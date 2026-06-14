@@ -60,21 +60,59 @@ the model allows but has not been validated end-to-end:
   attestation scan) returns `ErrUnsupported`.
 - `CreateRepo` creates the project but does not yet push the working tree.
 
-## GitHub Enterprise: the real work is in the templates (follow-up)
+## GitHub Enterprise: flavor-gated CI templates
 
 The **forge client** for GHE is just `forge.GH` + a host — `gh` behaves
-identically. But a working GHE instance needs **different rendered workflow/action
-files**, not a different Go client. The `ohttp-bits` proto
-(`bits.linode.com:functions/ohttp`, branch `main`) shows the workarounds a
-self-hosted-runner-on-GHE deployment requires:
+identically. The real GHE-specific work is in the **rendered workflow/action
+files**, ported from the `ohttp-bits` proto
+(`bits.linode.com:functions/ohttp`, branch `main`).
 
-- Local composite actions under `.github/actions/` (e.g. a `checkout` wrapper)
-  instead of bare marketplace `uses:` — plus a `fix-workspace-perms` step before
-  checkout (containerized self-hosted runners leave root-owned workspaces).
-- `PATH` set via `GITHUB_ENV` rather than `GITHUB_PATH` (unreliable in
-  containerized GHA jobs on some runner versions).
+### Scaffold-time flavor
 
-Porting these into the copier templates as a GHE flavor (so an instance scaffolds
-the right workflow variants for its `Flavor()`) is a separate, larger workstream
-tracked outside this change. The Go abstraction here is the prerequisite: `llz`
-can already tell which forge it targets via `Flavor()`.
+`copier.yml` asks `forge_flavor` (`github` | `github-enterprise` | `gitlab`,
+default `github`), mirroring `forge.Flavor()`. It is recorded in
+`.copier-answers.yml`, so `copier update` carries it forward.
+
+### Gating mechanism: input threading
+
+Instances are thin callers of shared reusable workflows
+(`<org>/lke-landing-zone/.github/workflows/llz-*.yml`) that dual-checkout the
+template and source composite actions from it. So GHE workarounds can't be
+selected purely at scaffold time — they're gated at run time by threading the
+flavor as a workflow input:
+
+1. The thin caller forwards `forge_flavor: <@ forge_flavor @>` to the reusable
+   workflow (see `instance-template/.github/workflows/terraform.yml`).
+2. The reusable workflow declares a `forge_flavor` `workflow_call` input and, as
+   the first step of every job (before checkout), runs the workspace-perms fix
+   gated on `inputs.forge_flavor == 'github-enterprise'` (see
+   `.github/workflows/llz-terraform.yml` — the reference conversion).
+
+The fix is inlined per job rather than a local composite action because it must
+run *before* any checkout (the template — and thus its composite actions — isn't
+on disk yet). The ported composite actions cover single-repo / persistent-runner
+flows:
+
+- `instance-template/.github/actions/fix-workspace-perms` — the `sudo chown -R`
+  primitive (no-op-safe off GHE).
+- `instance-template/.github/actions/checkout` — flavor-aware wrapper
+  (fix-perms when GHE, then `actions/checkout`). `forge-flavor` input gates it.
+
+Both live under `.github/actions/` (template-internal, excluded from instances,
+classified `managed` in `.template-manifest`).
+
+### Remaining work (follow-ups)
+
+- **Convert the other reusable workflows** the same way `llz-terraform.yml` was:
+  `llz-bootstrap-dns`, `llz-bootstrap-openbao`, `llz-cluster-health`,
+  `llz-openbao-auto-unseal`, `llz-scheduled-checks`, `llz-secret-rotation`
+  (declare the `forge_flavor` input, forward it from each thin caller, add the
+  gated step). Mirror in each `instance-template/.github/workflows/*.yml` caller.
+- **`runs-on` labels.** GHE has no github.com-hosted runners; a GHE instance must
+  target self-hosted runner labels. Make `runs-on` flavor-aware (input or repo
+  variable) — not yet done.
+- **CI forge selection for `llz`.** Export `LLZ_GH_HOST` (and/or
+  `LLZ_FORGE`) in the reusable workflows when `forge_flavor` is GHE so the in-CI
+  `llz` picks the GHE backend. Source the host from a repo variable.
+- **`PATH` via `GITHUB_ENV`** (the ohttp-bits container-runner workaround) — only
+  if a GHE adopter hits the containerized-`GITHUB_PATH` bug.

@@ -1,0 +1,48 @@
+name: Checkout
+description: >
+  Flavor-aware checkout: on GitHub Enterprise (forge-flavor ==
+  'github-enterprise') it first restores GITHUB_WORKSPACE ownership — self-hosted
+  GHE runners reuse the workspace and a prior job can leave root-owned files that
+  break actions/checkout — then checks out. On github.com it is a plain checkout.
+  Ported from the ohttp-bits GHE proto (its checkout = fix-workspace-perms +
+  actions/checkout); the perms-fix is inlined here rather than referenced as a
+  sibling local action so this composite stays portable across the reusable
+  workflows' dual checkout (_llz-template/...).
+inputs:
+  forge-flavor:
+    description: "github | github-enterprise | gitlab (the instance's forge_flavor). The workspace-perms fix runs only for github-enterprise."
+    required: false
+    default: github
+  repository:
+    description: "Repository to check out (owner/name). Default: the workflow's repository."
+    required: false
+    default: ${{ github.repository }}
+  ref:
+    description: "Ref to check out. Default: the workflow's ref."
+    required: false
+    default: ""
+  path:
+    description: "Relative path under GITHUB_WORKSPACE to check out into."
+    required: false
+    default: ""
+  fetch-depth:
+    description: "Number of commits to fetch (0 = full history)."
+    required: false
+    default: "1"
+runs:
+  using: composite
+  steps:
+    # Self-hosted GHE runners reuse the workspace; a previous job may have left
+    # root-owned files that make actions/checkout fail. Harmless elsewhere, but
+    # gated so github.com jobs don't shell out for nothing.
+    - name: Fix workspace permissions (GHE self-hosted runners)
+      if: inputs.forge-flavor == 'github-enterprise'
+      shell: bash
+      run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
+
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        path: ${{ inputs.path }}
+        fetch-depth: ${{ inputs.fetch-depth }}

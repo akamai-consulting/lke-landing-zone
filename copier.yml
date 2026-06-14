@@ -116,6 +116,21 @@ instance_repo:
     repo URLs, `gh` CLI targeting, and the SSH deploy-key wiring.
   default: your-org/your-instance-repo
 
+forge_flavor:
+  type: str
+  help: >-
+    Which git forge hosts this instance. `github` (default) targets github.com.
+    `github-enterprise` targets a self-managed GHE server — it renders the GHE
+    CI workarounds (e.g. the fix-workspace-perms step before checkout on
+    self-hosted runners) and matches the llz runtime forge selected by
+    LLZ_GH_HOST. `gitlab` is reserved for the GitLab backend (LLZ_FORGE=gitlab).
+    Mirrors forge.Flavor() in tools/internal/forge.
+  choices:
+    - github
+    - github-enterprise
+    - gitlab
+  default: github
+
 llz_version:
   type: str
   help: >-

@@ -23,6 +23,11 @@ on:
         description: "This instance's GitHub repo (<owner>/<name>) — used in operator-facing messages + forwarded to llz-bootstrap-openbao."
         required: true
         type: string
+      forge_flavor:
+        description: "Which forge hosts the caller instance: github | github-enterprise | gitlab. Gates the GHE CI workarounds (fix-workspace-perms before checkout on self-hosted runners). Mirrors forge.Flavor()."
+        required: false
+        type: string
+        default: github
       template-ref:
         description: 'LLZ template ref to source the composite actions + scripts from. Pin to the same tag as this workflow''s @<ref>.'
         required: false
@@ -151,6 +156,10 @@ jobs:
     env:
       REGION: ${{ matrix.region }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -213,6 +222,10 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -243,6 +256,10 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -323,6 +340,10 @@ jobs:
       AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -458,6 +479,10 @@ jobs:
       AWS_ACCESS_KEY_ID:         ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:     ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -624,6 +649,10 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -826,6 +855,10 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -952,6 +985,10 @@ jobs:
       AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1045,6 +1082,10 @@ jobs:
       AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -1162,6 +1203,10 @@ jobs:
       AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1223,6 +1268,10 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -1426,6 +1475,10 @@ jobs:
       AWS_ACCESS_KEY_ID:       ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:   ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -1476,6 +1529,10 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1530,6 +1587,10 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1612,6 +1673,10 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
@@ -1708,6 +1773,10 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1761,6 +1830,10 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
