@@ -52,11 +52,11 @@ func TestParseTokenAndPolicies(t *testing.T) {
 }
 
 func TestSecretListed(t *testing.T) {
-	out := "NAME                    UPDATED\nOPENBAO_ROOT_TOKEN      2026-06-10\nOTHER_SECRET            2026-06-09\n"
-	if !secretListed(out, "OPENBAO_ROOT_TOKEN") {
+	names := []string{"OPENBAO_ROOT_TOKEN", "OTHER_SECRET"}
+	if !secretListed(names, "OPENBAO_ROOT_TOKEN") {
 		t.Error("should find OPENBAO_ROOT_TOKEN")
 	}
-	if secretListed(out, "MISSING") {
+	if secretListed(names, "MISSING") {
 		t.Error("should not find MISSING")
 	}
 }

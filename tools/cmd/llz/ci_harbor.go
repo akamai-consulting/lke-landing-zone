@@ -68,13 +68,13 @@ var baoKVPutFn = func(path string, fields map[string]string) error {
 	return nil
 }
 
-// ghSetRepoSecretFn writes a repo-level GitHub secret with the value piped
-// over stdin (never argv-visible). The repo-level sibling of
+// ghSetRepoSecretFn writes a repo-level secret to the active forge with the
+// value piped over stdin (never argv-visible). The repo-level sibling of
 // ci_openbao_init.go's ghSetSecretFn (--env), which must stay environment-
 // scoped; the Harbor robot credentials are read by region-agnostic workflows.
-// gh resolves auth + repo from the ambient GH_TOKEN/GH_REPO. Seamed for tests.
+// The forge resolves auth + repo from its ambient context. Seamed for tests.
 var ghSetRepoSecretFn = func(name, value string) error {
-	return ghSecretSetStdin(name, "", value)
+	return forgeFn("").SetSecret(bg(), name, value, scopeFor(""))
 }
 
 func ciProvisionHarborRobotsCmd() *cobra.Command {

@@ -55,46 +55,15 @@ func copierUpdateArgv(ref string) []string {
 	return a
 }
 
-func buildArgv(env string) []string {
-	return []string{"gh", "workflow", "run", "terraform.yml",
-		"--field", "region=" + env, "--field", "action=apply", "--field", "module=all"}
-}
-
-func bootstrapArgv(kind, env string) ([]string, error) {
+// bootstrapWorkflow maps a bootstrap kind to its workflow file.
+func bootstrapWorkflow(kind string) (string, error) {
 	wf := map[string]string{
 		"dns": "bootstrap-dns.yml",
 	}[kind]
 	if wf == "" {
-		return nil, fmt.Errorf("unknown bootstrap kind %q (want dns)", kind)
+		return "", fmt.Errorf("unknown bootstrap kind %q (want dns)", kind)
 	}
-	return []string{"gh", "workflow", "run", wf, "--field", "region=" + env}, nil
-}
-
-func secretSetArgv(env, name string) []string {
-	return []string{"gh", "secret", "set", name, "--env", "infra-" + env}
-}
-
-// ghSecretSetStdin pipes value into `gh secret set <name>` (with --env <ghEnv>
-// when ghEnv is non-empty), keeping the value off argv. gh resolves auth + repo
-// from the ambient GH_TOKEN/GH_REPO. Shared body for the ghSetSecretFn (--env,
-// ci_openbao_init.go) and ghSetRepoSecretFn (repo-level, ci_harbor.go) seams.
-func ghSecretSetStdin(name, ghEnv, value string) error {
-	args := []string{"secret", "set", name}
-	label := name
-	if ghEnv != "" {
-		args = append(args, "--env", ghEnv)
-		label = fmt.Sprintf("%s --env %s", name, ghEnv)
-	}
-	cmd := exec.Command("gh", args...)
-	cmd.Stdin = strings.NewReader(value)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("gh secret set %s: %s", label, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func variableSetArgv(name string) []string {
-	return []string{"gh", "variable", "set", name}
+	return wf, nil
 }
 
 // statusArgv is the read-only convergence check set (matches the verify steps in
@@ -118,24 +87,9 @@ func run(g globalOpts, argv ...string) error {
 	return execArgv(argv, "")
 }
 
-// runGated is run() for cloud-mutating commands: it refuses to execute without
-// --yes, printing the command instead so the operator can see exactly what would
-// reach Linode/GitHub.
-func runGated(g globalOpts, argv ...string) error {
-	if g.dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) "+shellQuote(argv))
-		return nil
-	}
-	if !g.yes {
-		fmt.Fprintln(os.Stderr, "would run: "+shellQuote(argv))
-		fmt.Fprintln(os.Stderr, "  (re-run with --yes to execute)")
-		return nil
-	}
-	return run(g, argv...)
-}
-
-// execArgv runs argv with an optional stdin string (used to pipe secret values
-// into `gh secret set` without putting them in the process arguments).
+// execArgv runs argv with an optional stdin string (used to pipe values into a
+// subprocess without putting them in the process arguments). Cloud-mutating
+// forge operations now go through gateForge in forge.go instead.
 func execArgv(argv []string, stdin string) error {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -227,9 +181,12 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 			return false, err
 		}
 	}
-	// gh repo create makes a new GitHub repo (outward-facing) — gate on --yes.
-	return g.yes && !g.dryRun, runGated(g, "gh", "repo", "create", repo,
-		"--private", "--source", dir, "--remote", "origin", "--push")
+	// Creating the instance repo is outward-facing — gate on --yes.
+	f := forgeFn(repo)
+	err = gateForge(g, "create instance repo "+repo+" and push "+dir, func() error {
+		return f.CreateRepo(bg(), dir, true)
+	})
+	return g.yes && !g.dryRun, err
 }
 
 func runUpgrade(g globalOpts, ref string) error {
@@ -263,7 +220,12 @@ func cmdBuild(args []string, g globalOpts) error {
 	if err := validateEnvName(env); err != nil {
 		return err
 	}
-	return runGated(g, buildArgv(env)...)
+	f := forgeFn("")
+	return gateForge(g, "run terraform.yml (region="+env+", action=apply, module=all)", func() error {
+		return f.RunWorkflow(bg(), "terraform.yml", map[string]string{
+			"region": env, "action": "apply", "module": "all",
+		})
+	})
 }
 
 // up{Tokens,Doctor,Build} are the seams cmdUp drives — package-level vars so a
@@ -365,9 +327,13 @@ func cmdBootstrap(args []string, g globalOpts) error {
 	if len(args) != 2 {
 		return fmt.Errorf("usage: llz bootstrap <dns> <env>")
 	}
-	argv, err := bootstrapArgv(args[0], args[1])
+	kind, env := args[0], args[1]
+	wf, err := bootstrapWorkflow(kind)
 	if err != nil {
 		return err
 	}
-	return runGated(g, argv...)
+	f := forgeFn("")
+	return gateForge(g, "run "+wf+" (region="+env+")", func() error {
+		return f.RunWorkflow(bg(), wf, map[string]string{"region": env})
+	})
 }

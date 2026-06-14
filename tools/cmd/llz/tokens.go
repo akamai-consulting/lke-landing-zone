@@ -383,27 +383,22 @@ func pickCluster(ctx context.Context, client *linode.Client, in *bufio.Scanner) 
 // --yes; secret values pipe via stdin.
 func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string, st liveState) error {
 	fmt.Printf("\nConfigure %s:\n", repo)
-	type item struct {
-		argv []string
-		val  string
-	}
-	var items []item
+	f := forgeFn(repo)
+	var writes []forgeWrite
 	for _, k := range sortedKeys(secrets) {
-		items = append(items, item{[]string{"gh", "secret", "set", k, "--repo", repo, "--env", "infra-" + env}, secrets[k]})
+		writes = append(writes, forgeWrite{name: k, value: secrets[k], secret: true, scope: scopeFor("infra-" + env)})
 	}
 	for _, k := range sortedKeys(vars) {
 		if st.value(k) == vars[k] {
 			continue // already set to this value
 		}
-		items = append(items, item{[]string{"gh", "variable", "set", k, "--repo", repo, "--body", vars[k]}, ""})
+		writes = append(writes, forgeWrite{name: k, value: vars[k], scope: scopeFor("")})
 	}
-	if len(items) == 0 {
+	if len(writes) == 0 {
 		fmt.Fprintln(os.Stderr, "  (nothing new to push)")
 		return nil
 	}
-	for _, it := range items {
-		fmt.Fprintln(os.Stderr, "→ "+shellQuote(it.argv))
-	}
+	echoWrites(writes)
 	if g.dryRun {
 		_ = lockInfraEnvBranchPolicy(g, repo, env) // prints the plan only
 		return nil
@@ -412,10 +407,8 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 		fmt.Fprintln(os.Stderr, "→ lock infra-"+env+" branch policy to main")
 		return nil
 	}
-	for _, it := range items {
-		if err := execArgv(it.argv, it.val); err != nil {
-			return fmt.Errorf("%s: %w", it.argv[3], err)
-		}
+	if _, err := applyWrites(g, f, writes); err != nil {
+		return err
 	}
 	// Restrict infra-<env> secret injection to ref=main (the real boundary that
 	// stops a feature-branch dispatch from exfiltrating the OpenBao unseal keys).
@@ -427,24 +420,21 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clusterID string, st liveState) error {
 	tr := templateRepo()
 	fmt.Printf("\n[admin] e2e harness on %s\n", tr)
+	f := forgeFn(tr)
 	want := map[string]string{
 		"E2E_INSTANCE_REPO": instanceRepo,
 		"E2E_LINODE_REGION": regionFromCluster(clusterID),
 		"E2E_OBJ_CLUSTER":   clusterID,
 	}
-	var items [][]string
+	var writes []forgeWrite
 	for _, k := range sortedKeys(want) {
 		if want[k] == "" || st.value(k) == want[k] {
 			continue
 		}
-		items = append(items, []string{"gh", "variable", "set", k, "--repo", tr, "--body", want[k]})
+		writes = append(writes, forgeWrite{name: k, value: want[k], scope: scopeFor("")})
 	}
-	for _, argv := range items {
-		fmt.Fprintln(os.Stderr, "→ "+shellQuote(argv))
-	}
+	echoWrites(writes)
 
-	var dispArgv []string
-	var dispatch string
 	if !st.repoSecrets["E2E_DISPATCH_TOKEN"] {
 		owner := instanceRepo
 		if i := strings.IndexByte(instanceRepo, '/'); i > 0 {
@@ -456,10 +446,10 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 		fmt.Printf("    • E2E_DISPATCH_TOKEN — drives the e2e instance repo %s (force-push the instantiated tree + dispatch/watch its workflows)\n", instanceRepo)
 		fmt.Printf("      classic (scopes repo + workflow, recommended): %s\n", classicURL)
 		fmt.Printf("      fine-grained (then set Contents + Actions + Workflows: Read and write; Only select repositories: %s):\n        %s\n", instanceRepo, fineURL)
-		dispatch = prompt(in, "E2E_DISPATCH_TOKEN (Enter to skip)")
-		if dispatch != "" {
-			dispArgv = []string{"gh", "secret", "set", "E2E_DISPATCH_TOKEN", "--repo", tr}
-			fmt.Fprintln(os.Stderr, "→ "+shellQuote(dispArgv))
+		if dispatch := prompt(in, "E2E_DISPATCH_TOKEN (Enter to skip)"); dispatch != "" {
+			dw := forgeWrite{name: "E2E_DISPATCH_TOKEN", value: dispatch, secret: true, scope: scopeFor("")}
+			writes = append(writes, dw)
+			fmt.Fprintln(os.Stderr, "→ "+dw.desc())
 		}
 	} else {
 		fmt.Println("    • E2E_DISPATCH_TOKEN already set — skipping")
@@ -468,15 +458,8 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 	if g.dryRun || !g.yes {
 		return nil
 	}
-	for _, argv := range items {
-		if err := execArgv(argv, ""); err != nil {
-			return fmt.Errorf("set %s on %s: %w", argv[3], tr, err)
-		}
-	}
-	if dispArgv != nil {
-		if err := execArgv(dispArgv, dispatch); err != nil {
-			return fmt.Errorf("set E2E_DISPATCH_TOKEN on %s: %w", tr, err)
-		}
+	if _, err := applyWrites(g, f, writes); err != nil {
+		return fmt.Errorf("configure %s harness: %w", tr, err)
 	}
 	return nil
 }

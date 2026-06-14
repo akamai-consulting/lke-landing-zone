@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 )
 
 func TestCopierCopyArgv(t *testing.T) {
@@ -42,38 +44,60 @@ func TestResolveScaffoldRef(t *testing.T) {
 	}
 }
 
-func TestBuildArgv(t *testing.T) {
-	got := buildArgv("lab")
-	want := []string{"gh", "workflow", "run", "terraform.yml",
-		"--field", "region=lab", "--field", "action=apply", "--field", "module=all"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("buildArgv\n got: %v\nwant: %v", got, want)
+func TestBootstrapWorkflow(t *testing.T) {
+	wf, err := bootstrapWorkflow("dns")
+	if err != nil || wf != "bootstrap-dns.yml" {
+		t.Fatalf("dns: wf=%q err=%v", wf, err)
 	}
-}
-
-func TestBootstrapArgv(t *testing.T) {
-	dns, err := bootstrapArgv("dns", "lab")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"gh", "workflow", "run", "bootstrap-dns.yml", "--field", "region=lab"}; !reflect.DeepEqual(dns, want) {
-		t.Errorf("dns: got %v want %v", dns, want)
-	}
-	if _, err := bootstrapArgv("nope", "lab"); err == nil {
+	if _, err := bootstrapWorkflow("nope"); err == nil {
 		t.Error("expected error for unknown bootstrap kind")
 	}
 }
 
-func TestSecretAndVariableArgv(t *testing.T) {
-	// The value must NEVER appear in argv — it is piped via stdin.
-	got := secretSetArgv("lab", "LINODE_API_TOKEN")
-	want := []string{"gh", "secret", "set", "LINODE_API_TOKEN", "--env", "infra-lab"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("secretSetArgv\n got: %v\nwant: %v", got, want)
+// withFakeForge points forgeFn at a fresh Fake for the duration of the test.
+func withFakeForge(t *testing.T) *forge.Fake {
+	t.Helper()
+	fake := forge.NewFake()
+	old := forgeFn
+	forgeFn = func(string) forge.Forge { return fake }
+	t.Cleanup(func() { forgeFn = old })
+	return fake
+}
+
+func TestCmdBuildRunsWorkflow(t *testing.T) {
+	fake := withFakeForge(t)
+	if err := cmdBuild([]string{"lab"}, globalOpts{yes: true}); err != nil {
+		t.Fatal(err)
 	}
-	if got := variableSetArgv("TF_STATE_BUCKET"); !reflect.DeepEqual(got,
-		[]string{"gh", "variable", "set", "TF_STATE_BUCKET"}) {
-		t.Errorf("variableSetArgv: got %v", got)
+	if len(fake.Workflows) != 1 || fake.Workflows[0].Workflow != "terraform.yml" {
+		t.Fatalf("workflows = %v", fake.Workflows)
+	}
+	f := fake.Workflows[0].Fields
+	if f["region"] != "lab" || f["action"] != "apply" || f["module"] != "all" {
+		t.Fatalf("fields = %v", f)
+	}
+}
+
+func TestCmdBuildDryRunNoExec(t *testing.T) {
+	fake := withFakeForge(t)
+	if err := cmdBuild([]string{"lab"}, globalOpts{dryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Workflows) != 0 {
+		t.Fatalf("dry-run executed workflow: %v", fake.Workflows)
+	}
+}
+
+func TestCmdBootstrapRunsWorkflow(t *testing.T) {
+	fake := withFakeForge(t)
+	if err := cmdBootstrap([]string{"dns", "lab"}, globalOpts{yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Workflows) != 1 || fake.Workflows[0].Workflow != "bootstrap-dns.yml" {
+		t.Fatalf("workflows = %v", fake.Workflows)
+	}
+	if fake.Workflows[0].Fields["region"] != "lab" {
+		t.Fatalf("fields = %v", fake.Workflows[0].Fields)
 	}
 }
 
