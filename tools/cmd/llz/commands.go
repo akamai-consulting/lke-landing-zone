@@ -313,7 +313,8 @@ func warnIfRootTokenPresent(env string) {
 	if err != nil {
 		return
 	}
-	for _, n := range ghSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
+	names, _ := forgeFn(repo).SecretNames(bg(), scopeFor("infra-"+env))
+	for _, n := range names {
 		if n == "OPENBAO_ROOT_TOKEN" {
 			fmt.Printf("\n⚠ OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", env)
 			fmt.Println("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability.")

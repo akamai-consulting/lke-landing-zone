@@ -36,7 +36,7 @@ const (
 )
 
 func ghTokenURL(scopes, desc string) string {
-	return "https://github.com/settings/tokens/new?scopes=" + scopes + "&description=" + desc
+	return "https://" + ghHost() + "/settings/tokens/new?scopes=" + scopes + "&description=" + desc
 }
 
 // ghFineGrainedTokenURL builds a template URL for the fine-grained PAT creation
@@ -58,7 +58,7 @@ func ghFineGrainedTokenURL(name, owner, desc string) string {
 	}
 	q.Set("expires_in", "90")
 	q.Set("contents", "write")
-	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
+	return "https://" + ghHost() + "/settings/personal-access-tokens/new?" + q.Encode()
 }
 
 // ghFineGrainedPackagesURL builds a fine-grained PAT creation URL pre-filled for
@@ -72,7 +72,7 @@ func ghFineGrainedPackagesURL(name, owner string) string {
 		q.Set("target_name", owner)
 	}
 	q.Set("expires_in", "90")
-	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
+	return "https://" + ghHost() + "/settings/personal-access-tokens/new?" + q.Encode()
 }
 
 // ghFineGrainedDispatchURL builds a fine-grained PAT creation URL pre-filled for

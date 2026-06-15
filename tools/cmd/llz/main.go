@@ -364,6 +364,7 @@ func regenRootCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&o.updateGHA, "update-gha-secret", false, "write the new root to infra-<region>.OPENBAO_ROOT_TOKEN")
 	c.Flags().StringVar(&o.repo, "repo", "", "owner/repo for gh (avoids multi-remote auto-detect failures)")
+	c.Flags().StringVar(&o.ghHost, "gh-host", "", "GitHub Enterprise host for the secret write (default: LLZ_GH_HOST else github.com)")
 	return c
 }
 

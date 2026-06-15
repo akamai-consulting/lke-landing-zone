@@ -32,6 +32,7 @@ const openbaoNS = "llz-openbao"
 type regenRootOpts struct {
 	updateGHA bool
 	repo      string
+	ghHost    string // optional GitHub Enterprise host override (LLZ_GH_HOST/GH_HOST)
 }
 
 func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
