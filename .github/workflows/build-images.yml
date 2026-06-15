@@ -1,0 +1,198 @@
+name: Build Container Images
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'dockerfiles/**'
+      # The ci images bake the `llz` binary from the Go tools module via
+      # `--build-context tools-src=tools`, so a tools change must rebuild them —
+      # otherwise the static `:1.9.8` / `:1.31.0` tags keep serving a stale
+      # binary (e.g. a workflow or Makefile target calling a freshly added `llz`
+      # subcommand gets "unknown command").
+      - 'tools/**'
+      - '.github/workflows/build-images.yml'
+  schedule:
+    - cron: '0 3 * * 1'  # Weekly Monday rebuild
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Which image to build'
+        required: true
+        default: all
+        type: choice
+        options: [terraform, kubernetes, devcontainer, all]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-terraform:
+    name: Build ci-terraform
+    # The Dockerfile builds `llz` from the Go tools module, supplied via
+    # `--build-context tools-src=tools`, so there is no separate builder image to
+    # depend on.
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.image == 'terraform' ||
+      inputs.image == 'all'
+    runs-on: ubuntu-latest
+    # packages: write lets the built-in GITHUB_TOKEN push to GHCR — no PAT needed.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Resolve GHCR namespace
+        id: ns
+        # GHCR paths must be lowercase; derive the namespace from the repo owner so
+        # images always land in this repo's org (akamai-consulting), and in an
+        # adopter's own org after they fork — never a hardcoded personal account.
+        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        with:
+          # All three build jobs run in parallel and each pull the same binfmt
+          # image, which setup-qemu-action otherwise caches under one fixed GHA
+          # key — so the jobs race to reserve it and log a "another job may be
+          # creating this cache" warning. The image is tiny; skip caching it.
+          cache-image: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ci-terraform
+        # --build-context tools-src=tools exposes the Go tools module to the
+        # Dockerfile's `llz` build stage without broadening the primary
+        # build context. The gha cache is wired up by setup-buildx-action above.
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push \
+            --build-context tools-src=tools \
+            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
+            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:1.9.8 \
+            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:latest \
+            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:sha-${{ github.sha }} \
+            --cache-from type=gha,scope=ci-terraform \
+            --cache-to   type=gha,scope=ci-terraform,mode=max \
+            dockerfiles/terraform
+
+  build-kubernetes:
+    name: Build ci-kubernetes
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.image == 'kubernetes' ||
+      inputs.image == 'all'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Resolve GHCR namespace
+        id: ns
+        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        with:
+          # See build-terraform: avoid the parallel binfmt cache-reserve race.
+          cache-image: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ci-kubernetes
+        # --build-context tools-src=tools exposes the Go tools module to the
+        # Dockerfile's llz build stage (the image bakes `llz` for the Makefile's
+        # externalsecret-paths-check), exactly like ci-terraform/devcontainer.
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push \
+            --build-context tools-src=tools \
+            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
+            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:1.31.0 \
+            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:latest \
+            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:sha-${{ github.sha }} \
+            --cache-from type=gha,scope=ci-kubernetes \
+            --cache-to   type=gha,scope=ci-kubernetes,mode=max \
+            dockerfiles/kubernetes
+
+  build-devcontainer:
+    name: Build devcontainer
+    # The adopter-workstation image consumed by instances' .devcontainer/. Like
+    # ci-terraform it bakes a Go binary from the tools/ module (the `llz` CLI,
+    # supplied via `--build-context tools-src=tools`); every other tool is fetched
+    # by digest at build time.
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.image == 'devcontainer' ||
+      inputs.image == 'all'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Resolve GHCR namespace
+        id: ns
+        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        with:
+          # See build-terraform: avoid the parallel binfmt cache-reserve race.
+          cache-image: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push devcontainer
+        # --build-context tools-src=tools exposes the Go tools module to the
+        # Dockerfile's llz build stage. LLZ_VERSION stamps main.version so the
+        # baked-in `llz version` is traceable to this build. Adopters pin :latest
+        # to a :sha-... tag in .devcontainer/devcontainer.json for reproducibility.
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push \
+            --build-context tools-src=tools \
+            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
+            --tag ${{ steps.ns.outputs.repo }}/devcontainer:latest \
+            --tag ${{ steps.ns.outputs.repo }}/devcontainer:sha-${{ github.sha }} \
+            --cache-from type=gha,scope=devcontainer \
+            --cache-to   type=gha,scope=devcontainer,mode=max \
+            dockerfiles/devcontainer

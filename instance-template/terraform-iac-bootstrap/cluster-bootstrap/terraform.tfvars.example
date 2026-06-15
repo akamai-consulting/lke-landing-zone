@@ -1,0 +1,57 @@
+# cluster-bootstrap — installs apl-core on the LKE-E cluster and seeds the
+# GitOps repo credentials. Applied AFTER the `cluster` workspace; it reads the
+# kubeconfig from the cluster workspace's remote state output.
+#
+#   terraform workspace select <env>      # must match the cluster workspace
+#   terraform apply -var-file=<env>.tfvars
+#
+# Copy this file to <env>.tfvars (lab | staging | primary | secondary | <your-env>)
+# and fill the ADOPTER-MUST-SET values. SECRETs come from TF_VAR_* env vars in
+# CI — never put them in a committed tfvars file.
+
+# Deployment discriminator — must match the cluster workspace's backend key
+# suffix and the apl-values/<env> overlay directory name.
+# MIGRATION NOTE: this key was previously named `region` (it never held a
+# Linode region). Instances upgrading the template must rename `region` to
+# `deployment` in their cluster-bootstrap *.tfvars; CI supplies it as
+# TF_VAR_deployment.
+deployment = "your-env"
+
+# apl-core Helm chart — pin a version and bump deliberately.
+# Verify with: helm search repo apl/apl --versions
+apl_chart_version = "5.0.0"
+
+# Subdirectory under apl-values/ for this cluster's overlay.
+apl_values_env = "your-env"
+
+# Logical cluster name → apl-core cluster.name (Istio Gateway hostnames,
+# Argo CD context, Console banner).
+cluster_name = "platform-your-env"
+
+# Base DNS domain → apl-core cluster.domainSuffix. ExternalDNS + cert-manager
+# issue subdomains under this. Use a per-env prefix so siblings don't collide.
+cluster_domain = "your-env.internal"
+
+# GitOps repo holding apl-values/ and manifest/ — apl-core's external values
+# store (the in-cluster Gitea is obsoleted). apl-core REQUIRES an HTTPS URL on a
+# publicly-reachable host. This points at the instance repo itself; apl-operator
+# reads AND writes its rendered values tree here over HTTPS with the PAT below,
+# so the PAT needs Contents: write. `<@ instance_repo @>` is rendered to the
+# instance's owner/name at instantiation.
+apl_values_repo_url      = "https://github.com/<@ instance_repo @>.git"
+apl_values_repo_revision = "main"
+# GitHub ignores the basic-auth username when a PAT is the password; the
+# conventional token sentinel is fine.
+apl_values_repo_username = "x-access-token"
+
+# Branch/tag/commit of the first-party bootstrap repo (your fork of your-org/your-instance-repo)
+# that the TF-managed bootstrap Argo CD Application tracks.
+apps_repo_revision = "main"
+
+# ── SECRETs — supply via TF_VAR_* env vars in CI, NOT in this file ────────────
+#   TF_VAR_tf_state_bucket             S3 bucket holding the cluster workspace state
+#   TF_VAR_linode_dns_token            Linode token scoped to DNS zone write
+#   TF_VAR_apl_values_repo_token       GitHub fine-grained PAT (Contents: write) for the values + apps repo
+#   TF_VAR_loki_admin_password         Loki gateway basic-auth admin password (optional — generated + persisted if empty)
+#   TF_VAR_linode_token                Linode account token (destroy-time volume sweep)
+#   TF_VAR_openbao_secrets_write_token GitHub PAT (secrets:write) — optional, destroy cleanup

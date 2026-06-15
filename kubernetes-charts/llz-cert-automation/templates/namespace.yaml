@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  annotations:
+    # N5-C2: wave -20 so the namespace lands before any cert-automation resource.
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.namespace | quote }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+    # Pod Security Admission — enforce baseline rather than restricted because
+    # the buildah build-image step runs as root (required to construct overlay
+    # layers) and the cleanup step also needs root to remove buildah-written
+    # workspace files. All other steps use runAsNonRoot + allowPrivilegeEscalation
+    # false + drop ALL, so audit/warn are set to restricted to track the gap.
+    pod-security.kubernetes.io/audit: {{ .Values.podSecurity.audit }}
+    pod-security.kubernetes.io/audit-version: {{ .Values.podSecurity.auditVersion }}
+    pod-security.kubernetes.io/enforce: {{ .Values.podSecurity.enforce }}
+    pod-security.kubernetes.io/enforce-version: {{ .Values.podSecurity.enforceVersion }}
+    pod-security.kubernetes.io/warn: {{ .Values.podSecurity.warn }}
+    pod-security.kubernetes.io/warn-version: {{ .Values.podSecurity.warnVersion }}
+    # Disable Istio sidecar injection — Argo Workflow pods are short-lived
+    # batch workloads and the sidecar prevents the pod from terminating cleanly.
+    istio-injection: disabled

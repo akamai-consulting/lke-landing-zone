@@ -1,0 +1,400 @@
+{{- if .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+{{- $wave := .Values.syncWaves.networkPolicies }}
+# Foundation NetworkPolicies for apl-core-managed namespaces.
+#
+# apl-core's helmfile creates cert-manager/harbor/istio-system/observability but
+# ships NO NPs into them (no per-app networkPolicies knob in 5.0.0). On a
+# default-permit cluster every workload runs unrestricted. We drop additive NP
+# CRs here — apl-core's reconciler doesn't fight NP resources in namespaces it
+# owns (only the Namespace object itself is contested).
+#
+# apl-core native NP options were audited (2026-05-31, 5.0.0) and rejected:
+#   1. `apl-network-policies` chart covers only gitea + otomi-api.
+#   2. Several sub-charts ship NPs disabled-by-default with allow-rules that may
+#      not match our ingress flow (TLS at Istio Gateway, cross-ns observability
+#      sidecar) — needs lab verification before enabling.
+#   3. `teamConfig.<id>.netpols[]` supports one rule per entry, label-selector
+#      ingress only — no ipBlock, no multi-rule, no apiserver-entity patterns.
+#
+# Pattern per namespace: default-deny (Ingress+Egress) + allow-dns +
+# allow-apiserver (LKE-E dual-port 443+6443) + namespace-specific allows. All NPs
+# at sync-wave {{ $wave }} so they land before workload pods
+# (project_np_sync_wave_race). openbao is NOT covered here — its NPs live
+# in its own Application tree.
+
+# ── cert-manager ─────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-default-deny
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-allow-dns
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range $np.dnsPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+---
+# cert-manager controllers call Let's Encrypt ACME + the Linode DNS API (both
+# HTTPS) and the apiserver. The 6443 entry covers LKE-E's apiserver DNAT. Istio
+# sidecars need 15010/15012/15014 to istiod for xDS + cert signing — without that
+# egress, Envoy's iptables redirect kills ALL pod egress and the workload never
+# reaches Ready. Same allowance in every default-deny + sidecar namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-allow-egress
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range $np.apiserverPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.istiod.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $np.istiod.podLabel | nindent 14 }}
+      ports:
+        {{- range $np.istiod.ports }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+---
+# cert-manager's validating + mutating webhooks accept ingress from the apiserver
+# (via konnectivity-agent on LKE-E).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-allow-webhook-ingress
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: webhook
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { port: 10250, protocol: TCP }
+
+# ── harbor ───────────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-default-deny
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-allow-dns
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range $np.dnsPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+---
+# Harbor talks to apiserver + Linode Object Storage (S3 over HTTPS).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-allow-egress
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range $np.apiserverPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+    # Istio sidecar → istiod (see cert-manager-allow-egress comment above).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.istiod.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $np.istiod.podLabel | nindent 14 }}
+      ports:
+        {{- range $np.istiod.ports }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+---
+# Harbor is fronted by Istio Gateway. Allow ingress from istio-system.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-allow-istio-ingress
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.istiod.namespace }}
+---
+# Harbor is multi-component (core, registry, jobservice, db, redis, trivy); they
+# need to talk to each other.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-allow-intra-namespace
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+# The CloudNativePG operator (cnpg-system) polls each Postgres instance's status
+# endpoint (:8000) cross-namespace. harbor-default-deny blocks that, so without
+# this the operator reports "Instance Status Extraction Error", harbor-otomi-db
+# stays ClusterIsNotReady, the harbor DB Argo app sits Degraded, and convergence
+# stalls. Second rule: Prometheus (monitoring) scrapes CNPG :9187 — same
+# default-deny blocked it. Scoped to the CNPG instance pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-allow-cnpg-operator
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $np.cnpg.instancePodLabel | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.cnpg.operatorNamespace }}
+      ports:
+        {{- range $np.cnpg.operatorPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.cnpg.metricsNamespace }}
+      ports:
+        {{- range $np.cnpg.metricsPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+
+# ── istio-system ─────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: istio-system-default-deny
+  namespace: {{ $np.istiod.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: istio-system-allow-dns
+  namespace: {{ $np.istiod.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range $np.dnsPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+---
+# istiod watches K8s resources cluster-wide; gateways pull from upstream services
+# in every namespace. Egress wide-open — gateways proxy to arbitrary upstream
+# services + ports.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: istio-system-allow-egress
+  namespace: {{ $np.istiod.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - {}
+---
+# Gateway pods MUST accept ingress from anywhere on 80/443 + the Envoy ready
+# port. Gateway API mode: pods are labeled by gateway.networking.k8s.io/
+# gateway-name (set by the istio gateway-controller), NOT the legacy
+# `app: gateway-<name>`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: istio-system-allow-gateway-ingress
+  namespace: {{ $np.istiod.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      {{ $np.gateway.gatewayNameLabel }}: {{ $np.gateway.gatewayName }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        {{- range $np.gateway.ingressPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+---
+# istiod (control plane) admission webhooks + discovery.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: istio-system-allow-istiod-ingress
+  namespace: {{ $np.istiod.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $np.istiod.podLabel | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        {{- range $np.istiodIngressPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+
+# ── observability ────────────────────────────────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: observability-default-deny
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: observability-allow-dns
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range $np.dnsPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+---
+# Workloads here (OTel Collector, observability sidecars) reach apiserver +
+# Linode Object Storage (Loki S3). Internet HTTPS covered by 443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: observability-allow-egress
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range $np.apiserverPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+    # Istio sidecar → istiod (see cert-manager-allow-egress comment above).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.istiod.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $np.istiod.podLabel | nindent 14 }}
+      ports:
+        {{- range $np.istiod.ports }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+---
+# Allow OTel Collector ingress from Istio Gateway (otel.<env>.<domain> routes
+# here) and Grafana scrapes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: observability-allow-ingress
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.istiod.namespace }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.grafanaNamespace }}
+{{- end }}

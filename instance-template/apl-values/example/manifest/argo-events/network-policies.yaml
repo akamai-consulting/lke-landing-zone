@@ -1,0 +1,110 @@
+# NetworkPolicies for the llz-argo-events namespace.
+#
+# Restores the secure-by-default posture the cluster health-check expects:
+# without these, the namespace runs unrestricted. argo-events ships three
+# controllers (eventbus/eventsource/sensor) that watch CRs cluster-wide; the
+# cert-automation EventBus pods live in llz-cert-automation, but the
+# intra-namespace allow covers any JetStream EventBus declared here. The
+# namespace is created by cluster-foundation at wave -20; these NPs are applied
+# (wave -10) by the platform-bootstrap tree once it exists.
+#
+# Sync wave -10 (project_np_sync_wave_race) — applied before the controller pods
+# so cilium's async BPF programming doesn't crash-loop them on first apiserver
+# reach. Apiserver-egress lists BOTH 443 and 6443 (project_lke_e_cilium_np_port_6443):
+# Cilium evaluates policy post-DNAT on LKE-E.
+---
+# Default-deny everything. Subsequent NPs additively allow what controllers need.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-events-default-deny
+  namespace: llz-argo-events
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# DNS resolution (kube-dns / CoreDNS in kube-system).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-events-allow-dns
+  namespace: llz-argo-events
+spec:
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# Apiserver egress. Controllers watch Sensor/EventSource/EventBus CRs
+# cluster-wide and need the apiserver constantly. Dual-port (443 + 6443) per
+# project_lke_e_cilium_np_port_6443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-events-allow-apiserver-egress
+  namespace: llz-argo-events
+spec:
+  egress:
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+# Intra-namespace allow — controllers talk to colocated webhook/metrics
+# endpoints, and a JetStream EventBus's NATS replicas gossip (4222/6222/8222).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-events-allow-intra-namespace
+  namespace: llz-argo-events
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+# Ingress to the argo-events validating admission webhook (events-webhook
+# Deployment, container :443). The apiserver reaches it via the webhook Service;
+# the source is external from a NP standpoint, so accept any peer on TCP/443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-events-allow-webhook-ingress
+  namespace: llz-argo-events
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: events-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 443
+          protocol: TCP

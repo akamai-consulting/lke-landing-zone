@@ -1,0 +1,72 @@
+# Budget for "untestable" code — logic embedded where it cannot be unit-tested:
+# inline multi-line workflow bash, standalone shell scripts, Python scripts, and
+# bash embedded in Terraform provisioner `command` heredocs.
+#
+# The design principle of this repo (see template-scripts/AGENTS.md and the llz
+# CLI under tools/) is that decision-making logic belongs in unit-tested Go, not
+# in CI shell. `llz ci untestable-loc` (run from lint.yml) tallies the logic
+# lines below and FAILS the build when a category exceeds its budget — so a PR
+# that piles new bash/python on instead of converting it is rejected at review
+# time.
+#
+# These budgets are a RATCHET: lower them as logic moves into the CLI; never
+# raise one to make a red build pass. If a file is genuine install/glue with no
+# logic worth testing, add it to `exclude:` with a one-line justification
+# instead of spending budget on it.
+#
+# Counting (reproducible — `llz ci untestable-loc --verbose` prints the
+# per-file breakdown):
+#   workflow-run          : LOGICAL lines inside multi-line `run:` blocks —
+#                           backslash-continued commands count once, and single-
+#                           line `run: <cmd>` tool invocations are glue and not
+#                           counted (a converted step looks exactly like that, so
+#                           neither penalizes conversion).
+#   script                : non-blank, non-comment lines of the whole file.
+#   terraform-provisioner : non-blank, non-comment bash inside `command = <<EOT
+#                           … EOT` heredocs of local-exec / remote-exec
+#                           provisioners. Single-line `command = "./x.sh"` is
+#                           glue (the script is already counted under shell) and
+#                           not tallied, same as a single-line `run:`.
+#
+# Baseline (post script-assimilation + kyverno-policy conversion): inline-bash
+# 659, shell 611, python 405, tf-provisioner 98. Budgets carry ~3% headroom over
+# baseline.
+
+categories:
+  workflow-inline-bash:
+    kind: workflow-run
+    budget: 680
+    include:
+      - ".github/workflows/*.yml"
+      - "instance-template/.github/workflows/*.yml"
+      - "instance-template/.github/actions/**/action.yml"
+
+  shell-scripts:
+    kind: script
+    budget: 630
+    include:
+      - "template-scripts/**/*.sh"
+      - ".github/scripts/**/*.sh"
+      - "terraform-modules/**/*.sh"
+      - "instance-template/**/*.sh"
+
+  python-scripts:
+    kind: script
+    budget: 420
+    include:
+      - "template-scripts/**/*.py"
+
+  terraform-provisioner-bash:
+    kind: terraform-provisioner
+    budget: 101
+    include:
+      - "terraform-modules/**/*.tf"
+      - "instance-template/**/*.tf"
+
+# Files exempted from every category. Keep this list short and justified — each
+# entry is logic the gate is choosing NOT to push into Go.
+exclude:
+  - "template-scripts/install-llz.sh"        # pinned-release installer for the llz CLI, no logic
+  - "template-scripts/ci/install-trivy.sh"   # pinned-release installer, no logic
+  - "template-scripts/ci/install-syft.sh"    # pinned-release installer, no logic
+  - "template-scripts/ci/llz-functional.sh"  # functional test harness for the built llz binary — its assertions ARE the test (exercised every CI run), not decision logic to push into Go

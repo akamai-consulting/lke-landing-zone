@@ -1,0 +1,33 @@
+# Namespaces apl-core does NOT manage on its own. apl-core creates argocd,
+# cert-manager, external-secrets' siblings, harbor, istio-system, keycloak,
+# gitea, kyverno, sealed-secrets, cnpg-system, trivy-system, external-dns and the
+# apl-* control plane — those are NOT listed in .Values.namespaces.
+#
+# N5-C2: sync-wave -20 (matching AppProjects) so namespaces land BEFORE any
+# resource that targets them; Argo CD does not guarantee ordering within a wave.
+#
+# N5-M1 (lab-verify, not enforced): if apl-core's Istio does cluster-wide
+# auto-injection, pods here get sidecars; OpenBao Raft TCP on 8201 is
+# sidecar-sensitive. Belt-and-suspenders would add `istio-injection: disabled`.
+{{- $pssVersion := .Values.podSecurityStandardsVersion }}
+{{- range .Values.namespaces }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $.Values.syncWaves.namespaces | quote }}
+  labels:
+    {{- if .restricted }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: {{ $pssVersion }}
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: {{ $pssVersion }}
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: {{ $pssVersion }}
+    {{- end }}
+    {{- with .labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}

@@ -1,0 +1,65 @@
+{{- if and .Values.openbao.enabled .Values.openbaoPromtail.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-openbao-promtail
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/component: audit-shipper
+data:
+  promtail.yaml: |
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+      log_level: info
+
+    positions:
+      filename: /var/promtail/positions.yaml
+
+    clients:
+      - url: {{ .Values.openbaoPromtail.lokiPushUrl | quote }}
+        tenant_id: platform
+        backoff_config:
+          min_period: 500ms
+          max_period: 5m
+          max_retries: 10
+        # Audit events are small JSON lines. Let them batch up a bit to cut
+        # request overhead, but flush frequently enough to keep freshness.
+        batchwait: 1s
+        batchsize: 102400
+
+    scrape_configs:
+      - job_name: openbao-audit
+        static_configs:
+          - targets:
+              - localhost
+            labels:
+              app: openbao
+              component: audit
+              region: {{ .Values.openbaoPromtail.region | quote }}
+              cluster: {{ .Values.openbaoPromtail.cluster | quote }}
+              pod: ${HOSTNAME}
+              __path__: /openbao/audit/audit.log
+        pipeline_stages:
+          # OpenBao audit lines are JSON; parse time and type for label/level.
+          - json:
+              expressions:
+                type: type
+                time: time
+                auth_display_name: auth.display_name
+                request_path: request.path
+                request_operation: request.operation
+                error: error
+          - timestamp:
+              source: time
+              format: RFC3339Nano
+          - labels:
+              type:
+              request_operation:
+          # Redact sensitive data: OpenBao hashes request data in the audit log
+          # already, but strip any residual bearer/token substrings just in case.
+          - replace:
+              expression: '(?i)(token|secret_id|client_token)["\s:=]+["]?[A-Za-z0-9._-]+'
+              replace: '$1=REDACTED'
+{{- end }}

@@ -1,0 +1,107 @@
+# .template-manifest — ownership map for the LLZ template scaffold.
+#
+# Classifies every file an instance carries so an update tool can apply template
+# changes WITHOUT clobbering instance-local edits. It is the contract behind
+# "pull template updates cleanly":
+#   - template-scripts/check-template-manifest.sh validates this file covers the whole
+#     scaffold (CI fails if a scaffold file matches no rule), and classifies a
+#     given path on demand.
+#   - a future template-sync tool reads it to decide, per file, whether to
+#     overwrite / 3-way-merge / skip.
+#
+# FORMAT: one rule per line — `<class>  <glob>`. Globs are POSIX shell globs
+# rooted at the instance repo root (= instance-template/ inside the template
+# repo); `**` matches across directories. Blank lines and `#` comments ignored.
+# PRECEDENCE: last matching rule wins — put specific overrides AFTER general rules.
+#
+# CLASSES:
+#   managed  Template owns it outright. An update OVERWRITES it. Do NOT hand-edit
+#            it in an instance — your change will be lost on the next sync (and
+#            belongs upstream in the template anyway).
+#   merge    Template owns the logic, but the file carries a few fork-local tokens
+#            (your GitHub org/registry, your state bucket). An update 3-way-merges
+#            it; expect conflicts ONLY on those token lines, which you re-resolve.
+#   owned    The instance owns it (per-deployment config, generated files, secrets,
+#            provider locks). An update NEVER touches it.
+
+# ── managed: pure template logic — overwritten on update ─────────────────────
+managed  .template-manifest
+# Composite actions are template-INTERNAL: the reusable `llz-*` workflows source
+# them from a template checkout (docs/templatization-plan.md §"Keeping instances
+# in sync"), and copier.yml `_exclude`s them so instances no longer copy them.
+# They stay physically under instance-template/.github/actions/ for the reusable
+# workflows — still classified here so the manifest-completeness check passes.
+managed  .github/actions/**
+# Instance-local checks live in `llz` itself (llz lint / fmt / validate — tofu fmt
+# / tflint / actionlint / gitleaks / checkov), not in the instance, so fixes ship
+# with the binary. Only the lint CONFIGS stay here — the tools read them. Template
+# owns them — overwritten on update so fixes propagate. The pre-commit hook is
+# installed per-clone by `llz hooks` (copier.yml runs it on copy), not delivered.
+managed  .tflintrc.hcl
+managed  .checkov.yaml
+managed  .gitleaks.toml
+# Operational tooling is NOT classified here: like .github/actions, it's template-
+# INTERNAL and no longer delivered to instances (copier.yml drops the old _task).
+# The former instance-scripts/ were assimilated into the llz CLI, which is baked
+# into the ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable
+# `llz-*` workflows run in, so an instance carries no scripts/ for this manifest to own.
+# Operator docs (runbooks/playbooks/architecture/…) are delivered from the repo-
+# root docs/ tree by copier.yml `_tasks` (OUTSIDE the scaffold), so they refresh
+# on update — overwrite-managed, never hand-edited in an instance.
+managed  docs/**
+managed  terraform-iac-bootstrap/AGENTS.md
+managed  terraform-iac-bootstrap/*/README.md
+managed  terraform-iac-bootstrap/*/variables.tf
+managed  terraform-iac-bootstrap/*/outputs.tf
+managed  terraform-iac-bootstrap/*/providers.tf
+managed  terraform-iac-bootstrap/*/versions.tf
+managed  terraform-iac-bootstrap/*/terraform.tfvars.example
+managed  terraform-iac-bootstrap/cluster-bootstrap/.gitignore
+managed  terraform-iac-bootstrap/cluster-bootstrap/manifests/**
+# Shared local-exec bodies for the kyverno_* policy null_resources in main.tf —
+# pure template logic (no fork-local tokens), overwritten on update.
+managed  terraform-iac-bootstrap/cluster-bootstrap/scripts/**
+managed  apl-values/README.md
+# The `example` overlay is the template's reference env — adopters CLONE it to
+# apl-values/<env>/ (which is `owned` below); the example itself stays managed.
+managed  apl-values/example/**
+
+# ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─
+# Workflows: the `uses:`/`template-ref` org + any dispatch defaults you tune.
+merge    .github/workflows/**
+# Renovate: the packageName/registryUrls you repoint to your fork on adoption.
+merge    renovate.json
+# Dev Container: devcontainer.json pins the prebuilt toolchain image by the
+# upstream template org (<@ upstream_org @>) — repoint it if you build your own.
+merge    .devcontainer/**
+# TF roots: the `git::` module source host/org (the ?ref= version is Renovate's).
+merge    terraform-iac-bootstrap/*/main.tf
+# Backend: template ships the backend block; you fill in bucket/key/endpoint.
+merge    terraform-iac-bootstrap/*/backend.tf
+
+# ── owned: per-instance state/config/secrets — never touched by an update ─────
+# Provider lockfiles: regenerated per instance by `terraform init`.
+owned    terraform-iac-bootstrap/*/.terraform.lock.hcl
+# Operator allow-list CIDRs for the control-plane ACL (your IPs).
+owned    terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt
+# Per-deployment overlays cloned from apl-values/example (the example stays
+# managed via the rule above, which — being earlier — is overridden here for
+# every OTHER env dir; precedence is last-match, so re-assert example as managed).
+owned    apl-values/*/**
+managed  apl-values/example/**
+# Generated per-env Terraform inputs (llz env add writes these; not the
+# committed *.example). Never present in the template tree itself.
+owned    terraform-iac-bootstrap/**/*.auto.tfvars
+owned    terraform-iac-bootstrap/**/[a-z]*.tfvars
+# Operator escape hatches, never shipped by the template:
+#   .llz/commands.yaml      — instance-specific `llz` subcommands (replaces the old
+#                             Makefile.local; see docs/extending-llz.md).
+#   .githooks/pre-commit.local — extra pre-commit checks, run by `llz precommit`
+#                             after the built-in lint gate.
+# `copier update` never touches them.
+owned    .llz/commands.yaml
+owned    .githooks/pre-commit.local
+# Template provenance stamp (written by template-scripts/stamp-template-version.sh).
+owned    .template-version
+# Copier answer tracker (rendered + maintained by `copier copy`/`copier update`).
+owned    .copier-answers.yml

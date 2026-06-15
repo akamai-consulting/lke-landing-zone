@@ -1,0 +1,47 @@
+{{- if .Values.coreDNS.custom.enabled }}
+# Cluster DNS rewrite: *.{{ .Values.coreDNS.custom.matchSuffix }} →
+# {{ .Values.coreDNS.custom.gatewayTarget }}.
+#
+# Why this exists:
+#   apl-core publishes Istio ServiceEntry resources for *.{{ .Values.coreDNS.custom.matchSuffix }} hostnames
+#   (harbor.{{ .Values.coreDNS.custom.matchSuffix }}, keycloak.{{ .Values.coreDNS.custom.matchSuffix }}, …). ServiceEntries only
+#   register hostnames in the Istio mesh — they do NOT create CoreDNS records.
+#   Pods WITHOUT a sidecar (apl-keycloak-operator, oauth2-proxy with explicit
+#   `sidecar.istio.io/inject: false`, init containers in any pod) fall through to
+#   cluster CoreDNS which returns NXDOMAIN for *.{{ .Values.coreDNS.custom.matchSuffix }} —
+#   apl-keycloak-operator crashloops with `getaddrinfo ENOTFOUND
+#   keycloak.{{ .Values.coreDNS.custom.matchSuffix }}`, oauth2-proxy's `wait-for-keycloak` init container
+#   busy-loops forever, otomi-api fails its OIDC handshake.
+#
+# How the fix works:
+#   LKE's `workload-coredns` Corefile already includes `import custom/*.include`
+#   INSIDE its `.:53 { ... }` block (the `coredns-custom` ConfigMap is mounted
+#   optional at /etc/coredns/custom/). This ConfigMap provides one .include file
+#   with a regex rewrite. CoreDNS's `reload` plugin picks it up within seconds.
+#
+#   The rewrite changes <anything>.{{ .Values.coreDNS.custom.matchSuffix }} to the platform Istio gateway
+#   Service, which the existing `kubernetes cluster.local` plugin resolves to the
+#   Gateway Service ClusterIP. `answer auto` rewrites the response name back to
+#   the original query so the client doesn't see the substitution. The Istio
+#   Gateway then routes by Host header to the correct backend.
+#
+# Sync-wave {{ .Values.syncWaves.corednsCustom }} — must land before any pod that wait-loops on
+# *.{{ .Values.coreDNS.custom.matchSuffix }} (oauth2-proxy and apl-keycloak-operator both start
+# immediately when apl-core syncs).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.corednsCustom | quote }}
+data:
+  # Filename ending in `.include` is imported INSIDE the existing `.:53 { }`
+  # block by the base Corefile's `import custom/*.include` directive.
+  # CoreDNS rewrite plugin docs: https://coredns.io/plugins/rewrite/
+  internal-rewrite.include: |
+    rewrite stop {
+        name regex (.*)\.{{ .Values.coreDNS.custom.matchSuffix }}\.? {{ .Values.coreDNS.custom.gatewayTarget }}
+        answer auto
+    }
+{{- end }}

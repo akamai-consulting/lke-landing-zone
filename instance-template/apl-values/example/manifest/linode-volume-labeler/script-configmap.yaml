@@ -1,0 +1,111 @@
+# ConfigMap shipping the relabeler script. Mounted at /scripts in the CronJob
+# pod (defaultMode: 0555, read-only).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: linode-volume-labeler-script
+  namespace: llz-linode-volume-labeler
+data:
+  relabel.sh: |
+    #!/bin/sh
+    # Linode Volume relabeler — runs on a CronJob schedule, hits Linode's
+    # PUT /v4/volumes/{id} for every PV in the cluster, rewriting the UI Label
+    # from the CSI-default `<prefix><PV-name>` (which is `pvc-<uuid>` on LKE-E
+    # because the managed CSI controller's --volume-label-prefix is empty) to a
+    # human-readable `<region-short>-<namespace>-<pvc-name>` truncated to the
+    # 32-char Linode label cap.
+    #
+    # Why post-creation rename (vs SC parameter / CSI flag): the Linode Block
+    # Storage CSI driver has no SC parameter or per-PVC mechanism for label
+    # customization. This idempotent, rate-limited CronJob is the practical
+    # fallback that lives entirely in our control.
+    set -eu
+
+    : "${LINODE_TOKEN:?LINODE_TOKEN env var required}"
+    : "${REGION_SHORT:?REGION_SHORT env var required (pri|sec|sta|lab)}"
+
+    # Build map of {volume_id => "namespace/pvc-name"} from cluster PVs.
+    # Skip non-Linode-CSI PVs and PVs without a claimRef (orphaned, awaiting reclaim).
+    TMP_MAP=$(mktemp)
+    trap 'rm -f "$TMP_MAP"' EXIT
+
+    kubectl get pv -o json |
+      jq -r '
+        .items[]
+        | select(.spec.csi.driver == "linodebs.csi.linode.com")
+        | select(.spec.claimRef != null)
+        | "\(.spec.csi.volumeHandle | split("-")[0])\t\(.spec.claimRef.namespace)\t\(.spec.claimRef.name)"
+      ' >"$TMP_MAP"
+
+    if [ ! -s "$TMP_MAP" ]; then
+      echo "no Linode-CSI PVs with bound PVCs found; nothing to relabel"
+      exit 0
+    fi
+
+    RENAMED=0
+    SKIPPED_OK=0
+    SKIPPED_404=0
+    ERRORS=0
+
+    while IFS="	" read -r volume_id namespace pvc_name; do
+      [ -z "$volume_id" ] && continue
+      raw_label="${REGION_SHORT}-${namespace}-${pvc_name}"
+      # Sanitize to Linode's [a-zA-Z0-9_-] charset, truncate to 32 chars, then
+      # strip any trailing `-` left over from truncation (cosmetic).
+      desired_label=$(printf '%s' "$raw_label" | tr -c 'A-Za-z0-9_-' '-' | cut -c -32 | sed 's/-*$//')
+
+      # GET the current label. 404 means the volume was deleted out-of-band
+      # (e.g. via Linode UI) but the PV still references it — skip.
+      resp_file=$(mktemp)
+      http_code=$(curl -s -o "$resp_file" -w '%{http_code}' \
+        -H "Authorization: Bearer $LINODE_TOKEN" \
+        "https://api.linode.com/v4/volumes/${volume_id}")
+
+      if [ "$http_code" = "404" ]; then
+        echo "skip ${volume_id}: 404 — Linode volume missing"
+        SKIPPED_404=$((SKIPPED_404 + 1))
+        rm -f "$resp_file"
+        continue
+      fi
+
+      if [ "$http_code" != "200" ]; then
+        echo "error ${volume_id}: GET returned ${http_code}"
+        cat "$resp_file" >&2
+        ERRORS=$((ERRORS + 1))
+        rm -f "$resp_file"
+        continue
+      fi
+
+      current_label=$(jq -r '.label' <"$resp_file")
+      rm -f "$resp_file"
+
+      if [ "$current_label" = "$desired_label" ]; then
+        SKIPPED_OK=$((SKIPPED_OK + 1))
+        continue
+      fi
+
+      # PUT the new label. Idempotent on Linode side.
+      put_resp=$(mktemp)
+      put_code=$(curl -s -o "$put_resp" -w '%{http_code}' \
+        -X PUT \
+        -H "Authorization: Bearer $LINODE_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"label\": \"$desired_label\"}" \
+        "https://api.linode.com/v4/volumes/${volume_id}")
+
+      if [ "$put_code" = "200" ]; then
+        echo "renamed ${volume_id}: ${current_label} -> ${desired_label}"
+        RENAMED=$((RENAMED + 1))
+      else
+        echo "error ${volume_id}: PUT returned ${put_code}"
+        cat "$put_resp" >&2
+        ERRORS=$((ERRORS + 1))
+      fi
+      rm -f "$put_resp"
+    done <"$TMP_MAP"
+
+    echo
+    echo "summary: renamed=${RENAMED} already-ok=${SKIPPED_OK} api-404=${SKIPPED_404} errors=${ERRORS}"
+
+    # Non-zero exit only on errors so CronJob alerts fire.
+    [ "$ERRORS" -eq 0 ]

@@ -1,0 +1,73 @@
+# Dedicated, self-signed cert-manager CA for OpenBao's server/API TLS
+# (`openbao-tls`). This CA lives ENTIRELY in cert-manager and has NO dependency
+# on OpenBao — which is the whole point.
+#
+# REQUIRED BY THE llz-openbao-platform CHART: that chart's `openbao-tls`
+# Certificate sets `issuerRef: { name: openbao-ca, kind: ClusterIssuer }`. The
+# ClusterIssuer below is what satisfies it — without this manifest the chart's
+# serving cert never issues, OpenBao never gets a TLS cert, and the platform
+# cannot bootstrap. The issuer/cert/secret names (`openbao-ca`,
+# `openbao-selfsigned`) MUST stay as-is to match that chart contract.
+#
+# WHY A STABLE SELF-SIGNED CA: `openbao-tls` is signed by `openbao-ca` from
+# first issuance and is NEVER re-signed → no mid-bootstrap CA rotation, no
+# OpenBao reload, no ESO CA re-read. cert-manager can issue `openbao-tls`
+# BEFORE OpenBao starts (the pod waits in ContainerCreating for the secret
+# mount). ESO's caProvider reads `openbao-ca`'s cert (key `ca.crt` on the
+# openbao-tls Secret), stable for the CA's 10-year life — the leaf renews
+# every ~80 days under the SAME CA, so `ca.crt` is unchanged on renewal.
+#
+# WAVES — this CA has no OpenBao dependency, so it comes up early:
+#   -16  self-signed issuer + the CA Certificate
+#   -15  the CA ClusterIssuer that signs openbao-tls
+# cert-manager (installed by apl-core) is up well before this tree, and a
+# selfSigned issuer has no other prerequisites, so these reach Ready
+# immediately.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: openbao-selfsigned
+  annotations:
+    argocd.argoproj.io/sync-wave: "-16"
+spec:
+  selfSigned: {}
+---
+# Self-signed root that signs openbao-tls. Long-lived (10y) so the serving CA
+# is effectively immutable across the cluster's life; the openbao-tls leaf
+# rotates under it on the normal ~80-day cadence without changing this CA.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: openbao-ca
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "-16"
+spec:
+  isCA: true
+  commonName: llz-openbao-ca
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["infra"]
+  secretName: openbao-ca
+  duration: 87600h    # 10 years
+  renewBefore: 2160h  # 90 days
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: openbao-selfsigned
+    kind: ClusterIssuer
+---
+# CA ClusterIssuer that signs openbao-tls. Reads the keypair from the
+# `openbao-ca` Secret minted by the Certificate above (cert-manager's
+# cluster-resource-namespace is `cert-manager`, where that Secret lives).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: openbao-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  ca:
+    secretName: openbao-ca

@@ -1,0 +1,51 @@
+name: Scheduled Checks
+
+# Thin caller for the reusable LLZ workflow — the full body (OpenBao/ESO health,
+# rotation-SLA checks, PAT-expiry audits, PrometheusRule + cert-manager health,
+# Go CVE audit, template-drift report) lives in the template and is sourced there,
+# along with the fetch-kubeconfig action, the `llz openbao exec` passthrough, and
+# the Go tools/ module the audit jobs build (see docs/templatization-plan.md
+# §"Keeping instances in sync"). This stub owns only the trigger surface: the
+# weekly + daily + monthly crons.
+# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
+# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+
+on:
+  schedule:
+    # Weekly Sunday 02:00 UTC — fuzz, mutation tests
+    - cron: "0 2 * * 0"
+    # Daily 06:00 UTC — OpenBao seal status + ESO readiness
+    - cron: "0 6 * * *"
+    # Monthly 1st @ 07:00 UTC — template drift report
+    - cron: "0 7 1 * *"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds to run each fuzz target"
+        required: false
+        default: "60"
+      drift_branch:
+        description: "Template branch the drift report compares against"
+        required: false
+        default: main
+      drift_strict:
+        description: "Fail the drift report if the instance is behind the template"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    # Pinned to an immutable LLZ template release tag (not @main) so updates
+    # arrive as reviewable Renovate PRs. ADOPTERS: repoint the org to your fork.
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-scheduled-checks.yml@<@ llz_version @>
+    with:
+      fuzz_seconds: ${{ inputs.fuzz_seconds || '60' }}
+      drift_branch: ${{ inputs.drift_branch || 'main' }}
+      drift_strict: ${{ inputs.drift_strict || false }}
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref: <@ llz_version @>
+    secrets: inherit

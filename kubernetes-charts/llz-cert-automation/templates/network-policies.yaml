@@ -1,0 +1,152 @@
+# Default-deny + allow rules for the cert-automation namespace.
+#
+# Pods that run here:
+#   - Argo Events EventBus JetStream replicas (3) — eventbus.yaml
+#   - Argo Events EventSource pod (resource watch on the watched Secret) — eventsource.yaml
+#   - Argo Events Sensor pod (submits Workflow on UPDATE) — sensor.yaml
+#   - Argo Workflow pods spawned from the haproxy-rebuild WorkflowTemplate
+#
+# Selectors used below:
+#   - EventBus / EventSource / Sensor pods: `controller=<name>-controller`
+#     (argo-events 1.9+ — per project-argo-events-label-change-v19, pre-1.9
+#     labels `app.kubernetes.io/component=*` match nothing on current charts).
+#   - Argo Workflow pods: `workflows.argoproj.io/workflow` Exists.
+#
+# Sync-wave -10 applies these before any sensor / eventsource / eventbus /
+# workflow pods start.
+#
+# LKE-E port 6443 reminder (project-lke-e-cilium-np-port-6443): Cilium
+# evaluates policy AFTER DNAT, so apiserver-egress rules must list 6443
+# alongside 443 even though pods dial the in-cluster Service IP at :443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.networkPolicy | quote }}
+  name: {{ include "llz-cert-automation.name" . }}-default-deny
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.networkPolicy | quote }}
+  name: {{ include "llz-cert-automation.name" . }}-allow-dns
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+---
+# Workflow pods need cert-manager (read the TLS Secret), Harbor (push image),
+# the apiserver (kubectl), and GitHub (gh dispatch — covered by the
+# unrestricted 443 egress).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.networkPolicy | quote }}
+  name: {{ include "llz-cert-automation.name" . }}-allow-runner-egress
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: workflows.argoproj.io/workflow
+        operator: Exists
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.certManagerNamespace }}
+      ports:
+        - { port: 443, protocol: TCP }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.harborNamespace }}
+      ports:
+        - { port: 80,  protocol: TCP }
+        - { port: 443, protocol: TCP }
+    # apiserver — LKE-E evaluates post-DNAT, so we must allow 6443 too.
+    - ports:
+        {{- range .Values.networkPolicy.apiserverPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+---
+# Intra-namespace allow. Covers two distinct flows:
+#   1. JetStream EventBus replica gossip: the 3 eventbus-default-js-* pods need
+#      to talk to each other on NATS client (4222), cluster (6222), monitor
+#      (8222), and (chart-defined) metrics (7777) — without this, every replica
+#      logs "Waiting for routing to be established" and never reaches Ready,
+#      and the EventBus CR conditions reflect a degraded JetStream.
+#   2. Sensor / EventSource → EventBus: sensor and eventsource pods dial the
+#      EventBus client port (4222) on the JetStream replicas; without this
+#      they crashloop with "failed to new Nats Rpc: dial tcp ...:4222: i/o
+#      timeout" within ~5s of pod start.
+# Mirrors apl-values/_shared/manifest/argo-events/network-policies.yaml's
+# `argo-events-allow-intra-namespace` rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.networkPolicy | quote }}
+  name: {{ include "llz-cert-automation.name" . }}-allow-intra-namespace
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+# Egress to the Kubernetes apiserver for argo-events EventBus / Sensor /
+# EventSource pods (selectors per project-argo-events-label-change-v19):
+#   - EventBus JetStream replicas: leader election + status updates.
+#   - Sensor: when the dependency fires, the sensor uses the in-cluster
+#     apiserver to create the haproxy-rebuild Workflow under its serviceAccount
+#     (<name>-runner). Required even when the trigger is in-namespace.
+#   - EventSource: watches the TLS Secret in the cert-manager namespace via the
+#     apiserver watch stream (resource watch eventsource).
+# Dual-port (443 + 6443) per project-lke-e-cilium-np-port-6443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.networkPolicy | quote }}
+  name: {{ include "llz-cert-automation.name" . }}-allow-argo-events-apiserver-egress
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: controller
+        operator: In
+        values:
+          - eventbus-controller
+          - eventsource-controller
+          - sensor-controller
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        {{- range .Values.networkPolicy.apiserverPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}

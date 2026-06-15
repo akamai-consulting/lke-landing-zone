@@ -1,0 +1,59 @@
+# Argo Events Sensor — submits haproxy-rebuild Workflow on Secret change.
+#
+# Wiring:
+#   eventsource.yaml  →  EventBus "{{ .Values.eventBus.name }}"  →  this Sensor
+#     dependency "haproxy-tls-change"   (eventSourceName: haproxy-tls-resource,
+#                                        eventName: haproxy-tls)
+#     trigger    "submit-haproxy-rebuild"
+#       creates Workflow (generateName: haproxy-rebuild-) from WorkflowTemplate
+#       "haproxy-rebuild", parameterising image-tag from the observed Secret
+#       resourceVersion so each rebuild produces a uniquely-tagged Harbor
+#       artifact.
+#
+# harbor-url is sourced from .Values.harborUrl (hardcoded to the primary cluster
+# by default). If/when staging, secondary, or lab need to run their own HAProxy
+# rebuilds, override `harborUrl` per-env.
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: haproxy-rebuild-trigger
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # See eventbus.yaml for the wave rationale (argo-events at -15 →
+    # this CR at -14 to land after CRDs are registered).
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.argoEvents | quote }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  template:
+    serviceAccountName: {{ include "llz-cert-automation.runnerServiceAccount" . }}
+  dependencies:
+    - name: haproxy-tls-change
+      eventSourceName: haproxy-tls-resource
+      eventName: haproxy-tls
+  triggers:
+    - template:
+        name: submit-haproxy-rebuild
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: haproxy-rebuild-
+                namespace: {{ .Values.namespace }}
+              spec:
+                workflowTemplateRef:
+                  name: haproxy-rebuild
+                arguments:
+                  parameters:
+                    - name: harbor-url
+                      value: {{ .Values.harborUrl | quote }}
+                    - name: image-tag
+                      value: ""
+          parameters:
+            - src:
+                dependencyName: haproxy-tls-change
+                dataTemplate: "{{ `{{ .Input.body.resource.metadata.resourceVersion }}` }}"
+              dest: spec.arguments.parameters.1.value

@@ -1,0 +1,41 @@
+{{- /*
+Render one Argo CD Application per enabled component, in the order they appear
+in .Values.components. `enabled: false` drops the component from the render.
+Each Application carries: sync-wave annotation, optional finalizer, project,
+source (oci|git), destination, and syncPolicy (defaults + per-component merge).
+*/ -}}
+{{- $root := . -}}
+{{- range $component := .Values.components }}
+{{- if $component.enabled }}
+{{- if not $component.name }}{{ fail "every component requires a name" }}{{ end }}
+{{- if not $component.source }}{{ fail (printf "component %q requires a source block" $component.name) }}{{ end }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $component.name }}
+  namespace: {{ $root.Values.global.argocdNamespace }}
+  labels:
+    {{- include "llz-argo-bootstrap-apps.labels" $root | nindent 4 }}
+  annotations:
+    # Sync-wave encodes the bootstrap ordering — see values.yaml for the WHY of
+    # each wave. Quoted because Argo CD reads the annotation value as a string.
+    argocd.argoproj.io/sync-wave: {{ $component.syncWave | default "0" | quote }}
+  {{- if $root.Values.finalizer }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  {{- end }}
+spec:
+  {{- with $root.Values.revisionHistoryLimit }}
+  revisionHistoryLimit: {{ . }}
+  {{- end }}
+  project: {{ required "global.project is required" $root.Values.global.project }}
+  source:
+    {{- include "llz-argo-bootstrap-apps.source" (dict "ctx" $root "component" $component) | nindent 4 }}
+  destination:
+    server: {{ $root.Values.global.destinationServer }}
+    namespace: {{ required (printf "component %q: destinationNamespace is required" $component.name) $component.destinationNamespace }}
+  syncPolicy:
+    {{- include "llz-argo-bootstrap-apps.syncPolicy" (dict "ctx" $root "component" $component) | nindent 4 }}
+{{- end }}
+{{- end }}

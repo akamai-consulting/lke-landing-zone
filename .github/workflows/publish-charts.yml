@@ -1,0 +1,109 @@
+name: Publish Helm Charts
+
+# Packages every first-party Helm chart under kubernetes-charts/ and pushes it to GHCR as
+# an OCI artifact (oci://ghcr.io/<repo-owner>/charts/<chart>:<version>).
+#
+# Why GHCR (not the in-cluster Harbor): the charts the bootstrap itself consumes
+# (cluster-foundation, eso-cert-watcher, …) must come from a registry that
+# exists BEFORE the cluster does. Harbor runs *inside* the cluster, so it can't
+# serve the charts that stand the cluster up. See docs/templatization-plan.md §9.
+#
+# Versioning is immutable-by-convention: a chart is published only if its
+# Chart.yaml `version:` has not already been pushed. To release a change, bump
+# the chart's `version:` — never overwrite an existing tag. The monorepo's Argo
+# Applications reference a pinned `targetRevision: X.Y.Z`, so an overwritten tag
+# would silently mutate every consumer.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'kubernetes-charts/**'
+      - '.github/workflows/publish-charts.yml'
+  workflow_dispatch:
+    inputs:
+      chart:
+        description: 'Single chart to publish (directory name under kubernetes-charts/), or "all"'
+        required: true
+        default: all
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  HELM_VERSION: "3.17.3"
+  # OCI repository prefix. Charts land at oci://ghcr.io/<repo-owner>/charts/<chart>.
+  CHARTS_REPO_PATH: charts
+
+jobs:
+  publish:
+    name: Package & push charts
+    runs-on: ubuntu-latest
+    # packages: write lets the built-in GITHUB_TOKEN push to GHCR — no PAT needed.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Resolve GHCR namespace
+        id: ns
+        # GHCR paths must be lowercase; derive the namespace from the repo owner so
+        # charts always land in this repo's org (akamai-consulting), and in an
+        # adopter's own org after they fork — never a hardcoded personal account.
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        with:
+          version: v${{ env.HELM_VERSION }}
+
+      - name: Log in to GHCR (Helm OCI)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | helm registry login "$REGISTRY" \
+            -u "$GH_ACTOR" --password-stdin
+
+      - name: Package & push charts
+        env:
+          # workflow_dispatch passes a single chart name (or "all"); push events
+          # default to "all".
+          SELECTED_CHART: ${{ github.event.inputs.chart || 'all' }}
+          GHCR_OWNER: ${{ steps.ns.outputs.owner }}
+        run: |
+          set -euo pipefail
+          OCI_DEST="oci://${REGISTRY}/${GHCR_OWNER}/${CHARTS_REPO_PATH}"
+          PUSHED=0
+          for dir in kubernetes-charts/*/; do
+            [ -f "${dir}Chart.yaml" ] || continue
+            name="$(helm show chart "$dir" | awk '/^name:/ {print $2; exit}')"
+            version="$(helm show chart "$dir" | awk '/^version:/ {print $2; exit}')"
+            if [ "$SELECTED_CHART" != "all" ] && [ "$SELECTED_CHART" != "$name" ]; then
+              continue
+            fi
+
+            # Immutability guard: skip if this exact version already exists in GHCR.
+            # `helm show chart oci://…:version` exits non-zero when the tag is absent.
+            if helm show chart "${OCI_DEST}/${name}" --version "$version" >/dev/null 2>&1; then
+              echo "::notice::${name} ${version} already published — skipping (bump version: to release)"
+              continue
+            fi
+
+            echo "Packaging ${name} ${version}"
+            helm dependency build "$dir" 2>/dev/null || true
+            helm package "$dir" --destination /tmp/charts
+            echo "Pushing ${name} ${version} → ${OCI_DEST}"
+            helm push "/tmp/charts/${name}-${version}.tgz" "$OCI_DEST"
+            PUSHED=$((PUSHED + 1))
+          done
+          echo "::notice::Published ${PUSHED} chart(s)"
+
+      - name: Logout
+        if: always()
+        run: helm registry logout "$REGISTRY" || true

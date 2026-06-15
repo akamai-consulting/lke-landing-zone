@@ -1,0 +1,36 @@
+apiVersion: v2
+name: llz-openbao-platform
+description: >-
+  Opinionated "OpenBao on Kubernetes, done right" wrapper. Wraps the upstream
+  OpenBao Helm chart (HA integrated-Raft, 3 replicas) and adds the cluster
+  integration the bare chart omits: a cert-manager-issued serving cert with the
+  per-pod raft SANs, default-deny + explicit-allow NetworkPolicies, a Prometheus
+  ServiceMonitor, a Promtail audit-log shipper sidecar config, and an Argo
+  CronWorkflow that rotates the AppRole secret_id used by CI and ESO. Every
+  non-obvious value is a default that captures an operational scar (raft join
+  ordering, PSS securityContexts, the LKE-E 443→6443 NetworkPolicy DNAT, audit
+  HCL `type =` requirement) so a sibling deployment overrides only what differs.
+type: application
+# Chart version — bump on any template/values change. Published to
+# oci://ghcr.io/<org>/charts/llz-openbao-platform by .github/workflows/publish-charts.yml.
+version: 0.1.3
+# appVersion tracks the OpenBao server image tag default in values.yaml.
+appVersion: "2.5.0"
+keywords:
+  - openbao
+  - vault
+  - secrets
+  - raft
+  - cert-manager
+  - approle-rotation
+home: https://github.com/akamai-consulting/lke-landing-zone
+maintainers:
+  - name: lke-landing-zone platform team
+dependencies:
+  - name: openbao
+    version: 0.13.0
+    repository: https://openbao.github.io/openbao-helm
+    condition: openbao.enabled
+
+annotations:
+  artifacthub.io/license: Apache-2.0

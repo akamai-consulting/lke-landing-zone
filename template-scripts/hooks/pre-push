@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "pre-push: checking shell syntax"
+while IFS= read -r s; do
+  bash -n "$s"
+done < <(find template-scripts -name '*.sh' -type f)
+
+# ── Scope the tools build to commits that touch the Go module ─────────────────
+UPSTREAM=$(git rev-parse --verify '@{u}' 2>/dev/null || echo "")
+if [[ -n "$UPSTREAM" ]]; then
+  CHANGED=$(git diff --name-only "$UPSTREAM"..HEAD)
+else
+  # No upstream yet (first push) — build everything
+  CHANGED="all"
+fi
+
+needs_build() {
+  local prefix="$1"
+  [[ "$CHANGED" == "all" ]] || echo "$CHANGED" | grep -q "^${prefix}/"
+}
+
+# ── tools/ module (Go) ────────────────────────────────────────────────────────
+if needs_build "tools"; then
+  echo "pre-push: building tools/ module"
+  (cd tools && go build ./...)
+else
+  echo "pre-push: skipping tools/ (no changes)"
+fi

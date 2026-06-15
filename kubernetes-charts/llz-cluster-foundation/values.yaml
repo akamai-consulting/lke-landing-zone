@@ -1,0 +1,304 @@
+# Default values for cluster-foundation.
+#
+# This chart is the secure-by-default baseline that every namespace on a Linode
+# LKE-E + apl-core cluster needs. apl-core (Akamai App Platform) is a HARD
+# dependency and Linode LKE-E is a HARD given — the defaults below are
+# Linode/apl-core-shaped on purpose. A sibling deployment overrides only what
+# genuinely differs (region, domain suffix, namespace list, CIDRs/ports if their
+# control plane differs). Do NOT scrub the Linode/apl-core assumptions.
+#
+# Everything here encodes an operational scar: a default-permit cluster runs
+# every workload unrestricted, apl-core's helmfile ships no per-app NPs, and the
+# LKE-E managed control plane + Istio-sidecar injection break naive NetworkPolicy
+# in ways that only surface as CrashLoopBackOff / "ClusterIsNotReady" /
+# NXDOMAIN. The comments capture how each scar was diagnosed so the next adopter
+# inherits the fix as a default.
+
+# nameOverride / fullnameOverride follow the standard Helm idiom. They affect
+# ONLY the chart-level labels — the cluster-singleton resource NAMES this chart
+# manages (coredns-custom ConfigMap, the patcher Jobs, the NetworkPolicies) are
+# literal contracts referenced by LKE's base Corefile / apl-core / other
+# components and are NEVER prefixed. Left empty, labels read "cluster-foundation".
+nameOverride: ""
+fullnameOverride: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared image for the in-cluster patcher Jobs (CoreDNS restart + StorageClass
+# demotion). alpine/k8s ships a current kubectl + busybox shell, which is all
+# either Job needs. Tag tracks Chart.appVersion.
+# ─────────────────────────────────────────────────────────────────────────────
+image:
+  repository: alpine/k8s
+  tag: "1.32.4"
+  pullPolicy: IfNotPresent
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Argo CD sync-wave ordering. These encode the bootstrap ordering and MUST be
+# preserved — Argo CD does not guarantee resource ordering within a wave, and
+# every value here was chosen to defeat a specific race.
+# ─────────────────────────────────────────────────────────────────────────────
+syncWaves:
+  # Namespaces land at -20 (matching AppProjects) so they exist BEFORE any
+  # ConfigMap/Application/NetworkPolicy that targets them. Without this, wave-0
+  # resources race namespace creation on cold bootstrap.
+  namespaces: "-20"
+  # All per-namespace NetworkPolicies at -10 so they land before workload pods
+  # (project_np_sync_wave_race).
+  networkPolicies: "-10"
+  # CoreDNS-custom ConfigMap at -10 — must land before any pod that wait-loops
+  # on *.internal (oauth2-proxy, apl-keycloak-operator start the moment apl-core
+  # syncs).
+  corednsCustom: "-10"
+  # CoreDNS-restart Job + its RBAC/NP at -9: AFTER the ConfigMap (-10) but it
+  # still reaches the kube-system rollout target via the pre-NP path open at
+  # this stage. The Job itself is also a PostSync hook (see below).
+  corednsRestart: "-9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Namespaces this chart creates — ONLY the ones apl-core does NOT manage itself.
+# apl-core already creates argocd, cert-manager, harbor, istio-system, keycloak,
+# gitea, kyverno, sealed-secrets, cnpg-system, trivy-system, external-dns, and
+# its apl-* control plane. Do NOT add those here — apl-core contests the
+# Namespace object (only) and server-side-apply conflicts will result.
+#
+# Each entry: name + labels. Most carry restricted Pod Security Standards
+# (enforce/warn/audit) pinned to a version. A few are pre-created purely to win
+# a cold-bootstrap race (see per-entry notes) and deliberately omit PSS labels so
+# apl-core's later create-or-replace merges cleanly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Reused PSS label block. The version pin must match the cluster's Kubernetes
+# minor; bump in lockstep with the LKE-E version (current default: v1.33.6+lke7).
+podSecurityStandardsVersion: "v1.33"
+
+namespaces:
+  # openbao — our HA Raft cluster. Full restricted PSS.
+  - name: llz-openbao
+    restricted: true
+    labels:
+      monitoring: enabled
+  # grafana — apl-core puts its bundled Grafana HERE (not observability) later
+  # in its helmfile. Pre-created so our Loki object-store ExternalSecret doesn't
+  # fail with `namespaces "grafana" not found` on cold bootstrap. PSS left UNSET
+  # so apl-core's later apply (which sets istio-injection=enabled) wins on labels.
+  - name: grafana
+    restricted: false
+    labels:
+      monitoring: enabled
+  # monitoring — apl-core runs the prometheus/loki stack (Loki included) HERE.
+  # Our Loki object-store ExternalSecret lands here so Loki can mount the S3
+  # creds via singleBinary.extraEnvFrom; it would otherwise fail on cold
+  # bootstrap / server-side dry-run with `namespaces "monitoring" not found`
+  # (apl-core, not this tree, normally creates it). PSS left UNSET on purpose —
+  # apl-core's Loki/Prometheus pods are not `restricted`-compliant and the live
+  # namespace carries no PSA labels, so apl-core's later apply wins on labels.
+  - name: monitoring
+    restricted: false
+    labels:
+      monitoring: enabled
+  # observability — holds Grafana dashboard ConfigMaps + Loki ExternalSecret;
+  # apl-core's Grafana sidecar (searchNamespace=ALL) loads dashboards from here.
+  # OpenBao NPs also reference this namespace. Full restricted PSS.
+  - name: llz-observability
+    restricted: true
+    labels:
+      monitoring: enabled
+  # argo-workflows / argo-events / external-secrets — their install Apps (wave
+  # -15) set CreateNamespace=true, but Argo treats -15 "complete" when the
+  # Application resource is created, NOT when its Helm chart finishes. The NPs in
+  # those trees (wave -10) would race the eventual namespace creation. Pre-create
+  # at -20 to kill the race; the install Apps' later Helm create is a no-op merge.
+  - name: llz-argo-workflows
+    restricted: false
+    labels:
+      monitoring: enabled
+  - name: llz-argo-events
+    restricted: false
+    labels:
+      monitoring: enabled
+  - name: llz-external-secrets
+    restricted: false
+    labels:
+      monitoring: enabled
+  # linode-volume-labeler — dual-owned with Terraform, which creates it pre-Argo
+  # for credential-injection ordering. This declaration exists so the Argo
+  # dry-run lint (kind cluster, no TF) sees the namespace before the labeler SA +
+  # NP + CronFob land; server-side apply makes TF's pre-existing namespace a
+  # no-op merge target. LABELS MUST MATCH TF's set exactly (cluster-bootstrap/
+  # main.tf ~line 1216) or SSA reports ownership conflicts — hence the explicit
+  # bootstrap label + restricted PSS WITHOUT a version pin (matching TF).
+  - name: llz-linode-volume-labeler
+    restricted: false
+    labels:
+      lke-landing-zone.akamai.io/managed-by-bootstrap: "true"
+      pod-security.kubernetes.io/enforce: restricted
+      pod-security.kubernetes.io/audit: restricted
+      pod-security.kubernetes.io/warn: restricted
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NetworkPolicy knobs. apl-core's helmfile creates cert-manager/harbor/
+# istio-system/observability but ships NO NetworkPolicies into them (its 5.0.0
+# values schema has no per-app NP knob), so on a default-permit cluster every
+# workload runs unrestricted. We drop additive default-deny + minimum-viable
+# allows here. openbao NPs come from its OWN Application tree and is NOT
+# covered here.
+# ─────────────────────────────────────────────────────────────────────────────
+networkPolicies:
+  # Master toggle for the whole foundation NP set.
+  enabled: true
+
+  # LKE-E apiserver egress port pair. On LKE-E the apiserver is reached via a
+  # DNAT: the in-cluster `kubernetes` Service is :443, but Cilium sees the
+  # DNAT'd target on :6443 post-rewrite (project_lke_e_cilium_np_port_6443).
+  # BOTH are required in every allow-egress rule or kubectl/controllers silently
+  # lose the apiserver. There is NO in-cluster pod labeled
+  # `component: kube-apiserver` on LKE-E (managed control plane), so these rules
+  # intentionally use NO `to:` selector — a podSelector would match nothing and
+  # block all apiserver egress.
+  apiserverPorts:
+    - 443
+    - 6443
+
+  # DNS egress ports (CoreDNS) — opened in every default-deny namespace.
+  dnsPorts:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+
+  # The istiod control-plane Service/pod selector and xDS ports. Pods with an
+  # Istio sidecar (injected in cert-manager/harbor/observability) need egress to
+  # istiod for xDS + cert signing; WITHOUT it Envoy's iptables redirect kills
+  # ALL pod egress (including kube-apiserver) and the workload never reaches
+  # Ready. Required in every namespace that has BOTH default-deny AND sidecar
+  # injection.
+  istiod:
+    namespace: istio-system
+    podLabel:
+      app: istiod
+    ports:
+      - 15010   # XDS plaintext (legacy)
+      - 15012   # XDS mTLS + cert signing
+      - 15014   # Monitoring
+
+  # The platform Istio ingress gateway. Gateway API mode labels gateway pods with
+  # `gateway.networking.k8s.io/gateway-name: <name>` (set by the istio
+  # gateway-controller), NOT the legacy `app: gateway-<name>`. NP selectors must
+  # use the Gateway-API label or they match nothing.
+  gateway:
+    gatewayNameLabel: gateway.networking.k8s.io/gateway-name
+    gatewayName: platform
+    # Ports the gateway pods accept ingress on from anywhere.
+    ingressPorts:
+      - 80      # HTTP (HTTPS-redirect)
+      - 443     # HTTPS (TLS termination)
+      - 15021   # Envoy ready
+
+  # istiod (control plane) ingress ports — admission webhooks + discovery.
+  istiodIngressPorts:
+    - 15010   # XDS plaintext (deprecated path)
+    - 15012   # XDS mTLS
+    - 15014   # Monitoring
+    - 15017   # Validation + injection webhooks
+
+  # CNPG (CloudNativePG) operator + Prometheus allow in the harbor namespace.
+  # harbor-default-deny blocks the cnpg-system operator's cross-namespace health
+  # poll of each Postgres instance's :8000 status endpoint → "Instance Status
+  # Extraction Error", harbor-otomi-db stays ClusterIsNotReady, the harbor DB
+  # Argo app sits Degraded, convergence stalls. Second rule lets Prometheus
+  # (monitoring ns) scrape the CNPG :9187 metrics port (otherwise that target
+  # reads connection-refused). Scoped to CNPG instance pods only.
+  cnpg:
+    instancePodLabel:
+      cnpg.io/podRole: instance
+    operatorNamespace: cnpg-system
+    operatorPorts:
+      - port: 8000   # CNPG instance status (operator health poll)
+        protocol: TCP
+      - port: 5432   # postgres (operator connectivity checks)
+        protocol: TCP
+    metricsNamespace: monitoring
+    metricsPorts:
+      - port: 9187   # CNPG Prometheus metrics
+        protocol: TCP
+
+  # The grafana namespace is allowed ingress into observability (Grafana → OTel
+  # Collector / dashboards). Kept as a value since apl-core's Grafana namespace
+  # name is a platform assumption.
+  grafanaNamespace: grafana
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CoreDNS *.internal rewrite. apl-core publishes Istio ServiceEntries for
+# *.internal hostnames (harbor.internal, keycloak.internal, …) but ServiceEntries
+# register hostnames only in the MESH — they create no CoreDNS records. Non-meshed
+# pods (apl-keycloak-operator, oauth2-proxy with sidecar.istio.io/inject=false,
+# init containers) fall through to cluster CoreDNS and get NXDOMAIN, crashlooping
+# with `getaddrinfo ENOTFOUND keycloak.internal`. LKE's base Corefile already
+# `import custom/*.include` INSIDE its `.:53 {}` block; this ConfigMap supplies
+# that include with a regex rewrite to the platform Istio gateway Service, which
+# then routes by Host header to the right backend.
+# ─────────────────────────────────────────────────────────────────────────────
+coreDNS:
+  custom:
+    enabled: true
+    # The domain suffix the rewrite matches. LKE/apl-core uses bare `internal`
+    # (harbor.internal, keycloak.internal). A sibling on a different suffix
+    # overrides this; it becomes the `(.*)\.<suffix>\.?` regex below.
+    matchSuffix: internal
+    # The in-cluster target the rewrite points at — the platform Istio ingress
+    # gateway Service FQDN. `answer auto` rewrites the response name back to the
+    # original query so the client never sees the substitution.
+    gatewayTarget: platform-istio.istio-system.svc.cluster.local.
+  # One-shot Job that rollout-restarts CoreDNS once after the ConfigMap first
+  # lands. CoreDNS's `reload` plugin watches the Corefile mtime but NOT the
+  # import-dir contents: on a fresh bootstrap it logs "No files matching import
+  # glob pattern" and never registers the include, so *.internal stays NXDOMAIN
+  # until a pod restart. (Hit directly during the lke610071 bootstrap.) One-shot,
+  # not periodic — later ConfigMap edits DO trigger reload once the file exists.
+  restart:
+    enabled: true
+    # The CoreDNS Deployment to restart. LKE names it workload-coredns.
+    targetDeployment: workload-coredns
+    # Block until the rollout is Available so downstream pods that resolve
+    # *.internal don't crashloop in the 30-60s reload window.
+    rolloutStatusTimeout: "180s"
+    availableTimeout: "60s"
+    resources:
+      limits:
+        cpu: "100m"
+        memory: "64Mi"
+      requests:
+        cpu: "10m"
+        memory: "16Mi"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Default StorageClass demotion. LKE's `workload` HelmRelease (Flux-managed)
+# installs `linode-block-storage-retain` as the default. That SC has no
+# encryption param and no block-storage Volume tags, so any apl-core workload that
+# doesn't set storageClassName (gitea, keycloak, …) provisions UNENCRYPTED,
+# UNTAGGED Volumes — which the tag-filtered destroy hook can't reap, leaving
+# Linode quota orphans. This PostSync hook demotes the LKE default in favor of
+# our encrypted/tagged class, then verifies exactly one default remains and it's
+# ours. Runs on EVERY Argo sync (incl. selfHeal), so it self-recovers if Flux's
+# ~10m reconcile reverts the demotion.
+#
+# IMPORTANT: these StorageClass NAMES are literal contracts referenced by other
+# cluster components (the block-storage class is rendered by Terraform's
+# cluster-bootstrap module and consumed by name). Do NOT rename them — the
+# `block-storage-` prefix is an EXISTING name to preserve, not a new one to add.
+# ─────────────────────────────────────────────────────────────────────────────
+storageClassPatcher:
+  enabled: true
+  # The class we promote to default — rendered by Terraform (lands before
+  # apl-operator's helmfile starts creating PVCs), verified present here.
+  desiredDefault: block-storage-retain
+  # The LKE default we demote (annotate is-default-class=false). If absent on a
+  # single-class cluster the Job no-ops that step.
+  demote: linode-block-storage-retain
+  resources:
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+    requests:
+      cpu: "50m"
+      memory: "64Mi"

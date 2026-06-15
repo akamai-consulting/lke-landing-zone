@@ -1,0 +1,137 @@
+# Example: LKE Secure-by-Default Cluster Bootstrap
+#
+# Copy this to .github/workflows/ and adapt the env block to your project.
+#
+# Required repository secrets:
+#   LINODE_API_TOKEN    — Linode API token with full cluster permissions
+#   TF_STATE_ACCESS_KEY — S3-compatible backend access key
+#   TF_STATE_SECRET_KEY — S3-compatible backend secret key
+#   GH_TOKEN      — github.com PAT with repo
+#                         scope for registering the ArgoCD deploy key
+#
+# Required repository variables:
+#   TF_STATE_BUCKET     — S3 bucket name for Terraform state
+#   TF_STATE_ENDPOINT   — S3-compatible endpoint URL
+
+name: Bootstrap LKE Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Terraform workspace (primary | secondary)'
+        required: true
+        type: choice
+        options: [primary, secondary]
+
+env:
+  TF_VERSION: '1.9.8'
+  TF_IN_AUTOMATION: 'true'
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+  REGION: ${{ github.event.inputs.region }}
+  GH_REPO: 'your-org/your-instance-repo'
+  GH_API: 'https://api.github.com'
+
+jobs:
+  bootstrap:
+    name: Bootstrap cluster (${{ github.event.inputs.region }})
+    runs-on: ubuntu-latest
+    environment: infra-${{ github.event.inputs.region }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: ./.github/actions/setup-terraform
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+
+      - name: Terraform init
+        working-directory: terraform-iac-bootstrap/cluster
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          terraform init \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=cluster/${REGION}/terraform.tfstate" \
+            -backend-config="region=us-east-1"
+          terraform workspace select "$REGION" 2>/dev/null || terraform workspace new "$REGION"
+
+      - name: Terraform apply
+        working-directory: terraform-iac-bootstrap/cluster
+        env:
+          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_github_token:   ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          terraform apply -auto-approve -var-file="${REGION}.tfvars"
+
+      # ── Register ArgoCD deploy key on github.com ───────────────────────
+      # Fetches the public key from TF output and upserts it as a read-only
+      # deploy key on the GitOps repo via the GitHub API. Idempotent
+      # — a no-op if the key is already current.
+      #
+      # If GH_TOKEN is not available, skip this step and follow the
+      # manual instructions in terraform-modules/README.md.
+      - name: Register ArgoCD deploy key on github.com
+        working-directory: terraform-iac-bootstrap/cluster
+        env:
+          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_github_token:   ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+          GH_TOKEN:        ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          PUB_KEY="$(terraform output -raw argocd_deploy_public_key)"
+          # Compare type+material only (ignore trailing comment field)
+          PUB_MATERIAL="$(echo "$PUB_KEY" | awk '{print $1, $2}')"
+          KEY_TITLE="argocd-${REGION}"
+
+          EXISTING="$(curl -fsSL \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "${GH_API}/repos/${GH_REPO}/keys" | \
+            jq -r --arg t "$KEY_TITLE" '.[] | select(.title == $t) | {id,key} | @base64')"
+
+          if [ -n "$EXISTING" ]; then
+            EXISTING_ID="$(echo "$EXISTING" | base64 -d | jq -r '.id')"
+            EXISTING_MATERIAL="$(echo "$EXISTING" | base64 -d | jq -r '.key' | awk '{print $1, $2}')"
+            if [ "$EXISTING_MATERIAL" = "$PUB_MATERIAL" ]; then
+              echo "Deploy key '${KEY_TITLE}' is current — skipping"
+              exit 0
+            fi
+            echo "Key content changed — replacing '${KEY_TITLE}' (id=${EXISTING_ID})"
+            curl -fsSL -X DELETE \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "${GH_API}/repos/${GH_REPO}/keys/${EXISTING_ID}"
+          fi
+
+          curl -fsSL -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg t "$KEY_TITLE" --arg k "$PUB_KEY" \
+                  '{title: $t, key: $k, read_only: true}')" \
+            "${GH_API}/repos/${GH_REPO}/keys"
+          echo "Deploy key '${KEY_TITLE}' registered."
+
+      - name: Print deploy key (if GH_TOKEN absent)
+        if: ${{ secrets.GH_TOKEN == '' }}
+        working-directory: terraform-iac-bootstrap/cluster
+        env:
+          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_github_token:   ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          echo "::warning::GH_TOKEN not set. Register this key manually"
+          echo "::warning::at github.com/akamai-consulting/lke-landing-zone → Settings → Deploy keys"
+          terraform output -raw argocd_deploy_public_key >> "$GITHUB_STEP_SUMMARY"

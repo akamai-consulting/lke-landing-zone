@@ -1,0 +1,56 @@
+# Platform scrape-health alerts for the support/observability plane. Deployed
+# as a PrometheusRule CR; apl-core's kube-prometheus-stack picks it up via its
+# ruleSelector. Namespace selectors reflect the topology (per the
+# llz-cluster-foundation namespace map): apl-core's Loki/Prometheus run in
+# `monitoring`, Grafana in `grafana`, the landing-zone OTel Collector in
+# `llz-observability`, Harbor in `harbor`.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: support-plane-alerts
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: support-plane-alerts
+      interval: 30s
+      rules:
+        - alert: OTelCollectorMetricsTargetDown
+          expr: up{namespace="llz-observability", service=~".*otel.*"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: otel-collector
+          annotations:
+            summary: OTel Collector metrics target is down
+            description: Prometheus cannot scrape one or more OTel Collector metrics endpoints.
+        - alert: LokiMetricsTargetDown
+          expr: up{namespace="monitoring", service=~".*loki.*"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: loki
+          annotations:
+            summary: Loki metrics target is down
+            description: Prometheus cannot scrape one or more Loki metrics endpoints.
+        - alert: GrafanaMetricsTargetDown
+          expr: up{namespace="grafana", service=~".*grafana.*"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: grafana
+          annotations:
+            summary: Grafana metrics target is down
+            description: Prometheus cannot scrape the Grafana metrics endpoint.
+        - alert: HarborMetricsTargetDown
+          expr: up{namespace="harbor", service=~".*harbor.*"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            service: harbor
+          annotations:
+            summary: Harbor metrics target is down
+            description: Prometheus cannot scrape one or more Harbor metrics endpoints.

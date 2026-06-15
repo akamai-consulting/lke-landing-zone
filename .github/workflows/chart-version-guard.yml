@@ -1,0 +1,55 @@
+# Release-hygiene guard: any change under a chart directory must bump that
+# chart's Chart.yaml `version:`.
+#
+# Why: publish-charts.yml publishes immutably — it pushes a chart ONLY when its
+# version is not already in the registry, and never overwrites an existing tag.
+# So a template/values change merged WITHOUT a version bump is silently never
+# published; clusters keep pulling the stale artifact by their pinned
+# targetRevision. That is exactly how the firewall-controller runner-acl RBAC
+# grant shipped to source but never reached any cluster (incl. brand-new ones),
+# leaving the control-plane ACL un-reconciled. This check makes that class of
+# mistake fail in CI instead of in production.
+#
+# The decision logic lives in unit-tested Go (`llz ci chart-version-guard`); the
+# steps below are single-line glue (build llz, run it) so they add no
+# untestable inline bash.
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'kubernetes-charts/**'
+      - 'tools/**'
+      - '.github/workflows/chart-version-guard.yml'
+
+name: Chart version guard
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  version-bumped:
+    name: Changed charts bump Chart.yaml version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history so the PR base is diffable)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go (to build llz)
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+
+      - name: Build llz onto PATH
+        run: cd tools && go build -buildvcs=false -o /usr/local/bin/llz ./cmd/llz
+
+      - name: Assert every changed chart bumped its version
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: llz ci chart-version-guard --base "$BASE_SHA"

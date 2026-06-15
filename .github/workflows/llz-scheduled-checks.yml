@@ -1,0 +1,721 @@
+name: llz-scheduled-checks (reusable)
+
+# Reusable (`workflow_call`) version of the scheduled health/audit checks.
+# Surface-reduction pattern (docs/templatization-plan.md §"Keeping instances in
+# sync"): an instance ships a thin caller stub (which owns the `schedule:`
+# crons) instead of copying this whole body, the fetch-kubeconfig action, the
+# `llz openbao exec` passthrough, AND the Go `tools/` module + Makefile that two of these jobs
+# build/audit. All of those are sourced here from one checkout of the LLZ
+# template — note the linode-pat-expiry + go-vuln-audit jobs need tools/ +
+# `make audit`, which only exist in the template, so they only work via this
+# reusable form. `github.event_name` / `github.event.schedule` are inherited
+# from the caller, so every job's schedule/dispatch `if:` gate is unchanged.
+on:
+  workflow_call:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds to run each fuzz target (forwarded from the caller's dispatch input)."
+        required: false
+        type: string
+        default: "60"
+      template-ref:
+        description: 'LLZ template ref to source scripts/actions/tools from. Pin to the same tag as this workflow''s @<ref>.'
+        required: false
+        type: string
+        default: main
+      drift_branch:
+        description: 'Template branch the monthly template-drift job compares .template-version against (NOT template-ref — drift measures distance to the moving branch head).'
+        required: false
+        type: string
+        default: main
+      drift_strict:
+        description: 'Fail the template-drift job if the instance is behind the template (report-only by default).'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      TF_STATE_ACCESS_KEY:
+        required: true
+      TF_STATE_SECRET_KEY:
+        required: true
+      LINODE_API_TOKEN:
+        required: false
+      OPENBAO_ROOT_TOKEN:
+        required: false
+      OPENBAO_SECRETS_WRITE_TOKEN:
+        required: false
+      APL_VALUES_REPO_TOKEN:
+        description: 'github.com fine-grained PAT (Contents: write) for apl-core otomi.git + the argocd repo Secrets. Checked for expiry by gh-pat-expiry-health.'
+        required: false
+      TEMPLATE_TOKEN:
+        description: 'Token with read access to the LLZ template repo. Only needed when the template is private and not the caller repo; defaults to the job GITHUB_TOKEN.'
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=accept-new
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # ── Discover deployments (the per-env matrix source of truth) ────────────────
+  # Single source of truth for every per-env matrix below — see
+  # llz-discover-deployments.yml. The credential rotation and the Terraform PR
+  # plan call the SAME reusable workflow, so the set these checks verify cannot
+  # drift from the set the rotation propagates into (no checked-but-unrotated, or
+  # rotated-but-unchecked, deployment).
+  discover:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    uses: ./.github/workflows/llz-discover-deployments.yml
+
+  # ── OpenBao + ESO health checks ──────────────────────────────────────────────
+  # Runs daily (06:00 UTC) and on demand. Checks each cluster for:
+  #   • OpenBao pod seal state (all 3 Raft pods)
+  #   • ESO ClusterSecretStore readiness
+  #   • Any unhealthy ExternalSecrets across all namespaces
+  # Warning-only (continue-on-error) — a sealed pod pages the operator via the
+  # job summary warning annotations but does not block other scheduled work.
+  openbao-health:
+    name: OpenBao Health (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    continue-on-error: true
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_VERSION:          '1.9.8'
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
+      # LKE-E control-plane ACL so the kubectl checks below are permitted
+      # (revoked at job end), and install llz. allow-missing — these checks
+      # tolerate a torn-down cluster: the ACL open + llz install are skipped
+      # internally and the check steps gate on the `available` output.
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: kubeconfig
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      # Native port of the inline seal-status + ESO readiness shell — the seal
+      # classification (ParseBaoStatus/ClassifyBaoSeal) and Ready-condition checks
+      # are unit-tested in internal/health. Warning-only.
+      - name: Check OpenBao seal + ESO readiness
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci health-openbao
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ matrix.region }}
+
+  # ── AppRole rotation success check ──────────────────────────────────────────
+  # Runs daily (06:00 UTC). Verifies the quarterly `approle-rotation` Argo
+  # Workflows CronWorkflow has a recent successful run. The secret_id TTL is
+  # 2208h (~92 days); this check warns at 100 days so there is an 8-day window
+  # to investigate before ESO and CI lose OpenBao access.
+  approle-rotation-health:
+    name: AppRole Rotation Health (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    continue-on-error: true
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_VERSION:          '1.9.8'
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
+      # LKE-E control-plane ACL so the kubectl checks below are permitted
+      # (revoked at job end), and install llz. allow-missing — these checks
+      # tolerate a torn-down cluster: the ACL open + llz install are skipped
+      # internally and the check steps gate on the `available` output.
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: kubeconfig
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      # Native port — last-success age vs threshold is health.ClassifyRotationAge.
+      - name: Check AppRole rotation last success
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci health-approle-rotation
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ matrix.region }}
+
+  # ── LKE-E lke-admin rotation SLA ─────────────────────────────────────────────
+  # Runs daily (06:00 UTC). On LKE-Enterprise the only sanctioned rotation is
+  # lke-admin-token (see .github/workflows/secret-rotation.yml). This is the
+  # SLA backstop: it reads the newest lke-admin-token Secret's age and warns if
+  # rotation is overdue, so a silently-failing rotation workflow is surfaced
+  # before the 90-day Critical SLA is breached. Same alerting surface as
+  # approle-rotation-health (no kube-state-metrics secret-age metric exists in
+  # this Prometheus, so a PrometheusRule would never fire — this is the alert).
+  lke-admin-rotation-health:
+    name: lke-admin Rotation SLA (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_VERSION:          '1.9.8'
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
+      # LKE-E control-plane ACL so the kubectl checks below are permitted
+      # (revoked at job end), and install llz. allow-missing — these checks
+      # tolerate a torn-down cluster: the ACL open + llz install are skipped
+      # internally and the check steps gate on the `available` output.
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: kubeconfig
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      # Native port — newest-token age vs warn/critical SLA is health.ClassifyRotationAge;
+      # the cluster-unreachable skip lives in the command.
+      - name: Check lke-admin-token age
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci health-lke-admin-rotation
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ matrix.region }}
+
+  # ── Linode PAT expiry policy ─────────────────────────────────────────────────
+  # Runs daily (06:00 UTC). PAT-rotation policy: every Linode User/Service API token
+  # must expire within 90 days. `llz ci cred-audit` is the scriptable check for
+  # it. It lists every PAT on the account profile and
+  # fails on any token with no expiry, an over-90-day lifetime, or already
+  # expired. Same alert surface as the rotation-health checks (job goes red;
+  # there is no kube-state metric for Linode PAT expiry). It also inventories
+  # Object Storage keys for the audit trail, and skips a deployment whose
+  # LINODE_API_TOKEN is not yet seeded (env not bootstrapped).
+  linode-pat-expiry-health:
+    name: Linode PAT Expiry (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      REGION:       ${{ matrix.region }}
+      LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+      MAX_PAT_DAYS: "90"
+      WARN_DAYS:    "14"
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Audit Linode PAT expiry + OBJ key inventory
+        run: llz ci cred-audit
+
+  # ── Loki OBJ key 120-day rotation SLA ────────────────────────────────────────
+  # Runs daily (06:00 UTC). Linode Object Storage keys have no native expiry;
+  # the Guidelines mandate revoking bucket access keys after 120 days. The
+  # object-storage Terraform module force-rotates the key declaratively
+  # (time_rotating), but the OpenBao reseed hop is manual — this check reads the
+  # age of the current secret/loki/object-store version and alerts if the live
+  # credential has fallen behind the 120-day clock. Same surface as the other
+  # rotation-health checks.
+  loki-objkey-rotation-health:
+    name: Loki OBJ Key SLA (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_VERSION:          '1.9.8'
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+      OPENBAO_ROOT_TOKEN:  ${{ secrets.OPENBAO_ROOT_TOKEN }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
+      # LKE-E control-plane ACL so the kubectl checks below are permitted
+      # (revoked at job end), and install llz (the `openbao exec` passthrough
+      # the SLA check reads through). allow-missing — these checks tolerate a
+      # torn-down cluster: the ACL open + llz install are skipped internally and
+      # the check steps gate on the `available` output.
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: kubeconfig
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      # Native port — secret/loki/object-store age vs SLA is health.ClassifyRotationAge;
+      # read via kubectl exec bao (OPENBAO_ROOT_TOKEN).
+      - name: Check secret/loki/object-store age
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci health-loki-objkey-rotation
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ matrix.region }}
+
+  # ── github.com service PAT expiry ────────────────────────────────────────────
+  # Runs daily (06:00 UTC). The PAT-rotation policy also covers the GitHub service PATs.
+  # GitHub provides NO API to enumerate classic PATs, so this is a per-token
+  # self-check: one authenticated request per known service PAT, reading the
+  # `GitHub-Authentication-Token-Expiration` response header. A missing header
+  # means the token was created with NO expiry (never-expiring classic PAT —
+  # the core token-lifetime violation); a >90-day window or a 401 also fails the job.
+  # It CANNOT see ad-hoc personal PATs created by individuals — that residual
+  # gap is a human-process check (docs/runbooks/linode-credential-rotation.md).
+  # Same alert surface as the other rotation checks.
+  gh-pat-expiry-health:
+    name: GitHub Service PAT Expiry
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    env:
+      MAX_PAT_DAYS:          "90"
+      WARN_DAYS:             "14"
+      OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+      APL_VALUES_REPO_TOKEN: ${{ secrets.APL_VALUES_REPO_TOKEN }}
+    steps:
+      - name: Checkout the instance
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # Native port of the former curl|grep header self-check — the
+      # not-set/unreachable/401/no-expiry/expired/over-policy/warn ladder is
+      # unit-tested in internal/health. Tokens are read from the job env; the API
+      # base defaults to https://api.github.com; the command masks each token.
+      - name: Check GitHub service PAT expiry (header self-check)
+        run: llz ci gh-pat-expiry --max-days "$MAX_PAT_DAYS" --warn-days "$WARN_DAYS"
+
+  # ── PrometheusRule health ────────────────────────────────────────────────────
+  # Runs daily (06:00 UTC). Verifies:
+  #   • Expected PrometheusRule CRs are present in the llz-observability namespace
+  #   • Prometheus has actually loaded them (no rule groups with lastError set)
+  # Warning-only (continue-on-error). A missing or errored rule group means
+  # alerting is silently broken — this surfaces it before an incident would.
+  prometheusrule-health:
+    name: PrometheusRule Health (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    continue-on-error: true
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_VERSION:          '1.9.8'
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # Fetch the kubeconfig and open this hosted-runner's dynamic egress IP in
+      # the LKE-E control-plane ACL so the kubectl checks below are permitted
+      # (revoked at job end). allow-missing — these checks tolerate a torn-down
+      # cluster: the ACL open is skipped internally and the check steps gate on
+      # `available`.
+      - name: Cluster access (kubeconfig + runner ACL)
+        id: kubeconfig
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      - name: Check PrometheusRule CRs present
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          EXPECTED_RULES="openbao-alerts support-plane-alerts"
+          MISSING=0
+
+          {
+            echo "## PrometheusRule Health — ${REGION} — $(date -u +%Y-%m-%dT%H:%MZ)"
+            echo ""
+            echo "| Rule | Found |"
+            echo "|------|-------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for RULE in $EXPECTED_RULES; do
+            if kubectl -n llz-observability get prometheusrule "$RULE" >/dev/null 2>&1; then
+              echo "PrometheusRule ${RULE} (${REGION}): present"
+              printf '| %s | yes |\n' "$RULE" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::PrometheusRule ${RULE} not found in llz-observability namespace on ${REGION}"
+              printf '| **%s** | **missing** |\n' "$RULE" >> "$GITHUB_STEP_SUMMARY"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$MISSING" -gt 0 ]; then
+            echo "::warning::${MISSING} PrometheusRule(s) missing on ${REGION} — check ArgoCD sync status"
+            echo "> **Action required:** ${MISSING} PrometheusRule(s) not found — verify ArgoCD has synced." \
+              >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "All expected PrometheusRules present on ${REGION}."
+            echo "> All PrometheusRules present." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # health-prom-rules port-forwards the Prometheus pod and reports any rule
+      # group with lastError set — evaluation failures promtool's syntax check
+      # cannot catch. Warn-only, like the other health-* checks.
+      - name: Check Prometheus has loaded rules (no evaluation errors)
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci health-prom-rules
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ matrix.region }}
+
+  # ── Dependency CVE audit ─────────────────────────────────────────────────────
+  # `go build`/`go test` run on every push/PR but CVEs are published continuously.
+  # This weekly job runs govulncheck against the Go tools module to catch
+  # advisories that land between code changes.
+  go-vuln-audit:
+    name: Dependency CVE audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
+    container:
+      image: golang:1.23-bookworm
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Audit the tools module
+        run: make -C _llz-template audit
+
+  # ── cert-manager Certificate health ─────────────────────────────────────────
+  # Runs daily (06:00 UTC). Checks every cert-manager Certificate across all
+  # namespaces for Ready=True. A stuck ACME renewal (e.g. DNS-01 challenge
+  # failure for otel.<env>.internal) leaves the Certificate in Ready=False
+  # indefinitely — this surfaces it before pods start rejecting connections.
+  certmanager-health:
+    name: cert-manager Certificate Health (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    continue-on-error: true
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_VERSION:          '1.9.8'
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
+      # LKE-E control-plane ACL so the kubectl checks below are permitted
+      # (revoked at job end), and install llz. allow-missing — these checks
+      # tolerate a torn-down cluster: the ACL open + llz install are skipped
+      # internally and the check steps gate on the `available` output.
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: kubeconfig
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      # Native port — every Certificate's Ready condition via health.FindReady. Warn-only.
+      - name: Check cert-manager Certificate readiness
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci health-certmanager
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ matrix.region }}
+
+  # ── Template drift report ────────────────────────────────────────────────────
+  # Runs monthly (1st @ 07:00 UTC) and on demand. Reports how far this instance
+  # has fallen behind the LLZ template it was generated from: `llz drift` reads
+  # the committed .template-version (written by `llz env add` / `llz upgrade`)
+  # and compares it to the template branch head. Report-only by default — it
+  # annotates + writes a job summary but does not fail; pass drift_strict: true
+  # on the dispatch to gate. Unlike the other jobs this one compares against
+  # `drift_branch` (the moving head being measured), NOT `template-ref` (the
+  # pinned tag) — comparing against the pin would always read zero drift. Runs
+  # in TF_IMAGE like the sibling jobs so the baked `llz` is on PATH (no template
+  # checkout, no Go toolchain).
+  template-drift:
+    name: Template drift
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 7 1 * *'
+    steps:
+      # Instance at the workspace root — its .template-version is what we compare.
+      - name: Checkout the instance
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Compare .template-version against the template head
+        env:
+          # `llz drift` resolves the template head via `git ls-remote`, which
+          # needs auth when the template repo is private; route github.com
+          # fetches through the token.
+          GH_TOKEN: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          llz drift \
+            --branch "${{ inputs.drift_branch || 'main' }}" \
+            ${{ (inputs.drift_strict && '--strict') || '' }}

@@ -1,0 +1,339 @@
+# Default values for argo-bootstrap-apps.
+#
+# This chart is an "app-of-apps generator": it renders one Argo CD
+# `Application` per entry in `.Values.components`, plus (behind a toggle) the
+# `AppProject` those Applications live in. The default `components` list below
+# reproduces THIS cluster's bootstrap ordering — every non-obvious sync-wave
+# carries a comment explaining WHY that order is required. A sibling system
+# team adopts it by:
+#   1. setting `global.gitRepoURL` to THEIR repo (no default — see below),
+#   2. toggling components on/off via `enabled`,
+#   3. adjusting waves / source versions only where their stack differs.
+#
+# Naming: generated Application names use the component `name` directly. In this
+# landing-zone template every component carries the `llz-` prefix so the whole
+# stack shares one collision-free identity; a sibling team re-prefixes to their
+# own namespace if they co-tenant an Argo CD. The PROJECT name (`global.project`)
+# is an existing shared identity and stays configurable.
+
+# ---------------------------------------------------------------------------
+# Global settings — shared by every rendered Application (and the AppProject).
+# ---------------------------------------------------------------------------
+global:
+  # Namespace the Argo CD Application/AppProject CRs are created in. This is
+  # where Argo CD itself runs (apl-core installs Argo CD in `argocd`).
+  argocdNamespace: argocd
+
+  # Cluster the Applications deploy INTO. In-cluster install uses the well-known
+  # Kubernetes API alias; a hub/spoke setup would point this at a registered
+  # remote cluster server URL.
+  destinationServer: https://kubernetes.default.svc
+
+  # Argo CD AppProject every generated Application is placed in. `platform-support`
+  # is the existing shared support-plane project identity; a sibling team can
+  # rename it, but it must match the AppProject that actually exists (either the
+  # one this chart renders via `appProject.enabled`, or one shipped elsewhere).
+  project: platform-support
+
+  # OCI registry hosting the first-party charts (oci:// is implied by Argo CD
+  # when `chart:` is set on an OCI repoURL). Components with `source.type: oci`
+  # whose `source.repoURL` is empty default to this registry. GHCR (not the
+  # in-cluster Harbor) by design — the bootstrap charts must come from a
+  # registry that exists BEFORE the cluster does (templatization-plan §9).
+  chartsRegistry: ghcr.io/akamai-consulting/charts
+
+  # Git repo that hosts the in-repo manifests referenced by `source.type: git`
+  # components AND the AppProject sourceRepos. This is the single org-identity
+  # value a sibling team MUST set to their own repo. It ships as a recognizable
+  # placeholder so the chart still renders with defaults (helm template / lint
+  # stay clean), but every git-sourced Application gets a loud `⚠️` warning
+  # comment until it's overridden — so the placeholder can't ship unnoticed.
+  gitRepoURL: "REPLACE_ME-git-repo-url"  # e.g. git@github.com:yourorg/yourplatform.git
+
+  # Default git revision for `source.type: git` components that don't pin their
+  # own `source.targetRevision`. In the live repo this is rewritten per-env by a
+  # kustomize `replacements:` block; standalone, `main` is the safe fallback.
+  targetRevision: main
+
+# ---------------------------------------------------------------------------
+# Default syncPolicy applied to every Application unless a component overrides
+# it under `component.syncPolicy`. These are the conventions every bootstrap
+# Application in this cluster shares.
+# ---------------------------------------------------------------------------
+defaultSyncPolicy:
+  automated:
+    prune: true
+    selfHeal: true
+  # retry: backoff is what makes Argo actually retry a failed sync. Without it,
+  # selfHeal's ~3min poll is the only retry primitive — far too slow for the
+  # transient bootstrap races (ESO authenticating to OpenBao, cert-manager
+  # issuing while DNS01 challenges retry).
+  retry:
+    limit: 5
+    backoff:
+      duration: 5s
+      maxDuration: 3m
+      factor: 2
+  syncOptions:
+    - CreateNamespace=true
+    - ServerSideApply=true
+
+# Add the resources-finalizer to every generated Application so deleting the
+# Application cascades to its child resources (the bootstrap convention).
+finalizer: true
+
+# Keep N revisions of each Application's sync history. Matches the in-repo apps.
+revisionHistoryLimit: 3
+
+# ---------------------------------------------------------------------------
+# AppProject — OFF by default. The live repo already ships
+# argocd/platform-support-project.yaml, so rendering it here would duplicate it.
+# A greenfield sibling team flips this on to get a correctly-shaped project
+# (sourceRepos/destinations variabilized from `global`).
+# ---------------------------------------------------------------------------
+appProject:
+  enabled: false
+  # Sync-wave -20: the AppProject MUST exist before any Application that
+  # references it. Apps at wave -15 set `project: <global.project>`; without
+  # the project applied first the root app deadlocks (wave -15 goes Degraded
+  # "project not found" and the sync never reaches wave 0).
+  syncWave: "-20"
+  description: >-
+    Support-plane infrastructure project rendered by argo-bootstrap-apps.
+  # Extra Helm/OCI chart repos the child Apps pull from, beyond `global.gitRepoURL`
+  # and `global.chartsRegistry` (which are appended automatically). Override per
+  # sibling stack.
+  extraSourceRepos:
+    - https://openbao.github.io/openbao-helm
+    - https://argoproj.github.io/argo-helm
+    - https://charts.external-secrets.io
+  # Namespaces the project's Applications may deploy into. Bootstrap-shaped
+  # default list; trim/extend per sibling stack.
+  destinationNamespaces:
+    - kube-system
+    - llz-openbao
+    - llz-external-secrets
+    - cert-manager
+    - llz-cert-automation
+    - harbor
+    - llz-observability
+    - istio-system
+    - argocd
+    - llz-argo-workflows
+    - llz-argo-events
+  # Bootstrap project installs operators whose charts ship CRDs / ClusterRoles /
+  # webhooks. Restricting this makes every chart sync fail "resource <kind> is
+  # not permitted in project". Destinations (above) still bound namespaced
+  # resources.
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota
+  orphanedResources:
+    warn: true
+
+# ---------------------------------------------------------------------------
+# Components — the ordered bootstrap set. Each entry renders one Application.
+#
+# Entry shape:
+#   name:                  Application metadata.name (no platform- prefix).
+#   enabled:               toggle; `false` drops the Application from the render.
+#   syncWave:              argocd.argoproj.io/sync-wave annotation value (string).
+#   destinationNamespace:  spec.destination.namespace (default ns for the App).
+#   source:
+#     type: oci            -> { chart, version, repoURL?, valuesObject? }
+#       chart:             OCI chart name.
+#       version:           chart SemVer (spec.source.targetRevision).
+#       repoURL:           optional; defaults to global.chartsRegistry.
+#       valuesObject:      optional inline Helm values (spec.source.helm.valuesObject).
+#       releaseName:       optional Helm release name (defaults to component name).
+#     type: git            -> { path, repoURL?, targetRevision? }
+#       path:              in-repo path (spec.source.path).
+#       repoURL:           optional; defaults to global.gitRepoURL.
+#       targetRevision:    optional; defaults to global.targetRevision.
+#   syncPolicy:            optional; deep-merged over defaultSyncPolicy. Set
+#                          syncPolicy: {} to inherit defaults; set keys to
+#                          override (e.g. automated.prune: false for stateful).
+#
+# The default list below IS the wave-ordering knowledge — keep the waves.
+# ---------------------------------------------------------------------------
+components:
+  # Wave -20: cluster-foundation. Creates the namespaces apl-core does NOT manage
+  # (llz-openbao, llz-external-secrets, llz-observability, llz-argo-workflows/events,
+  # grafana, monitoring), the default-deny + component NetworkPolicies,
+  # the CoreDNS *.internal rewrite + restart Job, and the storage-class default
+  # patcher. MUST be -20 (same tier as the AppProject) so the namespaces exist
+  # before any wave -15+ resource targets them — without it the llz-openbao
+  # namespace is never created and the OpenBao bootstrap fails. prune is DISABLED:
+  # the foundation namespaces are load-bearing; an accidental prune would
+  # cascade-delete every workload in them. CreateNamespace=false — the chart
+  # creates its own namespaces; destinationNamespace is only the fallback for the
+  # chart's cluster-scoped / explicitly-namespaced resources.
+  - name: llz-cluster-foundation
+    enabled: true
+    syncWave: "-20"
+    destinationNamespace: kube-system
+    source:
+      type: oci
+      # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
+      chart: llz-cluster-foundation
+      version: 0.1.0
+      releaseName: llz-cluster-foundation
+    syncPolicy:
+      automated:
+        prune: false
+        selfHeal: true
+      syncOptions:
+        - CreateNamespace=false
+        - ServerSideApply=true
+
+  # Wave -15: External Secrets Operator. apl-core 5.0.0 does NOT ship ESO, so
+  # the cluster has zero external-secrets.io CRDs out of the box. -15 places it
+  # AFTER the AppProject (-20) so `project:` resolves, and BEFORE consumers
+  # (default wave 0) so the CRDs + webhook exist before any ClusterSecretStore /
+  # ExternalSecret is reconciled.
+  - name: llz-external-secrets-operator
+    enabled: true
+    syncWave: "-15"
+    destinationNamespace: llz-external-secrets
+    source:
+      type: oci
+      # Upstream ESO chart (not the first-party GHCR registry).
+      repoURL: https://charts.external-secrets.io
+      chart: external-secrets
+      version: 0.10.7
+      releaseName: llz-external-secrets
+      valuesObject:
+        installCRDs: true
+        webhook:
+          create: true
+        certController:
+          create: true
+
+  # Wave -15: Argo Workflows. apl-core doesn't ship it; needed for the
+  # Workflow/CronWorkflow CRDs the AppRole-rotation CronWorkflow and the
+  # cert-automation WorkflowTemplate consume. Same wave as ESO — installs
+  # alongside it, before default-wave consumers.
+  - name: llz-argo-workflows
+    enabled: true
+    syncWave: "-15"
+    destinationNamespace: llz-argo-workflows
+    source:
+      type: oci
+      repoURL: https://argoproj.github.io/argo-helm
+      chart: argo-workflows
+      version: 0.42.3
+      releaseName: llz-argo-workflows
+      valuesObject:
+        crds:
+          install: true
+          keep: true
+        controller:
+          workflowNamespaces:
+            - llz-openbao
+            - llz-cert-automation
+        workflow:
+          serviceAccount:
+            create: true
+            name: argo-workflow
+
+  # Wave -15: Argo Events. Provides the EventBus/EventSource/Sensor CRDs the
+  # cert-automation flow needs. Same wave as argo-workflows so they install
+  # together, before consumers.
+  - name: llz-argo-events
+    enabled: true
+    syncWave: "-15"
+    destinationNamespace: llz-argo-events
+    source:
+      type: oci
+      repoURL: https://argoproj.github.io/argo-helm
+      chart: argo-events
+      version: 2.4.13
+      releaseName: llz-argo-events
+      valuesObject:
+        crds:
+          install: true
+          keep: true
+
+  # Wave -14: cert-automation (first-party chart). -14 is AFTER argo-events (-15)
+  # registers the EventBus/EventSource/Sensor CRDs this chart's CRs reference.
+  # Its own per-resource sync-waves order within the sync.
+  - name: llz-cert-automation
+    enabled: true
+    syncWave: "-14"
+    destinationNamespace: llz-cert-automation
+    source:
+      type: oci
+      # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
+      chart: llz-cert-automation
+      version: 0.1.0
+      releaseName: llz-cert-automation
+      valuesObject:
+        namespace: llz-cert-automation
+        certManagerNamespace: cert-manager
+        eventBus:
+          name: default
+    syncPolicy:
+      # Argo Events/Workflows CRDs may not be registered at first reconcile.
+      syncOptions:
+        - SkipDryRunOnMissingResource=true
+        - CreateNamespace=false
+        - ServerSideApply=true
+
+  # Wave -5: eso-cert-watcher (first-party OCI chart). AFTER the ESO install
+  # (-15), BEFORE default-wave consumers — it restarts ESO when the OpenBao CA
+  # rotates, so ESO must already be installed.
+  - name: llz-eso-cert-watcher
+    enabled: true
+    syncWave: "-5"
+    destinationNamespace: llz-external-secrets
+    source:
+      type: oci
+      # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
+      chart: llz-eso-cert-watcher
+      version: 0.2.0
+      releaseName: llz-eso-cert-watcher
+      valuesObject:
+        namespace: llz-external-secrets
+        target:
+          deployment:
+            name: llz-external-secrets
+        watch:
+          certificate:
+            name: openbao-tls
+            namespace: llz-openbao
+        pollIntervalSeconds: 60
+
+  # Wave 0: OpenBao (git source — wraps the vendored OpenBao HA Raft Helm chart
+  # plus TLS/NP/ServiceMonitor/rotation). Default wave: it consumes ESO + the
+  # CA chain established by earlier waves. prune is DISABLED — OpenBao manages
+  # stateful PKI/auth backends; auto-pruning a transiently-absent resource could
+  # lock out every service.
+  - name: llz-openbao
+    enabled: true
+    syncWave: "0"
+    destinationNamespace: llz-openbao
+    source:
+      type: git
+      path: apl-values/_shared/manifest/openbao/argocd/applications
+      # repoURL omitted -> defaults to global.gitRepoURL.
+      helm:
+        releaseName: llz-openbao
+        valueFiles:
+          - openbao-values.yaml
+    syncPolicy:
+      automated:
+        prune: false
+        selfHeal: true
+      syncOptions:
+        - CreateNamespace=true
+        - ServerSideApply=true
+        - Validate=true
+
+  # NOTE: the Linode internal-CIDR firewall reconciler is an Akamai-internal
+  # feature and lives in the private `lke-landing-zone-internal` repo (it needs a
+  # provider-internal Linode firewall-templates API scope). Akamai instances add
+  # its Argo Application from the private chart — see the public repo's
+  # docs/consume-lke-landing-zone-internal.md.

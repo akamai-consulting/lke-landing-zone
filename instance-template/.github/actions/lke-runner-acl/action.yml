@@ -1,0 +1,109 @@
+name: LKE-E control-plane ACL — open/revoke this runner
+description: >
+  Add (mode=open) or remove (mode=revoke) THIS GitHub-hosted runner's public
+  egress IP to/from the LKE Enterprise cluster's control-plane ACL via the
+  Linode API, so `kubectl` against the API server is permitted for the duration
+  of the job.
+
+  Background: the old ACL design (github_runner_ipv4_cidrs / acl inventory)
+  assumed a discrete, pre-determinable runner egress range — true for the
+  self-hosted runners with a fixed egress range, FALSE for github.com hosted runners, whose
+  egress IP is dynamic per job. This action detects the actual egress IP at run
+  time, opens it, and the paired `revoke` step (run with `if: always()`) closes
+  it again so the ACL is never left open.
+
+  The read-modify-write + cluster resolution is the native `llz ci runner-acl`
+  command (tools/cmd/llz), baked onto PATH in the TF_IMAGE these jobs run in
+  (dockerfiles/terraform/Dockerfile). open records what it changed in a
+  per-region state file under RUNNER_TEMP so revoke is self-describing and
+  idempotent.
+
+inputs:
+  mode:
+    description: "'open' to allow this runner, 'revoke' to remove it."
+    required: true
+  linode-token:
+    description: >
+      Linode API token with read/write on LKE clusters (LINODE_API_TOKEN).
+      If empty, the action no-ops with a warning so the failure surfaces later
+      on the kubectl step with a clear ACL message rather than here.
+    required: true
+  region:
+    description: Deployment/region key (e.g. e2e, primary). Resolves the cluster and names the state file.
+    required: false
+    default: ''
+  cluster-id:
+    description: Explicit LKE cluster numeric ID. Skips label+region resolution when set.
+    required: false
+    default: ''
+  cluster-label:
+    description: >
+      LKE cluster label to resolve the cluster ID by (combined with the Linode
+      region). Defaults to reading cluster_label from <tfvars-dir>/<region>.tfvars.
+    required: false
+    default: ''
+  linode-region:
+    description: >
+      Linode datacenter region of the cluster (e.g. us-ord, us-sea) — NOT the
+      deployment env key. Used to disambiguate clusters that share a label
+      across envs. Defaults to reading `region` from <tfvars-dir>/<region>.tfvars.
+    required: false
+    default: ''
+  tfvars-dir:
+    description: Directory holding <region>.tfvars (instance cluster root); used to read cluster_label + region when cluster-id is blank.
+    required: false
+    default: terraform-iac-bootstrap/cluster
+  fail-on-missing:
+    description: >
+      open mode only. 'true' (default) fails the step if the cluster can't be
+      resolved. Set 'false' for destroy jobs that must tolerate an
+      already-gone/never-initialized cluster: open then no-ops (there is nothing
+      to allow), so a CASE-B teardown isn't blocked while a CASE-A (live cluster)
+      teardown still gets its runner IP opened.
+    required: false
+    default: 'true'
+  kubeconfig:
+    description: >
+      Path to a kubeconfig for the target cluster. When set, the runner IP is
+      ALSO leased in the firewall-runner-acl ConfigMap (open) / released (revoke)
+      so the EAA firewall-controller preserves it across reconciles instead of
+      replacing it out from under a long-running kubectl job (e.g. the
+      convergence gate). Leave empty for short jobs that finish inside one
+      reconcile interval — behaviour is then exactly the Linode-API-only ACL
+      open/revoke. The value may contain $HOME / $RUNNER_TEMP (expanded here).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: ${{ inputs.mode }} control-plane ACL for this runner
+      shell: bash
+      env:
+        LINODE_API_TOKEN:    ${{ inputs.linode-token }}
+        ACL_MODE:            ${{ inputs.mode }}
+        ACL_REGION:          ${{ inputs.region }}
+        ACL_CLUSTER_ID:      ${{ inputs.cluster-id }}
+        ACL_CLUSTER_LABEL:   ${{ inputs.cluster-label }}
+        ACL_LINODE_REGION:   ${{ inputs.linode-region }}
+        ACL_TFVARS_DIR:      ${{ inputs.tfvars-dir }}
+        ACL_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+        ACL_KUBECONFIG:      ${{ inputs.kubeconfig }}
+      run: |
+        set -euo pipefail
+        CM_ARGS=()
+        if [ -n "$ACL_KUBECONFIG" ]; then
+          # Expand any $HOME / $RUNNER_TEMP the caller passed, then lease the IP
+          # in the firewall-runner-acl ConfigMap so the EAA controller keeps it.
+          KUBECONFIG="$(eval echo "$ACL_KUBECONFIG")"
+          export KUBECONFIG
+          CM_ARGS=(--runner-configmap)
+        fi
+        llz ci runner-acl "$ACL_MODE" \
+          --region          "$ACL_REGION" \
+          --cluster-id      "$ACL_CLUSTER_ID" \
+          --cluster-label   "$ACL_CLUSTER_LABEL" \
+          --linode-region   "$ACL_LINODE_REGION" \
+          --tfvars-dir      "$ACL_TFVARS_DIR" \
+          --fail-on-missing="$ACL_FAIL_ON_MISSING" \
+          "${CM_ARGS[@]}"

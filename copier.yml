@@ -1,0 +1,129 @@
+# copier.yml — makes this repo a Copier template for LKE landing-zone instances.
+#
+#   copier copy   gh:<org>/lke-landing-zone <dst>   # scaffold a new instance
+#   copier update                                   # pull template changes into
+#                                                   #   an instance (3-way merge —
+#                                                   #   conflicts only where the
+#                                                   #   instance diverged)
+#
+# This is the apply-side of "pull template updates cleanly": Copier renders the
+# instance from instance-template/, records answers in .copier-answers.yml, and
+# on `copier update` re-renders the old + new template versions and 3-way-merges
+# the delta onto the instance. Ownership mirrors instance-template/.template-manifest:
+#   managed → re-rendered/overwritten on update
+#   merge   → carries <@ token @> substitutions; 3-way-merged (conflicts only on
+#             lines the instance changed beyond the token)
+#   owned   → seeded once via _skip_if_exists, never touched again
+# template-scripts/check-template-manifest.sh keeps that manifest complete in CI.
+
+# Only instance-template/ is the scaffold; the rest of the repo (modules, charts,
+# reusable workflows, this file) is template machinery, not copied into instances.
+_subdirectory: instance-template
+
+# This scaffold is bash- and GitHub-Actions-heavy: `{{ }}` (Helm / Actions ${{ }})
+# and `[[ ]]` (bash tests) appear ~600 / ~38 times. The default Jinja delimiters
+# would corrupt them, so use delimiters verified absent from the entire tree.
+_envops:
+  variable_start_string: "<@"
+  variable_end_string: "@>"
+  block_start_string: "<%"
+  block_end_string: "%>"
+  comment_start_string: "<#"
+  comment_end_string: "#>"
+  keep_trailing_newline: true
+
+# Render every file in-place (not just *.jinja) so the <@ token @> substitutions
+# resolve without renaming files. Safe because the delimiters above collide with
+# nothing in the scaffold.
+_templates_suffix: ""
+
+# Files under the scaffold that instances must NOT receive. Setting _exclude
+# REPLACES Copier's built-in default, so the usual junk patterns are re-listed.
+# `.github/actions` is template-INTERNAL: the reusable `llz-*` workflows source
+# the composite actions from a template checkout (docs/templatization-plan.md
+# §"Keeping instances in sync"), so an instance no longer copies them — every
+# instance workflow is a thin caller now. The actions stay physically under
+# instance-template/.github/actions/ (this scaffold dir) for the reusable
+# workflows to reference; this rule just keeps them out of generated instances.
+_exclude:
+  - "copier.yml"
+  - "copier.yaml"
+  - "~*"
+  - "*.py[co]"
+  - "__pycache__"
+  - ".git"
+  - ".DS_Store"
+  - ".svn"
+  - ".github/actions"
+  - ".github/actions/**"
+
+# Answers tracker that `copier update` reads. Shipped (templated) at
+# instance-template/.copier-answers.yml.
+_answers_file: .copier-answers.yml
+
+# Seed once on `copier copy`, never overwrite on `copier update` (= manifest
+# `owned`): the provider lockfile each instance regenerates, and the operator's
+# control-plane ACL allow-list. Per-env tfvars and apl-values/<env> overlays are
+# created by `llz env add` and never exist in the template, so Copier
+# leaves them alone without needing a rule here.
+_skip_if_exists:
+  - "terraform-iac-bootstrap/*/.terraform.lock.hcl"
+  - "terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt"
+
+# ── Content delivered from OUTSIDE the scaffold ──────────────────────────────
+# docs/ lives at the repo root — NOT under instance-template/ — so the scaffold a
+# human audits stays trim and there is one source of truth shared by the
+# template's own CI/README AND every instance:
+#   * docs/ — the operator-facing runbooks/playbooks/architecture the README
+#             calls "knowledge an adopter inherits", landed at the instance's
+#             docs/. The two pure template-build docs (templatization-plan.md =
+#             extraction design, agents.md = contributor convention) are dropped —
+#             they describe building the template, not operating an instance.
+# `_subdirectory` would otherwise never copy docs/, so this task pulls it in from
+# the cloned template (`_copier_conf.src_path`). Tasks run on BOTH `copier copy`
+# and `copier update`, so docs/ refreshes on update exactly like a `managed` file
+# (.template-manifest classifies docs/** as managed to match) — verified with
+# copier 9.x. (Requires `copier copy --trust`, since this runs a shell command.)
+# docs/ carries no <@ token @>s, so a raw cp loses no rendering.
+#
+# Operational tooling is deliberately NOT delivered here. Like .github/actions
+# (see `_exclude` above), it is template-INTERNAL: the former instance-scripts/
+# were assimilated into the llz CLI (tools/cmd/llz), which is baked into the
+# ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable `llz-*`
+# workflows run in, so an instance never carries its own copy.
+_tasks:
+  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md"
+  # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
+  # needs a repo: on `copier update` the instance already is one; on the initial
+  # `copier copy` it isn't yet, so init first. `llz hooks` is per-clone and
+  # idempotent; if llz isn't on PATH, fall back to a reminder (run it yourself).
+  - "git rev-parse --git-dir >/dev/null 2>&1 || git init -q; command -v llz >/dev/null 2>&1 && llz hooks || echo \"run 'llz hooks' in this instance to arm the pre-commit hook\""
+
+# ── Questions ────────────────────────────────────────────────────────────────
+upstream_org:
+  type: str
+  help: >-
+    GitHub org that hosts the LKE landing-zone template — its tagged Terraform
+    modules, OCI Helm charts, CI images, and reusable workflows that this
+    instance consumes. Keep the default to track upstream directly, or set it to
+    your fork's org if you publish your own.
+  default: akamai-consulting
+
+instance_repo:
+  type: str
+  help: >-
+    This instance's own GitHub repository as <owner>/<name> — used for ArgoCD
+    repo URLs, `gh` CLI targeting, and the SSH deploy-key wiring.
+  default: your-org/your-instance-repo
+
+llz_version:
+  type: str
+  help: >-
+    The landing-zone release this instance pins to — the git tag rendered into the
+    Terraform module `?ref=` sources and the reusable-workflow `uses:@` /
+    `template-ref:` refs, so a scaffold references the very release it was cut from.
+    Normally set automatically by `llz new` / `llz upgrade` to the version of the
+    `llz` binary you ran (the CLI is the version anchor). For a manual `copier
+    copy`, pass `-d llz_version=vX.Y.Z` to pin a release; the `main` default tracks
+    the tip unpinned.
+  default: main

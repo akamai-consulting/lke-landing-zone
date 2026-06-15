@@ -1,0 +1,55 @@
+name: Terraform init (S3 backend)
+description: >
+  Initialize Terraform with the project S3 backend.
+  Inherits REGION and TF_STATE_BUCKET from the caller's environment.
+
+inputs:
+  module:
+    description: Module directory under terraform-iac-bootstrap/ (cluster, openbao-config, object-storage)
+    required: false
+    default: cluster
+  aws-access-key-id:
+    description: AWS access key for the S3 state backend
+    required: true
+  aws-secret-access-key:
+    description: AWS secret key for the S3 state backend
+    required: true
+  github-token:
+    description: >
+      Token used to fetch first-party git:: Terraform module sources hosted on
+      this same GitHub (Enterprise) server. Defaults to the workflow token,
+      which has contents:read on this repo. Override only if the modules live in
+      a different repo needing a broader-scoped token.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    # First-party modules are consumed as
+    #   git::ssh://git@<host>/<org>/<repo>.git//terraform-modules/<name>?ref=<tag>
+    # (the published, SemVer-tagged reuse units — see terraform-modules/RELEASING.md).
+    # The CI container has no SSH key for <host> and the bind-mounted workspace
+    # trips git's dubious-ownership guard, so `terraform init`'s module clones
+    # would fail. The shared git-auth script (trust paths + rewrite SSH→HTTPS)
+    # fixes both; it lives once and is shared with fetch-kubeconfig.
+    - name: Authenticate git for published module sources
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        # shellcheck source=../_lib/git-auth.sh
+        . "$GITHUB_ACTION_PATH/../_lib/git-auth.sh"
+
+    - name: Terraform init
+      shell: bash
+      working-directory: terraform-iac-bootstrap/${{ inputs.module }}
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+      run: |
+        terraform init \
+          -backend-config="bucket=$TF_STATE_BUCKET" \
+          -backend-config="key=${{ inputs.module }}/$REGION/terraform.tfstate" \
+          -backend-config="region=us-east-1"

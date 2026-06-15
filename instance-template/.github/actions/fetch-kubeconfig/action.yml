@@ -1,0 +1,76 @@
+name: Fetch kubeconfig (Terraform state)
+description: >
+  Initialize Terraform (cluster module) and write the cluster kubeconfig to the
+  specified path. Inherits TF_STATE_BUCKET from the caller's environment.
+  REGION is read from the caller's environment; override with the region input
+  when the job does not set a REGION env var.
+
+inputs:
+  aws-access-key-id:
+    description: AWS access key for the S3 state backend
+    required: true
+  aws-secret-access-key:
+    description: AWS secret key for the S3 state backend
+    required: true
+  kubeconfig-path:
+    description: Absolute path to write the kubeconfig file
+    required: true
+  region:
+    description: Region (primary or secondary). Defaults to REGION env var when blank.
+    required: false
+    default: ''
+  allow-missing:
+    description: >
+      If 'true', set output available=false instead of failing when the
+      cluster has no kubeconfig_raw Terraform output yet.
+    required: false
+    default: 'false'
+  github-token:
+    description: >
+      Token used to fetch first-party git:: Terraform module sources that the
+      cluster root references (the kubeconfig fetch runs `terraform init`, which
+      clones those modules). Defaults to the workflow token; override with a
+      token that can read the modules' repo when it is private and separate from
+      the caller (e.g. TEMPLATE_TOKEN).
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  available:
+    description: "'true' if the kubeconfig was fetched; 'false' if allow-missing=true and output was absent"
+    value: ${{ steps.fetch.outputs.available }}
+
+runs:
+  using: composite
+  steps:
+    # The cluster root pulls its modules from
+    #   git::ssh://git@<host>/<org>/<repo>.git//terraform-modules/<name>?ref=<tag>
+    # and the CI container has no SSH key, so `terraform init` below would fail
+    # with "Failed to download module". The shared git-auth script (trust paths +
+    # rewrite SSH→HTTPS via github-token) fixes that; it is the same logic
+    # terraform-init uses, sourced from one place.
+    - name: Authenticate git for published module sources
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        # shellcheck source=../_lib/git-auth.sh
+        . "$GITHUB_ACTION_PATH/../_lib/git-auth.sh"
+
+    # fetch-kubeconfig-state owns the init + output extraction + the
+    # empty-output diagnostics (a failed/odd init reading a different state
+    # than cluster-bootstrap is the classic suspect).
+    - name: Fetch kubeconfig
+      id: fetch
+      shell: bash
+      working-directory: terraform-iac-bootstrap/cluster
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+      run: |
+        KUBE_REGION="${{ inputs.region }}"
+        llz ci fetch-kubeconfig-state \
+          --region "${KUBE_REGION:-$REGION}" \
+          --output "${{ inputs.kubeconfig-path }}" \
+          ${{ inputs.allow-missing == 'true' && '--allow-missing' || '' }}

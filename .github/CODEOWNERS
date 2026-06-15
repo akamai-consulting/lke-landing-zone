@@ -1,0 +1,15 @@
+# CODEOWNERS — review routing for pull requests.
+#
+# Set the owning team(s)/users below before relying on this file. Until real
+# handles are filled in, no automatic review requests are made (the examples are
+# commented out). See:
+# https://docs.github.com/en/repositories/managing-your-repos-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Global owner:
+# *                       @your-org/llz-maintainers
+#
+# Per-area owners (examples):
+# /terraform-modules/     @your-org/llz-infra
+# /kubernetes-charts/     @your-org/llz-platform
+# /tools/                 @your-org/llz-tooling
+# /.github/workflows/     @your-org/llz-ci

@@ -1,0 +1,18 @@
+# Linode Volume relabeler — Argo-owned manifest tree.
+#
+# Terraform (terraform-iac-bootstrap/cluster-bootstrap) owns ONLY the
+# `llz-linode-volume-labeler` namespace (Pod Security label injection) and the
+# `linode-api-token` Secret (credential injection from var.linode_token).
+# Everything else (SA, RBAC, ConfigMap with relabel.sh, NetworkPolicy, CronJob)
+# lives here and reconciles via apl-core's in-cluster Argo CD.
+#
+# Per-env REGION_SHORT comes from the manifest-root
+# linode-volume-labeler-region-patch.yaml; this base defaults to "exa".
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rbac.yaml
+  - network-policy.yaml
+  - script-configmap.yaml
+  - cronjob.yaml

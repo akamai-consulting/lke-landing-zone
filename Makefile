@@ -1,0 +1,615 @@
+SHELL := /bin/bash
+
+.PHONY: help \
+        build build-tools llz \
+        fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argo-workflow-lint argocd-rendered-apps-check externalsecret-paths-check untestable-loc-check actions-lint py-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+        test coverage clean \
+        instance-test scaffold-check llz-functional reap-orphans \
+        install-tools install-syft install-trivy
+
+KUBECTL_VERSION  := 1.31.0
+
+# The Go module that holds the host-side tooling: tools/ (the `llz` CLI). The
+# firewall-cidrs / firewall-controller commands moved to the private
+# lke-landing-zone-internal repo.
+GO_DIR := tools
+
+# Per-package minimum statement coverage, as <pkg-suffix>=<percent> entries.
+# pkg-suffix matches the END of a Go import path (cmd/llz -> .../tools/cmd/llz).
+# `make coverage` fails the build if any listed package drops below its floor.
+# It's a ratchet: bump a floor UP as that package's coverage improves, never
+# down.
+# Override on the CLI, e.g. `make coverage COVERAGE_MINS="cmd/llz=20"`.
+COVERAGE_MINS := \
+	cmd/llz=48 \
+	internal/cli=95 \
+	internal/health=95 \
+	internal/linode=80 \
+	internal/openbao=80 \
+	internal/preflight=95 \
+	internal/terraform=95
+
+help:
+	@echo "lke-landing-zone — template repository targets"
+	@echo
+	@echo "Go targets:"
+	@echo "  build           Build the Go tools (+ llz)"
+	@echo "  build-tools     go build ./... in tools/"
+	@echo "  llz             Build the adopter CLI to bin/llz"
+	@echo "  fmt             gofmt -w (auto-fix formatting)"
+	@echo "  fmt-check       gofmt -l (CI-safe, no writes)"
+	@echo "  vet             go vet ./... across the tools module"
+	@echo "  shellcheck      shellcheck all template-scripts/*.sh"
+	@echo "  audit           govulncheck ./... — Go vulnerability database scan"
+	@echo "  tidy            go mod tidy (and verify it leaves no diff)"
+	@echo "  update          go get -u ./... + go mod tidy (bump dependencies)"
+	@echo "  gitleaks        gitleaks secret scan of the working tree"
+	@echo "  sbom            Generate CycloneDX SBOMs into sbom/"
+	@echo "  test            go test ./... in tools/"
+	@echo "  coverage        go test -cover for the tools module (fails below per-pkg COVERAGE_MINS)"
+	@echo "  clean           Remove build + coverage artifacts"
+	@echo
+	@echo "Terraform targets:"
+	@echo "  tf-fmt          tofu fmt (auto-fix formatting)"
+	@echo "  tf-fmt-check    tofu fmt -check (CI-safe, no writes)"
+	@echo "  tf-lint         tflint — Terraform best-practice rules (.tflintrc.hcl)"
+	@echo "  tf-validate     terraform validate — syntax + type checking (requires prior init)"
+	@echo "  checkov         Checkov IaC security scan across all Terraform modules"
+	@echo
+	@echo "Kubernetes targets:"
+	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
+	@echo "  k8s-validate    kubeconform — schema validation against k8s 1.31"
+	@echo "  prom-rules-check  promtool check rules — PromQL syntax + rule structure"
+	@echo "  helm-lint-argocd  helm lint the observability ArgoCD app chart"
+	@echo "  helm-lint-real-values  helm lint --strict/template all charts (observability, registry, secrets, cert-manager, external-secrets) with production + staging values"
+	@echo "  helm-dep-lock-check  verify committed Chart.lock files match Chart.yaml dependency declarations"
+	@echo "  argo-workflow-lint  render + argo lint --offline Argo CronWorkflow/WorkflowTemplates"
+	@echo "  argocd-rendered-apps-check  render overlays and reject duplicate ArgoCD Helm parameters"
+	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
+	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
+	@echo "  actions-lint    actionlint — GitHub Actions workflow and composite-action linting"
+	@echo "  py-lint         python3 -m py_compile — syntax check all template-scripts/*.py"
+	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
+	@echo "                  the CI 'Lint' workflow (.github/workflows/lint.yml): go + shell +"
+	@echo "                  py + actions, \$$(LINT_TF), and \$$(LINT_K8S). The kind server-side"
+	@echo "                  dry-run is CI-only (needs Docker/kind)."
+	@echo
+	@echo "Instance test:"
+	@echo "  instance-test   Local, no-cloud smoke test: copier-instantiate the template"
+	@echo "                  and run the offline validators (token residue, structure,"
+	@echo "                  terraform validate) against the rendered instance. The fast"
+	@echo "                  counterpart to the release-e2e workflow (which stands up a"
+	@echo "                  real cluster). Set SKIP_TF=1 to skip terraform validate."
+	@echo "                  Runs scaffold-check first."
+	@echo "  scaffold-check  Scaffold a throwaway env (llz env add) and assert the"
+	@echo "                  per-env scaffold renders: no leftover 'your-env', required"
+	@echo "                  per-env files present, values.yaml renders via templatefile()."
+	@echo "                  No cloud; artifacts removed on exit. SKIP_TF=1 skips render."
+	@echo "  reap-orphans    Manual sweep of leaked Linode resources from failed/cancelled"
+	@echo "                  cycles: orphan clusters (if CLUSTER_LABEL) + their firewall/VPC,"
+	@echo "                  then NodeBalancers + VPCs + Volumes whose cluster is gone."
+	@echo "                  DRY-RUN unless CONFIRM=yes. Needs LINODE_TOKEN; REGION recommended."
+	@echo
+	@echo "Setup:"
+	@echo "  install-tools   Install all required Go and system tools for local development"
+
+# ── Tools ────────────────────────────────────────────────────────────────────
+
+install-tools: install-syft install-trivy
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+	@if command -v brew >/dev/null 2>&1; then \
+		brew install actionlint checkov helm; \
+	else \
+		pip3 install --user checkov; \
+		curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash; \
+		curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash; \
+	fi
+
+# Pinned, SHA-verified syft install. Used ONLY by sbom-terraform — trivy does
+# not parse .terraform.lock.hcl for provider inventory; everything else uses
+# trivy. Override SYFT_VERSION / SYFT_INSTALL_DIR via env.
+install-syft:
+	@./template-scripts/ci/install-syft.sh
+
+# Pinned, SHA-verified trivy install. Used by sbom-kubernetes and sbom-scan.
+# Override TRIVY_VERSION / TRIVY_INSTALL_DIR via env.
+install-trivy:
+	@./template-scripts/ci/install-trivy.sh
+
+# ── Build ────────────────────────────────────────────────────────────────────
+
+build: build-tools llz
+
+build-tools:
+	cd $(GO_DIR) && go build ./...
+
+# Local dev build of the adopter CLI; release builds are multi-platform (see
+# .github/workflows/llz-release.yml). Adopters install the released binary.
+llz:
+	cd $(GO_DIR) && go build -o ../bin/llz ./cmd/llz
+
+# ── Lint ─────────────────────────────────────────────────────────────────────
+
+fmt:
+	cd $(GO_DIR) && gofmt -w .
+
+fmt-check:
+	@cd $(GO_DIR) && out=$$(gofmt -l .); \
+	if [ -n "$$out" ]; then \
+		echo "gofmt: the following files need formatting:"; echo "$$out"; exit 1; \
+	fi
+
+vet:
+	cd $(GO_DIR) && go vet ./...
+
+shellcheck:
+	find template-scripts -type f \( -name '*.sh' -o -path 'template-scripts/hooks/*' \) -print0 | xargs -0 shellcheck -x
+
+# ── Terraform ─────────────────────────────────────────────────────────────────
+
+# The template's first-party Terraform surface is the reusable modules. The
+# per-env instance roots live under instance-template/terraform-iac-bootstrap/ and are
+# scaffolding (placeholders + git:: tags that resolve only after publishing), so
+# they are not linted here.
+TF_DIRS := $(wildcard terraform-modules/llz-cluster \
+                      terraform-modules/llz-pool \
+                      terraform-modules/llz-object-storage \
+                      terraform-modules/llz-node-firewall \
+                      terraform-modules/llz-openbao)
+
+tf-fmt:
+	@for d in $(TF_DIRS); do tofu fmt "$$d"; done
+
+tf-fmt-check:
+	@for d in $(TF_DIRS); do tofu fmt -check "$$d" || exit 1; done
+
+tf-lint:
+	@for d in $(TF_DIRS); do tflint --chdir="$$d" --config="$(CURDIR)/.tflintrc.hcl" || exit 1; done
+
+# tf-validate: HCL syntax + provider type checking. Requires terraform init to
+# have been run in each module (use init -backend=false for offline use).
+tf-validate:
+	@for d in $(TF_DIRS); do terraform -chdir="$$d" validate || exit 1; done
+
+checkov:
+	@for d in $(TF_DIRS); do checkov -d "$$d" --framework terraform --config-file .checkov.yaml --compact --quiet || exit 1; done
+
+# tf-validate-roots: validate the INSTANCE Terraform roots (the reusable modules
+# are covered by tf-fmt-check/tf-lint/tf-validate/checkov above). Instantiates
+# the roots by rewriting their published git:: module sources to the in-repo
+# terraform-modules/ paths, then runs init -backend=false + validate on each —
+# catching HCL/type/module-wiring errors without published tags or remote state.
+tf-validate-roots:
+	template-scripts/ci/instantiate-terraform.sh
+
+# ── Kubernetes ────────────────────────────────────────────────────────────────
+
+# RENDER_DIR: where template-scripts/ci/render-charts.sh materializes the first-party
+# charts as plain Kubernetes manifests. The landing-zone template ships its
+# workloads AS charts (the apl-values manifest trees were helmified into
+# kubernetes-charts/, templatization §5), so the kubernetes scans validate this
+# rendered output rather than a raw apl-values/ tree that no longer exists here.
+RENDER_DIR ?= rendered
+
+render-charts:
+	template-scripts/ci/render-charts.sh $(RENDER_DIR)
+
+# k8s-lint: kube-linter checks the rendered first-party charts against the
+# all-built-in ruleset (security contexts, anti-affinity, resource limits, …).
+# Policy + exclusions live in .kube-linter.yaml.
+k8s-lint: render-charts
+	kube-linter lint $(RENDER_DIR) --config .kube-linter.yaml
+
+# k8s-validate: kubeconform schema validation of the rendered charts against the
+# Kubernetes schema + the Datree CRD catalog. -ignore-missing-schemas tolerates
+# CRs whose CRDs aren't in the catalog — those are validated against the real
+# installed CRDs by the kind dry-run job in .github/workflows/lint.yml.
+#   ClusterIssuer — Datree catalog rejects cert-manager's dns01.selector field
+K8S_VALIDATE_SKIP_KINDS := ClusterIssuer
+k8s-validate: render-charts
+	kubeconform \
+	  -kubernetes-version $(KUBECTL_VERSION) \
+	  -ignore-missing-schemas \
+	  -schema-location default \
+	  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+	  -skip $(K8S_VALIDATE_SKIP_KINDS) \
+	  -summary \
+	  -output pretty \
+	  $(RENDER_DIR)
+
+# Validate every Prometheus rule file under apl-values shipped as PrometheusRule
+# CRs. Apl-core's kube-prometheus-stack picks them up via its ruleSelector
+# matching the labels on each CRD. promtool only accepts the bare-groups form,
+# so the helper script extracts spec.groups from each CRD before invoking it.
+# Validates any PrometheusRule CRs shipped under the (instance) observability
+# overlay. The landing-zone template ships no PrometheusRules — its charts emit
+# ServiceMonitors only — so this no-ops here and runs in a populated instance.
+prom-rules-check:
+	@RULES_DIR=apl-values/_shared/manifest/observability/prometheus-rules-crd; \
+	if [ -d "$$RULES_DIR" ]; then \
+	  find "$$RULES_DIR" -name "*.yaml" -print0 \
+	    | xargs -0 python3 template-scripts/linting-and-validation/check-prometheus-rule-crds.py; \
+	else \
+	  echo "prom-rules-check: no PrometheusRule manifests ($$RULES_DIR absent) — skipping"; \
+	fi
+
+py-lint:
+	find template-scripts -name "*.py" -print0 | xargs -0 python3 -m py_compile
+
+helm-repos:
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+	helm repo add grafana https://grafana.github.io/helm-charts --force-update
+	helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts --force-update
+	helm repo add harbor https://helm.goharbor.io --force-update
+	helm repo add openbao          https://openbao.github.io/openbao-helm                  --force-update
+	helm repo add argo             https://argoproj.github.io/argo-helm                   --force-update
+	helm repo add jetstack         https://charts.jetstack.io                             --force-update
+	helm repo add external-secrets https://charts.external-secrets.io                    --force-update
+	helm repo update
+
+# The OpenBao chart was extracted/decoupled into kubernetes-charts/llz-openbao-platform (the
+# first-party chart library, published to GHCR). These targets keep the dedicated
+# CronWorkflow/dep-lock validation pointed at it; helm-lint-charts also lints it
+# along with every other first-party chart. The chart's defaults live in its
+# values.yaml (the former openbao-values.yaml content was merged in on extract).
+# cert-manager, ESO, kube-prometheus-stack, Grafana, Loki, OTel, and Harbor are
+# installed by apl-core directly — validated by `make argocd-rendered-apps-check`.
+OPENBAO_CHART := kubernetes-charts/llz-openbao-platform
+
+helm-lint-argocd: helm-repos
+	helm dependency build $(OPENBAO_CHART)
+	helm lint --strict $(OPENBAO_CHART) \
+		--set "approleWorkflow.approleRotationEnabled=false"
+
+helm-lint-real-values: helm-repos
+	helm dependency build $(OPENBAO_CHART)
+	helm lint --strict $(OPENBAO_CHART)
+	helm template platform-openbao $(OPENBAO_CHART) \
+		-n llz-openbao >/dev/null
+
+argocd-rendered-apps-check: render-charts
+	python3 template-scripts/linting-and-validation/validate-argocd-rendered-apps.py
+
+# placeholder-lint: reject unsubstituted placeholder.example.com hostnames in the
+# rendered manifests — anything Argo CD reconciles into a cluster must carry real
+# addresses, never the template's example placeholders.
+placeholder-lint: render-charts
+	@if grep -rn 'placeholder\.example\.com' $(RENDER_DIR)/; then \
+		echo "::error::Unsubstituted placeholder.example.com found in rendered manifests."; \
+		exit 1; \
+	fi; \
+	echo "No placeholder addresses found in rendered manifests."
+
+# externalsecret-paths-check: `llz ci externalsecret-paths` (the native port of
+# the former validate-externalsecret-paths.py). Uses the PATH llz when present
+# (the CI images bake it); otherwise builds from source via the Go toolchain.
+externalsecret-paths-check: render-charts
+	@if command -v llz >/dev/null 2>&1; then \
+		RENDER_DIR=$(RENDER_DIR) llz ci externalsecret-paths; \
+	else \
+		cd $(GO_DIR) && RENDER_DIR=$(RENDER_DIR) go run ./cmd/llz ci externalsecret-paths --root ..; \
+	fi
+
+# untestable-loc-check: the design-principle gate. Fails when inline workflow
+# bash / shell / python logic exceeds the budget in .untestable-budget.yaml —
+# the signal to convert logic into the unit-tested llz CLI rather than pile more
+# untestable shell into CI. Pure Go + a config file, so it runs anywhere (no
+# rendered charts needed). Budgets ratchet DOWN as code is converted.
+untestable-loc-check:
+	@if command -v llz >/dev/null 2>&1; then \
+		llz ci untestable-loc; \
+	else \
+		cd $(GO_DIR) && go run ./cmd/llz ci untestable-loc --root ..; \
+	fi
+
+# argo-workflow-lint: render the OpenBao approle-rotation CronWorkflow from the
+# Helm chart and validate the rendered YAML with `argo lint --offline`. Catches
+# step→template reference errors and invalid Argo field names that schema-only
+# checks miss. The empty-render guard ensures conditional templates ({{- if ... }})
+# actually produce output — a silent empty render would otherwise pass argo lint
+# trivially.
+#
+# The cert-automation WorkflowTemplate is validated as raw YAML by k8s-validate
+# + the kind dry-run job, so this target only needs to cover the OpenBao chart's
+# CronWorkflow (which is templated and can only be linted post-render).
+argo-workflow-lint:
+	@RENDERED=$$(helm template platform-openbao $(OPENBAO_CHART) \
+		-n llz-openbao \
+		--set "approleWorkflow.approleRotationEnabled=true"); \
+	if ! printf '%s\n' "$$RENDERED" | grep -q "^kind: CronWorkflow"; then \
+		echo "::error::argo-workflow-lint: helm template produced no CronWorkflow — check approleWorkflow.approleRotationEnabled and template conditionals"; \
+		exit 1; \
+	fi; \
+	_ARGO_TMP=$$(mktemp /tmp/argo-lint-XXXXXX.yaml); \
+	printf '%s\n' "$$RENDERED" > "$$_ARGO_TMP"; \
+	argo lint --offline "$$_ARGO_TMP"; \
+	rm -f "$$_ARGO_TMP"
+
+helm-dep-lock-check:
+	python3 template-scripts/linting-and-validation/check-chart-lock-drift.py \
+	  $(OPENBAO_CHART)
+
+# helm-lint-charts: lint + template every first-party Helm chart under kubernetes-charts/.
+# These are the extracted, independently-versioned charts published to GHCR
+# (docs/templatization-plan.md §5). `helm lint --strict` enforces schema +
+# best-practices; `helm template` proves every chart renders with its default
+# values (the operational scars are encoded as those defaults). Mirrors the
+# helm-lint-charts CI step in .github/workflows/lint.yml.
+helm-lint-charts: helm-repos
+	@set -euo pipefail; \
+	for dir in kubernetes-charts/*/; do \
+		[ -f "$${dir}Chart.yaml" ] || continue; \
+		echo "── $$dir"; \
+		helm dependency build "$$dir" >/dev/null 2>&1 || true; \
+		helm lint --strict "$$dir"; \
+		helm template "$$(basename "$$dir")" "$$dir" >/dev/null; \
+	done
+
+actions-lint:
+	actionlint .github/workflows/*.yml
+
+# sync-wave-lint: every Application + AppProject YAML in apl-values/ must carry
+# an argocd.argoproj.io/sync-wave annotation. Missing annotations cause
+# undefined sync ordering — in particular, AppProjects without a wave default
+# to wave 0, which is AFTER wave -5/-10 Applications that reference them,
+# causing a deadlock on greenfield install. Mirrors the CI check in
+# .github/workflows/lint.yml sync-wave-lint job.
+sync-wave-lint: render-charts
+	@set -euo pipefail; \
+	FAIL=false; \
+	while IFS= read -r file; do \
+		if ! grep -qE "^kind: (Application|AppProject)" "$$file"; then continue; fi; \
+		if ! grep -q "argocd.argoproj.io/sync-wave" "$$file"; then \
+			KIND=$$(grep -oE "^kind: (Application|AppProject)" "$$file" | head -1); \
+			echo "ERROR $$file: ArgoCD $$KIND is missing argocd.argoproj.io/sync-wave annotation"; \
+			FAIL=true; \
+		fi; \
+	done < <(find $(RENDER_DIR)/ -name "*.yaml"); \
+	if [ "$$FAIL" = "true" ]; then \
+		echo "One or more Applications or AppProjects are missing sync-wave annotations."; \
+		echo "Add argocd.argoproj.io/sync-wave: \"<N>\" to the metadata.annotations block."; \
+		exit 1; \
+	fi; \
+	echo "All ArgoCD Applications and AppProjects have sync-wave annotations."
+
+# ── Combined lint ─────────────────────────────────────────────────────────────
+# By default, only lints files changed since the last commit (git diff HEAD).
+# Pass LINT_ALL=1 to run every check unconditionally (e.g. in CI).
+
+# Kubernetes + Terraform check groups — the single source of truth shared by the
+# CI 'Lint' workflow (.github/workflows/lint.yml, via the lint-k8s / lint-tf
+# entrypoints below) and the local `make lint` mirror. The render-based k8s
+# targets share a render-charts prerequisite, so one $(MAKE) invocation renders
+# once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
+# TF_IMAGE) and added explicitly to the local all-checks run.
+LINT_K8S := k8s-lint k8s-validate sync-wave-lint placeholder-lint \
+            externalsecret-paths-check argocd-rendered-apps-check prom-rules-check \
+            helm-lint-charts helm-lint-real-values helm-lint-argocd \
+            helm-dep-lock-check argo-workflow-lint
+LINT_TF := tf-lint checkov tf-validate-roots
+
+# CI job entrypoints — one target per lint.yml container job.
+lint-k8s: $(LINT_K8S) shellcheck py-lint
+lint-tf: $(LINT_TF) template-manifest-check
+
+# Assert .template-manifest classifies every scaffold file (managed/merge/owned),
+# so the template-update tooling never has to guess about a new file.
+template-manifest-check:
+	template-scripts/check-template-manifest.sh
+
+lint:
+	@set -e; \
+	if [ -n "$(LINT_ALL)" ]; then \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck py-lint actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S); \
+		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
+		exit 0; \
+	fi; \
+	CHANGED=$$(git diff --name-only HEAD 2>/dev/null || git ls-files); \
+	if [ -z "$$CHANGED" ]; then \
+		echo "lint: nothing changed since last commit (use LINT_ALL=1 to run all checks)"; \
+		exit 0; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '\.go$$|go\.(mod|sum)$$'; then \
+		$(MAKE) --no-print-directory fmt-check vet; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '^tools/.*\.go$$|^tools/go\.(mod|sum)$$|^template-scripts/ci/llz-functional\.sh$$'; then \
+		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '\.sh$$|template-scripts/hooks/'; then \
+		$(MAKE) --no-print-directory shellcheck; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '^(terraform-modules|instance-template/terraform-iac-bootstrap)/.*\.tf$$|\.tflintrc\.hcl$$|\.checkov\.yaml$$'; then \
+		$(MAKE) --no-print-directory tf-fmt-check $(LINT_TF); \
+	fi; \
+	if echo "$$CHANGED" | grep -qE 'template-scripts/.*\.py$$'; then \
+		$(MAKE) --no-print-directory py-lint; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '^kubernetes-charts/|\.kube-linter\.yaml$$'; then \
+		$(MAKE) --no-print-directory $(LINT_K8S); \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$'; then \
+		$(MAKE) --no-print-directory actions-lint; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|template-scripts/.*\.py$$|instance-template/\.github/|^\.untestable-budget\.yaml$$'; then \
+		$(MAKE) --no-print-directory untestable-loc-check; \
+	fi
+
+# ── Audit ─────────────────────────────────────────────────────────────────────
+
+# govulncheck cross-references the Go vulnerability database against the symbols
+# the tools module actually calls. `go run ...@latest` avoids a separate install
+# step; pin GOVULNCHECK_VERSION to a tag for reproducible CI if desired.
+GOVULNCHECK_VERSION ?= latest
+
+audit:
+	cd $(GO_DIR) && go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+# tidy verifies go.mod / go.sum are in sync with the source (CI-safe: fails if
+# `go mod tidy` would change anything).
+tidy:
+	@cd $(GO_DIR) && go mod tidy && \
+	if ! git diff --quiet -- go.mod go.sum; then \
+		echo "go.mod / go.sum are not tidy — run 'make tidy' and commit the result"; \
+		git --no-pager diff -- go.mod go.sum; exit 1; \
+	fi
+
+update:
+	cd $(GO_DIR) && go get -u ./... && go mod tidy
+
+gitleaks:
+	@command -v gitleaks >/dev/null 2>&1 || \
+	  { echo "gitleaks not found — install with: brew install gitleaks"; exit 1; }
+	gitleaks detect --source .
+
+# SBOM generation — release evidence. Three sources:
+#   * sbom-go         — `trivy fs` CycloneDX SBOM of the Go tools module.
+#   * sbom-terraform  — `syft scan` against terraform-iac-bootstrap/ (parses
+#                       every .terraform.lock.hcl for provider versions).
+#                       Trivy doesn't parse Terraform lock files; syft does,
+#                       so syft is retained here even though trivy owns the
+#                       rest of the SBOM + CVE pipeline.
+#   * sbom-kubernetes — `trivy image` per container image referenced under
+#                       kubernetes/ (template-scripts/ci/sbom-kubernetes.sh extracts the
+#                       refs and runs trivy per ref).
+# All three produce CycloneDX JSON in sbom/ so the release.yml SBOM job can
+# upload them with a single `gh release upload sbom/*.json`.
+#
+# `make sbom-scan` runs trivy against the produced SBOMs and exits non-zero
+# on Critical CVEs — release.yml runs this after sbom to gate the release.
+SYFT ?= syft
+TRIVY ?= trivy
+SBOM_FAIL_ON ?= CRITICAL
+
+sbom: sbom-go sbom-terraform sbom-kubernetes
+
+sbom-go:
+	@mkdir -p sbom
+	@if command -v $(TRIVY) >/dev/null 2>&1; then \
+		$(TRIVY) fs --quiet --format cyclonedx --output sbom/sbom-tools.json $(GO_DIR); \
+	else \
+		echo "WARNING: trivy not installed — skipping sbom-go."; \
+		echo "  Install: make install-trivy"; \
+		[ -z "$(SBOM_STRICT)" ] || { echo "SBOM_STRICT=1 set — failing"; exit 1; }; \
+	fi
+
+# syft/trivy-using targets: skip with a warning when the tool is not installed,
+# so a local `make sbom` still produces what it can. CI always installs both
+# first (release.yml). Force the check by setting SBOM_STRICT=1.
+sbom-terraform:
+	@mkdir -p sbom
+	@if command -v $(SYFT) >/dev/null 2>&1; then \
+		$(SYFT) scan dir:terraform-iac-bootstrap -o cyclonedx-json=sbom/sbom-terraform.json; \
+	else \
+		echo "WARNING: syft not installed — skipping sbom-terraform."; \
+		echo "  Install: make install-syft"; \
+		[ -z "$(SBOM_STRICT)" ] || { echo "SBOM_STRICT=1 set — failing"; exit 1; }; \
+	fi
+
+sbom-kubernetes:
+	@mkdir -p sbom
+	@if command -v $(TRIVY) >/dev/null 2>&1; then \
+		./template-scripts/ci/sbom-kubernetes.sh; \
+	else \
+		echo "WARNING: trivy not installed — skipping sbom-kubernetes."; \
+		echo "  Install: make install-trivy"; \
+		[ -z "$(SBOM_STRICT)" ] || { echo "SBOM_STRICT=1 set — failing"; exit 1; }; \
+	fi
+
+# Vulnerability gate. Reads the generated SBOMs in sbom/ and fails on any CVE
+# at or above SBOM_FAIL_ON severity (default CRITICAL). Override via env to
+# tighten (CRITICAL,HIGH) or loosen (UNKNOWN to disable the gate). Skipped
+# locally if trivy is missing unless SBOM_STRICT=1.
+sbom-scan:
+	@if ! command -v $(TRIVY) >/dev/null 2>&1; then \
+		echo "WARNING: trivy not installed — skipping sbom-scan."; \
+		[ -z "$(SBOM_STRICT)" ] || { echo "SBOM_STRICT=1 set — failing"; exit 1; }; \
+		exit 0; \
+	fi
+	@if [ -z "$$(ls sbom/*.json 2>/dev/null)" ]; then \
+		echo "No SBOMs in sbom/ — run \`make sbom\` first."; \
+		exit 1; \
+	fi
+	@fail=0; \
+	for f in sbom/*.json; do \
+		echo "Scanning $$f for $(SBOM_FAIL_ON)+ vulnerabilities..."; \
+		$(TRIVY) sbom --quiet --severity $(SBOM_FAIL_ON) \
+			--exit-code 1 --no-progress "$$f" || fail=1; \
+	done; \
+	if [ "$$fail" -ne 0 ]; then \
+		echo "::error::sbom-scan: $(SBOM_FAIL_ON)+ vulnerabilities present (see output above)"; \
+		exit 1; \
+	fi
+	@echo "sbom-scan: no $(SBOM_FAIL_ON)+ vulnerabilities found across $$(ls sbom/*.json | wc -l | tr -d ' ') SBOMs."
+
+# ── Test ──────────────────────────────────────────────────────────────────────
+
+test:
+	cd $(GO_DIR) && go test ./...
+
+# ── Coverage ─────────────────────────────────────────────────────────────────
+
+coverage:
+	@mkdir -p coverage
+	cd $(GO_DIR) && go test -covermode=atomic \
+		-coverprofile="$(CURDIR)/coverage/tools.out" ./...
+	@cd $(GO_DIR) && go tool cover -func="$(CURDIR)/coverage/tools.out" | tail -1
+	@echo "Per-package thresholds (COVERAGE_MINS):"
+	@template-scripts/ci/check-go-coverage.sh "$(CURDIR)/coverage/tools.out" $(COVERAGE_MINS)
+	@echo "Coverage profile written to coverage/tools.out"
+
+# ── Instance smoke test ───────────────────────────────────────────────────────
+# instance-test: the fast, LOCAL, no-cloud counterpart to release-e2e.yml. That
+# workflow proves the template by standing up a REAL LKE-Enterprise cluster
+# (instantiate → provision → validate → destroy) — slow and billable. This target
+# runs only the parts that need no cloud: `copier copy` renders instance-template/
+# into $(INSTANCE_TEST_DIR) via the REAL instantiation path (so it catches the
+# <@ token @> substitution bugs the release-e2e raw-cp hoist silently passes),
+# then validates the rendered instance offline — no unrendered tokens, the
+# load-bearing files present, and `terraform validate` on every rendered TF root
+# (git:: module sources rewritten to the in-repo terraform-modules/, same trick as
+# tf-validate-roots). Stands up NO cluster. Set SKIP_TF=1 to skip terraform.
+INSTANCE_TEST_DIR ?= .instance-test
+instance-test: scaffold-check
+	template-scripts/ci/instance-test.sh
+
+# scaffold-check: scaffold a throwaway env via `llz env add` and assert the
+# per-env scaffold is correct (no leftover `your-env`, required per-env files
+# present, every apl-values/<env>/values.yaml renders through templatefile()).
+# Catches the class of bug that only surfaced in Release-E2E before. No cloud;
+# all artifacts removed on exit. Set SKIP_TF=1 to skip the templatefile render.
+# Depends on `llz` so the scaffolder (bin/llz env add) is built first.
+scaffold-check: llz
+	template-scripts/ci/scaffold-render-check.sh
+
+# llz-functional: drive the BUILT llz binary like an adopter and assert on real
+# behaviour (vs the in-process unit tests, which stub the shell-out). Section A —
+# basic commands (version/help/completion/env list/validation) — is offline and
+# always runs. Section B exercises the documented INSTALL FLOW (docs/quickstart.md
+# §2) against a real published release: `gh release download` + checksum, the
+# authenticated `curl` against the private repo, and `llz self-update`'s
+# download→verify→replace. Section B needs `gh` authenticated to the template repo
+# (CI: GITHUB_TOKEN) and SELF-SKIPS when it isn't, so `make llz-functional` still
+# runs section A offline. Set LLZ_FUNCTIONAL_NET=1 to require section B.
+#
+# `make lint` (the pre-commit gate) runs this with LLZ_FUNCTIONAL_NET=0 when the
+# llz CLI source or this script changed — section A only, so the commit-time check
+# stays offline + fast; the network install-flow is gated by release-e2e.yml.
+llz-functional: llz
+	template-scripts/ci/llz-functional.sh
+
+# reap-orphans: the single manual entrypoint for clearing leaked Linode
+# resources from failed/cancelled cluster cycles (the backlog that makes a fresh
+# cluster-create HANG; `llz ci preflight` points here). Wraps the native
+# `llz reap`, which sweeps clusters (if CLUSTER_LABEL) -> firewall -> NodeBalancers
+# -> VPCs -> Volumes in dependency order. DRY-RUN by default; CONFIRM=yes to
+# delete. NOT for routine teardown — CI uses the cluster-scoped `llz ci
+# reap-volumes` / `reap-nodebalancers` sweeps instead.
+reap-orphans: llz
+	@LINODE_TOKEN='$(LINODE_TOKEN)' bin/llz reap --region '$(REGION)' --cluster-label '$(CLUSTER_LABEL)' $(if $(filter yes,$(CONFIRM)),--yes)
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
+
+clean:
+	cd $(GO_DIR) && go clean
+	@rm -rf coverage sbom

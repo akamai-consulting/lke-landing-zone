@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(shellcheck *)",
+      "Bash(actionlint *)",
+      "Bash(git fetch *)",
+      "Bash(kubectl kustomize *)",
+      "Bash(gofmt -l *)",
+      "Bash(kubectl get *)",
+      "Bash(go vet *)",
+      "Bash(copier --version)"
+    ]
+  }
+}

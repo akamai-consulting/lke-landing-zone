@@ -1,0 +1,120 @@
+# Default-deny + allow rules for the llz-argo-workflows namespace.
+#
+# Restores the secure-by-default posture the cluster health-check expects:
+# without these, the namespace runs unrestricted. The namespace itself is created
+# by cluster-foundation at wave -20; these NPs are applied (wave -10) by the
+# platform-bootstrap tree once it exists.
+#
+# Sync wave -10: applied BEFORE the workflow-controller / argo-server pods come
+# up. Cilium NP programming is async; NPs in the same wave as the workloads can
+# crash-loop pods that fail-fast on connectivity (project_np_sync_wave_race).
+#
+# LKE-E port 6443 (project_lke_e_cilium_np_port_6443): Cilium evaluates NP AFTER
+# DNAT. Pods dial the kubernetes Service at :443 but Cilium sees the post-DNAT
+# node IP at :6443 — apiserver-egress rules MUST list both.
+#
+# Selectors (argo-workflows v0.42.x chart):
+#   - argo-server pod: app.kubernetes.io/name=argo-server
+# Workflow step pods are created by the controller in the workflowNamespaces it
+# manages (llz-openbao, llz-cert-automation) — their NPs live in those namespaces.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-workflows-default-deny
+  namespace: llz-argo-workflows
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# DNS resolution for every pod in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-workflows-allow-dns
+  namespace: llz-argo-workflows
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+---
+# Apiserver egress — workflow-controller watches Workflow/CronWorkflow CRs and
+# creates pods in workflowNamespaces (llz-openbao, llz-cert-automation);
+# argo-server proxies kubectl-style calls. Both 443 (Service VIP) and 6443
+# (post-DNAT node port) must be allowed on LKE-E.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-workflows-allow-apiserver-egress
+  namespace: llz-argo-workflows
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - { port: 443,  protocol: TCP }
+        - { port: 6443, protocol: TCP }
+---
+# Intra-namespace traffic: argo-server <-> workflow-controller (metrics, health,
+# leader election). Allow any pod in the namespace to talk to any other, both ways.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-workflows-allow-intra-namespace
+  namespace: llz-argo-workflows
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+# argo-server UI/API on :2746. Reached via Istio Gateway from istio-system; also
+# allow same-namespace ingress for the controller and probes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  name: llz-argo-workflows-allow-argo-server-ingress
+  namespace: llz-argo-workflows
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argo-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+        - podSelector: {}
+      ports:
+        - { port: 2746, protocol: TCP }

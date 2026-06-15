@@ -1,0 +1,82 @@
+# platform-support AppProject
+#
+# Every bootstrap component Application in argocd/applications/ sets
+# `project: platform-support`; without this AppProject they all fail with
+# InvalidSpecError ("project platform-support not found") and never sync — which
+# leaves the llz-openbao namespace uncreated and the OpenBao bootstrap workflow
+# timing out on `namespaces "llz-openbao" not found`.
+#
+# This is the per-domain support-plane project the TF cluster-bootstrap comments
+# reference ("downstream apps live under their own per-domain AppProjects
+# (platform-support) defined inside the manifest tree itself"). The
+# seed `platform-bootstrap` project (created by TF) only source-pins the instance
+# repo for the root app-of-apps; the component apps below ride THIS project, which
+# is scoped to the OCI/Helm registries they actually pull from.
+#
+# Wave -20: must exist before any Application that references it (Argo evaluates
+# the project on the referencing app's first reconcile).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform-support
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # NOTE: ArgoCD AppProject spec.description max is 255 bytes (k8s validation).
+  # Keep this short — if it overflows, the whole project fails to apply and every
+  # Application referencing it (cluster-foundation, openbao, …) goes
+  # InvalidSpecError → no namespaces, OpenBao bootstrap times out.
+  description: >-
+    Support-plane infrastructure: cluster-foundation, External Secrets Operator,
+    Argo Workflows/Events, cert-automation, eso-cert-watcher, OpenBao, and the
+    Linode internal-CIDR firewall. Only support-plane charts live here.
+  # No git source: every component below is OCI (first-party GHCR) or a direct
+  # upstream Helm repo. The instance repo is source-pinned by the seed
+  # platform-bootstrap project for the root app, not here.
+  #
+  # Only repos Argo CD pulls at RUNTIME are listed:
+  #   - GHCR: first-party charts (cluster-foundation, cert-automation,
+  #     eso-cert-watcher, openbao-platform, firewall).
+  #   - charts.external-secrets.io: ESO (apl-core 5.0.0 doesn't ship it).
+  #   - argoproj.github.io/argo-helm: Argo WORKFLOWS + EVENTS (NOT Argo CD —
+  #     apl-core owns that). apl-core doesn't ship workflows/events; cert-automation
+  #     needs their CRDs, so we install them as direct upstream sources.
+  # openbao.github.io is intentionally ABSENT: openbao is a vendored subchart of
+  # llz-openbao-platform (bundled into the OCI artifact at publish), so Argo never
+  # pulls it from upstream at runtime.
+  sourceRepos:
+    - 'ghcr.io/<@ upstream_org @>/charts'
+    - 'ghcr.io/<@ upstream_org @>/charts/*'
+    - 'https://charts.external-secrets.io'
+    - 'https://argoproj.github.io/argo-helm'
+  destinations:
+    # Namespaces cluster-foundation creates (wave -20) + the apl-core-managed
+    # namespaces the support-plane charts deploy into. A destination missing here
+    # fails the owning app with InvalidSpecError.
+    - { namespace: kube-system,                server: https://kubernetes.default.svc }
+    - { namespace: argocd,                     server: https://kubernetes.default.svc }
+    - { namespace: cert-manager,               server: https://kubernetes.default.svc }
+    - { namespace: harbor,                     server: https://kubernetes.default.svc }
+    - { namespace: istio-system,               server: https://kubernetes.default.svc }
+    - { namespace: monitoring,                 server: https://kubernetes.default.svc }
+    - { namespace: grafana,                    server: https://kubernetes.default.svc }
+    - { namespace: llz-openbao,                server: https://kubernetes.default.svc }
+    - { namespace: llz-external-secrets,       server: https://kubernetes.default.svc }
+    - { namespace: llz-cert-automation,        server: https://kubernetes.default.svc }
+    - { namespace: llz-argo-workflows,         server: https://kubernetes.default.svc }
+    - { namespace: llz-argo-events,            server: https://kubernetes.default.svc }
+    - { namespace: llz-observability,          server: https://kubernetes.default.svc }
+    - { namespace: llz-linode-volume-labeler,  server: https://kubernetes.default.svc }
+  clusterResourceWhitelist:
+    # cluster-foundation creates Namespaces + the storage-class-patcher
+    # ClusterRole/Binding; the firewall reconciler needs cluster-scoped reads.
+    - group: '*'
+      kind: '*'
+  namespaceResourceBlacklist:
+    - group: ''
+      kind: ResourceQuota
+  orphanedResources:
+    warn: true

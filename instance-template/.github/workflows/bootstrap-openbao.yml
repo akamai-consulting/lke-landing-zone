@@ -1,0 +1,61 @@
+name: Bootstrap OpenBao
+
+# Thin caller for the reusable LLZ workflow — the full body (init, unseal,
+# configure, secondary-CA reprovision, secret seeding), the fetch-kubeconfig
+# action, and the llz CLI all live in the template and are sourced
+# there (see docs/templatization-plan.md §"Keeping instances in sync"). The
+# reusable workflow checks THIS instance back out (its terraform-iac-bootstrap
+# TF state), so the instance copies only this stub.
+# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
+# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+#
+# Operators dispatch this directly. The terraform.yml pipeline reaches OpenBao
+# bootstrap through llz-terraform's own bootstrap-openbao job (which calls
+# llz-bootstrap-openbao directly), not through this stub.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Deployment (primary | secondary | staging | lab)'
+        required: true
+        type: choice
+        options: [primary, secondary, staging, lab]
+      reprovision_ca_only:
+        description: 'Re-provision secondary CA in primary cluster only (skips full bootstrap)'
+        required: false
+        type: boolean
+        default: false
+      preserve_root_on_failure:
+        description: >
+          DEBUG ONLY. Skip the post-bootstrap root-token revoke when the
+          bootstrap FAILS, so the operator can iterate without burning a
+          fresh quorum-regenerate per retry. Default false (revoke runs
+          unconditionally — security-safe default). Successful bootstraps
+          always revoke regardless of this flag.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Same group as bootstrap-dns so a DNS seed cannot race a concurrent
+# re-bootstrap that's touching the same KV mount or the same root token.
+concurrency:
+  group: openbao-bootstrap-${{ inputs.region }}
+  cancel-in-progress: false
+
+jobs:
+  call:
+    # Pinned to an immutable LLZ template release tag (not @main) so updates
+    # arrive as reviewable Renovate PRs. ADOPTERS: repoint the org to your fork.
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-bootstrap-openbao.yml@<@ llz_version @>
+    with:
+      region:                   ${{ inputs.region }}
+      reprovision_ca_only:      ${{ inputs.reprovision_ca_only || false }}
+      preserve_root_on_failure: ${{ inputs.preserve_root_on_failure || false }}
+      instance_repo:            <@ instance_repo @>
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref:             <@ llz_version @>
+    secrets: inherit

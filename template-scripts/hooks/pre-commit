@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+IFS=$'\n' read -r -d '' -a STAGED_FILES < <(git diff --cached --name-only --diff-filter=ACMR && printf '\0')
+
+if [[ ${#STAGED_FILES[@]} -eq 0 ]]; then
+  exit 0
+fi
+
+# ── Secrets guard ─────────────────────────────────────────────────────────────
+SECRETS_FAIL=false
+for file in "${STAGED_FILES[@]}"; do
+  if [[ "$file" =~ \.(pem|der|key)$ ]]; then
+    echo "pre-commit: BLOCKED — refusing to commit sensitive file: $file"
+    SECRETS_FAIL=true
+  fi
+done
+if [[ "$SECRETS_FAIL" == true ]]; then
+  echo "  Remove the file from staging: git reset HEAD <file>"
+  exit 1
+fi
+
+# ── Lint ──────────────────────────────────────────────────────────────────────
+echo "pre-commit: running make lint"
+make lint

@@ -1,0 +1,52 @@
+# Let's Encrypt ClusterIssuers — production + staging.
+#
+# The `llz-` prefix avoids collision with apl-core's bundled cert-manager
+# auto-creating a `letsencrypt` ClusterIssuer when
+# `apps.cert-manager.issuer: letsencrypt` is set in apl-core values. Any
+# Certificate that needs LE explicitly targets `llz-letsencrypt-*` so the
+# landing zone owns the issuer config (DNS-01 webhook, email, account key).
+#
+# Pre-requisite: a Kubernetes Secret named `cert-manager-dns01-solver-token`
+# must exist in the cert-manager namespace containing the Linode DNS API token
+# under key `token`. dns01-solver-externalsecret.yaml (this dir) syncs it from
+# OpenBao (secret/certmanager/dns01), which bootstrap-dns.yml seeds.
+#
+# REPLACE_PER_ENV: set `spec.acme.email` to your operations contact before use
+# (Let's Encrypt requires a valid registration email).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: llz-letsencrypt-production
+  annotations:
+    # Wave -5: after ESO (-15) and external-secrets NPs (-10), before any
+    # Certificate/Gateway annotation that references the issuer by name.
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: REPLACE_PER_ENV   # e.g. ops@example.com
+    privateKeySecretRef:
+      name: llz-letsencrypt-production-account-key
+    solvers:
+      - dns01:
+          webhook:
+            groupName: acme.cluster.local
+            solverName: linode
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: llz-letsencrypt-staging
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: REPLACE_PER_ENV   # e.g. ops@example.com
+    privateKeySecretRef:
+      name: llz-letsencrypt-staging-account-key
+    solvers:
+      - dns01:
+          webhook:
+            groupName: acme.cluster.local
+            solverName: linode

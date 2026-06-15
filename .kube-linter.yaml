@@ -1,0 +1,58 @@
+# kube-linter policy for the rendered first-party charts (template-scripts/ci/render-charts.sh).
+# Run via: make k8s-lint
+# Docs: https://docs.kubelinter.io/#/configuring-kubelinter
+
+checks:
+  # Enable all built-in checks, not just the default subset.
+  addAllBuiltIn: true
+
+  exclude:
+    # Manifests are rendered from Helm charts (template-scripts/ci/render-charts.sh), so
+    # key order follows the chart templates, not alphabetical. sorted-keys is a
+    # pure style check with no bearing on a rendered manifest's correctness.
+    - sorted-keys
+
+    # Project labels use app.kubernetes.io/part-of, not a bare "owner" label.
+    - required-label-owner
+
+    # Internal service; no email-contact annotations are used.
+    - required-annotation-email
+
+    # Some base manifests declare 2 replicas; production overlays patch this to 3+.
+    # ArgoCD Application objects are not workloads so replica checks don't apply.
+    - minimum-three-replicas
+
+    # Default-deny NetworkPolicies intentionally use empty podSelector (selecting
+    # all pods in namespace). Argo Events component policies reference pods
+    # deployed by the operator — not tracked as static manifests in this repo.
+    # Both are correctly configured; kube-linter cannot resolve them statically.
+    - dangling-networkpolicy
+    - dangling-networkpolicypeer-podselector
+
+    # Same static-resolution limit: a ServiceMonitor's target Service is part of
+    # the wrapped upstream OpenBao chart (rendered separately), so kube-linter
+    # sees the selector as dangling. The selector is correct at deploy time.
+    - dangling-servicemonitor
+
+    # non-isolated-pod requires every workload to ship its own NetworkPolicy.
+    # Cross-namespace isolation here is provided by the cluster-foundation
+    # default-deny + per-namespace allow policies, not by each workload chart, so
+    # this check flags singleton watchers (eso-cert-watcher) that intentionally
+    # carry no in-chart NetworkPolicy. Consistent with the dangling-* exclusions.
+    - non-isolated-pod
+
+    # Node affinity is not required for all workloads; pod anti-affinity is used
+    # where multi-replica spreading is needed.
+    - no-node-affinity
+
+    # DNS ndots tuning is managed at the cluster level via CoreDNS; per-pod
+    # dnsConfig options are not required for correctness in this environment.
+    - dnsconfig-options
+
+    # CronJob short-lived workloads (llz-cert-automation/haproxy-tls-watcher) use
+    # restartPolicy=Never per Kubernetes Jobs convention; kube-linter's default
+    # restart-policy check is workload-type-agnostic and flags this incorrectly.
+    # Probes are also N/A for short-lived run-to-completion workloads.
+    - restart-policy
+    - no-liveness-probe
+    - no-readiness-probe

@@ -1,0 +1,1907 @@
+# Reusable (`workflow_call`) version of the Terraform infra pipeline (plan /
+# apply / destroy across cluster, cluster-bootstrap, openbao-config,
+# object-storage + the OpenBao bootstrap + converge gate). Surface-reduction
+# pattern (docs/templatization-plan.md §"Keeping instances in sync"): the
+# instance ships a thin caller stub (owning the push / pull_request /
+# workflow_dispatch triggers) instead of this body, the terraform-init +
+# fetch-kubeconfig composite actions, and the llz CLI. Dual checkout
+# (Option A): the caller instance is at the workspace root (its
+# terraform-iac-bootstrap/ TF roots + state), the LLZ template into
+# _llz-template/. github.event_name / github.ref / github.event.pull_request.*
+# ARE inherited from the caller, so the push/PR trigger gates work unchanged. The
+# dispatch SELECTORS (action / module / region / confirm_destroy) are NOT — a
+# reusable workflow's github.event.inputs is empty across the workflow_call
+# boundary — so the caller forwards them as explicit `with:` inputs and the jobs
+# below gate on the `inputs` context. On push/PR the caller forwards empty
+# strings, leaving the action-gated jobs skipped.
+# The bootstrap-openbao job calls llz-bootstrap-openbao directly (template-local
+# nested reusable).
+on:
+  workflow_call:
+    inputs:
+      instance_repo:
+        description: "This instance's GitHub repo (<owner>/<name>) — used in operator-facing messages + forwarded to llz-bootstrap-openbao."
+        required: true
+        type: string
+      template-ref:
+        description: 'LLZ template ref to source the composite actions + scripts from. Pin to the same tag as this workflow''s @<ref>.'
+        required: false
+        type: string
+        default: main
+      # The plan/apply/destroy selectors. The caller stub owns the
+      # push/pull_request/workflow_dispatch triggers and FORWARDS the dispatch
+      # inputs here via `with:`. They must be explicit workflow_call inputs and
+      # read through the `inputs` context — `inputs.*` is NOT
+      # populated for a reusable workflow invoked via workflow_call (only the
+      # caller's `inputs` carries them; the github.event payload does not cross
+      # the boundary). On push/PR the caller passes empty strings, which leaves
+      # every action-gated job below correctly skipped (PR plan jobs gate on
+      # github.event_name, which DOES inherit).
+      action:
+        description: 'Terraform action: plan | apply | destroy (empty on push/PR).'
+        required: false
+        type: string
+        default: ''
+      module:
+        description: 'Target module: cluster | openbao-config | object-storage | all.'
+        required: false
+        type: string
+        default: ''
+      region:
+        description: 'Deployment (primary | secondary | staging | lab | e2e) — also the infra-<region> Environment + state-key path.'
+        required: false
+        type: string
+        default: ''
+      confirm_destroy:
+        description: 'Destroy confirmation token: destroy:<deployment>:<module>.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      TF_STATE_ACCESS_KEY:
+        required: true
+      TF_STATE_SECRET_KEY:
+        required: true
+      LINODE_API_TOKEN:
+        required: true
+      LINODE_DNS_TOKEN:
+        required: false
+      # required: false so a missing token gives the friendly preflight error
+      # (llz ci require-secret) instead of a cryptic call-time "required, but not
+      # provided" failure under `secrets: inherit`. It IS needed for a green
+      # apply — the Pre-flight step enforces presence.
+      APL_VALUES_REPO_TOKEN:
+        required: false
+      GHCR_READ_TOKEN:
+        required: false
+      CLOUD_FIREWALL_TOKEN:
+        required: false
+      APPS_REPO_REVISION:
+        required: false
+      LOKI_ADMIN_PASSWORD:
+        required: false
+      OPENBAO_ADDRESS:
+        required: false
+      OPENBAO_ROOT_TOKEN:
+        required: false
+      OPENBAO_SECRETS_WRITE_TOKEN:
+        required: false
+      TEMPLATE_TOKEN:
+        description: 'Token with read access to the LLZ template repo. Only needed when the template is private and not the caller repo; defaults to the job GITHUB_TOKEN.'
+        required: false
+
+name: llz-terraform (reusable)
+
+permissions:
+  contents: read
+
+# Never cancel in-flight infra changes — a partial apply is worse than a queued one.
+concurrency:
+  group: terraform-infra-${{ inputs.region || 'pr' }}
+  cancel-in-progress: false
+
+env:
+  # TF_IMAGE, KUBE_IMAGE must be set as GitHub Actions repository variables.
+  GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=accept-new
+  TF_VERSION: '1.9.8'
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+  TF_IN_AUTOMATION: 'true'
+  # Tool versions are baked into vars.TF_IMAGE and vars.KUBE_IMAGE.
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # ── Discover deployments (the PR-plan matrix source of truth) ────────────────
+  # Single source of truth for the PR-plan matrix — see
+  # llz-discover-deployments.yml. The same reusable workflow feeds the rotation +
+  # scheduled-check matrices, so the PR plan covers exactly the deployments those
+  # do.
+  discover:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/llz-discover-deployments.yml
+
+  # ── Plan on PRs ─────────────────────────────────────────────────────────────
+  # Runs for every PR that touches a Terraform path. Posts a plan summary;
+  # never applies. Uses read-only remote state credentials.
+  #
+  # SECURITY: Plan jobs consume production secrets (LINODE_API_TOKEN, TF_STATE_*).
+  # Restricted to internal PRs only — fork PRs are skipped to prevent untrusted
+  # code from reading secrets via the runner environment. See GitHub docs:
+  # "Keeping your GitHub Actions and workflows secure / Preventing pwn requests".
+  plan-cluster-pr:
+    name: Plan Cluster (PR)
+    needs: discover
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      REGION: ${{ matrix.region }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Terraform init — cluster
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Terraform validate — cluster
+        working-directory: terraform-iac-bootstrap/cluster
+        run: terraform validate
+
+      - name: Import VPC and subnet if not in state
+        working-directory: terraform-iac-bootstrap/cluster
+        env:
+          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+          REGION:                ${{ matrix.region }}
+        run: llz ci tf-import --region "$REGION"
+      - name: Terraform plan — cluster
+        working-directory: terraform-iac-bootstrap/cluster
+        env:
+          LINODE_TOKEN:                    ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_linode_token:             ${{ secrets.LINODE_API_TOKEN }}
+          TF_VAR_github_token:             ${{ secrets.GITHUB_TOKEN }}
+          TF_VAR_github_api_url:           ${{ github.api_url }}
+          AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
+          REGION:                          ${{ matrix.region }}
+        run: |
+          TFVARS="${REGION}.tfvars"
+          test -f "$TFVARS" || TFVARS="${REGION}.tfvars.example"
+          llz ci tf-plan --out "plan-cluster-${REGION}.txt" --title "Cluster plan (${REGION})" \
+            -- -var-file="$TFVARS" -out="tfplan-cluster-${REGION}.bin"
+
+  # ── tflint ───────────────────────────────────────────────────────────────────
+  # Static analysis of Terraform HCL using rules in .tflintrc.hcl. Does not
+  # need provider credentials or remote state — runs against local HCL only.
+  tf-lint:
+    name: Terraform Lint
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: tflint
+        run: make tf-lint
+
+  # ── Checkov IaC security scan ────────────────────────────────────────────────
+  # Checks both Terraform modules for security misconfigurations: public bucket
+  # exposure, missing encryption, overly permissive IAM, and provider-specific
+  # best practices. Runs against local HCL; no credentials required.
+  checkov:
+    name: Checkov IaC Security Scan
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Checkov
+        run: make checkov
+
+      - name: Upload Checkov SARIF report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: checkov-results
+          path: results_*.sarif
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ── Promotion-pipeline drift (PRs) ───────────────────────────────────────────
+  # `promotion_rank` (cluster/<env>.tfvars) is the source of truth for the native
+  # promotion pipeline; .github/workflows/promote.yml is RENDERED from it by
+  # `llz env add` / `llz env pipeline` (docs/environments-and-promotion.md §4).
+  # This gate fails a PR that edits a rank without regenerating promote.yml — the
+  # "did you regenerate?" check. No-op for instances with <2 ranked deployments
+  # (the chain only forms at two stages). Regenerate locally with `llz env pipeline`.
+  # llz is baked into vars.TF_IMAGE (same as the plan jobs' `llz ci …`).
+  promote-pipeline-drift:
+    name: Promotion pipeline up to date
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the instance (tfvars + promote.yml)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Verify promote.yml matches the promotion_rank ordering
+        run: llz env pipeline --check
+
+  # ── Apply and destroy (manual dispatch — requires environment approval) ──────
+  # Apply is handled by release.yml on every GitHub release (all regions).
+  # Use workflow_dispatch here for emergency infrastructure-only changes that
+  # don't warrant cutting a release (e.g. rotating credentials, updating ACLs).
+  # `infra-primary` and `infra-secondary` GitHub Environments each have
+  # required reviewers.  Approval is logged with reviewer identity + timestamp
+  # in the GitHub Deployments API audit trail.
+  apply-cluster:
+    name: Apply Cluster
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      REGION:                          ${{ inputs.region }}
+      ACTION:                          ${{ inputs.action }}
+      LINODE_TOKEN:                    ${{ secrets.LINODE_API_TOKEN }}
+      TF_VAR_github_token:             ${{ secrets.GITHUB_TOKEN }}
+      TF_VAR_github_api_url:           ${{ github.api_url }}
+      AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # Catch account-quota exhaustion BEFORE the apply, not via a 30-minute
+      # cluster-create hang / PVCs-Pending-on-[400] / provider-ReadResource
+      # hang. Orphaned volumes, CCM NodeBalancers and LKE VPCs left by a
+      # failed/partial destroy accrete across rebuild cycles and eat the
+      # account's active-services limit. NodeBalancers + VPCs are scanned
+      # account-wide (they carry a cluster-id tag/label, so a gone-cluster
+      # orphan is unambiguous in any region). pvc-* Volumes are scoped to THIS
+      # deployment's region via --volume-region: a detached Volume carries no
+      # cluster id, so an account-wide count flags other regions'/teams'
+      # detached Volumes that `llz reap` (region-scoped, refuses unscoped Volume
+      # sweeps) will never clean — the gate would then disagree with reap and
+      # block the apply on Volumes no one can attribute. Block-storage quota is
+      # per-region anyway, so only same-region Volumes compete with this apply.
+      # Tune via repo vars: PREFLIGHT_ORPHAN_THRESHOLD (default 5), or
+      # PREFLIGHT_FAIL_ON_ORPHANS=false for report-only.
+      - name: Pre-flight — Linode account capacity / orphan check
+        env:
+          FAIL_ON_ORPHANS:  ${{ vars.PREFLIGHT_FAIL_ON_ORPHANS || 'true' }}
+          ORPHAN_THRESHOLD: ${{ vars.PREFLIGHT_ORPHAN_THRESHOLD || '5' }}
+        run: llz ci preflight --fail-on-orphans "$FAIL_ON_ORPHANS" --orphan-threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION"
+
+      - name: Terraform init — cluster
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Import VPC and subnet if not in state
+        working-directory: terraform-iac-bootstrap/cluster
+        run: llz ci tf-import --region "$REGION"
+      - name: Terraform plan — cluster
+        working-directory: terraform-iac-bootstrap/cluster
+        run: |
+          llz ci tf-plan --out plan.txt --title "Cluster plan" \
+            -- -var-file="${REGION}.tfvars" -out=tfplan.bin
+
+      - name: Terraform apply — cluster
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/cluster
+        # Wrapped so a duplicate Cloud-Firewall-label create (an orphan from a
+        # prior cancelled run, or one the import-before-plan step missed) self-
+        # heals: the wrapper imports the existing firewall by label and retries,
+        # instead of failing the whole provision on a [400] label collision.
+        run: llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
+
+      - name: Show cluster API endpoints
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/cluster
+        run: |
+          echo "Cluster API endpoints:"
+          terraform output -json api_endpoints
+
+  # ── Apply / plan in-cluster bootstrap (apl-core + apl-values-repo Secret) ───
+  # Runs after apply-cluster. Reads kubeconfig from the cluster workspace's
+  # remote state output and applies all Kubernetes-side resources: apl-core
+  # Helm release, the apl-values-repo Argo CD repo Secret, and the
+  # argocd-cm config-patch Job.
+  apply-cluster-bootstrap:
+    name: Apply Cluster Bootstrap
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+    needs: [apply-cluster]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    # Worst-case cold bootstrap: helm_release.apl (10-15m) + helmfile installing
+    # argo-cd (~5m to argocd-cm landing) + argocd_config_patcher_job
+    # (kustomize.buildOptions patch + repo-server bounce, ~2m) +
+    # sc_default_patcher_job (≤20m wait for the block-storage-retain
+    # SC to be Argo-rendered after the bootstrap App syncs the foundation/
+    # tree). Plus the new wait_for_kyverno_crd (≤20m parallel to the SC
+    # wait). 30m was too tight; 50m gives headroom for slow GitOps-source
+    # SSH and slower-than-usual chart pulls.
+    timeout-minutes: 50
+    env:
+      REGION:                    ${{ inputs.region }}
+      ACTION:                    ${{ inputs.action }}
+      TF_VAR_deployment:         ${{ inputs.region }}
+      TF_VAR_tf_state_bucket:    ${{ vars.TF_STATE_BUCKET }}
+      # apl-core's values-repo credential is the external HTTPS PAT
+      # APL_VALUES_REPO_TOKEN (wired below as TF_VAR_apl_values_repo_token); the
+      # in-cluster Gitea and its TF-generated password are obsoleted. Any legacy
+      # GITOPS_REPO_HTTPS_TOKEN env/repo secret has no consumer and is safe to delete.
+      # Non-blocking placeholder when no Linode DNS token is provisioned on
+      # this env. Satisfies apl-core's schema (string required); cert-manager
+      # DNS-01 + ExternalDNS will fail to authenticate at runtime, but the
+      # cluster bootstrap itself completes. Provision the real token on the
+      # env to enable automated TLS + DNS record management.
+      TF_VAR_linode_dns_token:        ${{ secrets.LINODE_DNS_TOKEN || 'placeholder-set-LINODE_DNS_TOKEN-to-enable-dns' }}
+      TF_VAR_apl_values_repo_token:   ${{ secrets.APL_VALUES_REPO_TOKEN }}
+      # GHCR read token (read:packages) + its owner — lets ArgoCD pull the private
+      # first-party OCI Helm charts (ghcr.io/akamai-consulting/charts). Empty =>
+      # the GHCR repo Secret is skipped (only works if the charts are public).
+      TF_VAR_ghcr_token:              ${{ secrets.GHCR_READ_TOKEN }}
+      TF_VAR_ghcr_username:           ${{ vars.GHCR_USERNAME }}
+      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
+      # Branch of the instance repo that the bootstrap ArgoCD Application targets.
+      # Defaults to 'main'; override by setting APPS_REPO_REVISION as a
+      # repository or environment **variable** (preferred, matches the existing
+      # convention for non-secret config like TF_IMAGE, HARBOR_URL, etc.) or as
+      # a secret. Variable wins if both are present.
+      TF_VAR_apps_repo_revision: ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
+      # Consumed by null_resource.cleanup_platform_volumes_on_destroy's
+      # destroy-time provisioner to sweep Linode Volumes tagged block-storage
+      # left unattached after PVC reap. Required for orphan-prevention; same
+      # token the cluster module uses, sourced from the same secret.
+      TF_VAR_linode_token:            ${{ secrets.LINODE_API_TOKEN }}
+      # Consumed by null_resource.clear_openbao_secrets_on_destroy's destroy-
+      # time provisioner to delete cluster-scoped GH env secrets (root token,
+      # unseal keys, Harbor robot creds, AppRole secret_id) when the cluster
+      # is torn down. Same PAT bootstrap-openbao.yml uses for `gh secret set`.
+      # Optional in TF (default ""); empty value falls back to a warning + no-op.
+      TF_VAR_openbao_secrets_write_token: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+      AWS_ACCESS_KEY_ID:         ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY:     ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # ── Pre-flight: env secrets the cluster-bootstrap apply needs ──────────────
+      # APL_VALUES_REPO_TOKEN (passed as TF_VAR_apl_values_repo_token) is
+      # rendered into apl-core's otomi.git.password and the apl-values-repo /
+      # platform-apps-repo Secrets; empty value produces an unauthenticated repo
+      # config — apl-operator can't push its values tree and Argo's repo-server
+      # can't clone over HTTPS. Surfaces 5-10 min in as Argo Application Unknown.
+      #
+      # OPENBAO_SECRETS_WRITE_TOKEN is used downstream by apply-object-storage
+      # (parallel job) to `gh secret set` the S3 secrets, by bootstrap-openbao,
+      # by the loki-admin-password stash below, and by the destroy-time
+      # GH-secret cleanup; an empty value 401s those. Front-load the check so the
+      # operator gets one consolidated error.
+      - name: Pre-flight — verify infra-${{ env.REGION }} env secrets
+        env:
+          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+        run: |
+          set -u
+          FAIL=0
+          llz ci require-secret APL_VALUES_REPO_TOKEN \
+            --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
+          llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys + LOKI_ADMIN_PASSWORD and by bootstrap-openbao." || FAIL=1
+          [ "$FAIL" -eq 0 ]
+
+      - name: Terraform init — cluster-bootstrap
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module:                cluster-bootstrap
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      # Absorb the cluster→cluster-bootstrap handoff race: apply-cluster can
+      # finish (kubeconfig_raw populated) before the LKE-E HA control plane is
+      # actually serving TLS on :6443. Without this gate the helm provider's
+      # first call times out and a manual re-run is needed. Also opens this
+      # hosted runner's dynamic egress IP in the LKE-E control-plane ACL (the
+      # ACL seeded at cluster create cannot pre-include it, so the kubectl
+      # readiness probe below would be refused); the paired revoke
+      # (if: always(), end of job) closes it.
+      - name: Cluster access (kubeconfig readiness probe + runner ACL)
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          kubeconfig-path:       $RUNNER_TEMP/cluster-${{ env.REGION }}.yaml
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ env.REGION }}
+
+      # wait-cluster-ready probes the apiserver's /version directly on timeout,
+      # distinguishing "still provisioning" from "ACL blocks this runner".
+      - name: Wait for cluster API ready
+        env:
+          KUBECONFIG: ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
+        run: |
+          llz ci wait-cluster-ready --timeout 900 --interval 10 || {
+            echo "Persisting failure = control plane still provisioning (re-run later), OR the 'Open control-plane ACL for this runner' step did not add this runner's egress IP to the LKE-E control-plane ACL (check that step's log + LINODE_API_TOKEN scope). Static github_runner_ipv4_cidrs / acl inventory are no longer required for hosted-runner access — the runner IP is opened at runtime by the lke-runner-acl action."
+            exit 1
+          }
+
+      - name: Terraform plan — cluster-bootstrap
+        working-directory: terraform-iac-bootstrap/cluster-bootstrap
+        run: |
+          llz ci tf-plan --out plan.txt --title "Cluster-bootstrap plan" \
+            -- -var-file="${REGION}.tfvars" -out=tfplan.bin
+
+      - name: Terraform apply — cluster-bootstrap
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/cluster-bootstrap
+        # `llz ci tf-apply` self-heals a stale helm_release in TF state (cluster
+        # lacks the underlying release; destroy errors with "release: not found")
+        # via `terraform state rm` + replan + retry. Any other apply failure
+        # passes through unchanged.
+        run: llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
+
+      # Persist the effective Loki admin password to the infra-<region> env as
+      # LOKI_ADMIN_PASSWORD. On the first apply (secret unset) cluster-bootstrap
+      # GENERATED it via random_password.loki_admin; we read it back from the TF
+      # output and stash it so every later run passes the same value straight
+      # back in via TF_VAR_loki_admin_password (idempotent — no rotation). Mirrors
+      # the object-storage LOKI_S3_* stash; same OPENBAO_SECRETS_WRITE_TOKEN PAT.
+      - name: Store Loki admin password as an environment secret
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/cluster-bootstrap
+        env:
+          GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+        run: |
+          llz ci stash-env-secret --env "infra-${REGION}" \
+            --from-tf-output loki_admin_password=LOKI_ADMIN_PASSWORD
+
+      # ── Diagnostics ─────────────────────────────────────────────────────────
+      # Runs only when a previous step failed (typically the helm_release.argocd
+      # apply timing out on a pre-install hook).  Pulls the kubeconfig from the
+      # cluster workspace state and dumps everything needed to see WHY the hook
+      # Job / ArgoCD pods are not becoming ready.
+      - name: Fetch kubeconfig for diagnostics
+        if: failure()
+        uses: ./_llz-template/instance-template/.github/actions/fetch-kubeconfig
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          # $RUNNER_TEMP (shell var) not ${{ runner.temp }} — see the
+          # bootstrap-cluster fetch step for the container-path rationale.
+          kubeconfig-path:       $RUNNER_TEMP/diag-${{ env.REGION }}.yaml
+          allow-missing:         'true'
+
+      - name: Diagnose ArgoCD install failure
+        if: failure()
+        env:
+          KUBECONFIG: ${{ runner.temp }}/diag-${{ env.REGION }}.yaml
+        # diagnose-argocd is best-effort and always exits 0 — diagnostics must
+        # never mask the original failure.
+        run: llz ci diagnose-argocd
+
+      - name: Cleanup diagnostics kubeconfig
+        if: always()
+        run: rm -f "$RUNNER_TEMP/diag-${{ env.REGION }}.yaml"
+
+      - name: Cleanup readiness kubeconfig
+        if: always()
+        run: rm -f "$RUNNER_TEMP/cluster-${{ env.REGION }}.yaml"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ env.REGION }}
+
+  bootstrap-cluster:
+    name: Bootstrap Cluster (firewall-controller config)
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'apply' &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+    needs: [apply-cluster-bootstrap]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      REGION:                ${{ inputs.region }}
+      LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Pre-flight — resolve cloud-firewall token
+        env:
+          CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
+        run: |
+          set -u
+          if [ -z "${CLOUD_FIREWALL_TOKEN:-}" ] && [ -z "${LINODE_TOKEN:-}" ]; then
+            echo "::error::Neither CLOUD_FIREWALL_TOKEN nor LINODE_TOKEN is set for infra-${REGION}. The firewall-controller cannot authenticate to the Linode API and firewall rules will not sync."
+            exit 1
+          fi
+          if [ -z "${CLOUD_FIREWALL_TOKEN:-}" ]; then
+            echo "::warning::CLOUD_FIREWALL_TOKEN not set — falling back to LINODE_TOKEN for the firewall-controller. Set a least-privilege CLOUD_FIREWALL_TOKEN (cloud-firewall-scoped) in infra-${REGION} when possible."
+          fi
+
+      # `terraform output` reads remote state from S3, so the cluster module
+      # must be init'd (backend wired) *and* AWS creds must be on the env —
+      # otherwise the S3 backend falls through to EC2 IMDS and fails with
+      # "No valid credential sources found".
+      - name: Terraform init — cluster
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module:                cluster
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      # Fetch the kubeconfig and open this hosted-runner's dynamic egress IP in
+      # the LKE-E control-plane ACL before any kubectl (revoked at job end,
+      # if: always()).
+      - name: Cluster access (kubeconfig + runner ACL)
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          # $RUNNER_TEMP (shell var → in-container /__w/_temp), NOT
+          # ${{ runner.temp }} which bakes the host path into the action
+          # script for container jobs and is not translated for composite
+          # inputs. KUBECONFIG below stays ${{ runner.temp }} (env values
+          # ARE runner-translated host→container); both resolve to the same
+          # /__w/_temp file.
+          kubeconfig-path:       $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ env.REGION }}
+
+      - name: Bootstrap — seed firewall-controller Secret + ConfigMap
+        env:
+          KUBECONFIG:           ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
+          CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
+          LINODE_TOKEN:         ${{ secrets.LINODE_API_TOKEN }}
+        run: |
+          CHDIR=terraform-iac-bootstrap/cluster
+          # All three derive from the cluster workspace so the runtime controller
+          # reconciles the SAME firewall the TF cluster module created: the node
+          # firewall ID, the VPC subnet CIDR (so VPC_CIDR matches the VPC, not the
+          # chart's stale /16 default), and the LKE cluster ID (so the EAA/bastion
+          # ranges are also synced into the control-plane ACL).
+          LINODE_FIREWALL_ID="$(terraform -chdir=$CHDIR output -raw node_firewall_id)"
+          VPC_CIDR="$(terraform -chdir=$CHDIR output -raw vpc_subnet_cidr)"
+          CLUSTER_ID="$(terraform -chdir=$CHDIR output -raw cluster_id)"
+          export LINODE_FIREWALL_ID VPC_CIDR CLUSTER_ID
+          llz ci bootstrap-cloud-firewall
+
+      # NOTE — the convergence gate that used to live here has moved to the
+      # terminal `converge` job (below, after bootstrap-openbao). Running it
+      # here was an ordering inversion: the cluster cannot reach health until
+      # OpenBao is initialized/unsealed (the OpenBao→cert-manager→TLS→
+      # Harbor/oauth2-proxy cascade stays PENDING/Degraded until then), but
+      # bootstrap-openbao runs AFTER this job. A converge timeout failed
+      # bootstrap-cluster, which (via the `needs.bootstrap-cluster.result ==
+      # 'success'` guard on bootstrap-openbao) SKIPPED the OpenBao bootstrap
+      # entirely — so the cluster could never converge. See the `converge`
+      # job below.
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$RUNNER_TEMP/platform-${REGION}.yaml"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ env.REGION }}
+
+  # ── Chain: bootstrap-openbao after the cluster is up ──────────────────────────
+  # Tier-1 streamlining: the operator used to trigger two workflows manually —
+  # terraform.yml first, then bootstrap-openbao.yml within a 60-min window.
+  # With bootstrap-openbao.yml's `workflow_call:` trigger we can chain it here
+  # so a single `module=all` apply walks the whole bootstrap path end-to-end:
+  #   1. apply-object-storage         (buckets + auto-stash 6 S3 secrets)
+  #   2. apply-cluster                (Linode LKE-E cluster)
+  #   3. apply-cluster-bootstrap      (apl-core + foundation + Kyverno policy)
+  #   4. bootstrap-cluster            (firewall-controller config)
+  #   5. bootstrap-openbao            (OpenBao init/unseal/seed + ESO sync)
+  #   6. converge                     (final health gate — runs AFTER OpenBao
+  #                                    so the OpenBao→cert-manager→TLS cascade
+  #                                    has cleared and convergence can pass)
+  #
+  # Step 5 also gates the PreSync timeout window concern — by running it
+  # immediately as part of the same workflow, there's no chance the operator
+  # forgets or runs out of the 60-min budget the gate enforces.
+  #
+  # Operators can still trigger bootstrap-openbao.yml on its own via
+  # workflow_dispatch (the dispatch trigger is preserved) for retries and
+  # post-seed configuration changes.
+  bootstrap-openbao:
+    name: Bootstrap OpenBao (${{ inputs.region }})
+    # The `if:` mixes a default-skip-on-needs-failure guard with explicit
+    # `needs.*.result` checks so we can require apply-cluster-bootstrap +
+    # bootstrap-cluster to have SUCCEEDED while accepting apply-object-storage
+    # as either success OR skipped. apply-object-storage now runs on
+    # module=cluster too (its buckets/keys are always needed), so on a normal
+    # cluster bootstrap it SUCCEEDS and stashes the S3 secrets before this job
+    # seeds them. The `|| skipped` arm is kept as a backstop for forward-compat
+    # (e.g. a future module value that legitimately skips object-storage) — a
+    # FAILED object-storage apply still (correctly) blocks this job. Without
+    # `always()` the default `success()` would skip this job whenever
+    # apply-object-storage is skipped.
+    if: >
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'apply' &&
+      (inputs.module == 'cluster' || inputs.module == 'all') &&
+      needs.apply-cluster-bootstrap.result == 'success' &&
+      needs.bootstrap-cluster.result == 'success' &&
+      (needs.apply-object-storage.result == 'success' || needs.apply-object-storage.result == 'skipped')
+    # needs:
+    #   apply-cluster-bootstrap    cluster + apl-core ready
+    #   bootstrap-cluster          firewall-controller config seeded
+    #   apply-object-storage       6 S3 secrets auto-stashed in infra-<region>
+    #                              env (bootstrap-openbao's preflight asserts the
+    #                              object-storage state is populated before any
+    #                              seed step runs; without this dep the preflight
+    #                              races the stash step's gh-secret-set on
+    #                              slow-Linode-OBJ days). Now runs on
+    #                              module=cluster too; the `|| skipped` arm in
+    #                              the `if:` above is a forward-compat backstop.
+    needs: [apply-cluster-bootstrap, bootstrap-cluster, apply-object-storage]
+    uses: ./.github/workflows/llz-bootstrap-openbao.yml
+    with:
+      region: ${{ inputs.region }}
+      instance_repo: ${{ inputs.instance_repo }}
+      template-ref: ${{ inputs.template-ref }}
+    # secrets: inherit forwards ALL repository + environment-scoped secrets
+    # from the caller. bootstrap-openbao.yml's job declares
+    # `environment: infra-${{ inputs.region }}` so env-scoped secrets resolve
+    # correctly at job-evaluation time on the runner.
+    secrets: inherit
+
+  # ── Final convergence gate — runs AFTER OpenBao is bootstrapped ──────────────
+  # MOVED here from the bootstrap-cluster job to fix an ordering inversion: the
+  # cluster cannot reach health until OpenBao is initialized/unsealed (the
+  # OpenBao→cert-manager→TLS→Harbor/oauth2-proxy cascade stays PENDING/Degraded
+  # until then). Running converge inside bootstrap-cluster — BEFORE
+  # bootstrap-openbao — meant a converge timeout failed bootstrap-cluster,
+  # which (via bootstrap-openbao's `needs.bootstrap-cluster.result == 'success'`
+  # guard) SKIPPED the OpenBao bootstrap entirely, so the cluster could never
+  # converge. As the terminal job, init+unseal+seed has already run, the
+  # cascade has cleared, and `llz ci converge` can actually reach exit 0.
+  #
+  # `llz ci converge` exits 0 (converged) or 1 (budget exhausted / underlying check
+  # error). Per docs/architecture/convergence-contract.md, this gate is what
+  # makes "the workflow passed" mean "the cluster works".
+  converge:
+    name: Verify cluster convergence (${{ inputs.region }})
+    # Mirror the apply/module guards; require bootstrap-openbao to have
+    # SUCCEEDED (no point converging if OpenBao never bootstrapped). always()
+    # so an upstream skip doesn't silently short-circuit the explicit
+    # result check.
+    if: >
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'apply' &&
+      (inputs.module == 'cluster' || inputs.module == 'all') &&
+      needs.bootstrap-openbao.result == 'success'
+    needs: [bootstrap-openbao]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      REGION:                ${{ inputs.region }}
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      # fetch-kubeconfig self-inits the cluster module's S3 backend and reads
+      # kubeconfig_raw — no separate terraform-init step needed (`llz ci converge`
+      # only needs the kubeconfig, not any `terraform output`). Also opens this
+      # hosted-runner's egress IP in the control-plane ACL before the convergence
+      # kubectl loop (revoked at job end, if: always()) and installs llz.
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          kubeconfig-path:       $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ env.REGION }}
+          # This gate polls for up to 30m — past a controller reconcile tick — so
+          # lease the runner IP in the firewall-runner-acl ConfigMap to stop the
+          # EAA controller from evicting it mid-poll. Revoke (below) releases it.
+          register-runner-lease: 'true'
+
+      - name: Wait for cluster to converge
+        env:
+          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
+        run: llz ci converge
+
+      # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx
+      # logs WHILE the cluster is still up — before teardown destroys it and
+      # before the revoke below cuts apiserver access. The resolver line is the
+      # decisive datum for the recurring loki-gateway CrashLoopBackOff: an IP
+      # means the Kyverno mutation held (a transient/rollout-timing failure), a
+      # hostname means it never stuck (the admission/webhook-race path needs
+      # hardening). Single-line glue (kubectl is already in the image) so it adds
+      # no untestable inline bash and no new llz subcommand a stale baked binary
+      # would reject; every command is `|| true` so it never alters the outcome.
+      - name: Capture loki-gateway diagnostics (on convergence failure)
+        if: failure()
+        env:
+          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
+        run: 'echo "== loki-gateway nginx.conf resolver =="; kubectl -n monitoring get cm loki-gateway -o "jsonpath={.data.nginx\.conf}" 2>/dev/null | grep -i resolver || true; for p in $(kubectl -n monitoring get pods -o name 2>/dev/null | grep loki-gateway); do echo "== $p =="; kubectl -n monitoring logs "$p" -c nginx --tail=50 2>/dev/null || true; kubectl -n monitoring logs "$p" -c nginx --tail=50 --previous 2>/dev/null || true; kubectl -n monitoring describe "$p" 2>/dev/null | tail -30 || true; done'
+
+      # Revoke BEFORE deleting the kubeconfig: revoke releases the ConfigMap
+      # lease via kubectl (needs the kubeconfig) before the Linode-API call cuts
+      # apiserver access.
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ env.REGION }}
+          kubeconfig:   $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$RUNNER_TEMP/platform-${REGION}.yaml"
+
+  # ── Destroy (manual dispatch — requires environment approval) ───────────────
+  # Explicitly gated: action must equal 'destroy'. Completely separate from
+  # the apply job path so an apply run cannot accidentally destroy.
+  #
+  # Order:
+  #   1. plan-destroy-cluster-bootstrap  (k8s plan — informational)
+  #   2. plan-destroy-cluster            (Linode plan — informational)
+  #   3. destroy-cluster-bootstrap       (delete ArgoCD, controllers, etc.)
+  #   4. destroy-cluster                 (delete Linode resources)
+  #
+  # destroy-cluster-bootstrap is best-effort: if the cluster is unreachable
+  # (k8s provider can't connect, helm uninstall fails, …) it does not block
+  # the cluster destroy because the K8s objects disappear with the cluster.
+  plan-destroy-cluster-bootstrap:
+    name: Plan DESTROY Cluster Bootstrap
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:                 ${{ inputs.region }}
+      CONFIRM_DESTROY:        ${{ inputs.confirm_destroy }}
+      TF_VAR_deployment:      ${{ inputs.region }}
+      TF_VAR_tf_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+      # Destroy path: variable must be defined (TF enforces) but value is unused
+      # because the resources consuming it are being torn down. Wire the same
+      # secret for consistency; if it's missing on this env, "" is fine.
+      TF_VAR_apl_values_repo_token:   ${{ secrets.APL_VALUES_REPO_TOKEN }}
+      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
+      # Required (no default), unused at destroy — mirror the apply placeholder
+      # fallback so `terraform plan -destroy` doesn't prompt and fail with
+      # "No value for required variable" (observed on a primary cluster destroy).
+      TF_VAR_linode_dns_token:        ${{ secrets.LINODE_DNS_TOKEN || 'placeholder-set-LINODE_DNS_TOKEN-to-enable-dns' }}
+      # Branch of the instance repo that the bootstrap ArgoCD Application targets.
+      # Defaults to 'main'; override by setting APPS_REPO_REVISION as a
+      # repository or environment **variable** (preferred, matches the existing
+      # convention for non-secret config like TF_IMAGE, HARBOR_URL, etc.) or as
+      # a secret. Variable wins if both are present.
+      TF_VAR_apps_repo_revision: ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
+      # Unlike the other destroy-path TF_VARs above, this one IS consumed
+      # at destroy time: null_resource.cleanup_platform_volumes_on_destroy's
+      # provisioner hits the Linode API to sweep Volumes tagged block-storage
+      # left unattached after PVC reap. Must be a valid token; otherwise the
+      # destroy succeeds but orphans accumulate against account quota.
+      TF_VAR_linode_token:    ${{ secrets.LINODE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — cluster-bootstrap
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module:                cluster-bootstrap
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Terraform plan destroy — cluster-bootstrap
+        # Informational only — shows what the destroy job will tear down.
+        #
+        # `-refresh=false` is REQUIRED here: when the cluster is already gone
+        # (a re-run of a partial destroy, or `module == all` where the cluster
+        # was reaped first) the providers point at an unreachable dummy endpoint
+        # (see providers.tf), and a refresh of the in-state kubectl_manifest/
+        # helm resources fails with "dial tcp: lookup
+        # cluster-already-destroyed.invalid ... no such host". That cluster-gone
+        # state is a LEGITIMATE destroy scenario, so this informational plan must
+        # not hard-fail on it. -refresh=false plans straight from state (still an
+        # accurate "N resources to destroy" preview) without touching the cluster.
+        # The real state reconciliation for the cluster-gone case happens in the
+        # destroy job's "Untrack cluster-bootstrap resources" step below.
+        working-directory: terraform-iac-bootstrap/cluster-bootstrap
+        run: |
+          llz ci tf-plan --out destroy-plan.txt --title "Cluster-bootstrap destroy plan (informational)" \
+            -- -destroy -refresh=false -var-file="${REGION}.tfvars"
+
+  destroy-cluster-bootstrap:
+    name: DESTROY Cluster Bootstrap
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+    needs: [plan-destroy-cluster-bootstrap]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    env:
+      REGION:                 ${{ inputs.region }}
+      CONFIRM_DESTROY:        ${{ inputs.confirm_destroy }}
+      TF_VAR_deployment:      ${{ inputs.region }}
+      TF_VAR_tf_state_bucket: ${{ vars.TF_STATE_BUCKET }}
+      # Destroy path: variable must be defined (TF enforces) but value is unused
+      # because the resources consuming it are being torn down. Wire the same
+      # secret for consistency; if it's missing on this env, "" is fine.
+      TF_VAR_apl_values_repo_token:   ${{ secrets.APL_VALUES_REPO_TOKEN }}
+      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
+      # Required (no default), unused at destroy — mirror the apply placeholder
+      # fallback so `terraform plan -destroy` doesn't prompt and fail with
+      # "No value for required variable" (observed on a primary cluster destroy).
+      TF_VAR_linode_dns_token:        ${{ secrets.LINODE_DNS_TOKEN || 'placeholder-set-LINODE_DNS_TOKEN-to-enable-dns' }}
+      # Branch of the instance repo that the bootstrap ArgoCD Application targets.
+      # Defaults to 'main'; override by setting APPS_REPO_REVISION as a
+      # repository or environment **variable** (preferred, matches the existing
+      # convention for non-secret config like TF_IMAGE, HARBOR_URL, etc.) or as
+      # a secret. Variable wins if both are present.
+      TF_VAR_apps_repo_revision: ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
+      # Unlike the other destroy-path TF_VARs above, this one IS consumed
+      # at destroy time: null_resource.cleanup_platform_volumes_on_destroy's
+      # provisioner hits the Linode API to sweep Volumes tagged block-storage
+      # left unattached after PVC reap. Must be a valid token; otherwise the
+      # destroy succeeds but orphans accumulate against account quota.
+      TF_VAR_linode_token:    ${{ secrets.LINODE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — cluster-bootstrap
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module:                cluster-bootstrap
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      # ── Untrack cluster-bootstrap resources before destroy ─────────────────
+      # Reconcile state to what `terraform destroy` can actually tear down,
+      # branching on whether the LKE cluster still exists:
+      #
+      #   CASE A (cluster alive) — drop only the apl-core chain. `helm uninstall
+      #     apl` blocks on finalizer-heavy state and times out with "context
+      #     deadline exceeded" for ZERO benefit: the downstream DESTROY Cluster
+      #     job deletes the LKE cluster, which reaps every in-cluster resource
+      #     regardless. Everything else is destroyed normally against the live API.
+      #
+      #   CASE B (cluster already gone — re-run of a partial destroy, or
+      #     `module == all` where the cluster was reaped first) — drop ALL
+      #     cluster-backed resources. Their provider points at an unreachable
+      #     dummy endpoint (see providers.tf), so refresh + delete would fail with
+      #     a DNS error; they were already reaped by the cluster delete.
+      #
+      # The resources stay in the .tf config either way, so the next apply
+      # re-installs them normally. Idempotent: an address not in state is skipped.
+      - name: Untrack cluster-bootstrap resources (let cluster delete reap them)
+        working-directory: terraform-iac-bootstrap/cluster-bootstrap
+        env:
+          # For a module=cluster|all teardown the LKE cluster is destroyed in this
+          # same run, so the untrack script forces CASE B (drop every in-cluster
+          # resource from state) — refreshing/destroying them against an API
+          # that's about to vanish is pointless and hangs. The script ALSO falls
+          # to CASE B when the cluster is a hung-create zombie (kubeconfig present
+          # but API unreachable), independent of this flag.
+          DESTROY_CLUSTER_TOO: ${{ (inputs.module == 'all' || inputs.module == 'cluster') && '1' || '0' }}
+        run: llz ci tf-untrack --destroy-cluster-too "$DESTROY_CLUSTER_TOO"
+
+      # CASE A (live cluster): the destroy below refreshes + deletes the
+      # remaining in-cluster kubectl_manifest resources against the API server,
+      # so this hosted runner's dynamic egress IP must be in the control-plane
+      # ACL or the refresh times out (dial :6443 i/o timeout). fail-on-missing
+      # is false so CASE B (cluster already gone) is a clean no-op. Revoked at
+      # job end (if: always()).
+      - name: Open control-plane ACL for this runner
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:            open
+          linode-token:    ${{ secrets.LINODE_API_TOKEN }}
+          region:          ${{ env.REGION }}
+          fail-on-missing: 'false'
+
+      - name: Terraform destroy — cluster-bootstrap
+        # Fails visibly if the cluster is unreachable WHILE cluster-backed
+        # resources are still tracked. The untrack step above removes those for
+        # both the cluster-alive (apl-core chain) and cluster-gone (all of them)
+        # cases, so by the time we get here a refresh only touches local/no-op
+        # resources and never the cluster — no need for -refresh=false. The
+        # downstream destroy-cluster job has `if: always()`, so the Linode-
+        # resource teardown still proceeds; what we don't want is a green
+        # checkmark on a destroy that errored mid-way. K8s objects are wiped
+        # implicitly when the cluster is deleted. See
+        # docs/architecture/convergence-contract.md anti-pattern #5.
+        working-directory: terraform-iac-bootstrap/cluster-bootstrap
+        run: |
+          terraform plan -destroy \
+            -var-file="${REGION}.tfvars" \
+            -out=destroy-plan.bin \
+            -no-color
+          terraform apply destroy-plan.bin
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ env.REGION }}
+
+  plan-destroy-cluster:
+    name: Plan DESTROY Cluster
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:                          ${{ inputs.region }}
+      CONFIRM_DESTROY:                 ${{ inputs.confirm_destroy }}
+      LINODE_TOKEN:                    ${{ secrets.LINODE_API_TOKEN }}
+      TF_VAR_github_token:             ${{ secrets.GITHUB_TOKEN }}
+      TF_VAR_github_api_url:           ${{ github.api_url }}
+      AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — cluster
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Import VPC and subnet if not in state
+        working-directory: terraform-iac-bootstrap/cluster
+        run: llz ci tf-import --region "$REGION" --nonfatal
+
+      - name: Terraform plan destroy — cluster
+        working-directory: terraform-iac-bootstrap/cluster
+        run: |
+          llz ci tf-plan --out destroy-plan.txt --title "Destroy plan (review before approving destroy job)" \
+            -- -destroy -var-file="${REGION}.tfvars"
+
+  destroy-cluster:
+    name: DESTROY Cluster
+    if: >
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+    # destroy-cluster-bootstrap is allowed to fail (cluster unreachable, k8s
+    # provider hang, etc.) — the cluster destroy still proceeds because the
+    # K8s objects disappear with the cluster.
+    needs: [plan-destroy-cluster, destroy-cluster-bootstrap]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      REGION:                ${{ inputs.region }}
+      CONFIRM_DESTROY:       ${{ inputs.confirm_destroy }}
+      LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+      TF_VAR_github_token:   ${{ secrets.GITHUB_TOKEN }}
+      TF_VAR_github_api_url: ${{ github.api_url }}
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Validate destroy confirmation
+        id: confirm
+        run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — cluster
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Import VPC and subnet if not in state
+        working-directory: terraform-iac-bootstrap/cluster
+        run: llz ci tf-import --region "$REGION" --nonfatal
+
+      # Capture cluster-scoped identifiers BEFORE the destroy deletes them, for
+      # the straggler sweeps below. Both sweeps must be scoped to THIS cluster,
+      # never to the region — co-located deployments (primary/staging/lab all →
+      # us-ord) share a Linode region AND the block-storage Volume tag, so a
+      # region-wide filter both fails to converge (a live peer's resources keep
+      # the count > 0 forever) and risks deleting a peer's resource.
+      #   * NodeBalancers are scoped by the cluster's CCM tag (lke<id>), so we
+      #     just need the id.
+      #   * Volumes carry no cluster id, and once detached lose their linode_id —
+      #     so we must snapshot, by id, exactly the pvc-* Volumes attached to
+      #     this cluster's nodes while the cluster still exists.
+      - name: Capture LKE cluster id + pvc Volume ids (for the sweeps)
+        run: llz ci teardown-capture --region "$REGION"
+
+      - name: Terraform destroy — cluster
+        working-directory: terraform-iac-bootstrap/cluster
+        run: |
+          terraform plan -destroy \
+            -var-file="${REGION}.tfvars" \
+            -out=destroy-plan.bin \
+            -no-color
+          terraform apply destroy-plan.bin
+
+      # Handles the case where the cluster was in an indeterminate state and
+      # Terraform couldn't reach or import it: deletes the cluster by label,
+      # then the node firewall (exact node_firewall_id output first, then the
+      # module-correct label — never a reconstructed "<cluster>-nodes" guess,
+      # which ignored var.firewall_label and leaked the firewall every teardown).
+      # NOTE: the VPC is deleted in a dedicated step at the END of this job,
+      # AFTER the Volume and NodeBalancer sweeps — a CCM NodeBalancer parked in
+      # the VPC subnet blocks the VPC delete with a 409 until then.
+      - name: Force-delete remaining Linode resources via API
+        # always() so this runs even if `terraform destroy` failed mid-way, but
+        # gated on the confirmation having PASSED — a failed confirm means
+        # nothing was torn down, so there's nothing to force-delete or sweep
+        # (and the Volume sweep below would otherwise poll its full 10m waiting
+        # for volumes to detach from a cluster that's still alive).
+        if: always() && steps.confirm.outcome == 'success'
+        run: llz --yes ci teardown-force-delete --region "$REGION"
+
+      # ── Authoritative orphan-Volume sweep ──────────────────────────────────
+      # The block-storage-retain StorageClass is reclaimPolicy:
+      # Retain, so CSI NEVER deletes its Block Storage Volumes — only an API
+      # sweep does. The in-cluster sweep in destroy-cluster-bootstrap
+      # (null_resource.cleanup_platform_volumes_on_destroy) runs while the
+      # LKE nodes are still alive, so every pvc-* Volume is still attached
+      # (linode_id != null) and that sweep deletes nothing — the orphans only
+      # become unattached once THIS job tears the nodes down. This is the
+      # authoritative sweep: it runs AFTER the cluster delete, where the
+      # Volumes are detached, and it's what keeps Retain Volumes from accreting
+      # toward the account quota across rebuild cycles (see the
+      # project_lke_rebuild_orphans_quota incident).
+      - name: Sweep orphaned Block Storage Volumes
+        # See the gate rationale on "Force-delete remaining Linode resources".
+        if: always() && steps.confirm.outcome == 'success'
+        run: |
+          set -eu
+          # Scoped to the pvc-* Volume ids snapshotted before the destroy (the
+          # Volumes attached to THIS cluster's nodes). If none were captured the
+          # cluster was already gone — any attached pvc-* Volumes in the region
+          # belong to a live co-located peer, so there's nothing for us to do.
+          if [ -z "${CLUSTER_PVC_VOLUME_IDS:-}" ]; then
+            echo "no cluster pvc-* Volumes were tracked before destroy — nothing to sweep."
+            exit 0
+          fi
+          # Cluster deletion detaches these Volumes asynchronously as the LKE
+          # Linodes tear down; --wait-detach polls the TRACKED ids (≤10m), so a
+          # live co-located peer's Volumes can't stall it (the region-wide
+          # poll's old failure mode) and can never be deleted. --require-empty
+          # then re-lists and, if any tracked Volume survives the sweep (e.g. one
+          # that never detached, or a delete still settling), retries up to
+          # --attempts and finally FAILS the job when orphans remain — a leaked
+          # Volume otherwise sails past this green-checkmarked destroy and stalls
+          # the next apply's preflight on the account quota.
+          llz --yes ci reap-volumes --volume-ids "$CLUSTER_PVC_VOLUME_IDS" --wait-detach 600 \
+            --require-empty --attempts 4 --retry-delay 30
+
+      # ── Authoritative orphan-NodeBalancer sweep ────────────────────────────
+      # NodeBalancers are created by the in-cluster CCM for every LoadBalancer
+      # Service (Istio ingress, etc.). Deleting the LKE cluster normally reaps
+      # them — but because this destroy path deliberately does NOT gracefully
+      # delete the Services first (the apl-core chain is dropped from state and
+      # the cluster is nuked), the CCM never issues its own NodeBalancer DELETE,
+      # so reaping is left entirely to LKE cluster-delete, which has been seen
+      # to leak the occasional NodeBalancer (ongoing billing + a held IPv4).
+      # This sweep deletes any survivor still carrying the cluster's CCM tag
+      # (lke<id>). It runs after the Volume sweep above, which polls up to 10m —
+      # by then the cluster delete has long completed and any reap-able
+      # NodeBalancer is already gone, so this only catches genuine stragglers.
+      - name: Sweep orphaned NodeBalancers
+        # See the gate rationale on "Force-delete remaining Linode resources".
+        if: always() && steps.confirm.outcome == 'success'
+        run: |
+          set -eu
+          if [ -z "${LKE_CLUSTER_ID:-}" ]; then
+            echo "::warning::LKE cluster id was not captured before destroy (cluster may have already been gone) — skipping the NodeBalancer sweep to avoid an unscoped delete. Finish manually once you know the id: LINODE_TOKEN=<token> llz --yes ci reap-nodebalancers --cluster-id <id>"
+            exit 0
+          fi
+          # --require-empty re-lists after the sweep and, if any NodeBalancer still
+          # carries this cluster's CCM tag, retries up to --attempts and finally
+          # FAILS the job — a leaked NodeBalancer keeps billing + an IPv4 and
+          # counts against the next apply's preflight quota.
+          llz --yes ci reap-nodebalancers --cluster-id "$LKE_CLUSTER_ID" \
+            --require-empty --attempts 4 --retry-delay 30
+
+      # ── Delete the cluster VPC (LAST — after the NB + Volume sweeps) ────────
+      # A VPC can only be deleted once NOTHING is parked in its subnet. CCM
+      # NodeBalancers (swept in the step above) and attached node Linodes both
+      # block it with a 409, so the VPC delete MUST come after those sweeps —
+      # doing it in the force-delete step (before the sweeps) guaranteed a 409
+      # and leaked the VPC every teardown. Resolve by the exact vpc_id output
+      # first, then the "<cluster_label>-vpc" label, then — for the LKE-E auto VPC
+      # labeled lke<id>, which no output or BYO label names — the captured cluster
+      # id. llz reads that from the LKE_CLUSTER_ID env teardown-capture exported,
+      # so NO new flag is passed here: a stale baked llz (the ci-terraform image
+      # lags a tools/ change until rebuilt) just ignores the env instead of dying
+      # on an "unknown flag". Retry to ride out the async-release window.
+      - name: Delete cluster VPC
+        if: always() && steps.confirm.outcome == 'success'
+        run: llz --yes ci teardown-delete-vpc --region "$REGION" --require-deleted
+
+      # ── Final orphan gate (fail the destroy if anything is left behind) ─────
+      # The scoped Volume + NodeBalancer sweeps above only fire when the cluster
+      # still existed at teardown-capture time. When it was ALREADY gone — a
+      # re-run of a partial destroy, or pre-existing orphans from an earlier
+      # rebuild cycle — those sweeps no-op, so without this gate the destroy goes
+      # GREEN while leaving orphans that then stall the next apply's preflight
+      # (the project_lke_rebuild_orphans_quota incident: a "successful" destroy
+      # left 5-7 orphaned pvc-* Volumes / NodeBalancers / VPCs and the next apply
+      # failed preflight). This re-counts orphans account-wide with the SAME
+      # census preflight uses, retries to ride out the cluster-delete's async
+      # NB/VPC reap + Volume detach, and FAILS the destroy if any remain. It
+      # deletes nothing — clear survivors with `llz reap`. Account-wide / same
+      # threshold as the apply preflight so a destroy that leaves the account in
+      # a state the next apply would reject fails loudly here instead.
+      # llz also reads LKE_CLUSTER_ID from the env (exported by teardown-capture)
+      # so THIS cluster's own survivors (NodeBalancers by lke_cluster.id, VPC
+      # labeled lke<id>) fail the gate regardless of --threshold — the threshold
+      # only tolerates other-account orphans the destroy can't clean, and must
+      # never mask the cluster we just destroyed. No new flag here (see VPC step).
+      - name: Assert no orphaned resources remain
+        if: always() && steps.confirm.outcome == 'success'
+        env:
+          ORPHAN_THRESHOLD: ${{ vars.PREFLIGHT_ORPHAN_THRESHOLD || '5' }}
+        run: llz ci assert-no-orphans --threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION" --attempts 5 --retry-delay 30
+
+  # ── Apply / plan openbao-config module ────────────────────────────────────────
+  # Plans or applies the openbao-config Terraform module — KV v2, AppRole,
+  # Kubernetes auth, policies, and roles. Requires an active admin token.
+  # Run bootstrap-openbao.yml first to obtain and unseal the cluster, then apply
+  # this module with OPENBAO_ROOT_TOKEN set, then revoke the token.
+  #
+  # Required infra-<region> environment secrets (beyond the standard set):
+  #   OPENBAO_ADDRESS    — HTTPS URL of the OpenBao server reachable from runners
+  #   OPENBAO_ROOT_TOKEN — Admin token with permission to configure OpenBao
+  apply-openbao-config:
+    name: Apply OpenBao Config
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      inputs.module == 'openbao-config'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:                  ${{ inputs.region }}
+      ACTION:                  ${{ inputs.action }}
+      TF_VAR_openbao_address:  ${{ secrets.OPENBAO_ADDRESS }}
+      TF_VAR_openbao_token:    ${{ secrets.OPENBAO_ROOT_TOKEN }}
+      AWS_ACCESS_KEY_ID:       ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY:   ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Terraform init — openbao-config
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module: openbao-config
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Terraform plan — openbao-config
+        working-directory: terraform-iac-bootstrap/openbao-config
+        run: |
+          llz ci tf-plan --out plan.txt --title "OpenBao config plan" \
+            -- -out=tfplan.bin
+
+      - name: Terraform apply — openbao-config
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/openbao-config
+        run: terraform apply -auto-approve tfplan.bin
+
+  # ── Destroy openbao-config (manual dispatch — requires environment approval) ───
+  plan-destroy-openbao-config:
+    name: Plan DESTROY OpenBao Config
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      inputs.module == 'openbao-config'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:          ${{ inputs.region }}
+      CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+    steps:
+      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "openbao-config" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — openbao-config
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module: openbao-config
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Terraform plan destroy — openbao-config
+        working-directory: terraform-iac-bootstrap/openbao-config
+        env:
+          TF_VAR_openbao_address: ${{ secrets.OPENBAO_ADDRESS }}
+          TF_VAR_openbao_token:   ${{ secrets.OPENBAO_ROOT_TOKEN }}
+          AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          llz ci tf-plan --out destroy-plan.txt --title "OpenBao config destroy plan (review before approving destroy job)" \
+            -- -destroy
+
+  destroy-openbao-config:
+    name: DESTROY OpenBao Config
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      inputs.module == 'openbao-config'
+    needs: [plan-destroy-openbao-config]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:          ${{ inputs.region }}
+      CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+    steps:
+      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "openbao-config" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — openbao-config
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module: openbao-config
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Terraform destroy — openbao-config
+        working-directory: terraform-iac-bootstrap/openbao-config
+        env:
+          TF_VAR_openbao_address: ${{ secrets.OPENBAO_ADDRESS }}
+          TF_VAR_openbao_token:   ${{ secrets.OPENBAO_ROOT_TOKEN }}
+          AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          terraform plan -destroy \
+            -out=destroy-plan.bin \
+            -no-color
+          terraform apply destroy-plan.bin
+
+  # ── Apply / plan / destroy object-storage module ────────────────────────────
+  # Creates the three Loki S3 buckets and a scoped Object Storage access key
+  # for each region. After apply, the job automatically writes the generated
+  # access and secret keys as LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY into the
+  # matching infra-<region> GitHub environment secret so bootstrap-openbao.yml
+  # can seed secret/loki/object-store without an operator copy-paste step.
+  #
+  # Required infra-<region> environment secrets (beyond the standard set):
+  #   LINODE_API_TOKEN — Linode API token for the Object Storage provider
+  #
+  # Required environment secrets for automated key storage:
+  #   OPENBAO_SECRETS_WRITE_TOKEN — PAT with repo + secrets:write scope
+  apply-object-storage:
+    name: Apply Object Storage (${{ inputs.region }})
+    # Runs on module=cluster too (not just object-storage/all). Loki and Harbor
+    # are ALWAYS installed and BOTH require their S3 buckets + scoped keys to
+    # exist, so object-storage must be provisioned on every cluster bootstrap —
+    # leaving it opt-in let cluster-only rebuilds silently skip it, so Loki
+    # persisted zero chunks and Harbor's registry couldn't write to S3 with no
+    # signal (observed 2026-06-03, primary lke612303). The apply is idempotent
+    # (0 changes once the buckets/keys exist) and lives in its OWN tf state, so
+    # making it always-run does NOT couple bucket lifecycle to the cluster — a
+    # cluster destroy still never touches the buckets (destroy is module-scoped
+    # via destroy:<region>:object-storage), preserving log/image durability
+    # across rebuilds. bootstrap-openbao already `needs:` this job and seeds
+    # OpenBao from the keys it auto-stashes.
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      (inputs.module == 'cluster' || inputs.module == 'object-storage' || inputs.module == 'all')
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:                ${{ inputs.region }}
+      ACTION:                ${{ inputs.action }}
+      TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Terraform init — object-storage
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module: object-storage
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Terraform plan — object-storage
+        working-directory: terraform-iac-bootstrap/object-storage
+        run: |
+          llz ci tf-plan --out plan.txt --title "Object Storage plan (${REGION})" --lines 40 \
+            -- -var-file="${REGION}.tfvars" -out=tfplan.bin
+
+      - name: Terraform apply — object-storage
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/object-storage
+        run: terraform apply -auto-approve tfplan.bin
+
+      - name: Store object-storage credentials as environment secrets
+        if: env.ACTION == 'apply'
+        shell: bash
+        working-directory: terraform-iac-bootstrap/object-storage
+        env:
+          # github.com is the default host, so GH_TOKEN alone authenticates.
+          # OPENBAO_SECRETS_WRITE_TOKEN is a fine-grained PAT scoped
+          # to this repo with Actions + Secrets: write.
+          GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Stash the S3 access/secret pairs (Loki + Harbor registry) as
+          # infra-<region> environment secrets so the operator doesn't have to
+          # copy them manually. stash-env-secret reads each via `terraform
+          # output -raw`, masks it, writes it via `gh secret set --env`, and
+          # attempts every mapping before failing (a partial failure mid-list
+          # must not go unflagged). The bootstrap-openbao.yml workflow's early
+          # pre-flight step asserts these are present before any further
+          # bootstrap work runs; common failure modes (PAT absent/expired, PAT
+          # not granted this repo, missing Secrets: write) are diagnosed by the
+          # command's remediation output.
+          llz ci stash-env-secret --env "infra-${REGION}" \
+            --from-tf-output loki_access_key=LOKI_S3_ACCESS_KEY \
+            --from-tf-output loki_secret_key=LOKI_S3_SECRET_KEY \
+            --from-tf-output harbor_registry_access_key=HARBOR_REGISTRY_S3_ACCESS_KEY \
+            --from-tf-output harbor_registry_secret_key=HARBOR_REGISTRY_S3_SECRET_KEY
+
+          BUCKETS=$(terraform output -json bucket_names)
+          HARBOR_BUCKET=$(terraform output -raw harbor_registry_bucket)
+          {
+            echo "### Object Storage credentials stored"
+            echo ""
+            echo "All four S3 access/secret pairs (Loki ×1, Harbor registry ×1)"
+            echo "have been written to the \`infra-${REGION}\` environment secrets automatically."
+            echo ""
+            echo "**Loki buckets:**"
+            echo '```json'
+            printf '%s\n' "$BUCKETS"
+            echo '```'
+            echo ""
+            echo "**Harbor registry bucket:** \`${HARBOR_BUCKET}\`"
+            echo ""
+            echo "**Next step:** run \`bootstrap-openbao.yml\` → \`${REGION}\` to seed"
+            echo "\`secret/loki/object-store\` and \`secret/harbor/registry-s3\` in OpenBao."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  plan-destroy-object-storage:
+    name: Plan DESTROY Object Storage (${{ inputs.region }})
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      (inputs.module == 'object-storage' || inputs.module == 'all')
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:          ${{ inputs.region }}
+      CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+    steps:
+      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — object-storage
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module: object-storage
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      - name: Terraform plan destroy — object-storage
+        working-directory: terraform-iac-bootstrap/object-storage
+        env:
+          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          llz ci tf-plan --out destroy-plan.txt --title "Object Storage destroy plan (review before approving destroy job)" --lines 40 \
+            -- -destroy -var-file="${REGION}.tfvars"
+
+  destroy-object-storage:
+    name: DESTROY Object Storage (${{ inputs.region }})
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      (inputs.module == 'object-storage' || inputs.module == 'all')
+    needs: [plan-destroy-object-storage]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:          ${{ inputs.region }}
+      CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+    steps:
+      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          path: _llz-template
+
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — object-storage
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module: object-storage
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+
+      # Drain buckets before TF destroy. The Linode provider does NOT support
+      # force_destroy=true on linode_object_storage_bucket, so a bucket with any
+      # remaining objects (Loki chunks, Harbor registry layers, gitea dumps)
+      # fails the destroy with "bucket is not empty". This step uses the
+      # bucket-scoped access keys still present in TF state at this point to
+      # bulk-delete each bucket's contents, then TF destroy proceeds against
+      # empty buckets.
+      #
+      # We use s5cmd (single static Go binary, peak/s5cmd) instead of awscli
+      # because TF_IMAGE (debian-slim + terraform/kubectl/helm/kustomize)
+      # ships NEITHER awscli NOR python+pip — the previous awscli-via-pip
+      # approach hit `pip3: command not found` on the first real-world run.
+      # s5cmd is downloaded into /tmp on each invocation (~5 MB tarball) so
+      # no apt-get / user-permission gymnastics.
+      #
+      # Tolerant by design: failure to drain any single bucket emits a
+      # ::warning:: but doesn't fail the step — TF destroy then surfaces the
+      # specific bucket that's still non-empty, and the operator falls back to
+      # manual cleanup. The state of any already-destroyed key/bucket is
+      # handled by the `|| true` guard on each `terraform output` read;
+      # outputs disappear from state as their backing resources are destroyed
+      # in a retried run.
+      - name: Drain S3 buckets before destroy
+        working-directory: terraform-iac-bootstrap/object-storage
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          set -uo pipefail
+
+          # Fetch s5cmd binary on-demand. Pin to a known version AND verify
+          # the tarball sha256 BEFORE extracting + executing — supply-chain
+          # mitigation since this binary handles the loki/harbor/gitea
+          # access keys in env. If GitHub's CDN ever serves a different
+          # tarball (compromise, typosquat, TLS-bypass), the sha256sum
+          # check fails and the step exits non-zero before chmod + execute.
+          # When bumping S5CMD_VER, refresh S5CMD_TAR_SHA256 with
+          # `curl -fsSL <url> | sha256sum`.
+          S5CMD=/tmp/s5cmd
+          S5CMD_VER=2.2.2
+          S5CMD_TAR_SHA256=a15f83d2a6dc091e43b2a120f29f8f6c86d146c381766c0197ec75d7985af2b6
+          if [ ! -x "$S5CMD" ]; then
+            echo "downloading s5cmd v${S5CMD_VER}..."
+            curl -fsSL "https://github.com/peak/s5cmd/releases/download/v${S5CMD_VER}/s5cmd_${S5CMD_VER}_Linux-64bit.tar.gz" \
+              -o /tmp/s5cmd.tar.gz
+            echo "${S5CMD_TAR_SHA256}  /tmp/s5cmd.tar.gz" | sha256sum -c - || {
+              echo "::error::s5cmd tarball sha256 mismatch — refusing to execute. Either the pinned hash is stale (bump after re-verifying upstream) or the artifact is tampered with."
+              rm -f /tmp/s5cmd.tar.gz
+              exit 1
+            }
+            tar -xzC /tmp -f /tmp/s5cmd.tar.gz s5cmd
+            chmod 0755 "$S5CMD"
+            rm -f /tmp/s5cmd.tar.gz
+          fi
+          "$S5CMD" version
+
+          # Read ALL terraform outputs as one JSON blob, once. The previous
+          # `terraform output -raw <name>` approach leaked TF's "Warning: No
+          # outputs found" text into the captured value when state had zero
+          # outputs (observed on a re-run after a partial destroy) — that
+          # text got embedded into bucket names and endpoint URLs, breaking
+          # s5cmd with `bad value for --endpoint-url`. `-json` returns clean
+          # `{}` on no-outputs and clean `{name: {value, type, sensitive}}`
+          # otherwise, no inline warnings. `2>/dev/null` keeps any stderr
+          # quiet either way.
+          OUTPUTS_JSON="$(terraform output -json 2>/dev/null || printf '{}')"
+
+          read_output() {
+            printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$1" '.[$k].value // empty'
+          }
+
+          ENDPOINT="$(read_output s3_endpoint)"
+          if [ -z "$ENDPOINT" ]; then
+            echo "::warning::no s3_endpoint in state — assuming module already destroyed; skipping drain"
+            exit 0
+          fi
+
+          # Mask keys before they show up in any echo or s5cmd error trace.
+          mask() { [ -n "$1" ] && echo "::add-mask::$1"; }
+
+          drain_bucket() {
+            local label="$1" ak="$2" sk="$3" bucket="$4"
+            if [ -z "$ak" ] || [ -z "$sk" ] || [ -z "$bucket" ]; then
+              echo "skip $label: key or bucket already destroyed in a prior run"
+              return 0
+            fi
+            echo "draining s3://$bucket ($label)"
+            # s5cmd reads AWS_* env vars + uses --endpoint-url for the
+            # custom endpoint. AWS_REGION must be non-empty for sigv4
+            # signing even though Linode OBJ ignores the value.
+            # `s3://bucket/*` matches all objects recursively in s5cmd's
+            # wildcard semantics. Errors when the bucket is already empty
+            # are tolerated by the `|| ...` guard.
+            AWS_ACCESS_KEY_ID="$ak" AWS_SECRET_ACCESS_KEY="$sk" AWS_REGION=us-east-1 \
+              "$S5CMD" --endpoint-url "$ENDPOINT" rm "s3://${bucket}/*" \
+              || echo "::warning::drain of $bucket exited non-zero (may already be empty, or terraform destroy will surface the real failure)"
+          }
+
+          # Loki — 3 buckets sharing one key. Bucket names come from the
+          # `bucket_names` output's value (a map).
+          LOKI_AK="$(read_output loki_access_key)"; mask "$LOKI_AK"
+          LOKI_SK="$(read_output loki_secret_key)"; mask "$LOKI_SK"
+          for b in chunks ruler admin; do
+            bucket="$(printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$b" '.bucket_names.value[$k] // empty')"
+            drain_bucket "loki/$b" "$LOKI_AK" "$LOKI_SK" "$bucket"
+          done
+
+          # Harbor registry — single bucket + scoped key.
+          HARBOR_AK="$(read_output harbor_registry_access_key)"; mask "$HARBOR_AK"
+          HARBOR_SK="$(read_output harbor_registry_secret_key)"; mask "$HARBOR_SK"
+          HARBOR_BUCKET="$(read_output harbor_registry_bucket)"
+          drain_bucket "harbor-registry" "$HARBOR_AK" "$HARBOR_SK" "$HARBOR_BUCKET"
+
+          # NOTE — the gitea-backup bucket drain was removed alongside the
+          # bucket/key/outputs in the apl-core anti-pattern cleanup.
+
+          echo "drain pass complete."
+
+      - name: Terraform destroy — object-storage
+        working-directory: terraform-iac-bootstrap/object-storage
+        env:
+          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          terraform plan -destroy \
+            -var-file="${REGION}.tfvars" \
+            -out=destroy-plan.bin \
+            -no-color
+          terraform apply destroy-plan.bin

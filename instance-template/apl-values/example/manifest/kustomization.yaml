@@ -1,0 +1,70 @@
+# Platform manifest base for the `example` env — reconciled by apl-core's
+# in-cluster Argo CD (the env's otomi.git.path in ../values.yaml points here).
+# llz env add clones this whole tree to apl-values/<env>/manifest
+# and swaps the env identity tokens.
+#
+# This tree holds two things:
+#   1. The raw platform manifests that are NOT expressed as apl-core values and
+#      NOT shipped as first-party Helm charts (kubernetes-charts/llz-*) — the
+#      cluster-identity-coupled glue every environment needs (the resources below).
+#   2. ./argocd — the per-domain `platform-support` AppProject + the wave-ordered
+#      Argo CD Applications that deploy the llz-* charts (cluster-foundation, ESO,
+#      argo-workflows/events, cert-automation, eso-cert-watcher, OpenBao, the
+#      firewall). These are consumed live as OCI/upstream Applications HERE;
+#      the llz-argo-bootstrap-apps chart is the standalone Phase-5 seed for
+#      sibling teams and is intentionally NOT wired into this live tree.
+#
+# The DNS tree (./dns) is intentionally NOT included — it is applied separately
+# by .github/workflows/bootstrap-dns.yml once the operator seeds the Linode DNS
+# token (see dns/kustomization.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Support-plane AppProject + wave-ordered component Applications (see
+  # argocd/kustomization.yaml). cluster-foundation (wave -20) here is what creates
+  # the llz-openbao namespace the OpenBao bootstrap workflow waits on.
+  - argocd
+
+  # ESO ↔ OpenBao binding — the ClusterSecretStore every ExternalSecret needs,
+  # plus the ESO namespace NetworkPolicies. Applied early (sync-waves on the CRs).
+  - external-secrets/network-policies.yaml
+  - external-secrets/cluster-secret-store-openbao.yaml
+
+  # Secure-by-default NetworkPolicies for the Argo Workflows/Events namespaces
+  # (default-deny + DNS + apiserver + intra-ns + ingress). cluster-foundation
+  # only covers the apl-core-sidecar namespaces; these two live with their
+  # components, mirroring external-secrets/network-policies.yaml.
+  - argo-workflows/network-policies.yaml
+  - argo-events/network-policies.yaml
+
+  # Stable self-signed CA that signs the llz-openbao-platform chart's
+  # `openbao-tls` cert (the chart's issuerRef points at the `openbao-ca`
+  # ClusterIssuer this manifest creates).
+  - cert-manager/openbao-bootstrap-ca.yaml
+
+  # Restarts the OpenBao StatefulSet when openbao-tls rotates (no in-process
+  # TLS reload in the OpenBao image).
+  - openbao/openbao-cert-watcher.yaml
+
+  # Linode Volume relabeler — CronJob + RBAC + NetworkPolicy + ConfigMap. The
+  # namespace + linode-api-token Secret are TF-owned (terraform-iac-bootstrap/cluster-bootstrap).
+  - linode-volume-labeler
+
+  # Object-storage credential ExternalSecrets for the platform observability /
+  # registry backends (synced from OpenBao by ESO).
+  - observability/loki-object-store-externalsecret.yaml
+  - harbor/harbor-registry-s3-externalsecret.yaml
+
+  # Platform alert rules (PrometheusRule CRs picked up by kube-prometheus-stack).
+  - observability/prometheus-rules/openbao-alerts.yaml
+  - observability/prometheus-rules/support-plane-alerts.yaml
+
+patches:
+  # Override REGION_SHORT on the volume-labeler CronJob per env (base = "exa").
+  - path: linode-volume-labeler-region-patch.yaml
+    target:
+      group: batch
+      version: v1
+      kind: CronJob
+      name: linode-volume-labeler

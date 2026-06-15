@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llz-eso-cert-watcher.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    {{- include "llz-eso-cert-watcher.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Singleton watcher — RollingUpdate with maxSurge=0 + maxUnavailable=1 gives
+  # Recreate-equivalent semantics (tear down old pod before starting new)
+  # without tripping the no-rolling-update-strategy kube-linter check. Two
+  # watchers racing isn't catastrophic (idempotent restart trigger), and a
+  # brief gap during upgrade is fine.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "llz-eso-cert-watcher.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llz-eso-cert-watcher.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "llz-eso-cert-watcher.fullname" . }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: watcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -u
+              {{- if .Values.watch.store.name }}
+              # Restart the target no more than once per this many seconds for
+              # the store-wedge signal, so a genuinely-misconfigured store (bad
+              # roleId/secretId, OpenBao down) can't thrash it. The CA-rotation
+              # signal is naturally rate-limited (rotations are rare).
+              STORE_COOLDOWN={{ .Values.watch.store.cooldownSeconds }}
+              echo "eso-cert-watcher: polling {{ .Values.watch.certificate.namespace }}/{{ .Values.watch.certificate.name }} Certificate.status.notBefore + {{ .Values.watch.store.name }} ClusterSecretStore readiness every {{ .Values.pollIntervalSeconds }}s"
+              {{- else }}
+              echo "eso-cert-watcher: polling {{ .Values.watch.certificate.namespace }}/{{ .Values.watch.certificate.name }} Certificate.status.notBefore every {{ .Values.pollIntervalSeconds }}s"
+              {{- end }}
+              prev=""
+              {{- if .Values.watch.store.name }}
+              store_last_restart=0
+              store_streak=0
+              {{- end }}
+              while :; do
+                {{- if .Values.watch.store.name }}
+                now=$(date +%s)
+                {{- end }}
+
+                # ── Signal 1: {{ .Values.watch.certificate.name }} rotation ──
+                # .status.notBefore on the cert-manager Certificate is set every
+                # time a new certificate is issued. Reading the Certificate
+                # (public material) avoids granting access to the backing Secret
+                # which holds tls.key.
+                cur=$(kubectl -n {{ .Values.watch.certificate.namespace }} get certificate {{ .Values.watch.certificate.name }} \
+                  -o jsonpath='{.status.notBefore}' 2>/dev/null || true)
+                if [ -z "$cur" ]; then
+                  echo "$(date -Is) {{ .Values.watch.certificate.name }} Certificate not readable yet (rbac? not issued?) — skipping CA tick"
+                elif [ -z "$prev" ]; then
+                  # First successful read after pod start: don't restart the
+                  # target on this tick — it restarted with us, so its trust
+                  # pool is already current. Just record baseline.
+                  echo "$(date -Is) baseline notBefore=$cur"
+                  prev="$cur"
+                elif [ "$cur" != "$prev" ]; then
+                  echo "$(date -Is) {{ .Values.watch.certificate.name }} rotated: $prev -> $cur; restarting {{ .Values.target.deployment.name }}"
+                  if kubectl -n {{ include "llz-eso-cert-watcher.targetNamespace" . }} rollout restart deployment/{{ .Values.target.deployment.name }}; then
+                    prev="$cur"
+                  else
+                    echo "$(date -Is) rollout restart failed (rbac?) — will retry next tick"
+                  fi
+                fi
+                {{- if .Values.watch.store.name }}
+
+                # ── Signal 2: {{ .Values.watch.store.name }} ClusterSecretStore wedged at bootstrap ──
+                # If the store validated once (Ready=True) ESO's client is live
+                # and we leave it alone. If it's stuck not-Ready, ESO most likely
+                # started before its inputs (approle secret / CA) existed and
+                # won't re-validate on its own — restart it. An empty value means
+                # the store/CRD isn't present yet (nothing to do). Cooldown-
+                # limited; the streak counter escalates the log so a real
+                # misconfig is visible rather than silent.
+                ready=$(kubectl get clustersecretstore {{ .Values.watch.store.name }} \
+                  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+                if [ "$ready" = "True" ]; then
+                  [ "$store_streak" -ne 0 ] && echo "$(date -Is) ClusterSecretStore {{ .Values.watch.store.name }} recovered (Ready=True) after $store_streak restart(s)"
+                  store_streak=0
+                elif [ -n "$ready" ] && [ "$(( now - store_last_restart ))" -ge "$STORE_COOLDOWN" ]; then
+                  store_streak=$(( store_streak + 1 ))
+                  note=""
+                  [ "$store_streak" -ge 10 ] && note=" (10+ restarts — likely a real store misconfig, not a startup race: check roleId/secretId/CA/OpenBao reachability)"
+                  echo "$(date -Is) ClusterSecretStore {{ .Values.watch.store.name }} not Ready (Ready=$ready) — restarting {{ .Values.target.deployment.name }} to force re-validation${note}"
+                  if kubectl -n {{ include "llz-eso-cert-watcher.targetNamespace" . }} rollout restart deployment/{{ .Values.target.deployment.name }}; then
+                    store_last_restart="$now"
+                  else
+                    echo "$(date -Is) rollout restart failed (rbac?) — will retry after cooldown"
+                  fi
+                fi
+                {{- end }}
+                sleep {{ .Values.pollIntervalSeconds }}
+              done
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault

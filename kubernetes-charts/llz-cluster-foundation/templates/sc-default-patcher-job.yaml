@@ -1,0 +1,164 @@
+{{- if .Values.storageClassPatcher.enabled }}
+{{- $np := .Values.networkPolicies }}
+{{- $sc := .Values.storageClassPatcher }}
+# Default StorageClass demotion — PostSync hook owned by Argo CD.
+#
+# WHY THIS EXISTS:
+#   LKE's `workload` HelmRelease (Flux-managed) installs `{{ $sc.demote }}` with
+#   `storageclass.kubernetes.io/is-default-class: "true"`. That SC has no
+#   encryption parameter and no block-storage Volume tags, so any apl-core workload
+#   that doesn't explicitly set `storageClassName` (gitea, keycloak, eventual
+#   argo-cd/Prometheus/Loki PVCs) provisions unencrypted, untagged Volumes — and
+#   untagged Volumes can't be reaped by the tag-filtered destroy hook, leaving
+#   Linode account-quota orphans.
+#
+# WHAT THIS DOES:
+#   Wait for `{{ $sc.desiredDefault }}` to exist, then demote `{{ $sc.demote }}`
+#   by overwriting its is-default-class annotation to `"false"`. Verify exactly
+#   one default remains and it's ours.
+#
+#   The SC itself is rendered by Terraform (cluster-bootstrap module), NOT by
+#   Argo — it must land before apl-operator's helmfile starts creating PVCs, and
+#   Argo's sync of this tree happens later. The SC is present by the time this
+#   PostSync hook runs, so the demotion succeeds whether or not Argo owns the SC.
+#
+# WHY POSTSYNC:
+#   PostSync runs after every successful sync — so if Flux's helm-controller
+#   reconciles the `workload` HelmRelease (~every 10m) and reverts the demotion,
+#   the next Argo selfHeal re-runs this Job and restores it. (Previously a TF
+#   null_resource that only re-ran on `terraform apply`.)
+---
+# Isolating NetworkPolicy. Same pattern as the coredns-restart Job. The Job's pod
+# only needs egress to the K8s apiserver (kubectl) + DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sc-default-patcher-isolate
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.corednsRestart | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sc-default-patcher
+  policyTypes: [Ingress, Egress]
+  egress:
+    # kube-apiserver — LKE-E dual-port: 443 (in-cluster Service) + 6443 (DNAT'd
+    # apiserver address Cilium sees post-rewrite). Both required per
+    # project_lke_e_cilium_np_port_6443.
+    #
+    # NO `to:` selector. On LKE-E the control plane is managed/external — there is
+    # NO in-cluster pod labeled `component: kube-apiserver`, so a podSelector here
+    # matches nothing and silently blocks ALL apiserver egress: kubectl can't
+    # reach the apiserver, `kubectl get sc` fails, and the script misreports it as
+    # "{{ $sc.desiredDefault }} not found" → exit 1 → CrashLoopBackOff (duplicate
+    # default never demoted, convergence stalls). Allow 443/6443 to any
+    # destination, matching every other foundation NP.
+    - ports:
+        {{- range $np.apiserverPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+    # DNS resolution.
+    - ports:
+        {{- range $np.dnsPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sc-default-patcher
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sc-default-patcher
+rules:
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sc-default-patcher
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sc-default-patcher
+subjects:
+  - kind: ServiceAccount
+    name: sc-default-patcher
+    namespace: kube-system
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sc-default-patcher
+  namespace: kube-system
+  annotations:
+    # PostSync — runs after every successful sync. If Flux reverts the demotion
+    # mid-cycle, the next sync re-runs us.
+    argocd.argoproj.io/hook: PostSync
+    # Replace lets the next sync re-create the Job cleanly even if a previous run
+    # is still in TTL.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 600
+  activeDeadlineSeconds: 1500
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sc-default-patcher
+    spec:
+      serviceAccountName: sc-default-patcher
+      restartPolicy: OnFailure
+      containers:
+        - name: patch
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [sh, -c]
+          args:
+            - |
+              set -euo pipefail
+              echo "Verifying {{ $sc.desiredDefault }} exists..."
+              if ! kubectl get sc {{ $sc.desiredDefault }} >/dev/null 2>&1; then
+                # PostSync runs after the SC has been rendered, so this is a "the
+                # sync didn't actually install the SC" symptom — fail loud so
+                # `llz ci converge` sees it.
+                echo "::error::{{ $sc.desiredDefault }} not found. Not demoting {{ $sc.demote }} — would leave the cluster with no default StorageClass." >&2
+                exit 1
+              fi
+
+              echo "=== Demote {{ $sc.demote }} from default ==="
+              if kubectl get sc {{ $sc.demote }} >/dev/null 2>&1; then
+                kubectl annotate sc {{ $sc.demote }} \
+                  storageclass.kubernetes.io/is-default-class=false --overwrite
+              else
+                echo "{{ $sc.demote }} not found on cluster — nothing to demote (single-class cluster?)."
+              fi
+
+              # Verify exactly one default remains, and it's ours.
+              DEFAULTS=$(kubectl get sc -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}{"\n"}{end}' \
+                | awk -F'\t' '$2=="true"{print $1}')
+              echo "Default StorageClasses after patch:"
+              echo "$DEFAULTS"
+              if [ "$DEFAULTS" != "{{ $sc.desiredDefault }}" ]; then
+                echo "::error::expected exactly '{{ $sc.desiredDefault }}' as default; got: $DEFAULTS" >&2
+                exit 1
+              fi
+              echo "Done."
+          resources:
+            {{- toYaml $sc.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault
+{{- end }}

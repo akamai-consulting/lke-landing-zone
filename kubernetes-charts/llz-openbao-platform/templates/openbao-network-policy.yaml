@@ -1,0 +1,130 @@
+{{- if .Values.platform.networkPolicy.enabled }}
+# Default-deny + explicit allow rules for the openbao namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openbao-default-deny
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Apply before any openbao workload — see project-np-sync-wave-race.
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openbao-allow
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Apply before any openbao workload — see project-np-sync-wave-race.
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openbao
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Client namespaces permitted to reach the OpenBao API on :8200. Override
+    # platform.networkPolicy.allowedClientNamespaces for a sibling cluster whose
+    # namespace names differ.
+    {{- range .Values.platform.networkPolicy.allowedClientNamespaces }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+      ports:
+        - port: 8200
+          protocol: TCP
+    {{- end }}
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openbao
+      ports:
+        - port: 8200
+          protocol: TCP
+        - port: 8201
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: approle-rotator
+      ports:
+        - port: 8200
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openbao
+      ports:
+        - port: 8200
+          protocol: TCP
+        - port: 8201
+          protocol: TCP
+    # Kubernetes API. OpenBao's `service_registration "kubernetes"` calls the
+    # API server on startup to label its own pod — if this is blocked the
+    # server wedges before the :8200 listener serves. On LKE-Enterprise the
+    # `kubernetes` Service DNATs 443→6443 and Cilium evaluates policy on the
+    # post-DNAT port, so 6443 must be allowed alongside 443.
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.platform.networkPolicy.observabilityNamespace }}
+      ports:
+        - port: 80
+          protocol: TCP
+---
+# Allow approle-rotation CronWorkflow pods egress to OpenBao, K8s API, and GitHub.
+# Workflow pods carry the label set by spec.workflowSpec.podMetadata.labels.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: approle-rotator-workflow
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Apply before any openbao workload — see project-np-sync-wave-race.
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: approle-rotator
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openbao
+      ports:
+        - port: 8200
+          protocol: TCP
+    # K8s API + GitHub. 6443 covers the LKE-Enterprise apiserver Service
+    # (443→6443 DNAT, Cilium enforces policy on the post-DNAT port).
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+{{- end }}

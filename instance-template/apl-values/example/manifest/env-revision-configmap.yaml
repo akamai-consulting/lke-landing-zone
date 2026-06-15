@@ -1,0 +1,25 @@
+# Single source of truth for the git revision this env's in-repo Argo CD
+# content tracks. Read by terraform-iac-bootstrap/cluster-bootstrap (data.local_file
+# "env_revision_configmap"); its plan-time precondition asserts
+#   data.revision == var.apps_repo_revision (TF_VAR_apps_repo_revision, default "main")
+# so the bootstrap App's revision and the in-repo child Apps' revision can't
+# silently diverge.
+#
+# llz env add clones this whole manifest/ tree to
+# apl-values/<env>/manifest and swaps the env identity tokens; `revision` is
+# NOT an env token, so it stays "main" — keep it in sync with the value the
+# env's bootstrap is pointed at (set APPS_REPO_REVISION on infra-<env> to run a
+# feature branch, and edit `revision` here to match on that same branch).
+#
+# `config.kubernetes.io/local-config: "true"` keeps kustomize from emitting it
+# to any build output — it is a substitution/validation source only, never an
+# in-cluster object.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: env-revision
+  namespace: argocd
+  annotations:
+    config.kubernetes.io/local-config: "true"
+data:
+  revision: main

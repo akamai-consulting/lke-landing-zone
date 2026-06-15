@@ -1,0 +1,42 @@
+# Argo Events EventSource — watched-TLS-Secret resource watch.
+#
+# Subscribes to the apiserver watch stream for the watched Secret in
+# cert-manager and publishes UPDATE events to the EventBus. The Sensor in
+# sensor.yaml consumes them via dependency "haproxy-tls-change"
+# → eventName "haproxy-tls" and submits the haproxy-rebuild Workflow.
+#
+# Notes on the filter block:
+#   - afterStart: true suppresses the synthetic "initial state" UPDATE the
+#     watch fires on EventSource pod start — without it, every controller
+#     restart spuriously triggers a rebuild.
+#   - labels (controller.cert-manager.io/fao=true) gates to Secrets actually
+#     managed by cert-manager — defence-in-depth against a hand edit
+#     triggering an unwanted rebuild loop.
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: haproxy-tls-resource
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # See eventbus.yaml for the wave rationale (argo-events at -15 →
+    # this CR at -14 to land after CRDs are registered).
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.argoEvents | quote }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  eventBusName: {{ .Values.eventBus.name }}
+  resource:
+    haproxy-tls:
+      namespace: {{ .Values.certManagerNamespace }}
+      group: ""
+      version: v1
+      resource: secrets
+      eventTypes:
+        - UPDATE
+      filter:
+        afterStart: true
+        labels:
+          - key: controller.cert-manager.io/fao
+            value: "true"
+        # Watch only the specific watched Secret.
+        fieldSelector: metadata.name={{ .Values.watchedSecret.name }}

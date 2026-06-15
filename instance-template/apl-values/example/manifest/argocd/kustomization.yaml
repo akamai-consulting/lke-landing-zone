@@ -1,0 +1,30 @@
+# Support-plane Argo CD wiring — the per-domain AppProject + the wave-ordered set
+# of bootstrap component Applications. The root `platform-bootstrap` Application
+# (created by terraform-iac-bootstrap/cluster-bootstrap) syncs the parent manifest tree, which
+# applies these CRs into the `argocd` namespace; Argo CD then reconciles each
+# component into the cluster in sync-wave order:
+#
+#   -20  platform-support AppProject + llz-cluster-foundation (namespaces, NPs,
+#        CoreDNS rewrite, storage-class patcher)
+#   -15  external-secrets-operator, argo-workflows, argo-events
+#   -14  cert-automation
+#    -5  eso-cert-watcher
+#     0  openbao
+#
+# These were dropped when the per-component argocd/applications wrappers were
+# removed in the templatization refactor without being re-added here (the
+# llz-argo-bootstrap-apps chart is the standalone Phase-5 seed for sibling teams,
+# NOT wired into this live tree). Their absence left llz-openbao uncreated and the
+# OpenBao bootstrap timing out.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - platform-support-project.yaml
+  - applications/cluster-foundation.yaml
+  - applications/external-secrets-operator.yaml
+  - applications/argo-workflows.yaml
+  - applications/argo-events.yaml
+  - applications/cert-automation.yaml
+  - applications/eso-cert-watcher.yaml
+  - applications/openbao.yaml

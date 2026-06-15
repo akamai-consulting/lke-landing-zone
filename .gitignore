@@ -1,0 +1,52 @@
+kubernetes/observability/argocd/applications/charts/
+certs/*.pem
+
+# Go test binaries / local build output of the tools module
+*.test
+tools/firewall-cidrs
+tools/firewall-controller/firewall-controller
+tools/linode-cred-audit
+tools/llz
+/bin/llz
+
+# Tokens gathered by `llz new` / `llz secrets gather` (0600, never committed)
+.llz/
+
+# Coverage reports (go test -coverprofile output)
+**/coverage/
+**/cobertura.xml
+
+# Generated SBOMs (attached to releases via release.yml)
+sbom/
+
+# Claude Code personal settings (per-user, never committed)
+.claude/settings.local.json
+
+research-materials
+
+# macOS
+**/.DS_Store
+
+# Terraform/OpenTofu
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfplan
+# Dependency lock files belong to ROOT configurations (the instance-template/
+# terraform/* roots commit theirs). Reusable child modules under
+# terraform-modules/ are never independently init/applied, so a lock there is
+# only an artifact of a local `terraform validate` — keep it out of git.
+terraform-modules/**/.terraform.lock.hcl
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Rendered chart manifests for kubernetes scans (make render-charts)
+/rendered/
+
+# Instantiated instance Terraform roots for validation (make tf-validate-roots)
+/.tf-instance/
+
+# Copier-rendered instance for the local smoke test (make instance-test)
+/.instance-test/

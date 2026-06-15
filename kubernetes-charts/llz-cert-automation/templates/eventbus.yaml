@@ -1,0 +1,29 @@
+# Argo Events EventBus for cert-automation.
+#
+# Shared transport between the resource-watch EventSource (eventsource.yaml)
+# and the Workflow-submission Sensor (sensor.yaml). JetStream-backed
+# (replicas: 3) so a Secret rotation that coincides with a controller restart
+# is delivered at-least-once rather than dropped.
+#
+# ORDERING SCAR: this EventBus must APPLY BEFORE the EventSource/Sensor that
+# reference it by `eventBusName: {{ .Values.eventBus.name }}`. The shared
+# sync-wave (-14) plus the source kustomization ordering enforce that.
+apiVersion: argoproj.io/v1alpha1
+kind: EventBus
+metadata:
+  name: {{ .Values.eventBus.name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    # The argo-events Application lands at sync-wave -15. Without an explicit
+    # wave here this CR sits at default 0 and races the CRD-not-yet-registered
+    # window — retry: backoff catches it, but at the cost of one or two
+    # reconcile cycles per cold bootstrap. Wave -14 lands AFTER argo-events
+    # finishes installing CRDs and BEFORE the wave-0 workloads that depend on
+    # the EventBus existing.
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.argoEvents | quote }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  jetstream:
+    version: {{ .Values.eventBus.jetstream.version }}
+    replicas: {{ .Values.eventBus.jetstream.replicas }}

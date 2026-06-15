@@ -1,0 +1,51 @@
+{{- /*
+Optional AppProject — OFF by default (appProject.enabled=false) because the live
+repo already ships argocd/platform-support-project.yaml. A greenfield sibling team
+flips it on to get a correctly-shaped project with sourceRepos/destinations
+variabilized from `global`. Wave -20 so it applies before any Application that
+references it.
+*/ -}}
+{{- if .Values.appProject.enabled }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ required "global.project is required" .Values.global.project }}
+  namespace: {{ .Values.global.argocdNamespace }}
+  labels:
+    {{- include "llz-argo-bootstrap-apps.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.appProject.syncWave | default "-20" | quote }}
+  {{- if .Values.finalizer }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  {{- end }}
+spec:
+  description: {{ .Values.appProject.description | quote }}
+  sourceRepos:
+    # The platform git repo and the first-party OCI chart registry are always
+    # permitted (the chart's own components pull from them); extras are appended.
+    - {{ include "llz-argo-bootstrap-apps.gitRepoURL" . | quote }}
+    - {{ .Values.global.chartsRegistry | quote }}
+    - {{ printf "%s/*" .Values.global.chartsRegistry | quote }}
+    {{- with .Values.appProject.extraSourceRepos }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  destinations:
+    {{- range .Values.appProject.destinationNamespaces }}
+    - namespace: {{ . }}
+      server: {{ $.Values.global.destinationServer }}
+    {{- end }}
+  {{- with .Values.appProject.clusterResourceWhitelist }}
+  clusterResourceWhitelist:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.appProject.namespaceResourceBlacklist }}
+  namespaceResourceBlacklist:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.appProject.orphanedResources }}
+  orphanedResources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

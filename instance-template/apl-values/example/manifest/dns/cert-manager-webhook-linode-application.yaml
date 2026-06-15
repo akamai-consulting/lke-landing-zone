@@ -1,0 +1,63 @@
+# cert-manager-webhook-linode Application — solves cert-manager DNS-01
+# challenges by writing/deleting TXT records via the Linode DNS API.
+#
+# ⚠️  PLACEHOLDER CHART SOURCE — the repoURL/targetRevision below are NOT real.
+# This was an unresolved blocker in the upstream reference deployment too: until
+# it points at a real Helm chart, this Application fails to sync and every
+# Let's Encrypt Certificate sits Pending forever. To resolve, update TWO files
+# in lockstep:
+#   1. THIS FILE — replace repoURL + targetRevision with a real chart + version
+#      (candidate: the upstream community chart,
+#      https://github.com/slicen/cert-manager-webhook-linode).
+#   2. The AppProject this Application uses (project: platform-support — see the
+#      llz-argo-bootstrap-apps chart `appProject.extraSourceRepos`) — add the
+#      same repoURL to its sourceRepos, or Argo CD rejects the Application with
+#      "repository not permitted in project".
+#
+# The webhook reads its Linode API token from the `cert-manager-dns01-solver-token`
+# Secret in the cert-manager namespace, which dns01-solver-externalsecret.yaml
+# (this dir) syncs from OpenBao at secret/certmanager/dns01.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llz-cert-manager-webhook-linode
+  namespace: argocd
+  annotations:
+    # Wave -5 — must be installed before the ClusterIssuers that reference it
+    # (llz-letsencrypt-{staging,production}) can solve DNS-01 challenges.
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  revisionHistoryLimit: 3
+  project: platform-support
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  source:
+    # PLACEHOLDER — replace with the actual Helm registry URL + version.
+    repoURL: https://REPLACE_ME.example.com/cert-manager-webhook-linode
+    chart: cert-manager-webhook-linode
+    targetRevision: "0.0.0"  # PLACEHOLDER — pin to a real version
+    helm:
+      releaseName: cert-manager-webhook-linode
+      values: |
+        # Keep `groupName` in sync with letsencrypt-clusterissuer.yaml
+        # (solvers[].dns01.webhook.groupName).
+        groupName: acme.cluster.local
+        # The webhook reads the Linode DNS token from this Secret, populated by
+        # dns01-solver-externalsecret.yaml.
+        secretRef:
+          name: cert-manager-dns01-solver-token
+          key: token
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+        factor: 2
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

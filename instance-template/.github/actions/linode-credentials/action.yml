@@ -1,0 +1,344 @@
+name: Linode credentials (rotate / drain)
+description: >
+  One parameterized wrapper around `llz credentials` — the mutating half of the
+  policy-tracked Linode credential lifecycles. `credential-type: pat` owns the
+  shared LINODE_API_TOKEN PAT (90-day policy); `credential-type: obj-key` owns the
+  120-day TF-state Object Storage key SLA. `operation: create` mints the new
+  credential and updates the repo-level GHA secret(s); `operation: revoke-old`
+  is the daily drain (grace-by-age for PATs, keep-newest-N for OBJ keys, whose
+  API exposes no created time). Replaces the four former rotate-/revoke-
+  linode-pat/-obj-key actions. Dry-run unless apply=true.
+
+inputs:
+  credential-type:
+    description: Which credential lifecycle to drive — `pat` or `obj-key`.
+    required: true
+  operation:
+    description: What to do — `create` (mint + update GHA secret(s)) or `revoke-old` (drain).
+    required: true
+  linode-token:
+    description: >
+      Linode PAT used to call the tokens / object-storage keys APIs. Needs
+      account:read_write for PATs (create + revoke other PATs) or
+      object_storage:read_write for OBJ keys.
+    required: true
+  label:
+    description: Label for the new credential and the drain target — `revoke-old` matches the same label `create` mints.
+    required: true
+  apply:
+    description: 'Set to "true" to arm the rotation/revocations. Default is dry-run.'
+    required: false
+    default: 'false'
+  gha-token:
+    description: >
+      GitHub PAT with secrets:write scope; used for `gh secret set`. Required
+      for `operation: create` (both credential types); unused by revoke-old.
+    required: false
+
+  # ── pat-only inputs ──────────────────────────────────────────────────────────
+  scopes:
+    description: 'pat create: Linode-API scopes string for the new PAT (e.g. "linodes:read_write lke:read_write").'
+    required: false
+  validity-days:
+    description: 'pat create: validity window in days. the 90-day policy caps this at 90; the tool refuses larger.'
+    required: false
+    default: '90'
+  grace-days:
+    description: 'pat revoke-old: only revoke same-labeled siblings older than this many days. Newest is always kept.'
+    required: false
+    default: '7'
+  gha-secret-name:
+    description: 'pat create: name of the repo-level GHA secret to update with the new token (e.g. LINODE_API_TOKEN).'
+    required: false
+
+  # ── obj-key-only inputs ──────────────────────────────────────────────────────
+  bucket-cluster:
+    description: 'obj-key create: Linode object-storage cluster id (e.g. `us-ord-10`).'
+    required: false
+  bucket-name:
+    description: 'obj-key create: bucket name to scope the key to (e.g. `ecc-block-storage`).'
+    required: false
+  bucket-permissions:
+    description: 'obj-key create: `read_only`, `read_write`, or `none`. Default `read_write`.'
+    required: false
+    default: read_write
+  keep-newest:
+    description: 'obj-key revoke-old: how many most-recent same-labeled keys to keep. N=2 gives ~30-day overlap with monthly rotation.'
+    required: false
+    default: '2'
+  gha-access-key-secret-name:
+    description: 'obj-key create: repo-level secret name receiving the new access_key (e.g. TF_STATE_ACCESS_KEY).'
+    required: false
+  gha-secret-key-secret-name:
+    description: 'obj-key create: repo-level secret name receiving the new secret_key (e.g. TF_STATE_SECRET_KEY).'
+    required: false
+
+outputs:
+  new-pat-id:
+    description: 'pat create: ID of the newly created PAT (numeric).'
+    value: ${{ steps.create-pat.outputs.new-pat-id }}
+  new-token-hash:
+    description: >
+      pat create: sha256 hex of the new PAT. Use to verify cross-job that
+      secrets.LINODE_API_TOKEN was re-read fresh (raw token cannot cross job
+      boundaries — `::add-mask::` redacts it to empty in job outputs).
+    value: ${{ steps.create-pat.outputs.new-token-hash }}
+  kept-pat-id:
+    description: 'pat revoke-old: ID of the kept (newest) PAT, or empty if no matches.'
+    value: ${{ steps.revoke-pat.outputs.kept-pat-id }}
+  new-obj-key-id:
+    description: 'obj-key create: ID of the newly created OBJ key (numeric).'
+    value: ${{ steps.create-obj-key.outputs.new-obj-key-id }}
+  kept-ids:
+    description: 'obj-key revoke-old: JSON array of kept OBJ key IDs.'
+    value: ${{ steps.revoke-obj-key.outputs.kept-ids }}
+  revoked-ids:
+    description: 'revoke-old (either type): JSON array of revoked credential IDs.'
+    value: ${{ steps.revoke-pat.outputs.revoked-ids || steps.revoke-obj-key.outputs.revoked-ids }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate mode
+      shell: bash
+      env:
+        CREDENTIAL_TYPE: ${{ inputs.credential-type }}
+        OPERATION:       ${{ inputs.operation }}
+      run: |
+        set -euo pipefail
+        case "$CREDENTIAL_TYPE" in pat|obj-key) ;; *)
+          echo "::error::credential-type must be 'pat' or 'obj-key' (got '$CREDENTIAL_TYPE')"; exit 1 ;;
+        esac
+        case "$OPERATION" in create|revoke-old) ;; *)
+          echo "::error::operation must be 'create' or 'revoke-old' (got '$OPERATION')"; exit 1 ;;
+        esac
+
+    # `llz` and `jq` are baked into the TF_IMAGE these jobs run in
+    # (dockerfiles/terraform/Dockerfile) — no build/install step needed.
+
+    # ── pat create ───────────────────────────────────────────────────────────
+    - name: Create new PAT
+      if: inputs.credential-type == 'pat' && inputs.operation == 'create'
+      id: create-pat
+      shell: bash
+      env:
+        LINODE_TOKEN:      ${{ inputs.linode-token }}
+        PAT_LABEL:         ${{ inputs.label }}
+        PAT_SCOPES:        ${{ inputs.scopes }}
+        PAT_VALIDITY_DAYS: ${{ inputs.validity-days }}
+        ROTATION_APPLY:    ${{ inputs.apply }}
+      run: |
+        set -euo pipefail
+        OUT_FILE="$(mktemp)"
+        trap 'rm -f "$OUT_FILE"' EXIT
+        # llz emits ::add-mask:: on stderr (forwarded to the runner) before
+        # printing the token JSON on stdout, so the value is registered as a
+        # secret in the same step that creates it.
+        llz credentials pat create \
+          --label    "$PAT_LABEL" \
+          --scopes   "$PAT_SCOPES" \
+          --validity-days "$PAT_VALIDITY_DAYS" \
+          > "$OUT_FILE"
+
+        NEW_ID=$(jq -r '.new_pat_id // empty' < "$OUT_FILE")
+        if [ "${ROTATION_APPLY}" = "true" ]; then
+          NEW_TOKEN=$(jq -r '.new_token // empty' < "$OUT_FILE")
+          if [ -z "$NEW_TOKEN" ] || [ -z "$NEW_ID" ]; then
+            echo "::error::create returned no new_token / new_pat_id — see step log"
+            jq -c '.' < "$OUT_FILE" >&2 || cat "$OUT_FILE" >&2
+            exit 1
+          fi
+          echo "::add-mask::$NEW_TOKEN"
+          # The raw token cannot cross a job boundary — once ::add-mask:: is
+          # registered, the runner redacts the value when serializing job
+          # outputs (it becomes empty downstream). Emit only the sha256 hash;
+          # the consuming job re-reads `secrets.LINODE_API_TOKEN` (which the
+          # "Update repo-level GHA secret" step below just rewrote) and
+          # verifies the hash before writing to OpenBao.
+          NEW_TOKEN_HASH=$(printf '%s' "$NEW_TOKEN" | sha256sum | awk '{print $1}')
+          # `new-token` is consumed only by the next step in this same job
+          # ("Update repo-level GHA secret") — same-job step outputs preserve
+          # masked values. It is intentionally NOT re-exported as a composite
+          # action output for cross-job use; the hash is the cross-job channel.
+          {
+            echo "new-pat-id=$NEW_ID"
+            echo "new-token-hash=$NEW_TOKEN_HASH"
+            echo "new-token<<__PAT_EOF__"
+            echo "$NEW_TOKEN"
+            echo "__PAT_EOF__"
+          } >> "$GITHUB_OUTPUT"
+        else
+          echo "DRY-RUN: not creating a PAT or setting GHA secret"
+          {
+            echo "new-pat-id="
+            echo "new-token-hash="
+            echo "new-token="
+          } >> "$GITHUB_OUTPUT"
+        fi
+
+        {
+          echo "## Linode PAT — create"
+          echo ""
+          echo '```json'
+          jq '.' < "$OUT_FILE"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Update repo-level GHA secret
+      if: inputs.credential-type == 'pat' && inputs.operation == 'create' && inputs.apply == 'true'
+      shell: bash
+      env:
+        GH_TOKEN:            ${{ inputs.gha-token }}
+        SECRET_NAME:         ${{ inputs.gha-secret-name }}
+        NEW_TOKEN:           ${{ steps.create-pat.outputs.new-token }}
+      run: |
+        set -euo pipefail
+        if [ -z "$NEW_TOKEN" ]; then
+          echo "::error::no token in create step output — aborting before gh secret set"
+          exit 1
+        fi
+        # Read from stdin so the token never lands in argv / process listings.
+        printf '%s' "$NEW_TOKEN" | gh secret set "$SECRET_NAME"
+        echo "Updated repo-level secret ${SECRET_NAME}."
+        {
+          echo ""
+          echo "**GHA secret updated:** \`${SECRET_NAME}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # ── pat revoke-old ───────────────────────────────────────────────────────
+    - name: Revoke old PATs matching label
+      if: inputs.credential-type == 'pat' && inputs.operation == 'revoke-old'
+      id: revoke-pat
+      shell: bash
+      env:
+        LINODE_TOKEN:   ${{ inputs.linode-token }}
+        PAT_LABEL:      ${{ inputs.label }}
+        PAT_GRACE_DAYS: ${{ inputs.grace-days }}
+        ROTATION_APPLY: ${{ inputs.apply }}
+      run: |
+        set -euo pipefail
+        OUT_FILE="$(mktemp)"
+        trap 'rm -f "$OUT_FILE"' EXIT
+        llz credentials pat revoke-old \
+          --label      "$PAT_LABEL" \
+          --grace-days "$PAT_GRACE_DAYS" \
+          > "$OUT_FILE"
+
+        REVOKED=$(jq -c '.revoked_ids' < "$OUT_FILE")
+        KEPT=$(jq -r '.kept_pat_id // empty' < "$OUT_FILE")
+        {
+          echo "revoked-ids=$REVOKED"
+          echo "kept-pat-id=$KEPT"
+        } >> "$GITHUB_OUTPUT"
+
+        {
+          echo "## Linode PAT — revoke-old"
+          echo ""
+          echo '```json'
+          jq '.' < "$OUT_FILE"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # ── obj-key create ───────────────────────────────────────────────────────
+    - name: Create new OBJ key + update repo-level GHA secrets
+      if: inputs.credential-type == 'obj-key' && inputs.operation == 'create'
+      id: create-obj-key
+      shell: bash
+      env:
+        LINODE_TOKEN:           ${{ inputs.linode-token }}
+        OBJ_LABEL:              ${{ inputs.label }}
+        OBJ_BUCKET_CLUSTER:     ${{ inputs.bucket-cluster }}
+        OBJ_BUCKET_NAME:        ${{ inputs.bucket-name }}
+        OBJ_BUCKET_PERMISSIONS: ${{ inputs.bucket-permissions }}
+        ROTATION_APPLY:         ${{ inputs.apply }}
+        GH_TOKEN:               ${{ inputs.gha-token }}
+        ACCESS_KEY_SECRET_NAME: ${{ inputs.gha-access-key-secret-name }}
+        SECRET_KEY_SECRET_NAME: ${{ inputs.gha-secret-key-secret-name }}
+      run: |
+        set -euo pipefail
+        OUT_FILE="$(mktemp)"
+        trap 'rm -f "$OUT_FILE"' EXIT
+
+        llz credentials obj-key create \
+          --label              "$OBJ_LABEL" \
+          --bucket-cluster     "$OBJ_BUCKET_CLUSTER" \
+          --bucket-name        "$OBJ_BUCKET_NAME" \
+          --bucket-permissions "$OBJ_BUCKET_PERMISSIONS" \
+          > "$OUT_FILE"
+
+        NEW_ID=$(jq -r '.new_obj_key_id // empty' < "$OUT_FILE")
+        if [ "${ROTATION_APPLY}" = "true" ]; then
+          NEW_ACCESS=$(jq -r '.new_access_key // empty' < "$OUT_FILE")
+          NEW_SECRET=$(jq -r '.new_secret_key // empty' < "$OUT_FILE")
+          if [ -z "$NEW_ACCESS" ] || [ -z "$NEW_SECRET" ] || [ -z "$NEW_ID" ]; then
+            echo "::error::create returned no access_key / secret_key / id — see step log"
+            jq -c '.' < "$OUT_FILE" >&2 || cat "$OUT_FILE" >&2
+            exit 1
+          fi
+          echo "::add-mask::$NEW_ACCESS"
+          echo "::add-mask::$NEW_SECRET"
+
+          # Set secret-half FIRST, access-half SECOND. A workflow triggered
+          # between the two reads (new_access, old_secret) and fails to auth —
+          # which is the safer failure mode because the previous OBJ key is
+          # still live (drain runs separately, daily) so a retry succeeds.
+          printf '%s' "$NEW_SECRET" | gh secret set "$SECRET_KEY_SECRET_NAME"
+          printf '%s' "$NEW_ACCESS" | gh secret set "$ACCESS_KEY_SECRET_NAME"
+
+          echo "new-obj-key-id=$NEW_ID" >> "$GITHUB_OUTPUT"
+          {
+            echo "**GHA secrets updated:** \`${ACCESS_KEY_SECRET_NAME}\` + \`${SECRET_KEY_SECRET_NAME}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "DRY-RUN: not creating an OBJ key or setting GHA secrets"
+          echo "new-obj-key-id=" >> "$GITHUB_OUTPUT"
+        fi
+
+        # Scrub the secret halves from the JSON record before adding it to the
+        # step summary — ::add-mask:: would redact them, but a clean record
+        # reads better in the audit log.
+        SCRUBBED=$(jq -c '. as $r | $r
+          | if has("new_access_key") then .new_access_key = "(masked)" else . end
+          | if has("new_secret_key") then .new_secret_key = "(masked)" else . end' \
+          < "$OUT_FILE")
+        {
+          echo "## Linode OBJ key — create"
+          echo ""
+          echo '```json'
+          echo "$SCRUBBED" | jq '.'
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # ── obj-key revoke-old ───────────────────────────────────────────────────
+    - name: Revoke old OBJ keys matching label
+      if: inputs.credential-type == 'obj-key' && inputs.operation == 'revoke-old'
+      id: revoke-obj-key
+      shell: bash
+      env:
+        LINODE_TOKEN:    ${{ inputs.linode-token }}
+        OBJ_LABEL:       ${{ inputs.label }}
+        OBJ_KEEP_NEWEST: ${{ inputs.keep-newest }}
+        ROTATION_APPLY:  ${{ inputs.apply }}
+      run: |
+        set -euo pipefail
+        OUT_FILE="$(mktemp)"
+        trap 'rm -f "$OUT_FILE"' EXIT
+        llz credentials obj-key revoke-old \
+          --label       "$OBJ_LABEL" \
+          --keep-newest "$OBJ_KEEP_NEWEST" \
+          > "$OUT_FILE"
+
+        REVOKED=$(jq -c '.revoked_ids' < "$OUT_FILE")
+        KEPT=$(jq -c '.kept_ids' < "$OUT_FILE")
+        {
+          echo "revoked-ids=$REVOKED"
+          echo "kept-ids=$KEPT"
+        } >> "$GITHUB_OUTPUT"
+
+        {
+          echo "## Linode OBJ key — revoke-old"
+          echo ""
+          echo '```json'
+          jq '.' < "$OUT_FILE"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"

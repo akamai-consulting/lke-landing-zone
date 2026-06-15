@@ -1,0 +1,40 @@
+[extend]
+useDefault = true
+
+# Research prototype material: contains self-signed TLS certs generated for
+# local load-test deployments.  These keys have never been used in production.
+[[allowlists]]
+id          = "research-materials"
+description = "Research prototype certs and test keys"
+paths       = ['''research-materials/''']
+
+# Vendored third-party GitHub Actions — not our code.
+[[allowlists]]
+id          = "vendored-actions"
+description = "Vendored GitHub Actions"
+paths       = ['''\.github/actions/vendor/''']
+
+# HashiCorp's public GPG signing key — used to verify Terraform release
+# signatures and intentionally committed to the repo.
+[[allowlists]]
+id          = "hashicorp-gpg"
+description = "HashiCorp public signing key for Terraform verification"
+paths       = ['''\.github/actions/setup-terraform/hashicorp\.gpg\.asc''']
+
+# False-positive: shell-snippet placeholder syntax in operator runbooks.
+# Gitleaks' generic-api-key heuristic captures the substring
+# `token> REGION=...` and treats the literal `REGION=us-ord` as a secret —
+# the actual sensitive part is the `<token>` placeholder, which is exactly
+# that, a placeholder. Match only the exact `<…token> REGION=` shape so
+# this allowlist doesn't accidentally silence real secrets that happen to
+# share one of those words.
+#
+# Pattern is intentionally narrow:
+#   <token> REGION=us-ord ...
+#   <work-account token> REGION=us-ord ...
+#   <your-token> REGION=us-ord ...
+[[allowlists]]
+id           = "shell-token-placeholder-region-env"
+description  = "Bash placeholder <token> followed by REGION env var assignment"
+regexTarget  = "match"
+regexes      = ['''token>\s+REGION=''']

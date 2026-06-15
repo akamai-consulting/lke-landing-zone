@@ -1,0 +1,65 @@
+name: Cluster health (diagnostic + E2E validate)
+
+# Thin caller for the reusable LLZ workflow — the body (fetch kubeconfig, cluster
+# health, optional Loki S3-backed assertion), the fetch-kubeconfig action, and
+# `llz ci health` all live in the template and are sourced there (see
+# docs/templatization-plan.md §"Keeping instances in sync"). The reusable
+# workflow checks THIS instance back out (its terraform-iac-bootstrap TF state),
+# so the instance copies only this stub.
+#
+# Two uses, one surface — selected by the gate flags below:
+#   • Recovery / diagnostic (the all-defaults dispatch): report-only, the job
+#     summary is the deliverable. Set verbose: true to dump describe/logs even
+#     when nothing is failing.
+#   • E2E validation: set fail-on-unhealthy: true (+ assert-loki: true) to gate.
+#     The template repo's release-e2e gate dispatches THIS caller by filename and
+#     watches it, passing those flags explicitly (see release-e2e.yml §validate).
+#
+# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
+# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        # Free-form string, not a fixed `choice`: deployments are dynamic
+        # (`llz env add`), so a hardcoded list would reject adopter envs.
+        # e.g. primary | secondary | staging | lab | e2e
+        description: 'Deployment to check, e.g. primary | secondary | staging | lab | e2e'
+        required: true
+        type: string
+        default: primary
+      verbose:
+        description: 'VERBOSE=1 — dump describe/logs even when nothing is failing'
+        required: false
+        type: boolean
+        default: false
+      fail-on-unhealthy:
+        description: 'Fail the run on an unhealthy cluster (gate mode; default report-only)'
+        required: false
+        type: boolean
+        default: false
+      assert-loki:
+        description: 'Also assert Loki is S3-backed (E2E validation)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    # Pinned to an immutable LLZ template release tag (not @main) so updates
+    # arrive as reviewable Renovate PRs — see terraform-modules/RELEASING.md
+    # §"Template-repo releases". Keep the @<tag> and template-ref in lockstep
+    # (Renovate bumps both). ADOPTERS: repoint the org to your fork.
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-cluster-health.yml@<@ llz_version @>
+    with:
+      region: ${{ inputs.region }}
+      verbose: ${{ inputs.verbose }}
+      fail-on-unhealthy: ${{ inputs.fail-on-unhealthy }}
+      assert-loki: ${{ inputs.assert-loki }}
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref: <@ llz_version @>
+    secrets: inherit

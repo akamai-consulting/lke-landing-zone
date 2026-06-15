@@ -1,0 +1,40 @@
+# Vulnerability allowlist for `make sbom-scan`. trivy auto-loads this file
+# from the working directory.
+#
+# Each entry MUST carry a comment explaining:
+#   * which SBOM(s) it applies to
+#   * why it can't be fixed by bumping (i.e. upstream-blocked vs. accepted risk)
+#   * a re-evaluation trigger (a release to watch for, a date to revisit)
+#
+# Entries here are the only way to silence a Critical CVE that the gate is
+# blocking. Review periodically; remove anything that has been upstream-fixed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# CVE-2025-68121 — crypto/tls cert-validation flaw in Go stdlib 1.22.5/1.23.6/
+# 1.24.1; fixed in Go 1.24.13 / 1.25.7. Surfaces in:
+#   * sbom-k8s-registry.k8s.io_kubectl_*.json — the kubectl binary is built
+#     with Go 1.23.6 by the upstream Kubernetes release pipeline. Even
+#     registry.k8s.io/kubectl:v1.34.0 still ships with this Go build.
+#   * sbom-terraform.json — multiple TF providers (linode, hashicorp/*)
+#     compiled with Go 1.22.5 / 1.24.1. Already on latest-available provider
+#     versions in `.terraform.lock.hcl`.
+# Re-evaluate when K8s ships a v1.32.x patch built with Go 1.24.13+, and when
+# linode/linode + hashicorp/* providers cut releases on patched Go.
+CVE-2025-68121
+
+# CVE-2026-33186 — grpc-go denial of service (large header). Fixed in 1.79.3.
+# Surfaces in sbom-terraform.json only:
+#   * provider builds with google.golang.org/grpc v1.63.2 and v1.72.1 baked in.
+# Already on latest-available provider versions. Re-evaluate when the
+# upstream provider releases ship grpc-go >= 1.79.3.
+CVE-2026-33186
+
+# CVE-2026-31789 — openssl libcrypto3/libssl3 cert-validation flaw, fixed in
+# 3.3.7-r0 / 3.0.19-1~deb12u2 depending on base. We track this only for the
+# `maniator/gh:v2.92.0` alpine base — the openssl install is used by the gh
+# CLI's outbound TLS to api.github.com; a malicious-
+# server-induced cert flaw is not relevant in that direction. Other images
+# that previously carried this CVE (alpine/curl, curlimages/curl, openbao,
+# kubectl swap, promtail) have all been bumped to fixed bases.
+# Re-evaluate when maniator/gh refreshes its base image past openssl 3.3.7.
+CVE-2026-31789

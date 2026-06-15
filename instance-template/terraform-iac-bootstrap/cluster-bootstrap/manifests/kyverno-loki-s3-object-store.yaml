@@ -1,0 +1,78 @@
+# Kyverno ClusterPolicy: force Loki's chunk store onto S3.
+#
+# WHY A KYVERNO MUTATION INSTEAD OF VALUES
+# ----------------------------------------
+# The grafana/loki chart does NOT derive the schema's `object_store` from
+# `loki.storage.type: s3` — it comes from `loki.schemaConfig.configs[].
+# object_store`, which the chart defaults to `filesystem`. Without an override,
+# Loki writes chunks to the read-only container filesystem and every flush
+# fails ("mkdir … read-only file system"), so zero logs are persisted.
+#
+# The obvious fix — set `_rawValues.loki.schemaConfig` in apl-values — does NOT
+# work through apl-core's value pipeline. apl-core round-trips values through a
+# MIX of YAML libraries: the `yaml` lib dumps the schema `from` date unquoted
+# (`from: 2020-09-07`), then `js-yaml` re-parses that plain scalar as a YAML 1.1
+# !!timestamp and serializes it as `2020-09-07T00:00:00.000Z`. Loki's
+# schema_config `from` parser wants date-only `2006-01-02` and rejects the
+# timestamp ("extra text") → CrashLoopBackOff. No quoting in the values
+# survives the round-trip (verified against apl-operator's js-yaml + yaml libs,
+# 2026-06-03). See project_loki_s3_wiring memory.
+#
+# So we DON'T override schemaConfig at all — the chart's own default schema has
+# a valid date-only `from: "2020-09-07"` (it never goes through the pipeline) —
+# and instead mutate just the `object_store` field of the rendered ConfigMap
+# from `filesystem` to `s3`. The date is untouched; only the storage target
+# changes. The chart's `loki.storage.{type:s3,bucketNames,s3}` (set via
+# _rawValues) + the `loki-object-store` Secret (singleBinary.extraEnvFrom) then
+# carry the S3 client config and credentials.
+#
+# This mirrors the repo's existing pattern of patching apl-core gaps Kyverno
+# can express but values can't (see kyverno-pvc-encrypted-storage-class.yaml,
+# kyverno-oauth2-proxy-wait-keycloak-trust.yaml).
+#
+# If/when apl-core (or the loki chart) lets `object_store` be set safely via
+# values, this policy can be removed.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: loki-s3-object-store
+  annotations:
+    policies.kyverno.io/title: Force Loki schema object_store=s3
+    policies.kyverno.io/category: Storage
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: ConfigMap
+    policies.kyverno.io/description: >-
+      Rewrites the Loki ConfigMap's schema_config object_store from filesystem
+      to s3 so chunks persist to the platform-loki-* buckets instead of the
+      read-only container filesystem. The schema `from` date is left untouched
+      (apl-core's value pipeline corrupts it; the chart default is already
+      valid date-only).
+spec:
+  # Mutate on admission for both CREATE (fresh install) and UPDATE (helm/
+  # apl-operator reconciles re-applying the chart-default filesystem cm), so the
+  # s3 setting is re-asserted every time the ConfigMap is written.
+  background: false
+  # Best-effort: never block the loki ConfigMap write on a webhook hiccup —
+  # the bootstrap continues and the next reconcile re-applies the mutation.
+  failurePolicy: Ignore
+  rules:
+    - name: rewrite-object-store-to-s3
+      match:
+        any:
+          - resources:
+              kinds: [ConfigMap]
+              names: [loki]
+              namespaces: [monitoring]
+              operations: [CREATE, UPDATE]
+      preconditions:
+        all:
+          # Only mutate when the rendered config still targets filesystem —
+          # makes the rule a no-op once it's already s3 (and on any cm whose
+          # config we don't recognize).
+          - key: "{{ contains(request.object.data.\"config.yaml\" || '', 'object_store: filesystem') }}"
+            operator: Equals
+            value: true
+      mutate:
+        patchStrategicMerge:
+          data:
+            config.yaml: "{{ replace_all(request.object.data.\"config.yaml\", 'object_store: filesystem', 'object_store: s3') }}"

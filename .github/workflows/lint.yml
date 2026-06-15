@@ -1,0 +1,363 @@
+# Lint + validate everything the template ships, in one workflow (merges the
+# former kubernetes.yml + terraform.yml):
+#  - Helm charts: render then kube-linter / kubeconform / server-side dry-run,
+#    plus ExternalSecret-path and ArgoCD-Application semantic checks.
+#  - Terraform: tflint + checkov over the reusable modules, and instantiate +
+#    validate over the instance roots.
+# Every scan validates the RENDERED / INSTANTIATED template content — never a
+# raw apl-values/ tree (those manifests were helmified into kubernetes-charts/).
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'kubernetes-charts/**'
+      - 'terraform-modules/**'
+      - 'instance-template/terraform-iac-bootstrap/**'
+      - 'instance-template/.github/workflows/bootstrap-openbao.yml'
+      - 'instance-template/.template-manifest'
+      - 'template-scripts/**'
+      - '.kube-linter.yaml'
+      - '.checkov.yaml'
+      - '.tflintrc.hcl'
+      - 'Makefile'
+      - 'tools/**'
+      - '.github/workflows/**'
+      - 'instance-template/.github/**'
+      - '.untestable-budget.yaml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'kubernetes-charts/**'
+      - 'terraform-modules/**'
+      - 'instance-template/terraform-iac-bootstrap/**'
+      - 'instance-template/.github/workflows/bootstrap-openbao.yml'
+      - 'instance-template/.template-manifest'
+      - 'template-scripts/**'
+      - '.kube-linter.yaml'
+      - '.checkov.yaml'
+      - '.tflintrc.hcl'
+      - 'Makefile'
+      - 'tools/**'
+      - '.github/workflows/**'
+      - 'instance-template/.github/**'
+      - '.untestable-budget.yaml'
+  workflow_dispatch:
+
+name: Lint
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # Accept new SSH host keys automatically (runner known_hosts may be cleared
+  # between jobs); reject any key that changes from a previously seen value.
+  GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=accept-new
+  KIND_VERSION: v0.25.0
+  HELM_VERSION: "3.17.3"
+  KUBECTL_VERSION: "1.31.0"
+  YQ_VERSION: "4.44.3"
+  # Operator versions used only for offline CRD installs in the dry-run job.
+  # Apl-core itself owns these in production — match its bundled versions so
+  # the dry-run validates against the same CRD schemas the cluster will use.
+  ARGOCD_HELM_VERSION: "7.8.0"
+  CERT_MANAGER_VERSION: "v1.16.3"
+  ESO_HELM_VERSION: "0.12.1"
+  # Match the chart versions referenced from
+  # apl-values/_shared/manifest/argo-{events,workflows}/argocd/applications/.
+  ARGO_WORKFLOWS_HELM_VERSION: "0.42.3"
+  ARGO_EVENTS_HELM_VERSION: "2.4.13"
+  # Istio Gateway + VirtualService CRDs needed by per-env ingress trees.
+  ISTIO_VERSION: "1.23.0"
+  # kube-prometheus-stack CRDs (PrometheusRule, ServiceMonitor, PodMonitor)
+  # used by the rendered OpenBao ServiceMonitor.
+  KUBE_PROMETHEUS_STACK_VERSION: "61.7.2"
+  # Terraform jobs.
+  TF_IN_AUTOMATION: 'true'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # ── Kubernetes ───────────────────────────────────────────────────────────────
+  # Single source of truth via `make lint-k8s` (= $(LINT_K8S) + shellcheck +
+  # py-lint in the Makefile): renders the first-party charts once, then runs
+  # kube-linter, kubeconform, the sync-wave / placeholder / ExternalSecret-path /
+  # ArgoCD-Application semantic checks, helm lint/template, Chart.lock drift,
+  # Argo CronWorkflow lint, shellcheck, and the Python syntax check. The kind
+  # server-side dry-run is the one k8s check that needs a cluster — separate job.
+  kubernetes:
+    name: Kubernetes lint
+    # Run on push always; on PRs only from the same repo (fork PRs can't pull the
+    # private KUBE_IMAGE and must not run with repo context).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # GITHUB_TOKEN needs packages:read to pull the private CI image from GHCR.
+      packages: read
+    container:
+      # Fall back to the image build-images.yml publishes under this repo's owner
+      # when KUBE_IMAGE isn't set, so CI works on a fresh fork with no repo
+      # variables. (Owner must be lowercase for GHCR — true for org logins.)
+      image: ${{ vars.KUBE_IMAGE || format('ghcr.io/{0}/ci-kubernetes:1.31.0', github.repository_owner) }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Add /usr/local/bin to PATH
+        run: echo "PATH=/usr/local/bin:${PATH}" >> "$GITHUB_ENV"
+
+      # `make lint-k8s` runs `externalsecret-paths-check`, which calls `llz ci
+      # externalsecret-paths`. The published ci-kubernetes image bakes llz
+      # (dockerfiles/kubernetes/Dockerfile), but a PR that changes tools/ runs
+      # before that image is rebuilt — and the image carries no Go toolchain, so
+      # the Makefile's `go run` fallback can't fire either. Set up Go and build
+      # llz onto PATH so the check runs regardless of the image's age; once the
+      # rebuilt image carries llz this is a fast, redundant no-op.
+      - name: Set up Go (to build llz)
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+      - name: Build llz onto PATH
+        # -buildvcs=false: the checkout is owned by a different UID than the
+        # container's root user, so git refuses VCS queries ("dubious
+        # ownership") and stamping would fail. The lint build needs no version
+        # stamp (the released binary is stamped by llz-release.yml).
+        run: cd tools && go build -buildvcs=false -o /usr/local/bin/llz ./cmd/llz
+
+      - name: Render + lint/validate charts, manifests, and scripts
+        run: make lint-k8s
+
+  # ── Server-side dry-run ──────────────────────────────────────────────────────
+  # Spins up a kind cluster, installs the CRDs for every operator the apl-core
+  # bundle ships in the cluster, and runs kubectl apply --dry-run=server against
+  # each per-env apl-values manifest tree. This catches integration errors that
+  # kustomize-build alone misses: CRD-schema violations, immutable-field changes,
+  # and duplicate-key issues at the apply layer.
+  #
+  # CRDs installed mirror what apl-core ships:
+  #   ArgoCD (Application, AppProject)
+  #   cert-manager (Certificate, ClusterIssuer)
+  #   External Secrets Operator (ClusterSecretStore, ExternalSecret)
+  #   Argo Workflows (Workflow, WorkflowTemplate, CronWorkflow)
+  #   Argo Events (EventBus, EventSource, Sensor)
+  #   Istio base (Gateway, VirtualService)
+  dry-run:
+    name: Server-side dry-run (kind)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        with:
+          version: v${{ env.HELM_VERSION }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
+        with:
+          version: v${{ env.KUBECTL_VERSION }}
+
+      - name: Install yq
+        uses: dcarbone/install-yq-action@4075b4dca348d74bd83f2bf82d30f25d7c54539b # v1.3.1
+        with:
+          version: v${{ env.YQ_VERSION }}
+
+      # helm/kind-action installs kind (KIND_VERSION) and stands up the cluster in
+      # one step; the ephemeral runner is torn down afterward, so no explicit
+      # delete is needed.
+      - name: Create kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          version: ${{ env.KIND_VERSION }}
+          cluster_name: k8s-ci
+          wait: 60s
+
+      - name: Add Helm repos
+        run: |
+          set -euo pipefail
+          make helm-repos
+          # Istio chart repo isn't in the shared helm-repos target — it's only
+          # needed here for Gateway/VirtualService CRD installs in dry-run.
+          helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
+          helm repo update
+
+      - name: Install CRDs
+        run: |
+          set -euo pipefail
+
+          echo "ArgoCD CRDs (argo-cd ${ARGOCD_HELM_VERSION})..."
+          # argo-cd places CRDs in templates/ not crds/, so helm show crds returns
+          # nothing. Use helm template --include-crds and filter with yq.
+          helm template argocd argo/argo-cd --version "$ARGOCD_HELM_VERSION" \
+            --include-crds \
+            | yq 'select(.kind == "CustomResourceDefinition")' \
+            | kubectl apply -f -
+
+          echo "cert-manager CRDs (${CERT_MANAGER_VERSION})..."
+          helm template cert-manager jetstack/cert-manager --version "${CERT_MANAGER_VERSION#v}" \
+            --include-crds --set crds.enabled=true \
+            | yq 'select(.kind == "CustomResourceDefinition")' \
+            | kubectl apply -f -
+
+          echo "External Secrets Operator CRDs (${ESO_HELM_VERSION})..."
+          # ESO puts CRDs in templates/ (not crds/) — helm show crds returns nothing.
+          # Render with --set crds.create=true to ensure the conditional fires.
+          helm template eso external-secrets/external-secrets --version "$ESO_HELM_VERSION" \
+            --set crds.create=true \
+            | yq 'select(.kind == "CustomResourceDefinition")' \
+            | kubectl apply -f -
+
+          echo "Istio base CRDs (istio/base ${ISTIO_VERSION})..."
+          helm template istio-base istio/base --version "$ISTIO_VERSION" --include-crds \
+            | yq 'select(.kind == "CustomResourceDefinition")' \
+            | kubectl apply -f -
+
+          echo "Argo Workflows CRDs (${ARGO_WORKFLOWS_HELM_VERSION})..."
+          # argo-workflows ships CRDs in templates/ (not crds/, gated by crds.install
+          # which defaults to true) — helm show crds returns nothing. Use
+          # `helm template --include-crds` and yq filter, same pattern as argocd/eso above.
+          # Installs: workflows, workflowtemplates, cronworkflows, clusterworkflowtemplates,
+          # workflowtaskresults, workflowtasksets, workflowartifactgctasks, workfloweventbindings.
+          # Referenced from apl-values/_shared/manifest/cert-automation/
+          # haproxy-rebuild-workflowtemplate.yaml.
+          helm template argo-workflows argo/argo-workflows --version "$ARGO_WORKFLOWS_HELM_VERSION" \
+            --include-crds \
+            | yq 'select(.kind == "CustomResourceDefinition")' \
+            | kubectl apply -f -
+
+          echo "Argo Events CRDs (${ARGO_EVENTS_HELM_VERSION})..."
+          # argo-events ships CRDs in templates/ (not crds/) so helm show crds
+          # returns nothing — use `helm template --include-crds` and yq filter,
+          # same pattern as argocd/eso above.
+          # Installs: eventbus, eventsources, sensors. Referenced from
+          # apl-values/_shared/manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
+          helm template argo-events argo/argo-events --version "$ARGO_EVENTS_HELM_VERSION" \
+            --include-crds \
+            | yq 'select(.kind == "CustomResourceDefinition")' \
+            | kubectl apply -f -
+
+          echo "kube-prometheus-stack CRDs (${KUBE_PROMETHEUS_STACK_VERSION})..."
+          # The chart ships CRDs in crds/ — helm show crds returns them.
+          # Four of these CRDs (alertmanagers, prometheusagents, prometheuses,
+          # thanosrulers) exceed kubectl's 262144-byte annotation limit on
+          # `kubectl.kubernetes.io/last-applied-configuration`, so client-side
+          # apply errors with "metadata.annotations: Too long".
+          # Server-side apply doesn't use that annotation — required here.
+          helm show crds prometheus-community/kube-prometheus-stack \
+            --version "$KUBE_PROMETHEUS_STACK_VERSION" \
+            | kubectl apply --server-side=true --force-conflicts -f -
+
+          echo "Waiting for all CRDs to be established..."
+          kubectl wait crd --all --for=condition=established --timeout=90s
+
+      - name: Render charts
+        # Materialize the first-party charts as plain manifests — the landing
+        # zone ships its workloads as charts (templatization §5), so the dry-run
+        # validates this rendered output, not a raw apl-values/ tree.
+        run: make render-charts
+
+      - name: Validate rendered ArgoCD Applications
+        # Semantic checks (e.g. duplicate Helm parameters) on the generated
+        # Applications; render-charts already ran above so this is a no-op render.
+        run: make argocd-rendered-apps-check
+
+      - name: Create namespaces
+        run: |
+          set -euo pipefail
+          # The charts create the namespaces their workloads land in
+          # (cluster-foundation's set + cert-automation's own). Apply just the
+          # rendered Namespace objects so namespaced-resource dry-runs resolve.
+          yq 'select(.kind == "Namespace")' rendered/*.yaml \
+            | kubectl apply -f -
+          # argocd, cert-manager, harbor, and istio-system are owned by apl-core;
+          # the rendered charts place resources in (argocd) or attach
+          # NetworkPolicies/RBAC to (the rest) them. Stub them so namespaced
+          # dry-runs resolve. (kube-system already exists in the kind cluster.)
+          for ns in argocd cert-manager harbor istio-system; do
+            kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+          done
+
+      - name: Server-side dry-run of the rendered charts
+        run: kubectl apply --dry-run=server -f rendered/
+
+
+
+  # ── Terraform ────────────────────────────────────────────────────────────────
+  # Single source of truth via `make lint-tf` (= $(LINT_TF) in the Makefile):
+  # tflint + checkov over the reusable modules, then instantiate + validate the
+  # instance roots (rewrites published git:: module sources to in-repo paths;
+  # init -backend=false + validate — no tags, backend, or cloud credentials).
+  terraform:
+    name: Terraform lint
+    # Run on push always; on PRs only from the same repo (fork PRs can't pull the
+    # private TF_IMAGE and must not run with repo context).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # GITHUB_TOKEN needs packages:read to pull the private CI image from GHCR.
+      packages: read
+    container:
+      # Fall back to the image build-images.yml publishes under this repo's owner
+      # when TF_IMAGE isn't set, so CI works on a fresh fork with no repo
+      # variables. (Owner must be lowercase for GHCR — true for org logins.)
+      image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-terraform:1.9.8', github.repository_owner) }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: tflint + checkov + validate instance roots
+        run: make lint-tf
+
+      - name: Upload Checkov SARIF report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: checkov-results
+          path: results_*.sarif
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ── Go tests + coverage ──────────────────────────────────────────────────────
+  # `make coverage` runs `go test` across the tools module, then enforces the
+  # per-package statement-coverage floors in COVERAGE_MINS (Makefile) via
+  # template-scripts/ci/check-go-coverage.sh — the build fails if any gated
+  # package drops below its floor. Pure Go: no private CI image, so unlike the
+  # k8s/terraform jobs this runs on plain ubuntu-latest and on fork PRs too.
+  go-tests:
+    name: Go tests + coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+
+      - name: Test + enforce per-package coverage thresholds
+        run: make coverage
+
+      # Design-principle gate: fail when inline-bash / shell / python logic
+      # exceeds .untestable-budget.yaml — the prompt to convert logic into the
+      # unit-tested llz CLI rather than grow untestable CI shell. Runs here (not
+      # in the container jobs) because it needs only the Go toolchain, already
+      # set up above; `make untestable-loc-check` falls back to `go run`.
+      - name: Untestable-LOC budget gate
+        run: make untestable-loc-check

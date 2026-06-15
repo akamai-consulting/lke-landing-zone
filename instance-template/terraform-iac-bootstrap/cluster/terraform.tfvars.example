@@ -1,0 +1,66 @@
+cluster_label = "platform-support-services"
+region        = "us-ord"
+
+# OpenBao HA topology for this deployment. The default is a self-contained,
+# single-cluster OpenBao — most deployments want this:
+ha_role  = "standalone"
+ha_group = ""
+# For a two-cluster HA pair, give BOTH deployments the same ha_group and opposite
+# roles, e.g. in <active>.tfvars:   ha_role = "active"  ha_group = "prod"
+#                  in <standby>.tfvars:  ha_role = "standby" ha_group = "prod"
+# `llz env list --ha`, `llz env role <name>`, and `llz env peer <name>` read
+# these to drive the OpenBao dual-write, cross-region CA, and Harbor seeding.
+
+# Code-promotion pipeline position (optional). Assign ascending, unique ranks
+# across the deployments you want to promote a change through — e.g.
+# dev.tfvars: promotion_rank = 1, staging.tfvars: 2, prod.tfvars: 3 — and a
+# promote-on-green CI job walks them with `llz env list --ordered` /
+# `llz env next <name>`. 0 = this deployment is not in any pipeline (the default).
+# See docs/environments-and-promotion.md.
+promotion_rank = 0
+
+# Update this to a currently supported LKE Enterprise version in your account.
+k8s_version = "v1.33.6+lke7"
+
+tags = ["platform", "observability", "demo"]
+
+# Node pool sizing for apl-core's full stack (istio, keycloak, argocd,
+# cert-manager, ESO, CNPG, kube-prometheus-stack, Loki, Harbor, kyverno, trivy).
+# g7-premium-4 ×3 (24 GB) is the documented floor — g7-premium-2 ×3 (12 GB) left
+# argocd Pending on "Insufficient memory".
+#
+# Do NOT bump this to g7-premium-8 (16 GB ea) without first confirming the target
+# Linode account's instance/vCPU quota: g7-premium-8 ×3 = 24 vCPU / 48 GB hung
+# cluster creation indefinitely on the e2e account (nodes never provisioned →
+# `linode_lke_cluster` "Still creating…" to the job timeout). preflight-quota.sh
+# only checks for ORPHANS, not the requested pool vs the account limit, so it
+# won't catch an over-quota pool. node_type is ForceNew — changing it recreates
+# the pool.
+#
+# node_count = 5, NOT 3: apl-core's full stack already fills 3× g8-dedicated-8-4,
+# and once the support-plane deploys (OpenBao HA ×3 + ESO + Argo Workflows/Events
+# + cert-automation + the internal-CIDR firewall) the 2nd/3rd OpenBao replicas go
+# Pending — "Insufficient memory" on 2 nodes and "max volume count" on the 3rd —
+# stalling Bootstrap OpenBao. 5 nodes give the memory headroom and spread PVCs
+# under the per-Linode Block Storage attach limit. (node_count is NOT ForceNew —
+# it just scales the pool.)
+node_type  = "g8-dedicated-8-4"
+node_count = 5
+
+control_plane_high_availability  = true
+control_plane_audit_logs_enabled = true
+
+# Control-plane ACL: who may reach the LKE Kubernetes API server (TCP 443).
+# Terraform seeds the ACL at cluster-create from the github_runner_* CIDRs below
+# so the bootstrapping runner can reach the API server. After init, the
+# in-cluster cloud-firewall-controller owns the ACL — it resolves the EAA/bastion
+# CIDRs from the Linode firewall template via the Linode API and reconciles them
+# (with a committed firewall_rules/ fallback) every cycle. There is no
+# control_plane_acl_enabled/control_plane_acl_ipv4 variable at this root.
+#
+# Operator/VPN/CI egress CIDRs that must reach the API server and node NodePorts.
+# Do NOT use 0.0.0.0/0.
+github_runner_ipv4_cidrs = []  # e.g. ["203.0.113.0/24"]
+github_runner_ipv6_cidrs = []
+
+autoscaler_enabled = false

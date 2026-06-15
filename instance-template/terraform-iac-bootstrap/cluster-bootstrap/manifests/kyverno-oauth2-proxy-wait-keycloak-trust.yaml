@@ -1,0 +1,76 @@
+# Kyverno ClusterPolicy: make oauth2-proxy's wait-for-keycloak init container
+# trust the Otomi-issued *.primary.internal wildcard cert.
+#
+# apl-core 5.0.0 templates this init container as:
+#
+#   initContainers:
+#   - name: wait-for-keycloak
+#     image: curlimages/curl:latest
+#     command: ["/bin/sh", "-c"]
+#     args:
+#       - |
+#         while [ $(curl -sw '%{http_code}' https://keycloak.primary.internal/realms/otomi -o /dev/null) -ne 200 ]; do
+#           sleep 2; echo 'Waiting for Keycloak OIDC Issuer URL'
+#         done
+#
+# The image has only Mozilla's CA bundle — it does NOT trust the Otomi root CA
+# that signs the Gateway-served *.primary.internal cert, so curl exits 60
+# ("self-signed certificate in certificate chain") on every iteration and the
+# init container loops forever. The main oauth2-proxy container has its own
+# properly-configured TLS trust for the OIDC flow (via PROVIDER_CA_FILES), so
+# this is strictly a bootstrap-time readiness issue.
+#
+# Mutation adds `-k` to the curl invocation. Safe because:
+#   1. The check only verifies HTTP 200 — no data is read.
+#   2. Resolution goes Pod → in-cluster SVC ClusterIP for platform-istio →
+#      Gateway pod IPs, all on the pod network. MITM would require existing
+#      pod-network compromise.
+#   3. The actual OIDC handshake happens in the main container, which still
+#      enforces full chain verification.
+#
+# If/when apl-core templates this init container with a CA volume mount or
+# exposes a chart knob to override the curl args, this policy can be deleted.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: oauth2-proxy-wait-keycloak-skip-verify
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+    policies.kyverno.io/title: oauth2-proxy wait-for-keycloak — skip TLS verify
+    policies.kyverno.io/category: Bootstrap / TLS trust
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/subject: Deployment
+    policies.kyverno.io/description: >-
+      Adds -k to oauth2-proxy's wait-for-keycloak init container so its
+      readiness probe doesn't fail trust validation against the Otomi-issued
+      wildcard cert on https://keycloak.primary.internal. The main oauth2-
+      proxy container still enforces full chain verification for the OIDC
+      flow via PROVIDER_CA_FILES.
+spec:
+  background: false
+  failurePolicy: Ignore
+  rules:
+    - name: add-insecure-flag-to-wait-for-keycloak
+      match:
+        any:
+          - resources:
+              kinds: [Deployment]
+              names: [oauth2-proxy]
+              namespaces: [istio-system]
+              operations: [CREATE, UPDATE]
+      preconditions:
+        all:
+          # Defend against apl-core reordering initContainers in a future
+          # release — only patch if index 0 is in fact wait-for-keycloak.
+          - key: "{{ request.object.spec.template.spec.initContainers[0].name || '' }}"
+            operator: Equals
+            value: wait-for-keycloak
+          # Idempotency: skip if the flag is already present.
+          - key: "{{ contains(request.object.spec.template.spec.initContainers[0].args[0], '-sk') }}"
+            operator: Equals
+            value: false
+      mutate:
+        patchesJson6902: |
+          - op: replace
+            path: "/spec/template/spec/initContainers/0/args/0"
+            value: "while [ $(curl -sk --connect-timeout 5 -w '%{http_code}' https://keycloak.primary.internal/realms/otomi -o /dev/null) -ne 200 ]; do sleep 2; echo 'Waiting for Keycloak OIDC Issuer URL'; done"

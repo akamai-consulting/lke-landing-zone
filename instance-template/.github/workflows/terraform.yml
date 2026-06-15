@@ -1,0 +1,84 @@
+name: Terraform Infrastructure
+
+# Thin caller for the reusable LLZ workflow — the full pipeline body (plan /
+# apply / destroy across cluster, cluster-bootstrap, openbao-config,
+# object-storage + OpenBao bootstrap + converge gate), the terraform-init +
+# fetch-kubeconfig composite actions, and the llz CLI all live in the
+# template and are sourced there (see docs/templatization-plan.md §"Keeping
+# instances in sync"). The reusable workflow checks THIS instance back out (its
+# terraform-iac-bootstrap/ TF roots + state), so the instance copies only this
+# stub. The dispatch inputs below are FORWARDED to the reusable as explicit
+# workflow_call inputs (`with:`) — a reusable workflow's github.event.inputs is
+# empty across the workflow_call boundary, so it reads them via `inputs`.
+# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
+# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'terraform-iac-bootstrap/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'terraform-iac-bootstrap/**'
+      - '.github/workflows/terraform.yml'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action to run'
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      module:
+        description: 'Which module to target'
+        required: true
+        type: choice
+        options:
+          - cluster
+          - openbao-config
+          - object-storage
+          - all
+      region:
+        # NOTE: input name kept as `region` for backwards compatibility with
+        # existing state-key paths (cluster/<deployment>/terraform.tfstate)
+        # and GitHub Environment names (infra-<deployment>). The value is
+        # really a *deployment*.
+        #
+        # Free-form string, NOT a fixed `choice` list: deployments are created
+        # dynamically by `llz env add` (the docs stress there is no hardcoded env
+        # list), so a choice input would reject any env an adopter adds (e.g.
+        # `myteam-dev`). Must match a deployment you scaffolded
+        # (^[a-z][a-z0-9-]{1,30}$) with a tfvars set + infra-<deployment> Environment.
+        description: 'Deployment to act on, e.g. primary | secondary | staging | lab | e2e (must have a tfvars set + infra-<deployment> Environment)'
+        required: true
+        type: string
+      confirm_destroy:
+        description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:openbao-config | destroy:<deployment>:object-storage'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    # Pinned to an immutable LLZ template release tag (not @main) so updates
+    # arrive as reviewable Renovate PRs. ADOPTERS: repoint the org to your fork.
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
+    with:
+      instance_repo: <@ instance_repo @>
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref: <@ llz_version @>
+      # Forward the workflow_dispatch selectors so the reusable can read them via
+      # `inputs` (github.event.inputs does not cross the workflow_call boundary).
+      # Empty on push/PR, which leaves the action-gated jobs skipped.
+      action: ${{ inputs.action }}
+      module: ${{ inputs.module }}
+      region: ${{ inputs.region }}
+      confirm_destroy: ${{ inputs.confirm_destroy }}
+    secrets: inherit

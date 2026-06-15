@@ -1,0 +1,359 @@
+name: Release E2E — provision, validate, destroy a real cluster
+
+# Release gate: runs on a published *pre-release* `vX.Y.Z` (the candidate), proving
+# the template can instantiate a working instance, stand up a REAL LKE-Enterprise
+# cluster, reach a healthy + Loki-bootstrapped state, and tear itself back down
+# cleanly. Only after this is green does a human PROMOTE the pre-release to a full
+# release — which fires the binaries (llz-release.yml) and operator image
+# (firewall-controller.yml), keyed on `released`. The pre-release tag is ignored by
+# `llz self-update`/`new` (selfupdate.go skips pre-releases), so an un-validated
+# candidate is never consumable. (Convention: always cut a pre-release first; a
+# direct full release skips this gate.)
+#
+# ── How it works (and why) ───────────────────────────────────────────────────
+# terraform.yml is the provisioning engine, but here it lives under
+# instance-template/.github/workflows/, so it is NOT runnable in THIS template
+# repo — it only becomes dispatchable once it sits at .github/workflows/ on the
+# default branch of a real instance. So this workflow drives a dedicated,
+# throwaway E2E *instance repo*:
+#   1. instantiate — scaffold the `e2e` env (llz env add), lay the template out as
+#      an instance (instance-template/* → root; the scaffold already names its TF
+#      roots terraform-iac-bootstrap/), and force-push it to the E2E instance repo.
+#   2. provision  — `gh workflow run terraform.yml` (apply, module=all,
+#      region=e2e) in that repo + `gh run watch --exit-status`. terraform.yml's
+#      own chain (apply-cluster → cluster-bootstrap → bootstrap-openbao →
+#      converge) IS the wait-for-deploy + health gate.
+#   3. validate   — dispatch the instance's cluster-health.yml in gate mode
+#      (fail-on-unhealthy + assert-loki) and watch it. Runs IN the instance so it
+#      sees the real layout + infra-e2e secrets.
+#   4. teardown   — `gh workflow run terraform.yml` (destroy) + watch. ALWAYS
+#      runs once provisioning started, so a paid cluster is never leaked.
+#   5. gate       — pass only if provision + validate + teardown all succeeded.
+#
+# ── Prerequisites (org-specific; this workflow cannot create them) ────────────
+# A dedicated throwaway E2E instance repo (its default branch is overwritten
+# every run) that has: terraform.yml + cluster-health.yml active (on GitHub-hosted
+# runners), and an `infra-e2e` Environment holding LINODE_API_TOKEN / TF_STATE_* /
+# APL_VALUES_REPO_TOKEN / OPENBAO_* (all the infra secrets — they live THERE, not
+# here). LOKI_ADMIN_PASSWORD is generated + stashed by terraform.yml on first
+# apply, so it need not be pre-seeded. It also needs `e2e` added to terraform.yml's region
+# choices (done) and an `e2e.tfvars` set produced by instantiate.
+#
+# This (template) repo only needs two values that can't be derived:
+#   vars:    E2E_INSTANCE_REPO (owner/name of the throwaway instance repo)
+#   secrets: E2E_DISPATCH_TOKEN — PAT/app token with contents:write +
+#            actions:read/write on E2E_INSTANCE_REPO.
+# Region + OBJ cluster default to the canonical `lab` tier (us-ord / us-ord-1);
+# set vars E2E_LINODE_REGION / E2E_OBJ_CLUSTER only to override.
+#
+# Smoke-test the plumbing cheaply first: workflow_dispatch with dry_run=true
+# instantiates + runs terraform.yml action=plan and SKIPS apply/validate/destroy.
+
+on:
+  release:
+    types: [prereleased]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Instantiate + plan only (no real apply / validate / destroy)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One E2E cluster at a time — never let two runs race the same e2e state/cluster.
+concurrency:
+  group: release-e2e
+  cancel-in-progress: false
+
+env:
+  E2E_ENV: e2e
+  INSTANCE_REPO: ${{ vars.E2E_INSTANCE_REPO }}
+  # Region + OBJ cluster default to the canonical `lab` tier (terraform-iac-bootstrap/
+  # {cluster,object-storage}/lab.tfvars on the instance repo's default branch) — lab is the throwaway
+  # tier co-located in us-ord, the right shape for an E2E run. Override via repo vars
+  # only to exercise a different region.
+  E2E_LINODE_REGION: ${{ vars.E2E_LINODE_REGION || 'us-ord' }}
+  E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── 0. Functional test of the llz CLI (fast, no cloud) ───────────────────────
+  # Proves the BUILT binary behaves and — the part a 404 install complaint
+  # surfaced — that docs/quickstart.md §2's install flow works against the
+  # just-published private release: `gh release download` + checksum, the
+  # authenticated `curl` on the API asset endpoint, and `llz self-update`'s
+  # download→verify→replace. Runs in BOTH dry-run and full mode (no cloud, cheap)
+  # and gates the release. The built-in GITHUB_TOKEN authenticates gh + reads this
+  # repo's own private releases.
+  llz-functional:
+    name: llz functional (commands + install flow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+
+      - name: Build llz
+        run: cd tools && go build -o ../bin/llz ./cmd/llz
+
+      - name: Functional test — basic commands (offline)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LLZ_FUNCTIONAL_REPO: ${{ github.repository }}
+          # Section A (offline command checks) only. The documented install flow
+          # (Section B) needs published full-release binaries — but this gate runs
+          # on the PRE-release `vX.Y.Z`, before any binaries are attached (those land
+          # on promotion to a full release). So the install flow is validated there
+          # instead, in llz-release.yml's `functional` job (post-attach, no race).
+          LLZ_FUNCTIONAL_NET: "0"
+        run: template-scripts/ci/llz-functional.sh
+
+  # ── 1. Instantiate the template into the throwaway E2E instance repo ──────────
+  instantiate:
+    name: Instantiate → ${{ vars.E2E_INSTANCE_REPO }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      head_sha: ${{ steps.push.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Preconditions
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Only two values can't be derived: the throwaway instance repo (must really
+          # exist — its default branch is force-pushed every run) and the dispatch token
+          # (a credential). Region + OBJ cluster default to the canonical lab tier (see
+          # the top-level env block). These are separate from the instance repo's
+          # infra-e2e secrets (LINODE_API_TOKEN, TF_STATE_*, OBJ keys) that terraform.yml
+          # consumes inside the instance. Report EVERY missing one at once, so a
+          # first-time setup needs a single round-trip instead of one fix per re-run.
+          missing=0
+          require() { # name, value, kind ("vars" | "secrets"), description
+            if [[ -z "$2" ]]; then
+              local cmd="variable"; [[ "$3" == "secrets" ]] && cmd="secret"
+              echo "::error::Missing ${3}.${1} — ${4}. Set it on this repo: gh ${cmd} set ${1} (or Settings → Secrets and variables → Actions)."
+              missing=1
+            fi
+          }
+          require E2E_INSTANCE_REPO  "${INSTANCE_REPO}"       vars    "owner/name of the throwaway E2E instance repo (its default branch is force-pushed every run)"
+          require E2E_DISPATCH_TOKEN "${E2E_DISPATCH_TOKEN}"  secrets "PAT/app token with contents:write + actions:read/write on the instance repo"
+          if [[ "${missing}" -ne 0 ]]; then
+            echo "::error::E2E config is incomplete on ${GITHUB_REPOSITORY}. Fix the items above, then re-run. See the header of .github/workflows/release-e2e.yml for the full setup."
+            exit 1
+          fi
+          echo "E2E config OK — instance=${INSTANCE_REPO} region=${E2E_LINODE_REGION} obj=${E2E_OBJ_CLUSTER}"
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+
+      - name: Build llz (the env-add scaffolder)
+        run: cd tools && go build -o ../bin/llz ./cmd/llz
+
+      - name: Scaffold the e2e environment
+        run: |
+          set -euo pipefail
+          # Re-create the e2e env from scratch each run (idempotent).
+          rm -rf "instance-template/apl-values/${E2E_ENV}" 2>/dev/null || true
+          rm -f instance-template/terraform-iac-bootstrap/*/"${E2E_ENV}.tfvars" 2>/dev/null || true
+          # `llz env add` is the scaffolder (folded into the binary from the old
+          # template-scripts/new-deployment.sh). It is layout-aware: run from the
+          # template root it writes into instance-template/.
+          bin/llz env add "${E2E_ENV}" \
+            --region "${E2E_LINODE_REGION}" \
+            --obj-cluster "${E2E_OBJ_CLUSTER}"
+
+      - name: Lay the template out as an instance
+        run: |
+          set -euo pipefail
+          rm -rf .e2e-instance && mkdir -p .e2e-instance
+          # instance-template/* becomes the instance repo root so terraform.yml +
+          # cluster-health.yml sit at .github/workflows/ and are dispatchable there.
+          cp -a instance-template/. .e2e-instance/
+          # The scaffold already names its TF roots terraform-iac-bootstrap/ (what
+          # terraform.yml and the actions chdir into), so no rename is needed.
+          # Operational tooling (the llz CLI, which absorbed instance-scripts/) is
+          # template-INTERNAL (like .github/actions): the reusable llz-* workflows
+          # build it from a template checkout. A real instance has no scripts/, so
+          # the e2e instance must not either — don't hoist anything here.
+          # docs/ are delivered the same way (copier _tasks); mirror that too, minus
+          # the two template-build docs the _tasks drops, so the e2e instance matches.
+          mkdir -p .e2e-instance/docs && cp -a docs/. .e2e-instance/docs/
+          rm -f .e2e-instance/docs/templatization-plan.md .e2e-instance/docs/agents.md
+          # Composite actions are template-internal — the reusable llz-* workflows
+          # source them from a template checkout, so instances don't carry them
+          # (copier.yml `_exclude`s `.github/actions`). Mirror that here.
+          rm -rf .e2e-instance/.github/actions
+          # `.copier-answers.yml` carries copier-internal jinja (`<@ _copier_answers
+          # … @>`) that only `copier update` renders — which this throwaway instance
+          # never runs. Drop it so a literal token can't reach the pushed repo (and
+          # can't trip the render-pass survivor check below).
+          rm -f .e2e-instance/.copier-answers.yml
+          # NOTE: this manual hoist is a raw `cp`, so the copier `<@ token @>`
+          # substitutions are still literal here. The next step renders them — see
+          # there for why that's mandatory, not cosmetic.
+
+      - name: Render copier tokens + pin LLZ refs to the commit under test
+        run: |
+          set -euo pipefail
+          cd .e2e-instance
+          OWNER="${GITHUB_REPOSITORY%/*}"   # template org (e.g. akamai-consulting)
+          # 1. Resolve the copier <@ … @> tokens the raw `cp` left literal. Mandatory:
+          #    an unrendered `<@ upstream_org @>` in a workflow `uses:` makes GitHub
+          #    reject the dispatch ("too many '@' in workflow reference"), and the same
+          #    token in the terraform/ module sources breaks `terraform init`.
+          #    `<@ llz_version @>` is the version pin (`llz new`/`llz upgrade` would set
+          #    it to the llz binary's version); render it to the SHA under test so e2e
+          #    exercises THIS commit, not a past release — a full SHA is valid both as a
+          #    cross-repo `uses:` ref and as a git `?ref=`. (Rendering it here also
+          #    matters because it embeds spaces, which the ref-rewrite in step 2 below
+          #    can't span.)
+          grep -rlZ -e '<@ upstream_org @>' -e '<@ instance_repo @>' -e '<@ llz_version @>' . \
+            | xargs -0 -r sed -i \
+                -e "s#<@ upstream_org @>#${OWNER}#g" \
+                -e "s#<@ instance_repo @>#${INSTANCE_REPO}#g" \
+                -e "s#<@ llz_version @>#${GITHUB_SHA}#g"
+          # 2. Backstop: repin any LLZ ref that is a literal tag (not the llz_version
+          #    placeholder) to the SHA under test too, so e2e never exercises a past
+          #    release. With the placeholder model above this is normally a no-op.
+          grep -rlZ 'lke-landing-zone' . \
+            | xargs -0 -r sed -i -E \
+                -e "s#(/lke-landing-zone/\.github/workflows/llz-[A-Za-z0-9_-]+\.yml)@[^[:space:]]+#\1@${GITHUB_SHA}#g" \
+                -e "s#(//terraform-modules/llz-[A-Za-z0-9_-]+\?ref=)[^\"]+#\1${GITHUB_SHA}#g"
+          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]*).*/\1${GITHUB_SHA}/" .github/workflows/*.yml
+          # Fail loudly if any token survived — a silent miss = a broken instance push.
+          if grep -rnE '<@|@>' . ; then
+            echo "::error::unrendered copier token(s) survived the e2e render pass"
+            exit 1
+          fi
+
+      - name: Stamp provenance + force-push instantiation
+        id: push
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd .e2e-instance
+          git init -q
+          git checkout -q -b main
+          git config user.name  "llz-release-e2e[bot]"
+          git config user.email "llz-release-e2e@users.noreply.github.com"
+          # Record which template commit this instance was generated from (drift
+          # provenance). cwd is now a git repo, so the stamp lands here.
+          "${GITHUB_WORKSPACE}/template-scripts/stamp-template-version.sh" \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" \
+            --ref "${GITHUB_REF_NAME}" --env "${E2E_ENV}"
+          git add -A
+          git commit -q -m "e2e: instantiate ${GITHUB_REPOSITORY}@${GITHUB_SHA::8} (${GITHUB_REF_NAME})"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          # Throwaway fixture repo: overwrite its default branch wholesale.
+          git remote add origin "https://x-access-token:${E2E_DISPATCH_TOKEN}@github.com/${INSTANCE_REPO}.git"
+          git push -f origin main
+          echo "Pushed instantiation ${HEAD_SHA::8} to ${INSTANCE_REPO}@main"
+
+  # ── 2. Provision the real cluster by driving the instance's terraform.yml ────
+  provision:
+    name: Provision (apply + converge)
+    needs: instantiate
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Dispatch terraform.yml (${{ env.DRY_RUN == 'true' && 'plan' || 'apply' }}) and watch
+        env:
+          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          ACTION=apply; [[ "${DRY_RUN}" == "true" ]] && ACTION=plan
+          .github/scripts/dispatch-and-watch.sh \
+            --repo "${INSTANCE_REPO}" --workflow terraform.yml \
+            --field action="${ACTION}" --field module=all --field region="${E2E_ENV}"
+
+  # ── 3. Validate health + Loki (runs inside the instance) ─────────────────────
+  validate:
+    name: Validate health + Loki
+    needs: provision
+    if: ${{ needs.provision.result == 'success' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Dispatch cluster-health.yml (E2E gate mode) and watch
+        env:
+          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # cluster-health.yml defaults to report-only; the E2E gate must opt
+          # into the failing assertions explicitly (fail-on-unhealthy +
+          # assert-loki), or an unhealthy cluster / non-S3 Loki would pass green.
+          .github/scripts/dispatch-and-watch.sh \
+            --repo "${INSTANCE_REPO}" --workflow cluster-health.yml \
+            --field region="${E2E_ENV}" \
+            --field fail-on-unhealthy=true \
+            --field assert-loki=true
+
+  # ── 4. Teardown — ALWAYS, so a paid cluster is never leaked ───────────────────
+  teardown:
+    name: Teardown (destroy + sweep)
+    needs: [instantiate, provision, validate]
+    # Run whenever provisioning actually started, regardless of validate; skip
+    # only for a dry run (plan only — nothing was created).
+    if: ${{ always() && needs.provision.result != 'skipped' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Dispatch terraform.yml (destroy) and watch
+        env:
+          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          .github/scripts/dispatch-and-watch.sh \
+            --repo "${INSTANCE_REPO}" --workflow terraform.yml \
+            --field action=destroy --field module=cluster --field region="${E2E_ENV}" \
+            --field confirm_destroy="destroy:${E2E_ENV}:cluster"
+
+  # ── 5. Gate — the release passes only if every stage above was green ─────────
+  gate:
+    name: E2E gate
+    needs: [llz-functional, provision, validate, teardown]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require llz-functional + provision + validate + teardown to have succeeded
+        env:
+          F: ${{ needs.llz-functional.result }}
+          P: ${{ needs.provision.result }}
+          V: ${{ needs.validate.result }}
+          T: ${{ needs.teardown.result }}
+        run: |
+          set -euo pipefail
+          echo "llz-functional=$F provision=$P validate=$V teardown=$T (dry_run=${DRY_RUN})"
+          fail=0
+          # F + P gate both modes (F is no-cloud); V + T only when a cluster was built.
+          [[ "$F" == "success" ]] || { echo "::error::llz-functional $F"; fail=1; }
+          [[ "$P" == "success" ]] || { echo "::error::provision $P"; fail=1; }
+          if [[ "${DRY_RUN}" != "true" ]]; then
+            [[ "$V" == "success" ]] || { echo "::error::validate $V"; fail=1; }
+            [[ "$T" == "success" ]] || { echo "::error::teardown $T — a cluster may have leaked; check ${INSTANCE_REPO} state"; fail=1; }
+          fi
+          exit $fail

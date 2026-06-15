@@ -1,0 +1,45 @@
+# Argo Events — wave -15.
+#
+# Provides the EventBus/EventSource/Sensor CRDs the cert-automation flow
+# references. Same wave as argo-workflows so they install together, before the
+# cert-automation app (-14) that consumes the EventBus CRD.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llz-argo-events
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  revisionHistoryLimit: 3
+  project: platform-support
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-events
+    targetRevision: 2.4.13
+    helm:
+      releaseName: llz-argo-events
+      valuesObject:
+        crds:
+          install: true
+          keep: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: llz-argo-events
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+        factor: 2
+    syncOptions:
+      # llz-argo-events is created by cluster-foundation at wave -20 (single
+      # Namespace owner).
+      - CreateNamespace=false
+      - ServerSideApply=true

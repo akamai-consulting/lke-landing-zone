@@ -1,0 +1,302 @@
+package main
+
+// reap.go is the operator-facing orchestrator for `llz reap` — the native port of
+// reap-all-orphaned-resources.sh: a one-shot manual sweep of Linode resources
+// leaked by failed/cancelled cluster cycles, run in dependency order (clusters →
+// firewall → NodeBalancers → VPCs → Volumes). The orphan-identity heuristics +
+// API primitives live in internal/linode (reap.go); this file is control flow,
+// dry-run gating, and output. Dry-run by default; deletes only with --yes.
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+)
+
+type reapOpts struct {
+	region         string
+	clusterLabel   string
+	fwLabel        string
+	volumeIDs      string // space-separated allowlist
+	tagMustInclude string
+	force          bool
+}
+
+func runReap(g globalOpts, o reapOpts) error {
+	token := firstNonEmpty(os.Getenv("LINODE_API_TOKEN"), os.Getenv("LINODE_TOKEN"))
+	if token == "" {
+		return fmt.Errorf("set LINODE_API_TOKEN (or LINODE_TOKEN) to a Linode PAT (read_write to delete, read_only for a dry-run)")
+	}
+	confirm := g.yes && !g.dryRun
+	client := linode.NewClient(token, 60*time.Second)
+	ctx := context.Background()
+
+	fmt.Println("################ llz reap — orphaned Linode resources ################")
+	if !confirm {
+		fmt.Println("DRY-RUN — nothing will be deleted. Re-run with --yes to delete.")
+	}
+	fmt.Printf("  region:        %s\n", orAll(o.region))
+	fmt.Printf("  cluster label: %s\n\n", orNone(o.clusterLabel))
+
+	deleted, failed := 0, 0
+	// del prints (dry-run) or deletes (confirm), tallying outcomes.
+	del := func(path, desc string) {
+		if !confirm {
+			fmt.Printf("  would DELETE %s\n", desc)
+			return
+		}
+		if err := client.DeleteResourcePath(ctx, path); err != nil {
+			fmt.Fprintf(os.Stderr, "  DELETE %s FAILED: %v\n", desc, err)
+			failed++
+			return
+		}
+		fmt.Printf("  DELETE %s\n", desc)
+		deleted++
+	}
+
+	// ── 1. Orphan clusters by label (root) ───────────────────────────────────
+	clustersDeleted := false
+	if o.clusterLabel != "" {
+		fmt.Printf("==== orphan clusters (label %q) ====\n", o.clusterLabel)
+		ids, err := client.ClustersWithLabel(ctx, o.clusterLabel)
+		if err != nil {
+			return fmt.Errorf("list clusters: %w", err)
+		}
+		for _, id := range ids {
+			del(fmt.Sprintf("/v4beta/lke/clusters/%d", id), fmt.Sprintf("cluster %d", id))
+			clustersDeleted = true
+		}
+		if len(ids) == 0 {
+			fmt.Println("  none matched")
+		}
+		// Cluster delete is async; let it settle so the firewall safety guard
+		// (which refuses while a live cluster still carries the label) passes.
+		if confirm && clustersDeleted {
+			fmt.Println("  (waiting 25s for cluster delete to settle)")
+			time.Sleep(25 * time.Second)
+		}
+
+		// ── 2. Orphan node firewall ──────────────────────────────────────────
+		fmt.Println("\n==== orphan node firewall ====")
+		if err := reapFirewalls(ctx, client, o, del); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("==== orphan clusters + firewall — skipped (no --cluster-label) ====")
+	}
+
+	// ── 3. NodeBalancers BEFORE VPCs (a parked NB blocks its VPC delete) ──────
+	fmt.Println("\n==== orphan NodeBalancers (account-wide) ====")
+	if err := reapNodeBalancers(ctx, client, o, del); err != nil {
+		return err
+	}
+
+	// ── 4. VPCs (lke<id> cluster-gone, + <label>-vpc when --cluster-label) ────
+	fmt.Println("\n==== orphan VPCs ====")
+	if err := reapVPCs(ctx, client, o, del); err != nil {
+		return err
+	}
+
+	// ── 5. Volumes (needs a scope: --region or --volume-ids) ──────────────────
+	fmt.Println("\n==== orphan Volumes ====")
+	if o.region == "" && o.volumeIDs == "" {
+		fmt.Println("  skipped — set --region and/or --volume-ids to scope the sweep (refusing an unscoped Volume delete)")
+	} else if err := reapVolumes(ctx, client, o, del); err != nil {
+		return err
+	}
+
+	fmt.Printf("\nsummary: deleted=%d failed=%d\n", deleted, failed)
+	if !confirm {
+		fmt.Println("(dry-run — nothing was deleted; re-run with --yes)")
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d delete(s) failed", failed)
+	}
+	return nil
+}
+
+func reapFirewalls(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+	// Candidate labels (account-unique, so each matches ≤1 firewall).
+	var candidates []string
+	if o.fwLabel != "" {
+		candidates = []string{o.fwLabel}
+	} else {
+		candidates = []string{"platform-nodes-fw", truncate(o.clusterLabel, 26) + "-nodes"}
+	}
+	// Safety: never delete a live cluster's firewall.
+	if !o.force {
+		live, err := client.ClustersWithLabel(ctx, o.clusterLabel)
+		if err != nil {
+			return fmt.Errorf("firewall safety check: %w", err)
+		}
+		if len(live) > 0 {
+			fmt.Printf("  a live cluster still carries label %q — refusing (delete the cluster first, or --force)\n", o.clusterLabel)
+			return nil
+		}
+	}
+	fws, err := client.ListFirewalls(ctx)
+	if err != nil {
+		return fmt.Errorf("list firewalls: %w", err)
+	}
+	matched := false
+	for _, fw := range fws {
+		label := linode.MapString(fw, "label")
+		if !containsString(candidates, label) {
+			continue
+		}
+		id := linode.MapUint(fw, "id")
+		del(fmt.Sprintf("/v4/networking/firewalls/%d", id), fmt.Sprintf("firewall %d (%s)", id, label))
+		matched = true
+	}
+	if !matched {
+		fmt.Printf("  none matched (searched: %s)\n", strings.Join(candidates, ", "))
+	}
+	return nil
+}
+
+func reapNodeBalancers(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+	live, err := client.LiveClusterIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("load live clusters: %w", err)
+	}
+	nbs, err := client.ListNodeBalancers(ctx)
+	if err != nil {
+		return fmt.Errorf("list NodeBalancers: %w", err)
+	}
+	matched := false
+	for _, nb := range nbs {
+		region := linode.MapString(nb, "region")
+		if o.region != "" && region != o.region {
+			continue
+		}
+		tags := linode.MapTags(nb)
+		label := linode.MapString(nb, "label")
+		switch linode.ClassifyNodeBalancer(linode.LKEClusterIDFromNB(nb), tags, label, live) {
+		case linode.NBKeep:
+			continue
+		case linode.NBCheckBackends:
+			n, err := client.NodeBalancerBackendCount(ctx, linode.MapUint(nb, "id"))
+			if err != nil || n != 0 {
+				continue
+			}
+		}
+		id := linode.MapUint(nb, "id")
+		del(fmt.Sprintf("/v4/nodebalancers/%d", id),
+			fmt.Sprintf("nodebalancer %d (%s, %s)", id, label, region))
+		matched = true
+	}
+	if !matched {
+		fmt.Println("  none matched")
+	}
+	return nil
+}
+
+func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+	live, err := client.LiveClusterIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("load live clusters: %w", err)
+	}
+	byoLabel := ""
+	if o.clusterLabel != "" {
+		held, err := client.ClustersWithLabel(ctx, o.clusterLabel)
+		if err != nil {
+			return err
+		}
+		if len(held) > 0 {
+			fmt.Printf("  a live cluster still carries label %q — not targeting its %q VPC\n", o.clusterLabel, o.clusterLabel+"-vpc")
+		} else {
+			byoLabel = o.clusterLabel + "-vpc"
+		}
+	}
+	vpcs, err := client.ListVPCs(ctx)
+	if err != nil {
+		return fmt.Errorf("list VPCs: %w", err)
+	}
+	matched := false
+	for _, vpc := range vpcs {
+		region := linode.MapString(vpc, "region")
+		if o.region != "" && region != o.region {
+			continue
+		}
+		label := linode.MapString(vpc, "label")
+		id := linode.MapUint(vpc, "id")
+		isOrphan := linode.VPCIsOrphan(label, live)
+		if !isOrphan && !(byoLabel != "" && label == byoLabel) {
+			continue
+		}
+		// Subnets must go before the VPC.
+		subs, err := client.ListVPCSubnets(ctx, id)
+		if err != nil {
+			return fmt.Errorf("list subnets of vpc %d: %w", id, err)
+		}
+		for _, s := range subs {
+			sid := linode.MapUint(s, "id")
+			del(fmt.Sprintf("/v4/vpcs/%d/subnets/%d", id, sid), fmt.Sprintf("vpc %d subnet %d", id, sid))
+		}
+		del(fmt.Sprintf("/v4/vpcs/%d", id), fmt.Sprintf("vpc %d (%s)", id, label))
+		matched = true
+	}
+	if !matched {
+		fmt.Println("  none matched")
+	}
+	return nil
+}
+
+func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+	idAllow := map[string]bool{}
+	for _, id := range strings.Fields(o.volumeIDs) {
+		idAllow[id] = true
+	}
+	vols, err := client.ListVolumes(ctx)
+	if err != nil {
+		return fmt.Errorf("list Volumes: %w", err)
+	}
+	matched := false
+	for _, v := range vols {
+		id := linode.MapIDString(v)
+		if !linode.VolumeIsCandidate(
+			linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"), linode.MapString(v, "region"),
+			linode.MapTags(v), o.region, idAllow, id, o.tagMustInclude) {
+			continue
+		}
+		del("/v4/volumes/"+id, fmt.Sprintf("volume %s (%s)", id, linode.MapString(v, "label")))
+		matched = true
+	}
+	if !matched {
+		fmt.Println("  none matched the filter")
+	}
+	return nil
+}
+
+// ── small helpers ────────────────────────────────────────────────────────────
+
+func orAll(s string) string {
+	if s == "" {
+		return "(all)"
+	}
+	return s
+}
+func orNone(s string) string {
+	if s == "" {
+		return "(none — skipping cluster/firewall/BYO-VPC steps)"
+	}
+	return s
+}
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+func containsString(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

@@ -1,0 +1,96 @@
+# Default-deny + allow rules for the llz-external-secrets namespace.
+# ESO controller pods need egress to OpenBao (8200) and the Kubernetes API.
+#
+# LKE-Enterprise note: the in-cluster `kubernetes` Service maps port 443 to
+# targetPort 6443 (the real apiserver port). Cilium evaluates NetworkPolicy
+# *after* the kube-proxy-replacement DNAT, so the egress rule must allow
+# port 6443 in addition to 443 — otherwise connections to 10.x.x.1:443 are
+# silently dropped and ESO times out trying to list API resources.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-secrets-default-deny
+  namespace: llz-external-secrets
+  annotations:
+    # Apply before any external-secrets workload — see project-np-sync-wave-race.
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Allow all external-secrets pods to resolve DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-secrets-allow-dns
+  namespace: llz-external-secrets
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Allow ESO controller to reach OpenBao (port 8200) and the Kubernetes API.
+# ESO uses AppRole auth against OpenBao and calls the K8s API to create/update Secrets.
+# Port 6443 covers LKE-Enterprise where the `kubernetes` Service DNATs 443→6443
+# and Cilium evaluates policy on the post-DNAT port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-secrets-allow-egress
+  namespace: llz-external-secrets
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llz-openbao
+      ports:
+        - port: 8200
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+---
+# Allow the kube-apiserver to reach the ESO validating webhook (port 10250)
+# so ClusterSecretStore/SecretStore/ExternalSecret create+update operations
+# don't 5s-timeout. The default-deny above blocks every Ingress; without
+# this allow, any kubectl mutation of an ESO CR fails with:
+#   "failed calling webhook validate.clustersecretstore.external-secrets.io:
+#    … context deadline exceeded"
+# On LKE-E the apiserver reaches webhooks via konnectivity-agent tunnels
+# rather than direct pod IPs, so an open ingress is the simplest cover.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-secrets-allow-ingress-webhook
+  namespace: llz-external-secrets
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: external-secrets-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 10250
+          protocol: TCP

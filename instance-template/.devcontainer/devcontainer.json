@@ -1,0 +1,31 @@
+// Dev Container for this LLZ instance repo.
+//
+// "Reopen in Container" gives you a ready-made adopter workstation — every CLI
+// `llz doctor` checks (terraform, kubectl, helm, bao, copier, gh, linode-cli,
+// jq, ssh-keygen) plus the lint/validate stack — without installing anything on
+// the host. The image is prebuilt and multi-arch (amd64 + arm64, so it runs
+// natively on Intel/AMD and Apple Silicon). Full walkthrough: docs/devcontainer.md.
+//
+// The image org below was filled in by Copier from your `upstream_org` answer.
+// Forked the template and build your own image? Repoint it (this file is a
+// `merge` in .template-manifest, so the org edit is yours to keep on update).
+// Pin `:latest` to a `:sha-...` tag for a reproducible workstation.
+{
+  "name": "LLZ instance",
+  "image": "ghcr.io/<@ upstream_org @>/devcontainer:latest",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "hashicorp.terraform",
+        "redhat.vscode-yaml",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "github.vscode-github-actions",
+        "timonwong.shellcheck"
+      ]
+    }
+  },
+  // Avoids git's "dubious ownership" warning on the bind-mounted workspace, and
+  // forwards the host SSH agent / gh login if you've set them up (see the doc).
+  "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder}"
+}

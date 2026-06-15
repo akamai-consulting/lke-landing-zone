@@ -1,0 +1,373 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
+)
+
+// envNameRe is the deployment-name contract — IDENTICAL to the one
+// new-deployment.sh / `llz env add` enforce (^[a-z][a-z0-9-]{1,30}$). Deployments
+// are created dynamically (there is no hardcoded env list — terraform.yml's
+// region input is a free-form string, not a choice), so build/status/tokens
+// validate the SHAPE of the name, not membership in a fixed set: otherwise
+// `llz env add myteam-dev` would succeed but `llz build myteam-dev` refuse.
+var envNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
+
+// validateEnvName returns an error if env is not a legal deployment name.
+func validateEnvName(env string) error {
+	if !envNameRe.MatchString(env) {
+		return fmt.Errorf("invalid deployment name %q (want %s — the same contract as `llz env add`)", env, envNameRe.String())
+	}
+	return nil
+}
+
+// ── argv builders (pure; covered by commands_test.go) ────────────────────────
+
+// resolveScaffoldRef picks the template ref to scaffold/upgrade from: an explicit
+// --ref verbatim (tag, branch, or SHA), else this llz binary's own version when it
+// is a real release (the CLI is the version anchor), else "main" for a dev build.
+// The same value is rendered into the instance's pins as copier's llz_version, so
+// the scaffold references exactly the release it was cut from.
+func resolveScaffoldRef(ref string) string {
+	if ref != "" {
+		return ref
+	}
+	if _, _, _, ok := semver(version); ok {
+		return normalizeLLZTag(version)
+	}
+	return "main"
+}
+
+func copierCopyArgv(org, ref, dir string) []string {
+	return []string{"copier", "copy", "--trust", "--vcs-ref", ref,
+		"--data", "llz_version=" + ref,
+		"gh:" + org + "/" + templateName, dir}
+}
+
+func copierUpdateArgv(ref string) []string {
+	a := []string{"copier", "update", "--trust"}
+	if ref != "" {
+		a = append(a, "--vcs-ref", ref, "--data", "llz_version="+ref)
+	}
+	return a
+}
+
+func buildArgv(env string) []string {
+	return []string{"gh", "workflow", "run", "terraform.yml",
+		"--field", "region=" + env, "--field", "action=apply", "--field", "module=all"}
+}
+
+func bootstrapArgv(kind, env string) ([]string, error) {
+	wf := map[string]string{
+		"dns": "bootstrap-dns.yml",
+	}[kind]
+	if wf == "" {
+		return nil, fmt.Errorf("unknown bootstrap kind %q (want dns)", kind)
+	}
+	return []string{"gh", "workflow", "run", wf, "--field", "region=" + env}, nil
+}
+
+func secretSetArgv(env, name string) []string {
+	return []string{"gh", "secret", "set", name, "--env", "infra-" + env}
+}
+
+// ghSecretSetStdin pipes value into `gh secret set <name>` (with --env <ghEnv>
+// when ghEnv is non-empty), keeping the value off argv. gh resolves auth + repo
+// from the ambient GH_TOKEN/GH_REPO. Shared body for the ghSetSecretFn (--env,
+// ci_openbao_init.go) and ghSetRepoSecretFn (repo-level, ci_harbor.go) seams.
+func ghSecretSetStdin(name, ghEnv, value string) error {
+	args := []string{"secret", "set", name}
+	label := name
+	if ghEnv != "" {
+		args = append(args, "--env", ghEnv)
+		label = fmt.Sprintf("%s --env %s", name, ghEnv)
+	}
+	cmd := exec.Command("gh", args...)
+	cmd.Stdin = strings.NewReader(value)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("gh secret set %s: %s", label, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func variableSetArgv(name string) []string {
+	return []string{"gh", "variable", "set", name}
+}
+
+// statusArgv is the read-only convergence check set (matches the verify steps in
+// docs/runbooks/bootstrap-openbao.md).
+func statusArgv() [][]string {
+	return [][]string{
+		{"kubectl", "-n", "openbao", "get", "pods"},
+		{"kubectl", "-n", "argocd", "get", "applications"},
+		{"kubectl", "-n", "external-secrets", "get", "clustersecretstore"},
+	}
+}
+
+// ── execution helpers ────────────────────────────────────────────────────────
+
+// run executes argv, streaming stdio. In dry-run it prints and returns.
+func run(g globalOpts, argv ...string) error {
+	fmt.Fprintln(os.Stderr, "→ "+shellQuote(argv))
+	if g.dryRun {
+		return nil
+	}
+	return execArgv(argv, "")
+}
+
+// runGated is run() for cloud-mutating commands: it refuses to execute without
+// --yes, printing the command instead so the operator can see exactly what would
+// reach Linode/GitHub.
+func runGated(g globalOpts, argv ...string) error {
+	if g.dryRun {
+		fmt.Fprintln(os.Stderr, "→ (dry-run) "+shellQuote(argv))
+		return nil
+	}
+	if !g.yes {
+		fmt.Fprintln(os.Stderr, "would run: "+shellQuote(argv))
+		fmt.Fprintln(os.Stderr, "  (re-run with --yes to execute)")
+		return nil
+	}
+	return run(g, argv...)
+}
+
+// execArgv runs argv with an optional stdin string (used to pipe secret values
+// into `gh secret set` without putting them in the process arguments).
+func execArgv(argv []string, stdin string) error {
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	} else {
+		cmd.Stdin = os.Stdin
+	}
+	return cmd.Run()
+}
+
+// shellQuote renders argv for display, quoting tokens that need it.
+func shellQuote(argv []string) string {
+	var b strings.Builder
+	for i, a := range argv {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		if a == "" || strings.ContainsAny(a, " \t\"'$&|;<>()") {
+			b.WriteString("'" + strings.ReplaceAll(a, "'", `'\''`) + "'")
+		} else {
+			b.WriteString(a)
+		}
+	}
+	return b.String()
+}
+
+// ── commands ─────────────────────────────────────────────────────────────────
+
+func runNew(g globalOpts, org, ref, dir string, push bool) error {
+	ref = resolveScaffoldRef(ref)
+	fmt.Printf("Scaffolding a new LKE landing-zone instance into %q from %s/%s@%s\n\n",
+		dir, org, templateName, ref)
+
+	if err := run(g, copierCopyArgv(org, ref, dir)...); err != nil {
+		return fmt.Errorf("copier copy: %w", err)
+	}
+
+	// Arm the pre-commit hook in the freshly scaffolded instance. Best-effort:
+	// `copier copy` git-inits the dir, but don't fail `new` if hook install does.
+	if err := runHooksInstall(g, dir); err != nil {
+		fmt.Fprintln(os.Stderr, "llz: could not arm pre-commit hook (run `llz hooks` in the instance):", err)
+	}
+
+	pushed := false
+	if push {
+		var err error
+		if pushed, err = pushInstanceRepo(g, dir); err != nil {
+			return err
+		}
+	}
+
+	envHint := "  # commit + push to your GitHub repo (or re-run `llz new --push --yes`)\n"
+	if pushed {
+		envHint = "  # instance repo created + pushed ✓\n"
+	}
+	fmt.Printf(`
+Next steps:
+  cd %s
+`+envHint+`  llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>  # scaffold tfvars
+  # edit the generated <env>.tfvars files (the ADOPTER-MUST-SET values)
+  llz validate --env <env>          # catch unfilled placeholders before a build
+  llz tokens --env <env> --yes      # create state bucket+key, gather PATs, push
+  llz doctor --env <env>            # confirm every required value is set
+  llz build  <env> --yes            # kick off the apply
+  # local checks: llz lint / llz validate; add your own commands in .llz/commands.yaml
+`, dir)
+	return nil
+}
+
+// pushInstanceRepo creates the instance's GitHub repo and pushes the freshly
+// scaffolded tree, closing the §3 loop (the repo learned from .copier-answers.yml).
+// Returns whether the push actually happened. Gated by --yes; respects --dry-run.
+func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
+	a, err := readAnswers(dir)
+	if err != nil || a == nil || a.InstanceRepo == "" || a.InstanceRepo == "your-org/your-instance-repo" {
+		fmt.Fprintln(os.Stderr, "llz: --push: instance_repo not set in .copier-answers.yml — skipping (create + push by hand)")
+		return false, nil
+	}
+	repo := a.InstanceRepo
+
+	// gh repo create --push needs at least one commit; copier git-inits but does
+	// not commit, so seed an initial commit if the tree has none.
+	if _, err := execOutput("git", "-C", dir, "rev-parse", "HEAD"); err != nil {
+		if err := run(g, "git", "-C", dir, "add", "-A"); err != nil {
+			return false, err
+		}
+		if err := run(g, "git", "-C", dir, "commit", "-q", "-m", "Initial instance scaffold (llz new)"); err != nil {
+			return false, err
+		}
+	}
+	// gh repo create makes a new GitHub repo (outward-facing) — gate on --yes.
+	return g.yes && !g.dryRun, runGated(g, "gh", "repo", "create", repo,
+		"--private", "--source", dir, "--remote", "origin", "--push")
+}
+
+func runUpgrade(g globalOpts, ref string) error {
+	// Always resolve to a concrete ref so the instance's llz_version pins update in
+	// lockstep with the template code (a bare `copier update` would float the code
+	// to the latest tag but leave the recorded llz_version stale).
+	ref = resolveScaffoldRef(ref)
+	if err := run(g, copierUpdateArgv(ref)...); err != nil {
+		return fmt.Errorf("copier update: %w", err)
+	}
+	// Re-stamp natively: an instance carries no template-scripts/ to shell out to.
+	if g.dryRun {
+		fmt.Fprintln(os.Stderr, "→ (dry-run) stamp .template-version")
+		return nil
+	}
+	if err := stampTemplateVersion(""); err != nil {
+		return fmt.Errorf("stamp template version: %w", err)
+	}
+	return nil
+}
+
+func cmdEnvAdd(g globalOpts, name string, o envAddOpts) error {
+	return runEnvAdd(g, name, o)
+}
+
+func cmdBuild(args []string, g globalOpts) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: llz build <env>")
+	}
+	env := args[0]
+	if err := validateEnvName(env); err != nil {
+		return err
+	}
+	return runGated(g, buildArgv(env)...)
+}
+
+// up{Tokens,Doctor,Build} are the seams cmdUp drives — package-level vars so a
+// unit test can record the call order and inject a failure without the
+// cloud-mutating side effects of the real commands. Defaults call the real ones.
+var (
+	upTokens = func(g globalOpts, admin bool, env string) error { return runTokens(g, admin, env, "", "", "") }
+	upDoctor = func(g globalOpts, admin bool, env string) error { return runDoctor("", env, admin, true, "", "") }
+	upBuild  = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g) }
+)
+
+// cmdUp sequences the first-build flow into one command: provision credentials
+// (tokens) → confirm the readiness gate (doctor) → dispatch the apply (build),
+// then print the steps the tooling can't do for you. It stops at the first
+// failure. Cloud-mutating steps honour --yes/--dry-run via the delegated commands.
+func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
+	if err := validateEnvName(env); err != nil {
+		return err
+	}
+	if !skipTokens {
+		fmt.Println("══ 1/3  llz tokens — provision credentials ══")
+		if err := upTokens(g, admin, env); err != nil {
+			return fmt.Errorf("tokens: %w", err)
+		}
+	}
+	fmt.Println("\n══ 2/3  llz doctor — readiness gate ══")
+	if err := upDoctor(g, admin, env); err != nil {
+		return fmt.Errorf("doctor: %w (fix the above, then re-run `llz up %s`)", err, env)
+	}
+	fmt.Println("\n══ 3/3  llz build — dispatch the apply ══")
+	if err := upBuild(g, env); err != nil {
+		return fmt.Errorf("build: %w", err)
+	}
+	printManualActions(env)
+	return nil
+}
+
+// printManualActions lists the post-build steps the bootstrap genuinely cannot do
+// on the operator's behalf — surfaced once here so they don't get lost.
+func printManualActions(env string) {
+	fmt.Printf(`
+══ remaining manual actions (the tooling can't do these for you) ══
+  • Watch convergence:   llz status %[1]s --wait
+  • After OpenBao bootstrap, from the job summary (shown once):
+      – escrow unseal keys 4 & 5 + the root token to secure offline storage
+      – delete OPENBAO_ROOT_TOKEN from infra-%[1]s   (`+"`llz status`"+` flags it if left)
+  • Once LINODE_DNS_TOKEN exists, finish cert DNS-01:
+      llz bootstrap dns %[1]s --yes
+`, env)
+}
+
+func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: llz status <env>")
+	}
+	// Read-only kubectl checks against the cluster kubectl currently points at.
+	var firstErr error
+	for _, argv := range statusArgv() {
+		if err := run(g, argv...); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	// Argo CD Application health (report-only by default; --wait polls + gates).
+	fmt.Println()
+	if err := reportArgoHealth(g, wait, timeout); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	// Standing security-hygiene check: the OpenBao root token must not linger in
+	// infra-<env> after first-time bootstrap (report-only — it does not gate health).
+	warnIfRootTokenPresent(args[0])
+	return firstErr
+}
+
+// warnIfRootTokenPresent flags an OPENBAO_ROOT_TOKEN left behind in the infra-<env>
+// environment. First-time bootstrap requires the operator to escrow the unseal keys
+// + root token offline and DELETE the root token from infra-<env> — it is only
+// needed to seed secrets at bootstrap, and is a standing liability once that is
+// done. The one-time job-summary warning is easy to miss, so status re-checks it on
+// every run. Best-effort: skips silently without gh or a resolvable repo.
+func warnIfRootTokenPresent(env string) {
+	if !lookable("gh") {
+		return
+	}
+	repo, err := resolveInstanceRepo("", false)
+	if err != nil {
+		return
+	}
+	for _, n := range ghSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
+		if n == "OPENBAO_ROOT_TOKEN" {
+			fmt.Printf("\n⚠ OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", env)
+			fmt.Println("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability.")
+			fmt.Printf("  Remove it: `gh secret delete OPENBAO_ROOT_TOKEN --env infra-%s --repo %s`\n", env, repo)
+			return
+		}
+	}
+}
+
+func cmdBootstrap(args []string, g globalOpts) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: llz bootstrap <dns> <env>")
+	}
+	argv, err := bootstrapArgv(args[0], args[1])
+	if err != nil {
+		return err
+	}
+	return runGated(g, argv...)
+}

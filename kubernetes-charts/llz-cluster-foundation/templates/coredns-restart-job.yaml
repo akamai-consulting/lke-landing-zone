@@ -1,0 +1,147 @@
+{{- if .Values.coreDNS.restart.enabled }}
+{{- $wave := .Values.syncWaves.corednsRestart }}
+{{- $np := .Values.networkPolicies }}
+{{- $r := .Values.coreDNS.restart }}
+# One-shot CoreDNS rollout-restart so the coredns-custom ConfigMap's `.include`
+# file becomes effective on a fresh bootstrap.
+#
+# Why this is needed:
+#   CoreDNS's `reload` plugin watches the Corefile mtime — NOT the import-dir
+#   contents. LKE's workload-coredns ships `import custom/*.include` baked in;
+#   when CoreDNS first parses that with an empty/missing import dir it logs
+#   `[WARNING] No files matching import glob pattern: custom/*.include` and moves
+#   on without registering the import. Subsequently CREATING the ConfigMap does
+#   NOT trigger a re-parse — reload only re-evaluates the Corefile itself, not the
+#   import dir entries. A pod restart is required exactly once after the ConfigMap
+#   first lands. (Hit directly during the lke610071 bootstrap: lookups returned
+#   NXDOMAIN until `rollout restart deploy/{{ $r.targetDeployment }}` cleared the
+#   "no files match" state.) One-shot, not periodic — once the file exists,
+#   future edits ARE picked up by reload.
+#
+# Sync-wave {{ $wave }}: runs AFTER the ConfigMap ({{ .Values.syncWaves.corednsCustom }}) but reaches the
+# kube-system rollout target via whatever pre-NP path the cluster has open at
+# this stage.
+---
+# Isolating NetworkPolicy for the restart Job's pod. The pod's only egress is the
+# K8s API server (rollout restart + status) plus DNS. No ingress is ever
+# expected. Satisfies kube-linter's `non-isolated-pod` rule and double-locks the
+# blast radius in case kube-system ever gains NP enforcement.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coredns-restart-isolate
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: coredns-restart
+  policyTypes: [Ingress, Egress]
+  egress:
+    - ports:
+        {{- range $np.dnsPorts }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
+    - ports:
+        # K8s API server — both 443 (default kubernetes Service) and 6443 (LKE-E
+        # DNAT target, per project_lke_e_cilium_np_port_6443).
+        {{- range $np.apiserverPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: coredns-restart
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+    # Hook deletion ensures stale SA from prior runs doesn't accumulate; argo
+    # will recreate when this Job is re-applied (e.g. via selfHeal).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: coredns-restart
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+rules:
+  # Tightly scoped: only the workload-coredns Deployment. Verbs: patch (rollout
+  # restart bumps the pod template annotation), get + watch + list (rollout
+  # status + wait --for=condition both poll via watch streams).
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: [{{ $r.targetDeployment | quote }}]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: coredns-restart
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: coredns-restart
+subjects:
+  - kind: ServiceAccount
+    name: coredns-restart
+    namespace: kube-system
+---
+# Argo PostSync hook: fires after the ConfigMap and RBAC land; Argo deletes the
+# Job on successful completion and recreates it on the next manifest change (e.g.
+# a regex edit), so the restart re-applies whenever the rewrite content actually
+# changes. Wrapped in `succeeded` + back-off rather than a CronJob since we want
+# this on every bootstrap, not on a recurring schedule.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: coredns-restart-on-custom-cm
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: coredns-restart
+    spec:
+      serviceAccountName: coredns-restart
+      restartPolicy: OnFailure
+      containers:
+        - name: kubectl
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "Restarting {{ $r.targetDeployment }} to pick up coredns-custom imports..."
+              kubectl -n kube-system rollout restart deployment/{{ $r.targetDeployment }}
+              # Block until BOTH replicas are rolled out + Available. Without this
+              # wait the Job returns success while CoreDNS is still rolling, and
+              # downstream pods (apl-keycloak-operator, oauth2-proxy init
+              # container) that resolve *.{{ .Values.coreDNS.custom.matchSuffix }} can crashloop in the
+              # 30-60s window before resolution comes back.
+              kubectl -n kube-system rollout status deployment/{{ $r.targetDeployment }} --timeout={{ $r.rolloutStatusTimeout }}
+              kubectl -n kube-system wait deployment/{{ $r.targetDeployment }} \
+                --for=condition=Available --timeout={{ $r.availableTimeout }}
+              echo "coredns reload complete and Available."
+          resources:
+            {{- toYaml $r.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:             { drop: ["ALL"] }
+            readOnlyRootFilesystem:   true
+            runAsNonRoot:             true
+            runAsUser:                1000
+            seccompProfile:           { type: RuntimeDefault }
+{{- end }}

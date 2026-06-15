@@ -1,0 +1,64 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "labels": ["dependencies"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "Etc/UTC",
+  "semanticCommits": "enabled",
+  "prConcurrentLimit": 5,
+  "configMigration": true,
+
+  "description": "Ships into the instance repo (copied from instance-template/) and keeps third-party-shaped pins current: the OCI Helm charts (independently versioned) and external GitHub Action digests. The first-party lke-landing-zone references — the git::-tagged Terraform modules (?ref=vX.Y.Z), the reusable-workflow uses:@ refs, and template-ref: — are NOT Renovate-managed: they are rendered in lockstep from the copier llz_version that `llz new`/`llz upgrade` set to the llz binary's own version, so `llz upgrade` (not Renovate) bumps them as a unit (see the disable rule below). ADOPTERS: after forking, repoint the packageName/registryUrls below from <@ upstream_org @> to your own fork/registry, exactly as you repoint the module sources themselves.",
+
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions carrying an explicit `# renovate: datasource=… depName=…` annotation (e.g. apl_chart_version in tfvars, image tags in values, the reusable-workflow template-ref in a workflow stub). Accepts both HCL `name = \"v\"` and YAML `key: v` (quoted or bare).",
+      "managerFilePatterns": ["/\\.(tf|tfvars|ya?ml)$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+registryUrl=(?<registryUrl>\\S+))?(?:\\s+versioning=(?<versioning>\\S+))?\\s*\\n\\s*[A-Za-z0-9_.-]+\\s*[:=]\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    }
+  ],
+
+  "helmv3": {
+    "registryAliases": {
+      "llz-charts": "oci://ghcr.io/<@ upstream_org @>/charts"
+    }
+  },
+
+  "argocd": {
+    "managerFilePatterns": [
+      "/apl-values/.+/manifest/.+\\.ya?ml$/"
+    ]
+  },
+
+  "packageRules": [
+    {
+      "description": "The first-party lke-landing-zone self-reference (reusable-workflow uses:@ + template-ref:) is rendered from the copier llz_version and re-pinned by `llz upgrade`, not Renovate — disable it so the two never race. Modules pin to a bare ?ref=vX.Y.Z with no custom manager, so they are already unmanaged. Charts (llz-*/charts/llz-*) are independently versioned and stay Renovate-managed below.",
+      "matchPackageNames": ["/lke-landing-zone/"],
+      "enabled": false
+    },
+    {
+      "description": "Group first-party LLZ chart bumps into one PR per release wave",
+      "matchPackageNames": ["/^llz-/", "/charts/llz-/"],
+      "groupName": "LLZ platform artifacts"
+    },
+    {
+      "description": "First-party LLZ charts are immutable releases we cut ourselves — safe to automerge patch bumps",
+      "matchPackageNames": ["/^llz-/", "/charts/llz-/"],
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "description": "GitHub Actions and reusable-workflow refs: pin to digests, group together",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    }
+  ]
+}

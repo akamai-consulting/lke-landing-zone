@@ -1,0 +1,34 @@
+apiVersion: v2
+name: llz-cluster-foundation
+description: >-
+  The secure-by-default baseline every namespace on a Linode LKE-E + apl-core
+  cluster needs: the namespaces apl-core does NOT manage (openbao,
+  observability, grafana, argo-workflows/events, external-secrets), default-deny
+  NetworkPolicies + the minimum-viable allows for apl-core-managed namespaces
+  (cert-manager, harbor, istio-system, observability), the CoreDNS `*.internal`
+  rewrite to the platform Istio gateway, the one-shot CoreDNS rollout-restart,
+  and the default-StorageClass demotion PostSync hook. The NetworkPolicy scars
+  (istiod xDS egress, CNPG operator/Prometheus allows, Gateway-API pod
+  selectors, the LKE-E 443+6443 apiserver pair) ship as correct-by-default.
+type: application
+# Chart version — bump on any template/values change. Published to
+# oci://ghcr.io/<org>/charts/llz-cluster-foundation by .github/workflows/publish-charts.yml.
+version: 0.1.1
+# appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
+# (used by the CoreDNS-restart and StorageClass-patcher Jobs).
+appVersion: "1.32.4"
+keywords:
+  - networkpolicy
+  - default-deny
+  - coredns
+  - storageclass
+  - apl-core
+  - linode
+  - lke-enterprise
+  - istio
+home: https://github.com/akamai-consulting/lke-landing-zone
+maintainers:
+  - name: lke-landing-zone platform team
+
+annotations:
+  artifacthub.io/license: Apache-2.0

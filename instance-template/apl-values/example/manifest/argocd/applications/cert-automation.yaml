@@ -1,0 +1,46 @@
+# cert-automation (first-party chart) — wave -14.
+#
+# -14 is AFTER argo-events (-15) registers the EventBus/EventSource/Sensor CRDs
+# this chart's CRs reference. Its own per-resource sync-waves order within the
+# sync. SkipDryRunOnMissingResource=true: the Argo Events/Workflows CRDs may not
+# be registered at this chart's first reconcile.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: llz-cert-automation
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  revisionHistoryLimit: 3
+  project: platform-support
+  source:
+    repoURL: ghcr.io/<@ upstream_org @>/charts
+    chart: llz-cert-automation
+    targetRevision: 0.1.0
+    helm:
+      releaseName: llz-cert-automation
+      valuesObject:
+        namespace: llz-cert-automation
+        certManagerNamespace: cert-manager
+        eventBus:
+          name: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: llz-cert-automation
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+        factor: 2
+    syncOptions:
+      - SkipDryRunOnMissingResource=true
+      - CreateNamespace=false
+      - ServerSideApply=true

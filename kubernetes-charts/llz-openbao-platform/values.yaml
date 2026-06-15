@@ -1,0 +1,371 @@
+# Default values for openbao-platform.
+#
+# This chart wraps the upstream OpenBao Helm chart (a subchart dependency) and
+# layers on the cluster integration the bare chart omits: a cert-manager serving
+# cert, NetworkPolicies, a ServiceMonitor, a Promtail audit-shipper config, and
+# the AppRole-rotation CronWorkflow. The defaults below capture the operational
+# scars this platform hit on Linode LKE-Enterprise + apl-core, so a sibling
+# deployment overrides only what genuinely differs (region, repo, CIDRs, names).
+#
+# Two kinds of values live here:
+#   • `openbao:`  — passed straight through to the upstream openbao subchart.
+#   • everything else (`platform`, `openbaoPromtail`, `approleWorkflow`) —
+#     consumed by THIS chart's own templates/ (cert, NP, ServiceMonitor, etc.).
+
+# ── Platform identity (the decoupled org/cluster knobs) ──────────────────────
+# These are the values a sibling system team changes. Defaults are this repo's
+# current Linode LKE-E values. Names that other cluster components reference by
+# string (the openbao-tls Secret, the platform-openbao release/StatefulSet identity,
+# the platform-openbao-internal headless Service) are LOAD-BEARING — kept here as
+# defaults so they remain overridable, but changing them is a coordinated rename.
+platform:
+  # The Helm release name OpenBao's StatefulSet + Services derive from. This is
+  # a load-bearing identity: the cert SANs, raft retry_join FQDNs, ServiceMonitor
+  # selector, and the consuming Argo Application's releaseName/ignoreDifferences
+  # all assume it. The upstream subchart derives the StatefulSet name from the
+  # release name (here `platform-openbao`), NOT from this value — this is the
+  # documented mirror used by THIS chart's cert/NP templates. Keep them in sync.
+  releaseName: platform-openbao
+  # Headless Service the raft peers resolve each other through. Derived by the
+  # subchart as `<releaseName>-internal`; mirrored here for the cert SANs.
+  internalServiceName: platform-openbao-internal
+
+  tls:
+    # Name of the cert-manager Certificate AND the Secret it writes. LOAD-BEARING:
+    # OpenBao mounts `openbao-tls` at /openbao/tls (see openbao.server.volumes),
+    # the eso-cert-watcher chart watches this Certificate, and the rotation
+    # CronWorkflow mounts this Secret's ca.crt. Do not rename without a sweep.
+    secretName: openbao-tls
+    # cert-manager issuer that signs the OpenBao serving cert. `openbao-ca` is a
+    # STABLE self-signed ClusterIssuer (cert-manager/raw/openbao-bootstrap-ca.yaml)
+    # with no OpenBao dependency, so the cert issues BEFORE OpenBao starts and the
+    # serving CA never rotates mid-bootstrap. A sibling cluster points this at its
+    # own bootstrap CA issuer.
+    issuerRef:
+      name: openbao-ca
+      kind: ClusterIssuer
+    duration: 8760h
+    renewBefore: 720h
+
+  # NetworkPolicy: namespaces allowed to reach OpenBao on :8200, and the
+  # observability namespace OpenBao ships audit logs to on :80. These are
+  # apl-core namespace names; a sibling deployment with different namespace
+  # names overrides the list. The intra-raft (:8200/:8201) and DNS/K8s-API
+  # (53/443/6443) rules are structural and stay in the template.
+  networkPolicy:
+    enabled: true
+    # Namespaces permitted to connect to OpenBao's API port (8200).
+    allowedClientNamespaces:
+      - llz-external-secrets
+      - llz-cert-automation
+      - llz-observability
+    # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
+    observabilityNamespace: llz-observability
+
+  # Prometheus ServiceMonitor for OpenBao's /v1/sys/metrics endpoint. In the
+  # source chart this rendered only when the release was named `platform-prom`
+  # (a magic-release-name gate); decoupled here into an explicit flag plus the
+  # Prometheus-operator release label the operator selects on. A sibling cluster
+  # whose kube-prometheus-stack release is not `platform-prom` overrides
+  # releaseLabel; set enabled:false if Prometheus isn't installed.
+  serviceMonitor:
+    enabled: true
+    # Value of the `release:` label the Prometheus Operator's serviceMonitorSelector
+    # matches. Must equal the kube-prometheus-stack Helm release name.
+    releaseLabel: platform-prom
+
+# ── OpenBao subchart values (passed through to openbao/openbao-helm 0.13.0) ──
+#
+# OpenBao is the OpenSSF/Linux Foundation fork of HashiCorp Vault, Apache 2.0
+# licensed. API-compatible with Vault at the OSS feature level.
+#
+# Mode: HA with integrated Raft storage, 3 replicas. Single-cluster durability
+# and leader election without an external storage backend. Per-region cluster —
+# the secondary region runs its own independent OpenBao cluster. Cross-region
+# consistency is achieved by operator-side dual-write (see
+# `llz openbao set` and `docs/secrets.md`), not by OpenBao
+# replication. OpenBao OSS has no Performance Replication equivalent — that is a
+# Vault Enterprise feature, intentionally not in OpenBao.
+#
+# After first sync the pods come up sealed. Bootstrap is fully automated:
+# run .github/workflows/bootstrap-openbao.yml for each region.
+#
+# Chart repo: https://openbao.github.io/openbao-helm
+openbao:
+  enabled: true
+
+  global:
+    tlsDisable: false
+
+  # OpenBao does not ship a secret-injection sidecar equivalent to Vault Injector
+  # today. CI fetches secrets via the HTTP API directly. If workloads move onto
+  # LKE and need runtime injection, swap in External Secrets Operator or the
+  # OpenBao CSI provider here.
+  injector:
+    enabled: false
+
+  server:
+    image:
+      repository: openbao/openbao
+      tag: "2.5.0@sha256:d24890f589bc57658a43c18faab2afc4fbedaadad3806d5a638e1adaed2dff8d"
+
+    # The openbao namespace is labeled with Pod Security Standards
+    # `restricted:v1.31`. Without these securityContext settings the StatefulSet
+    # controller can't create pods (violates PodSecurity restricted:v1.31:
+    # unrestricted capabilities, seccompProfile ...).
+    statefulSet:
+      securityContext:
+        pod:
+          runAsNonRoot: true
+          runAsGroup: 1000
+          runAsUser: 100
+          fsGroup: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        container:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+
+    ha:
+      enabled: true
+      # Raft replica count. 3 is the minimum for a quorum that tolerates one node
+      # loss. NOTE: the retry_join blocks in the `config` below are written out
+      # per-pod for exactly 3 peers, and the openbao-tls cert SANs
+      # (platform.tls.secretName) enumerate platform-openbao-0..2 — changing this
+      # number means editing both the retry_join list here AND the cert dnsNames
+      # in templates/openbao-tls-cert.yaml. Kept literal here because the upstream
+      # subchart reads this exact path.
+      replicas: 3
+      raft:
+        enabled: true
+        setNodeId: true
+        config: |
+          ui = true
+
+          listener "tcp" {
+            tls_disable      = 0
+            address          = "[::]:8200"
+            cluster_address  = "[::]:8201"
+            tls_cert_file    = "/openbao/tls/tls.crt"
+            tls_key_file     = "/openbao/tls/tls.key"
+            tls_min_version  = "tls12"
+
+            telemetry {
+              unauthenticated_metrics_access = true
+            }
+          }
+
+          telemetry {
+            prometheus_retention_time = "30s"
+            disable_hostname = true
+          }
+
+          storage "raft" {
+            path = "/openbao/data"
+
+            # retry_join blocks let each follower discover the active leader
+            # automatically on startup, removing the manual
+            # `bao operator raft join` step from cluster bootstrap. Each pod
+            # carries blocks for ALL three peer FQDNs (including its own —
+            # OpenBao silently ignores self-joins); whichever is leader at
+            # the moment of join wins, and the others retry until they hit
+            # the leader.
+            #
+            # The FQDNs MUST appear as SANs on the openbao-tls cert that
+            # the leader is currently serving (see templates/openbao-tls-cert.yaml,
+            # which enumerates the same per-pod names). The CA file path mirrors
+            # the standard volume mount of the openbao-tls Secret.
+            retry_join {
+              leader_api_addr     = "https://platform-openbao-0.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
+              leader_ca_cert_file = "/openbao/tls/ca.crt"
+            }
+            retry_join {
+              leader_api_addr     = "https://platform-openbao-1.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
+              leader_ca_cert_file = "/openbao/tls/ca.crt"
+            }
+            retry_join {
+              leader_api_addr     = "https://platform-openbao-2.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
+              leader_ca_cert_file = "/openbao/tls/ca.crt"
+            }
+          }
+
+          service_registration "kubernetes" {}
+
+          # Declarative file audit device. OpenBao 2.5.0 rejects the historical
+          # API-based path (`bao audit enable file ...`) with HTTP 400; declarative
+          # config is the only supported path now.
+          #
+          # CRITICAL — OpenBao 2.5.0's HCL parser does NOT infer `type` from the
+          # labeled block syntax (`audit "file"`) like Vault does. Without an
+          # explicit `type = "file"` line the server fails to load config with
+          # "audit type must be specified" and every pod crashes on start. Always
+          # include `type =` here. `mode = "0640"` — group-readable so the
+          # Promtail sidecar (uid=10000 gid=1000) can tail audit.log; default 0600
+          # left Promtail with "permission denied" and the audit stream never
+          # reached Loki.
+          audit "file" {
+            type = "file"
+            path = "file"
+            options = {
+              file_path = "/openbao/audit/audit.log"
+              mode      = "0640"
+            }
+          }
+
+    dataStorage:
+      enabled: true
+      size: 10Gi
+      storageClass: block-storage-retain
+      accessMode: ReadWriteOnce
+
+    # Audit log goes to an emptyDir (NOT a PVC) — the named `audit` volume below.
+    # The Promtail sidecar tails /openbao/audit/audit.log and ships to Loki within
+    # seconds; the local file is only a buffer. Removing the PVC saves 30GB across
+    # the 3-pod raft. Caveat: OpenBao audit devices are blocking — if the emptyDir
+    # fills, OpenBao stops serving. Monitor `kubelet_volume_stats`, alert at 75%.
+    auditStorage:
+      enabled: false
+
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+
+    service:
+      enabled: true
+      type: ClusterIP
+      port: 8200
+
+    readinessProbe:
+      # default readiness treats sealed/uninitialized as not-ready (correct —
+      # keeps sealed pods out of Service endpoints).
+      enabled: true
+
+    livenessProbe:
+      enabled: true
+      # sealedcode=204 & uninitcode=204: a freshly deployed OpenBao comes up
+      # sealed/uninitialized and answers /v1/sys/health with 503/501. Default
+      # liveness treats those as failure, so kubelet SIGKILLs the container
+      # (~90s after start) before bootstrap-openbao.yml can run `bao operator
+      # init`. Mapping sealed/uninitialized to 204 keeps the pod alive through
+      # the bootstrap window.
+      path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+      initialDelaySeconds: 60
+
+    # --- Audit log shipping via Promtail sidecar ------------------------------
+    # A Promtail sidecar tails the file audit device and ships to the in-cluster
+    # Loki gateway. Its config lives in the `platform-openbao-promtail` ConfigMap
+    # rendered by templates/openbao-promtail-config.yaml in this chart.
+    extraContainers:
+      - name: promtail
+        image: grafana/promtail:3.6.11@sha256:a761cb834cfaeee29745440d4884d6748f0a08d8f68928db1d707018c1dcfbe9
+        imagePullPolicy: Always
+        args:
+          - -config.file=/etc/promtail/promtail.yaml
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+          - name: audit
+            mountPath: /openbao/audit
+            readOnly: true
+          - name: promtail-config
+            mountPath: /etc/promtail
+            readOnly: true
+          - name: promtail-positions
+            mountPath: /var/promtail
+          - name: promtail-tmp
+            mountPath: /tmp
+        resources:
+          requests:
+            cpu: 20m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+    # `server.volumes` are raw Pod-spec volume entries. With auditStorage
+    # disabled, we provide the `audit` volume ourselves as an emptyDir sized at
+    # 2Gi (matches the prior PVC quota). The promtail-config ConfigMap name
+    # matches templates/openbao-promtail-config.yaml; openbao-tls matches
+    # platform.tls.secretName.
+    volumes:
+      - name: audit
+        emptyDir:
+          sizeLimit: 2Gi
+      - name: promtail-config
+        configMap:
+          name: platform-openbao-promtail
+      - name: promtail-positions
+        emptyDir: {}
+      - name: promtail-tmp
+        emptyDir: {}
+      - name: openbao-tls
+        secret:
+          secretName: openbao-tls
+
+    # NOTE: this chart uses `server.volumeMounts` (not `extraVolumeMounts`) to
+    # mount /openbao/tls. The `extraVolumeMounts` key is silently ignored,
+    # leaving /openbao/tls unmounted and OpenBao crash-looping with
+    # "open /openbao/tls/tls.crt: no such file".
+    volumeMounts:
+      - name: openbao-tls
+        mountPath: /openbao/tls
+        readOnly: true
+      - name: audit
+        mountPath: /openbao/audit
+
+  ui:
+    enabled: true
+    serviceType: ClusterIP  # expose via ingress/port-forward; do not LoadBalancer-expose the UI.
+
+  csi:
+    enabled: false
+
+# ── Promtail audit-shipper config (templates/openbao-promtail-config.yaml) ───
+# Override per cluster via the Application's spec.source.helm.parameters in the
+# env overlay.
+openbaoPromtail:
+  enabled: true
+  # Loki gateway service URL, resolvable from the openbao namespace.
+  lokiPushUrl: http://loki-gateway.llz-observability.svc.cluster.local/loki/api/v1/push
+  region: primary
+  cluster: platform-openbao  # stable label — matches the Helm release name.
+
+# ── AppRole-rotation CronWorkflow (templates/approle-rotation-*.yaml) ────────
+approleWorkflow:
+  # Gate for the entire rotation CronWorkflow + its RBAC/ESO. Set false in
+  # overlays that don't yet have cluster-specific GHA secret names (otherwise the
+  # rotation would clobber another cluster's GHA secret on the first tick).
+  approleRotationEnabled: true
+  # Cron schedule for the rotation. Default fires day 1 of months 1,4,7,10
+  # (quarterly ~= 90 days, the 90-day secret lifetime). A sibling
+  # cluster can stagger its schedule to avoid all regions rotating at once.
+  schedule: "0 2 1 1,4,7,10 *"
+  timezone: UTC
+  # GitHub repo (org-specific) the rotation pushes the new secret_id to via gh.
+  # This is org/cluster identity — a sibling team points at its own repo.
+  githubRepo: "your-org/your-instance-repo"
+  # This deployment's OpenBao HA role (active | standby | standalone). It is the
+  # source of truth for the GitHub Actions secret the rotation writes back to:
+  # active/standalone → OPENBAO_APPROLE_SECRET_ID, standby → ..._STANDBY (matching
+  # the suffix bootstrap-openbao.yml seeds). Set per-deployment in the env overlay.
+  role: standalone
+  # Optional explicit override of the rotated GHA secret name. Leave empty to use
+  # the role-derived name above (the common case); set it only for a bespoke name.
+  githubApproleSecretName: ""
+  # Deployment this cluster represents. Used to env-scope the
+  # OPENBAO_PROPAGATOR_SECRET_ID GHA secret (`infra-<deployment>`). Set it to the
+  # deployment name in the env overlay.
+  region: primary

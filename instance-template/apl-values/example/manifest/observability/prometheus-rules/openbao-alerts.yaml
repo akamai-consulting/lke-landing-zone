@@ -1,0 +1,47 @@
+# Platform alert rules for OpenBao. Deployed as a PrometheusRule CR; apl-core's
+# kube-prometheus-stack picks it up via its ruleSelector (set permissively in
+# the env values.yaml). Namespace selectors target the llz-openbao namespace
+# the llz-openbao-platform chart deploys into.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: openbao-alerts
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    # Organizational label only; pickup is via the kube-prometheus-stack
+    # ruleSelector, not this label.
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: openbao-alerts
+      interval: 30s
+      rules:
+        - alert: OpenBaoMetricsTargetDown
+          expr: up{namespace="llz-openbao", service=~".*openbao.*"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            service: openbao
+          annotations:
+            summary: OpenBao metrics target is down
+            description: Prometheus cannot scrape one or more OpenBao pods.
+        - alert: OpenBaoSealed
+          expr: vault_core_unsealed{namespace="llz-openbao"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            service: openbao
+          annotations:
+            summary: OpenBao pod is sealed
+            description: An OpenBao pod is sealed and cannot serve secret requests until unsealed.
+        - alert: OpenBaoNoActiveLeader
+          expr: sum(vault_core_active{namespace="llz-openbao"}) < 1
+          for: 2m
+          labels:
+            severity: critical
+            service: openbao
+          annotations:
+            summary: OpenBao has no active leader
+            description: No OpenBao pod is reporting active leadership.

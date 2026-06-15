@@ -1,0 +1,45 @@
+# RBAC for the cert-automation namespace.
+#
+# <name>-runner — used by Argo Workflow pods spawned from the haproxy-rebuild
+#                 WorkflowTemplate (kubectl extract, buildah push, gh dispatch)
+#                 and by the Sensor that submits the Workflow.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "llz-cert-automation.runnerServiceAccount" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+---
+# Workflow pods need to read the watched TLS Secret in cert-manager to extract
+# the renewed certificate before rebuilding the HAProxy image.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "llz-cert-automation.name" . }}-read-haproxy-tls
+  namespace: {{ .Values.certManagerNamespace }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resourceNames: [{{ .Values.watchedSecret.name | quote }}]
+    resources: [secrets]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "llz-cert-automation.name" . }}-read-haproxy-tls
+  namespace: {{ .Values.certManagerNamespace }}
+  annotations:
+    ignore-check.kube-linter.io/access-to-secrets: "cert-automation workflow requires read-only access to the haproxy-tls Secret to extract the renewed TLS certificate for image build"
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "llz-cert-automation.name" . }}-read-haproxy-tls
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "llz-cert-automation.runnerServiceAccount" . }}
+    namespace: {{ .Values.namespace }}

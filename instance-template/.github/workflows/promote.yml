@@ -1,0 +1,119 @@
+name: Promote (dev → staging → prod)
+
+# Native code-promotion pipeline (docs/environments-and-promotion.md): a STATIC,
+# `needs:`-chained walk over the ranked deployments. Each stage calls the SAME
+# reusable llz-terraform.yml apply path the single-deployment flow uses
+# (terraform.yml). The only thing this file adds is ORDERING (`needs:`) and the
+# per-stage GREEN GATE — a stage starts only once the prior stage's whole apply +
+# convergence gate succeeded.
+#
+# REGENERATED FROM `promotion_rank`: this file is rendered from each deployment's
+# `promotion_rank` (cluster/<env>.tfvars) by `llz env add` and `llz env pipeline`.
+# It is the GitHub-native runtime; promotion_rank is the source of truth. The
+# dev/staging/prod jobs below are the example shipped with a fresh instance — once
+# you scaffold your ranked deployments (`llz env add <env> --promotion-rank N`),
+# llz rewrites this file to match. To change the pipeline, edit promotion_rank and
+# run `llz env pipeline` (NOT this file by hand); `llz env pipeline --check` fails
+# in CI when the two drift. `llz env list --ordered` / `llz env next` read the same
+# ranks; the fan-out workflows (health, rotation) read the full deployment list.
+#
+# Why static jobs instead of a `llz env next` self-dispatch loop: GitHub already
+# provides the three pieces of a promotion pipeline, so there is nothing to
+# reinvent at runtime —
+#   • on-green gate       → `needs:` (a stage waits for the prior to go green)
+#   • approval / soak      → infra-<stage> Environment protection rules
+#                            (required reviewers + wait timer + "only main"
+#                             deployment-branch policy)
+#   • resume-from-failure  → GitHub's built-in "Re-run failed jobs" resumes the
+#                            chain from the stage that failed — no custom resume.
+#
+# ADOPTERS:
+#   • Set `promotion_rank` on the deployments you want chained and run
+#     `llz env pipeline` rather than editing the jobs below by hand.
+#   • Every stage's `region:` must have a tfvars set + an `infra-<deployment>`
+#     GitHub Environment. Put approval (required reviewers) and any soak time
+#     (wait timer) on infra-staging / infra-prod — NOT on infra-dev — so dev flows
+#     automatically and the human gate sits BETWEEN stages. Add a
+#     deployment-branch policy ("Selected branches: main") so only main promotes.
+#   • Repoint the `uses:` org to your fork and pin @<ref> + template-ref to a
+#     template release tag (Renovate keeps both current — instance-template/renovate.json).
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'How much of each stage to (re)apply for this promotion'
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - cluster
+          - object-storage
+          - openbao-config
+  # Optional: auto-start the pipeline when a promotable change lands on main.
+  # Left commented so promotion is an explicit, operator-initiated action by
+  # default; uncomment to make every merge to main walk the pipeline.
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'terraform-iac-bootstrap/**'
+  #     - 'apl-values/**'
+
+permissions:
+  contents: read
+
+# One promotion in flight at a time; never cancel an in-progress rollout
+# (a partial apply is worse than a queued one — same policy as llz-terraform.yml).
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  # ── Stage 1 (promotion_rank 1) ───────────────────────────────────────────────
+  # No `needs:` — the pipeline entry point. infra-dev should have NO required
+  # reviewers so the first stage applies automatically from main.
+  dev:
+    name: Promote → dev
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
+    with:
+      instance_repo: <@ instance_repo @>
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref: <@ llz_version @>
+      action: apply
+      module: ${{ inputs.module || 'all' }}
+      region: dev
+    secrets: inherit
+
+  # ── Stage 2 (promotion_rank 2) ───────────────────────────────────────────────
+  # `needs: dev` is the green gate: staging only starts after dev applied AND the
+  # convergence gate passed. The approval prompt (if infra-staging has required
+  # reviewers) appears when this stage's apply jobs begin.
+  staging:
+    name: Promote → staging
+    needs: dev
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
+    with:
+      instance_repo: <@ instance_repo @>
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref: <@ llz_version @>
+      action: apply
+      module: ${{ inputs.module || 'all' }}
+      region: staging
+    secrets: inherit
+
+  # ── Stage 3 (promotion_rank 3) ───────────────────────────────────────────────
+  # Last stage. Gate infra-prod with required reviewers (and optionally a wait
+  # timer for soak) so prod is the deliberate, human-approved end of the line.
+  prod:
+    name: Promote → prod
+    needs: staging
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
+    with:
+      instance_repo: <@ instance_repo @>
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref: <@ llz_version @>
+      action: apply
+      module: ${{ inputs.module || 'all' }}
+      region: prod
+    secrets: inherit

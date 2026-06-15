@@ -1,0 +1,46 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Auto-merge Dependabot patch/minor PRs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Auto-merge patch and minor updates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          pr=$(curl -sSf \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
+          body=$(echo "$pr" | python3 -c "import sys,json; print(json.load(sys.stdin).get('body') or '')")
+
+          if echo "$body" | grep -qF 'update-type: version-update:semver-major'; then
+            echo "Contains major update — skipping auto-merge"
+            exit 0
+          fi
+          if ! echo "$body" | grep -qF 'update-type: version-update:semver-'; then
+            echo "No recognised semver update-type found — skipping"
+            exit 0
+          fi
+
+          echo "Patch/minor update — enabling auto-merge"
+          node_id=$(echo "$pr" | python3 -c "import sys,json; print(json.load(sys.stdin)['node_id'])")
+          mutation="mutation{enablePullRequestAutoMerge(input:{pullRequestId:\"${node_id}\",mergeMethod:SQUASH}){pullRequest{number}}}"
+          curl -sSf -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$GITHUB_GRAPHQL_URL" \
+            -d "$(python3 -c "import json,sys; print(json.dumps({'query': sys.argv[1]}))" "$mutation")"

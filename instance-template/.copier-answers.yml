@@ -1,0 +1,4 @@
+# This file is managed by Copier — DO NOT edit by hand.
+# `copier update` reads it to pull LKE landing-zone template changes into this
+# instance (it records the template version + the answers you gave at scaffold).
+<@ _copier_answers|to_nice_yaml @>

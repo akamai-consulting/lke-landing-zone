@@ -1,0 +1,28 @@
+apiVersion: v2
+name: llz-eso-cert-watcher
+description: >-
+  Singleton watcher that rolling-restarts the External Secrets Operator on two
+  signals that both leave ESO's cached Vault/OpenBao client stale: (1) the CA
+  Secret behind `caProvider` rotates (provider caches the CA at client-creation
+  → "x509: certificate signed by unknown authority"); (2) the ClusterSecretStore
+  wedges at bootstrap because ESO validated it before its inputs existed and
+  never re-validates (InvalidProviderConfig). Both read only public status.
+type: application
+# Chart version — bump on any template/values change. Published to
+# oci://ghcr.io/<org>/charts/llz-eso-cert-watcher by .github/workflows/publish-charts.yml.
+# 0.2.0: add signal 2 (ClusterSecretStore wedge recovery) + store-read ClusterRole.
+version: 0.2.0
+# appVersion tracks the watcher image tag default in values.yaml.
+appVersion: "1.32.4"
+keywords:
+  - external-secrets
+  - cert-manager
+  - ca-rotation
+  - openbao
+  - vault
+home: https://github.com/akamai-consulting/lke-landing-zone
+maintainers:
+  - name: lke-landing-zone platform team
+
+annotations:
+  artifacthub.io/license: Apache-2.0

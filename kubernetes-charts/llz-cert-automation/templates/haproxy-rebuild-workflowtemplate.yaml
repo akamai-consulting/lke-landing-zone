@@ -1,0 +1,163 @@
+# Argo Workflows WorkflowTemplate: rebuild the HAProxy container image with the
+# renewed TLS certificate, push it to Harbor, and trigger a HAProxy re-deploy.
+#
+# Submitted by the cert-automation Sensor (sensor.yaml) when the
+# cert-manager-managed watched-TLS Secret changes.
+#
+# The entire flow is removed when Akamai Cloud Functions ships native TLS
+# termination (§4.2.3 of architecture overview).
+#
+# NOTE: the workflow.parameters.* / inputs.parameters.* placeholders below are
+# Argo Workflows substitutions, NOT Helm — they are escaped so Helm renders them
+# through verbatim.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: haproxy-rebuild
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "llz-cert-automation.labels" . | nindent 4 }}
+spec:
+  serviceAccountName: {{ include "llz-cert-automation.runnerServiceAccount" . }}
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: harbor-url
+        description: Harbor external URL — image push destination
+      - name: image-tag
+        description: Tag for the rebuilt HAProxy image
+  volumes:
+    - name: shared-data
+      emptyDir: {}
+    - name: harbor-config
+      secret:
+        secretName: {{ .Values.externalSecrets.harborDockerConfig.secretName }}
+  templates:
+    # DAG entrypoint: extract-cert -> build-image -> deploy-haproxy (sequential).
+    - name: main
+      dag:
+        tasks:
+          - name: extract-cert
+            template: extract-cert
+          - name: build-image
+            depends: "extract-cert"
+            template: build-image
+            arguments:
+              parameters:
+                - name: harbor-url
+                  value: "{{ `{{workflow.parameters.harbor-url}}` }}"
+                - name: image-tag
+                  value: "{{ `{{workflow.parameters.image-tag}}` }}"
+          - name: deploy-haproxy
+            depends: "build-image"
+            template: deploy-haproxy
+            arguments:
+              parameters:
+                - name: image-tag
+                  value: "{{ `{{workflow.parameters.image-tag}}` }}"
+
+    # extract-cert: kubectl pulls tls.crt / tls.key from the cert-manager
+    # watched-TLS Secret onto the shared volume.
+    - name: extract-cert
+      script:
+        image: {{ .Values.images.kubectl | quote }}
+        command: ["/bin/sh"]
+        source: |
+          #!/bin/sh
+          set -euo pipefail
+          kubectl -n {{ .Values.certManagerNamespace }} get secret {{ .Values.watchedSecret.name }} \
+            -o jsonpath='{{ `{.data.tls\.crt}` }}' | base64 -d > "/shared/tls.crt"
+          kubectl -n {{ .Values.certManagerNamespace }} get secret {{ .Values.watchedSecret.name }} \
+            -o jsonpath='{{ `{.data.tls\.key}` }}' | base64 -d > "/shared/tls.key"
+          echo "Certificate extracted. NotAfter:"
+          openssl x509 -noout -enddate -in "/shared/tls.crt"
+        volumeMounts:
+          - name: shared-data
+            mountPath: /shared
+        resources:
+          limits:   { cpu: 100m, memory: 128Mi }
+          requests: { cpu: 50m,  memory: 64Mi }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          seccompProfile: { type: RuntimeDefault }
+
+    # build-image: buildah rebuilds the HAProxy image with the renewed cert and
+    # pushes to Harbor. buildah-vfs is rootless-compatible (no fuse-overlayfs /
+    # extra caps) and adequate for one-off cert rebuilds.
+    - name: build-image
+      inputs:
+        parameters:
+          - name: harbor-url
+          - name: image-tag
+      script:
+        image: {{ .Values.images.buildah | quote }}
+        command: ["/bin/sh"]
+        env:
+          - name: STORAGE_DRIVER
+            value: vfs
+          - name: REGISTRY_AUTH_FILE
+            value: /harbor-config/config.json
+        source: |
+          #!/bin/sh
+          set -euo pipefail
+          cd "/shared"
+          cat > Dockerfile <<EOF
+          FROM {{ .Values.haproxyImage.baseImage }}
+          COPY tls.crt /usr/local/etc/haproxy/tls.crt
+          COPY tls.key /usr/local/etc/haproxy/tls.key
+          EOF
+          IMAGE="{{ `{{inputs.parameters.harbor-url}}` }}/{{ .Values.haproxyImage.repoPath }}:{{ `{{inputs.parameters.image-tag}}` }}"
+          buildah bud --storage-driver=vfs -t "$IMAGE" .
+          buildah push --storage-driver=vfs "$IMAGE"
+        volumeMounts:
+          - name: shared-data
+            mountPath: /shared
+          - name: harbor-config
+            mountPath: /harbor-config
+        resources:
+          limits:   { cpu: 1,    memory: 1Gi }
+          requests: { cpu: 250m, memory: 512Mi }
+        securityContext:
+          # buildah requires CAP_SETUID/SETGID for user namespace setup.
+          runAsUser: 1000
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+            add:  ["SETUID","SETGID"]
+          seccompProfile: { type: RuntimeDefault }
+
+    # deploy-haproxy: gh CLI dispatches the GitHub Actions deploy workflow which
+    # rolls out the HAProxy sidecar with the new image tag. GH_TOKEN is
+    # sourced from the github-token ExternalSecret.
+    - name: deploy-haproxy
+      inputs:
+        parameters:
+          - name: image-tag
+      script:
+        image: {{ .Values.images.ghCli | quote }}
+        command: ["/bin/sh"]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.externalSecrets.githubToken.secretName }}
+                key: {{ .Values.externalSecrets.githubToken.remoteProperty }}
+        source: |
+          #!/bin/sh
+          set -euo pipefail
+          gh workflow run {{ .Values.githubDeploy.workflow }} \
+            --repo {{ .Values.githubDeploy.repo }} \
+            --ref {{ .Values.githubDeploy.ref }} \
+            -f image_tag={{ `{{inputs.parameters.image-tag}}` }}
+        resources:
+          limits:   { cpu: 100m, memory: 128Mi }
+          requests: { cpu: 50m,  memory: 64Mi }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          seccompProfile: { type: RuntimeDefault }

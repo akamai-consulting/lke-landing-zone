@@ -1,0 +1,861 @@
+package main
+
+// ci.go implements `llz ci` — pipeline-only plumbing invoked by the project's
+// GitHub Actions workflows, NOT a hand-run operator command. It is grouped (and
+// documented) separately from the operator porcelain so `llz --help` stays
+// legible and nobody fat-fingers a CI-only step. Each subcommand is the native
+// port of a former instance-scripts/terraform/*.sh step: the decision logic
+// lives in internal/terraform (+ internal/linode) behind unit tests, and this
+// file is the thin terraform/Linode orchestration around it.
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
+	"github.com/spf13/cobra"
+)
+
+func ciCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "ci",
+		Short: "pipeline plumbing run by .github/workflows (a few also serve manual incident cleanup)",
+		Long: "Plumbing subcommands the project's GitHub Actions workflows call in place of\n" +
+			"the former instance-scripts/*.sh CI steps. The terraform ones (tf-import,\n" +
+			"tf-apply) expect to run inside a job (a terraform working directory,\n" +
+			"step-injected env); the orphan sweeps (reap-volumes, reap-nodebalancers) also\n" +
+			"double as the manual fallback operators run by hand. The reusable logic lives\n" +
+			"in internal/terraform + internal/linode behind unit tests; these commands are\n" +
+			"the thin orchestration over it.",
+	}
+	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFUntrackCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(),
+		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciConvergeCmd(),
+		ciBaoStatusCmd(), ciBaoUnsealCmd(), ciBaoUnsealFollowersCmd(),
+		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd())
+	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
+	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd())
+	// Generic wait primitives (formerly inline kubectl polling loops in the
+	// bootstrap / rotation workflows).
+	c.AddCommand(ciWaitPodsCmd(), ciWaitSecretCmd(), ciWaitClusterReadyCmd())
+	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
+	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
+	// Rotation routing + PAT propagation (formerly inline in llz-secret-rotation.yml).
+	c.AddCommand(ciRotationPlanCmd(), ciPropagatePATCmd())
+	// Harbor API steps (formerly inline curl in llz-bootstrap-openbao.yml).
+	c.AddCommand(ciHarborPortForwardCmd(), ciHarborEnsureProjectCmd(), ciHarborSmokeCmd())
+	// Pre-flight guards (require-secret.sh / assert-destroy-confirm.sh).
+	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd())
+	// Bootstrap seeding (gen-bootstrap-tls.sh / bootstrap-cloud-firewall.sh /
+	// provision-harbor-robots.sh).
+	c.AddCommand(ciGenBootstrapTLSCmd(), ciBootstrapCloudFirewallCmd(), ciProvisionHarborRobotsCmd())
+	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
+	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
+	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
+	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd())
+	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
+	c.AddCommand(ciHealthApproleRotationCmd(), ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
+		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
+	// Apply-time secret stashes + failure diagnostics (llz-terraform.yml).
+	c.AddCommand(ciStashEnvSecretCmd(), ciDiagnoseArgoCDCmd())
+	// OpenBao KV seed steps (formerly ~15 inline-bash blocks in
+	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
+	// material specials in ci_bao_seed.go / ci_seed_approle.go /
+	// ci_seed_special.go.
+	c.AddCommand(ciBaoSeedCmd(), ciSeedApproleCmd(),
+		ciSeedHarborDockerConfigCmd(), ciSeedHarborRegistryS3Cmd(),
+		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd())
+	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
+	// via the Makefile).
+	c.AddCommand(ciExternalSecretPathsCmd())
+	// Design-principle gate: budget on inline-bash / shell / python logic that
+	// should instead live in unit-tested Go (lint.yml). Ratchets DOWN over time.
+	c.AddCommand(ciUntestableLOCCmd())
+	// Release-hygiene gate: a chart change must bump its Chart.yaml version, or
+	// publish-charts.yml never publishes it and clusters keep the stale artifact.
+	c.AddCommand(ciChartVersionGuardCmd())
+	// Cluster-bootstrap local-exec body (the kyverno_* null_resources in
+	// instance-template cluster-bootstrap/main.tf): readiness poll + apply +
+	// webhook-race soft-fail + retrofit kick.
+	c.AddCommand(ciApplyKyvernoPolicyCmd())
+	return c
+}
+
+func ciVerifyObjectStorageCmd() *cobra.Command {
+	var region string
+	c := &cobra.Command{
+		Use:   "verify-object-storage",
+		Short: "verify a region's Loki/Harbor object-storage keys exist before openbao seeds them",
+		Long: "Native port of verify-object-storage-provisioned.sh. Lists Linode\n" +
+			"object-storage keys and checks the region's scoped keys exist\n" +
+			"(platform-loki-<region>, platform-harbor-registry-<region>) — a present key\n" +
+			"implies its bucket. The backstop against seeding STALE LOKI_S3_* /\n" +
+			"HARBOR_REGISTRY_S3_* secrets (which yield InvalidAccessKeyId at runtime with\n" +
+			"no other signal). Non-fatal on a Linode API hiccup (warn + succeed); fails\n" +
+			"only when the API responds and a key is genuinely absent. Reads LINODE_API_TOKEN.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return runCIVerifyObjectStorage(region) },
+	}
+	c.Flags().StringVar(&region, "region", "", "region whose scoped keys to verify (required)")
+	return c
+}
+
+func runCIVerifyObjectStorage(region string) error {
+	if region == "" {
+		return fmt.Errorf("--region is required")
+	}
+	token, err := ciToken()
+	if err != nil {
+		return err
+	}
+	keys, err := linode.NewClient(token, 30*time.Second).ListObjectStorageKeys(context.Background())
+	if err != nil {
+		// Transient API hiccup / auth page / non-JSON body — don't block the
+		// bootstrap on a parsing edge case; the seed steps below still run.
+		fmt.Fprintf(os.Stderr, "::warning::could not verify object-storage keys for %s (%v) — skipping this preflight (non-fatal).\n", region, err)
+		return nil
+	}
+	want := []string{"platform-loki-" + region, "platform-harbor-registry-" + region}
+	var missing []string
+	for _, label := range want {
+		if _, ok := linode.FindIDByLabel(keys, label); !ok {
+			missing = append(missing, label)
+		}
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "::error::object-storage scoped key(s) not found on Linode for %s: %s\n", region, strings.Join(missing, " "))
+		fmt.Fprintln(os.Stderr, "The Loki/Harbor S3 keys are absent, so LOKI_S3_* / HARBOR_REGISTRY_S3_* secrets are STALE — seeding them yields InvalidAccessKeyId at runtime. Remediate:")
+		fmt.Fprintf(os.Stderr, "  gh workflow run terraform.yml -f action=apply -f module=object-storage -f region=%s\n", region)
+		fmt.Fprintf(os.Stderr, "  gh workflow run bootstrap-openbao.yml -f region=%s\n", region)
+		return fmt.Errorf("object-storage preflight failed: %d key(s) missing for %s", len(missing), region)
+	}
+	fmt.Printf("object-storage preflight OK for %s: %s exist on Linode.\n", region, strings.Join(want, " + "))
+	return nil
+}
+
+func ciTFImportCmd() *cobra.Command {
+	var region string
+	var nonfatal bool
+	c := &cobra.Command{
+		Use:   "tf-import",
+		Short: "idempotently import existing Linode cluster resources into TF state",
+		Long: "Native port of terraform-linode-import.sh. Run from the cluster terraform\n" +
+			"working directory: for each cluster resource (VPC, subnet, LKE cluster, node\n" +
+			"pool, node firewall) not already in state, it finds the live resource by label\n" +
+			"via the Linode API (fully paginated) and `terraform import`s it. Also seeds a\n" +
+			"kubeconfig (real or stub) so the kubernetes/helm/kubectl providers can init.\n" +
+			"Reads LINODE_TOKEN (or LINODE_API_TOKEN). --nonfatal logs+skips import failures\n" +
+			"instead of aborting (destroy workflows only).",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return runCITFImport(gopts, region, nonfatal) },
+	}
+	c.Flags().StringVar(&region, "region", "", "tfvars prefix, e.g. primary (required)")
+	c.Flags().BoolVar(&nonfatal, "nonfatal", false, "log+skip import failures instead of aborting (destroy only)")
+	return c
+}
+
+func ciTFApplyCmd() *cobra.Command {
+	var varFile, plan string
+	c := &cobra.Command{
+		Use:   "tf-apply",
+		Short: "terraform apply with self-heal for two known idempotent failure modes",
+		Long: "Native port of terraform-apply-with-heal.sh. Runs `terraform apply` once; on\n" +
+			"failure it matches two known patterns, applies a targeted heal, re-plans, and\n" +
+			"retries ONCE. Heal A: a phantom helm_release in state (cluster lost the release)\n" +
+			"→ `terraform state rm`. Heal B: a duplicate Cloud Firewall label → find the\n" +
+			"existing firewall by label (paginated) and `terraform import` it so the retry\n" +
+			"adopts it. Any other error passes through. Reads LINODE_TOKEN (or\n" +
+			"TF_VAR_linode_token) for Heal B.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return runCITFApply(gopts, plan, varFile) },
+	}
+	c.Flags().StringVar(&plan, "plan", "", "saved terraform plan file to apply (required)")
+	c.Flags().StringVar(&varFile, "var-file", "", "tfvars file for re-plan/import (required)")
+	return c
+}
+
+// cluster-resource terraform addresses (stable; match the bootstrap modules).
+const (
+	addrVPC      = "module.cluster.linode_vpc.this"
+	addrSubnet   = "module.cluster.linode_vpc_subnet.nodes"
+	addrCluster  = "module.cluster.linode_lke_cluster.this"
+	addrNodePool = "module.node_pool.linode_lke_node_pool.this"
+	addrFirewall = "module.cluster.module.node_firewall.linode_firewall.this"
+)
+
+func runCITFImport(g globalOpts, region string, nonfatal bool) error {
+	if region == "" {
+		return fmt.Errorf("--region is required (the tfvars prefix, e.g. primary)")
+	}
+	token := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
+	if token == "" {
+		return fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) to a Linode PAT")
+	}
+
+	// tfvars file: prefer <region>.tfvars, fall back to the .example (mirrors the
+	// script + the plan step's own resolution).
+	varFile := region + ".tfvars"
+	if _, err := os.Stat(varFile); err != nil {
+		varFile = region + ".tfvars.example"
+	}
+	content, err := os.ReadFile(varFile)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", varFile, err)
+	}
+	labels := tf.DeriveLabels(tf.ParseTFVars(string(content)))
+	if labels.Cluster == "" {
+		return fmt.Errorf("%s has no cluster_label", varFile)
+	}
+
+	client := linode.NewClient(token, 60*time.Second)
+	ctx := context.Background()
+
+	if err := ensureKubeconfig(ctx, g, client, labels.Cluster); err != nil {
+		return err
+	}
+
+	// ── VPC (always fatal — fast, no cluster dependency, even under --nonfatal) ──
+	vpcID := tfStateID(addrVPC)
+	if vpcID == "" {
+		vpcs, err := client.ListVPCs(ctx)
+		if err != nil {
+			return fmt.Errorf("list VPCs: %w", err)
+		}
+		if id, ok := linode.FindIDByLabel(vpcs, labels.VPC); ok {
+			vpcID = strconv.FormatUint(id, 10)
+			if _, err := tfImport(g, varFile, addrVPC, vpcID, false); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("VPC %q not found in Linode — skipping import\n", labels.VPC)
+		}
+	} else {
+		fmt.Printf("%s already in state — skipping\n", addrVPC)
+	}
+
+	// ── VPC subnet (always fatal; needs the VPC id) ──
+	if subnetInState := tfStateID(addrSubnet); subnetInState != "" {
+		fmt.Printf("%s already in state — skipping\n", addrSubnet)
+	} else if vpcID == "" {
+		fmt.Println("No VPC id available — skipping subnet import")
+	} else {
+		vpcNum, _ := strconv.ParseUint(vpcID, 10, 64)
+		subs, err := client.ListVPCSubnets(ctx, vpcNum)
+		if err != nil {
+			return fmt.Errorf("list subnets of vpc %s: %w", vpcID, err)
+		}
+		if sid, ok := linode.FindIDByLabel(subs, labels.Subnet); ok {
+			if _, err := tfImport(g, varFile, addrSubnet, vpcID+","+strconv.FormatUint(sid, 10), false); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("Subnet %q not found in VPC %s — skipping import\n", labels.Subnet, vpcID)
+		}
+	}
+
+	// ── LKE cluster (nonfatal-aware; a failed import clears the id so the pool
+	//    import is skipped too) ──
+	clusterID := tfStateID(addrCluster)
+	if clusterID == "" {
+		ids, err := client.ClustersWithLabel(ctx, labels.Cluster)
+		if err != nil {
+			return fmt.Errorf("list clusters: %w", err)
+		}
+		if len(ids) > 0 {
+			clusterID = strconv.FormatUint(ids[0], 10)
+			ok, err := tfImport(g, varFile, addrCluster, clusterID, !nonfatal)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				clusterID = ""
+			}
+		} else {
+			fmt.Printf("Cluster %q not found in Linode — skipping import\n", labels.Cluster)
+		}
+	} else {
+		fmt.Printf("%s already in state — skipping\n", addrCluster)
+	}
+
+	// ── LKE node pool (nonfatal-aware; needs the cluster id) ──
+	if poolInState := tfStateID(addrNodePool); poolInState != "" {
+		fmt.Printf("%s already in state — skipping\n", addrNodePool)
+	} else if clusterID == "" {
+		fmt.Println("No cluster id available — skipping node pool import")
+	} else {
+		cNum, _ := strconv.ParseUint(clusterID, 10, 64)
+		pools, err := client.ListNodePools(ctx, cNum)
+		if err != nil {
+			return fmt.Errorf("list node pools of cluster %s: %w", clusterID, err)
+		}
+		if pid, ok := tf.SelectNodePoolID(pools, labels.NodePool); ok {
+			if _, err := tfImport(g, varFile, addrNodePool, clusterID+","+strconv.FormatUint(pid, 10), !nonfatal); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("Node pool %q not found by label or tag — skipping import\n", labels.NodePool)
+		}
+	}
+
+	// ── Node firewall (nonfatal-aware; account-unique label) ──
+	if fwInState := tfStateID(addrFirewall); fwInState != "" {
+		fmt.Printf("%s already in state — skipping\n", addrFirewall)
+	} else {
+		fws, err := client.ListFirewalls(ctx)
+		if err != nil {
+			return fmt.Errorf("list firewalls: %w", err)
+		}
+		if fid, ok := linode.FindIDByLabel(fws, labels.Firewall); ok {
+			if _, err := tfImport(g, varFile, addrFirewall, strconv.FormatUint(fid, 10), !nonfatal); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("Firewall %q not found — skipping import\n", labels.Firewall)
+		}
+	}
+
+	return nil
+}
+
+// ensureKubeconfig writes generated/<cluster>-kubeconfig.yaml if absent so the
+// kubernetes/helm/kubectl providers can initialise: the real kubeconfig when the
+// cluster exists and the API serves it, otherwise a stub.
+func ensureKubeconfig(ctx context.Context, g globalOpts, client *linode.Client, clusterLabel string) error {
+	path := filepath.Join("generated", clusterLabel+"-kubeconfig.yaml")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	if g.dryRun {
+		fmt.Fprintln(os.Stderr, "→ (dry-run) ensure kubeconfig "+path)
+		return nil
+	}
+	if err := os.MkdirAll("generated", 0o755); err != nil {
+		return fmt.Errorf("mkdir generated: %w", err)
+	}
+	var b64 string
+	if ids, err := client.ClustersWithLabel(ctx, clusterLabel); err == nil && len(ids) > 0 {
+		if kc, err := client.GetKubeconfig(ctx, ids[0]); err == nil {
+			b64 = kc
+		}
+	}
+	content, stub := tf.KubeconfigContent(b64)
+	if stub {
+		fmt.Printf("Kubeconfig unavailable for %q — writing stub for provider init\n", clusterLabel)
+	} else {
+		fmt.Printf("Kubeconfig written to %s\n", path)
+	}
+	return os.WriteFile(path, content, 0o600)
+}
+
+// tfImport runs `terraform import` for a resource, with the script's timeouts
+// (300s fatal / 120s non-fatal). When fatal it returns the error; when non-fatal
+// it logs a warning and returns (false, nil) so the caller can skip dependents.
+// Honors --dry-run (prints, imports nothing). ok reports whether the resource is
+// now in state.
+func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err error) {
+	fmt.Printf("Importing %s (id=%s)\n", addr, id)
+	if g.dryRun {
+		fmt.Fprintf(os.Stderr, "→ (dry-run) terraform import -var-file=%s %s %s\n", varFile, addr, id)
+		return true, nil
+	}
+	timeout := 300 * time.Second
+	if !fatal {
+		timeout = 120 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "terraform", "import", "-var-file="+varFile, addr, id)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if runErr := cmd.Run(); runErr != nil {
+		if fatal {
+			return false, fmt.Errorf("import %s: %w", addr, runErr)
+		}
+		fmt.Printf("WARNING: import of %s timed out or failed — skipping (post-destroy API cleanup will delete it)\n", addr)
+		return false, nil
+	}
+	return true, nil
+}
+
+// tfStateID returns the id of an in-state resource via `terraform state show`,
+// or "" if the resource is not in state: `state show` of an absent address
+// exits non-zero, so the error path covers the not-in-state case.
+func tfStateID(addr string) string {
+	out, err := exec.Command("terraform", "state", "show", addr).Output()
+	if err != nil {
+		return ""
+	}
+	return tf.ParseStateID(string(out))
+}
+
+func runCITFApply(g globalOpts, plan, varFile string) error {
+	if plan == "" || varFile == "" {
+		return fmt.Errorf("--plan and --var-file are required")
+	}
+	if g.dryRun {
+		fmt.Fprintf(os.Stderr, "→ (dry-run) terraform apply -auto-approve %s (with self-heal + one retry)\n", plan)
+		return nil
+	}
+
+	// First attempt — the happy path. -no-color is load-bearing: the heal
+	// parsers anchor on the plain "  with <addr>," diagnostic lines.
+	applyLog, code, err := runTeed("terraform", "apply", "-no-color", "-auto-approve", plan)
+	if err != nil {
+		return fmt.Errorf("could not run terraform apply: %w", err)
+	}
+	if code == 0 {
+		return nil
+	}
+
+	healed := false
+
+	// ── Heal A: phantom helm_release in state ──
+	if addr := tf.ParseHelmPhantom(applyLog); addr != "" {
+		fmt.Fprintf(os.Stderr, "::warning::Detected stale TF state for %s (cluster lacks the underlying release). Self-healing.\n", addr)
+		if err := runTF("state", "rm", addr); err != nil {
+			return fmt.Errorf("terraform state rm %s failed — original apply error stands (exit %d): %w", addr, code, err)
+		}
+		healed = true
+	}
+
+	// ── Heal B: duplicate Cloud Firewall label ──
+	if !healed && tf.FirewallCollision(applyLog) {
+		if err := healFirewallCollision(g, applyLog, varFile, code); err != nil {
+			return err
+		}
+		healed = true
+	}
+
+	if !healed {
+		return fmt.Errorf("terraform apply failed (exit %d); no self-heal pattern detected, not retrying", code)
+	}
+
+	fmt.Fprintln(os.Stderr, "::notice::Re-planning after state heal.")
+	if err := runTF("plan", "-no-color", "-out="+plan, "-var-file="+varFile); err != nil {
+		return fmt.Errorf("re-plan failed after state heal: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "::notice::Retrying apply after state heal.")
+	return runTF("apply", "-no-color", "-auto-approve", plan)
+}
+
+// healFirewallCollision resolves the colliding firewall by label (paginated) and
+// imports it into the resource address terraform tried to create, so the retry
+// adopts it instead of recreating.
+func healFirewallCollision(g globalOpts, applyLog, varFile string, applyExit int) error {
+	fwAddr := tf.ParseFirewallAddress(applyLog)
+	if fwAddr == "" {
+		return fmt.Errorf("firewall label collision detected but could not parse the resource address — original error stands (exit %d)", applyExit)
+	}
+	token := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("TF_VAR_linode_token"))
+	if token == "" {
+		return fmt.Errorf("firewall collision but LINODE_TOKEN / TF_VAR_linode_token is unset — cannot look up the existing firewall (exit %d)", applyExit)
+	}
+	content, err := os.ReadFile(varFile)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", varFile, err)
+	}
+	label := tf.ResolveFirewallLabel(tf.ParseTFVars(string(content)))
+
+	client := linode.NewClient(token, 60*time.Second)
+	fws, err := client.ListFirewalls(context.Background())
+	if err != nil {
+		return fmt.Errorf("list firewalls: %w", err)
+	}
+	id, ok := linode.FindIDByLabel(fws, label)
+	if !ok {
+		return fmt.Errorf("firewall %q collided on create but was not found by label in the account — cannot import (exit %d)", label, applyExit)
+	}
+	fmt.Fprintf(os.Stderr, "::warning::Firewall label %q already exists (id=%d); importing it into %s so the retry adopts it.\n", label, id, fwAddr)
+	if err := runTF("import", "-var-file="+varFile, fwAddr, strconv.FormatUint(id, 10)); err != nil {
+		return fmt.Errorf("terraform import %s %d failed — original apply error stands (exit %d): %w", fwAddr, id, applyExit, err)
+	}
+	return nil
+}
+
+// runTF runs a terraform subcommand with inherited stdio.
+func runTF(args ...string) error {
+	cmd := exec.Command("terraform", args...)
+	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
+	return cmd.Run()
+}
+
+// runTeed runs a command streaming combined stdout+stderr to the terminal while
+// also capturing it, and returns (output, exitCode, startErr). startErr is non-nil
+// only when the process could not be started/observed; a non-zero terraform exit
+// is reported via exitCode, not startErr.
+func runTeed(name string, args ...string) (string, int, error) {
+	var buf bytes.Buffer
+	w := io.MultiWriter(os.Stdout, &buf)
+	cmd := exec.Command(name, args...)
+	cmd.Stdout, cmd.Stderr = w, w
+	err := cmd.Run()
+	if err == nil {
+		return buf.String(), 0, nil
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		return buf.String(), ee.ExitCode(), nil
+	}
+	return buf.String(), -1, err
+}
+
+// ── orphan-resource sweeps (ports of cleanup-orphan-{volumes,nodebalancers}.sh) ──
+// Both reuse the orphan-identity heuristics + list/delete primitives in
+// internal/linode (the same ones `llz reap` drives); this is just the
+// CI-scoped orchestration. Dry-run by default; deletes only with --yes.
+
+func ciReapVolumesCmd() *cobra.Command {
+	var region, volumeIDs, tagMustInclude string
+	var waitDetach, attempts, retryDelay int
+	var requireEmpty bool
+	c := &cobra.Command{
+		Use:   "reap-volumes",
+		Short: "delete orphaned pvc-* Block Storage Volumes (--yes to delete)",
+		Long: "Native port of cleanup-orphan-volumes.sh. Deletes unattached CSI Volumes\n" +
+			"(label pvc-*, linode_id null) scoped by --volume-ids and/or --region, with an\n" +
+			"optional --tag-must-include constraint — the same orphan predicate as `llz\n" +
+			"reap`. At least one scope is required (never an unscoped sweep).\n" +
+			"--wait-detach polls until every --volume-ids Volume is unattached before\n" +
+			"sweeping (cluster delete detaches them asynchronously as the LKE Linodes\n" +
+			"tear down).\n" +
+			"--require-empty (needs --volume-ids) re-lists after the sweep and, if any\n" +
+			"tracked Volume is still present, retries up to --attempts (sleeping\n" +
+			"--retry-delay s between tries) and finally EXITS NON-ZERO when orphans\n" +
+			"remain — so a destroy doesn't go green leaving Volumes that block the next\n" +
+			"apply's preflight. Without it the sweep is single-pass and best-effort.\n" +
+			"Reads LINODE_TOKEN; dry-run by default, deletes only with --yes.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runCIReapVolumes(gopts, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty)
+		},
+	}
+	f := c.Flags()
+	f.StringVar(&region, "region", "", "scope to one Linode region (e.g. us-ord)")
+	f.StringVar(&volumeIDs, "volume-ids", "", "space-separated Volume id allowlist (the precise CI scope)")
+	f.StringVar(&tagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
+	f.IntVar(&waitDetach, "wait-detach", 0, "seconds to wait for the --volume-ids Volumes to detach before sweeping (0 = no wait)")
+	f.BoolVar(&requireEmpty, "require-empty", false, "verify every --volume-ids Volume is gone; retry then fail if orphans remain")
+	f.IntVar(&attempts, "attempts", 1, "sweep+verify attempts before failing (only with --require-empty)")
+	f.IntVar(&retryDelay, "retry-delay", 30, "seconds between --require-empty retries")
+	return c
+}
+
+func ciReapNodeBalancersCmd() *cobra.Command {
+	var clusterID, region string
+	var attempts, retryDelay int
+	var requireEmpty bool
+	c := &cobra.Command{
+		Use:   "reap-nodebalancers",
+		Short: "delete orphaned NodeBalancers (--cluster-id for the CI-scoped sweep; --yes to delete)",
+		Long: "Native port of cleanup-orphan-nodebalancers.sh. With --cluster-id it deletes\n" +
+			"only NodeBalancers carrying that cluster's CCM tag (lke<id>) — the\n" +
+			"co-located-peer-safe mode the destroy path uses. Without it, an account-wide\n" +
+			"orphan sweep (CCM tag points to a gone cluster, or CCM-identified with 0\n" +
+			"backends), optionally narrowed by --region. Dry-run by default; --yes to delete.\n" +
+			"--require-empty (needs --cluster-id) re-lists after the sweep and, if any\n" +
+			"NodeBalancer still carries the cluster's CCM tag, retries up to --attempts\n" +
+			"(sleeping --retry-delay s between tries) and finally EXITS NON-ZERO when\n" +
+			"orphans remain — so a destroy doesn't go green leaving a NodeBalancer that\n" +
+			"blocks the next apply's preflight.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runCIReapNodeBalancers(gopts, clusterID, region, attempts, retryDelay, requireEmpty)
+		},
+	}
+	f := c.Flags()
+	f.StringVar(&clusterID, "cluster-id", "", "scope to one cluster's CCM-tagged NodeBalancers (numeric LKE id)")
+	f.StringVar(&region, "region", "", "narrow the account-wide sweep to one region (ignored with --cluster-id)")
+	f.BoolVar(&requireEmpty, "require-empty", false, "verify the cluster's NodeBalancers are gone; retry then fail if orphans remain")
+	f.IntVar(&attempts, "attempts", 1, "sweep+verify attempts before failing (only with --require-empty)")
+	f.IntVar(&retryDelay, "retry-delay", 30, "seconds between --require-empty retries")
+	return c
+}
+
+// ciToken reads the Linode PAT the CI sweeps run under.
+func ciToken() (string, error) {
+	t := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
+	if t == "" {
+		return "", fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) to a Linode PAT")
+	}
+	return t, nil
+}
+
+// ciDeleter returns a delete closure that honors --yes/--dry-run and tallies
+// outcomes, plus a finalize func that prints the summary and errors if any delete
+// failed. Mirrors the del/summary scaffolding in runReap.
+func ciDeleter(ctx context.Context, g globalOpts, client *linode.Client) (func(path, desc string), func() error) {
+	confirm := g.yes && !g.dryRun
+	if !confirm {
+		fmt.Println("DRY-RUN — nothing will be deleted. Re-run with --yes to delete.")
+	}
+	deleted, failed := 0, 0
+	del := func(path, desc string) {
+		if !confirm {
+			fmt.Printf("  would DELETE %s\n", desc)
+			return
+		}
+		if err := client.DeleteResourcePath(ctx, path); err != nil {
+			fmt.Fprintf(os.Stderr, "  DELETE %s FAILED: %v\n", desc, err)
+			failed++
+			return
+		}
+		fmt.Printf("  DELETE %s\n", desc)
+		deleted++
+	}
+	fin := func() error {
+		fmt.Printf("summary: deleted=%d failed=%d\n", deleted, failed)
+		if failed > 0 {
+			return fmt.Errorf("%d delete(s) failed", failed)
+		}
+		return nil
+	}
+	return del, fin
+}
+
+func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, waitDetach, attempts, retryDelay int, requireEmpty bool) error {
+	if region == "" && volumeIDs == "" {
+		return fmt.Errorf("--region and/or --volume-ids is required (refusing an unscoped Volume sweep)")
+	}
+	if requireEmpty && volumeIDs == "" {
+		return fmt.Errorf("--require-empty needs --volume-ids (the precise set whose disappearance is verified)")
+	}
+	token, err := ciToken()
+	if err != nil {
+		return err
+	}
+	client := linode.NewClient(token, 60*time.Second)
+	ctx := context.Background()
+	confirm := g.yes && !g.dryRun
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	remaining := -1
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if waitDetach > 0 && volumeIDs != "" {
+			waitVolumesDetached(ctx, client, volumeIDs, waitDetach)
+		}
+		del, fin := ciDeleter(ctx, g, client)
+		fmt.Printf("=== orphan Volumes (region=%q volume-ids=%q tag=%q, label prefix pvc-, unattached) [attempt %d/%d] ===\n",
+			region, volumeIDs, tagMustInclude, attempt, attempts)
+		if err := reapVolumes(ctx, client, reapOpts{region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del); err != nil {
+			return err
+		}
+		lastErr = fin()
+
+		// Without --require-empty (or in dry-run, where nothing was deleted)
+		// keep the historical single-pass best-effort behavior.
+		if !requireEmpty || !confirm {
+			return lastErr
+		}
+
+		var verr error
+		if remaining, verr = countVolumesPresent(ctx, client, volumeIDs); verr != nil {
+			fmt.Fprintf(os.Stderr, "verify Volumes: %v\n", verr)
+			remaining = -1
+		} else if remaining == 0 {
+			fmt.Println("verified: all tracked Volumes are gone.")
+			return lastErr
+		} else {
+			fmt.Printf("verify: %d tracked Volume(s) still present after attempt %d/%d.\n", remaining, attempt, attempts)
+		}
+		if attempt < attempts {
+			fmt.Printf("retrying the Volume sweep in %ds...\n", retryDelay)
+			time.Sleep(time.Duration(retryDelay) * time.Second)
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("reap-volumes: %s tracked Volume(s) still present after %d attempt(s) — orphans remain; failing the destroy so they don't block the next apply's preflight",
+		firstNonEmpty(itoaOrUnknown(remaining), "some"), attempts)
+}
+
+// countVolumesPresent reports how many of the tracked Volume ids still exist in
+// the account (attached or not) — the post-sweep convergence check for
+// --require-empty. A surviving id is a genuine orphan (or a delete still
+// settling), so the caller retries and ultimately fails on a non-zero count.
+func countVolumesPresent(ctx context.Context, client interface {
+	ListVolumes(context.Context) ([]map[string]any, error)
+}, volumeIDs string) (int, error) {
+	tracked := map[string]bool{}
+	for _, id := range strings.Fields(volumeIDs) {
+		tracked[id] = true
+	}
+	vols, err := client.ListVolumes(ctx)
+	if err != nil {
+		return -1, err
+	}
+	n := 0
+	for _, v := range vols {
+		if tracked[linode.MapIDString(v)] {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// itoaOrUnknown renders a count, mapping the -1 "list failed" sentinel to "".
+func itoaOrUnknown(n int) string {
+	if n < 0 {
+		return ""
+	}
+	return strconv.Itoa(n)
+}
+
+// waitVolumesDetached polls until none of the tracked Volume ids is still
+// attached (linode_id non-null), bounded by waitSec. Best-effort: a list error
+// or timeout just falls through to the sweep — VolumeIsCandidate skips anything
+// still attached, so it is left for the next run rather than mis-deleted.
+func waitVolumesDetached(ctx context.Context, client interface {
+	ListVolumes(context.Context) ([]map[string]any, error)
+}, volumeIDs string, waitSec int) {
+	tracked := map[string]bool{}
+	for _, id := range strings.Fields(volumeIDs) {
+		tracked[id] = true
+	}
+	deadline := time.Now().Add(time.Duration(waitSec) * time.Second)
+	for attempt := 1; ; attempt++ {
+		still := -1 // unknown on a list error
+		if vols, err := client.ListVolumes(ctx); err == nil {
+			still = 0
+			for _, v := range vols {
+				if tracked[linode.MapIDString(v)] && !linode.VolumeLinodeIDNull(v) {
+					still++
+				}
+			}
+		}
+		if still == 0 {
+			fmt.Println("all tracked Volumes are detached.")
+			return
+		}
+		if time.Now().After(deadline) {
+			fmt.Printf("tracked Volumes still attached after %ds — sweeping what is detached; the rest is left for the next run.\n", waitSec)
+			return
+		}
+		if still < 0 {
+			fmt.Printf("tracked Volumes still attached: unknown (list error, attempt %d)\n", attempt)
+		} else {
+			fmt.Printf("tracked Volumes still attached: %d (attempt %d)\n", still, attempt)
+		}
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, retryDelay int, requireEmpty bool) error {
+	if clusterID != "" {
+		if _, perr := strconv.ParseUint(clusterID, 10, 64); perr != nil {
+			return fmt.Errorf("--cluster-id must be a numeric LKE cluster id (got %q)", clusterID)
+		}
+	}
+	if requireEmpty && clusterID == "" {
+		return fmt.Errorf("--require-empty needs --cluster-id (the scoped set whose disappearance is verified)")
+	}
+	token, err := ciToken()
+	if err != nil {
+		return err
+	}
+	client := linode.NewClient(token, 60*time.Second)
+	ctx := context.Background()
+	confirm := g.yes && !g.dryRun
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	// Account-wide orphan sweep (cluster gone / 0-backend) — reuse reap's logic.
+	// There's no precise scoped set to converge on, so this stays single-pass.
+	if clusterID == "" {
+		del, fin := ciDeleter(ctx, g, client)
+		fmt.Printf("=== orphan NodeBalancers — account-wide (region=%q) ===\n", region)
+		if err := reapNodeBalancers(ctx, client, reapOpts{region: region}, del); err != nil {
+			return err
+		}
+		return fin()
+	}
+
+	// Scoped sweep: only NodeBalancers carrying THIS cluster's CCM tag (lke<id>).
+	var lastErr error
+	remaining := -1
+	for attempt := 1; attempt <= attempts; attempt++ {
+		del, fin := ciDeleter(ctx, g, client)
+		fmt.Printf("=== orphan NodeBalancers — scoped to cluster %s (lke_cluster.id or CCM tag lke%s) [attempt %d/%d] ===\n",
+			clusterID, clusterID, attempt, attempts)
+		nbs, err := client.ListNodeBalancers(ctx)
+		if err != nil {
+			return fmt.Errorf("list NodeBalancers: %w", err)
+		}
+		matched := false
+		for _, nb := range nbs {
+			if !nbBelongsToCluster(nb, clusterID) {
+				continue
+			}
+			id := linode.MapUint(nb, "id")
+			del(fmt.Sprintf("/v4/nodebalancers/%d", id),
+				fmt.Sprintf("nodebalancer %d (%s)", id, linode.MapString(nb, "label")))
+			matched = true
+		}
+		if !matched {
+			fmt.Println("  none matched")
+		}
+		lastErr = fin()
+
+		if !requireEmpty || !confirm {
+			return lastErr
+		}
+
+		var verr error
+		if remaining, verr = countClusterNodeBalancersPresent(ctx, client, clusterID); verr != nil {
+			fmt.Fprintf(os.Stderr, "verify NodeBalancers: %v\n", verr)
+			remaining = -1
+		} else if remaining == 0 {
+			fmt.Println("verified: the cluster's NodeBalancers are gone.")
+			return lastErr
+		} else {
+			fmt.Printf("verify: %d cluster NodeBalancer(s) still present after attempt %d/%d.\n", remaining, attempt, attempts)
+		}
+		if attempt < attempts {
+			fmt.Printf("retrying the NodeBalancer sweep in %ds...\n", retryDelay)
+			time.Sleep(time.Duration(retryDelay) * time.Second)
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("reap-nodebalancers: %s cluster NodeBalancer(s) still present after %d attempt(s) — orphans remain; failing the destroy so they don't block the next apply's preflight",
+		firstNonEmpty(itoaOrUnknown(remaining), "some"), attempts)
+}
+
+// countClusterNodeBalancersPresent reports how many NodeBalancers still carry
+// the cluster's CCM tag (lke<id>) — the post-sweep convergence check for
+// reap-nodebalancers --require-empty.
+func countClusterNodeBalancersPresent(ctx context.Context, client interface {
+	ListNodeBalancers(context.Context) ([]map[string]any, error)
+}, clusterID string) (int, error) {
+	nbs, err := client.ListNodeBalancers(ctx)
+	if err != nil {
+		return -1, err
+	}
+	n := 0
+	for _, nb := range nbs {
+		if nbBelongsToCluster(nb, clusterID) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// nbBelongsToCluster reports whether a NodeBalancer is owned by the given LKE
+// cluster id — by its lke_cluster.id (LKE-E's reliable owner link), else its CCM
+// `lke<id>` tag (older CCMs). Matching only the tag missed LKE-E CCM
+// NodeBalancers, which carry just the `kubernetes` tag, so the destroy's scoped
+// sweep deleted nothing and they (and the VPC they parked in) leaked.
+func nbBelongsToCluster(nb map[string]any, clusterID string) bool {
+	return linode.LKEClusterIDFromNB(nb) == clusterID || linode.LKEIDFromTags(linode.MapTags(nb)) == clusterID
+}

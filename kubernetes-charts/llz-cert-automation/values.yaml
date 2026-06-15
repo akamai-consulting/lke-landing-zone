@@ -1,0 +1,141 @@
+# Default values for cert-automation.
+#
+# This chart wires up event-driven TLS-cert renewal for the edge HAProxy:
+#   cert-manager rotates the haproxy-tls Secret
+#     -> EventSource (resource watch) publishes UPDATE to the EventBus
+#       -> Sensor submits the haproxy-rebuild Workflow
+#         -> Workflow extracts cert, rebuilds the HAProxy image (buildah),
+#            pushes to Harbor, dispatches the GitHub Actions deploy.
+#
+# It exists because the HAProxy container has NO SIGHUP TLS-reload (verified
+# 2026-06-01): without this stack the edge keeps serving the OLD cert after
+# every ~80-day cert-manager rotation. The defaults below capture the
+# operational scars (apply-ordering sync-waves, the eventBusName: default
+# contract, the LKE-E port-6443 NetworkPolicy quirk, PSA baseline for buildah).
+#
+# A sibling deployment overrides only what differs (namespace, Harbor URL,
+# GitHub repo, secret backend, CIDRs/image refs).
+
+# nameOverride / fullnameOverride follow the standard Helm idiom. Left empty,
+# resources keep their original names (cert-automation-runner, haproxy-rebuild,
+# etc.) — these names are referenced cross-resource (Sensor -> WorkflowTemplate,
+# WorkflowTemplate -> ServiceAccount) so changing them is rarely wanted.
+nameOverride: ""
+fullnameOverride: ""
+
+# Namespace every cert-automation resource runs in. The Namespace object itself
+# is created by this chart (templates/namespace.yaml) at sync-wave -20 so it
+# lands before any resource that targets it.
+namespace: llz-cert-automation
+
+# Namespace where cert-manager manages the watched haproxy-tls Secret. The
+# EventSource watches it, the WorkflowTemplate reads it, and the runner RBAC
+# grants read on the Secret here.
+certManagerNamespace: cert-manager
+
+# Argo Events EventBus.
+#   - name: MUST stay "default" unless every EventSource/Sensor below is also
+#     repointed — Argo Events resolves the bus by this exact name via
+#     `spec.eventBusName`. The EventBus CR (argo-eventbus.yaml) must APPLY
+#     BEFORE the EventSource/Sensor that reference it, which is enforced by the
+#     sync-waves below (eventBus/source/sensor all at -14, AFTER argo-events
+#     installs its CRDs at -15) and by the source kustomization ordering.
+#   - JetStream replicas: 3 so a Secret rotation coinciding with a controller
+#     restart is delivered at-least-once rather than dropped.
+eventBus:
+  name: default
+  jetstream:
+    version: latest
+    replicas: 3
+
+# The cert-manager Secret whose rotation drives a rebuild. The EventSource
+# filters to this exact name and to cert-manager-managed Secrets only
+# (controller.cert-manager.io/fao=true) so a hand edit can't trigger a loop.
+watchedSecret:
+  name: haproxy-tls
+
+# Harbor — push destination for the rebuilt HAProxy image. This MUST be
+# overridden with the cluster's own Harbor host; a sibling cluster overrides
+# this. The image is pushed as <harborUrl>/<imageRepoPath>:<tag>.
+harborUrl: "https://harbor.<cluster-domain>:5000"
+
+# HAProxy image build inputs (used by the rebuild Workflow's build-image step).
+haproxyImage:
+  # Base image the rebuild builds FROM (the renewed cert is COPY'd in).
+  baseImage: "haproxy:2.9-alpine"
+  # Repo path appended to harborUrl for the rebuilt artifact (-> <harborUrl>/platform/haproxy:<tag>).
+  repoPath: platform/haproxy
+
+# GitHub deploy dispatch — the deploy-haproxy Workflow step runs `gh workflow run`
+# to roll out the HAProxy sidecar with the freshly-built image tag.
+githubDeploy:
+  repo: your-org/your-instance-repo
+  ref: main
+  workflow: deploy-haproxy.yml
+
+# Container images used by the rebuild Workflow's steps. Pinned by digest where
+# the upstream provides one (extract-cert kubectl is pinned — reproducible cert
+# extraction matters most).
+images:
+  kubectl: "registry.k8s.io/kubectl:v1.32.4@sha256:5c9c4fb91818d262a9d8150cdfd75546ff47640e5a72249f769bd25fb171a207"
+  buildah: "quay.io/buildah/stable:v1.41"
+  ghCli: "ghcr.io/cli/cli:v2.65.0"
+
+# ExternalSecrets — workflow credentials provisioned from OpenBao. Both remote
+# values are seeded by .github/workflows/bootstrap-openbao.yml.
+# NOTE: remoteRef keys omit the mount prefix (cert-automation/..., NOT
+# secret/cert-automation/...) — the ClusterSecretStore is mounted at `secret/`.
+externalSecrets:
+  refreshInterval: 1h
+  secretStore:
+    kind: ClusterSecretStore
+    name: openbao
+  # GitHub dispatch token consumed by the deploy-haproxy step (env GH_TOKEN).
+  githubToken:
+    secretName: cert-automation-github-token
+    remoteKey: cert-automation/github-token
+    remoteProperty: token
+  # Harbor docker config.json consumed by the build-image step (REGISTRY_AUTH_FILE).
+  harborDockerConfig:
+    secretName: harbor-docker-config
+    remoteKey: harbor/docker-config
+    remoteProperty: config_json
+
+# NetworkPolicy egress targets. Linode/apl-core-shaped defaults; a sibling
+# deployment changes these only if its namespaces differ.
+#   LKE-E port-6443 reminder (project-lke-e-cilium-np-port-6443): Cilium
+#   evaluates policy AFTER DNAT, so apiserver-egress rules list 6443 alongside
+#   443 even though pods dial the in-cluster Service IP at :443.
+networkPolicy:
+  # Namespace label cert-manager pods carry (workflow reads haproxy-tls there).
+  certManagerNamespace: cert-manager
+  # Namespace label Harbor pods carry (workflow pushes the image there).
+  harborNamespace: harbor
+  # apiserver ports the runner + argo-events pods must reach. Both 443 and 6443
+  # are required on LKE-E (post-DNAT policy evaluation).
+  apiserverPorts:
+    - 443
+    - 6443
+
+# Argo CD sync-waves. These encode the apply-ordering scars — change with care.
+syncWaves:
+  # Namespace first, before anything targets it.
+  namespace: "-20"
+  # NetworkPolicies before any sensor/eventsource/eventbus/workflow pod starts.
+  networkPolicy: "-10"
+  # EventBus + EventSource + Sensor land at -14: AFTER argo-events installs its
+  # CRDs (its Application is at -15) and BEFORE the wave-0 workloads that depend
+  # on the EventBus existing. All three share -14; the kustomization/source
+  # ordering still applies EventBus before EventSource/Sensor.
+  argoEvents: "-14"
+
+# Pod Security Admission level enforced on the namespace. `baseline` (not
+# restricted) because the buildah build-image step runs as root to construct
+# overlay layers; audit/warn stay restricted to track the gap.
+podSecurity:
+  enforce: baseline
+  enforceVersion: v1.31
+  audit: restricted
+  auditVersion: v1.31
+  warn: restricted
+  warnVersion: v1.31

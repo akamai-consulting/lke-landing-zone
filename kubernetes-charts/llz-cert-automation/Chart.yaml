@@ -1,0 +1,28 @@
+apiVersion: v2
+name: llz-cert-automation
+description: >-
+  Event-driven TLS-certificate renewal for the edge HAProxy. Argo Events watches
+  the cert-manager `haproxy-tls` Secret; when cert-manager rotates it, a Sensor
+  submits an Argo Workflow that re-extracts the cert, rebuilds the HAProxy image
+  via buildah, pushes it to Harbor, and dispatches the GitHub Actions deploy. This
+  bridges the gap that the HAProxy container has no SIGHUP TLS-reload — without it
+  the edge keeps serving the OLD cert after every ~80-day cert-manager rotation.
+type: application
+# Chart version — bump on any template/values change. Published to
+# oci://ghcr.io/<org>/charts/llz-cert-automation by .github/workflows/publish-charts.yml.
+version: 0.1.0
+# appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
+# (workflow.build-image step: FROM haproxy:2.9-alpine).
+appVersion: "2.9-alpine"
+keywords:
+  - argo-events
+  - argo-workflows
+  - cert-manager
+  - haproxy
+  - tls-rotation
+  - cert-renewal
+home: https://github.com/akamai-consulting/lke-landing-zone
+maintainers:
+  - name: lke-landing-zone platform team
+annotations:
+  artifacthub.io/license: Apache-2.0
