@@ -67,10 +67,10 @@ LINODE_TOKEN=<token> llz --yes ci reap-volumes \
 ```
 DRY-RUN — nothing will be deleted. Re-run with --yes to delete.
 === orphan Volumes (region="<cluster_region>" volume-ids="" tag="", label prefix pvc-, unattached) ===
-  would DELETE volume 15966578 (pvc-0adbc87d9a9040fe)
-  would DELETE volume 15966581 (pvc-1845f14ee4904e45)
+  would DELETE volume 12345678 (pvc-aaaaaaaaaaaaaaaa)
+  would DELETE volume 12345681 (pvc-bbbbbbbbbbbbbbbb)
   ...
-  would DELETE volume 15966592 (pvc-63ce6a5ab5e34394)
+  would DELETE volume 12345692 (pvc-cccccccccccccccc)
 summary: deleted=0 failed=0
 ```
 

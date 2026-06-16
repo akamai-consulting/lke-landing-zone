@@ -8,7 +8,7 @@
 #            pushes to Harbor, dispatches the GitHub Actions deploy.
 #
 # It exists because the HAProxy container has NO SIGHUP TLS-reload (verified
-# 2026-06-01): without this stack the edge keeps serving the OLD cert after
+# in practice): without this stack the edge keeps serving the OLD cert after
 # every ~80-day cert-manager rotation. The defaults below capture the
 # operational scars (apply-ordering sync-waves, the eventBusName: default
 # contract, the LKE-E port-6443 NetworkPolicy quirk, PSA baseline for buildah).

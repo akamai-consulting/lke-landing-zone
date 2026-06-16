@@ -44,8 +44,7 @@ spec:
   policyTypes: [Ingress, Egress]
   egress:
     # kube-apiserver — LKE-E dual-port: 443 (in-cluster Service) + 6443 (DNAT'd
-    # apiserver address Cilium sees post-rewrite). Both required per
-    # project_lke_e_cilium_np_port_6443.
+    # apiserver address Cilium sees post-rewrite). Both required.
     #
     # NO `to:` selector. On LKE-E the control plane is managed/external — there is
     # NO in-cluster pod labeled `component: kube-apiserver`, so a podSelector here

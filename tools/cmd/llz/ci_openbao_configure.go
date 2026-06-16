@@ -114,8 +114,8 @@ func baoConfigureSteps() []baoConfigStep {
 // device. The device is enabled DECLARATIVELY by the chart values (the
 // `audit "file" { … }` block in server.ha.raft.config) — OpenBao 2.5.0
 // rejects API-based enablement ("cannot enable audit device via API; use
-// declarative, config-based audit device management instead", observed
-// 2026-06-01 on lke610954) — so configure only VERIFIES it is active.
+// declarative, config-based audit device management instead", observed in
+// practice) — so configure only VERIFIES it is active.
 func auditFileDeviceActive(out string) bool {
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "file/") {

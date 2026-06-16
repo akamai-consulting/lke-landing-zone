@@ -57,7 +57,7 @@ to be stale, fix it in place rather than working around it.
   `kubectl delete` the `lke-admin-token` Secret** — on LKE-E it is not regenerated.
 - Rotation deliberately reuses the broad shared `LINODE_API_TOKEN` rather than a
   Kubernetes-scoped PAT — an **accepted, documented deviation**
-  (`docs/lke-admin-rotation-runbook.md`). Don't re-propose a least-privilege PAT or
+  (`docs/runbooks/lke-admin-rotation.md`). Don't re-propose a least-privilege PAT or
   a scope preflight for it.
 
 ## CI / GitHub Actions
@@ -89,9 +89,9 @@ to be stale, fix it in place rather than working around it.
   exist yet; when it's created, update the OTel collector `tls.host` value in both
   overlay patches to the real public FQDNs.
 
-## Operational scars (live-stack observations)
+## Operational scars (observed failure modes)
 
-These were hit on the **live deployment** of this same Linode LKE-Enterprise +
+These are failure modes hit while operating this Linode LKE-Enterprise +
 apl-core stack. They are *why* many non-obvious chart/module defaults exist — the
 AGENTS.md "scars as defaults" rule. Treat each as a failure mode to preserve a
 default against, not something to "clean up." Version-specific notes (apl-core
@@ -136,9 +136,9 @@ default against, not something to "clean up." Version-specific notes (apl-core
   apply stuck on `linode_lke_cluster.this: Still creating...` to the job timeout
   means Linode never brought up the worker nodes, so the cluster never reaches
   Ready and no kubeconfig is ever produced (→ "no kubeconfig in the UI"). This is
-  NOT reliably an orphan/quota problem: incident 2026-06-08 (run 27148561842) hit
-  it with preflight reporting `Orphaned total: 0` and 9 *legitimate* clusters on a
-  shared account — the pool still never came up. There is no Linode compute-quota
+  NOT reliably an orphan/quota problem: it has been hit with preflight reporting
+  `Orphaned total: 0` and several *legitimate* clusters on a shared account — the
+  pool still never came up. There is no Linode compute-quota
   API, so any "quota exceeded" claim is unverifiable from automation; orphan-
   sweeping is a guess, not a diagnosis. The cluster resource is pool-less (the
   node pool is the separate `linode_lke_node_pool`), so the hang is the cluster's
@@ -151,14 +151,14 @@ default against, not something to "clean up." Version-specific notes (apl-core
   never join → node firewall/VPC misconfig. Disambiguate by retrying a different
   region/type and by checking VPC/firewall/NodeBalancer counts against quota;
   escalate to Linode support for a confirmed compute limit. Don't assume orphans.
-  **Confirmed root cause, incident 2026-06-08:** VPC-quota exhaustion from a
+  **Confirmed root cause:** VPC-quota exhaustion from a
   per-cycle leak — `linode_lke_cluster` was given `subnet_id` but **not** `vpc_id`,
-  so LKE-E ignored our BYO VPC and provisioned its own `lke<id>` one, orphaning the
+  so LKE-E ignores the BYO VPC and provisions its own `lke<id>` one, orphaning the
   module's `<cluster_label>-vpc` on every run (and the node firewall leaked too,
-  because teardown looked it up by the wrong label). Fixed in lke-landing-zone
-  PR #11 (bind `vpc_id`) + PR #12 (reap firewall/VPC on destroy — after the
-  NodeBalancer sweep — and drop zombie-cluster state so the bootstrap destroy
-  doesn't hang). Node type / vCPU quota were red herrings.
+  because teardown looked it up by the wrong label). Fixed by binding `vpc_id` and
+  by reaping the firewall/VPC on destroy (after the NodeBalancer sweep) and dropping
+  zombie-cluster state so the bootstrap destroy doesn't hang. Node type / vCPU quota
+  were red herrings.
 - **Cluster destroy needs `Events:Read` on the token.** Destroy issues the delete
   then 401s in the post-delete waiter (`/account/events`) unless `LINODE_API_TOKEN`
   carries Events:Read scope.

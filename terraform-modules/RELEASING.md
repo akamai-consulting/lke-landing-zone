@@ -1,7 +1,6 @@
 # Releasing the landing zone
 
-This is the versioning + distribution contract for the whole landing zone, per
-[docs/templatization-plan.md](../docs/templatization-plan.md) §6, §9 (Phase 3).
+This is the versioning + distribution contract for the whole landing zone.
 The Terraform modules under `terraform-modules/` are published as versioned
 `git::` sources, and the monorepo's own roots consume the tagged versions — the
 dogfood relationship that keeps the extraction honest.

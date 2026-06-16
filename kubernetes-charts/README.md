@@ -1,8 +1,7 @@
 # First-party Helm charts
 
 Independently-versioned Helm charts extracted from the cluster's raw kustomize
-manifests, per [docs/templatization-plan.md](../docs/templatization-plan.md) §5.
-Each chart turns per-env kustomize overlays into a documented `values.yaml` and
+manifests. Each chart turns per-env kustomize overlays into a documented `values.yaml` and
 captures the project's hard-won operational scars as **defaults** — so a sister
 system team (Linode LKE-E + apl-core) stands up the same component by setting
 values, not editing YAML.
@@ -44,7 +43,7 @@ Argo Applications pin `targetRevision: X.Y.Z`.
 Each cut-over chart is consumed by an Argo CD `Application` under
 `apl-values/_shared/manifest/<component>/argocd/applications/` that references the
 OCI chart instead of an in-repo path. This consumer relationship is the forcing
-function that keeps the extracted charts honestly reusable (§4 / §9).
+function that keeps the extracted charts honestly reusable.
 
 ### Cutover status
 

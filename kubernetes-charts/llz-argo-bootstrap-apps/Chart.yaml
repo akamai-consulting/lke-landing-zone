@@ -13,7 +13,7 @@ type: application
 # Chart version — bump on any template/values change. Published to
 # oci://ghcr.io/<org>/charts/llz-argo-bootstrap-apps by
 # .github/workflows/publish-charts.yml.
-version: 0.1.2
+version: 0.1.3
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

@@ -81,7 +81,7 @@
 #   Pending until a consumer pod schedules; the consumer is in the
 #   NEXT chart, not this one, so helm waits the full 20m, hits the
 #   timeout, --atomic rolls the chart back, and the helmfile loop
-#   restarts. Observed deadlock on the 2026-05-31 LKE-E primary rebuild:
+#   restarts. Observed deadlock on an LKE-E primary rebuild:
 #   gitea-artifacts stuck `pending-install` for 8+ hours, blocking
 #   apl-operator from ever reaching Argo CD or Kyverno (both downstream
 #   of gitea in apl-core's helmfile ordering).

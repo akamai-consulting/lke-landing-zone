@@ -3,8 +3,7 @@
 Linode Object Storage buckets + scoped access keys for a platform's container
 registry and log storage, with a declarative 120-day key-rotation clock.
 
-Extracted from the `object-storage/` root config per
-[docs/templatization-plan.md](../../docs/templatization-plan.md) §6 so a sibling
+Extracted from the `object-storage/` root config so a sibling
 system team can provision the same registry/telemetry storage by setting values
 instead of copying YAML. The operational scars travel with the module:
 

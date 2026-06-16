@@ -134,7 +134,7 @@ func runCIPreflight(o preflightOpts) error {
 		return fmt.Errorf("preflight failed: %d clusters share label %q", sameLabel, o.clusterLabel)
 	}
 
-	// (b) VPC quota — the confirmed 2026-06-08 cause; LKE-E creates one VPC/cluster.
+	// (b) VPC quota — the confirmed root cause; LKE-E creates one VPC/cluster.
 	fmt.Printf("  VPCs in account      : %d total\n  This apply adds      : 1 VPC\n", scan.vpc.total)
 	if o.vpcLimit > 0 {
 		fmt.Printf("  Account VPC limit    : %d\n", o.vpcLimit)

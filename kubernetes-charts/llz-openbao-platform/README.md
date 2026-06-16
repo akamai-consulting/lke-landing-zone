@@ -45,7 +45,7 @@ This chart captures them as **defaults**:
 
 ## Decoupling (what's a value vs. a default)
 
-Per the templatization plan (§5), Linode + apl-core assumptions stay as
+Linode + apl-core assumptions stay as
 **defaults**; only org/cluster identity is variabilized. The newly-decoupled
 knobs live under `platform`, `openbaoPromtail`, and `approleWorkflow`:
 

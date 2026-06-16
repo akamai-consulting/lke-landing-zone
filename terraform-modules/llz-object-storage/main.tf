@@ -9,12 +9,11 @@
 # Rationale: the block volume had a hard 10Gi Linode minimum and grew
 # monotonically as images accumulated. OBJ is cheaper per-GB, uncapped, and
 # removes one volume from each cluster's attached-disk count — relevant to
-# the LKE account-quota orphan problem documented in the
-# project-lke-rebuild-orphans-quota memory.
+# the LKE account-quota orphan problem (see docs/lessons-learned.md).
 # NOTE: an earlier commit added `force_destroy = true` here to auto-empty
 # buckets before `terraform destroy` — the Linode provider's
 # linode_object_storage_bucket resource does NOT support that argument
-# (validated against the deployed provider version on TF run 2994938).
+# (validated against the deployed provider version).
 # Removed. The "Drain S3 buckets before destroy" step in
 # .github/workflows/terraform.yml (destroy-object-storage job) now uses
 # `aws s3 rm --recursive` with the bucket-scoped keys still in TF state

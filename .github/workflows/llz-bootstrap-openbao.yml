@@ -409,9 +409,6 @@ jobs:
         # ourselves). The cluster-internal Raft heartbeats use the production
         # bootstrap cert + retry_join's leader_ca_cert_file, both handled by
         # the chart config — nothing for the workflow to set up here.
-        #
-        # See project_openbao_raft_join_gotchas memory for the full failure-
-        # mode write-up (2026-06-01 lke610954).
         run: llz ci bao-unseal-followers
 
       # ── Branch B: emergency re-unseal ──────────────────────────────────────────
@@ -441,7 +438,7 @@ jobs:
       # (Code 403 — permission denied), regenerate via the
       # `bao operator generate-root` quorum flow and update the GH secret.
       #
-      # This is the same flow operators ran manually before 2026-06-01:
+      # This is the same flow operators run manually:
       #   1. bao operator generate-root -init           → OTP + nonce
       #   2. bao operator generate-root -nonce=N $RAFTk  → for each of 3 keys
       #   3. bao operator generate-root -decode -otp     → new root token
@@ -452,7 +449,7 @@ jobs:
       #
       # IMPORTANT — `bao_status.outputs.sealed` reflects the state from the
       # "Check OpenBao status" step which runs BEFORE Branch A / Branch B
-      # unseal. PR #167 made sealed=true if ANY pod is sealed, which is
+      # unseal. A prior change made sealed=true if ANY pod is sealed, which is
       # exactly the case when entering Branch B. After Branch B finishes
       # all 3 pods are unsealed, but bao_status.outputs.sealed is still
       # the stale 'true'. The previous `sealed == 'false'` gate then

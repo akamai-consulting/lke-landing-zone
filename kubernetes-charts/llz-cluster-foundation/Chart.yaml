@@ -13,7 +13,8 @@ description: >-
 type: application
 # Chart version — bump on any template/values change. Published to
 # oci://ghcr.io/<org>/charts/llz-cluster-foundation by .github/workflows/publish-charts.yml.
-version: 0.1.1
+# 0.1.2: strip internal fingerprints from comments for open-sourcing (no rendered change).
+version: 0.1.2
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"

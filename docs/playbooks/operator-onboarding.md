@@ -152,7 +152,7 @@ Skim each [`docs/runbooks/`](../runbooks/) file once so you know what exists and
 Just so you don't burn time looking:
 
 - **Delete OpenBao unseal keys / change the shareholder set** — requires a planned rekey ceremony with all current shareholders.
-- **Push directly to `master`** — every change goes through PR + Argo CD; even rotation workflows are gated by GitHub Environment approval.
+- **Push directly to `main`** — every change goes through PR + Argo CD; even rotation workflows are gated by GitHub Environment approval.
 - **Change a `*.terraform.lock.hcl` provider version casually** — these come through dependabot PRs that the CVE gate audits.
 
 ---

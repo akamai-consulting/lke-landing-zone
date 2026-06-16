@@ -169,7 +169,6 @@ so the adopter guide's manual steps remain fully supported.
 | Quick start (TL;DR checklist) | [docs/quickstart.md](docs/quickstart.md) |
 | End-to-end adopter path | [docs/adopter-guide.md](docs/adopter-guide.md) |
 | Environments as a `dev → staging → prod` promotion pipeline | [docs/environments-and-promotion.md](docs/environments-and-promotion.md) |
-| Extraction / templatization design | [docs/templatization-plan.md](docs/templatization-plan.md) |
 | Agent / assistant conventions | [AGENTS.md](AGENTS.md) ([details](docs/agents.md)) |
 | Terraform module release contract | [terraform-modules/RELEASING.md](terraform-modules/RELEASING.md) |
 | Helm chart inventory + OCI publishing | [kubernetes-charts/README.md](kubernetes-charts/README.md) |

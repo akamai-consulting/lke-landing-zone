@@ -1,7 +1,7 @@
 # Default values for eso-cert-watcher.
 #
-# These defaults capture the operational scar this chart exists to fix
-# (project_eso_caprovider_stale_after_rotation): ESO's Vault/OpenBao provider
+# These defaults capture the operational scar this chart exists to fix:
+# ESO's Vault/OpenBao provider
 # caches the `caProvider` CA once at client creation, so after cert-manager
 # rotates the backing TLS Secret ESO keeps serving the OLD CA and every
 # ExternalSecret reconcile fails. This watcher polls the cert-manager

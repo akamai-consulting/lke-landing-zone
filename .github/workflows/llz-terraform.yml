@@ -1289,8 +1289,7 @@ jobs:
       # become unattached once THIS job tears the nodes down. This is the
       # authoritative sweep: it runs AFTER the cluster delete, where the
       # Volumes are detached, and it's what keeps Retain Volumes from accreting
-      # toward the account quota across rebuild cycles (see the
-      # project_lke_rebuild_orphans_quota incident).
+      # toward the account quota across rebuild cycles.
       - name: Sweep orphaned Block Storage Volumes
         # See the gate rationale on "Force-delete remaining Linode resources".
         if: always() && steps.confirm.outcome == 'success'
@@ -1366,7 +1365,7 @@ jobs:
       # re-run of a partial destroy, or pre-existing orphans from an earlier
       # rebuild cycle — those sweeps no-op, so without this gate the destroy goes
       # GREEN while leaving orphans that then stall the next apply's preflight
-      # (the project_lke_rebuild_orphans_quota incident: a "successful" destroy
+      # (observed: a "successful" destroy
       # left 5-7 orphaned pvc-* Volumes / NodeBalancers / VPCs and the next apply
       # failed preflight). This re-counts orphans account-wide with the SAME
       # census preflight uses, retries to ride out the cluster-delete's async
@@ -1576,7 +1575,7 @@ jobs:
     # exist, so object-storage must be provisioned on every cluster bootstrap —
     # leaving it opt-in let cluster-only rebuilds silently skip it, so Loki
     # persisted zero chunks and Harbor's registry couldn't write to S3 with no
-    # signal (observed 2026-06-03, primary lke612303). The apply is idempotent
+    # signal (observed in practice). The apply is idempotent
     # (0 changes once the buckets/keys exist) and lives in its OWN tf state, so
     # making it always-run does NOT couple bucket lifecycle to the cluster — a
     # cluster destroy still never touches the buckets (destroy is module-scoped

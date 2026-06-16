@@ -160,8 +160,8 @@ jobs:
       # because including it there made the platform-bootstrap App fail at
       # dns01-solver-token's hook phase (no upstream secret) and abort BEFORE
       # applying ~16 downstream resources (harbor-registry-s3,
-      # observability/loki-object-store, Gateway/VirtualService). Observed
-      # 2026-06-01 on lke610954: the whole cluster stayed Degraded because of
+      # observability/loki-object-store, Gateway/VirtualService). Observed:
+      # the whole cluster stayed Degraded because of
       # one missing operator input. See the env's manifest/dns/kustomization.yaml
       # for the full rationale. The instance overlay lives at the workspace root
       # (this reusable checks the caller out there); ${REGION} is the env/overlay

@@ -11,7 +11,8 @@ type: application
 # Chart version — bump on any template/values change. Published to
 # oci://ghcr.io/<org>/charts/llz-eso-cert-watcher by .github/workflows/publish-charts.yml.
 # 0.2.0: add signal 2 (ClusterSecretStore wedge recovery) + store-read ClusterRole.
-version: 0.2.0
+# 0.2.1: strip internal fingerprints from comments for open-sourcing (no rendered change).
+version: 0.2.1
 # appVersion tracks the watcher image tag default in values.yaml.
 appVersion: "1.32.4"
 keywords:

@@ -84,7 +84,7 @@ resource "linode_lke_cluster" "this" {
   # linode_lke_node_pool resource (module.node_pool). The Linode API still
   # echoes pools back on the cluster object, and without this guard Terraform
   # treats them as drift and nulls them out — which the API interprets as
-  # "delete the pool" (see incident 2026-05-21: pool 889957 was destroyed
+  # "delete the pool" (observed in practice: a live pool was destroyed
   # this way).
   lifecycle {
     ignore_changes = [control_plane[0].acl, pool]

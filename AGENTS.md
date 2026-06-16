@@ -51,7 +51,7 @@ tools/               Native Go module: llz (adopter CLI + CI plumbing), firewall
 dockerfiles/         Container images (ci-terraform, ci-kubernetes, devcontainer) → ghcr.io/akamai-consulting/*
 template-scripts/    stamp/drift scaffold provenance, git hooks, linting-and-validation, ci helpers
 instance-template/   Genericized starter material a downstream instance repo instantiates
-docs/                adopter-guide.md, templatization-plan.md, agents.md
+docs/                adopter-guide.md, agents.md
 .github/workflows/   build-images.yml, publish-charts.yml, ci-gate.yml, kubernetes.yml
 ```
 
@@ -136,7 +136,6 @@ The git hooks in `template-scripts/hooks/` enforce this at commit/push time (wir
 | Topic | File |
 |-------|------|
 | End-to-end adopter path | [docs/adopter-guide.md](docs/adopter-guide.md) |
-| Extraction / templatization design | [docs/templatization-plan.md](docs/templatization-plan.md) |
 | Agent convention (this file's rules) | [docs/agents.md](docs/agents.md) |
 | Non-obvious gotchas / hard-won lessons | [docs/lessons-learned.md](docs/lessons-learned.md) |
 | Terraform module release contract | [terraform-modules/RELEASING.md](terraform-modules/RELEASING.md) |
