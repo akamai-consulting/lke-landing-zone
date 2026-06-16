@@ -98,7 +98,7 @@ variable "ghcr_username" {
 }
 
 variable "ghcr_token" {
-  description = "GitHub token so ArgoCD can pull the first-party OCI Helm charts from ghcr.io/<@ upstream_org @>/charts (cluster-foundation, openbao-platform, cert-automation, eso-cert-watcher, internal-cidr-firewall). Either a classic PAT with `read:packages` (zero-friction, always works for GHCR) or a fine-grained PAT with `Packages: Read-only` on the org (needs the org to allow fine-grained tokens; verify with `helm pull` first). Without it those private charts 401 and the whole support-plane sync fails (cluster-foundation ComparisonError → no namespaces → OpenBao bootstrap times out). Supply via TF_VAR_ghcr_token (sourced from secrets.GHCR_READ_TOKEN); pair with var.ghcr_username. Empty default = no GHCR repo Secret created (charts must then be public)."
+  description = "OPTIONAL GitHub token for GHCR. The first-party OCI Helm charts under ghcr.io/<@ upstream_org @>/charts are PUBLIC, so ArgoCD pulls them anonymously and this is normally left empty. Set it only for (a) a private fork that keeps its charts private, or (b) the optional Akamai-internal firewall-controller-internal image (see docs/consume-lke-landing-zone-internal.md). When set, supply via TF_VAR_ghcr_token (sourced from secrets.GHCR_READ_TOKEN) and pair with var.ghcr_username; a classic PAT with `read:packages` is simplest. Empty default = no GHCR Secret created (the public-charts path)."
   type        = string
   sensitive   = true
   default     = ""

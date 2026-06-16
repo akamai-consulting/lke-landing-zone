@@ -29,9 +29,8 @@ inputs:
     description: >
       Token used to fetch first-party git:: Terraform module sources that the
       cluster root references (the kubeconfig fetch runs `terraform init`, which
-      clones those modules). Defaults to the workflow token; override with a
-      token that can read the modules' repo when it is private and separate from
-      the caller (e.g. TEMPLATE_TOKEN).
+      clones those modules). Defaults to the workflow token; the first-party
+      modules are public, so the default suffices.
     required: false
     default: ${{ github.token }}
 

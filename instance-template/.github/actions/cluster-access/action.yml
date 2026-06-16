@@ -35,8 +35,8 @@ inputs:
   github-token:
     description: >
       Token for first-party git:: Terraform module sources (the kubeconfig
-      fetch runs `terraform init`). Defaults to the workflow token; pass
-      TEMPLATE_TOKEN when the modules' repo is private and separate.
+      fetch runs `terraform init`). Defaults to the workflow token; the
+      first-party modules are public, so the default suffices.
     required: false
     default: ${{ github.token }}
   kubeconfig-path:
