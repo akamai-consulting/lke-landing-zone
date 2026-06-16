@@ -82,7 +82,9 @@ selected purely at scaffold time — they're gated at run time by threading the
 flavor as a workflow input:
 
 1. The thin caller forwards `forge_flavor: <@ forge_flavor @>` to the reusable
-   workflow (see `instance-template/.github/workflows/terraform.yml`).
+   workflow (see `instance-template/.github/workflows/terraform.yml`, and the
+   code-promotion caller `promote.yml`, whose every stage forwards it too — the
+   generator `tools/cmd/llz/promote_gen.go` preserves it alongside the pin).
 2. The reusable workflow declares a `forge_flavor` `workflow_call` input and, as
    the first step of every job (before checkout), runs the workspace-perms fix
    gated on `inputs.forge_flavor == 'github-enterprise'` (see

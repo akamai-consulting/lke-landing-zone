@@ -163,9 +163,12 @@ llz env pipeline --check    # CI gate: exit non-zero if promote.yml has drifted 
 
 Wire `llz env pipeline --check` into the instance's CI as the "did you
 regenerate?" guard so a tfvars rank edit can't silently diverge from the workflow.
-The reusable-workflow pin (`uses:@<ref>` + `template-ref`) is **preserved** from
-the file already on disk (or lifted from the sibling `terraform.yml`), so a
-Renovate version bump is *not* treated as drift — only a rank change is.
+The reusable-workflow pin (`uses:@<ref>` + `template-ref` + `forge_flavor`) is
+**preserved** from the file already on disk (or lifted from the sibling
+`terraform.yml`, finally the `forge_flavor` copier answer), so a Renovate version
+bump is *not* treated as drift — only a rank change is. Carrying `forge_flavor`
+keeps a GHE instance's promotion stages gating the same CI workarounds the
+single-deployment `terraform.yml` does.
 
 Start a rollout with **Run workflow** on the Promote action (or `gh workflow run
 promote.yml`). It walks `dev → staging → prod`, pausing at each protected

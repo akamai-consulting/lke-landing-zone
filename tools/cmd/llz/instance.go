@@ -15,6 +15,7 @@ type answers struct {
 	SrcPath      string `json:"_src_path"`
 	UpstreamOrg  string `json:"upstream_org"`
 	InstanceRepo string `json:"instance_repo"`
+	ForgeFlavor  string `json:"forge_flavor"`
 }
 
 // readAnswers loads .copier-answers.yml from dir (use "." for the current
