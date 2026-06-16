@@ -171,6 +171,7 @@ flowchart TB
 ## See also
 
 - [README — what it ships and how it's published/consumed](../../README.md)
+- [Delivery methodology — the phased path these mechanics drive](../delivery-methodology.md)
 - [Convergence contract — the three exit codes in detail](convergence-contract.md)
 - [Environments as a dev → staging → prod pipeline](../environments-and-promotion.md)
 - [terraform-modules/README.md](../../terraform-modules/README.md) ·
