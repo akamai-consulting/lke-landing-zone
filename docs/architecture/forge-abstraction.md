@@ -60,6 +60,40 @@ the model allows but has not been validated end-to-end:
   attestation scan) returns `ErrUnsupported`.
 - `CreateRepo` creates the project but does not yet push the working tree.
 
+## Why not Bitbucket
+
+Bitbucket was evaluated as a fourth flavor and deliberately **not** implemented.
+The blocker is structural, not effort: the `Forge` abstraction models a forge
+that is *both* the source host *and* the CI/secrets plane (the `Runner` surface +
+secret/variable scopes), and Bitbucket does not fit that shape.
+
+- **Bitbucket Server / Data Center** (the self-managed edition enterprises
+  actually run) has **no forge-native CI**. Pipelines run on an *external* system
+  — Jenkins / CloudBees / Bamboo — wired via webhooks ([Atlassian's CI/CD
+  integration guide](https://confluence.atlassian.com/bitbucketserver094/integrate-your-ci-cd-pipeline-1489803073.html)).
+  So the `Runner` surface (`RunWorkflow`) and the CI secret/variable surfaces
+  (`SetSecret`, `SetVariable`, `SecretNames`, `Variables`) have no home on the
+  forge: those credentials live in the external CI's store (e.g. Jenkins
+  credentials), and builds are triggered there, not via a forge-side dispatch. A
+  backend could only return `ErrUnsupported` for the majority of the interface —
+  it would be a forge in name but serve almost none of what `llz` needs.
+- **No CI templates to gate.** The `forge_flavor` mechanism's payoff is selecting
+  rendered CI (the GHE workspace-perms workarounds; in principle GitLab `.gitlab-ci.yml`).
+  A Bitbucket instance's CI is a Jenkins/CloudBees pipeline that this template
+  does not (and would be a large, separate effort to) generate, so the flavor
+  would gate nothing.
+- **No first-class CLI.** GitHub has `gh` and GitLab has `glab`; Bitbucket Server
+  has no equivalent, so even the source-only operations would mean hand-rolling
+  REST-over-`curl`, diverging from the established backend pattern.
+- **Even Bitbucket Cloud lacks a native package/container registry** (unlike
+  GHCR/GitLab), so it is not a drop-in for the GitHub-shaped model either.
+
+If a Bitbucket adopter appears, the realistic path is not a `forge.BB` backend but
+a **separate CI integration** (e.g. a Jenkins `Runner`) plus a Jenkins/CloudBees
+pipeline template — tracked as future work, not modeled here. Until then the
+`Flavor` enum and `forge_flavor` choices stop at `github` / `github-enterprise` /
+`gitlab`.
+
 ## GitHub Enterprise: flavor-gated CI templates
 
 The **forge client** for GHE is just `forge.GH` + a host — `gh` behaves
