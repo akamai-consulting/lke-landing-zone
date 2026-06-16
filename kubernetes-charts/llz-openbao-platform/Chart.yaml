@@ -13,7 +13,8 @@ description: >-
 type: application
 # Chart version — bump on any template/values change. Published to
 # oci://ghcr.io/<org>/charts/llz-openbao-platform by .github/workflows/publish-charts.yml.
-version: 0.1.3
+# 0.1.4: strip internal fingerprints from comments for open-sourcing (no rendered change).
+version: 0.1.4
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

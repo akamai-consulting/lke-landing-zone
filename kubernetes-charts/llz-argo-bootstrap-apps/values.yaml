@@ -179,7 +179,7 @@ components:
       type: oci
       # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
       chart: llz-cluster-foundation
-      version: 0.1.1
+      version: 0.1.2
       releaseName: llz-cluster-foundation
     syncPolicy:
       automated:
@@ -268,7 +268,7 @@ components:
       type: oci
       # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
       chart: llz-cert-automation
-      version: 0.1.0
+      version: 0.1.1
       releaseName: llz-cert-automation
       valuesObject:
         namespace: llz-cert-automation
@@ -293,7 +293,7 @@ components:
       type: oci
       # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
       chart: llz-eso-cert-watcher
-      version: 0.2.0
+      version: 0.2.1
       releaseName: llz-eso-cert-watcher
       valuesObject:
         namespace: llz-external-secrets
