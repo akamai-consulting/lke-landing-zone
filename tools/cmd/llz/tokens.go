@@ -163,27 +163,12 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// the specific repo, so the note tells the operator to pick it.
 	aplOwner, _, _ := strings.Cut(instanceRepo, "/")
 	gatherGH("APL_VALUES_REPO_TOKEN", ghFineGrainedTokenURL("llz-apl-values-repo", aplOwner, "apl-core values repo (otomi.git) + argocd repo Secrets"), "fine-grained PAT (Contents: write pre-filled) → Only select repositories: "+instanceRepo)
-	gatherGH("TEMPLATE_TOKEN", ghTokenURL("repo", "llz-template-read"), "classic PAT, repo scope (read on the private template repo "+templateRepo()+")")
-	// ArgoCD pulls the first-party OCI Helm charts (cluster-foundation, openbao,
-	// …) from ghcr.io/<org>/charts, which are private; without this token the
-	// support-plane sync 401s and OpenBao bootstrap times out. Either a classic
-	// read:packages PAT (zero-friction, always works for GHCR) or a fine-grained
-	// PAT with Packages: Read-only (needs the org to allow fine-grained tokens;
-	// verify with `helm pull` first). Pairs with the GHCR_USERNAME variable.
-	if have("GHCR_READ_TOKEN", true) {
-		fmt.Println("[GitHub] GHCR_READ_TOKEN already set — skipping")
-	} else {
-		ghcrOrg := strings.ToLower(defaultTemplateOrg)
-		classicURL := ghTokenURL("read:packages", "llz-ghcr-read")
-		fineURL := ghFineGrainedPackagesURL("llz-ghcr-read", ghcrOrg)
-		openURL(g, classicURL)
-		fmt.Printf("\n[GitHub] GHCR_READ_TOKEN — ArgoCD pulls private ghcr.io/%s/charts OCI charts (pairs with the GHCR_USERNAME variable)\n", ghcrOrg)
-		fmt.Printf("      classic (read:packages, recommended): %s\n", classicURL)
-		fmt.Printf("      fine-grained (then set Packages: Read-only on %s; verify with `helm pull`):\n        %s\n", ghcrOrg, fineURL)
-		if v := prompt(in, "GHCR_READ_TOKEN"); v != "" {
-			secrets["GHCR_READ_TOKEN"] = v
-		}
-	}
+	// (The template repo + its first-party modules are public, so no TEMPLATE_TOKEN
+	// is needed — the reusable workflows check it out anonymously.)
+	// (The first-party OCI Helm charts under ghcr.io/<org>/charts are public, so
+	// ArgoCD pulls them anonymously — no GHCR_READ_TOKEN is provisioned here. A
+	// private fork or the optional Akamai-internal firewall-controller image can
+	// still set GHCR_READ_TOKEN + GHCR_USERNAME by hand; the TF gate honors it.)
 
 	// ── Computed vars ────────────────────────────────────────────────────────
 	if !have("TF_IMAGE", false) {
