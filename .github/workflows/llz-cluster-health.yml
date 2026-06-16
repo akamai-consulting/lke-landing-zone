@@ -29,6 +29,11 @@ on:
         description: 'Deployment (matches an infra-<region> Environment in the caller repo)'
         required: true
         type: string
+      forge_flavor:
+        description: "Which forge hosts the caller instance: github | github-enterprise | gitlab. Gates the GHE CI workarounds (fix-workspace-perms before checkout on self-hosted runners). Mirrors forge.Flavor()."
+        required: false
+        type: string
+        default: github
       verbose:
         description: 'VERBOSE=1 — dump describe/logs even when nothing is failing'
         required: false
@@ -71,7 +76,7 @@ defaults:
 jobs:
   health:
     name: cluster-health (${{ inputs.region }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     environment: infra-${{ inputs.region }}
     container:
       image: ${{ vars.TF_IMAGE }}
@@ -86,6 +91,10 @@ jobs:
       TF_IN_AUTOMATION:     'true'
       VERBOSE:              ${{ inputs.verbose && '1' || '0' }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Dual checkout (Option A). The fetch-kubeconfig composite action hard-codes
       # `working-directory: terraform-iac-bootstrap/cluster` — the INSTANCE's TF
       # layout — and a composite action's working-directory is resolved against

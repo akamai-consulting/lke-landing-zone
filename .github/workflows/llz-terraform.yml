@@ -141,7 +141,7 @@ jobs:
     name: Plan Cluster (PR)
     needs: discover
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -212,7 +212,7 @@ jobs:
   tf-lint:
     name: Terraform Lint
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -246,7 +246,7 @@ jobs:
   checkov:
     name: Checkov IaC Security Scan
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -293,7 +293,7 @@ jobs:
   promote-pipeline-drift:
     name: Promotion pipeline up to date
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -321,7 +321,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       (inputs.module == 'cluster' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -419,7 +419,7 @@ jobs:
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       (inputs.module == 'cluster' || inputs.module == 'all')
     needs: [apply-cluster]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -633,7 +633,7 @@ jobs:
       inputs.action == 'apply' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
     needs: [apply-cluster-bootstrap]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -840,7 +840,7 @@ jobs:
       (inputs.module == 'cluster' || inputs.module == 'all') &&
       needs.bootstrap-openbao.result == 'success'
     needs: [bootstrap-openbao]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -943,7 +943,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'destroy' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1037,7 +1037,7 @@ jobs:
       inputs.action == 'destroy' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
     needs: [plan-destroy-cluster-bootstrap]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1184,7 +1184,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'destroy' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1249,7 +1249,7 @@ jobs:
     # provider hang, etc.) — the cluster destroy still proceeds because the
     # K8s objects disappear with the cluster.
     needs: [plan-destroy-cluster, destroy-cluster-bootstrap]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1457,7 +1457,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       inputs.module == 'openbao-config'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1515,7 +1515,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'destroy' &&
       inputs.module == 'openbao-config'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1573,7 +1573,7 @@ jobs:
       inputs.action == 'destroy' &&
       inputs.module == 'openbao-config'
     needs: [plan-destroy-openbao-config]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1656,7 +1656,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       (inputs.module == 'cluster' || inputs.module == 'object-storage' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1759,7 +1759,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'destroy' &&
       (inputs.module == 'object-storage' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1816,7 +1816,7 @@ jobs:
       inputs.action == 'destroy' &&
       (inputs.module == 'object-storage' || inputs.module == 'all')
     needs: [plan-destroy-object-storage]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:

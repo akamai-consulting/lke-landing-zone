@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: all
+      forge_flavor:
+        description: "Which forge hosts the caller instance: github | github-enterprise | gitlab. Gates the GHE CI workarounds (fix-workspace-perms before checkout on self-hosted runners). Mirrors forge.Flavor()."
+        required: false
+        type: string
+        default: github
       template-ref:
         description: 'LLZ template ref to source the unseal script + fetch-kubeconfig action from. Pin to the same tag as this workflow''s @<ref>.'
         required: false
@@ -73,11 +78,13 @@ jobs:
   discover:
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/llz-discover-deployments.yml
+    with:
+      forge_flavor: ${{ inputs.forge_flavor }}
 
   auto-unseal:
     name: Auto-Unseal (${{ matrix.region }})
     needs: discover
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     # Defense-in-depth: the caller's schedule trigger is already main-only, but
     # this `if:` (github.ref is inherited from the caller) prevents an attacker
     # who got commit access on a feature branch from re-dispatching against
@@ -110,6 +117,10 @@ jobs:
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       REGION:              ${{ matrix.region }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Dual checkout (Option A): the caller instance at the workspace root (so
       # the fetch-kubeconfig action's `terraform-iac-bootstrap/cluster`
       # working-dir resolves against the instance's TF roots) + the LLZ template

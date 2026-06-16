@@ -46,6 +46,9 @@ jobs:
       fuzz_seconds: ${{ inputs.fuzz_seconds || '60' }}
       drift_branch: ${{ inputs.drift_branch || 'main' }}
       drift_strict: ${{ inputs.drift_strict || false }}
+      # Which forge hosts this instance — gates the GHE CI workarounds (e.g. the
+      # fix-workspace-perms step on self-hosted runners) in the reusable workflow.
+      forge_flavor: <@ forge_flavor @>
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
       template-ref: <@ llz_version @>
     secrets: inherit

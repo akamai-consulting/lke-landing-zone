@@ -56,6 +56,9 @@ jobs:
       reprovision_ca_only:      ${{ inputs.reprovision_ca_only || false }}
       preserve_root_on_failure: ${{ inputs.preserve_root_on_failure || false }}
       instance_repo:            <@ instance_repo @>
+      # Which forge hosts this instance — gates the GHE CI workarounds (e.g. the
+      # fix-workspace-perms step on self-hosted runners) in the reusable workflow.
+      forge_flavor:             <@ forge_flavor @>
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
       template-ref:             <@ llz_version @>
     secrets: inherit

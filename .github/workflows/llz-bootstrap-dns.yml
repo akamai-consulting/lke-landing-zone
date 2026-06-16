@@ -24,6 +24,11 @@ on:
         description: 'Deployment (matches an infra-<region> Environment in the caller repo)'
         required: true
         type: string
+      forge_flavor:
+        description: "Which forge hosts the caller instance: github | github-enterprise | gitlab. Gates the GHE CI workarounds (fix-workspace-perms before checkout on self-hosted runners). Mirrors forge.Flavor()."
+        required: false
+        type: string
+        default: github
       template-ref:
         description: 'LLZ template ref to source the fetch-kubeconfig action + scripts from. Pin to the same tag as this workflow''s @<ref>.'
         required: false
@@ -55,7 +60,7 @@ defaults:
 jobs:
   seed-dns:
     name: Seed cert-manager DNS-01 token (${{ inputs.region }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -71,6 +76,10 @@ jobs:
       REGION:              ${{ inputs.region }}
 
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Instance at the workspace root (fetch-kubeconfig's terraform-iac-bootstrap/
       # working-dir + the apl-values tree); template into _llz-template/.
       - name: Checkout the instance (TF roots + apl-values overlays)
