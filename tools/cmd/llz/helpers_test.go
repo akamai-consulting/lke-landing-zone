@@ -103,6 +103,29 @@ func TestGhFineGrainedPackagesURL(t *testing.T) {
 	}
 }
 
+func TestGhFineGrainedDispatchURL(t *testing.T) {
+	u, err := url.Parse(ghFineGrainedDispatchURL("llz-e2e-dispatch", "my-org"))
+	if err != nil {
+		t.Fatalf("not a valid URL: %v", err)
+	}
+	if u.Host != "github.com" || u.Path != "/settings/personal-access-tokens/new" {
+		t.Errorf("unexpected host/path: %q", u)
+	}
+	q := u.Query()
+	for k, want := range map[string]string{
+		"name": "llz-e2e-dispatch", "target_name": "my-org", "expires_in": "90",
+		"contents": "write", "actions": "write", "workflows": "write",
+	} {
+		if q.Get(k) != want {
+			t.Errorf("%s = %q, want %q", k, q.Get(k), want)
+		}
+	}
+	// owner omitted -> no target_name.
+	if q2 := mustQuery(t, ghFineGrainedDispatchURL("n", "")); q2.Has("target_name") {
+		t.Errorf("empty owner should omit target_name, got %v", q2)
+	}
+}
+
 func mustQuery(t *testing.T, raw string) url.Values {
 	t.Helper()
 	u, err := url.Parse(raw)

@@ -446,10 +446,16 @@ func configureTemplateHarness(g globalOpts, in *bufio.Scanner, instanceRepo, clu
 	var dispArgv []string
 	var dispatch string
 	if !st.repoSecrets["E2E_DISPATCH_TOKEN"] {
-		url := ghTokenURL("repo,workflow", "llz-e2e-dispatch")
-		openURL(g, url)
-		fmt.Printf("    • E2E_DISPATCH_TOKEN — classic PAT, scopes repo + workflow\n"+
-			"      (Contents:write + Actions:read/write + push workflow files) on %s\n      %s\n", instanceRepo, url)
+		owner := instanceRepo
+		if i := strings.IndexByte(instanceRepo, '/'); i > 0 {
+			owner = instanceRepo[:i]
+		}
+		classicURL := ghTokenURL("repo,workflow", "llz-e2e-dispatch")
+		fineURL := ghFineGrainedDispatchURL("llz-e2e-dispatch", owner)
+		openURL(g, classicURL)
+		fmt.Printf("    • E2E_DISPATCH_TOKEN — drives the e2e instance repo %s (force-push the instantiated tree + dispatch/watch its workflows)\n", instanceRepo)
+		fmt.Printf("      classic (scopes repo + workflow, recommended): %s\n", classicURL)
+		fmt.Printf("      fine-grained (then set Contents + Actions + Workflows: Read and write; Only select repositories: %s):\n        %s\n", instanceRepo, fineURL)
 		dispatch = prompt(in, "E2E_DISPATCH_TOKEN (Enter to skip)")
 		if dispatch != "" {
 			dispArgv = []string{"gh", "secret", "set", "E2E_DISPATCH_TOKEN", "--repo", tr}
