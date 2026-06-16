@@ -27,6 +27,56 @@ caller stubs for the workflows, a pinned `llz` binary, version-tagged modules an
 charts — and overrides only its own org/cluster identity. Upstream fixes reach
 adopters via version bumps, not manual diffs.
 
+## Architecture at a glance
+
+This repo is a **template that publishes immutable, independently versioned
+artifacts** — it is not itself a running deployment. A downstream **instance
+repo** consumes those artifacts (pinned to one umbrella tag) and the `llz` CLI
+drives it from scaffold to a converged LKE-E cluster and on into day-2.
+
+```mermaid
+flowchart LR
+    subgraph TPL["📦 Template repo (this repo) — builds & publishes"]
+        direction TB
+        TF["terraform-modules/<br/>cluster · pool · firewall · object-storage · openbao"]
+        CH["kubernetes-charts/<br/>5 first-party Helm charts"]
+        IMG["dockerfiles/<br/>ci-terraform · ci-kubernetes · devcontainer"]
+        CLI["tools/ — the llz CLI (Go)"]
+        WF["reusable workflows + instance-template/ scaffold"]
+    end
+
+    subgraph REG["🏷️ Published artifacts"]
+        direction TB
+        GTAG["git:: umbrella tag vX.Y.Z<br/>(modules + workflows + CLI)"]
+        OCI["GHCR OCI charts<br/>(independently versioned)"]
+        GHCRimg["GHCR container images"]
+    end
+
+    INST["🏗️ Instance repo (downstream, per org)<br/>org/cluster identity only + pinned artifacts"]
+    TARGET["☸️ LKE-Enterprise cluster<br/>+ Akamai App Platform (apl-core)"]
+
+    TF --> GTAG
+    WF --> GTAG
+    CLI --> GTAG
+    CH --> OCI
+    IMG --> GHCRimg
+
+    GTAG -->|"?ref=vX.Y.Z"| INST
+    GHCRimg -->|"TF_IMAGE / KUBE_IMAGE"| INST
+    OCI -->|"Argo CD targetRevision"| TARGET
+    INST -->|"llz: scaffold → apply → converge"| TARGET
+
+    classDef repo fill:#e8f0fe,stroke:#4285f4,color:#111;
+    classDef art fill:#fef7e0,stroke:#f9ab00,color:#111;
+    classDef tgt fill:#e6f4ea,stroke:#34a853,color:#111;
+    class TF,CH,IMG,CLI,WF repo;
+    class GTAG,OCI,GHCRimg art;
+    class TARGET tgt;
+```
+
+> Full high- and low-level diagrams (including the in-cluster bootstrap chain):
+> [docs/architecture/overview.md](docs/architecture/overview.md).
+
 ## What it is
 
 - **Secure-by-default.** Every non-obvious value (NetworkPolicy CIDRs, sync-wave
@@ -181,6 +231,7 @@ failure mode the default already prevents.
 
 | Topic | File |
 |-------|------|
+| Architecture overview (high- + low-level diagrams) | [docs/architecture/overview.md](docs/architecture/overview.md) |
 | Bootstrap "done" contract (3 exit codes) | [docs/architecture/convergence-contract.md](docs/architecture/convergence-contract.md) |
 | Secret backend (OpenBao) operations guide | [docs/secrets.md](docs/secrets.md) |
 | Alerting inventory + coverage | [docs/alerting.md](docs/alerting.md) |
