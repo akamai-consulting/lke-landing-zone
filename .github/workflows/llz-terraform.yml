@@ -946,6 +946,9 @@ jobs:
       # left unattached after PVC reap. Must be a valid token; otherwise the
       # destroy succeeds but orphans accumulate against account quota.
       TF_VAR_linode_token:    ${{ secrets.LINODE_API_TOKEN }}
+      # Match the destroy job: gate data.kubernetes_service.coredns off on the
+      # teardown path (apply-only read; would time out against the dying cluster).
+      TF_VAR_destroying:      'true'
       AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
@@ -1033,6 +1036,12 @@ jobs:
       # left unattached after PVC reap. Must be a valid token; otherwise the
       # destroy succeeds but orphans accumulate against account quota.
       TF_VAR_linode_token:    ${{ secrets.LINODE_API_TOKEN }}
+      # Teardown path: gate data.kubernetes_service.coredns off so the destroy's
+      # `terraform plan -destroy` (refresh on) doesn't read the cluster API while
+      # the LKE cluster is being reaped in the same run — that read times out
+      # (dial :6443 i/o timeout) and fails the destroy. The Untrack step below
+      # only `state rm`s managed resources; it can't drop a data source.
+      TF_VAR_destroying:      'true'
       AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
