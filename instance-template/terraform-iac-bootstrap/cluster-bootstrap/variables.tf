@@ -72,6 +72,12 @@ variable "loki_admin_password" {
   default     = ""
 }
 
+variable "destroying" {
+  description = "Set true (TF_VAR_destroying=true) only on the teardown path. Gates data.kubernetes_service.coredns off so `terraform destroy` doesn't refresh that cluster-API read while the LKE cluster is being reaped in the same run — the read would time out (dial :6443 i/o timeout) and fail the destroy. The data source is apply-only (it just feeds the rendered Loki gateway resolver), so skipping it on destroy is safe; the Kyverno loki-gateway-resolver policy is the runtime backstop. Defaults false so the apply path is unaffected and no apply job needs to set it."
+  type        = bool
+  default     = false
+}
+
 variable "linode_token" {
   description = "Linode account API token. Consumed by the destroy-time provisioner on null_resource.cleanup_platform_volumes_on_destroy to sweep any Block Storage Volume tagged `block-storage` that's left unattached after PVC reap — this is the orphan-prevention that keeps account-quota exhaustion from blocking the next bootstrap. Same value as the cluster module's linode_token; in CI both are wired from secrets.LINODE_API_TOKEN via TF_VAR_linode_token."
   type        = string

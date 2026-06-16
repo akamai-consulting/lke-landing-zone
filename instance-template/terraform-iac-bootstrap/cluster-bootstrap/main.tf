@@ -114,7 +114,16 @@ resource "random_password" "loki_admin" {
 # kube-system; cluster-bootstrap already has working cluster access, so this read
 # is safe. The Kyverno loki-gateway-resolver policy is kept as a backstop: if this
 # value is ever empty the chart falls back to the hostname and the policy fixes it.
+#
+# count guards the destroy path: this is a data source, so `terraform destroy`
+# still refreshes it even after the teardown's "Untrack cluster-bootstrap
+# resources" step has `state rm`'d every managed in-cluster resource (state rm
+# cannot drop a data source). On a CASE B teardown (cluster being reaped in the
+# same run) the API server is unreachable and the read times out (dial :6443 i/o
+# timeout), failing the whole destroy. The value is apply-only (it only feeds the
+# rendered Loki values below), so skip the read entirely when destroying.
 data "kubernetes_service" "coredns" {
+  count = var.destroying ? 0 : 1
   metadata {
     name      = "coredns"
     namespace = "kube-system"
@@ -149,7 +158,7 @@ locals {
       apl_values_repo_ref      = var.apl_values_repo_revision
       linode_dns_token         = var.linode_dns_token
       loki_admin_password      = local.loki_admin_password_effective
-      coredns_cluster_ip       = try(data.kubernetes_service.coredns.spec[0].cluster_ip, "")
+      coredns_cluster_ip       = try(data.kubernetes_service.coredns[0].spec[0].cluster_ip, "")
       loki_bucket_chunks       = local.loki_buckets.chunks
       loki_bucket_ruler        = local.loki_buckets.ruler
       loki_bucket_admin        = local.loki_buckets.admin
