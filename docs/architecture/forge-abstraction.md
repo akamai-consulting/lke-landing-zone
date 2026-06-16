@@ -115,14 +115,22 @@ template and source composite actions from it. So GHE workarounds can't be
 selected purely at scaffold time — they're gated at run time by threading the
 flavor as a workflow input:
 
-1. The thin caller forwards `forge_flavor: <@ forge_flavor @>` to the reusable
-   workflow (see `instance-template/.github/workflows/terraform.yml`, and the
-   code-promotion caller `promote.yml`, whose every stage forwards it too — the
-   generator `tools/cmd/llz/promote_gen.go` preserves it alongside the pin).
-2. The reusable workflow declares a `forge_flavor` `workflow_call` input and, as
-   the first step of every job (before checkout), runs the workspace-perms fix
-   gated on `inputs.forge_flavor == 'github-enterprise'` (see
-   `.github/workflows/llz-terraform.yml` — the reference conversion).
+1. **Every** thin caller forwards `forge_flavor: <@ forge_flavor @>` to its
+   reusable workflow — `terraform.yml`, `promote.yml` (whose every generated
+   stage forwards it, preserved by `tools/cmd/llz/promote_gen.go`), plus
+   `bootstrap-dns`, `bootstrap-openbao`, `cluster-health`, `openbao-auto-unseal`,
+   `scheduled-checks`, and `secret-rotation`.
+2. **Every** reusable workflow (`llz-*.yml`, except the github.com-only
+   `llz-release.yml`) declares a `forge_flavor` `workflow_call` input and, as the
+   first step of every checkout-bearing job, runs the workspace-perms fix gated on
+   `inputs.forge_flavor == 'github-enterprise'`. Workflows that call
+   `llz-discover-deployments.yml` forward the flavor down to it. The flavor input
+   default is `github`, so github.com instances are unaffected.
+
+Runner selection is centralized off the same need: GHE has no github.com-hosted
+runners, so every job's `runs-on` is `${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}`.
+A GHE (or any self-hosted) instance sets the `LLZ_RUNNER` repo/org variable once
+to its runner label; github.com instances leave it unset and get `ubuntu-latest`.
 
 The fix is inlined per job rather than a local composite action because it must
 run *before* any checkout (the template — and thus its composite actions — isn't
@@ -137,18 +145,53 @@ flows:
 Both live under `.github/actions/` (template-internal, excluded from instances,
 classified `managed` in `.template-manifest`).
 
-### Remaining work (follow-ups)
+### Done / remaining (follow-ups)
 
-- **Convert the other reusable workflows** the same way `llz-terraform.yml` was:
-  `llz-bootstrap-dns`, `llz-bootstrap-openbao`, `llz-cluster-health`,
-  `llz-openbao-auto-unseal`, `llz-scheduled-checks`, `llz-secret-rotation`
-  (declare the `forge_flavor` input, forward it from each thin caller, add the
-  gated step). Mirror in each `instance-template/.github/workflows/*.yml` caller.
-- **`runs-on` labels.** GHE has no github.com-hosted runners; a GHE instance must
-  target self-hosted runner labels. Make `runs-on` flavor-aware (input or repo
-  variable) — not yet done.
-- **CI forge selection for `llz`.** Export `LLZ_GH_HOST` (and/or
-  `LLZ_FORGE`) in the reusable workflows when `forge_flavor` is GHE so the in-CI
-  `llz` picks the GHE backend. Source the host from a repo variable.
+Done: all reusable workflows + thin callers thread `forge_flavor`, every
+checkout-bearing job runs the gated perms-fix, and `runs-on` is centralized on
+`vars.LLZ_RUNNER`. Remaining:
+
+- **CI forge selection for `llz`.** Export `LLZ_GH_HOST` (and/or `LLZ_FORGE`) in
+  the reusable workflows when `forge_flavor` is GHE so the in-CI `llz` picks the
+  GHE backend. Source the host from a repo variable.
 - **`PATH` via `GITHUB_ENV`** (the ohttp-bits container-runner workaround) — only
   if a GHE adopter hits the containerized-`GITHUB_PATH` bug.
+
+## GitLab: a parallel CI suite
+
+GitHub Actions workflows cannot run on GitLab — GitLab executes `.gitlab-ci.yml`,
+not `workflow_call` workflows. So `forge_flavor=gitlab` is not a gated *variant*
+of the github.com workflows (the way GHE is); it selects a **separate CI
+implementation** that mirrors the same topology and drives the same `llz` CLI.
+
+| Layer | github.com / GHE | GitLab |
+|---|---|---|
+| Reusable definitions (template-hosted) | `.github/workflows/llz-*.yml` | `gitlab-ci/*.yml` |
+| Instance entry point | `.github/workflows/*.yml` thin callers (`uses:@<ref>`) | `.gitlab-ci.yml` (`include: project:…, ref: <ref>`) |
+| Reuse mechanism | `workflow_call` | `include:` + `extends:` + `!reference` |
+| Shared glue | composite actions (`.github/actions/*`) | one base file (`gitlab-ci/base.yml`) |
+| Runner selection | `runs-on: ${{ vars.LLZ_RUNNER }}` | `tags: [$LLZ_RUNNER]` |
+| Approval / soak gate | GitHub Environment protection | protected GitLab environment + `when: manual` |
+| Per-env secrets | environment secrets (`secrets: inherit`) | environment-scoped CI/CD variables |
+
+**Centralization.** The operational logic is the *same `llz ci …` binary* on both
+forges (baked into the ci-terraform image, which also ships `glab`). The only
+GitLab-specific glue — git auth for `git::` module fetches and the `terraform
+init` backend — lives **once** in `gitlab-ci/base.yml` as the `.llz-base` /
+`.llz-git-auth` / `.llz-tf-init` anchors that every pipeline `extends`/`!reference`s,
+the GitLab analog of the composite actions.
+
+**Status: best-effort, not validated against a live GitLab instance** — the same
+bar as the GitLab forge backend. Known gaps, documented in the files:
+
+- **Per-region fan-out.** The github.com side discovers deployments and matrixes
+  over them; GitLab can't matrix dynamically, so day-2 jobs drive on a single
+  `$REGION` and loop `llz env list --json` when `$REGION` is empty/`all`. True
+  parallel fan-out would use dynamic child pipelines.
+- **Promotion is not generated yet.** `promote.yml` ships the reusable
+  `.llz-promote-stage` block + a worked example; teaching `llz env pipeline` to
+  emit a ranked GitLab stage chain (as `promote_gen.go` does for github.com) is
+  the tracked follow-up.
+- **Cross-host includes.** GitLab `include: project:` resolves within one GitLab
+  instance, so a GitLab adopter must consume the template from a GitLab-hosted
+  copy of `lke-landing-zone`, not from github.com.
