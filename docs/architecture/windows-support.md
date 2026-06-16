@@ -150,6 +150,87 @@ Grounded in the code as it stands. "Build" = stops a Windows binary from existin
   Bash regardless; native `make` support means a task runner or de-bashing, and
   the audience is small. Defer hard.
 
+## Tier 1, scoped: a native `llz.exe` with basic PowerShell support
+
+If demand justifies going past Tier 0, this is the concrete, bounded shape of
+"compile a Windows binary and give it basic PowerShell ergonomics" — chosen so it
+can't sprawl into the long tail. The build side is genuinely small because the
+cross-compile is already clean: the release build is `CGO_ENABLED=0` with a single
+`go build -trimpath -ldflags …` in a `goos × goarch` matrix
+(`.github/workflows/llz-release.yml:44-57`), so the binary is one matrix entry
+away once it compiles at all.
+
+### The one hard prerequisite
+
+`GOOS=windows go build ./cmd/llz` **fails today** on the `Setsid` field
+(`ci_harbor_steps.go:79`), so nothing ships until that is split. Extract a
+`detachProcess(*exec.Cmd)` seam into two files:
+
+- `harbor_detach_unix.go` (`//go:build !windows`) — sets
+  `SysProcAttr.Setsid = true`, exactly as today.
+- `harbor_detach_windows.go` (`//go:build windows`) — a no-op (or
+  `CREATE_NEW_PROCESS_GROUP`); the step is CI-only and never runs on an operator
+  box, so the Windows arm need only *compile*, not detach for real.
+
+~30 lines, no behavior change on Linux. This is the gate; everything below assumes
+the binary now builds.
+
+### Build + publish
+
+- Add `windows` to the `goos` matrix and suffix `.exe` on the Windows asset
+  (`llz-windows-amd64.exe`). Two-line diff to the release workflow.
+- `windows/amd64` first; `arm64` only if the amd64 lane proves out.
+
+### The "basic PowerShell" deliverables — in scope
+
+- **`install-llz.ps1`** — a PowerShell mirror of `install-llz.sh`: resolve the
+  release, `gh release download` the `.exe` + `SHA256SUMS`, verify with
+  `Get-FileHash -Algorithm SHA256`, place on PATH. ~40 lines, same shape as the
+  shell version, no new concepts.
+- **`llz completion powershell`** — essentially **free**: cobra's default
+  `completion` command already emits a PowerShell script (the functional test
+  already exercises `completion`, see `Makefile:600`). Deliverable is one doc
+  paragraph: dot-source it from `$PROFILE`.
+- **Runtime fixes so the `.exe` doesn't feel broken** — the browser-opener Windows
+  arm (`wizard.go:297`) and `os.TempDir()` for `/tmp` (`ci_harbor_steps.go:32`),
+  both one-liners noted above.
+- **`llz self-update` on Windows** — the one item here that is *real* work, not a
+  one-liner: Windows locks a running `.exe`, so `os.Rename` over the live binary
+  (`selfupdate.go:272-300`) can't work. Implement rename-aside-then-swap (move the
+  current `.exe` to `llz.exe.old`, drop the new one in place, clean up the old on
+  next run) and teach `assetName` the `.exe`/`windows` scheme
+  (`selfupdate.go:26-29`). Included in Tier 1 deliberately: a self-updater that
+  errors on its own platform is worse than not shipping one.
+
+### Deliberately *out* of "basic" — name the line so it holds
+
+- **No PowerShell pre-commit hook.** Git for Windows runs hooks through its own
+  bundled bash, so the existing bash shim (`hooks.go:43-49`) already works for
+  anyone who installed `git` — which is everyone using this flow. Tier 1
+  *documents that constraint* ("Git for Windows required for the hook") rather
+  than building a `.bat`/`.ps1` hook generator. The native hook is Tier 2,
+  demand-gated.
+- **No PowerShell module / cmdlet wrapper** (`Invoke-Llz`, parameter binding,
+  pipeline objects). `llz.exe` is already a first-class external command in
+  PowerShell; a module is gold-plating.
+- **No Makefile / contributor-flow port.** Separate audience, stays on WSL2.
+
+### What Tier 1 costs to *keep*
+
+A `windows-latest` job in CI that at minimum cross-builds and smoke-runs
+`llz version` / `--help` / `completion` (the offline functional set). Without it,
+the next `syscall`-shaped or `/tmp`-shaped addition silently breaks the Windows
+build. Supporting the binary means testing it — that lane *is* the support.
+
+### The caveat that survives Tier 1
+
+A native `.exe` still leaves the operator hand-installing terraform / kubectl /
+helm / gh / bao / copier on PATH — the exact friction the
+[Dev Container](../devcontainer.md) erases. So even with Tier 1 shipped, the
+*recommended* path stays WSL2 / Dev Container; native PowerShell is the "I genuinely
+cannot run a Linux userland" fallback. The `.exe` widens the door; it does not
+change which door we point people at.
+
 ## What it would mean
 
 Beyond the one-time build, native support is a **standing commitment**, and that
@@ -183,11 +264,14 @@ A tiered, demand-gated path:
 1. **Now (Tier 0):** officially document **WSL2 or the Dev Container** as *the*
    supported Windows operator path. Near-zero engineering, removes the real
    blocker (operator confusion), and is honest about how the flow is shaped.
-2. **On real demand (Tier 1):** add `windows/amd64` to the release matrix, do the
-   `Setsid` build-tag split, the self-update replace-on-next-run fix, and the
-   browser/`/tmp` one-liners, behind a Windows CI build lane. This delivers a
-   genuinely native `llz.exe` for the read/scaffold/validate core while leaving
-   the bootstrap heavy-lifting where it belongs (CI).
+2. **On real demand (Tier 1):** ship a native `llz.exe` with basic PowerShell
+   ergonomics — the `Setsid` build-tag split, `windows/amd64` in the release
+   matrix, `install-llz.ps1`, PowerShell completion, the self-update
+   replace-on-next-run fix, and the browser/`/tmp` one-liners, behind a Windows CI
+   build lane. Full breakdown of what's in and out in
+   [Tier 1, scoped](#tier-1-scoped-a-native-llzexe-with-basic-powershell-support).
+   This delivers a genuinely native binary for the read/scaffold/validate core
+   while leaving the bootstrap heavy-lifting where it belongs (CI).
 3. **Only if asked (Tiers 2–3):** native pre-commit hook generation and a
    de-bashed contributor flow. Long tail; wait for a named user.
 
