@@ -1,23 +1,32 @@
-# Release-hygiene guard: any change under a chart directory must bump that
-# chart's Chart.yaml `version:`.
+# Release-hygiene guards — two complementary chart-version checks:
 #
-# Why: publish-charts.yml publishes immutably — it pushes a chart ONLY when its
-# version is not already in the registry, and never overwrites an existing tag.
-# So a template/values change merged WITHOUT a version bump is silently never
-# published; clusters keep pulling the stale artifact by their pinned
-# targetRevision. That is exactly how the firewall-controller runner-acl RBAC
-# grant shipped to source but never reached any cluster (incl. brand-new ones),
-# leaving the control-plane ACL un-reconciled. This check makes that class of
-# mistake fail in CI instead of in production.
+#  1. chart-version-guard: any change under a chart directory must bump that
+#     chart's Chart.yaml `version:`. publish-charts.yml publishes immutably — it
+#     pushes a chart ONLY when its version is not already in the registry, and
+#     never overwrites an existing tag. So a template/values change merged
+#     WITHOUT a version bump is silently never published; clusters keep pulling
+#     the stale artifact by their pinned targetRevision. That is exactly how the
+#     firewall-controller runner-acl RBAC grant shipped to source but never
+#     reached any cluster, leaving the control-plane ACL un-reconciled.
 #
-# The decision logic lives in unit-tested Go (`llz ci chart-version-guard`); the
-# steps below are single-line glue (build llz, run it) so they add no
-# untestable inline bash.
+#  2. chart-pin-guard: every Argo CD first-party chart pin (apl-values
+#     targetRevision + llz-argo-bootstrap-apps component version) must match the
+#     chart's local Chart.yaml version. A Chart.yaml bump not mirrored into the
+#     pin leaves Argo pulling a tag the registry never received; on a cold
+#     bootstrap that 404 silently strands the support-plane app (the llz-openbao
+#     namespace is never created) and times out the OpenBao bootstrap workflow on
+#     `namespaces "llz-openbao" not found`. Guard #1 catches the missing bump;
+#     guard #2 catches the un-mirrored pin — together they close the loop.
+#
+# Both decision logics live in unit-tested Go (`llz ci chart-version-guard` /
+# `llz ci chart-pin-guard`); the steps below are single-line glue (build llz, run
+# it) so they add no untestable inline bash.
 on:
   pull_request:
     branches: [main, master]
     paths:
       - 'kubernetes-charts/**'
+      - 'instance-template/apl-values/**'
       - 'tools/**'
       - '.github/workflows/chart-version-guard.yml'
 
@@ -32,7 +41,7 @@ concurrency:
 
 jobs:
   version-bumped:
-    name: Changed charts bump Chart.yaml version
+    name: Charts bump version and pins stay aligned
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (full history so the PR base is diffable)
@@ -53,3 +62,6 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: llz ci chart-version-guard --base "$BASE_SHA"
+
+      - name: Assert every Argo chart pin matches its Chart.yaml version
+        run: llz ci chart-pin-guard

@@ -303,6 +303,19 @@ untestable-loc-check:
 		cd $(GO_DIR) && go run ./cmd/llz ci untestable-loc --root ..; \
 	fi
 
+# chart-pin-guard: assert every Argo CD first-party chart pin (apl-values
+# targetRevision + llz-argo-bootstrap-apps component version) matches the chart's
+# local kubernetes-charts/<chart>/Chart.yaml version. A pin the registry never
+# received 404s at Argo sync time — on a cold bootstrap that silently strands the
+# support-plane app (llz-openbao namespace never created) and times out the
+# OpenBao bootstrap. Decision logic is unit-tested Go; this is thin glue.
+chart-pin-guard:
+	@if command -v llz >/dev/null 2>&1; then \
+		llz ci chart-pin-guard; \
+	else \
+		cd $(GO_DIR) && go run ./cmd/llz ci chart-pin-guard --root ..; \
+	fi
+
 # argo-workflow-lint: render the OpenBao approle-rotation CronWorkflow from the
 # Helm chart and validate the rendered YAML with `argo lint --offline`. Catches
 # step→template reference errors and invalid Argo field names that schema-only
@@ -384,7 +397,7 @@ sync-wave-lint: render-charts
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
 LINT_K8S := k8s-lint k8s-validate sync-wave-lint placeholder-lint \
-            externalsecret-paths-check argocd-rendered-apps-check prom-rules-check \
+            externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
             helm-lint-charts helm-lint-real-values helm-lint-argocd \
             helm-dep-lock-check argo-workflow-lint
 LINT_TF := tf-lint checkov tf-validate-roots

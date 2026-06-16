@@ -82,6 +82,11 @@ func ciCmd() *cobra.Command {
 	// Release-hygiene gate: a chart change must bump its Chart.yaml version, or
 	// publish-charts.yml never publishes it and clusters keep the stale artifact.
 	c.AddCommand(ciChartVersionGuardCmd())
+	// Companion gate: every Argo CD chart pin (apl-values targetRevision +
+	// llz-argo-bootstrap-apps component version) must match the chart's local
+	// Chart.yaml version, or Argo pulls a tag the registry never received and the
+	// support-plane app silently never syncs (llz-openbao namespace never created).
+	c.AddCommand(ciChartPinGuardCmd())
 	// Cluster-bootstrap local-exec body (the kyverno_* null_resources in
 	// instance-template cluster-bootstrap/main.tf): readiness poll + apply +
 	// webhook-race soft-fail + retrofit kick.
