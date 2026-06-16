@@ -1,0 +1,355 @@
+# gitlab-ci/bootstrap-openbao.yml — GitLab analog of .github/workflows/llz-bootstrap-openbao.yml. Best-effort, not validated against live GitLab.
+# Initializes, unseals, and configures an OpenBao cluster for a given REGION, then seeds its KV paths and CI/AppRole secrets — and, for a standby deployment, ships its TLS CA into the active peer's cluster.
+#
+# ── Relationship to the github.com workflow ──────────────────────────────────
+# The GHA file is the source of truth; this mirrors its job topology and calls
+# the SAME `llz ci …` / `llz env …` commands baked into $LLZ_TF_IMAGE. GitLab CI
+# has no job-level `if:` over another job's step outputs, so the GHA per-step
+# `if: steps.<x>.outputs…` gates that branch on live OpenBao state (init/seal,
+# root-token availability, Harbor presence) are carried INSIDE the `llz ci …`
+# commands, exactly as the github.com side already does — each command no-ops or
+# skips gracefully when its precondition isn't met. The cross-job `needs:` chain
+# and the workflow_dispatch inputs (reprovision_ca_only / preserve_root_on_failure)
+# are modeled with `needs:` + selector variables (see rules below).
+#
+# ── Drive on pipeline variables (set on a manual/web run) ────────────────────
+#   LLZ_JOB            — "bootstrap-openbao" to arm this pipeline (the analog of
+#                        picking the workflow in the Actions UI).
+#   REGION             — deployment to bootstrap; also the infra-<region> GitLab
+#                        environment and the tfstate key path.
+#   LLZ_INSTANCE_REPO  — this instance's repo (<owner>/<name>) for forge targeting
+#                        (analog of the GHA `instance_repo` input).
+#   REPROVISION_CA_ONLY      — "true" to run the standby-CA recovery path only
+#                              (analog of the `reprovision_ca_only` input).
+#   PRESERVE_ROOT_ON_FAILURE — "true" to skip the post-bootstrap root-token revoke
+#                              on FAILURE (DEBUG; analog of `preserve_root_on_failure`).
+# All infra-<region> secrets (LINODE_API_TOKEN, TF_STATE_*, OPENBAO_*, HARBOR_*,
+# LOKI_S3_*) are environment-scoped CI/CD variables, as documented in base.yml.
+
+include:
+  - local: gitlab-ci/base.yml
+
+stages:
+  - resolve
+  - bootstrap
+  - peer-ca
+
+# ── Resolve this deployment's HA role + peer ─────────────────────────────────
+# role (active|standby|standalone) and peer (the other member of its ha_group)
+# are read from the cluster tfvars via `llz env`. Persisted to a dotenv artifact
+# so downstream jobs read $HA_ROLE / $HA_PEER (the GitLab analog of the GHA job
+# outputs consumed via needs.resolve.outputs.*). peer is empty for standalone.
+resolve:
+  extends: .llz-base
+  stage: resolve
+  rules:
+    - if: $LLZ_JOB == "bootstrap-openbao"
+  script:
+    - |
+      set -euo pipefail
+      ROLE="$(llz env role "$REGION")"
+      # peer exits non-zero for a standalone deployment — empty is expected.
+      PEER="$(llz env peer "$REGION" 2>/dev/null || true)"
+      # Guard against a stale `llz` (a binary predating role/peer prints help and
+      # exits 0). A real role is a single bare word; reject anything else loudly.
+      case "$ROLE" in
+        active|standby|standalone) ;;
+        *) echo "llz env role returned an unexpected value (stale image?): ${ROLE}" >&2; exit 1 ;;
+      esac
+      echo "HA_ROLE=${ROLE}" >> resolve.env
+      echo "HA_PEER=${PEER}" >> resolve.env
+      echo "Resolved ${REGION}: role=${ROLE} peer=${PEER:-<none>}"
+  artifacts:
+    reports:
+      dotenv: resolve.env
+
+# ── Bootstrap OpenBao (main path) ────────────────────────────────────────────
+# The GHA `bootstrap` job: pre-flight secrets/object-storage, open the control-
+# plane ACL + fetch kubeconfig (cluster-access), gen the OTel bootstrap TLS,
+# init/unseal, configure, then the full seed sequence. Runs unless this is a
+# reprovision-CA-only recovery run. State-dependent GHA per-step `if:` gates
+# (init/seal branch, root-token availability, Harbor presence) live inside the
+# corresponding `llz ci …` commands. The standby CA is extracted at the end and
+# handed to provision-peer-ca via a dotenv artifact.
+bootstrap:
+  extends: .llz-base
+  stage: bootstrap
+  needs:
+    - job: resolve
+      artifacts: true
+  rules:
+    - if: $LLZ_JOB == "bootstrap-openbao" && $REPROVISION_CA_ONLY != "true"
+  environment:
+    name: infra-$REGION
+  variables:
+    LLZ_MODULE: cluster
+  script:
+    # ── Pre-flight: required infra-<region> env secrets ──────────────────────
+    - |
+      set -u
+      FAIL=0
+      llz ci require-secret LOKI_S3_ACCESS_KEY \
+        --hint "Source: terraform-iac-bootstrap/object-storage/ output loki_access_key" || FAIL=1
+      llz ci require-secret LOKI_S3_SECRET_KEY \
+        --hint "Source: terraform-iac-bootstrap/object-storage/ output loki_secret_key" || FAIL=1
+      llz ci require-secret HARBOR_REGISTRY_S3_ACCESS_KEY \
+        --hint "Source: terraform-iac-bootstrap/object-storage/ output harbor_registry_access_key" || FAIL=1
+      llz ci require-secret HARBOR_REGISTRY_S3_SECRET_KEY \
+        --hint "Source: terraform-iac-bootstrap/object-storage/ output harbor_registry_secret_key" || FAIL=1
+      [ "$FAIL" -eq 0 ]
+    # ── Pre-flight: object-storage buckets/keys actually exist ───────────────
+    - llz ci verify-object-storage --region "$REGION"
+    # ── Kubeconfig + control-plane ACL (analog of cluster-access action) ──────
+    - llz ci runner-acl --mode open --region "$REGION"
+    # ── OTel Collector bootstrap TLS cert (break circular dependency) ─────────
+    - |
+      llz ci gen-bootstrap-tls \
+        --prefix otel-bootstrap \
+        --ca-subj "/CN=platform-otel-bootstrap-ca/O=app/OU=bootstrap" \
+        --cert-subj "/CN=otel.${REGION}.internal/O=app/OU=bootstrap" \
+        --dns "otel.${REGION}.internal,platform-otel-collector.llz-observability.svc,platform-otel-collector.llz-observability.svc.cluster.local" \
+        --k8s-secret llz-observability/platform-otel-collector-tls \
+        --ensure-namespace \
+        --skip-if-secret-exists
+    # ── Wait for OpenBao pods to be running, then probe seal state ────────────
+    - llz ci wait-pods --namespace llz-openbao --timeout 600 platform-openbao-0 platform-openbao-1 platform-openbao-2
+    - llz ci bao-status
+    # ── Init / unseal. The bao-* commands branch on live seal state internally
+    # (the GHA `if: steps.bao_status.outputs.*` gates): bao-init is a no-op when
+    # already initialized; bao-unseal handles both the post-init and emergency
+    # re-unseal paths and is idempotent on an already-unsealed pod.
+    - llz ci bao-init --region "$REGION"
+    - llz ci bao-unseal --pods 0
+    - llz ci bao-unseal-followers
+    - llz ci bao-unseal
+    # Regenerate the root token if the loaded one was revoked on a prior run
+    # (no-op when no root token is available — i.e. the init branch just set it).
+    - llz ci bao-regen-root --region "$REGION"
+    # ── Configure: mounts, auth, policies, roles (skips without a root token) ─
+    - llz ci resolve-harbor-url --region "$REGION"
+    - llz ci bao-configure --region "$REGION"
+    # ── Apply the post-apl-bootstrap kustomize tree ──────────────────────────
+    - kubectl apply -k "apl-values/${REGION}/manifest/post-apl-bootstrap"
+    # ── Seed: ESO + CI AppRole credentials ───────────────────────────────────
+    - |
+      llz ci seed-approle --role platform-ci \
+        --k8s-secret llz-external-secrets/eso-approle-secret:secretId \
+        --gh-role-secret OPENBAO_APPROLE_ROLE_ID \
+        --gh-secret OPENBAO_APPROLE_SECRET_ID \
+        --gh-secret-standby OPENBAO_APPROLE_SECRET_ID_STANDBY \
+        --done-message "eso-approle-secret and GitHub CI secrets updated."
+    # ── Seed: secret-propagator AppRole credentials (env-scoped) ─────────────
+    - |
+      GH_ENV="infra-${REGION}"
+      llz ci seed-approle --role secret-propagator \
+        --gh-env "$GH_ENV" \
+        --gh-role-secret OPENBAO_PROPAGATOR_ROLE_ID \
+        --gh-secret OPENBAO_PROPAGATOR_SECRET_ID \
+        --summary "" \
+        --summary "**secret-propagator AppRole seeded** to \`${GH_ENV}\`:" \
+        --summary "- \`OPENBAO_PROPAGATOR_ROLE_ID\` = \`secret-propagator\`" \
+        --summary "- \`OPENBAO_PROPAGATOR_SECRET_ID\` = (set, value hidden)" \
+        --done-message "secret-propagator role_id + secret_id seeded to ${GH_ENV} environment secrets."
+    # ── Harbor: wait, port-forward, ensure project (each skips when absent) ───
+    - llz ci wait-harbor --harbor-url "" || true
+    - llz ci harbor-port-forward
+    - llz ci harbor-ensure-project
+    # ── Seed: Harbor admin password ──────────────────────────────────────────
+    - |
+      llz ci bao-seed --path secret/harbor/admin \
+        --field password=k8s:harbor/harbor-admin-password/HARBOR_ADMIN_PASSWORD \
+        --on-missing skip \
+        --missing-note 'harbor-admin-password Secret not found — Harbor not yet deployed.' \
+        --missing-note 'Re-run this pipeline after Harbor is up to seed secret/harbor/admin.'
+    # ── Seed: Harbor robot accounts (continue-on-error analog: || true) ───────
+    - llz ci provision-harbor-robots || true
+    # ── Seed: GitHub dispatch token ──────────────────────────────────────────
+    - |
+      llz ci bao-seed --path secret/infra/github-dispatch-token \
+        --field token=env:OPENBAO_SECRETS_WRITE_TOKEN \
+        --on-missing error \
+        --on-missing-standby skip \
+        --missing-annotation "OPENBAO_SECRETS_WRITE_TOKEN is not set for the infra-${REGION} environment." \
+        --missing-annotation "Without it, secret/infra/github-dispatch-token cannot be seeded and the harbor-ready" \
+        --missing-annotation "PostSync hook will fail to dispatch build-firewall-controller. Add the secret and re-run." \
+        --missing-note-standby 'OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/infra/github-dispatch-token (standby).'
+    # ── Seed: Harbor buildah Docker config ───────────────────────────────────
+    - llz ci seed-harbor-dockerconfig
+    # ── Smoke test: Harbor robot account credentials ─────────────────────────
+    - llz ci harbor-smoke
+    # ── Seed: cert-automation GitHub token ───────────────────────────────────
+    - |
+      llz ci bao-seed --path secret/cert-automation/github-token \
+        --field token=env:OPENBAO_SECRETS_WRITE_TOKEN \
+        --on-missing skip \
+        --missing-note 'OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/cert-automation/github-token.'
+    # ── Seed: AppRole rotation workflow credentials ──────────────────────────
+    - |
+      llz ci bao-seed --path secret/approle/rotation-secrets \
+        --field github_token=env:OPENBAO_SECRETS_WRITE_TOKEN \
+        --on-missing skip \
+        --missing-note 'OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/approle/rotation-secrets.' \
+        --missing-note "Add it as an infra-${REGION} environment secret and re-run."
+    # ── Seed: Grafana admin credentials (idempotent) ─────────────────────────
+    - |
+      llz ci bao-seed --path secret/grafana/admin \
+        --skip-if-present password \
+        --field username=literal:admin \
+        --field password=gen:base64:24 \
+        --seeded-message 'secret/grafana/admin seeded (new password generated).'
+    # ── Seed: OTel Collector ingress bearer token (idempotent) ───────────────
+    - |
+      llz ci bao-seed --path secret/otel/ingress \
+        --skip-if-present token \
+        --field token=gen:hex:32 \
+        --seeded-message 'secret/otel/ingress seeded (new token generated).'
+    # ── Seed: Loki object-store credentials ──────────────────────────────────
+    - |
+      llz ci bao-seed --path secret/loki/object-store \
+        --field AWS_ACCESS_KEY_ID=env:LOKI_S3_ACCESS_KEY \
+        --field AWS_SECRET_ACCESS_KEY=env:LOKI_S3_SECRET_KEY \
+        --on-missing error \
+        --missing-annotation 'LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY not set — secret/loki/object-store not seeded; Loki will CrashLoopBackOff' \
+        --missing-note 'LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY not set — skipping secret/loki/object-store.' \
+        --missing-note "Add them as infra-${REGION} environment secrets and re-run." \
+        --missing-note "Create the keys via: linode-cli object-storage keys-create --label platform-loki-${REGION}"
+    # ── Seed: Harbor registry S3 credentials ─────────────────────────────────
+    - llz ci seed-harbor-registry-s3 --region "$REGION"
+    # ── Audit: PVCs that escaped the Kyverno encryption mutation ─────────────
+    - if [ "$HA_ROLE" != "standby" ]; then llz ci audit-pvc-storageclass; fi
+    # ── Extract the standby CA cert for cross-cluster rotation ───────────────
+    # Standalone/active deployments have no peer, so this only runs for standby;
+    # the CA is handed to provision-peer-ca via the dotenv artifact (CA_AVAILABLE
+    # gates that job — the GitLab analog of the bootstrap job's ca_available output).
+    - |
+      set -euo pipefail
+      echo "CA_AVAILABLE=false" >> peer-ca.env
+      if [ "$HA_ROLE" = "standby" ]; then
+        CA_B64=$(kubectl -n llz-openbao get secret openbao-tls \
+          -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
+        if [ -z "$CA_B64" ]; then
+          echo "openbao-tls Secret not found in standby cluster — CA not provisioned" >&2
+        else
+          echo "CA_B64=$CA_B64"      >> peer-ca.env
+          echo "CA_AVAILABLE=true"   >> peer-ca.env
+          echo "Standby CA cert extracted."
+        fi
+      fi
+  after_script:
+    # Stop the Harbor API port-forward, then revoke the root token (unless
+    # PRESERVE_ROOT_ON_FAILURE on a failed run), then revoke this runner's ACL —
+    # the GitLab analog of the GHA always() cleanup steps. Each || true so one
+    # cleanup failure can't mask another.
+    - llz ci harbor-port-forward --stop || true
+    - |
+      if [ "${CI_JOB_STATUS}" = "success" ] || [ "${PRESERVE_ROOT_ON_FAILURE:-}" != "true" ]; then
+        llz openbao exec -- token revoke -self \
+          && echo "Root token revoked." \
+          || echo "Root token revocation failed — delete OPENBAO_ROOT_TOKEN from the infra-${REGION} environment variables manually to prevent credential reuse"
+      fi
+    - llz ci runner-acl --mode revoke --region "$REGION" || true
+  artifacts:
+    reports:
+      dotenv: peer-ca.env
+
+# ── Provision the standby CA cert in its active peer's cluster ───────────────
+# Runs only after a standby bootstrap that successfully extracted the CA cert.
+# Creates/updates openbao-peer-tls in the active peer's openbao namespace so the
+# AppRole rotation CronWorkflow can verify TLS to the standby without
+# VAULT_SKIP_VERIFY=true. Runs in the PEER's environment + ACL.
+provision-peer-ca:
+  extends: .llz-base
+  stage: peer-ca
+  needs:
+    - job: resolve
+      artifacts: true
+    - job: bootstrap
+      artifacts: true
+  rules:
+    - if: $LLZ_JOB == "bootstrap-openbao" && $REPROVISION_CA_ONLY != "true" && $HA_ROLE == "standby" && $CA_AVAILABLE == "true"
+  environment:
+    name: infra-$HA_PEER
+  script:
+    # Open the active PEER's control-plane ACL + fetch its kubeconfig.
+    - llz ci runner-acl --mode open --region "$HA_PEER"
+    - |
+      set -euo pipefail
+      # Guard against an empty handoff — an empty ca.crt would "provision" silently.
+      if [ -z "${CA_B64:-}" ]; then
+        echo "CA_B64 is empty — refusing to provision an empty ca.crt" >&2
+        exit 1
+      fi
+      kubectl -n llz-openbao create secret generic openbao-peer-tls \
+        --from-literal=ca.crt="$(printf '%s' "$CA_B64" | base64 -d)" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      echo "openbao-peer-tls Secret provisioned in the active peer cluster."
+      echo "Establishes cross-cluster trust (VAULT_SKIP_VERIFY=false) for standby operations."
+  after_script:
+    - llz ci runner-acl --mode revoke --region "$HA_PEER" || true
+
+# ── Recovery: fetch the standby's CA cert ────────────────────────────────────
+# Armed with REPROVISION_CA_ONLY=true (analog of the workflow_dispatch input).
+# Fetches the CA cert from the standby cluster (self) and hands it to
+# reprovision-peer-ca without running a full bootstrap. No-op unless role=standby.
+fetch-standby-ca:
+  extends: .llz-base
+  stage: bootstrap
+  needs:
+    - job: resolve
+      artifacts: true
+  rules:
+    - if: $LLZ_JOB == "bootstrap-openbao" && $REPROVISION_CA_ONLY == "true" && $HA_ROLE == "standby"
+  environment:
+    name: infra-$REGION
+  script:
+    # Open the standby cluster's (self) control-plane ACL + fetch its kubeconfig.
+    - llz ci runner-acl --mode open --region "$REGION"
+    - |
+      set -euo pipefail
+      echo "CA_AVAILABLE=false" >> peer-ca.env
+      CA_B64=$(kubectl -n llz-openbao get secret openbao-tls \
+        -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
+      if [ -z "$CA_B64" ]; then
+        echo "openbao-tls Secret not found in standby cluster — cannot extract CA" >&2
+        exit 1
+      fi
+      echo "CA_B64=$CA_B64"      >> peer-ca.env
+      echo "CA_AVAILABLE=true"   >> peer-ca.env
+      echo "Standby CA cert extracted."
+  after_script:
+    - llz ci runner-acl --mode revoke --region "$REGION" || true
+  artifacts:
+    reports:
+      dotenv: peer-ca.env
+
+# ── Recovery: provision the standby CA in its active peer's cluster ──────────
+# Depends on fetch-standby-ca above; runs in the active peer's environment.
+reprovision-peer-ca:
+  extends: .llz-base
+  stage: peer-ca
+  needs:
+    - job: resolve
+      artifacts: true
+    - job: fetch-standby-ca
+      artifacts: true
+  rules:
+    - if: $LLZ_JOB == "bootstrap-openbao" && $REPROVISION_CA_ONLY == "true" && $CA_AVAILABLE == "true"
+  environment:
+    name: infra-$HA_PEER
+  script:
+    # Open the active PEER's control-plane ACL + fetch its kubeconfig.
+    - llz ci runner-acl --mode open --region "$HA_PEER"
+    - |
+      set -euo pipefail
+      # Guard against an empty handoff — an empty ca.crt would "provision" silently.
+      if [ -z "${CA_B64:-}" ]; then
+        echo "CA_B64 is empty — refusing to provision an empty ca.crt" >&2
+        exit 1
+      fi
+      kubectl -n llz-openbao create secret generic openbao-peer-tls \
+        --from-literal=ca.crt="$(printf '%s' "$CA_B64" | base64 -d)" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      echo "openbao-peer-tls Secret provisioned in the active peer cluster."
+      echo "Establishes cross-cluster trust (VAULT_SKIP_VERIFY=false) for standby operations."
+  after_script:
+    - llz ci runner-acl --mode revoke --region "$HA_PEER" || true

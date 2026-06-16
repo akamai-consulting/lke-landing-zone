@@ -1,0 +1,83 @@
+# gitlab-ci/openbao-auto-unseal.yml — GitLab analog of .github/workflows/llz-openbao-auto-unseal.yml. Best-effort, not validated against live GitLab.
+# Scheduled self-converging OpenBao unseal loop: for each region, opens this
+# runner's egress IP in the LKE-E control-plane ACL, probes seal state with
+# `llz ci bao-status`, submits the 3 quorum keys with `llz ci bao-unseal` only
+# when a pod is sealed, re-verifies with `llz ci bao-status`, then always
+# revokes the ACL.
+#
+# WHY: OpenBao pods come up sealed after every restart (Shamir, no auto-unseal
+# provider); the cold-bootstrap cert-watcher race and the ~80-day CA renewal
+# reseal them. This loop reseals nothing — it only unseals — and is idempotent:
+# `bao operator unseal` against an unsealed pod is a no-op.
+#
+# Drivers (pipeline variables on a schedule/web run, the analog of the GH
+# workflow_call inputs):
+#   REGION                 — deployment (primary | staging | …); also the
+#                            infra-<region> GitLab environment. Empty or "all"
+#                            fans out over every region from `llz env list --json`.
+#   OPENBAO_UNSEAL_KEY_{1,2,3} — the 3 quorum keys (infra-<region>-scoped,
+#                            masked CI/CD variables). Mapped to UNSEAL_K1/2/3,
+#                            which `llz ci bao-unseal` reads.
+#
+# This is a SCHEDULED workflow: jobs run only on schedule/web pipelines.
+
+stages:
+  - auto-unseal
+
+# ── Scheduled self-converging unseal loop ────────────────────────────────────
+# Fan-out note: the github.com workflow discovers deployments and matrixes one
+# job per region. This job drives on a single $REGION pipeline variable; when
+# $REGION is empty or "all" it iterates the regions from `llz env list --json`
+# in a shell loop in one job. TRUE per-region PARALLEL fan-out on GitLab would
+# require generating a dynamic child pipeline (one trigger job per region) — a
+# documented best-effort limitation of this single-job include.
+auto-unseal:
+  extends: .llz-base
+  stage: auto-unseal
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  environment:
+    name: infra-$REGION
+  variables:
+    # Map the infra-<region>-scoped secrets to the UNSEAL_K1/2/3 env vars that
+    # `llz ci bao-unseal` reads (analog of the GHA step `env:` block).
+    UNSEAL_K1: $OPENBAO_UNSEAL_KEY_1
+    UNSEAL_K2: $OPENBAO_UNSEAL_KEY_2
+    UNSEAL_K3: $OPENBAO_UNSEAL_KEY_3
+    TF_IN_AUTOMATION: "true"
+  script:
+    - |
+      set -e
+      # Resolve the region set: a single $REGION, or every env when empty/"all".
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        echo "── auto-unseal (${region}) ─────────────────────────────"
+        export REGION="$region"
+        # Open this runner's egress IP in the LKE-E control-plane ACL (the GitLab
+        # analog of the cluster-access composite: kubeconfig + ACL open + llz).
+        llz ci runner-acl --mode open --region "$region"
+        # Seal-state detection — the same probe bootstrap-openbao.yml branches on.
+        llz ci bao-status
+        # Submit the 3 quorum keys to every pod (idempotent: an already-unsealed
+        # pod accepts them as no-ops, so this is safe to run every cycle).
+        llz ci bao-unseal
+        # Re-verify with the same probe after the unseal cycle.
+        llz ci bao-status
+      done
+  after_script:
+    # Always revoke this runner's ACL entry for every region operated on, success
+    # or fail (analog of the `if: always()` lke-runner-acl revoke step).
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        llz ci runner-acl --mode revoke --region "$region" || true
+      done

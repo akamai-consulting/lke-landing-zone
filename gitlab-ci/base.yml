@@ -1,0 +1,71 @@
+# gitlab-ci/base.yml — shared foundation for the LLZ GitLab CI pipelines.
+#
+# This is the GitLab analog of the github.com-side reusable workflows under
+# .github/workflows/llz-*.yml. A GitLab-hosted instance (forge_flavor=gitlab)
+# carries a thin .gitlab-ci.yml that `include:`s these files from the template
+# project, pinned to the same release tag the instance is on — exactly mirroring
+# how a GitHub instance's thin caller `uses:` the reusable workflows.
+#
+# Status: BEST-EFFORT and NOT exercised against a live GitLab instance, matching
+# the bar set by the GitLab forge backend (tools/internal/forge/gitlab.go). The
+# topology and llz command sequence mirror the validated github.com pipelines;
+# the GitLab-specific glue (runner tags, CI/CD-variable secrets, git auth) is
+# modeled as closely as the platform allows. See docs/architecture/forge-abstraction.md.
+#
+# ── Centralization ───────────────────────────────────────────────────────────
+# The github.com pipelines push their non-llz glue into composite actions
+# (instance-template/.github/actions/*). GitLab CI has no composite actions, so
+# the equivalent glue lives ONCE here as hidden jobs / `!reference`-able script
+# anchors that every pipeline extends. Everything else is a direct `llz ci …`
+# call — the same binary, baked into $LLZ_TF_IMAGE, that the github.com jobs run —
+# so the operational logic is centralized in the CLI, not duplicated per forge.
+#
+# ── Variables an instance/group must set (GitLab CI/CD variables) ─────────────
+#   LLZ_TF_IMAGE   — the ci-terraform image ref (analog of the GH `vars.TF_IMAGE`).
+#   LLZ_RUNNER     — runner tag(s) to select (analog of `vars.LLZ_RUNNER` / runs-on).
+#   TF_STATE_BUCKET, TF_STATE_ACCESS_KEY, TF_STATE_SECRET_KEY, LINODE_API_TOKEN,
+#   and the infra-<region>-scoped secrets the github.com side passes via
+#   `secrets: inherit` — set as (environment-scoped) CI/CD variables, masked.
+#   LLZ_MODULE_TOKEN — optional: read token for the first-party git:: module
+#   sources when they live in another project; defaults to CI_JOB_TOKEN.
+
+# Shared job base: the image, runner selection, and git auth every job needs.
+.llz-base:
+  image: $LLZ_TF_IMAGE
+  # GitLab runner selection — the analog of GH Actions runs-on / vars.LLZ_RUNNER.
+  # `tags:` expands CI variables but not bash defaults, so LLZ_RUNNER is given a
+  # default in the instance .gitlab-ci.yml `variables:` (overridable by a project/
+  # group CI/CD variable — that precedence is the fallback).
+  tags:
+    - $LLZ_RUNNER
+  variables:
+    GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=accept-new"
+  before_script:
+    - !reference [.llz-git-auth, script]
+
+# Centralized git auth for `terraform init` against published first-party
+# git:: module sources — the GitLab analog of
+# instance-template/.github/actions/_lib/git-auth.sh. Trust the bind-mounted
+# workspace (git's dubious-ownership guard) and rewrite SSH module fetches to
+# token-authenticated HTTPS. Host comes from CI_SERVER_HOST so it follows the
+# instance if it ever moves. Sourced via `!reference [.llz-git-auth, script]`.
+.llz-git-auth:
+  script:
+    - git config --global --add safe.directory '*'
+    - |
+      token="${LLZ_MODULE_TOKEN:-gitlab-ci-token:${CI_JOB_TOKEN}}"
+      case "$token" in *:*) ;; *) token="oauth2:${token}" ;; esac
+      git config --global \
+        url."https://${token}@${CI_SERVER_HOST}/".insteadOf \
+        "ssh://git@${CI_SERVER_HOST}/"
+
+# Centralized `terraform init` with the S3-compatible backend — the GitLab
+# analog of the terraform-init composite action. The caller sets LLZ_MODULE and
+# REGION, then runs: `- !reference [.llz-tf-init, script]`.
+.llz-tf-init:
+  script:
+    - |
+      terraform -chdir="terraform-iac-bootstrap/${LLZ_MODULE}" init \
+        -backend-config="bucket=${TF_STATE_BUCKET}" \
+        -backend-config="key=${LLZ_MODULE}/${REGION}/terraform.tfstate" \
+        -backend-config="region=us-east-1"

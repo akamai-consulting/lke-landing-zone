@@ -1,0 +1,58 @@
+# gitlab-ci/bootstrap-dns.yml — GitLab analog of .github/workflows/llz-bootstrap-dns.yml. Best-effort, not validated against live GitLab.
+# On-demand cert-manager DNS-01 token seed: writes secret/certmanager/dns01 in
+# OpenBao, applies the apl-values/<region>/manifest/dns kustomize tree, and waits
+# (bounded) for the cert-manager-dns01-solver-token Secret to materialize.
+
+stages:
+  - bootstrap
+
+# Single job mirroring the github.com `seed-dns` job. Drive on one $REGION
+# pipeline variable (the analog of the workflow_call `region` input); it is both
+# the infra-<region> GitLab environment and the apl-values overlay name.
+seed-dns:
+  extends: .llz-base
+  stage: bootstrap
+  # On-demand only: gate on the LLZ_JOB selector, set as a pipeline variable on a
+  # manual/web run (the GitLab analog of GH workflow_dispatch). No schedule.
+  rules:
+    - if: $LLZ_JOB == "bootstrap-dns"
+  environment:
+    name: infra-$REGION
+  script:
+    # ── Pre-flight: both env secrets must be present ──────────────────────────
+    # Fail fast — without LINODE_DNS_TOKEN there is nothing to seed; without
+    # OPENBAO_ROOT_TOKEN we cannot authenticate to write into the KV mount.
+    - llz ci require-secret LINODE_DNS_TOKEN --hint "Create a Linode API token with DNS-zone-write scope, add it as LINODE_DNS_TOKEN in the infra-${REGION} environment"
+    - llz ci require-secret OPENBAO_ROOT_TOKEN --hint "Set manually as an infra-${REGION} environment secret; bootstrap-openbao.yml writes it back on init. Delete after this run."
+    # ── Cluster access ────────────────────────────────────────────────────────
+    # Open this runner's egress IP in the LKE-E control-plane ACL before any
+    # kubectl/openbao call (revoked in after_script, success or fail).
+    - llz ci runner-acl --mode open --region "$REGION"
+    - llz ci wait-cluster-ready --timeout 900 --interval 10
+    # ── Verify root token is valid before any write ───────────────────────────
+    - |
+      set -euo pipefail
+      if ! llz openbao exec -- token lookup -format=json > /tmp/tok.json 2>/tmp/tok.err; then
+        echo "OPENBAO_ROOT_TOKEN on ${REGION} is invalid (token lookup failed). Regenerate with 'bao operator generate-root' and re-seed."
+        cat /tmp/tok.err
+        exit 1
+      fi
+      POLICIES="$(jq -r '.data.policies | join(",")' /tmp/tok.json)"
+      if ! printf '%s' "$POLICIES" | tr ',' '\n' | grep -qx root; then
+        echo "OPENBAO_ROOT_TOKEN on ${REGION} is valid but not root (policies=[${POLICIES}]). Writing to secret/ requires root."
+        exit 1
+      fi
+      echo "Root token OK (policies=[${POLICIES}])."
+    # ── Seed: cert-manager DNS-01 Linode token ────────────────────────────────
+    - llz openbao exec -- kv put secret/certmanager/dns01 token="$LINODE_DNS_TOKEN"
+    # ── Apply the DNS kustomize tree (consumer resources) ─────────────────────
+    # Apply AFTER seeding the OpenBao path so the dns01-solver-token ExternalSecret
+    # finds a populated upstream on its first reconcile.
+    - kubectl apply -k "apl-values/${REGION}/manifest/dns"
+    # ── Wait for the K8s Secret to materialize ────────────────────────────────
+    # wait-secret polls existence first, then requires the ExternalSecret Ready.
+    - llz ci wait-secret --namespace cert-manager --name cert-manager-dns01-solver-token --externalsecret dns01-solver-token --timeout 180
+  after_script:
+    # Always revoke this runner's ACL entry, success or fail (analog of the
+    # `if: always()` lke-runner-acl revoke step).
+    - llz ci runner-acl --mode revoke --region "$REGION" || true
