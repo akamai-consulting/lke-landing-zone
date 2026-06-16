@@ -276,6 +276,29 @@ memory:
   non-negotiable parts of the methodology are enforced in the binary, not in a
   reviewer's discipline.
 
+## Signs of divergence (antipatterns)
+
+Divergence rarely announces itself; it accumulates as small manual shortcuts that
+each felt faster than the convergent path. Because *divergence is a failure mode,
+not a customization strategy*, the methodology is easier to hold when you can name
+the day-to-day smells that mean you've stepped off it. Each maps to the tenet it
+erodes and the convergent move that gets you back on.
+
+| Smell you'll notice | What it really means | Get back on the path |
+|---|---|---|
+| **Routine mutating `kubectl`** — `apply` / `edit` / `patch` / `scale` / `create secret` as standard operating procedure, not a one-off diagnosis | Cluster state now lives only in someone's shell history; Argo CD will either reconcile it away or it becomes silent, undocumented drift. Erodes *convergence, not handcraft* + *reviewable git fact*. | Change the **chart values / `apl-values/<env>` overlay / tfvars** and let GitOps converge. Read-only `kubectl get/describe/logs` for diagnosis is expected — **mutating verbs as a habit are the antipattern.** |
+| **Watching `kubectl get pods` to decide "is it done?"** | "Delivered/healthy" has regressed from a measured state back to a human eyeballing pods. Erodes *convergence over completion*. | Let the [convergence contract](architecture/convergence-contract.md) gate answer it — `llz ci converge` / `llz status`, whose exit code is the verdict. |
+| **Hand-merging upstream / editing `managed` files** | You're back to *fork-and-pray*; the next `llz upgrade` will conflict or clobber the edit. Erodes *publish/consume* + *defaults with escape hatches*. | Take fixes as a **version bump** (`llz self-update` → `llz upgrade`); put local changes in `owned` files / `.llz/commands.yaml` / `.githooks/pre-commit.local`. |
+| **Editing `promote.yml` (or any generated file) by hand** | The pipeline no longer derives from `promotion_rank`; `llz env pipeline --check` will flag the drift in CI. Erodes *reviewable git fact*. | Edit `promotion_rank` in the tfvars and **regenerate** with `llz env pipeline`. |
+| **Secrets typed straight into the cluster** (`kubectl create secret`, console paste) | Secret material now exists outside the wired `TF_VAR_*` → OpenBao path, so rotation and review can't see it. Erodes *reviewable git fact* + the [secrets model](secrets.md). | Wire it as a `TF_VAR_*` / through the OpenBao platform so it's environment-injected, never ad-hoc. |
+| **Bumping a single module `?ref=` or chart by hand** | The "which version of which piece" matrix is back; first-party pins no longer move in lockstep. Erodes *CLI as the version anchor*. | First-party pins move via `llz upgrade`; independently-versioned artifacts move via **Renovate** — never edit one ref in isolation. |
+| **A step only the original author can run** | A privileged "delivery environment" has crept in, and handover will fail. Erodes *CLI as anchor* + phase 7. | Drive everything through `llz` so a sister team runs the identical flow — if a step isn't in the CLI or a playbook, that gap *is* the bug. |
+
+The throughline: **whenever you reach for an imperative shortcut, ask what declared
+artifact should have changed instead.** A handful of manual `kubectl` mutations
+during an incident is fine — a *team that runs on them* has quietly re-introduced
+the handcraft model this methodology exists to replace.
+
 ## What this methodology is *not*
 
 - **Not application continuous delivery.** This delivers and sustains the
