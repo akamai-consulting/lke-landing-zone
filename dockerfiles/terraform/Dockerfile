@@ -7,7 +7,7 @@
 #                       audit formerly shipped as standalone binaries).
 # main.version is stamped from LLZ_VERSION exactly as llz-release.yml /
 # the devcontainer image do, so a baked `llz version` is traceable to its build.
-FROM --platform=$BUILDPLATFORM golang:1.23-bookworm AS gotools
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS gotools
 ARG TARGETOS
 ARG TARGETARCH
 ARG LLZ_VERSION=dev

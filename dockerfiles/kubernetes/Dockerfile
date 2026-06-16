@@ -4,7 +4,7 @@
 # its externalsecret-paths-check target calls `llz ci externalsecret-paths`, so
 # the CLI must be on PATH with no runtime `go build` (the image ships no Go
 # toolchain). LLZ_VERSION stamps main.version for traceability.
-FROM --platform=$BUILDPLATFORM golang:1.23-bookworm AS gotools
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS gotools
 ARG TARGETOS
 ARG TARGETARCH
 ARG LLZ_VERSION=dev

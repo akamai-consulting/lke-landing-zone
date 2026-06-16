@@ -18,7 +18,7 @@
 # ships a working `llz` OOTB without a private-repo release download, and the
 # binary always matches the template commit that built the image. main.version is
 # stamped from LLZ_VERSION exactly as .github/workflows/llz-release.yml does.
-FROM --platform=$BUILDPLATFORM golang:1.23-bookworm AS llz
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS llz
 ARG TARGETOS
 ARG TARGETARCH
 ARG LLZ_VERSION=dev
