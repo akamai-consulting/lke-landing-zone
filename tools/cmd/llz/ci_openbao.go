@@ -73,8 +73,8 @@ func isTransientExecErr(stderr string) bool {
 // baoExecRetries tries — generous, but still well inside the job's 30m budget.
 //
 // SCAR: on a COLD bootstrap the konnectivity agent can take *minutes*, not
-// seconds, to register with the control-plane server. The e2e run on
-// 2026-06-12 saw "No agent available" persist continuously for >2 minutes —
+// seconds, to register with the control-plane server. An e2e run has seen
+// "No agent available" persist continuously for >2 minutes —
 // through the whole bao-status probe and into bao-init — which blew the old
 // 6-try / ~30s budget and failed the entire OpenBao bootstrap. The agent dials
 // OUT to the server and the node-pool firewall's outbound policy is ACCEPT, so
@@ -82,7 +82,7 @@ func isTransientExecErr(stderr string) bool {
 // Retrying is safe even for `operator init` because a transient transport
 // failure means the in-pod command never ran (see transientExecMarkers).
 //
-// A later 2026-06-12 run still spent 17 of 18 tries on platform-openbao-0
+// A later run still spent 17 of 18 tries on platform-openbao-0
 // before konnectivity registered — one attempt of margin — so the budget was
 // widened again from 18 to 24 (~5m) to keep a slower-than-usual warmup from
 // failing the bootstrap on the last try.
@@ -332,8 +332,8 @@ func ciBaoUnsealFollowersCmd() *cobra.Command {
 			"leader's raft bootstrap challenge endpoint stops 503ing — then polls each\n" +
 			"follower until retry_join flips it to initialized=true and submits the\n" +
 			"UNSEAL_K1/2/3 quorum keys. There is NO manual raft join: the chart's\n" +
-			"retry_join stanza handles membership, and a duplicate join attempt 500s\n" +
-			"(see the project_openbao_raft_join_gotchas write-up). On timeout it dumps\n" +
+			"retry_join stanza handles membership, and a duplicate join attempt 500s.\n" +
+			"On timeout it dumps\n" +
 			"`bao status` + recent pod logs for actionable diagnostics.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {

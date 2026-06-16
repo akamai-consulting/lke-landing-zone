@@ -4,8 +4,7 @@ Opinionated OpenBao/Vault bootstrap: a KV v2 secret engine, AppRole +
 Kubernetes auth methods, a read policy for CI/ESO, and the AppRole-rotation
 wiring (a Kubernetes-auth role that mints/destroys secret_ids for the CI role).
 
-Extracted from the `openbao-config/` root config per
-[docs/templatization-plan.md](../../docs/templatization-plan.md) §6. The
+Extracted from the `openbao-config/` root config. The
 org-specific surface — role names, the pinned `role_id`, and the secret tree the
 CI policy grants — is **variabilized**, so a sibling system team supplies its own
 without editing HCL. The CI read policy is **generated** from `ci_read_paths`

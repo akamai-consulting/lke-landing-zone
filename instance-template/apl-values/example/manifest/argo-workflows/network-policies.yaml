@@ -7,9 +7,9 @@
 #
 # Sync wave -10: applied BEFORE the workflow-controller / argo-server pods come
 # up. Cilium NP programming is async; NPs in the same wave as the workloads can
-# crash-loop pods that fail-fast on connectivity (project_np_sync_wave_race).
+# crash-loop pods that fail-fast on connectivity.
 #
-# LKE-E port 6443 (project_lke_e_cilium_np_port_6443): Cilium evaluates NP AFTER
+# LKE-E port 6443: Cilium evaluates NP AFTER
 # DNAT. Pods dial the kubernetes Service at :443 but Cilium sees the post-DNAT
 # node IP at :6443 — apiserver-egress rules MUST list both.
 #

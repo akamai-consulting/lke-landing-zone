@@ -73,13 +73,13 @@ variable "loki_admin_password" {
 }
 
 variable "linode_token" {
-  description = "Linode account API token. Consumed by the destroy-time provisioner on null_resource.cleanup_platform_volumes_on_destroy to sweep any Block Storage Volume tagged `block-storage` that's left unattached after PVC reap — this is the orphan-prevention that keeps account-quota exhaustion from blocking the next bootstrap (see project_lke_rebuild_orphans_quota memory). Same value as the cluster module's linode_token; in CI both are wired from secrets.LINODE_API_TOKEN via TF_VAR_linode_token."
+  description = "Linode account API token. Consumed by the destroy-time provisioner on null_resource.cleanup_platform_volumes_on_destroy to sweep any Block Storage Volume tagged `block-storage` that's left unattached after PVC reap — this is the orphan-prevention that keeps account-quota exhaustion from blocking the next bootstrap. Same value as the cluster module's linode_token; in CI both are wired from secrets.LINODE_API_TOKEN via TF_VAR_linode_token."
   type        = string
   sensitive   = true
 }
 
 variable "openbao_secrets_write_token" {
-  description = "GitHub PAT with `repo` + `secrets:write` scope. Consumed by null_resource.clear_openbao_secrets_on_destroy to delete OPENBAO_ROOT_TOKEN (and downstream OPENBAO_UNSEAL_KEY_{1,2,3}, OPENBAO_APPROLE_SECRET_ID_<REGION>, HARBOR_ROBOT_NAME, HARBOR_PASSWORD) from the `infra-<region>` environment on cluster-bootstrap destroy. After a cluster destroy these are all bound to an OpenBao / Harbor instance that no longer exists; leaving them set lets stale-credential failures latch onto the next bootstrap (Configure OpenBao 403 permission denied — observed 2026-06-01 TF run 3009342). Optional: empty default = no-op + log a warning, operator clears manually."
+  description = "GitHub PAT with `repo` + `secrets:write` scope. Consumed by null_resource.clear_openbao_secrets_on_destroy to delete OPENBAO_ROOT_TOKEN (and downstream OPENBAO_UNSEAL_KEY_{1,2,3}, OPENBAO_APPROLE_SECRET_ID_<REGION>, HARBOR_ROBOT_NAME, HARBOR_PASSWORD) from the `infra-<region>` environment on cluster-bootstrap destroy. After a cluster destroy these are all bound to an OpenBao / Harbor instance that no longer exists; leaving them set lets stale-credential failures latch onto the next bootstrap (Configure OpenBao 403 permission denied). Optional: empty default = no-op + log a warning, operator clears manually."
   type        = string
   sensitive   = true
   default     = ""

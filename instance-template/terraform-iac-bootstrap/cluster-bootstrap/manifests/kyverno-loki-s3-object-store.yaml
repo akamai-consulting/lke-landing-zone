@@ -15,8 +15,7 @@
 # !!timestamp and serializes it as `2020-09-07T00:00:00.000Z`. Loki's
 # schema_config `from` parser wants date-only `2006-01-02` and rejects the
 # timestamp ("extra text") → CrashLoopBackOff. No quoting in the values
-# survives the round-trip (verified against apl-operator's js-yaml + yaml libs,
-# 2026-06-03). See project_loki_s3_wiring memory.
+# survives the round-trip (verified against apl-operator's js-yaml + yaml libs).
 #
 # So we DON'T override schemaConfig at all — the chart's own default schema has
 # a valid date-only `from: "2020-09-07"` (it never goes through the pipeline) —

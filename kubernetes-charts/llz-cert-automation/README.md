@@ -5,7 +5,7 @@ Events** + **Argo Workflows**.
 
 ## Why this chart exists
 
-The edge HAProxy container has **no SIGHUP TLS-reload** (verified 2026-06-01).
+The edge HAProxy container has **no SIGHUP TLS-reload** (verified in practice).
 cert-manager rotates the `haproxy-tls` Secret every ~80 days, but a running
 HAProxy keeps serving the **old** certificate until its image is rebuilt and
 redeployed. This chart automates that rebuild the moment the cert rotates.

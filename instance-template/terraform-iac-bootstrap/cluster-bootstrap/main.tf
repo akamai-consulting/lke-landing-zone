@@ -266,7 +266,7 @@ resource "kubectl_manifest" "apl_operator_namespace" {
 # set in chart values (it isn't — we don't use SOPS). The mismatch leaves
 # apl-operator pods stuck in CreateContainerConfigError on every rollout.
 #
-# Observed on cluster lke610954 (2026-06-01): the first apl-operator pod
+# Observed during bootstrap: the first apl-operator pod
 # (created by Helm install with no envFrom) ran fine. Argo CD's
 # `apl-operator-apl-operator` Application then reconciled the Deployment
 # from apl-core source, which DOES set envFrom, and the new ReplicaSet
@@ -456,8 +456,8 @@ resource "kubectl_manifest" "argocd_namespace" {
         # monitoring, apl-operator, apl-gitea-operator, otomi, cnpg-system,
         # harbor, cert-manager, grafana, keycloak) ships with the `name=<ns>`
         # label from apl-core's helmfile; argocd's namespace is set here in
-        # TF so it was missing the convention. Observed 2026-06-01 on
-        # lke610954: applying the label flipped `gitops-global` from
+        # TF so it was missing the convention. Observed: applying the label
+        # flipped `gitops-global` from
         # Unknown/Healthy (timed out) to Synced/Healthy within 30s.
         name                                              = "argocd"
         "lke-landing-zone.akamai.io/managed-by-bootstrap" = "true"
@@ -533,8 +533,8 @@ resource "null_resource" "apl_pipeline_ready" {
       export KUBECONFIG="$KUBECONFIG_FILE"
 
       # Helper: poll for a resource's existence (kubectl wait --for=condition
-      # errors immediately on NotFound — see feedback_kubectl_wait_existence
-      # memory), then wait for the condition. Replaces the three near-identical
+      # errors immediately on NotFound), then wait for the condition. Replaces
+      # the three near-identical
       # deadline-loop blocks in the previous wait_for_*_crd resources.
       wait_for_resource() {
         # $1 namespace ("" for cluster-scoped)
@@ -544,8 +544,8 @@ resource "null_resource" "apl_pipeline_ready" {
         #                           (e.g. "Established", "Available")
         #     contains "="        → passed verbatim as `--for=<clause>`
         #                           (e.g. "jsonpath={.status.readyReplicas}=1")
-        #     Standard StatefulSets do NOT expose a Ready condition (verified
-        #     2026-06-02 on lke611730: `.status.conditions` is empty even when
+        #     Standard StatefulSets do NOT expose a Ready condition (verified:
+        #     `.status.conditions` is empty even when
         #     readyReplicas=1). `--for=condition=Ready` times out indefinitely
         #     on healthy StatefulSets — use jsonpath for those.
         # $4 existence-poll deadline in seconds (e.g. 900 = 15m)
@@ -650,7 +650,7 @@ resource "null_resource" "apl_pipeline_ready" {
 # It deliberately does NOT depend on null_resource.apl_pipeline_ready: that
 # gate also waits for argocd + cert-manager, and that extra ~minute is exactly
 # the window in which apl-operator races ahead and provisions the PVCs
-# unmutated (observed on lke612000: the policy reached Ready ~30-60s AFTER
+# unmutated (observed: the policy reached Ready ~30-60s AFTER
 # gitea-valkey's PVC was created, so it slipped through permanently). Instead
 # this depends only on helm_release.apl (apl-operator installed) and polls for
 # Kyverno's admission controller itself, applying the instant Kyverno can admit
@@ -1015,9 +1015,9 @@ resource "kubectl_manifest" "app_bootstrap_application" {
 
 # ── Destroy-time orphan-Volume cleanup (now a no-op — see below) ──────────────
 # Reaping orphaned Linode Block Storage Volumes on destroy keeps a destroyed
-# cluster's Volumes from counting against the account-wide service quota (see
-# project_lke_rebuild_orphans_quota memory — the failure mode that stalled
-# gitea PVCs on the next bootstrap and silently blocked Argo CD's install).
+# cluster's Volumes from counting against the account-wide service quota — the
+# failure mode that stalled gitea PVCs on the next bootstrap and silently
+# blocked Argo CD's install.
 #
 # That sweep MOVED to the DESTROY Cluster job
 # (.github/workflows/terraform.yml → "Sweep orphaned Block Storage Volumes"),
@@ -1080,7 +1080,7 @@ resource "null_resource" "cleanup_platform_volumes_on_destroy" {
 # ── Unwedge namespace finalization on destroy ───────────────────────────────
 # `helm_release.apl` has `wait = true`, so its uninstall blocks until the
 # release's resources (incl. namespaces) actually delete. Two things observed
-# on TF run 3019639 make that wait run out the full `timeout` and then ERROR:
+# make that wait run out the full `timeout` and then ERROR:
 #
 #   1. Argo CD deadlock. apl-core installs Argo CD, which creates ~60+
 #      Applications + AppProjects, each carrying `resources-finalizer.
@@ -1089,8 +1089,8 @@ resource "null_resource" "cleanup_platform_volumes_on_destroy" {
 #      the `argocd` namespace never finalizes (NamespaceContentRemaining /
 #      NamespaceFinalizersRemaining stay True forever).
 #   2. Broken aggregated discovery. A stale APIService whose backing Service
-#      is gone (observed: `v1alpha1.acme.slicen.me` →
-#      cert-manager-webhook-linode) reports Available=False, which fails
+#      is gone (e.g. the cert-manager-webhook-linode ACME solver APIService)
+#      reports Available=False, which fails
 #      discovery for that group on EVERY namespace
 #      (NamespaceDeletionDiscoveryFailure=True) and stalls finalization
 #      cluster-wide.
@@ -1103,7 +1103,7 @@ resource "null_resource" "cleanup_platform_volumes_on_destroy" {
 #      cnpg.io finalizers; once the cnpg-system operator is gone the
 #      cnpg-system / harbor / keycloak / gitea namespaces hang in
 #      Terminating and helm's apl uninstall --wait sits there until the
-#      600s timeout, then ERRORs (TF run 3032519).
+#      600s timeout, then ERRORs.
 #
 # This destroy-time provisioner runs BEFORE helm uninstalls apl (it
 # depends_on helm_release.apl, so TF tears it down first, while the cluster
@@ -1234,11 +1234,11 @@ resource "null_resource" "unwedge_namespace_finalizers_on_destroy" {
 # ── Clear cluster-scoped GH env secrets on destroy ──────────────────────────
 # After a cluster destroy, the GH env secrets bound to the previous OpenBao /
 # Harbor instances are not just stale — they're actively harmful on the next
-# bootstrap. Concretely observed 2026-06-01 on TF run 3009342: the previous
+# bootstrap. Concretely observed: the previous
 # run's "Revoke root token" if:always() step revoked OPENBAO_ROOT_TOKEN, the
 # next run's "Configure OpenBao" loaded the now-invalid token, lookup-self
-# returned 403, the regen step skipped on a stale gate (since fixed by PR
-# #177), and the bootstrap was stuck. Even after the regen-gate fix, the
+# returned 403, the regen step skipped on a stale gate (since fixed), and the
+# bootstrap was stuck. Even after the regen-gate fix, the
 # unseal keys and Harbor creds are still bound to a destroyed cluster — on
 # next apply the Initialize step would generate new ones (overwriting the
 # stale values) but the brief window between apply-time secret-rewrite and

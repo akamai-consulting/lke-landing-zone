@@ -8,9 +8,9 @@
 # namespace is created by cluster-foundation at wave -20; these NPs are applied
 # (wave -10) by the platform-bootstrap tree once it exists.
 #
-# Sync wave -10 (project_np_sync_wave_race) — applied before the controller pods
+# Sync wave -10 — applied before the controller pods
 # so cilium's async BPF programming doesn't crash-loop them on first apiserver
-# reach. Apiserver-egress lists BOTH 443 and 6443 (project_lke_e_cilium_np_port_6443):
+# reach. Apiserver-egress lists BOTH 443 and 6443:
 # Cilium evaluates policy post-DNAT on LKE-E.
 ---
 # Default-deny everything. Subsequent NPs additively allow what controllers need.
@@ -47,8 +47,7 @@ spec:
     - Egress
 ---
 # Apiserver egress. Controllers watch Sensor/EventSource/EventBus CRs
-# cluster-wide and need the apiserver constantly. Dual-port (443 + 6443) per
-# project_lke_e_cilium_np_port_6443.
+# cluster-wide and need the apiserver constantly. Dual-port (443 + 6443).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

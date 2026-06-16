@@ -42,8 +42,7 @@ syncWaves:
   # ConfigMap/Application/NetworkPolicy that targets them. Without this, wave-0
   # resources race namespace creation on cold bootstrap.
   namespaces: "-20"
-  # All per-namespace NetworkPolicies at -10 so they land before workload pods
-  # (project_np_sync_wave_race).
+  # All per-namespace NetworkPolicies at -10 so they land before workload pods.
   networkPolicies: "-10"
   # CoreDNS-custom ConfigMap at -10 — must land before any pod that wait-loops
   # on *.internal (oauth2-proxy, apl-keycloak-operator start the moment apl-core
@@ -149,7 +148,7 @@ networkPolicies:
 
   # LKE-E apiserver egress port pair. On LKE-E the apiserver is reached via a
   # DNAT: the in-cluster `kubernetes` Service is :443, but Cilium sees the
-  # DNAT'd target on :6443 post-rewrite (project_lke_e_cilium_np_port_6443).
+  # DNAT'd target on :6443 post-rewrite.
   # BOTH are required in every allow-egress rule or kubectl/controllers silently
   # lose the apiserver. There is NO in-cluster pod labeled
   # `component: kube-apiserver` on LKE-E (managed control plane), so these rules
@@ -253,7 +252,7 @@ coreDNS:
   # lands. CoreDNS's `reload` plugin watches the Corefile mtime but NOT the
   # import-dir contents: on a fresh bootstrap it logs "No files matching import
   # glob pattern" and never registers the include, so *.internal stays NXDOMAIN
-  # until a pod restart. (Hit directly during the lke610071 bootstrap.) One-shot,
+  # until a pod restart. (Hit directly during a cold bootstrap.) One-shot,
   # not periodic — later ConfigMap edits DO trigger reload once the file exists.
   restart:
     enabled: true

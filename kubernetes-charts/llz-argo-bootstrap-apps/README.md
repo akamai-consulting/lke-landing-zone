@@ -16,8 +16,8 @@ before any `ExternalSecret` consumer; Argo Events (-15) must register the
 `EventBus` CRD before llz-cert-automation (-14) references it; stateful OpenBao (0)
 consumes the CA chain laid down earlier. That ordering is operational knowledge
 that previously lived only in a pile of per-component `argocd/applications/`
-wrapper files. This chart captures it as **defaults** (per templatization-plan
-§5 / §10 Phase 5) so the next adopter doesn't re-discover it.
+wrapper files. This chart captures it as **defaults** so the next adopter
+doesn't re-discover it.
 
 > **Not wired into the live tree.** The existing repo manages its Applications
 > via the `_shared/manifest/kustomization.yaml` resource list. This chart is the

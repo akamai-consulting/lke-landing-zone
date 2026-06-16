@@ -9,7 +9,7 @@
 # CRs here — apl-core's reconciler doesn't fight NP resources in namespaces it
 # owns (only the Namespace object itself is contested).
 #
-# apl-core native NP options were audited (2026-05-31, 5.0.0) and rejected:
+# apl-core native NP options were audited (apl-core 5.0.0) and rejected:
 #   1. `apl-network-policies` chart covers only gitea + otomi-api.
 #   2. Several sub-charts ship NPs disabled-by-default with allow-rules that may
 #      not match our ingress flow (TLS at Istio Gateway, cross-ns observability
@@ -19,9 +19,8 @@
 #
 # Pattern per namespace: default-deny (Ingress+Egress) + allow-dns +
 # allow-apiserver (LKE-E dual-port 443+6443) + namespace-specific allows. All NPs
-# at sync-wave {{ $wave }} so they land before workload pods
-# (project_np_sync_wave_race). openbao is NOT covered here — its NPs live
-# in its own Application tree.
+# at sync-wave {{ $wave }} so they land before workload pods. openbao is NOT
+# covered here — its NPs live in its own Application tree.
 
 # ── cert-manager ─────────────────────────────────────────────────────────────
 apiVersion: networking.k8s.io/v1

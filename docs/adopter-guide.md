@@ -31,7 +31,7 @@ provision them:
 | **Akamai App Platform (apl-core) entitlement** | We build *on* the platform it provides (Istio, Argo CD, cert-manager, Harbor, Keycloak) | Pinned via `apl_chart_version`; verify with `helm search repo apl/apl --versions` |
 | **A GitOps repo reachable over HTTPS** | apl-core's values schema requires an HTTPS Git URL that every node can reach | Must be reachable over HTTPS by every node — use github.com, gitlab.com, or an internal HTTPS mirror |
 | **A fork of this repo** | The TF-managed bootstrap Argo CD Application tracks *your* first-party repo over SSH | See §5 for the literals to repoint |
-| **GHCR pull access** | Argo CD pulls the first-party charts from `ghcr.io/<org>/charts` | The packages are currently **private**; the bootstrap seeds an Argo CD repo credential from `GHCR_READ_TOKEN` + `GHCR_USERNAME` (provisioned by `llz tokens`). No in-cluster chicken-and-egg — the creds come from the CI runner, not OpenBao. (Making the charts public is the intended end-state; see plan §9.) |
+| **GHCR pull access** | Argo CD pulls the first-party charts from `ghcr.io/<org>/charts` | The packages are currently **private**; the bootstrap seeds an Argo CD repo credential from `GHCR_READ_TOKEN` + `GHCR_USERNAME` (provisioned by `llz tokens`). No in-cluster chicken-and-egg — the creds come from the CI runner, not OpenBao. (Making the charts public is the intended end-state.) |
 | CLI tooling | `terraform`/`tofu`, `kubectl`, `helm`, `linode-cli`, `gh`, `bao`, `jq` | **`llz doctor` is the authoritative, always-current list** + reports which are installed and whether `gh` is authed. Skip the host installs by working in the [Dev Container](devcontainer.md), which ships them all. |
 
 ## 2. The reusable artifacts

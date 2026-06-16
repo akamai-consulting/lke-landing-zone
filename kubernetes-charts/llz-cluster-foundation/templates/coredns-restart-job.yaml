@@ -13,7 +13,7 @@
 #   on without registering the import. Subsequently CREATING the ConfigMap does
 #   NOT trigger a re-parse — reload only re-evaluates the Corefile itself, not the
 #   import dir entries. A pod restart is required exactly once after the ConfigMap
-#   first lands. (Hit directly during the lke610071 bootstrap: lookups returned
+#   first lands. (Hit directly during a cold bootstrap: lookups returned
 #   NXDOMAIN until `rollout restart deploy/{{ $r.targetDeployment }}` cleared the
 #   "no files match" state.) One-shot, not periodic — once the file exists,
 #   future edits ARE picked up by reload.
@@ -45,7 +45,7 @@ spec:
         {{- end }}
     - ports:
         # K8s API server — both 443 (default kubernetes Service) and 6443 (LKE-E
-        # DNAT target, per project_lke_e_cilium_np_port_6443).
+        # DNAT target).
         {{- range $np.apiserverPorts }}
         - { port: {{ . }}, protocol: TCP }
         {{- end }}
