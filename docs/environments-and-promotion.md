@@ -225,6 +225,8 @@ sequences *clusters*; Argo sequences *apps within* a cluster.
 
 ## See also
 
+- [delivery-methodology.md](delivery-methodology.md) — where promotion sits in the
+  full seven-phase delivery lifecycle (this doc is phase 5).
 - [quickstart.md](quickstart.md) — single-deployment end-to-end path and the
   three meanings of "environment".
 - [secrets.md](secrets.md) — OpenBao HA topology (`ha_role`/`ha_group`), the

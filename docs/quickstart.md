@@ -445,6 +445,7 @@ versioned charts + external actions*.
 
 - [Dev Container](devcontainer.md) — open the instance in a ready-made workstation with the whole toolchain
 - [Adopter guide](adopter-guide.md) — the same path with full rationale
+- [Delivery methodology](delivery-methodology.md) — the phases this checklist walks, and how LLZ supports each
 - [Linode account request checklist](infosec/linode-account-request-checklist.md) — account + InfoSec approval
 - [OpenBao bootstrap runbook](runbooks/bootstrap-openbao.md) — full secret inventory + recovery modes
 - [Secrets operations guide](secrets.md) — dual-write rotation, CI read path, failover

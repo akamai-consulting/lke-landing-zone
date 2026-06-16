@@ -217,6 +217,7 @@ so the adopter guide's manual steps remain fully supported.
 | Topic | File |
 |-------|------|
 | Quick start (TL;DR checklist) | [docs/quickstart.md](docs/quickstart.md) |
+| Delivery methodology (phases + how LLZ supports them) | [docs/delivery-methodology.md](docs/delivery-methodology.md) |
 | End-to-end adopter path | [docs/adopter-guide.md](docs/adopter-guide.md) |
 | Environments as a `dev → staging → prod` promotion pipeline | [docs/environments-and-promotion.md](docs/environments-and-promotion.md) |
 | Agent / assistant conventions | [AGENTS.md](AGENTS.md) ([details](docs/agents.md)) |
