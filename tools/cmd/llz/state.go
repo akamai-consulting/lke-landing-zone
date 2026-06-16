@@ -46,7 +46,7 @@ func e2eRequirements(admin bool) []requirement {
 			requirement{"E2E_INSTANCE_REPO", false, false, true, true, "the example repo"},
 			requirement{"E2E_LINODE_REGION", false, false, true, true, "region of the chosen cluster"},
 			requirement{"E2E_OBJ_CLUSTER", false, false, true, true, "the chosen OBJ cluster"},
-			requirement{"E2E_DISPATCH_TOKEN", true, false, true, true, "GitHub PAT, Contents+Actions:write on the example repo"},
+			requirement{"E2E_DISPATCH_TOKEN", true, false, true, true, "classic PAT scopes repo+workflow (Contents+Actions:write + workflow files) on the example repo"},
 		)
 	}
 	return reqs

@@ -73,6 +73,27 @@ func ghFineGrainedPackagesURL(name, owner string) string {
 	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
 }
 
+// ghFineGrainedDispatchURL builds a fine-grained PAT creation URL pre-filled for
+// the e2e dispatch token: name, resource owner, 90-day expiry, and the three
+// repository permissions the e2e run needs — Contents (force-push the
+// instantiated tree), Actions (workflow_dispatch + watch the runs), and
+// Workflows (the force-push rewrites .github/workflows/*). GitHub can't
+// pre-select WHICH repository via query, so the caller tells the operator to
+// pick it under "Only select repositories". Unknown perm keys are harmlessly
+// ignored by GitHub, so the operator confirms the toggles on the page anyway.
+func ghFineGrainedDispatchURL(name, owner string) string {
+	q := url.Values{}
+	q.Set("name", name)
+	if owner != "" {
+		q.Set("target_name", owner)
+	}
+	q.Set("expires_in", "90")
+	q.Set("contents", "write")
+	q.Set("actions", "write")
+	q.Set("workflows", "write")
+	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
+}
+
 // catalog is the credential set the wizard walks. It mirrors docs/quickstart.md
 // §2 and runbooks/bootstrap-openbao.md — and deliberately OMITS the secrets the
 // build writes for you (OPENBAO_UNSEAL_KEY_*, LOKI_S3_*, HARBOR_*, AppRole IDs).
