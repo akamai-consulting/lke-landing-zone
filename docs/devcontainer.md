@@ -33,6 +33,7 @@ checks, so a fresh container reports green tooling out of the box:
 | `bao` | the OpenBao CLI |
 | `copier` | `llz upgrade` / `copier update` to pull template releases |
 | `gh` | dispatching workflows, reading repo config |
+| `glab` | the same against GitLab, when `LLZ_FORGE=gitlab` (best-effort) |
 | `linode-cli` | the `llz tokens` wizard + OBJ-cluster lookup |
 | `jq`, `yq`, `ssh-keygen` | the bootstrap scripts' workhorses |
 | `tflint`, `checkov` | Terraform lint + IaC security scan |
