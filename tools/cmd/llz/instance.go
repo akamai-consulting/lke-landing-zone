@@ -15,6 +15,7 @@ type answers struct {
 	SrcPath      string `json:"_src_path"`
 	UpstreamOrg  string `json:"upstream_org"`
 	InstanceRepo string `json:"instance_repo"`
+	ForgeFlavor  string `json:"forge_flavor"`
 }
 
 // readAnswers loads .copier-answers.yml from dir (use "." for the current
@@ -33,4 +34,16 @@ func readAnswers(dir string) (*answers, error) {
 		return nil, err
 	}
 	return &a, nil
+}
+
+// ghHost is the GitHub host used to select the forge backend (forge.go) and build
+// token-creation links. It defaults to github.com and is overridable via
+// LLZ_GH_HOST for GitHub Enterprise instances (the host is not derivable from the
+// <owner>/<name> instance_repo answer). Pairs with the copier forge_flavor =
+// github-enterprise scaffold answer.
+func ghHost() string {
+	if h := os.Getenv("LLZ_GH_HOST"); h != "" {
+		return h
+	}
+	return "github.com"
 }

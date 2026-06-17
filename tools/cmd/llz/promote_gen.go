@@ -10,10 +10,12 @@ package main
 // approval/soak gate, and GitHub's "Re-run failed jobs" is the resume. There is
 // no self-dispatch loop to reinvent.
 //
-// The pin (the reusable workflow `uses:@<ref>`, instance_repo, template-ref) is
-// NOT regenerated from the ranks — it is PRESERVED from the file already on disk
-// (or, on a fresh instance, lifted from the sibling terraform.yml caller stub, or
-// finally derived from .copier-answers.yml + .template-version). That keeps this
+// The pin (the reusable workflow `uses:@<ref>`, instance_repo, template-ref, and
+// forge_flavor) is NOT regenerated from the ranks — it is PRESERVED from the file
+// already on disk (or, on a fresh instance, lifted from the sibling terraform.yml
+// caller stub, or finally derived from .copier-answers.yml + .template-version).
+// forge_flavor rides along so a GHE instance's promote.yml gates the same GHE CI
+// workarounds terraform.yml does. That keeps this
 // file in lockstep with terraform.yml's pin — Renovate bumps both `uses:` refs in
 // one PR — so a version bump never shows up as pipeline "drift"; only a
 // promotion_rank change does, which is exactly what `llz env pipeline --check`
@@ -35,12 +37,18 @@ type promoCaller struct {
 	uses         string // <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@<ref>
 	instanceRepo string
 	templateRef  string
+	forgeFlavor  string // github | github-enterprise | gitlab — gates the GHE CI workarounds
 }
+
+// defaultForgeFlavor matches the reusable llz-terraform.yml input default: a
+// forge_flavor we cannot otherwise determine selects no GHE workarounds.
+const defaultForgeFlavor = "github"
 
 var (
 	reUses        = regexp.MustCompile(`(?m)^\s*uses:\s*(\S+/lke-landing-zone/\.github/workflows/llz-terraform\.yml@\S+)`)
 	reInstanceErr = regexp.MustCompile(`(?m)^\s*instance_repo:\s*(\S+)`)
 	reTemplateRef = regexp.MustCompile(`(?m)^\s*template-ref:\s*(\S+)`)
+	reForgeFlavor = regexp.MustCompile(`(?m)^\s*forge_flavor:\s*(\S+)`)
 )
 
 // callerFromWorkflow extracts the pin from an existing rendered caller stub
@@ -64,6 +72,11 @@ func callerFromWorkflow(path string) (promoCaller, bool) {
 	if m := reTemplateRef.FindStringSubmatch(s); m != nil {
 		c.templateRef = m[1]
 	}
+	// forge_flavor is absent from caller stubs rendered before the forge
+	// abstraction; resolveCaller backfills it from the copier answer in that case.
+	if m := reForgeFlavor.FindStringSubmatch(s); m != nil {
+		c.forgeFlavor = m[1]
+	}
 	return c, true
 }
 
@@ -74,21 +87,39 @@ func callerFromWorkflow(path string) (promoCaller, bool) {
 //  3. .copier-answers.yml (upstream_org + instance_repo) + .template-version ref.
 func resolveCaller(workflowsDir string) (promoCaller, error) {
 	if c, ok := callerFromWorkflow(filepath.Join(workflowsDir, "promote.yml")); ok {
-		return c, nil
+		return backfillForgeFlavor(c), nil
 	}
 	if c, ok := callerFromWorkflow(filepath.Join(workflowsDir, "terraform.yml")); ok {
-		return c, nil
+		return backfillForgeFlavor(c), nil
 	}
 	a, _ := readAnswers(".")
 	ref := templateRefFromStamp()
 	if a == nil || a.UpstreamOrg == "" || a.InstanceRepo == "" || ref == "" {
 		return promoCaller{}, fmt.Errorf("cannot determine the reusable-workflow pin: no rendered promote.yml/terraform.yml to copy it from, and .copier-answers.yml/.template-version are incomplete")
 	}
-	return promoCaller{
+	return backfillForgeFlavor(promoCaller{
 		uses:         fmt.Sprintf("%s/lke-landing-zone/.github/workflows/llz-terraform.yml@%s", a.UpstreamOrg, ref),
 		instanceRepo: a.InstanceRepo,
 		templateRef:  ref,
-	}, nil
+		forgeFlavor:  a.ForgeFlavor,
+	}), nil
+}
+
+// backfillForgeFlavor fills a forge_flavor the caller stub didn't carry (a
+// terraform.yml rendered before the forge abstraction omits the input). It falls
+// back to the copier answer, then to the reusable workflow's own default, so the
+// generated promote.yml always pins forge_flavor in lockstep with terraform.yml
+// instead of silently dropping the GHE workarounds.
+func backfillForgeFlavor(c promoCaller) promoCaller {
+	if c.forgeFlavor == "" {
+		if a, _ := readAnswers("."); a != nil {
+			c.forgeFlavor = a.ForgeFlavor
+		}
+	}
+	if c.forgeFlavor == "" {
+		c.forgeFlavor = defaultForgeFlavor
+	}
+	return c
 }
 
 // templateRefFromStamp reads the template_ref out of .template-version (best
@@ -165,6 +196,9 @@ jobs:
 		b.WriteString(fmt.Sprintf("    uses: %s\n", c.uses))
 		b.WriteString("    with:\n")
 		b.WriteString(fmt.Sprintf("      instance_repo: %s\n", c.instanceRepo))
+		b.WriteString("      # Which forge hosts this instance — gates the GHE CI workarounds (e.g. the\n")
+		b.WriteString("      # fix-workspace-perms step on self-hosted runners) in the reusable workflow.\n")
+		b.WriteString(fmt.Sprintf("      forge_flavor: %s\n", c.forgeFlavor))
 		b.WriteString("      # renovate: datasource=github-tags depName=" + depNameFromUses(c.uses) + "\n")
 		b.WriteString(fmt.Sprintf("      template-ref: %s\n", c.templateRef))
 		b.WriteString("      action: apply\n")

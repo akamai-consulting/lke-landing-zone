@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"golang.org/x/term"
 )
 
@@ -31,6 +32,7 @@ const openbaoNS = "llz-openbao"
 type regenRootOpts struct {
 	updateGHA bool
 	repo      string
+	ghHost    string // optional GitHub Enterprise host override (LLZ_GH_HOST/GH_HOST)
 }
 
 func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
@@ -141,25 +143,18 @@ func runRegenRoot(g globalOpts, region string, o regenRootOpts) error {
 // updateRootGHASecret writes OPENBAO_ROOT_TOKEN to infra-<region> and verifies
 // the env-level write actually landed (gh can silently fall back to repo-level).
 func updateRootGHASecret(region, newRoot string, o regenRootOpts) error {
-	if _, err := execLookPath("gh"); err != nil {
-		emitRecoveryToken(newRoot, "gh CLI not installed")
-		return fmt.Errorf("gh not installed but --update-gha-secret was requested")
-	}
-	repoArgs := []string{}
-	if o.repo != "" {
-		repoArgs = []string{"--repo", o.repo}
-	}
+	f := forgeForFn(o.ghHost, o.repo)
+	ctx := bg()
+	scope := forge.Env("infra-" + region)
 
-	set := exec.Command("gh", append([]string{"secret", "set", "OPENBAO_ROOT_TOKEN", "--env", "infra-" + region}, repoArgs...)...)
-	set.Stdin = strings.NewReader(newRoot)
-	if out, err := set.CombinedOutput(); err != nil {
-		emitRecoveryToken(newRoot, "gh secret set failed (token NOT written)")
-		return fmt.Errorf("gh secret set failed: %s", strings.TrimSpace(string(out)))
+	if err := f.SetSecret(ctx, "OPENBAO_ROOT_TOKEN", newRoot, scope); err != nil {
+		emitRecoveryToken(newRoot, "secret set failed (token NOT written)")
+		return fmt.Errorf("secret set failed: %w", err)
 	}
-	// Authoritative env-level check (gh's success message is version-dependent).
-	list := exec.Command("gh", append([]string{"secret", "list", "--env", "infra-" + region}, repoArgs...)...)
-	out, _ := list.Output()
-	if !secretListed(string(out), "OPENBAO_ROOT_TOKEN") {
+	// Authoritative env-level check (a forge can silently fall back to repo-level
+	// when the env doesn't exist or the token lacks env-admin scope).
+	names, _ := f.SecretNames(ctx, scope)
+	if !secretListed(names, "OPENBAO_ROOT_TOKEN") {
 		emitRecoveryToken(newRoot, "env-secret on infra-"+region+" NOT updated (--env likely ignored; create the env / grant env-admin scope)")
 		return fmt.Errorf("OPENBAO_ROOT_TOKEN not present on infra-%s after set — --env was ignored", region)
 	}
@@ -277,10 +272,10 @@ func policiesIncludeRoot(lookupJSON string) bool {
 	return false
 }
 
-// secretListed reports whether `gh secret list` output contains name in column 1.
-func secretListed(out, name string) bool {
-	for _, line := range strings.Split(out, "\n") {
-		if f := strings.Fields(line); len(f) > 0 && f[0] == name {
+// secretListed reports whether the forge's secret-name list contains name.
+func secretListed(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
 			return true
 		}
 	}

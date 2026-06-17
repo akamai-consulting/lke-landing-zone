@@ -23,6 +23,12 @@ name: llz-discover-deployments (reusable)
 
 on:
   workflow_call:
+    inputs:
+      forge_flavor:
+        description: "Which forge hosts the caller instance: github | github-enterprise | gitlab. Gates the GHE CI workarounds (fix-workspace-perms before checkout on self-hosted runners). Mirrors forge.Flavor()."
+        required: false
+        type: string
+        default: github
     outputs:
       deployments:
         description: >
@@ -38,7 +44,7 @@ permissions:
 jobs:
   discover:
     name: Discover deployments
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -50,6 +56,10 @@ jobs:
     outputs:
       deployments: ${{ steps.list.outputs.deployments }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (tfvars)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: List deployments

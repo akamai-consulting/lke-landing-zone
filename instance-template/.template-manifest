@@ -69,6 +69,11 @@ managed  apl-values/example/**
 # ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─
 # Workflows: the `uses:`/`template-ref` org + any dispatch defaults you tune.
 merge    .github/workflows/**
+# GitLab CI entry point (forge_flavor=gitlab): `include:` org + ref it pins to
+# the template, same fork-local tokens as the github.com callers. The reusable
+# gitlab-ci/*.yml it includes live at the template repo root (not in an instance),
+# exactly like the .github/workflows/llz-*.yml reusable workflows.
+merge    .gitlab-ci.yml
 # Renovate: the packageName/registryUrls you repoint to your fork on adoption.
 merge    renovate.json
 # Dev Container: devcontainer.json pins the prebuilt toolchain image by the

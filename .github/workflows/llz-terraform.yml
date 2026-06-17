@@ -23,6 +23,11 @@ on:
         description: "This instance's GitHub repo (<owner>/<name>) — used in operator-facing messages + forwarded to llz-bootstrap-openbao."
         required: true
         type: string
+      forge_flavor:
+        description: "Which forge hosts the caller instance: github | github-enterprise | gitlab. Gates the GHE CI workarounds (fix-workspace-perms before checkout on self-hosted runners). Mirrors forge.Flavor()."
+        required: false
+        type: string
+        default: github
       template-ref:
         description: 'LLZ template ref to source the composite actions + scripts from. Pin to the same tag as this workflow''s @<ref>.'
         required: false
@@ -86,9 +91,6 @@ on:
         required: false
       OPENBAO_SECRETS_WRITE_TOKEN:
         required: false
-      TEMPLATE_TOKEN:
-        description: 'Token with read access to the LLZ template repo. Only needed when the template is private and not the caller repo; defaults to the job GITHUB_TOKEN.'
-        required: false
 
 name: llz-terraform (reusable)
 
@@ -136,7 +138,7 @@ jobs:
     name: Plan Cluster (PR)
     needs: discover
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -151,14 +153,19 @@ jobs:
     env:
       REGION: ${{ matrix.region }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Terraform init — cluster
@@ -166,7 +173,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Terraform validate — cluster
         working-directory: terraform-iac-bootstrap/cluster
@@ -203,7 +210,7 @@ jobs:
   tf-lint:
     name: Terraform Lint
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -213,14 +220,19 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: tflint
@@ -233,7 +245,7 @@ jobs:
   checkov:
     name: Checkov IaC Security Scan
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -243,14 +255,19 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Checkov
@@ -276,7 +293,7 @@ jobs:
   promote-pipeline-drift:
     name: Promotion pipeline up to date
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -304,7 +321,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       (inputs.module == 'cluster' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -323,14 +340,19 @@ jobs:
       AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Catch account-quota exhaustion BEFORE the apply, not via a 30-minute
@@ -359,7 +381,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
         working-directory: terraform-iac-bootstrap/cluster
@@ -398,7 +420,7 @@ jobs:
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       (inputs.module == 'cluster' || inputs.module == 'all')
     needs: [apply-cluster]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -458,14 +480,19 @@ jobs:
       AWS_ACCESS_KEY_ID:         ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:     ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # ── Pre-flight: env secrets the cluster-bootstrap apply needs ──────────────
@@ -499,7 +526,7 @@ jobs:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       # Absorb the cluster→cluster-bootstrap handoff race: apply-cluster can
       # finish (kubeconfig_raw populated) before the LKE-E HA control plane is
@@ -514,7 +541,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $RUNNER_TEMP/cluster-${{ env.REGION }}.yaml
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ env.REGION }}
@@ -571,7 +598,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           # $RUNNER_TEMP (shell var) not ${{ runner.temp }} — see the
           # bootstrap-cluster fetch step for the container-path rationale.
           kubeconfig-path:       $RUNNER_TEMP/diag-${{ env.REGION }}.yaml
@@ -608,7 +635,7 @@ jobs:
       inputs.action == 'apply' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
     needs: [apply-cluster-bootstrap]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -624,14 +651,19 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Pre-flight — resolve cloud-firewall token
@@ -657,7 +689,7 @@ jobs:
           module:                cluster
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       # Fetch the kubeconfig and open this hosted-runner's dynamic egress IP in
       # the LKE-E control-plane ACL before any kubectl (revoked at job end,
@@ -667,7 +699,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           # $RUNNER_TEMP (shell var → in-container /__w/_temp), NOT
           # ${{ runner.temp }} which bakes the host path into the action
           # script for container jobs and is not translated for composite
@@ -811,7 +843,7 @@ jobs:
       (inputs.module == 'cluster' || inputs.module == 'all') &&
       needs.bootstrap-openbao.result == 'success'
     needs: [bootstrap-openbao]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -826,14 +858,19 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # fetch-kubeconfig self-inits the cluster module's S3 backend and reads
@@ -846,7 +883,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ env.REGION }}
@@ -910,7 +947,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'destroy' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -952,6 +989,10 @@ jobs:
       AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -959,8 +1000,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -972,7 +1014,7 @@ jobs:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Terraform plan destroy — cluster-bootstrap
         # Informational only — shows what the destroy job will tear down.
@@ -1000,7 +1042,7 @@ jobs:
       inputs.action == 'destroy' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
     needs: [plan-destroy-cluster-bootstrap]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1045,14 +1087,19 @@ jobs:
       AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1064,7 +1111,7 @@ jobs:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       # ── Untrack cluster-bootstrap resources before destroy ─────────────────
       # Reconcile state to what `terraform destroy` can actually tear down,
@@ -1143,7 +1190,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'destroy' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1162,6 +1209,10 @@ jobs:
       AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1169,8 +1220,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1181,7 +1233,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
         working-directory: terraform-iac-bootstrap/cluster
@@ -1204,7 +1256,7 @@ jobs:
     # provider hang, etc.) — the cluster destroy still proceeds because the
     # K8s objects disappear with the cluster.
     needs: [plan-destroy-cluster, destroy-cluster-bootstrap]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1223,14 +1275,19 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1242,7 +1299,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
         working-directory: terraform-iac-bootstrap/cluster
@@ -1408,7 +1465,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       inputs.module == 'openbao-config'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1426,14 +1483,19 @@ jobs:
       AWS_ACCESS_KEY_ID:       ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:   ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Terraform init — openbao-config
@@ -1442,7 +1504,7 @@ jobs:
           module: openbao-config
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Terraform plan — openbao-config
         working-directory: terraform-iac-bootstrap/openbao-config
@@ -1462,7 +1524,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'destroy' &&
       inputs.module == 'openbao-config'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1476,6 +1538,10 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1483,8 +1549,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1496,7 +1563,7 @@ jobs:
           module: openbao-config
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Terraform plan destroy — openbao-config
         working-directory: terraform-iac-bootstrap/openbao-config
@@ -1516,7 +1583,7 @@ jobs:
       inputs.action == 'destroy' &&
       inputs.module == 'openbao-config'
     needs: [plan-destroy-openbao-config]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1530,6 +1597,10 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1537,8 +1608,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1550,7 +1622,7 @@ jobs:
           module: openbao-config
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Terraform destroy — openbao-config
         working-directory: terraform-iac-bootstrap/openbao-config
@@ -1595,7 +1667,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       (inputs.module == 'cluster' || inputs.module == 'object-storage' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1612,14 +1684,19 @@ jobs:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Checkout LLZ template (actions + scripts)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Terraform init — object-storage
@@ -1628,7 +1705,7 @@ jobs:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Terraform plan — object-storage
         working-directory: terraform-iac-bootstrap/object-storage
@@ -1694,7 +1771,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'destroy' &&
       (inputs.module == 'object-storage' || inputs.module == 'all')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1708,6 +1785,10 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1715,8 +1796,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1728,7 +1810,7 @@ jobs:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       - name: Terraform plan destroy — object-storage
         working-directory: terraform-iac-bootstrap/object-storage
@@ -1747,7 +1829,7 @@ jobs:
       inputs.action == 'destroy' &&
       (inputs.module == 'object-storage' || inputs.module == 'all')
     needs: [plan-destroy-object-storage]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -1761,6 +1843,10 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -1768,8 +1854,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1781,7 +1868,7 @@ jobs:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
 
       # Drain buckets before TF destroy. The Linode provider does NOT support
       # force_destroy=true on linode_object_storage_bucket, so a bucket with any

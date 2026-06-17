@@ -1,0 +1,47 @@
+# .gitlab-ci.yml — this instance's GitLab CI entry point (forge_flavor=gitlab).
+#
+# The GitLab analog of the thin caller workflows under .github/workflows/. It
+# `include:`s the reusable LLZ pipelines from the template project, pinned to the
+# same release tag this instance is on (the `ref:` below), exactly as a github.com
+# instance's callers `uses:` the reusable workflows @<llz_version>. Renovate keeps
+# the ref current in lockstep with the Terraform module pins.
+#
+# This file is inert on github.com / GHE instances (GitHub ignores it); it is the
+# live CI only when forge_flavor=gitlab. ADOPTERS: repoint the include `project:`
+# to your fork if you publish your own template.
+#
+# Status: BEST-EFFORT, not validated against a live GitLab instance — see the
+# Bitbucket/GitLab caveats in docs/architecture/forge-abstraction.md.
+
+include:
+  - project: <@ upstream_org @>/lke-landing-zone
+    # renovate: datasource=git-tags depName=<@ upstream_org @>/lke-landing-zone
+    ref: <@ llz_version @>
+    file:
+      - /gitlab-ci/base.yml
+      - /gitlab-ci/terraform.yml
+      - /gitlab-ci/cluster-health.yml
+      - /gitlab-ci/bootstrap-dns.yml
+      - /gitlab-ci/bootstrap-openbao.yml
+      - /gitlab-ci/openbao-auto-unseal.yml
+      - /gitlab-ci/scheduled-checks.yml
+      - /gitlab-ci/secret-rotation.yml
+      - /gitlab-ci/promote.yml
+
+variables:
+  # This instance's repo, as <group>/<project> — forwarded to llz the way the
+  # github.com callers forward instance_repo. Mirrors the copier answer.
+  LLZ_INSTANCE_REPO: <@ instance_repo @>
+  # Runner selection (the GitLab analog of vars.LLZ_RUNNER / runs-on). Default to
+  # GitLab.com's shared runners; override with a project/group CI/CD variable to
+  # target self-hosted runner tags (that precedence is the fallback mechanism).
+  LLZ_RUNNER: saas-linux-small-amd64
+
+# One pipeline per meaningful trigger; never double-run a branch+MR pipeline.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "pipeline"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"

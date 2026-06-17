@@ -18,12 +18,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// ghSetSecretFn writes a GitHub Actions environment secret via
-// `gh secret set <name> --env <ghEnv>` with the value piped over stdin (never
-// argv-visible). gh resolves auth + repo from the ambient GH_TOKEN/GH_REPO —
-// the same contract the shell scripts ran under. Seamed for tests.
+// ghSetSecretFn writes an environment-scoped secret to the active forge (value
+// piped over stdin, never argv-visible). ghEnv "" means repo-level. The forge
+// resolves auth + repo from its ambient context — the same contract the shell
+// scripts ran under. Seamed for tests (assign a *forge.Fake via forgeFn).
 var ghSetSecretFn = func(name, ghEnv, value string) error {
-	return ghSecretSetStdin(name, ghEnv, value)
+	return forgeFn("").SetSecret(bg(), name, value, scopeFor(ghEnv))
 }
 
 // ── bao-init ──────────────────────────────────────────────────────────────────

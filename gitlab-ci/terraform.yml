@@ -1,0 +1,113 @@
+# gitlab-ci/terraform.yml — the core plan/apply/destroy pipeline, the GitLab
+# analog of .github/workflows/llz-terraform.yml. Included by an instance's
+# .gitlab-ci.yml. Mirrors the github.com job sequence (preflight → init → plan →
+# apply → converge) and calls the SAME `llz ci …` commands baked into the image.
+#
+# Drivers (set as pipeline variables on a manual/scheduled run, the analog of the
+# GH workflow_dispatch inputs):
+#   LLZ_ACTION   — plan | apply | destroy
+#   LLZ_MODULE   — cluster | object-storage | openbao-config | cluster-bootstrap | all
+#   REGION       — deployment (primary | staging | …); also the infra-<region>
+#                  GitLab environment + the tfstate key path.
+#   CONFIRM_DESTROY — destroy:<region>:<module>, required for a destroy run.
+#
+# Merge-request pipelines auto-run the read-only plan/lint jobs (the analog of
+# the github.com PR plan); apply/destroy are gated on LLZ_ACTION and on a
+# protected GitLab environment (the approval/soak gate, analog of GH Environments).
+
+stages:
+  - validate
+  - plan
+  - apply
+  - destroy
+
+# ── Read-only gates (merge-request pipelines) ────────────────────────────────
+tf-lint:
+  extends: .llz-base
+  stage: validate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - make tf-lint
+
+tf-checkov:
+  extends: .llz-base
+  stage: validate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - make checkov
+  allow_failure: true
+
+tf-plan:
+  extends: .llz-base
+  stage: plan
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    LLZ_MODULE: cluster
+  script:
+    - !reference [.llz-tf-init, script]
+    - llz ci tf-import --region "$REGION"
+    - llz ci tf-plan --out "plan-${LLZ_MODULE}-${REGION}.txt" --title "${LLZ_MODULE} plan (${REGION})" --var-file "terraform-iac-bootstrap/${LLZ_MODULE}/${REGION}.tfvars"
+  artifacts:
+    paths:
+      - "plan-*.txt"
+    expire_in: 7 days
+
+# ── Apply (manual/scheduled run with LLZ_ACTION=apply) ───────────────────────
+tf-apply-cluster:
+  extends: .llz-base
+  stage: apply
+  rules:
+    - if: $LLZ_ACTION == "apply" && ($LLZ_MODULE == "cluster" || $LLZ_MODULE == "all")
+  environment:
+    name: infra-$REGION
+  variables:
+    LLZ_MODULE: cluster
+  script:
+    - llz ci preflight --fail-on-orphans "${FAIL_ON_ORPHANS:-true}" --orphan-threshold "${ORPHAN_THRESHOLD:-0}" --volume-region "$REGION"
+    - !reference [.llz-tf-init, script]
+    - llz ci tf-import --region "$REGION"
+    - llz ci tf-plan --out plan.txt --title "Cluster plan" --var-file "terraform-iac-bootstrap/${LLZ_MODULE}/${REGION}.tfvars"
+    - llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
+
+tf-apply-cluster-bootstrap:
+  extends: .llz-base
+  stage: apply
+  needs:
+    - job: tf-apply-cluster
+      optional: true
+  rules:
+    - if: $LLZ_ACTION == "apply" && ($LLZ_MODULE == "cluster-bootstrap" || $LLZ_MODULE == "all")
+  environment:
+    name: infra-$REGION
+  variables:
+    LLZ_MODULE: cluster-bootstrap
+  script:
+    - llz ci require-secret APL_VALUES_REPO_TOKEN --env "infra-${REGION}"
+    - llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN --env "infra-${REGION}"
+    - !reference [.llz-tf-init, script]
+    # Open this runner's egress IP in the cluster control-plane ACL, fetch the
+    # kubeconfig, then converge — the GitLab analog of the cluster-access action.
+    - llz ci runner-acl --mode open --region "$REGION"
+    - llz ci wait-cluster-ready --timeout 900 --interval 10
+    - llz ci tf-plan --out plan.txt --title "Cluster-bootstrap plan" --var-file "terraform-iac-bootstrap/${LLZ_MODULE}/${REGION}.tfvars"
+    - llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
+  after_script:
+    # Always revoke this runner's ACL entry, success or fail (analog of the
+    # `if: always()` lke-runner-acl revoke step).
+    - llz ci runner-acl --mode revoke --region "$REGION" || true
+
+# ── Destroy (manual run with LLZ_ACTION=destroy + CONFIRM_DESTROY token) ──────
+tf-destroy:
+  extends: .llz-base
+  stage: destroy
+  rules:
+    - if: $LLZ_ACTION == "destroy"
+      when: manual
+  environment:
+    name: infra-$REGION
+    action: stop
+  script:
+    - llz ci teardown --region "$REGION" --module "$LLZ_MODULE" --confirm "$CONFIRM_DESTROY"

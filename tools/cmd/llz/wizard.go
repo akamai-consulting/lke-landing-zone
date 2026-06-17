@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 )
 
 // secretSpec is one credential the token wizard requests. Dest records where the
@@ -34,7 +36,7 @@ const (
 )
 
 func ghTokenURL(scopes, desc string) string {
-	return "https://github.com/settings/tokens/new?scopes=" + scopes + "&description=" + desc
+	return "https://" + ghHost() + "/settings/tokens/new?scopes=" + scopes + "&description=" + desc
 }
 
 // ghFineGrainedTokenURL builds a template URL for the fine-grained PAT creation
@@ -56,7 +58,7 @@ func ghFineGrainedTokenURL(name, owner, desc string) string {
 	}
 	q.Set("expires_in", "90")
 	q.Set("contents", "write")
-	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
+	return "https://" + ghHost() + "/settings/personal-access-tokens/new?" + q.Encode()
 }
 
 // ghFineGrainedPackagesURL builds a fine-grained PAT creation URL pre-filled for
@@ -70,7 +72,7 @@ func ghFineGrainedPackagesURL(name, owner string) string {
 		q.Set("target_name", owner)
 	}
 	q.Set("expires_in", "90")
-	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
+	return "https://" + ghHost() + "/settings/personal-access-tokens/new?" + q.Encode()
 }
 
 // ghFineGrainedDispatchURL builds a fine-grained PAT creation URL pre-filled for
@@ -320,21 +322,15 @@ func pushSecrets(g globalOpts, env string) error {
 		return fmt.Errorf("nothing to push — run `llz secrets gather` first")
 	}
 
-	type item struct {
-		argv []string
-		val  string
-	}
-	var items []item
+	f := forgeFn("")
+	var writes []forgeWrite
 	for _, k := range sortedKeys(secrets) {
-		items = append(items, item{secretSetArgv(env, k), secrets[k]})
+		writes = append(writes, forgeWrite{name: k, value: secrets[k], secret: true, scope: scopeFor("infra-" + env)})
 	}
 	for _, k := range sortedKeys(vars) {
-		items = append(items, item{variableSetArgv(k), vars[k]})
+		writes = append(writes, forgeWrite{name: k, value: vars[k], scope: scopeFor("")})
 	}
-
-	for _, it := range items {
-		fmt.Fprintln(os.Stderr, "→ "+shellQuote(it.argv))
-	}
+	echoWrites(writes)
 
 	if g.dryRun {
 		_ = lockInfraEnvBranchPolicy(g, "", env) // prints the plan, changes nothing
@@ -345,10 +341,8 @@ func pushSecrets(g globalOpts, env string) error {
 		fmt.Fprintln(os.Stderr, "  (re-run with --yes to execute)")
 		return nil
 	}
-	for _, it := range items {
-		if err := execArgv(it.argv, it.val); err != nil {
-			return fmt.Errorf("%s: %w", it.argv[2], err) // argv[2] = the name
-		}
+	if _, err := applyWrites(g, f, writes); err != nil {
+		return err
 	}
 	// Lock infra-<env> to main-only — the actual secret-injection boundary.
 	return lockInfraEnvBranchPolicy(g, "", env)
@@ -367,12 +361,18 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		report(t, lookable(t))
 	}
 
-	fmt.Println("\nGitHub auth:")
-	if _, err := execLookPath("gh"); err != nil {
-		report("gh auth status", false)
+	// Check the active forge's CLI (glab for GitLab, else gh). Both expose
+	// `<cli> auth status`.
+	cli := "gh"
+	if forgeFn("").Flavor() == forge.GitLab {
+		cli = "glab"
+	}
+	fmt.Printf("\nForge auth (%s):\n", cli)
+	if _, err := execLookPath(cli); err != nil {
+		report(cli+" auth status", false)
 	} else {
-		_, err := execOutput("gh", "auth", "status")
-		report("gh auth status", err == nil)
+		_, err := execOutput(cli, "auth", "status")
+		report(cli+" auth status", err == nil)
 	}
 
 	var errs []error

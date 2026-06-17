@@ -27,6 +27,7 @@ ARG TFLINT_VERSION=0.53.0
 ARG HELM_VERSION=3.17.3
 ARG KUBECTL_VERSION=1.31.0
 ARG KUSTOMIZE_VERSION=5.4.3
+ARG GLAB_VERSION=1.102.0
 
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
@@ -129,6 +130,20 @@ RUN set -eux; \
     apt-get update -qq; \
     apt-get install -y --no-install-recommends gh; \
     rm -rf /var/lib/apt/lists/*
+
+# GitLab CLI (checksum-verified tarball — no official apt repo, so mirror the
+# kustomize/tflint pattern rather than the gh apt install). The GitLab forge
+# backend (LLZ_FORGE=gitlab) shells out to `glab` exactly as the default backend
+# uses `gh`; baked in for parity. GitLab support is still best-effort/untested —
+# this just removes the missing-binary blocker, it does not certify the path.
+RUN set -eux; \
+    TARBALL="glab_${GLAB_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    BASE="https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads"; \
+    curl -fsSLO "${BASE}/${TARBALL}"; \
+    curl -fsSLO "${BASE}/checksums.txt"; \
+    grep "${TARBALL}" checksums.txt | sha256sum -c; \
+    tar -xzf "${TARBALL}" -C /usr/local/bin --strip-components=1 bin/glab; \
+    rm "${TARBALL}" checksums.txt
 
 # CI Go binary, built from the tools module in the `gotools` stage above and
 # baked onto PATH — so CI jobs call `llz` with no runtime `go build`. This is

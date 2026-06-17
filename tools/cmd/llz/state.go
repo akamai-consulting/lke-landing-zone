@@ -6,8 +6,9 @@ package main
 // prepopulate vars.env with real values and, for secrets, only know presence.
 
 import (
-	"encoding/json"
 	"fmt"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 )
 
 // requirement is one var/secret an e2e instance needs.
@@ -29,13 +30,10 @@ func e2eRequirements(admin bool) []requirement {
 		{"TF_STATE_SECRET_KEY", true, true, true, false, "bucket-scoped OBJ key (created)"},
 		{"OPENBAO_SECRETS_WRITE_TOKEN", true, true, true, false, "GitHub PAT, Actions+Secrets:write"},
 		{"APL_VALUES_REPO_TOKEN", true, true, true, false, "GitHub fine-grained PAT, Contents:write (values+apps repo)"},
-		{"TEMPLATE_TOKEN", true, false, true, false, "GitHub PAT, Contents:read on the template"},
 		{"TF_STATE_BUCKET", false, false, true, false, "state bucket name (created)"},
 		{"TF_STATE_ENDPOINT", false, false, true, false, "S3 endpoint of the chosen cluster"},
 		{"TF_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-terraform:<tag> (computed)"},
 		{"KUBE_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-kubernetes:<tag> (computed)"},
-		{"GHCR_READ_TOKEN", true, true, true, false, "GitHub PAT, read:packages — ArgoCD pulls the private ghcr.io/<org>/charts OCI charts"},
-		{"GHCR_USERNAME", false, true, true, false, "GitHub username that owns GHCR_READ_TOKEN (GHCR OCI auth)"},
 		{"LINODE_DNS_TOKEN", true, true, false, false, "Linode Domains:RW (cert DNS-01)"},
 		{"LOKI_ADMIN_PASSWORD", true, true, false, false, "Loki gateway basic-auth (TF generates + stashes if unset)"},
 		{"CLOUD_FIREWALL_TOKEN", true, true, false, false, "Linode Cloud Firewalls token"},
@@ -80,65 +78,37 @@ func (s liveState) value(name string) string {
 	return s.repoVars[name]
 }
 
-// fetchLiveState queries repo + infra-<env> via gh. Missing env / 404s yield
-// empty maps rather than errors (a fresh repo has no environment yet).
+// fetchLiveState queries repo + infra-<env> via the active forge. Missing env /
+// 404s yield empty maps rather than errors (a fresh repo has no environment yet),
+// so list errors are swallowed.
 func fetchLiveState(repo, env string) liveState {
 	s := liveState{
 		repoVars: map[string]string{}, repoSecrets: map[string]bool{},
 		envVars: map[string]string{}, envSecrets: map[string]bool{},
 	}
-	for _, v := range ghVars("repos/" + repo + "/actions/variables") {
+	f := forgeFn(repo)
+	ctx := bg()
+
+	repoVars, _ := f.Variables(ctx, forge.RepoLevel)
+	for _, v := range repoVars {
 		s.repoVars[v.Name] = v.Value
 	}
-	for _, n := range ghSecretNames("repos/" + repo + "/actions/secrets") {
+	repoSecrets, _ := f.SecretNames(ctx, forge.RepoLevel)
+	for _, n := range repoSecrets {
 		s.repoSecrets[n] = true
 	}
 	if env != "" {
-		for _, v := range ghVars("repos/" + repo + "/environments/infra-" + env + "/variables") {
+		envScope := forge.Env("infra-" + env)
+		envVars, _ := f.Variables(ctx, envScope)
+		for _, v := range envVars {
 			s.envVars[v.Name] = v.Value
 		}
-		for _, n := range ghSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
+		envSecrets, _ := f.SecretNames(ctx, envScope)
+		for _, n := range envSecrets {
 			s.envSecrets[n] = true
 		}
 	}
 	return s
-}
-
-type ghVar struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
-func ghVars(path string) []ghVar {
-	var out struct {
-		Variables []ghVar `json:"variables"`
-	}
-	_ = json.Unmarshal(ghAPI(path), &out)
-	return out.Variables
-}
-
-func ghSecretNames(path string) []string {
-	var out struct {
-		Secrets []struct {
-			Name string `json:"name"`
-		} `json:"secrets"`
-	}
-	_ = json.Unmarshal(ghAPI(path), &out)
-	names := make([]string, 0, len(out.Secrets))
-	for _, s := range out.Secrets {
-		names = append(names, s.Name)
-	}
-	return names
-}
-
-// ghAPI runs `gh api <path>` and returns stdout (nil on error — callers treat a
-// failed/absent endpoint as "nothing configured").
-func ghAPI(path string) []byte {
-	out, err := execOutput("gh", "api", path)
-	if err != nil {
-		return nil
-	}
-	return out
 }
 
 // satisfied reports whether req is met by either the local .llz/*.env or the

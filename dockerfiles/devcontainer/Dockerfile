@@ -49,6 +49,7 @@ ARG SHELLCHECK_VERSION=v0.10.0
 ARG UV_VERSION=0.6.14
 ARG BAO_VERSION=2.5.4
 ARG ACTIONLINT_VERSION=1.7.7
+ARG GLAB_VERSION=1.102.0
 
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
@@ -196,6 +197,20 @@ RUN set -eux; \
     apt-get update -qq; \
     apt-get install -y --no-install-recommends gh; \
     rm -rf /var/lib/apt/lists/*
+
+# GitLab CLI (checksum-verified tarball — no official apt repo, so mirror the
+# kustomize pattern rather than the gh apt install). The GitLab forge backend
+# (LLZ_FORGE=gitlab) shells out to `glab` as the default backend uses `gh`, and
+# `llz doctor` checks `glab auth status` when the flavor is GitLab — ship it so
+# the workstation is complete. GitLab support is still best-effort/untested.
+RUN set -eux; \
+    TARBALL="glab_${GLAB_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    BASE="https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads"; \
+    curl -fsSLO "${BASE}/${TARBALL}"; \
+    curl -fsSLO "${BASE}/checksums.txt"; \
+    grep "${TARBALL}" checksums.txt | sha256sum -c; \
+    tar -xzf "${TARBALL}" -C /usr/local/bin --strip-components=1 bin/glab; \
+    rm "${TARBALL}" checksums.txt
 
 # uv (fast Python package installer — used to land the Python CLIs below)
 RUN set -eux; \

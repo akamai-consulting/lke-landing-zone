@@ -1,0 +1,12 @@
+name: Fix workspace permissions
+description: >
+  Restore GITHUB_WORKSPACE ownership to the current user on self-hosted runners
+  where a previous job may have left root-owned files (e.g. GitHub Enterprise
+  self-hosted runners with a persistent workspace). No-op-safe: a failed chown is
+  ignored, so it is harmless on github.com-hosted runners. Ported from the
+  ohttp-bits GHE proto. Gate its use on forge_flavor == 'github-enterprise'.
+runs:
+  using: composite
+  steps:
+    - run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
+      shell: bash

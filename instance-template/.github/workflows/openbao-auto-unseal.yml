@@ -49,6 +49,9 @@ jobs:
       # Empty on `schedule` (inputs is null) → the reusable workflow defaults to
       # "all"; a dispatch can narrow to a single deployment.
       region: ${{ inputs.region || 'all' }}
+      # Which forge hosts this instance — gates the GHE CI workarounds (e.g. the
+      # fix-workspace-perms step on self-hosted runners) in the reusable workflow.
+      forge_flavor: <@ forge_flavor @>
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
       template-ref: <@ llz_version @>
     secrets: inherit

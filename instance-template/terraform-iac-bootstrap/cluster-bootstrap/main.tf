@@ -815,12 +815,11 @@ resource "kubectl_manifest" "argocd_apps_repo" {
 # Repo Secret — lets ArgoCD authenticate to GHCR to pull the first-party OCI
 # Helm charts (ghcr.io/<@ upstream_org @>/charts/*: cluster-foundation, openbao-
 # platform, cert-automation, eso-cert-watcher, internal-cidr-firewall). These
-# packages are PRIVATE, so without this Secret every support-plane Application
-# 401s on `helm pull` (cluster-foundation ComparisonError → no namespaces →
-# OpenBao bootstrap times out on `namespaces "llz-openbao" not found`).
-# type=helm + enableOCI=true; url is the registry+org prefix ArgoCD matches the
-# Application's repoURL against. Gated on ghcr_token so plan/destroy and the
-# "charts are public" path work without it.
+# packages are PUBLIC, so ArgoCD pulls them anonymously and this Secret is
+# normally NOT created — it exists only for a private fork that keeps its charts
+# private. type=helm + enableOCI=true; url is the registry+org prefix ArgoCD
+# matches the Application's repoURL against. Gated on ghcr_token: empty (the
+# default, public-charts path) skips it; plan/destroy work without it.
 resource "kubectl_manifest" "argocd_ghcr_oci_creds" {
   count = var.ghcr_token != "" ? 1 : 0
   yaml_body = yamlencode({

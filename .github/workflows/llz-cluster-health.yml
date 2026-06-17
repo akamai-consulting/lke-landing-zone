@@ -29,6 +29,11 @@ on:
         description: 'Deployment (matches an infra-<region> Environment in the caller repo)'
         required: true
         type: string
+      forge_flavor:
+        description: "Which forge hosts the caller instance: github | github-enterprise | gitlab. Gates the GHE CI workarounds (fix-workspace-perms before checkout on self-hosted runners). Mirrors forge.Flavor()."
+        required: false
+        type: string
+        default: github
       verbose:
         description: 'VERBOSE=1 — dump describe/logs even when nothing is failing'
         required: false
@@ -57,9 +62,6 @@ on:
       LINODE_API_TOKEN:
         description: 'Linode API token used to open/revoke this runner''s egress IP in the LKE-E control-plane ACL for the kubectl steps.'
         required: true
-      TEMPLATE_TOKEN:
-        description: 'Token with read access to the LLZ template repo. Only needed when the template is private and not the caller repo; defaults to the job GITHUB_TOKEN.'
-        required: false
 
 permissions:
   contents: read
@@ -71,7 +73,7 @@ defaults:
 jobs:
   health:
     name: cluster-health (${{ inputs.region }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     environment: infra-${{ inputs.region }}
     container:
       image: ${{ vars.TF_IMAGE }}
@@ -86,6 +88,10 @@ jobs:
       TF_IN_AUTOMATION:     'true'
       VERBOSE:              ${{ inputs.verbose && '1' || '0' }}
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Dual checkout (Option A). The fetch-kubeconfig composite action hard-codes
       # `working-directory: terraform-iac-bootstrap/cluster` — the INSTANCE's TF
       # layout — and a composite action's working-directory is resolved against
@@ -99,8 +105,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -111,7 +118,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ inputs.region }}

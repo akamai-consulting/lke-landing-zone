@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 )
 
 func TestValidateOBJCluster(t *testing.T) {
@@ -214,31 +216,25 @@ func TestE2ERequirements(t *testing.T) {
 	}
 }
 
-func TestGhSecretNames(t *testing.T) {
-	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
-		if name != "gh" {
-			t.Errorf("ghSecretNames shelled out to %q, want gh", name)
-		}
-		return []byte(`{"secrets":[{"name":"TOKEN_A"},{"name":"TOKEN_B"}]}`), nil
-	})
-	names := ghSecretNames("repos/o/r/actions/secrets")
-	if len(names) != 2 || !containsString(names, "TOKEN_A") || !containsString(names, "TOKEN_B") {
-		t.Errorf("ghSecretNames = %v, want [TOKEN_A TOKEN_B]", names)
-	}
+// ghSecretNames/ghVars were replaced by forge.GH.SecretNames/Variables; the
+// live-state plumbing is now covered by TestFetchLiveState (via the Fake) and
+// the forge package's own tests.
 
-	// gh failure -> empty (ghAPI returns nil, unmarshal of nil is a no-op).
-	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, os.ErrNotExist })
-	if got := ghSecretNames("x"); len(got) != 0 {
-		t.Errorf("ghSecretNames(gh error) = %v, want empty", got)
-	}
-}
+func TestFetchLiveState(t *testing.T) {
+	fake := withFakeForge(t)
+	ctx := bg()
+	_ = fake.SetSecret(ctx, "TOKEN_A", "v", forge.RepoLevel)
+	_ = fake.SetVariable(ctx, "TF_IMAGE", "ghcr.io/x", forge.RepoLevel)
+	_ = fake.SetSecret(ctx, "ENV_TOKEN", "v", forge.Env("infra-dev"))
 
-func TestGhVars(t *testing.T) {
-	withExecOutput(t, func(string, ...string) ([]byte, error) {
-		return []byte(`{"variables":[{"name":"TF_IMAGE","value":"ghcr.io/x"}]}`), nil
-	})
-	vars := ghVars("repos/o/r/actions/variables")
-	if len(vars) != 1 || vars[0].Name != "TF_IMAGE" || vars[0].Value != "ghcr.io/x" {
-		t.Errorf("ghVars = %+v, want one TF_IMAGE var", vars)
+	st := fetchLiveState("o/r", "dev")
+	if !st.repoSecrets["TOKEN_A"] {
+		t.Error("repo secret TOKEN_A not captured")
+	}
+	if st.repoVars["TF_IMAGE"] != "ghcr.io/x" {
+		t.Errorf("repo var TF_IMAGE = %q", st.repoVars["TF_IMAGE"])
+	}
+	if !st.envSecrets["ENV_TOKEN"] {
+		t.Error("env secret ENV_TOKEN not captured")
 	}
 }

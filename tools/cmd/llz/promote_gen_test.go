@@ -10,7 +10,7 @@ import (
 const testUses = "akamai-consulting/lke-landing-zone/.github/workflows/llz-terraform.yml@v1.2.3"
 
 func testCaller() promoCaller {
-	return promoCaller{uses: testUses, instanceRepo: "myorg/my-instance", templateRef: "v1.2.3"}
+	return promoCaller{uses: testUses, instanceRepo: "myorg/my-instance", templateRef: "v1.2.3", forgeFlavor: "github-enterprise"}
 }
 
 func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {
@@ -52,6 +52,11 @@ func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {
 	if strings.Count(out, "instance_repo: myorg/my-instance") != 3 {
 		t.Errorf("instance_repo not rendered on every stage")
 	}
+	// forge_flavor rides along on every stage so a GHE pipeline gates the same
+	// workarounds terraform.yml does — never silently drops to the github default.
+	if strings.Count(out, "forge_flavor: github-enterprise") != 3 {
+		t.Errorf("forge_flavor not rendered on every stage:\n%s", out)
+	}
 	if strings.Count(out, "region: dev")+strings.Count(out, "region: staging")+strings.Count(out, "region: prod") != 3 {
 		t.Errorf("per-stage region: not rendered")
 	}
@@ -69,12 +74,12 @@ func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {
 func TestCallerFromWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	concrete := filepath.Join(dir, "terraform.yml")
-	mustWrite(t, concrete, "jobs:\n  call:\n    uses: "+testUses+"\n    with:\n      instance_repo: myorg/my-instance\n      template-ref: v1.2.3\n")
+	mustWrite(t, concrete, "jobs:\n  call:\n    uses: "+testUses+"\n    with:\n      instance_repo: myorg/my-instance\n      forge_flavor: github-enterprise\n      template-ref: v1.2.3\n")
 	c, ok := callerFromWorkflow(concrete)
 	if !ok {
 		t.Fatal("expected ok for a concrete caller stub")
 	}
-	if c.uses != testUses || c.instanceRepo != "myorg/my-instance" || c.templateRef != "v1.2.3" {
+	if c.uses != testUses || c.instanceRepo != "myorg/my-instance" || c.templateRef != "v1.2.3" || c.forgeFlavor != "github-enterprise" {
 		t.Errorf("extracted %+v", c)
 	}
 
@@ -112,7 +117,7 @@ func TestSyncPromoteWorkflowRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustWrite(t, filepath.Join(".github", "workflows", "terraform.yml"),
-		"jobs:\n  call:\n    uses: "+testUses+"\n    with:\n      instance_repo: myorg/my-instance\n      template-ref: v1.2.3\n")
+		"jobs:\n  call:\n    uses: "+testUses+"\n    with:\n      instance_repo: myorg/my-instance\n      forge_flavor: github-enterprise\n      template-ref: v1.2.3\n")
 
 	changed, err := syncPromoteWorkflow("tf", "", false)
 	if err != nil {

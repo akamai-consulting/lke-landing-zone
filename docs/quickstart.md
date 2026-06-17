@@ -45,7 +45,7 @@ the short version:
 - **Akamai App Platform (apl-core) entitlement**
 - **A GitHub org + an instance repo** — a fork of the template org, or your own
 - **A GitOps repo reachable over HTTPS** — github.com, gitlab.com, or an internal HTTPS mirror (often the same repo)
-- **GHCR pull access** — Argo CD pulls the first-party charts from `ghcr.io/<org>/charts` (currently **private**); `llz tokens` provisions the `GHCR_READ_TOKEN` + `GHCR_USERNAME` the bootstrap seeds as an Argo CD repo credential
+- **GHCR pull access** — Argo CD pulls the first-party charts from `ghcr.io/<org>/charts`; these are **public**, so it pulls them anonymously — no credential needed
 
 > **Start the Linode account first — it has the longest lead time.** Production
 > accounts need an executive sponsor + InfoSec approval: follow the
@@ -317,7 +317,7 @@ For what's missing it:
 | **Linode token** | reads your Linode PAT (full Read/Write) → `LINODE_API_TOKEN`, and uses it for the next two steps |
 | **State bucket** | lists your Linode OBJ clusters, you pick one, then **creates** the state bucket → `TF_STATE_BUCKET`, `TF_STATE_ENDPOINT` |
 | **State key** | **creates** a bucket-scoped `read_write` OBJ key → `TF_STATE_ACCESS_KEY`, `TF_STATE_SECRET_KEY` |
-| **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (classic PAT, **`repo` + `workflow`** scopes — the build writes the remaining infra secrets with it), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted), `TEMPLATE_TOKEN` (classic PAT, **`repo`** scope — read on the template repo, needed while it's private), and `GHCR_READ_TOKEN` (classic PAT, **`read:packages`** — ArgoCD pulls the private `ghcr.io/<org>/charts` OCI charts; pairs with the `GHCR_USERNAME` variable) |
+| **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (classic PAT, **`repo` + `workflow`** scopes — the build writes the remaining infra secrets with it), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted) |
 | **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE` (`ghcr.io/<org>/ci-{terraform,kubernetes}:<tag>`) |
 | **Optional** | offers `LINODE_DNS_TOKEN`, `LOKI_ADMIN_PASSWORD`, `CLOUD_FIREWALL_TOKEN` (Enter to skip — the cluster still bootstraps) |
 

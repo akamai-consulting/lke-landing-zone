@@ -1,0 +1,300 @@
+# gitlab-ci/scheduled-checks.yml — GitLab analog of .github/workflows/llz-scheduled-checks.yml. Best-effort, not validated against live GitLab.
+# Scheduled health/audit/drift checks: each job is an independent `llz ci …`
+# (or `llz drift` / `make audit`) call baked into the image, mirroring one job
+# of the github.com reusable workflow so the operational logic stays centralized
+# in the CLI rather than duplicated per forge.
+#
+# Drivers (pipeline variables on a schedule/web run):
+#   REGION         — deployment (primary | staging | …); also the infra-<region>
+#                    GitLab environment. Empty or "all" fans out over every
+#                    region from `llz env list --json` (see fan-out note below).
+#   MAX_PAT_DAYS   — PAT-rotation policy ceiling (default 90).
+#   WARN_DAYS      — warn threshold for the expiry checks (default 14).
+#   DRIFT_BRANCH   — template branch the template-drift job measures against (default main).
+#   DRIFT_STRICT   — "true" makes template-drift fail when the instance is behind.
+#
+# ── Fan-out note ─────────────────────────────────────────────────────────────
+# The github.com workflow matrixes the per-deployment health jobs over the
+# regions discovered by `llz env list --json`. The region-scoped jobs below
+# drive on a single $REGION pipeline variable; when $REGION is empty or "all"
+# they iterate every region from `llz env list --json` in a shell loop in one
+# job (the same pattern as gitlab-ci/cluster-health.yml). TRUE per-region
+# PARALLEL fan-out on GitLab would require generating a dynamic child pipeline
+# (one trigger job per region) — a documented best-effort limitation of this
+# single-job include.
+
+stages:
+  - checks
+
+# Shared scheduled-only gate every job extends — the analog of the github.com
+# `if: github.event_name == 'workflow_dispatch' || == 'schedule'` step gate.
+.scheduled-rules:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+# Resolve the region set ($REGION, or every env when empty/"all") and open this
+# runner's egress IP in each cluster's control-plane ACL — the GitLab analog of
+# the cluster-access composite (kubeconfig + ACL open). Sourced via
+# `!reference [.acl-open, script]` by every region-scoped, cluster-touching job.
+.acl-open:
+  script:
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        llz ci runner-acl --mode open --region "$region" || true
+      done
+
+# Always revoke this runner's ACL entry for every region operated on, success or
+# fail — the analog of the `if: always()` lke-runner-acl revoke step. Sourced via
+# `!reference [.acl-revoke, script]` in each cluster-touching job's after_script.
+.acl-revoke:
+  script:
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        llz ci runner-acl --mode revoke --region "$region" || true
+      done
+
+# ── OpenBao + ESO health (region-scoped, cluster-touching) ───────────────────
+# Per region: OpenBao pod seal state, ESO ClusterSecretStore readiness, and any
+# unhealthy ExternalSecrets. Warning-only on github.com (continue-on-error);
+# allow_failure mirrors that so a sealed pod does not block other scheduled work.
+openbao-health:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  environment:
+    name: infra-$REGION
+  allow_failure: true
+  script:
+    - !reference [.acl-open, script]
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        echo "── openbao-health (${region}) ─────────────────────────────"
+        REGION="$region" llz ci health-openbao
+      done
+  after_script:
+    - !reference [.acl-revoke, script]
+
+# ── AppRole rotation success (region-scoped, cluster-touching) ───────────────
+# Verifies the quarterly approle-rotation CronWorkflow has a recent success.
+approle-rotation-health:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  environment:
+    name: infra-$REGION
+  allow_failure: true
+  script:
+    - !reference [.acl-open, script]
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        echo "── approle-rotation-health (${region}) ────────────────────"
+        REGION="$region" llz ci health-approle-rotation
+      done
+  after_script:
+    - !reference [.acl-revoke, script]
+
+# ── LKE-E lke-admin rotation SLA (region-scoped, cluster-touching) ───────────
+# Reads the newest lke-admin-token Secret's age and warns if rotation is overdue.
+lke-admin-rotation-health:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  environment:
+    name: infra-$REGION
+  script:
+    - !reference [.acl-open, script]
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        echo "── lke-admin-rotation-health (${region}) ──────────────────"
+        REGION="$region" llz ci health-lke-admin-rotation
+      done
+  after_script:
+    - !reference [.acl-revoke, script]
+
+# ── Linode PAT expiry policy (region-scoped, NO cluster access) ──────────────
+# Lists every Linode PAT and fails on no-expiry / >90-day / expired tokens; also
+# inventories OBJ keys. No kubectl, so no control-plane ACL — but it is per-env
+# because LINODE_API_TOKEN is an infra-<region>-scoped secret.
+linode-pat-expiry-health:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  environment:
+    name: infra-$REGION
+  variables:
+    MAX_PAT_DAYS: "90"
+    WARN_DAYS: "14"
+  script:
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        echo "── linode-pat-expiry-health (${region}) ───────────────────"
+        REGION="$region" llz ci cred-audit
+      done
+
+# ── Loki OBJ key 120-day rotation SLA (region-scoped, cluster-touching) ──────
+# Reads the age of secret/loki/object-store via the openbao exec passthrough and
+# alerts if the live credential has fallen behind the 120-day clock.
+loki-objkey-rotation-health:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  environment:
+    name: infra-$REGION
+  script:
+    - !reference [.acl-open, script]
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        echo "── loki-objkey-rotation-health (${region}) ────────────────"
+        REGION="$region" llz ci health-loki-objkey-rotation
+      done
+  after_script:
+    - !reference [.acl-revoke, script]
+
+# ── Forge service token expiry (NO cluster access) ──────────────────────────
+# The github.com job (gh-pat-expiry-health) is a per-token self-check of the
+# GitHub service PATs via the GitHub-Authentication-Token-Expiration response
+# header. On GitLab its APPLICABILITY DEPENDS ON THE FORGE: there is no direct
+# GitLab analog command, so this is a BEST-EFFORT PLACEHOLDER if no GitLab
+# equivalent exists — it still calls the SAME `llz ci gh-pat-expiry` so the
+# expiry-policy logic stays centralized in the CLI (the command no-ops / skips
+# when the GitHub service tokens are not present on a GitLab instance).
+gh-pat-expiry-health:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  variables:
+    MAX_PAT_DAYS: "90"
+    WARN_DAYS: "14"
+  script:
+    - llz ci gh-pat-expiry --max-days "$MAX_PAT_DAYS" --warn-days "$WARN_DAYS"
+
+# ── PrometheusRule health (region-scoped, cluster-touching) ──────────────────
+# Verifies expected PrometheusRule CRs are present and that Prometheus has loaded
+# them with no rule group lastError. Warning-only on github.com — allow_failure
+# mirrors that. The expected-CR-presence check is the inline shell on github.com;
+# health-prom-rules covers the evaluation-error half.
+prometheusrule-health:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  environment:
+    name: infra-$REGION
+  allow_failure: true
+  script:
+    - !reference [.acl-open, script]
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        echo "── prometheusrule-health (${region}) ──────────────────────"
+        export REGION="$region"
+        # Expected PrometheusRule CRs present (the github.com inline-shell half).
+        EXPECTED_RULES="openbao-alerts support-plane-alerts"
+        MISSING=0
+        for RULE in $EXPECTED_RULES; do
+          if kubectl -n llz-observability get prometheusrule "$RULE" >/dev/null 2>&1; then
+            echo "PrometheusRule ${RULE} (${region}): present"
+          else
+            echo "WARNING: PrometheusRule ${RULE} not found in llz-observability on ${region}"
+            MISSING=$((MISSING + 1))
+          fi
+        done
+        if [ "$MISSING" -gt 0 ]; then
+          echo "WARNING: ${MISSING} PrometheusRule(s) missing on ${region} — check ArgoCD sync"
+        fi
+        # Prometheus has loaded the rules with no evaluation errors.
+        llz ci health-prom-rules
+      done
+  after_script:
+    - !reference [.acl-revoke, script]
+
+# ── Dependency CVE audit (NO cluster access, NO env) ─────────────────────────
+# govulncheck against the Go tools module. Runs in a Go image like the github.com
+# job; the image override is local to this job so the rest stay on $LLZ_TF_IMAGE.
+go-vuln-audit:
+  extends: .llz-base
+  stage: checks
+  image: golang:1.25-bookworm
+  rules: !reference [.scheduled-rules, rules]
+  script:
+    - make audit
+
+# ── cert-manager Certificate health (region-scoped, cluster-touching) ────────
+# Checks every cert-manager Certificate across all namespaces for Ready=True.
+# Warning-only on github.com — allow_failure mirrors that.
+certmanager-health:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  environment:
+    name: infra-$REGION
+  allow_failure: true
+  script:
+    - !reference [.acl-open, script]
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        echo "── certmanager-health (${region}) ─────────────────────────"
+        REGION="$region" llz ci health-certmanager
+      done
+  after_script:
+    - !reference [.acl-revoke, script]
+
+# ── Template drift report (NO cluster access, NO env) ────────────────────────
+# `llz drift` reads the committed .template-version and compares it to the
+# template branch head (DRIFT_BRANCH — the moving head, NOT the pinned tag).
+# Report-only by default; DRIFT_STRICT=true passes --strict to gate.
+template-drift:
+  extends: .llz-base
+  stage: checks
+  rules: !reference [.scheduled-rules, rules]
+  script:
+    - |
+      strict=""
+      if [ "${DRIFT_STRICT:-false}" = "true" ]; then
+        strict="--strict"
+      fi
+      llz drift --branch "${DRIFT_BRANCH:-main}" $strict

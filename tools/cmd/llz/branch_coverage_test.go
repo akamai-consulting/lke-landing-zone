@@ -78,10 +78,11 @@ func TestWarnIfRootTokenPresent(t *testing.T) {
 	dir := chdirTempDir(t)
 	mustWrite(t, filepath.Join(dir, ".copier-answers.yml"), "instance_repo: acme/inst\n")
 
-	// Present in infra-<env> → the nag + the exact delete command.
-	withExecOutput(t, func(_ string, _ ...string) ([]byte, error) {
-		return []byte(`{"secrets":[{"name":"OPENBAO_ROOT_TOKEN"},{"name":"LINODE_API_TOKEN"}]}`), nil
-	})
+	// Present in infra-<env> → the nag + the exact delete command. The forge
+	// (now the chokepoint) reports the secret names via the Fake.
+	present := withFakeForge(t)
+	_ = present.SetSecret(bg(), "OPENBAO_ROOT_TOKEN", "x", scopeFor("infra-lab"))
+	_ = present.SetSecret(bg(), "LINODE_API_TOKEN", "x", scopeFor("infra-lab"))
 	out := captureStdout(t, func() { warnIfRootTokenPresent("lab") })
 	for _, want := range []string{
 		"OPENBAO_ROOT_TOKEN is still set in infra-lab",
@@ -93,9 +94,8 @@ func TestWarnIfRootTokenPresent(t *testing.T) {
 	}
 
 	// Absent → silent.
-	withExecOutput(t, func(string, ...string) ([]byte, error) {
-		return []byte(`{"secrets":[{"name":"LINODE_API_TOKEN"}]}`), nil
-	})
+	absent := withFakeForge(t)
+	_ = absent.SetSecret(bg(), "LINODE_API_TOKEN", "x", scopeFor("infra-lab"))
 	if out := captureStdout(t, func() { warnIfRootTokenPresent("lab") }); strings.Contains(out, "OPENBAO_ROOT_TOKEN") {
 		t.Errorf("absent root token must print nothing, got:\n%s", out)
 	}

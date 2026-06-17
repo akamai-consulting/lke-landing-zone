@@ -1,0 +1,79 @@
+# gitlab-ci/cluster-health.yml — GitLab analog of .github/workflows/llz-cluster-health.yml. Best-effort, not validated against live GitLab.
+# Scheduled/day-2 cluster-health check: opens this runner's egress IP in the
+# LKE-E control-plane ACL, runs `llz ci health` (report-only) and optionally
+# `llz ci assert-loki` (the E2E validation gate), then always revokes the ACL.
+#
+# Drivers (pipeline variables on a schedule/web run, the analog of the GH
+# workflow_call inputs):
+#   REGION             — deployment (primary | staging | …); also the infra-<region>
+#                        GitLab environment. Empty or "all" fans out over every
+#                        region from `llz env list --json`.
+#   FAIL_ON_UNHEALTHY  — "true" makes the job honor `llz ci health`'s exit code;
+#                        defaults to report-only (false), where the log is the deliverable.
+#   ASSERT_LOKI        — "true" also runs `llz ci assert-loki` (E2E validation gate).
+#   VERBOSE            — "1" to dump describe/logs even when nothing is failing.
+
+stages:
+  - health
+
+# ── Scheduled/day-2 cluster-health check ─────────────────────────────────────
+# Fan-out note: the github.com workflow is invoked once per region by its caller.
+# This job drives on a single $REGION pipeline variable; when $REGION is empty or
+# "all" it iterates the regions from `llz env list --json` in a shell loop in one
+# job. TRUE per-region PARALLEL fan-out on GitLab would require generating a
+# dynamic child pipeline (one trigger job per region) — a documented best-effort
+# limitation of this single-job include.
+cluster-health:
+  extends: .llz-base
+  stage: health
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  environment:
+    name: infra-$REGION
+  variables:
+    VERBOSE: ${VERBOSE:-0}
+    TF_IN_AUTOMATION: "true"
+  script:
+    - |
+      set -e
+      # Resolve the region set: a single $REGION, or every env when empty/"all".
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      rc=0
+      for region in $regions; do
+        echo "── cluster-health (${region}) ─────────────────────────────"
+        export REGION="$region"
+        # Open this runner's egress IP in the LKE-E control-plane ACL (the GitLab
+        # analog of the cluster-access composite: kubeconfig + ACL open).
+        llz ci runner-acl --mode open --region "$region"
+        # Report-only by default: capture health, honor exit code only when asked.
+        set +e
+        llz ci health | tee /tmp/health-${region}.txt
+        ec=${PIPESTATUS[0]}
+        set -e
+        echo "Exit (${region}): $ec"
+        if [ "${FAIL_ON_UNHEALTHY:-false}" = "true" ] && [ "$ec" -ne 0 ]; then
+          rc=$ec
+        fi
+        # E2E validation gate: assert Loki is bootstrapped and S3-backed.
+        if [ "${ASSERT_LOKI:-false}" = "true" ]; then
+          llz ci assert-loki
+        fi
+      done
+      exit "$rc"
+  after_script:
+    # Always revoke this runner's ACL entry for every region operated on, success
+    # or fail (analog of the `if: always()` lke-runner-acl revoke step).
+    - |
+      if [ -z "${REGION:-}" ] || [ "$REGION" = "all" ]; then
+        regions=$(llz env list --json | jq -r '.[].region')
+      else
+        regions="$REGION"
+      fi
+      for region in $regions; do
+        llz ci runner-acl --mode revoke --region "$region" || true
+      done

@@ -24,6 +24,11 @@ on:
         description: 'Deployment (matches an infra-<region> Environment in the caller repo)'
         required: true
         type: string
+      forge_flavor:
+        description: "Which forge hosts the caller instance: github | github-enterprise | gitlab. Gates the GHE CI workarounds (fix-workspace-perms before checkout on self-hosted runners). Mirrors forge.Flavor()."
+        required: false
+        type: string
+        default: github
       template-ref:
         description: 'LLZ template ref to source the fetch-kubeconfig action + scripts from. Pin to the same tag as this workflow''s @<ref>.'
         required: false
@@ -41,9 +46,6 @@ on:
       LINODE_API_TOKEN:
         description: 'Linode API token used to open/revoke this runner''s egress IP in the LKE-E control-plane ACL for the kubectl steps.'
         required: true
-      TEMPLATE_TOKEN:
-        description: 'Token with read access to the LLZ template repo. Only needed when the template is private and not the caller repo; defaults to the job GITHUB_TOKEN.'
-        required: false
 
 permissions:
   contents: read
@@ -55,7 +57,7 @@ defaults:
 jobs:
   seed-dns:
     name: Seed cert-manager DNS-01 token (${{ inputs.region }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LLZ_RUNNER || 'ubuntu-latest' }}
     container:
       image: ${{ vars.TF_IMAGE }}
       credentials:
@@ -71,6 +73,10 @@ jobs:
       REGION:              ${{ inputs.region }}
 
     steps:
+      - name: Fix workspace perms (GHE self-hosted runners)
+        if: inputs.forge_flavor == 'github-enterprise'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
       # Instance at the workspace root (fetch-kubeconfig's terraform-iac-bootstrap/
       # working-dir + the apl-values tree); template into _llz-template/.
       - name: Checkout the instance (TF roots + apl-values overlays)
@@ -79,8 +85,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # ── Pre-flight: both env secrets must be present ──────────────────────────
@@ -111,7 +118,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ inputs.region }}

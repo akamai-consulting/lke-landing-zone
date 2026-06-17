@@ -1,0 +1,71 @@
+# gitlab-ci/promote.yml — GitLab analog of the github.com code-promotion
+# pipeline. Best-effort, not validated against live GitLab.
+#
+# IMPORTANT — generation gap. On github.com the promote workflow
+# (instance-template/.github/workflows/promote.yml) is GENERATED per instance
+# from each deployment's `promotion_rank` by `llz env pipeline` (see
+# tools/cmd/llz/promote_gen.go): a static needs:-chain over the ranked
+# deployments, dev → staging → prod, each stage gated on the prior stage's green
+# convergence. The GitLab equivalent generator does NOT exist yet — teaching
+# `llz env pipeline` to emit a ranked GitLab stage chain is the tracked follow-up
+# that makes GitLab promotion first-class.
+#
+# Until then this file ships the reusable BUILDING BLOCK — a hidden
+# `.llz-promote-stage` job — plus a worked example. An instance hand-writes one
+# concrete stage per ranked deployment, in rank order, each `extends:
+# .llz-promote-stage` with its REGION, so promotion still walks the deployments
+# in order with GitLab's manual-gate + protected-environment approval between
+# stages (the analog of GitHub Environment protection). Keep the stage order in
+# lockstep with the `promotion_rank` values in cluster/<env>.tfvars.
+
+# One promotion in flight at a time; never cancel an in-progress rollout (the
+# analog of the github.com concurrency: { group: promote, cancel-in-progress: false }).
+.llz-promote-base:
+  extends: .llz-base
+  rules:
+    - if: $LLZ_JOB == "promote"
+      when: manual
+  resource_group: promote
+
+# Reusable promotion stage: apply the merged commit to one ranked deployment and
+# wait for it to converge, exactly as the core terraform apply path does. A
+# concrete instance stage sets REGION (and optional LLZ_MODULE, default all) and
+# binds its protected environment. The next stage's `needs:` on this one is the
+# on-green gate — it starts only once this deployment applied AND converged.
+.llz-promote-stage:
+  extends: .llz-promote-base
+  environment:
+    name: infra-$REGION
+  variables:
+    LLZ_MODULE: all
+  script:
+    - !reference [.llz-tf-init, script]
+    - llz ci runner-acl --mode open --region "$REGION"
+    - llz ci tf-plan --out plan.txt --title "Promote ${REGION}" --var-file "terraform-iac-bootstrap/${LLZ_MODULE}/${REGION}.tfvars"
+    - llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
+    - llz ci converge --region "$REGION"
+  after_script:
+    - llz ci runner-acl --mode revoke --region "$REGION" || true
+
+# ── Worked example (an instance generates/edits stages like these) ───────────
+# stages:
+#   - promote-dev
+#   - promote-staging
+#   - promote-prod
+#
+# promote-dev:
+#   extends: .llz-promote-stage
+#   stage: promote-dev
+#   variables: { REGION: dev }
+#
+# promote-staging:
+#   extends: .llz-promote-stage
+#   stage: promote-staging
+#   needs: [promote-dev]          # on-green gate: only after dev converged
+#   variables: { REGION: staging }
+#
+# promote-prod:
+#   extends: .llz-promote-stage
+#   stage: promote-prod
+#   needs: [promote-staging]
+#   variables: { REGION: prod }
