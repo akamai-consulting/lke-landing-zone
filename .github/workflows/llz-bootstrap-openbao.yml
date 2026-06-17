@@ -119,9 +119,6 @@ on:
         required: false
       LOKI_S3_SECRET_KEY:
         required: false
-      TEMPLATE_TOKEN:
-        description: 'Token with read access to the LLZ template repo. Only needed when the template is private and not the caller repo; defaults to the job GITHUB_TOKEN.'
-        required: false
 
 permissions:
   contents: read
@@ -230,8 +227,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # ── Pre-flight: required infra-<region> env secrets ────────────────────────
@@ -285,7 +283,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ env.REGION }}
@@ -989,8 +987,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
@@ -1001,7 +1000,7 @@ jobs:
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
 
@@ -1065,8 +1064,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the standby cluster's (self) kubeconfig and open this runner's
@@ -1077,7 +1077,7 @@ jobs:
           region:                ${{ inputs.region }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
 
@@ -1136,8 +1136,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
@@ -1148,7 +1149,7 @@ jobs:
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
 

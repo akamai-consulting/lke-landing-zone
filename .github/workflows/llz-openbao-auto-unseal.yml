@@ -53,9 +53,6 @@ on:
         required: true
       OPENBAO_UNSEAL_KEY_3:
         required: true
-      TEMPLATE_TOKEN:
-        description: 'Token with read access to the LLZ template repo. Only needed when the template is private and not the caller repo; defaults to the job GITHUB_TOKEN.'
-        required: false
 
 permissions:
   contents: read
@@ -120,8 +117,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's egress IP in the
@@ -137,7 +135,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ matrix.region }}

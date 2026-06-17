@@ -47,9 +47,6 @@ on:
       APL_VALUES_REPO_TOKEN:
         description: 'github.com fine-grained PAT (Contents: write) for apl-core otomi.git + the argocd repo Secrets. Checked for expiry by gh-pat-expiry-health.'
         required: false
-      TEMPLATE_TOKEN:
-        description: 'Token with read access to the LLZ template repo. Only needed when the template is private and not the caller repo; defaults to the job GITHUB_TOKEN.'
-        required: false
 
 permissions:
   contents: read
@@ -111,8 +108,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -126,7 +124,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ matrix.region }}
@@ -186,8 +184,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -201,7 +200,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ matrix.region }}
@@ -261,8 +260,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -276,7 +276,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ matrix.region }}
@@ -338,8 +338,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Audit Linode PAT expiry + OBJ key inventory
@@ -384,8 +385,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -400,7 +402,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ matrix.region }}
@@ -457,8 +459,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Native port of the former curl|grep header self-check — the
@@ -505,8 +508,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig and open this hosted-runner's dynamic egress IP in
@@ -520,7 +524,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ matrix.region }}
@@ -599,8 +603,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Audit the tools module
@@ -642,8 +647,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -657,7 +663,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          github-token:          ${{ github.token }}
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ matrix.region }}
@@ -712,7 +718,7 @@ jobs:
           # `llz drift` resolves the template head via `git ls-remote`, which
           # needs auth when the template repo is private; route github.com
           # fetches through the token.
-          GH_TOKEN: ${{ secrets.TEMPLATE_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config --global \
             url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
