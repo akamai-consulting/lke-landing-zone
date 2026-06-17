@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -222,13 +221,43 @@ func runCIWaitHarbor(harborURL string) int {
 // loop could.
 const harborWaitBudget = 600 * time.Second
 
-// harborRollout runs `kubectl -n harbor rollout status <ref> --timeout=2m`,
-// streaming output; returns the error (which fails the wait) on timeout. A
-// package var so tests can stub the rollout wait.
+// harborRollout polls `<ref>` to a Ready rollout using the kstatus readiness
+// primitive (health.ResourceStatus) instead of `kubectl rollout status`: it fetches
+// the object as JSON and lets kstatus decide Current/InProgress/Failed from the
+// controller's status, so the rollout verdict comes from the same library the
+// kubectl ecosystem uses rather than a separate shell-out. Returns nil once the
+// workload is Current, and an error on a Failed rollout or a 2-minute timeout
+// (matching the former `--timeout=2m`). A package var so tests can stub the wait.
 var harborRollout = func(ref string) error {
-	cmd := exec.Command("kubectl", "-n", "harbor", "rollout", "status", ref, "--timeout=2m")
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+	const (
+		rolloutTimeout = 2 * time.Minute
+		pollInterval   = 5 * time.Second
+	)
+	deadline := time.Now().Add(rolloutTimeout)
+	for {
+		raw, err := execOutput("kubectl", "-n", "harbor", "get", ref, "-o", "json")
+		if err == nil {
+			switch cat, label := health.ResourceStatus(raw); cat {
+			case health.CatOK:
+				fmt.Printf("OK: %s rolled out\n", label)
+				return nil
+			case health.CatFail:
+				fmt.Fprintf(os.Stderr, "::error::%s\n", label)
+				return fmt.Errorf("rollout failed: %s", label)
+			default:
+				fmt.Printf("  waiting: %s\n", label)
+			}
+		} else {
+			// get failed — object not created yet or a transient apiserver blip;
+			// keep polling against the deadline rather than failing immediately.
+			fmt.Printf("  waiting: harbor/%s not yet queryable\n", ref)
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(os.Stderr, "::error::timed out after %s waiting for %s to roll out\n", rolloutTimeout, ref)
+			return fmt.Errorf("timed out waiting for %s", ref)
+		}
+		time.Sleep(pollInterval)
+	}
 }
 
 // harborPingOK reports whether GET <url>/api/v2.0/ping returns 2xx (curl -ksSf:
