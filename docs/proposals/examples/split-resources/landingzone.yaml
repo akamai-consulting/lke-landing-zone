@@ -1,0 +1,25 @@
+# OPTION B — shared resource. One per repo: instance identity + OPTIONAL shared
+# defaults that every per-env ClusterDefinition inherits (and may override).
+# Pairs with clusters/<env>.yaml. See ../../landing-zone-spec-representation.md.
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata:
+  name: platform-support
+
+spec:
+  instance:
+    upstreamOrg: akamai-consulting
+    repo: my-org/platform-support
+    forge: github
+    templateVersion: v0.4.0
+
+  # Shared defaults inherited by every clusters/<env>.yaml. A per-env file
+  # overrides any field it sets; anything it omits falls back to here, and then
+  # to the built-in defaults. Keeps a fleet of similar envs DRY.
+  defaults:
+    cluster:
+      k8sVersion: v1.33.6+lke7
+      nodePool:     { type: g8-dedicated-8-4, count: 5 }
+      controlPlane: { highAvailability: true, auditLogsEnabled: true }
+    recipes:
+      harbor: { enabled: true }     # fleet-wide default; staging turns it off below

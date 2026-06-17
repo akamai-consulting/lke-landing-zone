@@ -1,0 +1,47 @@
+# OPTION A — single resource. One repo-root file holds the instance identity AND
+# every environment inline. See docs/proposals/landing-zone-spec-representation.md.
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata:
+  name: platform-support                  # instance name (repo short name)
+
+spec:
+  # ── Instance identity (one per repo; was .copier-answers.yml) ──────────────
+  instance:
+    upstreamOrg: akamai-consulting         # → copier upstream_org
+    repo: my-org/platform-support          # → instance_repo
+    forge: github                          # → forge_flavor (github | github-enterprise | gitlab)
+    templateVersion: v0.4.0                # → llz_version
+
+  # ── Every deployment inline, keyed by env name ─────────────────────────────
+  environments:
+
+    prod:
+      cluster:
+        clusterLabel: platform-prod
+        region: us-ord
+        k8sVersion: v1.33.6+lke7
+        tags: [platform, observability, prod]
+        nodePool:        { type: g8-dedicated-8-4, count: 5, autoscalerEnabled: false }
+        controlPlane:    { highAvailability: true, auditLogsEnabled: true }
+        apiServerAllowCIDRs: { ipv4: ["203.0.113.0/24"], ipv6: [] }
+        promotionRank: 3
+        bootstrap:
+          name: platform-prod
+          domainSuffix: prod.example.com
+          aplChartVersion: 5.0.0
+          aplValues: { repoURL: https://github.com/my-org/platform-support.git, revision: main }
+        objectStorage: { cluster: us-ord-7, keyRotationDays: 90 }
+      # recipes omitted → all default-enabled except dns
+
+    staging:
+      cluster:
+        clusterLabel: platform-staging
+        region: us-sea
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: g8-dedicated-8-4, count: 3 }
+        promotionRank: 2
+        bootstrap: { name: platform-staging }   # domainSuffix defaults to staging.internal
+        objectStorage: { cluster: us-sea-1 }
+      recipes:
+        harbor: { enabled: false }              # no registry in staging; the rest default on

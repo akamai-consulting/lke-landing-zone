@@ -1,0 +1,15 @@
+# OPTION B — a second environment, owned/reviewed independently of prod.
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata:
+  name: staging
+spec:
+  cluster:
+    clusterLabel: platform-staging
+    region: us-sea
+    nodePool: { type: g8-dedicated-8-4, count: 3 }   # override the shared default (count 5)
+    promotionRank: 2
+    bootstrap: { name: platform-staging }             # domainSuffix defaults to staging.internal
+    objectStorage: { cluster: us-sea-1 }
+  recipes:
+    harbor: { enabled: false }                        # override the shared default

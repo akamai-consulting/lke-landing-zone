@@ -1,0 +1,22 @@
+# OPTION B — one ClusterDefinition per environment. metadata.name == env name
+# (== TF workspace == apl-values/<env> dir == infra-<env>). Inherits shared
+# defaults from ../landingzone.yaml; sets only what is env-specific.
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata:
+  name: prod
+spec:
+  cluster:
+    clusterLabel: platform-prod
+    region: us-ord
+    tags: [platform, observability, prod]
+    apiServerAllowCIDRs: { ipv4: ["203.0.113.0/24"] }
+    promotionRank: 3
+    bootstrap:
+      name: platform-prod
+      domainSuffix: prod.example.com
+      aplChartVersion: 5.0.0
+    objectStorage: { cluster: us-ord-7, keyRotationDays: 90 }
+    # k8sVersion / nodePool / controlPlane inherited from LandingZone.defaults
+  recipes:
+    harbor: { enabled: true }
