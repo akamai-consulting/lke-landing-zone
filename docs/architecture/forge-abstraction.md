@@ -115,8 +115,8 @@ template and source composite actions from it. So GHE workarounds can't be
 selected purely at scaffold time — they're gated at run time by threading the
 flavor as a workflow input:
 
-1. **Every** thin caller forwards `forge_flavor: <@ forge_flavor @>` to its
-   reusable workflow — `terraform.yml`, `promote.yml` (whose every generated
+1. **Every** thin caller forwards its rendered `forge_flavor` answer (a `with:`
+   input) to its reusable workflow — `terraform.yml`, `promote.yml` (whose every generated
    stage forwards it, preserved by `tools/cmd/llz/promote_gen.go`), plus
    `bootstrap-dns`, `bootstrap-openbao`, `cluster-health`, `openbao-auto-unseal`,
    `scheduled-checks`, and `secret-rotation`.
