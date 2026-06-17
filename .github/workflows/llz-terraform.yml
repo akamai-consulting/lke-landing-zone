@@ -165,7 +165,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Terraform init — cluster
@@ -232,7 +232,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: tflint
@@ -267,7 +267,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Checkov
@@ -352,7 +352,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Catch account-quota exhaustion BEFORE the apply, not via a 30-minute
@@ -492,7 +492,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # ── Pre-flight: env secrets the cluster-bootstrap apply needs ──────────────
@@ -663,7 +663,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Pre-flight — resolve cloud-firewall token
@@ -870,7 +870,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # fetch-kubeconfig self-inits the cluster module's S3 backend and reads
@@ -1002,7 +1002,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1099,7 +1099,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1222,7 +1222,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1287,7 +1287,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1495,7 +1495,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Terraform init — openbao-config
@@ -1551,7 +1551,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1610,7 +1610,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1696,7 +1696,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Terraform init — object-storage
@@ -1798,7 +1798,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation
@@ -1856,7 +1856,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Validate destroy confirmation

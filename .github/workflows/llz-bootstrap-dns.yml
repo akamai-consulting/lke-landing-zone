@@ -87,7 +87,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # ── Pre-flight: both env secrets must be present ──────────────────────────

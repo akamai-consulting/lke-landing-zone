@@ -121,7 +121,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -201,7 +201,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -281,7 +281,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -363,7 +363,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Audit Linode PAT expiry + OBJ key inventory
@@ -414,7 +414,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
@@ -492,7 +492,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Native port of the former curl|grep header self-check — the
@@ -545,7 +545,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig and open this hosted-runner's dynamic egress IP in
@@ -644,7 +644,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       - name: Audit the tools module
@@ -692,7 +692,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the

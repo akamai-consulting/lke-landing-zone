@@ -130,7 +130,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the kubeconfig, open this hosted-runner's egress IP in the
