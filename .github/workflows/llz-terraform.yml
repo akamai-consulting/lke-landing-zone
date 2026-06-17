@@ -319,6 +319,14 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Verify promote.yml matches the promotion_rank ordering
         run: llz env pipeline --check
+      # LandingZone instances: verify the committed recipe kustomizations still
+      # match llz.yaml (the tfvars are transient, so only these are checked).
+      # No-op for instances that have not adopted the spec.
+      - name: Verify recipe kustomizations match llz.yaml
+        run: |
+          if [ -f llz.yaml ]; then
+            llz render --check
+          fi
 
   # ── Apply and destroy (manual dispatch — requires environment approval) ──────
   # Apply is handled by release.yml on every GitHub release (all regions).

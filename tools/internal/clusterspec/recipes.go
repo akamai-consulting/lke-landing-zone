@@ -20,9 +20,23 @@ type Recipe struct {
 	// ArgoApps are the entries this recipe adds to argocd/kustomization.yaml
 	// resources: (the wave-ordered component Applications + the AppProject).
 	ArgoApps []string
+	// Patches are the strategic-merge/target patches this recipe adds to the
+	// parent kustomization.yaml patches: list (e.g. the per-env REGION_SHORT
+	// override on the volume-labeler CronJob).
+	Patches []Patch
 	// DefaultDisabled recipes default to enabled:false (e.g. dns, which is
 	// applied separately by bootstrap-dns.yml and never lives in the synced tree).
 	DefaultDisabled bool
+}
+
+// Patch is one kustomize patch entry (path + target selector), mirroring the
+// `patches:` block in apl-values/example/manifest/kustomization.yaml.
+type Patch struct {
+	Path    string
+	Group   string
+	Version string
+	Kind    string
+	Name    string
 }
 
 // Recipes is the ordered registry. Order is the rendering order for the
@@ -75,6 +89,13 @@ var Recipes = []Recipe{
 	{
 		Name:              "volumeLabeler",
 		ManifestResources: []string{"linode-volume-labeler"},
+		Patches: []Patch{{
+			Path:    "linode-volume-labeler-region-patch.yaml",
+			Group:   "batch",
+			Version: "v1",
+			Kind:    "CronJob",
+			Name:    "linode-volume-labeler",
+		}},
 	},
 	{
 		Name: "observability",
@@ -115,4 +136,11 @@ func KnownRecipe(name string) bool {
 func LookupRecipe(name string) (Recipe, bool) {
 	r, ok := recipeByName[name]
 	return r, ok
+}
+
+// RecipeEnabled reports whether the named recipe is toggled on in the (defaulted)
+// recipe map.
+func RecipeEnabled(recipes map[string]RecipeToggle, name string) bool {
+	t, ok := recipes[name]
+	return ok && t.Enabled
 }

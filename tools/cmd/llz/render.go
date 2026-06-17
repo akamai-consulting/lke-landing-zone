@@ -63,10 +63,6 @@ func runRender(g globalOpts, env string, tfvarsOnly, check bool) error {
 		}
 		return fmt.Errorf("invalid LandingZone spec")
 	}
-	if check {
-		fmt.Printf("✓ %s valid (%d environment(s))\n", specPath, len(lz.Spec.Environments))
-		return nil
-	}
 
 	envs := lz.EnvNames()
 	if env != "" {
@@ -76,20 +72,98 @@ func runRender(g globalOpts, env string, tfvarsOnly, check bool) error {
 		envs = []string{env}
 	}
 
-	tfDir, _, relPrefix := instanceLayout()
+	tfDir, aplDir, relPrefix := instanceLayout()
+
+	if check {
+		// tfvars are transient (rendered at build time, never committed) so there
+		// is nothing to drift-check there; the recipe kustomizations ARE committed,
+		// so verify each matches what the spec would render.
+		var drift []string
+		for _, name := range envs {
+			e, _ := lz.Env(name)
+			drift = append(drift, checkEnvRecipes(name, e.Recipes, aplDir, relPrefix)...)
+		}
+		if len(drift) > 0 {
+			fmt.Fprintf(os.Stderr, "%s: %d committed file(s) drifted from the spec — run `llz render`:\n", specPath, len(drift))
+			for _, d := range drift {
+				fmt.Fprintf(os.Stderr, "  • %s\n", d)
+			}
+			return fmt.Errorf("recipe kustomizations out of sync with %s", specPath)
+		}
+		fmt.Printf("✓ %s valid and in sync (%d environment(s))\n", specPath, len(lz.Spec.Environments))
+		return nil
+	}
+
 	dryRun := g.dryRun
 	for _, name := range envs {
 		e, _ := lz.Env(name)
 		if err := renderEnvTfvars(name, e.Cluster, tfDir, relPrefix, dryRun); err != nil {
 			return fmt.Errorf("render %s: %w", name, err)
 		}
-	}
-	if !tfvarsOnly {
-		// Recipe/manifest rendering arrives in a later PR; the flag is accepted
-		// now so the CI step and operators can opt into tfvars-only explicitly.
-		fmt.Println("note: recipe/manifest rendering is not yet implemented; only tfvars were rendered")
+		if !tfvarsOnly {
+			if err := renderEnvRecipes(name, e.Recipes, aplDir, relPrefix, dryRun); err != nil {
+				return fmt.Errorf("render %s recipes: %w", name, err)
+			}
+		}
 	}
 	return nil
+}
+
+// recipeKustomizations returns the env's two committed-derived files (relative to
+// the manifest dir) paired with their rendered content for the given recipes.
+func recipeKustomizations(env string, recipes map[string]clusterspec.RecipeToggle, aplDir string) (manifestDir string, files map[string]string) {
+	manifestDir = filepath.Join(aplDir, env, "manifest")
+	return manifestDir, map[string]string{
+		"kustomization.yaml":        clusterspec.RenderManifestKustomization(recipes),
+		"argocd/kustomization.yaml": clusterspec.RenderArgoKustomization(recipes),
+	}
+}
+
+// renderEnvRecipes writes the env's manifest + argocd kustomizations from the
+// enabled recipes. The component files they reference are cloned from the example
+// overlay by `llz env add`; this only (re)writes the two resources-list files.
+func renderEnvRecipes(env string, recipes map[string]clusterspec.RecipeToggle, aplDir, relPrefix string, dryRun bool) error {
+	manifestDir, files := recipeKustomizations(env, recipes, aplDir)
+	if fi, err := os.Stat(manifestDir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("overlay %s not found — run `llz env add %s` first to clone the component tree", manifestDir, env)
+	}
+	for rel, content := range files {
+		dst := filepath.Join(manifestDir, rel)
+		if dryRun {
+			fmt.Printf("  would-render  %s%s\n", relPrefix, filepathRel(aplDir, dst))
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, []byte(content), 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("  rendered  %s%s\n", relPrefix, filepathRel(aplDir, dst))
+	}
+	return nil
+}
+
+// checkEnvRecipes returns a list of human-readable drift descriptions for the
+// env's committed kustomizations (missing or differing from the spec render).
+func checkEnvRecipes(env string, recipes map[string]clusterspec.RecipeToggle, aplDir, relPrefix string) []string {
+	manifestDir, files := recipeKustomizations(env, recipes, aplDir)
+	if fi, err := os.Stat(manifestDir); err != nil || !fi.IsDir() {
+		return []string{fmt.Sprintf("%s%s — overlay missing (run `llz env add %s`)", relPrefix, filepathRel(aplDir, manifestDir), env)}
+	}
+	var drift []string
+	for rel, want := range files {
+		dst := filepath.Join(manifestDir, rel)
+		got, err := os.ReadFile(dst)
+		if err != nil {
+			drift = append(drift, fmt.Sprintf("%s%s — missing", relPrefix, filepathRel(aplDir, dst)))
+			continue
+		}
+		if string(got) != want {
+			drift = append(drift, fmt.Sprintf("%s%s — differs", relPrefix, filepathRel(aplDir, dst)))
+		}
+	}
+	return drift
 }
 
 // renderEnvTfvars writes the three <env>.tfvars for one deployment from the

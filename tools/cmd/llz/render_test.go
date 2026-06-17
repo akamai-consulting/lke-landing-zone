@@ -103,6 +103,39 @@ func TestRenderEnvTfvars(t *testing.T) {
 	}
 }
 
+// TestRenderEnvRecipes_RoundTrip renders the recipe kustomizations, then asserts
+// checkEnvRecipes sees them in sync; flipping a toggle without re-rendering must
+// surface drift.
+func TestRenderEnvRecipes_RoundTrip(t *testing.T) {
+	aplDir := filepath.Join(t.TempDir(), "apl-values")
+	if err := os.MkdirAll(filepath.Join(aplDir, "prod", "manifest", "argocd"), 0o755); err != nil {
+		t.Fatalf("mkdir overlay: %v", err)
+	}
+	lz, err := clusterspec.Decode([]byte(renderSpec))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	recipes := lz.Spec.Environments["prod"].Recipes
+
+	if err := renderEnvRecipes("prod", recipes, aplDir, "", false); err != nil {
+		t.Fatalf("renderEnvRecipes: %v", err)
+	}
+	if drift := checkEnvRecipes("prod", recipes, aplDir, ""); len(drift) != 0 {
+		t.Fatalf("freshly rendered overlay should be in sync, got drift: %v", drift)
+	}
+
+	// Flip a recipe off without re-rendering → the committed file now differs.
+	recipes["harbor"] = clusterspec.RecipeToggle{Enabled: false}
+	if drift := checkEnvRecipes("prod", recipes, aplDir, ""); len(drift) == 0 {
+		t.Fatal("expected drift after toggling harbor without re-render")
+	}
+
+	// A missing overlay is reported as drift (not a panic).
+	if drift := checkEnvRecipes("absent", recipes, aplDir, ""); len(drift) == 0 {
+		t.Fatal("expected drift for an env with no overlay dir")
+	}
+}
+
 // listDeployments must union committed tfvars with spec.environments so an
 // instance can migrate env-by-env.
 func TestListDeployments_SpecUnion(t *testing.T) {
