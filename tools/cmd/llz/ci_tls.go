@@ -133,7 +133,7 @@ func runCIGenBootstrapTLS(prefix, caSubj, certSubj, dnsCSV, k8sSecret string, en
 		fmt.Printf("%s not found — generating self-signed bootstrap certificate.\n", secretName)
 	}
 
-	caKey, caDER, err := genCAFn(caName, 365)
+	caKey, caDER, err := genCA(caName, 365)
 	if err != nil {
 		return err
 	}
@@ -205,8 +205,7 @@ func runCIGenBootstrapTLS(prefix, caSubj, certSubj, dnsCSV, k8sSecret string, en
 }
 
 // genCA generates an RSA-4096 key + self-signed CA certificate valid for
-// days — used by gen-bootstrap-tls (365d throwaway CA). genCAFn is the test
-// seam (RSA-4096 keygen is slow).
+// days — used by gen-bootstrap-tls (365d throwaway CA).
 func genCA(subject pkix.Name, days int) (*rsa.PrivateKey, []byte, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 4096)
 	if err != nil {
@@ -228,8 +227,6 @@ func genCA(subject pkix.Name, days int) (*rsa.PrivateKey, []byte, error) {
 	}
 	return key, der, nil
 }
-
-var genCAFn = genCA
 
 // namespaceManifest renders a bare Namespace — the native form of
 // `kubectl create namespace … --dry-run=client -o yaml | kubectl apply -f -`.

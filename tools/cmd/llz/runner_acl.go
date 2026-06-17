@@ -61,9 +61,8 @@ type clusterRef struct {
 
 // Seams (overridden in tests).
 var (
-	newACLClient     = func(token string) aclClient { return linode.NewClient(token, 30*time.Second) }
-	detectEgressIPFn = detectEgressIP
-	aclRetryDelay    = 3 * time.Second
+	newACLClient  = func(token string) aclClient { return linode.NewClient(token, 30*time.Second) }
+	aclRetryDelay = 3 * time.Second
 )
 
 type runnerACLOpts struct {
@@ -150,7 +149,7 @@ func runnerACLOpen(ctx context.Context, client aclClient, o runnerACLOpts) error
 
 	ip := o.ip
 	if ip == "" {
-		if ip, err = detectEgressIPFn(); err != nil {
+		if ip, err = detectEgressIP(); err != nil {
 			return fmt.Errorf("could not detect runner egress IP: %w", err)
 		}
 	}
