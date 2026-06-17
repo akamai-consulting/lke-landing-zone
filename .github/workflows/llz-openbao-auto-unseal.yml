@@ -84,9 +84,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}

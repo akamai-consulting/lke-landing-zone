@@ -51,9 +51,6 @@ on:
 permissions:
   contents: read
 
-env:
-  GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=accept-new
-
 defaults:
   run:
     shell: bash
@@ -83,9 +80,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}
@@ -159,9 +153,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}
@@ -236,9 +227,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}
@@ -314,9 +302,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}
@@ -360,9 +345,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}
@@ -440,9 +422,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     timeout-minutes: 15
@@ -483,9 +462,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}
@@ -622,9 +598,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}
@@ -701,9 +674,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     timeout-minutes: 10

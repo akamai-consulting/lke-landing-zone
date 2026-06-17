@@ -59,9 +59,9 @@ also reports deployment + e2e readiness (see §4).
 
 ## 2. Install `llz`
 
-The template repo is **private** during beta, so the download must be
-authenticated — `gh` (already a prerequisite; see `llz doctor`) inherits your auth
-and works against a private repo or a GHE host. From a template or instance
+The template repo is **public**, so the download needs no auth. The install
+script uses `gh` (already a prerequisite; see `llz doctor`), which also works
+against a private fork or a GHE host. From a template or instance
 checkout, the install script picks your platform, resolves the latest full
 release, verifies the checksum, and installs to **`~/.local/bin`** — a per-user
 dir that needs no `sudo` and works on locked-down corporate machines that deny
@@ -85,8 +85,7 @@ llz version
 
 Download the asset for your platform with `gh` and put it on your `PATH`. The
 release tag is the bare `<VER>`; the snippet resolves the latest with
-`gh release list`. An anonymous `curl` against the release URL 404s on a private
-repo, so use `gh`:
+`gh release list`:
 
 ```bash
 # macOS arm64 shown; swap the suffix for your platform:
@@ -103,23 +102,15 @@ install -m 0755 "${ASSET}" "$BINDIR/llz" && rm -f "${ASSET}" SHA256SUMS
 llz version
 ```
 
-**Prefer `curl`?** You *can* — but the browser download URL
-(`github.com/<org>/lke-landing-zone/releases/download/<VER>/<asset>`) only works
-for **public** repos; against this private repo it 404s no matter what token you
-send. For a private repo you must hit the **API asset endpoint** with a token and
-`Accept: application/octet-stream` (the token authorizes you; the `Accept` header
-makes the API stream the binary instead of returning JSON):
+**Prefer `curl`?** The repo is public, so the browser download URL works
+anonymously — no token, no API asset endpoint:
 
 ```bash
 ORG=akamai-consulting; ASSET=llz-darwin-arm64
 VER=$(gh release list --repo "${ORG}/lke-landing-zone" --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')
 BINDIR="$HOME/.local/bin"; mkdir -p "$BINDIR"
-TOKEN=$(gh auth token)                       # or a PAT with `repo` scope
-ASSET_ID=$(gh api "repos/${ORG}/lke-landing-zone/releases/tags/${VER}" \
-  --jq ".assets[] | select(.name==\"${ASSET}\") | .id")
-curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
-  -H "Accept: application/octet-stream" \
-  "https://api.github.com/repos/${ORG}/lke-landing-zone/releases/assets/${ASSET_ID}" \
+curl -fsSL \
+  "https://github.com/${ORG}/lke-landing-zone/releases/download/${VER}/${ASSET}" \
   -o "$BINDIR/llz"
 chmod +x "$BINDIR/llz" && llz version
 ```

@@ -72,9 +72,6 @@ jobs:
     environment: infra-${{ inputs.region }}
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     timeout-minutes: 20
     env:
       REGION:               ${{ inputs.region }}
