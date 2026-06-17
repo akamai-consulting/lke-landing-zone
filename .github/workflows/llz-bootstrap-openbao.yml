@@ -229,7 +229,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # ── Pre-flight: required infra-<region> env secrets ────────────────────────
@@ -989,7 +989,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
@@ -1066,7 +1066,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the standby cluster's (self) kubeconfig and open this runner's
@@ -1138,7 +1138,7 @@ jobs:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
           ref: ${{ inputs.template-ref }}
-          token: ''
+          token: ${{ github.token }}
           path: _llz-template
 
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
