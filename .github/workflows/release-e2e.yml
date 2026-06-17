@@ -223,11 +223,15 @@ jobs:
           #    cross-repo `uses:` ref and as a git `?ref=`. (Rendering it here also
           #    matters because it embeds spaces, which the ref-rewrite in step 2 below
           #    can't span.)
-          grep -rlZ -e '<@ upstream_org @>' -e '<@ instance_repo @>' -e '<@ llz_version @>' . \
+          # forge_flavor renders to `github` — the e2e cluster is a github.com
+          # instance. (copier copy resolves it from the question default; this
+          # hand-render must list it explicitly or the token survives below.)
+          grep -rlZ -e '<@ upstream_org @>' -e '<@ instance_repo @>' -e '<@ llz_version @>' -e '<@ forge_flavor @>' . \
             | xargs -0 -r sed -i \
                 -e "s#<@ upstream_org @>#${OWNER}#g" \
                 -e "s#<@ instance_repo @>#${INSTANCE_REPO}#g" \
-                -e "s#<@ llz_version @>#${GITHUB_SHA}#g"
+                -e "s#<@ llz_version @>#${GITHUB_SHA}#g" \
+                -e "s#<@ forge_flavor @>#github#g"
           # 2. Backstop: repin any LLZ ref that is a literal tag (not the llz_version
           #    placeholder) to the SHA under test too, so e2e never exercises a past
           #    release. With the placeholder model above this is normally a no-op.
