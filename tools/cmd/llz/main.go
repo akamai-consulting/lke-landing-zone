@@ -64,7 +64,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(),
-		secretsCmd(), tokensCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
+		secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
 	)

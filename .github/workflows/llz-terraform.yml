@@ -168,6 +168,18 @@ jobs:
           token: ${{ github.token }}
           path: _llz-template
 
+      # LandingZone instances author one repo-root llz.yaml instead of committing
+      # the per-env tfvars; render the transient <env>.tfvars before any TF step
+      # reads them. No-op (the `test -f` gate) for instances that have not adopted
+      # the spec, so existing instances are unaffected.
+      - name: Render tfvars from llz.yaml (spec-driven instances)
+        env:
+          REGION: ${{ matrix.region }}
+        run: |
+          if [ -f llz.yaml ]; then
+            llz render "$REGION" --tfvars-only
+          fi
+
       - name: Terraform init — cluster
         uses: ./_llz-template/instance-template/.github/actions/terraform-init
         with:
@@ -354,6 +366,15 @@ jobs:
           ref: ${{ inputs.template-ref }}
           token: ${{ github.token }}
           path: _llz-template
+
+      # LandingZone instances author one repo-root llz.yaml instead of committing
+      # the per-env tfvars; render the transient <env>.tfvars before the apply
+      # reads them. No-op for instances that have not adopted the spec.
+      - name: Render tfvars from llz.yaml (spec-driven instances)
+        run: |
+          if [ -f llz.yaml ]; then
+            llz render "$REGION" --tfvars-only
+          fi
 
       # Catch account-quota exhaustion BEFORE the apply, not via a 30-minute
       # cluster-create hang / PVCs-Pending-on-[400] / provider-ReadResource

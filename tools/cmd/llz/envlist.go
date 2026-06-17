@@ -18,23 +18,27 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 )
 
-// listDeployments returns the sorted deployment names discovered under
-// <tfDir>/cluster/*.tfvars. The cluster root is the canonical one: every
-// deployment owns a Linode cluster, so its cluster tfvars is the authoritative
-// marker (the other roots can drift if a file is hand-removed). The template's
-// own terraform.tfvars[.example] and any non-conforming basename are skipped —
-// the latter with a stderr warning, so a stray file can never inject a poisoned
-// value into a CI matrix. Pure (takes tfDir) so it is unit-testable against a
-// temp dir.
+// listDeployments returns the sorted deployment names from BOTH sources: the
+// committed <tfDir>/cluster/*.tfvars (the legacy marker — every deployment owns a
+// Linode cluster) AND the spec.environments in a repo-root llz.yaml when present
+// (LandingZone instances). The union (dedup by name) is what lets an instance
+// migrate env-by-env: a spec-only deployment whose transient tfvars are rendered
+// at build time still shows up in the CI matrix. The template's own
+// terraform.tfvars[.example] and any non-conforming basename are skipped — the
+// latter with a stderr warning, so a stray file can never inject a poisoned value
+// into a CI matrix. Pure (takes tfDir; the spec is read from the sibling
+// instance root) so it is unit-testable against a temp dir.
 func listDeployments(tfDir string) ([]string, error) {
+	set := map[string]struct{}{}
+
 	matches, err := filepath.Glob(filepath.Join(tfDir, "cluster", "*.tfvars"))
 	if err != nil {
 		return nil, err
 	}
-	names := []string{}
 	for _, p := range matches {
 		name := strings.TrimSuffix(filepath.Base(p), ".tfvars")
 		// `terraform.tfvars` (a non-suffixed local override) and
@@ -46,7 +50,30 @@ func listDeployments(tfDir string) ([]string, error) {
 			fmt.Fprintf(os.Stderr, "warning: skipping %s — %v\n", p, err)
 			continue
 		}
-		names = append(names, name)
+		set[name] = struct{}{}
+	}
+
+	// Union the LandingZone spec's environments. The spec lives at the instance
+	// root (the parent of terraform-iac-bootstrap), so it is found in both the
+	// instance and template-checkout layouts.
+	specPath := filepath.Join(filepath.Dir(tfDir), clusterspec.DefaultFile)
+	if clusterspec.Exists(specPath) {
+		if lz, lerr := clusterspec.Load(specPath); lerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not read %s — %v\n", specPath, lerr)
+		} else {
+			for _, name := range lz.EnvNames() {
+				if err := validateEnvName(name); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: skipping spec env %q — %v\n", name, err)
+					continue
+				}
+				set[name] = struct{}{}
+			}
+		}
+	}
+
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
 	}
 	sort.Strings(names)
 	return names, nil
