@@ -41,9 +41,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
     timeout-minutes: 5

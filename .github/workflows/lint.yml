@@ -53,9 +53,6 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  # Accept new SSH host keys automatically (runner known_hosts may be cleared
-  # between jobs); reject any key that changes from a previously seen value.
-  GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=accept-new
   KIND_VERSION: v0.25.0
   HELM_VERSION: "3.17.3"
   KUBECTL_VERSION: "1.31.0"
@@ -106,9 +103,6 @@ jobs:
       # when KUBE_IMAGE isn't set, so CI works on a fresh fork with no repo
       # variables. (Owner must be lowercase for GHCR — true for org logins.)
       image: ${{ vars.KUBE_IMAGE || format('ghcr.io/{0}/ci-kubernetes:1.31.0', github.repository_owner) }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -314,9 +308,6 @@ jobs:
       # when TF_IMAGE isn't set, so CI works on a fresh fork with no repo
       # variables. (Owner must be lowercase for GHCR — true for org logins.)
       image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-terraform:1.9.8', github.repository_owner) }}
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
