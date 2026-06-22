@@ -88,9 +88,9 @@ jobs:
       # is checked out into _llz-template/. The instance repo no longer carries
       # copies of either.
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Checkout LLZ template (actions + llz)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
