@@ -160,7 +160,7 @@ jobs:
       peer: ${{ steps.r.outputs.peer }}
     steps:
       - name: Checkout the instance (tfvars)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Resolve role + peer
         id: r
         env:
@@ -215,9 +215,9 @@ jobs:
 
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
@@ -972,9 +972,9 @@ jobs:
 
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
@@ -1046,9 +1046,9 @@ jobs:
 
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
@@ -1115,9 +1115,9 @@ jobs:
 
     steps:
       - name: Checkout the instance (TF roots)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: akamai-consulting/lke-landing-zone
           github-server-url: https://github.com
