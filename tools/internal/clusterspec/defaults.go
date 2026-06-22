@@ -12,15 +12,15 @@ func (lz *LandingZone) Defaults() {
 		if env.Cluster.Bootstrap.DomainSuffix == "" {
 			env.Cluster.Bootstrap.DomainSuffix = name + ".internal"
 		}
-		// Recipes default to all-enabled, except the DefaultDisabled ones (dns).
+		// Components default to all-enabled, except the DefaultDisabled ones (dns).
 		// A nil/empty map gets the full default set; a partial map only fills in
-		// recipes the author didn't mention (so an explicit enabled:false sticks).
-		if env.Recipes == nil {
-			env.Recipes = map[string]RecipeToggle{}
+		// components the author didn't mention (so an explicit enabled:false sticks).
+		if env.Components == nil {
+			env.Components = map[string]ComponentToggle{}
 		}
-		for _, r := range Recipes {
-			if _, set := env.Recipes[r.Name]; !set {
-				env.Recipes[r.Name] = RecipeToggle{Enabled: !r.DefaultDisabled}
+		for _, r := range Components {
+			if _, set := env.Components[r.Name]; !set {
+				env.Components[r.Name] = ComponentToggle{Enabled: !r.DefaultDisabled}
 			}
 		}
 		lz.Spec.Environments[name] = env

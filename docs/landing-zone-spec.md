@@ -7,7 +7,7 @@ instance. It is authored as a **split layout**:
   repo, forge, pinned template version — previously `.copier-answers.yml`) plus
   optional **shared `spec.defaults`** inherited by every deployment.
 - **`environments/<env>.yaml`** (`kind: ClusterDefinition`, `metadata.name == env`) —
-  one per deployment, holding that cluster's definition + enabled "recipes"
+  one per deployment, holding that cluster's definition + enabled "components"
   (previously the three per-env tfvars and the `apl-values/<env>` manifest
   selection).
 
@@ -17,7 +17,7 @@ the files the rest of the toolchain already consumes:
 | Source of truth | Renders to | When |
 |---|---|---|
 | `environments/<env>.yaml` → `spec.cluster` | the three `<env>.tfvars` (transient, working-tree) | build/CI, before `terraform` |
-| `environments/<env>.yaml` → `spec.recipes` | `manifest/kustomization.yaml` + `argocd/kustomization.yaml` (committed, CI-verified) | `llz render` |
+| `environments/<env>.yaml` → `spec.components` | `manifest/kustomization.yaml` + `argocd/kustomization.yaml` (committed, CI-verified) | `llz render` |
 | `landingzone.yaml` → `spec.instance` | `.copier-answers.yml` + copier `-d` data | `llz new` / `llz upgrade` |
 
 This is the **CRD-faithful** shape — one `LandingZone` object plus one
@@ -42,7 +42,7 @@ environments/
 
 Deployments live **only** in `environments/<env>.yaml` — authoring `spec.environments`
 inline in `landingzone.yaml` is rejected, so there is exactly one place an env is
-defined. A `ClusterDefinition`'s `spec` is a cluster definition + its recipe
+defined. A `ClusterDefinition`'s `spec` is a cluster definition + its component
 toggles; each inherits `landingzone.yaml`'s `spec.defaults`.
 
 **Inheritance precedence:** a per-env value **>** `spec.defaults` **>** the built-in
@@ -102,7 +102,7 @@ spec:
     objectStorage:                                # → object-storage/<env>.tfvars
       cluster: us-ord-7                           # → obj_cluster
       keyRotationDays: 90                         # → obj_key_rotation_days (≤120)
-  # recipes omitted → all default-enabled except dns (see "Recipe defaults")
+  # components omitted → all default-enabled except dns (see "Component defaults")
 ```
 
 ```yaml
@@ -121,7 +121,7 @@ spec:
       name: platform-staging
       # domainSuffix omitted → defaults to "staging.internal"
     objectStorage: { cluster: us-sea-1 }
-  recipes:                                        # partial block: only these change
+  components:                                        # partial block: only these change
     harbor: { enabled: false }                    # ← no registry in staging
     dns:    { enabled: false }                    # applied separately by bootstrap-dns.yml
 ```
@@ -152,7 +152,7 @@ spec:
 
 ## Minimal example
 
-The smallest valid spec — recipes default to all-on except `dns`, and
+The smallest valid spec — components default to all-on except `dns`, and
 `domainSuffix` defaults to `<env>.internal`:
 
 ```yaml
@@ -190,14 +190,25 @@ and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 `cluster.{clusterLabel,region,k8sVersion}`, `cluster.nodePool.{type,count}`,
 `cluster.bootstrap.name`.
 
-**Recipe defaults.** Omit the `recipes:` block entirely and every recipe is
-enabled except `dns`. Provide a partial block and only the recipes you name are
-changed — an explicit `enabled: false` sticks, and unmentioned recipes still
-default on. The recipe set: `clusterFoundation` (mandatory), `argocd`
-(mandatory), `externalSecrets`, `certManager`, `openbao` (requires
-`externalSecrets` + `certManager`), `argoWorkflows`, `argoEvents`,
-`volumeLabeler`, `observability`, `harbor`, `dns` (default off — applied
-separately by `bootstrap-dns.yml`).
+**Components — one toggle, two backends.** `spec.components.<name>` is the single
+"what's deployed" switch. Each component routes to whichever backend(s) deliver it:
+the **llz Argo backend** (it contributes resources/Applications to the committed
+`apl-values/<env>/manifest/kustomization.yaml` + `argocd/kustomization.yaml`, which
+`llz render` generates and `llz render --check` drift-guards) and/or the **apl-core
+backend** (it flips `apps.<key>.enabled` in the committed `values.yaml`, which
+`llz render` patches with yaml.v3 — comments and the `${…}` Terraform placeholders
+are preserved — and `--check` drift-guards). Some span both — e.g. `harbor`
+enables apl-core's Harbor app *and* adds the llz registry-S3 ExternalSecret;
+`observability` enables apl-core's prometheus/loki/grafana/alertmanager/otel *and*
+adds the loki ExternalSecret + alert rules.
+
+Omit the `components:` block and every component is enabled except `dns`. A partial
+block changes only the components you name — an explicit `enabled: false` sticks;
+unmentioned components default on. The set: `argocd` (mandatory), `clusterFoundation`
+(mandatory), `externalSecrets`, `certManager`, `openbao` (requires `externalSecrets`
++ `certManager`), `argoWorkflows`, `argoEvents`, `volumeLabeler`, `observability`,
+`harbor`, `policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy),
+`gitea`, `dns` (default off — applied separately by `bootstrap-dns.yml`).
 
 **Optional fields are only written when set.** The optional bools
 (`nodePool.autoscalerEnabled`, `controlPlane.highAvailability`,
@@ -205,7 +216,7 @@ separately by `bootstrap-dns.yml`).
 to the tfvars only when you specify them (on the env or in `spec.defaults`); omit
 them and the `terraform.tfvars.example` default is left untouched.
 
-**Shared defaults.** `spec.defaults.cluster` / `spec.defaults.recipes` in
+**Shared defaults.** `spec.defaults.cluster` / `spec.defaults.components` in
 `landingzone.yaml` set a baseline inherited by every environment; a per-env value
 overrides it field-by-field (see [Layout](#layout)).
 
@@ -266,7 +277,7 @@ llz render --check       # validate the spec; write nothing (used as a CI guard)
 llz env list             # deployments from the spec ∪ committed cluster/*.tfvars
 ```
 
-`llz render --check` reports every problem at once — unknown recipe names, a
-disabled mandatory recipe, `openbao` missing its dependencies, an HA group that
+`llz render --check` reports every problem at once — unknown component names, a
+disabled mandatory component, `openbao` missing its dependencies, an HA group that
 is not a clean active/standby pair, an invalid `forge`, `spec.environments`
 authored inline in `landingzone.yaml`, and so on.

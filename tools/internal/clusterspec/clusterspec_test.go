@@ -51,9 +51,9 @@ func TestDecodeAndValidate_OK(t *testing.T) {
 	}
 }
 
-func TestDefaults_RecipesAndDomain(t *testing.T) {
-	// A spec env with no recipes and no domainSuffix should get the full
-	// default recipe set (dns disabled) and the <env>.internal domain.
+func TestDefaults_ComponentsAndDomain(t *testing.T) {
+	// A spec env with no components and no domainSuffix should get the full
+	// default component set (dns disabled) and the <env>.internal domain.
 	const y = `
 apiVersion: llz.akamai-consulting.io/v1alpha1
 kind: LandingZone
@@ -75,40 +75,40 @@ spec:
 	if got := env.Cluster.Bootstrap.DomainSuffix; got != "lab.internal" {
 		t.Errorf("domainSuffix default = %q, want lab.internal", got)
 	}
-	if !env.Recipes["openbao"].Enabled {
-		t.Error("openbao recipe should default enabled")
+	if !env.Components["openbao"].Enabled {
+		t.Error("openbao component should default enabled")
 	}
-	if env.Recipes["dns"].Enabled {
-		t.Error("dns recipe should default disabled")
+	if env.Components["dns"].Enabled {
+		t.Error("dns component should default disabled")
 	}
 	if errs := lz.Validate(); len(errs) != 0 {
 		t.Fatalf("defaulted spec should validate, got: %v", errs)
 	}
 }
 
-func TestDefaults_PartialRecipesPreserveExplicitFalse(t *testing.T) {
+func TestDefaults_PartialComponentsPreserveExplicitFalse(t *testing.T) {
 	const y = validSpec
-	lz := mustDecode(t, y+`      recipes:
+	lz := mustDecode(t, y+`      components:
         harbor: { enabled: false }
 `)
 	env := lz.Spec.Environments["primary"]
-	if env.Recipes["harbor"].Enabled {
+	if env.Components["harbor"].Enabled {
 		t.Error("explicit harbor:false must be preserved by Defaults")
 	}
-	if !env.Recipes["observability"].Enabled {
-		t.Error("unmentioned recipe should default enabled")
+	if !env.Components["observability"].Enabled {
+		t.Error("unmentioned component should default enabled")
 	}
 }
 
 func TestValidate_Errors(t *testing.T) {
 	tests := []struct {
 		name    string
-		mutate  string // appended under the primary cluster/recipes
+		mutate  string // appended under the primary cluster/components
 		wantSub string
 	}{
-		{"unknown recipe", "      recipes:\n        bogus: { enabled: true }\n", "unknown recipe"},
-		{"mandatory disabled", "      recipes:\n        argocd: { enabled: false }\n", "mandatory"},
-		{"openbao missing dep", "      recipes:\n        externalSecrets: { enabled: false }\n", "requires recipe \"externalSecrets\""},
+		{"unknown component", "      components:\n        bogus: { enabled: true }\n", "unknown component"},
+		{"mandatory disabled", "      components:\n        argocd: { enabled: false }\n", "mandatory"},
+		{"openbao missing dep", "      components:\n        externalSecrets: { enabled: false }\n", "requires component \"externalSecrets\""},
 		{"vpc cidr bad prefix", "        network: { subnetCIDR: 10.0.0.0/24 }\n", "/13 or /14"},
 		{"vpc cidr not a cidr", "        network: { subnetCIDR: nope }\n", "not a valid CIDR"},
 	}

@@ -63,7 +63,7 @@ spec:
     nodePool: { count: 3 }
     bootstrap: { name: platform-staging }
     objectStorage: { cluster: us-sea-1 }
-  recipes:
+  components:
     harbor: { enabled: false }
 `
 
@@ -110,8 +110,8 @@ func TestLoadSplit_InheritanceAndValidate(t *testing.T) {
 	if st.NodePool.Type != "g8-dedicated-8-4" {
 		t.Errorf("staging type = %q, want inherited g8-dedicated-8-4", st.NodePool.Type)
 	}
-	if lz.Spec.Environments["staging"].Recipes["harbor"].Enabled {
-		t.Error("staging harbor recipe should be disabled by override")
+	if lz.Spec.Environments["staging"].Components["harbor"].Enabled {
+		t.Error("staging harbor component should be disabled by override")
 	}
 }
 
@@ -202,7 +202,7 @@ spec:
         nodePool: { count: 3 }
         bootstrap: { name: platform-staging }
         objectStorage: { cluster: us-sea-1 }
-      recipes:
+      components:
         harbor: { enabled: false }
 `
 	want := mustDecode(t, reference)
