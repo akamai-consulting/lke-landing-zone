@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,24 @@ func TestCopierCopyArgv(t *testing.T) {
 		"gh:akamai-consulting/lke-landing-zone", "my-instance"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("copierCopyArgv\n got: %v\nwant: %v", got, want)
+	}
+}
+
+func TestRunNewMissingTemplateSource(t *testing.T) {
+	// A typo'd / un-forked --org must fail fast with the actionable error instead
+	// of letting copier drop into an interactive git username prompt.
+	orig := templateSourceExistsFn
+	t.Cleanup(func() { templateSourceExistsFn = orig })
+	templateSourceExistsFn = func(string) bool { return false }
+
+	err := runNew(globalOpts{}, "nonexistent-org", "v0.1.0", "my-instance", false)
+	if err == nil {
+		t.Fatal("expected an error when the template source is missing")
+	}
+	for _, want := range []string{"nonexistent-org/" + templateName, "--org " + defaultTemplateOrg, "gh repo fork"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
 	}
 }
 

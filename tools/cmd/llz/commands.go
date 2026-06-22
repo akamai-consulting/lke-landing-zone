@@ -165,8 +165,29 @@ func shellQuote(argv []string) string {
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
+// templateSourceExistsFn reports whether the --org template source is reachable
+// on GitHub; seamed for tests. runNew preflights it because copier clones
+// gh:<org>/<template> over HTTPS, and a 404 there (typo'd/un-forked --org)
+// surfaces as an interactive `Username for 'https://github.com':` prompt rather
+// than a clear error — the failure mode adopters actually hit.
+var templateSourceExistsFn = repoExists
+
+// missingTemplateSourceErr explains an absent --org template source: --org names
+// the template to scaffold FROM (default: the public upstream), not where the
+// instance lands, so the fix is to use the upstream or fork the template first.
+func missingTemplateSourceErr(org string) error {
+	return fmt.Errorf("template source %s/%s not found on GitHub (or not visible to your `gh` login).\n"+
+		"  --org names the template to scaffold FROM, not where your instance lands.\n"+
+		"  • scaffold from the public upstream:  llz new <dir> --org %s --push --yes\n"+
+		"  • or fork the template there first:   gh repo fork %s/%s --org %s",
+		org, templateName, defaultTemplateOrg, defaultTemplateOrg, templateName, org)
+}
+
 func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	ref = resolveScaffoldRef(ref)
+	if !templateSourceExistsFn(org + "/" + templateName) {
+		return missingTemplateSourceErr(org)
+	}
 	fmt.Printf("Scaffolding a new LKE landing-zone instance into %q from %s/%s@%s\n\n",
 		dir, org, templateName, ref)
 
