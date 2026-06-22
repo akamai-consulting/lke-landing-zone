@@ -7,9 +7,6 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// DefaultFile is the repo-root path of the LandingZone resource.
-const DefaultFile = "llz.yaml"
-
 // Load reads, decodes, defaults, and returns the LandingZone at path. It does
 // NOT validate (call Validate separately) so callers can inspect a structurally
 // loadable-but-invalid spec. sigs.k8s.io/yaml decodes via the json tags, matching

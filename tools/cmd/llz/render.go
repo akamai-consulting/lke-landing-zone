@@ -1,12 +1,12 @@
 package main
 
-// render.go reconciles the declarative LandingZone spec (llz.yaml, see
-// internal/clusterspec) into the files the rest of the toolchain already
-// consumes. PR1 covers the tfvars half: for each deployment it writes the three
-// <env>.tfvars in the working tree from spec.environments.<env>.cluster, which
-// `terraform -var-file=<env>.tfvars` then picks up (the CI step runs this before
-// plan/apply; the file is transient and not committed). Recipe/manifest rendering
-// and copier-answers sync land in later PRs.
+// render.go reconciles the declarative LandingZone spec (landingzone.yaml +
+// clusters/<env>.yaml, see internal/clusterspec) into the files the rest of the
+// toolchain already consumes. PR1 covers the tfvars half: for each deployment it
+// writes the three <env>.tfvars in the working tree from the env's cluster
+// definition, which `terraform -var-file=<env>.tfvars` then picks up (the CI step
+// runs this before plan/apply; the file is transient and not committed).
+// Recipe/manifest rendering and copier-answers sync land in later PRs.
 //
 // The pure spec→tfvars mapping lives in clusterspec (tfvars_map.go); this file is
 // the thin apply loop — it reads each root's terraform.tfvars.example and sets
@@ -26,14 +26,13 @@ func renderCmd() *cobra.Command {
 	var tfvarsOnly, check bool
 	c := &cobra.Command{
 		Use:   "render [env]",
-		Short: "reconcile llz.yaml into <env>.tfvars (spec-driven instances)",
-		Long: "Reads the LandingZone spec — either a single llz.yaml or the split\n" +
-			"landingzone.yaml + clusters/<env>.yaml layout — and renders each deployment's\n" +
-			"cluster definition into the three terraform-iac-bootstrap/*/<env>.tfvars files\n" +
-			"the terraform plan/apply consume. With no [env], renders every environment in\n" +
-			"the spec. --check validates the spec without writing. A no-op contract: callers\n" +
-			"gate on the presence of a spec (CI does), so instances that have not adopted it\n" +
-			"are unaffected.",
+		Short: "reconcile the LandingZone spec into <env>.tfvars (spec-driven instances)",
+		Long: "Reads the LandingZone spec (landingzone.yaml + clusters/<env>.yaml) and\n" +
+			"renders each deployment's cluster definition into the three\n" +
+			"terraform-iac-bootstrap/*/<env>.tfvars files the terraform plan/apply consume.\n" +
+			"With no [env], renders every environment in the spec. --check validates the\n" +
+			"spec without writing. A no-op contract: callers gate on the presence of a spec\n" +
+			"(CI does), so instances that have not adopted it are unaffected.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			env := ""
@@ -52,7 +51,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check bool) error {
 	tfDir, _, relPrefix := instanceLayout()
 	specRoot := filepath.Dir(tfDir)
 	if !clusterspec.InstancePresent(specRoot) {
-		return fmt.Errorf("no LandingZone spec (%s or %s) found — `llz render` needs a spec", clusterspec.DefaultFile, clusterspec.LandingZoneFile)
+		return fmt.Errorf("no LandingZone spec (%s) found — `llz render` needs a spec", clusterspec.LandingZoneFile)
 	}
 	lz, err := clusterspec.LoadInstance(specRoot)
 	if err != nil {

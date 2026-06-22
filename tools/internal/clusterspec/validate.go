@@ -8,7 +8,7 @@ import (
 )
 
 // Validate returns every problem with the spec (not just the first), so an
-// operator fixing llz.yaml sees the whole list. It reuses the same pure
+// operator fixing the spec sees the whole list. It reuses the same pure
 // validators the CLI enforces (internal/validate) so the spec and `llz env add`
 // share one contract. Call Defaults first (Load/Decode do).
 func (lz *LandingZone) Validate() []error {

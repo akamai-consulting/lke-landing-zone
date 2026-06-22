@@ -1,9 +1,11 @@
 // Package clusterspec is the declarative front-end for an LKE landing-zone
-// instance: one repo-root file (llz.yaml, kind: LandingZone) that holds the
-// instance identity (was .copier-answers.yml) AND every deployment's cluster
-// definition + enabled "recipes" (was the per-env tfvars + the apl-values/<env>
-// manifest kustomization). The `llz` CLI reconciles it into the existing
-// Terraform / Argo / copier config (see tools/cmd/llz/render.go).
+// instance: a landingzone.yaml (kind: LandingZone) holding the instance identity
+// (was .copier-answers.yml) + shared spec.defaults, plus one clusters/<env>.yaml
+// (kind: ClusterDefinition) per deployment carrying its cluster definition +
+// enabled "recipes" (was the per-env tfvars + the apl-values/<env> manifest
+// kustomization). The loader (instance.go) assembles them into one *LandingZone
+// the `llz` CLI reconciles into the existing Terraform / Argo / copier config
+// (see tools/cmd/llz/render.go).
 //
 // The types carry json tags and use the apiVersion/kind/metadata/spec shape so
 // the same struct tree can graduate to a controller-gen CRD later without a
@@ -21,7 +23,8 @@ const (
 	Kind       = "LandingZone"
 )
 
-// LandingZone is the root resource authored in llz.yaml.
+// LandingZone is the assembled root resource: landingzone.yaml's identity +
+// defaults, with spec.environments populated from the clusters/*.yaml files.
 type LandingZone struct {
 	APIVersion string   `json:"apiVersion"`
 	Kind       string   `json:"kind"`
@@ -38,15 +41,15 @@ type Spec struct {
 	// Instance is the one-per-repo identity that copier renders into committed
 	// files (was .copier-answers.yml).
 	Instance Instance `json:"instance"`
-	// Defaults are shared cluster/recipe settings inherited by every environment
-	// (the split layout's `spec.defaults`). A per-env value overrides the matching
-	// default; an unset env field falls back to the default, then to the built-in
-	// default. Empty when every env is fully specified (the single-file simple mode).
+	// Defaults are shared cluster/recipe settings (landingzone.yaml's
+	// `spec.defaults`) inherited by every environment. A per-env value overrides
+	// the matching default; an unset env field falls back to the default, then to
+	// the built-in default. Empty when every env is fully specified.
 	Defaults Defaults `json:"defaults,omitempty"`
 	// Environments is keyed by deployment name (== TF workspace key ==
-	// apl-values/<env> dir == infra-<env> GitHub Environment). In the single-file
-	// layout they are authored inline; in the split layout the loader assembles
-	// them from clusters/<env>.yaml (one ClusterDefinition each).
+	// apl-values/<env> dir == infra-<env> GitHub Environment). It is the ASSEMBLED
+	// model: the loader populates it from the clusters/<env>.yaml files (one
+	// ClusterDefinition each). Authoring it inline in landingzone.yaml is rejected.
 	Environments map[string]Environment `json:"environments,omitempty"`
 }
 

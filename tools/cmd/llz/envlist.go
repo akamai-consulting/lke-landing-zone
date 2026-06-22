@@ -23,11 +23,11 @@ import (
 )
 
 // listDeployments returns the sorted deployment names from BOTH sources: the
-// committed <tfDir>/cluster/*.tfvars (the legacy marker — every deployment owns a
-// Linode cluster) AND the spec.environments in a repo-root llz.yaml when present
-// (LandingZone instances). The union (dedup by name) is what lets an instance
-// migrate env-by-env: a spec-only deployment whose transient tfvars are rendered
-// at build time still shows up in the CI matrix. The template's own
+// committed <tfDir>/cluster/*.tfvars (one per deployment that owns a Linode
+// cluster) AND the LandingZone spec's environments (the clusters/<env>.yaml set)
+// when a landingzone.yaml is present. The union (dedup by name) means a
+// spec-driven deployment whose transient tfvars are rendered at build time still
+// shows up in the CI matrix. The template's own
 // terraform.tfvars[.example] and any non-conforming basename are skipped — the
 // latter with a stderr warning, so a stray file can never inject a poisoned value
 // into a CI matrix. Pure (takes tfDir; the spec is read from the sibling
@@ -55,8 +55,7 @@ func listDeployments(tfDir string) ([]string, error) {
 
 	// Union the LandingZone spec's environments. The spec lives at the instance
 	// root (the parent of terraform-iac-bootstrap), so it is found in both the
-	// instance and template-checkout layouts, and in either spec shape (a single
-	// llz.yaml or the split landingzone.yaml + clusters/*.yaml).
+	// instance and template-checkout layouts.
 	specRoot := filepath.Dir(tfDir)
 	if clusterspec.InstancePresent(specRoot) {
 		if lz, lerr := clusterspec.LoadInstance(specRoot); lerr != nil {

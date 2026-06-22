@@ -10,7 +10,7 @@ package clusterspec
 // override values are already populated and continue to win.
 
 // applyInheritance folds spec.defaults into every environment in place. Called
-// after assembly (single-file inline envs or split clusters/*.yaml) and before
+// after the clusters/*.yaml files are assembled into spec.environments and before
 // the built-in Defaults(), so the precedence is env > defaults > built-in.
 func (lz *LandingZone) applyInheritance() {
 	d := lz.Spec.Defaults

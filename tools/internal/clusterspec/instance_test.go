@@ -115,24 +115,34 @@ func TestLoadSplit_InheritanceAndValidate(t *testing.T) {
 	}
 }
 
-func TestLoadInstance_LayoutDetection(t *testing.T) {
-	// split only
+func TestLoadInstance_Presence(t *testing.T) {
+	// landingzone.yaml present → loads.
 	if _, err := LoadInstance(writeInstance(t, splitFiles())); err != nil {
 		t.Errorf("split layout: %v", err)
 	}
-	// single only
-	single := writeInstance(t, map[string]string{"llz.yaml": validSpec})
-	if _, err := LoadInstance(single); err != nil {
-		t.Errorf("single layout: %v", err)
-	}
-	// neither → ErrNoSpec
+	// absent → ErrNoSpec (the no-op contract for un-adopted instances).
 	if _, err := LoadInstance(t.TempDir()); !errors.Is(err, ErrNoSpec) {
 		t.Errorf("empty dir err = %v, want ErrNoSpec", err)
 	}
-	// both → ambiguity error (not ErrNoSpec)
-	both := writeInstance(t, map[string]string{"llz.yaml": validSpec, "landingzone.yaml": splitLandingZone})
-	if _, err := LoadInstance(both); err == nil || errors.Is(err, ErrNoSpec) {
-		t.Errorf("both layouts err = %v, want an ambiguity error", err)
+}
+
+func TestLoadSplit_RejectsInlineEnvironments(t *testing.T) {
+	// Deployments belong in clusters/<env>.yaml — authoring them inline in
+	// landingzone.yaml is rejected so there is one place an env is defined.
+	inlineEnvs := splitLandingZone + `  environments:
+    sneaky:
+      cluster:
+        clusterLabel: x
+        region: us-ord
+        bootstrap: { name: n }
+        objectStorage: { cluster: us-ord-1 }
+`
+	root := writeInstance(t, map[string]string{
+		"landingzone.yaml":   inlineEnvs,
+		"clusters/prod.yaml": splitProd,
+	})
+	if _, err := LoadInstance(root); err == nil {
+		t.Fatal("expected an error: environments authored inline in landingzone.yaml")
 	}
 }
 
@@ -158,15 +168,16 @@ func TestLoadClusterDefinition_Structural(t *testing.T) {
 	}
 }
 
-// TestSplitEqualsSingle proves the two layouts are schema-compatible: a split
-// instance assembles to the same environments as an equivalent single-file one.
-func TestSplitEqualsSingle(t *testing.T) {
+// TestSplitAssembly_FullyInherited pins the assembled model: the split files plus
+// defaults inheritance produce exactly the fully-specified environments in the
+// reference below (built directly from YAML via Decode, not from a layout).
+func TestSplitAssembly_FullyInherited(t *testing.T) {
 	split, err := LoadInstance(writeInstance(t, splitFiles()))
 	if err != nil {
 		t.Fatalf("split load: %v", err)
 	}
 
-	const equivalent = `
+	const reference = `
 apiVersion: llz.akamai-consulting.io/v1alpha1
 kind: LandingZone
 metadata: { name: my-instance }
@@ -194,10 +205,10 @@ spec:
       recipes:
         harbor: { enabled: false }
 `
-	single := mustDecode(t, equivalent)
-	if !reflect.DeepEqual(split.Spec.Environments, single.Spec.Environments) {
-		t.Errorf("split vs single environments differ:\n split=%+v\nsingle=%+v",
-			split.Spec.Environments, single.Spec.Environments)
+	want := mustDecode(t, reference)
+	if !reflect.DeepEqual(split.Spec.Environments, want.Spec.Environments) {
+		t.Errorf("assembled vs reference environments differ:\n   got=%+v\n  want=%+v",
+			split.Spec.Environments, want.Spec.Environments)
 	}
 }
 

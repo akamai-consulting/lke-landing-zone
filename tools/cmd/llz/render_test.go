@@ -143,23 +143,3 @@ spec:
 		t.Errorf("split union = %v, want %v", got, want)
 	}
 }
-
-// listDeployments must union committed tfvars with spec.environments so an
-// instance can migrate env-by-env.
-func TestListDeployments_SpecUnion(t *testing.T) {
-	root := t.TempDir()
-	tfDir := filepath.Join(root, "terraform-iac-bootstrap")
-	writeCluster(t, tfDir, map[string]string{
-		"legacy.tfvars": "region = \"us-sea\"\n",
-	})
-	mustWrite(t, filepath.Join(root, clusterspec.DefaultFile), renderSpec) // declares env "prod"
-
-	got, err := listDeployments(tfDir)
-	if err != nil {
-		t.Fatalf("listDeployments: %v", err)
-	}
-	want := []string{"legacy", "prod"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("listDeployments union = %v, want %v", got, want)
-	}
-}

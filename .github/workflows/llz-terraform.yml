@@ -168,16 +168,16 @@ jobs:
           token: ${{ github.token }}
           path: _llz-template
 
-      # LandingZone instances author a declarative spec (a single llz.yaml, or the
-      # split landingzone.yaml + clusters/<env>.yaml) instead of committing the
-      # per-env tfvars; render the transient <env>.tfvars before any TF step reads
-      # them. No-op (the `test -f` gate) for instances that have not adopted the
-      # spec, so existing instances are unaffected.
+      # LandingZone instances author a declarative spec (landingzone.yaml +
+      # clusters/<env>.yaml) instead of committing the per-env tfvars; render the
+      # transient <env>.tfvars before any TF step reads them. No-op (the `test -f`
+      # gate) for instances that have not adopted the spec, so existing instances
+      # are unaffected.
       - name: Render tfvars from the LandingZone spec (spec-driven instances)
         env:
           REGION: ${{ matrix.region }}
         run: |
-          if [ -f llz.yaml ] || [ -f landingzone.yaml ]; then
+          if [ -f landingzone.yaml ]; then
             llz render "$REGION" --tfvars-only
           fi
 
