@@ -23,6 +23,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 )
 
 // envAddOpts mirrors new-deployment.sh's flags, plus the ADOPTER-MUST-SET values
@@ -64,26 +66,10 @@ const tplTfvars = "terraform.tfvars.example"
 
 var tfRoots = []string{"cluster", "cluster-bootstrap", "object-storage"}
 
-// objClusterRe matches a Linode OBJ cluster id: a region plus a datacenter
-// ordinal, e.g. us-ord-1 or the newer-generation us-ord-10.
-var objClusterRe = regexp.MustCompile(`^[a-z]{2}-[a-z]+-\d+$`)
-
 // validateOBJCluster catches a value that isn't shaped like a Linode OBJ cluster
-// id (a CIDR, a bare region with no datacenter ordinal, an unfilled placeholder)
-// early, before it reaches the object-storage apply. It does NOT constrain the
-// ordinal: both legacy (-1) and newer-generation (e.g. -10) clusters are valid —
-// the exact set is account/region-specific (`linode-cli object-storage
-// clusters-list`). Empty is allowed (the caller decides whether unset is OK).
-func validateOBJCluster(v string) error {
-	if v == "" {
-		return nil
-	}
-	if !objClusterRe.MatchString(v) {
-		return fmt.Errorf("obj_cluster %q is not a Linode OBJ cluster id (expected e.g. us-ord-1 or us-ord-10); "+
-			"list them with `linode-cli object-storage clusters-list`", v)
-	}
-	return nil
-}
+// id. The shape rule lives in internal/validate (OBJClusterID) so the LandingZone
+// spec validator reuses it.
+func validateOBJCluster(v string) error { return validate.OBJClusterID(v) }
 
 func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if o.templateEnv == "" {

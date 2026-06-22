@@ -29,6 +29,19 @@ variable "vpc_subnet_cidr" {
   default     = "10.0.0.0/13"
 }
 
+variable "vpc_id" {
+  description = <<-EOT
+    Attach this cluster to an EXISTING (shared) VPC by ID instead of creating a
+    dedicated <cluster_label>-vpc. Empty (the default) = create a dedicated VPC,
+    the original behavior. When set, only this cluster's subnet is created inside
+    the shared VPC; subnets across clusters sharing a VPC must not overlap.
+    NOTE: multiple LKE-E clusters sharing one VPC is unverified — see the spec's
+    cluster.network.vpc and the shared-VPC bootstrap-ordering note before relying on it.
+  EOT
+  type        = string
+  default     = ""
+}
+
 # ── Control plane ─────────────────────────────────────────────────────────────
 
 variable "control_plane_high_availability" {

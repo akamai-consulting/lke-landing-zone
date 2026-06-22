@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"sort"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/spf13/cobra"
 )
 
@@ -158,21 +159,11 @@ func validateTopology(deps []deployment) error {
 }
 
 // validateHAFlags checks the `llz env add` --ha-role/--ha-group combination
-// before any files are written.
+// before any files are written. The rule lives in internal/validate so the
+// LandingZone spec validator enforces the same active/standby pairing (with
+// spec-field names in its messages).
 func validateHAFlags(role, group string) error {
-	switch role {
-	case "", roleStandalone:
-		if group != "" {
-			return fmt.Errorf("--ha-group set but --ha-role is standalone — drop one")
-		}
-	case roleActive, roleStandby:
-		if group == "" {
-			return fmt.Errorf("--ha-role %s requires --ha-group (the pair id shared with its peer)", role)
-		}
-	default:
-		return fmt.Errorf("--ha-role %q invalid (want active|standby|standalone)", role)
-	}
-	return nil
+	return validate.HATopology(role, group, "--ha-role", "--ha-group")
 }
 
 func envRoleCmd() *cobra.Command {

@@ -64,7 +64,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(),
-		secretsCmd(), tokensCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
+		secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
 	)
@@ -270,7 +270,7 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.haGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")
 	f.IntVar(&o.promotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would be created; write nothing")
-	env.AddCommand(add, envListCmd(), envRoleCmd(), envPeerCmd(), envNextCmd(), envPipelineCmd())
+	env.AddCommand(add, envListCmd(), envRoleCmd(), envPeerCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
 	return env
 }
 
