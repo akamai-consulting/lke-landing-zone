@@ -85,7 +85,7 @@ func runEnvReadiness(env string) error {
 		}
 	}
 
-	fmt.Printf("Deployment %q readiness (%s + %s):\n\n", env, tfDir, aplDir)
+	fmt.Printf("%s\n\n", bold(fmt.Sprintf("Deployment %q readiness (%s + %s):", env, tfDir, aplDir)))
 
 	var findings []finding
 	missing := 0
@@ -93,7 +93,7 @@ func runEnvReadiness(env string) error {
 		fs, present := scanForSentinels(f)
 		if !present {
 			if strings.HasSuffix(f, ".tfvars") {
-				fmt.Printf("  ✗ missing  %s — run `llz env add %s`\n", f, env)
+				fmt.Printf("  %s  %s %s\n", red("✗ missing"), f, dim("— run `llz env add "+env+"`"))
 				missing++
 			}
 			continue
@@ -103,15 +103,23 @@ func runEnvReadiness(env string) error {
 
 	blocking := 0
 	if len(findings) == 0 && missing == 0 {
-		fmt.Println("  ✓ no residual scaffold placeholders in the tfvars or overlay")
+		fmt.Println("  " + green("✓") + " no residual scaffold placeholders in the tfvars or overlay")
 	}
+	// DNS/cert overlay placeholders are DEFERRABLE, not blocking: they configure
+	// cert-manager DNS-01 issuance, which `llz bootstrap dns` provisions AFTER the
+	// first build (quickstart §4). Split them out so the build isn't gated on them.
+	var deferred []finding
 	for _, f := range findings {
-		mark := "⚠ warn "
+		if isDeferrable(f.file) {
+			deferred = append(deferred, f)
+			continue
+		}
+		mark := yellow("⚠ warn ")
 		if f.blocking {
-			mark = "✗ TODO "
+			mark = red("✗ TODO ")
 			blocking++
 		}
-		fmt.Printf("  %s %s:%d  %s — %s\n", mark, f.file, f.line, f.token, f.hint)
+		fmt.Printf("  %s %s:%d  %s %s\n", mark, f.file, f.line, f.token, dim("— "+f.hint))
 	}
 
 	// obj_cluster must be shaped like a Linode OBJ cluster id — catch a malformed
@@ -120,7 +128,7 @@ func runEnvReadiness(env string) error {
 	if b, err := os.ReadFile(objTfv); err == nil {
 		if v := tfvarsValue(string(b), "obj_cluster"); v != "" {
 			if err := validateOBJCluster(v); err != nil {
-				fmt.Printf("  ✗ TODO  %s — %s\n", objTfv, err)
+				fmt.Printf("  %s  %s %s\n", red("✗ TODO"), objTfv, dim("— "+err.Error()))
 				blocking++
 			}
 		}
@@ -141,8 +149,8 @@ func runEnvReadiness(env string) error {
 			continue
 		}
 		if v := tfvarsValue(string(b), dc.key); v != "" && v != env {
-			fmt.Printf("  ✗ TODO  %s  %s = %q must equal the deployment name %q "+
-				"(mismatched discriminator → wrong TF state key / overlay)\n", p, dc.key, v, env)
+			fmt.Printf("  %s  %s  %s\n", red("✗ TODO"), p,
+				dim(fmt.Sprintf("%s = %q must equal the deployment name %q (mismatched discriminator → wrong TF state key / overlay)", dc.key, v, env)))
 			blocking++
 		}
 	}
@@ -150,20 +158,47 @@ func runEnvReadiness(env string) error {
 	fmt.Println()
 	switch err := renderOverlay(overlay); {
 	case err == nil:
-		fmt.Printf("  ✓ kubectl kustomize %s/manifest renders\n", overlay)
+		fmt.Printf("  %s kubectl kustomize %s/manifest renders\n", green("✓"), overlay)
 	case isMissingBinary(err):
-		fmt.Printf("  – kubectl not found — skipped overlay render (install kubectl to enable)\n")
+		fmt.Printf("  %s kubectl not found — skipped overlay render (install kubectl to enable)\n", dim("–"))
 	default:
-		fmt.Printf("  ✗ kubectl kustomize %s/manifest failed:\n%s\n", overlay, indent(err.Error(), "      "))
+		fmt.Printf("  %s kubectl kustomize %s/manifest failed:\n%s\n", red("✗"), overlay, indent(err.Error(), "      "))
 		blocking++
+	}
+
+	// Deferred (non-blocking) cert/DNS placeholders, surfaced on their own so it's
+	// obvious the build can proceed now and DNS-01 is finished later.
+	if len(deferred) > 0 {
+		fmt.Println("\n" + bold("Deferred — cert/DNS issuance (non-blocking; set up after the build):"))
+		for _, f := range deferred {
+			fmt.Printf("  %s %s:%d  %s %s\n", cyan("○ later"), f.file, f.line, f.token, dim("— "+f.hint))
+		}
+		fmt.Println("  " + dim("↳ fine to leave for now — run `llz bootstrap dns "+env+" --yes` once LINODE_DNS_TOKEN exists (quickstart §4)."))
 	}
 
 	fmt.Println()
 	if blocking > 0 || missing > 0 {
-		return fmt.Errorf("%d blocking issue(s) — fill the values above, then re-run `llz doctor --env %s`", blocking+missing, env)
+		tail := ""
+		if len(deferred) > 0 {
+			tail = fmt.Sprintf(" (the %d cert/DNS item(s) above are deferred — leave them for now)", len(deferred))
+		}
+		return fmt.Errorf("%d blocking issue(s) — fill the values above, then re-run `llz doctor --env %s`%s", blocking+missing, env, tail)
 	}
-	fmt.Printf("✓ deployment %q is ready to build (`llz build %s --yes`).\n", env, env)
+	if len(deferred) > 0 {
+		fmt.Printf("%s deployment %q is ready to build (`llz build %s --yes`) %s\n",
+			green("✓"), env, env, dim(fmt.Sprintf("— %d cert/DNS item(s) deferred to `llz bootstrap dns`", len(deferred))))
+		return nil
+	}
+	fmt.Printf("%s deployment %q is ready to build (`llz build %s --yes`).\n", green("✓"), env, env)
 	return nil
+}
+
+// isDeferrable reports whether a readiness finding lives in the cert/DNS overlay
+// (apl-values/<env>/manifest/dns/...). Those placeholders configure cert-manager
+// DNS-01 issuance, which `llz bootstrap dns` provisions AFTER the first build
+// (quickstart §4), so they must not block the apply.
+func isDeferrable(file string) bool {
+	return strings.Contains(filepath.ToSlash(file), "/manifest/dns/")
 }
 
 // scaffoldExists reports whether an apl-values overlay directory exists for env.
