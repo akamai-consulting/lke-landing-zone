@@ -2,7 +2,7 @@
 // instance: a landingzone.yaml (kind: LandingZone) holding the instance identity
 // (was .copier-answers.yml) + shared spec.defaults, plus one environments/<env>.yaml
 // (kind: ClusterDefinition) per deployment carrying its cluster definition +
-// enabled "recipes" (was the per-env tfvars + the apl-values/<env> manifest
+// enabled "components" (was the per-env tfvars + the apl-values/<env> manifest
 // kustomization). The loader (instance.go) assembles them into one *LandingZone
 // the `llz` CLI reconciles into the existing Terraform / Argo / copier config
 // (see tools/cmd/llz/render.go).
@@ -45,7 +45,7 @@ type Spec struct {
 	// to one via cluster.network.vpc (omit → its own dedicated VPC). Linode VPCs
 	// cannot span regions, so every env on a network must be in the network's region.
 	Networks map[string]VPC `json:"networks,omitempty"`
-	// Defaults are shared cluster/recipe settings (landingzone.yaml's
+	// Defaults are shared cluster/component settings (landingzone.yaml's
 	// `spec.defaults`) inherited by every environment. A per-env value overrides
 	// the matching default; an unset env field falls back to the default, then to
 	// the built-in default. Empty when every env is fully specified.
@@ -58,11 +58,11 @@ type Spec struct {
 }
 
 // Defaults is the shared baseline merged into every environment before the
-// built-in defaults. It mirrors an Environment's shape (cluster + recipes) but
+// built-in defaults. It mirrors an Environment's shape (cluster + components) but
 // every field is optional — only the keys an author sets are inherited.
 type Defaults struct {
-	Cluster Cluster                 `json:"cluster,omitempty"`
-	Recipes map[string]RecipeToggle `json:"recipes,omitempty"`
+	Cluster    Cluster                    `json:"cluster,omitempty"`
+	Components map[string]ComponentToggle `json:"components,omitempty"`
 }
 
 // VPC is a shared, region-scoped Linode VPC declared in spec.networks. A VPC is a
@@ -81,17 +81,17 @@ type Instance struct {
 	TemplateVersion string `json:"templateVersion"`
 }
 
-// Environment is one deployment: its cluster definition plus the recipe toggles
+// Environment is one deployment: its cluster definition plus the component toggles
 // that select which components deploy.
 type Environment struct {
 	Cluster Cluster `json:"cluster"`
-	// Recipes maps a recipe name (see recipes.go) to its toggle. A map (not a
-	// fixed struct of named bools) keeps adding a recipe data-only and is the
+	// Components maps a component name (see components.go) to its toggle. A map (not a
+	// fixed struct of named bools) keeps adding a component data-only and is the
 	// CRD-friendly `additionalProperties` shape; Validate rejects unknown keys.
-	Recipes map[string]RecipeToggle `json:"recipes,omitempty"`
+	Components map[string]ComponentToggle `json:"components,omitempty"`
 }
 
-type RecipeToggle struct {
+type ComponentToggle struct {
 	Enabled bool `json:"enabled"`
 }
 

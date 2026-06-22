@@ -162,7 +162,7 @@ func validateEnv(name string, env Environment) []error {
 		}
 	}
 
-	errs = append(errs, validateRecipes(name, env.Recipes)...)
+	errs = append(errs, validateComponents(name, env.Components)...)
 	return errs
 }
 
@@ -238,30 +238,30 @@ func cidrsOverlap(a, b string) bool {
 	return na.Contains(nb.IP) || nb.Contains(na.IP)
 }
 
-func validateRecipes(env string, recipes map[string]RecipeToggle) []error {
+func validateComponents(env string, components map[string]ComponentToggle) []error {
 	var errs []error
 	// Stable iteration for deterministic error ordering.
-	names := make([]string, 0, len(recipes))
-	for n := range recipes {
+	names := make([]string, 0, len(components))
+	for n := range components {
 		names = append(names, n)
 	}
 	sort.Strings(names)
 
 	for _, n := range names {
-		if !KnownRecipe(n) {
-			errs = append(errs, fmt.Errorf("environments.%s.recipes.%s: unknown recipe (known: %s)", env, n, knownRecipeList()))
+		if !KnownComponent(n) {
+			errs = append(errs, fmt.Errorf("environments.%s.components.%s: unknown component (known: %s)", env, n, knownComponentList()))
 		}
 	}
-	for _, r := range Recipes {
-		t, set := recipes[r.Name]
+	for _, r := range Components {
+		t, set := components[r.Name]
 		enabled := set && t.Enabled
 		if r.Mandatory && !enabled {
-			errs = append(errs, fmt.Errorf("environments.%s.recipes.%s is mandatory and cannot be disabled", env, r.Name))
+			errs = append(errs, fmt.Errorf("environments.%s.components.%s is mandatory and cannot be disabled", env, r.Name))
 		}
 		if enabled {
 			for _, dep := range r.DependsOn {
-				if dt, ok := recipes[dep]; !ok || !dt.Enabled {
-					errs = append(errs, fmt.Errorf("environments.%s.recipes.%s requires recipe %q to be enabled", env, r.Name, dep))
+				if dt, ok := components[dep]; !ok || !dt.Enabled {
+					errs = append(errs, fmt.Errorf("environments.%s.components.%s requires component %q to be enabled", env, r.Name, dep))
 				}
 			}
 		}
@@ -307,9 +307,9 @@ func validateHAGroups(lz *LandingZone) []error {
 	return errs
 }
 
-func knownRecipeList() string {
-	names := make([]string, len(Recipes))
-	for i, r := range Recipes {
+func knownComponentList() string {
+	names := make([]string, len(Components))
+	for i, r := range Components {
 		names[i] = r.Name
 	}
 	sort.Strings(names)

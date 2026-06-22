@@ -103,6 +103,56 @@ func TestRenderEnvTfvars(t *testing.T) {
 	}
 }
 
+func TestRenderManifest_AndDriftCheck(t *testing.T) {
+	root := t.TempDir()
+	aplDir := filepath.Join(root, "apl-values")
+	lz, err := clusterspec.Decode([]byte(`
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: i }
+spec:
+  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }
+  environments:
+    prod:
+      cluster:
+        clusterLabel: prod
+        region: us-ord
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: t, count: 3 }
+        bootstrap: { name: platform-prod }
+        objectStorage: { cluster: us-ord-1 }
+      components:
+        harbor: { enabled: false }
+`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	prod, _ := lz.Env("prod")
+	if err := renderManifest("prod", prod.Components, aplDir, "", false); err != nil {
+		t.Fatalf("renderManifest: %v", err)
+	}
+
+	kust, err := os.ReadFile(filepath.Join(aplDir, "prod", "manifest", "kustomization.yaml"))
+	if err != nil {
+		t.Fatalf("read kustomization: %v", err)
+	}
+	if !strings.Contains(string(kust), "- argocd") || strings.Contains(string(kust), "harbor/harbor-registry-s3") {
+		t.Errorf("kustomization wrong (harbor should be dropped):\n%s", kust)
+	}
+
+	// Freshly rendered → no drift.
+	if err := checkManifestDrift(lz, aplDir, []string{"prod"}); err != nil {
+		t.Fatalf("expected no drift after render; got %v", err)
+	}
+	// Tamper → drift detected.
+	if err := os.WriteFile(filepath.Join(aplDir, "prod", "manifest", "kustomization.yaml"), []byte("hand-edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkManifestDrift(lz, aplDir, []string{"prod"}); err == nil {
+		t.Error("expected drift error after tampering with the committed kustomization")
+	}
+}
+
 func TestRenderNetworks(t *testing.T) {
 	tfDir := filepath.Join(t.TempDir(), "terraform-iac-bootstrap")
 	if err := os.MkdirAll(filepath.Join(tfDir, "vpc"), 0o755); err != nil {

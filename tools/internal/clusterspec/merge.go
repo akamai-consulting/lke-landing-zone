@@ -22,7 +22,7 @@ func (lz *LandingZone) applyInheritance() {
 // mergeEnvironment returns env with the shared defaults filled in underneath it.
 func mergeEnvironment(d Defaults, env Environment) Environment {
 	env.Cluster = mergeCluster(d.Cluster, env.Cluster)
-	env.Recipes = mergeRecipes(d.Recipes, env.Recipes)
+	env.Components = mergeComponents(d.Components, env.Components)
 	return env
 }
 
@@ -64,14 +64,14 @@ func mergeCluster(base, over Cluster) Cluster {
 	return out
 }
 
-// mergeRecipes overlays per-env toggles on the shared defaults (env wins
+// mergeComponents overlays per-env toggles on the shared defaults (env wins
 // per-key). Returns nil when neither side sets anything, so the built-in
-// Defaults() still applies the full default recipe set.
-func mergeRecipes(base, over map[string]RecipeToggle) map[string]RecipeToggle {
+// Defaults() still applies the full default component set.
+func mergeComponents(base, over map[string]ComponentToggle) map[string]ComponentToggle {
 	if base == nil && over == nil {
 		return nil
 	}
-	out := make(map[string]RecipeToggle, len(base)+len(over))
+	out := make(map[string]ComponentToggle, len(base)+len(over))
 	for k, v := range base {
 		out[k] = v
 	}
