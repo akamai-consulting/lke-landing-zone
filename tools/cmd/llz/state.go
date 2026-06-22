@@ -186,7 +186,7 @@ func prepopulateVars(vars map[string]string, reqs []requirement, instance, templ
 // (satisfied()/have() stay cache-aware so we don't re-prompt for cached values.)
 func reportReadiness(reqs []requirement, secrets, vars map[string]string, instance, template liveState) []string {
 	var missing []string
-	fmt.Printf("\n%-30s %-7s %-9s %s\n", "NAME", "KIND", "REQUIRED", "STATUS")
+	fmt.Printf("\n%s\n", bold(fmt.Sprintf("%-30s %-7s %-9s %s", "NAME", "KIND", "REQUIRED", "STATUS")))
 	for _, r := range reqs {
 		st := instance
 		if r.Template {
@@ -197,12 +197,12 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 		if r.Secret {
 			_, inCache = secrets[r.Name]
 		}
-		mark := "✗ missing"
+		mark := red("✗ missing")
 		switch {
 		case onGitHub:
-			mark = "✓ set"
+			mark = green("✓ set")
 		case inCache:
-			mark = "⤴ cached → will push"
+			mark = yellow("⤴ cached → will push")
 		}
 		kind := "var"
 		if r.Secret {

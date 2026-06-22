@@ -41,7 +41,7 @@ var gopts globalOpts
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "llz:", err)
+		fmt.Fprintln(os.Stderr, red("llz:"), err)
 		os.Exit(1)
 	}
 }
@@ -72,7 +72,7 @@ func newRootCmd() *cobra.Command {
 	// Operator-defined commands from .llz/commands.yaml (added last so the
 	// built-in set wins any name collision). See docs/extending-llz.md.
 	if cmds, err := loadExtCommands("."); err != nil {
-		fmt.Fprintln(os.Stderr, "llz:", err)
+		fmt.Fprintln(os.Stderr, red("llz:"), err)
 	} else {
 		addExtCommands(root, cmds)
 	}

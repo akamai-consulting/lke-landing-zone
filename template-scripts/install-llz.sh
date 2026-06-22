@@ -9,9 +9,9 @@
 #   ORG=myfork ./template-scripts/install-llz.sh      # install from your fork's releases
 #   LLZ_BINDIR=/usr/local/bin ./template-scripts/install-llz.sh   # custom install dir
 #
-# Requires `gh`, authenticated (`gh auth status`). The template repo is private
-# during beta, so an anonymous curl 404s; gh inherits your auth (and works against
-# a GHE host).
+# Requires `gh`, authenticated (`gh auth status`) — run `gh auth login` first. The
+# template repo is public, but the script drives `gh` so it also works against a
+# private fork or a GHE host (gh inherits your auth).
 set -euo pipefail
 
 ORG="${ORG:-akamai-consulting}"

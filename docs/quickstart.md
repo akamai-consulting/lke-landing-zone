@@ -10,12 +10,13 @@
 
 ## The golden path — four commands
 
-After the [accounts](#1-accounts-you-need) exist, the whole flow is four commands
-from a checkout:
+After the [accounts](#1-accounts-you-need) exist, the whole flow is four commands —
+**no clone of this repo required** (the installer is a one-liner; `llz new` creates
+your own repo):
 
 ```bash
-./template-scripts/install-llz.sh                          # 1. install the llz CLI (§2)
-llz new my-instance --org <org> --push --yes               # 2. scaffold + create/push the instance repo (§3)
+curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash   # 1. install the llz CLI (§2)
+llz new my-instance --push --yes                           # 2. scaffold from the upstream + create/push your repo (§3)
 cd my-instance && llz env add lab --region us-sea --obj-cluster us-sea-1   # 3. add a deployment, then fill the checklist it prints (§3)
 llz up lab --yes                                           # 4. credentials → readiness gate → build, in one go (§4)
 ```
@@ -44,12 +45,8 @@ the short version:
 - **Linode account with LKE-Enterprise** — `+lke` versions, not standard LKE
 - **Akamai App Platform (apl-core) entitlement**
 - **A GitHub org + an instance repo** — a fork of the template org, or your own
-- **A GitOps repo reachable over HTTPS** — github.com, gitlab.com, or an internal HTTPS mirror (often the same repo)
-- **GHCR pull access** — Argo CD pulls the first-party charts from `ghcr.io/<org>/charts`; these are **public**, so it pulls them anonymously — no credential needed
 
-> **Start the Linode account first — it has the longest lead time.** Production
-> accounts need an executive sponsor + InfoSec approval: follow the
-> [Linode account request checklist](infosec/linode-account-request-checklist.md).
+> **Start the Linode account first — it has the longest lead time.**
 
 Run **`llz doctor`** any time to check your CLI tooling + `gh` auth — it is the
 authoritative, always-current list of what the flow needs. With a repo/env it
@@ -59,19 +56,39 @@ also reports deployment + e2e readiness (see §4).
 
 ## 2. Install `llz`
 
-The template repo is **public**, so the download needs no auth. The install
-script uses `gh` (already a prerequisite; see `llz doctor`), which also works
-against a private fork or a GHE host. From a template or instance
-checkout, the install script picks your platform, resolves the latest full
-release, verifies the checksum, and installs to **`~/.local/bin`** — a per-user
-dir that needs no `sudo` and works on locked-down corporate machines that deny
-writes to `/usr/local/bin`:
+**Authenticate `gh` first.** The install script and every `llz` command that
+touches GitHub (`llz new`, `llz tokens`, `llz doctor`, `llz self-update`) drive
+the `gh` CLI, so it must be logged in *before* you run any of them:
 
 ```bash
-./template-scripts/install-llz.sh            # latest release; ORG=<fork> to use your fork
-# or pin a tag:  ./template-scripts/install-llz.sh v0.2.0
-llz version
+gh auth login        # one-time; `gh auth status` confirms you're logged in
 ```
+
+> **`gh auth` ≠ your cloud/PAT credentials.** Logging in to `gh` covers GitHub
+> repo, release, and API calls only. `llz tokens` (§4) still prompts you for a
+> **Linode PAT** and a couple of **GitHub PATs** — that's by design, not a
+> re-auth loop; those are the secrets it pushes into your repo so the build can
+> run. See §4 for the full list.
+
+**Install it — no clone required.** `llz` ships as a release binary of the public
+template repo, [`github.com/akamai-consulting/lke-landing-zone`](https://github.com/akamai-consulting/lke-landing-zone/releases/latest).
+Pipe the installer straight from `main`; it picks your platform, resolves the
+latest full release, verifies the checksum, and installs to **`~/.local/bin`** —
+a per-user dir that needs no `sudo` and works on locked-down corporate machines
+that deny writes to `/usr/local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
+llz version
+# wget:  wget -qO- https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
+```
+
+The script still uses `gh` to fetch the release asset, so keep `gh` authenticated
+(above) — only the script itself is downloaded anonymously.
+
+> **Already have a template or instance checkout?** Skip the `curl` and run the
+> same script from there: `./template-scripts/install-llz.sh` (append `v0.2.0` to
+> pin a tag, or prefix `ORG=<fork>`).
 
 > **Put `~/.local/bin` on your `PATH`.** If `llz version` prints "command not
 > found", the dir isn't on your `PATH` yet — add it (then restart the shell):
@@ -151,10 +168,19 @@ install.
 Two commands: scaffold the instance repo, then add a deployment to it.
 
 ```bash
-llz new my-instance --org akamai-consulting --push --yes
+llz new my-instance --push --yes
 cd my-instance
 llz env add lab --region us-sea --obj-cluster us-sea-1
 ```
+
+**Most users don't pass `--org`.** It names the **template to scaffold *from***
+and defaults to the public upstream `akamai-consulting/lke-landing-zone` — exactly
+what you want unless you maintain your *own fork* of the template, in which case
+pass `--org <your-fork-org>`. It is **not** where your instance lands; that's the
+`instance_repo` copier answer, created by `--push`. (Pointing `--org` at an org
+with no template fork makes copier's HTTPS clone 404, which git surfaces as a
+confusing `Username for 'https://github.com':` prompt — `llz new` now preflights
+this and tells you to fix `--org` or fork first.)
 
 `llz new` runs `copier copy` to render the instance into `my-instance/` (asks
 `upstream_org` and `instance_repo`, writes `.copier-answers.yml`). With
@@ -198,8 +224,8 @@ llz doctor --env lab   # scans tfvars + overlay for residual placeholders, rende
 
 `llz doctor --env` is the single readiness gate (full breakdown in §4). Run it
 now for the local file checks — the repo-config part fills in once `llz tokens`
-has pushed. Or run `make instance-test` for a fast, no-cloud smoke test of the
-whole instantiation path before paying for a real build.
+has pushed. Or, from a template checkout, run `make instance-test` for a fast,
+no-cloud smoke test of the whole instantiation path before paying for a real build.
 
 <details>
 <summary><strong>What "environment" means here</strong> — three distinct things</summary>
@@ -271,6 +297,12 @@ It stops at the first failure, so a missing token or unfilled placeholder is
 caught before the expensive apply. (Run the three commands individually whenever
 you want to inspect each gate — see the collapsible below.)
 
+> **`llz up` is interactive — run it at a terminal, not in CI.** `--yes` authorizes
+> the *cloud-mutating* steps; it does **not** make the run unattended. The first
+> stage (`llz tokens`) still opens pre-filled browser links and prompts you to
+> paste a Linode PAT + GitHub PATs and pick an OBJ cluster. Pass `--skip-tokens`
+> once those are already provisioned to get a non-interactive `doctor → build`.
+
 > ⚠️ **After the run, do the two manual steps the bootstrap can't:** copy
 > **unseal keys 4 & 5 and the root token** from the job summary to secure offline
 > storage (shown once), and delete `OPENBAO_ROOT_TOKEN` from `infra-lab` if you
@@ -278,8 +310,7 @@ you want to inspect each gate — see the collapsible below.)
 > [bootstrap runbook](runbooks/bootstrap-openbao.md#after-first-time-bootstrap--required-operator-actions).
 
 Then finish the deferred DNS bit once its token exists (the ArgoCD deploy key was
-already provisioned by `llz tokens`; `llz bootstrap ssh` is for *rotating* it
-later), and verify convergence:
+already provisioned by `llz tokens`), and verify convergence:
 
 ```bash
 llz bootstrap dns lab --yes    # cert-manager DNS-01 (needs LINODE_DNS_TOKEN)
@@ -422,7 +453,8 @@ versioned charts + external actions*.
 
 ## Checklist
 
-- [ ] Accounts (§1): LKE-E, apl-core, instance repo, HTTPS GitOps repo, inventory repo
+- [ ] Accounts (§1): LKE-E, apl-core, GitHub org + instance repo
+- [ ] `gh auth login` done (§2)
 - [ ] `llz` installed + completion (§2); `llz doctor` tooling green
 - [ ] `llz new … --push --yes` run; org literals repointed; instance pushed to GitHub (§3)
 - [ ] `llz env add <env>` run; the placeholders it listed are filled (`obj_cluster` set to your region's OBJ cluster id) (§3)

@@ -240,13 +240,13 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	if admin {
 		tmplSt = fetchLiveState(templateRepo(), "")
 	}
-	fmt.Printf("\ne2e readiness — %s (infra-%s)%s\n", instanceRepo, env, adminBanner(admin))
+	fmt.Printf("\n%s\n", bold(fmt.Sprintf("e2e readiness — %s (infra-%s)%s", instanceRepo, env, adminBanner(admin))))
 	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt)
 	if len(missing) == 0 {
-		fmt.Println("\n✓ ready — every required value is set.")
+		fmt.Println("\n" + green("✓") + " ready — every required value is set.")
 		return nil
 	}
-	fmt.Printf("\n✗ %d required item(s) missing: %s\n", len(missing), strings.Join(missing, ", "))
+	fmt.Printf("\n%s %d required item(s) missing: %s\n", red("✗"), len(missing), strings.Join(missing, ", "))
 	fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
 	return nil
 }
@@ -285,11 +285,11 @@ func repoExists(repo string) bool {
 // remediateMissingRepo prints the exact fix for an absent instance repo so the
 // failure is actionable instead of an all-missing readiness table.
 func remediateMissingRepo(repo string) {
-	fmt.Fprintf(os.Stderr, "\n✗ instance repo %q is not reachable on GitHub.\n", repo)
+	fmt.Fprintf(os.Stderr, "\n%s instance repo %q is not reachable on GitHub.\n", red("✗"), repo)
 	fmt.Fprintln(os.Stderr, "  `llz tokens` and `llz doctor` read/write the live repo, so it must exist and be pushed first.")
 	fmt.Fprintln(os.Stderr, "  Create + push it from the instance directory:")
 	fmt.Fprintf(os.Stderr, "    gh repo create %s --private --source . --remote origin --push\n", repo)
-	fmt.Fprintln(os.Stderr, "  …or re-scaffold with push next time: `llz new <name> --org <org> --push --yes`.")
+	fmt.Fprintln(os.Stderr, "  …or re-scaffold with push next time: `llz new <name> --push --yes`.")
 }
 
 func templateRepo() string { return defaultTemplateOrg + "/" + templateName }

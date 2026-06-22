@@ -29,6 +29,31 @@ func TestIsEmptyCIDRList(t *testing.T) {
 	}
 }
 
+func TestIsDeferrable(t *testing.T) {
+	// cert/DNS overlay placeholders are deferred to `llz bootstrap dns` (post-build),
+	// so they must not block the apply…
+	deferred := []string{
+		"apl-values/lab/manifest/dns/letsencrypt-clusterissuer.yaml",
+		"apl-values/primary/manifest/dns/cert-manager-webhook-linode-application.yaml",
+	}
+	for _, f := range deferred {
+		if !isDeferrable(f) {
+			t.Errorf("isDeferrable(%q) = false, want true", f)
+		}
+	}
+	// …while everything else (tfvars, non-dns overlay) still blocks.
+	blocking := []string{
+		"terraform-iac-bootstrap/cluster/lab.tfvars",
+		"apl-values/lab/manifest/apps/some-app.yaml",
+		"kubernetes-charts/llz-cert-automation/values.yaml",
+	}
+	for _, f := range blocking {
+		if isDeferrable(f) {
+			t.Errorf("isDeferrable(%q) = true, want false", f)
+		}
+	}
+}
+
 func TestScanForSentinels(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "cluster.tfvars")

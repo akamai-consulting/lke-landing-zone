@@ -360,14 +360,14 @@ func pushSecrets(g globalOpts, env string) error {
 // all the blockers. envExplicit distinguishes a user-supplied --env from the
 // default, so a bare `llz doctor` doesn't error on a scaffold that was never added.
 func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts string) error {
-	fmt.Println("Tooling:")
+	fmt.Println(bold("Tooling:"))
 	// terraform OR tofu satisfies the Terraform requirement.
 	reportEither("terraform", "tofu")
 	for _, t := range []string{"copier", "gh", "kubectl", "helm", "bao", "jq", "linode-cli"} {
 		report(t, lookable(t))
 	}
 
-	fmt.Println("\nGitHub auth:")
+	fmt.Println("\n" + bold("GitHub auth:"))
 	if _, err := execLookPath("gh"); err != nil {
 		report("gh auth status", false)
 	} else {
@@ -421,9 +421,9 @@ func reportEither(a, b string) {
 }
 
 func report(name string, ok bool) {
-	mark := "✗"
+	mark := red("✗")
 	if ok {
-		mark = "✓"
+		mark = green("✓")
 	}
 	fmt.Printf("  %s  %s\n", mark, name)
 }
