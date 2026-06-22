@@ -55,11 +55,12 @@ func listDeployments(tfDir string) ([]string, error) {
 
 	// Union the LandingZone spec's environments. The spec lives at the instance
 	// root (the parent of terraform-iac-bootstrap), so it is found in both the
-	// instance and template-checkout layouts.
-	specPath := filepath.Join(filepath.Dir(tfDir), clusterspec.DefaultFile)
-	if clusterspec.Exists(specPath) {
-		if lz, lerr := clusterspec.Load(specPath); lerr != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not read %s — %v\n", specPath, lerr)
+	// instance and template-checkout layouts, and in either spec shape (a single
+	// llz.yaml or the split landingzone.yaml + clusters/*.yaml).
+	specRoot := filepath.Dir(tfDir)
+	if clusterspec.InstancePresent(specRoot) {
+		if lz, lerr := clusterspec.LoadInstance(specRoot); lerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not read LandingZone spec at %s — %v\n", specRoot, lerr)
 		} else {
 			for _, name := range lz.EnvNames() {
 				if err := validateEnvName(name); err != nil {

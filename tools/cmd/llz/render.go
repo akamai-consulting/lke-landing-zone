@@ -27,12 +27,13 @@ func renderCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "render [env]",
 		Short: "reconcile llz.yaml into <env>.tfvars (spec-driven instances)",
-		Long: "Reads the repo-root llz.yaml (kind: LandingZone) and renders each\n" +
-			"deployment's cluster definition into the three terraform-iac-bootstrap/*/\n" +
-			"<env>.tfvars files the terraform plan/apply consume. With no [env], renders\n" +
-			"every environment in the spec. --check validates the spec without writing.\n" +
-			"A no-op contract: callers gate on `test -f llz.yaml` (CI does), so instances\n" +
-			"that have not adopted the spec are unaffected.",
+		Long: "Reads the LandingZone spec — either a single llz.yaml or the split\n" +
+			"landingzone.yaml + clusters/<env>.yaml layout — and renders each deployment's\n" +
+			"cluster definition into the three terraform-iac-bootstrap/*/<env>.tfvars files\n" +
+			"the terraform plan/apply consume. With no [env], renders every environment in\n" +
+			"the spec. --check validates the spec without writing. A no-op contract: callers\n" +
+			"gate on the presence of a spec (CI does), so instances that have not adopted it\n" +
+			"are unaffected.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			env := ""
@@ -48,35 +49,35 @@ func renderCmd() *cobra.Command {
 }
 
 func runRender(g globalOpts, env string, tfvarsOnly, check bool) error {
-	specPath := clusterspec.DefaultFile
-	if !clusterspec.Exists(specPath) {
-		return fmt.Errorf("no %s found in the current directory — `llz render` needs a LandingZone spec", specPath)
+	tfDir, _, relPrefix := instanceLayout()
+	specRoot := filepath.Dir(tfDir)
+	if !clusterspec.InstancePresent(specRoot) {
+		return fmt.Errorf("no LandingZone spec (%s or %s) found — `llz render` needs a spec", clusterspec.DefaultFile, clusterspec.LandingZoneFile)
 	}
-	lz, err := clusterspec.Load(specPath)
+	lz, err := clusterspec.LoadInstance(specRoot)
 	if err != nil {
 		return err
 	}
 	if errs := lz.Validate(); len(errs) > 0 {
-		fmt.Fprintf(os.Stderr, "%s is invalid (%d problem(s)):\n", specPath, len(errs))
+		fmt.Fprintf(os.Stderr, "LandingZone spec is invalid (%d problem(s)):\n", len(errs))
 		for _, e := range errs {
 			fmt.Fprintf(os.Stderr, "  • %v\n", e)
 		}
 		return fmt.Errorf("invalid LandingZone spec")
 	}
 	if check {
-		fmt.Printf("✓ %s valid (%d environment(s))\n", specPath, len(lz.Spec.Environments))
+		fmt.Printf("✓ LandingZone spec valid (%d environment(s))\n", len(lz.Spec.Environments))
 		return nil
 	}
 
 	envs := lz.EnvNames()
 	if env != "" {
 		if _, ok := lz.Env(env); !ok {
-			return fmt.Errorf("env %q not in %s (have: %v)", env, specPath, lz.EnvNames())
+			return fmt.Errorf("env %q not in spec (have: %v)", env, lz.EnvNames())
 		}
 		envs = []string{env}
 	}
 
-	tfDir, _, relPrefix := instanceLayout()
 	dryRun := g.dryRun
 	for _, name := range envs {
 		e, _ := lz.Env(name)

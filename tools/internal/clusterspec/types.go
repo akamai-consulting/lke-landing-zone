@@ -38,9 +38,24 @@ type Spec struct {
 	// Instance is the one-per-repo identity that copier renders into committed
 	// files (was .copier-answers.yml).
 	Instance Instance `json:"instance"`
+	// Defaults are shared cluster/recipe settings inherited by every environment
+	// (the split layout's `spec.defaults`). A per-env value overrides the matching
+	// default; an unset env field falls back to the default, then to the built-in
+	// default. Empty when every env is fully specified (the single-file simple mode).
+	Defaults Defaults `json:"defaults,omitempty"`
 	// Environments is keyed by deployment name (== TF workspace key ==
-	// apl-values/<env> dir == infra-<env> GitHub Environment).
-	Environments map[string]Environment `json:"environments"`
+	// apl-values/<env> dir == infra-<env> GitHub Environment). In the single-file
+	// layout they are authored inline; in the split layout the loader assembles
+	// them from clusters/<env>.yaml (one ClusterDefinition each).
+	Environments map[string]Environment `json:"environments,omitempty"`
+}
+
+// Defaults is the shared baseline merged into every environment before the
+// built-in defaults. It mirrors an Environment's shape (cluster + recipes) but
+// every field is optional — only the keys an author sets are inherited.
+type Defaults struct {
+	Cluster Cluster                 `json:"cluster,omitempty"`
+	Recipes map[string]RecipeToggle `json:"recipes,omitempty"`
 }
 
 // Instance mirrors copier.yml's questions (upstream_org, instance_repo,

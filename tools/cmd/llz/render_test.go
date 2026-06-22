@@ -103,6 +103,47 @@ func TestRenderEnvTfvars(t *testing.T) {
 	}
 }
 
+// listDeployments must also discover the split layout (landingzone.yaml +
+// clusters/*.yaml), unioned with committed tfvars.
+func TestListDeployments_SplitSpecUnion(t *testing.T) {
+	root := t.TempDir()
+	tfDir := filepath.Join(root, "terraform-iac-bootstrap")
+	writeCluster(t, tfDir, map[string]string{
+		"legacy.tfvars": "region = \"us-sea\"\n",
+	})
+	mustWrite(t, filepath.Join(root, clusterspec.LandingZoneFile), `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: i }
+spec:
+  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }
+`)
+	if err := os.MkdirAll(filepath.Join(root, clusterspec.ClustersDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, clusterspec.ClustersDir, "prod.yaml"), `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata: { name: prod }
+spec:
+  cluster:
+    clusterLabel: platform-prod
+    region: us-ord
+    k8sVersion: v1.33.6+lke7
+    nodePool: { type: g8-dedicated-8-4, count: 5 }
+    bootstrap: { name: platform-prod }
+    objectStorage: { cluster: us-ord-1 }
+`)
+
+	got, err := listDeployments(tfDir)
+	if err != nil {
+		t.Fatalf("listDeployments: %v", err)
+	}
+	if want := []string{"legacy", "prod"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("split union = %v, want %v", got, want)
+	}
+}
+
 // listDeployments must union committed tfvars with spec.environments so an
 // instance can migrate env-by-env.
 func TestListDeployments_SpecUnion(t *testing.T) {

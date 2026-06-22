@@ -19,11 +19,66 @@ CLI-rendered: `llz render` reads it, `llz render --check` validates it, and
 `llz env list` discovers deployments from it (unioned with any committed
 `cluster/*.tfvars`, so an instance can migrate env-by-env).
 
-> Adopting `llz.yaml` is opt-in. Instances without one keep using their committed
-> tfvars + manifest trees unchanged; every spec-driven path is a no-op when the
-> file is absent.
+> Adopting the spec is opt-in. Instances without one keep using their committed
+> tfvars + manifest trees unchanged; every spec-driven path is a no-op when no
+> spec file is present.
+
+## Two layouts: single file vs. split
+
+The spec is authored in one of two on-disk shapes. Both assemble into the **same**
+in-memory model, so `llz render`, the tfvars mapping, and every validator behave
+identically — pick by instance size.
+
+| | **Single file** (simple mode) | **Split** (the fleet default) |
+|---|---|---|
+| Files | one `llz.yaml` | `landingzone.yaml` + `clusters/<env>.yaml` |
+| Per-env kind | inline `spec.environments.<env>` | `kind: ClusterDefinition`, `metadata.name == env` |
+| Best for | a 1–2 env instance | several prod/staging/lab/HA-pair envs |
+| Wins | whole instance in one diff | per-env diffs, per-env `CODEOWNERS`, blast radius of one |
+| Shared defaults | `spec.defaults` (optional) | `spec.defaults` in `landingzone.yaml` |
+
+The split layout is the **CRD-faithful** shape — one `LandingZone` object plus one
+`ClusterDefinition` per env — so graduating to a controller is near-mechanical. A
+`clusters/<env>.yaml`'s `spec` is exactly a single-file `spec.environments.<env>` —
+the same fields, just relocated.
+
+```yaml
+# landingzone.yaml — instance identity + shared defaults
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: platform-support }
+spec:
+  instance: { upstreamOrg: akamai-consulting, repo: my-org/platform-support, forge: github, templateVersion: v0.4.0 }
+  defaults:                                    # inherited by every ClusterDefinition
+    cluster:
+      k8sVersion: v1.33.6+lke7
+      nodePool: { type: g8-dedicated-8-4, count: 5 }
+      controlPlane: { highAvailability: true, auditLogsEnabled: true }
+---
+# clusters/prod.yaml — one per env; metadata.name IS the deployment name
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata: { name: prod }
+spec:
+  cluster:
+    clusterLabel: platform-prod
+    region: us-ord                             # k8sVersion / nodePool inherited from defaults
+    bootstrap: { name: platform-prod }
+    objectStorage: { cluster: us-ord-1 }
+```
+
+**Inheritance precedence:** a per-env value **>** `spec.defaults` **>** the built-in
+`terraform.tfvars.example` default. Inheritance is field-level and honors deliberate
+zeros — an env's explicit `apiServerAllowCIDRs.ipv4: []` or
+`nodePool.autoscalerEnabled: false` overrides a non-empty/true default, while an
+omitted field inherits. `spec.defaults` also works in the single-file layout.
+
+> **One layout per instance.** Keep either `llz.yaml` **or** `landingzone.yaml`,
+> not both — `llz` errors on an ambiguous mix.
 
 ## Full example
+
+The single-file layout, with every field shown inline:
 
 ```yaml
 apiVersion: llz.akamai-consulting.io/v1alpha1
@@ -166,17 +221,25 @@ separately by `bootstrap-dns.yml`).
 to the tfvars only when you specify them; omit them and the
 `terraform.tfvars.example` default is left untouched.
 
+**Shared defaults.** `spec.defaults.cluster` / `spec.defaults.recipes` set a baseline
+inherited by every environment; a per-env value overrides it field-by-field (see
+[Two layouts](#two-layouts-single-file-vs-split)). Common in the split layout, but
+valid in either.
+
 **Injected automatically.** `deployment`, `apl_values_env`, and `region_suffix`
 are always set to the env key, so they can never drift out of sync.
 
 ## Commands
 
 ```sh
-llz render               # render every environment's tfvars from llz.yaml
+llz render               # render every environment's tfvars from the spec
 llz render staging       # render just one environment
 llz render --check       # validate the spec; write nothing (used as a CI guard)
-llz env list             # deployments from llz.yaml ∪ committed cluster/*.tfvars
+llz env list             # deployments from the spec ∪ committed cluster/*.tfvars
 ```
+
+These work the same against either layout — `llz` auto-detects `llz.yaml` vs.
+`landingzone.yaml` + `clusters/*.yaml` and assembles the same model before rendering.
 
 `llz render --check` reports every problem at once — unknown recipe names, a
 disabled mandatory recipe, `openbao` missing its dependencies, an HA group that

@@ -28,6 +28,7 @@ func Decode(b []byte) (*LandingZone, error) {
 	if err := yaml.UnmarshalStrict(b, &lz); err != nil {
 		return nil, fmt.Errorf("parse LandingZone: %w", err)
 	}
+	lz.applyInheritance() // fold spec.defaults under inline envs (no-op when unset)
 	lz.Defaults()
 	return &lz, nil
 }
