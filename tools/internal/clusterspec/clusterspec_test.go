@@ -1,0 +1,342 @@
+package clusterspec
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
+
+// validSpec is a minimal but complete LandingZone used as the base for the
+// table tests; helpers tweak one thing at a time.
+const validSpec = `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata:
+  name: my-instance
+spec:
+  instance:
+    upstreamOrg: akamai-consulting
+    repo: my-org/my-instance
+    forge: github
+    templateVersion: v0.4.0
+  environments:
+    primary:
+      cluster:
+        clusterLabel: platform-support
+        region: us-ord
+        k8sVersion: v1.33.6+lke7
+        tags: [platform, observability]
+        nodePool: { type: g8-dedicated-8-4, count: 5 }
+        controlPlane: { highAvailability: true, auditLogsEnabled: true }
+        ha: { role: standalone }
+        bootstrap:
+          name: platform-primary
+          domainSuffix: primary.example.com
+        objectStorage: { cluster: us-ord-1 }
+`
+
+func mustDecode(t *testing.T, y string) *LandingZone {
+	t.Helper()
+	lz, err := Decode([]byte(y))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	return lz
+}
+
+func TestDecodeAndValidate_OK(t *testing.T) {
+	lz := mustDecode(t, validSpec)
+	if errs := lz.Validate(); len(errs) != 0 {
+		t.Fatalf("expected valid spec, got errors: %v", errs)
+	}
+}
+
+func TestDefaults_RecipesAndDomain(t *testing.T) {
+	// A spec env with no recipes and no domainSuffix should get the full
+	// default recipe set (dns disabled) and the <env>.internal domain.
+	const y = `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: i }
+spec:
+  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }
+  environments:
+    lab:
+      cluster:
+        clusterLabel: lab
+        region: us-sea
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: g8-dedicated-8-4, count: 3 }
+        bootstrap: { name: platform-lab }
+        objectStorage: { cluster: us-sea-1 }
+`
+	lz := mustDecode(t, y)
+	env := lz.Spec.Environments["lab"]
+	if got := env.Cluster.Bootstrap.DomainSuffix; got != "lab.internal" {
+		t.Errorf("domainSuffix default = %q, want lab.internal", got)
+	}
+	if !env.Recipes["openbao"].Enabled {
+		t.Error("openbao recipe should default enabled")
+	}
+	if env.Recipes["dns"].Enabled {
+		t.Error("dns recipe should default disabled")
+	}
+	if errs := lz.Validate(); len(errs) != 0 {
+		t.Fatalf("defaulted spec should validate, got: %v", errs)
+	}
+}
+
+func TestDefaults_PartialRecipesPreserveExplicitFalse(t *testing.T) {
+	const y = validSpec
+	lz := mustDecode(t, y+`      recipes:
+        harbor: { enabled: false }
+`)
+	env := lz.Spec.Environments["primary"]
+	if env.Recipes["harbor"].Enabled {
+		t.Error("explicit harbor:false must be preserved by Defaults")
+	}
+	if !env.Recipes["observability"].Enabled {
+		t.Error("unmentioned recipe should default enabled")
+	}
+}
+
+func TestValidate_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  string // appended under the primary cluster/recipes
+		wantSub string
+	}{
+		{"unknown recipe", "      recipes:\n        bogus: { enabled: true }\n", "unknown recipe"},
+		{"mandatory disabled", "      recipes:\n        argocd: { enabled: false }\n", "mandatory"},
+		{"openbao missing dep", "      recipes:\n        externalSecrets: { enabled: false }\n", "requires recipe \"externalSecrets\""},
+		{"vpc cidr bad prefix", "        network: { subnetCIDR: 10.0.0.0/24 }\n", "/13 or /14"},
+		{"vpc cidr not a cidr", "        network: { subnetCIDR: nope }\n", "not a valid CIDR"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lz := mustDecode(t, validSpec+tc.mutate)
+			errs := lz.Validate()
+			if !containsSub(errs, tc.wantSub) {
+				t.Fatalf("want an error containing %q; got %v", tc.wantSub, errs)
+			}
+		})
+	}
+}
+
+func TestValidate_HAInconsistent(t *testing.T) {
+	const y = `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: i }
+spec:
+  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }
+  environments:
+    a:
+      cluster:
+        clusterLabel: a
+        region: us-ord
+        k8sVersion: v1
+        nodePool: { type: t, count: 3 }
+        ha: { role: active }
+        bootstrap: { name: platform-a }
+        objectStorage: { cluster: us-ord-1 }
+`
+	lz := mustDecode(t, y)
+	if !containsSub(lz.Validate(), "requires") {
+		t.Fatalf("active role without group should error; got %v", lz.Validate())
+	}
+}
+
+func TestValidate_BadForgeAndAPIVersion(t *testing.T) {
+	y := strings.Replace(validSpec, "forge: github", "forge: bitbucket", 1)
+	y = strings.Replace(y, APIVersion, "v0", 1)
+	lz := mustDecode(t, y)
+	errs := lz.Validate()
+	if !containsSub(errs, "forge") || !containsSub(errs, "apiVersion") {
+		t.Fatalf("want forge + apiVersion errors; got %v", errs)
+	}
+}
+
+// haPairSpec builds an active/standby HA pair in two regions; an empty cidr omits
+// the env's network block (so it falls back to the default).
+func haPairSpec(cidrA, cidrB string) string {
+	net := func(c string) string {
+		if c == "" {
+			return ""
+		}
+		return "\n        network: { subnetCIDR: " + c + " }"
+	}
+	return `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: i }
+spec:
+  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }
+  environments:
+    east:
+      cluster:
+        clusterLabel: east
+        region: us-ord
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: t, count: 3 }
+        ha: { role: active, group: prod }` + net(cidrA) + `
+        bootstrap: { name: platform-east }
+        objectStorage: { cluster: us-ord-1 }
+    west:
+      cluster:
+        clusterLabel: west
+        region: us-sea
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: t, count: 3 }
+        ha: { role: standby, group: prod }` + net(cidrB) + `
+        bootstrap: { name: platform-west }
+        objectStorage: { cluster: us-sea-1 }
+`
+}
+
+func TestValidate_HAVPCOverlap(t *testing.T) {
+	overlapping := map[string][2]string{
+		"both default (silent collision)": {"", ""},
+		"explicit identical":              {"10.0.0.0/13", "10.0.0.0/13"},
+		"nested":                          {"10.0.0.0/13", "10.0.0.0/14"},
+	}
+	for name, c := range overlapping {
+		t.Run(name, func(t *testing.T) {
+			if !containsSub(mustDecode(t, haPairSpec(c[0], c[1])).Validate(), "overlapping VPC subnet") {
+				t.Errorf("HA peers (%q,%q) should overlap-error", c[0], c[1])
+			}
+		})
+	}
+	// Distinct, non-overlapping /13s validate clean.
+	if errs := mustDecode(t, haPairSpec("10.0.0.0/13", "10.8.0.0/13")).Validate(); len(errs) != 0 {
+		t.Errorf("distinct HA CIDRs should validate clean; got %v", errs)
+	}
+}
+
+func TestValidate_Networks(t *testing.T) {
+	// base has a shared VPC "ord" (us-ord) and two envs; the verb args fill web's
+	// subnet, then api's region / vpc-ref / subnet.
+	base := `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: i }
+spec:
+  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }
+  networks:
+    ord: { region: us-ord }
+  environments:
+    web:
+      cluster:
+        clusterLabel: web
+        region: us-ord
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: t, count: 3 }
+        network: { vpc: ord, subnetCIDR: %s }
+        bootstrap: { name: platform-web }
+        objectStorage: { cluster: us-ord-1 }
+    api:
+      cluster:
+        clusterLabel: api
+        region: %s
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: t, count: 3 }
+        network: { vpc: %s, subnetCIDR: %s }
+        bootstrap: { name: platform-api }
+        objectStorage: { cluster: us-ord-1 }
+`
+	// distinct subnets sharing one VPC → clean.
+	if errs := mustDecode(t, fmt.Sprintf(base, "10.0.0.0/14", "us-ord", "ord", "10.4.0.0/14")).Validate(); len(errs) != 0 {
+		t.Errorf("distinct subnets in one VPC should validate clean; got %v", errs)
+	}
+	// overlapping subnets sharing one VPC → error.
+	if !containsSub(mustDecode(t, fmt.Sprintf(base, "10.0.0.0/13", "us-ord", "ord", "10.0.0.0/13")).Validate(), "overlapping subnet") {
+		t.Error("overlapping subnets in one VPC should error")
+	}
+	// reference to an undeclared network → error.
+	if !containsSub(mustDecode(t, fmt.Sprintf(base, "10.0.0.0/14", "us-ord", "nope", "10.4.0.0/14")).Validate(), "not declared in spec.networks") {
+		t.Error("unknown vpc ref should error")
+	}
+	// attaching to a VPC in another region → error.
+	if !containsSub(mustDecode(t, fmt.Sprintf(base, "10.0.0.0/14", "us-sea", "ord", "10.4.0.0/14")).Validate(), "cannot span regions") {
+		t.Error("region mismatch should error")
+	}
+}
+
+func TestClusterTFVars_SubnetCIDR(t *testing.T) {
+	got := assignMap(ClusterTFVars(Cluster{Network: ClusterNetwork{SubnetCIDR: "10.8.0.0/14"}}))
+	if got["vpc_subnet_cidr"] != `"10.8.0.0/14"` {
+		t.Errorf("vpc_subnet_cidr = %q, want \"10.8.0.0/14\"", got["vpc_subnet_cidr"])
+	}
+	// Unset → not emitted, so the tfvars-example default stands.
+	if _, ok := assignMap(ClusterTFVars(Cluster{}))["vpc_subnet_cidr"]; ok {
+		t.Error("unset subnetCIDR should not emit vpc_subnet_cidr")
+	}
+}
+
+func TestDecode_RejectsUnknownField(t *testing.T) {
+	if _, err := Decode([]byte(validSpec + "  bogusTopLevel: true\n")); err == nil {
+		t.Fatal("UnmarshalStrict should reject an unknown field")
+	}
+}
+
+func TestClusterTFVars_Golden(t *testing.T) {
+	lz := mustDecode(t, validSpec)
+	got := assignMap(ClusterTFVars(lz.Spec.Environments["primary"].Cluster))
+	want := map[string]string{
+		"cluster_label":                    `"platform-support"`,
+		"region":                           `"us-ord"`,
+		"k8s_version":                      `"v1.33.6+lke7"`,
+		"tags":                             `["platform", "observability"]`,
+		"node_type":                        `"g8-dedicated-8-4"`,
+		"node_count":                       `5`,
+		"control_plane_high_availability":  `true`,
+		"control_plane_audit_logs_enabled": `true`,
+		"ha_role":                          `"standalone"`,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("cluster tfvars %s = %q, want %q", k, got[k], v)
+		}
+	}
+	// Omitted optionals must NOT be emitted (left to the example default).
+	for _, k := range []string{"autoscaler_enabled", "github_runner_ipv4_cidrs", "ha_group", "promotion_rank"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("omitted field %s should not be assigned, got %q", k, got[k])
+		}
+	}
+}
+
+func TestBootstrapAndObjTFVars_InjectEnvName(t *testing.T) {
+	lz := mustDecode(t, validSpec)
+	c := lz.Spec.Environments["primary"].Cluster
+	b := assignMap(BootstrapTFVars("primary", c))
+	if b["deployment"] != `"primary"` || b["apl_values_env"] != `"primary"` {
+		t.Errorf("deployment/apl_values_env must be the env name; got %v", b)
+	}
+	if b["cluster_name"] != `"platform-primary"` || b["cluster_domain"] != `"primary.example.com"` {
+		t.Errorf("bootstrap name/domain mismatch; got %v", b)
+	}
+	o := assignMap(ObjectStorageTFVars("primary", c))
+	if o["region_suffix"] != `"primary"` || o["obj_cluster"] != `"us-ord-1"` {
+		t.Errorf("object-storage mapping mismatch; got %v", o)
+	}
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+func assignMap(as []Assign) map[string]string {
+	m := make(map[string]string, len(as))
+	for _, a := range as {
+		m[a.Key] = a.Val
+	}
+	return m
+}
+
+func containsSub(errs []error, sub string) bool {
+	for _, e := range errs {
+		if strings.Contains(e.Error(), sub) {
+			return true
+		}
+	}
+	return false
+}

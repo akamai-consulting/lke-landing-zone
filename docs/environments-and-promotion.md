@@ -84,6 +84,13 @@ llz env add prod    --region us-sea --promotion-rank 3
 …or edit `promotion_rank` in an existing `cluster/<env>.tfvars` by hand. Either
 way it is a reviewable line in a committed tfvars file.
 
+> **Spec-driven instances:** if you author a [LandingZone spec](landing-zone-spec.md)
+> (`landingzone.yaml` + `environments/<env>.yaml`), set `cluster.promotionRank` in
+> the env's file instead — `llz render` writes it into the transient
+> `cluster/<env>.tfvars`. Don't hand-edit those rendered tfvars; the next render
+> overwrites them. `llz env list --ordered` / `llz env next` read the rendered
+> result the same way.
+
 ## 3. Reading the order: `llz env list --ordered` and `llz env next`
 
 Two read-only helpers turn the ranks into something CI can walk. Both are

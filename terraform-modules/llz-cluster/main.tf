@@ -2,11 +2,17 @@ locals {
   # Linode firewall labels are capped at 32 chars; truncate the cluster label
   # to 26 to always leave room for the "-nodes" suffix.
   firewall_label = var.firewall_label != "" ? var.firewall_label : "${substr(var.cluster_label, 0, 26)}-nodes"
+
+  # Dedicated (default) vs shared VPC: with no vpc_id we create our own VPC; with
+  # one we attach this cluster's subnet to the caller-provided shared VPC.
+  create_vpc = var.vpc_id == ""
+  vpc_id     = local.create_vpc ? linode_vpc.this[0].id : var.vpc_id
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
 
 resource "linode_vpc" "this" {
+  count       = local.create_vpc ? 1 : 0
   label       = "${var.cluster_label}-vpc"
   region      = var.region
   description = "VPC for LKE Enterprise cluster ${var.cluster_label}"
@@ -19,15 +25,17 @@ resource "linode_vpc" "this" {
 # Give the VPC a few seconds to propagate before creating the subnet. time_sleep
 # only delays on CREATE, so steady-state applies are unaffected.
 resource "time_sleep" "vpc_settle" {
+  count           = local.create_vpc ? 1 : 0
   depends_on      = [linode_vpc.this]
   create_duration = "15s"
 }
 
 resource "linode_vpc_subnet" "nodes" {
-  vpc_id = linode_vpc.this.id
+  vpc_id = local.vpc_id
   label  = "${var.cluster_label}-nodes"
   ipv4   = var.vpc_subnet_cidr
 
+  # Only the dedicated path needs the settle delay (the shared VPC already exists).
   depends_on = [time_sleep.vpc_settle]
 }
 
@@ -58,7 +66,7 @@ resource "linode_lke_cluster" "this" {
   # linode_vpc.this above orphaned. Each cycle then leaks a "<label>-vpc" until
   # the account hits its VPC quota and new cluster creates hang forever in
   # "Still creating…" (no VPC available). See the provider's enterprise example.
-  vpc_id    = linode_vpc.this.id
+  vpc_id    = local.vpc_id
   subnet_id = linode_vpc_subnet.nodes.id
 
   control_plane {
