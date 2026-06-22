@@ -5,18 +5,24 @@
 #
 #     llz env add <env> --template-env example
 #
-# That copies this directory to apl-values/<env>/ and substitutes the env
-# identity tokens. Values written as $${...} are rendered by Terraform's
-# cluster-bootstrap (templatefile()); values written REPLACE_PER_ENV are filled
-# in by you (or the scaffold) per environment.
+# That copies this directory to apl-values/<env>/ and fills it in. The $${...}
+# placeholders are rendered by Terraform's cluster-bootstrap (templatefile()):
+# the cluster identity (cluster_name/cluster_domain, from the env's tfvars) plus
+# the secrets + infra outputs (repo creds, dns token, loki/harbor object-store,
+# coredns IP). For a SPEC-driven instance (landingzone.yaml present), `llz render`
+# additionally writes the identity + platform keys — cluster.name/domainSuffix,
+# dns.domainFilters, otomi.has* — straight in from spec.environments.<env> +
+# spec.defaults.platform, so the ${cluster_name}/${cluster_domain} placeholders
+# below are already resolved before Terraform runs (single source = the spec).
+# Values written REPLACE_PER_ENV are filled in by you per environment.
 #
 # Schema reference: https://raw.githubusercontent.com/linode/apl-core/main/values-schema.yaml
 
-# ── Cluster identity (Terraform-rendered) ──────────────────────────────────────
+# ── Cluster identity (Terraform-rendered; spec instances: llz-render-rendered) ──
 cluster:
-  name:         ${cluster_name}       # e.g. <prefix>-<env>; set in terraform-iac-bootstrap/cluster/<env>.tfvars
+  name:         ${cluster_name}       # env's cluster_name (spec: cluster.bootstrap.name)
   provider:     linode
-  domainSuffix: ${cluster_domain}     # e.g. <env>.example.internal
+  domainSuffix: ${cluster_domain}     # env's cluster_domain (spec: cluster.bootstrap.domainSuffix)
   # Promote the encrypted, retain-policy block-storage class shipped by the
   # llz-cluster-foundation chart (kubernetes-charts/llz-cluster-foundation).
   defaultStorageClass: block-storage-retain
@@ -154,6 +160,9 @@ apps:
   rabbitmq:      { enabled: false }
 
 # ── Global platform settings ────────────────────────────────────────────────────
+# hasExternalDNS / hasExternalIDP are the literals every env gets by default. A
+# spec instance can override them per spec.defaults.platform (externalDNS/
+# externalIDP), which `llz render` writes here.
 otomi:
   hasExternalDNS: true
   hasExternalIDP: false   # standalone Keycloak
@@ -171,7 +180,7 @@ otomi:
 
 dns:
   domainFilters:
-    - ${cluster_domain}        # the cluster domainSuffix, e.g. <env>.internal
+    - ${cluster_domain}        # the cluster domainSuffix (spec: cluster.bootstrap.domainSuffix)
   provider:
     linode:
       apiToken: ${linode_dns_token}   # rendered from var.linode_dns_token via templatefile()

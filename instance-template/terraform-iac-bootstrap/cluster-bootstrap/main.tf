@@ -147,6 +147,12 @@ locals {
   s3_host       = replace(local.obj_s3_url, "https://", "")
   s3_region     = replace(local.s3_host, ".linodeobjects.com", "")
 
+  # Fills the values.yaml placeholders: the cluster identity (cluster_name/
+  # cluster_domain) + the secrets/infra outputs (repo creds, dns token, loki/harbor
+  # object-store, coredns IP). For a SPEC instance, `llz render` has already written
+  # the identity literals into the committed values.yaml from the LandingZone spec,
+  # so those two are resolved before this runs and the vars here are a no-op for it;
+  # for a non-spec instance they ARE the identity render path.
   apl_rendered_values = templatefile(
     "${path.module}/../../apl-values/${var.apl_values_env}/values.yaml",
     {

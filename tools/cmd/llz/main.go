@@ -64,7 +64,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(),
-		secretsCmd(), tokensCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
+		secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
 	)
@@ -245,11 +245,14 @@ func envCmd() *cobra.Command {
 	var o envAddOpts
 	add := &cobra.Command{
 		Use:   "add <name>",
-		Short: "scaffold a deployment (native; works in any instance)",
-		Long: "Clones the apl-values/example overlay + each Terraform root's\n" +
-			"terraform.tfvars.example into a new <name> deployment, swapping identity\n" +
-			"tokens. Layout-aware (instance root or a template-repo checkout). Supplying\n" +
-			"the must-set values as flags makes env add → tokens → build a guided path.",
+		Short: "scaffold a deployment — authors the LandingZone spec, then renders it",
+		Long: "Spec-first: authors landingzone.yaml (on the first env, from\n" +
+			".copier-answers.yml + seeded spec.defaults) and one environments/<name>.yaml\n" +
+			"ClusterDefinition from the flags, clones the apl-values/example overlay\n" +
+			"payload, then runs `llz render` to reconcile the spec into the tfvars +\n" +
+			"overlay. --region and --obj-cluster are required (the spec validates them).\n" +
+			"Layout-aware (instance root or a template-repo checkout). Edit\n" +
+			"environments/<name>.yaml + re-run `llz render` to change a deployment.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error { return cmdEnvAdd(gopts, args[0], o) },
 	}
@@ -270,7 +273,7 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.haGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")
 	f.IntVar(&o.promotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would be created; write nothing")
-	env.AddCommand(add, envListCmd(), envRoleCmd(), envPeerCmd(), envNextCmd(), envPipelineCmd())
+	env.AddCommand(add, envListCmd(), envRoleCmd(), envPeerCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
 	return env
 }
 

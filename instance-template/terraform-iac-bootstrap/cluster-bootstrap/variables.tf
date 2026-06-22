@@ -21,12 +21,12 @@ variable "apl_values_env" {
 }
 
 variable "cluster_name" {
-  description = "Logical cluster name injected into apl-core values as cluster.name. Used by Istio Gateway hostnames, Argo CD context, and Console banner."
+  description = "Logical cluster name injected into apl-core values as cluster.name (Istio Gateway hostnames, Argo CD context, Console banner). For a spec instance this matches cluster.bootstrap.name, which `llz render` has already written into the committed values.yaml."
   type        = string
 }
 
 variable "cluster_domain" {
-  description = "Base DNS domain for this cluster (e.g. lab.<domain>, <domain> for primary). Injected as cluster.domainSuffix. ExternalDNS uses this; cert-manager Let's Encrypt issuance covers subdomains of it."
+  description = "Base DNS domain for this cluster (e.g. lab.<domain>, <domain> for primary). Injected as cluster.domainSuffix + dns.domainFilters; also read from these tfvars by `llz ci resolve-harbor-url` to derive harbor.<cluster_domain>. ExternalDNS uses it; cert-manager Let's Encrypt covers its subdomains. Spec instances: cluster.bootstrap.domainSuffix."
   type        = string
 }
 

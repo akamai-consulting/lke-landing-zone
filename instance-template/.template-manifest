@@ -40,6 +40,11 @@ managed  .github/actions/**
 managed  .tflintrc.hcl
 managed  .checkov.yaml
 managed  .gitleaks.toml
+# LandingZone spec starting template (the active landingzone.yaml an instance
+# authors is `owned`, below — this .example is template-provided reference).
+managed  landingzone.yaml.example
+owned    landingzone.yaml
+owned    environments/*.yaml
 # Operational tooling is NOT classified here: like .github/actions, it's template-
 # INTERNAL and no longer delivered to instances (copier.yml drops the old _task).
 # The former instance-scripts/ were assimilated into the llz CLI, which is baked

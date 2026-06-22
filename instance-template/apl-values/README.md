@@ -30,6 +30,11 @@ That command:
 2. Generates the matching Terraform tfvars under `../terraform/<root>/<env>.tfvars`
    from the example tfvars.
 
-Identity values written as `${cluster_name}` / `${cluster_domain}` are rendered
-by Terraform `templatefile()`; values written `REPLACE_PER_ENV` are filled in by
-you (or by the scaffold flags) per environment.
+Identity values written as `${cluster_name}` / `${cluster_domain}`, and the other
+`${...}` placeholders (secrets + infra outputs: repo creds, dns token, loki/harbor
+object-store, coredns IP), are rendered by Terraform `templatefile()` at
+cluster-bootstrap; values written `REPLACE_PER_ENV` are filled in by you (or the
+scaffold flags) per environment. For a **spec-driven** instance (`landingzone.yaml`
+present), `llz render` additionally writes the identity + platform keys
+(`cluster.name`/`domainSuffix`, `dns.domainFilters`, `otomi.has*`) straight from
+the spec, so those are already resolved before Terraform runs.

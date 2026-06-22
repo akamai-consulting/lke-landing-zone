@@ -168,12 +168,15 @@ jobs:
       - name: Scaffold the e2e environment
         run: |
           set -euo pipefail
-          # Re-create the e2e env from scratch each run (idempotent).
+          # Re-create the e2e env from scratch each run (idempotent). env add is
+          # spec-first, so also drop the authored spec files — it refuses to
+          # overwrite environments/<env>.yaml, and landingzone.yaml is re-bootstrapped.
           rm -rf "instance-template/apl-values/${E2E_ENV}" 2>/dev/null || true
           rm -f instance-template/terraform-iac-bootstrap/*/"${E2E_ENV}.tfvars" 2>/dev/null || true
-          # `llz env add` is the scaffolder (folded into the binary from the old
-          # template-scripts/new-deployment.sh). It is layout-aware: run from the
-          # template root it writes into instance-template/.
+          rm -f "instance-template/environments/${E2E_ENV}.yaml" instance-template/landingzone.yaml 2>/dev/null || true
+          # `llz env add` is the spec-first scaffolder (folded into the binary from
+          # the old template-scripts/new-deployment.sh). It is layout-aware: run from
+          # the template root it writes into instance-template/.
           bin/llz env add "${E2E_ENV}" \
             --region "${E2E_LINODE_REGION}" \
             --obj-cluster "${E2E_OBJ_CLUSTER}"

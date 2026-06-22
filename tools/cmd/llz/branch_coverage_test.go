@@ -310,7 +310,7 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 	// With a residual placeholder → it's listed.
 	dir := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir, "apl-values", "lab", "issuer.yaml"), "email: REPLACE_PER_ENV\n")
-	out := captureStdout(t, func() { printPlaceholderChecklist("terraform-iac-bootstrap", "apl-values", "lab") })
+	out := captureStdout(t, func() { printPlaceholderChecklist("apl-values", "lab") })
 	if !strings.Contains(out, "Placeholders still to fill") || !strings.Contains(out, "REPLACE_PER_ENV") {
 		t.Errorf("checklist did not flag the placeholder:\n%s", out)
 	}
@@ -318,7 +318,7 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 	// Clean overlay → the "nothing left" message.
 	dir2 := chdirTempDir(t)
 	writeFileMkdir(t, filepath.Join(dir2, "apl-values", "lab", "issuer.yaml"), "email: ops@example.com\n")
-	out2 := captureStdout(t, func() { printPlaceholderChecklist("terraform-iac-bootstrap", "apl-values", "lab") })
+	out2 := captureStdout(t, func() { printPlaceholderChecklist("apl-values", "lab") })
 	if !strings.Contains(out2, "no placeholders left") {
 		t.Errorf("clean overlay should report none left:\n%s", out2)
 	}

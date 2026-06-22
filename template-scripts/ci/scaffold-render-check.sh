@@ -67,26 +67,31 @@ GEN_TFVARS=(
   "$INSTANCE/terraform-iac-bootstrap/object-storage/$ENV_NAME.tfvars"
 )
 GEN_OVERLAY="$INSTANCE/apl-values/$ENV_NAME"
+ENV_YAML="$INSTANCE/environments/$ENV_NAME.yaml"   # spec ClusterDefinition `llz env add` authors
+LZ="$INSTANCE/landingzone.yaml"                     # created on the first env add (untracked in the template)
 TV="$ROOT/.template-version"   # llz env add stamps this at repo root
 
 # Refuse to touch a real, tracked env of the same name.
-for f in "${GEN_TFVARS[@]}" "$GEN_OVERLAY"; do
+for f in "${GEN_TFVARS[@]}" "$GEN_OVERLAY" "$ENV_YAML"; do
   if git -C "$ROOT" ls-files --error-unmatch "$f" >/dev/null 2>&1; then
     echo "::error::scaffold-check: '$ENV_NAME' is a real tracked env (${f#"$ROOT"/}). Set SCAFFOLD_CHECK_ENV to a throwaway name."
     exit 1
   fi
 done
 
-# Snapshot .template-version so the throwaway scaffold's stamp doesn't clobber it.
-TV_BAK=""
-[[ -f "$TV" ]] && { TV_BAK="$(mktemp)"; cp "$TV" "$TV_BAK"; }
+# Snapshot .template-version + landingzone.yaml so the throwaway scaffold's
+# stamp / first-env bootstrap doesn't clobber a real local copy.
+TV_BAK=""; [[ -f "$TV" ]] && { TV_BAK="$(mktemp)"; cp "$TV" "$TV_BAK"; }
+LZ_BAK=""; [[ -f "$LZ" ]] && { LZ_BAK="$(mktemp)"; cp "$LZ" "$LZ_BAK"; }
 
 cleanup() {
-  rm -rf "${GEN_TFVARS[@]}" "$GEN_OVERLAY"
+  rm -rf "${GEN_TFVARS[@]}" "$GEN_OVERLAY" "$ENV_YAML"
   if [[ -n "$TV_BAK" ]]; then mv -f "$TV_BAK" "$TV"; else rm -f "$TV"; fi
+  if [[ -n "$LZ_BAK" ]]; then mv -f "$LZ_BAK" "$LZ"; else rm -f "$LZ"; fi
 }
 cleanup            # pre-clean leftovers from an interrupted prior run
 TV_BAK=""; [[ -f "$TV" ]] && { TV_BAK="$(mktemp)"; cp "$TV" "$TV_BAK"; }
+LZ_BAK=""; [[ -f "$LZ" ]] && { LZ_BAK="$(mktemp)"; cp "$LZ" "$LZ_BAK"; }
 trap cleanup EXIT
 
 # ── 1. Scaffold a throwaway env (the real `llz env add` path) ─────────────────

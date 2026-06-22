@@ -4,25 +4,19 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 )
 
-// envNameRe is the deployment-name contract — IDENTICAL to the one
-// new-deployment.sh / `llz env add` enforce (^[a-z][a-z0-9-]{1,30}$). Deployments
-// are created dynamically (there is no hardcoded env list — terraform.yml's
-// region input is a free-form string, not a choice), so build/status/tokens
-// validate the SHAPE of the name, not membership in a fixed set: otherwise
-// `llz env add myteam-dev` would succeed but `llz build myteam-dev` refuse.
-var envNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
-
 // validateEnvName returns an error if env is not a legal deployment name.
-func validateEnvName(env string) error {
-	if !envNameRe.MatchString(env) {
-		return fmt.Errorf("invalid deployment name %q (want %s — the same contract as `llz env add`)", env, envNameRe.String())
-	}
-	return nil
-}
+// The deployment-name contract (^[a-z][a-z0-9-]{1,30}$) lives in internal/validate
+// so the LandingZone spec validator enforces the IDENTICAL rule. Deployments are
+// created dynamically (there is no hardcoded env list — terraform.yml's region
+// input is a free-form string, not a choice), so build/status/tokens validate the
+// SHAPE of the name, not membership in a fixed set: otherwise `llz env add
+// myteam-dev` would succeed but `llz build myteam-dev` refuse.
+func validateEnvName(env string) error { return validate.EnvName(env) }
 
 // ── argv builders (pure; covered by commands_test.go) ────────────────────────
 
@@ -216,8 +210,8 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	fmt.Printf(`
 Next steps:
   cd %s
-`+envHint+`  llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>  # scaffold tfvars
-  # edit the generated <env>.tfvars files (the ADOPTER-MUST-SET values)
+`+envHint+`  llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>  # authors the spec + renders
+  # edit environments/<env>.yaml to tune the deployment, then `+"`llz render <env>`"+`
   llz validate --env <env>          # catch unfilled placeholders before a build
   llz tokens --env <env> --yes      # create state bucket+key, gather PATs, push
   llz doctor --env <env>            # confirm every required value is set

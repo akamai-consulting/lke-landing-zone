@@ -21,8 +21,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 )
 
 // envAddOpts mirrors new-deployment.sh's flags, plus the ADOPTER-MUST-SET values
@@ -64,26 +66,10 @@ const tplTfvars = "terraform.tfvars.example"
 
 var tfRoots = []string{"cluster", "cluster-bootstrap", "object-storage"}
 
-// objClusterRe matches a Linode OBJ cluster id: a region plus a datacenter
-// ordinal, e.g. us-ord-1 or the newer-generation us-ord-10.
-var objClusterRe = regexp.MustCompile(`^[a-z]{2}-[a-z]+-\d+$`)
-
 // validateOBJCluster catches a value that isn't shaped like a Linode OBJ cluster
-// id (a CIDR, a bare region with no datacenter ordinal, an unfilled placeholder)
-// early, before it reaches the object-storage apply. It does NOT constrain the
-// ordinal: both legacy (-1) and newer-generation (e.g. -10) clusters are valid —
-// the exact set is account/region-specific (`linode-cli object-storage
-// clusters-list`). Empty is allowed (the caller decides whether unset is OK).
-func validateOBJCluster(v string) error {
-	if v == "" {
-		return nil
-	}
-	if !objClusterRe.MatchString(v) {
-		return fmt.Errorf("obj_cluster %q is not a Linode OBJ cluster id (expected e.g. us-ord-1 or us-ord-10); "+
-			"list them with `linode-cli object-storage clusters-list`", v)
-	}
-	return nil
-}
+// id. The shape rule lives in internal/validate (OBJClusterID) so the LandingZone
+// spec validator reuses it.
+func validateOBJCluster(v string) error { return validate.OBJClusterID(v) }
 
 func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if o.templateEnv == "" {
@@ -101,24 +87,26 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if err := validateHAFlags(o.haRole, o.haGroup); err != nil {
 		return err
 	}
+	// Spec-first must-sets: the spec validates these, so require them up front
+	// rather than scaffolding an env that won't render.
+	if o.region == "" {
+		return fmt.Errorf("--region is required (the spec's cluster.region)")
+	}
 	if err := validateOBJCluster(o.objCluster); err != nil {
-		return err
+		return fmt.Errorf("--obj-cluster: %w", err)
 	}
 	dryRun := o.dryRun || g.dryRun
 
 	tfDir, aplDir, relPrefix := instanceLayout()
-	clusterDomain := o.clusterDomain
-	if clusterDomain == "" {
-		clusterDomain = name + ".internal"
-	}
-	regionShort := o.regionShort
-	if regionShort == "" {
-		regionShort = first3(name)
-	}
+	specRoot := filepath.Dir(tfDir)
+	clusterDomain := orElse(o.clusterDomain, name+".internal")
+	regionShort := orElse(o.regionShort, first3(name))
 	templateShort := first3(o.templateEnv)
 
 	overlaySrc := filepath.Join(aplDir, o.templateEnv)
 	overlayDst := filepath.Join(aplDir, name)
+	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
+	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
 
 	// ── pre-flight ───────────────────────────────────────────────────────────
 	if fi, err := os.Stat(overlaySrc); err != nil || !fi.IsDir() {
@@ -127,215 +115,116 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if _, err := os.Stat(overlayDst); err == nil {
 		return fmt.Errorf("%s already exists — refusing to overwrite", overlayDst)
 	}
-	for _, root := range tfRoots {
-		if _, err := os.Stat(filepath.Join(tfDir, root, tplTfvars)); err != nil {
-			return fmt.Errorf("missing template tfvars: %s/%s", root, tplTfvars)
-		}
-		if _, err := os.Stat(filepath.Join(tfDir, root, name+".tfvars")); err == nil {
-			return fmt.Errorf("%s/%s.tfvars already exists — refusing to overwrite", root, name)
-		}
+	if _, err := os.Stat(envFile); err == nil {
+		return fmt.Errorf("%s already exists — refusing to overwrite", envFile)
 	}
 
-	fmt.Println("=== llz env add — scaffold ===")
+	fmt.Println("=== llz env add — spec-first scaffold ===")
 	fmt.Printf("    env:            %s\n", name)
 	fmt.Printf("    template-env:   %s\n", o.templateEnv)
 	fmt.Printf("    domainSuffix:   %s\n", clusterDomain)
 	fmt.Printf("    REGION_SHORT:   %s -> %s\n", templateShort, regionShort)
-	fmt.Printf("    Linode region:  %s\n", orUnset(o.region, "cluster/"+name+".tfvars"))
-	fmt.Printf("    OBJ cluster:    %s\n", orUnset(o.objCluster, "object-storage/"+name+".tfvars"))
+	fmt.Printf("    Linode region:  %s\n", o.region)
+	fmt.Printf("    OBJ cluster:    %s\n", o.objCluster)
 	fmt.Printf("    dry-run:        %v\n\n", dryRun)
 
-	// ── 1. Terraform tfvars ──────────────────────────────────────────────────
-	fmt.Println("Terraform tfvars:")
-	for _, root := range tfRoots {
-		dst := filepath.Join(tfDir, root, name+".tfvars")
-		if dryRun {
-			fmt.Printf("  would-create  %s\n", dst)
-			continue
-		}
-		if err := copyFile(filepath.Join(tfDir, root, tplTfvars), dst); err != nil {
-			return err
-		}
-		if err := editFile(dst, func(s string) string { return strings.ReplaceAll(s, o.templateEnv, name) }); err != nil {
-			return err
-		}
-		fmt.Printf("  created  %s\n", dst)
-	}
-
-	if !dryRun {
-		clusterTfvars := filepath.Join(tfDir, "cluster", name+".tfvars")
-		objTfvars := filepath.Join(tfDir, "object-storage", name+".tfvars")
-		cbTfvars := filepath.Join(tfDir, "cluster-bootstrap", name+".tfvars")
-
-		if err := editFile(clusterTfvars, func(s string) string {
-			if o.region != "" {
-				s = setHCLField(s, "region", quote(o.region))
-			}
-			if o.k8sVersion != "" {
-				s = setHCLField(s, "k8s_version", quote(o.k8sVersion))
-			}
-			if o.nodeType != "" {
-				s = setHCLField(s, "node_type", quote(o.nodeType))
-			}
-			if o.nodeCount != "" {
-				s = setHCLField(s, "node_count", o.nodeCount) // numeric — no quotes
-			}
-			if o.runnerIPv4CIDRs != "" {
-				s = setHCLField(s, "github_runner_ipv4_cidrs", hclList(o.runnerIPv4CIDRs))
-			}
-			if o.runnerIPv6CIDRs != "" {
-				s = setHCLField(s, "github_runner_ipv6_cidrs", hclList(o.runnerIPv6CIDRs))
-			}
-			if o.haRole != "" {
-				s = setHCLField(s, "ha_role", quote(o.haRole))
-			}
-			if o.haGroup != "" {
-				s = setHCLField(s, "ha_group", quote(o.haGroup))
-			}
-			if o.promotionRank > 0 {
-				// Unquoted: promotion_rank is an HCL number.
-				s = setHCLField(s, "promotion_rank", strconv.Itoa(o.promotionRank))
-			}
-			return s
-		}); err != nil {
-			return err
-		}
-
-		if err := editFile(objTfvars, func(s string) string {
-			if o.objCluster != "" {
-				s = setHCLField(s, "obj_cluster", quote(o.objCluster))
-			}
-			// region_suffix is the deployment discriminator — always the env name.
-			return setHCLField(s, "region_suffix", quote(name))
-		}); err != nil {
-			return err
-		}
-
-		// cluster-bootstrap carries "your-env" sentinels the example→env swap does
-		// not touch: region (workspace key), apl_values_env, cluster_name,
-		// cluster_domain. Fill them, then apply the domain + must-set overrides.
-		if err := editFile(cbTfvars, func(s string) string {
-			s = strings.ReplaceAll(s, "your-env", name)
-			if clusterDomain != name+".internal" {
-				s = strings.ReplaceAll(s, name+".internal", clusterDomain)
-			}
-			if o.aplChartVersion != "" {
-				s = setHCLField(s, "apl_chart_version", quote(o.aplChartVersion))
-			}
-			if o.aplValuesRepoURL != "" {
-				s = setHCLField(s, "apl_values_repo_url", quote(o.aplValuesRepoURL))
-			}
-			return s
-		}); err != nil {
-			return err
-		}
-	}
-
-	// ── 2. apl-values overlay ────────────────────────────────────────────────
-	fmt.Println("\napl-values overlay:")
 	if dryRun {
-		for _, rel := range walkFilesRel(overlaySrc) {
-			fmt.Printf("  would-create  %s\n", filepath.Join(overlayDst, rel))
+		fmt.Println("Spec + overlay that would be authored, then `llz render`:")
+		if _, err := os.Stat(lzPath); err != nil {
+			fmt.Printf("  would-create  %s  (instance identity + shared defaults)\n", lzPath)
+		} else {
+			fmt.Printf("  exists        %s  (left as-is)\n", lzPath)
 		}
-	} else {
-		if err := copyTree(overlaySrc, overlayDst); err != nil {
-			return err
-		}
-		for _, p := range walkFiles(overlayDst) {
-			if err := editFile(p, func(s string) string {
-				s = strings.ReplaceAll(s, o.templateEnv, name)
-				if clusterDomain != name+".internal" {
-					s = strings.ReplaceAll(s, name+".internal", clusterDomain)
-				}
-				return s
-			}); err != nil {
-				return err
-			}
-		}
-		// REGION_SHORT in the volume-labeler patch, if present.
-		labeler := filepath.Join(overlayDst, "manifest", "linode-volume-labeler-region-patch.yaml")
-		if _, err := os.Stat(labeler); err == nil {
-			_ = editFile(labeler, func(s string) string {
-				return strings.ReplaceAll(s, quote(templateShort), quote(regionShort))
-			})
-		}
-		fmt.Printf("  created  %s/ (%d files)\n", overlayDst, len(walkFiles(overlayDst)))
-	}
-
-	if dryRun {
+		fmt.Printf("  would-create  %s  (ClusterDefinition from the flags)\n", envFile)
+		fmt.Printf("  would-create  %s/  (overlay payload, %d files)\n", overlayDst, len(walkFilesRel(overlaySrc)))
+		fmt.Printf("  would-run     llz render %s  (→ tfvars + the generated overlay)\n", name)
 		fmt.Println("\nDRY RUN — nothing written. Re-run without --dry-run to create the files.")
 		return nil
 	}
 
-	// ── 3. residual-token review ─────────────────────────────────────────────
-	if hits := grepToken(o.templateEnv, overlayDst, tfvarsPaths(tfDir, name)); len(hits) > 0 {
-		fmt.Printf("\nLeftover %q references to review (some may be intentional, e.g. shared comments):\n", o.templateEnv)
-		for _, h := range hits {
-			fmt.Printf("  %s\n", h)
-		}
+	// ── 1. landingzone.yaml (created on the first env, else left as-is) ───────
+	instanceName, created, err := ensureLandingZone(specRoot, tfDir)
+	if err != nil {
+		return fmt.Errorf("write landingzone.yaml: %w", err)
+	}
+	if created {
+		fmt.Printf("  created  %s  (instance identity + shared defaults)\n", lzPath)
 	}
 
-	// ── 4. provenance stamp (best-effort) ────────────────────────────────────
+	// ── 2. environments/<env>.yaml (the ClusterDefinition from the flags) ─────
+	if err := writeEnvDefinition(envFile, name, o, instanceName, clusterDomain); err != nil {
+		return fmt.Errorf("write %s: %w", envFile, err)
+	}
+	fmt.Printf("  created  %s\n", envFile)
+
+	// ── 3. apl-values overlay payload ────────────────────────────────────────
+	// The resource manifests the generated kustomizations reference are NOT spec-
+	// derived, so clone them from the template; `llz render` (step 4) then
+	// overwrites the two kustomizations + values.yaml from the spec.
+	if err := copyTree(overlaySrc, overlayDst); err != nil {
+		return err
+	}
+	for _, p := range walkFiles(overlayDst) {
+		if err := editFile(p, func(s string) string {
+			s = strings.ReplaceAll(s, o.templateEnv, name)
+			if clusterDomain != name+".internal" {
+				s = strings.ReplaceAll(s, name+".internal", clusterDomain)
+			}
+			return s
+		}); err != nil {
+			return err
+		}
+	}
+	labeler := filepath.Join(overlayDst, "manifest", "linode-volume-labeler-region-patch.yaml")
+	if _, err := os.Stat(labeler); err == nil {
+		_ = editFile(labeler, func(s string) string {
+			return strings.ReplaceAll(s, quote(templateShort), quote(regionShort))
+		})
+	}
+	fmt.Printf("  created  %s/ (%d files)\n", overlayDst, len(walkFiles(overlayDst)))
+
+	// ── 4. render the spec → tfvars + the generated overlay files ─────────────
+	fmt.Printf("\nReconciling the spec (`llz render %s`):\n", name)
+	if err := runRender(g, name, false, false); err != nil {
+		fmt.Fprintf(os.Stderr, "\nThe spec was authored but `llz render` rejected it — fix %s above, then re-run `llz render %s`.\n", envFile, name)
+		return err
+	}
+
+	// ── 5. provenance stamp + promotion pipeline (best-effort) ───────────────
 	if err := stampTemplateVersion(name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not write .template-version (%v)\n", err)
 	}
-
-	// ── 5. regenerate the promotion pipeline from the ranks (best-effort) ─────
-	// promotion_rank is the source of truth; promote.yml is the native
-	// needs:-chain rendered from it (docs/environments-and-promotion.md). A
-	// failure here must not abort an otherwise-complete scaffold.
 	if _, err := syncPromoteWorkflow(tfDir, relPrefix, false); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not regenerate promote.yml (%v) — run `llz env pipeline` once the pin is resolvable\n", err)
 	}
 
-	printEnvAddNextSteps(name, relPrefix, o)
-	printPlaceholderChecklist(tfDir, aplDir, name)
+	printEnvAddNextSteps(name, envFile, o)
+	printPlaceholderChecklist(aplDir, name)
 	return nil
 }
 
-func printEnvAddNextSteps(name, relPrefix string, o envAddOpts) {
-	set := func(v, label string) string {
-		if v != "" {
-			return " ✓ " + label + "=" + v
-		}
-		return ""
-	}
+func printEnvAddNextSteps(name, envFile string, o envAddOpts) {
 	fmt.Printf(`
-Scaffold created for env %q. Still to fill in before `+"`llz build`"+`:
-  • %sterraform-iac-bootstrap/cluster/%s.tfvars
-      - region%s, k8s_version%s, node sizing (node_type/node_count — or pass
-        --node-type/--node-count to env add)
-      - github_runner_ipv4_cidrs / *_ipv6_cidrs%s  → static operator/CI egress CIDRs
-        seeding the bootstrap control-plane ACL (never 0.0.0.0/0). github.com-hosted
-        runners use `+"`llz ci runner-acl open`"+` instead — no static CIDR needed.
-  • %sterraform-iac-bootstrap/cluster-bootstrap/%s.tfvars
-      - apl_chart_version%s, apl_values_repo_url (defaults from instance_repo)
-  • %sterraform-iac-bootstrap/object-storage/%s.tfvars
-      - obj_cluster%s
-  • %sapl-values/%s/values.yaml + manifest/ — fill the REPLACE_PER_ENV / REPLACE_ME
-      placeholders (ACME email, GitOps repoUrl/branch/path, DNS domain).
+Deployment %q scaffolded — landingzone.yaml + %s are the source; `+"`llz render`"+`
+reconciled them into the tfvars + apl-values/%s overlay. To change the cluster,
+edit %s and re-run `+"`llz render %s`"+` (CI re-renders on every build).
+
+Still to fill in the overlay before `+"`llz build`"+`:
+  • apl-values/%s/manifest/ — the REPLACE_PER_ENV / REPLACE_ME placeholders
+      (ACME email, GitOps repoUrl/branch/path, DNS domain) the spec doesn't carry.
 
 Next: `+"`llz doctor --env %s`"+` to catch unfilled values, then `+"`llz tokens --env %s --yes`"+`.
-`,
-		name,
-		relPrefix, name, set(o.region, "region"), set(o.k8sVersion, "k8s_version"),
-		set(o.runnerIPv4CIDRs, "ipv4_cidrs"),
-		relPrefix, name, set(o.aplChartVersion, "apl_chart_version"),
-		relPrefix, name, set(o.objCluster, "obj_cluster"),
-		relPrefix, name, name, name)
+`, name, envFile, name, envFile, name, name, name, name)
 }
 
-// printPlaceholderChecklist scans the freshly-scaffolded tfvars + overlay for the
-// REPLACE_* / your-* sentinels still to be filled and prints them as an exact
-// file:line checklist — so the operator edits a concrete list instead of hunting
-// through the overlay tree. (`llz doctor --env` re-checks these before a build.)
-func printPlaceholderChecklist(tfDir, aplDir, env string) {
-	overlay := filepath.Join(aplDir, env)
-	files := tfvarsPaths(tfDir, env)
-	files = append(files, overlayScanFiles(overlay)...)
-
+// printPlaceholderChecklist scans the freshly-scaffolded apl-values overlay for the
+// REPLACE_* sentinels still to be filled and prints them as an exact file:line
+// checklist. The tfvars are now spec-rendered (transient, regenerated by `llz
+// render`), so only the overlay payload — the manifests the spec doesn't carry —
+// has anything left to hand-fill. (`llz doctor --env` re-checks before a build.)
+func printPlaceholderChecklist(aplDir, env string) {
 	var todo []finding
-	for _, f := range files {
+	for _, f := range overlayScanFiles(filepath.Join(aplDir, env)) {
 		fs, _ := scanForSentinels(f)
 		for _, fd := range fs {
 			if fd.blocking {

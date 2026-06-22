@@ -133,6 +133,17 @@ variable "vpc_subnet_cidr" {
   default     = "10.0.0.0/13"
 }
 
+variable "vpc_network" {
+  description = <<-EOT
+    Label of a SHARED VPC to attach this cluster to (the spec.networks key the env
+    references via cluster.network.vpc; set by `llz render`). Empty (the default)
+    creates a dedicated <cluster_label>-vpc. The shared VPC must already exist — the
+    vpc root applies before the clusters (apply-vpc → apply-cluster).
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "firewall_label" {
   description = "Label for the LKE node firewall. Linode labels are capped at 32 characters."
   type        = string
