@@ -13,12 +13,13 @@
 #   1. Operator seeds LINODE_DNS_TOKEN GH env secret for infra-<region>.
 #   2. bootstrap-dns.yml seeds OpenBao secret/certmanager/dns01, then
 #      `kubectl apply -k` this directory, then waits for ESO to sync.
-#   3. webhook Application + dns01-solver-token Secret + llz-letsencrypt
-#      ClusterIssuers reach Ready in sequence.
+#   3. dns01-solver-token Secret + llz-letsencrypt ClusterIssuers reach Ready in
+#      sequence. The DNS-01 webhook itself is NOT shipped here — apl-core deploys
+#      cert-manager-webhook-linode (API group `acme.slicen.me`) as part of its
+#      cert-manager integration; the ClusterIssuers below target that group.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - dns01-solver-externalsecret.yaml
   - letsencrypt-clusterissuer.yaml
-  - cert-manager-webhook-linode-application.yaml

@@ -34,7 +34,7 @@ func TestIsDeferrable(t *testing.T) {
 	// so they must not block the apply…
 	deferred := []string{
 		"apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml",
-		"apl-values/_shared/manifest/dns/cert-manager-webhook-linode-application.yaml",
+		"apl-values/_shared/manifest/dns/dns01-solver-externalsecret.yaml",
 	}
 	for _, f := range deferred {
 		if !isDeferrable(f) {
