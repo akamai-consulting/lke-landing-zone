@@ -58,19 +58,20 @@ func hclIntField(body, field string) (int, bool) {
 // must be a strict line so "promote to next" is well-defined. Reuses
 // listDeployments so the deployment set is identical to `llz env list`.
 func readPromotion(tfDir string) ([]promoStage, error) {
-	names, err := listDeployments(tfDir)
+	ranks, err := promotionRanks(tfDir)
 	if err != nil {
 		return nil, err
 	}
+	names := make([]string, 0, len(ranks))
+	for name := range ranks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	seen := map[int]string{}
 	stages := []promoStage{}
 	for _, name := range names {
-		body, err := os.ReadFile(filepath.Join(tfDir, "cluster", name+".tfvars"))
-		if err != nil {
-			return nil, err
-		}
-		rank, ok := hclIntField(string(body), "promotion_rank")
-		if !ok || rank <= 0 {
+		rank := ranks[name]
+		if rank <= 0 {
 			continue
 		}
 		if other, dup := seen[rank]; dup {
@@ -81,6 +82,36 @@ func readPromotion(tfDir string) ([]promoStage, error) {
 	}
 	sort.Slice(stages, func(i, j int) bool { return stages[i].rank < stages[j].rank })
 	return stages, nil
+}
+
+// promotionRanks returns each deployment's promotion_rank from the LandingZone
+// spec when present (the source of truth), else from the committed cluster tfvars.
+func promotionRanks(tfDir string) (map[string]int, error) {
+	if lz, present, err := loadSpec(); present {
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]int, len(lz.Spec.Environments))
+		for name, e := range lz.Spec.Environments {
+			out[name] = e.Cluster.PromotionRank
+		}
+		return out, nil
+	}
+	names, err := listDeployments(tfDir)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(names))
+	for _, name := range names {
+		body, err := os.ReadFile(filepath.Join(tfDir, "cluster", name+".tfvars"))
+		if err != nil {
+			return nil, err
+		}
+		if rank, ok := hclIntField(string(body), "promotion_rank"); ok {
+			out[name] = rank
+		}
+	}
+	return out, nil
 }
 
 // promotionOrder projects the ordered stages down to their names.

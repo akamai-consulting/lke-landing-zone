@@ -185,7 +185,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 
 	// ── 4. render the spec → tfvars + the generated overlay files ─────────────
 	fmt.Printf("\nReconciling the spec (`llz render %s`):\n", name)
-	if err := runRender(g, name, false, false); err != nil {
+	if err := runRender(g, name, false, false, false); err != nil {
 		fmt.Fprintf(os.Stderr, "\nThe spec was authored but `llz render` rejected it — fix %s above, then re-run `llz render %s`.\n", envFile, name)
 		return err
 	}

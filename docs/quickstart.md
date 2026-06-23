@@ -223,15 +223,26 @@ rest of the must-sets come from flags or are inherited from `spec.defaults`. The
 
 To change anything afterward, **edit `environments/<env>.yaml` and re-run `llz
 render <env>`** (CI re-renders on every build; the committed tfvars are
-regenerated, so they're effectively transient). Then fill any overlay placeholders
-`env add` listed and confirm readiness:
+regenerated, so they're effectively transient). Inspect and preview before you
+commit:
 
 ```bash
-llz doctor --env lab   # scans the overlay for residual placeholders, renders the overlay
+llz components             # what's toggleable: default state, backends, sizing knobs
+llz env show lab           # lab's effective config after spec.defaults + component set
+llz render lab --diff      # preview exactly which files a render would create/change
 ```
 
-`llz doctor --env` is the single readiness gate (full breakdown in §4). Run it
-now for the local file checks — the repo-config part fills in once `llz tokens`
+Then fill any overlay placeholders `env add` listed and confirm readiness:
+
+```bash
+llz doctor --env lab   # validates the spec + drift, then scans the overlay for placeholders
+```
+
+`llz doctor --env` is the single readiness gate (full breakdown in §4): when a
+spec is present it **validates it and confirms the committed `apl-values` are in
+sync with it** — so a spec edit you forgot to `llz render` is caught here, not at
+build. (`llz validate` runs the same spec check alongside the TF code gate.) Run
+it now for the local file checks — the repo-config part fills in once `llz tokens`
 has pushed. Or, from a template checkout, run `make instance-test` for a fast,
 no-cloud smoke test of the whole instantiation path before paying for a real build.
 

@@ -77,6 +77,34 @@ func runEnvReadiness(env string) error {
 		return fmt.Errorf("no scaffold for %q (%s missing) — run `llz env add %s` first", env, overlay, env)
 	}
 
+	// Spec-aware gate. When a LandingZone spec is present it's the source of truth,
+	// so validate it AND confirm the committed apl-values match what it renders
+	// before the file-level scan below — which reads the RENDERED output and would
+	// otherwise pass on stale tfvars after a spec edit that wasn't re-rendered.
+	if lz, present, perr := loadSpec(); present {
+		fmt.Println(bold("LandingZone spec:"))
+		if perr != nil {
+			fmt.Printf("  %s failed to load: %v\n", red("✗"), perr)
+			return perr
+		}
+		if errs := lz.Validate(); len(errs) > 0 {
+			for _, e := range errs {
+				fmt.Printf("  %s %v\n", red("✗"), e)
+			}
+			return fmt.Errorf("%d spec problem(s) — fix landingzone.yaml / environments/<env>.yaml, then re-run", len(errs))
+		}
+		if _, ok := lz.Env(env); ok {
+			if err := checkManifestDrift(lz, aplDir, []string{env}); err != nil {
+				// checkManifestDrift already printed the drifted files + the
+				// `llz render` hint; surface it as the blocking failure.
+				return err
+			}
+			fmt.Printf("  %s valid; committed apl-values for %q in sync with the spec\n\n", green("✓"), env)
+		} else {
+			fmt.Printf("  %s valid (%q is not in the spec — scanning its committed files directly)\n\n", green("✓"), env)
+		}
+	}
+
 	files := tfvarsPaths(tfDir, env)
 	files = append(files, overlayScanFiles(overlay)...)
 	for _, cf := range chartValuesFiles {

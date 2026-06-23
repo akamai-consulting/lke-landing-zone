@@ -63,7 +63,7 @@ func newRootCmd() *cobra.Command {
 	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build / bootstrap)")
 
 	root.AddCommand(
-		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(),
+		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), componentsCmd(),
 		secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
@@ -273,7 +273,7 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.haGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")
 	f.IntVar(&o.promotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would be created; write nothing")
-	env.AddCommand(add, envListCmd(), envRoleCmd(), envPeerCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
+	env.AddCommand(add, envShowCmd(), envListCmd(), envRoleCmd(), envPeerCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
 	return env
 }
 

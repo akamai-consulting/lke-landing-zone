@@ -20,29 +20,44 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 )
 
 // envVPCCmd prints the shared VPC (spec.networks name) a deployment attaches to,
-// or an empty line for a dedicated VPC. It reads the rendered cluster/<env>.tfvars
-// (vpc_network), so the apply-vpc workflow step can decide whether — and which —
-// shared VPC to apply before the cluster.
+// or an empty line for a dedicated VPC, so the apply-vpc workflow step can decide
+// whether — and which — shared VPC to apply before the cluster. It reads the spec
+// when present (the source of truth), falling back to the rendered
+// cluster/<env>.tfvars (vpc_network) for a pre-spec instance.
 func envVPCCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "vpc <deployment>",
 		Short: "print the shared VPC a deployment attaches to (spec.networks name); empty for a dedicated VPC",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			if err := validateEnvName(args[0]); err != nil {
+			env := args[0]
+			if err := validateEnvName(env); err != nil {
 				return err
 			}
+			// Spec is the source of truth; the committed tfvars can lag a spec edit.
+			if lz, present, err := loadSpec(); present {
+				if err != nil {
+					return err
+				}
+				e, ok := lz.Env(env)
+				if !ok {
+					return fmt.Errorf("no such deployment %q in the spec (run `llz env list`)", env)
+				}
+				fmt.Println(e.Cluster.Network.VPC)
+				return nil
+			}
 			tfDir, _, _ := instanceLayout()
-			p := filepath.Join(tfDir, "cluster", args[0]+".tfvars")
+			p := filepath.Join(tfDir, "cluster", env+".tfvars")
 			b, err := os.ReadFile(p)
 			if err != nil {
-				return fmt.Errorf("read %s (for spec-driven instances run `llz render %s` first): %w", p, args[0], err)
+				return fmt.Errorf("read %s (for spec-driven instances run `llz render %s` first): %w", p, env, err)
 			}
 			fmt.Println(tfvarsValue(string(b), "vpc_network"))
 			return nil
@@ -51,7 +66,7 @@ func envVPCCmd() *cobra.Command {
 }
 
 func renderCmd() *cobra.Command {
-	var tfvarsOnly, check bool
+	var tfvarsOnly, check, diff bool
 	c := &cobra.Command{
 		Use:   "render [env]",
 		Short: "reconcile the LandingZone spec into <env>.tfvars (spec-driven instances)",
@@ -59,7 +74,8 @@ func renderCmd() *cobra.Command {
 			"renders each deployment's cluster definition into the three\n" +
 			"terraform-iac-bootstrap/*/<env>.tfvars files the terraform plan/apply consume.\n" +
 			"With no [env], renders every environment in the spec. --check validates the\n" +
-			"spec without writing. A no-op contract: callers gate on the presence of a spec\n" +
+			"spec without writing; --diff previews what a render WOULD change (also\n" +
+			"writes nothing). A no-op contract: callers gate on the presence of a spec\n" +
 			"(CI does), so instances that have not adopted it are unaffected.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -67,15 +83,16 @@ func renderCmd() *cobra.Command {
 			if len(args) == 1 {
 				env = args[0]
 			}
-			return runRender(gopts, env, tfvarsOnly, check)
+			return runRender(gopts, env, tfvarsOnly, check, diff)
 		},
 	}
 	c.Flags().BoolVar(&tfvarsOnly, "tfvars-only", false, "render only the tfvars (skip the committed manifest kustomizations)")
 	c.Flags().BoolVar(&check, "check", false, "validate the spec and exit non-zero on any error; write nothing")
+	c.Flags().BoolVar(&diff, "diff", false, "preview which files a render would create/change (writes nothing)")
 	return c
 }
 
-func runRender(g globalOpts, env string, tfvarsOnly, check bool) error {
+func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 	tfDir, aplDir, relPrefix := instanceLayout()
 	specRoot := filepath.Dir(tfDir)
 	if !clusterspec.InstancePresent(specRoot) {
@@ -112,6 +129,11 @@ func runRender(g globalOpts, env string, tfvarsOnly, check bool) error {
 		}
 		fmt.Printf("✓ LandingZone spec valid (%d environment(s)); committed manifests in sync\n", len(lz.Spec.Environments))
 		return nil
+	}
+
+	// --diff previews what a render would create/change, writing nothing.
+	if diff {
+		return runRenderDiff(lz, envs, tfDir, aplDir, tfvarsOnly)
 	}
 
 	dryRun := g.dryRun
@@ -302,4 +324,119 @@ func filepathRel(tfDir, dst string) string {
 		return rel
 	}
 	return dst
+}
+
+// runRenderDiff prints, per target file, whether a render would create or change
+// it (with a compact line diff), writing nothing. It mirrors what runRender emits:
+// the shared-VPC tfvars, each env's three tfvars, and — unless tfvarsOnly — the
+// committed apl-values artifacts.
+func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir string, tfvarsOnly bool) error {
+	want := map[string]string{} // path -> would-be content
+	readExample := func(root string) (string, error) {
+		b, err := os.ReadFile(filepath.Join(tfDir, root, tplTfvars))
+		return string(b), err
+	}
+
+	netNames := make([]string, 0, len(lz.Spec.Networks))
+	for n := range lz.Spec.Networks {
+		netNames = append(netNames, n)
+	}
+	sort.Strings(netNames)
+	for _, n := range netNames {
+		base, err := readExample("vpc")
+		if err != nil {
+			return fmt.Errorf("read vpc tfvars.example: %w", err)
+		}
+		want[filepath.Join(tfDir, "vpc", n+".tfvars")] = applyAssigns(base, clusterspec.NetworkTFVars(n, lz.Spec.Networks[n]))
+	}
+
+	for _, name := range envs {
+		e, _ := lz.Env(name)
+		for root, assigns := range map[string][]clusterspec.Assign{
+			"cluster":           clusterspec.ClusterTFVars(e.Cluster),
+			"cluster-bootstrap": clusterspec.BootstrapTFVars(name, e.Cluster),
+			"object-storage":    clusterspec.ObjectStorageTFVars(name, e.Cluster),
+		} {
+			base, err := readExample(root)
+			if err != nil {
+				return fmt.Errorf("read %s tfvars.example: %w", root, err)
+			}
+			want[filepath.Join(tfDir, root, name+".tfvars")] = applyAssigns(base, assigns)
+		}
+		if !tfvarsOnly {
+			ct, err := committedTargets(name, e.Components, lz.ValuesIdentity(name), aplDir)
+			if err != nil {
+				return err
+			}
+			for p, c := range ct {
+				want[p] = c
+			}
+		}
+	}
+
+	paths := make([]string, 0, len(want))
+	for p := range want {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	changed := 0
+	for _, p := range paths {
+		cur, err := os.ReadFile(p)
+		switch {
+		case err != nil:
+			changed++
+			fmt.Printf("%s %s\n", green("+ new    "), p)
+			fmt.Println(indent(lineDiff("", want[p]), "    "))
+		case string(cur) != want[p]:
+			changed++
+			fmt.Printf("%s %s\n", yellow("~ changed"), p)
+			fmt.Println(indent(lineDiff(string(cur), want[p]), "    "))
+		}
+	}
+	if changed == 0 {
+		fmt.Printf("✓ render is a no-op — all %d target file(s) already match the spec\n", len(want))
+		return nil
+	}
+	fmt.Printf("\n%d file(s) would change. Run `llz render` to apply.\n", changed)
+	return nil
+}
+
+// lineDiff returns a compact diff between old and new: common prefix + suffix
+// lines are trimmed and the differing middle shown as -old / +new with a little
+// context, capped so a file with scattered changes can't flood the output. Good
+// enough for the deterministic generated files render produces.
+func lineDiff(oldS, newS string) string {
+	var o []string
+	if oldS != "" {
+		o = strings.Split(strings.TrimRight(oldS, "\n"), "\n")
+	}
+	n := strings.Split(strings.TrimRight(newS, "\n"), "\n")
+	p := 0
+	for p < len(o) && p < len(n) && o[p] == n[p] {
+		p++
+	}
+	so, sn := len(o), len(n)
+	for so > p && sn > p && o[so-1] == n[sn-1] {
+		so--
+		sn--
+	}
+	const ctx, cap = 2, 6
+	var b strings.Builder
+	for i := max(p-ctx, 0); i < p; i++ {
+		fmt.Fprintf(&b, "  %s\n", n[i])
+	}
+	for i := p; i < min(so, p+cap); i++ {
+		fmt.Fprintf(&b, "%s %s\n", red("-"), o[i])
+	}
+	for i := p; i < min(sn, p+cap); i++ {
+		fmt.Fprintf(&b, "%s %s\n", green("+"), n[i])
+	}
+	if so-p > cap || sn-p > cap {
+		fmt.Fprintf(&b, "  %s\n", dim("… (more changes — run `llz render`, then `git diff` for the full change)"))
+	} else {
+		for i := sn; i < min(sn+ctx, len(n)); i++ {
+			fmt.Fprintf(&b, "  %s\n", n[i])
+		}
+	}
+	return b.String()
 }

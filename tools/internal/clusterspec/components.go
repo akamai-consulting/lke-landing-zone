@@ -177,3 +177,21 @@ func ComponentEnabled(toggles map[string]ComponentToggle, name string) bool {
 
 // boolPtr returns a pointer to b (for tri-state ComponentToggle.Enabled defaults).
 func boolPtr(b bool) *bool { return &b }
+
+// ComponentKnobs returns the spec.components sizing fields a component reads
+// (empty for components with no capacity knobs). Exposed for `llz components`.
+func ComponentKnobs(name string) []string { return sizingKnobs[name] }
+
+// Backends returns the human-readable delivery backends a component routes to:
+// "apl-core" (apps.<key>.enabled in values.yaml) and/or "llz-argo" (manifest /
+// Argo Application resources). Empty for a marker-only component (e.g. dns).
+func (c Component) Backends() []string {
+	var b []string
+	if len(c.AplCoreApps) > 0 {
+		b = append(b, "apl-core")
+	}
+	if len(c.ManifestResources) > 0 || len(c.ArgoApps) > 0 || len(c.Patches) > 0 {
+		b = append(b, "llz-argo")
+	}
+	return b
+}

@@ -201,6 +201,22 @@ func runLint(g globalOpts) error {
 }
 
 func runValidate(g globalOpts) error {
+	// The spec is config-as-code, so the code gate validates it first when present
+	// (this is where `llz validate` users look for "is my spec valid?"). Same check
+	// as `llz render --check`, run before the TF roots.
+	if lz, present, err := loadSpec(); present {
+		if err != nil {
+			return err
+		}
+		if errs := lz.Validate(); len(errs) > 0 {
+			fmt.Fprintf(os.Stderr, "LandingZone spec is invalid (%d problem(s)):\n", len(errs))
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "  • %v\n", e)
+			}
+			return fmt.Errorf("invalid LandingZone spec")
+		}
+		fmt.Fprintln(os.Stderr, "spec: ok")
+	}
 	for _, step := range []func(globalOpts) error{stepTFValidate, stepCheckov} {
 		if err := step(g); err != nil {
 			return err
@@ -234,9 +250,11 @@ func validateCmd() *cobra.Command {
 	var env string
 	c := &cobra.Command{
 		Use:   "validate",
-		Short: "code-level gate: terraform validate + checkov across the TF roots",
-		Long: "terraform validate + checkov across the TF roots — the deep, on-demand\n" +
-			"code gate (slower than `llz lint`, which is the fast pre-commit gate).\n\n" +
+		Short: "code-level gate: LandingZone spec + terraform validate + checkov",
+		Long: "Validates the LandingZone spec (when present) then runs terraform validate +\n" +
+			"checkov across the TF roots — the deep, on-demand code gate (slower than\n" +
+			"`llz lint`, the fast pre-commit gate). The spec check is the same as\n" +
+			"`llz render --check`.\n\n" +
 			"--env is DEPRECATED: deployment readiness is now part of the single\n" +
 			"\"am I ready to build?\" gate, `llz doctor --env <env>` (tooling + gh auth +\n" +
 			"file-level placeholders + repo config). `validate --env` still delegates to\n" +
