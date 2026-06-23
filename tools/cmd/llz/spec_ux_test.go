@@ -84,7 +84,7 @@ func TestRenderDiff(t *testing.T) {
 	writeFileMkdir(t, "terraform-iac-bootstrap/cluster/terraform.tfvars.example", "cluster_label = \"x\"\n")
 	writeFileMkdir(t, "terraform-iac-bootstrap/cluster-bootstrap/terraform.tfvars.example", "cluster_name = \"x\"\n")
 	writeFileMkdir(t, "terraform-iac-bootstrap/object-storage/terraform.tfvars.example", "obj_cluster = \"x\"\n")
-	writeFileMkdir(t, filepath.Join("apl-values", "example", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
+	writeFileMkdir(t, filepath.Join("apl-values", "_shared", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
 
 	lz, present, err := loadSpec()
 	if !present || err != nil {

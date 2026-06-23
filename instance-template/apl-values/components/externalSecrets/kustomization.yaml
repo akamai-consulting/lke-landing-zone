@@ -1,0 +1,8 @@
+# spec.components.externalSecrets → this kustomize Component. An env's overlay lists it under
+# components: when the component is enabled. Template-managed — edit upstream.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - network-policies.yaml
+  - cluster-secret-store-openbao.yaml
+  - external-secrets-operator.yaml

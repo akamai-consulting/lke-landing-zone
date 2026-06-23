@@ -127,18 +127,18 @@ spec:
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// An example values.yaml base lets renderManifest exercise the apl-core
-	// backend too — including the spec-owned identity write.
-	if err := os.MkdirAll(filepath.Join(aplDir, "example"), 0o755); err != nil {
+	// The shared values.yaml base lets renderManifest exercise the apl-core backend
+	// too — including the spec-owned identity write.
+	if err := os.MkdirAll(filepath.Join(aplDir, "_shared"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(aplDir, "example", "values.yaml"), []byte(
+	if err := os.WriteFile(filepath.Join(aplDir, "_shared", "values.yaml"), []byte(
 		"cluster:\n  name: ${cluster_name}\n  domainSuffix: ${cluster_domain}\napps:\n  harbor: { enabled: true }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	prod, _ := lz.Env("prod")
-	if err := renderManifest("prod", prod.Components, lz.ValuesIdentity("prod"), "", aplDir, "", false); err != nil {
+	if err := renderManifest("prod", prod, lz.ValuesIdentity("prod"), aplDir, "", false); err != nil {
 		t.Fatalf("renderManifest: %v", err)
 	}
 
@@ -146,8 +146,9 @@ spec:
 	if err != nil {
 		t.Fatalf("read kustomization: %v", err)
 	}
-	if !strings.Contains(string(kust), "- argocd") || strings.Contains(string(kust), "harbor/harbor-registry-s3") {
-		t.Errorf("kustomization wrong (harbor should be dropped):\n%s", kust)
+	// Thin overlay over the shared base; harbor disabled → its component dir dropped.
+	if !strings.Contains(string(kust), "../../_shared/manifest") || strings.Contains(string(kust), "../../components/harbor") {
+		t.Errorf("kustomization wrong (thin overlay, harbor dropped):\n%s", kust)
 	}
 
 	// The apl-core backend rendered the spec identity into values.yaml (the

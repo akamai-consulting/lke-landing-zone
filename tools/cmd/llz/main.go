@@ -269,11 +269,12 @@ func envCmd() *cobra.Command {
 		Short: "scaffold a deployment — authors the LandingZone spec, then renders it",
 		Long: "Spec-first: authors landingzone.yaml (on the first env, from\n" +
 			".copier-answers.yml + seeded spec.defaults) and one environments/<name>.yaml\n" +
-			"ClusterDefinition from the flags, clones the apl-values/example overlay\n" +
-			"payload, then runs `llz render` to reconcile the spec into the tfvars +\n" +
-			"overlay. --region and --obj-cluster are required (the spec validates them).\n" +
-			"Layout-aware (instance root or a template-repo checkout). Edit\n" +
-			"environments/<name>.yaml + re-run `llz render` to change a deployment.",
+			"ClusterDefinition from the flags, then runs `llz render` to reconcile the spec\n" +
+			"into the tfvars + a THIN apl-values/<name>/ overlay (the manifests live ONCE\n" +
+			"in apl-values/_shared + components/, never cloned per env). --region and\n" +
+			"--obj-cluster are required (the spec validates them). Layout-aware (instance\n" +
+			"root or template checkout). Edit environments/<name>.yaml + re-run `llz render`\n" +
+			"(or `llz env set`) to change a deployment.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error { return cmdEnvAdd(gopts, args[0], o) },
 	}

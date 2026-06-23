@@ -148,7 +148,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 			return fmt.Errorf("render %s: %w", name, err)
 		}
 		if !tfvarsOnly {
-			if err := renderManifest(name, e.Components, lz.ValuesIdentity(name), lz.Spec.DNS.AcmeEmail, aplDir, relPrefix, dryRun); err != nil {
+			if err := renderManifest(name, e, lz.ValuesIdentity(name), aplDir, relPrefix, dryRun); err != nil {
 				return fmt.Errorf("render %s manifests: %w", name, err)
 			}
 		}
@@ -156,42 +156,44 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 	return nil
 }
 
-// committedTargets returns every committed apl-values/<env>/ file a deployment's
-// component toggles render to, as {path → content}: the two manifest kustomizations
-// (the llz Argo backend) and — when an apl-values/example/values.yaml template is
-// present — the values.yaml with apps.<key>.enabled patched (the apl-core backend).
-func committedTargets(env string, components map[string]clusterspec.ComponentToggle, id clusterspec.ValuesIdentity, acmeEmail, aplDir string) (map[string]string, error) {
+// committedTargets returns every committed apl-values/<env>/ file a deployment
+// renders to, as {path → content}: the THIN manifest overlay (resources: the shared
+// _shared/manifest base + components: the enabled component dirs), the per-env
+// env-revision marker, the volume-labeler REGION_SHORT patch (when enabled), and —
+// when an apl-values/_shared/values.yaml base is present — the values.yaml with
+// apps.<key>.enabled + identity patched (the apl-core backend).
+func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
 	manifest := filepath.Join(aplDir, env, "manifest")
 	targets := map[string]string{
-		filepath.Join(manifest, "kustomization.yaml"):           clusterspec.RenderManifestKustomization(components),
-		filepath.Join(manifest, "argocd", "kustomization.yaml"): clusterspec.RenderArgoKustomization(components),
+		// THIN overlay over the shared base + per-component kustomize Components —
+		// the resources live ONCE in apl-values/_shared/ + apl-values/components/,
+		// never copied per env.
+		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components),
+		// per-env local-config marker the cluster-bootstrap precondition reads.
+		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
 	}
-	// apl-core backend: patch apps.<key>.enabled + the spec-owned identity/platform
-	// keys into the shared values.yaml template. Skipped (not an error) for
-	// instances without the example overlay.
-	if base, err := os.ReadFile(filepath.Join(aplDir, "example", "values.yaml")); err == nil {
-		rendered, err := clusterspec.RenderValues(base, components, id)
+	// The one genuine per-env manifest delta: the volume-labeler REGION_SHORT patch
+	// the thin overlay references — emitted only when volumeLabeler is enabled.
+	if clusterspec.ComponentEnabled(e.Components, "volumeLabeler") {
+		targets[filepath.Join(manifest, "linode-volume-labeler-region-patch.yaml")] = clusterspec.RenderRegionPatch(first3(env))
+	}
+	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
+	// patched into the shared values.yaml base. Skipped (not an error) for instances
+	// without the shared overlay.
+	if base, err := os.ReadFile(filepath.Join(aplDir, "_shared", "values.yaml")); err == nil {
+		rendered, err := clusterspec.RenderValues(base, e.Components, id)
 		if err != nil {
 			return nil, fmt.Errorf("render values.yaml: %w", err)
 		}
 		targets[filepath.Join(aplDir, env, "values.yaml")] = string(rendered)
-	}
-	// spec.dns.acmeEmail → the cert-manager DNS-01 issuer's ACME email. When unset,
-	// the overlay keeps its REPLACE_PER_ENV placeholder (the operator fills it).
-	if acmeEmail != "" {
-		rel := filepath.Join("manifest", "dns", "letsencrypt-clusterissuer.yaml")
-		if base, err := os.ReadFile(filepath.Join(aplDir, "example", rel)); err == nil {
-			targets[filepath.Join(aplDir, env, rel)] = strings.ReplaceAll(
-				string(base), "email: REPLACE_PER_ENV", "email: "+acmeEmail)
-		}
 	}
 	return targets, nil
 }
 
 // renderManifest writes a deployment's committed apl-values/<env>/ artifacts (the
 // manifest kustomizations + the apps-toggled values.yaml) from its components.
-func renderManifest(env string, components map[string]clusterspec.ComponentToggle, id clusterspec.ValuesIdentity, acmeEmail, aplDir, relPrefix string, dryRun bool) error {
-	targets, err := committedTargets(env, components, id, acmeEmail, aplDir)
+func renderManifest(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, relPrefix string, dryRun bool) error {
+	targets, err := committedTargets(env, e, id, aplDir)
 	if err != nil {
 		return err
 	}
@@ -218,7 +220,7 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 	var drifted []string
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		targets, err := committedTargets(name, e.Components, lz.ValuesIdentity(name), lz.Spec.DNS.AcmeEmail, aplDir)
+		targets, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
 		if err != nil {
 			return err
 		}
@@ -373,7 +375,7 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 			want[filepath.Join(tfDir, root, name+".tfvars")] = applyAssigns(base, assigns)
 		}
 		if !tfvarsOnly {
-			ct, err := committedTargets(name, e.Components, lz.ValuesIdentity(name), lz.Spec.DNS.AcmeEmail, aplDir)
+			ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
 			if err != nil {
 				return err
 			}

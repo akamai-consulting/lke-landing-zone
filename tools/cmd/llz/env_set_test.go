@@ -124,24 +124,40 @@ func TestHaGroupMissingRole(t *testing.T) {
 
 // #4: committedTargets renders the letsencrypt issuer with the spec ACME email,
 // and omits it entirely when no email is set.
-func TestCommittedTargetsAcmeEmail(t *testing.T) {
+// committedTargets emits only the THIN per-env files (overlay + env-revision +
+// region patch + values) — the manifests themselves live in the shared base.
+func TestCommittedTargets(t *testing.T) {
 	chdirTempDir(t)
-	rel := filepath.Join("apl-values", "example", "manifest", "dns", "letsencrypt-clusterissuer.yaml")
-	writeFileMkdir(t, rel, "spec:\n  acme:\n    email: REPLACE_PER_ENV\n")
-	want := filepath.Join("apl-values", "lab", "manifest", "dns", "letsencrypt-clusterissuer.yaml")
+	writeFileMkdir(t, filepath.Join("apl-values", "_shared", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
+	e := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{}} // all default-enabled
 
-	with, err := committedTargets("lab", nil, clusterspec.ValuesIdentity{}, "ops@acme.io", "apl-values")
+	targets, err := committedTargets("lab", e, clusterspec.ValuesIdentity{ClusterName: "x"}, "apl-values")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(with[want], "email: ops@acme.io") {
-		t.Errorf("letsencrypt not rendered with the email:\n%s", with[want])
+	for _, p := range []string{
+		filepath.Join("apl-values", "lab", "manifest", "kustomization.yaml"),
+		filepath.Join("apl-values", "lab", "manifest", "env-revision-configmap.yaml"),
+		filepath.Join("apl-values", "lab", "manifest", "linode-volume-labeler-region-patch.yaml"), // volumeLabeler default-on
+		filepath.Join("apl-values", "lab", "values.yaml"),
+	} {
+		if _, ok := targets[p]; !ok {
+			t.Errorf("missing committed target %s", p)
+		}
 	}
-	without, _ := committedTargets("lab", nil, clusterspec.ValuesIdentity{}, "", "apl-values")
-	if _, ok := without[want]; ok {
-		t.Error("no acmeEmail should not produce a letsencrypt target")
+	overlay := targets[filepath.Join("apl-values", "lab", "manifest", "kustomization.yaml")]
+	if !strings.Contains(overlay, "../../_shared/manifest") {
+		t.Errorf("overlay is not thin (no shared base ref):\n%s", overlay)
+	}
+	// volumeLabeler disabled → no region patch target.
+	off := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{"volumeLabeler": {Enabled: boolPtrLocal(false)}}}
+	t2, _ := committedTargets("lab", off, clusterspec.ValuesIdentity{}, "apl-values")
+	if _, ok := t2[filepath.Join("apl-values", "lab", "manifest", "linode-volume-labeler-region-patch.yaml")]; ok {
+		t.Error("disabled volumeLabeler should not emit a region patch")
 	}
 }
+
+func boolPtrLocal(b bool) *bool { return &b }
 
 // #9: the LCS diff shows scattered changes as separate hunks with a collapse marker.
 func TestLineDiffScattered(t *testing.T) {

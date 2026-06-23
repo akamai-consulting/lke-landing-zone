@@ -102,18 +102,11 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	tfDir, aplDir, relPrefix := instanceLayout()
 	specRoot := filepath.Dir(tfDir)
 	clusterDomain := orElse(o.clusterDomain, name+".internal")
-	regionShort := orElse(o.regionShort, first3(name))
-	templateShort := first3(o.templateEnv)
-
-	overlaySrc := filepath.Join(aplDir, o.templateEnv)
 	overlayDst := filepath.Join(aplDir, name)
 	envFile := filepath.Join(specRoot, clusterspec.EnvironmentsDir, name+".yaml")
 	lzPath := filepath.Join(specRoot, clusterspec.LandingZoneFile)
 
 	// ── pre-flight ───────────────────────────────────────────────────────────
-	if fi, err := os.Stat(overlaySrc); err != nil || !fi.IsDir() {
-		return fmt.Errorf("template overlay not found: %s (run from an instance or template checkout)", overlaySrc)
-	}
 	if _, err := os.Stat(overlayDst); err == nil {
 		return fmt.Errorf("%s already exists — refusing to overwrite", overlayDst)
 	}
@@ -123,23 +116,20 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 
 	fmt.Println("=== llz env add — spec-first scaffold ===")
 	fmt.Printf("    env:            %s\n", name)
-	fmt.Printf("    template-env:   %s\n", o.templateEnv)
 	fmt.Printf("    domainSuffix:   %s\n", clusterDomain)
-	fmt.Printf("    REGION_SHORT:   %s -> %s\n", templateShort, regionShort)
 	fmt.Printf("    Linode region:  %s\n", o.region)
 	fmt.Printf("    OBJ cluster:    %s\n", o.objCluster)
 	fmt.Printf("    dry-run:        %v\n\n", dryRun)
 
 	if dryRun {
-		fmt.Println("Spec + overlay that would be authored, then `llz render`:")
+		fmt.Println("Spec that would be authored, then `llz render`:")
 		if _, err := os.Stat(lzPath); err != nil {
 			fmt.Printf("  would-create  %s  (instance identity + shared defaults)\n", lzPath)
 		} else {
 			fmt.Printf("  exists        %s  (left as-is)\n", lzPath)
 		}
 		fmt.Printf("  would-create  %s  (ClusterDefinition from the flags)\n", envFile)
-		fmt.Printf("  would-create  %s/  (overlay payload, %d files)\n", overlayDst, len(walkFilesRel(overlaySrc)))
-		fmt.Printf("  would-run     llz render %s  (→ tfvars + the generated overlay)\n", name)
+		fmt.Printf("  would-run     llz render %s  (→ tfvars + the thin apl-values/%s overlay)\n", name, name)
 		fmt.Println("\nDRY RUN — nothing written. Re-run without --dry-run to create the files.")
 		return nil
 	}
@@ -159,33 +149,11 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	}
 	fmt.Printf("  created  %s\n", envFile)
 
-	// ── 3. apl-values overlay payload ────────────────────────────────────────
-	// The resource manifests the generated kustomizations reference are NOT spec-
-	// derived, so clone them from the template; `llz render` (step 4) then
-	// overwrites the two kustomizations + values.yaml from the spec.
-	if err := copyTree(overlaySrc, overlayDst); err != nil {
-		return err
-	}
-	for _, p := range walkFiles(overlayDst) {
-		if err := editFile(p, func(s string) string {
-			s = strings.ReplaceAll(s, o.templateEnv, name)
-			if clusterDomain != name+".internal" {
-				s = strings.ReplaceAll(s, name+".internal", clusterDomain)
-			}
-			return s
-		}); err != nil {
-			return err
-		}
-	}
-	labeler := filepath.Join(overlayDst, "manifest", "linode-volume-labeler-region-patch.yaml")
-	if _, err := os.Stat(labeler); err == nil {
-		_ = editFile(labeler, func(s string) string {
-			return strings.ReplaceAll(s, quote(templateShort), quote(regionShort))
-		})
-	}
-	fmt.Printf("  created  %s/ (%d files)\n", overlayDst, len(walkFiles(overlayDst)))
-
-	// ── 4. render the spec → tfvars + the generated overlay files ─────────────
+	// ── 3. render → tfvars + the THIN apl-values/<env>/ overlay ──────────────
+	// Nothing to clone: the manifests live ONCE in apl-values/_shared/ +
+	// apl-values/components/; render writes only the per-env overlay (a thin
+	// kustomization referencing the shared base + the enabled component dirs, the
+	// volume-labeler REGION_SHORT patch, env-revision) and values.yaml.
 	// An HA member can't render until BOTH peers exist (the spec requires one
 	// active + one standby per group), so adding the first peer defers the render
 	// with guidance instead of failing; completing the pair renders both.
