@@ -15,7 +15,7 @@ type: application
 # .github/workflows/publish-charts.yml.
 # 0.1.4: drop the stale llz-openbao app-of-apps entry (OpenBao now ships as the
 #        apl-values/components/openbao kustomize Component; the duplicate collided).
-version: 0.1.4
+version: 0.1.5
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"
