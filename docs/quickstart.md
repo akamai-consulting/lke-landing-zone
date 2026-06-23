@@ -173,6 +173,8 @@ cd my-instance
 llz env add lab --region us-sea --obj-cluster us-sea-1
 ```
 
+### Scaffold the instance repo — `llz new`
+
 **Most users don't pass `--org`.** It names the **template to scaffold *from***
 and defaults to the public upstream `akamai-consulting/lke-landing-zone` — exactly
 what you want unless you maintain your *own fork* of the template, in which case
@@ -194,6 +196,8 @@ immediately. It does **not** ask for credentials — that's `llz tokens` (§4).
 > to pin to a different release. Everything inside the scaffold is repointed to your
 > fork by Copier — the only by-hand repoints are the published `kubernetes-charts/`
 > values that live outside the scaffold ([adopter-guide §5](adopter-guide.md#5-org-literals-to-repoint-to-your-fork)).
+
+### Add a deployment — `llz env add` writes the spec
 
 `llz env add` is **spec-first**: it authors the declarative LandingZone spec and
 then renders it. The first `env add` creates `landingzone.yaml` (your instance
@@ -221,6 +225,8 @@ rest of the must-sets come from flags or are inherited from `spec.defaults`. The
 - `cluster.domainSuffix` (`--cluster-domain`, default `<env>.internal`), `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them.
 - `--obj-cluster` (**required**) — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `env add` validates the shape up front.
 
+### Change, inspect & preview a deployment
+
 To change a deployment, use the spec **write** commands — they edit the YAML in
 place (comments preserved) and re-render for you, so the edit→render loop can't be
 forgotten:
@@ -244,6 +250,8 @@ llz render lab --diff      # preview exactly which files a render would create/c
 For an HA pair, `env add` the active first (it defers the render until both peers
 exist), then the standby with a **distinct** `--subnet-cidr`; completing the pair
 renders both.
+
+### Confirm readiness — `llz doctor --env`
 
 Then fill any overlay placeholders `env add` listed and confirm readiness:
 

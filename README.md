@@ -13,7 +13,8 @@ and operate. LLZ ships the hardened building blocks (versioned Terraform modules
 Helm charts, and CI images), the **`llz`** operator CLI that drives them, and a
 set of reusable GitHub Actions workflows — so an adopting **system team** stands
 up and runs a production-grade cluster on Linode LKE-E + Akamai App Platform
-(apl-core) by setting values and running commands, not editing YAML.
+(apl-core) by **declaring a small instance spec and running commands**, not
+hand-wiring Terraform, manifests, and CI.
 
 It doesn't stop at bootstrap. The same reusable workflows keep an instance
 healthy on day-2: scheduled health and audit checks, monthly credential rotation
@@ -160,15 +161,17 @@ chart are an Akamai-internal feature; they live in the private
 
 ### Scaffold + instance template
 
-- `llz env add` — generates a new
-  environment (Terraform tfvars + apl-values overlay) for an instance repo by
-  cloning a template environment and swapping its identity tokens.
+- `llz env add` — authors the declarative **LandingZone spec** (`landingzone.yaml`
+  + one `environments/<env>.yaml` per cluster) and runs `llz render` to reconcile
+  it into the per-env Terraform tfvars + apl-values overlay. See
+  [The LandingZone spec](#the-landingzone-spec--your-instances-source-of-truth).
 - [`instance-template/`](instance-template/) — genericized starter material an
-  instance repo instantiates: Terraform roots (`cluster`, `cluster-bootstrap`,
-  `object-storage`, `openbao-config`), an example `apl-values` environment, and
-  instance GitHub workflows + composite actions. The template repo itself only
-  builds and publishes the reusable artifacts; `instance-template/` is starter
-  material, not active here.
+  instance repo instantiates: the LandingZone spec examples
+  (`landingzone.yaml.example`, `environments/<env>.yaml.example`), Terraform roots
+  (`cluster`, `cluster-bootstrap`, `object-storage`, `openbao-config`), an example
+  `apl-values` overlay, and instance GitHub workflows + composite actions. The
+  template repo itself only builds and publishes the reusable artifacts;
+  `instance-template/` is starter material, not active here.
 - **`make instance-test`** — fast, local, no-cloud smoke test of the
   instantiation path. `copier copy`s the template into a throwaway dir, then
   checks for unrendered tokens, asserts the load-bearing files rendered, and runs
@@ -190,6 +193,27 @@ chart are an Akamai-internal feature; they live in the private
 GHCR (not the in-cluster Harbor) is deliberate for charts: the bootstrap consumes
 charts that must come from a registry existing *before* the cluster does.
 
+## The LandingZone spec — your instance's source of truth
+
+An instance is described by a small **declarative spec** that `llz` reconciles into
+everything Terraform and Argo CD consume — so you edit one spec, not three tfvars
+roots and a manifest tree:
+
+```text
+landingzone.yaml          # instance identity + shared defaults, DNS, shared VPCs
+environments/<env>.yaml   # one ClusterDefinition per cluster (region, sizing,
+                          #   components, HA role, promotion rank)
+```
+
+`llz env add` authors these; **`llz render`** reconciles them into the per-env
+tfvars + `apl-values/<env>/` overlay (CI re-renders on every build, and `llz render
+--check` drift-guards the committed result). Change a deployment with `llz env set`
+/ `llz env edit` (they re-render for you); inspect with `llz env show` / `llz
+components` / `llz render --diff`. Full reference:
+[docs/landing-zone-spec.md](docs/landing-zone-spec.md), plus the fully-commented
+[`landingzone.yaml.example`](instance-template/landingzone.yaml.example) +
+[`environments/prod-web-ord.yaml.example`](instance-template/environments/).
+
 ## Getting started (adopters)
 
 The fastest path is the **`llz`** CLI, which fronts the whole flow (token wizard +
@@ -198,9 +222,10 @@ platform, then:
 
 ```bash
 ./template-scripts/install-llz.sh                      # install the CLI (from a checkout)
-llz new my-instance --org <org> --push --yes           # scaffold + create/push the instance repo
+llz new my-instance --push --yes                       # scaffold + create/push the instance repo
+                                                       #   (--org only if you maintain your own template fork)
 cd my-instance
-llz env add lab --region us-sea --obj-cluster us-sea-1  # add a deployment, then fill the checklist it prints
+llz env add lab --region us-sea --obj-cluster us-sea-1  # author the spec for a deployment + render; fill any overlay placeholders it lists
 llz up lab --yes                                       # credentials → readiness gate → build; llz status lab to verify
 ```
 
@@ -217,6 +242,7 @@ so the adopter guide's manual steps remain fully supported.
 | Topic | File |
 |-------|------|
 | Quick start (TL;DR checklist) | [docs/quickstart.md](docs/quickstart.md) |
+| LandingZone spec reference (landingzone.yaml + environments/) | [docs/landing-zone-spec.md](docs/landing-zone-spec.md) |
 | Delivery methodology (phases + how LLZ supports them) | [docs/delivery-methodology.md](docs/delivery-methodology.md) |
 | End-to-end adopter path | [docs/adopter-guide.md](docs/adopter-guide.md) |
 | Environments as a `dev → staging → prod` promotion pipeline | [docs/environments-and-promotion.md](docs/environments-and-promotion.md) |
