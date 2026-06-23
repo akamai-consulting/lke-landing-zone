@@ -484,11 +484,20 @@ jobs:
   # remote state output and applies all Kubernetes-side resources: apl-core
   # Helm release, the apl-values-repo Argo CD repo Secret, and the
   # argocd-cm config-patch Job.
+  #
+  # apply ONLY — NOT plan. Unlike apply-vpc / apply-cluster (linode-provider roots
+  # that plan fine before anything exists), cluster-bootstrap CONSUMES a live
+  # cluster: its "Cluster access" step fetches the kubeconfig by label, and even a
+  # `terraform plan` resolves the kubernetes/helm providers + the live
+  # data.kubernetes_service.coredns. A plan-mode dispatch (e.g. the release-e2e
+  # dry-run) creates no cluster, so this would always fail with "no LKE cluster
+  # matched". Gating to apply-only lets `action=plan module=all` cleanly plan the
+  # cluster-CREATING roots and stop there. (PR previews use plan-cluster-pr.)
   apply-cluster-bootstrap:
     name: Apply Cluster Bootstrap
     if: >
       github.event_name == 'workflow_dispatch' &&
-      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      inputs.action == 'apply' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
     needs: [apply-cluster]
     runs-on: ubuntu-latest
