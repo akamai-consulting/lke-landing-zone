@@ -313,23 +313,26 @@ llz env list --json   # ["lab","primary",...] — the same source of truth the C
                       # matrices use (a `discover` job feeds it into every
                       # per-deployment workflow matrix), so a deployment is
                       # covered by rotation + the scheduled health checks the
-                      # moment its cluster/<name>.tfvars exists.
+                      # moment it's in the spec (or its cluster/<name>.tfvars exists).
 llz env list --ha     # only deployments in an OpenBao HA pair (ha_role != standalone)
-llz env role lab      # active | standby | standalone (from cluster/lab.tfvars)
+llz env role lab      # active | standby | standalone (from the spec, else cluster/lab.tfvars)
 llz env peer lab      # the deployment paired with lab (errors if standalone)
 ```
 
 Most deployments are **standalone** (a single self-contained OpenBao — the
 `llz env add` default). For a two-cluster HA pair, scaffold both with a shared
-`--ha-group` and opposite roles:
+`--ha-group`, opposite roles, and **distinct** `--subnet-cidr`s (cross-region
+peers can't share a CIDR). `env add` defers the render of the first peer until the
+second completes the pair, then renders both:
 
 ```bash
-llz env add east --region us-sea --obj-cluster us-sea-1 --ha-role active  --ha-group prod
-llz env add west --region us-ord --obj-cluster us-ord-1 --ha-role standby --ha-group prod
+llz env add east --region us-sea --obj-cluster us-sea-1 --ha-role active  --ha-group prod --subnet-cidr 10.0.0.0/14
+llz env add west --region us-ord --obj-cluster us-ord-1 --ha-role standby --ha-group prod --subnet-cidr 10.4.0.0/14
 ```
 
-The bootstrap, rotation, and Harbor workflows resolve `ha_role`/peer from the
-tfvars instead of hardcoding which cluster is which.
+The bootstrap, rotation, and Harbor workflows resolve `ha_role`/peer from the spec
+(the committed tfvars are rendered from it) instead of hardcoding which cluster is
+which.
 
 </details>
 
@@ -422,7 +425,9 @@ The single **"am I ready to build?"** gate. In one run it checks all three thing
 that must be true before the build:
 
 1. **Tooling + `gh` auth** — the CLIs the flow uses, and that `gh` is logged in.
-2. **Deployment files** — scans the tfvars + overlay for residual scaffold
+2. **Deployment files** — when a spec is present, validates it and confirms the
+   committed `apl-values` are in sync with it (so a spec edit you forgot to
+   `llz render` is caught here); then scans the tfvars + overlay for residual
    placeholders, verifies the deployment discriminator agrees across the tfvars,
    and renders the overlay (the former `llz validate --env`).
 3. **Repo config** — every variable/secret an e2e/build needs, required vs
