@@ -4,15 +4,14 @@
 # instead: fill the instance identity below, add one environments/<env>.yaml per
 # cluster, and `llz render` reconciles it all into the per-env tfvars terraform consumes.
 #
-# How the pieces fit together:
+# How the pieces fit together (both sit at your instance-repo root):
 #
-#   landingzone.yaml            ← this file: instance identity + (optional) DNS,
-#   │                             shared VPCs, and shared defaults
-#   └── environments/
-#       ├── prod-web-ord.yaml   ← one ClusterDefinition per cluster you deploy
-#       └── dev-ord.yaml          (see environments/prod-web-ord.yaml.example)
-#                  │
-#                  └── llz render → apl-values/<env>/ + per-env *.tfvars → terraform
+#   landingzone.yaml          ← this file: instance identity + optional dns/defaults/networks
+#   environments/
+#     ├── prod-web-ord.yaml   ← one ClusterDefinition per cluster you deploy
+#     └── dev-ord.yaml          (see environments/prod-web-ord.yaml.example)
+#
+#   llz render  ──→  apl-values/<env>/ + per-env *.tfvars  ──→  terraform
 #
 # Full reference: docs/landing-zone-spec.md
 apiVersion: llz.akamai-consulting.io/v1alpha1
@@ -23,9 +22,21 @@ spec:
   instance:
     upstreamOrg: REPLACE_UPSTREAM_ORG    # template source org. e.g. akamai-consulting
     repo: REPLACE_OWNER/REPLACE_REPO     # <owner>/<name>. e.g. acme/acme-platform
-    forge: github                        # github | github-enterprise | gitlab
+    forge: github                        # github-only on this template (other forges reserved)
     templateVersion: REPLACE_LLZ_VERSION # pinned llz release tag (see `llz version` /
                                          # the template repo's releases), or "main"
+
+  # ── Shared defaults (optional) ─────────────────────────────────────────────
+  # Inherited by every environment; a per-env value overrides field-by-field.
+  defaults:
+    cluster:
+      k8sVersion: v1.33.6+lke7   # an LKE-E +lke version available in your Linode account
+      nodePool: { type: g8-dedicated-8-4, count: 5 }
+    # apl-core global feature flags (otomi.*), rendered into every env's
+    # values.yaml. Both optional — shown here with their defaults.
+    platform:
+      externalDNS: true    # otomi.hasExternalDNS — external-dns manages records
+      externalIDP: false   # otomi.hasExternalIDP — false → standalone Keycloak
 
   # ── DNS / cert (optional) ──────────────────────────────────────────────────
   # Instance-wide cert-manager DNS-01 issuer config. Uncomment + set acmeEmail to
@@ -35,19 +46,7 @@ spec:
   # dns:
   #   acmeEmail: ops@example.com
 
-  # ── Shared defaults (optional) ─────────────────────────────────────────────
-  # Inherited by every environment; a per-env value overrides field-by-field.
-  defaults:
-    cluster:
-      k8sVersion: v1.33.6+lke7
-      nodePool: { type: g8-dedicated-8-4, count: 5 }
-    # apl-core global feature flags (otomi.*), rendered into every env's
-    # values.yaml. Both optional — shown here with their defaults.
-    platform:
-      externalDNS: true    # otomi.hasExternalDNS — external-dns manages records
-      externalIDP: false   # otomi.hasExternalIDP — false → standalone Keycloak
-
-  # ── Shared VPCs (optional — most instances DELETE this whole block) ─────────
+  # ── Shared VPCs (optional — most instances leave this out) ──────────────────
   # By default every env gets its OWN DEDICATED VPC (own state, fully isolated) —
   # the safest posture, and what you get by leaving `networks` out entirely.
   # Declare a shared VPC ONLY to co-locate 2+ clusters in ONE region (e.g.
@@ -70,6 +69,7 @@ spec:
 
 # Next: author one environments/<env>.yaml per deployment (cluster definition +
 # component toggles + per-component sizing). See the fully-commented
-# environments/prod-web-ord.yaml.example for the complete per-env surface — it
-# shows a co-located cluster attaching to a shared network. A lone per-region
-# cluster just omits cluster.network and gets its own dedicated VPC.
+# environments/prod-web-ord.yaml.example for the complete per-env surface — note it
+# attaches to a shared network (prod-ord), so it only validates once you uncomment
+# the matching `networks:` entry above. A lone per-region cluster just omits
+# cluster.network and gets its own dedicated VPC (no networks block needed).
