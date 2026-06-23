@@ -4,7 +4,7 @@
 
 **Related:** [`operator-onboarding.md`](operator-onboarding.md), `llz status <env>` (one-shot support-plane Application health report; `--wait` polls), and the sync-wave + correctness rules described in [`docs/architecture/convergence-contract.md`](../architecture/convergence-contract.md).
 
-> **Rule of thumb:** the change you want to make is almost always a PR to the Argo manifests (under `instance-template/apl-values/example/manifest/`) that Argo CD reconciles. `kubectl edit` and the Argo CD UI's manual-sync button are for unwedging a stuck reconciliation, not for routine changes. Direct edits get blown away on next sync.
+> **Rule of thumb:** the change you want to make is almost always a PR to the Argo manifests (the shared base under `instance-template/apl-values/_shared/manifest/` + the per-component `instance-template/apl-values/components/`) that Argo CD reconciles. `kubectl edit` and the Argo CD UI's manual-sync button are for unwedging a stuck reconciliation, not for routine changes. Direct edits get blown away on next sync.
 
 ---
 
@@ -189,7 +189,7 @@ kubectl -n argocd describe pod <argocd-server-...>
 #      → re-seed the deploy-key secret and restart.
 
 # 3. If you need to re-create Argo CD from scratch, the install manifest lives under
-#    instance-template/apl-values/example/manifest/openbao/ — the bootstrap workflow can re-apply it.
+#    instance-template/apl-values/components/openbao/ — the bootstrap workflow can re-apply it.
 ```
 
 In a true Argo-CD-down emergency, fall back to `kubectl apply -f` against the Argo manifests directly — but expect Argo CD to undo any drift the moment it comes back up unless you also fixed the source.

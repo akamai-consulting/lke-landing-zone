@@ -63,11 +63,32 @@ func newRootCmd() *cobra.Command {
 	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build / bootstrap)")
 
 	root.AddCommand(
-		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(),
-		secretsCmd(), tokensCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
+		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), specCmd(), networkCmd(), componentsCmd(),
+		secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
 	)
+
+	// Group the adopter-facing commands in `llz --help` so the front door is
+	// legible; CI/plumbing (ci, lint, fmt, hooks, …) falls under "Additional
+	// Commands". Groups must be registered before a command references them.
+	root.AddGroup(
+		&cobra.Group{ID: "spec", Title: "Author & deploy (the LandingZone spec):"},
+		&cobra.Group{ID: "build", Title: "Provision, build & operate:"},
+		&cobra.Group{ID: "day2", Title: "Day-2 & maintenance:"},
+	)
+	groupOf := map[string]string{
+		"new": "spec", "env": "spec", "spec": "spec", "network": "spec", "components": "spec", "render": "spec",
+		"tokens": "build", "secrets": "build", "doctor": "build", "validate": "build",
+		"build": "build", "up": "build", "status": "build", "bootstrap": "build",
+		"upgrade": "day2", "drift": "day2", "credentials": "day2", "openbao": "day2",
+		"verify": "day2", "reap": "day2", "self-update": "day2",
+	}
+	for _, c := range root.Commands() {
+		if g, ok := groupOf[c.Name()]; ok {
+			c.GroupID = g
+		}
+	}
 
 	// Operator-defined commands from .llz/commands.yaml (added last so the
 	// built-in set wins any name collision). See docs/extending-llz.md.
@@ -245,11 +266,15 @@ func envCmd() *cobra.Command {
 	var o envAddOpts
 	add := &cobra.Command{
 		Use:   "add <name>",
-		Short: "scaffold a deployment (native; works in any instance)",
-		Long: "Clones the apl-values/example overlay + each Terraform root's\n" +
-			"terraform.tfvars.example into a new <name> deployment, swapping identity\n" +
-			"tokens. Layout-aware (instance root or a template-repo checkout). Supplying\n" +
-			"the must-set values as flags makes env add → tokens → build a guided path.",
+		Short: "scaffold a deployment — authors the LandingZone spec, then renders it",
+		Long: "Spec-first: authors landingzone.yaml (on the first env, from\n" +
+			".copier-answers.yml + seeded spec.defaults) and one environments/<name>.yaml\n" +
+			"ClusterDefinition from the flags, then runs `llz render` to reconcile the spec\n" +
+			"into the tfvars + a THIN apl-values/<name>/ overlay (the manifests live ONCE\n" +
+			"in apl-values/_shared + components/, never cloned per env). --region and\n" +
+			"--obj-cluster are required (the spec validates them). Layout-aware (instance\n" +
+			"root or template checkout). Edit environments/<name>.yaml + re-run `llz render`\n" +
+			"(or `llz env set`) to change a deployment.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error { return cmdEnvAdd(gopts, args[0], o) },
 	}
@@ -268,9 +293,11 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.aplValuesRepoURL, "apl-values-repo-url", "", "HTTPS GitOps repo URL (default: derived from instance_repo)")
 	f.StringVar(&o.haRole, "ha-role", "", "OpenBao HA role: active | standby | standalone (default: standalone)")
 	f.StringVar(&o.haGroup, "ha-group", "", "OpenBao HA group id (required for --ha-role active|standby; pairs the two peers)")
+	f.StringVar(&o.network, "network", "", "shared VPC name (spec.networks, see `llz network add`) to co-locate in; default: dedicated VPC")
+	f.StringVar(&o.subnetCIDR, "subnet-cidr", "", "cluster.network.subnetCIDR (/13 or /14); HA peers need DISTINCT CIDRs")
 	f.IntVar(&o.promotionRank, "promotion-rank", 0, "position in the code-promotion pipeline (ascending: dev=1, staging=2, prod=3; 0 = not in a pipeline)")
 	f.BoolVar(&o.dryRun, "dry-run", false, "print what would be created; write nothing")
-	env.AddCommand(add, envListCmd(), envRoleCmd(), envPeerCmd(), envNextCmd(), envPipelineCmd())
+	env.AddCommand(add, envShowCmd(), envSetCmd(), envEditCmd(), envListCmd(), envRoleCmd(), envPeerCmd(), envNextCmd(), envPipelineCmd(), envVPCCmd())
 	return env
 }
 

@@ -2,7 +2,7 @@
 
 > **Cutover status: live (consumed via OCI Argo Application).** The cluster's
 > `platform-openbao` Application now sources this chart from GHCR
-> (`apl-values/_shared/manifest/openbao/argocd/applications/openbao.yaml`); the old
+> (`apl-values/components/openbao/openbao.yaml`); the old
 > in-repo chart machinery was removed and the `OPENBAO_CHART` Makefile targets +
 > per-env `replacements:` were repointed/cleaned. HA-Raft boots fresh on the
 > recreated cluster. `releaseName: platform-openbao` is preserved — the
@@ -94,7 +94,7 @@ helm install platform-openbao oci://ghcr.io/akamai-consulting/charts/llz-openbao
 > retry_join all line up.
 
 In this repo it is consumed by an Argo CD Application
-(`apl-values/_shared/manifest/openbao/argocd/applications/`) referencing the
+(`apl-values/components/openbao/`) referencing the
 published OCI chart. OpenBao manages stateful PKI, so that Application keeps
 `prune: false`, `selfHeal: true`, and the `ignoreDifferences` for the
 StatefulSet `volumeClaimTemplates` + the ESO `deletionPolicy` defaulting.

@@ -306,31 +306,12 @@ components:
             namespace: llz-openbao
         pollIntervalSeconds: 60
 
-  # Wave 0: OpenBao (git source — wraps the vendored OpenBao HA Raft Helm chart
-  # plus TLS/NP/ServiceMonitor/rotation). Default wave: it consumes ESO + the
-  # CA chain established by earlier waves. prune is DISABLED — OpenBao manages
-  # stateful PKI/auth backends; auto-pruning a transiently-absent resource could
-  # lock out every service.
-  - name: llz-openbao
-    enabled: true
-    syncWave: "0"
-    destinationNamespace: llz-openbao
-    source:
-      type: git
-      path: apl-values/_shared/manifest/openbao/argocd/applications
-      # repoURL omitted -> defaults to global.gitRepoURL.
-      helm:
-        releaseName: llz-openbao
-        valueFiles:
-          - openbao-values.yaml
-    syncPolicy:
-      automated:
-        prune: false
-        selfHeal: true
-      syncOptions:
-        - CreateNamespace=true
-        - ServerSideApply=true
-        - Validate=true
+  # NOTE: OpenBao (llz-openbao, wave 0) is intentionally NOT delivered here. Since
+  # the OCI cutover it ships as a kustomize Component
+  # (apl-values/components/openbao/openbao.yaml) sourcing the llz-openbao-platform
+  # OCI chart — synced via each env's manifest overlay, with its own sync-wave "0",
+  # prune:false, and ignoreDifferences. A second app-of-apps entry here would create
+  # a duplicate Application named `llz-openbao` and collide with it.
 
   # NOTE: the Linode internal-CIDR firewall reconciler is an Akamai-internal
   # feature and lives in the private `lke-landing-zone-internal` repo (it needs a

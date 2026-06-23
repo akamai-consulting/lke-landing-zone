@@ -114,7 +114,7 @@ Harbor only runs on the primary cluster. Browse to `https://harbor.<primary-clus
 
 ### 8. Argo CD access
 
-Argo CD is the GitOps engine for everything under the Argo manifests directory (`instance-template/apl-values/example/manifest/`). To inspect deploys:
+Argo CD is the GitOps engine for everything under the Argo manifests (the shared `instance-template/apl-values/_shared/manifest/` base + the per-component `instance-template/apl-values/components/`). To inspect deploys:
 
 ```bash
 kubectl -n argocd port-forward svc/argocd-server 8080:443

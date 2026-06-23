@@ -67,26 +67,31 @@ GEN_TFVARS=(
   "$INSTANCE/terraform-iac-bootstrap/object-storage/$ENV_NAME.tfvars"
 )
 GEN_OVERLAY="$INSTANCE/apl-values/$ENV_NAME"
+ENV_YAML="$INSTANCE/environments/$ENV_NAME.yaml"   # spec ClusterDefinition `llz env add` authors
+LZ="$INSTANCE/landingzone.yaml"                     # created on the first env add (untracked in the template)
 TV="$ROOT/.template-version"   # llz env add stamps this at repo root
 
 # Refuse to touch a real, tracked env of the same name.
-for f in "${GEN_TFVARS[@]}" "$GEN_OVERLAY"; do
+for f in "${GEN_TFVARS[@]}" "$GEN_OVERLAY" "$ENV_YAML"; do
   if git -C "$ROOT" ls-files --error-unmatch "$f" >/dev/null 2>&1; then
     echo "::error::scaffold-check: '$ENV_NAME' is a real tracked env (${f#"$ROOT"/}). Set SCAFFOLD_CHECK_ENV to a throwaway name."
     exit 1
   fi
 done
 
-# Snapshot .template-version so the throwaway scaffold's stamp doesn't clobber it.
-TV_BAK=""
-[[ -f "$TV" ]] && { TV_BAK="$(mktemp)"; cp "$TV" "$TV_BAK"; }
+# Snapshot .template-version + landingzone.yaml so the throwaway scaffold's
+# stamp / first-env bootstrap doesn't clobber a real local copy.
+TV_BAK=""; [[ -f "$TV" ]] && { TV_BAK="$(mktemp)"; cp "$TV" "$TV_BAK"; }
+LZ_BAK=""; [[ -f "$LZ" ]] && { LZ_BAK="$(mktemp)"; cp "$LZ" "$LZ_BAK"; }
 
 cleanup() {
-  rm -rf "${GEN_TFVARS[@]}" "$GEN_OVERLAY"
+  rm -rf "${GEN_TFVARS[@]}" "$GEN_OVERLAY" "$ENV_YAML"
   if [[ -n "$TV_BAK" ]]; then mv -f "$TV_BAK" "$TV"; else rm -f "$TV"; fi
+  if [[ -n "$LZ_BAK" ]]; then mv -f "$LZ_BAK" "$LZ"; else rm -f "$LZ"; fi
 }
 cleanup            # pre-clean leftovers from an interrupted prior run
 TV_BAK=""; [[ -f "$TV" ]] && { TV_BAK="$(mktemp)"; cp "$TV" "$TV_BAK"; }
+LZ_BAK=""; [[ -f "$LZ" ]] && { LZ_BAK="$(mktemp)"; cp "$LZ" "$LZ_BAK"; }
 trap cleanup EXIT
 
 # ── 1. Scaffold a throwaway env (the real `llz env add` path) ─────────────────
@@ -132,7 +137,7 @@ elif [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
   # Same variable set cluster-bootstrap/main.tf feeds to templatefile(); a
   # values.yaml that references anything outside this set fails here (correctly).
   # Keep in sync with the templatefile(...) call in cluster-bootstrap/main.tf.
-  vars='{cluster_name="x",cluster_domain="x",apl_values_repo_url="x",apl_values_repo_username="x",apl_values_repo_password="x",apl_values_repo_ref="x",linode_dns_token="x",loki_admin_password="x",loki_bucket_chunks="x",loki_bucket_ruler="x",loki_bucket_admin="x",loki_s3_endpoint="x",loki_s3_region="x",harbor_bucket="x",harbor_s3_endpoint="x",harbor_s3_region="x",env_revision_configmap_content="x",env_revision_in_configmap=true}'
+  vars='{cluster_name="x",cluster_domain="x",apl_values_repo_url="x",apl_values_repo_username="x",apl_values_repo_password="x",apl_values_repo_ref="x",linode_dns_token="x",loki_admin_password="x",coredns_cluster_ip="x",loki_bucket_chunks="x",loki_bucket_ruler="x",loki_bucket_admin="x",loki_s3_endpoint="x",loki_s3_region="x",harbor_bucket="x",harbor_s3_endpoint="x",harbor_s3_region="x",env_revision_configmap_content="x",env_revision_in_configmap=true}'
   tmp="$(mktemp -d)"
   printf 'terraform {}\n' > "$tmp/main.tf"
   ( cd "$tmp" && "$TF" init -backend=false >/dev/null 2>&1 ) || true

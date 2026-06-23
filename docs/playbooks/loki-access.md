@@ -2,7 +2,7 @@
 
 **Applies to:** Loki (`<release>-loki` SingleBinary deployment in the `observability` namespace) on every cluster. Backed by Linode Object Storage per cluster.
 
-**Related:** your observability configuration, [`loki-values.yaml`](../../instance-template/apl-values/example/values.yaml), [`grafana-access.md`](grafana-access.md).
+**Related:** your observability configuration, [`loki-values.yaml`](../../instance-template/apl-values/_shared/values.yaml), [`grafana-access.md`](grafana-access.md).
 
 ---
 
@@ -11,9 +11,9 @@
 Two facts shape every Loki playbook:
 
 1. **No external Ingress.** Loki is reachable only as `http://<release>-loki-gateway.observability.svc.cluster.local` — inside the cluster network. Operators reach it via Grafana (preferred) or `kubectl port-forward` (debug).
-2. **Multi-tenancy is on.** `loki.auth_enabled: true` in [`loki-values.yaml`](../../instance-template/apl-values/example/values.yaml). Every read or write **must** carry the header `X-Scope-OrgID: <project>` — Loki returns 401 / "no org id" otherwise.
+2. **Multi-tenancy is on.** `loki.auth_enabled: true` in [`loki-values.yaml`](../../instance-template/apl-values/_shared/values.yaml). Every read or write **must** carry the header `X-Scope-OrgID: <project>` — Loki returns 401 / "no org id" otherwise.
 
-The single tenant we use today is **`<project>`** ([`loki-values.yaml`](../../instance-template/apl-values/example/values.yaml), [`grafana-values.yaml`](../../instance-template/apl-values/example/values.yaml), [`otel-collector-values.yaml`](../../instance-template/apl-values/example/values.yaml)).
+The single tenant we use today is **`<project>`** ([`loki-values.yaml`](../../instance-template/apl-values/_shared/values.yaml), [`grafana-values.yaml`](../../instance-template/apl-values/_shared/values.yaml), [`otel-collector-values.yaml`](../../instance-template/apl-values/_shared/values.yaml)).
 
 ---
 
@@ -92,7 +92,7 @@ curl -fsSL -X POST "http://localhost:3100/loki/api/v1/push" \
 If a separate workload needs log isolation, add a new tenant by:
 
 1. Setting its writers to send `X-Scope-OrgID: <new-tenant>` instead of `<project>`.
-2. Adding a per-tenant `limits_config` block in [`loki-values.yaml`](../../instance-template/apl-values/example/values.yaml) — see Loki's [multi-tenancy docs](https://grafana.com/docs/loki/latest/operations/multi-tenancy/) for ingestion-rate / retention overrides.
+2. Adding a per-tenant `limits_config` block in [`loki-values.yaml`](../../instance-template/apl-values/_shared/values.yaml) — see Loki's [multi-tenancy docs](https://grafana.com/docs/loki/latest/operations/multi-tenancy/) for ingestion-rate / retention overrides.
 3. Adding a second Loki data source in Grafana for that tenant (header value differs).
 
 Don't reuse `<project>` as a catch-all — once a workload's logs are mixed in there, splitting them out later is painful.

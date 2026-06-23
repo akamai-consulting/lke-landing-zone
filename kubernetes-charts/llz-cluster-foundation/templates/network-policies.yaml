@@ -99,6 +99,28 @@ spec:
   ingress:
     - ports:
         - { port: 10250, protocol: TCP }
+---
+# The Linode DNS-01 webhook (cert-manager-webhook-linode, deployed by apl-core's
+# cert-manager integration) is an aggregated APIService: the apiserver must reach
+# its :443 to pass the discovery check, or APIService v1alpha1.acme.slicen.me
+# stays Available=False and convergence hangs forever. Its pod is labeled
+# `app=cert-manager-webhook-linode` (no `app.kubernetes.io/name`), so the
+# core-webhook policy above does NOT cover it — it needs its own ingress allow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-allow-webhook-linode-ingress
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      app: cert-manager-webhook-linode
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { port: 443, protocol: TCP }
 
 # ── harbor ───────────────────────────────────────────────────────────────────
 ---

@@ -1,0 +1,75 @@
+# LandingZone spec — the annotated reference. `llz env add` CREATES your real
+# landingzone.yaml from .copier-answers.yml on the first deployment, so you don't
+# normally copy this file — read it to learn the shape. Copy it only to hand-author
+# instead: fill the instance identity below, add one environments/<env>.yaml per
+# cluster, and `llz render` reconciles it all into the per-env tfvars terraform consumes.
+#
+# How the pieces fit together (both sit at your instance-repo root):
+#
+#   landingzone.yaml          ← this file: instance identity + optional dns/defaults/networks
+#   environments/
+#     ├── prod-web-ord.yaml   ← one ClusterDefinition per cluster you deploy
+#     └── dev-ord.yaml          (see environments/prod-web-ord.yaml.example)
+#
+#   llz render  ──→  apl-values/<env>/ + per-env *.tfvars  ──→  terraform
+#
+# Full reference: docs/landing-zone-spec.md
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata:
+  name: REPLACE_INSTANCE_NAME            # instance name == repo short name. e.g. acme-platform
+spec:
+  instance:
+    upstreamOrg: REPLACE_UPSTREAM_ORG    # template source org. e.g. akamai-consulting
+    repo: REPLACE_OWNER/REPLACE_REPO     # <owner>/<name>. e.g. acme/acme-platform
+    forge: github                        # github-only on this template (other forges reserved)
+    templateVersion: REPLACE_LLZ_VERSION # pinned llz release tag (see `llz version` /
+                                         # the template repo's releases), or "main"
+
+  # ── Shared defaults (optional) ─────────────────────────────────────────────
+  # Inherited by every environment; a per-env value overrides field-by-field.
+  defaults:
+    cluster:
+      k8sVersion: v1.33.6+lke7   # an LKE-E +lke version available in your Linode account
+      nodePool: { type: g8-dedicated-8-4, count: 5 }
+    # apl-core global feature flags (otomi.*), rendered into every env's
+    # values.yaml. Both optional — shown here with their defaults.
+    platform:
+      externalDNS: true    # otomi.hasExternalDNS — external-dns manages records
+      externalIDP: false   # otomi.hasExternalIDP — false → standalone Keycloak
+
+  # ── DNS / cert (optional) ──────────────────────────────────────────────────
+  # Instance-wide cert-manager DNS-01 issuer config. Uncomment + set acmeEmail to
+  # render the Let's Encrypt registration contact into every env's overlay from the
+  # spec; left out (the default), it stays a REPLACE_PER_ENV placeholder you fill by
+  # hand. Leave it commented unless you set a REAL address — a bogus one fails issuance.
+  # dns:
+  #   acmeEmail: ops@example.com
+
+  # ── Shared VPCs (optional — most instances leave this out) ──────────────────
+  # By default every env gets its OWN DEDICATED VPC (own state, fully isolated) —
+  # the safest posture, and what you get by leaving `networks` out entirely.
+  # Declare a shared VPC ONLY to co-locate 2+ clusters in ONE region (e.g.
+  # prod-web + prod-api). A Linode VPC is region-scoped, so name them
+  # <tier>-<region>, one per region; each is its own Terraform state (vpc/<name>).
+  #
+  # KEEP PROD ISOLATED: prod and non-prod must never share a network, or a
+  # non-prod build's VPC apply runs against prod's state. An env must sit in its
+  # network's region (the validator rejects cross-region attach).
+  #
+  # NOTE: a multi-region prod HA pair (one cluster per region) needs NO shared
+  # network — each cluster is alone in its region, so a dedicated VPC is correct.
+  # You only need prod-<region> networks when co-locating SEVERAL clusters in a
+  # region. Uncomment + trim the example below only if that's you:
+  #
+  # networks:
+  #   prod-ord:    { region: us-ord } # prod, region 1 (e.g. HA primary)
+  #   prod-sea:    { region: us-sea } # prod, region 2 (e.g. HA secondary)
+  #   nonprod-ord: { region: us-ord } # dev/staging/lab co-located in us-ord
+
+# Next: author one environments/<env>.yaml per deployment (cluster definition +
+# component toggles + per-component sizing). See the fully-commented
+# environments/prod-web-ord.yaml.example for the complete per-env surface — note it
+# attaches to a shared network (prod-ord), so it only validates once you uncomment
+# the matching `networks:` entry above. A lone per-region cluster just omits
+# cluster.network and gets its own dedicated VPC (no networks block needed).

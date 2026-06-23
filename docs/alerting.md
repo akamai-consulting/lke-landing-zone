@@ -13,13 +13,13 @@ Loki) is itself broken.
 
 | Mechanism | Defined in | Notification path |
 |-----------|------------|-------------------|
-| Prometheus rules (custom) | `PrometheusRule` CRs under [apl-values/example/manifest/observability/prometheus-rules/](../instance-template/apl-values/example/manifest/observability/prometheus-rules/) — deployed source of truth, synced by apl-core's Argo CD and picked up by kube-prometheus-stack's `ruleSelector` | Prometheus UI / Grafana (see caveat below) |
+| Prometheus rules (custom) | `PrometheusRule` CRs under [apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/) — deployed source of truth, synced by apl-core's Argo CD and picked up by kube-prometheus-stack's `ruleSelector` | Prometheus UI / Grafana (see caveat below) |
 | Prometheus rules (defaults) | `kube-prometheus-stack.defaultRules.create: true` — node, kubelet, kube-state, and Prometheus self-monitoring | Prometheus UI / Grafana |
 | Scheduled CI checks | [.github/workflows/scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) | GitHub Actions `::warning::`/`::error::` annotations + job failure |
 | Rotation failure notice | the AppRole-rotation CronWorkflow `onExit` handler (under the OpenBao Argo CD application templates) | Opens a GitHub issue |
 
 > **Caveat — no paging yet.** `kube-prometheus-stack.alertmanager.enabled` is
-> `false` in [apl-values/&lt;env&gt;/values.yaml](../instance-template/apl-values/example/values.yaml).
+> `false` in [apl-values/_shared/values.yaml](../instance-template/apl-values/_shared/values.yaml).
 > Prometheus evaluates every rule and shows firing alerts in its own UI and via
 > Grafana, but there is **no Alertmanager routing / paging** for them today. The
 > only alerts that actively reach a human right now are the GitHub Actions
@@ -37,7 +37,7 @@ inventory below covers the alerts the **platform itself** ships.
 ### Secrets plane — OpenBao
 
 Covered by `openbao-alerts` (under
-[apl-values/example/manifest/observability/prometheus-rules/](../instance-template/apl-values/example/manifest/observability/prometheus-rules/)).
+[apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/)).
 
 | Condition | Alert | Severity | Status |
 |-----------|-------|----------|--------|
@@ -53,7 +53,7 @@ Covered by `openbao-alerts` (under
 ### Observability / support plane
 
 Covered by `support-plane-alerts` (under
-[apl-values/example/manifest/observability/prometheus-rules/](../instance-template/apl-values/example/manifest/observability/prometheus-rules/)).
+[apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/)).
 Today this is **scrape-health only** — each service has a single
 `...MetricsTargetDown` alert (`up == 0` for 5m, warning). Deeper per-service
 coverage is a known gap.
@@ -99,7 +99,7 @@ template.
 ## Adding or changing an alert
 
 1. Edit (or add) the matching `PrometheusRule` file under
-   [apl-values/example/manifest/observability/prometheus-rules/](../instance-template/apl-values/example/manifest/observability/prometheus-rules/)
+   [apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/)
    (deployed source of truth) and reference it from that directory's
    `kustomization.yaml`.
 2. If you add a new rule group, also add it to the `EXPECTED_RULES` list in the

@@ -90,7 +90,7 @@ require ".copier-answers.yml"
 require "renovate.json"
 require ".github/workflows/terraform.yml"
 require ".github/workflows/cluster-health.yml"
-require "apl-values/example/values.yaml"
+require "apl-values/_shared/values.yaml"
 # Operational tooling (the llz CLI, which absorbed instance-scripts/) is
 # template-INTERNAL and intentionally NOT delivered: the reusable llz-* workflows
 # build it from a template checkout (_llz-template/), so an instance must NOT

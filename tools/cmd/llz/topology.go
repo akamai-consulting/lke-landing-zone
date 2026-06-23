@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"sort"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 	"github.com/spf13/cobra"
 )
 
@@ -48,10 +50,18 @@ func hclStringField(body, field string) (string, bool) {
 	return "", false
 }
 
-// readTopology returns every deployment under <tfDir>/cluster/*.tfvars with its
-// declared ha_role/ha_group (role defaults to standalone when absent). Reuses
-// listDeployments' name discovery so the deployment set is identical.
+// readTopology returns every deployment with its declared ha_role/ha_group (role
+// defaults to standalone when absent). It reads the LandingZone spec when one is
+// present — the source of truth, so `llz env role`/`peer` stay correct even when
+// the committed tfvars lag a spec edit — and falls back to <tfDir>/cluster/*.tfvars
+// otherwise (reusing listDeployments' name discovery so the set is identical).
 func readTopology(tfDir string) ([]deployment, error) {
+	if lz, present, err := loadSpec(); present {
+		if err != nil {
+			return nil, err
+		}
+		return topologyFromSpec(lz), nil
+	}
 	names, err := listDeployments(tfDir)
 	if err != nil {
 		return nil, err
@@ -70,6 +80,21 @@ func readTopology(tfDir string) ([]deployment, error) {
 		deps = append(deps, deployment{name: name, haRole: role, haGroup: group})
 	}
 	return deps, nil
+}
+
+// topologyFromSpec builds the HA topology from the assembled spec (the merged
+// per-env ha.role/ha.group), sorted by name to match the tfvars path's ordering.
+func topologyFromSpec(lz *clusterspec.LandingZone) []deployment {
+	deps := make([]deployment, 0, len(lz.Spec.Environments))
+	for name, e := range lz.Spec.Environments {
+		role := e.Cluster.HA.Role
+		if role == "" {
+			role = roleStandalone
+		}
+		deps = append(deps, deployment{name: name, haRole: role, haGroup: e.Cluster.HA.Group})
+	}
+	sort.Slice(deps, func(i, j int) bool { return deps[i].name < deps[j].name })
+	return deps
 }
 
 func findDeployment(deps []deployment, name string) (deployment, bool) {
@@ -158,21 +183,11 @@ func validateTopology(deps []deployment) error {
 }
 
 // validateHAFlags checks the `llz env add` --ha-role/--ha-group combination
-// before any files are written.
+// before any files are written. The rule lives in internal/validate so the
+// LandingZone spec validator enforces the same active/standby pairing (with
+// spec-field names in its messages).
 func validateHAFlags(role, group string) error {
-	switch role {
-	case "", roleStandalone:
-		if group != "" {
-			return fmt.Errorf("--ha-group set but --ha-role is standalone — drop one")
-		}
-	case roleActive, roleStandby:
-		if group == "" {
-			return fmt.Errorf("--ha-role %s requires --ha-group (the pair id shared with its peer)", role)
-		}
-	default:
-		return fmt.Errorf("--ha-role %q invalid (want active|standby|standalone)", role)
-	}
-	return nil
+	return validate.HATopology(role, group, "--ha-role", "--ha-group")
 }
 
 func envRoleCmd() *cobra.Command {

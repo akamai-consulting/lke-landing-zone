@@ -14,7 +14,10 @@ type: application
 # Chart version — bump on any template/values change. Published to
 # oci://ghcr.io/<org>/charts/llz-cluster-foundation by .github/workflows/publish-charts.yml.
 # 0.1.2: strip internal fingerprints from comments for open-sourcing (no rendered change).
-version: 0.1.2
+# 0.1.3: add cert-manager-allow-webhook-linode-ingress NP so the apiserver can
+#        reach the Linode DNS-01 webhook's :443 (else acme.slicen.me APIService
+#        stays Available=False and convergence hangs).
+version: 0.1.3
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"

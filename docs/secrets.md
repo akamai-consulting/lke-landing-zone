@@ -9,8 +9,9 @@ This document is the runbook for the platform's secret backend. It covers:
 - Regional failover behavior
 
 The secret store itself runs as an Argo CD-managed Helm release of the published
-`llz-openbao-platform` chart; the per-deployment Argo CD Application and value
-overrides live under `instance-template/apl-values/<env>/manifest/openbao/argocd/applications/`.
+`llz-openbao-platform` chart; its Argo CD Application + manifests live ONCE in the
+shared `instance-template/apl-values/components/openbao/` component (enabled per env
+via `spec.components.openbao`), and per-env value overrides in `apl-values/<env>/values.yaml`.
 Your application workloads never talk to OpenBao directly — CI fetches the values
 it needs and injects them as deploy-time configuration. (For an edge/serverless
 target, for example, that means CI reads the values and passes them to the deploy

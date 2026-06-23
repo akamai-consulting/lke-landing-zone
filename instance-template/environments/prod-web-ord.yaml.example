@@ -1,0 +1,75 @@
+# environments/<env>.yaml — one ClusterDefinition per deployment. Copy to
+# environments/<env>.yaml (the filename's <env> == metadata.name == the workspace
+# key == apl-values/<env>/), fill it in, and `llz render` reconciles it into the
+# per-env tfvars + the committed apl-values overlay. Every cluster field can also
+# live in landingzone.yaml's spec.defaults and be inherited (a per-env value wins
+# field-by-field). See docs/landing-zone-spec.md.
+#
+# This example is the prod-web cluster co-located in us-ord, attaching to the
+# shared prod-ord VPC declared in landingzone.yaml.
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata:
+  name: prod-web-ord                              # == filename <env> == workspace key
+spec:
+  cluster:
+    clusterLabel: platform-prod-web-ord           # → cluster_label (Linode LKE label)
+    region: us-ord                                 # → region (must match its network's region)
+    k8sVersion: v1.33.6+lke7                       # → k8s_version (or inherit from defaults)
+    tags: [platform, prod, web]                    # → tags
+
+    nodePool:                                      # → node_type / node_count / autoscaler
+      type: g8-dedicated-16-8
+      count: 8
+      autoscalerEnabled: true                      # optional; omit → tfvars-example default
+
+    controlPlane:                                  # → control_plane_* (both optional)
+      highAvailability: true
+      auditLogsEnabled: true
+
+    ha:                                            # → ha_role / ha_group
+      role: standalone                             # active | standby | standalone
+      # For an HA pair instead: set role: active + group: prod-web here, and add a
+      # sibling environments/prod-web-sea.yaml with role: standby + the same group
+      # (a group needs exactly one active + one standby, in different regions).
+
+    apiServerAllowCIDRs:                           # → github_runner_ipv4/ipv6_cidrs (optional)
+      ipv4: ["203.0.113.0/24"]
+      ipv6: []
+
+    network:                                       # omit entirely → own dedicated VPC
+      vpc: prod-ord                                # a spec.networks name (same region)
+      subnetCIDR: 10.0.0.0/14                      # → vpc_subnet_cidr (/13 or /14)
+
+    promotionRank: 3                               # → promotion_rank (pipeline position)
+
+    bootstrap:                                     # → cluster-bootstrap/<env>.tfvars
+      name: platform-prod-web                      # → cluster.name (apl-core identity)
+      domainSuffix: web.prod.example.com           # → cluster.domainSuffix + dns.domainFilters
+      aplChartVersion: 5.0.0                       # → apl_chart_version (optional)
+      aplValues:
+        repoURL: https://github.com/my-org/platform-support.git
+        revision: main
+      appsRepoRevision: main                       # optional
+
+    objectStorage:                                 # → object-storage/<env>.tfvars
+      cluster: us-ord-1                             # → obj_cluster (region-local OBJ)
+      keyRotationDays: 90                           # → obj_key_rotation_days (≤120)
+
+  # ── Components: one toggle, two backends (apl-core apps + llz Argo manifests) ──
+  # Omit this block entirely → every component on except dns. A partial block
+  # changes only what you name; an explicit enabled:false sticks. Sizing knobs
+  # (config in the spec, mechanism stays in apl-values/example/values.yaml) render
+  # into the env's values.yaml — set them where prod should differ from defaults.
+  components:
+    observability:                                 # prod: keep more history, more headroom
+      enabled: true
+      retention: 30d                               # → apps.prometheus.retention (default 7d)
+      storage: 50Gi                                # → apps.prometheus.storageSize (default 10Gi)
+      replicas: 2                                  # → apps.prometheus.replicas (default 1)
+    harbor:
+      enabled: true
+      registryStorage: 100Gi                       # → registry image-store PVC (default 20Gi)
+    imageScanning: { enabled: true }               # Trivy
+    policyEngine:   { enabled: true }              # Kyverno + policy-reporter
+    # dns stays default-off — applied separately by bootstrap-dns.yml.

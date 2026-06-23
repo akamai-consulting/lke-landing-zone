@@ -8,31 +8,57 @@
 > rationale behind each step, read the [adopter guide](adopter-guide.md); this
 > page is the fast path.
 
-## The golden path — four commands
+## The whole path — copy/paste, top to bottom
 
-After the [accounts](#1-accounts-you-need) exist, the whole flow is four commands —
-**no clone of this repo required** (the installer is a one-liner; `llz new` creates
-your own repo):
+Once the [accounts](#1-accounts-you-need) exist, this is the **entire flow in
+order**. Run it line by line, swapping `my-instance`, `lab`, the region, and the
+OBJ cluster for your own. No clone of this repo required (the installer is a
+one-liner; `llz new` creates your own repo). Each step links to the section that
+explains it.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash   # 1. install the llz CLI (§2)
-llz new my-instance --push --yes                           # 2. scaffold from the upstream + create/push your repo (§3)
-cd my-instance && llz env add lab --region us-sea --obj-cluster us-sea-1   # 3. add a deployment, then fill the checklist it prints (§3)
-llz up lab --yes                                           # 4. credentials → readiness gate → build, in one go (§4)
+# 0. Authenticate gh FIRST — the installer and every GitHub call below use it (§2)
+gh auth login
+
+# 1. Install the llz CLI (§2)
+curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
+
+# 2. Scaffold your instance repo + create/push it on GitHub (§3)
+llz new my-instance --push --yes
+cd my-instance
+
+# 3. Add a deployment — authors the spec, renders the tfvars + apl-values overlay (§3)
+llz env add lab --region us-sea --obj-cluster us-sea-1
+
+# 4. Confirm it's ready to build — fill anything doctor flags, then re-run until green (§4)
+llz doctor --env lab
+
+# 5. Provision credentials → readiness gate → build, in ONE command (§4)
+llz up lab --yes
+
+# 6. AFTER the build, do the two manual steps the bootstrap can't (§4):
+#    • copy unseal keys 4 & 5 + the root token (shown once) to offline storage
+#    • delete the OPENBAO_ROOT_TOKEN secret from infra-lab if you seeded one
+#      (`llz status` flags it every run until you do)
+
+# 7. Finish DNS-01 issuance, then verify convergence (§4)
+llz bootstrap dns lab --yes
+llz status lab
 ```
 
-`llz` (a [cobra](https://github.com/spf13/cobra)-based CLI) is a thin front-end
-over the tools this flow already uses (`copier`, `gh`, `kubectl`, and the Linode
-API). It doesn't replace them — it sequences them and adds a **provisioning
-wizard** (`llz tokens`) that *creates* the Terraform-state bucket + a scoped key,
-*generates* the ArgoCD deploy key, gathers the GitHub PATs behind pre-filled
-links, and pushes everything to your repo. `llz up` chains the last three steps
-(`tokens → doctor → build`); the sections below cover each command, and you can
-always run them individually.
+That is the whole thing, start to converged cluster. Step 5's `llz up` chains the
+three gates — `tokens → doctor → build` — and **stops at the first failure**, so a
+missing token or unfilled placeholder is caught before the expensive apply; you can
+run those three individually to inspect each gate (§4). `llz` itself is a thin
+[cobra](https://github.com/spf13/cobra) front-end over the tools this flow already
+uses (`copier`, `gh`, `kubectl`, the Linode API) — it sequences them and adds the
+`llz tokens` provisioning wizard (state bucket + scoped key, ArgoCD deploy key,
+GitHub PATs behind pre-filled links), pushing everything to your repo.
 
 Run `llz <command> --help` for any command; the persistent flags `--dry-run`
 (print, change nothing), `--open` (open links), and `--yes` (execute
-cloud-mutating commands) work anywhere on the line.
+cloud-mutating commands) work anywhere on the line. Stuck on a step? `llz doctor`
+(§4) is the always-current readiness check.
 
 ---
 
@@ -173,6 +199,8 @@ cd my-instance
 llz env add lab --region us-sea --obj-cluster us-sea-1
 ```
 
+### Scaffold the instance repo — `llz new`
+
 **Most users don't pass `--org`.** It names the **template to scaffold *from***
 and defaults to the public upstream `akamai-consulting/lke-landing-zone` — exactly
 what you want unless you maintain your *own fork* of the template, in which case
@@ -195,12 +223,17 @@ immediately. It does **not** ask for credentials — that's `llz tokens` (§4).
 > fork by Copier — the only by-hand repoints are the published `kubernetes-charts/`
 > values that live outside the scaffold ([adopter-guide §5](adopter-guide.md#5-org-literals-to-repoint-to-your-fork)).
 
-`llz env add` generates
-`terraform-iac-bootstrap/{cluster,cluster-bootstrap,object-storage}/lab.tfvars`
-and the `apl-values/lab/` overlay, then **prints an exact checklist of the
-placeholders you still need to fill** (file:line + what each is). Several
-must-set values are accepted as **flags**, so you can set them up front instead
-of hand-editing:
+### Add a deployment — `llz env add` writes the spec
+
+`llz env add` is **spec-first**: it authors the declarative LandingZone spec and
+then renders it. The first `env add` creates `landingzone.yaml` (your instance
+identity + shared `spec.defaults`, seeded from `.copier-answers.yml`); every
+`env add` writes one `environments/<env>.yaml` (a `ClusterDefinition` from your
+flags) and runs `llz render` to reconcile the spec into the
+`terraform-iac-bootstrap/*/<env>.tfvars` + `apl-values/<env>/` overlay. It then
+**prints a checklist of the overlay placeholders** the spec doesn't carry. So you
+edit **one file per deployment** — `environments/<env>.yaml` — not three tfvars
+roots:
 
 ```bash
 llz env add lab --region us-sea --obj-cluster us-sea-1 \
@@ -208,24 +241,69 @@ llz env add lab --region us-sea --obj-cluster us-sea-1 \
   --runner-ipv4-cidrs 203.0.113.0/24
 ```
 
-The **ADOPTER-MUST-SET** values (full table in
+`--region` and `--obj-cluster` are **required** (the spec validates them); the
+rest of the must-sets come from flags or are inherited from `spec.defaults`. The
+**ADOPTER-MUST-SET** values (full table in
 [adopter-guide §3](adopter-guide.md#3-the-values-contract-what-you-must-set)):
 
-- `region`, `k8s_version` (an LKE-E `+lke` version in your account), node sizing (`--node-type`/`--node-count`)
-- `github_runner_ipv4_cidrs` / `*_ipv6_cidrs` — static operator/CI egress CIDRs that seed the bootstrap control-plane ACL (**never `0.0.0.0/0`**; leave empty for github.com-hosted runners, which open their egress IP at runtime via `llz ci runner-acl open`)
-- `cluster_name`, `cluster_domain`, `apl_values_repo_url` (**HTTPS**, defaults from `instance_repo`), `apl_chart_version`
-- `obj_cluster` — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `llz env add` validates the shape up front.
+- `region` (**required**), `k8sVersion` (an LKE-E `+lke` version) + node sizing (`--node-type`/`--node-count` — default to the seeded `spec.defaults`)
+- `--runner-ipv4-cidrs` / `--runner-ipv6-cidrs` → `cluster.apiServerAllowCIDRs` — static operator/CI egress CIDRs that seed the bootstrap control-plane ACL (**never `0.0.0.0/0`**; leave empty for github.com-hosted runners, which open their egress IP at runtime via `llz ci runner-acl open`)
+- `cluster.domainSuffix` (`--cluster-domain`, default `<env>.internal`), `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them.
+- `--obj-cluster` (**required**) — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `env add` validates the shape up front.
 
-Fill the placeholders `env add` listed, then confirm readiness:
+### Change, inspect & preview a deployment
+
+To change a deployment, use the spec **write** commands — they edit the YAML in
+place (comments preserved) and re-render for you, so the edit→render loop can't be
+forgotten:
 
 ```bash
-llz doctor --env lab   # scans tfvars + overlay for residual placeholders, renders the overlay
+llz env set lab cluster.nodePool.count=8                # per-env fields (cluster.*/components.*) + re-render
+llz env set lab components.harbor.enabled=false components.observability.retention=30d
+llz spec set dns.acmeEmail=ops@example.com              # instance-wide fields (landingzone.yaml) + re-render
+llz env edit lab                                        # open $EDITOR, re-render on exit
+llz network add prod-ord --region us-ord               # declare a shared VPC; attach with
+                                                        #   llz env set <env> cluster.network.vpc=prod-ord
 ```
 
-`llz doctor --env` is the single readiness gate (full breakdown in §4). Run it
-now for the local file checks — the repo-config part fills in once `llz tokens`
+A bad path is **rejected and the file left untouched** (no corruption), and `env
+set` / `spec set` point you at each other for a mis-targeted field.
+
+Inspect and preview before you commit:
+
+```bash
+llz components             # what's toggleable: default state, backends, sizing knobs
+llz env show lab           # lab's effective config after spec.defaults + component set
+llz render lab --diff      # preview exactly which files a render would create/change
+```
+
+For an HA pair, `env add` the active first (it defers the render until both peers
+exist), then the standby with a **distinct** `--subnet-cidr`; completing the pair
+renders both.
+
+### Confirm readiness — `llz doctor --env`
+
+Then fill any overlay placeholders `env add` listed and confirm readiness:
+
+```bash
+llz doctor --env lab   # validates the spec + drift, then scans the overlay for placeholders
+```
+
+`llz doctor --env` is the single readiness gate (full breakdown in §4): when a
+spec is present it **validates it and confirms the committed `apl-values` are in
+sync with it** — so a spec edit you forgot to `llz render` is caught here, not at
+build. (`llz validate` runs the same spec check alongside the TF code gate.) Run
+it now for the local file checks — the repo-config part fills in once `llz tokens`
 has pushed. Or, from a template checkout, run `make instance-test` for a fast,
 no-cloud smoke test of the whole instantiation path before paying for a real build.
+
+> **The spec is the source of truth.** `landingzone.yaml` (instance identity +
+> shared `spec.defaults` + shared VPCs) plus one `environments/<env>.yaml` per
+> deployment (cluster definition + `components` toggles + per-component sizing) are
+> what you edit; `llz render` reconciles them into the tfvars + `apl-values/<env>/`
+> overlay, and `llz render --check` drift-guards the committed result in CI. See
+> [landing-zone-spec.md](landing-zone-spec.md) and the fully-commented
+> `landingzone.yaml.example` + `environments/prod-web-ord.yaml.example`.
 
 <details>
 <summary><strong>What "environment" means here</strong> — three distinct things</summary>
@@ -261,23 +339,26 @@ llz env list --json   # ["lab","primary",...] — the same source of truth the C
                       # matrices use (a `discover` job feeds it into every
                       # per-deployment workflow matrix), so a deployment is
                       # covered by rotation + the scheduled health checks the
-                      # moment its cluster/<name>.tfvars exists.
+                      # moment it's in the spec (or its cluster/<name>.tfvars exists).
 llz env list --ha     # only deployments in an OpenBao HA pair (ha_role != standalone)
-llz env role lab      # active | standby | standalone (from cluster/lab.tfvars)
+llz env role lab      # active | standby | standalone (from the spec, else cluster/lab.tfvars)
 llz env peer lab      # the deployment paired with lab (errors if standalone)
 ```
 
 Most deployments are **standalone** (a single self-contained OpenBao — the
 `llz env add` default). For a two-cluster HA pair, scaffold both with a shared
-`--ha-group` and opposite roles:
+`--ha-group`, opposite roles, and **distinct** `--subnet-cidr`s (cross-region
+peers can't share a CIDR). `env add` defers the render of the first peer until the
+second completes the pair, then renders both:
 
 ```bash
-llz env add east --region us-sea --obj-cluster us-sea-1 --ha-role active  --ha-group prod
-llz env add west --region us-ord --obj-cluster us-ord-1 --ha-role standby --ha-group prod
+llz env add east --region us-sea --obj-cluster us-sea-1 --ha-role active  --ha-group prod --subnet-cidr 10.0.0.0/14
+llz env add west --region us-ord --obj-cluster us-ord-1 --ha-role standby --ha-group prod --subnet-cidr 10.4.0.0/14
 ```
 
-The bootstrap, rotation, and Harbor workflows resolve `ha_role`/peer from the
-tfvars instead of hardcoding which cluster is which.
+The bootstrap, rotation, and Harbor workflows resolve `ha_role`/peer from the spec
+(the committed tfvars are rendered from it) instead of hardcoding which cluster is
+which.
 
 </details>
 
@@ -370,7 +451,9 @@ The single **"am I ready to build?"** gate. In one run it checks all three thing
 that must be true before the build:
 
 1. **Tooling + `gh` auth** — the CLIs the flow uses, and that `gh` is logged in.
-2. **Deployment files** — scans the tfvars + overlay for residual scaffold
+2. **Deployment files** — when a spec is present, validates it and confirms the
+   committed `apl-values` are in sync with it (so a spec edit you forgot to
+   `llz render` is caught here); then scans the tfvars + overlay for residual
    placeholders, verifies the deployment discriminator agrees across the tfvars,
    and renders the overlay (the former `llz validate --env`).
 3. **Repo config** — every variable/secret an e2e/build needs, required vs
@@ -457,7 +540,7 @@ versioned charts + external actions*.
 - [ ] `gh auth login` done (§2)
 - [ ] `llz` installed + completion (§2); `llz doctor` tooling green
 - [ ] `llz new … --push --yes` run; org literals repointed; instance pushed to GitHub (§3)
-- [ ] `llz env add <env>` run; the placeholders it listed are filled (`obj_cluster` set to your region's OBJ cluster id) (§3)
+- [ ] `llz env add <env> --region … --obj-cluster …` run (authors `landingzone.yaml` + `environments/<env>.yaml`, renders); the overlay placeholders it listed are filled (§3)
 - [ ] `llz doctor --env <env>` green — deployment files + every required value set (§4)
 - [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); cluster converges (`llz status <env>`) (§4)
 - [ ] Unseal keys 4 & 5 + root token saved offline; `OPENBAO_ROOT_TOKEN` deleted

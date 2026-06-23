@@ -4,7 +4,7 @@ name: llz-bootstrap-dns (reusable)
 # Surface-reduction pattern (docs/templatization-plan.md §"Keeping instances in
 # sync"). Dual checkout (Option A): the caller instance sits at the workspace
 # root — so the fetch-kubeconfig action's `terraform-iac-bootstrap/cluster`
-# working-dir resolves AND the apl-values/<env>/manifest/dns kustomize tree is
+# working-dir resolves AND the apl-values/_shared/manifest/dns kustomize tree is
 # present — while the LLZ template is checked out into _llz-template/ for the
 # fetch-kubeconfig action (the require-secret gate and OpenBao writes both go
 # through llz, which is baked into TF_IMAGE). The instance
@@ -13,7 +13,7 @@ name: llz-bootstrap-dns (reusable)
 #
 # Effect:
 #   • Writes secret/certmanager/dns01 with `token=$LINODE_DNS_TOKEN`
-#   • Applies apl-values/<env>/manifest/dns so the dns01-solver-token
+#   • Applies apl-values/_shared/manifest/dns so the dns01-solver-token
 #     ExternalSecret materializes the cert-manager Secret
 #   • Waits (bounded) for that Secret with the existence-then-condition pattern
 
@@ -150,21 +150,21 @@ jobs:
       # reconcile (avoids the 5-min refresh wait that would otherwise gate
       # the cert-manager-dns01-solver-token Secret materialisation).
       #
-      # The dns/ tree is split out of the main env manifest kustomization
-      # (apl-values/<env>/manifest/kustomization.yaml does NOT include dns/)
+      # The dns/ tree is split out of the shared manifest kustomization
+      # (apl-values/_shared/manifest/kustomization.yaml does NOT include dns/)
       # because including it there made the platform-bootstrap App fail at
       # dns01-solver-token's hook phase (no upstream secret) and abort BEFORE
       # applying ~16 downstream resources (harbor-registry-s3,
       # observability/loki-object-store, Gateway/VirtualService). Observed:
       # the whole cluster stayed Degraded because of
-      # one missing operator input. See the env's manifest/dns/kustomization.yaml
-      # for the full rationale. The instance overlay lives at the workspace root
-      # (this reusable checks the caller out there); ${REGION} is the env/overlay
-      # name forwarded by the caller.
+      # one missing operator input. See apl-values/_shared/manifest/dns/kustomization.yaml
+      # for the full rationale. The dns/ tree is instance-wide (DRY — one copy
+      # under _shared, applied to every region's cluster); ${REGION} selects the
+      # target cluster's kubeconfig, not a per-env manifest copy.
       - name: Apply DNS kustomize tree
         run: |
           set -euo pipefail
-          kubectl apply -k "apl-values/${REGION}/manifest/dns"
+          kubectl apply -k "apl-values/_shared/manifest/dns"
           echo "DNS kustomize tree applied (dns01-solver-token ES + letsencrypt"
           echo "ClusterIssuers + cert-manager-webhook-linode App)."
 
@@ -186,7 +186,7 @@ jobs:
           {
             printf '## DNS bootstrap (%s)\n\n' "$REGION"
             printf -- "- Wrote \`secret/certmanager/dns01\` in OpenBao\n"
-            printf -- "- Applied \`apl-values/%s/manifest/dns\` (dns01-solver-token ES)\n" "$REGION"
+            printf -- "- Applied \`apl-values/_shared/manifest/dns\` (dns01-solver-token ES) to the %s cluster\n" "$REGION"
             printf -- "- Verified \`cert-manager-dns01-solver-token\` Secret present\n\n"
             printf -- "Delete the \`OPENBAO_ROOT_TOKEN\` env secret if it was seeded just for this run.\n"
           } >> "$GITHUB_STEP_SUMMARY"

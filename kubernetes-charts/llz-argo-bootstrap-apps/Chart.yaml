@@ -13,7 +13,9 @@ type: application
 # Chart version — bump on any template/values change. Published to
 # oci://ghcr.io/<org>/charts/llz-argo-bootstrap-apps by
 # .github/workflows/publish-charts.yml.
-version: 0.1.3
+# 0.1.4: drop the stale llz-openbao app-of-apps entry (OpenBao now ships as the
+#        apl-values/components/openbao kustomize Component; the duplicate collided).
+version: 0.1.4
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

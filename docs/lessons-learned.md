@@ -118,6 +118,20 @@ default against, not something to "clean up." Version-specific notes (apl-core
   allow, so the operator can't poll Postgres status on `:8000`, the Harbor DB
   replica never starts, and convergence stalls. (Only Harbor has a default-deny;
   gitea/keycloak don't.)
+- **`cert-manager-default-deny` starves the Linode DNS-01 webhook → convergence
+  hangs on an APIService.** `cert-manager-allow-webhook-ingress` only selects the
+  CORE cert-manager webhook (`app.kubernetes.io/name=webhook`, `:10250`). The
+  Linode DNS-01 webhook apl-core deploys is an *aggregated APIService* whose pod
+  is labeled `app=cert-manager-webhook-linode` and serves `:443` — not covered,
+  so the apiserver's discovery probe is dropped, `APIService
+  v1alpha1.acme.slicen.me` stays `Available=False` (`FailedDiscoveryCheck`), and
+  `llz ci converge` polls forever. The pod is `1/1 Running` with healthy
+  endpoints, which makes it look fine — the failure is purely the apiserver→`:443`
+  NP path. Fix: a dedicated `cert-manager-allow-webhook-linode-ingress` allowing
+  ingress to `app=cert-manager-webhook-linode` on `:443` (llz-cluster-foundation
+  `network-policies.yaml`). General rule: any aggregated-APIService webhook behind
+  a default-deny needs its own `:443` ingress allow keyed on *its* pod label —
+  don't assume the core-webhook policy covers it.
 - **argo-events v1.9+ relabeled pods.** EventBus/Sensor/EventSource pods now carry
   `controller=*-controller` labels instead of `app.kubernetes.io/component=*`. NPs
   using the old selectors match nothing → JetStream "Waiting for routing" loop.

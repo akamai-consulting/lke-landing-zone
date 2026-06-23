@@ -17,22 +17,18 @@ The cutover happens **per cluster**, not all at once. The promotion path is
 - [ ] `LINODE_DNS_TOKEN` GitHub secret seeded — apl-core's ExternalDNS
       and cert-manager DNS-01 solver both use it. Without it ACME
       challenges fail and TLS never issues.
-- [ ] **Resolve the cert-manager-webhook-linode chart URL.** This is a
-      **two-file lockstep edit** — if you only do one, Argo CD will Degrade
-      the Application:
-      - [ ] Edit
-        [`apl-values/example/manifest/dns/cert-manager-webhook-linode-application.yaml`](../instance-template/apl-values/example/manifest/dns/cert-manager-webhook-linode-application.yaml)
-        — replace the `repoURL: https://REPLACE_ME.example.com/...` placeholder and
-        `targetRevision: "0.0.0"` with a real chart + version.
-      - [ ] Edit
-        [`apl-values/example/manifest/argocd/platform-support-project.yaml`](../instance-template/apl-values/example/manifest/argocd/platform-support-project.yaml)
-        — add the same repoURL to the `sourceRepos:` list (uncomment the
-        commented entry and update it). Argo CD enforces project-level
-        sourceRepos; forgetting this step makes the webhook Application
-        sync fail with "repository not permitted in project".
-
-      Without this every Let's Encrypt Certificate sits in Pending and no
-      Istio Gateway gets TLS.
+- [ ] **DNS-01 webhook — no action needed (apl-core owns it).** apl-core
+      deploys `cert-manager-webhook-linode` as part of its cert-manager
+      integration, registering the `acme.slicen.me` API group (the slicen chart
+      default) and holding the Linode token from `LINODE_DNS_TOKEN` above. The
+      landing zone no longer ships its own webhook Application; the
+      `llz-letsencrypt-{production,staging}` ClusterIssuers
+      ([`apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml`](../instance-template/apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml))
+      target that group via `groupName: acme.slicen.me` + `solverName: linode`.
+      Just confirm apl-core's `cert-manager-webhook-linode` pod reaches Ready
+      (its APIService `v1alpha1.acme.slicen.me` shows `Available=True`) — if it
+      doesn't, every Let's Encrypt Certificate sits in Pending and no Istio
+      Gateway gets TLS.
 - [ ] **Verify the apl chart version** — run
       `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`
       and update `apl_chart_version` in each

@@ -18,6 +18,19 @@
 # server before the controller takes over.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Shared-VPC attach: when the env declares cluster.network.vpc, `llz render` sets
+# vpc_network to that VPC's label. Look it up (the vpc root created it first — see
+# apply-vpc → apply-cluster ordering) and pass its id to the module so this cluster
+# attaches its subnet to the shared VPC instead of creating a dedicated one. Empty
+# vpc_network → the module creates a dedicated <cluster_label>-vpc (the default).
+data "linode_vpcs" "shared" {
+  count = var.vpc_network == "" ? 0 : 1
+  filter {
+    name   = "label"
+    values = [var.vpc_network]
+  }
+}
+
 module "cluster" {
   # checkov:skip=CKV_TF_1: First-party module sources pin to immutable-by-convention
   # SemVer tags (terraform-modules/RELEASING.md — tags are never moved), which are the
@@ -30,6 +43,7 @@ module "cluster" {
   k8s_version     = var.k8s_version
   tags            = var.tags
   vpc_subnet_cidr = var.vpc_subnet_cidr
+  vpc_id          = var.vpc_network == "" ? "" : tostring(data.linode_vpcs.shared[0].vpcs[0].id)
 
   control_plane_high_availability  = var.control_plane_high_availability
   control_plane_audit_logs_enabled = var.control_plane_audit_logs_enabled

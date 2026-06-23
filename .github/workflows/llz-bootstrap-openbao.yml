@@ -379,10 +379,9 @@ jobs:
 
       - name: Unseal pods 1–2 (post-init)
         if: steps.bao_status.outputs.initialized == 'false'
-        # NO MANUAL RAFT JOIN. The chart values at
-        # apl-values/_shared/manifest/openbao/argocd/applications/openbao-values.yaml
-        # declare `retry_join` blocks for all three peer FQDNs in the storage
-        # stanza. By the time pod 0 finishes `bao operator init`, pods 1 and 2
+        # NO MANUAL RAFT JOIN. The llz-openbao-platform OCI chart values
+        # (kubernetes-charts/llz-openbao-platform/values.yaml) declare `retry_join`
+        # blocks for all three peer FQDNs in the storage stanza. By the time pod 0 finishes `bao operator init`, pods 1 and 2
         # have already auto-joined the raft cluster (they're at
         # Initialized=true, Sealed=true). Running `bao operator raft join`
         # against an already-joined member returns a 500 from the leader:
@@ -512,17 +511,18 @@ jobs:
       # Currently includes:
       #   - OpenTelemetryCollector (opentelemetry.io/v1beta1)
       #
-      # Split from the main env manifest tree because including those resources
+      # Split from the shared manifest tree because including those resources
       # there makes `kubectl kustomize | kubectl apply --dry-run=server`
       # validation fail against a fresh cluster (CRD isn't yet registered at
-      # lint time). See apl-values/<env>/manifest/post-apl-bootstrap/kustomization.yaml
-      # header for the full rationale + the precedent (DNS split). ${REGION} is
-      # the env/overlay name forwarded by the caller.
+      # lint time). See apl-values/_shared/manifest/post-apl-bootstrap/kustomization.yaml
+      # header for the full rationale + the precedent (DNS split). The tree is
+      # instance-wide (DRY — one copy under _shared, applied to every region's
+      # cluster); ${REGION} selects the target cluster's kubeconfig.
       - name: Apply post-apl-bootstrap kustomize tree
         if: steps.check_token.outputs.available == 'true'
         run: |
           set -euo pipefail
-          kubectl apply -k "apl-values/${REGION}/manifest/post-apl-bootstrap"
+          kubectl apply -k "apl-values/_shared/manifest/post-apl-bootstrap"
           echo "post-apl-bootstrap resources applied (OpenTelemetryCollector + future CRD-dependent resources)."
 
       # ── Seed: ESO and CI AppRole credentials ───────────────────────────────────

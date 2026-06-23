@@ -32,8 +32,8 @@ output "kubeconfig_path" {
 # ── Networking ────────────────────────────────────────────────────────────────
 
 output "vpc_id" {
-  description = "ID of the VPC wrapping the cluster."
-  value       = linode_vpc.this.id
+  description = "ID of the VPC wrapping the cluster (the dedicated one created here, or the shared vpc_id passed in)."
+  value       = local.vpc_id
 }
 
 output "vpc_subnet_id" {

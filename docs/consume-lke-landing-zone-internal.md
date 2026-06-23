@@ -29,8 +29,11 @@ You add the **controller + chart** back from the private repo. Three steps.
 
 ## 1. Deploy the chart (Argo Application)
 
-Add an Application to your instance's `apl-values/<env>/manifest/argocd/applications/`
-(and list it in that dir's `kustomization.yaml`):
+Add an Application to the shared `apl-values/_shared/manifest/applications/` (instance-
+wide — it lands in every env) and list it in `apl-values/_shared/manifest/kustomization.yaml`
+alongside `applications/cluster-foundation.yaml`. (The shared tree is template-managed,
+so re-assert the `resources:` entry after a `copier update` — or, better, contribute the
+app upstream as its own kustomize Component under `apl-values/components/`.)
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1

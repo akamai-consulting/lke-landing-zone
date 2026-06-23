@@ -1,0 +1,23 @@
+# Post-apl-bootstrap kustomize tree — applied SEPARATELY from the main manifest
+# tree by .github/workflows/bootstrap-openbao.yml, NOT included in the parent
+# manifest/kustomization.yaml.
+#
+# Why split out: resources here depend on a CRD registered by apl-core's
+# helmfile (opentelemetry.io/v1beta1). If included in the main tree, the first
+# `kubectl kustomize | kubectl apply --dry-run=server` against a fresh cluster
+# fails at resource-mapping (CRD not yet registered) and CI lint exits non-zero.
+# Argo CD's SkipDryRunOnMissingResource handles this at sync time but not on the
+# local kubectl path. Splitting keeps the main tree validating cleanly while
+# these land separately once the CRD is present.
+#
+# Apply order on a cold bootstrap:
+#   1. TF apply → cluster + apl-operator.
+#   2. apl-core helmfile → installs otel-operator + registers the CRD.
+#   3. Operator runs bootstrap-openbao.yml → "Apply post-apl-bootstrap" runs
+#      `kubectl apply -k apl-values/_shared/manifest/post-apl-bootstrap`
+#      against each region's cluster (the tree is instance-wide — DRY).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - otel-collector.yaml

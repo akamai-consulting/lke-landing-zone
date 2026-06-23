@@ -22,6 +22,13 @@ inputs:
       a different repo needing a broader-scoped token.
     required: false
     default: ${{ github.token }}
+  state-key:
+    description: >
+      Override the S3 state key. Default is <module>/<REGION>/terraform.tfstate
+      (per-deployment). The shared-VPC root sets vpc/<network>/terraform.tfstate so
+      one VPC's state is shared across the deployments that attach to it.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -49,7 +56,9 @@ runs:
         AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
       run: |
+        KEY="${{ inputs.state-key }}"
+        [ -n "$KEY" ] || KEY="${{ inputs.module }}/$REGION/terraform.tfstate"
         terraform init \
           -backend-config="bucket=$TF_STATE_BUCKET" \
-          -backend-config="key=${{ inputs.module }}/$REGION/terraform.tfstate" \
+          -backend-config="key=$KEY" \
           -backend-config="region=us-east-1"

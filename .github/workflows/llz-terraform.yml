@@ -155,6 +155,19 @@ jobs:
           token: ${{ github.token }}
           path: _llz-template
 
+      # LandingZone instances author a declarative spec (landingzone.yaml +
+      # environments/<env>.yaml) instead of committing the per-env tfvars; render the
+      # transient <env>.tfvars before any TF step reads them. No-op (the `test -f`
+      # gate) for instances that have not adopted the spec, so existing instances
+      # are unaffected.
+      - name: Render tfvars from the LandingZone spec (spec-driven instances)
+        env:
+          REGION: ${{ matrix.region }}
+        run: |
+          if [ -f landingzone.yaml ]; then
+            llz render "$REGION" --tfvars-only
+          fi
+
       - name: Terraform init — cluster
         uses: ./_llz-template/instance-template/.github/actions/terraform-init
         with:
@@ -285,12 +298,97 @@ jobs:
   # `infra-primary` and `infra-secondary` GitHub Environments each have
   # required reviewers.  Approval is logged with reviewer identity + timestamp
   # in the GitHub Deployments API audit trail.
+  # ── Shared VPC (spec.networks) ──────────────────────────────────────────────
+  # Spec-driven instances may put several SAME-REGION deployments in one VPC
+  # (cluster.network.vpc). That VPC is cross-deployment state (key vpc/<network>),
+  # so it is created here, once, before the cluster that attaches to it — the
+  # cluster root then looks it up by label. A deployment using a dedicated VPC
+  # (the default) resolves no network and this job is a no-op. Linode OBJ has no
+  # state locking, so a single concurrency group serializes all VPC applies to
+  # avoid concurrent same-state corruption (the promotion chain already orders
+  # pipeline stages; this guards ad-hoc concurrent builds).
+  apply-vpc:
+    name: Apply Shared VPC
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      (inputs.module == 'cluster' || inputs.module == 'all')
+    concurrency:
+      group: llz-shared-vpc-apply
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:                ${{ inputs.region }}
+      ACTION:                ${{ inputs.action }}
+      LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+      TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout LLZ template (actions + scripts)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
+          ref: ${{ inputs.template-ref }}
+          token: ${{ github.token }}
+          path: _llz-template
+
+      # Render the env's tfvars (incl. vpc_network) + each shared VPC's
+      # vpc/<network>.tfvars. No-op for instances without a spec.
+      - name: Render tfvars from the LandingZone spec
+        run: |
+          if [ -f landingzone.yaml ]; then
+            llz render "$REGION" --tfvars-only
+          fi
+
+      # Which shared VPC (if any) this deployment attaches to. Empty => dedicated
+      # VPC, created by the cluster apply itself — nothing to do here.
+      - name: Resolve shared VPC for this deployment
+        id: net
+        run: |
+          NET=""
+          if [ -f landingzone.yaml ]; then NET="$(llz env vpc "$REGION")"; fi
+          echo "net=$NET" >> "$GITHUB_OUTPUT"
+          if [ -n "$NET" ]; then
+            echo "Deployment '$REGION' attaches to shared VPC '$NET'."
+          else
+            echo "Deployment '$REGION' uses a dedicated VPC — skipping the shared-VPC root."
+          fi
+
+      - name: Terraform init — shared VPC
+        if: steps.net.outputs.net != ''
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module:                vpc
+          state-key:             vpc/${{ steps.net.outputs.net }}/terraform.tfstate
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+      - name: Terraform plan — shared VPC
+        if: steps.net.outputs.net != ''
+        working-directory: terraform-iac-bootstrap/vpc
+        run: terraform plan -var-file="${{ steps.net.outputs.net }}.tfvars"
+      - name: Terraform apply — shared VPC
+        if: steps.net.outputs.net != '' && env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/vpc
+        run: terraform apply -auto-approve -var-file="${{ steps.net.outputs.net }}.tfvars"
+
   apply-cluster:
     name: Apply Cluster
     if: >
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'apply' || inputs.action == 'plan') &&
       (inputs.module == 'cluster' || inputs.module == 'all')
+    needs: [apply-vpc]
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
@@ -317,6 +415,16 @@ jobs:
           ref: ${{ inputs.template-ref }}
           token: ${{ github.token }}
           path: _llz-template
+
+      # LandingZone instances author a declarative spec (landingzone.yaml +
+      # environments/<env>.yaml) instead of committing the per-env tfvars; render
+      # the transient <env>.tfvars before the apply reads them. No-op for instances
+      # that have not adopted the spec.
+      - name: Render tfvars from the LandingZone spec (spec-driven instances)
+        run: |
+          if [ -f landingzone.yaml ]; then
+            llz render "$REGION" --tfvars-only
+          fi
 
       # Catch account-quota exhaustion BEFORE the apply, not via a 30-minute
       # cluster-create hang / PVCs-Pending-on-[400] / provider-ReadResource
@@ -376,11 +484,20 @@ jobs:
   # remote state output and applies all Kubernetes-side resources: apl-core
   # Helm release, the apl-values-repo Argo CD repo Secret, and the
   # argocd-cm config-patch Job.
+  #
+  # apply ONLY — NOT plan. Unlike apply-vpc / apply-cluster (linode-provider roots
+  # that plan fine before anything exists), cluster-bootstrap CONSUMES a live
+  # cluster: its "Cluster access" step fetches the kubeconfig by label, and even a
+  # `terraform plan` resolves the kubernetes/helm providers + the live
+  # data.kubernetes_service.coredns. A plan-mode dispatch (e.g. the release-e2e
+  # dry-run) creates no cluster, so this would always fail with "no LKE cluster
+  # matched". Gating to apply-only lets `action=plan module=all` cleanly plan the
+  # cluster-CREATING roots and stop there. (PR previews use plan-cluster-pr.)
   apply-cluster-bootstrap:
     name: Apply Cluster Bootstrap
     if: >
       github.event_name == 'workflow_dispatch' &&
-      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      inputs.action == 'apply' &&
       (inputs.module == 'cluster' || inputs.module == 'all')
     needs: [apply-cluster]
     runs-on: ubuntu-latest

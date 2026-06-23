@@ -77,8 +77,42 @@ func runEnvReadiness(env string) error {
 		return fmt.Errorf("no scaffold for %q (%s missing) — run `llz env add %s` first", env, overlay, env)
 	}
 
+	// Spec-aware gate. When a LandingZone spec is present it's the source of truth,
+	// so validate it AND confirm the committed apl-values match what it renders
+	// before the file-level scan below — which reads the RENDERED output and would
+	// otherwise pass on stale tfvars after a spec edit that wasn't re-rendered.
+	if lz, present, perr := loadSpec(); present {
+		fmt.Println(bold("LandingZone spec:"))
+		if perr != nil {
+			fmt.Printf("  %s failed to load: %v\n", red("✗"), perr)
+			return perr
+		}
+		if errs := lz.Validate(); len(errs) > 0 {
+			for _, e := range errs {
+				fmt.Printf("  %s %v\n", red("✗"), e)
+			}
+			return fmt.Errorf("%d spec problem(s) — fix landingzone.yaml / environments/<env>.yaml, then re-run", len(errs))
+		}
+		if _, ok := lz.Env(env); ok {
+			if err := checkManifestDrift(lz, aplDir, []string{env}); err != nil {
+				// checkManifestDrift already printed the drifted files + the
+				// `llz render` hint; surface it as the blocking failure.
+				return err
+			}
+			fmt.Printf("  %s valid; committed apl-values for %q in sync with the spec\n\n", green("✓"), env)
+		} else {
+			fmt.Printf("  %s valid (%q is not in the spec — scanning its committed files directly)\n\n", green("✓"), env)
+		}
+	}
+
 	files := tfvarsPaths(tfDir, env)
 	files = append(files, overlayScanFiles(overlay)...)
+	// The cert/DNS tree is shared (DRY) — its REPLACE_PER_ENV (ACME email) /
+	// REPLACE_ME (webhook chart repoURL) placeholders live ONCE under
+	// apl-values/_shared, not in the per-env overlay — so scan it too (no-op for
+	// older instances without _shared). isDeferrable still classifies them under
+	// /manifest/dns/, so they surface as deferrable cert/DNS items, not blockers.
+	files = append(files, overlayScanFiles(filepath.Join(aplDir, "_shared"))...)
 	for _, cf := range chartValuesFiles {
 		if fi, err := os.Stat(cf); err == nil && !fi.IsDir() {
 			files = append(files, cf)
@@ -193,8 +227,8 @@ func runEnvReadiness(env string) error {
 	return nil
 }
 
-// isDeferrable reports whether a readiness finding lives in the cert/DNS overlay
-// (apl-values/<env>/manifest/dns/...). Those placeholders configure cert-manager
+// isDeferrable reports whether a readiness finding lives in the cert/DNS tree
+// (apl-values/_shared/manifest/dns/...). Those placeholders configure cert-manager
 // DNS-01 issuance, which `llz bootstrap dns` provisions AFTER the first build
 // (quickstart §4), so they must not block the apply.
 func isDeferrable(file string) bool {
