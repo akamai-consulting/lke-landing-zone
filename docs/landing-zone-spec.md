@@ -192,10 +192,11 @@ and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 
 **Components — one toggle, two backends.** `spec.components.<name>` is the single
 "what's deployed" switch. Each component routes to whichever backend(s) deliver it:
-the **llz Argo backend** (it contributes resources/Applications to the committed
-`apl-values/<env>/manifest/kustomization.yaml` + `argocd/kustomization.yaml`, which
-`llz render` generates and `llz render --check` drift-guards) and/or the **apl-core
-backend** (it flips `apps.<key>.enabled` in the committed `values.yaml`, which
+the **llz Argo backend** (its resources/Applications live ONCE in a shared kustomize
+Component, `apl-values/components/<name>/`, which the env's thin
+`apl-values/<env>/manifest/kustomization.yaml` lists under `components:` when enabled —
+`llz render` generates that overlay and `llz render --check` drift-guards it) and/or the
+**apl-core backend** (it flips `apps.<key>.enabled` in the committed `values.yaml`, which
 `llz render` patches with yaml.v3 — comments and the remaining `${…}` Terraform
 placeholders are preserved — and `--check` drift-guards). Some span both — e.g. `harbor`
 enables apl-core's Harbor app *and* adds the llz registry-S3 ExternalSecret;
@@ -215,8 +216,8 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 **Per-component sizing (config in the spec, mechanism in the base).** A few
 components take capacity knobs alongside `enabled`, rendered into the env's
 `values.yaml` so prod can differ from the defaults without hand-editing the
-overlay — everything else (chart mechanism, secrets) stays in
-`apl-values/example/values.yaml`. `observability` takes `retention` (→
+overlay — everything else (chart mechanism, secrets) stays in the shared
+`apl-values/_shared/values.yaml` base. `observability` takes `retention` (→
 `apps.prometheus.retention`, default `7d`), `storage` (→ `storageSize`, default
 `10Gi`), and `replicas` (default `1`); `harbor` takes `registryStorage` (registry
 image-store PVC, default `20Gi`). An unset knob keeps the base default; a knob set

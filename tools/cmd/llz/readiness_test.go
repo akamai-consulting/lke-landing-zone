@@ -33,8 +33,8 @@ func TestIsDeferrable(t *testing.T) {
 	// cert/DNS overlay placeholders are deferred to `llz bootstrap dns` (post-build),
 	// so they must not block the apply…
 	deferred := []string{
-		"apl-values/lab/manifest/dns/letsencrypt-clusterissuer.yaml",
-		"apl-values/primary/manifest/dns/cert-manager-webhook-linode-application.yaml",
+		"apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml",
+		"apl-values/_shared/manifest/dns/cert-manager-webhook-linode-application.yaml",
 	}
 	for _, f := range deferred {
 		if !isDeferrable(f) {

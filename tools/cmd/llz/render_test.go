@@ -177,6 +177,33 @@ spec:
 	}
 }
 
+// The ACME email is instance-wide: render fills it ONCE into the shared dns tree
+// when spec.dns.acmeEmail is set, and leaves the placeholder (no target) when unset.
+func TestSharedDNSEmailTarget(t *testing.T) {
+	root := t.TempDir()
+	aplDir := filepath.Join(root, "apl-values")
+	issuer := filepath.Join(aplDir, "_shared", "manifest", "dns", "letsencrypt-clusterissuer.yaml")
+	if err := os.MkdirAll(filepath.Dir(issuer), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, issuer, "spec:\n  acme:\n    email: REPLACE_PER_ENV   # e.g. ops@example.com\n")
+
+	withEmail, _ := clusterspec.Decode([]byte("apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata: { name: i }\nspec:\n  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }\n  dns: { acmeEmail: ops@example.com }\n"))
+	p, content, ok := sharedDNSEmailTarget(withEmail, aplDir)
+	if !ok || p != issuer {
+		t.Fatalf("expected a target at %s, got ok=%v p=%s", issuer, ok, p)
+	}
+	if strings.Contains(content, "REPLACE_PER_ENV") || !strings.Contains(content, "email: ops@example.com") {
+		t.Errorf("email not substituted:\n%s", content)
+	}
+
+	// Unset email → no target (placeholder stays, flagged later by `llz doctor`).
+	noEmail, _ := clusterspec.Decode([]byte("apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata: { name: i }\nspec:\n  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }\n"))
+	if _, _, ok := sharedDNSEmailTarget(noEmail, aplDir); ok {
+		t.Error("unset acmeEmail should yield no shared-dns target")
+	}
+}
+
 func TestRenderNetworks(t *testing.T) {
 	tfDir := filepath.Join(t.TempDir(), "terraform-iac-bootstrap")
 	if err := os.MkdirAll(filepath.Join(tfDir, "vpc"), 0o755); err != nil {

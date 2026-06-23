@@ -1,6 +1,9 @@
 package clusterspec
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // kustomize.go renders a deployment's manifest/kustomization.yaml — a THIN overlay
 // over the shared, DRY manifest tree (so an env is NOT a 30-file clone):
@@ -87,6 +90,22 @@ metadata:
     config.kubernetes.io/local-config: "true"
 data:
   revision: ` + revision + "\n"
+}
+
+// acmeEmailLine matches the `email:` line(s) in the shared letsencrypt
+// ClusterIssuer (both production + staging issuers carry one under spec.acme).
+// The shared DNS tree has no other `email:` key, so a line-anchored match is safe.
+var acmeEmailLine = regexp.MustCompile(`(?m)^(\s*email:).*$`)
+
+// SetACMEEmail substitutes the Let's Encrypt registration email into the shared
+// letsencrypt-clusterissuer.yaml content (spec.acme.email on both ClusterIssuers).
+// It is idempotent and re-render-safe: it rewrites whatever value is on each
+// `email:` line — the REPLACE_PER_ENV placeholder on first render, or a previously
+// rendered address when spec.dns.acmeEmail changes — so the rendered output is a
+// pure function of (current file structure, email). The email is instance-wide
+// (spec.dns.acmeEmail), so this is rendered ONCE into apl-values/_shared, not per env.
+func SetACMEEmail(content, email string) string {
+	return acmeEmailLine.ReplaceAllString(content, "${1} "+email)
 }
 
 // RenderRegionPatch returns the per-env volume-labeler REGION_SHORT strategic-merge

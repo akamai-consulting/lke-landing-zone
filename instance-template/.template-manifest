@@ -104,6 +104,11 @@ owned    terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt
 owned    apl-values/*/**
 managed  apl-values/_shared/**
 managed  apl-values/components/**
+# The shared letsencrypt ClusterIssuer is the ONE shared-tree file `llz render`
+# fills in place — it substitutes spec.dns.acmeEmail into spec.acme.email (instance-
+# wide, rendered once). Owned so a template update never clobbers the operator's
+# rendered email; it ships with a REPLACE_PER_ENV placeholder that render replaces.
+owned    apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml
 # Generated per-env Terraform inputs (llz env add writes these; not the
 # committed *.example). Never present in the template tree itself.
 owned    terraform-iac-bootstrap/**/*.auto.tfvars

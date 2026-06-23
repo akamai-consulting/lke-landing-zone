@@ -135,7 +135,7 @@ kubectl -n observability get externalsecret grafana-admin-credentials
 **If the ClusterSecretStore shows an auth error:**
 
 - **Automated path (CronWorkflow):** Check that the `eso-approle-secret` K8s Secret in the `external-secrets` namespace was patched by the CronWorkflow's rotate-primary step. If not, re-run the CronWorkflow.
-- **Manual path (Steps 1–4):** Steps 1–4 update the GitHub secrets only. The `eso-approle-secret` K8s Secret still holds the old `secret_id` and must be patched manually — see the rotate step in `instance-template/apl-values/example/manifest/openbao/argocd/applications/templates/approle-rotation-cronworkflow.yaml` for the exact patch operation, or re-run `bootstrap-openbao.yml` in re-configure mode to fully re-seed credentials.
+- **Manual path (Steps 1–4):** Steps 1–4 update the GitHub secrets only. The `eso-approle-secret` K8s Secret still holds the old `secret_id` and must be patched manually — see the rotate step in `kubernetes-charts/llz-openbao-platform/templates/approle-rotation-cronworkflow.yaml` for the exact patch operation, or re-run `bootstrap-openbao.yml` in re-configure mode to fully re-seed credentials.
 
 ---
 

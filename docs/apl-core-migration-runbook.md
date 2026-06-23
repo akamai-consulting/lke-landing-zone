@@ -21,11 +21,11 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       **two-file lockstep edit** — if you only do one, Argo CD will Degrade
       the Application:
       - [ ] Edit
-        [`apl-values/example/manifest/dns/cert-manager-webhook-linode-application.yaml`](../instance-template/apl-values/example/manifest/dns/cert-manager-webhook-linode-application.yaml)
+        [`apl-values/_shared/manifest/dns/cert-manager-webhook-linode-application.yaml`](../instance-template/apl-values/_shared/manifest/dns/cert-manager-webhook-linode-application.yaml)
         — replace the `repoURL: https://REPLACE_ME.example.com/...` placeholder and
         `targetRevision: "0.0.0"` with a real chart + version.
       - [ ] Edit
-        [`apl-values/example/manifest/argocd/platform-support-project.yaml`](../instance-template/apl-values/example/manifest/argocd/platform-support-project.yaml)
+        [`apl-values/_shared/manifest/platform-support-project.yaml`](../instance-template/apl-values/_shared/manifest/platform-support-project.yaml)
         — add the same repoURL to the `sourceRepos:` list (uncomment the
         commented entry and update it). Argo CD enforces project-level
         sourceRepos; forgetting this step makes the webhook Application

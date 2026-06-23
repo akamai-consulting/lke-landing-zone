@@ -153,6 +153,20 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 			}
 		}
 	}
+	// The shared DNS tree's ACME email is instance-wide — render it ONCE (not per
+	// env) into apl-values/_shared after the per-env loop.
+	if !tfvarsOnly {
+		if p, content, ok := sharedDNSEmailTarget(lz, aplDir); ok {
+			if dryRun {
+				fmt.Printf("  would-render  %s%s\n", relPrefix, filepathRel(aplDir, p))
+			} else {
+				if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+					return fmt.Errorf("render shared dns email: %w", err)
+				}
+				fmt.Printf("  rendered  %s%s\n", relPrefix, filepathRel(aplDir, p))
+			}
+		}
+	}
 	return nil
 }
 
@@ -188,6 +202,26 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		targets[filepath.Join(aplDir, env, "values.yaml")] = string(rendered)
 	}
 	return targets, nil
+}
+
+// sharedDNSEmailTarget returns the instance-wide letsencrypt ClusterIssuer path and
+// its email-substituted content when spec.dns.acmeEmail is set (and the shared dns
+// tree is present). The ACME email is instance-wide, so it renders ONCE into
+// apl-values/_shared/manifest/dns/ — not per env (the whole dns tree is applied from
+// _shared by `llz bootstrap dns`). ok=false (no target) when the email is unset: the
+// file keeps its REPLACE_PER_ENV placeholder, which `llz doctor` flags as a deferrable
+// cert/DNS item and `llz bootstrap dns` finishes after the first build.
+func sharedDNSEmailTarget(lz *clusterspec.LandingZone, aplDir string) (string, string, bool) {
+	email := lz.Spec.DNS.AcmeEmail
+	if email == "" {
+		return "", "", false
+	}
+	p := filepath.Join(aplDir, "_shared", "manifest", "dns", "letsencrypt-clusterissuer.yaml")
+	base, err := os.ReadFile(p)
+	if err != nil {
+		return "", "", false // older layout without the shared dns tree — skip silently
+	}
+	return p, clusterspec.SetACMEEmail(string(base), email), true
 }
 
 // renderManifest writes a deployment's committed apl-values/<env>/ artifacts (the
@@ -233,6 +267,13 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 			if string(got) != want {
 				drifted = append(drifted, dst)
 			}
+		}
+	}
+	// Instance-wide: the shared DNS tree's rendered ACME email (when spec.dns.acmeEmail
+	// is set) must match too, so a spec email edit that wasn't re-rendered is caught.
+	if p, want, ok := sharedDNSEmailTarget(lz, aplDir); ok {
+		if got, err := os.ReadFile(p); err != nil || string(got) != want {
+			drifted = append(drifted, p)
 		}
 	}
 	if len(drifted) > 0 {
@@ -382,6 +423,11 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 			for p, c := range ct {
 				want[p] = c
 			}
+		}
+	}
+	if !tfvarsOnly {
+		if p, content, ok := sharedDNSEmailTarget(lz, aplDir); ok {
+			want[p] = content
 		}
 	}
 

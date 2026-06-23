@@ -42,6 +42,34 @@ func TestRenderManifestKustomization(t *testing.T) {
 	}
 }
 
+func TestSetACMEEmail(t *testing.T) {
+	// Two ClusterIssuers (production + staging), each with an acme email line.
+	base := `spec:
+  acme:
+    email: REPLACE_PER_ENV   # e.g. ops@example.com
+---
+spec:
+  acme:
+    email: REPLACE_PER_ENV   # e.g. ops@example.com
+`
+	got := SetACMEEmail(base, "ops@example.com")
+	if strings.Contains(got, "REPLACE_PER_ENV") {
+		t.Errorf("placeholder survived:\n%s", got)
+	}
+	if n := strings.Count(got, "email: ops@example.com"); n != 2 {
+		t.Errorf("both issuer emails should be set, got %d:\n%s", n, got)
+	}
+	// Idempotent: re-rendering the already-filled content is a no-op.
+	if again := SetACMEEmail(got, "ops@example.com"); again != got {
+		t.Errorf("SetACMEEmail not idempotent:\n%s", again)
+	}
+	// Change-safe: a new email rewrites the existing value (not just the placeholder).
+	changed := SetACMEEmail(got, "sre@example.com")
+	if strings.Count(changed, "email: sre@example.com") != 2 || strings.Contains(changed, "ops@example.com") {
+		t.Errorf("email change not applied:\n%s", changed)
+	}
+}
+
 func TestComponentRegistry_AplCoreMapping(t *testing.T) {
 	// The unified model routes some components to the apl-core (values.yaml) backend.
 	obs, ok := LookupComponent("observability")

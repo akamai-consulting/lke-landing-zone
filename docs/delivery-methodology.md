@@ -119,8 +119,9 @@ secrets are wired as `TF_VAR_*` in CI, and the overlay renders.
 Each Terraform root ships a `terraform.tfvars.example` documenting three value
 classes — **MUST-SET** (identity: region, k8s version, cluster name/domain),
 **SECRET** (`TF_VAR_*` only, never committed), and **default** (Linode/apl-core
-shapes you keep). Adding a deployment is `llz env add`, which clones a template
-environment and swaps identity tokens rather than hand-copying overlays.
+shapes you keep). Adding a deployment is `llz env add`, which declares the env in
+the LandingZone spec and `llz render`s a thin overlay over the shared apl-values
+base (`_shared/` + `components/`) rather than cloning or hand-copying per-env files.
 
 - **Drives it:** `llz env add <env>` (with `--dry-run` to preview), the values
   contract in [adopter §3](adopter-guide.md), `llz validate --env <env>` to flag

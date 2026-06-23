@@ -234,10 +234,12 @@ the `owned` (never-touched) escape hatches:
 
 ### Adding a deployment (environment) inside an instance
 
-Use `llz env add` instead of hand-copying overlays. It clones an existing template
-environment and swaps its identity tokens (env name, `cluster.name`, domain suffix,
-`REGION_SHORT`, Linode region, OBJ cluster). The scaffolding is built into the
-binary, so it works in an instance with no scripts/ tree:
+Use `llz env add` instead of hand-copying overlays. It declares the env in the
+LandingZone spec and `llz render`s a thin overlay over the shared apl-values base
+(`_shared/` + `components/`) — no per-env clone to keep in sync — swapping its
+identity tokens (env name, `cluster.name`, domain suffix, `REGION_SHORT`, Linode
+region, OBJ cluster). The scaffolding is built into the binary, so it works in an
+instance with no scripts/ tree:
 
 ```bash
 # preview first — writes nothing

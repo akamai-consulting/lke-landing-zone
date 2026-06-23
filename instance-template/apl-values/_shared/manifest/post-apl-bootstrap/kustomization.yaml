@@ -14,7 +14,8 @@
 #   1. TF apply → cluster + apl-operator.
 #   2. apl-core helmfile → installs otel-operator + registers the CRD.
 #   3. Operator runs bootstrap-openbao.yml → "Apply post-apl-bootstrap" runs
-#      `kubectl apply -k apl-values/<env>/manifest/post-apl-bootstrap`.
+#      `kubectl apply -k apl-values/_shared/manifest/post-apl-bootstrap`
+#      against each region's cluster (the tree is instance-wide — DRY).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

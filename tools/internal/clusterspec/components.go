@@ -7,8 +7,10 @@ package clusterspec
 //   - apl-core (Helm umbrella): AplCoreApps are the apps.<key>.enabled flags this
 //     component flips in apl-values/<env>/values.yaml.
 //   - llz-first-party (Argo/kustomize): ManifestResources + ArgoApps are the
-//     entries it adds to apl-values/<env>/manifest/kustomization.yaml and
-//     manifest/argocd/kustomization.yaml; Patches are kustomize patches it brings.
+//     resources its shared kustomize Component (apl-values/components/<name>/, or the
+//     apl-values/_shared/manifest base for mandatory components) lists — the thin
+//     per-env manifest/kustomization.yaml pulls them in via components:. Patches are
+//     kustomize patches it brings.
 //
 // A component may use either backend or both (e.g. `harbor` enables apl-core's
 // harbor app AND adds the llz harbor-registry-s3 ExternalSecret; `observability`
@@ -28,8 +30,9 @@ type Component struct {
 	// ManifestResources are the entries this component adds to the parent
 	// manifest/kustomization.yaml resources: list (the llz Argo/kustomize backend).
 	ManifestResources []string
-	// ArgoApps are the entries this component adds to manifest/argocd/kustomization.yaml
-	// resources: (the wave-ordered component Applications + the AppProject).
+	// ArgoApps are the wave-ordered component Applications (+ the AppProject) this
+	// component's shared kustomize Component lists — the per-env overlay pulls them
+	// in via components: (mandatory components list them in the _shared base instead).
 	ArgoApps []string
 	// Patches are kustomize patches this component contributes to the parent
 	// manifest/kustomization.yaml patches: list.

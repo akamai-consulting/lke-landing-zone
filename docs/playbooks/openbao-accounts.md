@@ -106,9 +106,9 @@ Use AppRole for any in-cluster workload that needs read access to OpenBao. The e
     # → returns secret_id + secret_id_accessor
     ```
 
-    For ESO: write the secret_id into the appropriate region's GitHub environment secret (e.g. `OPENBAO_APPROLE_SECRET_ID_<MYAPP>`) and reference it from your `ClusterSecretStore`. Mirror the pattern in the OpenBao Argo application values under `instance-template/apl-values/example/manifest/openbao/` and the existing CI AppRole rotation workflow.
+    For ESO: write the secret_id into the appropriate region's GitHub environment secret (e.g. `OPENBAO_APPROLE_SECRET_ID_<MYAPP>`) and reference it from your `ClusterSecretStore`. Mirror the pattern in the OpenBao Argo application values under `instance-template/apl-values/components/openbao/` and the existing CI AppRole rotation workflow.
 
-5. **Schedule rotation** — extend the `approle-rotation` CronWorkflow (under the OpenBao Argo application templates in `instance-template/apl-values/example/manifest/openbao/`) to mint a new secret_id every 60-90 days and push it to the GitHub environment secret. The existing CI AppRole rotation step is a copy-pasteable template.
+5. **Schedule rotation** — extend the `approle-rotation` CronWorkflow (under the OpenBao Argo application templates in `instance-template/apl-values/components/openbao/`) to mint a new secret_id every 60-90 days and push it to the GitHub environment secret. The existing CI AppRole rotation step is a copy-pasteable template.
 
 ### Adding a Kubernetes-auth role (alternative)
 
