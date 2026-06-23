@@ -50,11 +50,22 @@ type Spec struct {
 	// the matching default; an unset env field falls back to the default, then to
 	// the built-in default. Empty when every env is fully specified.
 	Defaults Defaults `json:"defaults,omitempty"`
+	// DNS holds instance-wide DNS/cert settings that render into the apl-values
+	// overlay (the cert-manager DNS-01 issuer). Optional — unset leaves the
+	// overlay's REPLACE_PER_ENV placeholder for the operator to fill by hand.
+	DNS DNS `json:"dns,omitempty"`
 	// Environments is keyed by deployment name (== TF workspace key ==
 	// apl-values/<env> dir == infra-<env> GitHub Environment). It is the ASSEMBLED
 	// model: the loader populates it from the environments/<env>.yaml files (one
 	// ClusterDefinition each). Authoring it inline in landingzone.yaml is rejected.
 	Environments map[string]Environment `json:"environments,omitempty"`
+}
+
+// DNS is the instance-wide DNS/cert config rendered into the apl-values overlay.
+type DNS struct {
+	// AcmeEmail is the Let's Encrypt registration contact written into every env's
+	// manifest/dns/letsencrypt-clusterissuer.yaml (spec.acme.email).
+	AcmeEmail string `json:"acmeEmail,omitempty"`
 }
 
 // Defaults is the shared baseline merged into every environment before the

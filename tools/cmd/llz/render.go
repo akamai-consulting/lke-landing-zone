@@ -148,7 +148,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 			return fmt.Errorf("render %s: %w", name, err)
 		}
 		if !tfvarsOnly {
-			if err := renderManifest(name, e.Components, lz.ValuesIdentity(name), aplDir, relPrefix, dryRun); err != nil {
+			if err := renderManifest(name, e.Components, lz.ValuesIdentity(name), lz.Spec.DNS.AcmeEmail, aplDir, relPrefix, dryRun); err != nil {
 				return fmt.Errorf("render %s manifests: %w", name, err)
 			}
 		}
@@ -160,7 +160,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 // component toggles render to, as {path → content}: the two manifest kustomizations
 // (the llz Argo backend) and — when an apl-values/example/values.yaml template is
 // present — the values.yaml with apps.<key>.enabled patched (the apl-core backend).
-func committedTargets(env string, components map[string]clusterspec.ComponentToggle, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
+func committedTargets(env string, components map[string]clusterspec.ComponentToggle, id clusterspec.ValuesIdentity, acmeEmail, aplDir string) (map[string]string, error) {
 	manifest := filepath.Join(aplDir, env, "manifest")
 	targets := map[string]string{
 		filepath.Join(manifest, "kustomization.yaml"):           clusterspec.RenderManifestKustomization(components),
@@ -176,13 +176,22 @@ func committedTargets(env string, components map[string]clusterspec.ComponentTog
 		}
 		targets[filepath.Join(aplDir, env, "values.yaml")] = string(rendered)
 	}
+	// spec.dns.acmeEmail → the cert-manager DNS-01 issuer's ACME email. When unset,
+	// the overlay keeps its REPLACE_PER_ENV placeholder (the operator fills it).
+	if acmeEmail != "" {
+		rel := filepath.Join("manifest", "dns", "letsencrypt-clusterissuer.yaml")
+		if base, err := os.ReadFile(filepath.Join(aplDir, "example", rel)); err == nil {
+			targets[filepath.Join(aplDir, env, rel)] = strings.ReplaceAll(
+				string(base), "email: REPLACE_PER_ENV", "email: "+acmeEmail)
+		}
+	}
 	return targets, nil
 }
 
 // renderManifest writes a deployment's committed apl-values/<env>/ artifacts (the
 // manifest kustomizations + the apps-toggled values.yaml) from its components.
-func renderManifest(env string, components map[string]clusterspec.ComponentToggle, id clusterspec.ValuesIdentity, aplDir, relPrefix string, dryRun bool) error {
-	targets, err := committedTargets(env, components, id, aplDir)
+func renderManifest(env string, components map[string]clusterspec.ComponentToggle, id clusterspec.ValuesIdentity, acmeEmail, aplDir, relPrefix string, dryRun bool) error {
+	targets, err := committedTargets(env, components, id, acmeEmail, aplDir)
 	if err != nil {
 		return err
 	}
@@ -209,7 +218,7 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 	var drifted []string
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		targets, err := committedTargets(name, e.Components, lz.ValuesIdentity(name), aplDir)
+		targets, err := committedTargets(name, e.Components, lz.ValuesIdentity(name), lz.Spec.DNS.AcmeEmail, aplDir)
 		if err != nil {
 			return err
 		}
@@ -364,7 +373,7 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 			want[filepath.Join(tfDir, root, name+".tfvars")] = applyAssigns(base, assigns)
 		}
 		if !tfvarsOnly {
-			ct, err := committedTargets(name, e.Components, lz.ValuesIdentity(name), aplDir)
+			ct, err := committedTargets(name, e.Components, lz.ValuesIdentity(name), lz.Spec.DNS.AcmeEmail, aplDir)
 			if err != nil {
 				return err
 			}
@@ -401,42 +410,93 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 	return nil
 }
 
-// lineDiff returns a compact diff between old and new: common prefix + suffix
-// lines are trimmed and the differing middle shown as -old / +new with a little
-// context, capped so a file with scattered changes can't flood the output. Good
-// enough for the deterministic generated files render produces.
+// lineDiff returns a compact unified diff of old→new via a line-level LCS, so
+// scattered changes show as separate small hunks (collapsed unchanged runs become
+// "…") rather than one inflated block. Output is capped to keep a preview short.
 func lineDiff(oldS, newS string) string {
-	var o []string
+	var o, n []string
 	if oldS != "" {
 		o = strings.Split(strings.TrimRight(oldS, "\n"), "\n")
 	}
-	n := strings.Split(strings.TrimRight(newS, "\n"), "\n")
-	p := 0
-	for p < len(o) && p < len(n) && o[p] == n[p] {
-		p++
+	n = strings.Split(strings.TrimRight(newS, "\n"), "\n")
+
+	// LCS-length DP, then backtrack into a ' '/'-'/'+' line sequence.
+	m, k := len(o), len(n)
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, k+1)
 	}
-	so, sn := len(o), len(n)
-	for so > p && sn > p && o[so-1] == n[sn-1] {
-		so--
-		sn--
-	}
-	const ctx, cap = 2, 6
-	var b strings.Builder
-	for i := max(p-ctx, 0); i < p; i++ {
-		fmt.Fprintf(&b, "  %s\n", n[i])
-	}
-	for i := p; i < min(so, p+cap); i++ {
-		fmt.Fprintf(&b, "%s %s\n", red("-"), o[i])
-	}
-	for i := p; i < min(sn, p+cap); i++ {
-		fmt.Fprintf(&b, "%s %s\n", green("+"), n[i])
-	}
-	if so-p > cap || sn-p > cap {
-		fmt.Fprintf(&b, "  %s\n", dim("… (more changes — run `llz render`, then `git diff` for the full change)"))
-	} else {
-		for i := sn; i < min(sn+ctx, len(n)); i++ {
-			fmt.Fprintf(&b, "  %s\n", n[i])
+	for i := m - 1; i >= 0; i-- {
+		for j := k - 1; j >= 0; j-- {
+			if o[i] == n[j] {
+				dp[i][j] = dp[i+1][j+1] + 1
+			} else if dp[i+1][j] >= dp[i][j+1] {
+				dp[i][j] = dp[i+1][j]
+			} else {
+				dp[i][j] = dp[i][j+1]
+			}
 		}
+	}
+	type dl struct {
+		sign byte
+		text string
+	}
+	var seq []dl
+	i, j := 0, 0
+	for i < m && j < k {
+		switch {
+		case o[i] == n[j]:
+			seq = append(seq, dl{' ', n[j]})
+			i, j = i+1, j+1
+		case dp[i+1][j] >= dp[i][j+1]:
+			seq = append(seq, dl{'-', o[i]})
+			i++
+		default:
+			seq = append(seq, dl{'+', n[j]})
+			j++
+		}
+	}
+	for ; i < m; i++ {
+		seq = append(seq, dl{'-', o[i]})
+	}
+	for ; j < k; j++ {
+		seq = append(seq, dl{'+', n[j]})
+	}
+
+	// Keep changed lines + a little context; collapse the rest.
+	const ctx, capLines = 2, 20
+	keep := make([]bool, len(seq))
+	for idx, d := range seq {
+		if d.sign != ' ' {
+			for w := max(0, idx-ctx); w <= min(len(seq)-1, idx+ctx); w++ {
+				keep[w] = true
+			}
+		}
+	}
+	var b strings.Builder
+	emitted, gap := 0, false
+	for idx, d := range seq {
+		if !keep[idx] {
+			gap = true
+			continue
+		}
+		if gap {
+			fmt.Fprintf(&b, "  %s\n", dim("…"))
+			gap = false
+		}
+		if emitted >= capLines {
+			fmt.Fprintf(&b, "  %s\n", dim("… (more — run `llz render`, then `git diff`)"))
+			break
+		}
+		switch d.sign {
+		case '-':
+			fmt.Fprintf(&b, "%s %s\n", red("-"), d.text)
+		case '+':
+			fmt.Fprintf(&b, "%s %s\n", green("+"), d.text)
+		default:
+			fmt.Fprintf(&b, "  %s\n", d.text)
+		}
+		emitted++
 	}
 	return b.String()
 }

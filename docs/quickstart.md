@@ -221,16 +221,29 @@ rest of the must-sets come from flags or are inherited from `spec.defaults`. The
 - `cluster.domainSuffix` (`--cluster-domain`, default `<env>.internal`), `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them.
 - `--obj-cluster` (**required**) — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `env add` validates the shape up front.
 
-To change anything afterward, **edit `environments/<env>.yaml` and re-run `llz
-render <env>`** (CI re-renders on every build; the committed tfvars are
-regenerated, so they're effectively transient). Inspect and preview before you
-commit:
+To change a deployment, use the spec **write** commands — they edit the YAML in
+place (comments preserved) and re-render for you, so the edit→render loop can't be
+forgotten:
+
+```bash
+llz env set lab cluster.nodePool.count=8                # set fields + re-render
+llz env set lab components.harbor.enabled=false components.observability.retention=30d
+llz env edit lab                                        # open $EDITOR, re-render on exit
+llz network add prod-ord --region us-ord               # declare a shared VPC; attach with
+                                                        #   llz env set <env> cluster.network.vpc=prod-ord
+```
+
+Inspect and preview before you commit:
 
 ```bash
 llz components             # what's toggleable: default state, backends, sizing knobs
 llz env show lab           # lab's effective config after spec.defaults + component set
 llz render lab --diff      # preview exactly which files a render would create/change
 ```
+
+For an HA pair, `env add` the active first (it defers the render until both peers
+exist), then the standby with a **distinct** `--subnet-cidr`; completing the pair
+renders both.
 
 Then fill any overlay placeholders `env add` listed and confirm readiness:
 

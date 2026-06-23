@@ -13,6 +13,13 @@ spec:
     forge: github                        # github | github-enterprise | gitlab
     templateVersion: REPLACE_LLZ_VERSION # pinned llz release, or "main"
 
+  # ── DNS / cert (optional) ──────────────────────────────────────────────────
+  # Instance-wide cert-manager DNS-01 issuer config. Set acmeEmail to render the
+  # Let's Encrypt registration contact into every env's overlay from the spec
+  # (else it stays a REPLACE_PER_ENV placeholder you fill by hand).
+  dns:
+    acmeEmail: ops@example.com
+
   # ── Shared VPCs (optional — most instances omit this) ──────────────────────
   # By default every env gets its OWN DEDICATED VPC (its own state, fully isolated)
   # — the safest posture. Declare a shared VPC only to CO-LOCATE 2+ clusters in ONE

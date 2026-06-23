@@ -46,6 +46,8 @@ type envAddOpts struct {
 	aplValuesRepoURL string
 	haRole           string // active | standby | standalone (default: leave example's standalone)
 	haGroup          string // HA pair id (required for active/standby)
+	network          string // shared VPC name (spec.networks) to attach to; "" = dedicated VPC
+	subnetCIDR       string // cluster.network.subnetCIDR (/13 or /14); "" = default
 	promotionRank    int    // code-promotion pipeline position; 0 = leave example's 0 (not in a pipeline)
 	dryRun           bool
 }
@@ -184,10 +186,26 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	fmt.Printf("  created  %s/ (%d files)\n", overlayDst, len(walkFiles(overlayDst)))
 
 	// ── 4. render the spec → tfvars + the generated overlay files ─────────────
-	fmt.Printf("\nReconciling the spec (`llz render %s`):\n", name)
-	if err := runRender(g, name, false, false, false); err != nil {
-		fmt.Fprintf(os.Stderr, "\nThe spec was authored but `llz render` rejected it — fix %s above, then re-run `llz render %s`.\n", envFile, name)
-		return err
+	// An HA member can't render until BOTH peers exist (the spec requires one
+	// active + one standby per group), so adding the first peer defers the render
+	// with guidance instead of failing; completing the pair renders both.
+	renderEnv, deferred := name, false
+	if o.haGroup != "" {
+		if missing := haGroupMissingRole(o.haGroup); missing != "" {
+			deferred = true
+			fmt.Printf("\n%s deployment %q authored; HA group %q still needs its %s peer.\n", cyan("○"), name, o.haGroup, missing)
+			fmt.Printf("  add it, then both render:  llz env add <peer> --ha-role %s --ha-group %s --region <r> --obj-cluster <o> --subnet-cidr <distinct/14>\n", missing, o.haGroup)
+			fmt.Printf("  %s\n", dim("HA peers need DISTINCT cluster.network.subnetCIDR (e.g. 10.0.0.0/14 + 10.4.0.0/14) — pass --subnet-cidr on each."))
+		} else {
+			renderEnv = "" // pair complete — render every env so both peers render
+		}
+	}
+	if !deferred {
+		fmt.Printf("\nReconciling the spec (`llz render %s`):\n", orElse(renderEnv, "(all)"))
+		if err := runRender(g, renderEnv, false, false, false); err != nil {
+			fmt.Fprintf(os.Stderr, "\nThe spec was authored but `llz render` rejected it — fix %s above, then re-run `llz render %s`.\n", envFile, name)
+			return err
+		}
 	}
 
 	// ── 5. provenance stamp + promotion pipeline (best-effort) ───────────────
@@ -198,8 +216,14 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 		fmt.Fprintf(os.Stderr, "warning: could not regenerate promote.yml (%v) — run `llz env pipeline` once the pin is resolvable\n", err)
 	}
 
+	if deferred {
+		fmt.Printf("\n%s commit the spec (%s + %s), add the peer above, then `llz render` reconciles both.\n",
+			dim("→"), lzPath, envFile)
+		return nil
+	}
 	printEnvAddNextSteps(name, envFile, o)
 	printPlaceholderChecklist(aplDir, name)
+	fmt.Printf("\n%s commit your spec — `git add %s %s` (they're the source of truth).\n", dim("→"), lzPath, envFile)
 	return nil
 }
 

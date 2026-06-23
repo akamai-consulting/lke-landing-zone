@@ -138,7 +138,7 @@ spec:
 	}
 
 	prod, _ := lz.Env("prod")
-	if err := renderManifest("prod", prod.Components, lz.ValuesIdentity("prod"), aplDir, "", false); err != nil {
+	if err := renderManifest("prod", prod.Components, lz.ValuesIdentity("prod"), "", aplDir, "", false); err != nil {
 		t.Fatalf("renderManifest: %v", err)
 	}
 

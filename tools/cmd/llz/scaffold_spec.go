@@ -59,7 +59,12 @@ func ensureLandingZone(specRoot, tfDir string) (instanceName string, created boo
 
 	// Identity comes from .copier-answers.yml in a real instance; fall back to the
 	// upstream defaults so the template-root path (CI scaffold checks, which have
-	// no rendered answers file) still authors a spec that validates.
+	// no rendered answers file) still authors a spec that validates. Warn on the
+	// fallback so a fork doesn't silently inherit the wrong upstream.
+	if a.UpstreamOrg == "" || a.InstanceRepo == "" {
+		fmt.Fprintf(os.Stderr, "warning: no .copier-answers.yml identity — defaulting spec.instance to akamai-consulting / %s; edit %s if that's wrong.\n",
+			instanceName, clusterspec.LandingZoneFile)
+	}
 	upstreamOrg := orElse(a.UpstreamOrg, "akamai-consulting")
 	repo := orElse(a.InstanceRepo, instanceName+"/"+instanceName)
 	version := orElse(orElse(a.Version, a.Commit), "main")
@@ -81,6 +86,11 @@ spec:
     repo: %s
     forge: github
     templateVersion: %s
+  # Instance-wide DNS/cert config rendered into every env's overlay. Uncomment +
+  # set to fill the cert-manager DNS-01 issuer's ACME email from the spec (else
+  # it stays a REPLACE_PER_ENV placeholder you fill by hand).
+  # dns:
+  #   acmeEmail: ops@example.com
   # Shared defaults inherited by every environment (a per-env value overrides
   # field-by-field). Add spec.networks here to co-locate clusters in one VPC.
   defaults:
@@ -134,6 +144,17 @@ spec:
 		fmt.Fprintf(&b, "      ipv4: %s\n", yamlList(o.runnerIPv4CIDRs))
 		fmt.Fprintf(&b, "      ipv6: %s\n", yamlList(o.runnerIPv6CIDRs))
 	}
+	if o.network != "" || o.subnetCIDR != "" {
+		b.WriteString("    network: {")
+		var parts []string
+		if o.network != "" {
+			parts = append(parts, " vpc: "+o.network)
+		}
+		if o.subnetCIDR != "" {
+			parts = append(parts, " subnetCIDR: "+o.subnetCIDR)
+		}
+		b.WriteString(strings.Join(parts, ",") + " }\n")
+	}
 	b.WriteString("    ha:\n")
 	fmt.Fprintf(&b, "      role: %s\n", role)
 	if o.haGroup != "" {
@@ -160,6 +181,36 @@ spec:
 		return err
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// haGroupMissingRole returns the HA role (active|standby) still missing from
+// group after the current env was authored, or "" when the pair is complete or no
+// spec loads. Used by `llz env add` to defer the render of a half-authored pair.
+func haGroupMissingRole(group string) string {
+	lz, present, err := loadSpec()
+	if !present || err != nil {
+		return ""
+	}
+	var actives, standbys int
+	for _, e := range lz.Spec.Environments {
+		if e.Cluster.HA.Group != group {
+			continue
+		}
+		switch e.Cluster.HA.Role {
+		case "active":
+			actives++
+		case "standby":
+			standbys++
+		}
+	}
+	switch {
+	case actives == 0:
+		return "active"
+	case standbys == 0:
+		return "standby"
+	default:
+		return ""
+	}
 }
 
 // yamlList renders a comma-separated CIDR string as a YAML flow sequence.

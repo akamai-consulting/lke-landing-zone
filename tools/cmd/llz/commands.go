@@ -210,8 +210,11 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 	fmt.Printf(`
 Next steps:
   cd %s
+  # The declarative LandingZone spec is the source of truth — landingzone.yaml +
+  # environments/<env>.yaml. `+"`llz env add`"+` authors them; see the committed
+  # landingzone.yaml.example + docs/landing-zone-spec.md for the full model.
 `+envHint+`  llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>  # authors the spec + renders
-  # edit environments/<env>.yaml to tune the deployment, then `+"`llz render <env>`"+`
+  # tune it: llz env set <env> cluster.nodePool.count=8  (or `+"`llz env edit <env>`"+`); llz env show <env>
   llz validate --env <env>          # catch unfilled placeholders before a build
   llz tokens --env <env> --yes      # create state bucket+key, gather PATs, push
   llz doctor --env <env>            # confirm every required value is set
