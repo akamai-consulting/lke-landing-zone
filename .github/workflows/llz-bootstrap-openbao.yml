@@ -379,10 +379,9 @@ jobs:
 
       - name: Unseal pods 1–2 (post-init)
         if: steps.bao_status.outputs.initialized == 'false'
-        # NO MANUAL RAFT JOIN. The chart values at
-        # apl-values/_shared/manifest/openbao/argocd/applications/openbao-values.yaml
-        # declare `retry_join` blocks for all three peer FQDNs in the storage
-        # stanza. By the time pod 0 finishes `bao operator init`, pods 1 and 2
+        # NO MANUAL RAFT JOIN. The llz-openbao-platform OCI chart values
+        # (kubernetes-charts/llz-openbao-platform/values.yaml) declare `retry_join`
+        # blocks for all three peer FQDNs in the storage stanza. By the time pod 0 finishes `bao operator init`, pods 1 and 2
         # have already auto-joined the raft cluster (they're at
         # Initialized=true, Sealed=true). Running `bao operator raft join`
         # against an already-joined member returns a 500 from the leader:

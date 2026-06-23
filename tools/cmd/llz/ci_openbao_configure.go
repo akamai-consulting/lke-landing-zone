@@ -205,7 +205,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	if auditFileDeviceActive(auditOut) {
 		fmt.Println("audit device file/ active (declared in chart values).")
 	} else {
-		fmt.Fprintln(os.Stderr, "::warning::audit device file/ NOT active. Check pod logs for HCL parse errors and the openbao-values.yaml audit block.")
+		fmt.Fprintln(os.Stderr, "::warning::audit device file/ NOT active. Check pod logs for HCL parse errors and the llz-openbao-platform chart's audit block.")
 		if err := appendGHAFile("GITHUB_ENV", "BOOTSTRAP_ERRORS=true"); err != nil {
 			return err
 		}
