@@ -63,11 +63,32 @@ func newRootCmd() *cobra.Command {
 	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build / bootstrap)")
 
 	root.AddCommand(
-		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), networkCmd(), componentsCmd(),
+		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), specCmd(), networkCmd(), componentsCmd(),
 		secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
 	)
+
+	// Group the adopter-facing commands in `llz --help` so the front door is
+	// legible; CI/plumbing (ci, lint, fmt, hooks, …) falls under "Additional
+	// Commands". Groups must be registered before a command references them.
+	root.AddGroup(
+		&cobra.Group{ID: "spec", Title: "Author & deploy (the LandingZone spec):"},
+		&cobra.Group{ID: "build", Title: "Provision, build & operate:"},
+		&cobra.Group{ID: "day2", Title: "Day-2 & maintenance:"},
+	)
+	groupOf := map[string]string{
+		"new": "spec", "env": "spec", "spec": "spec", "network": "spec", "components": "spec", "render": "spec",
+		"tokens": "build", "secrets": "build", "doctor": "build", "validate": "build",
+		"build": "build", "up": "build", "status": "build", "bootstrap": "build",
+		"upgrade": "day2", "drift": "day2", "credentials": "day2", "openbao": "day2",
+		"verify": "day2", "reap": "day2", "self-update": "day2",
+	}
+	for _, c := range root.Commands() {
+		if g, ok := groupOf[c.Name()]; ok {
+			c.GroupID = g
+		}
+	}
 
 	// Operator-defined commands from .llz/commands.yaml (added last so the
 	// built-in set wins any name collision). See docs/extending-llz.md.

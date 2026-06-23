@@ -232,12 +232,16 @@ place (comments preserved) and re-render for you, so the edit→render loop can'
 forgotten:
 
 ```bash
-llz env set lab cluster.nodePool.count=8                # set fields + re-render
+llz env set lab cluster.nodePool.count=8                # per-env fields (cluster.*/components.*) + re-render
 llz env set lab components.harbor.enabled=false components.observability.retention=30d
+llz spec set dns.acmeEmail=ops@example.com              # instance-wide fields (landingzone.yaml) + re-render
 llz env edit lab                                        # open $EDITOR, re-render on exit
 llz network add prod-ord --region us-ord               # declare a shared VPC; attach with
                                                         #   llz env set <env> cluster.network.vpc=prod-ord
 ```
+
+A bad path is **rejected and the file left untouched** (no corruption), and `env
+set` / `spec set` point you at each other for a mis-targeted field.
 
 Inspect and preview before you commit:
 

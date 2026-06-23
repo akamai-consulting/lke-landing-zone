@@ -105,18 +105,29 @@ func loadClusterDefinition(path string) (*ClusterDefinition, error) {
 	if err != nil {
 		return nil, err
 	}
+	cd, err := DecodeClusterDefinition(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return cd, nil
+}
+
+// DecodeClusterDefinition strict-parses one environments/<env>.yaml's bytes,
+// rejecting unknown fields (a typo'd path). Exposed so a CLI write command can
+// validate a single edited file before committing it.
+func DecodeClusterDefinition(b []byte) (*ClusterDefinition, error) {
 	var cd ClusterDefinition
 	if err := yaml.UnmarshalStrict(b, &cd); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, err
 	}
 	if cd.Kind != KindClusterDefinition {
-		return nil, fmt.Errorf("%s: kind %q invalid (want %q)", path, cd.Kind, KindClusterDefinition)
+		return nil, fmt.Errorf("kind %q invalid (want %q)", cd.Kind, KindClusterDefinition)
 	}
 	if cd.APIVersion != APIVersion {
-		return nil, fmt.Errorf("%s: apiVersion %q invalid (want %q)", path, cd.APIVersion, APIVersion)
+		return nil, fmt.Errorf("apiVersion %q invalid (want %q)", cd.APIVersion, APIVersion)
 	}
 	if cd.Metadata.Name == "" {
-		return nil, fmt.Errorf("%s: metadata.name is required (it is the deployment/env name)", path)
+		return nil, fmt.Errorf("metadata.name is required (the deployment/env name)")
 	}
 	return &cd, nil
 }

@@ -9,11 +9,60 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	yaml "gopkg.in/yaml.v3"
 )
+
+// editSpecFile applies mutate to a spec file, but COMMITS only if the result still
+// parses strictly — so a typo'd / unknown-field path can't poison the file and
+// break every subsequent spec command. parse is the strict decoder for the file's
+// kind (rejects unknown fields). On failure it restores the original bytes and
+// returns a clear, reverted error.
+func editSpecFile(path string, mutate func(*yaml.Node) error, parse func([]byte) error) error {
+	orig, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if err := editYAMLFile(path, mutate); err != nil {
+		return err
+	}
+	edited, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if perr := parse(edited); perr != nil {
+		_ = os.WriteFile(path, orig, 0o644) // roll back — never leave a poisoned file
+		return fmt.Errorf("change rejected — %s left unchanged: %s\n  (check the path against `llz env show` / docs/landing-zone-spec.md)",
+			filepath.Base(path), cleanFieldErr(perr))
+	}
+	return nil
+}
+
+// cleanFieldErr trims the raw json-unmarshal noise to the actionable bit (the
+// "unknown field …" / "cannot unmarshal …" tail).
+func cleanFieldErr(err error) string {
+	s := err.Error()
+	for _, marker := range []string{"unknown field", "cannot unmarshal"} {
+		if i := strings.LastIndex(s, marker); i >= 0 {
+			return s[i:]
+		}
+	}
+	return s
+}
+
+// isPerEnvPath reports whether a spec.<path> belongs in environments/<env>.yaml
+// (cluster.* / components.*) vs. instance-wide landingzone.yaml (instance / dns /
+// defaults / networks). Drives the routing between `llz env set` and `llz spec set`.
+func isPerEnvPath(dotted string) bool {
+	head := dotted
+	if i := strings.IndexByte(dotted, '.'); i >= 0 {
+		head = dotted[:i]
+	}
+	return head == "cluster" || head == "components"
+}
 
 // editYAMLFile loads path as a YAML document, hands the document node to mutate,
 // and writes it back with 2-space indent (matching the authored files).

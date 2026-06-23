@@ -50,18 +50,23 @@ func envSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			for _, a := range assigns {
+				if !isPerEnvPath(a[0]) {
+					return fmt.Errorf("%q is an instance-level field — set it with `llz spec set %s=%s` (per-env paths are cluster.* / components.*)", a[0], a[0], a[1])
+				}
+			}
 			envFile, err := envSpecFile(env)
 			if err != nil {
 				return err
 			}
-			if err := editYAMLFile(envFile, func(doc *yaml.Node) error {
+			if err := editSpecFile(envFile, func(doc *yaml.Node) error {
 				for _, a := range assigns {
 					if err := setSpecPath(doc, a[0], a[1]); err != nil {
 						return err
 					}
 				}
 				return nil
-			}); err != nil {
+			}, func(b []byte) error { _, e := clusterspec.DecodeClusterDefinition(b); return e }); err != nil {
 				return err
 			}
 			for _, a := range assigns {
@@ -91,9 +96,76 @@ func envEditCmd() *cobra.Command {
 			if err := c.Run(); err != nil {
 				return fmt.Errorf("editor %q: %w", editor, err)
 			}
+			// Keep the operator's edit (don't roll back manual work) but catch a
+			// parse error before render so the message is clear.
+			if b, rerr := os.ReadFile(envFile); rerr == nil {
+				if _, derr := clusterspec.DecodeClusterDefinition(b); derr != nil {
+					return fmt.Errorf("%s won't parse after your edit: %s\n  fix it, then `llz render %s`", envFile, cleanFieldErr(derr), env)
+				}
+			}
 			fmt.Printf("Reconciling (`llz render %s`):\n", env)
 			return runRender(gopts, env, false, false, false)
 		},
+	}
+}
+
+func specCmd() *cobra.Command {
+	c := &cobra.Command{Use: "spec", Short: "edit/validate the instance-level spec (landingzone.yaml)"}
+	c.AddCommand(specSetCmd(), specValidateCmd())
+	return c
+}
+
+func specSetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set <path=value>...",
+		Short: "set instance-level fields in landingzone.yaml + re-render (e.g. dns.acmeEmail=ops@x.com)",
+		Long: "Sets spec.<path>=<value> in landingzone.yaml (the instance-wide config: dns,\n" +
+			"defaults, platform, instance identity), preserving comments, then validates +\n" +
+			"re-renders every env. Per-env fields (cluster.* / components.*) go on\n" +
+			"`llz env set <env>`; shared VPCs on `llz network add`. Examples:\n" +
+			"  llz spec set dns.acmeEmail=ops@example.com\n" +
+			"  llz spec set defaults.cluster.nodePool.count=5 defaults.platform.externalIDP=true",
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			assigns, err := parseAssignments(args)
+			if err != nil {
+				return err
+			}
+			for _, a := range assigns {
+				if isPerEnvPath(a[0]) {
+					return fmt.Errorf("%q is a per-env field — set it with `llz env set <env> %s=%s`", a[0], a[0], a[1])
+				}
+			}
+			tfDir, _, _ := instanceLayout()
+			lzPath := filepath.Join(filepath.Dir(tfDir), clusterspec.LandingZoneFile)
+			if _, err := os.Stat(lzPath); err != nil {
+				return fmt.Errorf("no %s — run `llz env add <env>` first to create the spec", clusterspec.LandingZoneFile)
+			}
+			if err := editSpecFile(lzPath, func(doc *yaml.Node) error {
+				for _, a := range assigns {
+					if err := setSpecPath(doc, a[0], a[1]); err != nil {
+						return err
+					}
+				}
+				return nil
+			}, func(b []byte) error { _, e := clusterspec.Decode(b); return e }); err != nil {
+				return err
+			}
+			for _, a := range assigns {
+				fmt.Printf("  %s spec.%s = %s\n", green("set"), a[0], a[1])
+			}
+			fmt.Println("\nReconciling (`llz render`):")
+			return runRender(gopts, "", false, false, false)
+		},
+	}
+}
+
+func specValidateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "validate",
+		Short: "validate the LandingZone spec (alias for `llz render --check`)",
+		Args:  cobra.NoArgs,
+		RunE:  func(_ *cobra.Command, _ []string) error { return runRender(gopts, "", false, true, false) },
 	}
 }
 
@@ -122,9 +194,9 @@ func networkAddCmd() *cobra.Command {
 			if _, err := os.Stat(lzPath); err != nil {
 				return fmt.Errorf("no %s — run `llz env add <env>` first to create the spec", clusterspec.LandingZoneFile)
 			}
-			if err := editYAMLFile(lzPath, func(doc *yaml.Node) error {
+			if err := editSpecFile(lzPath, func(doc *yaml.Node) error {
 				return setSpecPath(doc, "networks."+name+".region", region)
-			}); err != nil {
+			}, func(b []byte) error { _, e := clusterspec.Decode(b); return e }); err != nil {
 				return err
 			}
 			fmt.Printf("  %s shared VPC %q (region %s) → spec.networks\n", green("added"), name, region)
