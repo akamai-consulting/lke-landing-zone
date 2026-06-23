@@ -59,6 +59,11 @@ on:
         required: false
         type: boolean
         default: true
+      keep_cluster:
+        description: 'On a full run, SKIP teardown so the cluster survives for debugging (it keeps billing — destroy it manually). Ignored on dry_run and on the release trigger.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -78,6 +83,10 @@ env:
   E2E_LINODE_REGION: ${{ vars.E2E_LINODE_REGION || 'us-ord' }}
   E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+  # keep_cluster is honored ONLY on a manual full-run dispatch — never on the
+  # release trigger (which must always tear down). Lets a human keep the cluster
+  # to debug a converge hang instead of having teardown reap the evidence.
+  KEEP_CLUSTER: ${{ github.event_name == 'workflow_dispatch' && inputs.keep_cluster || false }}
 
 defaults:
   run:
@@ -325,7 +334,24 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # keep_cluster debug escape hatch: leave the cluster running so a human can
+      # kubectl into it (the `validate` job's instance run already holds the full
+      # `llz ci health` dump; what teardown otherwise destroys is the live cluster
+      # to poke at). Mutually exclusive with the destroy step below.
+      - name: Keep cluster for debugging (SKIP destroy)
+        if: ${{ env.KEEP_CLUSTER == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "::warning::keep_cluster=true — SKIPPING teardown. The E2E cluster (env ${E2E_ENV}, region ${E2E_LINODE_REGION}) is LEFT RUNNING and is billing."
+          echo "Debug it:"
+          echo "  1. Pull the kubeconfig from ${INSTANCE_REPO} (terraform output / Linode), and"
+          echo "  2. open your IP in the LKE-E apiserver ACL (Cloud Manager → cluster → Control Plane ACL, add your /32),"
+          echo "     then: export KUBECONFIG=... && kubectl get pods -A"
+          echo "When done, destroy it manually:"
+          echo "  gh workflow run terraform.yml -R ${INSTANCE_REPO} -f action=destroy -f module=cluster -f region=${E2E_ENV} -f confirm_destroy=destroy:${E2E_ENV}:cluster"
+
       - name: Dispatch terraform.yml (destroy) and watch
+        if: ${{ env.KEEP_CLUSTER != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
         run: |
