@@ -8,31 +8,57 @@
 > rationale behind each step, read the [adopter guide](adopter-guide.md); this
 > page is the fast path.
 
-## The golden path — four commands
+## The whole path — copy/paste, top to bottom
 
-After the [accounts](#1-accounts-you-need) exist, the whole flow is four commands —
-**no clone of this repo required** (the installer is a one-liner; `llz new` creates
-your own repo):
+Once the [accounts](#1-accounts-you-need) exist, this is the **entire flow in
+order**. Run it line by line, swapping `my-instance`, `lab`, the region, and the
+OBJ cluster for your own. No clone of this repo required (the installer is a
+one-liner; `llz new` creates your own repo). Each step links to the section that
+explains it.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash   # 1. install the llz CLI (§2)
-llz new my-instance --push --yes                           # 2. scaffold from the upstream + create/push your repo (§3)
-cd my-instance && llz env add lab --region us-sea --obj-cluster us-sea-1   # 3. add a deployment, then fill the checklist it prints (§3)
-llz up lab --yes                                           # 4. credentials → readiness gate → build, in one go (§4)
+# 0. Authenticate gh FIRST — the installer and every GitHub call below use it (§2)
+gh auth login
+
+# 1. Install the llz CLI (§2)
+curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
+
+# 2. Scaffold your instance repo + create/push it on GitHub (§3)
+llz new my-instance --push --yes
+cd my-instance
+
+# 3. Add a deployment — authors the spec, renders the tfvars + apl-values overlay (§3)
+llz env add lab --region us-sea --obj-cluster us-sea-1
+
+# 4. Confirm it's ready to build — fill anything doctor flags, then re-run until green (§4)
+llz doctor --env lab
+
+# 5. Provision credentials → readiness gate → build, in ONE command (§4)
+llz up lab --yes
+
+# 6. AFTER the build, do the two manual steps the bootstrap can't (§4):
+#    • copy unseal keys 4 & 5 + the root token (shown once) to offline storage
+#    • delete the OPENBAO_ROOT_TOKEN secret from infra-lab if you seeded one
+#      (`llz status` flags it every run until you do)
+
+# 7. Finish DNS-01 issuance, then verify convergence (§4)
+llz bootstrap dns lab --yes
+llz status lab
 ```
 
-`llz` (a [cobra](https://github.com/spf13/cobra)-based CLI) is a thin front-end
-over the tools this flow already uses (`copier`, `gh`, `kubectl`, and the Linode
-API). It doesn't replace them — it sequences them and adds a **provisioning
-wizard** (`llz tokens`) that *creates* the Terraform-state bucket + a scoped key,
-*generates* the ArgoCD deploy key, gathers the GitHub PATs behind pre-filled
-links, and pushes everything to your repo. `llz up` chains the last three steps
-(`tokens → doctor → build`); the sections below cover each command, and you can
-always run them individually.
+That is the whole thing, start to converged cluster. Step 5's `llz up` chains the
+three gates — `tokens → doctor → build` — and **stops at the first failure**, so a
+missing token or unfilled placeholder is caught before the expensive apply; you can
+run those three individually to inspect each gate (§4). `llz` itself is a thin
+[cobra](https://github.com/spf13/cobra) front-end over the tools this flow already
+uses (`copier`, `gh`, `kubectl`, the Linode API) — it sequences them and adds the
+`llz tokens` provisioning wizard (state bucket + scoped key, ArgoCD deploy key,
+GitHub PATs behind pre-filled links), pushing everything to your repo.
 
 Run `llz <command> --help` for any command; the persistent flags `--dry-run`
 (print, change nothing), `--open` (open links), and `--yes` (execute
-cloud-mutating commands) work anywhere on the line.
+cloud-mutating commands) work anywhere on the line. Stuck on a step? `llz doctor`
+(§4) is the always-current readiness check.
 
 ---
 
