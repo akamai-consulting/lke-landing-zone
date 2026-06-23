@@ -269,7 +269,7 @@ helm-lint-real-values: helm-repos
 		-n llz-openbao >/dev/null
 
 argocd-rendered-apps-check: render-charts
-	python3 template-scripts/linting-and-validation/validate-argocd-rendered-apps.py
+	cd $(GO_DIR) && go run ./cmd/llz ci argocd-rendered-apps --root .. --render-dir $(RENDER_DIR)
 
 # placeholder-lint: reject unsubstituted placeholder.example.com hostnames in the
 # rendered manifests — anything Argo CD reconciles into a cluster must carry real
@@ -340,8 +340,7 @@ argo-workflow-lint:
 	rm -f "$$_ARGO_TMP"
 
 helm-dep-lock-check:
-	python3 template-scripts/linting-and-validation/check-chart-lock-drift.py \
-	  $(OPENBAO_CHART)
+	cd $(GO_DIR) && go run ./cmd/llz ci chart-lock-drift --root .. $(OPENBAO_CHART)
 
 # helm-lint-charts: lint + template every first-party Helm chart under kubernetes-charts/.
 # These are the extracted, independently-versioned charts published to GHCR
@@ -568,7 +567,8 @@ coverage:
 		-coverprofile="$(CURDIR)/coverage/tools.out" ./...
 	@cd $(GO_DIR) && go tool cover -func="$(CURDIR)/coverage/tools.out" | tail -1
 	@echo "Per-package thresholds (COVERAGE_MINS):"
-	@template-scripts/ci/check-go-coverage.sh "$(CURDIR)/coverage/tools.out" $(COVERAGE_MINS)
+	@cd $(GO_DIR) && go run ./cmd/llz ci check-coverage \
+		--profile "$(CURDIR)/coverage/tools.out" $(COVERAGE_MINS)
 	@echo "Coverage profile written to coverage/tools.out"
 
 # ── Instance smoke test ───────────────────────────────────────────────────────

@@ -326,7 +326,7 @@ jobs:
   # ── Go tests + coverage ──────────────────────────────────────────────────────
   # `make coverage` runs `go test` across the tools module, then enforces the
   # per-package statement-coverage floors in COVERAGE_MINS (Makefile) via
-  # template-scripts/ci/check-go-coverage.sh — the build fails if any gated
+  # `llz ci check-coverage` — the build fails if any gated
   # package drops below its floor. Pure Go: no private CI image, so unlike the
   # k8s/terraform jobs this runs on plain ubuntu-latest and on fork PRs too.
   go-tests:

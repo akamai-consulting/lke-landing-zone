@@ -28,9 +28,9 @@
 #                           glue (the script is already counted under shell) and
 #                           not tallied, same as a single-line `run:`.
 #
-# Baseline (post script-assimilation + kyverno-policy conversion): inline-bash
-# 659, shell 611, python 405, tf-provisioner 98. Budgets carry ~3% headroom over
-# baseline.
+# Baseline (post check-coverage / chart-lock-drift / argocd-rendered-apps
+# conversion to `llz ci`): inline-bash 669, shell 576, python 56,
+# tf-provisioner 98. Budgets carry ~3% headroom over baseline.
 
 categories:
   workflow-inline-bash:
@@ -43,7 +43,7 @@ categories:
 
   shell-scripts:
     kind: script
-    budget: 630
+    budget: 595
     include:
       - "template-scripts/**/*.sh"
       - ".github/scripts/**/*.sh"
@@ -52,7 +52,7 @@ categories:
 
   python-scripts:
     kind: script
-    budget: 420
+    budget: 60
     include:
       - "template-scripts/**/*.py"
 

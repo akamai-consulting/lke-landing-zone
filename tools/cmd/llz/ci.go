@@ -76,6 +76,10 @@ func ciCmd() *cobra.Command {
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())
+	// Render/coverage lint gates ported from template-scripts (the Makefile's
+	// helm-dep-lock-check, argocd-rendered-apps-check, and the per-package
+	// coverage floor in `make coverage`).
+	c.AddCommand(ciChartLockDriftCmd(), ciArgoCDRenderedAppsCmd(), ciCheckCoverageCmd())
 	// Design-principle gate: budget on inline-bash / shell / python logic that
 	// should instead live in unit-tested Go (lint.yml). Ratchets DOWN over time.
 	c.AddCommand(ciUntestableLOCCmd())
