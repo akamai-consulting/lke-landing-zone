@@ -2,10 +2,19 @@ package main
 
 // ci_diagnose_argocd.go implements `llz ci diagnose-argocd` — the native port
 // of llz-terraform.yml's 'Diagnose ArgoCD install failure' step. Runs only on
-// the failure path (typically helm_release.argocd timing out on a pre-install
-// hook) and dumps everything needed to see WHY the hook Job / ArgoCD pods are
-// not becoming ready. Diagnostics must never mask the original failure, so
-// every probe is best-effort and the command always exits 0.
+// the failure path and dumps everything needed to see WHY the bootstrap is not
+// becoming ready. Diagnostics must never mask the original failure, so every
+// probe is best-effort and the command always exits 0.
+//
+// The most common failure on a fresh cluster is helm_release.apl hitting its
+// 600s wait timeout (context deadline exceeded): the apl-operator Deployment
+// never becomes Available, usually because no worker node is Ready/schedulable
+// or the operator image can't be pulled. That release lives in the apl-operator
+// namespace; the argocd namespace is created later, in-cluster, only once the
+// operator's helmfile pipeline gets that far. So we sweep BOTH namespaces —
+// apl-operator first (the earlier, more likely failure point), then argocd —
+// instead of looking only at an argocd namespace that is empty by design when
+// the operator install is what failed.
 
 import (
 	"fmt"
@@ -17,20 +26,24 @@ import (
 )
 
 func ciDiagnoseArgoCDCmd() *cobra.Command {
-	var ns string
+	var ns, aplNS string
 	c := &cobra.Command{
 		Use:   "diagnose-argocd",
-		Short: "dump ArgoCD install-failure diagnostics (best-effort, never fails)",
+		Short: "dump apl-operator + ArgoCD install-failure diagnostics (best-effort, never fails)",
 		Long: "Native port of the 'Diagnose ArgoCD install failure' step. Dumps node\n" +
-			"schedulability, the argocd namespace's resources, the Helm pre-install hook\n" +
-			"Jobs + their logs, per-pod describes, recent events, and the Helm release\n" +
-			"history — grouped with ::group:: for the run log. Skips cleanly when\n" +
-			"$KUBECONFIG is absent/empty (cluster may not exist). Always exits 0:\n" +
-			"diagnostics must never mask the failure that triggered them.",
+			"schedulability, then for the apl-operator and argocd namespaces: their\n" +
+			"resources, Jobs + their logs, per-pod describes, recent events, and the\n" +
+			"Helm release status/history — grouped with ::group:: for the run log.\n" +
+			"apl-operator is swept first because helm_release.apl timing out (operator\n" +
+			"Deployment never Available) is the most common fresh-cluster failure, and\n" +
+			"the argocd namespace is empty by design until the operator gets that far.\n" +
+			"Skips cleanly when $KUBECONFIG is absent/empty (cluster may not exist).\n" +
+			"Always exits 0: diagnostics must never mask the failure that triggered them.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIDiagnoseArgoCD(ns) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runCIDiagnoseArgoCD(aplNS, ns) },
 	}
 	c.Flags().StringVar(&ns, "namespace", "argocd", "namespace holding the ArgoCD install")
+	c.Flags().StringVar(&aplNS, "apl-namespace", "apl-operator", "namespace holding the apl-operator install")
 	return c
 }
 
@@ -42,20 +55,14 @@ var diagStream = func(name string, args ...string) {
 	_ = cmd.Run()
 }
 
-func runCIDiagnoseArgoCD(ns string) error {
+func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 	kc := os.Getenv("KUBECONFIG")
 	if st, err := os.Stat(kc); kc == "" || err != nil || st.Size() == 0 {
 		fmt.Fprintln(os.Stderr, "::warning::No kubeconfig available — cluster may not exist; nothing to diagnose")
 		return nil
 	}
 
-	group := func(title string, fn func()) {
-		fmt.Printf("::group::%s\n", title)
-		fn()
-		fmt.Println("::endgroup::")
-	}
-
-	group("Nodes (schedulable? Ready?)", func() {
+	diagGroup("Nodes (schedulable? Ready?)", func() {
 		diagStream("kubectl", "get", "nodes", "-o", "wide")
 		// The bash piped describe through grep for the scheduling-relevant
 		// sections; print them from the captured describe instead.
@@ -69,43 +76,65 @@ func runCIDiagnoseArgoCD(ns string) error {
 			}
 		}
 	})
-	group(ns+" namespace — all resources", func() {
+
+	// Sweep apl-operator first: helm_release.apl ("apl") timing out is the most
+	// likely fresh-cluster failure, and argocd is empty until the operator's
+	// helmfile pipeline gets that far.
+	diagnoseNamespace(aplNS, "apl")
+	diagnoseNamespace(argoNS, "argocd")
+
+	fmt.Println("Diagnostics complete. Common causes:")
+	fmt.Println("  • apl-operator pod stuck Pending  -> no Ready/schedulable node (check Nodes / Taints / Conditions above)")
+	fmt.Println("  • ImagePullBackOff                -> registry unreachable or image pull secret missing")
+	fmt.Println("  • CrashLoopBackOff                -> see Job / pod logs above")
+	fmt.Println("  • argocd namespace empty          -> apl-operator helmfile pipeline never reached argocd (see apl-operator above)")
+	return nil
+}
+
+// diagGroup wraps fn in a collapsible ::group::/::endgroup:: block for the run
+// log. Package-level so the per-namespace sweep can share it.
+func diagGroup(title string, fn func()) {
+	fmt.Printf("::group::%s\n", title)
+	fn()
+	fmt.Println("::endgroup::")
+}
+
+// diagnoseNamespace dumps the install-failure picture for one namespace: its
+// resources, Jobs (+ logs), per-pod describes, recent events, and the Helm
+// status/history for release. Every probe is best-effort; group titles carry
+// the namespace so the two sweeps stay distinguishable in the run log.
+func diagnoseNamespace(ns, release string) {
+	diagGroup(ns+" — all resources", func() {
 		diagStream("kubectl", "get", "all", "-n", ns, "-o", "wide")
 	})
-	group("Helm pre-install hook Jobs", func() {
+	diagGroup(ns+" — Jobs", func() {
 		diagStream("kubectl", "get", "jobs", "-n", ns, "-o", "wide")
 	})
-	group("Pods (wide) — look for Pending / ImagePullBackOff / Error", func() {
+	diagGroup(ns+" — Pods (wide): Pending / ImagePullBackOff / Error", func() {
 		diagStream("kubectl", "get", "pods", "-n", ns, "-o", "wide")
 	})
-	group("Describe every pod in "+ns+" (scheduling + pull errors)", func() {
+	diagGroup(ns+" — describe every pod (scheduling + pull errors)", func() {
 		for _, p := range kubectlNames("-n", ns, "get", "pods", "-o", "name") {
 			fmt.Printf("----- describe %s -----\n", p)
 			diagStream("kubectl", "describe", "-n", ns, p)
 		}
 	})
-	group("Logs from hook Job pods", func() {
+	diagGroup(ns+" — logs from Job pods", func() {
 		for _, j := range kubectlNames("-n", ns, "get", "jobs", "-o", "name") {
 			fmt.Printf("----- logs %s -----\n", j)
 			diagStream("kubectl", "logs", "-n", ns, j, "--all-containers", "--tail=200")
 		}
 	})
-	group("Recent events ("+ns+", by time)", func() {
+	diagGroup(ns+" — recent events (by time)", func() {
 		if out, err := execOutput("kubectl", "get", "events", "-n", ns, "--sort-by=.lastTimestamp"); err == nil {
 			fmt.Print(tailLines(string(out), 60))
 			fmt.Println()
 		}
 	})
-	group("Helm release status / history", func() {
-		diagStream("helm", "status", "argocd", "-n", ns)
-		diagStream("helm", "history", "argocd", "-n", ns)
+	diagGroup(ns+" — Helm release "+release+" status / history", func() {
+		diagStream("helm", "status", release, "-n", ns)
+		diagStream("helm", "history", release, "-n", ns)
 	})
-
-	fmt.Println("Diagnostics complete. Common causes for 'failed pre-install: timed out':")
-	fmt.Println("  • hook pod stuck Pending  -> nodes not Ready/schedulable yet (check Taints / Conditions above)")
-	fmt.Println("  • ImagePullBackOff        -> registry unreachable or image pull secret missing")
-	fmt.Println("  • CrashLoopBackOff        -> see hook Job logs above")
-	return nil
 }
 
 // kubectlNames returns the non-empty lines of a `kubectl ... -o name` listing,
