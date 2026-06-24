@@ -111,6 +111,35 @@ defaults:
 
 jobs:
 
+  # ── Push-to-main notice (informational) ─────────────────────────────────────
+  # A push to main neither plans nor applies — plans run on PRs, applies on
+  # workflow_dispatch (what `llz build` / `llz up` fire). So committing a spec
+  # (`llz env add` auto-commits, then you push) produces a run where every OTHER
+  # job is correctly skipped — which reads as alarming on a fresh instance. This
+  # always-runs job makes the no-op explicit so the skips are understood as
+  # intentional, not a failure.
+  push-noop-notice:
+    name: Push to main — no plan/apply (informational)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Explain the no-op
+        run: |
+          echo "::notice title=No plan/apply on push::Push to main neither plans nor applies. Plans run on pull requests; applies run on workflow_dispatch, which 'llz build <env> --yes' (or 'llz up <env> --yes') fires. The other jobs in this run are skipped by design, not failed."
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ### Terraform — push to `main` (informational)
+
+          A push to `main` **does not plan or apply**, so every other job in this run is *skipped* — by design, not a failure.
+
+          | Goal | Run |
+          |---|---|
+          | **Apply** a deployment | `llz build <env> --yes` (or `llz up <env> --yes`) |
+          | **Preview** a change | open a pull request → `terraform plan` runs per deployment |
+
+          See `docs/quickstart.md` §4.
+          SUMMARY
+
   # ── Discover deployments (the PR-plan matrix source of truth) ────────────────
   # Single source of truth for the PR-plan matrix — see
   # llz-discover-deployments.yml. The same reusable workflow feeds the rotation +
