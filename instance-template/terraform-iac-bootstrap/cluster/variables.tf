@@ -55,15 +55,15 @@ variable "k8s_version" {
 }
 
 variable "tags" {
-  description = "Tags applied to the cluster."
+  description = "Tags applied to the cluster (and the node pool/firewall/VPC). The spec render emits this from spec.cluster.tags; default empty so an instance that declares no tags is not silently stamped with a leftover label."
   type        = list(string)
-  default     = ["platform"]
+  default     = []
 }
 
 variable "node_pool_label" {
-  description = "Label for the default node pool."
+  description = "Label for the default node pool. Not account-unique, so it does not collide, but it MUST match llz's DefaultNodePoolLabel (tools/internal/terraform/tfvars.go) — that is the value llz's import/teardown reconstructs when <region>.tfvars carries no node_pool_label (the spec render does not emit one). A divergent default here makes `llz ci tf-import` look for the wrong pool label and skip adopting the live pool."
   type        = string
-  default     = "platform-pool"
+  default     = "observability-pool"
 }
 
 variable "node_type" {
