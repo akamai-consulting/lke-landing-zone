@@ -55,7 +55,7 @@ func TestClusterTFVars_AllOptionalsEmitted(t *testing.T) {
 		"cluster_label", "region", "k8s_version", "tags", "node_type", "node_count",
 		"autoscaler_enabled", "control_plane_high_availability", "control_plane_audit_logs_enabled",
 		"github_runner_ipv4_cidrs", "github_runner_ipv6_cidrs", "vpc_subnet_cidr", "vpc_network",
-		"ha_role", "ha_group", "promotion_rank",
+		"ha_role", "ha_group",
 	} {
 		if _, ok := keys[k]; !ok {
 			t.Errorf("ClusterTFVars(full) missing %q", k)
@@ -68,7 +68,7 @@ func TestClusterTFVars_MinimalOmitsOptionals(t *testing.T) {
 	c.ClusterLabel, c.Region, c.K8sVersion = "l", "r", "v"
 	c.NodePool.Type, c.NodePool.Count = "t", 1
 	keys := assignKeys(ClusterTFVars(c))
-	for _, k := range []string{"tags", "autoscaler_enabled", "vpc_subnet_cidr", "vpc_network", "ha_role", "ha_group", "promotion_rank"} {
+	for _, k := range []string{"tags", "autoscaler_enabled", "vpc_subnet_cidr", "vpc_network", "ha_role", "ha_group"} {
 		if _, ok := keys[k]; ok {
 			t.Errorf("ClusterTFVars(minimal) should omit %q", k)
 		}

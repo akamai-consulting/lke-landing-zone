@@ -353,7 +353,7 @@ func TestClusterTFVars_Golden(t *testing.T) {
 		}
 	}
 	// Omitted optionals must NOT be emitted (left to the example default).
-	for _, k := range []string{"autoscaler_enabled", "github_runner_ipv4_cidrs", "ha_group", "promotion_rank"} {
+	for _, k := range []string{"autoscaler_enabled", "github_runner_ipv4_cidrs", "ha_group"} {
 		if _, ok := got[k]; ok {
 			t.Errorf("omitted field %s should not be assigned, got %q", k, got[k])
 		}

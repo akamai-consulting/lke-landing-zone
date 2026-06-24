@@ -95,9 +95,13 @@ _tasks:
   - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md"
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
-  # `copier copy` it isn't yet, so init first. `llz hooks` is per-clone and
-  # idempotent; if llz isn't on PATH, fall back to a reminder (run it yourself).
-  - "git rev-parse --git-dir >/dev/null 2>&1 || git init -q; command -v llz >/dev/null 2>&1 && llz hooks || echo \"run 'llz hooks' in this instance to arm the pre-commit hook\""
+  # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not
+  # `git rev-parse`, which walks UP and finds a parent repo when the instance is
+  # scaffolded inside one — e.g. the template checkout or a git-tracked $HOME —
+  # leaving the instance un-init'd so `gh repo create --source` later fails).
+  # `llz hooks` is per-clone and idempotent; if llz isn't on PATH, fall back to a
+  # reminder (run it yourself).
+  - "[ -e .git ] || git init -q; command -v llz >/dev/null 2>&1 && llz hooks || echo \"run 'llz hooks' in this instance to arm the pre-commit hook\""
 
 # ── Questions ────────────────────────────────────────────────────────────────
 upstream_org:

@@ -11,13 +11,11 @@ ha_group = ""
 # `llz env list --ha`, `llz env role <name>`, and `llz env peer <name>` read
 # these to drive the OpenBao dual-write, cross-region CA, and Harbor seeding.
 
-# Code-promotion pipeline position (optional). Assign ascending, unique ranks
-# across the deployments you want to promote a change through — e.g.
-# dev.tfvars: promotion_rank = 1, staging.tfvars: 2, prod.tfvars: 3 — and a
-# promote-on-green CI job walks them with `llz env list --ordered` /
-# `llz env next <name>`. 0 = this deployment is not in any pipeline (the default).
-# See docs/environments-and-promotion.md.
-promotion_rank = 0
+# Code-promotion pipeline position is NOT set here — it lives in the LandingZone
+# spec as `cluster.promotionRank` (set it with `llz env add --promotion-rank` or in
+# environments/<env>.yaml). `llz env list --ordered` / `llz env next <name>` read it
+# straight from the spec; Terraform never consumes it. See
+# docs/environments-and-promotion.md.
 
 # Update this to a currently supported LKE Enterprise version in your account.
 k8s_version = "v1.33.6+lke7"
