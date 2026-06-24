@@ -60,6 +60,24 @@ func (o *rotatorOpts) resolve() (token string, apply bool, err error) {
 	return token, apply, nil
 }
 
+// writeRotatedSecret persists a freshly-rotated account credential into the GitHub
+// secret `name` for EVERY infra-<deployment> environment (or repo-level when
+// deployments is empty). The shared Linode credentials (LINODE_API_TOKEN, the
+// TF-state OBJ key) live as a per-environment copy — the infra-<env> environments
+// are the main-only secret-injection boundary, so each deployment holds its own
+// copy and a rotation must update all of them, not a single repo-level secret.
+func writeRotatedSecret(name, value string, deployments []string) error {
+	if len(deployments) == 0 {
+		return ghSetSecretFn(name, "", value) // repo-level fallback (pre-env-scoped instances)
+	}
+	for _, d := range deployments {
+		if err := ghSetSecretFn(name, "infra-"+d, value); err != nil {
+			return fmt.Errorf("set %s in infra-%s: %w", name, d, err)
+		}
+	}
+	return nil
+}
+
 // Client constructors as package vars so the commands are exercisable without
 // network access (same seam pattern as newKubeconfigClient / newACLClient).
 var (
