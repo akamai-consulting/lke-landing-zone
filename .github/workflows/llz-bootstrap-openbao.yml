@@ -87,10 +87,23 @@ on:
         type: string
         default: main
     secrets:
+      # required: false even though a green bootstrap genuinely needs these.
+      # This workflow is reached via a nested `workflow_call` under
+      # `secrets: inherit` (llz-terraform.yml -> here). `secrets: inherit`
+      # forwards only repository/org secrets across the call boundary —
+      # environment-scoped secrets (the instance keeps TF_STATE_* in its
+      # infra-<region> Environment) are NOT inheritable, and a `required: true`
+      # declaration is validated statically at the call boundary BEFORE any job
+      # enters `environment: infra-<region>`. With `required: true` that yields a
+      # cryptic call-time "required, but not provided" failure on the very first
+      # job (Resolve HA role), which doesn't even use these secrets. The
+      # `bootstrap` job declares `environment: infra-<region>` and resolves them
+      # at runtime; `llz ci require-secret` preflights presence with a friendly
+      # error. Same rationale as APL_VALUES_REPO_TOKEN in llz-terraform.yml.
       TF_STATE_ACCESS_KEY:
-        required: true
+        required: false
       TF_STATE_SECRET_KEY:
-        required: true
+        required: false
       LINODE_API_TOKEN:
         required: false
       OPENBAO_ROOT_TOKEN:

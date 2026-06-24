@@ -58,18 +58,29 @@ on:
         type: string
         default: ''
     secrets:
+      # required: false even though a green run genuinely needs these. Instances
+      # keep TF_STATE_* / LINODE_API_TOKEN as *environment*-scoped secrets (one
+      # set per infra-<deployment> Environment — see the env-aware credential
+      # rotation). Environment-scoped secrets are NOT available to satisfy a
+      # reusable workflow's `secrets` contract at the call boundary under
+      # `secrets: inherit`; they resolve only at runtime once a job enters its
+      # `environment:`. A `required: true` secret is validated at call time, so
+      # it throws a cryptic "Secret ... is required, but not provided while
+      # calling" the moment a nested `secrets: inherit` workflow_call (the
+      # OpenBao bootstrap) forces the inherited bag to be materialized — even
+      # though the apply jobs themselves resolve the env secret fine at runtime.
+      # required: false defers to runtime; presence is enforced by the
+      # `llz ci require-secret` preflight + per-job `environment:`. Same
+      # rationale as APL_VALUES_REPO_TOKEN below. Ref: github/docs#44458,
+      # actions/runner#1490.
       TF_STATE_ACCESS_KEY:
-        required: true
+        required: false
       TF_STATE_SECRET_KEY:
-        required: true
+        required: false
       LINODE_API_TOKEN:
-        required: true
+        required: false
       LINODE_DNS_TOKEN:
         required: false
-      # required: false so a missing token gives the friendly preflight error
-      # (llz ci require-secret) instead of a cryptic call-time "required, but not
-      # provided" failure under `secrets: inherit`. It IS needed for a green
-      # apply — the Pre-flight step enforces presence.
       APL_VALUES_REPO_TOKEN:
         required: false
       GHCR_READ_TOKEN:
