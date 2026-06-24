@@ -20,7 +20,11 @@ ha_group = ""
 # Update this to a currently supported LKE Enterprise version in your account.
 k8s_version = "v1.33.6+lke7"
 
-tags = ["platform", "observability", "demo"]
+# Optional tags applied to the cluster/pool/firewall/VPC. The spec
+# (spec.cluster.tags) is the source of truth and overrides this when set; an
+# empty base means an instance that declares no tags is not stamped with leftover
+# example labels. e.g. tags = ["team-x", "prod"]
+tags = []
 
 # Node pool sizing for apl-core's full stack (istio, keycloak, argocd,
 # cert-manager, ESO, CNPG, kube-prometheus-stack, Loki, Harbor, kyverno, trivy).
