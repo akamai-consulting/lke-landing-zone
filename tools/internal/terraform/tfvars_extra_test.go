@@ -24,3 +24,16 @@ func TestParseTFVarsRegion(t *testing.T) {
 		t.Errorf("Region = %q, want us-ord", v.Region)
 	}
 }
+
+func TestParseTFVarsVPCNetwork(t *testing.T) {
+	// Shared VPC: vpc_network set → the module's linode_vpc.this is count 0
+	// (tf-import must NOT import a `.this[0]` that doesn't exist).
+	if v := ParseTFVars("cluster_label = \"c1\"\nvpc_network = \"shared-ord\"\n"); v.VPCNetwork != "shared-ord" {
+		t.Errorf("VPCNetwork = %q, want shared-ord", v.VPCNetwork)
+	}
+	// Dedicated VPC: vpc_network absent/empty → the VPC resource exists at
+	// linode_vpc.this[0], the address tf-import must use.
+	if v := ParseTFVars("cluster_label = \"c1\"\n"); v.VPCNetwork != "" {
+		t.Errorf("VPCNetwork = %q, want empty (dedicated VPC)", v.VPCNetwork)
+	}
+}
