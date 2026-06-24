@@ -235,8 +235,16 @@ jobs:
           #    cross-repo `uses:` ref and as a git `?ref=`. (Rendering it here also
           #    matters because it embeds spaces, which the ref-rewrite in step 2 below
           #    can't span.)
-          grep -rlZ -e '<@ upstream_org @>' -e '<@ instance_repo @>' -e '<@ llz_version @>' . \
+          #    This sed-render only knows the token FORMS below, so any new copier
+          #    expression in the template must be added here. instance-template's
+          #    README heading uses the jinja `<@ instance_repo.split('/')[-1] @>`
+          #    (the repo name) — render it to ${INSTANCE_REPO##*/}; otherwise it
+          #    survives the check below and fails the run.
+          REPO_NAME="${INSTANCE_REPO##*/}"
+          grep -rlZ -e '<@ upstream_org @>' -e '<@ instance_repo @>' -e '<@ llz_version @>' \
+                    -e '<@ instance_repo\.split' . \
             | xargs -0 -r sed -i \
+                -e "s#<@ instance_repo\.split('/')\[-1\] @>#${REPO_NAME}#g" \
                 -e "s#<@ upstream_org @>#${OWNER}#g" \
                 -e "s#<@ instance_repo @>#${INSTANCE_REPO}#g" \
                 -e "s#<@ llz_version @>#${GITHUB_SHA}#g"
