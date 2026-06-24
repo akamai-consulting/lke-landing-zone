@@ -1,0 +1,17 @@
+# llz local credential cache — NEVER commit. Holds the Linode PAT, GitHub PATs,
+# and the OBJ state key `llz tokens` gathers (mode 0600). `llz` reads it locally
+# and pushes the secrets to the infra-<env> GitHub Environment; the files stay here.
+.llz/
+
+# Terraform working dirs + state. State lives in the remote OBJ backend, never in
+# git; the plugin cache + plans are local build artifacts.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Editor / OS cruft
+.DS_Store
+*.swp

@@ -40,6 +40,10 @@ managed  .github/actions/**
 managed  .tflintrc.hcl
 managed  .checkov.yaml
 managed  .gitleaks.toml
+# .gitignore is safety-critical — it keeps the .llz/ credential cache (Linode/GitHub
+# PATs, OBJ keys) and Terraform state out of git. Template-owned so the ignore can't
+# silently drift out of an instance; extend local ignores via .git/info/exclude.
+managed  .gitignore
 # LandingZone spec starting templates (landingzone.yaml.example +
 # environments/<env>.yaml.example) — template-provided reference, overwritten on
 # update. The active landingzone.yaml + environments/<env>.yaml an instance authors

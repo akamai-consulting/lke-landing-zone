@@ -193,8 +193,51 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	}
 	printEnvAddNextSteps(name, envFile, o)
 	printPlaceholderChecklist(aplDir, name)
-	fmt.Printf("\n%s commit your spec — %s %s\n", dim("→"), cyan("git add "+lzPath+" "+envFile), dim("(they're the source of truth)."))
+
+	// Land the generated files in git for the operator. The spec + rendered tfvars
+	// + apl-values overlay are the source of truth and CI builds from the COMMITTED
+	// + pushed tree — but `env add` produces them as UNTRACKED files, so a "remember
+	// to commit" reminder (especially one that listed only the spec) routinely left
+	// the rendered files behind and the GitHub repo empty. Commit them all here, in
+	// a real instance only (the in-template dev layout commits nothing).
+	gen := existingPaths(append([]string{lzPath, envFile, ".template-version", filepath.Join(aplDir, name)},
+		tfvarsPaths(tfDir, name)...))
+	if relPrefix == "" && commitFiles(gen, "llz env add "+name) {
+		fmt.Printf("\n%s committed the spec + rendered files — %s to publish (CI builds from the pushed tree).\n",
+			green("✓"), cyan("git push"))
+	} else {
+		fmt.Printf("\n%s commit + push the spec and rendered files (CI builds from the pushed tree):\n", dim("→"))
+		fmt.Printf("    %s\n", cyan("git add "+strings.Join(gen, " ")))
+		fmt.Printf("    %s\n", cyan(`git commit -m "llz env add `+name+`" && git push`))
+	}
 	return nil
+}
+
+// existingPaths keeps only the paths that exist on disk (a best-effort stamp may
+// have failed, leaving its file absent).
+func existingPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// commitFiles stages exactly `paths` and commits them with msg. Best-effort: a
+// failure (no git, not a repo, nothing to commit) returns false so `env add`
+// degrades to printing the manual command rather than erroring. --no-verify keeps
+// it fast + quiet — the staged set is generated files only (never .llz secrets),
+// and CI re-runs lint + `llz render --check` on the pushed tree.
+func commitFiles(paths []string, msg string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	if err := execArgv(append([]string{"git", "add", "--"}, paths...), ""); err != nil {
+		return false
+	}
+	return execArgv([]string{"git", "commit", "-q", "--no-verify", "-m", msg}, "") == nil
 }
 
 func printEnvAddNextSteps(name, envFile string, o envAddOpts) {
