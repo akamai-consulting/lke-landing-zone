@@ -419,14 +419,22 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 		fmt.Fprintln(os.Stderr, "→ lock infra-"+env+" branch policy to main")
 		return nil
 	}
+	// Create + lock the infra-<env> environment BEFORE pushing secrets into it.
+	// `gh secret set --env infra-<env>` fetches that environment's public key and
+	// 404s if the environment doesn't exist yet; lockInfraEnvBranchPolicy is what
+	// creates it (PUT .../environments/infra-<env>), so it must run first — not
+	// after the push loop. It also restricts secret injection to ref=main (the
+	// real boundary that stops a feature-branch dispatch from exfiltrating the
+	// OpenBao unseal keys).
+	if err := lockInfraEnvBranchPolicy(g, repo, env); err != nil {
+		return err
+	}
 	for _, it := range items {
 		if err := execArgv(it.argv, it.val); err != nil {
 			return fmt.Errorf("%s: %w", it.argv[3], err)
 		}
 	}
-	// Restrict infra-<env> secret injection to ref=main (the real boundary that
-	// stops a feature-branch dispatch from exfiltrating the OpenBao unseal keys).
-	return lockInfraEnvBranchPolicy(g, repo, env)
+	return nil
 }
 
 // configureTemplateHarness sets the template repo's e2e vars + E2E_DISPATCH_TOKEN
