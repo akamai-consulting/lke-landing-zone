@@ -76,6 +76,10 @@ func ciCmd() *cobra.Command {
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())
+	// PrometheusRule promtool gate (former template-scripts python:
+	// check-prometheus-rule-crds.py via the Makefile's prom-rules-check) — the
+	// last first-party Python script in the repo.
+	c.AddCommand(ciCheckPromRulesCmd())
 	// Render/coverage lint gates ported from template-scripts (the Makefile's
 	// helm-dep-lock-check, argocd-rendered-apps-check, and the per-package
 	// coverage floor in `make coverage`).

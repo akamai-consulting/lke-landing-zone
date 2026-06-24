@@ -82,12 +82,13 @@ defaults:
 jobs:
 
   # ── Kubernetes ───────────────────────────────────────────────────────────────
-  # Single source of truth via `make lint-k8s` (= $(LINT_K8S) + shellcheck +
-  # py-lint in the Makefile): renders the first-party charts once, then runs
-  # kube-linter, kubeconform, the sync-wave / placeholder / ExternalSecret-path /
+  # Single source of truth via `make lint-k8s` (= $(LINT_K8S) + shellcheck in
+  # the Makefile): renders the first-party charts once, then runs kube-linter,
+  # kubeconform, the sync-wave / placeholder / ExternalSecret-path /
   # ArgoCD-Application semantic checks, helm lint/template, Chart.lock drift,
-  # Argo CronWorkflow lint, shellcheck, and the Python syntax check. The kind
-  # server-side dry-run is the one k8s check that needs a cluster — separate job.
+  # the PrometheusRule promtool gate (`llz ci check-prom-rules`), Argo
+  # CronWorkflow lint, and shellcheck. The kind server-side dry-run is the one
+  # k8s check that needs a cluster — separate job.
   kubernetes:
     name: Kubernetes lint
     # Run on push always; on PRs only from the same repo (fork PRs can't pull the

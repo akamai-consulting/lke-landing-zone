@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .PHONY: help \
         build build-tools llz \
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argo-workflow-lint argocd-rendered-apps-check externalsecret-paths-check untestable-loc-check actions-lint py-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argo-workflow-lint argocd-rendered-apps-check externalsecret-paths-check untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy
@@ -70,7 +70,6 @@ help:
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow and composite-action linting"
-	@echo "  py-lint         python3 -m py_compile — syntax check all template-scripts/*.py"
 	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
 	@echo "                  the CI 'Lint' workflow (.github/workflows/lint.yml): go + shell +"
 	@echo "                  py + actions, \$$(LINT_TF), and \$$(LINT_K8S). The kind server-side"
@@ -222,21 +221,18 @@ k8s-validate: render-charts
 # Validate every Prometheus rule file under apl-values shipped as PrometheusRule
 # CRs. Apl-core's kube-prometheus-stack picks them up via its ruleSelector
 # matching the labels on each CRD. promtool only accepts the bare-groups form,
-# so the helper script extracts spec.groups from each CRD before invoking it.
-# Validates any PrometheusRule CRs shipped under the (instance) observability
-# overlay. The landing-zone template ships no PrometheusRules — its charts emit
-# ServiceMonitors only — so this no-ops here and runs in a populated instance.
+# so `llz ci check-prom-rules` extracts spec.groups from each CRD before invoking
+# it. The landing-zone template ships no PrometheusRules — its charts emit
+# ServiceMonitors only — so this skips cleanly here and runs in a populated
+# instance. `llz ci check-prom-rules` is the native port of the former
+# template-scripts/linting-and-validation/check-prometheus-rule-crds.py; uses the
+# PATH llz when present (the CI images bake it), else builds from source.
 prom-rules-check:
-	@RULES_DIR=apl-values/_shared/manifest/observability/prometheus-rules-crd; \
-	if [ -d "$$RULES_DIR" ]; then \
-	  find "$$RULES_DIR" -name "*.yaml" -print0 \
-	    | xargs -0 python3 template-scripts/linting-and-validation/check-prometheus-rule-crds.py; \
+	@if command -v llz >/dev/null 2>&1; then \
+		llz ci check-prom-rules; \
 	else \
-	  echo "prom-rules-check: no PrometheusRule manifests ($$RULES_DIR absent) — skipping"; \
+		cd $(GO_DIR) && go run ./cmd/llz ci check-prom-rules --rules-dir ../apl-values/_shared/manifest/observability/prometheus-rules-crd; \
 	fi
-
-py-lint:
-	find template-scripts -name "*.py" -print0 | xargs -0 python3 -m py_compile
 
 helm-repos:
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
@@ -403,7 +399,7 @@ LINT_K8S := k8s-lint k8s-validate sync-wave-lint placeholder-lint \
 LINT_TF := tf-lint checkov tf-validate-roots
 
 # CI job entrypoints — one target per lint.yml container job.
-lint-k8s: $(LINT_K8S) shellcheck py-lint
+lint-k8s: $(LINT_K8S) shellcheck
 lint-tf: $(LINT_TF) template-manifest-check
 
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
@@ -414,7 +410,7 @@ template-manifest-check:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck py-lint actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S); \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S); \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
@@ -435,16 +431,13 @@ lint:
 	if echo "$$CHANGED" | grep -qE '^(terraform-modules|instance-template/terraform-iac-bootstrap)/.*\.tf$$|\.tflintrc\.hcl$$|\.checkov\.yaml$$'; then \
 		$(MAKE) --no-print-directory tf-fmt-check $(LINT_TF); \
 	fi; \
-	if echo "$$CHANGED" | grep -qE 'template-scripts/.*\.py$$'; then \
-		$(MAKE) --no-print-directory py-lint; \
-	fi; \
 	if echo "$$CHANGED" | grep -qE '^kubernetes-charts/|\.kube-linter\.yaml$$'; then \
 		$(MAKE) --no-print-directory $(LINT_K8S); \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$'; then \
 		$(MAKE) --no-print-directory actions-lint; \
 	fi; \
-	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|template-scripts/.*\.py$$|instance-template/\.github/|^\.untestable-budget\.yaml$$'; then \
+	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|instance-template/\.github/|^\.untestable-budget\.yaml$$'; then \
 		$(MAKE) --no-print-directory untestable-loc-check; \
 	fi
 

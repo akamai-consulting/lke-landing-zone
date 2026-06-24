@@ -128,8 +128,8 @@ The git hooks in `template-scripts/hooks/` enforce this at commit/push time (wir
    0.** It is change-aware (keys off `git diff HEAD`) and covers everything you
    touched: Go (`gofmt`/`go vet`), `shellcheck`, Terraform (`tofu fmt`,
    `tflint`, `checkov`), Kubernetes (`kube-linter`, `kubeconform`), Helm
-   (`helm lint --strict`), `actionlint` for `.github/workflows/*.yml`, and
-   `py-lint`. (`make LINT_ALL=1 lint` runs every check unconditionally.)
+   (`helm lint --strict`), and `actionlint` for `.github/workflows/*.yml`.
+   (`make LINT_ALL=1 lint` runs every check unconditionally.)
 
 ## Where to look
 
