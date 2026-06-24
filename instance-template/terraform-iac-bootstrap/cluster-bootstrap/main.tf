@@ -970,6 +970,27 @@ resource "kubectl_manifest" "app_bootstrap_application" {
           prune    = true
           selfHeal = true
         }
+        # Retry is load-bearing on first boot. Several wave-5 consumers depend on
+        # an async, partly out-of-band chain — OpenBao deployed -> auto-unsealed ->
+        # `eso-approle-secret` seeded by bootstrap-openbao.yml -> the `openbao`
+        # ClusterSecretStore goes Ready -> its ExternalSecrets sync. If the sync
+        # races ahead of that, the store's health-gate fails the wave; with NO
+        # retry block a single failed automated sync becomes terminal and Argo
+        # will NOT re-attempt the same revision (selfHeal only corrects drift
+        # after a *successful* sync), wedging the cluster until a manual
+        # `argocd app sync` or a new commit. ~20 retries @ 3m cap (~1h) rides out
+        # the first-boot convergence window. Pairs with the lenient
+        # ClusterSecretStore/ExternalSecret health customizations in
+        # apl-values/_shared/values.yaml (apps.argocd._rawValues.configs.cm) so a
+        # not-yet-ready store reports Progressing (wait), not Degraded (fail).
+        retry = {
+          limit = 20
+          backoff = {
+            duration    = "15s"
+            factor      = 2
+            maxDuration = "5m"
+          }
+        }
         # SkipDryRunOnMissingResource=true is critical here. The kustomize
         # tree includes both CRD-installing Applications (ESO, argo-workflows,
         # argo-events at wave -15) AND resources whose CRDs those installs
@@ -995,6 +1016,68 @@ resource "kubectl_manifest" "app_bootstrap_application" {
   # (apps.argocd._rawValues.server.additionalApplications). That duplicate
   # was deleted in the convergence-contract cleanup so TF is sole owner
   # now; no conflict to force.
+  depends_on = [
+    null_resource.apl_pipeline_ready,
+    kubectl_manifest.argocd_apps_repo,
+    kubectl_manifest.app_bootstrap_appproject,
+  ]
+}
+
+# ── llz-secret-store Application (blast-radius isolation for the ClusterSecretStore) ──
+# The `openbao` ClusterSecretStore is the single binding EVERY ExternalSecret
+# depends on, but on first boot it cannot go Ready until OpenBao is unsealed and
+# bootstrap-openbao.yml has seeded `eso-approle-secret`. When it lived in the
+# platform-bootstrap kustomize tree, its not-ready health FAILED that app's whole
+# sync wave (the exact hook that wedged the first lab bootstrap), stranding
+# unrelated wave-5 resources. Carving it into its own Application lets it converge
+# on its own retry loop without gating anything else — and nothing else gates it.
+#
+# Source is a fixed, env-agnostic path (the store references only fixed names), so
+# it does NOT go through the per-env `llz render` overlay; it is pinned to the same
+# apps_repo_revision as platform-bootstrap. SkipDryRunOnMissingResource rides out
+# the window before platform-bootstrap installs the external-secrets CRDs; prune is
+# off because the store is load-bearing. Same project as platform-bootstrap (it
+# already permits the cluster-scoped ClusterSecretStore + this source repo).
+resource "kubectl_manifest" "app_secret_store_application" {
+  yaml_body = yamlencode({
+    apiVersion = "argoproj.io/v1alpha1"
+    kind       = "Application"
+    metadata = {
+      name      = "llz-secret-store"
+      namespace = "argocd"
+    }
+    spec = {
+      project = "platform-bootstrap"
+      source = {
+        repoURL        = "https://github.com/<@ instance_repo @>.git"
+        targetRevision = var.apps_repo_revision
+        path           = "apl-values/_shared/manifest-secret-store"
+      }
+      destination = {
+        server    = "https://kubernetes.default.svc"
+        namespace = "argocd"
+      }
+      syncPolicy = {
+        automated = {
+          prune    = false
+          selfHeal = true
+        }
+        retry = {
+          limit = 20
+          backoff = {
+            duration    = "15s"
+            factor      = 2
+            maxDuration = "5m"
+          }
+        }
+        syncOptions = [
+          "ServerSideApply=true",
+          "SkipDryRunOnMissingResource=true",
+        ]
+      }
+    }
+  })
+  server_side_apply = true
   depends_on = [
     null_resource.apl_pipeline_ready,
     kubectl_manifest.argocd_apps_repo,

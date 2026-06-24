@@ -837,6 +837,30 @@ jobs:
           HARBOR_REGISTRY_S3_SECRET_KEY: ${{ secrets.HARBOR_REGISTRY_S3_SECRET_KEY }}
         run: llz ci seed-harbor-registry-s3 --region "$REGION"
 
+      # ── Nudge Argo CD to converge the secrets pipeline now ─────────────────────
+      # The `openbao` ClusterSecretStore and its ExternalSecrets (loki/harbor obj-
+      # storage) could not reach Ready until the AppRole secret + object-storage KV
+      # paths above were seeded. Force an immediate sync of the two apps that own
+      # them so the registry/log Secrets appear now instead of at the next
+      # reconcile — AND, critically, re-trigger the sync if an earlier first-boot
+      # race already drove it to a terminally-failed state (Argo CD does NOT auto-
+      # retry a failed sync to the same revision; selfHeal only corrects drift after
+      # a successful one). The standing safety net is the in-cluster nudger CronJob
+      # (apl-values/_shared/manifest/argo-resync-nudger); this just collapses the
+      # latency at the exact moment seeding unblocks them. Never fails the bootstrap.
+      - name: Nudge Argo CD to converge secrets (post-seed)
+        if: steps.check_token.outputs.available == 'true'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          for app in llz-secret-store platform-bootstrap; do
+            kubectl -n argocd annotate application "$app" \
+              argocd.argoproj.io/refresh=hard --overwrite || true
+            kubectl -n argocd patch application "$app" --type merge \
+              -p '{"operation":{"initiatedBy":{"username":"bootstrap-openbao"},"sync":{}}}' || true
+            echo "nudged $app"
+          done
+
       # NOTE — the "Seed Gitea backup S3 credentials in OpenBao" step that
       # wrote secret/gitea/backup-s3 was removed in the apl-core anti-
       # pattern cleanup. The corresponding bucket + key + outputs +

@@ -37,6 +37,63 @@ cluster:
 # error — and the app falls back to its chart default. Names verified against
 # linode/apl-core@v5.0.0 values-schema.yaml.
 apps:
+  # argocd is a core app (cannot be disabled — no `enabled` key). We only pass
+  # _rawValues to override two Argo CD resource health checks. Argo's built-in
+  # checks for external-secrets.io resources report Degraded the moment the store
+  # isn't Ready; during first boot the `openbao` ClusterSecretStore legitimately
+  # can't be Ready until OpenBao is unsealed and bootstrap-openbao.yml has seeded
+  # `eso-approle-secret`. A Degraded resource FAILS the platform-bootstrap sync
+  # wave (it was the exact hook that wedged the first lab bootstrap). These
+  # overrides reclassify "not ready yet" as Progressing, so Argo waits + retries
+  # (see the retry budget in terraform-iac-bootstrap/cluster-bootstrap/main.tf)
+  # instead of failing. Genuinely-broken stores/secrets still surface via the
+  # converge health check (`llz ci health`), which verifies the synced Secret
+  # exists independently of Argo's health rollup.
+  argocd:
+    _rawValues:
+      configs:
+        cm:
+          resource.customizations.health.external-secrets.io_ClusterSecretStore: |
+            local hs = {}
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  if c.status == "True" then
+                    hs.status = "Healthy"
+                  else
+                    -- OpenBao not yet reachable/unsealed or AppRole unseeded:
+                    -- still converging, do not fail the sync.
+                    hs.status = "Progressing"
+                  end
+                  hs.message = c.message
+                  return hs
+                end
+              end
+            end
+            hs.status = "Progressing"
+            hs.message = "Waiting for ClusterSecretStore Ready condition"
+            return hs
+          resource.customizations.health.external-secrets.io_ExternalSecret: |
+            local hs = {}
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  if c.status == "True" then
+                    hs.status = "Healthy"
+                  else
+                    -- ESO reconciles on refreshInterval; a not-yet-synced secret
+                    -- (e.g. OpenBao path not seeded yet) self-heals. Treat as
+                    -- Progressing so it never fails the bootstrap wave.
+                    hs.status = "Progressing"
+                  end
+                  hs.message = c.message
+                  return hs
+                end
+              end
+            end
+            hs.status = "Progressing"
+            hs.message = "Waiting for ExternalSecret to sync"
+            return hs
   prometheus:
     enabled: true
     # Resource-conscious defaults matching the reference lab: single replica,

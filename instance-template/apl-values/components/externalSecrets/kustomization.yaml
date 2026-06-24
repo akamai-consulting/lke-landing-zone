@@ -2,7 +2,10 @@
 # components: when the component is enabled. Template-managed — edit upstream.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
+# NOTE: the `openbao` ClusterSecretStore moved OUT of this component into its own
+# Argo CD Application (apl-values/_shared/manifest-secret-store/, applied by the
+# llz-secret-store app in cluster-bootstrap/main.tf) for blast-radius isolation —
+# its first-boot not-ready health used to fail the whole platform-bootstrap sync.
 resources:
   - network-policies.yaml
-  - cluster-secret-store-openbao.yaml
   - external-secrets-operator.yaml

@@ -1,0 +1,35 @@
+# Egress allow for the argo-resync-nudger pod: DNS + the Kubernetes API only.
+#
+# Scoped to the nudger pod (app: argo-resync-nudger) — this is an ADDITIVE allow,
+# NOT a namespace default-deny (the `argocd` namespace is apl-core-managed; we must
+# not impose a blanket deny on its controllers). If apl-core default-denies argocd
+# egress, this is what lets the nudger reach the apiserver; if it doesn't, this is
+# harmless.
+#
+# LKE-Enterprise note (same as the ESO policies): the in-cluster `kubernetes`
+# Service DNATs 443→6443 and Cilium evaluates NetworkPolicy on the post-DNAT port,
+# so egress must allow BOTH 443 and 6443 or API calls are silently dropped.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: argo-resync-nudger-allow-egress
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-18"
+spec:
+  podSelector:
+    matchLabels:
+      app: argo-resync-nudger
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP

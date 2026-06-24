@@ -11,3 +11,7 @@ kind: Kustomization
 resources:
   - platform-support-project.yaml
   - applications/cluster-foundation.yaml
+  # Standing safety net: re-triggers any Argo CD Application whose sync terminally
+  # failed (Argo won't auto-retry a failed revision). Early wave (-18) so it's
+  # running before the consumers that could fail. See argo-resync-nudger/.
+  - argo-resync-nudger
