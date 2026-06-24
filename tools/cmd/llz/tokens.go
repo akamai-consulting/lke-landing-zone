@@ -17,6 +17,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -446,13 +447,19 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	// after the push loop. It also restricts secret injection to ref=main (the
 	// real boundary that stops a feature-branch dispatch from exfiltrating the
 	// OpenBao unseal keys).
-	if err := lockInfraEnvBranchPolicy(g, repo, env); err != nil {
-		return err
+	protErr := lockInfraEnvBranchPolicy(g, repo, env)
+	if protErr != nil && !errors.Is(protErr, errEnvProtectionUnsupported) {
+		return protErr
 	}
 	for _, it := range items {
 		if err := execArgv(it.argv, it.val); err != nil {
 			return fmt.Errorf("%s: %w", it.argv[3], err)
 		}
+	}
+	// The env was created + seeded; if its branch policy couldn't be applied
+	// (plan without environment protection), remind the operator at the END.
+	if errors.Is(protErr, errEnvProtectionUnsupported) {
+		warnEnvProtectionUnsupported(repo, env)
 	}
 	return nil
 }

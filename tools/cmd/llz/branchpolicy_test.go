@@ -36,3 +36,23 @@ func TestEnvCfgCoercers(t *testing.T) {
 		t.Error("sliceOr")
 	}
 }
+
+func TestIsPlanLimitErr(t *testing.T) {
+	// The exact message GitHub returns when a private repo's plan lacks
+	// environment protection rules.
+	planErr := "gh: Failed to create the environment protection rule. Please ensure the " +
+		"billing plan supports the required reviewers protection rule. (HTTP 422)"
+	if !isPlanLimitErr(planErr) {
+		t.Error("want plan-limit message classified as plan limit")
+	}
+	for _, other := range []string{
+		"HTTP 404: Not Found",
+		`is not of type "boolean"`,
+		"name has already been taken",
+		"",
+	} {
+		if isPlanLimitErr(other) {
+			t.Errorf("unrelated error misclassified as plan limit: %q", other)
+		}
+	}
+}

@@ -15,11 +15,20 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 )
+
+// errEnvProtectionUnsupported signals the infra-<env> environment was created (so
+// secrets can be pushed) but its main-only branch policy could NOT be applied
+// because the repo's plan doesn't include environment protection rules — private
+// repos need GitHub Pro/Team/Enterprise. Callers treat it as non-fatal and warn
+// the operator to lock it by hand. The branch policy is a defense-in-depth
+// boundary, not a prerequisite for the cluster to bootstrap.
+var errEnvProtectionUnsupported = errors.New("environment branch protection unsupported on this plan")
 
 // lockInfraEnvBranchPolicy restricts the infra-<env> GitHub Environment to
 // deployments from `main` only. Idempotent: skips an env that already has a
@@ -41,21 +50,14 @@ func lockInfraEnvBranchPolicy(g globalOpts, repo, env string) error {
 		return nil
 	}
 
-	// 1. Fetch (or create) the environment.
+	// 1. Fetch (or create) the environment. Create it BARE (empty body, no
+	//    protection fields) so it exists on any plan that supports environments at
+	//    all — the branch policy is layered on next, best-effort. `gh secret set
+	//    --env` needs the environment to exist, so this must succeed.
 	envJSON, err := ghAPIOut("repos/" + repo + "/environments/" + envName)
 	if err != nil {
-		// Most likely 404 — create it with the branch policy, then re-fetch. Send a
-		// JSON body via --input (not `gh api -f`, which sends every value as a
-		// STRING, so the booleans arrive as "false"/"true" and GitHub 422s
-		// "is not of type boolean"). json.Marshal types them correctly.
-		createBody, _ := json.Marshal(map[string]any{
-			"deployment_branch_policy": map[string]any{
-				"protected_branches":     false,
-				"custom_branch_policies": true,
-			},
-		})
 		if err := execArgv([]string{"gh", "api", "-X", "PUT",
-			"repos/" + repo + "/environments/" + envName, "--input", "-"}, string(createBody)); err != nil {
+			"repos/" + repo + "/environments/" + envName}, ""); err != nil {
 			return fmt.Errorf("create environment %s: %w", envName, err)
 		}
 		if envJSON, err = ghAPIOut("repos/" + repo + "/environments/" + envName); err != nil {
@@ -74,38 +76,93 @@ func lockInfraEnvBranchPolicy(g globalOpts, repo, env string) error {
 		return nil
 	}
 
-	// 3. Flip the policy mode to custom_branch_policies via a GET-then-merge PUT
-	//    (PUT replaces the whole config, so preserve reviewers/wait_timer/etc.).
-	payload, err := json.Marshal(map[string]any{
-		"wait_timer":          numOr(envCfg["wait_timer"], 0),
-		"prevent_self_review": boolOr(envCfg["prevent_self_review"], false),
-		"reviewers":           sliceOr(envCfg["reviewers"]),
+	// 3. Enable custom branch policies. Send ONLY deployment_branch_policy plus any
+	//    EXISTING reviewer/wait-timer protections — never EMPTY ones. Sending an
+	//    empty reviewers/wait_timer makes GitHub validate the "required reviewers"
+	//    protection rule, which 422s on private repos without a paid plan; including
+	//    only already-set values both avoids that and preserves a paid repo's
+	//    manually-configured reviewers across the policy flip.
+	body := map[string]any{
 		"deployment_branch_policy": map[string]any{
 			"protected_branches":     false,
 			"custom_branch_policies": true,
 		},
-	})
+	}
+	if rv := sliceOr(envCfg["reviewers"]); len(rv) > 0 {
+		body["reviewers"] = rv
+	}
+	if wt := numOr(envCfg["wait_timer"], 0); wt > 0 {
+		body["wait_timer"] = wt
+	}
+	if boolOr(envCfg["prevent_self_review"], false) {
+		body["prevent_self_review"] = true
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	if err := execArgv([]string{"gh", "api", "-X", "PUT",
-		"repos/" + repo + "/environments/" + envName, "--input", "-"}, string(payload)); err != nil {
-		return fmt.Errorf("set policy mode on %s: %w", envName, err)
+	if out, err := ghAPIBody("PUT", "repos/"+repo+"/environments/"+envName, payload); err != nil {
+		if isPlanLimitErr(out) {
+			return errEnvProtectionUnsupported // env exists; caller warns + continues
+		}
+		return fmt.Errorf("set policy mode on %s: %s", envName, strings.TrimSpace(out))
 	}
 
 	// 4. Add the `main` rule. POST returns 422 if it already exists — tolerate.
 	if out, err := exec.Command("gh", "api", "-X", "POST",
 		"repos/"+repo+"/environments/"+envName+"/deployment-branch-policies",
 		"-f", "name="+branch, "-f", "type=branch").CombinedOutput(); err != nil {
-		if strings.Contains(string(out), "already exists") || strings.Contains(string(out), "already been taken") {
+		s := string(out)
+		switch {
+		case strings.Contains(s, "already exists") || strings.Contains(s, "already been taken"):
 			fmt.Fprintf(os.Stderr, "  ✓ %s rule on %s already exists (race-tolerated)\n", branch, envName)
-		} else {
-			return fmt.Errorf("add %s rule on %s: %s", branch, envName, strings.TrimSpace(string(out)))
+		case isPlanLimitErr(s):
+			return errEnvProtectionUnsupported
+		default:
+			return fmt.Errorf("add %s rule on %s: %s", branch, envName, strings.TrimSpace(s))
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "  ✓ %s restricted to ref=%s\n", envName, branch)
 	}
 	return nil
+}
+
+// ghAPIBody runs `gh api -X <method> <path> --input -` piping a JSON body, and
+// returns combined output (so the caller can classify the error text).
+func ghAPIBody(method, path string, body []byte) (string, error) {
+	cmd := exec.Command("gh", "api", "-X", method, path, "--input", "-")
+	cmd.Stdin = strings.NewReader(string(body))
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// isPlanLimitErr reports whether a gh-api error is GitHub refusing an environment
+// protection rule the repo's billing plan doesn't include (private repos need a
+// paid plan). The message is: "…ensure the billing plan supports the required
+// reviewers protection rule."
+func isPlanLimitErr(out string) bool {
+	l := strings.ToLower(out)
+	return strings.Contains(l, "billing plan") ||
+		(strings.Contains(l, "protection rule") && strings.Contains(l, "plan"))
+}
+
+// warnEnvProtectionUnsupported tells the operator the infra-<env> environment was
+// created + seeded but could NOT be locked to `main`, and how to do it by hand
+// once the plan allows. Printed at the END of the run so it isn't buried.
+func warnEnvProtectionUnsupported(repo, env string) {
+	if repo == "" {
+		if a, _ := readAnswers("."); a != nil {
+			repo = a.InstanceRepo
+		}
+	}
+	envName := "infra-" + env
+	fmt.Fprintf(os.Stderr, "\n%s could not restrict %s to deployments from `main`.\n", yellow("⚠ branch protection skipped"), envName)
+	fmt.Fprintln(os.Stderr, dim("  This repo's plan doesn't include environment protection rules (private repos need"))
+	fmt.Fprintln(os.Stderr, dim("  GitHub Pro/Team/Enterprise). Secrets were pushed, but until the env is locked a"))
+	fmt.Fprintln(os.Stderr, dim("  feature-branch workflow_dispatch could select "+envName+" and read them."))
+	fmt.Fprintln(os.Stderr, "  Lock it once the plan allows (UI: Settings → Environments → "+envName+" → Deployment branch policy), or:")
+	fmt.Fprintf(os.Stderr, "    %s\n", cyan("gh api -X PUT repos/"+repo+"/environments/"+envName+" -F deployment_branch_policy[custom_branch_policies]=true -F deployment_branch_policy[protected_branches]=false"))
+	fmt.Fprintf(os.Stderr, "    %s\n", cyan("gh api -X POST repos/"+repo+"/environments/"+envName+"/deployment-branch-policies -f name=main -f type=branch"))
 }
 
 // policyKind classifies the deployment_branch_policy of an environment config.

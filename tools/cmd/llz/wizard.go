@@ -365,13 +365,22 @@ func pushSecrets(g globalOpts, env string) error {
 		fmt.Fprintln(os.Stderr, "  (re-run with --yes to execute)")
 		return nil
 	}
+	// Create + lock infra-<env> BEFORE pushing — `gh secret set --env` 404s if the
+	// environment doesn't exist yet, and lockInfraEnvBranchPolicy is what creates
+	// it. The lock is also the secret-injection boundary (main-only).
+	protErr := lockInfraEnvBranchPolicy(g, "", env)
+	if protErr != nil && !errors.Is(protErr, errEnvProtectionUnsupported) {
+		return protErr
+	}
 	for _, it := range items {
 		if err := execArgv(it.argv, it.val); err != nil {
 			return fmt.Errorf("%s: %w", it.argv[2], err) // argv[2] = the name
 		}
 	}
-	// Lock infra-<env> to main-only — the actual secret-injection boundary.
-	return lockInfraEnvBranchPolicy(g, "", env)
+	if errors.Is(protErr, errEnvProtectionUnsupported) {
+		warnEnvProtectionUnsupported("", env)
+	}
+	return nil
 }
 
 // runDoctor is the single "am I ready to build?" gate: it reports tooling + gh
