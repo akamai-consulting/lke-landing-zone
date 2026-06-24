@@ -16,9 +16,18 @@ the files the rest of the toolchain already consumes:
 
 | Source of truth | Renders to | When |
 |---|---|---|
-| `environments/<env>.yaml` → `spec.cluster` | the three `<env>.tfvars` (transient, working-tree) | build/CI, before `terraform` |
+| `environments/<env>.yaml` → `spec.cluster` | the three `<env>.tfvars` (**gitignored**, regenerated) | build/CI, before `terraform` |
 | `environments/<env>.yaml` → `spec.components` | `manifest/kustomization.yaml` + `argocd/kustomization.yaml` (committed, CI-verified) | `llz render` |
 | `landingzone.yaml` → `spec.instance` | `.copier-answers.yml` + copier `-d` data | `llz new` / `llz upgrade` |
+
+The per-env `<env>.tfvars` are **build artifacts, not committed** — `terraform-iac-bootstrap/.gitignore`
+ignores them, and the `terraform-init` composite action runs `llz render --tfvars-only`
+before every terraform op, so the spec is the single source of truth and a spec edit is one
+reviewable diff instead of two. **A working `llz` is therefore a hard prerequisite for any
+terraform op.** Break-glass: if the renderer is ever broken, run `llz render --tfvars-only`
+yourself, or temporarily un-ignore the files and commit them. (The committed `apl-values/<env>/`
+manifests stay committed — Argo syncs them from git — and `llz render --check` drift-guards
+*those*, not the tfvars.)
 
 This is the **CRD-faithful** shape — one `LandingZone` object plus one
 `ClusterDefinition` per env — so graduating to a real CRD + controller later is a

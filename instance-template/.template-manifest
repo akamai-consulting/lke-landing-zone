@@ -72,6 +72,9 @@ managed  terraform-iac-bootstrap/*/outputs.tf
 managed  terraform-iac-bootstrap/*/providers.tf
 managed  terraform-iac-bootstrap/*/versions.tf
 managed  terraform-iac-bootstrap/*/terraform.tfvars.example
+# Gitignores the per-env <env>.tfvars that `llz render` regenerates (the spec is
+# the source of truth) — see the file's header. Template-owned.
+managed  terraform-iac-bootstrap/.gitignore
 managed  terraform-iac-bootstrap/cluster-bootstrap/.gitignore
 managed  terraform-iac-bootstrap/cluster-bootstrap/manifests/**
 # Shared local-exec bodies for the kyverno_* policy null_resources in main.tf —

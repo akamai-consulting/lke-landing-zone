@@ -1,16 +1,18 @@
 name: llz-discover-deployments (reusable)
 
 # Reusable (`workflow_call`) single source of truth for the per-deployment CI
-# matrix. Terraform owns the deployment list — one terraform-iac-bootstrap/
-# cluster/<name>.tfvars per deployment (scaffolded by `llz env add`). `llz env
-# list --json` emits that set; the scheduled health/audit checks, the credential
+# matrix. `llz env list --json` emits the deployment set — from the LandingZone
+# spec (`environments/<env>.yaml`) on spec-driven instances, unioned with any
+# committed `cluster/<name>.tfvars` on legacy instances. (The per-env tfvars are
+# gitignored build artifacts on spec instances, so this reads the spec, not them.)
+# The scheduled health/audit checks, the credential
 # rotation, and the Terraform PR plan all fan their matrices out over THIS
 # workflow's `deployments` output. Because every matrix derives from the same
 # call, they cannot drift from one another (or from Terraform) — a rotation run
 # can never leave a checked-but-unrotated (or rotated-but-unchecked) deployment,
 # and `llz env add` extends CI coverage everywhere at once.
 #
-# Read-only: it only reads the CALLER's checked-out tfvars — no secrets, no
+# Read-only: it only reads the CALLER's checked-out spec/tfvars — no secrets, no
 # cluster access. llz is baked into vars.TF_IMAGE (resolved from the caller's
 # repo/org variables); the CI image is pulled with the built-in GITHUB_TOKEN
 # (github.actor), so the image must be public or grant the caller repo

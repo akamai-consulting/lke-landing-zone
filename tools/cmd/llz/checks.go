@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -63,6 +64,34 @@ func fmtArgv(tofu, dir string) []string { return []string{tofu, "fmt", dir} }
 
 func fmtCheckArgv(tofu, dir string) []string { return []string{tofu, "fmt", "-check", dir} }
 
+// fmtCheckArgvPaths fmt-checks an explicit set of files instead of a whole dir,
+// so generated (gitignored, untracked) per-env tfvars are skipped — see
+// stepFmtCheck.
+func fmtCheckArgvPaths(tofu string, paths []string) []string {
+	return append([]string{tofu, "fmt", "-check"}, paths...)
+}
+
+// trackedFmtTargets returns the git-tracked *.tf / *.tfvars files under dir. It is
+// how stepFmtCheck skips the rendered per-env tfvars: those are gitignored build
+// artifacts (terraform-iac-bootstrap/.gitignore), so they are untracked and never
+// listed — while committed modules (*.tf) and terraform.tfvars.example stay
+// checked. Returns (nil, false) when not in a git repo so the caller falls back to
+// the dir scan. A legacy instance's hand-committed <env>.tfvars ARE tracked, so
+// they keep being checked — exactly right.
+func trackedFmtTargets(dir string) ([]string, bool) {
+	out, err := gitOutput("", "ls-files", "--", dir)
+	if err != nil {
+		return nil, false
+	}
+	var paths []string
+	for _, p := range strings.Split(strings.TrimSpace(out), "\n") {
+		if p = strings.TrimSpace(p); strings.HasSuffix(p, ".tf") || strings.HasSuffix(p, ".tfvars") {
+			paths = append(paths, p)
+		}
+	}
+	return paths, true
+}
+
 func tfLintArgv(tflint, dir, config string) []string {
 	return []string{tflint, "--chdir=" + dir, "--config=" + config}
 }
@@ -96,6 +125,18 @@ func stepFmtCheck(g globalOpts) error {
 		return nil
 	}
 	for _, d := range tfDirs() {
+		// Prefer fmt-checking only git-tracked files so the rendered per-env tfvars
+		// (gitignored build artifacts) are skipped — an unformatted render must not
+		// fail this pre-commit gate. Outside a git repo, fall back to the dir scan.
+		if paths, ok := trackedFmtTargets(d); ok {
+			if len(paths) == 0 {
+				continue
+			}
+			if err := run(g, fmtCheckArgvPaths(tofu, paths)...); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := run(g, fmtCheckArgv(tofu, d)...); err != nil {
 			return err
 		}

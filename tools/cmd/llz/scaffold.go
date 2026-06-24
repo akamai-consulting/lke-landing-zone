@@ -194,19 +194,20 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	printEnvAddNextSteps(name, envFile, o)
 	printPlaceholderChecklist(aplDir, name)
 
-	// Land the generated files in git for the operator. The spec + rendered tfvars
-	// + apl-values overlay are the source of truth and CI builds from the COMMITTED
-	// + pushed tree — but `env add` produces them as UNTRACKED files, so a "remember
-	// to commit" reminder (especially one that listed only the spec) routinely left
-	// the rendered files behind and the GitHub repo empty. Commit them all here, in
-	// a real instance only (the in-template dev layout commits nothing).
-	gen := existingPaths(append([]string{lzPath, envFile, ".template-version", filepath.Join(aplDir, name)},
-		tfvarsPaths(tfDir, name)...))
+	// Land the generated files in git for the operator. The source of truth is the
+	// spec (landingzone.yaml + environments/<env>.yaml) plus the committed
+	// apl-values overlay; CI builds from the COMMITTED + pushed tree. The per-env
+	// <env>.tfvars are gitignored build artifacts (regenerated from the spec on
+	// every render — locally and in CI), so they are deliberately NOT committed.
+	// `env add` produces all of this as UNTRACKED files, so a "remember to commit"
+	// reminder routinely left them behind and the GitHub repo empty — commit them
+	// here, in a real instance only (the in-template dev layout commits nothing).
+	gen := existingPaths([]string{lzPath, envFile, ".template-version", filepath.Join(aplDir, name)})
 	if relPrefix == "" && commitFiles(gen, "llz env add "+name) {
-		fmt.Printf("\n%s committed the spec + rendered files — %s to publish (CI builds from the pushed tree).\n",
+		fmt.Printf("\n%s committed the spec + overlay — %s to publish (CI renders tfvars + builds from the pushed tree).\n",
 			green("✓"), cyan("git push"))
 	} else {
-		fmt.Printf("\n%s commit + push the spec and rendered files (CI builds from the pushed tree):\n", dim("→"))
+		fmt.Printf("\n%s commit + push the spec and overlay (CI renders tfvars + builds from the pushed tree):\n", dim("→"))
 		fmt.Printf("    %s\n", cyan("git add "+strings.Join(gen, " ")))
 		fmt.Printf("    %s\n", cyan(`git commit -m "llz env add `+name+`" && git push`))
 	}

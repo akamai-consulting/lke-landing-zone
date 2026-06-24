@@ -251,8 +251,9 @@ llz env add <env> --region us-sea --obj-cluster us-sea-1 \
 ```
 
 It generates `terraform-iac-bootstrap/{cluster,cluster-bootstrap,object-storage}/<env>.tfvars`
-and the `apl-values/<env>/` overlay, then prints the values you must still fill
-(region, `k8s_version`, `apl_values_repo_url`, `obj_cluster`)
+(**gitignored** build artifacts — regenerated from the spec on every render and in CI, so you
+commit only the spec + overlay) and the `apl-values/<env>/` overlay, then prints the values
+you must still fill (region, `k8s_version`, `apl_values_repo_url`, `obj_cluster`)
 and scans for leftover template tokens to
 review. Validate the overlay renders:
 

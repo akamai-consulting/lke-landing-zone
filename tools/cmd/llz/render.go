@@ -3,8 +3,12 @@ package main
 // render.go reconciles the declarative LandingZone spec (landingzone.yaml +
 // environments/<env>.yaml, see internal/clusterspec) into the files the rest of
 // the toolchain consumes. Two targets:
-//   - the three <env>.tfvars (transient, working-tree) from the env's cluster
-//     definition, which `terraform -var-file=<env>.tfvars` picks up at build time;
+//   - the three <env>.tfvars (gitignored build artifacts — see
+//     terraform-iac-bootstrap/.gitignore) from the env's cluster definition, which
+//     `terraform -var-file=<env>.tfvars` picks up at build time. They are NOT
+//     committed: regenerated here on every render (locally and in CI, before each
+//     terraform op), so the spec is the single source of truth. A working `llz` is
+//     therefore a hard prerequisite for any terraform op.
 //   - the committed apl-values/<env>/ artifacts from the env's component toggles —
 //     the manifest kustomizations (llz Argo backend) and values.yaml apps.<key>.
 //     enabled (apl-core backend) — committed because Argo syncs git, and
@@ -183,7 +187,44 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 			}
 		}
 	}
+	if !dryRun {
+		untrackRenderedTfvars(relPrefix)
+	}
 	return nil
+}
+
+// untrackRenderedTfvars self-heals an instance that committed its per-env tfvars
+// before they became gitignored build artifacts: it drops any tracked
+// <env>.tfvars from the git index so the operator can commit the removal. The
+// terraform-iac-bootstrap/.gitignore (shipped by the template) keeps newly
+// rendered files untracked; this only handles the one-time migration of files
+// already in the index. Idempotent — a no-op once nothing matches.
+//
+// Skipped in two cases: the in-template dev layout (relPrefix != "", not a real
+// instance repo), and CI (GITHUB_ACTIONS) — there the render is ephemeral and the
+// migration is a local, committed action, so CI's index must stay pristine.
+func untrackRenderedTfvars(relPrefix string) {
+	if relPrefix != "" || os.Getenv("GITHUB_ACTIONS") == "true" {
+		return
+	}
+	// All tracked files under the TF roots, filtered in Go to the rendered per-env
+	// tfvars across every root (cluster, cluster-bootstrap, object-storage, vpc).
+	// terraform.tfvars.example stays tracked — it ends in .example, not .tfvars.
+	listed := gitOut("ls-files", "--", "terraform-iac-bootstrap")
+	var tracked []string
+	for _, p := range strings.Split(strings.TrimSpace(listed), "\n") {
+		if p = strings.TrimSpace(p); strings.HasSuffix(p, ".tfvars") {
+			tracked = append(tracked, p)
+		}
+	}
+	if len(tracked) == 0 {
+		return
+	}
+	if err := execArgv(append([]string{"git", "rm", "--cached", "-q", "--"}, tracked...), ""); err != nil {
+		return // best-effort: no git, not a repo, etc.
+	}
+	fmt.Fprintf(os.Stderr, "%s untracked %d now-gitignored tfvars (rendered from the spec) — commit the removal:\n  %s\n",
+		dim("→"), len(tracked), strings.Join(tracked, "\n  "))
 }
 
 // committedTargets returns every committed apl-values/<env>/ file a deployment

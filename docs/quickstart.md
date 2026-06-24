@@ -250,7 +250,9 @@ flags) and runs `llz render` to reconcile the spec into the
 `terraform-iac-bootstrap/*/<env>.tfvars` + `apl-values/<env>/` overlay. It then
 **prints a checklist of the overlay placeholders** the spec doesn't carry. So you
 edit **one file per deployment** — `environments/<env>.yaml` — not three tfvars
-roots:
+roots. The rendered `<env>.tfvars` are **gitignored** (regenerated from the spec
+on every render and in CI), so you commit only the spec + overlay; CI renders the
+tfvars before each terraform op:
 
 ```bash
 llz env add lab --region us-sea --obj-cluster us-sea-1 \
@@ -374,8 +376,8 @@ llz env add west --region us-ord --obj-cluster us-ord-1 --ha-role standby --ha-g
 ```
 
 The bootstrap, rotation, and Harbor workflows resolve `ha_role`/peer from the spec
-(the committed tfvars are rendered from it) instead of hardcoding which cluster is
-which.
+(the tfvars are rendered from it — gitignored build artifacts, regenerated in CI)
+instead of hardcoding which cluster is which.
 
 </details>
 

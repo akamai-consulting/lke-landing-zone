@@ -81,6 +81,7 @@ func runEnvReadiness(env string) error {
 	// so validate it AND confirm the committed apl-values match what it renders
 	// before the file-level scan below — which reads the RENDERED output and would
 	// otherwise pass on stale tfvars after a spec edit that wasn't re-rendered.
+	specDriven := false // spec present AND this env defined in it
 	if lz, present, perr := loadSpec(); present {
 		fmt.Println(bold("LandingZone spec:"))
 		if perr != nil {
@@ -94,6 +95,7 @@ func runEnvReadiness(env string) error {
 			return fmt.Errorf("%d spec problem(s) — fix landingzone.yaml / environments/<env>.yaml, then re-run", len(errs))
 		}
 		if _, ok := lz.Env(env); ok {
+			specDriven = true
 			if err := checkManifestDrift(lz, aplDir, []string{env}); err != nil {
 				// checkManifestDrift already printed the drifted files + the
 				// `llz render` hint; surface it as the blocking failure.
@@ -126,7 +128,11 @@ func runEnvReadiness(env string) error {
 	for _, f := range files {
 		fs, present := scanForSentinels(f)
 		if !present {
-			if strings.HasSuffix(f, ".tfvars") {
+			// A spec-driven env renders its tfvars on demand (they are gitignored
+			// build artifacts), so an absent <env>.tfvars is normal, not a finding —
+			// the spec was already validated above. Legacy/manual instances still
+			// flag a genuinely missing tfvars.
+			if strings.HasSuffix(f, ".tfvars") && !specDriven {
 				fmt.Printf("  %s  %s %s\n", red("✗ missing"), f, dim("— run `llz env add "+env+"`"))
 				missing++
 			}
