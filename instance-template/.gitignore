@@ -12,6 +12,19 @@
 crash.log
 crash.*.log
 
-# Editor / OS cruft
+# AI coding assistants — per-developer LOCAL state only (can carry local env vars,
+# tool permissions, and machine paths). The SHARED config is meant to be COMMITTED,
+# so this deliberately does NOT ignore it: CLAUDE.md, .claude/settings.json +
+# .claude/commands/ + .claude/agents/, and .github/copilot-instructions.md.
+.claude/settings.local.json
+.aider*
+
+# Editor / IDE local state. The Dev Container (.devcontainer/) carries the shared
+# editor setup via customizations.vscode, so a repo-level .vscode/.idea is
+# per-developer. (.devcontainer/ itself IS committed — it's the toolchain.)
+.vscode/
+.idea/
+
+# OS cruft
 .DS_Store
 *.swp
