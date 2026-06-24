@@ -4,11 +4,19 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
+
+// dealign collapses `tofu fmt`'s `=` column padding (key    = val → key = val) so
+// the rendered-tfvars assertions match the canonical single-space form whether or
+// not fmt aligned the output (it only runs when tofu/terraform is on PATH).
+var alignRE = regexp.MustCompile(` +=`)
+
+func dealign(s string) string { return alignRE.ReplaceAllString(s, " =") }
 
 func TestApplyAssigns(t *testing.T) {
 	base := "region = \"PLACEHOLDER\"\n# obj_key_rotation_days = 120\n"
@@ -78,7 +86,7 @@ func TestRenderEnvTfvars(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s/prod.tfvars: %v", root, err)
 		}
-		return string(b)
+		return dealign(string(b)) // tolerate tofu fmt's `=` alignment
 	}
 	cluster := read("cluster")
 	for _, want := range []string{`cluster_label = "platform-prod"`, `region = "us-ord"`, `node_count = 5`} {
@@ -233,7 +241,7 @@ spec:
 			t.Fatalf("read vpc/%s.tfvars: %v", name, err)
 		}
 		for _, want := range []string{`vpc_label = "` + name + `"`, `region = "` + region + `"`} {
-			if !strings.Contains(string(b), want) {
+			if !strings.Contains(dealign(string(b)), want) {
 				t.Errorf("vpc/%s.tfvars missing %q:\n%s", name, want, b)
 			}
 		}
