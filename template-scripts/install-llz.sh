@@ -18,13 +18,19 @@ ORG="${ORG:-akamai-consulting}"
 REPO="${ORG}/lke-landing-zone"
 BINDIR="${LLZ_BINDIR:-$HOME/.local/bin}"
 VER="${1:-${LLZ_VERSION:-}}"
+# Host the release lives on — github.com unless GH_HOST points gh at a GHE fork.
+HOST="${GH_HOST:-github.com}"
 
 command -v gh >/dev/null || {
   echo "install-llz: gh not found — install the GitHub CLI first (it authenticates the private-repo download)." >&2
   exit 1
 }
-gh auth status >/dev/null 2>&1 || {
-  echo "install-llz: gh is not authenticated — run \`gh auth login\` first." >&2
+# Scope the auth check to the one host we download from. Bare `gh auth status`
+# exits non-zero if ANY configured host is broken (e.g. an expired token on an
+# unrelated GHE account), which would wrongly block a user logged in to $HOST.
+gh auth status --hostname "$HOST" >/dev/null 2>&1 || {
+  echo "install-llz: gh is not authenticated to $HOST — run \`gh auth login --hostname $HOST\` first." >&2
+  echo "install-llz: (any other gh hosts can be in any state; only $HOST matters here.)" >&2
   exit 1
 }
 
