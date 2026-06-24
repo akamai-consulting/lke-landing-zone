@@ -34,10 +34,15 @@ GitHub Actions-side helpers + tooling install. Don't run these from a workstatio
 - `sbom-kubernetes.sh` — extracts images from cluster state and runs `syft` on each
 
 ### `linting-and-validation/` — CI lint inputs
-- `validate-argocd-rendered-apps.py` — renders each per-env `manifest/` tree with `kubectl kustomize` and rejects duplicate Helm parameter names
-- `check-prometheus-rule-crds.py` — runs `promtool check rules` on each PrometheusRule CRD
-- `check-chart-lock-drift.py` — verifies `Chart.lock` digests match `Chart.yaml`
 - `cleanup-workflow-runs.sh` — deletes old GitHub Actions runs (maintenance utility)
+
+> Rendered-app and Chart.lock validation moved into the unit-tested `llz` CLI:
+> `llz ci argocd-rendered-apps` (duplicate Helm parameter names) and
+> `llz ci chart-lock-drift` (Chart.lock vs Chart.yaml dependencies). The Go
+> per-package coverage floor (`llz ci check-coverage`) likewise replaced
+> `ci/check-go-coverage.sh`. The PrometheusRule promtool gate moved too:
+> `llz ci check-prom-rules` replaced `check-prometheus-rule-crds.py`, retiring
+> the last first-party Python script in the repo.
 
 ### `hooks/` — git hooks
 Enable with `git config core.hooksPath scripts/hooks`. `pre-commit` blocks secret
