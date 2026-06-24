@@ -13,9 +13,11 @@
 # (a healthy app's phase is "Succeeded", so steady-state runs are no-ops). It is
 # idempotent and safe to run on a schedule.
 #
-# IMAGE: uses a kubectl image. Adopters whose clusters can only pull from an
-# internal mirror (e.g. mirror.registry.linodelke.net) must mirror this image or
-# repoint it — that's the one instance-specific knob here.
+# IMAGE: uses a kubectl image. It MUST ship a shell — the args below run a
+# /bin/sh script — so a distroless kubectl (e.g. registry.k8s.io/kubectl) will
+# NOT work; alpine/kubectl (busybox ash) does. Adopters whose clusters can only
+# pull from an internal mirror (e.g. mirror.registry.linodelke.net) must mirror
+# this image or repoint it — that's the one instance-specific knob here.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -47,7 +49,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: nudger
-              image: bitnami/kubectl:1.33
+              image: alpine/kubectl:1.33.4
               imagePullPolicy: IfNotPresent
               securityContext:
                 allowPrivilegeEscalation: false
