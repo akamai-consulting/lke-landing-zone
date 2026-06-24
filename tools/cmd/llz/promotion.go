@@ -1,10 +1,11 @@
 package main
 
-// promotion.go derives an ordered code-promotion pipeline from the per-deployment
-// `promotion_rank` declared in cluster tfvars (see
-// terraform-iac-bootstrap/cluster/variables.tf). It is the same trick as
-// topology.go: a tfvars field that Terraform declares but that llz reads to drive
-// CI — here, "what order do I promote a change through my deployments?".
+// promotion.go derives an ordered code-promotion pipeline from each deployment's
+// `promotionRank`. The source of truth is the LandingZone spec
+// (cluster.promotionRank); Terraform never consumes it, so it is not a tfvars
+// field. For legacy pre-spec instances (no landingzone.yaml) promotionRanks()
+// still falls back to parsing a `promotion_rank` line from cluster/<env>.tfvars.
+// The question it answers: "what order do I promote a change through my deployments?".
 //
 // The model: assign ascending positive ranks to the deployments you want to form
 // a pipeline (dev=1, staging=2, prod=3). Rank 0 (the default) means "not in any

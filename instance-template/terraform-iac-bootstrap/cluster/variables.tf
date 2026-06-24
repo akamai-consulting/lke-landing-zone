@@ -49,25 +49,6 @@ variable "ha_group" {
   }
 }
 
-variable "promotion_rank" {
-  description = <<-EOT
-    This deployment's position in the code-promotion pipeline, ascending: the
-    lowest positive rank is the first stage a change promotes into (e.g. dev = 1),
-    the highest is the last (e.g. prod = 3). 0 (the default) means the deployment
-    is not part of any promotion pipeline. Ranks must be unique across deployments
-    — the pipeline is a line, not a tie. `llz env list --ordered` and
-    `llz env next <name>` read this to drive a sequential promote-on-green CI flow;
-    Terraform itself does not consume it (it is a CI-orchestration marker that
-    rides the same single-source-of-truth tfvars as ha_role).
-  EOT
-  type        = number
-  default     = 0
-  validation {
-    condition     = var.promotion_rank >= 0
-    error_message = "promotion_rank must be >= 0 (0 = not in a promotion pipeline)."
-  }
-}
-
 variable "k8s_version" {
   description = "Enterprise LKE Kubernetes version, for example v1.31.8+lke5."
   type        = string

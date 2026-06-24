@@ -66,9 +66,6 @@ func ClusterTFVars(c Cluster) []Assign {
 	if c.HA.Group != "" {
 		add("ha_group", hclStr(c.HA.Group))
 	}
-	if c.PromotionRank > 0 {
-		add("promotion_rank", strconv.Itoa(c.PromotionRank))
-	}
 	return a
 }
 
