@@ -203,25 +203,46 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 		}
 	}
 
-	envHint := "  # commit + push to your GitHub repo (or re-run `llz new --push --yes`)\n"
-	if pushed {
-		envHint = "  # instance repo created + pushed ✓\n"
-	}
-	fmt.Printf(`
-Next steps:
-  cd %s
-  # The declarative LandingZone spec is the source of truth — landingzone.yaml +
-  # environments/<env>.yaml. `+"`llz env add`"+` authors them; see the committed
-  # landingzone.yaml.example + docs/landing-zone-spec.md for the full model.
-`+envHint+`  llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>  # authors the spec + renders
-  # tune it: llz env set <env> cluster.nodePool.count=8  (or `+"`llz env edit <env>`"+`); llz env show <env>
-  llz validate --env <env>          # catch unfilled placeholders before a build
-  llz tokens --env <env> --yes      # create state bucket+key, gather PATs, push
-  llz doctor --env <env>            # confirm every required value is set
-  llz build  <env> --yes            # kick off the apply
-  # local checks: llz lint / llz validate; add your own commands in .llz/commands.yaml
-`, dir)
+	printNextSteps(dir, pushed)
 	return nil
+}
+
+// printNextSteps renders the post-scaffold guide: a bold header, dim context
+// notes, and the ordered command sequence with cyan commands + dim, column-
+// aligned `#` comments. Everything degrades to plain text off a TTY (color.go),
+// and the lines stay copy-paste-safe (commands run; notes are shell comments).
+func printNextSteps(dir string, pushed bool) {
+	cdNote := "commit + push to your GitHub repo (or re-run `llz new --push --yes`)"
+	if pushed {
+		cdNote = "instance repo created + pushed ✓"
+	}
+
+	// Trailing-comment alignment column, capped so a long command (or dir name)
+	// doesn't shove every comment off to the right — overflowing lines just trail
+	// with two spaces.
+	const col = 32
+	cmd := func(c, note string) {
+		pad := col - len(c)
+		if pad < 2 {
+			pad = 2
+		}
+		fmt.Printf("  %s%s%s\n", cyan(c), strings.Repeat(" ", pad), dim("# "+note))
+	}
+	note := func(s string) { fmt.Println(dim("  # " + s)) }
+
+	fmt.Println("\n" + bold("Next steps"))
+	note("The declarative LandingZone spec is the source of truth — landingzone.yaml +")
+	note("environments/<env>.yaml. `llz env add` authors them; see the committed")
+	note("landingzone.yaml.example + docs/landing-zone-spec.md for the full model.")
+	fmt.Println()
+	cmd("cd "+dir, cdNote)
+	cmd("llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>", "authors the spec + renders")
+	note("tune it: llz env set <env> cluster.nodePool.count=8  (or `llz env edit <env>`); llz env show <env>")
+	cmd("llz validate --env <env>", "catch unfilled placeholders before a build")
+	cmd("llz tokens --env <env> --yes", "create state bucket+key, gather PATs, push")
+	cmd("llz doctor --env <env>", "confirm every required value is set")
+	cmd("llz build <env> --yes", "kick off the apply")
+	note("local checks: llz lint / llz validate; add your own commands in .llz/commands.yaml")
 }
 
 // pushInstanceRepo creates the instance's GitHub repo and pushes the freshly

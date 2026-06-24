@@ -114,23 +114,25 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 		return fmt.Errorf("%s already exists — refusing to overwrite", envFile)
 	}
 
-	fmt.Println("=== llz env add — spec-first scaffold ===")
-	fmt.Printf("    env:            %s\n", name)
-	fmt.Printf("    domainSuffix:   %s\n", clusterDomain)
-	fmt.Printf("    Linode region:  %s\n", o.region)
-	fmt.Printf("    OBJ cluster:    %s\n", o.objCluster)
-	fmt.Printf("    dry-run:        %v\n\n", dryRun)
+	field := func(label, val string) { fmt.Printf("    %s%s\n", dim(label), val) }
+	fmt.Println(bold("llz env add") + dim(" — spec-first scaffold"))
+	field("env:            ", name)
+	field("domainSuffix:   ", clusterDomain)
+	field("Linode region:  ", o.region)
+	field("OBJ cluster:    ", o.objCluster)
+	field("dry-run:        ", fmt.Sprintf("%v", dryRun))
+	fmt.Println()
 
 	if dryRun {
-		fmt.Println("Spec that would be authored, then `llz render`:")
+		fmt.Println(bold("Spec that would be authored, then `llz render`:"))
 		if _, err := os.Stat(lzPath); err != nil {
-			fmt.Printf("  would-create  %s  (instance identity + shared defaults)\n", lzPath)
+			fmt.Printf("  %s  %s  %s\n", cyan("would-create"), lzPath, dim("(instance identity + shared defaults)"))
 		} else {
-			fmt.Printf("  exists        %s  (left as-is)\n", lzPath)
+			fmt.Printf("  %s        %s  %s\n", dim("exists"), lzPath, dim("(left as-is)"))
 		}
-		fmt.Printf("  would-create  %s  (ClusterDefinition from the flags)\n", envFile)
-		fmt.Printf("  would-run     llz render %s  (→ tfvars + the thin apl-values/%s overlay)\n", name, name)
-		fmt.Println("\nDRY RUN — nothing written. Re-run without --dry-run to create the files.")
+		fmt.Printf("  %s  %s  %s\n", cyan("would-create"), envFile, dim("(ClusterDefinition from the flags)"))
+		fmt.Printf("  %s     %s  %s\n", cyan("would-run"), "llz render "+name, dim(fmt.Sprintf("(→ tfvars + the thin apl-values/%s overlay)", name)))
+		fmt.Println("\n" + yellow("DRY RUN") + dim(" — nothing written. Re-run without --dry-run to create the files."))
 		return nil
 	}
 
@@ -140,14 +142,14 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 		return fmt.Errorf("write landingzone.yaml: %w", err)
 	}
 	if created {
-		fmt.Printf("  created  %s  (instance identity + shared defaults)\n", lzPath)
+		fmt.Printf("  %s  %s  %s\n", green("created"), lzPath, dim("(instance identity + shared defaults)"))
 	}
 
 	// ── 2. environments/<env>.yaml (the ClusterDefinition from the flags) ─────
 	if err := writeEnvDefinition(envFile, name, o, instanceName, clusterDomain); err != nil {
 		return fmt.Errorf("write %s: %w", envFile, err)
 	}
-	fmt.Printf("  created  %s\n", envFile)
+	fmt.Printf("  %s  %s\n", green("created"), envFile)
 
 	// ── 3. render → tfvars + the THIN apl-values/<env>/ overlay ──────────────
 	// Nothing to clone: the manifests live ONCE in apl-values/_shared/ +
@@ -169,7 +171,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 		}
 	}
 	if !deferred {
-		fmt.Printf("\nReconciling the spec (`llz render %s`):\n", orElse(renderEnv, "(all)"))
+		fmt.Printf("\n%s %s\n", bold("Reconciling the spec"), dim("(`llz render "+orElse(renderEnv, "(all)")+"`):"))
 		if err := runRender(g, renderEnv, false, false, false); err != nil {
 			fmt.Fprintf(os.Stderr, "\nThe spec was authored but `llz render` rejected it — fix %s above, then re-run `llz render %s`.\n", envFile, name)
 			return err
@@ -191,22 +193,22 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	}
 	printEnvAddNextSteps(name, envFile, o)
 	printPlaceholderChecklist(aplDir, name)
-	fmt.Printf("\n%s commit your spec — `git add %s %s` (they're the source of truth).\n", dim("→"), lzPath, envFile)
+	fmt.Printf("\n%s commit your spec — %s %s\n", dim("→"), cyan("git add "+lzPath+" "+envFile), dim("(they're the source of truth)."))
 	return nil
 }
 
 func printEnvAddNextSteps(name, envFile string, o envAddOpts) {
-	fmt.Printf(`
-Deployment %q scaffolded — landingzone.yaml + %s are the source; `+"`llz render`"+`
-reconciled them into the tfvars + apl-values/%s overlay. To change the cluster,
-edit %s and re-run `+"`llz render %s`"+` (CI re-renders on every build).
+	fmt.Printf("\n%s %s\n", green("✓"), bold(fmt.Sprintf("Deployment %q scaffolded", name)))
+	fmt.Println(dim(fmt.Sprintf("  landingzone.yaml + %s are the source; `llz render` reconciled them into", envFile)))
+	fmt.Println(dim(fmt.Sprintf("  the tfvars + apl-values/%s overlay. To change the cluster, edit %s", name, envFile)))
+	fmt.Println(dim(fmt.Sprintf("  and re-run `llz render %s` (CI re-renders on every build).", name)))
 
-Still to fill in the overlay before `+"`llz build`"+`:
-  • apl-values/%s/manifest/ — the REPLACE_PER_ENV / REPLACE_ME placeholders
-      (ACME email, GitOps repoUrl/branch/path, DNS domain) the spec doesn't carry.
+	fmt.Printf("\n%s %s\n", bold("Still to fill"), dim("in the overlay before `llz build`:"))
+	fmt.Printf("  %s apl-values/%s/manifest/ %s\n", dim("•"), name, dim("— the REPLACE_PER_ENV / REPLACE_ME placeholders"))
+	fmt.Println(dim("      (ACME email, GitOps repoUrl/branch/path, DNS domain) the spec doesn't carry."))
 
-Next: `+"`llz doctor --env %s`"+` to catch unfilled values, then `+"`llz tokens --env %s --yes`"+`.
-`, name, envFile, name, envFile, name, name, name, name)
+	fmt.Printf("\n%s %s catch unfilled values, then %s\n",
+		bold("Next:"), cyan("llz doctor --env "+name), cyan("llz tokens --env "+name+" --yes")+dim("."))
 }
 
 // printPlaceholderChecklist scans the freshly-scaffolded apl-values overlay for the
@@ -225,12 +227,14 @@ func printPlaceholderChecklist(aplDir, env string) {
 		}
 	}
 	if len(todo) == 0 {
-		fmt.Printf("\n✓ no placeholders left to fill — run `llz doctor --env %s` to confirm readiness.\n", env)
+		fmt.Printf("\n%s no placeholders left to fill — run %s to confirm readiness.\n",
+			green("✓"), cyan("llz doctor --env "+env))
 		return
 	}
-	fmt.Printf("\nPlaceholders still to fill (%d) — edit these, then `llz doctor --env %s`:\n", len(todo), env)
+	fmt.Printf("\n%s %s\n", yellow(fmt.Sprintf("Placeholders still to fill (%d)", len(todo))),
+		dim("— edit these, then `llz doctor --env "+env+"`:"))
 	for _, f := range todo {
-		fmt.Printf("  • %s:%d  %s — %s\n", f.file, f.line, f.token, f.hint)
+		fmt.Printf("  %s %s  %s %s\n", dim("•"), cyan(fmt.Sprintf("%s:%d", f.file, f.line)), f.token, dim("— "+f.hint))
 	}
 }
 

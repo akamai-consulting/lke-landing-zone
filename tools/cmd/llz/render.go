@@ -92,6 +92,21 @@ func renderCmd() *cobra.Command {
 	return c
 }
 
+// renderedPath / wouldRenderPath print one file-mutation line with a consistent
+// colored verb — green for done, cyan for a dry-run plan — so the render/scaffold
+// output reads as a scannable action log. Both degrade to plain text off a TTY
+// (color.go). `note` is an optional trailing parenthetical (e.g. "(N assignments)").
+func renderedPath(prefix, path string) {
+	fmt.Printf("  %s  %s%s\n", green("rendered"), prefix, path)
+}
+
+func wouldRenderPath(prefix, path, note string) {
+	if note != "" {
+		note = " " + dim(note)
+	}
+	fmt.Printf("  %s  %s%s%s\n", cyan("would-render"), prefix, path, note)
+}
+
 func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 	tfDir, aplDir, relPrefix := instanceLayout()
 	specRoot := filepath.Dir(tfDir)
@@ -127,7 +142,7 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 				return err
 			}
 		}
-		fmt.Printf("✓ LandingZone spec valid (%d environment(s)); committed manifests in sync\n", len(lz.Spec.Environments))
+		fmt.Printf("%s LandingZone spec valid (%d environment(s)); committed manifests in sync\n", green("✓"), len(lz.Spec.Environments))
 		return nil
 	}
 
@@ -158,12 +173,12 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 	if !tfvarsOnly {
 		if p, content, ok := sharedDNSEmailTarget(lz, aplDir); ok {
 			if dryRun {
-				fmt.Printf("  would-render  %s%s\n", relPrefix, filepathRel(aplDir, p))
+				wouldRenderPath(relPrefix, filepathRel(aplDir, p), "")
 			} else {
 				if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 					return fmt.Errorf("render shared dns email: %w", err)
 				}
-				fmt.Printf("  rendered  %s%s\n", relPrefix, filepathRel(aplDir, p))
+				renderedPath(relPrefix, filepathRel(aplDir, p))
 			}
 		}
 	}
@@ -233,7 +248,7 @@ func renderManifest(env string, e clusterspec.Environment, id clusterspec.Values
 	}
 	for dst, content := range targets {
 		if dryRun {
-			fmt.Printf("  would-render  %s%s\n", relPrefix, filepathRel(aplDir, dst))
+			wouldRenderPath(relPrefix, filepathRel(aplDir, dst), "")
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -242,7 +257,7 @@ func renderManifest(env string, e clusterspec.Environment, id clusterspec.Values
 		if err := os.WriteFile(dst, []byte(content), 0o644); err != nil {
 			return err
 		}
-		fmt.Printf("  rendered  %s%s\n", relPrefix, filepathRel(aplDir, dst))
+		renderedPath(relPrefix, filepathRel(aplDir, dst))
 	}
 	return nil
 }
@@ -306,13 +321,13 @@ func renderNetworks(lz *clusterspec.LandingZone, tfDir, relPrefix string, dryRun
 		}
 		out := applyAssigns(string(base), assigns)
 		if dryRun {
-			fmt.Printf("  would-render  %s%s (%d assignments)\n", relPrefix, filepathRel(tfDir, dst), len(assigns))
+			wouldRenderPath(relPrefix, filepathRel(tfDir, dst), fmt.Sprintf("(%d assignments)", len(assigns)))
 			continue
 		}
 		if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
 			return err
 		}
-		fmt.Printf("  rendered  %s%s\n", relPrefix, filepathRel(tfDir, dst))
+		renderedPath(relPrefix, filepathRel(tfDir, dst))
 	}
 	return nil
 }
@@ -336,13 +351,13 @@ func renderEnvTfvars(env string, c clusterspec.Cluster, tfDir, relPrefix string,
 		}
 		out := applyAssigns(string(base), roots[root])
 		if dryRun {
-			fmt.Printf("  would-render  %s%s (%d assignments)\n", relPrefix, filepathRel(tfDir, dst), len(roots[root]))
+			wouldRenderPath(relPrefix, filepathRel(tfDir, dst), fmt.Sprintf("(%d assignments)", len(roots[root])))
 			continue
 		}
 		if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
 			return err
 		}
-		fmt.Printf("  rendered  %s%s\n", relPrefix, filepathRel(tfDir, dst))
+		renderedPath(relPrefix, filepathRel(tfDir, dst))
 	}
 	return nil
 }
@@ -451,7 +466,7 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		}
 	}
 	if changed == 0 {
-		fmt.Printf("✓ render is a no-op — all %d target file(s) already match the spec\n", len(want))
+		fmt.Printf("%s render is a no-op — all %d target file(s) already match the spec\n", green("✓"), len(want))
 		return nil
 	}
 	fmt.Printf("\n%d file(s) would change. Run `llz render` to apply.\n", changed)
