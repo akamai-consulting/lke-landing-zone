@@ -1,0 +1,11 @@
+# argo-resync-nudger — standing safety net that re-triggers terminally-failed
+# Argo CD syncs (see cronjob.yaml header). Always-on: referenced by the shared
+# manifest base, so every env's platform-bootstrap tree includes it. Applied at an
+# early sync-wave (-18) so it is already running before the wave-5 consumers that
+# could fail. Template-managed — edit upstream.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - rbac.yaml
+  - networkpolicy.yaml
+  - cronjob.yaml

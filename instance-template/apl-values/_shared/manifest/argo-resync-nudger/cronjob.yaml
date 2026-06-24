@@ -1,0 +1,77 @@
+# argo-resync-nudger — standing safety net for terminally-failed Argo CD syncs.
+#
+# WHY THIS EXISTS: Argo CD will NOT auto-retry an automated sync that failed to a
+# given revision — `selfHeal` only corrects drift after a *successful* sync. So a
+# transient first-boot ordering race (e.g. the openbao ClusterSecretStore not yet
+# Ready) that exhausts an Application's retry budget leaves it permanently wedged
+# until a human runs `argocd app sync` or pushes a new commit. The generous retry
+# budgets (cluster-bootstrap/main.tf + the component apps) and the lenient ESO
+# health checks (apl-values/_shared/values.yaml) should prevent reaching that
+# terminal state — this CronJob is defense-in-depth for anything that slips past.
+#
+# It re-triggers ONLY Applications whose last sync operation phase == "Failed"
+# (a healthy app's phase is "Succeeded", so steady-state runs are no-ops). It is
+# idempotent and safe to run on a schedule.
+#
+# IMAGE: uses a kubectl image. Adopters whose clusters can only pull from an
+# internal mirror (e.g. mirror.registry.linodelke.net) must mirror this image or
+# repoint it — that's the one instance-specific knob here.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: argo-resync-nudger
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-18"
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            app: argo-resync-nudger
+        spec:
+          serviceAccountName: argo-resync-nudger
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: nudger
+              image: bitnami/kubectl:1.33
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits: { cpu: 100m, memory: 64Mi }
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -uo pipefail
+                  # Names of Applications whose last sync operation terminally failed.
+                  failed=$(kubectl -n argocd get applications \
+                    -o jsonpath='{range .items[?(@.status.operationState.phase=="Failed")]}{.metadata.name}{"\n"}{end}')
+                  if [ -z "${failed}" ]; then
+                    echo "no terminally-failed Applications; nothing to nudge."
+                    exit 0
+                  fi
+                  for app in ${failed}; do
+                    echo "re-triggering sync for failed Application: ${app}"
+                    kubectl -n argocd annotate application "${app}" \
+                      argocd.argoproj.io/refresh=hard --overwrite || true
+                    kubectl -n argocd patch application "${app}" --type merge \
+                      -p '{"operation":{"initiatedBy":{"username":"argo-resync-nudger"},"sync":{}}}' || true
+                  done

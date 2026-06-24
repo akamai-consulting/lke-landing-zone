@@ -1,0 +1,42 @@
+# RBAC for the argo-resync-nudger CronJob.
+#
+# Argo CD Applications are namespaced (they live in `argocd`), so a same-namespace
+# Role suffices — no ClusterRole. The nudger only needs to read Applications and
+# patch them (the `argocd.argoproj.io/refresh` annotation + the `operation` field
+# that re-triggers a sync). It cannot create/delete Applications or touch any
+# other resource — deliberately the narrowest grant that does the job.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-resync-nudger
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-18"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-resync-nudger
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-18"
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-resync-nudger
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-18"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argo-resync-nudger
+subjects:
+  - kind: ServiceAccount
+    name: argo-resync-nudger
+    namespace: argocd
