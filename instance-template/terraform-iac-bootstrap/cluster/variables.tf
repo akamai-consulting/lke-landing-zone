@@ -126,9 +126,9 @@ variable "vpc_network" {
 }
 
 variable "firewall_label" {
-  description = "Label for the LKE node firewall. Linode labels are capped at 32 characters."
+  description = "Label for the LKE node firewall (account-unique; capped at 32 chars). Leave empty (the default) to derive a unique \"<cluster_label[:26]>-nodes\" from cluster_label — set it explicitly only to pin a specific name. A non-empty hardcoded default here would make every cluster that doesn't override it collide on the same firewall label."
   type        = string
-  default     = "platform-nodes-fw"
+  default     = ""
 }
 
 variable "github_runner_ipv4_cidrs" {
