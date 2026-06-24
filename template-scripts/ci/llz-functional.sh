@@ -118,7 +118,8 @@ step "B. Install + self-update flow (repo=$REPO)"
 
 # Decide whether to run: explicit LLZ_FUNCTIONAL_NET wins; else auto-detect gh auth.
 run_net="${LLZ_FUNCTIONAL_NET:-auto}"
-gh_ok() { command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; }
+# Scope to one host: bare `gh auth status` fails if any configured host is broken.
+gh_ok() { command -v gh >/dev/null 2>&1 && gh auth status --hostname "${GH_HOST:-github.com}" >/dev/null 2>&1; }
 case "$run_net" in
   0) echo "  skipped (LLZ_FUNCTIONAL_NET=0)"; SKIP_NET=1 ;;
   1) gh_ok || { fail "LLZ_FUNCTIONAL_NET=1 but gh is not authenticated"; }; SKIP_NET=0 ;;

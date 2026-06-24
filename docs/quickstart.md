@@ -90,6 +90,21 @@ the `gh` CLI, so it must be logged in *before* you run any of them:
 gh auth login        # one-time; `gh auth status` confirms you're logged in
 ```
 
+> **Already use `gh` for another host?** The installer and `llz doctor` scope
+> their auth check to **`github.com`** (override with `GH_HOST`), so a second
+> account in a broken state — e.g. an expired GHE token — won't block you. You
+> only need `gh auth status --hostname github.com` to pass; a global
+> `gh auth status` failing on an *unrelated* host is fine. If that host is the
+> one you want, fix it with `gh auth login --hostname <host>` (or forget it:
+> `gh auth logout --hostname <host>`).
+
+> **Multiple github.com accounts?** gh picks the **active** account for a host —
+> there's no per-command account flag, so set it before you run the flow:
+> `gh auth switch --hostname github.com --user <name>` (persists; `gh auth status`
+> lists them). To use a specific account for one command without switching, override
+> the token for that invocation:
+> `GH_TOKEN="$(gh auth token --hostname github.com --user <name>)" ./template-scripts/install-llz.sh`.
+
 > **`gh auth` ≠ your cloud/PAT credentials.** Logging in to `gh` covers GitHub
 > repo, release, and API calls only. `llz tokens` (§4) still prompts you for a
 > **Linode PAT** and a couple of **GitHub PATs** — that's by design, not a

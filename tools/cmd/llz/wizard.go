@@ -371,8 +371,13 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	if _, err := execLookPath("gh"); err != nil {
 		report("gh auth status", false)
 	} else {
-		_, err := execOutput("gh", "auth", "status")
-		report("gh auth status", err == nil)
+		// Scope the check to the host llz actually uses. Bare `gh auth status`
+		// exits non-zero if ANY configured host is broken (e.g. an expired GHE
+		// token from an unrelated account), which would wrongly fail this gate
+		// for a user who is properly logged in to github.com.
+		host := ghHost()
+		_, err := execOutput("gh", "auth", "status", "--hostname", host)
+		report("gh auth status ("+host+")", err == nil)
 	}
 
 	var errs []error
@@ -418,6 +423,16 @@ func lookable(bin string) bool {
 
 func reportEither(a, b string) {
 	report(a+" or "+b, lookable(a) || lookable(b))
+}
+
+// ghHost is the GitHub host llz authenticates against — github.com unless GH_HOST
+// overrides it (e.g. a GHE-hosted template fork). Auth checks scope to this host
+// so an unrelated gh account in a broken state doesn't fail the gate.
+func ghHost() string {
+	if h := strings.TrimSpace(os.Getenv("GH_HOST")); h != "" {
+		return h
+	}
+	return "github.com"
 }
 
 func report(name string, ok bool) {
