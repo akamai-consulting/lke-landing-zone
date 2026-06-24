@@ -236,22 +236,40 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 	}
 
 	// ── VPC (always fatal — fast, no cluster dependency, even under --nonfatal) ──
-	vpcID := tfStateID(addrVPC)
-	if vpcID == "" {
+	// linode_vpc.this is a COUNTED resource (llz-cluster module:
+	// `count = local.create_vpc ? 1 : 0`, create_vpc = vpc_id == ""), so for a
+	// dedicated VPC its real state address is this[0]. A shared-VPC deployment
+	// (vpc_network set) has no such resource — nothing to import here — but the
+	// subnet below still needs the VPC id, so we resolve it either way. Importing
+	// the un-indexed `.this` fails with "Configuration for import target does not
+	// exist", which silently orphaned the VPC/subnet (they could not be re-adopted
+	// into state) and surfaced as label-collisions on the next apply.
+	dedicatedVPC := tf.ParseTFVars(string(content)).VPCNetwork == ""
+	addrVPCEff := addrVPC + "[0]"
+	var vpcID string
+	if dedicatedVPC {
+		vpcID = tfStateID(addrVPCEff)
+	}
+	if vpcID != "" {
+		fmt.Printf("%s already in state — skipping\n", addrVPCEff)
+	} else {
 		vpcs, err := client.ListVPCs(ctx)
 		if err != nil {
 			return fmt.Errorf("list VPCs: %w", err)
 		}
 		if id, ok := linode.FindIDByLabel(vpcs, labels.VPC); ok {
 			vpcID = strconv.FormatUint(id, 10)
-			if _, err := tfImport(g, varFile, addrVPC, vpcID, false); err != nil {
-				return err
+			// Only a dedicated VPC is managed (and thus imported) by this root; a
+			// shared VPC is owned by the vpc/<network> root — we just reuse its id
+			// for the subnet import.
+			if dedicatedVPC {
+				if _, err := tfImport(g, varFile, addrVPCEff, vpcID, false); err != nil {
+					return err
+				}
 			}
 		} else {
 			fmt.Printf("VPC %q not found in Linode — skipping import\n", labels.VPC)
 		}
-	} else {
-		fmt.Printf("%s already in state — skipping\n", addrVPC)
 	}
 
 	// ── VPC subnet (always fatal; needs the VPC id) ──

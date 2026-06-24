@@ -29,6 +29,10 @@ type TFVars struct {
 	// deployment/env key. It disambiguates clusters that share a label across
 	// envs (used by `llz ci runner-acl` to resolve the cluster).
 	Region string
+	// VPCNetwork is the shared VPC (spec.networks name) this deployment attaches
+	// to; empty means a dedicated VPC. It decides whether the module's counted
+	// linode_vpc.this resource exists (dedicated → this[0]) — see tf-import.
+	VPCNetwork string
 }
 
 // ParseTFVars extracts the cluster labels + node_type/node_count from tfvars
@@ -58,6 +62,10 @@ func ParseTFVars(content string) TFVars {
 		case "region":
 			if v.Region == "" {
 				v.Region = val
+			}
+		case "vpc_network":
+			if v.VPCNetwork == "" {
+				v.VPCNetwork = val
 			}
 		case "node_type":
 			if v.NodeType == "" {
