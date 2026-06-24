@@ -408,6 +408,11 @@ func tfStateID(addr string) string {
 	return tf.ParseStateID(string(out))
 }
 
+// clusterUnreachableSettle is how long Heal C waits for the LKE-E control plane
+// to settle before re-planning after a transient "Kubernetes cluster
+// unreachable" apply failure. A package var so tests can zero it.
+var clusterUnreachableSettle = 30 * time.Second
+
 func runCITFApply(g globalOpts, plan, varFile string) error {
 	if plan == "" || varFile == "" {
 		return fmt.Errorf("--plan and --var-file are required")
@@ -443,6 +448,18 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 		if err := healFirewallCollision(g, applyLog, varFile, code); err != nil {
 			return err
 		}
+		healed = true
+	}
+
+	// ── Heal C: transient "Kubernetes cluster unreachable" ──
+	// No state to repair: the apiserver flaked on a TLS handshake mid-apply
+	// (the LKE-E HA control plane can drop an individual replica seconds after
+	// wait-cluster-ready passed). Let it settle, then fall through to the shared
+	// re-plan + re-apply — the re-plan is load-bearing here, since the failed
+	// apply already created earlier resources and staled the saved plan.
+	if !healed && tf.TransientClusterUnreachable(applyLog) {
+		fmt.Fprintf(os.Stderr, "::warning::Apply hit a transient 'Kubernetes cluster unreachable' (control-plane TLS flake after readiness passed). Waiting %s for the control plane to settle, then retrying.\n", clusterUnreachableSettle)
+		time.Sleep(clusterUnreachableSettle)
 		healed = true
 	}
 

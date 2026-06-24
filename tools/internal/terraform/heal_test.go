@@ -52,3 +52,25 @@ func TestFirewallCollisionAndAddress(t *testing.T) {
 		t.Errorf("ParseFirewallAddress(none) = %q, want empty", got)
 	}
 }
+
+const clusterUnreachableLog = `helm_release.apl: Still creating... [10s elapsed]
+
+Error: Kubernetes cluster unreachable: Get "https://lke621819.api.us-ord.enterprise.linodelke.net:6443/version": net/http: TLS handshake timeout
+
+  with helm_release.apl,
+  on main.tf line 357, in resource "helm_release" "apl":
+ 357: resource "helm_release" "apl" {
+`
+
+func TestTransientClusterUnreachable(t *testing.T) {
+	if !TransientClusterUnreachable(clusterUnreachableLog) {
+		t.Error("TransientClusterUnreachable should detect the cluster-unreachable error")
+	}
+	// A genuine resource-level failure must NOT be treated as transient.
+	if TransientClusterUnreachable(fwCollisionLog) {
+		t.Error("TransientClusterUnreachable false positive on a firewall collision")
+	}
+	if TransientClusterUnreachable("Apply complete!") {
+		t.Error("TransientClusterUnreachable false positive on a clean apply")
+	}
+}
