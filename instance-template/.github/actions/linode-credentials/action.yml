@@ -48,7 +48,13 @@ inputs:
     required: false
     default: '7'
   gha-secret-name:
-    description: 'pat create: name of the repo-level GHA secret to update with the new token (e.g. LINODE_API_TOKEN).'
+    description: 'pat create: name of the GHA secret to update with the new token (e.g. LINODE_API_TOKEN).'
+    required: false
+  gha-secret-deployments:
+    description: >
+      create (either type): space-separated deployment names whose infra-<name>
+      ENVIRONMENT secret(s) get the new credential — the env-scoped copies the
+      workflows actually read. Empty writes a single repo-level secret instead.
     required: false
 
   # ── obj-key-only inputs ──────────────────────────────────────────────────────
@@ -127,13 +133,21 @@ runs:
         PAT_SCOPES:        ${{ inputs.scopes }}
         PAT_VALIDITY_DAYS: ${{ inputs.validity-days }}
         ROTATION_APPLY:    ${{ inputs.apply }}
+        # llz writes the new token into the GHA secret itself — for each
+        # infra-<deployment> ENVIRONMENT (the env-scoped copies the workflows
+        # read), or repo-level when GHA_SECRET_DEPLOYMENTS is empty. GH_TOKEN must
+        # carry secrets:write on those environments.
+        GH_TOKEN:               ${{ inputs.gha-token }}
+        GHA_SECRET_NAME:        ${{ inputs.gha-secret-name }}
+        GHA_SECRET_DEPLOYMENTS: ${{ inputs.gha-secret-deployments }}
       run: |
         set -euo pipefail
         OUT_FILE="$(mktemp)"
         trap 'rm -f "$OUT_FILE"' EXIT
         # llz emits ::add-mask:: on stderr (forwarded to the runner) before
         # printing the token JSON on stdout, so the value is registered as a
-        # secret in the same step that creates it.
+        # secret in the same step that creates it. With GHA_SECRET_NAME set it also
+        # writes the token into each infra-<deployment> environment secret.
         llz credentials pat create \
           --label    "$PAT_LABEL" \
           --scopes   "$PAT_SCOPES" \
@@ -149,30 +163,20 @@ runs:
             exit 1
           fi
           echo "::add-mask::$NEW_TOKEN"
-          # The raw token cannot cross a job boundary — once ::add-mask:: is
-          # registered, the runner redacts the value when serializing job
-          # outputs (it becomes empty downstream). Emit only the sha256 hash;
-          # the consuming job re-reads `secrets.LINODE_API_TOKEN` (which the
-          # "Update repo-level GHA secret" step below just rewrote) and
-          # verifies the hash before writing to OpenBao.
+          # The raw token cannot cross a job boundary — ::add-mask:: redacts it to
+          # empty in job outputs. Emit only the sha256 hash; the per-region
+          # propagate job re-reads its infra-<region> `secrets.LINODE_API_TOKEN`
+          # (which llz just rewrote) and verifies the hash before writing to OpenBao.
           NEW_TOKEN_HASH=$(printf '%s' "$NEW_TOKEN" | sha256sum | awk '{print $1}')
-          # `new-token` is consumed only by the next step in this same job
-          # ("Update repo-level GHA secret") — same-job step outputs preserve
-          # masked values. It is intentionally NOT re-exported as a composite
-          # action output for cross-job use; the hash is the cross-job channel.
           {
             echo "new-pat-id=$NEW_ID"
             echo "new-token-hash=$NEW_TOKEN_HASH"
-            echo "new-token<<__PAT_EOF__"
-            echo "$NEW_TOKEN"
-            echo "__PAT_EOF__"
           } >> "$GITHUB_OUTPUT"
         else
           echo "DRY-RUN: not creating a PAT or setting GHA secret"
           {
             echo "new-pat-id="
             echo "new-token-hash="
-            echo "new-token="
           } >> "$GITHUB_OUTPUT"
         fi
 
@@ -182,27 +186,6 @@ runs:
           echo '```json'
           jq '.' < "$OUT_FILE"
           echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
-
-    - name: Update repo-level GHA secret
-      if: inputs.credential-type == 'pat' && inputs.operation == 'create' && inputs.apply == 'true'
-      shell: bash
-      env:
-        GH_TOKEN:            ${{ inputs.gha-token }}
-        SECRET_NAME:         ${{ inputs.gha-secret-name }}
-        NEW_TOKEN:           ${{ steps.create-pat.outputs.new-token }}
-      run: |
-        set -euo pipefail
-        if [ -z "$NEW_TOKEN" ]; then
-          echo "::error::no token in create step output — aborting before gh secret set"
-          exit 1
-        fi
-        # Read from stdin so the token never lands in argv / process listings.
-        printf '%s' "$NEW_TOKEN" | gh secret set "$SECRET_NAME"
-        echo "Updated repo-level secret ${SECRET_NAME}."
-        {
-          echo ""
-          echo "**GHA secret updated:** \`${SECRET_NAME}\`"
         } >> "$GITHUB_STEP_SUMMARY"
 
     # ── pat revoke-old ───────────────────────────────────────────────────────
@@ -240,7 +223,7 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY"
 
     # ── obj-key create ───────────────────────────────────────────────────────
-    - name: Create new OBJ key + update repo-level GHA secrets
+    - name: Create new OBJ key + update GHA secrets
       if: inputs.credential-type == 'obj-key' && inputs.operation == 'create'
       id: create-obj-key
       shell: bash
@@ -251,14 +234,21 @@ runs:
         OBJ_BUCKET_NAME:        ${{ inputs.bucket-name }}
         OBJ_BUCKET_PERMISSIONS: ${{ inputs.bucket-permissions }}
         ROTATION_APPLY:         ${{ inputs.apply }}
-        GH_TOKEN:               ${{ inputs.gha-token }}
-        ACCESS_KEY_SECRET_NAME: ${{ inputs.gha-access-key-secret-name }}
-        SECRET_KEY_SECRET_NAME: ${{ inputs.gha-secret-key-secret-name }}
+        # llz writes both halves into each infra-<deployment> env secret itself —
+        # secret-half FIRST, access-half SECOND, so a mid-rotation read sees (new
+        # access, OLD secret) and fails to auth (safe; the old key is still live,
+        # drained daily). GH_TOKEN must carry secrets:write on those environments.
+        GH_TOKEN:                   ${{ inputs.gha-token }}
+        GHA_ACCESS_KEY_SECRET_NAME: ${{ inputs.gha-access-key-secret-name }}
+        GHA_SECRET_KEY_SECRET_NAME: ${{ inputs.gha-secret-key-secret-name }}
+        GHA_SECRET_DEPLOYMENTS:     ${{ inputs.gha-secret-deployments }}
       run: |
         set -euo pipefail
         OUT_FILE="$(mktemp)"
         trap 'rm -f "$OUT_FILE"' EXIT
 
+        # llz mints the key, ::add-mask::es both halves on stderr, and (when armed)
+        # writes them into each infra-<deployment> env secret.
         llz credentials obj-key create \
           --label              "$OBJ_LABEL" \
           --bucket-cluster     "$OBJ_BUCKET_CLUSTER" \
@@ -266,37 +256,10 @@ runs:
           --bucket-permissions "$OBJ_BUCKET_PERMISSIONS" \
           > "$OUT_FILE"
 
-        NEW_ID=$(jq -r '.new_obj_key_id // empty' < "$OUT_FILE")
-        if [ "${ROTATION_APPLY}" = "true" ]; then
-          NEW_ACCESS=$(jq -r '.new_access_key // empty' < "$OUT_FILE")
-          NEW_SECRET=$(jq -r '.new_secret_key // empty' < "$OUT_FILE")
-          if [ -z "$NEW_ACCESS" ] || [ -z "$NEW_SECRET" ] || [ -z "$NEW_ID" ]; then
-            echo "::error::create returned no access_key / secret_key / id — see step log"
-            jq -c '.' < "$OUT_FILE" >&2 || cat "$OUT_FILE" >&2
-            exit 1
-          fi
-          echo "::add-mask::$NEW_ACCESS"
-          echo "::add-mask::$NEW_SECRET"
+        echo "new-obj-key-id=$(jq -r '.new_obj_key_id // empty' < "$OUT_FILE")" >> "$GITHUB_OUTPUT"
 
-          # Set secret-half FIRST, access-half SECOND. A workflow triggered
-          # between the two reads (new_access, old_secret) and fails to auth —
-          # which is the safer failure mode because the previous OBJ key is
-          # still live (drain runs separately, daily) so a retry succeeds.
-          printf '%s' "$NEW_SECRET" | gh secret set "$SECRET_KEY_SECRET_NAME"
-          printf '%s' "$NEW_ACCESS" | gh secret set "$ACCESS_KEY_SECRET_NAME"
-
-          echo "new-obj-key-id=$NEW_ID" >> "$GITHUB_OUTPUT"
-          {
-            echo "**GHA secrets updated:** \`${ACCESS_KEY_SECRET_NAME}\` + \`${SECRET_KEY_SECRET_NAME}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-        else
-          echo "DRY-RUN: not creating an OBJ key or setting GHA secrets"
-          echo "new-obj-key-id=" >> "$GITHUB_OUTPUT"
-        fi
-
-        # Scrub the secret halves from the JSON record before adding it to the
-        # step summary — ::add-mask:: would redact them, but a clean record
-        # reads better in the audit log.
+        # Scrub the secret halves from the JSON record before the step summary —
+        # ::add-mask:: would redact them, but a clean record reads better.
         SCRUBBED=$(jq -c '. as $r | $r
           | if has("new_access_key") then .new_access_key = "(masked)" else . end
           | if has("new_secret_key") then .new_secret_key = "(masked)" else . end' \

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
@@ -29,28 +30,32 @@ func credentialsPATCmd(o *rotatorOpts) *cobra.Command {
 }
 
 func credentialsPATCreateCmd(o *rotatorOpts) *cobra.Command {
-	var label, scopes string
+	var label, scopes, ghaSecretName, ghaDeployments string
 	var validityDays int64
 	c := &cobra.Command{
 		Use:   "create",
 		Short: "mint a new PAT with the configured label/scopes/validity (JSON record on stdout)",
 		Long: "Issues a new Linode PAT with the configured label, scopes, and validity,\n" +
 			"printing the new id + token as one JSON record on stdout for the calling\n" +
-			"composite action to propagate (GHA repo secret + each region's OpenBao).\n" +
-			"Refuses validity-days > 90 (the 90-day policy ceiling). Dry-run unless --apply.",
+			"composite action to propagate (GHA secret + each region's OpenBao). With\n" +
+			"--gha-secret-name it ALSO writes the new token into that GitHub secret for\n" +
+			"every infra-<deployment> environment (--gha-deployments) — the env-scoped\n" +
+			"copies the workflows actually read. Refuses validity-days > 90. Dry-run unless --apply.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			token, apply, err := o.resolve()
 			if err != nil {
 				return err
 			}
-			return runCredentialsPATCreate(context.Background(), newPATRotatorClient(token), apply, label, scopes, validityDays)
+			return runCredentialsPATCreate(context.Background(), newPATRotatorClient(token), apply, label, scopes, validityDays, ghaSecretName, strings.Fields(ghaDeployments))
 		},
 	}
 	f := c.Flags()
 	f.StringVar(&label, "label", os.Getenv("PAT_LABEL"), "label for the new PAT — also the revoke-old drain target (env PAT_LABEL)")
 	f.StringVar(&scopes, "scopes", os.Getenv("PAT_SCOPES"), "Linode-API scopes string for the new PAT (env PAT_SCOPES)")
 	f.Int64Var(&validityDays, "validity-days", cli.EnvInt("PAT_VALIDITY_DAYS", 90), "validity window in days; the 90-day policy caps this at 90 (env PAT_VALIDITY_DAYS)")
+	f.StringVar(&ghaSecretName, "gha-secret-name", os.Getenv("GHA_SECRET_NAME"), "GitHub secret to update with the new token, in every infra-<deployment> env (env GHA_SECRET_NAME; empty = don't write)")
+	f.StringVar(&ghaDeployments, "gha-deployments", os.Getenv("GHA_SECRET_DEPLOYMENTS"), "space-separated deployment names whose infra-<name> env gets the new secret (env GHA_SECRET_DEPLOYMENTS; empty = repo-level)")
 	return c
 }
 
@@ -79,7 +84,7 @@ func credentialsPATRevokeOldCmd(o *rotatorOpts) *cobra.Command {
 	return c
 }
 
-func runCredentialsPATCreate(ctx context.Context, client patAPI, apply bool, label, scopes string, validityDays int64) error {
+func runCredentialsPATCreate(ctx context.Context, client patAPI, apply bool, label, scopes string, validityDays int64, ghaSecretName string, ghaDeployments []string) error {
 	if validityDays > 90 {
 		return fmt.Errorf("validity_days=%d exceeds the 90-day policy ceiling — refusing to create", validityDays)
 	}
@@ -120,6 +125,16 @@ func runCredentialsPATCreate(ctx context.Context, client patAPI, apply bool, lab
 	// ::add-mask:: on stderr so a step that pipes our stdout through `tee` is
 	// still scrubbed in the surrounding logs.
 	fmt.Fprintf(os.Stderr, "::add-mask::%s\n", newToken)
+
+	// Persist the new token into the GitHub secret for each infra-<deployment>
+	// environment — the env-scoped copies the workflows actually read (a repo-level
+	// write would be shadowed by the per-env secret and never picked up).
+	if ghaSecretName != "" {
+		if err := writeRotatedSecret(ghaSecretName, newToken, ghaDeployments); err != nil {
+			return err
+		}
+		slog.Info("updated GHA secret", "name", ghaSecretName, "deployments", ghaDeployments)
+	}
 
 	slog.Info("created new PAT", "new_pat_id", newID)
 	return cli.PrintRecord(map[string]any{

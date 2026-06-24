@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
@@ -40,21 +41,22 @@ func credentialsObjKeyCmd(o *rotatorOpts) *cobra.Command {
 }
 
 func credentialsObjKeyCreateCmd(o *rotatorOpts) *cobra.Command {
-	var label, cluster, bucket, permissions string
+	var label, cluster, bucket, permissions, ghaAccessName, ghaSecretName, ghaDeployments string
 	c := &cobra.Command{
 		Use:   "create",
 		Short: "mint a new bucket-scoped OBJ key pair (JSON record on stdout)",
 		Long: "Issues a new bucket-scoped Linode Object Storage key, printing the new id +\n" +
-			"access_key + secret_key as one JSON record on stdout for the calling composite\n" +
-			"action to write into the paired GHA secrets. The secret half is shown exactly\n" +
-			"once by the Linode API. Dry-run unless --apply.",
+			"access_key + secret_key as one JSON record on stdout. With --gha-*-secret-name it\n" +
+			"ALSO writes both halves into those GitHub secrets for every infra-<deployment>\n" +
+			"environment (--gha-deployments) — the env-scoped copies the workflows read. The\n" +
+			"secret half is shown exactly once by the Linode API. Dry-run unless --apply.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			token, apply, err := o.resolve()
 			if err != nil {
 				return err
 			}
-			return runCredentialsObjKeyCreate(context.Background(), newObjKeyRotatorClient(token), apply, label, cluster, bucket, permissions)
+			return runCredentialsObjKeyCreate(context.Background(), newObjKeyRotatorClient(token), apply, label, cluster, bucket, permissions, ghaAccessName, ghaSecretName, strings.Fields(ghaDeployments))
 		},
 	}
 	defaultPermissions := os.Getenv("OBJ_BUCKET_PERMISSIONS")
@@ -66,6 +68,9 @@ func credentialsObjKeyCreateCmd(o *rotatorOpts) *cobra.Command {
 	f.StringVar(&cluster, "bucket-cluster", os.Getenv("OBJ_BUCKET_CLUSTER"), "Linode object-storage cluster id, e.g. us-ord-10 (env OBJ_BUCKET_CLUSTER)")
 	f.StringVar(&bucket, "bucket-name", os.Getenv("OBJ_BUCKET_NAME"), "bucket name to scope the key to (env OBJ_BUCKET_NAME)")
 	f.StringVar(&permissions, "bucket-permissions", defaultPermissions, "read_only, read_write, or none (env OBJ_BUCKET_PERMISSIONS)")
+	f.StringVar(&ghaAccessName, "gha-access-key-secret-name", os.Getenv("GHA_ACCESS_KEY_SECRET_NAME"), "GitHub secret for the access-key half, written per infra-<deployment> env (env GHA_ACCESS_KEY_SECRET_NAME)")
+	f.StringVar(&ghaSecretName, "gha-secret-key-secret-name", os.Getenv("GHA_SECRET_KEY_SECRET_NAME"), "GitHub secret for the secret-key half, written per infra-<deployment> env (env GHA_SECRET_KEY_SECRET_NAME)")
+	f.StringVar(&ghaDeployments, "gha-deployments", os.Getenv("GHA_SECRET_DEPLOYMENTS"), "space-separated deployment names whose infra-<name> env gets the new secrets (env GHA_SECRET_DEPLOYMENTS; empty = repo-level)")
 	return c
 }
 
@@ -94,7 +99,7 @@ func credentialsObjKeyRevokeOldCmd(o *rotatorOpts) *cobra.Command {
 	return c
 }
 
-func runCredentialsObjKeyCreate(ctx context.Context, client objKeyAPI, apply bool, label, cluster, bucket, permissions string) error {
+func runCredentialsObjKeyCreate(ctx context.Context, client objKeyAPI, apply bool, label, cluster, bucket, permissions, ghaAccessName, ghaSecretName string, ghaDeployments []string) error {
 	slog.Info("creating OBJ key", "label", label, "cluster", cluster, "bucket", bucket, "permissions", permissions)
 
 	if !apply {
@@ -130,6 +135,24 @@ func runCredentialsObjKeyCreate(ctx context.Context, client objKeyAPI, apply boo
 	// could leak into a caller's log buffer.
 	fmt.Fprintf(os.Stderr, "::add-mask::%s\n", accessKey)
 	fmt.Fprintf(os.Stderr, "::add-mask::%s\n", secretKey)
+
+	// Write the new pair into each infra-<deployment> env. Secret half FIRST,
+	// access half SECOND: a workflow that reads mid-rotation then sees (new access,
+	// OLD secret) and fails to auth — the safe failure, since the previous key is
+	// still live (drained separately, daily) so a retry succeeds.
+	if ghaSecretName != "" {
+		if err := writeRotatedSecret(ghaSecretName, secretKey, ghaDeployments); err != nil {
+			return err
+		}
+	}
+	if ghaAccessName != "" {
+		if err := writeRotatedSecret(ghaAccessName, accessKey, ghaDeployments); err != nil {
+			return err
+		}
+	}
+	if ghaSecretName != "" || ghaAccessName != "" {
+		slog.Info("updated GHA OBJ-key secrets", "deployments", ghaDeployments)
+	}
 
 	slog.Info("created new OBJ key", "new_obj_key_id", newID)
 	return cli.PrintRecord(map[string]any{

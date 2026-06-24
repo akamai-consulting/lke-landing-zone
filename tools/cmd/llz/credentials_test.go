@@ -106,7 +106,7 @@ func TestRotatorOptsResolve(t *testing.T) {
 
 func TestCredentialsPATCreateValidation(t *testing.T) {
 	for _, days := range []int64{91, 0, -3} {
-		if err := runCredentialsPATCreate(context.Background(), &fakeRotatorClient{}, true, "l", "s", days); err == nil {
+		if err := runCredentialsPATCreate(context.Background(), &fakeRotatorClient{}, true, "l", "s", days, "", nil); err == nil {
 			t.Errorf("validity-days=%d: want error, got nil", days)
 		}
 	}
@@ -116,7 +116,7 @@ func TestCredentialsPATCreateDryRun(t *testing.T) {
 	client := &fakeRotatorClient{}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
-		err = runCredentialsPATCreate(context.Background(), client, false, "lbl", "scopes:read", 90)
+		err = runCredentialsPATCreate(context.Background(), client, false, "lbl", "scopes:read", 90, "", nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestCredentialsPATCreateApply(t *testing.T) {
 	}}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
-		err = runCredentialsPATCreate(context.Background(), client, true, "lbl", "scopes:read", 30)
+		err = runCredentialsPATCreate(context.Background(), client, true, "lbl", "scopes:read", 30, "", nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestCredentialsPATCreateBadResponses(t *testing.T) {
 		client := &fakeRotatorClient{createResp: tc.resp, createErr: tc.err}
 		var err error
 		captureFirewallOutput(t, func() {
-			err = runCredentialsPATCreate(context.Background(), client, true, "l", "s", 30)
+			err = runCredentialsPATCreate(context.Background(), client, true, "l", "s", 30, "", nil)
 		})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: want %q, got %v", tc.name, tc.want, err)
@@ -298,7 +298,7 @@ func TestCredentialsObjKeyCreateDryRun(t *testing.T) {
 	client := &fakeRotatorClient{}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyCreate(context.Background(), client, false, "lbl", "us-ord-10", "bkt", "read_write")
+		err = runCredentialsObjKeyCreate(context.Background(), client, false, "lbl", "us-ord-10", "bkt", "read_write", "", "", nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestCredentialsObjKeyCreateApply(t *testing.T) {
 	}}
 	var err error
 	stdout, stderr := captureFirewallOutput(t, func() {
-		err = runCredentialsObjKeyCreate(context.Background(), client, true, "lbl", "us-ord-10", "bkt", "read_write")
+		err = runCredentialsObjKeyCreate(context.Background(), client, true, "lbl", "us-ord-10", "bkt", "read_write", "", "", nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +357,7 @@ func TestCredentialsObjKeyCreateBadResponses(t *testing.T) {
 		client := &fakeRotatorClient{createResp: tc.resp, createErr: tc.err}
 		var err error
 		captureFirewallOutput(t, func() {
-			err = runCredentialsObjKeyCreate(context.Background(), client, true, "l", "c", "b", "read_write")
+			err = runCredentialsObjKeyCreate(context.Background(), client, true, "l", "c", "b", "read_write", "", "", nil)
 		})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: want %q, got %v", tc.name, tc.want, err)
@@ -524,5 +524,47 @@ func TestCredentialsCommandWiring(t *testing.T) {
 	rec = decodeRecord(t, run("obj-key", "create"))
 	if rec["label"] != "envL" || rec["bucket_cluster"] != "envC" || rec["bucket_name"] != "envB" || rec["bucket_permissions"] != "read_only" {
 		t.Errorf("obj-key env defaults: %v", rec)
+	}
+}
+
+func TestWriteRotatedSecret(t *testing.T) {
+	type call struct{ name, env, val string }
+	var got []call
+	orig := ghSetSecretFn
+	ghSetSecretFn = func(name, ghEnv, value string) error {
+		got = append(got, call{name, ghEnv, value})
+		return nil
+	}
+	defer func() { ghSetSecretFn = orig }()
+
+	// Writes the value into infra-<deployment> for EACH deployment.
+	got = nil
+	if err := writeRotatedSecret("LINODE_API_TOKEN", "tok", []string{"lab", "prod"}); err != nil {
+		t.Fatalf("writeRotatedSecret: %v", err)
+	}
+	want := []call{{"LINODE_API_TOKEN", "infra-lab", "tok"}, {"LINODE_API_TOKEN", "infra-prod", "tok"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("per-env writes = %v, want %v", got, want)
+	}
+
+	// No deployments → a single repo-level write (ghEnv "").
+	got = nil
+	if err := writeRotatedSecret("LINODE_API_TOKEN", "tok", nil); err != nil {
+		t.Fatalf("writeRotatedSecret repo: %v", err)
+	}
+	if len(got) != 1 || got[0].env != "" {
+		t.Errorf("repo-level write = %v, want one call with empty env", got)
+	}
+
+	// A per-env failure is wrapped with the env for context, and stops the loop.
+	ghSetSecretFn = func(_, ghEnv, _ string) error {
+		if ghEnv == "infra-prod" {
+			return fmt.Errorf("boom")
+		}
+		return nil
+	}
+	err := writeRotatedSecret("X", "v", []string{"lab", "prod", "stg"})
+	if err == nil || !strings.Contains(err.Error(), "infra-prod") {
+		t.Errorf("want error naming infra-prod, got %v", err)
 	}
 }
