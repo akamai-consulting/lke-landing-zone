@@ -18,7 +18,9 @@ explains it.
 
 ```bash
 # 0. Authenticate gh FIRST — the installer and every GitHub call below use it (§2)
-gh auth login
+#    Skips the login if you're already authed to github.com (host-scoped, so an
+#    unrelated/broken gh host doesn't trigger a needless re-login).
+gh auth status --hostname github.com || gh auth login --hostname github.com
 
 # 1. Install the llz CLI (§2)
 curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh | bash
@@ -87,7 +89,7 @@ touches GitHub (`llz new`, `llz tokens`, `llz doctor`, `llz self-update`) drive
 the `gh` CLI, so it must be logged in *before* you run any of them:
 
 ```bash
-gh auth login        # one-time; `gh auth status` confirms you're logged in
+gh auth status --hostname github.com || gh auth login --hostname github.com   # one-time; the check skips login if already authed
 ```
 
 > **Already use `gh` for another host?** The installer and `llz doctor` scope
