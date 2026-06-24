@@ -77,6 +77,31 @@ inputs:
 runs:
   using: composite
   steps:
+    # Spec-driven instances keep <region>.tfvars as gitignored build artifacts
+    # rendered from environments/<env>.yaml. Cluster resolution below reads
+    # cluster_label + region from <tfvars-dir>/<region>.tfvars whenever no
+    # explicit --cluster-id/--cluster-label is given, so any job that opens the
+    # ACL WITHOUT first running a terraform op (which renders via terraform-init)
+    # would hit a missing file. The clearest case is bootstrap-openbao: its
+    # cluster-access step fetches the kubeconfig from Terraform state but never
+    # inits the cluster root, so the tfvars are never rendered and `llz ci
+    # runner-acl` fails with "cannot determine cluster label". Render here so the
+    # file exists before resolution. No-op for instances without a spec (the
+    # `test -f` gate) and skipped when the caller passed an explicit cluster-id.
+    - name: Render tfvars from the LandingZone spec (spec-driven instances)
+      if: inputs.cluster-id == ''
+      shell: bash
+      env:
+        ACL_REGION: ${{ inputs.region }}
+      run: |
+        if [ -f landingzone.yaml ]; then
+          if [ -n "${ACL_REGION:-}" ]; then
+            llz render "$ACL_REGION" --tfvars-only
+          else
+            llz render --tfvars-only
+          fi
+        fi
+
     - name: ${{ inputs.mode }} control-plane ACL for this runner
       shell: bash
       env:
