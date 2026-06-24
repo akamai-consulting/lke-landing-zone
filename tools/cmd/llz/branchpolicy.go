@@ -44,10 +44,18 @@ func lockInfraEnvBranchPolicy(g globalOpts, repo, env string) error {
 	// 1. Fetch (or create) the environment.
 	envJSON, err := ghAPIOut("repos/" + repo + "/environments/" + envName)
 	if err != nil {
-		// Most likely 404 — create it with the branch policy, then re-fetch.
-		if err := ghAPIRun("-X", "PUT", "repos/"+repo+"/environments/"+envName,
-			"-f", "deployment_branch_policy[protected_branches]=false",
-			"-f", "deployment_branch_policy[custom_branch_policies]=true"); err != nil {
+		// Most likely 404 — create it with the branch policy, then re-fetch. Send a
+		// JSON body via --input (not `gh api -f`, which sends every value as a
+		// STRING, so the booleans arrive as "false"/"true" and GitHub 422s
+		// "is not of type boolean"). json.Marshal types them correctly.
+		createBody, _ := json.Marshal(map[string]any{
+			"deployment_branch_policy": map[string]any{
+				"protected_branches":     false,
+				"custom_branch_policies": true,
+			},
+		})
+		if err := execArgv([]string{"gh", "api", "-X", "PUT",
+			"repos/" + repo + "/environments/" + envName, "--input", "-"}, string(createBody)); err != nil {
 			return fmt.Errorf("create environment %s: %w", envName, err)
 		}
 		if envJSON, err = ghAPIOut("repos/" + repo + "/environments/" + envName); err != nil {
@@ -142,11 +150,6 @@ func hasMainBranchRule(repo, envName, branch string) bool {
 // (the multi-arg, error-returning sibling of state.go's ghAPI(path) []byte).
 func ghAPIOut(args ...string) ([]byte, error) {
 	return execOutput("gh", append([]string{"api"}, args...)...)
-}
-
-// ghAPIRun runs `gh api <args>` discarding stdout.
-func ghAPIRun(args ...string) error {
-	return execArgv(append([]string{"gh", "api"}, args...), "")
 }
 
 func numOr(v any, def float64) float64 {
