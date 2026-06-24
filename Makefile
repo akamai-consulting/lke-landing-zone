@@ -24,10 +24,10 @@ GO_DIR := tools
 COVERAGE_MINS := \
 	cmd/llz=48 \
 	internal/cli=95 \
-	internal/clusterspec=92 \
+	internal/clusterspec=95 \
 	internal/health=95 \
 	internal/linode=80 \
-	internal/openbao=80 \
+	internal/openbao=88 \
 	internal/preflight=95 \
 	internal/terraform=95
 
