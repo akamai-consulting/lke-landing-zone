@@ -203,25 +203,46 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 		}
 	}
 
-	envHint := "  # commit + push to your GitHub repo (or re-run `llz new --push --yes`)\n"
-	if pushed {
-		envHint = "  # instance repo created + pushed ✓\n"
-	}
-	fmt.Printf(`
-Next steps:
-  cd %s
-  # The declarative LandingZone spec is the source of truth — landingzone.yaml +
-  # environments/<env>.yaml. `+"`llz env add`"+` authors them; see the committed
-  # landingzone.yaml.example + docs/landing-zone-spec.md for the full model.
-`+envHint+`  llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>  # authors the spec + renders
-  # tune it: llz env set <env> cluster.nodePool.count=8  (or `+"`llz env edit <env>`"+`); llz env show <env>
-  llz validate --env <env>          # catch unfilled placeholders before a build
-  llz tokens --env <env> --yes      # create state bucket+key, gather PATs, push
-  llz doctor --env <env>            # confirm every required value is set
-  llz build  <env> --yes            # kick off the apply
-  # local checks: llz lint / llz validate; add your own commands in .llz/commands.yaml
-`, dir)
+	printNextSteps(dir, pushed)
 	return nil
+}
+
+// printNextSteps renders the post-scaffold guide: a bold header, dim context
+// notes, and the ordered command sequence with cyan commands + dim, column-
+// aligned `#` comments. Everything degrades to plain text off a TTY (color.go),
+// and the lines stay copy-paste-safe (commands run; notes are shell comments).
+func printNextSteps(dir string, pushed bool) {
+	cdNote := "commit + push to your GitHub repo (or re-run `llz new --push --yes`)"
+	if pushed {
+		cdNote = "instance repo created + pushed ✓"
+	}
+
+	// Trailing-comment alignment column, capped so a long command (or dir name)
+	// doesn't shove every comment off to the right — overflowing lines just trail
+	// with two spaces.
+	const col = 32
+	cmd := func(c, note string) {
+		pad := col - len(c)
+		if pad < 2 {
+			pad = 2
+		}
+		fmt.Printf("  %s%s%s\n", cyan(c), strings.Repeat(" ", pad), dim("# "+note))
+	}
+	note := func(s string) { fmt.Println(dim("  # " + s)) }
+
+	fmt.Println("\n" + bold("Next steps"))
+	note("The declarative LandingZone spec is the source of truth — landingzone.yaml +")
+	note("environments/<env>.yaml. `llz env add` authors them; see the committed")
+	note("landingzone.yaml.example + docs/landing-zone-spec.md for the full model.")
+	fmt.Println()
+	cmd("cd "+dir, cdNote)
+	cmd("llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>", "authors the spec + renders")
+	note("tune it: llz env set <env> cluster.nodePool.count=8  (or `llz env edit <env>`); llz env show <env>")
+	cmd("llz validate --env <env>", "catch unfilled placeholders before a build")
+	cmd("llz tokens --env <env> --yes", "create state bucket+key, gather PATs, push")
+	cmd("llz doctor --env <env>", "confirm every required value is set")
+	cmd("llz build <env> --yes", "kick off the apply")
+	note("local checks: llz lint / llz validate; add your own commands in .llz/commands.yaml")
 }
 
 // pushInstanceRepo creates the instance's GitHub repo and pushes the freshly
@@ -302,16 +323,16 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 		return err
 	}
 	if !skipTokens {
-		fmt.Println("══ 1/3  llz tokens — provision credentials ══")
+		fmt.Println(bold("══ 1/3  llz tokens — provision credentials ══"))
 		if err := upTokens(g, admin, env); err != nil {
 			return fmt.Errorf("tokens: %w", err)
 		}
 	}
-	fmt.Println("\n══ 2/3  llz doctor — readiness gate ══")
+	fmt.Println("\n" + bold("══ 2/3  llz doctor — readiness gate ══"))
 	if err := upDoctor(g, admin, env); err != nil {
 		return fmt.Errorf("doctor: %w (fix the above, then re-run `llz up %s`)", err, env)
 	}
-	fmt.Println("\n══ 3/3  llz build — dispatch the apply ══")
+	fmt.Println("\n" + bold("══ 3/3  llz build — dispatch the apply ══"))
 	if err := upBuild(g, env); err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
@@ -322,15 +343,14 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 // printManualActions lists the post-build steps the bootstrap genuinely cannot do
 // on the operator's behalf — surfaced once here so they don't get lost.
 func printManualActions(env string) {
-	fmt.Printf(`
-══ remaining manual actions (the tooling can't do these for you) ══
-  • Watch convergence:   llz status %[1]s --wait
-  • After OpenBao bootstrap, from the job summary (shown once):
-      – escrow unseal keys 4 & 5 + the root token to secure offline storage
-      – delete OPENBAO_ROOT_TOKEN from infra-%[1]s   (`+"`llz status`"+` flags it if left)
-  • Once LINODE_DNS_TOKEN exists, finish cert DNS-01:
-      llz bootstrap dns %[1]s --yes
-`, env)
+	b := func(s string) string { return "  " + dim("•") + " " + s }
+	fmt.Println("\n" + bold("══ remaining manual actions (the tooling can't do these for you) ══"))
+	fmt.Println(b("Watch convergence:   " + cyan("llz status "+env+" --wait")))
+	fmt.Println(b("After OpenBao bootstrap, from the job summary (shown once):"))
+	fmt.Println(dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
+	fmt.Println(dim("      – delete OPENBAO_ROOT_TOKEN from infra-"+env) + dim("   (`llz status` flags it if left)"))
+	fmt.Println(b("Once LINODE_DNS_TOKEN exists, finish cert DNS-01:"))
+	fmt.Println("      " + cyan("llz bootstrap dns "+env+" --yes"))
 }
 
 func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
@@ -371,9 +391,9 @@ func warnIfRootTokenPresent(env string) {
 	}
 	for _, n := range ghSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
 		if n == "OPENBAO_ROOT_TOKEN" {
-			fmt.Printf("\n⚠ OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", env)
-			fmt.Println("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability.")
-			fmt.Printf("  Remove it: `gh secret delete OPENBAO_ROOT_TOKEN --env infra-%s --repo %s`\n", env, repo)
+			fmt.Printf("\n%s OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", yellow("⚠"), env)
+			fmt.Println(dim("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability."))
+			fmt.Printf("  Remove it: %s\n", cyan(fmt.Sprintf("gh secret delete OPENBAO_ROOT_TOKEN --env infra-%s --repo %s", env, repo)))
 			return
 		}
 	}

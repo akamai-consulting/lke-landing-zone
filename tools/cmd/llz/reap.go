@@ -35,33 +35,33 @@ func runReap(g globalOpts, o reapOpts) error {
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
 
-	fmt.Println("################ llz reap — orphaned Linode resources ################")
+	fmt.Println(bold("################ llz reap — orphaned Linode resources ################"))
 	if !confirm {
-		fmt.Println("DRY-RUN — nothing will be deleted. Re-run with --yes to delete.")
+		fmt.Println(yellow("DRY-RUN — nothing will be deleted. Re-run with --yes to delete."))
 	}
-	fmt.Printf("  region:        %s\n", orAll(o.region))
-	fmt.Printf("  cluster label: %s\n\n", orNone(o.clusterLabel))
+	fmt.Printf("  %s%s\n", dim("region:        "), orAll(o.region))
+	fmt.Printf("  %s%s\n\n", dim("cluster label: "), orNone(o.clusterLabel))
 
 	deleted, failed := 0, 0
 	// del prints (dry-run) or deletes (confirm), tallying outcomes.
 	del := func(path, desc string) {
 		if !confirm {
-			fmt.Printf("  would DELETE %s\n", desc)
+			fmt.Printf("  %s %s\n", cyan("would DELETE"), desc)
 			return
 		}
 		if err := client.DeleteResourcePath(ctx, path); err != nil {
-			fmt.Fprintf(os.Stderr, "  DELETE %s FAILED: %v\n", desc, err)
+			fmt.Fprintf(os.Stderr, "  %s: %v\n", red(fmt.Sprintf("DELETE %s FAILED", desc)), err)
 			failed++
 			return
 		}
-		fmt.Printf("  DELETE %s\n", desc)
+		fmt.Printf("  %s %s\n", green("DELETE"), desc)
 		deleted++
 	}
 
 	// ── 1. Orphan clusters by label (root) ───────────────────────────────────
 	clustersDeleted := false
 	if o.clusterLabel != "" {
-		fmt.Printf("==== orphan clusters (label %q) ====\n", o.clusterLabel)
+		fmt.Println(bold(fmt.Sprintf("==== orphan clusters (label %q) ====", o.clusterLabel)))
 		ids, err := client.ClustersWithLabel(ctx, o.clusterLabel)
 		if err != nil {
 			return fmt.Errorf("list clusters: %w", err)
@@ -71,47 +71,53 @@ func runReap(g globalOpts, o reapOpts) error {
 			clustersDeleted = true
 		}
 		if len(ids) == 0 {
-			fmt.Println("  none matched")
+			fmt.Println(dim("  none matched"))
 		}
 		// Cluster delete is async; let it settle so the firewall safety guard
 		// (which refuses while a live cluster still carries the label) passes.
 		if confirm && clustersDeleted {
-			fmt.Println("  (waiting 25s for cluster delete to settle)")
+			fmt.Println(dim("  (waiting 25s for cluster delete to settle)"))
 			time.Sleep(25 * time.Second)
 		}
 
 		// ── 2. Orphan node firewall ──────────────────────────────────────────
-		fmt.Println("\n==== orphan node firewall ====")
+		fmt.Println("\n" + bold("==== orphan node firewall ===="))
 		if err := reapFirewalls(ctx, client, o, del); err != nil {
 			return err
 		}
 	} else {
-		fmt.Println("==== orphan clusters + firewall — skipped (no --cluster-label) ====")
+		fmt.Println(bold("==== orphan clusters + firewall ====") + dim(" — skipped (no --cluster-label)"))
 	}
 
 	// ── 3. NodeBalancers BEFORE VPCs (a parked NB blocks its VPC delete) ──────
-	fmt.Println("\n==== orphan NodeBalancers (account-wide) ====")
+	fmt.Println("\n" + bold("==== orphan NodeBalancers (account-wide) ===="))
 	if err := reapNodeBalancers(ctx, client, o, del); err != nil {
 		return err
 	}
 
 	// ── 4. VPCs (lke<id> cluster-gone, + <label>-vpc when --cluster-label) ────
-	fmt.Println("\n==== orphan VPCs ====")
+	fmt.Println("\n" + bold("==== orphan VPCs ===="))
 	if err := reapVPCs(ctx, client, o, del); err != nil {
 		return err
 	}
 
 	// ── 5. Volumes (needs a scope: --region or --volume-ids) ──────────────────
-	fmt.Println("\n==== orphan Volumes ====")
+	fmt.Println("\n" + bold("==== orphan Volumes ===="))
 	if o.region == "" && o.volumeIDs == "" {
-		fmt.Println("  skipped — set --region and/or --volume-ids to scope the sweep (refusing an unscoped Volume delete)")
+		fmt.Println(dim("  skipped — set --region and/or --volume-ids to scope the sweep (refusing an unscoped Volume delete)"))
 	} else if err := reapVolumes(ctx, client, o, del); err != nil {
 		return err
 	}
 
-	fmt.Printf("\nsummary: deleted=%d failed=%d\n", deleted, failed)
+	summary := fmt.Sprintf("summary: deleted=%d failed=%d", deleted, failed)
+	if failed > 0 {
+		summary = red(summary)
+	} else if deleted > 0 {
+		summary = green(summary)
+	}
+	fmt.Printf("\n%s\n", summary)
 	if !confirm {
-		fmt.Println("(dry-run — nothing was deleted; re-run with --yes)")
+		fmt.Println(dim("(dry-run — nothing was deleted; re-run with --yes)"))
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d delete(s) failed", failed)
@@ -134,7 +140,7 @@ func reapFirewalls(ctx context.Context, client *linode.Client, o reapOpts, del f
 			return fmt.Errorf("firewall safety check: %w", err)
 		}
 		if len(live) > 0 {
-			fmt.Printf("  a live cluster still carries label %q — refusing (delete the cluster first, or --force)\n", o.clusterLabel)
+			fmt.Printf("  %s\n", yellow(fmt.Sprintf("a live cluster still carries label %q — refusing (delete the cluster first, or --force)", o.clusterLabel)))
 			return nil
 		}
 	}
@@ -153,7 +159,7 @@ func reapFirewalls(ctx context.Context, client *linode.Client, o reapOpts, del f
 		matched = true
 	}
 	if !matched {
-		fmt.Printf("  none matched (searched: %s)\n", strings.Join(candidates, ", "))
+		fmt.Printf("%s\n", dim(fmt.Sprintf("  none matched (searched: %s)", strings.Join(candidates, ", "))))
 	}
 	return nil
 }
@@ -190,7 +196,7 @@ func reapNodeBalancers(ctx context.Context, client *linode.Client, o reapOpts, d
 		matched = true
 	}
 	if !matched {
-		fmt.Println("  none matched")
+		fmt.Println(dim("  none matched"))
 	}
 	return nil
 }
@@ -207,7 +213,7 @@ func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(p
 			return err
 		}
 		if len(held) > 0 {
-			fmt.Printf("  a live cluster still carries label %q — not targeting its %q VPC\n", o.clusterLabel, o.clusterLabel+"-vpc")
+			fmt.Printf("  %s\n", yellow(fmt.Sprintf("a live cluster still carries label %q — not targeting its %q VPC", o.clusterLabel, o.clusterLabel+"-vpc")))
 		} else {
 			byoLabel = o.clusterLabel + "-vpc"
 		}
@@ -241,7 +247,7 @@ func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(p
 		matched = true
 	}
 	if !matched {
-		fmt.Println("  none matched")
+		fmt.Println(dim("  none matched"))
 	}
 	return nil
 }
@@ -267,7 +273,7 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 		matched = true
 	}
 	if !matched {
-		fmt.Println("  none matched the filter")
+		fmt.Println(dim("  none matched the filter"))
 	}
 	return nil
 }

@@ -128,8 +128,8 @@ func healthExitCode() int {
 	// is in-progress, not converged — poll.
 	if !kExists("get", "crd", "applications.argoproj.io") ||
 		!kExists("-n", "argocd", "get", "application", "platform-bootstrap") {
-		fmt.Println("== pre-bootstrap phase detected — apl-core helmfile likely still running ==")
-		fmt.Println("  PENDING applications.argoproj.io CRD or platform-bootstrap Application not yet present")
+		fmt.Println(bold("== pre-bootstrap phase detected — apl-core helmfile likely still running =="))
+		fmt.Printf("  %s applications.argoproj.io CRD or platform-bootstrap Application not yet present\n", cyan("PENDING"))
 		return 2
 	}
 	// Phase 1: bootstrap-cluster ran but bootstrap-openbao hasn't (no platform-app-ca).
@@ -170,7 +170,7 @@ func healthExitCode() int {
 	// aborting on still-installing infra. See health.PhaseAwareExitCode.
 	code := health.PhaseAwareExitCode(r.ExitCode(), phase1)
 	if phase1 && code != r.ExitCode() {
-		fmt.Println("== phase1 (support plane still installing) — hard failures above are treated as in-progress; converge will keep polling ==")
+		fmt.Println(bold("== phase1 (support plane still installing) — hard failures above are treated as in-progress; converge will keep polling =="))
 	}
 	return code
 }
@@ -178,27 +178,27 @@ func healthExitCode() int {
 func printHealthSummary(r *health.Report) {
 	fmt.Println()
 	for _, c := range r.Drift {
-		fmt.Println("  drift:    " + c)
+		fmt.Println("  " + yellow("drift:   ") + " " + c)
 	}
 	for _, c := range r.Deferred {
-		fmt.Println("  deferred: " + c)
+		fmt.Println("  " + cyan("deferred:") + " " + c)
 	}
 	for _, c := range r.Pending {
-		fmt.Println("  pending:  " + c)
+		fmt.Println("  " + cyan("pending: ") + " " + c)
 	}
 	for _, c := range r.Failed {
-		fmt.Println("  FAILED:   " + c)
+		fmt.Println("  " + red("FAILED:  ") + " " + c)
 	}
 	switch r.Verdict() {
 	case health.HardFailed:
-		fmt.Printf("%d check(s) hard-failed.\n", len(r.Failed))
+		fmt.Printf("%s\n", red(fmt.Sprintf("%d check(s) hard-failed.", len(r.Failed))))
 	case health.InProgress:
-		fmt.Println("Cluster is still converging — re-run after a backoff.")
+		fmt.Println(yellow("Cluster is still converging — re-run after a backoff."))
 	default:
 		if len(r.Deferred) > 0 {
-			fmt.Printf("Cluster converged — %d operator-deferred item(s) remain, platform healthy.\n", len(r.Deferred))
+			fmt.Printf("%s %s\n", green("✓"), fmt.Sprintf("Cluster converged — %d operator-deferred item(s) remain, platform healthy.", len(r.Deferred)))
 		} else {
-			fmt.Println("Cluster converged.")
+			fmt.Printf("%s Cluster converged.\n", green("✓"))
 		}
 	}
 }
@@ -238,11 +238,28 @@ func record(r *health.Report, cat health.Category, msg string) {
 		health.CatOK: "OK", health.CatWarn: "WARN", health.CatFail: "FAIL",
 		health.CatPending: "PENDING", health.CatDeferred: "DEFERRED", health.CatDrift: "DRIFT",
 	}[cat]
-	fmt.Printf("  %-8s %s\n", label, msg)
+	// Pad to the fixed column on the PLAIN label, then color — the ANSI escapes are
+	// zero-width, so the columns stay aligned (color.go).
+	fmt.Printf("  %s %s\n", catColor(cat, fmt.Sprintf("%-8s", label)), msg)
 	r.Add(cat, msg)
 }
 
-func hdr(s string) { fmt.Printf("\n== %s ==\n", s) }
+// catColor tints a health-category label by severity, degrading to plain off a TTY.
+func catColor(cat health.Category, s string) string {
+	switch cat {
+	case health.CatOK:
+		return green(s)
+	case health.CatFail:
+		return red(s)
+	case health.CatWarn, health.CatDrift:
+		return yellow(s)
+	case health.CatPending, health.CatDeferred:
+		return cyan(s)
+	}
+	return s
+}
+
+func hdr(s string) { fmt.Printf("\n%s\n", bold("== "+s+" ==")) }
 
 // metaName / nsName extract common metadata for inline-typed items.
 type meta struct {
