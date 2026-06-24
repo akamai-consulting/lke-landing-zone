@@ -72,7 +72,7 @@ func envSetCmd() *cobra.Command {
 			for _, a := range assigns {
 				fmt.Printf("  %s spec.%s = %s\n", green("set"), a[0], a[1])
 			}
-			fmt.Printf("\nReconciling (`llz render %s`):\n", env)
+			fmt.Printf("\n%s\n", bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
 			return runRender(gopts, env, false, false, false)
 		},
 	}
@@ -103,7 +103,7 @@ func envEditCmd() *cobra.Command {
 					return fmt.Errorf("%s won't parse after your edit: %s\n  fix it, then `llz render %s`", envFile, cleanFieldErr(derr), env)
 				}
 			}
-			fmt.Printf("Reconciling (`llz render %s`):\n", env)
+			fmt.Printf("%s\n", bold(fmt.Sprintf("Reconciling (`llz render %s`):", env)))
 			return runRender(gopts, env, false, false, false)
 		},
 	}
@@ -154,7 +154,7 @@ func specSetCmd() *cobra.Command {
 			for _, a := range assigns {
 				fmt.Printf("  %s spec.%s = %s\n", green("set"), a[0], a[1])
 			}
-			fmt.Println("\nReconciling (`llz render`):")
+			fmt.Println("\n" + bold("Reconciling (`llz render`):"))
 			return runRender(gopts, "", false, false, false)
 		},
 	}
@@ -200,8 +200,8 @@ func networkAddCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("  %s shared VPC %q (region %s) → spec.networks\n", green("added"), name, region)
-			fmt.Printf("  attach an env:  llz env set <env> cluster.network.vpc=%s cluster.network.subnetCIDR=10.0.0.0/14\n", name)
-			fmt.Println("\nReconciling (`llz render`):")
+			fmt.Printf("  %s  %s\n", dim("attach an env:"), cyan(fmt.Sprintf("llz env set <env> cluster.network.vpc=%s cluster.network.subnetCIDR=10.0.0.0/14", name)))
+			fmt.Println("\n" + bold("Reconciling (`llz render`):"))
 			return runRender(gopts, "", false, false, false)
 		},
 	}
@@ -225,7 +225,7 @@ func networkListCmd() *cobra.Command {
 				return err
 			}
 			if len(lz.Spec.Networks) == 0 {
-				fmt.Println("no shared VPCs declared (every env uses a dedicated VPC) — add one with `llz network add`")
+				fmt.Println(dim("no shared VPCs declared (every env uses a dedicated VPC) — add one with `llz network add`"))
 				return nil
 			}
 			names := make([]string, 0, len(lz.Spec.Networks))

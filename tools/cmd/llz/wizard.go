@@ -94,6 +94,26 @@ func ghFineGrainedDispatchURL(name, owner string) string {
 	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
 }
 
+// ghFineGrainedSecretsWriteURL builds a fine-grained PAT creation URL pre-filled
+// for OPENBAO_SECRETS_WRITE_TOKEN: name, resource owner, 90-day expiry, and the
+// two repository permissions CI's `gh secret set` needs — Actions and Secrets,
+// both write (the exact scoping llz-bootstrap-openbao.yml documents). GitHub
+// can't pre-select WHICH repository via query, so the caller tells the operator
+// to pick it under "Only select repositories". owner may be "" (the operator
+// then picks the resource owner). A classic repo+workflow PAT also works; this
+// is the least-privilege option.
+func ghFineGrainedSecretsWriteURL(name, owner string) string {
+	q := url.Values{}
+	q.Set("name", name)
+	if owner != "" {
+		q.Set("target_name", owner)
+	}
+	q.Set("expires_in", "90")
+	q.Set("actions", "write")
+	q.Set("secrets", "write")
+	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
+}
+
 // catalog is the credential set the wizard walks. It mirrors docs/quickstart.md
 // §2 and runbooks/bootstrap-openbao.md — and deliberately OMITS the secrets the
 // build writes for you (OPENBAO_UNSEAL_KEY_*, LOKI_S3_*, HARBOR_*, AppRole IDs).
@@ -110,8 +130,8 @@ func catalog() []secretSpec {
 			Name:    "OPENBAO_SECRETS_WRITE_TOKEN",
 			Purpose: "GitHub PAT — CI stashes OBJ keys + persists OpenBao unseal keys / ESO AppRole",
 			Dest:    "infra-<env> environment secret",
-			URL:     ghTokenURL("repo,workflow", "llz-openbao-secrets-write"),
-			Note:    "Classic PAT, scopes repo+workflow. You must ALSO be Environment admin on every infra-<env> environment, or --env writes 401.",
+			URL:     ghFineGrainedSecretsWriteURL("llz-openbao-secrets-write", ""),
+			Note:    "Fine-grained PAT, Actions + Secrets: write (set Resource owner to your org, then Only select repositories: your instance repo) — or a classic repo+workflow PAT. Either way you must ALSO be Environment admin on every infra-<env> environment, or --env writes 401.",
 		},
 		{
 			Name:    "APL_VALUES_REPO_TOKEN",

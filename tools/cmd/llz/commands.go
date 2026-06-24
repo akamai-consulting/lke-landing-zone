@@ -323,16 +323,16 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 		return err
 	}
 	if !skipTokens {
-		fmt.Println("══ 1/3  llz tokens — provision credentials ══")
+		fmt.Println(bold("══ 1/3  llz tokens — provision credentials ══"))
 		if err := upTokens(g, admin, env); err != nil {
 			return fmt.Errorf("tokens: %w", err)
 		}
 	}
-	fmt.Println("\n══ 2/3  llz doctor — readiness gate ══")
+	fmt.Println("\n" + bold("══ 2/3  llz doctor — readiness gate ══"))
 	if err := upDoctor(g, admin, env); err != nil {
 		return fmt.Errorf("doctor: %w (fix the above, then re-run `llz up %s`)", err, env)
 	}
-	fmt.Println("\n══ 3/3  llz build — dispatch the apply ══")
+	fmt.Println("\n" + bold("══ 3/3  llz build — dispatch the apply ══"))
 	if err := upBuild(g, env); err != nil {
 		return fmt.Errorf("build: %w", err)
 	}
@@ -343,15 +343,14 @@ func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 // printManualActions lists the post-build steps the bootstrap genuinely cannot do
 // on the operator's behalf — surfaced once here so they don't get lost.
 func printManualActions(env string) {
-	fmt.Printf(`
-══ remaining manual actions (the tooling can't do these for you) ══
-  • Watch convergence:   llz status %[1]s --wait
-  • After OpenBao bootstrap, from the job summary (shown once):
-      – escrow unseal keys 4 & 5 + the root token to secure offline storage
-      – delete OPENBAO_ROOT_TOKEN from infra-%[1]s   (`+"`llz status`"+` flags it if left)
-  • Once LINODE_DNS_TOKEN exists, finish cert DNS-01:
-      llz bootstrap dns %[1]s --yes
-`, env)
+	b := func(s string) string { return "  " + dim("•") + " " + s }
+	fmt.Println("\n" + bold("══ remaining manual actions (the tooling can't do these for you) ══"))
+	fmt.Println(b("Watch convergence:   " + cyan("llz status "+env+" --wait")))
+	fmt.Println(b("After OpenBao bootstrap, from the job summary (shown once):"))
+	fmt.Println(dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
+	fmt.Println(dim("      – delete OPENBAO_ROOT_TOKEN from infra-"+env) + dim("   (`llz status` flags it if left)"))
+	fmt.Println(b("Once LINODE_DNS_TOKEN exists, finish cert DNS-01:"))
+	fmt.Println("      " + cyan("llz bootstrap dns "+env+" --yes"))
 }
 
 func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
@@ -392,9 +391,9 @@ func warnIfRootTokenPresent(env string) {
 	}
 	for _, n := range ghSecretNames("repos/" + repo + "/environments/infra-" + env + "/secrets") {
 		if n == "OPENBAO_ROOT_TOKEN" {
-			fmt.Printf("\n⚠ OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", env)
-			fmt.Println("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability.")
-			fmt.Printf("  Remove it: `gh secret delete OPENBAO_ROOT_TOKEN --env infra-%s --repo %s`\n", env, repo)
+			fmt.Printf("\n%s OPENBAO_ROOT_TOKEN is still set in infra-%s — escrow it offline and delete it.\n", yellow("⚠"), env)
+			fmt.Println(dim("  It is only needed to seed secrets at bootstrap; leaving it set is a standing liability."))
+			fmt.Printf("  Remove it: %s\n", cyan(fmt.Sprintf("gh secret delete OPENBAO_ROOT_TOKEN --env infra-%s --repo %s", env, repo)))
 			return
 		}
 	}

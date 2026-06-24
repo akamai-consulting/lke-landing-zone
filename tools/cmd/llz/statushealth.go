@@ -104,18 +104,18 @@ func reportArgoHealth(g globalOpts, wait bool, timeout int) error {
 		reqUnhealthy, missing, otherUnhealthy := classifyArgoApps(apps, requiredSupportApps)
 
 		if len(reqUnhealthy) == 0 && len(missing) == 0 {
-			fmt.Println("✓ required support-plane Applications are Synced + Healthy")
-			printList("  other Applications still not healthy:", otherUnhealthy)
+			fmt.Printf("%s required support-plane Applications are Synced + Healthy\n", green("✓"))
+			printList(dim("  other Applications still not healthy:"), otherUnhealthy)
 			return nil
 		}
 		if !wait || time.Now().After(deadline) {
-			fmt.Println("✗ required support-plane Applications not Synced/Healthy:")
+			fmt.Printf("%s required support-plane Applications not Synced/Healthy:\n", red("✗"))
 			printList("", reqUnhealthy)
-			printList("  missing:", missing)
-			printList("  (other Applications not healthy:)", otherUnhealthy)
+			printList(dim("  missing:"), missing)
+			printList(dim("  (other Applications not healthy:)"), otherUnhealthy)
 			return fmt.Errorf("%d required Application(s) unhealthy, %d missing", len(reqUnhealthy), len(missing))
 		}
-		fmt.Printf("  waiting for %d required Application(s) to converge…\n", len(reqUnhealthy)+len(missing))
+		fmt.Printf("%s\n", dim(fmt.Sprintf("  waiting for %d required Application(s) to converge…", len(reqUnhealthy)+len(missing))))
 		time.Sleep(interval)
 	}
 }
@@ -128,6 +128,6 @@ func printList(header string, items []string) {
 		fmt.Println(header)
 	}
 	for _, it := range items {
-		fmt.Println("  - " + it)
+		fmt.Println("  " + dim("-") + " " + it)
 	}
 }

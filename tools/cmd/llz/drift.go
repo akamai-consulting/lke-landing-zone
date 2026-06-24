@@ -63,7 +63,7 @@ func runDrift(branch, repoURL string, strict bool) error {
 	}
 
 	if tv.TemplateSHA == latest {
-		fmt.Printf("Up to date with %s@%s (%s).\n", tv.TemplateRepo, branch, short(latest))
+		fmt.Printf("%s Up to date with %s@%s (%s).\n", green("✓"), tv.TemplateRepo, branch, short(latest))
 		emitDriftSummary(tv, branch, latest, "", "✅ up to date")
 		return nil
 	}
@@ -76,10 +76,10 @@ func runDrift(branch, repoURL string, strict bool) error {
 	if behind != "" {
 		msg = behind + " commit(s) " + msg
 	}
-	fmt.Printf("Template drift: instance at %s, %s head at %s — %s.\n",
-		short(tv.TemplateSHA), branch, short(latest), msg)
+	fmt.Printf("%s instance at %s, %s head at %s — %s.\n",
+		yellow("Template drift:"), short(tv.TemplateSHA), branch, short(latest), msg)
 	if compareURL != "" {
-		fmt.Printf("Compare: %s\n", compareURL)
+		fmt.Printf("%s %s\n", dim("Compare:"), cyan(compareURL))
 	}
 	if os.Getenv("GITHUB_ACTIONS") != "" {
 		fmt.Printf("::warning title=Template drift::Instance is %s. Sync upstream + re-stamp with `llz upgrade`.\n", msg)

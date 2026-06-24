@@ -87,7 +87,7 @@ func runCIPreflight(o preflightOpts) error {
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
 
-	fmt.Printf("================ Linode account preflight (region: %s) ================\n", orAll(o.region))
+	fmt.Println(bold(fmt.Sprintf("================ Linode account preflight (region: %s) ================", orAll(o.region))))
 
 	// Same-label capacity signal — >1 live cluster with the label we'll create.
 	sameLabel := 0
@@ -124,8 +124,12 @@ func runCIPreflight(o preflightOpts) error {
 	fmt.Printf("  Volumes           : %3d total, %3d orphaned (unattached pvc-*)%s\n", scan.vol.total, scan.vol.orphan, volNote)
 	fmt.Printf("  NodeBalancers     : %3d total, %3d orphaned (lke<id> gone / ccm 0-backend)\n", scan.nb.total, scan.nb.orphan)
 	fmt.Printf("  VPCs              : %3d total, %3d orphaned (lke<id>, cluster gone)\n", scan.vpc.total, scan.vpc.orphan)
-	fmt.Printf("  Orphaned total    : %3d\n", orphans)
-	fmt.Println("===================================================================================")
+	orphanCount := fmt.Sprintf("%3d", orphans)
+	if orphans > 0 {
+		orphanCount = yellow(orphanCount)
+	}
+	fmt.Printf("  Orphaned total    : %s\n", orphanCount)
+	fmt.Println(dim("==================================================================================="))
 
 	// (a) same-label orphans — >1 live cluster with the label we're about to create.
 	if preflight.SameLabelExcess(sameLabel) {
@@ -143,7 +147,7 @@ func runCIPreflight(o preflightOpts) error {
 			return fmt.Errorf("preflight failed: VPC quota would be exceeded (%d + 1 > %d)", scan.vpc.total, o.vpcLimit)
 		}
 	} else {
-		fmt.Println("  (set --vpc-limit to your account's VPC limit to fail fast when an apply would exceed it)")
+		fmt.Println(dim("  (set --vpc-limit to your account's VPC limit to fail fast when an apply would exceed it)"))
 	}
 
 	// (c) vCPU quota — secondary; account-wide vCPUs in use + this pool.
@@ -169,7 +173,7 @@ func runCIPreflight(o preflightOpts) error {
 			return fmt.Errorf("preflight failed: vCPU quota would be exceeded (%d + %d > %d)", usedVCPU, poolVCPU, o.vcpuLimit)
 		}
 	} else {
-		fmt.Println("  (set --vcpu-limit to your account's vCPU limit to fail fast when an apply would exceed it)")
+		fmt.Println(dim("  (set --vcpu-limit to your account's vCPU limit to fail fast when an apply would exceed it)"))
 	}
 
 	// (d) orphans over threshold.
@@ -179,11 +183,11 @@ func runCIPreflight(o preflightOpts) error {
 			fmt.Fprintln(os.Stderr, "::error::preflight failed: clear the orphans above, then re-run.")
 			return fmt.Errorf("preflight failed: %d orphaned resource(s) over threshold %d", orphans, o.orphanThreshold)
 		}
-		fmt.Println("--fail-on-orphans=false — continuing despite orphans (report-only).")
+		fmt.Println(yellow("--fail-on-orphans=false — continuing despite orphans (report-only)."))
 		return nil
 	}
 
-	fmt.Println("Preflight OK — no orphaned resources above threshold; account has capacity to proceed.")
+	fmt.Printf("%s Preflight OK — no orphaned resources above threshold; account has capacity to proceed.\n", green("✓"))
 	return nil
 }
 

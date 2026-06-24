@@ -20,7 +20,7 @@ type verifyOpts struct {
 
 func runVerify(g globalOpts, o verifyOpts) error {
 	if g.dryRun {
-		fmt.Println("→ (dry-run) read-only verification snapshot via kubectl (current context)")
+		fmt.Println(dim("→ (dry-run) read-only verification snapshot via kubectl (current context)"))
 		return nil
 	}
 
@@ -105,14 +105,14 @@ func runVerify(g globalOpts, o verifyOpts) error {
 	pod, _ := kubectlOut("-n", openbaoNS, "get", "pod", "-l", "app.kubernetes.io/name=openbao",
 		"-o", "jsonpath={.items[0].metadata.name}")
 	if strings.TrimSpace(pod) == "" {
-		fmt.Println("  INFO  no OpenBao pods found (may be pre-bootstrap)")
+		fmt.Printf("  %s  no OpenBao pods found (may be pre-bootstrap)\n", dim("INFO"))
 	} else {
 		st, _, _ := baoExec(strings.TrimSpace(pod), "", "", "status", "-format=json")
 		sealed, _ := parseBaoStatus(st)
 		if strings.TrimSpace(st) == "" {
-			fmt.Println("  INFO  could not determine seal status (pod may be initialising)")
+			fmt.Printf("  %s  could not determine seal status (pod may be initialising)\n", dim("INFO"))
 		} else if sealed {
-			fmt.Println("  INFO  OpenBao is sealed (run bootstrap-openbao.yml if first boot)")
+			fmt.Printf("  %s  OpenBao is sealed (run bootstrap-openbao.yml if first boot)\n", dim("INFO"))
 		} else {
 			v.pass("OpenBao is unsealed")
 		}
@@ -131,10 +131,12 @@ func runVerify(g globalOpts, o verifyOpts) error {
 		v.fail("ClusterSecretStore openbao Ready=" + strings.TrimSpace(css))
 	}
 
-	fmt.Printf("\n%d/%d checks passed.\n", v.passed, v.passed+v.failed)
+	summary := fmt.Sprintf("%d/%d checks passed.", v.passed, v.passed+v.failed)
 	if v.failed > 0 {
+		fmt.Printf("\n%s\n", red(summary))
 		return fmt.Errorf("%d verification check(s) failed", v.failed)
 	}
+	fmt.Printf("\n%s\n", green(summary))
 	return nil
 }
 
@@ -142,9 +144,11 @@ func runVerify(g globalOpts, o verifyOpts) error {
 
 type verifier struct{ passed, failed int }
 
-func (v *verifier) section(s string) { fmt.Printf("\n\033[1m%s\033[0m\n", s) }
-func (v *verifier) pass(s string)    { fmt.Printf("  \033[32mPASS\033[0m  %s\n", s); v.passed++ }
-func (v *verifier) fail(s string)    { fmt.Printf("  \033[31mFAIL\033[0m  %s\n", s); v.failed++ }
+// section/pass/fail go through color.go's helpers so the output degrades to plain
+// text off a TTY / under NO_COLOR (a raw \033[…m here would leak into piped + CI logs).
+func (v *verifier) section(s string) { fmt.Printf("\n%s\n", bold(s)) }
+func (v *verifier) pass(s string)    { fmt.Printf("  %s  %s\n", green("PASS"), s); v.passed++ }
+func (v *verifier) fail(s string)    { fmt.Printf("  %s  %s\n", red("FAIL"), s); v.failed++ }
 
 func kubectlOut(args ...string) (string, error) {
 	out, err := execOutput("kubectl", args...)
