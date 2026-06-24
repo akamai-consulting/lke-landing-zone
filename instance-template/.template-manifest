@@ -57,6 +57,10 @@ owned    environments/*.yaml
 # root docs/ tree by copier.yml `_tasks` (OUTSIDE the scaffold), so they refresh
 # on update — overwrite-managed, never hand-edited in an instance.
 managed  docs/**
+# Instance landing page — links to the local docs/ tree + the common `llz` flow.
+# Template-owned (like the other READMEs) so improvements reach instances on update;
+# instance-specific notes belong in docs/ or a separate file, not here.
+managed  README.md
 managed  terraform-iac-bootstrap/AGENTS.md
 managed  terraform-iac-bootstrap/*/README.md
 managed  terraform-iac-bootstrap/*/variables.tf

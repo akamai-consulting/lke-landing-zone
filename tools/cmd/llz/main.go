@@ -155,7 +155,20 @@ func tokensCmd() *cobra.Command {
 			"e2e harness and defaults to the example repo. Mutating steps need --yes.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runTokens(gopts, admin, env, cluster, bucket, repo)
+			if err := runTokens(gopts, admin, env, cluster, bucket, repo); err != nil {
+				return err
+			}
+			// Recommend the rest of the flow — but only after a real run (not a
+			// dry-run / no-yes plan), and only standalone (`llz up` chains the
+			// next gates itself, so it would be redundant there).
+			if gopts.yes && !gopts.dryRun {
+				eff := env
+				if eff == "" {
+					eff = "e2e" // matches runTokens' admin default
+				}
+				printTokensNextSteps(eff)
+			}
+			return nil
 		},
 	}
 	c.Flags().BoolVar(&admin, "admin", false, "maintainer mode: also wire the template repo e2e harness; default to the example repo")

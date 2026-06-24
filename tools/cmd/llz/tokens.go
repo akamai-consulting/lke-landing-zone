@@ -241,6 +241,26 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	return nil
 }
 
+// printTokensNextSteps prints the recommended flow after a real `llz tokens` run
+// (credentials provisioned + pushed). Only the standalone command calls it — the
+// `llz up` chain runs tokens → doctor → build itself and prints its own guidance.
+func printTokensNextSteps(env string) {
+	const col = 26
+	cmd := func(c, note string) {
+		pad := col - len(c)
+		if pad < 2 {
+			pad = 2
+		}
+		fmt.Printf("  %s%s%s\n", cyan(c), strings.Repeat(" ", pad), dim("# "+note))
+	}
+	fmt.Println("\n" + bold("Next steps"))
+	cmd("llz doctor --env "+env, "confirm every required value is set")
+	cmd("llz build "+env+" --yes", "dispatch the apply  (or `llz up "+env+" --yes` chains doctor → build)")
+	cmd("llz status "+env, "watch OpenBao / ArgoCD / ESO converge")
+	fmt.Println(dim("  after the first build: escrow OpenBao unseal keys 4 & 5 + the root token offline,"))
+	fmt.Println(dim("  delete OPENBAO_ROOT_TOKEN from infra-" + env + ", then `llz bootstrap dns " + env + " --yes`."))
+}
+
 // cmdDoctorE2E reports e2e readiness of the env files + live repo (the wizard's
 // plan, runnable standalone). Wired as `llz doctor` (see cmdDoctor).
 func cmdDoctorE2E(repo, env string, admin bool) error {
