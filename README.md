@@ -6,6 +6,7 @@
 - **Automated security controls** — package scans, token rotation, and firewalls run on a schedule.
 - **Standard tooling pre-installed** — the full toolchain ships ready to use, so you don't have to assemble it.
 - **Standardized operations and monitoring** — clusters are operated and observed the same way everywhere.
+- **[Delivery methodology as code](docs/delivery-methodology.md)** — the opinionated path from scaffold to day-2 is itself versioned and shipped, so the *how* of delivery is inherited and upgraded, not reinvented per team.
 
 A reusable, **secure-by-default LKE-Enterprise (Linode Kubernetes Engine
 Enterprise) landing zone** for the full cluster lifecycle — scaffold, bootstrap,

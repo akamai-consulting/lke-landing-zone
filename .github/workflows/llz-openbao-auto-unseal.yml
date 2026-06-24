@@ -39,20 +39,28 @@ on:
         required: false
         type: string
         default: main
+    # All required: false. These are infra-<env> ENVIRONMENT secrets, resolved by
+    # the auto-unseal job via its `environment: infra-<region>` block — NOT passed
+    # across the workflow_call boundary. `secrets: inherit` only forwards repo/org
+    # secrets, so declaring these `required: true` makes GitHub reject the whole
+    # call (every job, before any step) whenever they aren't repo-level — which is
+    # the normal case, and ALWAYS the case before the first cluster is bootstrapped
+    # (the unseal keys don't exist yet). false lets the call through; the job then
+    # no-ops on a missing cluster (allow-missing → available=false).
     secrets:
       TF_STATE_ACCESS_KEY:
-        required: true
+        required: false
       TF_STATE_SECRET_KEY:
-        required: true
+        required: false
       LINODE_API_TOKEN:
         description: 'Linode API token used to open/revoke this runner''s egress IP in the LKE-E control-plane ACL for the kubectl steps.'
-        required: true
+        required: false
       OPENBAO_UNSEAL_KEY_1:
-        required: true
+        required: false
       OPENBAO_UNSEAL_KEY_2:
-        required: true
+        required: false
       OPENBAO_UNSEAL_KEY_3:
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -137,6 +145,15 @@ jobs:
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ matrix.region }}
           allow-missing:         'true'
+
+      # No cluster for this deployment yet (fresh instance, or DR peer not
+      # provisioned): cluster-access set available=false. Make the no-op explicit
+      # so a green-but-empty scheduled run isn't mistaken for a problem.
+      - name: No cluster yet — nothing to unseal
+        if: always() && steps.kubeconfig.outputs.available != 'true'
+        run: |
+          echo "::notice title=No-op (no cluster yet)::OpenBao auto-unseal for ${REGION} is a no-op until your first cluster is built — run 'llz build ${REGION} --yes' (or 'llz up ${REGION} --yes'). Nothing to unseal."
+          echo "### OpenBao auto-unseal — no-op: no cluster for ${REGION} yet. Build it ('llz build ${REGION} --yes') and the unseal loop starts automatically." >> "$GITHUB_STEP_SUMMARY"
 
       # ── Seal state detection — the SAME `llz ci bao-status` probe
       # bootstrap-openbao.yml branches on (formerly a verbatim-copy inline
