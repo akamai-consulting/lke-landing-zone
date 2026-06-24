@@ -17,6 +17,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -319,7 +320,7 @@ func renderNetworks(lz *clusterspec.LandingZone, tfDir, relPrefix string, dryRun
 		if err != nil {
 			return fmt.Errorf("read %s (spec.networks needs the terraform-iac-bootstrap/vpc root): %w", src, err)
 		}
-		out := applyAssigns(string(base), assigns)
+		out := renderTfvars(string(base), assigns)
 		if dryRun {
 			wouldRenderPath(relPrefix, filepathRel(tfDir, dst), fmt.Sprintf("(%d assignments)", len(assigns)))
 			continue
@@ -349,7 +350,7 @@ func renderEnvTfvars(env string, c clusterspec.Cluster, tfDir, relPrefix string,
 		if err != nil {
 			return fmt.Errorf("read %s: %w", src, err)
 		}
-		out := applyAssigns(string(base), roots[root])
+		out := renderTfvars(string(base), roots[root])
 		if dryRun {
 			wouldRenderPath(relPrefix, filepathRel(tfDir, dst), fmt.Sprintf("(%d assignments)", len(roots[root])))
 			continue
@@ -365,6 +366,37 @@ func renderEnvTfvars(env string, c clusterspec.Cluster, tfDir, relPrefix string,
 // applyAssigns sets each `key = value` in content, replacing an existing
 // assignment line (setHCLField) or appending the key when it is absent — so a
 // field the example commented out (e.g. obj_key_rotation_days) is still honored.
+// renderTfvars applies the spec assignments onto a root's terraform.tfvars.example
+// and returns the canonically-formatted result. Formatting matters because the
+// field setter replaces a value in place without re-aligning the `=` columns
+// `tofu fmt` expects — so an unformatted render fails the `tofu fmt -check` in
+// `llz lint` (the instance pre-commit hook). Both the write path and the
+// `render --check`/`--diff` path go through here, so committed and re-rendered
+// tfvars stay byte-identical (no false drift).
+func renderTfvars(base string, assigns []clusterspec.Assign) string {
+	return fmtHCL(applyAssigns(base, assigns))
+}
+
+// fmtHCL pipes HCL through `tofu fmt` (or `terraform fmt`). Best-effort: with
+// neither binary present it returns content unchanged — render and render --check
+// both call it, so they stay consistent regardless.
+func fmtHCL(content string) string {
+	bin := "tofu"
+	if _, err := execLookPath(bin); err != nil {
+		if _, err := execLookPath("terraform"); err != nil {
+			return content
+		}
+		bin = "terraform"
+	}
+	cmd := exec.Command(bin, "fmt", "-")
+	cmd.Stdin = strings.NewReader(content)
+	out, err := cmd.Output()
+	if err != nil {
+		return content
+	}
+	return string(out)
+}
+
 func applyAssigns(content string, assigns []clusterspec.Assign) string {
 	for _, a := range assigns {
 		if hasHCLKey(content, a.Key) {
@@ -414,7 +446,7 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		if err != nil {
 			return fmt.Errorf("read vpc tfvars.example: %w", err)
 		}
-		want[filepath.Join(tfDir, "vpc", n+".tfvars")] = applyAssigns(base, clusterspec.NetworkTFVars(n, lz.Spec.Networks[n]))
+		want[filepath.Join(tfDir, "vpc", n+".tfvars")] = renderTfvars(base, clusterspec.NetworkTFVars(n, lz.Spec.Networks[n]))
 	}
 
 	for _, name := range envs {
@@ -428,7 +460,7 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 			if err != nil {
 				return fmt.Errorf("read %s tfvars.example: %w", root, err)
 			}
-			want[filepath.Join(tfDir, root, name+".tfvars")] = applyAssigns(base, assigns)
+			want[filepath.Join(tfDir, root, name+".tfvars")] = renderTfvars(base, assigns)
 		}
 		if !tfvarsOnly {
 			ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
