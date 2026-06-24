@@ -668,8 +668,10 @@ jobs:
         working-directory: terraform-iac-bootstrap/cluster-bootstrap
         # `llz ci tf-apply` self-heals a stale helm_release in TF state (cluster
         # lacks the underlying release; destroy errors with "release: not found")
-        # via `terraform state rm` + replan + retry. Any other apply failure
-        # passes through unchanged.
+        # via `terraform state rm` + replan + retry. It also retries a transient
+        # "Kubernetes cluster unreachable" (control-plane TLS flake mid-apply,
+        # after readiness passed) by settling + replan + retry. Any other apply
+        # failure passes through unchanged.
         run: llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
 
       # Persist the effective Loki admin password to the infra-<region> env as

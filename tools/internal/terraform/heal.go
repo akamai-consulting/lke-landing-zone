@@ -15,6 +15,8 @@ var (
 
 	fwCreateFailRe = regexp.MustCompile(`Failed to Create Firewall`)
 	withFirewallRe = regexp.MustCompile(`^\s*with\s+([^\s,]*linode_firewall\.[^\s,]+)`)
+
+	clusterUnreachableRe = regexp.MustCompile(`Error:.*[Kk]ubernetes cluster unreachable`)
 )
 
 // FirewallCollisionMsg is the Linode error that signals two Cloud Firewalls would
@@ -43,6 +45,19 @@ func ParseHelmPhantom(applyLog string) string {
 // label already exists (Heal B's trigger).
 func FirewallCollision(applyLog string) bool {
 	return strings.Contains(applyLog, FirewallCollisionMsg)
+}
+
+// TransientClusterUnreachable reports whether the apply failed only because the
+// kubernetes/helm provider could not reach the API server ("Kubernetes cluster
+// unreachable" — a TLS handshake / i/o timeout against :6443). The LKE-E HA
+// control plane can flake on an individual apiserver replica moments after
+// wait-cluster-ready passed, killing an otherwise-valid apply (Heal C's
+// trigger). There is no TF state to repair — the fix is to let the control plane
+// settle and retry. Intentionally narrow: it anchors on the provider's exact
+// "cluster unreachable" wording so a genuine resource-level failure is not
+// mistaken for a connectivity blip and silently retried.
+func TransientClusterUnreachable(applyLog string) bool {
+	return clusterUnreachableRe.MatchString(applyLog)
 }
 
 // ParseFirewallAddress returns the linode_firewall resource address whose create
