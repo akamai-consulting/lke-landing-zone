@@ -1,0 +1,16 @@
+# Per-environment tfvars are RENDERED from the LandingZone spec
+# (environments/<env>.yaml is the source of truth) by `llz render`, and
+# regenerated in CI before every terraform op (the terraform-init composite runs
+# `llz render --tfvars-only`). They are transient build artifacts — NOT committed
+# — so a spec edit produces one reviewable diff (the spec) instead of two, and a
+# rendered-but-unformatted tfvars can never trip the pre-commit `tofu fmt -check`.
+#
+# Matches cluster/<env>.tfvars, cluster-bootstrap/<env>.tfvars,
+# object-storage/<env>.tfvars, and vpc/<network>.tfvars. The committed
+# terraform.tfvars.example defaults stay tracked (they end in .example, not
+# .tfvars). A working `llz` is therefore required for any terraform op — see
+# docs/landing-zone-spec.md.
+#
+# Legacy (pre-spec) instances never run `llz render`, so they never receive this
+# file; their hand-authored <env>.tfvars stay tracked as the source of truth.
+*/*.tfvars

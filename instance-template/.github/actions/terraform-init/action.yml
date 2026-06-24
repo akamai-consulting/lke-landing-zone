@@ -33,6 +33,25 @@ inputs:
 runs:
   using: composite
   steps:
+    # Spec-driven instances render the per-env tfvars on the fly: they are
+    # gitignored build artifacts (environments/<env>.yaml is the source of truth),
+    # so every terraform op must regenerate them first. This is the universal
+    # guarantee — every TF job inits through this action, so none can read a stale
+    # or missing <env>.tfvars. No-op for instances without a spec (the `test -f`
+    # gate). REGION is inherited from the caller; render every env when it is unset
+    # (e.g. a job that targets a peer env sets its own REGION). A working `llz` is
+    # therefore a hard prerequisite for any terraform op — by design.
+    - name: Render tfvars from the LandingZone spec (spec-driven instances)
+      shell: bash
+      run: |
+        if [ -f landingzone.yaml ]; then
+          if [ -n "${REGION:-}" ]; then
+            llz render "$REGION" --tfvars-only
+          else
+            llz render --tfvars-only
+          fi
+        fi
+
     # First-party modules are consumed as
     #   git::ssh://git@<host>/<org>/<repo>.git//terraform-modules/<name>?ref=<tag>
     # (the published, SemVer-tagged reuse units — see terraform-modules/RELEASING.md).

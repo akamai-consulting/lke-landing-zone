@@ -17,6 +17,8 @@ func TestCheckArgvBuilders(t *testing.T) {
 			[]string{"tofu", "fmt", "terraform/cluster"}},
 		{"fmt-check", fmtCheckArgv("tofu", "terraform/cluster"),
 			[]string{"tofu", "fmt", "-check", "terraform/cluster"}},
+		{"fmt-check-paths", fmtCheckArgvPaths("tofu", []string{"a/main.tf", "a/legacy.tfvars"}),
+			[]string{"tofu", "fmt", "-check", "a/main.tf", "a/legacy.tfvars"}},
 		{"tflint", tfLintArgv("tflint", "terraform/cluster", "/abs/.tflintrc.hcl"),
 			[]string{"tflint", "--chdir=terraform/cluster", "--config=/abs/.tflintrc.hcl"}},
 		{"actionlint", actionsLintArgv("actionlint", []string{".github/workflows/ci.yml"}),
