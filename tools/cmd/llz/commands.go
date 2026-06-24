@@ -279,6 +279,12 @@ func runUpgrade(g globalOpts, ref string) error {
 	if err := run(g, copierUpdateArgv(ref)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
 	}
+	// copier update never deletes a file the template dropped between versions, so
+	// apply the template's declared removals (.template-removals) ourselves — now
+	// up to date from the copier update above. Honors --dry-run internally.
+	if err := applyTemplateRemovals(g); err != nil {
+		return fmt.Errorf("apply template removals: %w", err)
+	}
 	// Re-stamp natively: an instance carries no template-scripts/ to shell out to.
 	if g.dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) stamp .template-version")
