@@ -87,7 +87,16 @@ apl_chart_version = "5.0.0"
 
 Renovate keeps the *published artifacts* current. For the **copied** scaffolding
 (workflows, overlays), `llz env add` / `llz upgrade` stamp a committed
-`.template-version` recording the template repo/ref/commit you generated from. The
+`.template-version` recording the template repo/ref/commit you generated from.
+
+`llz upgrade` also applies `.template-removals` after the `copier update` —
+`copier` never deletes a file the template dropped between versions, so the
+template lists obsolete paths there and the upgrade removes them (`untrack` =
+`git rm --cached`, keep on disk, for gitignored regenerated artifacts like the
+per-env tfvars; `delete` = `git rm`, for a file the template no longer ships).
+Idempotent, so re-running is safe; review + commit the resulting removals.
+
+The
 Scheduled Checks workflow's `template-drift` job (monthly) reports how far behind
 the template your instance has fallen (run `llz drift` for the same check locally). After you pull upstream template
 changes, re-run `template-scripts/stamp-template-version.sh` and commit the refreshed stamp so

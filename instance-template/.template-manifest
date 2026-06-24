@@ -26,6 +26,9 @@
 
 # ── managed: pure template logic — overwritten on update ─────────────────────
 managed  .template-manifest
+# Declares paths `llz upgrade` removes after a copier update (copier never deletes
+# files the template drops). Template-owned — overwritten on update.
+managed  .template-removals
 # Composite actions are template-INTERNAL: the reusable `llz-*` workflows source
 # them from a template checkout (docs/templatization-plan.md §"Keeping instances
 # in sync"), and copier.yml `_exclude`s them so instances no longer copy them.

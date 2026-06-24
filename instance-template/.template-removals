@@ -1,0 +1,27 @@
+# .template-removals — paths the CURRENT template version wants gone from an
+# instance, applied by `llz upgrade` AFTER `copier update`. copier itself never
+# deletes a file the template dropped between versions (it leaves orphans behind),
+# so the template declares them here and `llz upgrade` removes them.
+#
+# FORMAT: one rule per line — `<mode>  <glob>`. Blank lines and `#` comments are
+# ignored. Globs are filepath.Match patterns rooted at the instance repo root, so
+# `*` matches WITHIN one path segment (it does NOT span '/'). Matching is against
+# git-tracked files; each rule is idempotent (a no-op once nothing matches), so
+# re-running `llz upgrade` is safe.
+#
+# MODES:
+#   untrack  `git rm --cached` — drop from the index but KEEP on disk. For
+#            gitignored, regenerated build artifacts (e.g. the per-env tfvars,
+#            which `llz render` rewrites from the spec before every terraform op).
+#   delete   `git rm` — remove from the index AND the working tree. For a file the
+#            template genuinely no longer ships.
+#
+# ADD a `delete` rule when you drop a file from the template that instances
+# previously committed, so it doesn't orphan on upgrade — verify per file that an
+# instance truly no longer needs it before listing it here.
+
+# The per-env <env>.tfvars are now gitignored build artifacts (see
+# terraform-iac-bootstrap/.gitignore) — untrack any an instance committed before
+# the switch. `llz render` keeps regenerating them; terraform.tfvars.example stays
+# tracked (it ends in .example, so `[a-z]*.tfvars` does not match it).
+untrack  terraform-iac-bootstrap/*/[a-z]*.tfvars
