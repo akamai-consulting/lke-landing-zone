@@ -93,22 +93,6 @@ spec:
           - - name: cleanup
               template: cleanup-pending
 
-          # ── secret-propagator AppRole (used by secret-rotation.yml propagate
-          # to write secret/linode/api-token without root). Same 90d cadence;
-          # runs after the platform-ci pipeline so a failure in the propagator
-          # rotation does not block platform-ci. The two pipelines share no state.
-          - - name: rotate-propagator-local
-              template: rotate-secret-propagator
-
-          - - name: patch-github-propagator-secret
-              template: patch-github-propagator
-
-          - - name: revoke-propagator-old-accessors
-              template: revoke-secret-propagator-old-accessors
-
-          - - name: cleanup-propagator
-              template: cleanup-propagator-pending
-
       # rotate-primary: handles the full local-cluster rotation.
       # Generates new secret_id, verifies it, revokes old accessors, patches
       # eso-approle-secret, and writes a transient K8s Secret for patch-github.
@@ -363,8 +347,6 @@ spec:
               when: '"{{ "{{" }}workflow.status{{ "}}" }}" == "Failed"'
           - - name: cleanup
               template: cleanup-pending
-            - name: cleanup-propagator
-              template: cleanup-propagator-pending
 
       # notify-rotation-failure: opens a GitHub issue so operators are alerted when
       # the AppRole rotation fails mid-run and manual intervention is required.
@@ -451,248 +433,6 @@ spec:
               type: RuntimeDefault
             capabilities:
               drop: ["ALL"]
-
-      # ── secret-propagator AppRole pipeline ────────────────────────────────────
-      # Mirrors the platform-ci flow but writes to a separate transient Secret
-      # (secret-propagator-rotation-pending) and an env-scoped GHA secret
-      # (OPENBAO_PROPAGATOR_SECRET_ID on `infra-<region>`). No ESO patch — the
-      # secret-propagator AppRole has no in-cluster consumer; only
-      # propagate-linode-pat (GitHub Actions) uses it.
-
-      - name: rotate-secret-propagator
-        activeDeadlineSeconds: 300
-        retryStrategy:
-          limit: "3"
-          retryPolicy: OnError
-        script:
-          image: openbao/openbao:2.5.4@sha256:436eaf9778cad75507ff70ea26ace30dcbe15606e619ac3823495663d7f7c115
-          command: [sh]
-          source: |
-            set -euo pipefail
-            K8S_API=https://kubernetes.default.svc
-            SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-            SA_CA=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-
-            VAULT_TOKEN=$(bao write auth/kubernetes/login \
-              role=approle-rotator \
-              jwt="$SA_TOKEN" \
-              -address="$OPENBAO_ADDR" \
-              -format=json | jq -r '.auth.client_token')
-            export VAULT_TOKEN
-            export VAULT_ADDR="$OPENBAO_ADDR"
-
-            OLD_ACCESSORS=$(bao list -format=json auth/approle/role/secret-propagator/secret-id 2>/dev/null | jq -r '.[]' || true)
-            OLD_IDS_ENCODED=$(printf '%s' "$OLD_ACCESSORS" | base64 | tr -d '\n')
-
-            NEW_SECRET_ID=$(bao write -f auth/approle/role/secret-propagator/secret-id -format=json | jq -r '.data.secret_id')
-
-            ROLE_ID=$(bao read auth/approle/role/secret-propagator/role-id -format=json | jq -r '.data.role_id')
-            TOKEN=$(bao write auth/approle/login role_id="$ROLE_ID" secret_id="$NEW_SECRET_ID" -format=json | jq -r '.auth.client_token')
-            if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-              echo "ERROR: new secret-propagator secret_id failed verification; aborting before any changes."
-              exit 1
-            fi
-
-            ENCODED=$(printf '%s' "$NEW_SECRET_ID" | base64 | tr -d '\n')
-            curl -sSf -X PATCH \
-              -H "Authorization: Bearer $SA_TOKEN" \
-              -H "Content-Type: application/strategic-merge-patch+json" \
-              -H "Accept: application/json" \
-              --cacert "$SA_CA" \
-              "$K8S_API/api/v1/namespaces/llz-openbao/secrets/secret-propagator-rotation-pending" \
-              -d "{\"data\":{\"secret_id\":\"$ENCODED\",\"old_accessor_ids\":\"$OLD_IDS_ENCODED\"}}" \
-              || curl -sSf -X POST \
-                -H "Authorization: Bearer $SA_TOKEN" \
-                -H "Content-Type: application/json" \
-                -H "Accept: application/json" \
-                --cacert "$SA_CA" \
-                "$K8S_API/api/v1/namespaces/llz-openbao/secrets" \
-                -d "{\"apiVersion\":\"v1\",\"kind\":\"Secret\",\"metadata\":{\"name\":\"secret-propagator-rotation-pending\",\"namespace\":\"llz-openbao\"},\"data\":{\"secret_id\":\"$ENCODED\",\"old_accessor_ids\":\"$OLD_IDS_ENCODED\"}}"
-            echo "Transient secret-propagator pending Secret written."
-          env:
-            - name: OPENBAO_ADDR
-              value: {{ $openbaoAddr | quote }}
-            - name: VAULT_SKIP_VERIFY
-              value: "false"
-            - name: VAULT_CACERT
-              value: /openbao-ca/ca.crt
-          volumeMounts:
-            - name: tmp-dir
-              mountPath: /tmp
-            - name: openbao-ca
-              mountPath: /openbao-ca
-              readOnly: true
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
-          securityContext:
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop: ["ALL"]
-
-      - name: patch-github-propagator
-        activeDeadlineSeconds: 120
-        retryStrategy:
-          limit: "3"
-          retryPolicy: OnError
-        script:
-          image: maniator/gh:v2.92.0@sha256:63c7b3b8610ed9eab086b2b71fc415e74734e0ed83ba95a76bf9165c279f2dd3
-          command: [sh]
-          source: |
-            set -euo pipefail
-            SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-            SA_CA=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-
-            NEW_SECRET_ID=$(curl -sSf \
-              -H "Authorization: Bearer $SA_TOKEN" \
-              --cacert "$SA_CA" \
-              "https://kubernetes.default.svc/api/v1/namespaces/llz-openbao/secrets/secret-propagator-rotation-pending" \
-              | jq -r '.data.secret_id' | base64 -d)
-
-            # Env-scoped — propagate-linode-pat in secret-rotation.yml runs with
-            # `environment: infra-<region>`, so the env-scoped value is what
-            # `secrets.OPENBAO_PROPAGATOR_SECRET_ID` resolves to in that job.
-            echo "$NEW_SECRET_ID" | gh secret set "$GITHUB_SECRET_NAME" \
-              --env "$GITHUB_ENV_NAME" --repo "$GITHUB_REPO"
-            echo "GitHub Actions secret updated: $GITHUB_SECRET_NAME on env $GITHUB_ENV_NAME."
-          env:
-            - name: GITHUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: approle-rotation-secrets
-                  key: github_token
-            - name: GH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: approle-rotation-secrets
-                  key: github_token
-            - name: GH_CONFIG_DIR
-              value: /tmp/gh
-            - name: GITHUB_REPO
-              value: {{ .Values.approleWorkflow.githubRepo | default "your-org/your-instance-repo" | quote }}
-            - name: GITHUB_SECRET_NAME
-              value: "OPENBAO_PROPAGATOR_SECRET_ID"
-            - name: GITHUB_ENV_NAME
-              value: "infra-{{ .Values.approleWorkflow.region | default "primary" }}"
-          volumeMounts:
-            - name: tmp-dir
-              mountPath: /tmp
-          resources:
-            requests:
-              cpu: 50m
-              memory: 32Mi
-            limits:
-              cpu: 100m
-              memory: 64Mi
-          securityContext:
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop: ["ALL"]
-
-      - name: revoke-secret-propagator-old-accessors
-        activeDeadlineSeconds: 300
-        retryStrategy:
-          limit: "2"
-          retryPolicy: OnError
-        script:
-          image: openbao/openbao:2.5.4@sha256:436eaf9778cad75507ff70ea26ace30dcbe15606e619ac3823495663d7f7c115
-          command: [sh]
-          source: |
-            set -euo pipefail
-            K8S_API=https://kubernetes.default.svc
-            SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-            SA_CA=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-
-            OLD_IDS=$(curl -sSf \
-              -H "Authorization: Bearer $SA_TOKEN" \
-              --cacert "$SA_CA" \
-              "$K8S_API/api/v1/namespaces/llz-openbao/secrets/secret-propagator-rotation-pending" \
-              | jq -r '.data.old_accessor_ids // ""' | base64 -d)
-
-            if [ -n "$OLD_IDS" ]; then
-              export VAULT_SKIP_VERIFY=false
-              export VAULT_ADDR="$OPENBAO_ADDR"
-              export VAULT_CACERT=/openbao-ca/ca.crt
-              VAULT_TOKEN=$(bao write auth/kubernetes/login \
-                role=approle-rotator \
-                jwt="$SA_TOKEN" \
-                -address="$OPENBAO_ADDR" \
-                -format=json | jq -r '.auth.client_token')
-              export VAULT_TOKEN
-              for ACCESSOR in $OLD_IDS; do
-                bao write auth/approle/role/secret-propagator/secret-id-accessor/destroy accessor="$ACCESSOR" || true
-                echo "Revoked secret-propagator accessor: $ACCESSOR"
-              done
-            else
-              echo "No old secret-propagator accessors to revoke."
-            fi
-          env:
-            - name: OPENBAO_ADDR
-              value: {{ $openbaoAddr | quote }}
-            - name: VAULT_CACERT
-              value: /openbao-ca/ca.crt
-          volumeMounts:
-            - name: tmp-dir
-              mountPath: /tmp
-            - name: openbao-ca
-              mountPath: /openbao-ca
-              readOnly: true
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
-          securityContext:
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop: ["ALL"]
-
-      - name: cleanup-propagator-pending
-        activeDeadlineSeconds: 60
-        script:
-          image: registry.k8s.io/kubectl:v1.32.4@sha256:5c9c4fb91818d262a9d8150cdfd75546ff47640e5a72249f769bd25fb171a207
-          command: [sh]
-          source: |
-            set -euo pipefail
-            kubectl -n llz-openbao delete secret secret-propagator-rotation-pending --ignore-not-found
-            echo "Transient secret-propagator pending Secret deleted."
-          volumeMounts:
-            - name: tmp-dir
-              mountPath: /tmp
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 100m
-              memory: 128Mi
-          securityContext:
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
-            capabilities:
-              drop: ["ALL"]
-
 ---
 # ServiceAccount for the CronWorkflow pods.
 # automountServiceAccountToken is intentionally left at default (true) because
@@ -735,7 +475,7 @@ roleRef:
 # Allow approle-rotator to create/patch/delete the transient pending Secrets
 # in the openbao namespace. These Secrets are ephemeral — created by the
 # rotate-* steps and deleted by the matching cleanup-* steps within the same
-# workflow run. One per AppRole pipeline (platform-ci, secret-propagator).
+# workflow run for the platform-ci pipeline's transient pending Secret.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -746,7 +486,6 @@ rules:
     resources: [secrets]
     resourceNames:
       - approle-rotation-pending
-      - secret-propagator-rotation-pending
     verbs: [get, create, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

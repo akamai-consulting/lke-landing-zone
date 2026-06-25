@@ -17,7 +17,9 @@ type: application
 # 0.1.5: doc-only — correct stale apl-values paths in README (no rendered change).
 # 0.1.6: doc-only — point the openbao-tls cert-watcher references at openbao-cert-watcher
 #        (the eso-cert-watcher chart was removed; no rendered change).
-version: 0.1.6
+# 0.1.7: drop the retired secret-propagator AppRole rotation pipeline from the
+#        approle-rotation CronWorkflow (GitHub CI now authenticates via GitHub-OIDC).
+version: 0.1.7
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

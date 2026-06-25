@@ -365,7 +365,7 @@ approleWorkflow:
   # Optional explicit override of the rotated GHA secret name. Leave empty to use
   # the role-derived name above (the common case); set it only for a bespoke name.
   githubApproleSecretName: ""
-  # Deployment this cluster represents. Used to env-scope the
-  # OPENBAO_PROPAGATOR_SECRET_ID GHA secret (`infra-<deployment>`). Set it to the
-  # deployment name in the env overlay.
+  # Deployment this cluster represents. Selects the per-deployment
+  # `infra-<deployment>` GitHub environment (where propagate-linode-pat runs and
+  # the platform-ci rotation writes back). Set it to the deployment name in the env overlay.
   region: primary
