@@ -103,6 +103,16 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 			args: []string{"write", "auth/kubernetes/role/approle-rotator",
 				"bound_service_account_names=approle-rotator", "bound_service_account_namespaces=" + openbaoNS,
 				"policies=approle-rotator", "ttl=15m"}},
+		// Kubernetes auth role for the External Secrets Operator — lets the ESO
+		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
+		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
+		// a GitHub secret and rotated in-cluster via `gh secret set`. ESO's
+		// controller SA is the chart's release name (llz-external-secrets).
+		{desc: "write kubernetes auth role eso", fatal: true,
+			args: []string{"write", "auth/kubernetes/role/eso",
+				"bound_service_account_names=llz-external-secrets",
+				"bound_service_account_namespaces=llz-external-secrets",
+				"policies=platform-ci", "ttl=15m"}},
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in
