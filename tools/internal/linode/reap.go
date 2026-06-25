@@ -103,10 +103,42 @@ func VPCIsOrphan(label string, live map[string]bool) bool {
 	return cid != "" && !live[cid]
 }
 
+// VolDecision is the result of classifying a Volume's cluster-ownership.
+type VolDecision int
+
+const (
+	VolKeep     VolDecision = iota // carries an `lke<id>` tag for a LIVE cluster — never an orphan
+	VolOrphan                      // carries an `lke<id>` tag for a GONE cluster — a definitive orphan
+	VolUntagged                    // no `lke<id>` cluster tag — no ownership signal; caller falls back to the scope filter
+)
+
+// ClassifyVolume decides a Volume's orphan status from its cluster-ownership tag —
+// the `lke<id>` tag the linode-volume-labeler CronJob stamps on every PVC's Volume
+// (the same convention the CCM uses for NodeBalancers, so LKEIDFromTags parses
+// both). This is the cluster-liveness gate that makes a broad (region-wide)
+// Volume sweep safe: a *detached* `pvc-*` Volume whose owning cluster is still live
+// is NOT an orphan — it is a Retain-policy Volume of a running cluster (a pod
+// rescheduling, a node replaced, a chart mid-upgrade) and must be kept. Without a
+// cluster tag we cannot attribute the Volume, so the caller falls back to the
+// unattached + `pvc-` scope filter (VolumeIsCandidate) — the legacy behaviour for
+// Volumes provisioned before cluster tagging (or by other tooling).
+func ClassifyVolume(tags []string, live map[string]bool) VolDecision {
+	cid := LKEIDFromTags(tags)
+	if cid == "" {
+		return VolUntagged
+	}
+	if live[cid] {
+		return VolKeep
+	}
+	return VolOrphan
+}
+
 // VolumeIsCandidate mirrors cleanup-orphan-volumes.sh's safe filter: an
 // unattached `pvc-*` Volume, optionally constrained by region, an id allowlist,
 // and a required tag. An empty regionFilter / idAllow / tagMustInclude means
-// "no constraint".
+// "no constraint". It is the SCOPE filter only — the cluster-liveness gate that
+// distinguishes a live cluster's detached Volume from a true orphan is
+// ClassifyVolume, which the caller applies on top of this.
 func VolumeIsCandidate(linodeIDNull bool, label, region string, tags []string,
 	regionFilter string, idAllow map[string]bool, id, tagMustInclude string) bool {
 	if !linodeIDNull || !strings.HasPrefix(label, "pvc-") {

@@ -2,8 +2,11 @@
 #
 # The script reads PersistentVolume objects to derive each Volume's PVC
 # namespace+name (via `spec.claimRef`), then PUTs human-readable labels to
-# the Linode API. It never needs direct access to PVCs themselves. `list` is
-# the only verb the script calls (`kubectl get pv -o json` is a list).
+# the Linode API. It also lists Nodes once per run to self-discover this
+# cluster's `lke<id>` tag from a node's `spec.providerID` (Linode instance id),
+# used to attribute each Volume to its owning cluster for safe reaping. It never
+# needs direct access to PVCs themselves. `list` is the only verb the script
+# calls (`kubectl get pv` / `kubectl get nodes` are lists).
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -17,7 +20,7 @@ metadata:
   name: linode-volume-labeler
 rules:
   - apiGroups: [""]
-    resources: [persistentvolumes]
+    resources: [persistentvolumes, nodes]
     verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

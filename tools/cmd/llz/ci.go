@@ -59,6 +59,8 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciGenBootstrapTLSCmd(), ciBootstrapCloudFirewallCmd(), ciProvisionHarborRobotsCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
+	// In-cluster Volume relabel + cluster-tag (formerly volume-labeler relabel.sh).
+	c.AddCommand(ciLabelVolumesCmd())
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).

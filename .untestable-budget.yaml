@@ -1,6 +1,7 @@
 # Budget for "untestable" code — logic embedded where it cannot be unit-tested:
-# inline multi-line workflow bash, standalone shell scripts, Python scripts, and
-# bash embedded in Terraform provisioner `command` heredocs.
+# inline multi-line workflow bash, standalone shell scripts, Python scripts,
+# bash embedded in Terraform provisioner `command` heredocs, and shell embedded
+# in YAML block scalars (ConfigMap `data` scripts, Argo `script.source`).
 #
 # The design principle of this repo (see template-scripts/AGENTS.md and the llz
 # CLI under tools/) is that decision-making logic belongs in unit-tested Go, not
@@ -27,10 +28,22 @@
 #                           provisioners. Single-line `command = "./x.sh"` is
 #                           glue (the script is already counted under shell) and
 #                           not tallied, same as a single-line `run:`.
+#   embedded-shell        : non-blank, non-comment shell inside a YAML block
+#                           scalar (`relabel.sh: |`, Argo `script.source: |`).
+#                           A block counts as shell when its key ends in
+#                           `.sh`/`.bash` or its first body line is a shell
+#                           shebang; the shebang itself (a `#` line) is not
+#                           tallied. These hide from the *.sh glob (the file is
+#                           YAML), so they get a dedicated counter.
 #
 # Baseline (post check-coverage / chart-lock-drift / argocd-rendered-apps
 # conversion to `llz ci`): inline-bash 669, shell 576, python 56,
 # tf-provisioner 98. Budgets carry ~3% headroom over baseline.
+#
+# embedded-shell baseline 22 (the cert-automation haproxy-rebuild workflow's
+# buildah/gh/kubectl script blocks — genuine multi-image tool glue, no decision
+# logic). The volume-labeler's relabel.sh (103 lines) that set the original 125
+# baseline was converted to the tested `llz ci label-volumes` command.
 
 categories:
   workflow-inline-bash:
@@ -62,6 +75,17 @@ categories:
     include:
       - "terraform-modules/**/*.tf"
       - "instance-template/**/*.tf"
+
+  embedded-shell-in-yaml:
+    kind: embedded-shell
+    budget: 23
+    include:
+      - "instance-template/**/*.yaml"
+      - "instance-template/**/*.yml"
+      - "kubernetes-charts/**/*.yaml"
+      - "kubernetes-charts/**/*.yml"
+      - "terraform-modules/**/*.yaml"
+      - "terraform-modules/**/*.yml"
 
 # Files exempted from every category. Keep this list short and justified — each
 # entry is logic the gate is choosing NOT to push into Go.

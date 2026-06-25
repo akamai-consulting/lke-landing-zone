@@ -37,6 +37,16 @@
 #      indistinguishable from any other Linode account's and can't be
 #      cleaned up by tag-sweep.
 #
+#      Cluster attribution is NOT done here. The linode-volume-labeler CronJob
+#      (apl-values/components/volumeLabeler) additionally stamps an
+#      `lke<cluster_id>` tag on every Volume — the same convention the CCM uses
+#      for NodeBalancers — which is what lets `llz reap` apply a cluster-liveness
+#      gate (internal/linode ClassifyVolume): a detached, Retain-policy PVC whose
+#      cluster is still live is kept, not reaped; only Volumes whose owning
+#      cluster is GONE are orphans. Reaping unattached `pvc-*` Volumes by
+#      detach-state alone is unsafe — detached does not mean orphaned. Doing it
+#      in-cluster (vs a static SC tag) also backfills Volumes that already exist.
+#
 # NOTE on UI label prefix: the CSI driver doesn't honor a per-StorageClass
 # `volume-label-prefix` parameter — that's a `--volume-label-prefix` flag on
 # the CSI controller, which is LKE-managed and not safe to patch. Volumes

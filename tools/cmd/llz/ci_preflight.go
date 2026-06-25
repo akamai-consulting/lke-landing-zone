@@ -227,10 +227,12 @@ func (s orphanScan) orphans() int { return s.vol.orphan + s.nb.orphan + s.vpc.or
 // NodeBalancers whose cluster is gone (or 0-backend), and lke<id> VPCs whose
 // cluster is gone. NodeBalancers and VPCs are scoped to region ("" =
 // account-wide): they carry a cluster-id tag/label, so a gone-cluster orphan is
-// unambiguous and safe to count account-wide. Volumes are scoped SEPARATELY to
-// volumeRegion because a detached pvc-* Volume carries no cluster id and can't
-// be attributed — in a shared account an account-wide count pulls in other
-// regions'/teams' detached Volumes that `llz reap` (which refuses an unscoped
+// unambiguous and safe to count account-wide. Volumes stamped by the
+// linode-volume-labeler CronJob carry an lke<id> cluster tag, so a detached
+// Volume of a still-live cluster is excluded here via ClassifyVolume — but
+// volumeRegion scoping is still applied because UNtagged legacy Volumes carry no
+// cluster id and can't be attributed: in a shared account an account-wide count
+// would pull in other regions'/teams' detached Volumes that `llz reap` (refuses an unscoped
 // Volume sweep and only acts per --region) will never clean, so the gate would
 // disagree with reap. volumeRegion="" preserves the account-wide volume count.
 // Read-only.
@@ -253,8 +255,14 @@ func scanOrphans(ctx context.Context, client orphanScanner, region, volumeRegion
 			continue
 		}
 		s.vol.total++
+		tags := linode.MapTags(v)
+		// Same predicate `llz reap` uses: a detached `pvc-*` Volume in scope, minus
+		// the cluster-liveness gate — a Volume tagged `lke<id>` for a still-live
+		// cluster is a Retain Volume in use, not an orphan (reap keeps it too, so
+		// the gate stays aligned with what reap would actually clean).
 		if linode.VolumeIsCandidate(linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"),
-			linode.MapString(v, "region"), linode.MapTags(v), volumeRegion, nil, linode.MapIDString(v), "") {
+			linode.MapString(v, "region"), tags, volumeRegion, nil, linode.MapIDString(v), "") &&
+			linode.ClassifyVolume(tags, live) != linode.VolKeep {
 			s.vol.orphan++
 		}
 	}
