@@ -37,6 +37,27 @@ type PodStatus struct {
 	InitContainerStatuses []ContainerStatus `json:"initContainerStatuses"`
 }
 
+// OwnerRef is the subset of metadata.ownerReferences the health checks read.
+type OwnerRef struct {
+	Kind string `json:"kind"`
+}
+
+// IsJobControlled reports whether a pod is owned by a Job — i.e. an ephemeral
+// Job/CronJob pod (a CronJob owns the Job, the Job owns the Pod, so the pod's
+// immediate owner Kind is "Job" for both). These pods are transient and
+// self-completing; their health is the Job section's job (ClassifyJob), not the
+// steady-state workload-pod gate. checkPods skips them so a short-lived CronJob
+// pod caught mid-ContainerCreating (e.g. argo-resync-nudger firing on its
+// schedule) can't be mistaken for a failing workload and flunk the health gate.
+func IsJobControlled(refs []OwnerRef) bool {
+	for _, r := range refs {
+		if r.Kind == "Job" {
+			return true
+		}
+	}
+	return false
+}
+
 // PodIsFailing mirrors the BAD_PODS jq selector: a pod is NOT okay when it is not
 // Succeeded and either not Running, or Running but not all of its (main)
 // containers are ready. A pod with no container statuses yet that is non-Running

@@ -133,7 +133,11 @@ func healthExitCode() int {
 		return 2
 	}
 	// Phase 1: bootstrap-cluster ran but bootstrap-openbao hasn't (no platform-app-ca).
-	phase1 := !kExists("-n", "cert-manager", "get", "secret", "platform-app-ca")
+	// Probe with retry: phase1 flips downstream hard-fails to in-progress, so a
+	// single transient kubectl error on this one call must not masquerade as
+	// "secret absent" and misclassify the phase. Any attempt that finds the
+	// Secret wins (present => not phase1); only a consistent miss means phase1.
+	phase1 := !secretPresentWithRetry("-n", "cert-manager", "get", "secret", "platform-app-ca")
 
 	var r health.Report
 	checkNodes(&r)
@@ -212,6 +216,31 @@ func kubectlReachable() bool {
 
 // kExists reports whether `kubectl <args>` exits 0.
 func kExists(args ...string) bool { _, err := execOutput("kubectl", args...); return err == nil }
+
+// phase1ProbeRetries / phase1ProbeDelay bound secretPresentWithRetry's retry
+// loop. A package var so tests can zero the delay.
+var (
+	phase1ProbeRetries = 3
+	phase1ProbeDelay   = 3 * time.Second
+)
+
+// secretPresentWithRetry reports whether `kubectl <args>` (an existence probe)
+// succeeds on any of a few attempts. kExists collapses every non-zero exit to
+// "missing", so a transient API/ACL blip looks identical to a genuine NotFound;
+// retrying lets a one-off blip recover (present wins) while a real absence still
+// fails every attempt. Used for the phase1 platform-app-ca probe, where a false
+// "absent" would mislabel the cluster phase.
+func secretPresentWithRetry(args ...string) bool {
+	for attempt := 0; attempt < phase1ProbeRetries; attempt++ {
+		if kExists(args...) {
+			return true
+		}
+		if attempt < phase1ProbeRetries-1 {
+			time.Sleep(phase1ProbeDelay)
+		}
+	}
+	return false
+}
 
 // kItems runs `kubectl get <args> -o json` and returns its .items[] as raw
 // messages, or nil on any error (a missing/unreachable resource => empty, so the
@@ -928,12 +957,20 @@ func checkPods(r *health.Report, phase1 bool) {
 	for _, raw := range kItems("get", "pods", "-A") {
 		var p struct {
 			Metadata struct {
-				Namespace string `json:"namespace"`
-				Name      string `json:"name"`
+				Namespace       string            `json:"namespace"`
+				Name            string            `json:"name"`
+				OwnerReferences []health.OwnerRef `json:"ownerReferences"`
 			} `json:"metadata"`
 			Status health.PodStatus `json:"status"`
 		}
 		if json.Unmarshal(raw, &p) != nil {
+			continue
+		}
+		// Job/CronJob pods are ephemeral and self-completing — their health is
+		// the Job section's (checkJobs/ClassifyJob), not this steady-state
+		// workload gate. Skip them so a short-lived CronJob pod caught
+		// mid-creation (e.g. argo-resync-nudger) can't flunk the gate.
+		if health.IsJobControlled(p.Metadata.OwnerReferences) {
 			continue
 		}
 		key := p.Metadata.Namespace + "/" + p.Metadata.Name

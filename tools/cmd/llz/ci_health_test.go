@@ -234,12 +234,55 @@ func TestCheckPods(t *testing.T) {
 			`{"metadata":{"namespace":"x","name":"ok"},"status":{"phase":"Running","containerStatuses":[{"name":"c","ready":true}]}}`,
 			`{"metadata":{"namespace":"x","name":"bad"},"status":{"phase":"Pending","containerStatuses":[{"name":"c","ready":false,"state":{"waiting":{"reason":"ImagePullBackOff"}}}]}}`,
 			`{"metadata":{"namespace":"external-dns","name":"external-dns-1"},"status":{"phase":"Pending"}}`,
+			// Ephemeral CronJob pod (owned by a Job) caught mid-ContainerCreating —
+			// must be SKIPPED, not counted as a failing workload (the flake we fixed).
+			`{"metadata":{"namespace":"argocd","name":"argo-resync-nudger-29706490-n6n7n","ownerReferences":[{"kind":"Job","controller":true}]},"status":{"phase":"Pending","containerStatuses":[{"name":"nudger","ready":false,"state":{"waiting":{"reason":"ContainerCreating"}}}]}}`,
 		), nil
 	})
 	var r health.Report
 	checkPods(&r, false)
+	// 1 failed (bad) + 1 deferred (external-dns); the Job-owned nudger pod is skipped.
 	if len(r.Failed) != 1 || len(r.Deferred) != 1 {
-		t.Errorf("checkPods = failed %v deferred %v, want 1 each", r.Failed, r.Deferred)
+		t.Errorf("checkPods = failed %v deferred %v, want 1 each (Job pod must be skipped)", r.Failed, r.Deferred)
+	}
+	for _, f := range r.Failed {
+		if strings.Contains(f, "nudger") {
+			t.Errorf("checkPods flagged an ephemeral Job pod: %q", f)
+		}
+	}
+}
+
+func TestSecretPresentWithRetry(t *testing.T) {
+	prevDelay := phase1ProbeDelay
+	phase1ProbeDelay = 0 // no real sleeps in the test
+	t.Cleanup(func() { phase1ProbeDelay = prevDelay })
+
+	// Present on the first try → true, no retries needed.
+	calls := 0
+	withExecOutput(t, func(string, ...string) ([]byte, error) { calls++; return nil, nil })
+	if !secretPresentWithRetry("-n", "cert-manager", "get", "secret", "platform-app-ca") || calls != 1 {
+		t.Errorf("present-first: got false or calls=%d, want true in 1 call", calls)
+	}
+
+	// Transient blip then success → present wins (a one-off error must not read
+	// as "absent" / flip phase1). This is fix #3.
+	calls = 0
+	withExecOutput(t, func(string, ...string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, errors.New("transient: connection refused")
+		}
+		return nil, nil
+	})
+	if !secretPresentWithRetry("x") || calls != 2 {
+		t.Errorf("blip-then-ok: want true after 2 calls, got calls=%d", calls)
+	}
+
+	// Genuinely absent → false after exhausting all attempts.
+	calls = 0
+	withExecOutput(t, func(string, ...string) ([]byte, error) { calls++; return nil, errors.New("NotFound") })
+	if secretPresentWithRetry("x") || calls != phase1ProbeRetries {
+		t.Errorf("absent: want false after %d calls, got true or calls=%d", phase1ProbeRetries, calls)
 	}
 }
 

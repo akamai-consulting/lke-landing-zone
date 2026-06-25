@@ -138,8 +138,20 @@ jobs:
             echo "apiserver not reachable yet — waiting for the control-plane ACL to propagate…"
             sleep 5
           done
-          llz ci health | tee /tmp/health.txt
-          EC=${PIPESTATUS[0]}
+          # Gate mode polls (converge) instead of taking a one-shot snapshot, so a
+          # transient — an ephemeral CronJob pod caught mid-ContainerCreating (e.g.
+          # argo-resync-nudger firing on schedule), or a phase/ACL blip — can't fail
+          # the gate moments after the provisioning converge already passed. Same
+          # tolerance the provisioning gate has; short budget so a genuinely broken
+          # cluster still fails well inside the job timeout. Report-only mode keeps
+          # the one-shot snapshot: a point-in-time diagnostic, not a gate.
+          if [[ "$FAIL_ON_UNHEALTHY" == "true" ]]; then
+            llz ci converge --budget 300 --interval 20 | tee /tmp/health.txt
+            EC=${PIPESTATUS[0]}
+          else
+            llz ci health | tee /tmp/health.txt
+            EC=${PIPESTATUS[0]}
+          fi
           echo
           echo "Exit: $EC"
           {
