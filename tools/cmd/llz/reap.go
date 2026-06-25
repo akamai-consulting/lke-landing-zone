@@ -257,20 +257,41 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 	for _, id := range strings.Fields(o.volumeIDs) {
 		idAllow[id] = true
 	}
+	// Cluster-liveness gate: every PVC the block-storage StorageClass provisions
+	// carries an `lke<id>` tag for its owning cluster, so a detached `pvc-*` Volume
+	// whose cluster is still live is a Retain Volume in use — NOT an orphan — and
+	// must be kept. We only load the live set for a broad (region) sweep: an
+	// explicit --volume-ids allowlist is a deliberate, precise scope the caller
+	// owns (e.g. CI tearing down one cluster's Volumes), so it bypasses the gate.
+	var live map[string]bool
+	if len(idAllow) == 0 {
+		var err error
+		if live, err = client.LiveClusterIDs(ctx); err != nil {
+			return fmt.Errorf("load live clusters: %w", err)
+		}
+	}
 	vols, err := client.ListVolumes(ctx)
 	if err != nil {
 		return fmt.Errorf("list Volumes: %w", err)
 	}
-	matched := false
+	matched, keptLive := false, 0
 	for _, v := range vols {
 		id := linode.MapIDString(v)
+		tags := linode.MapTags(v)
 		if !linode.VolumeIsCandidate(
 			linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"), linode.MapString(v, "region"),
-			linode.MapTags(v), o.region, idAllow, id, o.tagMustInclude) {
+			tags, o.region, idAllow, id, o.tagMustInclude) {
+			continue
+		}
+		if len(idAllow) == 0 && linode.ClassifyVolume(tags, live) == linode.VolKeep {
+			keptLive++
 			continue
 		}
 		del("/v4/volumes/"+id, fmt.Sprintf("volume %s (%s)", id, linode.MapString(v, "label")))
 		matched = true
+	}
+	if keptLive > 0 {
+		fmt.Println(dim(fmt.Sprintf("  kept %d detached Volume(s) tagged to a live cluster (not orphans)", keptLive)))
 	}
 	if !matched {
 		fmt.Println(dim("  none matched the filter"))

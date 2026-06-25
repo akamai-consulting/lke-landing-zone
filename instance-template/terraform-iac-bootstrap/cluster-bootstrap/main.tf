@@ -348,8 +348,28 @@ resource "kubectl_manifest" "apl_sops_secrets_placeholder" {
 # The manifest itself documents the parameter-key trivia (encrypted/volumeTags,
 # not encryption/volume-tags). The Linode CSI driver silently ignored the old
 # spelling, leaving every "encrypted" Volume actually unencrypted until this PR.
+# Cluster-ownership tag for PVCs. Every Volume the block-storage SC provisions
+# gets an `lke<cluster_id>` tag (the same convention the CCM uses for
+# NodeBalancers) so `llz reap` can tell a detached-but-owned PVC of a LIVE cluster
+# from a truly orphaned one and never reaps the former. compact() drops the tag if
+# the cluster id is somehow unavailable, leaving the static tags as a safe default.
+locals {
+  _cluster_id = tostring(try(data.terraform_remote_state.cluster.outputs.cluster_id, ""))
+  block_storage_volume_tags = join(",", compact([
+    "block-storage",
+    "platform-support-services",
+    local._cluster_id != "" ? "lke${local._cluster_id}" : "",
+  ]))
+}
+
 resource "kubectl_manifest" "platform_app_storage_class" {
-  yaml_body         = file("${path.module}/manifests/block-storage-class.yaml")
+  # The manifest ships the static tags as the template anchor; replace() swaps in
+  # the cluster-scoped set so the .yaml stays a valid, applyable manifest on its own.
+  yaml_body = replace(
+    file("${path.module}/manifests/block-storage-class.yaml"),
+    "block-storage,platform-support-services",
+    local.block_storage_volume_tags,
+  )
   server_side_apply = true
   field_manager     = "cluster-bootstrap-tf"
 }

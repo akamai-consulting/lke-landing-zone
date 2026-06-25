@@ -93,6 +93,28 @@ func TestVPCIsOrphan(t *testing.T) {
 	}
 }
 
+func TestClassifyVolume(t *testing.T) {
+	live := map[string]bool{"100": true}
+	cases := []struct {
+		name string
+		tags []string
+		want VolDecision
+	}{
+		// The block-storage SC stamps `lke<id>`; a live cluster's detached PVC is kept.
+		{"live-cluster", []string{"block-storage", "lke100"}, VolKeep},
+		{"gone-cluster", []string{"block-storage", "lke200"}, VolOrphan},
+		{"hyphen-form-live", []string{"lke-100"}, VolKeep},
+		// No cluster tag (legacy / other tooling) — no ownership signal.
+		{"no-cluster-tag", []string{"block-storage", "platform-support-services"}, VolUntagged},
+		{"no-tags", nil, VolUntagged},
+	}
+	for _, c := range cases {
+		if got := ClassifyVolume(c.tags, live); got != c.want {
+			t.Errorf("%s: ClassifyVolume(%v) = %v, want %v", c.name, c.tags, got, c.want)
+		}
+	}
+}
+
 func TestVolumeIsCandidate(t *testing.T) {
 	// attached → never
 	if VolumeIsCandidate(false, "pvc-1", "us-ord", nil, "", nil, "1", "") {
