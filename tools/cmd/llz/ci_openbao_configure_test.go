@@ -10,8 +10,8 @@ import (
 
 func TestBaoConfigureStepsShape(t *testing.T) {
 	steps := baoConfigureSteps("acme/platform")
-	if len(steps) != 15 {
-		t.Fatalf("got %d steps, want 15 (12 base + 3 GitHub-OIDC: jwt enable, jwt config, jwt role)", len(steps))
+	if len(steps) != 16 {
+		t.Fatalf("got %d steps, want 16 (12 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
 	// `enable` steps are the only non-fatal ones (the bash `|| true`) — check by
 	// shape, not index, so adding a new enable (jwt) can't silently violate it.
@@ -25,25 +25,28 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 	if n := len(baoConfigureSteps("")); n != 12 {
 		t.Errorf("no-repo configure should omit JWT steps: got %d, want 12", n)
 	}
-	// SECURITY: the jwt role must pin to the instance repo and map to platform-ci.
-	var sawJWTRole bool
+	// SECURITY: every jwt role must pin to the instance repo + owner audience.
+	// Two roles expected: platform-ci (read) and secret-propagator (write).
+	jwtRolePolicy := map[string]string{}
 	for _, s := range steps {
 		if len(s.args) > 1 && s.args[0] == "write" && strings.HasPrefix(s.args[1], "auth/jwt/role/") {
-			sawJWTRole = true
 			joined := strings.Join(s.args, " ")
 			if !strings.Contains(joined, `bound_claims={"repository":"acme/platform"}`) {
-				t.Errorf("jwt role must bound_claims the instance repo; got %v", s.args)
+				t.Errorf("jwt role %s must bound_claims the instance repo; got %v", s.args[1], s.args)
 			}
 			if !strings.Contains(joined, "bound_audiences=https://github.com/acme") {
-				t.Errorf("jwt role must bound_audiences the owner; got %v", s.args)
+				t.Errorf("jwt role %s must bound_audiences the owner; got %v", s.args[1], s.args)
 			}
-			if !strings.Contains(joined, "token_policies=platform-ci") {
-				t.Errorf("jwt role must map to platform-ci; got %v", s.args)
+			role := strings.TrimPrefix(s.args[1], "auth/jwt/role/")
+			for _, a := range s.args {
+				if strings.HasPrefix(a, "token_policies=") {
+					jwtRolePolicy[role] = strings.TrimPrefix(a, "token_policies=")
+				}
 			}
 		}
 	}
-	if !sawJWTRole {
-		t.Error("expected a jwt role step when ghRepo is set")
+	if jwtRolePolicy["platform-ci"] != "platform-ci" || jwtRolePolicy["secret-propagator"] != "secret-propagator" {
+		t.Errorf("jwt roles = %v, want platform-ci->platform-ci and secret-propagator->secret-propagator", jwtRolePolicy)
 	}
 	// Policy writes deliver the document over stdin to `policy write <name> -`.
 	var policies []string
@@ -129,12 +132,12 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
 		t.Fatal(err)
 	}
-	// lookup + 15 steps (12 base + 3 GitHub-OIDC) + audit list.
-	if len(calls) != 17 {
-		t.Fatalf("got %d bao calls, want 17: %v", len(calls), calls)
+	// lookup + 16 steps (12 base + 4 GitHub-OIDC) + audit list.
+	if len(calls) != 18 {
+		t.Fatalf("got %d bao calls, want 18: %v", len(calls), calls)
 	}
-	if calls[0] != "token lookup -format=json" || calls[16] != "audit list" {
-		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[16])
+	if calls[0] != "token lookup -format=json" || calls[17] != "audit list" {
+		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[17])
 	}
 	// The repo-bound jwt role must actually be written during the run.
 	var sawJWT bool

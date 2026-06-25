@@ -113,17 +113,30 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"policies=approle-rotator", "ttl=15m"}},
 	}
 
-	// GitHub Actions OIDC (JWT) auth — phase 1: stand the method + a repo-bound
-	// role up ALONGSIDE AppRole (CI is switched to it in a later change). Lets a
-	// workflow log in with a short-lived, per-run OIDC token, retiring the
-	// long-lived AppRole secret_id kept in GitHub Actions secrets and the
-	// in-cluster PAT that rotates it. Appended only when the instance repo is
-	// known; a repo-less configure (local/dry-run without GITHUB_REPOSITORY)
-	// omits it rather than create an unbindable role.
+	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in
+	// with a short-lived, per-run OIDC token instead of a long-lived AppRole
+	// secret_id stashed in GitHub Actions secrets (and the in-cluster PAT that
+	// rotates it via `gh secret set`). The `secret-propagator` role is the live
+	// GitHub-CI auth path (llz ci propagate-pat); `platform-ci` is read-only,
+	// reserved for any future GitHub workflow that reads OpenBao directly (ESO
+	// reads in-cluster via AppRole, not GitHub OIDC). Appended only when the
+	// instance repo is known; a repo-less configure (local/dry-run without
+	// GITHUB_REPOSITORY) omits them rather than create an unbindable role.
 	if ghRepo != "" {
 		owner := ghRepo
 		if i := strings.IndexByte(ghRepo, '/'); i > 0 {
 			owner = ghRepo[:i]
+		}
+		// SECURITY — bound_claims pins each role to THIS instance repo and
+		// bound_audiences to the owner's GitHub-OIDC default audience. Without
+		// BOTH, any GitHub repo's OIDC token could mint a token here.
+		jwtRole := func(name, policy string) baoConfigStep {
+			return baoConfigStep{desc: "write jwt role " + name, fatal: true,
+				args: []string{"write", "auth/jwt/role/" + name,
+					"role_type=jwt", "user_claim=sub",
+					"bound_audiences=https://github.com/" + owner,
+					`bound_claims={"repository":"` + ghRepo + `"}`,
+					"token_policies=" + policy, "token_ttl=15m", "token_max_ttl=30m"}}
 		}
 		steps = append(steps,
 			// Non-fatal enable (tolerates already-enabled on re-runs), matching
@@ -134,17 +147,8 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				args: []string{"write", "auth/jwt/config",
 					"oidc_discovery_url=https://token.actions.githubusercontent.com",
 					"bound_issuer=https://token.actions.githubusercontent.com"}},
-			// SECURITY — the two bindings below are load-bearing: bound_claims
-			// pins this role to THIS instance repo, and bound_audiences to the
-			// GitHub-OIDC default audience for the owner. Without BOTH, any
-			// GitHub repo's OIDC token could mint a platform-ci token.
-			// user_claim=sub identifies the caller by its unique workflow subject.
-			baoConfigStep{desc: "write jwt role platform-ci", fatal: true,
-				args: []string{"write", "auth/jwt/role/platform-ci",
-					"role_type=jwt", "user_claim=sub",
-					"bound_audiences=https://github.com/" + owner,
-					`bound_claims={"repository":"` + ghRepo + `"}`,
-					"token_policies=platform-ci", "token_ttl=15m", "token_max_ttl=30m"}},
+			jwtRole("platform-ci", "platform-ci"),
+			jwtRole("secret-propagator", "secret-propagator"),
 		)
 	}
 	return steps
