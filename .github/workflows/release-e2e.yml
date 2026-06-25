@@ -37,12 +37,16 @@ name: Release E2E — provision, validate, destroy a real cluster
 # APL_VALUES_REPO_TOKEN / OPENBAO_* (all the infra secrets — they live THERE, not
 # here). LOKI_ADMIN_PASSWORD is generated + stashed by terraform.yml on first
 # apply, so it need not be pre-seeded. It also needs `e2e` added to terraform.yml's region
-# choices (done) and an `e2e.tfvars` set produced by instantiate.
+# choices (done) and an `e2e.tfvars` set produced by instantiate. The instance's
+# TF_IMAGE / KUBE_IMAGE vars are auto-pinned by the instantiate job on `release`
+# runs (see "Pin instance CI images to this commit") so the baked llz can never
+# drift from the rendered workflow — no need to bump them by hand per release.
 #
 # This (template) repo only needs two values that can't be derived:
 #   vars:    E2E_INSTANCE_REPO (owner/name of the throwaway instance repo)
 #   secrets: E2E_DISPATCH_TOKEN — PAT/app token with contents:write +
-#            actions:read/write on E2E_INSTANCE_REPO.
+#            actions:read/write + Variables:read/write on E2E_INSTANCE_REPO
+#            (Variables:write is what lets the instantiate job pin TF_IMAGE/KUBE_IMAGE).
 # Region + OBJ cluster default to the canonical `lab` tier (us-ord / us-ord-1);
 # set vars E2E_LINODE_REGION / E2E_OBJ_CLUSTER only to override.
 #
@@ -132,7 +136,11 @@ jobs:
   instantiate:
     name: Instantiate → ${{ vars.E2E_INSTANCE_REPO }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35   # the image-pin step may wait up to ~20m for a just-cut build to publish
+    permissions:
+      contents: read
+      packages: read   # docker login + manifest inspect to confirm this commit's ci images published
+      actions: read    # GITHUB_TOKEN lists THIS repo's Build Container Images runs (image-pin step)
     outputs:
       head_sha: ${{ steps.push.outputs.head_sha }}
     steps:
@@ -286,6 +294,30 @@ jobs:
           git remote add origin "https://x-access-token:${E2E_DISPATCH_TOKEN}@github.com/${INSTANCE_REPO}.git"
           git push -f origin main
           echo "Pushed instantiation ${HEAD_SHA::8} to ${INSTANCE_REPO}@main"
+
+      # ── Pin the instance's CI images to THIS commit ─────────────────────────
+      # The reusable workflows run in vars.TF_IMAGE / vars.KUBE_IMAGE, each baking
+      # the `llz` binary — but those vars are independent of the workflow YAML we
+      # just rendered at GITHUB_SHA. A stale pin makes the baked llz drift from the
+      # workflow (the recurring "llz: unknown flag" / stale-binary e2e failures, e.g.
+      # v0.0.14/v0.0.15). Pin them to this commit's images so they can never drift.
+      # build-images only runs when tools/dockerfiles change, so a per-commit `sha-`
+      # image exists ONLY for binary-changing releases: wait for and pin it when one
+      # built; otherwise the binary is unchanged and `:latest` (re-tagged by the most
+      # recent build) is the matching image. Release-only — branch/dry-run dispatches
+      # have no auto-built sha image and keep whatever TF_IMAGE the dev set.
+      # Pins the instance's TF_IMAGE / KUBE_IMAGE to THIS commit's ci images so the
+      # baked llz can't drift from the workflow YAML rendered above — the logic
+      # (build-detection, publish-wait, sha-vs-:latest) lives in unit-tested Go
+      # (llz ci pin-instance-images), not inline bash. Two distinct credentials:
+      # GH_TOKEN_TEMPLATE reads THIS repo's runs + GHCR; GH_TOKEN_INSTANCE writes
+      # the instance repo's variables (needs Variables:read/write).
+      - name: Pin instance CI images to this commit
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN_INSTANCE: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci pin-instance-images --instance "${INSTANCE_REPO}" --owner "${GITHUB_REPOSITORY_OWNER}" --template-repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}"
 
   # ── 2. Provision the real cluster by driving the instance's terraform.yml ────
   provision:
