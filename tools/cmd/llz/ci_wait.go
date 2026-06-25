@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 )
 
 func ciWaitPodsCmd() *cobra.Command {
@@ -74,29 +76,61 @@ func ciWaitSecretCmd() *cobra.Command {
 }
 
 func ciWaitClusterReadyCmd() *cobra.Command {
-	var timeout, interval, requestTimeout int
+	var timeout, interval, requestTimeout, expectNodes int
+	var tfvarsPath string
 	c := &cobra.Command{
 		Use:   "wait-cluster-ready",
-		Short: "wait until the apiserver answers `kubectl get nodes` under $KUBECONFIG",
+		Short: "wait until the apiserver answers AND the expected node count is Ready under $KUBECONFIG",
 		Long: "Native port of the post-rotation health gate loop in llz-secret-rotation.yml\n" +
 			"and the 'Wait for cluster API ready' loop in llz-terraform.yml. Polls\n" +
-			"`kubectl get nodes` until the control plane accepts the credentials — a\n" +
-			"fresh cluster's API takes minutes to provision, and after an\n" +
-			"lke-admin-token rotation the regenerated kubeconfig takes time to sync —\n" +
-			"and prints the node list on success. On timeout it probes the apiserver's\n" +
-			"/version endpoint directly so 'API never came up' and 'API up but rejecting\n" +
-			"this kubeconfig / ACL blocks this runner' are distinguishable. Exit 0\n" +
-			"reachable, 1 on timeout.",
+			"`kubectl get nodes` until (a) the control plane accepts the credentials and\n" +
+			"(b) at least --expect-nodes nodes report Ready=True. A fresh LKE pool is\n" +
+			"created in seconds (the API returns) but its nodes take minutes to register\n" +
+			"and go Ready; gating only on apiserver reachability lets bootstrap proceed\n" +
+			"onto an empty pool, where the apl-operator pod (and then helm_release.apl)\n" +
+			"sits Pending until it times out. Requiring nodes Ready closes that gap.\n" +
+			"With --tfvars the expected count is read from that file's node_count\n" +
+			"(overriding --expect-nodes when > 0; autoscaler/absent → falls back to\n" +
+			"--expect-nodes). On timeout it dumps node readiness and probes the\n" +
+			"apiserver's /version directly so 'API never came up', 'API up but ACL\n" +
+			"blocks this runner', and 'API up, nodes never joined' are distinguishable.\n" +
+			"Exit 0 ready, 1 on timeout.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIWaitClusterReady(timeout, interval, requestTimeout))
+			os.Exit(runCIWaitClusterReady(timeout, interval, requestTimeout, resolveExpectNodes(tfvarsPath, expectNodes)))
 			return nil
 		},
 	}
 	c.Flags().IntVar(&timeout, "timeout", 360, "total wait budget in seconds")
 	c.Flags().IntVar(&interval, "interval", 15, "seconds between polls")
 	c.Flags().IntVar(&requestTimeout, "request-timeout", 10, "kubectl --request-timeout per poll, in seconds (bounds a hanging apiserver)")
+	c.Flags().IntVar(&expectNodes, "expect-nodes", 1, "minimum number of Ready nodes to wait for")
+	c.Flags().StringVar(&tfvarsPath, "tfvars", "", "cluster <region>.tfvars path; its node_count (when > 0) sets the expected Ready-node count")
 	return c
+}
+
+// resolveExpectNodes returns the number of Ready nodes wait-cluster-ready should
+// require. A tfvars file's node_count wins when present and positive (so the gate
+// waits for the whole statically-sized pool); otherwise fallback (the
+// --expect-nodes flag) applies. The fallback is floored at 1 — a cluster with
+// zero Ready nodes is never "ready". Reading tfvars is best-effort: an unreadable
+// path silently falls back, matching the gate's tolerance of partial cluster state.
+func resolveExpectNodes(tfvarsPath string, fallback int) int {
+	if fallback < 1 {
+		fallback = 1
+	}
+	if tfvarsPath == "" {
+		return fallback
+	}
+	content, err := os.ReadFile(tfvarsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::could not read %s (%v) — expecting %d Ready node(s)\n", tfvarsPath, err, fallback)
+		return fallback
+	}
+	if n := tf.ParseTFVars(string(content)).NodeCount; n > 0 {
+		return n
+	}
+	return fallback
 }
 
 // waitPoll calls cond until it returns true or timeout elapses, sleeping
@@ -197,26 +231,57 @@ func runCIWaitSecret(ns, name, es string, timeout, interval, esTimeout int) int 
 	return 0
 }
 
-func runCIWaitClusterReady(timeout, interval, requestTimeout int) int {
-	var nodes []byte
+func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) int {
+	if expectNodes < 1 {
+		expectNodes = 1
+	}
+	var apiReachable bool
 	ok := waitPoll(time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second, func() bool {
+		// jsonpath: one "<node>=<Ready-condition-status>" line per node, so a
+		// reachable-but-empty pool prints nothing and parses to 0 Ready.
 		out, err := execOutput("kubectl", "get", "nodes",
+			"-o", `jsonpath={range .items[*]}{.metadata.name}{"="}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}`,
 			fmt.Sprintf("--request-timeout=%ds", requestTimeout))
 		if err != nil {
 			fmt.Println("Waiting for the control plane to accept the kubeconfig...")
 			return false
 		}
-		nodes = out
+		apiReachable = true
+		ready := countReadyNodes(string(out))
+		if ready < expectNodes {
+			fmt.Printf("Control plane reachable; %d/%d node(s) Ready — waiting for the pool to come up...\n", ready, expectNodes)
+			return false
+		}
 		return true
 	})
 	if !ok {
-		fmt.Fprintf(os.Stderr, "::error::cluster unreachable after %ds — investigate the kubeconfig before relying on CI.\n", timeout)
+		if apiReachable {
+			fmt.Fprintf(os.Stderr, "::error::control plane is reachable but fewer than %d node(s) became Ready within %ds — the node pool never came up (check Linode capacity/quota for the requested type, or a node_pool_label ≥ 16 chars).\n", expectNodes, timeout)
+			fmt.Fprintf(os.Stderr, "\n# kubectl get nodes -o wide\n%s\n", tailLines(execCombined("kubectl", "get", "nodes", "-o", "wide"), 40))
+		} else {
+			fmt.Fprintf(os.Stderr, "::error::cluster unreachable after %ds — investigate the kubeconfig before relying on CI.\n", timeout)
+		}
 		diagnoseAPIServer()
 		return 1
 	}
-	fmt.Println("Control plane is reachable:")
-	os.Stdout.Write(nodes)
+	fmt.Printf("Control plane is reachable and ≥%d node(s) Ready:\n", expectNodes)
+	fmt.Print(execCombined("kubectl", "get", "nodes", "-o", "wide"))
 	return 0
+}
+
+// countReadyNodes counts nodes reporting Ready=True from the wait loop's
+// jsonpath output — one "<node>=<status>" line per node (status is the Ready
+// condition's value, e.g. "True"/"False"/"Unknown", or empty if the condition
+// is not yet present). Pure + tested: it is the gate's core decision.
+func countReadyNodes(jsonpathOut string) int {
+	ready := 0
+	for _, line := range strings.Split(jsonpathOut, "\n") {
+		_, status, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if ok && status == "True" {
+			ready++
+		}
+	}
+	return ready
 }
 
 // diagnoseAPIServer probes the kubeconfig's server URL directly on timeout:

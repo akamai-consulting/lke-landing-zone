@@ -166,12 +166,13 @@ func TestDiagnoseArgoCD(t *testing.T) {
 		streamed = append(streamed, name+" "+strings.Join(args, " "))
 	}
 	t.Cleanup(func() { diagStream = prev })
-	if err := runCIDiagnoseArgoCD("argocd"); err != nil || len(streamed) != 0 {
+	if err := runCIDiagnoseArgoCD("apl-operator", "argocd"); err != nil || len(streamed) != 0 {
 		t.Fatalf("missing kubeconfig: err=%v streamed=%v, want clean skip", err, streamed)
 	}
 
 	// With a kubeconfig: probes run, per-pod describes and job logs included,
-	// and the command still never errors.
+	// both namespaces swept (apl-operator + argocd), and the command still
+	// never errors.
 	kc := filepath.Join(t.TempDir(), "kc")
 	if err := os.WriteFile(kc, []byte("apiVersion: v1"), 0o600); err != nil {
 		t.Fatal(err)
@@ -183,15 +184,22 @@ func TestDiagnoseArgoCD(t *testing.T) {
 			return []byte("pod/argocd-server-0\n"), nil
 		case a == "-n argocd get jobs -o name":
 			return []byte("job.batch/hook-1\n"), nil
+		case a == "-n apl-operator get pods -o name":
+			return []byte("pod/apl-0\n"), nil
 		}
 		return nil, errors.New("best-effort")
 	})
-	if err := runCIDiagnoseArgoCD("argocd"); err != nil {
+	if err := runCIDiagnoseArgoCD("apl-operator", "argocd"); err != nil {
 		t.Fatalf("diagnose: %v", err)
 	}
 	joined := strings.Join(streamed, "\n")
 	for _, want := range []string{
 		"kubectl get nodes -o wide",
+		// apl-operator swept first — the likely fresh-cluster failure point.
+		"kubectl get all -n apl-operator -o wide",
+		"kubectl describe -n apl-operator pod/apl-0",
+		"helm history apl -n apl-operator",
+		// argocd still swept too.
 		"kubectl describe -n argocd pod/argocd-server-0",
 		"kubectl logs -n argocd job.batch/hook-1 --all-containers --tail=200",
 		"helm history argocd -n argocd",

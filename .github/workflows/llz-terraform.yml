@@ -646,14 +646,20 @@ jobs:
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ env.REGION }}
 
-      # wait-cluster-ready probes the apiserver's /version directly on timeout,
-      # distinguishing "still provisioning" from "ACL blocks this runner".
+      # wait-cluster-ready gates on BOTH apiserver reachability AND the node pool
+      # actually coming up: --tfvars reads node_count so it waits for the whole
+      # statically-sized pool to report Ready, not just for the API to answer (an
+      # LKE pool is "created" in seconds but its nodes take minutes to join — and a
+      # ≥16-char node_pool_label has left them never joining at all). On timeout it
+      # probes /version directly, distinguishing "still provisioning" / "ACL blocks
+      # this runner" / "API up but nodes never joined".
       - name: Wait for cluster API ready
         env:
           KUBECONFIG: ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
         run: |
-          llz ci wait-cluster-ready --timeout 900 --interval 10 || {
-            echo "Persisting failure = control plane still provisioning (re-run later), OR the 'Open control-plane ACL for this runner' step did not add this runner's egress IP to the LKE-E control-plane ACL (check that step's log + LINODE_API_TOKEN scope). Static github_runner_ipv4_cidrs / acl inventory are no longer required for hosted-runner access — the runner IP is opened at runtime by the lke-runner-acl action."
+          llz ci wait-cluster-ready --timeout 900 --interval 10 \
+            --tfvars "terraform-iac-bootstrap/cluster/${REGION}.tfvars" || {
+            echo "Persisting failure = control plane still provisioning (re-run later), OR the node pool never reached the expected Ready count (Linode capacity/quota for the node type, or a node_pool_label ≥ 16 chars wedging node join), OR the 'Open control-plane ACL for this runner' step did not add this runner's egress IP to the LKE-E control-plane ACL (check that step's log + LINODE_API_TOKEN scope). Static github_runner_ipv4_cidrs / acl inventory are no longer required for hosted-runner access — the runner IP is opened at runtime by the lke-runner-acl action."
             exit 1
           }
 
