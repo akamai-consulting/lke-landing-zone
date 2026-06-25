@@ -93,7 +93,6 @@ var Components = []Component{
 		DependsOn:         []string{"externalSecrets", "certManager"},
 		ManifestResources: []string{"openbao/openbao-cert-watcher.yaml"},
 		ArgoApps: []string{
-			"applications/eso-cert-watcher.yaml",
 			"applications/openbao.yaml",
 		},
 	},

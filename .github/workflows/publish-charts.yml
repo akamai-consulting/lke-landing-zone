@@ -4,7 +4,7 @@ name: Publish Helm Charts
 # an OCI artifact (oci://ghcr.io/<repo-owner>/charts/<chart>:<version>).
 #
 # Why GHCR (not the in-cluster Harbor): the charts the bootstrap itself consumes
-# (cluster-foundation, eso-cert-watcher, …) must come from a registry that
+# (cluster-foundation, cert-automation, …) must come from a registry that
 # exists BEFORE the cluster does. Harbor runs *inside* the cluster, so it can't
 # serve the charts that stand the cluster up. See docs/templatization-plan.md §9.
 #

@@ -108,7 +108,7 @@ flowchart TB
         AOA["llz-argo-bootstrap-apps<br/>(app-of-apps, encodes sync waves)"]
         FOUND["llz-cluster-foundation<br/>namespaces · default-deny NetworkPolicy · CoreDNS"]
         BAO["llz-openbao-platform<br/>(TLS · ServiceMonitor · AppRole rotation)"]
-        CERT["llz-cert-automation + llz-eso-cert-watcher<br/>(event-driven cert renewal)"]
+        CERT["llz-cert-automation<br/>(event-driven cert renewal)"]
     end
 
     GATE{{"Convergence contract<br/>0 = converged · 2 = in-progress (poll) · 1 = hard-fail (stop)"}}

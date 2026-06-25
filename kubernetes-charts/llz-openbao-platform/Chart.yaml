@@ -15,7 +15,9 @@ type: application
 # oci://ghcr.io/<org>/charts/llz-openbao-platform by .github/workflows/publish-charts.yml.
 # 0.1.4: strip internal fingerprints from comments for open-sourcing (no rendered change).
 # 0.1.5: doc-only — correct stale apl-values paths in README (no rendered change).
-version: 0.1.5
+# 0.1.6: doc-only — point the openbao-tls cert-watcher references at openbao-cert-watcher
+#        (the eso-cert-watcher chart was removed; no rendered change).
+version: 0.1.6
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

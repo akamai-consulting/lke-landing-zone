@@ -159,7 +159,7 @@ func kubectlOut(args ...string) (string, error) {
 
 var sshAuthError = regexp.MustCompile(`(?i)permission denied|host key verification failed`)
 
-var platformAppRe = regexp.MustCompile(`llz-linode-cidr-firewall|llz-cert-automation|llz-eso-cert-watcher|llz-cluster-foundation`)
+var platformAppRe = regexp.MustCompile(`llz-linode-cidr-firewall|llz-cert-automation|llz-cluster-foundation`)
 
 // findSSHRepoSecret finds the ArgoCD repository Secret whose base64 .data.url
 // contains host, reporting its name and whether it carries an sshPrivateKey.

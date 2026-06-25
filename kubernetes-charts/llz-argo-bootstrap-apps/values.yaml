@@ -282,29 +282,11 @@ components:
         - CreateNamespace=false
         - ServerSideApply=true
 
-  # Wave -5: eso-cert-watcher (first-party OCI chart). AFTER the ESO install
-  # (-15), BEFORE default-wave consumers — it restarts ESO when the OpenBao CA
-  # rotates, so ESO must already be installed.
-  - name: llz-eso-cert-watcher
-    enabled: true
-    syncWave: "-5"
-    destinationNamespace: llz-external-secrets
-    source:
-      type: oci
-      # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
-      chart: llz-eso-cert-watcher
-      version: 0.2.1
-      releaseName: llz-eso-cert-watcher
-      valuesObject:
-        namespace: llz-external-secrets
-        target:
-          deployment:
-            name: llz-external-secrets
-        watch:
-          certificate:
-            name: openbao-tls
-            namespace: llz-openbao
-        pollIntervalSeconds: 60
+  # NOTE: the llz-eso-cert-watcher sidecar was REMOVED. ESO ≥0.10.7 re-validates
+  # (Cluster)SecretStores on its store-requeue-interval (tightened to 1m on the
+  # ESO Application), rebuilding the Vault client and re-reading the openbao-tls
+  # caProvider CA each cycle — so a bootstrap-wedged store recovers and a rotated
+  # CA is picked up natively, without a watcher restarting ESO.
 
   # NOTE: OpenBao (llz-openbao, wave 0) is intentionally NOT delivered here. Since
   # the OCI cutover it ships as a kustomize Component

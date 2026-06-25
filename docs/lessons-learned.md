@@ -187,11 +187,14 @@ default against, not something to "clean up." Version-specific notes (apl-core
   `retry_join` in the chart), and the bootstrap `openbao-tls` cert lacks pod SANs
   while cert-manager can't re-issue until OpenBao is already up. The bootstrap path
   must account for both.
-- **ESO `caProvider` goes stale after cert-manager rotation.** ESO reads the CA
-  once at pod start and caches it forever; after `openbao-tls` rotates, ESO holds
-  the old CA → "x509: unknown authority" on every reconcile. The
-  `eso-cert-watcher` singleton polls the Secret's resourceVersion every 60s and
-  restarts ESO only on real changes.
+- **ESO `caProvider` staleness — fixed upstream, watcher retired.** Earlier ESO
+  cached the CA at client creation, so after `openbao-tls` rotated ESO served the
+  old CA → "x509: unknown authority" on every reconcile, and an `eso-cert-watcher`
+  singleton restarted ESO to refresh it. ESO ≥0.10.7 re-validates
+  (Cluster)SecretStores on its `--store-requeue-interval` (set to `1m`), rebuilding
+  the Vault client and re-reading the CA each cycle — so the watcher was removed.
+  (Caveat: don't enable `--enable-vault-token-cache`, which re-introduces
+  stale-client caching across a CA-only rotation.)
 - **`apl_pipeline_ready` must not gate on ESO.** ESO is installed by the bootstrap
   tree (wave -15) that the gate `depends_on`, so waiting for it is circular and
   deadlocks fresh bootstraps (apl-core runs sealed-secrets by default).

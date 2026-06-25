@@ -313,6 +313,22 @@ chart-pin-guard:
 		cd $(GO_DIR) && go run ./cmd/llz ci chart-pin-guard --root ..; \
 	fi
 
+# chart-version-guard: assert every chart whose directory changed vs the base ref
+# bumped its Chart.yaml `version:`. publish-charts.yml publishes immutably (it only
+# pushes a NEW version), so a template/values change merged WITHOUT a bump is
+# silently never released and clusters keep pulling the stale artifact. CI runs this
+# in its own workflow with the PR base SHA; the local mirror diffs against
+# origin/main (override with CHART_GUARD_BASE=<ref>). Kept OUT of LINT_K8S on
+# purpose — the CI lint-k8s container has no base ref to diff against. Decision
+# logic is unit-tested Go; this is thin glue.
+CHART_GUARD_BASE ?= origin/main
+chart-version-guard:
+	@if command -v llz >/dev/null 2>&1; then \
+		llz ci chart-version-guard --base $(CHART_GUARD_BASE); \
+	else \
+		cd $(GO_DIR) && go run ./cmd/llz ci chart-version-guard --root .. --base $(CHART_GUARD_BASE); \
+	fi
+
 # argo-workflow-lint: render the OpenBao approle-rotation CronWorkflow from the
 # Helm chart and validate the rendered YAML with `argo lint --offline`. Catches
 # step→template reference errors and invalid Argo field names that schema-only
@@ -410,7 +426,7 @@ template-manifest-check:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S); \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
@@ -433,6 +449,9 @@ lint:
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^kubernetes-charts/|\.kube-linter\.yaml$$'; then \
 		$(MAKE) --no-print-directory $(LINT_K8S); \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '^kubernetes-charts/'; then \
+		$(MAKE) --no-print-directory chart-version-guard; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$'; then \
 		$(MAKE) --no-print-directory actions-lint; \

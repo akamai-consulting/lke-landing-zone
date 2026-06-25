@@ -31,7 +31,7 @@ spec:
   # InvalidSpecError → no namespaces, OpenBao bootstrap times out.
   description: >-
     Support-plane infrastructure: cluster-foundation, External Secrets Operator,
-    Argo Workflows/Events, cert-automation, eso-cert-watcher, OpenBao, and the
+    Argo Workflows/Events, cert-automation, OpenBao, and the
     Linode internal-CIDR firewall. Only support-plane charts live here.
   # No git source: every component below is OCI (first-party GHCR) or a direct
   # upstream Helm repo. The instance repo is source-pinned by the seed
@@ -39,7 +39,7 @@ spec:
   #
   # Only repos Argo CD pulls at RUNTIME are listed:
   #   - GHCR: first-party charts (cluster-foundation, cert-automation,
-  #     eso-cert-watcher, openbao-platform, firewall).
+  #     openbao-platform, firewall).
   #   - charts.external-secrets.io: ESO (apl-core 5.0.0 doesn't ship it).
   #   - argoproj.github.io/argo-helm: Argo WORKFLOWS + EVENTS (NOT Argo CD —
   #     apl-core owns that). apl-core doesn't ship workflows/events; cert-automation

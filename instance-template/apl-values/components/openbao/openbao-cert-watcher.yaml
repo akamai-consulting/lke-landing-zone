@@ -16,9 +16,10 @@
 # auto-join Raft via retry_join, come up SEALED, and require operator
 # intervention to unseal (run .github/workflows/bootstrap-openbao.yml).
 #
-# Companion to the eso-cert-watcher (llz-eso-cert-watcher chart), which does
-# the same thing for the ESO controller (which has a clean cache-refresh via
-# Deployment restart — no sealing concern there).
+# Note: the analogous ESO restart-on-rotation watcher was REMOVED — ESO >=0.10.7
+# re-reads the openbao-tls caProvider CA on its store-requeue-interval (set to 1m)
+# and recovers natively. OpenBao still needs THIS watcher because it loads its
+# serving cert only at process start and cannot reload it in place.
 ---
 apiVersion: v1
 kind: ServiceAccount
