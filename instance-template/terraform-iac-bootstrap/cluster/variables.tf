@@ -61,9 +61,19 @@ variable "tags" {
 }
 
 variable "node_pool_label" {
-  description = "Label for the default node pool. Not account-unique, so it does not collide, but it MUST match llz's DefaultNodePoolLabel (tools/internal/terraform/tfvars.go) — that is the value llz's import/teardown reconstructs when <region>.tfvars carries no node_pool_label (the spec render does not emit one). A divergent default here makes `llz ci tf-import` look for the wrong pool label and skip adopting the live pool."
+  description = "Label for the default node pool. Not account-unique, so it does not collide, but it MUST match llz's DefaultNodePoolLabel (tools/internal/terraform/tfvars.go) — that is the value llz's import/teardown reconstructs when <region>.tfvars carries no node_pool_label (the spec render does not emit one). A divergent default here makes `llz ci tf-import` look for the wrong pool label and skip adopting the live pool. Keep it under 16 chars — longer labels have left LKE nodes stuck never joining the pool (see the validation below)."
   type        = string
-  default     = "observability-pool"
+  default     = "platform-pool"
+
+  # A node-pool label of 16+ chars has wedged LKE node provisioning: the pool is
+  # created (the API returns in seconds) but the nodes never register/become
+  # Ready, so the cluster apply "succeeds" onto an empty pool and every downstream
+  # workload (apl-operator, then helm_release.apl) hangs until its wait times out.
+  # Fail fast at plan/validate instead. Keep this in lockstep with DefaultNodePoolLabel.
+  validation {
+    condition     = length(var.node_pool_label) < 16
+    error_message = "node_pool_label must be < 16 characters (LKE nodes fail to join the pool with longer labels); got \"${var.node_pool_label}\" (${length(var.node_pool_label)} chars)."
+  }
 }
 
 variable "node_type" {

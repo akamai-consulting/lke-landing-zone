@@ -13,7 +13,18 @@ import (
 
 // DefaultNodePoolLabel is the fallback node-pool label when <region>.tfvars sets
 // none — identical to terraform-linode-import.sh's `${NODE_POOL_LABEL:-...}`.
-const DefaultNodePoolLabel = "observability-pool"
+//
+// MUST stay in lockstep with the node_pool_label default + validation in
+// instance-template/terraform-iac-bootstrap/cluster/variables.tf, and MUST stay
+// under 16 chars: LKE nodes fail to join the pool with a 16+ char label (the pool
+// creates but nodes never become Ready). MaxNodePoolLabelLen enforces this and
+// TestDefaultNodePoolLabelLen guards the constant.
+const DefaultNodePoolLabel = "platform-pool"
+
+// MaxNodePoolLabelLen is the exclusive upper bound on a node-pool label length:
+// labels must be < 16 chars. Mirrors the cluster module's variable validation so
+// llz can reject an over-long label before terraform ever runs.
+const MaxNodePoolLabelLen = 16
 
 // TFVars holds the handful of values the CI terraform steps read out of a
 // <region>.tfvars file. FirewallLabel is the raw firewall_label override (""

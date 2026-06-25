@@ -2,6 +2,18 @@ package terraform
 
 import "testing"
 
+// TestDefaultNodePoolLabelLen guards the constant against the regression that
+// shipped an 18-char "observability-pool" default: a node_pool_label of 16+ chars
+// has left LKE nodes never joining the pool. The cluster module enforces the same
+// bound via a variable validation; this keeps llz's reconstructed default (which
+// MUST match that module default) on the legal side of the line too.
+func TestDefaultNodePoolLabelLen(t *testing.T) {
+	if len(DefaultNodePoolLabel) >= MaxNodePoolLabelLen {
+		t.Errorf("DefaultNodePoolLabel %q is %d chars; must be < %d (LKE nodes fail to join with longer labels)",
+			DefaultNodePoolLabel, len(DefaultNodePoolLabel), MaxNodePoolLabelLen)
+	}
+}
+
 // The package's TestParseTFVars only asserts ClusterLabel/NodePoolLabel, so the
 // firewall_label parse branch is the one statement ParseTFVars leaves uncovered.
 func TestParseTFVarsFirewallLabel(t *testing.T) {
