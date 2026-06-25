@@ -45,7 +45,11 @@ certManagerNamespace: cert-manager
 eventBus:
   name: default
   jetstream:
-    version: latest
+    # Pinned for reproducibility (was `latest`). In the argo-events 2.4.13
+    # controller-config `latest` maps to nats:2.10.10, so this is the SAME image,
+    # just non-floating. Value MUST be one of argo-events' supported version keys
+    # (configs.jetstream.versions) — re-verify when bumping the argo-events chart.
+    version: "2.10.10"
     replicas: 3
 
 # The cert-manager Secret whose rotation drives a rebuild. The EventSource
