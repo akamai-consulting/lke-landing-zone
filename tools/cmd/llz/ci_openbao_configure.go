@@ -74,9 +74,13 @@ type baoConfigStep struct {
 }
 
 // baoConfigureSteps is the ordered configure sequence: mounts/auth enables,
-// then policies, then roles. Pure so the table is unit-testable.
-func baoConfigureSteps() []baoConfigStep {
-	return []baoConfigStep{
+// then policies, then roles. Pure so the table is unit-testable. ghRepo is the
+// instance's "<owner>/<name>" (from GITHUB_REPOSITORY); when set, the
+// GitHub-OIDC (JWT) auth method + a repo-bound role are appended so CI can
+// authenticate with a short-lived OIDC token instead of a long-lived AppRole
+// secret_id stashed in GitHub Actions secrets.
+func baoConfigureSteps(ghRepo string) []baoConfigStep {
+	steps := []baoConfigStep{
 		{desc: "enable KV v2 at secret/", args: []string{"secrets", "enable", "-version=2", "-path=secret", "kv"}},
 		{desc: "enable approle auth", args: []string{"auth", "enable", "approle"}},
 		{desc: "enable kubernetes auth", args: []string{"auth", "enable", "kubernetes"}},
@@ -108,6 +112,42 @@ func baoConfigureSteps() []baoConfigStep {
 				"bound_service_account_names=approle-rotator", "bound_service_account_namespaces=" + openbaoNS,
 				"policies=approle-rotator", "ttl=15m"}},
 	}
+
+	// GitHub Actions OIDC (JWT) auth — phase 1: stand the method + a repo-bound
+	// role up ALONGSIDE AppRole (CI is switched to it in a later change). Lets a
+	// workflow log in with a short-lived, per-run OIDC token, retiring the
+	// long-lived AppRole secret_id kept in GitHub Actions secrets and the
+	// in-cluster PAT that rotates it. Appended only when the instance repo is
+	// known; a repo-less configure (local/dry-run without GITHUB_REPOSITORY)
+	// omits it rather than create an unbindable role.
+	if ghRepo != "" {
+		owner := ghRepo
+		if i := strings.IndexByte(ghRepo, '/'); i > 0 {
+			owner = ghRepo[:i]
+		}
+		steps = append(steps,
+			// Non-fatal enable (tolerates already-enabled on re-runs), matching
+			// the other auth enables above.
+			baoConfigStep{desc: "enable jwt (GitHub OIDC) auth",
+				args: []string{"auth", "enable", "jwt"}},
+			baoConfigStep{desc: "configure jwt with the GitHub Actions OIDC issuer", fatal: true,
+				args: []string{"write", "auth/jwt/config",
+					"oidc_discovery_url=https://token.actions.githubusercontent.com",
+					"bound_issuer=https://token.actions.githubusercontent.com"}},
+			// SECURITY — the two bindings below are load-bearing: bound_claims
+			// pins this role to THIS instance repo, and bound_audiences to the
+			// GitHub-OIDC default audience for the owner. Without BOTH, any
+			// GitHub repo's OIDC token could mint a platform-ci token.
+			// user_claim=sub identifies the caller by its unique workflow subject.
+			baoConfigStep{desc: "write jwt role platform-ci", fatal: true,
+				args: []string{"write", "auth/jwt/role/platform-ci",
+					"role_type=jwt", "user_claim=sub",
+					"bound_audiences=https://github.com/" + owner,
+					`bound_claims={"repository":"` + ghRepo + `"}`,
+					"token_policies=platform-ci", "token_ttl=15m", "token_max_ttl=30m"}},
+		)
+	}
+	return steps
 }
 
 // auditFileDeviceActive reports whether `bao audit list` shows the file/
@@ -151,9 +191,16 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	if token == "" {
 		return fmt.Errorf("OPENBAO_ROOT_TOKEN is not set")
 	}
+	// Instance repo (GitHub Actions sets GITHUB_REPOSITORY to "<owner>/<name>").
+	// Drives the GitHub-OIDC (JWT) role's repo binding; empty (e.g. a local
+	// configure) omits the JWT steps.
+	ghRepo := os.Getenv("GITHUB_REPOSITORY")
+	if ghRepo == "" {
+		fmt.Fprintln(os.Stderr, "::warning::GITHUB_REPOSITORY unset — skipping GitHub-OIDC (jwt) auth setup; CI will fall back to AppRole.")
+	}
 	if g.dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would preflight the root token and apply the configure sequence:")
-		for _, s := range baoConfigureSteps() {
+		for _, s := range baoConfigureSteps(ghRepo) {
 			fmt.Fprintf(os.Stderr, "    bao %s\n", strings.Join(s.args, " "))
 		}
 		return nil
@@ -187,7 +234,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	}
 	fmt.Printf("OPENBAO_ROOT_TOKEN preflight on %s OK — proceeding.\n", region)
 
-	for _, step := range baoConfigureSteps() {
+	for _, step := range baoConfigureSteps(ghRepo) {
 		out, errOut, err := baoExecFn(pod, token, step.stdin, step.args...)
 		if err != nil {
 			if step.fatal {
