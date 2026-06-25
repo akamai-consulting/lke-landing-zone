@@ -33,7 +33,7 @@ platform:
   tls:
     # Name of the cert-manager Certificate AND the Secret it writes. LOAD-BEARING:
     # OpenBao mounts `openbao-tls` at /openbao/tls (see openbao.server.volumes),
-    # the eso-cert-watcher chart watches this Certificate, and the rotation
+    # openbao-cert-watcher watches this Certificate, and the rotation
     # CronWorkflow mounts this Secret's ca.crt. Do not rename without a sweep.
     secretName: openbao-tls
     # cert-manager issuer that signs the OpenBao serving cert. `openbao-ca` is a

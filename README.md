@@ -136,7 +136,6 @@ by convention (bump `Chart.yaml` `version:` to release). See
 | [`llz-cluster-foundation`](kubernetes-charts/llz-cluster-foundation/) | Secure-by-default baseline: namespaces, default-deny NetworkPolicies, CoreDNS, storage-class defaulting |
 | [`llz-openbao-platform`](kubernetes-charts/llz-openbao-platform/) | Opinionated OpenBao-on-K8s wrapper (TLS, NP, ServiceMonitor, AppRole rotation) |
 | [`llz-cert-automation`](kubernetes-charts/llz-cert-automation/) | Event-driven cert renewal (Argo Events + Workflows) |
-| [`llz-eso-cert-watcher`](kubernetes-charts/llz-eso-cert-watcher/) | Restarts ESO when its `caProvider` CA rotates |
 | [`llz-argo-bootstrap-apps`](kubernetes-charts/llz-argo-bootstrap-apps/) | App-of-apps generator encoding sync-wave ordering |
 
 ### Container images — `dockerfiles/`

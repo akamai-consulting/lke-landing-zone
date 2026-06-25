@@ -69,7 +69,6 @@ components:
 | `argo-workflows` | -15 | oci (argo-helm) | Provides Workflow/CronWorkflow CRDs; same wave as ESO. |
 | `argo-events` | -15 | oci (argo-helm) | Provides EventBus/EventSource/Sensor CRDs; must precede llz-cert-automation. |
 | `llz-cert-automation` | -14 | oci (GHCR first-party) | After argo-events (-15) registers the EventBus CRD it references. |
-| `llz-eso-cert-watcher` | -5 | oci (GHCR first-party) | After ESO install (-15); restarts ESO on CA rotation, so ESO must exist. |
 | `openbao` | 0 | git | Consumes ESO + CA chain; `prune: false` (stateful PKI/auth). |
 
 ## Values

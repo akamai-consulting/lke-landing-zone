@@ -53,7 +53,7 @@ knobs live under `platform`, `openbaoPromtail`, and `approleWorkflow`:
 |---|---|---|
 | `platform.releaseName` | `platform-openbao` | **Load-bearing.** StatefulSet/Service identity; cert SANs and raft FQDNs assume it. |
 | `platform.internalServiceName` | `platform-openbao-internal` | **Load-bearing.** Headless Service raft peers resolve through. |
-| `platform.tls.secretName` | `openbao-tls` | **Load-bearing.** Mounted at `/openbao/tls`; watched by `llz-eso-cert-watcher`; ca.crt mounted by the rotation workflow. |
+| `platform.tls.secretName` | `openbao-tls` | **Load-bearing.** Mounted at `/openbao/tls`; watched by `openbao-cert-watcher`; ca.crt mounted by the rotation workflow. |
 | `platform.tls.issuerRef.name` | `openbao-ca` | cert-manager issuer (stable self-signed bootstrap CA). |
 | `platform.tls.issuerRef.kind` | `ClusterIssuer` | |
 | `platform.tls.duration` / `renewBefore` | `8760h` / `720h` | |

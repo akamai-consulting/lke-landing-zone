@@ -32,9 +32,9 @@ func TestExtractChartPins(t *testing.T) {
 		},
 		{
 			name: "quoted version is unquoted",
-			content: "    chart: \"llz-eso-cert-watcher\"\n" +
+			content: "    chart: \"llz-cert-automation\"\n" +
 				"    targetRevision: \"0.2.0\"\n",
-			want: []chartPin{{Chart: "llz-eso-cert-watcher", Version: "0.2.0", Line: 1}},
+			want: []chartPin{{Chart: "llz-cert-automation", Version: "0.2.0", Line: 1}},
 		},
 		{
 			name: "git source (path, no version sibling) yields no pin",

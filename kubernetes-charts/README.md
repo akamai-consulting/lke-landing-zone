@@ -10,7 +10,6 @@ values, not editing YAML.
 
 | Chart | Replaces | Deploys |
 |---|---|---|
-| [`llz-eso-cert-watcher`](llz-eso-cert-watcher/) | `external-secrets/raw/eso-cert-watcher.yaml` | Restarts ESO when its `caProvider` CA rotates |
 | [`llz-cluster-foundation`](llz-cluster-foundation/) | `foundation/` | Secure-by-default baseline: namespaces, default-deny NetworkPolicies, CoreDNS, storage-class defaulting |
 | [`llz-openbao-platform`](llz-openbao-platform/) | `openbao/argocd/applications/` | Opinionated OpenBao-on-K8s wrapper (TLS, NP, ServiceMonitor, AppRole rotation) |
 | [`llz-cert-automation`](llz-cert-automation/) | `llz-cert-automation/` | Event-driven cert renewal (Argo Events + Workflows) |
@@ -54,7 +53,6 @@ state to migrate — the bootstrap stands the whole platform up from the charts.
 
 | Chart | Live consumption | Notes |
 |---|---|---|
-| `llz-eso-cert-watcher` | ✅ OCI Argo App | Stateless singleton. |
 | `llz-cert-automation` | ✅ OCI Argo App | CRDs handled via `SkipDryRunOnMissingResource`. |
 | `llz-cluster-foundation` | ✅ OCI Argo App | Namespaces/NPs/Jobs; wave-`-20` health-gated so they're Healthy before wave-`-15` consumers. |
 | `llz-openbao-platform` | ✅ OCI Argo App | HA-Raft boots fresh on the recreated cluster. `releaseName: platform-openbao` preserved (StatefulSet/cert/raft identity); `OPENBAO_CHART` Makefile targets + `replacements:` repointed/cleaned. |

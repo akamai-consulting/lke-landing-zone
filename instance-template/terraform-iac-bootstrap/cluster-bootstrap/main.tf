@@ -820,7 +820,7 @@ resource "kubectl_manifest" "argocd_apps_repo" {
 
 # Repo Secret — lets ArgoCD authenticate to GHCR to pull the first-party OCI
 # Helm charts (ghcr.io/<@ upstream_org @>/charts/*: cluster-foundation, openbao-
-# platform, cert-automation, eso-cert-watcher, internal-cidr-firewall). These
+# platform, cert-automation, internal-cidr-firewall). These
 # packages are PUBLIC, so ArgoCD pulls them anonymously and this Secret is
 # normally NOT created — it exists only for a private fork that keeps its charts
 # private. type=helm + enableOCI=true; url is the registry+org prefix ArgoCD

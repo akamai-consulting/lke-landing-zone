@@ -37,7 +37,7 @@ checks:
     # non-isolated-pod requires every workload to ship its own NetworkPolicy.
     # Cross-namespace isolation here is provided by the cluster-foundation
     # default-deny + per-namespace allow policies, not by each workload chart, so
-    # this check flags singleton watchers (eso-cert-watcher) that intentionally
+    # this check flags singleton watchers (openbao-cert-watcher) that intentionally
     # carry no in-chart NetworkPolicy. Consistent with the dangling-* exclusions.
     - non-isolated-pod
 
