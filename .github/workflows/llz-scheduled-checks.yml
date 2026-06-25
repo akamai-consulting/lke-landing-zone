@@ -142,84 +142,13 @@ jobs:
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ matrix.region }}
 
-  # ── AppRole rotation success check ──────────────────────────────────────────
-  # Runs daily (06:00 UTC). Verifies the quarterly `approle-rotation` Argo
-  # Workflows CronWorkflow has a recent successful run. The secret_id TTL is
-  # 2208h (~92 days); this check warns at 100 days so there is an 8-day window
-  # to investigate before ESO and CI lose OpenBao access.
-  approle-rotation-health:
-    name: AppRole Rotation Health (${{ matrix.region }})
-    needs: discover
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    permissions:
-      contents: read
-    environment: infra-${{ matrix.region }}
-    timeout-minutes: 15
-    continue-on-error: true
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-    strategy:
-      fail-fast: false
-      matrix:
-        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
-    env:
-      TF_VERSION:          '1.9.8'
-      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
-      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
-      REGION:              ${{ matrix.region }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (scripts + actions + tools)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
-      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
-      # LKE-E control-plane ACL so the kubectl checks below are permitted
-      # (revoked at job end), and install llz. allow-missing — these checks
-      # tolerate a torn-down cluster: the ACL open + llz install are skipped
-      # internally and the check steps gate on the `available` output.
-      - name: Cluster access (kubeconfig + runner ACL + llz)
-        id: kubeconfig
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          kubeconfig-path:       $HOME/.kube/config
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ matrix.region }}
-          allow-missing:         'true'
-
-      # Native port — last-success age vs threshold is health.ClassifyRotationAge.
-      - name: Check AppRole rotation last success
-        if: steps.kubeconfig.outputs.available == 'true'
-        run: llz ci health-approle-rotation
-      - name: Cleanup kubeconfig
-        if: always()
-        run: rm -f "$HOME/.kube/config"
-
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ matrix.region }}
-
   # ── LKE-E lke-admin rotation SLA ─────────────────────────────────────────────
   # Runs daily (06:00 UTC). On LKE-Enterprise the only sanctioned rotation is
   # lke-admin-token (see .github/workflows/secret-rotation.yml). This is the
   # SLA backstop: it reads the newest lke-admin-token Secret's age and warns if
   # rotation is overdue, so a silently-failing rotation workflow is surfaced
-  # before the 90-day Critical SLA is breached. Same alerting surface as
-  # approle-rotation-health (no kube-state-metrics secret-age metric exists in
+  # before the 90-day Critical SLA is breached. Same alerting surface as the
+  # other rotation-health checks (no kube-state-metrics secret-age metric exists in
   # this Prometheus, so a PrometheusRule would never fire — this is the alert).
   lke-admin-rotation-health:
     name: lke-admin Rotation SLA (${{ matrix.region }})

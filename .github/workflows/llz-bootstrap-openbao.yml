@@ -33,7 +33,6 @@ name: llz-bootstrap-openbao (reusable)
 #     • Prints all 5 keys + root token to job summary (copy to offline storage)
 #     • Unseals all 3 pods and joins followers to the Raft leader
 #     • Configures KV v2, AppRole, Kubernetes auth, policies, roles, audit log
-#     • Seeds eso-approle-secret + OPENBAO_APPROLE_* GitHub secrets
 #     • Seeds secret/harbor/admin and secret/infra/github-dispatch-token
 #     • Revokes the root token on completion
 #
@@ -538,26 +537,6 @@ jobs:
           kubectl apply -k "apl-values/_shared/manifest/post-apl-bootstrap"
           echo "post-apl-bootstrap resources applied (OpenTelemetryCollector + future CRD-dependent resources)."
 
-      # ── Seed: ESO and CI AppRole credentials ───────────────────────────────────
-      # eso-approle-secret: ESO reads secretId to authenticate with OpenBao.
-      # The GH secrets use the same repo-level naming convention as the
-      # approle-rotation CronWorkflow so secrets stay consistent after the
-      # first rotation: OPENBAO_APPROLE_SECRET_ID for an active/standalone
-      # cluster, OPENBAO_APPROLE_SECRET_ID_STANDBY for the standby peer
-      # (`llz ci seed-approle` branches on HA_ROLE).
-      - name: Seed ESO AppRole secret and GitHub CI secrets
-        if: steps.check_token.outputs.available == 'true'
-        run: |
-          llz ci seed-approle --role platform-ci \
-            --k8s-secret llz-external-secrets/eso-approle-secret:secretId \
-            --gh-role-secret OPENBAO_APPROLE_ROLE_ID \
-            --gh-secret OPENBAO_APPROLE_SECRET_ID \
-            --gh-secret-standby OPENBAO_APPROLE_SECRET_ID_STANDBY \
-            --done-message "eso-approle-secret and GitHub CI secrets updated."
-
-      # continue-on-error: a Harbor problem (unreachable URL, unhealthy pods)
-      # must not abort the job — the ~12 unrelated seed steps below it still
-      # need to run. Harbor secrets can be seeded later by re-running.
       - name: Wait for Harbor readiness
         if: steps.check_token.outputs.available == 'true'
         continue-on-error: true
@@ -700,28 +679,6 @@ jobs:
             --on-missing skip \
             --missing-note 'OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/cert-automation/github-token.'
 
-      # ── Seed: AppRole rotation workflow credentials ─────────────────────────────
-      # Seeds secret/approle/rotation-secrets so the approle-rotation-secrets
-      # ExternalSecret (approle-rotation-externalsecrets.yaml) can create the K8s
-      # Secret consumed by the AppRole rotation CronWorkflow. Requires
-      # OPENBAO_SECRETS_WRITE_TOKEN (fine-grained PAT, Actions + Secrets: write) — same token
-      # used to seed secret/infra/github-dispatch-token above.
-      - name: Seed AppRole rotation workflow credentials in OpenBao
-        if: steps.check_token.outputs.available == 'true'
-        env:
-          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          llz ci bao-seed --path secret/approle/rotation-secrets \
-            --field github_token=env:OPENBAO_SECRETS_WRITE_TOKEN \
-            --on-missing skip \
-            --missing-note 'OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/approle/rotation-secrets.' \
-            --missing-note "Add it as an infra-${REGION} environment secret and re-run."
-
-      # ── Seed: Grafana admin credentials ────────────────────────────────────────
-      # Seeds secret/grafana/admin so the grafana-admin-externalsecret can create
-      # the K8s Secret consumed by Grafana. IDEMPOTENT: skip if a password
-      # already exists in OpenBao so workflow reruns don't break operator
-      # logins ~30 min after a successful first bootstrap (skip if already seeded).
       - name: Seed Grafana admin credentials in OpenBao
         if: steps.check_token.outputs.available == 'true'
         run: |

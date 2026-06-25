@@ -9,7 +9,7 @@
 #
 # Two kinds of values live here:
 #   • `openbao:`  — passed straight through to the upstream openbao subchart.
-#   • everything else (`platform`, `openbaoPromtail`, `approleWorkflow`) —
+#   • everything else (`platform`, `openbaoPromtail`) —
 #     consumed by THIS chart's own templates/ (cert, NP, ServiceMonitor, etc.).
 
 # ── Platform identity (the decoupled org/cluster knobs) ──────────────────────
@@ -342,30 +342,3 @@ openbaoPromtail:
   lokiPushUrl: http://loki-gateway.llz-observability.svc.cluster.local/loki/api/v1/push
   region: primary
   cluster: platform-openbao  # stable label — matches the Helm release name.
-
-# ── AppRole-rotation CronWorkflow (templates/approle-rotation-*.yaml) ────────
-approleWorkflow:
-  # Gate for the entire rotation CronWorkflow + its RBAC/ESO. Set false in
-  # overlays that don't yet have cluster-specific GHA secret names (otherwise the
-  # rotation would clobber another cluster's GHA secret on the first tick).
-  approleRotationEnabled: true
-  # Cron schedule for the rotation. Default fires day 1 of months 1,4,7,10
-  # (quarterly ~= 90 days, the 90-day secret lifetime). A sibling
-  # cluster can stagger its schedule to avoid all regions rotating at once.
-  schedule: "0 2 1 1,4,7,10 *"
-  timezone: UTC
-  # GitHub repo (org-specific) the rotation pushes the new secret_id to via gh.
-  # This is org/cluster identity — a sibling team points at its own repo.
-  githubRepo: "your-org/your-instance-repo"
-  # This deployment's OpenBao HA role (active | standby | standalone). It is the
-  # source of truth for the GitHub Actions secret the rotation writes back to:
-  # active/standalone → OPENBAO_APPROLE_SECRET_ID, standby → ..._STANDBY (matching
-  # the suffix bootstrap-openbao.yml seeds). Set per-deployment in the env overlay.
-  role: standalone
-  # Optional explicit override of the rotated GHA secret name. Leave empty to use
-  # the role-derived name above (the common case); set it only for a bespoke name.
-  githubApproleSecretName: ""
-  # Deployment this cluster represents. Selects the per-deployment
-  # `infra-<deployment>` GitHub environment (where propagate-linode-pat runs and
-  # the platform-ci rotation writes back). Set it to the deployment name in the env overlay.
-  region: primary

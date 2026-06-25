@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .PHONY: help \
         build build-tools llz \
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argo-workflow-lint argocd-rendered-apps-check externalsecret-paths-check untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy
@@ -65,7 +65,6 @@ help:
 	@echo "  helm-lint-argocd  helm lint the observability ArgoCD app chart"
 	@echo "  helm-lint-real-values  helm lint --strict/template all charts (observability, registry, secrets, cert-manager, external-secrets) with production + staging values"
 	@echo "  helm-dep-lock-check  verify committed Chart.lock files match Chart.yaml dependency declarations"
-	@echo "  argo-workflow-lint  render + argo lint --offline Argo CronWorkflow/WorkflowTemplates"
 	@echo "  argocd-rendered-apps-check  render overlays and reject duplicate ArgoCD Helm parameters"
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
@@ -329,29 +328,6 @@ chart-version-guard:
 		cd $(GO_DIR) && go run ./cmd/llz ci chart-version-guard --root .. --base $(CHART_GUARD_BASE); \
 	fi
 
-# argo-workflow-lint: render the OpenBao approle-rotation CronWorkflow from the
-# Helm chart and validate the rendered YAML with `argo lint --offline`. Catches
-# step→template reference errors and invalid Argo field names that schema-only
-# checks miss. The empty-render guard ensures conditional templates ({{- if ... }})
-# actually produce output — a silent empty render would otherwise pass argo lint
-# trivially.
-#
-# The cert-automation WorkflowTemplate is validated as raw YAML by k8s-validate
-# + the kind dry-run job, so this target only needs to cover the OpenBao chart's
-# CronWorkflow (which is templated and can only be linted post-render).
-argo-workflow-lint:
-	@RENDERED=$$(helm template platform-openbao $(OPENBAO_CHART) \
-		-n llz-openbao \
-		--set "approleWorkflow.approleRotationEnabled=true"); \
-	if ! printf '%s\n' "$$RENDERED" | grep -q "^kind: CronWorkflow"; then \
-		echo "::error::argo-workflow-lint: helm template produced no CronWorkflow — check approleWorkflow.approleRotationEnabled and template conditionals"; \
-		exit 1; \
-	fi; \
-	_ARGO_TMP=$$(mktemp /tmp/argo-lint-XXXXXX.yaml); \
-	printf '%s\n' "$$RENDERED" > "$$_ARGO_TMP"; \
-	argo lint --offline "$$_ARGO_TMP"; \
-	rm -f "$$_ARGO_TMP"
-
 helm-dep-lock-check:
 	cd $(GO_DIR) && go run ./cmd/llz ci chart-lock-drift --root .. $(OPENBAO_CHART)
 
@@ -411,7 +387,7 @@ sync-wave-lint: render-charts
 LINT_K8S := k8s-lint k8s-validate sync-wave-lint placeholder-lint \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
             helm-lint-charts helm-lint-real-values helm-lint-argocd \
-            helm-dep-lock-check argo-workflow-lint
+            helm-dep-lock-check
 LINT_TF := tf-lint checkov tf-validate-roots
 
 # CI job entrypoints — one target per lint.yml container job.

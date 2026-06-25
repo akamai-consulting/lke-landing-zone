@@ -11,8 +11,8 @@ import (
 
 func TestBaoConfigureStepsShape(t *testing.T) {
 	steps := baoConfigureSteps("acme/platform")
-	if len(steps) != 15 {
-		t.Fatalf("got %d steps, want 15 (11 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
+	if len(steps) != 10 {
+		t.Fatalf("got %d steps, want 10 (6 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
 	// `enable` steps are the only non-fatal ones (the bash `|| true`) — check by
 	// shape, not index, so adding a new enable (jwt) can't silently violate it.
@@ -23,8 +23,8 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		}
 	}
 	// A repo-less configure omits the GitHub-OIDC steps entirely.
-	if n := len(baoConfigureSteps("")); n != 11 {
-		t.Errorf("no-repo configure should omit JWT steps: got %d, want 11", n)
+	if n := len(baoConfigureSteps("")); n != 6 {
+		t.Errorf("no-repo configure should omit JWT steps: got %d, want 6", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
 	// Two roles expected: platform-ci (read) and secret-propagator (write). The
@@ -71,7 +71,7 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 			policies = append(policies, s.args[2])
 		}
 	}
-	if strings.Join(policies, ",") != "platform-ci,approle-rotator,secret-propagator" {
+	if strings.Join(policies, ",") != "platform-ci,secret-propagator" {
 		t.Errorf("policies = %v", policies)
 	}
 }
@@ -86,12 +86,6 @@ func TestPolicyDocuments(t *testing.T) {
 		if !strings.Contains(policyPlatformCI, p) {
 			t.Errorf("platform-ci policy missing %s", p)
 		}
-	}
-	if !strings.Contains(policyAppRoleRotator, "auth/approle/role/platform-ci/secret-id") {
-		t.Error("approle-rotator policy missing the platform-ci secret-id path")
-	}
-	if strings.Contains(policyAppRoleRotator, "secret-propagator") {
-		t.Error("approle-rotator policy must no longer manage the retired secret-propagator AppRole")
 	}
 	if !strings.Contains(policySecretPropagator, `path "secret/data/linode/api-token"`) {
 		t.Error("secret-propagator policy missing the linode api-token path")
@@ -148,12 +142,12 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
 		t.Fatal(err)
 	}
-	// lookup + 15 steps (11 base + 4 GitHub-OIDC) + audit list.
-	if len(calls) != 17 {
-		t.Fatalf("got %d bao calls, want 17: %v", len(calls), calls)
+	// lookup + 10 steps (6 base + 4 GitHub-OIDC) + audit list.
+	if len(calls) != 12 {
+		t.Fatalf("got %d bao calls, want 12: %v", len(calls), calls)
 	}
-	if calls[0] != "token lookup -format=json" || calls[16] != "audit list" {
-		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[16])
+	if calls[0] != "token lookup -format=json" || calls[11] != "audit list" {
+		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[11])
 	}
 	// The jwt role must actually be written during the run (body is JSON over
 	// stdin; repo/audience binding is asserted in TestBaoConfigureStepsShape).
