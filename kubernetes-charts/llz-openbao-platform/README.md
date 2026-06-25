@@ -47,13 +47,13 @@ This chart captures them as **defaults**:
 
 Linode + apl-core assumptions stay as
 **defaults**; only org/cluster identity is variabilized. The newly-decoupled
-knobs live under `platform`, `openbaoPromtail`, and `approleWorkflow`:
+knobs live under `platform` and `openbaoPromtail`:
 
 | Key | Default | Notes |
 |---|---|---|
 | `platform.releaseName` | `platform-openbao` | **Load-bearing.** StatefulSet/Service identity; cert SANs and raft FQDNs assume it. |
 | `platform.internalServiceName` | `platform-openbao-internal` | **Load-bearing.** Headless Service raft peers resolve through. |
-| `platform.tls.secretName` | `openbao-tls` | **Load-bearing.** Mounted at `/openbao/tls`; watched by `openbao-cert-watcher`; ca.crt mounted by the rotation workflow. |
+| `platform.tls.secretName` | `openbao-tls` | **Load-bearing.** Mounted at `/openbao/tls`; watched by `openbao-cert-watcher`. |
 | `platform.tls.issuerRef.name` | `openbao-ca` | cert-manager issuer (stable self-signed bootstrap CA). |
 | `platform.tls.issuerRef.kind` | `ClusterIssuer` | |
 | `platform.tls.duration` / `renewBefore` | `8760h` / `720h` | |
@@ -65,13 +65,6 @@ knobs live under `platform`, `openbaoPromtail`, and `approleWorkflow`:
 | `openbao.server.ha.replicas` | `3` | Raft replica count (passed through to the subchart). |
 | `openbaoPromtail.lokiPushUrl` | `http://loki-gateway.observability.svc.cluster.local/loki/api/v1/push` | |
 | `openbaoPromtail.region` / `cluster` | `primary` / `platform-openbao` | Audit log labels. |
-| `approleWorkflow.approleRotationEnabled` | `true` | Gates the CronWorkflow + its RBAC/ESO. |
-| `approleWorkflow.schedule` | `0 2 1 1,4,7,10 *` | Quarterly (~90d) rotation cron. |
-| `approleWorkflow.timezone` | `UTC` | |
-| `approleWorkflow.githubRepo` | `your-org/your-instance-repo` | **Org identity** — rotation pushes the new secret_id here. |
-| `approleWorkflow.role` | `standalone` | HA role (active\|standby\|standalone). Derives the rotated GHA secret name: standby → `_STANDBY` suffix, else base. |
-| `approleWorkflow.githubApproleSecretName` | `""` | Optional explicit override of the rotated GHA secret name (empty → role-derived). |
-| `approleWorkflow.region` | `primary` | Deployment this cluster represents; env-scopes the propagator GHA secret (`infra-<deployment>`). |
 
 > **Changing `openbao.server.ha.replicas` is not a single-value edit.** The
 > `retry_join` blocks in `openbao.server.ha.raft.config` and the cert SANs in

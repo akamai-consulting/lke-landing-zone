@@ -51,13 +51,6 @@ spec:
           protocol: TCP
         - port: 8201
           protocol: TCP
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: approle-rotator
-      ports:
-        - port: 8200
-          protocol: TCP
   egress:
     - ports:
         - port: 53
@@ -89,42 +82,5 @@ spec:
               kubernetes.io/metadata.name: {{ .Values.platform.networkPolicy.observabilityNamespace }}
       ports:
         - port: 80
-          protocol: TCP
----
-# Allow approle-rotation CronWorkflow pods egress to OpenBao, K8s API, and GitHub.
-# Workflow pods carry the label set by spec.workflowSpec.podMetadata.labels.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: approle-rotator-workflow
-  namespace: {{ .Release.Namespace }}
-  annotations:
-    # Apply before any openbao workload — see project-np-sync-wave-race.
-    argocd.argoproj.io/sync-wave: "-10"
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/component: approle-rotator
-  policyTypes:
-    - Egress
-  egress:
-    - ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
-    - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: openbao
-      ports:
-        - port: 8200
-          protocol: TCP
-    # K8s API + GitHub. 6443 covers the LKE-Enterprise apiserver Service
-    # (443→6443 DNAT, Cilium enforces policy on the post-DNAT port).
-    - ports:
-        - port: 443
-          protocol: TCP
-        - port: 6443
           protocol: TCP
 {{- end }}

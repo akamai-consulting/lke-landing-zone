@@ -43,15 +43,6 @@ path "secret/metadata/loki/object-store"            { capabilities = ["read", "l
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
 `
 
-// approle-rotator: manage the platform-ci AppRole secret_id (consumed by the
-// ESO ClusterSecretStore in-cluster) — used by the approle-rotation CronWorkflow.
-// The secret-propagator AppRole was retired (GitHub CI now authenticates via
-// GitHub-OIDC jwt auth), so the rotator no longer manages its secret_id.
-const policyAppRoleRotator = `path "auth/approle/role/platform-ci/secret-id"                  { capabilities = ["create", "update", "list"] }
-path "auth/approle/role/platform-ci/secret-id-accessor/destroy" { capabilities = ["update"] }
-path "auth/approle/role/platform-ci/role-id"                    { capabilities = ["read"] }
-`
-
 // secret-propagator: narrow write access to secret/linode/api-token, used by the
 // rotation pipeline (secret-rotation.yml → propagate-linode-pat) to refresh the
 // PAT after a mint. Consumed via the GitHub-OIDC jwt role `secret-propagator`
@@ -79,30 +70,18 @@ type baoConfigStep struct {
 func baoConfigureSteps(ghRepo string) []baoConfigStep {
 	steps := []baoConfigStep{
 		{desc: "enable KV v2 at secret/", args: []string{"secrets", "enable", "-version=2", "-path=secret", "kv"}},
-		{desc: "enable approle auth", args: []string{"auth", "enable", "approle"}},
 		{desc: "enable kubernetes auth", args: []string{"auth", "enable", "kubernetes"}},
 		// Kubernetes auth uses in-pod service account token/CA auto-discovery.
 		{desc: "configure kubernetes auth", fatal: true,
 			args: []string{"write", "auth/kubernetes/config", "kubernetes_host=https://kubernetes.default.svc:443"}},
+		// platform-ci policy: read-only KV, mapped to the ESO k8s-auth role below and
+		// the platform-ci GitHub-OIDC jwt role. The platform-ci AppRole + its rotator
+		// were retired: ESO authenticates via Kubernetes auth, GitHub CI via OIDC, so
+		// no AppRole, no secret_id, no rotation CronWorkflow, no in-cluster PAT.
 		{desc: "write policy platform-ci", fatal: true, stdin: policyPlatformCI,
 			args: []string{"policy", "write", "platform-ci", "-"}},
-		{desc: "write policy approle-rotator", fatal: true, stdin: policyAppRoleRotator,
-			args: []string{"policy", "write", "approle-rotator", "-"}},
 		{desc: "write policy secret-propagator", fatal: true, stdin: policySecretPropagator,
 			args: []string{"policy", "write", "secret-propagator", "-"}},
-		{desc: "write approle role platform-ci", fatal: true,
-			args: []string{"write", "auth/approle/role/platform-ci",
-				"token_policies=platform-ci", "token_ttl=15m", "token_max_ttl=30m", "secret_id_ttl=2208h"}},
-		// Pin role_id to "platform-ci" — must match the ClusterSecretStore roleId field.
-		{desc: "pin platform-ci role-id", fatal: true,
-			args: []string{"write", "auth/approle/role/platform-ci/role-id", "role_id=platform-ci"}},
-		// (The secret-propagator AppRole was retired — GitHub CI authenticates via
-		// the secret-propagator GitHub-OIDC jwt role below, not an AppRole secret_id.)
-		// Kubernetes auth role for the approle-rotation CronWorkflow SA.
-		{desc: "write kubernetes auth role approle-rotator", fatal: true,
-			args: []string{"write", "auth/kubernetes/role/approle-rotator",
-				"bound_service_account_names=approle-rotator", "bound_service_account_namespaces=" + openbaoNS,
-				"policies=approle-rotator", "ttl=15m"}},
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
