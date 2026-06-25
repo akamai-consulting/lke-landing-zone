@@ -67,6 +67,25 @@ func TestPodIsFailing(t *testing.T) {
 	}
 }
 
+func TestIsJobControlled(t *testing.T) {
+	cases := []struct {
+		name string
+		refs []OwnerRef
+		want bool
+	}{
+		{"no owners", nil, false},
+		{"job-owned (CronJob pod)", []OwnerRef{{Kind: "Job"}}, true},
+		{"replicaset-owned (Deployment pod)", []OwnerRef{{Kind: "ReplicaSet"}}, false},
+		{"statefulset-owned", []OwnerRef{{Kind: "StatefulSet"}}, false},
+		{"job among several", []OwnerRef{{Kind: "ReplicaSet"}, {Kind: "Job"}}, true},
+	}
+	for _, c := range cases {
+		if got := IsJobControlled(c.refs); got != c.want {
+			t.Errorf("%s: IsJobControlled = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestSummarizeStatesAndRatio(t *testing.T) {
 	// Unmarshal a realistic kubectl pod-status fragment to exercise the json tags.
 	const raw = `{
