@@ -66,6 +66,9 @@ func ciCmd() *cobra.Command {
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
 	// Apply-time secret stashes + failure diagnostics (llz-terraform.yml).
 	c.AddCommand(ciStashEnvSecretCmd(), ciDiagnoseArgoCDCmd())
+	// Release-e2e instantiate: pin the instance's TF_IMAGE/KUBE_IMAGE to this
+	// commit's ci images so the baked llz can't drift from the rendered workflow.
+	c.AddCommand(ciPinInstanceImagesCmd())
 	// OpenBao KV seed steps (formerly ~15 inline-bash blocks in
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
 	// material specials in ci_bao_seed.go / ci_seed_approle.go /

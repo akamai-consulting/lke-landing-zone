@@ -306,45 +306,18 @@ jobs:
       # built; otherwise the binary is unchanged and `:latest` (re-tagged by the most
       # recent build) is the matching image. Release-only — branch/dry-run dispatches
       # have no auto-built sha image and keep whatever TF_IMAGE the dev set.
+      # Pins the instance's TF_IMAGE / KUBE_IMAGE to THIS commit's ci images so the
+      # baked llz can't drift from the workflow YAML rendered above — the logic
+      # (build-detection, publish-wait, sha-vs-:latest) lives in unit-tested Go
+      # (llz ci pin-instance-images), not inline bash. Two distinct credentials:
+      # GH_TOKEN_TEMPLATE reads THIS repo's runs + GHCR; GH_TOKEN_INSTANCE writes
+      # the instance repo's variables (needs Variables:read/write).
       - name: Pin instance CI images to this commit
         if: github.event_name == 'release'
         env:
-          # Two distinct credentials: GITHUB_TOKEN reads THIS repo's runs + GHCR
-          # images; E2E_DISPATCH_TOKEN writes the INSTANCE repo's variables. They
-          # can't share GH_TOKEN, so each gh call names its own.
-          TEMPLATE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INSTANCE_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
-        run: |
-          set -euo pipefail
-          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "${TEMPLATE_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-
-          # Did this commit trigger an image build (touched tools/dockerfiles/build-images)?
-          builds=$(GH_TOKEN="${TEMPLATE_TOKEN}" gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&per_page=100" \
-            --jq '[.workflow_runs[] | select(.name=="Build Container Images")] | length')
-
-          pin() {  # <repo-var> <image-name>
-            local var="$1" base="ghcr.io/${OWNER}/$2" img
-            if [ "${builds}" -gt 0 ]; then
-              img="${base}:sha-${GITHUB_SHA}"
-              echo "Build Container Images ran for ${GITHUB_SHA::8} — waiting for ${img} to publish…"
-              local deadline=$(( SECONDS + 1200 ))   # 20m: a multi-arch build cut just before release may still be finishing
-              until docker manifest inspect "${img}" >/dev/null 2>&1; do
-                (( SECONDS < deadline )) || { echo "::error::${img} not published after 20m — did Build Container Images succeed for ${GITHUB_SHA::8}?"; exit 1; }
-                echo "  …not published yet, retrying in 20s"; sleep 20
-              done
-            else
-              img="${base}:latest"   # no per-commit build => binary unchanged; :latest matches this commit's tools state
-              docker manifest inspect "${img}" >/dev/null 2>&1 || { echo "::error::${img} not found in GHCR"; exit 1; }
-            fi
-            GH_TOKEN="${INSTANCE_TOKEN}" gh variable set "${var}" --repo "${INSTANCE_REPO}" --body "${img}" \
-              || { echo "::error::could not set ${var} on ${INSTANCE_REPO} — E2E_DISPATCH_TOKEN needs the 'Variables: read and write' permission (alongside contents:write + actions:read/write)."; exit 1; }
-            echo "Pinned ${INSTANCE_REPO} ${var}=${img}"
-          }
-
-          pin TF_IMAGE   ci-terraform
-          pin KUBE_IMAGE ci-kubernetes
+          GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN_INSTANCE: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci pin-instance-images --instance "${INSTANCE_REPO}" --owner "${GITHUB_REPOSITORY_OWNER}" --template-repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}"
 
   # ── 2. Provision the real cluster by driving the instance's terraform.yml ────
   provision:
