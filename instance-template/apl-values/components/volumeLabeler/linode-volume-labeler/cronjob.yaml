@@ -45,23 +45,32 @@ spec:
         spec:
           restartPolicy: OnFailure
           serviceAccountName: linode-volume-labeler
-          # alpine/k8s ships kubectl + jq + curl + sh. Digest-pinned because
-          # this pod mounts a Linode API token Secret; defense-in-depth against
-          # tag-mutation supply-chain attacks.
+          # First-party slim image (llz + kubectl, distroless/nonroot uid 65532 —
+          # matches the securityContext below). ENTRYPOINT is `llz`; the relabel +
+          # cluster-tag logic that used to live in an embedded shell script is now
+          # the tested `llz ci label-volumes` command. Must be PUBLIC on ghcr (as
+          # the first-party charts are) so the pod pulls it anonymously — the ghcr
+          # pull-secret only exists in kube-system. Pin the @sha256 digest
+          # (renovate manages it) for the same tag-mutation defense the token-
+          # mounting pod warranted before.
           containers:
             - name: relabel
-              image: alpine/k8s:1.32.4@sha256:7e1e7d5b7a9617646650d1bec4422c88cf279fab34d9e1f772391bc7478595d4
-              command: ["/bin/sh", "/scripts/relabel.sh"]
+              image: ghcr.io/<@ upstream_org @>/llz:latest
+              args: ["ci", "label-volumes"]
               env:
                 # Example-env default. Per-env overlays strategic-merge this
                 # entry via linode-volume-labeler-region-patch.yaml.
                 - name: REGION_SHORT
                   value: "exa"
-                # Optional override for the cluster-ownership tag. Empty = the
-                # script self-discovers the `lke<id>` tag from a node's Linode
-                # instance, so this normally stays unset.
+                # Optional override for the cluster-ownership tag. Empty = llz
+                # self-discovers the `lke<id>` tag from a node's Linode instance,
+                # so this normally stays unset.
                 - name: LKE_CLUSTER_ID
                   value: ""
+                # HOME on a writable tmpfs so kubectl's cache has somewhere to go
+                # under readOnlyRootFilesystem (distroless HOME is read-only).
+                - name: HOME
+                  value: /tmp
                 - name: LINODE_TOKEN
                   valueFrom:
                     secretKeyRef:
@@ -78,13 +87,8 @@ spec:
                 runAsUser: 65532
                 seccompProfile: { type: RuntimeDefault }
               volumeMounts:
-                - { name: script, mountPath: /scripts, readOnly: true }
-                - { name: tmp,    mountPath: /tmp }
+                - { name: tmp, mountPath: /tmp }
           volumes:
-            - name: script
-              configMap:
-                name: linode-volume-labeler-script
-                defaultMode: 0555
             - name: tmp
               emptyDir:
                 medium: Memory

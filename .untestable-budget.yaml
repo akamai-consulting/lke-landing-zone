@@ -38,8 +38,12 @@
 #
 # Baseline (post check-coverage / chart-lock-drift / argocd-rendered-apps
 # conversion to `llz ci`): inline-bash 669, shell 576, python 56,
-# tf-provisioner 98, embedded-shell 125. Budgets carry ~3% headroom over
-# baseline.
+# tf-provisioner 98. Budgets carry ~3% headroom over baseline.
+#
+# embedded-shell baseline 22 (the cert-automation haproxy-rebuild workflow's
+# buildah/gh/kubectl script blocks — genuine multi-image tool glue, no decision
+# logic). The volume-labeler's relabel.sh (103 lines) that set the original 125
+# baseline was converted to the tested `llz ci label-volumes` command.
 
 categories:
   workflow-inline-bash:
@@ -74,7 +78,7 @@ categories:
 
   embedded-shell-in-yaml:
     kind: embedded-shell
-    budget: 129
+    budget: 23
     include:
       - "instance-template/**/*.yaml"
       - "instance-template/**/*.yml"
