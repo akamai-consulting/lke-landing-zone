@@ -10,8 +10,8 @@ import (
 
 func TestBaoConfigureStepsShape(t *testing.T) {
 	steps := baoConfigureSteps("acme/platform")
-	if len(steps) != 14 {
-		t.Fatalf("got %d steps, want 14 (10 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
+	if len(steps) != 15 {
+		t.Fatalf("got %d steps, want 15 (11 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
 	// `enable` steps are the only non-fatal ones (the bash `|| true`) — check by
 	// shape, not index, so adding a new enable (jwt) can't silently violate it.
@@ -22,8 +22,8 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		}
 	}
 	// A repo-less configure omits the GitHub-OIDC steps entirely.
-	if n := len(baoConfigureSteps("")); n != 10 {
-		t.Errorf("no-repo configure should omit JWT steps: got %d, want 10", n)
+	if n := len(baoConfigureSteps("")); n != 11 {
+		t.Errorf("no-repo configure should omit JWT steps: got %d, want 11", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
 	// Two roles expected: platform-ci (read) and secret-propagator (write).
@@ -135,12 +135,12 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
 		t.Fatal(err)
 	}
-	// lookup + 14 steps (10 base + 4 GitHub-OIDC) + audit list.
-	if len(calls) != 16 {
-		t.Fatalf("got %d bao calls, want 16: %v", len(calls), calls)
+	// lookup + 15 steps (11 base + 4 GitHub-OIDC) + audit list.
+	if len(calls) != 17 {
+		t.Fatalf("got %d bao calls, want 17: %v", len(calls), calls)
 	}
-	if calls[0] != "token lookup -format=json" || calls[15] != "audit list" {
-		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[15])
+	if calls[0] != "token lookup -format=json" || calls[16] != "audit list" {
+		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[16])
 	}
 	// The repo-bound jwt role must actually be written during the run.
 	var sawJWT bool
