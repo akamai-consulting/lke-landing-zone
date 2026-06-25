@@ -4,20 +4,22 @@ package main
 // llz-secret-rotation.yml's 'Probe OpenBao + write secret/linode/api-token'
 // step. After a Linode PAT rotation, the new token must reach each region's
 // OpenBao or every consumer reading secret/linode/api-token keeps using the
-// revoked one. The write authenticates via the `secret-propagator` AppRole
-// (write on secret/data/linode/api-token only) — NOT root: bootstrap revokes
-// the root token at the end of every run by design.
+// revoked one. The write authenticates via the `secret-propagator` GitHub-OIDC
+// (jwt) role — a short-lived, per-run, repo-bound token (NOT a long-lived
+// AppRole secret_id, and NOT root: bootstrap revokes root at the end of run).
 //
-// Env contract (identical to the step's env: block):
-//   REGION                        — deployment being propagated to (messages)
-//   OPENBAO_PROPAGATOR_ROLE_ID    — secret-propagator AppRole role_id
-//   OPENBAO_PROPAGATOR_SECRET_ID  — secret-propagator AppRole secret_id
-//   NEW_TOKEN                     — secrets.LINODE_API_TOKEN (re-fetched after
-//                                   the create job rewrote it; a masked value
-//                                   cannot cross a job boundary as an output)
-//   NEW_PAT_ID                    — created PAT's id (audit label; optional)
-//   NEW_TOKEN_HASH                — sha256 of the token the create job minted;
-//                                   empty in propagate-only recovery mode
+// Env contract:
+//   REGION              — deployment being propagated to (messages)
+//   GITHUB_REPOSITORY   — "<owner>/<name>" (auto-set by Actions); drives the
+//                         OIDC audience that matches the jwt role's bound_audiences
+//   ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN — set when the job has
+//                         `permissions: id-token: write`; used to mint the OIDC JWT
+//   NEW_TOKEN           — secrets.LINODE_API_TOKEN (re-fetched after the create
+//                         job rewrote it; a masked value cannot cross a job
+//                         boundary as an output)
+//   NEW_PAT_ID          — created PAT's id (audit label; optional)
+//   NEW_TOKEN_HASH      — sha256 of the token the create job minted; empty in
+//                         propagate-only recovery mode
 
 import (
 	"crypto/sha256"
@@ -32,15 +34,16 @@ import (
 func ciPropagatePATCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "propagate-pat",
-		Short: "write the rotated Linode PAT into this cluster's OpenBao via the secret-propagator AppRole",
+		Short: "write the rotated Linode PAT into this cluster's OpenBao via the secret-propagator GitHub-OIDC role",
 		Long: "Native port of the 'Probe OpenBao + write secret/linode/api-token' rotation\n" +
 			"step. Verifies the token in NEW_TOKEN matches the hash the create job\n" +
 			"emitted (guarding against a stale GHA secret refetch silently undoing the\n" +
-			"rotation), logs in with the secret-propagator AppRole, and writes\n" +
-			"secret/linode/api-token over stdin so the token never appears on argv.\n" +
-			"Unbootstrapped regions (no AppRole creds seeded, or no OpenBao pod) skip\n" +
-			"with a summary note. Env: REGION, OPENBAO_PROPAGATOR_{ROLE_ID,SECRET_ID},\n" +
-			"NEW_TOKEN, NEW_PAT_ID, NEW_TOKEN_HASH.",
+			"rotation), mints a GitHub Actions OIDC token and exchanges it via OpenBao's\n" +
+			"jwt auth (role secret-propagator), and writes secret/linode/api-token over\n" +
+			"stdin so the token never appears on argv. Regions without an OpenBao pod\n" +
+			"skip with a summary note. Needs `permissions: id-token: write`. Env: REGION,\n" +
+			"GITHUB_REPOSITORY, ACTIONS_ID_TOKEN_REQUEST_{URL,TOKEN}, NEW_TOKEN,\n" +
+			"NEW_PAT_ID, NEW_TOKEN_HASH.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIPropagatePAT() },
 	}
@@ -53,11 +56,9 @@ func runCIPropagatePAT() error {
 		return err
 	}
 
-	roleID, secretID := os.Getenv("OPENBAO_PROPAGATOR_ROLE_ID"), os.Getenv("OPENBAO_PROPAGATOR_SECRET_ID")
-	if roleID == "" || secretID == "" {
-		fmt.Fprintf(os.Stderr, "::warning::OPENBAO_PROPAGATOR_ROLE_ID/SECRET_ID not set in infra-%s — cannot write secret/linode/api-token\n", region)
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
-			fmt.Sprintf("> Skipped: `OPENBAO_PROPAGATOR_*` not seeded in `infra-%s`. Re-run bootstrap-openbao.yml to seed the secret-propagator AppRole.", region))
+	ghRepo := os.Getenv("GITHUB_REPOSITORY")
+	if ghRepo == "" {
+		return fmt.Errorf("GITHUB_REPOSITORY is empty — cannot derive the OIDC audience for the secret-propagator jwt login")
 	}
 	newToken := os.Getenv("NEW_TOKEN")
 	if newToken == "" {
@@ -91,18 +92,25 @@ func runCIPropagatePAT() error {
 			fmt.Sprintf("> Skipped: OpenBao pod not found on `%s`.", region))
 	}
 
-	// AppRole login: exchange role_id + secret_id for a short-lived token bound
-	// to the secret-propagator policy (TTL 15m/30m, set by bootstrap-openbao).
+	// Mint a GitHub Actions OIDC token for the owner's audience, then exchange it
+	// via OpenBao's jwt auth for a short-lived token bound to the secret-propagator
+	// policy. No long-lived secret_id, no `gh secret set` round-trip: the role is
+	// repo-bound (bound_claims.repository) in `llz ci bao-configure`.
+	oidcToken, err := githubActionsOIDCToken(oidcAudienceForRepo(ghRepo), nil)
+	if err != nil {
+		return fmt.Errorf("mint GitHub OIDC token for %s: %w (does the job set `permissions: id-token: write`?)", region, err)
+	}
+	maskGHA(oidcToken)
 	out, _, err := baoExecFn(rootOpenbaoPod, "", "",
-		"write", "-f", "auth/approle/login",
-		"role_id="+roleID, "secret_id="+secretID, "-format=json")
+		"write", "-f", "auth/jwt/login",
+		"role=secret-propagator", "jwt="+oidcToken, "-format=json")
 	var login struct {
 		Auth struct {
 			ClientToken string `json:"client_token"`
 		} `json:"auth"`
 	}
 	if jsonErr := json.Unmarshal([]byte(out), &login); err != nil || jsonErr != nil || login.Auth.ClientToken == "" {
-		return fmt.Errorf("AppRole login failed for secret-propagator on %s — check the OPENBAO_PROPAGATOR_SECRET_ID is current (may have expired or been rotated out of band)", region)
+		return fmt.Errorf("jwt login failed for secret-propagator on %s — check the jwt role's bound_claims/bound_audiences match this repo (run `llz ci bao-configure`)", region)
 	}
 	maskGHA(login.Auth.ClientToken)
 
@@ -123,5 +131,5 @@ func runCIPropagatePAT() error {
 	}
 	fmt.Printf("Wrote secret/linode/api-token to %s OpenBao (new_pat_id=%s).\n", region, idLabel)
 	return appendGHAFile("GITHUB_STEP_SUMMARY",
-		fmt.Sprintf("> Wrote `secret/linode/api-token` (new_pat_id=`%s`) via secret-propagator AppRole.", idLabel))
+		fmt.Sprintf("> Wrote `secret/linode/api-token` (new_pat_id=`%s`) via secret-propagator GitHub-OIDC role.", idLabel))
 }
