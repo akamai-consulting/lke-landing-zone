@@ -113,9 +113,9 @@ const (
 )
 
 // ClassifyVolume decides a Volume's orphan status from its cluster-ownership tag —
-// the `lke<id>` tag the block-storage StorageClass stamps on every PVC it
-// provisions (the same convention the CCM uses for NodeBalancers, so LKEIDFromTags
-// parses both). This is the cluster-liveness gate that makes a broad (region-wide)
+// the `lke<id>` tag the linode-volume-labeler CronJob stamps on every PVC's Volume
+// (the same convention the CCM uses for NodeBalancers, so LKEIDFromTags parses
+// both). This is the cluster-liveness gate that makes a broad (region-wide)
 // Volume sweep safe: a *detached* `pvc-*` Volume whose owning cluster is still live
 // is NOT an orphan — it is a Retain-policy Volume of a running cluster (a pod
 // rescheduling, a node replaced, a chart mid-upgrade) and must be kept. Without a

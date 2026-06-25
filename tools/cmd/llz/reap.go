@@ -257,8 +257,8 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 	for _, id := range strings.Fields(o.volumeIDs) {
 		idAllow[id] = true
 	}
-	// Cluster-liveness gate: every PVC the block-storage StorageClass provisions
-	// carries an `lke<id>` tag for its owning cluster, so a detached `pvc-*` Volume
+	// Cluster-liveness gate: the linode-volume-labeler CronJob stamps an `lke<id>`
+	// tag for its owning cluster on each PVC's Volume, so a detached `pvc-*` Volume
 	// whose cluster is still live is a Retain Volume in use — NOT an orphan — and
 	// must be kept. We only load the live set for a broad (region) sweep: an
 	// explicit --volume-ids allowlist is a deliberate, precise scope the caller

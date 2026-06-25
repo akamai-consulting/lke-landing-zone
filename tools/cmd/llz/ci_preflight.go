@@ -227,8 +227,8 @@ func (s orphanScan) orphans() int { return s.vol.orphan + s.nb.orphan + s.vpc.or
 // NodeBalancers whose cluster is gone (or 0-backend), and lke<id> VPCs whose
 // cluster is gone. NodeBalancers and VPCs are scoped to region ("" =
 // account-wide): they carry a cluster-id tag/label, so a gone-cluster orphan is
-// unambiguous and safe to count account-wide. Volumes provisioned by the
-// block-storage StorageClass now also carry an lke<id> cluster tag, so a detached
+// unambiguous and safe to count account-wide. Volumes stamped by the
+// linode-volume-labeler CronJob carry an lke<id> cluster tag, so a detached
 // Volume of a still-live cluster is excluded here via ClassifyVolume — but
 // volumeRegion scoping is still applied because UNtagged legacy Volumes carry no
 // cluster id and can't be attributed: in a shared account an account-wide count

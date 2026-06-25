@@ -2,7 +2,10 @@
 #
 # Runs every 15 minutes. On each run: enumerates Linode-CSI PVs in the cluster,
 # derives a human-readable label `<region-short>-<namespace>-<pvc-name>`
-# truncated to 32 chars, and PUTs it via the Linode Volumes API. Idempotent.
+# truncated to 32 chars, and PUTs it via the Linode Volumes API. It also stamps
+# an `lke<cluster_id>` tag on each Volume (self-discovered from a node's Linode
+# instance, or LKE_CLUSTER_ID if set) so `llz reap` can attribute Volumes to
+# their owning cluster and never reap a live cluster's detached PVC. Idempotent.
 #
 # REGION_SHORT injection: this base sets the example region (`exa`). Each env
 # overlay strategic-merge-patches the value via the manifest-root
@@ -54,6 +57,11 @@ spec:
                 # entry via linode-volume-labeler-region-patch.yaml.
                 - name: REGION_SHORT
                   value: "exa"
+                # Optional override for the cluster-ownership tag. Empty = the
+                # script self-discovers the `lke<id>` tag from a node's Linode
+                # instance, so this normally stays unset.
+                - name: LKE_CLUSTER_ID
+                  value: ""
                 - name: LINODE_TOKEN
                   valueFrom:
                     secretKeyRef:

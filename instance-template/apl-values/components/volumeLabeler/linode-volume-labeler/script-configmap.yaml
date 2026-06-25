@@ -8,21 +8,57 @@ metadata:
 data:
   relabel.sh: |
     #!/bin/sh
-    # Linode Volume relabeler — runs on a CronJob schedule, hits Linode's
-    # PUT /v4/volumes/{id} for every PV in the cluster, rewriting the UI Label
-    # from the CSI-default `<prefix><PV-name>` (which is `pvc-<uuid>` on LKE-E
-    # because the managed CSI controller's --volume-label-prefix is empty) to a
-    # human-readable `<region-short>-<namespace>-<pvc-name>` truncated to the
-    # 32-char Linode label cap.
+    # Linode Volume relabeler + cluster-tagger — runs on a CronJob schedule and,
+    # for every PV in the cluster, hits Linode's PUT /v4/volumes/{id} to:
     #
-    # Why post-creation rename (vs SC parameter / CSI flag): the Linode Block
-    # Storage CSI driver has no SC parameter or per-PVC mechanism for label
-    # customization. This idempotent, rate-limited CronJob is the practical
-    # fallback that lives entirely in our control.
+    #   1. rewrite the UI Label from the CSI-default `<prefix><PV-name>` (which is
+    #      `pvc-<uuid>` on LKE-E because the managed CSI controller's
+    #      --volume-label-prefix is empty) to a human-readable
+    #      `<region-short>-<namespace>-<pvc-name>` truncated to the 32-char cap;
+    #
+    #   2. ensure the Volume carries an `lke<cluster_id>` tag attributing it to
+    #      THIS cluster — the same convention the CCM stamps on NodeBalancers.
+    #      That tag is what `llz reap` keys on (internal/linode ClassifyVolume) to
+    #      tell a detached-but-owned PVC of a LIVE cluster from a truly orphaned
+    #      one: under the Retain reclaim policy, detached does NOT mean orphaned.
+    #
+    # Why in-cluster (vs a static StorageClass volumeTag rendered by Terraform):
+    # the SC tag only applies at volume CREATE, so it can't backfill Volumes that
+    # already exist — this reconciler tags every Volume it sees, new or old — and
+    # it keeps the tagging out of TF string-munging, in one idempotent,
+    # rate-limited control loop alongside the existing relabeling.
+    #
+    # Cluster id resolution (no TF dependency): LKE_CLUSTER_ID env wins if set;
+    # otherwise it is self-discovered from a worker node's Linode instance
+    # `lke<id>` tag (providerID -> GET /v4/linode/instances/{id} -> tags). If
+    # neither resolves, the run relabels only and logs a warning — it never fails
+    # for a missing cluster tag, and reap then treats such Volumes as untagged
+    # legacy (scope-filter fallback).
     set -eu
 
     : "${LINODE_TOKEN:?LINODE_TOKEN env var required}"
     : "${REGION_SHORT:?REGION_SHORT env var required (pri|sec|sta|lab)}"
+
+    API="https://api.linode.com/v4"
+
+    # ── resolve this cluster's `lke<id>` tag ────────────────────────────────────
+    CLUSTER_TAG=""
+    if [ -n "${LKE_CLUSTER_ID:-}" ]; then
+      CLUSTER_TAG="lke${LKE_CLUSTER_ID}"
+    else
+      # providerID is `linode://<instance-id>`; LKE tags each node instance
+      # `lke<cluster-id>`, so any node's instance reveals this cluster's id.
+      node_iid=$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}' 2>/dev/null | sed 's#^linode://##')
+      if [ -n "$node_iid" ]; then
+        CLUSTER_TAG=$(curl -s -H "Authorization: Bearer $LINODE_TOKEN" "${API}/linode/instances/${node_iid}" |
+          jq -r '[.tags[]? | select(test("^lke-?[0-9]+$"))][0] // ""')
+      fi
+    fi
+    if [ -n "$CLUSTER_TAG" ]; then
+      echo "cluster tag: ${CLUSTER_TAG}"
+    else
+      echo "warning: could not resolve LKE cluster id (set LKE_CLUSTER_ID to override); relabeling only, no cluster tag"
+    fi
 
     # Build map of {volume_id => "namespace/pvc-name"} from cluster PVs.
     # Skip non-Linode-CSI PVs and PVs without a claimRef (orphaned, awaiting reclaim).
@@ -43,6 +79,7 @@ data:
     fi
 
     RENAMED=0
+    TAGGED=0
     SKIPPED_OK=0
     SKIPPED_404=0
     ERRORS=0
@@ -54,12 +91,12 @@ data:
       # strip any trailing `-` left over from truncation (cosmetic).
       desired_label=$(printf '%s' "$raw_label" | tr -c 'A-Za-z0-9_-' '-' | cut -c -32 | sed 's/-*$//')
 
-      # GET the current label. 404 means the volume was deleted out-of-band
+      # GET the current label + tags. 404 means the volume was deleted out-of-band
       # (e.g. via Linode UI) but the PV still references it — skip.
       resp_file=$(mktemp)
       http_code=$(curl -s -o "$resp_file" -w '%{http_code}' \
         -H "Authorization: Bearer $LINODE_TOKEN" \
-        "https://api.linode.com/v4/volumes/${volume_id}")
+        "${API}/volumes/${volume_id}")
 
       if [ "$http_code" = "404" ]; then
         echo "skip ${volume_id}: 404 — Linode volume missing"
@@ -77,25 +114,50 @@ data:
       fi
 
       current_label=$(jq -r '.label' <"$resp_file")
-      rm -f "$resp_file"
 
-      if [ "$current_label" = "$desired_label" ]; then
+      # Does the Volume already carry our cluster tag? (No tag to add => satisfied.)
+      has_tag=1
+      if [ -n "$CLUSTER_TAG" ] &&
+        ! jq -e --arg t "$CLUSTER_TAG" 'any(.tags[]?; . == $t)' <"$resp_file" >/dev/null; then
+        has_tag=0
+      fi
+
+      if [ "$current_label" = "$desired_label" ] && [ "$has_tag" = "1" ]; then
         SKIPPED_OK=$((SKIPPED_OK + 1))
+        rm -f "$resp_file"
         continue
       fi
 
-      # PUT the new label. Idempotent on Linode side.
+      # Build the PUT body. Linode replaces the whole tag list on update, so send
+      # the existing tags PLUS our cluster tag (unique) to avoid dropping the
+      # CSI-applied block-storage tags. Label-only body when no cluster tag.
+      if [ -n "$CLUSTER_TAG" ]; then
+        body=$(jq -cn --arg l "$desired_label" --arg t "$CLUSTER_TAG" \
+          --argjson tags "$(jq -c '.tags // []' <"$resp_file")" \
+          '{label: $l, tags: ($tags + [$t] | unique)}')
+      else
+        body=$(jq -cn --arg l "$desired_label" '{label: $l}')
+      fi
+      rm -f "$resp_file"
+
+      # PUT the new label/tags. Idempotent on Linode side.
       put_resp=$(mktemp)
       put_code=$(curl -s -o "$put_resp" -w '%{http_code}' \
         -X PUT \
         -H "Authorization: Bearer $LINODE_TOKEN" \
         -H "Content-Type: application/json" \
-        -d "{\"label\": \"$desired_label\"}" \
-        "https://api.linode.com/v4/volumes/${volume_id}")
+        -d "$body" \
+        "${API}/volumes/${volume_id}")
 
       if [ "$put_code" = "200" ]; then
-        echo "renamed ${volume_id}: ${current_label} -> ${desired_label}"
-        RENAMED=$((RENAMED + 1))
+        if [ "$current_label" != "$desired_label" ]; then
+          echo "renamed ${volume_id}: ${current_label} -> ${desired_label}"
+          RENAMED=$((RENAMED + 1))
+        fi
+        if [ "$has_tag" = "0" ]; then
+          echo "tagged ${volume_id}: +${CLUSTER_TAG}"
+          TAGGED=$((TAGGED + 1))
+        fi
       else
         echo "error ${volume_id}: PUT returned ${put_code}"
         cat "$put_resp" >&2
@@ -105,7 +167,7 @@ data:
     done <"$TMP_MAP"
 
     echo
-    echo "summary: renamed=${RENAMED} already-ok=${SKIPPED_OK} api-404=${SKIPPED_404} errors=${ERRORS}"
+    echo "summary: renamed=${RENAMED} tagged=${TAGGED} already-ok=${SKIPPED_OK} api-404=${SKIPPED_404} errors=${ERRORS}"
 
     # Non-zero exit only on errors so CronJob alerts fire.
     [ "$ERRORS" -eq 0 ]
