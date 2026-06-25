@@ -43,22 +43,19 @@ path "secret/metadata/loki/object-store"            { capabilities = ["read", "l
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
 `
 
-// approle-rotator: manage platform-ci AND secret-propagator secret_ids — used
-// by the approle-rotation CronWorkflow. Add a role here when extending the
-// CronWorkflow to rotate it.
+// approle-rotator: manage the platform-ci AppRole secret_id (consumed by the
+// ESO ClusterSecretStore in-cluster) — used by the approle-rotation CronWorkflow.
+// The secret-propagator AppRole was retired (GitHub CI now authenticates via
+// GitHub-OIDC jwt auth), so the rotator no longer manages its secret_id.
 const policyAppRoleRotator = `path "auth/approle/role/platform-ci/secret-id"                  { capabilities = ["create", "update", "list"] }
 path "auth/approle/role/platform-ci/secret-id-accessor/destroy" { capabilities = ["update"] }
 path "auth/approle/role/platform-ci/role-id"                    { capabilities = ["read"] }
-path "auth/approle/role/secret-propagator/secret-id"                  { capabilities = ["create", "update", "list"] }
-path "auth/approle/role/secret-propagator/secret-id-accessor/destroy" { capabilities = ["update"] }
-path "auth/approle/role/secret-propagator/role-id"                    { capabilities = ["read"] }
 `
 
-// secret-propagator: narrow write access to the kv paths the rotation
-// pipeline (secret-rotation.yml → propagate-linode-pat) needs to refresh
-// after a PAT/OBJ-key mint. Replaces the previous design that authed as root,
-// which broke once bootstrap-openbao.yml revoked the root token. Add new
-// paths here when extending the propagation pipeline.
+// secret-propagator: narrow write access to secret/linode/api-token, used by the
+// rotation pipeline (secret-rotation.yml → propagate-linode-pat) to refresh the
+// PAT after a mint. Consumed via the GitHub-OIDC jwt role `secret-propagator`
+// (auth method, not the retired AppRole). Add paths here when extending it.
 const policySecretPropagator = `path "secret/data/linode/api-token" { capabilities = ["create", "update", "read"] }
 path "secret/metadata/linode/api-token" { capabilities = ["read"] }
 `
@@ -99,13 +96,8 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		// Pin role_id to "platform-ci" — must match the ClusterSecretStore roleId field.
 		{desc: "pin platform-ci role-id", fatal: true,
 			args: []string{"write", "auth/approle/role/platform-ci/role-id", "role_id=platform-ci"}},
-		// secret-propagator AppRole. Pinned role_id; secret_id_ttl matches
-		// platform-ci (≈92 days) so the existing rotation cadence covers it.
-		{desc: "write approle role secret-propagator", fatal: true,
-			args: []string{"write", "auth/approle/role/secret-propagator",
-				"token_policies=secret-propagator", "token_ttl=15m", "token_max_ttl=30m", "secret_id_ttl=2208h"}},
-		{desc: "pin secret-propagator role-id", fatal: true,
-			args: []string{"write", "auth/approle/role/secret-propagator/role-id", "role_id=secret-propagator"}},
+		// (The secret-propagator AppRole was retired — GitHub CI authenticates via
+		// the secret-propagator GitHub-OIDC jwt role below, not an AppRole secret_id.)
 		// Kubernetes auth role for the approle-rotation CronWorkflow SA.
 		{desc: "write kubernetes auth role approle-rotator", fatal: true,
 			args: []string{"write", "auth/kubernetes/role/approle-rotator",

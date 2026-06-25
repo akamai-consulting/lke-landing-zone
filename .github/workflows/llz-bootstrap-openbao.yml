@@ -555,32 +555,6 @@ jobs:
             --gh-secret-standby OPENBAO_APPROLE_SECRET_ID_STANDBY \
             --done-message "eso-approle-secret and GitHub CI secrets updated."
 
-      # ── Seed: secret-propagator AppRole credentials ────────────────────────────
-      # Mints the initial secret_id for the secret-propagator AppRole created in
-      # "Configure OpenBao" and stores it as an env-scoped GHA secret on the
-      # matching infra-<region> environment. Consumed by
-      # `propagate-linode-pat` (secret-rotation.yml) to authenticate without the
-      # root token, which bootstrap revokes at the end of every run.
-      # Env-scoped (not repo-level + suffix like OPENBAO_APPROLE_*) so the value
-      # naturally varies per region, matching OPENBAO_ROOT_TOKEN's convention.
-      - name: Seed secret-propagator AppRole credentials
-        if: steps.check_token.outputs.available == 'true'
-        env:
-          # gh secret set --env requires GH_TOKEN to have admin on the target
-          # environment. OPENBAO_SECRETS_WRITE_TOKEN must be scoped accordingly;
-          # see the pre-flight require-secret step above.
-          GH_ENV: infra-${{ env.REGION }}
-        run: |
-          llz ci seed-approle --role secret-propagator \
-            --gh-env "$GH_ENV" \
-            --gh-role-secret OPENBAO_PROPAGATOR_ROLE_ID \
-            --gh-secret OPENBAO_PROPAGATOR_SECRET_ID \
-            --summary "" \
-            --summary "**secret-propagator AppRole seeded** to \`${GH_ENV}\`:" \
-            --summary "- \`OPENBAO_PROPAGATOR_ROLE_ID\` = \`secret-propagator\`" \
-            --summary "- \`OPENBAO_PROPAGATOR_SECRET_ID\` = (set, value hidden)" \
-            --done-message "secret-propagator role_id + secret_id seeded to ${GH_ENV} environment secrets."
-
       # continue-on-error: a Harbor problem (unreachable URL, unhealthy pods)
       # must not abort the job — the ~12 unrelated seed steps below it still
       # need to run. Harbor secrets can be seeded later by re-running.
