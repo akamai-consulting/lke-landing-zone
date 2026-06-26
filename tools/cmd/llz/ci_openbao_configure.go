@@ -57,16 +57,21 @@ path "secret/metadata/linode/api-token" { capabilities = ["read"] }
 // the Harbor admin password mirrored from Harbor's Helm Secret
 // (apl-values/components/harbor/harbor-admin-push.yaml). Replaces the imperative
 // `llz ci bao-seed` of these paths (root-token + kubectl exec) with a
-// least-privilege, in-cluster write. `read` is needed for the IfNotExists
-// existence check; the read-only `platform-ci` policy still serves every
-// consumer. Mapped to the `eso-pusher` Kubernetes-auth role below (same ESO
-// controller SA as `eso`).
+// least-privilege, in-cluster write. On the data paths `read` covers the
+// IfNotExists existence check. The metadata paths need create/update, not just
+// read: ESO stamps a `managed-by: external-secrets` marker into the secret's
+// custom_metadata on first push (a PUT to secret/metadata/<path>), so a
+// read-only metadata grant makes the very first PushSecret fail with a 403 on
+// the metadata write — which stalls the platform-bootstrap sync hooks and
+// wedges convergence on a fresh cluster. The read-only `platform-ci` policy
+// still serves every consumer. Mapped to the `eso-pusher` Kubernetes-auth role
+// below (same ESO controller SA as `eso`).
 const policyESOPusher = `path "secret/data/grafana/admin" { capabilities = ["create", "update", "read"] }
 path "secret/data/otel/ingress"  { capabilities = ["create", "update", "read"] }
 path "secret/data/harbor/admin"  { capabilities = ["create", "update", "read"] }
-path "secret/metadata/grafana/admin" { capabilities = ["read"] }
-path "secret/metadata/otel/ingress"  { capabilities = ["read"] }
-path "secret/metadata/harbor/admin"  { capabilities = ["read"] }
+path "secret/metadata/grafana/admin" { capabilities = ["create", "update", "read"] }
+path "secret/metadata/otel/ingress"  { capabilities = ["create", "update", "read"] }
+path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read"] }
 `
 
 // baoConfigStep is one in-pod bao invocation of the configure sequence.

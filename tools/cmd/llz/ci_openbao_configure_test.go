@@ -102,6 +102,18 @@ func TestPolicyDocuments(t *testing.T) {
 			t.Errorf("eso-pusher policy missing %s", p)
 		}
 	}
+	// The metadata paths must grant create/update, not just read: ESO stamps the
+	// managed-by custom_metadata on first push (PUT secret/metadata/<path>), so a
+	// read-only metadata grant 403s the first PushSecret and wedges convergence.
+	for _, p := range []string{
+		`path "secret/metadata/grafana/admin" { capabilities = ["create", "update", "read"] }`,
+		`path "secret/metadata/otel/ingress"  { capabilities = ["create", "update", "read"] }`,
+		`path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read"] }`,
+	} {
+		if !strings.Contains(policyESOPusher, p) {
+			t.Errorf("eso-pusher policy must grant create/update on metadata path: %s", p)
+		}
+	}
 	for _, forbidden := range []string{"linode/api-token", "harbor/registry-s3", "loki/object-store", `"*"`} {
 		if strings.Contains(policyESOPusher, forbidden) {
 			t.Errorf("eso-pusher policy is over-scoped: contains %q", forbidden)
