@@ -836,10 +836,11 @@ jobs:
   #                                    firewall-controller config — the latter
   #                                    folded in from the former bootstrap-cluster
   #                                    job to drop a whole job's overhead)
-  #   4. bootstrap-openbao            (OpenBao init/unseal/seed + ESO sync)
-  #   5. converge                     (final health gate — runs AFTER OpenBao
-  #                                    so the OpenBao→cert-manager→TLS cascade
-  #                                    has cleared and convergence can pass)
+  #   4. bootstrap-openbao            (OpenBao init/unseal/seed + ESO sync, then
+  #                                    its own `harbor` + `converge` jobs run in
+  #                                    parallel — the final health gate moved INTO
+  #                                    the reusable workflow so converge no longer
+  #                                    serializes behind Harbor robot provisioning)
   #
   # Step 4 also gates the PreSync timeout window concern — by running it
   # immediately as part of the same workflow, there's no chance the operator
@@ -891,132 +892,6 @@ jobs:
     # `environment: infra-${{ inputs.region }}` so env-scoped secrets resolve
     # correctly at job-evaluation time on the runner.
     secrets: inherit
-
-  # ── Final convergence gate — runs AFTER OpenBao is bootstrapped ──────────────
-  # MOVED here from the bootstrap-cluster job to fix an ordering inversion: the
-  # cluster cannot reach health until OpenBao is initialized/unsealed (the
-  # OpenBao→cert-manager→TLS→Harbor/oauth2-proxy cascade stays PENDING/Degraded
-  # until then). Running converge inside bootstrap-cluster — BEFORE
-  # bootstrap-openbao — meant a converge timeout failed bootstrap-cluster,
-  # which (via bootstrap-openbao's `needs.bootstrap-cluster.result == 'success'`
-  # guard) SKIPPED the OpenBao bootstrap entirely, so the cluster could never
-  # converge. As the terminal job, init+unseal+seed has already run, the
-  # cascade has cleared, and `llz ci converge` can actually reach exit 0.
-  #
-  # `llz ci converge` exits 0 (converged) or 1 (budget exhausted / underlying check
-  # error). Per docs/architecture/convergence-contract.md, this gate is what
-  # makes "the workflow passed" mean "the cluster works".
-  converge:
-    name: Verify cluster convergence (${{ inputs.region }})
-    # Mirror the apply/module guards; require bootstrap-openbao to have
-    # SUCCEEDED (no point converging if OpenBao never bootstrapped). always()
-    # so an upstream skip doesn't silently short-circuit the explicit
-    # result check.
-    if: >
-      always() &&
-      github.event_name == 'workflow_dispatch' &&
-      inputs.action == 'apply' &&
-      (inputs.module == 'cluster' || inputs.module == 'all') &&
-      needs.bootstrap-openbao.result == 'success'
-    needs: [bootstrap-openbao]
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    environment: infra-${{ inputs.region }}
-    permissions:
-      contents: read
-    # 40, not 30: the converge step's own --budget is 30m (1800s). With the
-    # checkout + cluster-access setup steps eating into a 30m job timeout, the job
-    # could be KILLED before converge's budget elapsed — turning a slow-but-healthy
-    # cluster into an opaque "job timed out" instead of converge's own verdict.
-    # 40m leaves ~10m of headroom around the 30m budget.
-    timeout-minutes: 40
-    env:
-      REGION:                ${{ inputs.region }}
-      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
-      # fetch-kubeconfig self-inits the cluster module's S3 backend and reads
-      # kubeconfig_raw — no separate terraform-init step needed (`llz ci converge`
-      # only needs the kubeconfig, not any `terraform output`). Also opens this
-      # hosted-runner's egress IP in the control-plane ACL before the convergence
-      # kubectl loop (revoked at job end, if: always()) and installs llz.
-      - name: Cluster access (kubeconfig + runner ACL + llz)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          kubeconfig-path:       $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ env.REGION }}
-          # This gate polls for up to 30m — past a controller reconcile tick — so
-          # lease the runner IP in the firewall-runner-acl ConfigMap to stop the
-          # EAA controller from evicting it mid-poll. Revoke (below) releases it.
-          register-runner-lease: 'true'
-
-      - name: Wait for cluster to converge
-        env:
-          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-        # Explicit --budget so the converge poll window is visibly bounded BELOW
-        # the job's timeout-minutes (40) — converge exits with its own verdict
-        # rather than being killed by the job timeout. 1800s is the command default;
-        # pinned here to make the budget-vs-timeout relationship intentional.
-        run: llz ci converge --budget 1800
-
-      # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx
-      # logs WHILE the cluster is still up — before teardown destroys it and
-      # before the revoke below cuts apiserver access. The resolver line is the
-      # decisive datum for the recurring loki-gateway CrashLoopBackOff: an IP
-      # means the Kyverno mutation held (a transient/rollout-timing failure), a
-      # hostname means it never stuck (the admission/webhook-race path needs
-      # hardening). Single-line glue (kubectl is already in the image) so it adds
-      # no untestable inline bash and no new llz subcommand a stale baked binary
-      # would reject; every command is `|| true` so it never alters the outcome.
-      - name: Capture loki-gateway diagnostics (on convergence failure)
-        if: failure()
-        env:
-          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-        run: 'echo "== loki-gateway nginx.conf resolver =="; kubectl -n monitoring get cm loki-gateway -o "jsonpath={.data.nginx\.conf}" 2>/dev/null | grep -i resolver || true; for p in $(kubectl -n monitoring get pods -o name 2>/dev/null | grep loki-gateway); do echo "== $p =="; kubectl -n monitoring logs "$p" -c nginx --tail=50 2>/dev/null || true; kubectl -n monitoring logs "$p" -c nginx --tail=50 --previous 2>/dev/null || true; kubectl -n monitoring describe "$p" 2>/dev/null | tail -30 || true; done'
-
-      # On a convergence stall, snapshot WHY before teardown destroys the cluster:
-      # the Argo CD Application states (a child ComparisonError stalling the seed
-      # app-of-apps) and the phase1 platform-app-ca CA chain — the two blockers the
-      # converge poll log shows the symptom of but not the cause. `|| cancelled()`
-      # so a manually-cancelled run still captures. All probes are best-effort
-      # inside the (tested) llz command, so it never alters the outcome.
-      - name: Diagnose convergence failure (Argo apps + cert-manager CA chain)
-        if: failure() || cancelled()
-        env:
-          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-        run: llz ci diagnose-argocd
-
-      # Revoke BEFORE deleting the kubeconfig: revoke releases the ConfigMap
-      # lease via kubectl (needs the kubeconfig) before the Linode-API call cuts
-      # apiserver access.
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ env.REGION }}
-          kubeconfig:   $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
-
-      - name: Cleanup kubeconfig
-        if: always()
-        run: rm -f "$RUNNER_TEMP/platform-${REGION}.yaml"
 
   # ── Destroy (manual dispatch — requires environment approval) ───────────────
   # Explicitly gated: action must equal 'destroy'. Completely separate from

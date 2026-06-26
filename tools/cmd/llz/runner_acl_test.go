@@ -16,6 +16,11 @@ type fakeACLClient struct {
 	getErr   error
 	putErr   error
 	puts     []linode.ControlPlaneACL
+	// clobberN simulates a racing writer: on each of the next clobberN PUTs the
+	// fake overwrites our just-PUT list with clobberACL (as if another job's PUT
+	// landed immediately after ours), exercising the verify-after-write retry.
+	clobberN   int
+	clobberACL linode.ControlPlaneACL
 }
 
 func (f *fakeACLClient) ListClusters(context.Context) ([]map[string]any, error) {
@@ -30,6 +35,10 @@ func (f *fakeACLClient) PutControlPlaneACL(_ context.Context, _ uint64, a linode
 	}
 	f.puts = append(f.puts, a)
 	f.acl = a
+	if f.clobberN > 0 {
+		f.clobberN--
+		f.acl = f.clobberACL // a racing writer overwrote our PUT
+	}
 	return nil
 }
 
@@ -41,7 +50,11 @@ func withFakeACL(t *testing.T, fake *fakeACLClient) {
 	t.Setenv("LINODE_API_TOKEN", "")
 	prev := newACLClient
 	newACLClient = func(string) aclClient { return fake }
-	t.Cleanup(func() { newACLClient = prev })
+	// Zero the backoff so retry paths run instantly and deterministically (no
+	// sleep, no RNG).
+	prevDelay := aclRetryDelay
+	aclRetryDelay = 0
+	t.Cleanup(func() { newACLClient = prev; aclRetryDelay = prevDelay })
 }
 
 func TestRunnerACLOpenAddsIPAndRecordsState(t *testing.T) {
@@ -107,6 +120,98 @@ func TestRunnerACLRevokeRemovesIPAndClearsState(t *testing.T) {
 	}
 	if _, ok, _ := readRunnerACLState("e2e"); ok {
 		t.Error("state file should be removed after revoke")
+	}
+}
+
+// A racing writer clobbers our open PUT once; verify-after-write must detect
+// the dropped IP, re-read the racer's current list, and retry until it sticks.
+func TestRunnerACLOpenRetriesWhenClobbered(t *testing.T) {
+	fake := &fakeACLClient{
+		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}},
+		clobberN:   1,
+		clobberACL: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"8.8.8.0/24"}}, // racer's list, sans our IP
+	}
+	withFakeACL(t, fake)
+
+	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true}); err != nil {
+		t.Fatalf("open = %v", err)
+	}
+	if len(fake.puts) != 2 {
+		t.Fatalf("expected 2 PUTs (clobbered + retry), got %d: %+v", len(fake.puts), fake.puts)
+	}
+	if !fake.acl.ContainsIP("1.2.3.4") {
+		t.Fatalf("final ACL must contain our IP after retry, got %+v", fake.acl)
+	}
+	if !fake.acl.ContainsIP("8.8.8.0/24") {
+		t.Errorf("retry must preserve the racer's IP (re-read current list), got %+v", fake.acl)
+	}
+	if st, ok, _ := readRunnerACLState("e2e"); !ok || !st.Modified {
+		t.Errorf("state should record Modified=true after a successful add, got ok=%v st=%+v", ok, st)
+	}
+}
+
+// A writer that clobbers every PUT must eventually fail open (hard error so the
+// job surfaces that this runner never got apiserver access) after the bounded
+// retries, not loop forever.
+func TestRunnerACLOpenFailsAfterMaxAttempts(t *testing.T) {
+	fake := &fakeACLClient{
+		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}},
+		clobberN:   1000, // always clobbered
+		clobberACL: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"8.8.8.0/24"}},
+	}
+	withFakeACL(t, fake)
+
+	if err := runRunnerACL("open", runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true}); err == nil {
+		t.Fatal("expected open to fail after exhausting retries, got nil")
+	}
+	if len(fake.puts) != aclMaxAttempts {
+		t.Errorf("expected %d PUT attempts, got %d", aclMaxAttempts, len(fake.puts))
+	}
+}
+
+// A racing writer re-adds our IP after our revoke PUT; verify-after-write must
+// detect it's still present and retry until the removal sticks.
+func TestRunnerACLRevokeRetriesWhenReadded(t *testing.T) {
+	fake := &fakeACLClient{
+		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32", "9.9.9.0/24"}},
+		clobberN:   1,
+		clobberACL: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32", "9.9.9.0/24"}}, // racer re-added our IP
+	}
+	withFakeACL(t, fake)
+	if err := writeRunnerACLState("e2e", runnerACLState{ClusterID: "5", IP: "1.2.3.4", Modified: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRunnerACL("revoke", runnerACLOpts{region: "e2e"}); err != nil {
+		t.Fatalf("revoke = %v", err)
+	}
+	if len(fake.puts) != 2 {
+		t.Fatalf("expected 2 PUTs (clobbered + retry), got %d: %+v", len(fake.puts), fake.puts)
+	}
+	if fake.acl.ContainsIP("1.2.3.4") {
+		t.Fatalf("final ACL must NOT contain our IP after revoke retry, got %+v", fake.acl)
+	}
+	if _, ok, _ := readRunnerACLState("e2e"); ok {
+		t.Error("state file should be removed after a successful revoke")
+	}
+}
+
+// Revoke runs under `if: always()`: a writer that keeps re-adding our IP must
+// NOT make revoke return a hard error (that would fail an otherwise-green job).
+func TestRunnerACLRevokeTolerantWhenAlwaysReadded(t *testing.T) {
+	fake := &fakeACLClient{
+		acl:        linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32"}},
+		clobberN:   1000, // racer re-adds every time
+		clobberACL: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32"}},
+	}
+	withFakeACL(t, fake)
+	if err := writeRunnerACLState("e2e", runnerACLState{ClusterID: "5", IP: "1.2.3.4", Modified: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runRunnerACL("revoke", runnerACLOpts{region: "e2e"}); err != nil {
+		t.Fatalf("revoke must stay tolerant (nil) even when it can't win, got %v", err)
+	}
+	if len(fake.puts) != aclMaxAttempts {
+		t.Errorf("expected %d PUT attempts before giving up, got %d", aclMaxAttempts, len(fake.puts))
 	}
 }
 
