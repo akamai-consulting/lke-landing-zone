@@ -219,86 +219,17 @@ func TestAppendGHAFileAppends(t *testing.T) {
 	}
 }
 
-func TestUnsealKeysFromEnv(t *testing.T) {
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
-	keys, err := unsealKeysFromEnv()
+func TestRecoveryKeysFromEnv(t *testing.T) {
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
+	keys, err := recoveryKeysFromEnv()
 	if err != nil || len(keys) != 3 || keys[2] != "k3" {
-		t.Fatalf("unsealKeysFromEnv = (%v, %v), want 3 keys", keys, err)
+		t.Fatalf("recoveryKeysFromEnv = (%v, %v), want 3 keys", keys, err)
 	}
-	t.Setenv("UNSEAL_K2", "")
-	if _, err := unsealKeysFromEnv(); err == nil || !strings.Contains(err.Error(), "UNSEAL_K2") {
-		t.Errorf("missing UNSEAL_K2 → err = %v, want named error", err)
-	}
-}
-
-func TestResolveUnsealPods(t *testing.T) {
-	if pods, err := resolveUnsealPods("all"); err != nil || len(pods) != 3 {
-		t.Errorf("all → (%v, %v), want 3 pods", pods, err)
-	}
-	if pods, err := resolveUnsealPods("0"); err != nil || len(pods) != 1 || pods[0] != "platform-openbao-0" {
-		t.Errorf("0 → (%v, %v), want pod-0", pods, err)
-	}
-	if pods, err := resolveUnsealPods("1,2"); err != nil || len(pods) != 2 || pods[1] != "platform-openbao-2" {
-		t.Errorf("1,2 → (%v, %v), want pods 1+2", pods, err)
-	}
-	for _, bad := range []string{"3", "-1", "x", "0;1"} {
-		if _, err := resolveUnsealPods(bad); err == nil {
-			t.Errorf("resolveUnsealPods(%q) = nil error, want rejection", bad)
-		}
-	}
-}
-
-func TestRunCIBaoUnsealSubmitsKeysInOrder(t *testing.T) {
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
-	var calls []string
-	withBaoExec(t, func(pod, token, stdin string, args ...string) (string, string, error) {
-		if token != "" || stdin != "" {
-			t.Errorf("unseal must not set token/stdin (got %q/%q)", token, stdin)
-		}
-		calls = append(calls, pod+":"+strings.Join(args, " "))
-		return "", "", nil
-	})
-	if err := runCIBaoUnseal(globalOpts{}, "all"); err != nil {
-		t.Fatal(err)
-	}
-	if len(calls) != 9 {
-		t.Fatalf("got %d exec calls, want 9 (3 keys × 3 pods)", len(calls))
-	}
-	if calls[0] != "platform-openbao-0:operator unseal k1" || calls[8] != "platform-openbao-2:operator unseal k3" {
-		t.Errorf("unexpected call ordering: first=%q last=%q", calls[0], calls[8])
-	}
-}
-
-func TestRunCIBaoUnsealDryRunExecsNothing(t *testing.T) {
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
-	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
-		t.Error("dry-run must not exec")
-		return "", "", nil
-	})
-	if err := runCIBaoUnseal(globalOpts{dryRun: true}, "all"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestRunCIBaoUnsealSurfacesFailure(t *testing.T) {
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
-	withBaoExec(t, func(pod, _, _ string, args ...string) (string, string, error) {
-		if args[len(args)-1] == "k2" {
-			return "", "Code: 400. * key mismatch", errors.New("exit status 2")
-		}
-		return "", "", nil
-	})
-	err := runCIBaoUnseal(globalOpts{}, "0")
-	if err == nil || !strings.Contains(err.Error(), "key 2/3") || !strings.Contains(err.Error(), "key mismatch") {
-		t.Errorf("err = %v, want key-2 failure with bao stderr", err)
+	t.Setenv("RECOVERY_K2", "")
+	if _, err := recoveryKeysFromEnv(); err == nil || !strings.Contains(err.Error(), "RECOVERY_K2") {
+		t.Errorf("missing RECOVERY_K2 → err = %v, want named error", err)
 	}
 }
 
@@ -335,59 +266,38 @@ func TestWaitForBaoStateTimesOut(t *testing.T) {
 	}
 }
 
-func TestRunCIBaoUnsealFollowersHappyPath(t *testing.T) {
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
+func TestWaitForAutoUnsealHappyPath(t *testing.T) {
 	withBaoSleep(t)
-	var unsealed []string
 	followerProbes := map[string]int{}
 	withBaoExec(t, func(pod, _, _ string, args ...string) (string, string, error) {
-		if args[0] == "status" {
-			if pod == "platform-openbao-0" {
-				return `{"initialized":true,"sealed":false}`, "", nil
-			}
-			// Followers flip to initialized on their second probe (retry_join race).
-			followerProbes[pod]++
-			return fmt.Sprintf(`{"initialized":%t,"sealed":true}`, followerProbes[pod] >= 2), "", errors.New("exit status 2")
+		if pod == "platform-openbao-0" {
+			return `{"initialized":true,"sealed":false}`, "", nil
 		}
-		unsealed = append(unsealed, pod+":"+args[len(args)-1])
-		return "", "", nil
+		// Followers retry_join then auto-unseal on their second probe (boot race):
+		// initialized flips true and sealed flips false together.
+		followerProbes[pod]++
+		up := followerProbes[pod] >= 2
+		return fmt.Sprintf(`{"initialized":%t,"sealed":%t}`, up, !up), "", errors.New("exit status 2")
 	})
-	if err := runCIBaoUnsealFollowers(globalOpts{}, 180*time.Second, 300*time.Second); err != nil {
+	if err := waitForAutoUnseal(180*time.Second, 300*time.Second); err != nil {
 		t.Fatal(err)
-	}
-	want := []string{
-		"platform-openbao-1:k1", "platform-openbao-1:k2", "platform-openbao-1:k3",
-		"platform-openbao-2:k1", "platform-openbao-2:k2", "platform-openbao-2:k3",
-	}
-	if strings.Join(unsealed, " ") != strings.Join(want, " ") {
-		t.Errorf("unseal calls = %v, want %v", unsealed, want)
 	}
 }
 
-func TestRunCIBaoUnsealFollowersLeaderTimeout(t *testing.T) {
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
+func TestWaitForAutoUnsealLeaderTimeout(t *testing.T) {
 	withBaoSleep(t)
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte(""), nil })
 	withBaoExec(t, func(pod, _, _ string, args ...string) (string, string, error) {
-		if args[0] == "operator" {
-			t.Errorf("must not unseal %s when the leader never settles", pod)
-		}
+		// Leader never auto-unseals (e.g. missing/wrong static seal key).
 		return `{"initialized":true,"sealed":true}`, "", errors.New("exit status 2")
 	})
-	err := runCIBaoUnsealFollowers(globalOpts{}, 10*time.Second, 10*time.Second)
+	err := waitForAutoUnseal(10*time.Second, 10*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "leader") {
 		t.Errorf("err = %v, want leader timeout", err)
 	}
 }
 
-func TestRunCIBaoUnsealFollowersJoinTimeoutDumpsLogs(t *testing.T) {
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
+func TestWaitForAutoUnsealFollowerTimeoutDumpsLogs(t *testing.T) {
 	withBaoSleep(t)
 	logsFetched := false
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
@@ -402,12 +312,12 @@ func TestRunCIBaoUnsealFollowersJoinTimeoutDumpsLogs(t *testing.T) {
 		}
 		return `{"initialized":false,"sealed":true}`, "", errors.New("exit status 2")
 	})
-	err := runCIBaoUnsealFollowers(globalOpts{}, 10*time.Second, 10*time.Second)
+	err := waitForAutoUnseal(10*time.Second, 10*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "platform-openbao-1") {
-		t.Errorf("err = %v, want follower-1 join timeout", err)
+		t.Errorf("err = %v, want follower-1 timeout", err)
 	}
 	if !logsFetched {
-		t.Error("join timeout did not fetch container logs for diagnostics")
+		t.Error("follower timeout did not fetch container logs for diagnostics")
 	}
 }
 
@@ -415,9 +325,9 @@ func TestRunCIBaoUnsealFollowersJoinTimeoutDumpsLogs(t *testing.T) {
 // end (flag parsing → RunE) under --dry-run with the exec/gh seams stubbed,
 // pinning the Use strings and required-flag errors the workflows depend on.
 func TestCIBaoCommandWiring(t *testing.T) {
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
 	t.Setenv("OPENBAO_ROOT_TOKEN", "s.root")
 	t.Setenv("GITHUB_OUTPUT", "")
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
@@ -434,8 +344,6 @@ func TestCIBaoCommandWiring(t *testing.T) {
 		args []string
 	}{
 		{ciBaoStatusCmd, "bao-status", nil},
-		{ciBaoUnsealCmd, "bao-unseal", []string{"--pods", "0"}},
-		{ciBaoUnsealFollowersCmd, "bao-unseal-followers", []string{"--leader-timeout", "1", "--join-timeout", "1"}},
 		{ciBaoInitCmd, "bao-init", []string{"--region", "primary"}},
 		{ciBaoRegenRootCmd, "bao-regen-root", []string{"--region", "primary"}},
 		{ciBaoConfigureCmd, "bao-configure", []string{"--region", "primary"}},

@@ -1,27 +1,25 @@
 package main
 
 // ci_openbao.go implements the `llz ci bao-*` family — native ports of the
-// instance-scripts/openbao/ CI steps that bootstrap-openbao.yml and
-// openbao-auto-unseal.yml used to run as bash:
+// instance-scripts/openbao/ CI steps that bootstrap-openbao.yml runs:
 //
-//   bao-status            the seal-state probe both workflows previously held
-//                         as a VERBATIM-copy inline step (drift hazard)
-//   bao-unseal            unseal-all.sh + the inline "Unseal pod 0" step
-//   bao-unseal-followers  unseal-followers.sh (leader wait + retry_join poll)
+//   bao-status   the seal-state probe the workflow previously held as a
+//                VERBATIM-copy inline step (drift hazard)
 //
-// All of them drive the in-pod `bao` CLI via kubectl exec (OpenBao's API is
-// only reachable in-cluster) through regenroot.go's baoExec, seamed here as
-// baoExecFn so the poll/branch logic is unit-testable without a cluster. The
-// quorum keys ride the UNSEAL_K1/2/3 env vars — the same contract as the
-// retired scripts (Branch A gets them from bao-init's GITHUB_ENV write,
-// Branch B from the infra-<region> environment secrets) — and are passed to
-// the in-pod bao on the local kubectl argv exactly as the bash did.
+// Under the chart's `seal "static"` auto-unseal the pods unseal themselves at
+// boot, so the old Shamir bao-unseal / bao-unseal-followers commands and the
+// openbao-auto-unseal.yml re-unseal cron are gone; bao-status remains for the
+// bootstrap branch + diagnostics, waitForAutoUnseal is the post-init
+// convergence wait (replacing the manual unseal steps), and recoveryKeysFromEnv
+// feeds the generate-root quorum (bao-regen-root, ci_openbao_init.go). It drives
+// the in-pod `bao` CLI via kubectl exec (OpenBao's API is only reachable
+// in-cluster) through regenroot.go's baoExec, seamed here as baoExecFn so the
+// poll/branch logic is unit-testable without a cluster.
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -202,90 +200,26 @@ func appendGHAFile(envVar string, lines ...string) error {
 	return f.Close()
 }
 
-// ── unseal ────────────────────────────────────────────────────────────────────
+// ── recovery keys ─────────────────────────────────────────────────────────────
 
-// unsealKeysFromEnv reads the 3 quorum keys from UNSEAL_K1/2/3.
-func unsealKeysFromEnv() ([]string, error) {
+// recoveryKeysFromEnv reads the 3 quorum recovery keys from RECOVERY_K1/2/3.
+// Under the chart's `seal "static"` auto-unseal, `operator init` yields recovery
+// shares (not unseal keys): the seal mechanism unseals every pod at boot, so
+// there is no submit-keys-to-unseal step. The recovery keys exist only to
+// authorize the `operator generate-root` quorum that bao-regen-root runs.
+func recoveryKeysFromEnv() ([]string, error) {
 	keys := make([]string, 0, 3)
-	for _, v := range []string{"UNSEAL_K1", "UNSEAL_K2", "UNSEAL_K3"} {
+	for _, v := range []string{"RECOVERY_K1", "RECOVERY_K2", "RECOVERY_K3"} {
 		k := os.Getenv(v)
 		if k == "" {
-			return nil, fmt.Errorf("%s is not set — the 3 quorum unseal keys are required (infra-<region> secrets OPENBAO_UNSEAL_KEY_{1,2,3})", v)
+			return nil, fmt.Errorf("%s is not set — the 3 quorum recovery keys are required (infra-<region> secrets OPENBAO_RECOVERY_KEY_{1,2,3})", v)
 		}
 		keys = append(keys, k)
 	}
 	return keys, nil
 }
 
-// resolveUnsealPods maps a --pods spec ("all" or comma-separated ordinals,
-// e.g. "0" / "1,2") to pod names.
-func resolveUnsealPods(spec string) ([]string, error) {
-	if spec == "" || spec == "all" {
-		return openbaoPodNames, nil
-	}
-	var pods []string
-	for _, part := range strings.Split(spec, ",") {
-		n, err := strconv.Atoi(strings.TrimSpace(part))
-		if err != nil || n < 0 || n >= len(openbaoPodNames) {
-			return nil, fmt.Errorf("--pods must be 'all' or comma-separated ordinals 0-%d (got %q)", len(openbaoPodNames)-1, spec)
-		}
-		pods = append(pods, openbaoPodNames[n])
-	}
-	return pods, nil
-}
-
-// unsealPod submits the 3 quorum keys to one pod. Idempotent like the bash:
-// `bao operator unseal` against an already-unsealed pod reports success.
-func unsealPod(pod string, keys []string) error {
-	for i, key := range keys {
-		out, errOut, err := baoExecFn(pod, "", "", "operator", "unseal", key)
-		if err != nil {
-			return fmt.Errorf("unseal %s (key %d/%d): %s", pod, i+1, len(keys),
-				strings.TrimSpace(firstNonEmpty(errOut, out)))
-		}
-	}
-	fmt.Printf("%s: submitted %d/%d unseal keys\n", pod, len(keys), len(keys))
-	return nil
-}
-
-func ciBaoUnsealCmd() *cobra.Command {
-	var pods string
-	c := &cobra.Command{
-		Use:   "bao-unseal",
-		Short: "unseal OpenBao pods with the 3 quorum keys (UNSEAL_K1/2/3)",
-		Long: "Native port of unseal-all.sh (and, with --pods 0, of the inline \"Unseal\n" +
-			"pod 0 (post-init)\" step). Submits UNSEAL_K1/2/3 to each selected pod.\n" +
-			"Idempotent: an already-unsealed pod accepts the keys as no-ops, so the\n" +
-			"auto-unseal schedule and Branch B can re-run it safely.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoUnseal(gopts, pods) },
-	}
-	c.Flags().StringVar(&pods, "pods", "all", "pods to unseal: 'all' or comma-separated ordinals (e.g. 0)")
-	return c
-}
-
-func runCIBaoUnseal(g globalOpts, spec string) error {
-	pods, err := resolveUnsealPods(spec)
-	if err != nil {
-		return err
-	}
-	keys, err := unsealKeysFromEnv()
-	if err != nil {
-		return err
-	}
-	for _, pod := range pods {
-		if g.dryRun {
-			fmt.Fprintf(os.Stderr, "→ (dry-run) would submit 3 unseal keys to %s\n", pod)
-			continue
-		}
-		if err := unsealPod(pod, keys); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ── follower join + unseal (post-init Branch A) ───────────────────────────────
+// ── auto-unseal convergence wait (post-init / re-seal) ────────────────────────
 
 // waitForBaoState polls one pod's `bao status` every interval until pred
 // accepts it, for at most budget. Returns false on timeout. The first probe is
@@ -322,66 +256,39 @@ func dumpBaoDiagnostics(pod string, withLogs bool) {
 	}
 }
 
-func ciBaoUnsealFollowersCmd() *cobra.Command {
-	var leaderTimeout, joinTimeout int
-	c := &cobra.Command{
-		Use:   "bao-unseal-followers",
-		Short: "post-init: wait for retry_join to initialize pods 1-2, then unseal them",
-		Long: "Native port of unseal-followers.sh. First confirms pod-0 (the leader) is\n" +
-			"unsealed and serving — a follower can only complete retry_join once the\n" +
-			"leader's raft bootstrap challenge endpoint stops 503ing — then polls each\n" +
-			"follower until retry_join flips it to initialized=true and submits the\n" +
-			"UNSEAL_K1/2/3 quorum keys. There is NO manual raft join: the chart's\n" +
-			"retry_join stanza handles membership, and a duplicate join attempt 500s.\n" +
-			"On timeout it dumps\n" +
-			"`bao status` + recent pod logs for actionable diagnostics.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIBaoUnsealFollowers(gopts, time.Duration(leaderTimeout)*time.Second, time.Duration(joinTimeout)*time.Second)
-		},
-	}
-	// 180s: leader election + API settle after pod-0's unseal. 300s: a cold
-	// join on a resource-constrained cluster routinely outlives two retry_join
-	// rounds — 120s lost that race repeatedly (script history).
-	c.Flags().IntVar(&leaderTimeout, "leader-timeout", 180, "seconds to wait for pod-0 to report unsealed")
-	c.Flags().IntVar(&joinTimeout, "join-timeout", 300, "seconds to wait for each follower to reach initialized=true")
-	return c
-}
-
-func runCIBaoUnsealFollowers(g globalOpts, leaderTimeout, joinTimeout time.Duration) error {
-	keys, err := unsealKeysFromEnv()
-	if err != nil {
-		return err
-	}
-	if g.dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) would wait for the leader, then poll+unseal pods 1-2")
-		return nil
-	}
-
+// waitForAutoUnseal waits for every pod to converge to initialized && unsealed.
+// Under the chart's `seal "static"` auto-unseal there is no key-submission step:
+// each pod unseals itself at boot from the static seal key once retry_join has
+// joined it to raft, so the bootstrap just waits for that convergence (the
+// leader first — followers can only join a serving leader — then each follower).
+// It replaces the old manual unseal-pod-0 + unseal-followers sequence and is
+// also the re-seal path (an initialized-but-sealed pod after a restart self-
+// unseals; we wait rather than submit keys). On timeout it dumps `bao status` +
+// recent pod logs for the stuck pod so the operator gets actionable context
+// (missing/unreadable openbao-unseal-key Secret, wrong static key, TLS SAN
+// mismatch, NetworkPolicy block, peer unreachable).
+func waitForAutoUnseal(leaderTimeout, joinTimeout time.Duration) error {
 	leader := openbaoPodNames[0]
-	fmt.Printf("=== wait for %s (leader) to be unsealed ===\n", leader)
+	fmt.Printf("=== wait for %s (leader) to auto-unseal ===\n", leader)
 	if !waitForBaoState(leader, leaderTimeout, 5*time.Second, func(st baoPodStatus) bool {
 		return st.Initialized && !st.Sealed
 	}) {
-		fmt.Fprintf(os.Stderr, "::error::%s not unsealed within %s — leader never settled, followers cannot join.\n", leader, leaderTimeout)
-		dumpBaoDiagnostics(leader, false)
-		return fmt.Errorf("leader %s not unsealed within %s", leader, leaderTimeout)
+		fmt.Fprintf(os.Stderr, "::error::%s not initialized+unsealed within %s — leader never auto-unsealed (openbao-unseal-key Secret missing/unreadable, wrong static key, or raft not bootstrapped).\n", leader, leaderTimeout)
+		dumpBaoDiagnostics(leader, true)
+		return fmt.Errorf("leader %s not initialized+unsealed within %s", leader, leaderTimeout)
 	}
-	fmt.Printf("%s unsealed — followers can now retry_join.\n", leader)
+	fmt.Printf("%s auto-unsealed.\n", leader)
 
 	for _, pod := range openbaoPodNames[1:] {
-		fmt.Printf("=== %s: wait for retry_join to initialize this follower ===\n", pod)
+		fmt.Printf("=== %s: wait for retry_join + auto-unseal ===\n", pod)
 		if !waitForBaoState(pod, joinTimeout, 5*time.Second, func(st baoPodStatus) bool {
-			return st.Initialized
+			return st.Initialized && !st.Sealed
 		}) {
-			fmt.Fprintf(os.Stderr, "::error::%s did not reach initialized=true within %s — retry_join likely failed (TLS SAN mismatch, NP block, or peer unreachable). Diagnostics:\n", pod, joinTimeout)
+			fmt.Fprintf(os.Stderr, "::error::%s not initialized+unsealed within %s — retry_join failed (TLS SAN mismatch, NP block, peer unreachable) or its static seal key differs from the leader's. Diagnostics:\n", pod, joinTimeout)
 			dumpBaoDiagnostics(pod, true)
-			return fmt.Errorf("follower %s did not initialize within %s", pod, joinTimeout)
+			return fmt.Errorf("follower %s not initialized+unsealed within %s", pod, joinTimeout)
 		}
-		fmt.Printf("%s: initialized=true — proceeding to unseal.\n", pod)
-		if err := unsealPod(pod, keys); err != nil {
-			return err
-		}
+		fmt.Printf("%s: initialized + unsealed.\n", pod)
 	}
 	return nil
 }

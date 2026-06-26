@@ -54,8 +54,8 @@ func runHealthOpenbao() error {
 
 	summary = append(summary, "")
 	if sealed > 0 {
-		fmt.Fprintf(os.Stderr, "::warning::%d/3 OpenBao pod(s) sealed on %s — openbao-auto-unseal.yml runs every 10m and should pick this up. Manual run: gh workflow run openbao-auto-unseal.yml --field region=%s\n", sealed, reg, reg)
-		summary = append(summary, fmt.Sprintf("> **Sealed pods detected.** `openbao-auto-unseal.yml` runs every 10m and should auto-remediate — no manual action expected unless this warning persists across several check cycles. Manual re-dispatch: `openbao-auto-unseal.yml` → `%s`. If still sealed after several auto-unseal cycles, verify `OPENBAO_UNSEAL_KEY_{1,2,3}` on `infra-%s` and inspect `bao status` on the affected pod.", reg, reg))
+		fmt.Fprintf(os.Stderr, "::warning::%d/3 OpenBao pod(s) sealed on %s — pods auto-unseal from the static seal key at boot, so a persistently sealed pod means the openbao-unseal-key Secret is missing/unreadable, the static key is wrong, or Raft storage is unhealthy.\n", sealed, reg)
+		summary = append(summary, fmt.Sprintf("> **Sealed pods detected on %s.** Pods auto-unseal from the static seal key (`seal \"static\"`) at boot — a persistently sealed pod means the `openbao-unseal-key` Secret is missing/unreadable, the 32-byte static key is wrong, or Raft storage is unhealthy. Inspect `bao status` and the openbao pod logs.", reg))
 	} else {
 		fmt.Printf("All OpenBao pods unsealed on %s.\n", reg)
 		summary = append(summary, "> All pods unsealed.")

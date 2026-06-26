@@ -87,8 +87,10 @@ platform:
 # replication. OpenBao OSS has no Performance Replication equivalent — that is a
 # Vault Enterprise feature, intentionally not in OpenBao.
 #
-# After first sync the pods come up sealed. Bootstrap is fully automated:
-# run .github/workflows/bootstrap-openbao.yml for each region.
+# After first sync the pods auto-unseal from the static seal key (see the
+# `seal "static"` stanza in server.ha.raft.config); bootstrap then runs
+# `bao operator init` + configuration. Fully automated: run
+# .github/workflows/bootstrap-openbao.yml for each region.
 #
 # Chart repo: https://openbao.github.io/openbao-helm
 openbao:
@@ -143,6 +145,26 @@ openbao:
         setNodeId: true
         config: |
           ui = true
+
+          # Static-key auto-unseal (no managed KMS on Linode LKE). Each pod
+          # unseals itself at boot from a 32-byte AES-256 key, replacing the old
+          # Shamir submit-keys flow + the openbao-auto-unseal re-unseal cron. The
+          # key is mounted from the `openbao-unseal-key` Secret (server.volumes
+          # below) at /openbao/seal/unseal.key and lives ONLY in that Secret
+          # (etcd, encrypted at rest on LKE-E), never inline in this ConfigMap.
+          # The Secret is created out-of-band by `llz ci bao-seed-seal-key`
+          # before bootstrap; until it exists the pod waits in ContainerCreating
+          # (a missing Secret volume does NOT crash-loop), so the seed step need
+          # only complete, not strictly precede this Argo sync. `current_key_id`
+          # is a PERMANENT identifier — OpenBao rejects a changed id for the same
+          # key material — and the key is never rotated: losing it loses the data
+          # (the recovery keys from `bao operator init` authorize generate-root
+          # but CANNOT decrypt the root key), so the seed command backs it up to
+          # the infra-<region> environment offline.
+          seal "static" {
+            current_key_id = "llz-openbao-static-1"
+            current_key    = "file:///openbao/seal/unseal.key"
+          }
 
           listener "tcp" {
             tls_disable      = 0
@@ -314,6 +336,15 @@ openbao:
       - name: openbao-tls
         secret:
           secretName: openbao-tls
+      # 32-byte static auto-unseal key, referenced as file:///openbao/seal/unseal.key
+      # by the `seal "static"` stanza in server.ha.raft.config. Created by
+      # `llz ci bao-seed-seal-key` before bootstrap (a missing Secret leaves the
+      # pod in ContainerCreating, not crash-looping). defaultMode 0440: readable
+      # by the openbao process (gid 1000 via the pod fsGroup) but not world-readable.
+      - name: openbao-seal-key
+        secret:
+          secretName: openbao-unseal-key
+          defaultMode: 0440
 
     # NOTE: this chart uses `server.volumeMounts` (not `extraVolumeMounts`) to
     # mount /openbao/tls. The `extraVolumeMounts` key is silently ignored,
@@ -322,6 +353,9 @@ openbao:
     volumeMounts:
       - name: openbao-tls
         mountPath: /openbao/tls
+        readOnly: true
+      - name: openbao-seal-key
+        mountPath: /openbao/seal
         readOnly: true
       - name: audit
         mountPath: /openbao/audit

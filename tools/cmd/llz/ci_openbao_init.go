@@ -5,7 +5,7 @@ package main
 // native ports of init-cluster.sh and regenerate-root-if-revoked.sh.
 // bao-regen-root is the NON-INTERACTIVE twin of the operator-facing
 // `llz openbao regen-root` (regenroot.go): same quorum flow, but the keys
-// come from the UNSEAL_K1/2/3 env (infra-<region> secrets) instead of a
+// come from the RECOVERY_K1/2/3 env (infra-<region> secrets) instead of a
 // terminal prompt, and the refreshed token is written straight back to the
 // GHA environment. Both reuse regenroot.go's baoExec + JSON parse helpers.
 
@@ -28,22 +28,28 @@ var ghSetSecretFn = func(name, ghEnv, value string) error {
 
 // ── bao-init ──────────────────────────────────────────────────────────────────
 
-// baoInitResult is the payload of `bao operator init -format=json`.
+// baoInitResult is the payload of `bao operator init -format=json`. Under an
+// auto-unseal seal (the chart configures `seal "static"`) init yields RECOVERY
+// keys, not unseal keys: the seal mechanism unseals every pod at boot, and the
+// recovery shares exist only to authorize `operator generate-root` /
+// `operator rekey` quorum flows. They CANNOT decrypt the root key, so they are
+// not sufficient to unseal if the static key is lost — that key must be backed
+// up offline (see runCIBaoInit's summary banner).
 type baoInitResult struct {
-	RootToken     string   `json:"root_token"`
-	UnsealKeysB64 []string `json:"unseal_keys_b64"`
+	RootToken       string   `json:"root_token"`
+	RecoveryKeysB64 []string `json:"recovery_keys_b64"`
 }
 
 // parseBaoInit validates the init payload: a root token plus at least the 5
-// key shares requested. Anything less means init half-failed and nothing
+// recovery shares requested. Anything less means init half-failed and nothing
 // below may proceed (the shares are generated exactly once).
 func parseBaoInit(s string) (baoInitResult, error) {
 	var r baoInitResult
 	if err := json.Unmarshal([]byte(s), &r); err != nil {
 		return r, fmt.Errorf("operator init returned unparseable JSON: %w", err)
 	}
-	if r.RootToken == "" || len(r.UnsealKeysB64) < 5 {
-		return r, fmt.Errorf("operator init payload incomplete (root=%v, %d key shares)", r.RootToken != "", len(r.UnsealKeysB64))
+	if r.RootToken == "" || len(r.RecoveryKeysB64) < 5 {
+		return r, fmt.Errorf("operator init payload incomplete (root=%v, %d recovery shares)", r.RootToken != "", len(r.RecoveryKeysB64))
 	}
 	return r, nil
 }
@@ -52,15 +58,18 @@ func ciBaoInitCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "bao-init",
-		Short: "first-time `bao operator init`: mask, persist keys + root, write job summary",
+		Short: "first-time `bao operator init`: mask, persist recovery keys + root, write job summary",
 		Long: "Native port of init-cluster.sh (bootstrap-openbao.yml Branch A). Runs\n" +
-			"`bao operator init -key-shares=5 -key-threshold=3` on pod-0, masks all six\n" +
-			"values, writes the full init payload to $GITHUB_STEP_SUMMARY FIRST (the\n" +
-			"shares are generated exactly once and cannot be recovered — capturing them\n" +
-			"must not be gated on gh/network success), exports OPENBAO_ROOT_TOKEN +\n" +
-			"UNSEAL_K1-3 to $GITHUB_ENV for the downstream steps, and persists keys 1-3\n" +
-			"plus the root token as infra-<region> environment secrets. Emits\n" +
-			"did_init=true. Requires GH_TOKEN/GH_REPO (the secrets-write PAT).",
+			"`bao operator init -recovery-shares=5 -recovery-threshold=3` on pod-0. Under\n" +
+			"the chart's `seal \"static\"` auto-unseal the pods unseal themselves at boot,\n" +
+			"so init yields RECOVERY shares (for generate-root/rekey quorum), not unseal\n" +
+			"keys. Masks all six values, writes the full init payload to\n" +
+			"$GITHUB_STEP_SUMMARY FIRST (the shares are generated exactly once and cannot\n" +
+			"be recovered — capturing them must not be gated on gh/network success),\n" +
+			"exports OPENBAO_ROOT_TOKEN + RECOVERY_K1-3 to $GITHUB_ENV for the downstream\n" +
+			"steps, and persists recovery keys 1-3 plus the root token as infra-<region>\n" +
+			"environment secrets. Emits did_init=true. Requires GH_TOKEN/GH_REPO (the\n" +
+			"secrets-write PAT).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoInit(gopts, region) },
 	}
@@ -73,12 +82,12 @@ func runCIBaoInit(g globalOpts, region string) error {
 		return fmt.Errorf("--region is required")
 	}
 	if g.dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) would run `bao operator init` and persist keys to infra-"+region)
+		fmt.Fprintln(os.Stderr, "→ (dry-run) would run `bao operator init` and persist recovery keys to infra-"+region)
 		return nil
 	}
 	pod := openbaoPodNames[0]
 	initOut, errOut, err := baoExecFn(pod, "", "",
-		"operator", "init", "-key-shares=5", "-key-threshold=3", "-format=json")
+		"operator", "init", "-recovery-shares=5", "-recovery-threshold=3", "-format=json")
 	if err != nil {
 		return fmt.Errorf("operator init on %s: %s", pod, strings.TrimSpace(firstNonEmpty(errOut, initOut)))
 	}
@@ -89,7 +98,7 @@ func runCIBaoInit(g globalOpts, region string) error {
 
 	// Mask everything before any other output can echo it.
 	maskGHA(res.RootToken)
-	for _, k := range res.UnsealKeysB64 {
+	for _, k := range res.RecoveryKeysB64 {
 		maskGHA(k)
 	}
 
@@ -98,8 +107,11 @@ func runCIBaoInit(g globalOpts, region string) error {
 		"## OpenBao Initialized — Save These Keys Now",
 		"",
 		"**OPERATOR ACTION REQUIRED:**",
-		"Copy all 5 unseal keys and the root token to secure offline storage",
+		"Copy all 5 recovery keys and the root token to secure offline storage",
 		"immediately. They will not be shown again.",
+		"Back up the cluster's 32-byte static unseal key offline TOO — recovery keys",
+		"authorize generate-root but CANNOT decrypt the root key, so losing the static",
+		"key loses the data.",
 		"Delete the `OPENBAO_ROOT_TOKEN` environment secret once bootstrap completes.",
 		"",
 		"```json",
@@ -110,32 +122,33 @@ func runCIBaoInit(g globalOpts, region string) error {
 
 	if err := appendGHAFile("GITHUB_ENV",
 		"OPENBAO_ROOT_TOKEN="+res.RootToken,
-		"UNSEAL_K1="+res.UnsealKeysB64[0],
-		"UNSEAL_K2="+res.UnsealKeysB64[1],
-		"UNSEAL_K3="+res.UnsealKeysB64[2]); err != nil {
+		"RECOVERY_K1="+res.RecoveryKeysB64[0],
+		"RECOVERY_K2="+res.RecoveryKeysB64[1],
+		"RECOVERY_K3="+res.RecoveryKeysB64[2]); err != nil {
 		return err
 	}
 	// Also export to the PROCESS env. A standalone `bao-init` step relies on the
 	// $GITHUB_ENV write above (GitHub Actions injects it into the next step), but
-	// the `bao-ensure-ready` orchestrator runs init + unseal in ONE process — the
-	// unseal calls read UNSEAL_K1/2/3 (and the availability gate reads
-	// OPENBAO_ROOT_TOKEN) via os.Getenv, which the file write does not satisfy.
+	// the `bao-ensure-ready` orchestrator runs init + regen-root in ONE process —
+	// the generate-root path reads RECOVERY_K1/2/3 (and the availability gate
+	// reads OPENBAO_ROOT_TOKEN) via os.Getenv, which the file write does not
+	// satisfy.
 	os.Setenv("OPENBAO_ROOT_TOKEN", res.RootToken)
-	os.Setenv("UNSEAL_K1", res.UnsealKeysB64[0])
-	os.Setenv("UNSEAL_K2", res.UnsealKeysB64[1])
-	os.Setenv("UNSEAL_K3", res.UnsealKeysB64[2])
+	os.Setenv("RECOVERY_K1", res.RecoveryKeysB64[0])
+	os.Setenv("RECOVERY_K2", res.RecoveryKeysB64[1])
+	os.Setenv("RECOVERY_K3", res.RecoveryKeysB64[2])
 
-	// Keys 1-3 as environment secrets for automated re-unseal; the root token
-	// too, for two reasons: (1) the configure preflight prints the sha256 of
-	// secrets.OPENBAO_ROOT_TOKEN so the operator can spot GHA-vs-cluster
-	// mismatch on the NEXT bootstrap — without persisting now, a prior
-	// cluster's stale token is what the audit reads; (2) `llz openbao
-	// regen-root` against this cluster needs the GHA-stored value to be
-	// CURRENT. The summary banner tells the operator to delete it after
-	// bootstrap; a leftover fails clean on the next cold bootstrap's preflight.
+	// Recovery keys 1-3 as environment secrets for the generate-root quorum
+	// (bao-regen-root); the root token too, for two reasons: (1) the configure
+	// preflight prints the sha256 of secrets.OPENBAO_ROOT_TOKEN so the operator
+	// can spot GHA-vs-cluster mismatch on the NEXT bootstrap — without persisting
+	// now, a prior cluster's stale token is what the audit reads; (2) `llz openbao
+	// regen-root` against this cluster needs the GHA-stored value to be CURRENT.
+	// The summary banner tells the operator to delete it after bootstrap; a
+	// leftover fails clean on the next cold bootstrap's preflight.
 	ghEnv := "infra-" + region
-	for i, key := range res.UnsealKeysB64[:3] {
-		if err := ghSetSecretFn(fmt.Sprintf("OPENBAO_UNSEAL_KEY_%d", i+1), ghEnv, key); err != nil {
+	for i, key := range res.RecoveryKeysB64[:3] {
+		if err := ghSetSecretFn(fmt.Sprintf("OPENBAO_RECOVERY_KEY_%d", i+1), ghEnv, key); err != nil {
 			return err
 		}
 	}
@@ -143,7 +156,7 @@ func runCIBaoInit(g globalOpts, region string) error {
 		return err
 	}
 
-	fmt.Printf("OpenBao initialized; unseal keys 1-3 + root token persisted to %s.\n", ghEnv)
+	fmt.Printf("OpenBao initialized; recovery keys 1-3 + root token persisted to %s.\n", ghEnv)
 	return appendGHAFile("GITHUB_OUTPUT", "did_init=true")
 }
 
@@ -158,11 +171,12 @@ func ciBaoRegenRootCmd() *cobra.Command {
 			"token\" step revokes the in-workflow token but can't update the GH secret,\n" +
 			"so the next run loads a dead value. This validates $OPENBAO_ROOT_TOKEN via\n" +
 			"`bao token lookup` and exits 0 if it works; otherwise it runs the\n" +
-			"`bao operator generate-root` quorum flow with UNSEAL_K1/2/3 (keys piped\n" +
-			"over stdin, never argv), masks the new token, exports it to $GITHUB_ENV\n" +
-			"for the downstream steps, and writes it back to the infra-<region>\n" +
-			"OPENBAO_ROOT_TOKEN environment secret. Interactive operator twin:\n" +
-			"`llz openbao regen-root`.",
+			"`bao operator generate-root` quorum flow with RECOVERY_K1/2/3 (keys piped\n" +
+			"over stdin, never argv — under auto-unseal generate-root is authorized by\n" +
+			"the recovery keys, not unseal keys), masks the new token, exports it to\n" +
+			"$GITHUB_ENV for the downstream steps, and writes it back to the\n" +
+			"infra-<region> OPENBAO_ROOT_TOKEN environment secret. Interactive operator\n" +
+			"twin: `llz openbao regen-root`.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoRegenRoot(gopts, region) },
 	}
@@ -205,9 +219,9 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 	}
 	fmt.Println("Root token is invalid (revoked from prior run?) — regenerating via quorum.")
 
-	keys, err := unsealKeysFromEnv()
+	keys, err := recoveryKeysFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "::error::Cannot regenerate — OPENBAO_UNSEAL_KEY_{1,2,3} env secrets not set on infra-%s.\n", region)
+		fmt.Fprintf(os.Stderr, "::error::Cannot regenerate — OPENBAO_RECOVERY_KEY_{1,2,3} env secrets not set on infra-%s.\n", region)
 		return err
 	}
 

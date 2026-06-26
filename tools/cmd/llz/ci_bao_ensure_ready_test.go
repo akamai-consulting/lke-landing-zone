@@ -35,14 +35,15 @@ func statusJSON(initialized, sealed bool) string {
 // cleanup (no leak into sibling tests).
 func clearBaoEnv(t *testing.T) {
 	t.Helper()
-	for _, v := range []string{"UNSEAL_K1", "UNSEAL_K2", "UNSEAL_K3", "OPENBAO_ROOT_TOKEN", "GH_TOKEN", "HA_ROLE"} {
+	for _, v := range []string{"RECOVERY_K1", "RECOVERY_K2", "RECOVERY_K3", "OPENBAO_ROOT_TOKEN", "GH_TOKEN", "HA_ROLE"} {
 		t.Setenv(v, "")
 	}
 }
 
 // TestRunCIBaoEnsureReadyFirstInit drives the uninitialized path end to end:
-// init mints the keys+token, pod-0 then the followers unseal, and the gate
-// reports available=true with the fresh root token re-exported.
+// init mints the recovery keys+token, every pod then auto-unseals from the
+// static seal key, and the gate reports available=true with the fresh root
+// token re-exported.
 func TestRunCIBaoEnsureReadyFirstInit(t *testing.T) {
 	clearBaoEnv(t)
 	t.Setenv("GH_TOKEN", "ghp_write")
@@ -50,25 +51,17 @@ func TestRunCIBaoEnsureReadyFirstInit(t *testing.T) {
 	withBaoSleep(t)
 	secrets := withGHSetSecret(t, nil)
 
-	inited, pod0Unsealed := false, false
+	inited := false
 	withBaoExec(t, func(pod, _, _ string, args ...string) (string, string, error) {
 		joined := strings.Join(args, " ")
 		switch {
 		case args[0] == "status":
-			if pod == "platform-openbao-0" {
-				return statusJSON(inited, !pod0Unsealed), "", nil
-			}
-			// Followers auto-join via retry_join once the leader is up: initialized
-			// follows `inited`, still sealed until their own unseal.
-			return statusJSON(inited, true), "", nil
+			// Before init: uninitialized+sealed. After init each pod auto-unseals
+			// from the static seal key (no key-submission step).
+			return statusJSON(inited, !inited), "", nil
 		case strings.HasPrefix(joined, "operator init"):
 			inited = true
-			return `{"root_token":"s.newroot","unseal_keys_b64":["k1","k2","k3","k4","k5"]}`, "", nil
-		case strings.HasPrefix(joined, "operator unseal"):
-			if pod == "platform-openbao-0" {
-				pod0Unsealed = true
-			}
-			return "", "", nil
+			return `{"root_token":"s.newroot","recovery_keys_b64":["k1","k2","k3","k4","k5"]}`, "", nil
 		}
 		return "", "unexpected " + joined, fmt.Errorf("unexpected")
 	})
@@ -83,8 +76,8 @@ func TestRunCIBaoEnsureReadyFirstInit(t *testing.T) {
 		t.Errorf("GITHUB_ENV = %q, want the fresh root token re-exported", got)
 	}
 	joined := strings.Join(*secrets, " ")
-	if !strings.Contains(joined, "OPENBAO_UNSEAL_KEY_1") || !strings.Contains(joined, "OPENBAO_ROOT_TOKEN") {
-		t.Errorf("persisted secrets = %v, want unseal keys + root token", *secrets)
+	if !strings.Contains(joined, "OPENBAO_RECOVERY_KEY_1") || !strings.Contains(joined, "OPENBAO_ROOT_TOKEN") {
+		t.Errorf("persisted secrets = %v, want recovery keys + root token", *secrets)
 	}
 }
 
@@ -102,31 +95,27 @@ func TestRunCIBaoEnsureReadyFirstInitNeedsGHToken(t *testing.T) {
 	}
 }
 
-// TestRunCIBaoEnsureReadyReUnseal: initialized + sealed, no root token →
-// re-unseal every pod (Branch B), available=false (configure/seed skipped).
-func TestRunCIBaoEnsureReadyReUnseal(t *testing.T) {
+// TestRunCIBaoEnsureReadyReseal: initialized + sealed after a restart, no root
+// token → wait for the pods to self-unseal from the static seal key (Branch B),
+// available=false (configure/seed skipped). No keys are submitted.
+func TestRunCIBaoEnsureReadyReseal(t *testing.T) {
 	clearBaoEnv(t)
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
 	readOutput, _ := ghaFiles(t)
-	unseals := 0
+	withBaoSleep(t)
+	probes := 0
 	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
 		joined := strings.Join(args, " ")
 		switch {
 		case args[0] == "status":
-			return statusJSON(true, true), "", nil
-		case strings.HasPrefix(joined, "operator unseal"):
-			unseals++
-			return "", "", nil
+			// The first sweep (aggregate probe over 3 pods) still sees the pods
+			// sealed; by the time waitForAutoUnseal polls they've self-unsealed.
+			probes++
+			return statusJSON(true, probes <= 3), "", nil
 		}
 		return "", "unexpected " + joined, fmt.Errorf("unexpected")
 	})
-	if err := runCIBaoEnsureReady(globalOpts{}, "primary", time.Second, time.Second); err != nil {
-		t.Fatalf("runCIBaoEnsureReady (re-unseal): %v", err)
-	}
-	if unseals != 9 {
-		t.Errorf("unseal submissions = %d, want 9 (3 keys × 3 pods)", unseals)
+	if err := runCIBaoEnsureReady(globalOpts{}, "primary", 30*time.Second, 30*time.Second); err != nil {
+		t.Fatalf("runCIBaoEnsureReady (reseal): %v", err)
 	}
 	if got := readOutput(); !strings.Contains(got, "available=false") {
 		t.Errorf("GITHUB_OUTPUT = %q, want available=false (no root token)", got)
@@ -138,9 +127,9 @@ func TestRunCIBaoEnsureReadyReUnseal(t *testing.T) {
 // reports available=true with the token re-exported.
 func TestRunCIBaoEnsureReadyReconfigureValidToken(t *testing.T) {
 	clearBaoEnv(t)
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
 	t.Setenv("OPENBAO_ROOT_TOKEN", "s.valid")
 	readOutput, readEnv := ghaFiles(t)
 	var sawInit, sawUnseal bool

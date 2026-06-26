@@ -2,7 +2,7 @@ package main
 
 // ci_bao_ensure_ready.go implements `llz ci bao-ensure-ready` — the single
 // command that collapses bootstrap-openbao.yml's seal/token-lifecycle steps
-// (status probe → first-init OR emergency re-unseal → root-token load/regen →
+// (status probe → first-init OR wait-for-auto-unseal → root-token load/regen →
 // availability gate) into one place. It COMPOSES the existing, individually-
 // tested bao-* run functions rather than reimplementing them, so the init
 // payload is still produced exactly once by runCIBaoInit and the quorum regen
@@ -10,11 +10,15 @@ package main
 // steps to one and the branch selection becomes unit-testable Go.
 //
 // CONVERGENCE CONTRACT — same detect → choose-a-path → re-verify shape the
-// cluster-health gate uses, applied to OpenBao seal state:
+// cluster-health gate uses, applied to OpenBao seal state. Under the chart's
+// `seal "static"` auto-unseal the pods unseal themselves at boot, so there is no
+// key-submission step — the bootstrap just waits for that convergence:
 //
-//   uninitialized        → init (generate keys + root, persist), unseal pod-0,
-//                          wait for retry_join then unseal the followers
-//   initialized + sealed → re-unseal every pod with the quorum keys (Branch B)
+//   uninitialized        → init (generate recovery keys + root, persist), then
+//                          wait for every pod to auto-unseal (leader, then the
+//                          retry_join'd followers)
+//   initialized + sealed → wait for the pod(s) to self-unseal after a restart
+//                          (transient; no keys are submitted)
 //   initialized          → validate the loaded root token, regenerate via quorum
 //                          if a prior run's revoke left a dead value behind
 //
@@ -22,7 +26,7 @@ package main
 // configure/seed step keys on) and re-exports the effective OPENBAO_ROOT_TOKEN
 // to $GITHUB_ENV for those steps. The keys/token handoff between the composed
 // steps rides the PROCESS env — runCIBaoInit / runCIBaoRegenRoot os.Setenv what
-// they also append to $GITHUB_ENV — so the in-process unseal-after-init and the
+// they also append to $GITHUB_ENV — so the in-process regen-after-init and the
 // availability check below see the values the inline steps used to receive via
 // GitHub Actions' between-step $GITHUB_ENV injection.
 
@@ -39,18 +43,19 @@ func ciBaoEnsureReadyCmd() *cobra.Command {
 	var leaderTimeout, joinTimeout int
 	c := &cobra.Command{
 		Use:   "bao-ensure-ready",
-		Short: "probe OpenBao and drive it to unsealed + a usable root token (init/unseal/regen)",
+		Short: "probe OpenBao and drive it to unsealed + a usable root token (init/wait/regen)",
 		Long: "Orchestrates the OpenBao seal/token lifecycle bootstrap-openbao.yml used to\n" +
 			"run as eight separate steps: probe all pods, then — on an uninitialized\n" +
-			"cluster — run `bao operator init` + unseal pod-0 + join/unseal the\n" +
-			"followers; on an initialized-but-sealed cluster re-unseal every pod with\n" +
-			"the quorum keys; and on an initialized cluster validate the loaded root\n" +
+			"cluster — run `bao operator init` and wait for every pod to auto-unseal\n" +
+			"from the static seal key (leader first, then the retry_join'd followers);\n" +
+			"on an initialized-but-sealed cluster wait for the pod(s) to self-unseal\n" +
+			"after a restart; and on an initialized cluster validate the loaded root\n" +
 			"token and regenerate it via quorum if a prior run revoked it. Composes the\n" +
-			"same bao-init / bao-unseal / bao-unseal-followers / bao-regen-root logic\n" +
-			"the individual commands run. Writes available=<bool> to $GITHUB_OUTPUT (the\n" +
-			"gate downstream configure/seed steps check) and re-exports the effective\n" +
-			"OPENBAO_ROOT_TOKEN to $GITHUB_ENV. Reads UNSEAL_K1/2/3 + OPENBAO_ROOT_TOKEN\n" +
-			"(infra-<region> secrets) and GH_TOKEN/GH_REPO (first-init persistence).",
+			"same bao-init / bao-regen-root logic the individual commands run. Writes\n" +
+			"available=<bool> to $GITHUB_OUTPUT (the gate downstream configure/seed steps\n" +
+			"check) and re-exports the effective OPENBAO_ROOT_TOKEN to $GITHUB_ENV. Reads\n" +
+			"RECOVERY_K1/2/3 + OPENBAO_ROOT_TOKEN (infra-<region> secrets) and\n" +
+			"GH_TOKEN/GH_REPO (first-init persistence).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runCIBaoEnsureReady(gopts, region,
@@ -68,7 +73,7 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 		return fmt.Errorf("--region is required")
 	}
 	if g.dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) would probe OpenBao and init/unseal/regen-root as needed")
+		fmt.Fprintln(os.Stderr, "→ (dry-run) would probe OpenBao and init/wait-for-auto-unseal/regen-root as needed")
 		return nil
 	}
 
@@ -90,24 +95,24 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 		// persist the keys; fail early and friendly if it's absent (the inline
 		// "verify GitHub secrets-write token for first init" preflight).
 		if os.Getenv("GH_TOKEN") == "" {
-			return fmt.Errorf("OpenBao is uninitialized and GH_TOKEN (OPENBAO_SECRETS_WRITE_TOKEN) is not set — first-time init must persist the unseal keys + root token as infra-%s secrets", region)
+			return fmt.Errorf("OpenBao is uninitialized and GH_TOKEN (OPENBAO_SECRETS_WRITE_TOKEN) is not set — first-time init must persist the recovery keys + root token as infra-%s secrets", region)
 		}
-		// Generates the 5 shares + root token, persists keys 1-3 + the root token,
-		// and exports UNSEAL_K1/2/3 + OPENBAO_ROOT_TOKEN to $GITHUB_ENV AND the
-		// process env, so the unseal calls below find the freshly-minted keys.
+		// Generates the 5 recovery shares + root token, persists keys 1-3 + the
+		// root token, and exports RECOVERY_K1/2/3 + OPENBAO_ROOT_TOKEN to
+		// $GITHUB_ENV AND the process env (for the in-process regen path + the
+		// availability gate). Under static seal each pod then unseals itself at
+		// boot once retry_join has joined it — wait for that convergence.
 		if err := runCIBaoInit(g, region); err != nil {
 			return err
 		}
-		if err := runCIBaoUnseal(g, "0"); err != nil {
-			return err
-		}
-		if err := runCIBaoUnsealFollowers(g, leaderTimeout, joinTimeout); err != nil {
+		if err := waitForAutoUnseal(leaderTimeout, joinTimeout); err != nil {
 			return err
 		}
 	case sealedAny:
-		// Branch B — initialized but (partially) sealed: re-unseal every pod with
-		// the quorum keys from the infra-<region> secrets.
-		if err := runCIBaoUnseal(g, "all"); err != nil {
+		// Branch B — initialized but (partially) sealed after a restart. Under
+		// static seal the pod self-unseals once it's back up; wait for that rather
+		// than submitting keys (there are none).
+		if err := waitForAutoUnseal(leaderTimeout, joinTimeout); err != nil {
 			return err
 		}
 	}
@@ -133,7 +138,7 @@ func runCIBaoEnsureReady(g globalOpts, region string, leaderTimeout, joinTimeout
 		if err := appendGHAFile("GITHUB_STEP_SUMMARY",
 			"Root token unavailable — configure and seed steps were skipped.",
 			fmt.Sprintf("To re-configure: set OPENBAO_ROOT_TOKEN as an infra-%s environment secret and re-run,", region),
-			"or ensure OPENBAO_UNSEAL_KEY_{1,2,3} are set so the workflow can regenerate it."); err != nil {
+			"or ensure OPENBAO_RECOVERY_KEY_{1,2,3} are set so the workflow can regenerate it."); err != nil {
 			return err
 		}
 		return appendGHAFile("GITHUB_OUTPUT", "available=false")
