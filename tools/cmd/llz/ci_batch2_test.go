@@ -203,6 +203,13 @@ func TestDiagnoseArgoCD(t *testing.T) {
 		"kubectl describe -n argocd pod/argocd-server-0",
 		"kubectl logs -n argocd job.batch/hook-1 --all-containers --tail=200",
 		"helm history argocd -n argocd",
+		// Convergence-blocker capture: Argo Application states + the phase1
+		// platform-app-ca CA chain.
+		"kubectl -n argocd get applications -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,MESSAGE:.status.conditions[*].message",
+		"kubectl -n argocd get application platform-bootstrap -o yaml",
+		"kubectl -n cert-manager get secret platform-app-ca -o wide",
+		"kubectl get certificate,certificaterequest --all-namespaces -o wide",
+		"kubectl get clusterissuer -o wide",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("probes missing %q:\n%s", want, joined)

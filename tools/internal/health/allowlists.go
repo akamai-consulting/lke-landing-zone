@@ -25,6 +25,7 @@ func ExternalDepApps() []DepEntry {
 		{"external-dns-external-dns", "LINODE_DNS_TOKEN not seeded — run bootstrap-dns.yml + re-apply TF so apl-values dns.provider.linode.apiToken is populated"},
 		{"istio-system-oauth2-proxy", "Keycloak OIDC issuer (keycloak.<domain>) not resolvable until DNS is wired — run bootstrap-dns.yml; deferred alongside external-dns"},
 		{"gitops-global", "apl-core's global-values Argo app is hardwired to clone the in-cluster gitea (gitea-http.gitea.svc), which this landing zone obsoletes — otomi.git points at the external GitHub repo. Bound deep in apl-core, not our config; deferred until apl-core sources gitops-global from otomi.git"},
+		{"team-[a-z0-9-]+-values-gitops", "apl-core/otomi generates a per-team values-gitops Application pointing at env/teams/<team>/sealedsecrets — a path that does not exist in this landing zone (we use ESO + OpenBao, not otomi per-team sealed-secrets), so it sits Unknown with a ComparisonError ('app path does not exist'). Same class as gitops-global: an apl-core-internal app this LZ obsoletes, not our config; deferred so it can't pin the convergence gate."},
 	}
 }
 

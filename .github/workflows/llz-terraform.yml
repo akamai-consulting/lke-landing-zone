@@ -1044,6 +1044,18 @@ jobs:
           KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
         run: 'echo "== loki-gateway nginx.conf resolver =="; kubectl -n monitoring get cm loki-gateway -o "jsonpath={.data.nginx\.conf}" 2>/dev/null | grep -i resolver || true; for p in $(kubectl -n monitoring get pods -o name 2>/dev/null | grep loki-gateway); do echo "== $p =="; kubectl -n monitoring logs "$p" -c nginx --tail=50 2>/dev/null || true; kubectl -n monitoring logs "$p" -c nginx --tail=50 --previous 2>/dev/null || true; kubectl -n monitoring describe "$p" 2>/dev/null | tail -30 || true; done'
 
+      # On a convergence stall, snapshot WHY before teardown destroys the cluster:
+      # the Argo CD Application states (a child ComparisonError stalling the seed
+      # app-of-apps) and the phase1 platform-app-ca CA chain — the two blockers the
+      # converge poll log shows the symptom of but not the cause. `|| cancelled()`
+      # so a manually-cancelled run still captures. All probes are best-effort
+      # inside the (tested) llz command, so it never alters the outcome.
+      - name: Diagnose convergence failure (Argo apps + cert-manager CA chain)
+        if: failure() || cancelled()
+        env:
+          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
+        run: llz ci diagnose-argocd
+
       # Revoke BEFORE deleting the kubeconfig: revoke releases the ConfigMap
       # lease via kubectl (needs the kubeconfig) before the Linode-API call cuts
       # apiserver access.
