@@ -100,9 +100,10 @@ func ciCmd() *cobra.Command {
 	// support-plane app silently never syncs (llz-openbao namespace never created).
 	c.AddCommand(ciChartPinGuardCmd())
 	// Cluster-bootstrap local-exec bodies (instance-template cluster-bootstrap/
-	// main.tf): the apl_pipeline_ready readiness gate, and the kyverno_* policy
-	// apply (readiness poll + apply + webhook-race soft-fail + retrofit kick).
-	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd())
+	// main.tf): the apl_pipeline_ready readiness gate, the kyverno_* policy apply
+	// (readiness poll + apply + webhook-race soft-fail + retrofit kick), and the
+	// destroy-time finalizer-deadlock unwedge.
+	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(), ciDestroyUnwedgeCmd())
 	return c
 }
 

@@ -62,10 +62,14 @@ categories:
       - "template-scripts/**/*.py"
 
   terraform-provisioner-bash:
-    # Ratcheted 101 → 65: null_resource.apl_pipeline_ready's ~35-line readiness
-    # heredoc moved into the unit-tested `llz ci wait-apl-pipeline` (98 → 63).
+    # Ratcheted 101 → 28: TWO provisioner heredocs moved into unit-tested llz
+    # subcommands — null_resource.apl_pipeline_ready's readiness gate into
+    # `llz ci wait-apl-pipeline` (PR #81), and
+    # null_resource.unwedge_namespace_finalizers_on_destroy's finalizer-deadlock
+    # breaker into `llz ci destroy-unwedge` (this PR). Both removals stack, so
+    # the remaining provisioner bash is well below either PR's standalone ratchet.
     kind: terraform-provisioner
-    budget: 65
+    budget: 28
     include:
       - "terraform-modules/**/*.tf"
       - "instance-template/**/*.tf"
