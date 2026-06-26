@@ -37,6 +37,16 @@ on:
 permissions:
   contents: read
 
+# The List-deployments step runs inside the ci-terraform container and uses
+# `set -o pipefail` (a bashism). Without this default GitHub falls back to the
+# container's /bin/sh (dash), which rejects `-o pipefail` ("Illegal option") and
+# fails the job on every scheduled run — taking auto-unseal / scheduled-checks /
+# secret-rotation down with it. Every other container workflow here sets the same
+# default; this one was missing it.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   discover:
     name: Discover deployments
