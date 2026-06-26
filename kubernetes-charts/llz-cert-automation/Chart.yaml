@@ -12,7 +12,9 @@ type: application
 # oci://ghcr.io/<org>/charts/llz-cert-automation by .github/workflows/publish-charts.yml.
 # 0.1.1: strip internal fingerprints from comments for open-sourcing (no rendered change).
 # 0.1.2: pin the EventBus JetStream version (was `latest`) to 2.10.10 for reproducibility.
-version: 0.1.2
+# 0.1.3: externalSecrets.refreshInterval 1h -> 1m so cert-automation's ExternalSecrets
+#        re-sync within ~1m of the OpenBao store going Ready on first boot (was ~14m idle).
+version: 0.1.3
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"
