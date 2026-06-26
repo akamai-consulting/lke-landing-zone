@@ -37,6 +37,18 @@ func TestParseTFVarsRegion(t *testing.T) {
 	}
 }
 
+// vpc_subnet_cidr feeds `llz ci bootstrap-cloud-firewall --region`'s VPC_CIDR.
+// An explicit value parses; an absent one falls back to the module default so the
+// resolved VPC_CIDR matches what `terraform output vpc_subnet_cidr` returned.
+func TestParseTFVarsVPCSubnetCIDR(t *testing.T) {
+	if v := ParseTFVars("cluster_label = \"c1\"\nvpc_subnet_cidr = \"10.8.0.0/14\"\n"); v.VPCSubnetCIDR != "10.8.0.0/14" {
+		t.Errorf("VPCSubnetCIDR = %q, want 10.8.0.0/14", v.VPCSubnetCIDR)
+	}
+	if v := ParseTFVars("cluster_label = \"c1\"\n"); v.VPCSubnetCIDR != DefaultVPCSubnetCIDR {
+		t.Errorf("VPCSubnetCIDR = %q, want default %q", v.VPCSubnetCIDR, DefaultVPCSubnetCIDR)
+	}
+}
+
 func TestParseTFVarsVPCNetwork(t *testing.T) {
 	// Shared VPC: vpc_network set → the module's linode_vpc.this is count 0
 	// (tf-import must NOT import a `.this[0]` that doesn't exist).

@@ -750,38 +750,27 @@ jobs:
             echo "::warning::CLOUD_FIREWALL_TOKEN not set — falling back to LINODE_TOKEN for the firewall-controller. Set a least-privilege CLOUD_FIREWALL_TOKEN (cloud-firewall-scoped) in infra-${REGION} when possible."
           fi
 
-      # `terraform output` for the cluster module reads remote state from S3, so
-      # that module must be init'd (backend wired) in addition to cluster-bootstrap
-      # above. The two init distinct workspace dirs, so they do not collide.
-      - name: Terraform init — cluster
-        if: env.ACTION == 'apply'
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
-        with:
-          module:                cluster
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-
+      # `llz ci bootstrap-cloud-firewall --region` resolves all three inputs the
+      # runtime controller needs — the node firewall ID, the LKE cluster ID, and
+      # the VPC subnet CIDR — so the controller reconciles the SAME firewall the TF
+      # cluster module created. The firewall + cluster are looked up by their
+      # account-unique labels via the Linode API; the subnet CIDR comes straight
+      # from cluster/<region>.tfvars. This replaces the former `terraform init`
+      # (cluster module, just to wire its S3 backend) + three `terraform output`
+      # reads of remote state — no second workspace init, no state read.
       - name: Bootstrap — seed firewall-controller Secret + ConfigMap
         if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/cluster
         env:
           # Reuse the readiness kubeconfig fetched by "Cluster access" above (same
           # cluster, same open control-plane ACL); no second fetch / ACL lease.
           KUBECONFIG:           ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
           CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
+          # Account-read PAT used to resolve the firewall + cluster IDs by label
+          # (also the warned-about fallback token seeded into the controller Secret
+          # when CLOUD_FIREWALL_TOKEN is unset).
           LINODE_TOKEN:         ${{ secrets.LINODE_API_TOKEN }}
-        run: |
-          CHDIR=terraform-iac-bootstrap/cluster
-          # All three derive from the cluster workspace so the runtime controller
-          # reconciles the SAME firewall the TF cluster module created: the node
-          # firewall ID, the VPC subnet CIDR (so VPC_CIDR matches the VPC, not the
-          # chart's stale /16 default), and the LKE cluster ID (so the EAA/bastion
-          # ranges are also synced into the control-plane ACL).
-          LINODE_FIREWALL_ID="$(terraform -chdir=$CHDIR output -raw node_firewall_id)"
-          VPC_CIDR="$(terraform -chdir=$CHDIR output -raw vpc_subnet_cidr)"
-          CLUSTER_ID="$(terraform -chdir=$CHDIR output -raw cluster_id)"
-          export LINODE_FIREWALL_ID VPC_CIDR CLUSTER_ID
-          llz ci bootstrap-cloud-firewall
+        run: llz ci bootstrap-cloud-firewall --region "$REGION"
 
       # ── Diagnostics ─────────────────────────────────────────────────────────
       # Runs only when a previous step failed (typically the helm_release.argocd
