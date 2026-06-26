@@ -7,9 +7,9 @@
 # REGION_SHORT injection: this base sets the example region (`exa`). Each env
 # overlay strategic-merge-patches the value via the manifest-root
 # linode-volume-labeler-region-patch.yaml (llz env add swaps it
-# to the target region's REGION_SHORT). The namespace itself is TF-owned
-# (terraform-iac-bootstrap/cluster-bootstrap, with its linode-api-token Secret) so the
-# credential stays with its consumer.
+# to the target region's REGION_SHORT). The namespace + the linode-api-token
+# Secret are co-located in this tree (namespace.yaml + externalsecret.yaml); the
+# Secret is synced from OpenBao by ESO, not injected by Terraform.
 #
 # 15-minute cadence keeps well under Linode's 800-req/2-min API cap (~100
 # req/run) while giving new PVCs readable labels within ~10 min.
@@ -19,9 +19,9 @@ metadata:
   name: linode-volume-labeler
   namespace: llz-linode-volume-labeler
   annotations:
-    # kube-linter can't see the linode-api-token Secret (TF-owned, injected via
-    # terraform-iac-bootstrap/cluster-bootstrap/main.tf::linode_volume_labeler_token).
-    ignore-check.kube-linter.io/env-value-from: "linode-api-token Secret is TF-owned (cluster-bootstrap); not a static manifest the linter can resolve"
+    # kube-linter can't resolve the linode-api-token Secret (created at runtime by
+    # ESO from externalsecret.yaml, not a static manifest in this tree).
+    ignore-check.kube-linter.io/env-value-from: "linode-api-token Secret is created at runtime by ESO (externalsecret.yaml); not a static manifest the linter can resolve"
     ignore-check.kube-linter.io/read-secret-from-env-var: "Shell script reads LINODE_TOKEN via env-var guard; no file-mount alternative without script rewrite"
     ignore-check.kube-linter.io/job-ttl-seconds-after-finished: "TTL + history-limits are intentional and complementary — failed runs retained for triage; successful runs reaped at the limit OR after 1h"
 spec:

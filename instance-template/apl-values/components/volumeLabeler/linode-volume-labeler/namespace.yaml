@@ -1,0 +1,23 @@
+# llz-linode-volume-labeler namespace — Argo-owned.
+#
+# Previously TF-owned (terraform-iac-bootstrap/cluster-bootstrap) so the
+# TF-injected linode-api-token Secret had somewhere to land before Argo CD was
+# up. That Secret now arrives via ESO (externalsecret.yaml), so the namespace
+# moves here with the rest of the volume-labeler tree — one owner, no TF→kube
+# crossing. Argo applies Namespace kinds before namespaced resources, so the
+# ExternalSecret + CronJob land into it on the same sync.
+#
+# Pod Security `restricted` is baked in: the relabeler pod's securityContext
+# already satisfies it (runAsNonRoot, drop ALL caps, readOnlyRootFilesystem,
+# seccomp RuntimeDefault, no privilege escalation), so enforce locks the posture
+# against future image regressions.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llz-linode-volume-labeler
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

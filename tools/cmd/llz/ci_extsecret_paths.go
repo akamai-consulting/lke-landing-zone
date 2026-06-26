@@ -277,7 +277,12 @@ var (
 type esPolicy = map[string]map[string]map[string]bool
 
 // collectPolicyPaths returns {kv path: {data|metadata: capability set}} for
-// every literal secret KV v2 policy stanza in the file.
+// every literal secret KV v2 policy stanza in the file. When the same path+kind
+// appears in more than one stanza (the file holds several policies — platform-ci,
+// secret-propagator — and a path may be granted by both), capabilities are
+// UNIONed, not overwritten: the file collectively grants the strongest set, so a
+// path read+listed by platform-ci stays covered even if secret-propagator also
+// grants it read-only.
 func collectPolicyPaths(path string) (esPolicy, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -286,14 +291,15 @@ func collectPolicyPaths(path string) (esPolicy, error) {
 	policies := esPolicy{}
 	for _, m := range esPolicyRx.FindAllStringSubmatch(string(b), -1) {
 		kind, kvPath, rawCaps := m[1], m[2], m[3]
-		caps := map[string]bool{}
-		for _, cm := range esCapRx.FindAllStringSubmatch(rawCaps, -1) {
-			caps[cm[1]] = true
-		}
 		if policies[kvPath] == nil {
 			policies[kvPath] = map[string]map[string]bool{}
 		}
-		policies[kvPath][kind] = caps
+		if policies[kvPath][kind] == nil {
+			policies[kvPath][kind] = map[string]bool{}
+		}
+		for _, cm := range esCapRx.FindAllStringSubmatch(rawCaps, -1) {
+			policies[kvPath][kind][cm[1]] = true
+		}
 	}
 	return policies, nil
 }

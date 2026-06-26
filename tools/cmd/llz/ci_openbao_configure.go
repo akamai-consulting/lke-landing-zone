@@ -26,6 +26,7 @@ path "secret/data/harbor/pull-robot"            { capabilities = ["read"] }
 path "secret/data/harbor/registry-s3"           { capabilities = ["read"] }
 path "secret/data/harbor/robot"                 { capabilities = ["read"] }
 path "secret/data/infra/github-dispatch-token"  { capabilities = ["read"] }
+path "secret/data/linode/api-token"             { capabilities = ["read"] }
 path "secret/data/loki/object-store"            { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
@@ -39,6 +40,7 @@ path "secret/metadata/harbor/pull-robot"            { capabilities = ["read", "l
 path "secret/metadata/harbor/registry-s3"           { capabilities = ["read", "list"] }
 path "secret/metadata/harbor/robot"                 { capabilities = ["read", "list"] }
 path "secret/metadata/infra/github-dispatch-token"  { capabilities = ["read", "list"] }
+path "secret/metadata/linode/api-token"             { capabilities = ["read", "list"] }
 path "secret/metadata/loki/object-store"            { capabilities = ["read", "list"] }
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
 `

@@ -2,10 +2,10 @@ package main
 
 // ci_bao_seed_all.go implements `llz ci bao-seed-all` — the data-driven driver
 // that runs the bootstrap's generic OpenBao KV seeds from one declarative table
-// instead of one hand-written workflow step per secret. It REPLACES the six
+// instead of one hand-written workflow step per secret. It REPLACES the
 // scattered `llz ci bao-seed …` steps in llz-bootstrap-openbao.yml (harbor
-// admin, github-dispatch-token, cert-automation token, grafana admin, otel
-// bearer, loki object-store) with a single step; the per-seed flag wiring those
+// admin, github-dispatch-token, cert-automation token, linode api-token, grafana
+// admin, otel bearer, loki object-store) with a single step; the per-seed flag wiring those
 // steps carried now lives in bootstrapSeeds() below. The harbor-specific seeds
 // that derive their own material (robot accounts → ci_harbor_steps.go,
 // docker-config → ci_seed_special.go, registry-S3 → ci_bao_seed registry-s3)
@@ -69,6 +69,18 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 			onMissing:    "skip",
 			missingNotes: []string{"OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/cert-automation/github-token."},
 		},
+		// Linode API token for the linode-volume-labeler ExternalSecret (and any
+		// other in-cluster Linode API consumer). Seeds the SAME path the daily
+		// rotation pipeline (secret-rotation.yml → propagate-linode-pat) keeps
+		// fresh, so the consumer reads one canonical, rotating credential via ESO
+		// instead of a static TF-injected Secret. on-missing skip: the labeler is
+		// non-critical (cosmetic PV labels) and rotation will seed it later anyway.
+		{
+			path:         "secret/linode/api-token",
+			fieldSpecs:   []string{"token=env:LINODE_API_TOKEN"},
+			onMissing:    "skip",
+			missingNotes: []string{"LINODE_API_TOKEN not set — skipping secret/linode/api-token (rotation will seed it)."},
+		},
 		// Grafana admin — generated once, then idempotent (never rotate a live cred).
 		{
 			path:          "secret/grafana/admin",
@@ -119,16 +131,16 @@ func ciBaoSeedAllCmd() *cobra.Command {
 		Use:   "bao-seed-all",
 		Short: "seed every generic OpenBao KV bootstrap path from one declarative table",
 		Long: "Data-driven driver that runs the bootstrap's generic `bao-seed` paths\n" +
-			"(harbor admin, github-dispatch-token, cert-automation token, grafana admin,\n" +
-			"otel bearer, loki object-store) from the bootstrapSeeds() table — replacing\n" +
-			"six near-identical inline steps in llz-bootstrap-openbao.yml with one. Each\n" +
+			"(harbor admin, github-dispatch-token, cert-automation token, linode api-token,\n" +
+			"grafana admin, otel bearer, loki object-store) from the bootstrapSeeds() table —\n" +
+			"replacing near-identical inline steps in llz-bootstrap-openbao.yml with one. Each\n" +
 			"entry is the same flag set `bao-seed` parses, so behavior is unchanged:\n" +
 			"per-seed idempotency guards, on-missing modes, and summary notes. A missing\n" +
 			"env:/k8s: source follows that seed's on-missing mode (exit 0, deferring via\n" +
 			"BOOTSTRAP_ERRORS where the inline step did); a genuine kv-put failure aborts\n" +
 			"before the remaining seeds, exactly as a failed inline step did. Reads\n" +
-			"OPENBAO_ROOT_TOKEN, OPENBAO_SECRETS_WRITE_TOKEN, LOKI_S3_*, and HA_ROLE;\n" +
-			"harbor/admin reads the in-cluster harbor-admin-password Secret.",
+			"OPENBAO_ROOT_TOKEN, OPENBAO_SECRETS_WRITE_TOKEN, LINODE_API_TOKEN, LOKI_S3_*,\n" +
+			"and HA_ROLE; harbor/admin reads the in-cluster harbor-admin-password Secret.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoSeedAll(region) },
 	}

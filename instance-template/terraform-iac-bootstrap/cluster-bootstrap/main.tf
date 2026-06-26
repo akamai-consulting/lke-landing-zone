@@ -1241,7 +1241,7 @@ resource "null_resource" "clear_openbao_secrets_on_destroy" {
   # (GH API is independent of the cluster's existence).
 }
 
-# ── Linode Volume relabeler — TF-owned namespace + credential Secret ─────────
+# ── Linode Volume relabeler — fully Argo-owned (no TF→kube crossing) ─────────
 # The LKE-managed Linode CSI controller stamps volumes with label
 # `<--volume-label-prefix><PV-name>` and the prefix is empty on LKE-E, so the
 # UI shows `pvc-<uuid>` everywhere. The CSI driver exposes no SC parameter to
@@ -1250,72 +1250,17 @@ resource "null_resource" "clear_openbao_secrets_on_destroy" {
 # at 12 chars, no per-PVC template) or an upstream PR adding a label-template
 # parameter (longer timeline).
 #
-# In the meantime: a CronJob that walks PVs and PUTs human-readable labels
-# via the Linode Volumes API. The CronJob + ServiceAccount + RBAC + script
-# ConfigMap + NetworkPolicy now live in apl-values/_shared/manifest/
-# linode-volume-labeler/ and reconcile via apl-core's in-cluster Argo CD
-# (see docs/architecture/convergence-contract.md anti-pattern #1).
+# In the meantime: a CronJob that walks PVs and PUTs human-readable labels via
+# the Linode Volumes API. The ENTIRE tree — namespace, the linode-api-token
+# Secret (synced from OpenBao by ESO), CronJob, ServiceAccount, RBAC, script
+# ConfigMap, NetworkPolicy — lives in apl-values/.../components/volumeLabeler/
+# and reconciles via apl-core's in-cluster Argo CD.
 #
-# TF retains only the two boundary pieces that need credential / cluster-
-# bootstrap access:
-#   - linode_volume_labeler_namespace: namespace with Pod Security
-#     `restricted` labels baked in; lands before Argo CD is up.
-#   - linode_volume_labeler_token: the Linode API token Secret, sourced
-#     from var.linode_token (same value the destroy-time orphan sweep
-#     uses) so we don't need a second token variable. Argo can't render
-#     this — the source value isn't in git.
-
-resource "kubectl_manifest" "linode_volume_labeler_namespace" {
-  yaml_body = yamlencode({
-    apiVersion = "v1"
-    kind       = "Namespace"
-    metadata = {
-      name = "llz-linode-volume-labeler"
-      labels = {
-        "lke-landing-zone.akamai.io/managed-by-bootstrap" = "true"
-        # Pod Security Standards baked in. The relabeler pod's securityContext
-        # already satisfies `restricted` (runAsNonRoot, drop ALL caps,
-        # readOnlyRootFilesystem, seccomp RuntimeDefault, no privilege
-        # escalation), so the enforce label is safe and locks in the posture
-        # against future image regressions.
-        "pod-security.kubernetes.io/enforce" = "restricted"
-        "pod-security.kubernetes.io/audit"   = "restricted"
-        "pod-security.kubernetes.io/warn"    = "restricted"
-      }
-    }
-  })
-  server_side_apply = true
-  force_conflicts   = true
-}
-
-# Linode API token Secret. Sourced from var.linode_token (same value the
-# destroy-time orphan sweep uses) so we don't have to introduce a second
-# token variable. Token needs `volumes:read_write` scope; the existing CI
-# LINODE_API_TOKEN already does (it provisions the LKE cluster + buckets).
-# Consumed by the Argo-owned CronJob at
-# apl-values/<env>/manifest/linode-volume-labeler/cronjob.yaml via
-# secretKeyRef.
-resource "kubectl_manifest" "linode_volume_labeler_token" {
-  yaml_body = yamlencode({
-    apiVersion = "v1"
-    kind       = "Secret"
-    metadata = {
-      name      = "linode-api-token"
-      namespace = "llz-linode-volume-labeler"
-    }
-    type = "Opaque"
-    stringData = {
-      token = var.linode_token
-    }
-  })
-  server_side_apply = true
-  depends_on        = [kubectl_manifest.linode_volume_labeler_namespace]
-}
-
-# NOTE — the script ConfigMap, egress NetworkPolicy, and CronJob (along
-# with the ServiceAccount + ClusterRole + ClusterRoleBinding) are NOT TF-owned.
-# They ship as raw manifests under
-# apl-values/<env>/manifest/linode-volume-labeler/ and reconcile via apl-core's
-# in-cluster Argo CD (see docs/architecture/convergence-contract.md
-# anti-pattern #1). Per-env REGION_SHORT is driven by each env's manifest
-# overlay's linode-volume-labeler-region-patch.yaml — `local.region_short` is gone.
+# TF no longer owns the namespace or the token Secret. The Secret used to be a
+# static var.linode_token written straight into the cluster here; it now arrives
+# via ESO from secret/linode/api-token (the canonical, daily-rotated path —
+# bootstrap seeds it from LINODE_API_TOKEN, platform-ci policy grants the read),
+# so the labeler reads a rotating credential through the standard secrets
+# pipeline instead of a token that goes stale the moment rotation first runs.
+# Per-env REGION_SHORT is driven by each env's manifest overlay's
+# linode-volume-labeler-region-patch.yaml.
