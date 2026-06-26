@@ -125,7 +125,7 @@ hand-rolled or that doesn't fit apl-core's defaults before touching staging.
    ```bash
    gh workflow run bootstrap-openbao.yml -f environment=<env> -f mode=init
    ```
-   Copy unseal keys 4-5 + root token to offline storage. See
+   Copy the static seal key (`OPENBAO_SEAL_KEY`) + recovery keys 4-5 + root token to offline storage. See
    [docs/runbooks/bootstrap-openbao.md](runbooks/bootstrap-openbao.md).
 
 8. **Verify ESO ClusterSecretStore + downstream ExternalSecrets** are syncing:

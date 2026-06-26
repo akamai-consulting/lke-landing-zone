@@ -93,7 +93,7 @@ Verify (no token needed for this — just port-forward):
 
 - [ ] `llz openbao get <cluster> secret/<example-path> <key> | head -1` returns the expected first line. If it errors with auth, you don't have an operator token yet — see [openbao-accounts.md](openbao-accounts.md).
 
-You'll receive an **unseal key share** if you're a shareholder. That share lives in your password manager forever and is required for re-unseal after pod restart — never lose it.
+You'll receive a **recovery key share** if you're a shareholder. That share lives in your password manager forever — it authorizes `bao operator generate-root` (emergency root-token regeneration), not unseal: the cluster auto-unseals itself from a static seal key after a pod restart. Never lose it.
 
 ### 5. Harbor access
 
@@ -150,7 +150,7 @@ Skim each [`docs/runbooks/`](../runbooks/) file once so you know what exists and
 
 Just so you don't burn time looking:
 
-- **Delete OpenBao unseal keys / change the shareholder set** — requires a planned rekey ceremony with all current shareholders.
+- **Delete OpenBao recovery keys / change the shareholder set** — requires a planned rekey ceremony with all current shareholders.
 - **Push directly to `main`** — every change goes through PR + Argo CD; even rotation workflows are gated by GitHub Environment approval.
 - **Change a `*.terraform.lock.hcl` provider version casually** — these come through dependabot PRs that the CVE gate audits.
 

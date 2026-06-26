@@ -22,7 +22,7 @@ There is no LDAP, userpass, or AppRole. Humans use root tokens (emergency-only) 
 
 ## Human account — operator (break-glass)
 
-You cannot create per-person OpenBao logins in this deployment. Operators authenticate by reconstituting a root token through Shamir's secret sharing.
+You cannot create per-person OpenBao logins in this deployment. Operators authenticate by reconstituting a root token through the recovery-key quorum (Shamir-split recovery shares from `bao operator init`).
 
 ### When you need root access
 
@@ -39,11 +39,12 @@ bao operator generate-root -init
 # → prints an OTP and a nonce — write them down
 ```
 
-Then collect three unseal-key holders. Each runs:
+Then collect three recovery-key holders (under static-seal auto-unseal,
+`generate-root` is authorized by the recovery keys from `bao operator init`). Each runs:
 
 ```bash
 bao operator generate-root -nonce=<NONCE>
-# → enters their unseal key share when prompted
+# → enters their recovery key share when prompted
 ```
 
 After the third share, the command prints an **encoded root token**. Decode it locally:

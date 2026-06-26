@@ -74,7 +74,7 @@ to be stale, fix it in place rather than working around it.
 - **GHCR auth** for publish/CI workflows uses the built-in `GITHUB_TOKEN` +
   `permissions: packages: write|read`, namespace from `${GITHUB_REPOSITORY_OWNER,,}`.
 - **Operational-reachability caveat:** the migrated operational workflows
-  (openbao-auto-unseal, cluster-health, secret-rotation, terraform apply,
+  (cluster-health, secret-rotation, terraform apply,
   e2e, etc.) now run from GitHub's cloud, **not** inside the cluster network. This
   repo manages a Linode Cloud Firewall that may allowlist only specific CIDRs — if
   the LKE API / OpenBao / Linode API endpoints are CIDR-restricted, hosted runners

@@ -39,7 +39,7 @@ llz doctor --env lab
 llz up lab --yes
 
 # 6. AFTER the build, do the two manual steps the bootstrap can't (§4):
-#    • copy unseal keys 4 & 5 + the root token (shown once) to offline storage
+#    • copy the static seal key + recovery keys 4 & 5 + the root token (shown once) to offline storage
 #    • delete the OPENBAO_ROOT_TOKEN secret from infra-lab if you seeded one
 #      (`llz status` flags it every run until you do)
 
@@ -330,7 +330,7 @@ no-cloud smoke test of the whole instantiation path before paying for a real bui
 | Term | What it is | Examples |
 |---|---|---|
 | **Deployment** (the `<env>` you pass to `llz`) | One cluster's identity: its own Terraform state key (`cluster/<deployment>/…`), tfvars, and `apl-values/<deployment>/` overlay. | `primary`, `secondary`, `staging`, `lab`, `e2e` |
-| **`infra-<deployment>` GitHub Environment** | One GitHub Actions *Environment* per deployment, holding that cluster's **infrastructure** secrets (Linode token, TF-state keys, OpenBao unseal keys). Locked to `main`. | `infra-primary`, `infra-staging` |
+| **`infra-<deployment>` GitHub Environment** | One GitHub Actions *Environment* per deployment, holding that cluster's **infrastructure** secrets (Linode token, TF-state keys, OpenBao seal + recovery keys). Locked to `main`. | `infra-primary`, `infra-staging` |
 | **Deploy GitHub Environment** | Actions Environments holding **application** secrets your deploy workflow reads at deploy time. Independent of the regional OpenBao clusters. | `lab`, `staging`, `production` |
 
 A production-grade setup is typically **two deployments in two Linode regions**
@@ -403,9 +403,9 @@ you want to inspect each gate — see the collapsible below.)
 > paste a Linode PAT + GitHub PATs and pick an OBJ cluster. Pass `--skip-tokens`
 > once those are already provisioned to get a non-interactive `doctor → build`.
 
-> ⚠️ **After the run, do the two manual steps the bootstrap can't:** copy
-> **unseal keys 4 & 5 and the root token** from the job summary to secure offline
-> storage (shown once), and delete `OPENBAO_ROOT_TOKEN` from `infra-lab` if you
+> ⚠️ **After the run, do the two manual steps the bootstrap can't:** copy the
+> **static seal key (`OPENBAO_SEAL_KEY`), recovery keys 4 & 5, and the root token**
+> to secure offline storage (the keys are shown once), and delete `OPENBAO_ROOT_TOKEN` from `infra-lab` if you
 > set it (`llz status` flags it on every run until you do). See the
 > [bootstrap runbook](runbooks/bootstrap-openbao.md#after-first-time-bootstrap--required-operator-actions).
 
@@ -446,7 +446,7 @@ For what's missing it:
 It writes everything to `my-instance/.llz/` (mode `0600`, **gitignored**), then
 pushes: secrets into the `infra-lab` GitHub Environment, variables at repo level.
 
-The remaining infra secrets — `OPENBAO_UNSEAL_KEY_*`, the OpenBao root token,
+The remaining infra secrets — `OPENBAO_SEAL_KEY`, `OPENBAO_RECOVERY_KEY_*`, the OpenBao root token,
 Loki/Harbor OBJ keys, Harbor robots — are written **by the build**
 (that's exactly what `OPENBAO_SECRETS_WRITE_TOKEN` is for); `llz` never asks for
 them.
@@ -496,7 +496,7 @@ the whole bootstrap end to end ([adopter-guide §6](adopter-guide.md#6-bootstrap
 2. **Object storage** — registry/log buckets; OBJ keys auto-stashed into env secrets.
 3. **Install apl-core** + apply the `apl-values/lab/manifest` Argo CD Applications.
 4. **Converge** — polls until the cluster meets the [convergence contract](architecture/convergence-contract.md).
-5. **Bootstrap OpenBao** (chained) — Raft init, unseal, KV v2, auth methods, seeds all
+5. **Bootstrap OpenBao** (chained) — Raft init, auto-unseal, KV v2, auth methods, seeds all
    platform secrets, populates GitHub secrets, revokes root.
 
 </details>
@@ -562,7 +562,7 @@ versioned charts + external actions*.
 - [ ] `llz env add <env> --region … --obj-cluster …` run (authors `landingzone.yaml` + `environments/<env>.yaml`, renders); the overlay placeholders it listed are filled (§3)
 - [ ] `llz doctor --env <env>` green — deployment files + every required value set (§4)
 - [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); cluster converges (`llz status <env>`) (§4)
-- [ ] Unseal keys 4 & 5 + root token saved offline; `OPENBAO_ROOT_TOKEN` deleted
+- [ ] Static seal key + recovery keys 4 & 5 + root token saved offline; `OPENBAO_ROOT_TOKEN` deleted
 - [ ] `llz bootstrap dns <env> --yes` run once `LINODE_DNS_TOKEN` exists
 - [ ] Renovate enabled and repointed; `llz upgrade` path understood (§5)
 

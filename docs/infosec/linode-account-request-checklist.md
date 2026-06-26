@@ -72,7 +72,7 @@ The requirements below are generic production-security controls (these map to a 
 | 8 | Token/key rotation schedule | User/service tokens: 90 days; bucket keys: 120 days; CSPM tokens: 180 days |
 | 9 | No sensitive data on Private LAN | Encrypt all secrets at rest; no cross-customer PII on the shared private network (e.g. `192.168.128.0/17`) |
 | 10 | LKE-Enterprise required | Use LKE-Enterprise for production clusters (a hard given for this landing zone) |
-| 11 | LKE secret rotation runbook | Document the process for rotating secrets-manager unseal keys + service credentials (see [docs/secrets.md](../secrets.md)) |
+| 11 | LKE secret rotation runbook | Document the process for rotating secrets-manager seal/recovery keys + service credentials (see [docs/secrets.md](../secrets.md)) |
 | 12 | LKE Control Plane IP ACL | Enable IP ACL; whitelist your CSPM scanner IP ranges |
 | 13 | LKE disk encryption (LDE) | Automated via Terraform — `disk_encryption = "enabled"` is enforced by the secure-by-default node-pool module at cluster bootstrap; no manual LKE engineering request required |
 | 14 | Account attribution format | Set Company Name: `<org> - <project> - [Workload] Prod` |
@@ -122,7 +122,7 @@ After the account is provisioned and InfoSec approval received:
 
 ## Related Docs
 
-- [Secrets management](../secrets.md) — secret rotation, unseal keys, and service credentials
+- [Secrets management](../secrets.md) — secret rotation, seal/recovery keys, and service credentials
 - [Adopter guide](../adopter-guide.md) — onboarding a `<project>` onto the landing zone
 - [apl-core migration runbook](../apl-core-migration-runbook.md) — migrating workloads onto apl-core
 

@@ -3,7 +3,7 @@
 This document is the runbook for the platform's secret backend. It covers:
 
 - What OpenBao is and why this template chose it (summary; brief rationale inline below)
-- Initial per-region cluster bring-up (init, unseal, KV v2, auth methods)
+- Initial per-region cluster bring-up (init, auto-unseal, KV v2, auth methods)
 - Rotating secrets via the dual-write script
 - How CI reads secrets at deploy time
 - Regional failover behavior
@@ -81,7 +81,7 @@ Vault Enterprise feature, intentionally not ported into OpenBao. The choices wer
 ## Initial cluster bring-up
 
 **This process is automated.** Run `instance-template/.github/workflows/bootstrap-openbao.yml`
-for each region. The workflow handles the full bootstrap: Raft init, unseal, KV v2
+for each region. The workflow handles the full bootstrap: Raft init, auto-unseal, KV v2
 setup, auth-method configuration (Kubernetes auth + GitHub-OIDC), all secret
 seeding, and GitHub secrets population. See
 [`docs/runbooks/bootstrap-openbao.md`](runbooks/bootstrap-openbao.md) for the
@@ -92,9 +92,9 @@ useful context for emergency recovery and understanding the secret layout.
 
 ### What bootstrap-openbao.yml does (reference)
 
-1. **Initialize Raft** — `bao operator init -key-shares=5 -key-threshold=3`. Stores unseal keys 1–3 as `OPENBAO_UNSEAL_KEY_1/2/3` in the `infra-<deployment>` environment (one of `infra-primary`, `infra-secondary`, `infra-staging`, `infra-lab`); prints all 5 keys + root token to the job summary.
+1. **Seed the static seal key + Initialize Raft** — first creates the 32-byte static auto-unseal key as the `openbao-unseal-key` Secret (so the pods can start and unseal themselves; the key is also persisted as `OPENBAO_SEAL_KEY` in the `infra-<deployment>` environment for disaster recovery and must be copied offline — losing it loses the data). Then runs `bao operator init -recovery-shares=5 -recovery-threshold=3`. Stores recovery keys 1–3 as `OPENBAO_RECOVERY_KEY_1/2/3` in the `infra-<deployment>` environment (one of `infra-primary`, `infra-secondary`, `infra-staging`, `infra-lab`); prints all 5 recovery keys + root token to the job summary. The recovery keys authorize `bao operator generate-root` / `rekey` — they do **not** unseal (the static seal key does) and **cannot** decrypt the root key.
 
-2. **Unseal** — unseals pod 0 with 3 keys; Raft-joins and unseals pods 1–2.
+2. **Auto-unseal** — each pod unseals itself at boot from the static seal key (`seal "static"` in the chart); the workflow waits for all 3 to converge to unsealed (followers join the leader via Raft `retry_join`). There is no manual key submission.
 
 3. **Configure** — enables KV v2 at `secret/`, Kubernetes auth, and GitHub-OIDC (`jwt`) auth. Creates the read-only `platform-ci` policy (paths enumerated explicitly — no wildcard) bound to the `eso` Kubernetes-auth role for ESO, and the `secret-propagator` GitHub-OIDC role + policy used by `llz ci propagate-pat`. Enables the file audit device.
 
@@ -162,7 +162,7 @@ Prerequisites:
 ```bash
 # Operator-level token for each region. Do NOT use the ESO platform-ci credentials — they are read-only.
 # Obtain via your normal operator auth method, or via `bao operator generate-root` for
-# emergency access (requires three of the five unseal key holders).
+# emergency access (requires three of the five recovery key holders).
 export OPENBAO_ADDR_ACTIVE=https://openbao.primary.<cluster_domain>
 export OPENBAO_ADDR_STANDBY=https://openbao.secondary.<cluster_domain>
 export OPENBAO_TOKEN_ACTIVE=...        # operator token for the active cluster
@@ -321,14 +321,27 @@ for access and bucket/credentials setup.
 
 ## Unseal automation
 
-Today, every pod restart requires a manual unseal quorum: three of the five key
-holders must each supply their share. Options that would automate this:
+Pods **auto-unseal** at boot from a per-cluster 32-byte static seal key — no
+managed KMS (none exists on Linode) and no human quorum on every pod restart. The
+key is configured via OpenBao's `seal "static"` stanza in the chart
+(`kubernetes-charts/llz-openbao-platform`), reading the key from the
+`openbao-unseal-key` Secret mounted at `/openbao/seal/unseal.key`. The Secret lives
+only in etcd, which LKE-Enterprise encrypts at rest, so the key satisfies the
+"encrypt secrets at rest" control without a KMS.
 
-- **Auto-unseal via Transit** — a third, small "seal" OpenBao cluster that holds the root-of-trust key; all workload clusters use Transit to unseal automatically. Adds a new dependency but removes human unseal toil.
-- **Auto-unseal via cloud KMS** — OpenBao supports cloud KMS providers. Not available on Linode today.
+The key is created by `llz ci bao-seed-seal-key` during bootstrap (before the pods
+start) and persisted as the `OPENBAO_SEAL_KEY` `infra-<deployment>` environment
+secret for disaster recovery: a lost namespace/Secret is restored from there, and
+the same key re-unseals the existing Raft data. **Copy it to offline storage** —
+the recovery keys from `bao operator init` authorize `generate-root` but cannot
+decrypt the root key, so the static seal key is the only thing that can unseal the
+data. The key is never rotated (a changed key bricks unseal); migrating an existing
+Shamir-initialized cluster to static seal is out of scope (rebuild instead).
 
-Until an auto-unseal path is wired up, keep the five-share threshold and follow the
-runbook for humans to unseal after any pod restart.
+A cert-rotation or node replacement that restarts a pod no longer needs any manual
+action — the pod re-reads the seal key and unseals itself. A persistently sealed
+pod means the `openbao-unseal-key` Secret is missing/unreadable, the key is wrong,
+or Raft storage is unhealthy.
 
 ## Cross-references
 
