@@ -90,14 +90,19 @@ func TestPolicyDocuments(t *testing.T) {
 	if !strings.Contains(policySecretPropagator, `path "secret/data/linode/api-token"`) {
 		t.Error("secret-propagator policy missing the linode api-token path")
 	}
-	// eso-pusher must grant create/update (push) on exactly the two self-generated
-	// paths and nothing else; a wider grant would over-privilege the ESO SA.
-	for _, p := range []string{`path "secret/data/grafana/admin"`, `path "secret/data/otel/ingress"`} {
+	// eso-pusher must grant create/update (push) on exactly the in-cluster-sourced
+	// paths (grafana admin, otel bearer, harbor admin) and nothing else; a wider
+	// grant would over-privilege the ESO SA.
+	for _, p := range []string{
+		`path "secret/data/grafana/admin"`,
+		`path "secret/data/otel/ingress"`,
+		`path "secret/data/harbor/admin"`,
+	} {
 		if !strings.Contains(policyESOPusher, p) {
 			t.Errorf("eso-pusher policy missing %s", p)
 		}
 	}
-	for _, forbidden := range []string{"linode/api-token", "harbor/", "loki/object-store", `"*"`} {
+	for _, forbidden := range []string{"linode/api-token", "harbor/registry-s3", "loki/object-store", `"*"`} {
 		if strings.Contains(policyESOPusher, forbidden) {
 			t.Errorf("eso-pusher policy is over-scoped: contains %q", forbidden)
 		}

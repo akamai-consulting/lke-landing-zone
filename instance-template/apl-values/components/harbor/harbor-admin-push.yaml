@@ -1,0 +1,41 @@
+# Harbor admin password → OpenBao, in-cluster.
+#
+# Replaces the `secret/harbor/admin` entry in bootstrapSeeds (ci_bao_seed_all.go),
+# which read Harbor's Helm-generated `harbor-admin-password` Secret and wrote it
+# into OpenBao via `kubectl exec ... bao kv put`. This PushSecret mirrors the same
+# Secret declaratively through the write-scoped `openbao-push` ClusterSecretStore
+# (eso-pusher role/policy). apl-core's harbor-admin consumers read the OpenBao
+# path unchanged.
+#
+# updatePolicy: Replace (not IfNotExists): the Harbor Helm Secret is the source of
+# truth for the live admin password, so OpenBao must keep mirroring it — matching
+# the old seed's re-write-each-run behavior. Harbor's chart generates the password
+# once and keeps it (lookup), so steady-state pushes are the same value.
+#
+# Sync-wave 5 (like harbor-registry-s3) so it lands after the harbor namespace
+# exists. ESO also watches the source Secret, so the first push fires as soon as
+# harbor-admin-password appears, regardless of refreshInterval.
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: harbor-admin-push
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  refreshInterval: 1h
+  updatePolicy: Replace
+  # Keep the OpenBao value if this PushSecret is pruned — consumers depend on it.
+  deletionPolicy: None
+  secretStoreRefs:
+    - name: openbao-push
+      kind: ClusterSecretStore
+  selector:
+    secret:
+      name: harbor-admin-password
+  data:
+    - match:
+        secretKey: HARBOR_ADMIN_PASSWORD
+        remoteRef:
+          remoteKey: harbor/admin
+          property: password

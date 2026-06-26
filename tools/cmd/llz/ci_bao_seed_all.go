@@ -3,12 +3,12 @@ package main
 // ci_bao_seed_all.go implements `llz ci bao-seed-all` — the data-driven driver
 // that runs the bootstrap's generic OpenBao KV seeds from one declarative table
 // instead of one hand-written workflow step per secret. It REPLACES the
-// scattered `llz ci bao-seed …` steps in llz-bootstrap-openbao.yml (harbor
-// admin, github-dispatch-token, cert-automation token, linode api-token, loki
+// scattered `llz ci bao-seed …` steps in llz-bootstrap-openbao.yml
+// (github-dispatch-token, cert-automation token, linode api-token, loki
 // object-store) with a single step; the per-seed flag wiring those steps carried
-// now lives in bootstrapSeeds() below. (grafana admin + otel bearer used to seed
-// here too; they are now generated in-cluster via ESO — see bootstrapSeeds.) The
-// harbor-specific seeds
+// now lives in bootstrapSeeds() below. (harbor admin, grafana admin + otel bearer
+// used to seed here too; they are now written in-cluster via ESO PushSecrets —
+// see bootstrapSeeds.) The harbor-specific seeds
 // that derive their own material (robot accounts → ci_harbor_steps.go,
 // docker-config → ci_seed_special.go, registry-S3 → ci_bao_seed registry-s3)
 // keep their dedicated commands — only the plain `bao-seed` invocations fold in.
@@ -35,17 +35,11 @@ import (
 // when they passed no --on-missing.
 func bootstrapSeeds(region string) []baoSeedOpts {
 	return []baoSeedOpts{
-		// Harbor admin password — read from Harbor's Helm-generated Secret so ESO
-		// can sync harbor-admin-credentials. Skips cleanly before Harbor is up.
-		{
-			path:       "secret/harbor/admin",
-			fieldSpecs: []string{"password=k8s:harbor/harbor-admin-password/HARBOR_ADMIN_PASSWORD"},
-			onMissing:  "skip",
-			missingNotes: []string{
-				"harbor-admin-password Secret not found — Harbor not yet deployed.",
-				"Re-run this workflow after Harbor is up to seed secret/harbor/admin.",
-			},
-		},
+		// secret/harbor/admin is NO LONGER seeded here — an ESO PushSecret
+		// (apl-values/components/harbor/harbor-admin-push.yaml) mirrors Harbor's
+		// Helm-generated harbor-admin-password Secret into OpenBao via the
+		// write-scoped openbao-push store, replacing the kubectl-exec kv put.
+		//
 		// GitHub dispatch token for the harbor-ready PostSync hook. Hard-defers on
 		// active/standalone (BOOTSTRAP_ERRORS); summary-note skip on a standby,
 		// where harbor-ready is the active peer's concern.
@@ -116,10 +110,11 @@ func ciBaoSeedAllCmd() *cobra.Command {
 		Use:   "bao-seed-all",
 		Short: "seed every generic OpenBao KV bootstrap path from one declarative table",
 		Long: "Data-driven driver that runs the bootstrap's generic `bao-seed` paths\n" +
-			"(harbor admin, github-dispatch-token, cert-automation token, linode api-token,\n" +
-			"loki object-store) from the bootstrapSeeds() table — replacing near-identical\n" +
-			"inline steps in llz-bootstrap-openbao.yml with one. (grafana admin + otel bearer\n" +
-			"are generated in-cluster via ESO, not seeded here.) Each\n" +
+			"(github-dispatch-token, cert-automation token, linode api-token, loki\n" +
+			"object-store) from the bootstrapSeeds() table — replacing near-identical\n" +
+			"inline steps in llz-bootstrap-openbao.yml with one. (harbor admin, grafana\n" +
+			"admin + otel bearer are written in-cluster via ESO PushSecrets, not seeded\n" +
+			"here.) Each\n" +
 			"entry is the same flag set `bao-seed` parses, so behavior is unchanged:\n" +
 			"per-seed idempotency guards, on-missing modes, and summary notes. A missing\n" +
 			"env:/k8s: source follows that seed's on-missing mode (exit 0, deferring via\n" +

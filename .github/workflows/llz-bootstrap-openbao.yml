@@ -40,7 +40,8 @@ name: llz-bootstrap-openbao (reusable)
 #     • Prints all 5 keys + root token to job summary (copy to offline storage)
 #     • Unseals all 3 pods and joins followers to the Raft leader
 #     • Configures KV v2, AppRole, Kubernetes auth, policies, roles, audit log
-#     • Seeds secret/harbor/admin and secret/infra/github-dispatch-token
+#     • Seeds secret/infra/github-dispatch-token and the other env-sourced KV paths
+#       (secret/harbor/admin, grafana/admin, otel/ingress now arrive via ESO PushSecrets)
 #     • Revokes the root token on completion
 #
 #   Emergency re-unseal (initialized but sealed, e.g. after pod restart):
@@ -435,14 +436,14 @@ jobs:
       # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
       # One step runs every generic `bao-seed` path from the bootstrapSeeds()
       # table in `llz ci bao-seed-all` (tools/cmd/llz/ci_bao_seed_all.go):
-      #   secret/harbor/admin                  (k8s: harbor/harbor-admin-password)
       #   secret/infra/github-dispatch-token   (harbor-ready PostSync hook)
       #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
       #   secret/linode/api-token              (linode-volume-labeler ExternalSecret)
       #   secret/loki/object-store             (LOKI_S3_* env secrets)
-      # (secret/grafana/admin + secret/otel/ingress are no longer seeded here —
-      #  ESO generates them in-cluster via a Password generator + PushSecret; see
-      #  apl-values/_shared/manifest/generated-secrets/.)
+      # (secret/harbor/admin, secret/grafana/admin + secret/otel/ingress are no
+      #  longer seeded here — ESO writes them in-cluster via PushSecrets: harbor
+      #  mirrors its Helm Secret, grafana/otel use a Password generator. See
+      #  apl-values/components/harbor/ and _shared/manifest/generated-secrets/.)
       # Per-seed on-missing modes, idempotency guards, and summary notes are
       # UNCHANGED — they moved from these flags into the table. A missing env:/k8s:
       # source defers per its mode (BOOTSTRAP_ERRORS for github-dispatch-token on
@@ -451,11 +452,8 @@ jobs:
       # did. HA_ROLE (job env) drives the github-dispatch-token standby skip.
       # The harbor-specific seeds that derive their own material — robot accounts
       # and docker-config (now in the parallel `harbor` job), registry-S3 below —
-      # keep their dedicated commands. secret/harbor/admin reads the in-cluster
-      # harbor-admin-password k8s Secret, created by apl-core's Harbor helm release
-      # (independent of the robot provisioning that moved to `harbor`); if it isn't
-      # present yet this single seed defers with a summary note (its on-missing
-      # mode), non-fatal. OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
+      # keep their dedicated commands.
+      # OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
       - name: Seed OpenBao KV bootstrap paths
         if: steps.ensure.outputs.available == 'true'
         env:
@@ -775,20 +773,11 @@ jobs:
         if: steps.ensure.outputs.available == 'true'
         run: llz ci harbor-smoke
 
-      # secret/harbor/admin reads the in-cluster harbor-admin-password Secret. The
-      # core `bootstrap` job's bao-seed-all also seeds it, but that now runs before
-      # this job waits for Harbor, so on a cold boot Harbor may not be up yet there
-      # and that one path defers (on-missing=skip). Re-seed it HERE, after the
-      # control-plane readiness gate above, where harbor-admin-password is present.
-      # Idempotent upsert; on-missing=skip keeps it non-fatal on a secondary
-      # (Harbor not deployed in-cluster).
-      - name: Seed Harbor admin password in OpenBao (post-Harbor-up)
-        if: steps.ensure.outputs.available == 'true'
-        run: |
-          llz ci bao-seed --path secret/harbor/admin \
-            --field "password=k8s:harbor/harbor-admin-password/HARBOR_ADMIN_PASSWORD" \
-            --on-missing skip \
-            --missing-note "harbor-admin-password Secret not found — Harbor not deployed here; skipping secret/harbor/admin."
+      # secret/harbor/admin is no longer seeded here (nor in bao-seed-all): the
+      # harbor-admin-push PushSecret (apl-values/components/harbor/) mirrors the
+      # in-cluster harbor-admin-password Secret into OpenBao via the openbao-push
+      # store. ESO watches the source Secret, so it fires once Harbor is up without
+      # this job's readiness gate — no timing race, no kubectl-exec kv put.
 
       # ── Stop Harbor API port-forward ───────────────────────────────────────────
       - name: Stop Harbor API port-forward

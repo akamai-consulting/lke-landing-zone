@@ -111,7 +111,6 @@ gh workflow run bootstrap-openbao.yml \
 10. Seeds the following secrets into OpenBao:
    - `eso-approle-secret` K8s Secret in `external-secrets` namespace (ESO ClusterSecretStore)
    - `OPENBAO_APPROLE_ROLE_ID` / `OPENBAO_APPROLE_SECRET_ID[_STANDBY]` GitHub secrets
-  - `secret/harbor/admin` (Harbor admin password from `<release>-harbor-core` K8s Secret)
    - `secret/harbor/robot` (Harbor CI robot, push+pull+delete; creates the robot on the first cluster; used for buildah builds)
    - `secret/harbor/pull-robot` (Harbor pull-only robot; creates the robot on the first cluster; distributed as imagePullSecret)
    - `secret/harbor/docker-config` (Docker config JSON for buildah cert-automation builds, derived from `harbor/robot`)
@@ -122,7 +121,7 @@ gh workflow run bootstrap-openbao.yml \
    - `secret/cert-automation/github-token` (used by cert-automation Argo Workflow)
    - `secret/<release>/mtls-ca` (mTLS CA keypair for the platform's internal mTLS ClusterIssuer)
    - `secret/loki/object-store` (from `LOKI_S3_ACCESS_KEY` / `LOKI_S3_SECRET_KEY`)
-   - Note: `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator generates them in-cluster (Password generator + PushSecret, `updatePolicy: IfNotExists`) and writes them into OpenBao. See `apl-values/_shared/manifest/generated-secrets/`.
+   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
    - Note: `secret/certmanager/dns01` is seeded by the separate `bootstrap-dns.yml` workflow once `LINODE_DNS_TOKEN` is provisioned — not by this workflow.
 11. Seeds the `secret-propagator` AppRole `secret_id` into the
     `infra-<env>` environment as `OPENBAO_PROPAGATOR_ROLE_ID` /

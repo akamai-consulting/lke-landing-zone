@@ -13,7 +13,6 @@ import (
 func TestBootstrapSeedsTable(t *testing.T) {
 	seeds := bootstrapSeeds("primary")
 	wantPaths := []string{
-		"secret/harbor/admin",
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
@@ -39,19 +38,19 @@ func TestBootstrapSeedsTable(t *testing.T) {
 		}
 	}
 	// Region interpolation reached the dispatch-token annotation and the loki notes.
-	dispatch := seeds[1]
+	dispatch := seeds[0]
 	if !strings.Contains(strings.Join(dispatch.missingAnnotations, " "), "infra-primary") {
 		t.Errorf("dispatch-token annotations missing infra-primary: %v", dispatch.missingAnnotations)
 	}
-	loki := seeds[4]
+	loki := seeds[3]
 	if !strings.Contains(strings.Join(loki.missingNotes, " "), "platform-loki-primary") {
 		t.Errorf("loki notes missing platform-loki-primary: %v", loki.missingNotes)
 	}
 }
 
 // TestRunCIBaoSeedAllSeedsEvery drives the whole table with every source
-// present (env secrets set, harbor admin Secret readable, nothing pre-seeded)
-// and asserts all five paths are kv-put, in table order.
+// present (env secrets set, nothing pre-seeded) and asserts all four paths are
+// kv-put, in table order.
 func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
@@ -60,12 +59,6 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("LOKI_S3_SECRET_KEY", "sk")
 	t.Setenv("HA_ROLE", "")
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent → skip-if-present never skips
-	withKubectl(t, func(a string) ([]byte, error) {
-		if strings.Contains(a, "get secret harbor-admin-password") {
-			return []byte("cHc="), nil // "pw"
-		}
-		return nil, errors.New("NotFound")
-	})
 	if err := runCIBaoSeedAll("primary"); err != nil {
 		t.Fatalf("runCIBaoSeedAll: %v", err)
 	}
@@ -74,7 +67,6 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 		gotPaths = append(gotPaths, p[2]) // args = kv put <path> ...
 	}
 	want := []string{
-		"secret/harbor/admin",
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
@@ -94,12 +86,6 @@ func TestRunCIBaoSeedAllAbortsOnPutFailure(t *testing.T) {
 	t.Setenv("LOKI_S3_ACCESS_KEY", "ak")
 	t.Setenv("LOKI_S3_SECRET_KEY", "sk")
 	t.Setenv("HA_ROLE", "")
-	withKubectl(t, func(a string) ([]byte, error) {
-		if strings.Contains(a, "get secret harbor-admin-password") {
-			return []byte("cHc="), nil
-		}
-		return nil, errors.New("NotFound")
-	})
 	puts := 0
 	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
 		joined := strings.Join(args, " ")
@@ -113,8 +99,8 @@ func TestRunCIBaoSeedAllAbortsOnPutFailure(t *testing.T) {
 		return "", "unexpected " + joined, errors.New("unexpected")
 	})
 	err := runCIBaoSeedAll("primary")
-	if err == nil || !strings.Contains(err.Error(), "secret/harbor/admin") {
-		t.Errorf("err = %v, want abort on the first seed (secret/harbor/admin)", err)
+	if err == nil || !strings.Contains(err.Error(), "secret/infra/github-dispatch-token") {
+		t.Errorf("err = %v, want abort on the first seed (secret/infra/github-dispatch-token)", err)
 	}
 	if puts != 1 {
 		t.Errorf("kv put attempts = %d, want 1 (driver must abort before later seeds)", puts)

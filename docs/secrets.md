@@ -100,7 +100,6 @@ useful context for emergency recovery and understanding the secret layout.
 4. **Seed secrets** — writes the following into OpenBao KV v2 and sets the corresponding GitHub secrets:
    - `eso-approle-secret` K8s Secret (ESO ClusterSecretStore auth)
    - `OPENBAO_APPROLE_ROLE_ID` / `OPENBAO_APPROLE_SECRET_ID[_STANDBY]` GitHub secrets
-   - `secret/harbor/admin` (Harbor admin password)
    - `secret/harbor/robot` (Harbor CI robot credentials, push+pull+delete; stored for buildah builds via `harbor/docker-config`)
    - `secret/harbor/pull-robot` (Harbor pull-only robot credentials; distributed as imagePullSecret to kube-system and workload namespaces)
    - `secret/harbor/docker-config` (Docker config JSON for buildah cert-automation builds)
@@ -108,7 +107,7 @@ useful context for emergency recovery and understanding the secret layout.
    - `secret/approle/rotation-secrets` (AppRole rotation CronWorkflow)
    - `secret/cert-automation/github-token` (cert-automation Argo Workflow)
    - `secret/loki/object-store` (Linode Object Storage keys from `LOKI_S3_ACCESS_KEY/SECRET`)
-   - Note: `secret/grafana/admin` (admin credentials) and `secret/otel/ingress` (OTLP bearer) are NO LONGER seeded here — they are generated in-cluster by External Secrets Operator (a Password generator + a PushSecret with `updatePolicy: IfNotExists`) and written into the same OpenBao paths. See `apl-values/_shared/manifest/generated-secrets/`.
+   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are NO LONGER seeded here — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`), through the write-scoped `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
    - Note: `secret/certmanager/dns01` (Linode DNS token from `LINODE_DNS_TOKEN`) is seeded by the separate `bootstrap-dns.yml` workflow once a DNS-scoped token has been provisioned.
 
 5. **Revoke root token** — runs unconditionally even on failure.

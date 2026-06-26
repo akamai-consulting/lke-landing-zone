@@ -53,19 +53,22 @@ const policySecretPropagator = `path "secret/data/linode/api-token" { capabiliti
 path "secret/metadata/linode/api-token" { capabilities = ["read"] }
 `
 
-// eso-pusher: narrow create/update access to the two self-generated, in-cluster-
-// only secrets (grafana admin password, otel ingress bearer). Used by ESO
-// PushSecrets (apl-values/_shared/manifest/generated-secrets/) that mint the
-// value via an ESO Password generator and push it into OpenBao with
-// updatePolicy: IfNotExists — so this replaces the imperative `llz ci bao-seed`
-// of these two paths (root-token + kubectl exec) with a least-privilege,
-// in-cluster write. `read` is needed for the IfNotExists existence check; the
-// read-only `platform-ci` policy still serves every consumer. Mapped to the
-// `eso-pusher` Kubernetes-auth role below (same ESO controller SA as `eso`).
+// eso-pusher: narrow create/update access to the in-cluster-sourced secrets that
+// ESO PushSecrets write into OpenBao — the self-generated grafana admin password
+// and otel ingress bearer (apl-values/_shared/manifest/generated-secrets/), plus
+// the Harbor admin password mirrored from Harbor's Helm Secret
+// (apl-values/components/harbor/harbor-admin-push.yaml). Replaces the imperative
+// `llz ci bao-seed` of these paths (root-token + kubectl exec) with a
+// least-privilege, in-cluster write. `read` is needed for the IfNotExists
+// existence check; the read-only `platform-ci` policy still serves every
+// consumer. Mapped to the `eso-pusher` Kubernetes-auth role below (same ESO
+// controller SA as `eso`).
 const policyESOPusher = `path "secret/data/grafana/admin" { capabilities = ["create", "update", "read"] }
 path "secret/data/otel/ingress"  { capabilities = ["create", "update", "read"] }
+path "secret/data/harbor/admin"  { capabilities = ["create", "update", "read"] }
 path "secret/metadata/grafana/admin" { capabilities = ["read"] }
 path "secret/metadata/otel/ingress"  { capabilities = ["read"] }
+path "secret/metadata/harbor/admin"  { capabilities = ["read"] }
 `
 
 // baoConfigStep is one in-pod bao invocation of the configure sequence.
