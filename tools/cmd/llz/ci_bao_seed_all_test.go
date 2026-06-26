@@ -7,7 +7,7 @@ import (
 )
 
 // TestBootstrapSeedsTable pins the data-driven table the workflow relies on:
-// the six generic seeds, each with a valid on-missing mode (runCIBaoSeed rejects
+// the generic seeds, each with a valid on-missing mode (runCIBaoSeed rejects
 // an empty one) and parseable field specs, and region interpolated into the
 // infra-<region> references the inline steps built from ${REGION}.
 func TestBootstrapSeedsTable(t *testing.T) {
@@ -16,6 +16,7 @@ func TestBootstrapSeedsTable(t *testing.T) {
 		"secret/harbor/admin",
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
+		"secret/linode/api-token",
 		"secret/grafana/admin",
 		"secret/otel/ingress",
 		"secret/loki/object-store",
@@ -44,7 +45,7 @@ func TestBootstrapSeedsTable(t *testing.T) {
 	if !strings.Contains(strings.Join(dispatch.missingAnnotations, " "), "infra-primary") {
 		t.Errorf("dispatch-token annotations missing infra-primary: %v", dispatch.missingAnnotations)
 	}
-	loki := seeds[5]
+	loki := seeds[6]
 	if !strings.Contains(strings.Join(loki.missingNotes, " "), "platform-loki-primary") {
 		t.Errorf("loki notes missing platform-loki-primary: %v", loki.missingNotes)
 	}
@@ -56,6 +57,7 @@ func TestBootstrapSeedsTable(t *testing.T) {
 func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
+	t.Setenv("LINODE_API_TOKEN", "linode-tok")
 	t.Setenv("LOKI_S3_ACCESS_KEY", "ak")
 	t.Setenv("LOKI_S3_SECRET_KEY", "sk")
 	t.Setenv("HA_ROLE", "")
@@ -77,6 +79,7 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 		"secret/harbor/admin",
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
+		"secret/linode/api-token",
 		"secret/grafana/admin",
 		"secret/otel/ingress",
 		"secret/loki/object-store",

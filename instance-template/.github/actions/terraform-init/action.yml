@@ -5,7 +5,7 @@ description: >
 
 inputs:
   module:
-    description: Module directory under terraform-iac-bootstrap/ (cluster, openbao-config, object-storage)
+    description: Module directory under terraform-iac-bootstrap/ (cluster, cluster-bootstrap, object-storage)
     required: false
     default: cluster
   aws-access-key-id:

@@ -45,9 +45,9 @@ The cutover happens **per cluster**, not all at once. The promotion path is
 - [ ] Update `apl_values_repo_url` + `apl_values_repo_username` in every
       `instance-template/terraform-iac-bootstrap/cluster-bootstrap/<env>.tfvars` if the
       placeholder values don't match your environment.
-- [ ] Note that `instance-template/terraform-iac-bootstrap/openbao-config/` still runs
-      separately after the cluster is up — it configures OpenBao's
-      KV-v2 mount, AppRole, Kubernetes auth, and policies. Not part of
+- [ ] Note that OpenBao's KV-v2 mount, Kubernetes auth, and policies are
+      configured by `llz ci bao-configure` (run from `bootstrap-openbao.yml`
+      after the cluster is up), not by a Terraform root and not by
       `cluster-bootstrap/`.
 
 ## Phase 1 — Lab cutover (the rehearsal)

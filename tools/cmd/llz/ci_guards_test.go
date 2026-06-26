@@ -57,8 +57,8 @@ func TestRunCIAssertDestroyConfirm(t *testing.T) {
 			wantExit: 1, wantErr: "::error::Set confirm_destroy to 'destroy:primary:cluster' to proceed.\n"},
 		{name: "wrong module", region: "primary", module: "object-storage", confirm: "destroy:primary:cluster",
 			wantExit: 1, wantErr: "::error::Set confirm_destroy to 'destroy:primary:object-storage' to proceed.\n"},
-		{name: "wrong region", region: "secondary", module: "openbao-config", confirm: "destroy:primary:openbao-config",
-			wantExit: 1, wantErr: "::error::Set confirm_destroy to 'destroy:secondary:openbao-config' to proceed.\n"},
+		{name: "wrong region", region: "secondary", module: "object-storage", confirm: "destroy:primary:object-storage",
+			wantExit: 1, wantErr: "::error::Set confirm_destroy to 'destroy:secondary:object-storage' to proceed.\n"},
 		{name: "case sensitive", region: "primary", module: "cluster", confirm: "DESTROY:primary:cluster",
 			wantExit: 1, wantErr: "::error::Set confirm_destroy to 'destroy:primary:cluster' to proceed.\n"},
 	}

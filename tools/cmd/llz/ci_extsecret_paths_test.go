@@ -188,37 +188,6 @@ func TestCollectPolicyPaths(t *testing.T) {
 	}
 }
 
-func TestCollectModuleCIReadPaths(t *testing.T) {
-	root := t.TempDir()
-	fixWrite(t, root, "variables.tf", strings.Join([]string{
-		`variable "ci_read_paths" {`,
-		`  description = "paths"`,
-		`  type        = list(string)`,
-		`  default = [`,
-		`    "grafana/admin",`,
-		`    "otel/ingress",`,
-		`  ]`,
-		`}`,
-	}, "\n"))
-	got, err := collectModuleCIReadPaths(filepath.Join(root, "variables.tf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := esPolicy{
-		"grafana/admin": {"data": {"read": true}, "metadata": {"read": true, "list": true}},
-		"otel/ingress":  {"data": {"read": true}, "metadata": {"read": true, "list": true}},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("module coverage = %#v\nwant %#v", got, want)
-	}
-
-	// No ci_read_paths variable → empty coverage, no error.
-	fixWrite(t, root, "empty.tf", `variable "other" { default = [] }`)
-	if got, err := collectModuleCIReadPaths(filepath.Join(root, "empty.tf")); err != nil || len(got) != 0 {
-		t.Errorf("empty module = %v, %v", got, err)
-	}
-}
-
 func TestValidatePolicyCoverage(t *testing.T) {
 	policy := map[string]esPolicy{
 		"a-policy": {
@@ -273,17 +242,12 @@ func esFixtureRepo(t *testing.T) string {
 
 	var policy strings.Builder
 	policy.WriteString("package main\nconst policyPlatformCI = `\n")
-	var ciReadPaths strings.Builder
-	ciReadPaths.WriteString("variable \"ci_read_paths\" {\n  default = [\n")
 	for _, p := range []string{"grafana/admin", "otel/ingress", "infra/github-dispatch-token", "certmanager/dns01", "harbor/admin"} {
 		policy.WriteString(`path "secret/data/` + p + `" { capabilities = ["read"] }` + "\n")
 		policy.WriteString(`path "secret/metadata/` + p + `" { capabilities = ["read", "list"] }` + "\n")
-		ciReadPaths.WriteString(`    "` + p + `",` + "\n")
 	}
 	policy.WriteString("`\n")
-	ciReadPaths.WriteString("  ]\n}\n")
 	fixWrite(t, root, "tools/cmd/llz/ci_openbao_configure.go", policy.String())
-	fixWrite(t, root, "terraform-modules/llz-openbao/variables.tf", ciReadPaths.String())
 	return root
 }
 
@@ -330,9 +294,10 @@ func TestRunCIExternalSecretPathsFailures(t *testing.T) {
 	if err == nil {
 		t.Fatalf("must fail:\n%s", buf.String())
 	}
-	// 1 unseeded key + 1 missing property + 4 uncovered-policy grants for the
-	// seeded-but-unreferenced uncovered/path (2 grants × 2 policy sources).
-	if err.Error() != "6 ExternalSecret ref(s) failed seed or policy validation" {
+	// 1 unseeded key + 1 missing property + 2 uncovered-policy grants for the
+	// seeded-but-unreferenced uncovered/path (2 grants × 1 policy source —
+	// bao-configure is now the sole OpenBao policy owner).
+	if err.Error() != "4 ExternalSecret ref(s) failed seed or policy validation" {
 		t.Errorf("err = %v", err)
 	}
 	out := buf.String()
@@ -340,8 +305,8 @@ func TestRunCIExternalSecretPathsFailures(t *testing.T) {
 		"::error file=apl-values/env/more.yaml::ExternalSecret remoteRef.key 'grafana/admin' property 'missing_field' is not written by any 'bao kv put secret/grafana/admin' step in bootstrap-openbao.yml or bootstrap-dns.yml\n",
 		"::error file=apl-values/env/more.yaml::ExternalSecret remoteRef.key 'never/seeded' is not seeded by any bootstrap workflow — add a 'bao kv put secret/never/seeded' step to bootstrap-openbao.yml or bootstrap-dns.yml, or add to MANUAL_PATHS if intentionally manual\n",
 		"::error file=tools/cmd/llz/ci_openbao_configure.go::KV path 'uncovered/path' is not covered by llz ci bao-configure (ci_openbao_configure.go): expected path 'secret/data/uncovered/path' with read capability\n",
-		"::error file=tools/cmd/llz/ci_openbao_configure.go::KV path 'uncovered/path' is not covered by terraform-modules/llz-openbao: expected path 'secret/metadata/uncovered/path' with read and list capabilities\n",
-		"\n6 ExternalSecret ref(s) failed seed or policy validation.\n",
+		"::error file=tools/cmd/llz/ci_openbao_configure.go::KV path 'uncovered/path' is not covered by llz ci bao-configure (ci_openbao_configure.go): expected path 'secret/metadata/uncovered/path' with read and list capabilities\n",
+		"\n4 ExternalSecret ref(s) failed seed or policy validation.\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -372,7 +337,6 @@ func TestRunCIExternalSecretPathsInstanceTemplateLayout(t *testing.T) {
 	for _, rel := range []string{
 		"tools/cmd/llz/ci_harbor.go",
 		"tools/cmd/llz/ci_openbao_configure.go",
-		"terraform-modules/llz-openbao/variables.tf",
 		"apl-values/env/secrets.yaml",
 	} {
 		b, err := os.ReadFile(filepath.Join(flat, filepath.FromSlash(rel)))

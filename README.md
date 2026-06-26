@@ -122,7 +122,6 @@ and the version/publish contract in
 | [`llz-pool`](terraform-modules/llz-pool/) | Node pool with `disk_encryption` and `firewall_id` enforced |
 | [`llz-node-firewall`](terraform-modules/llz-node-firewall/) | Cloud Firewall with baseline rules; hands off to the controller |
 | [`llz-object-storage`](terraform-modules/llz-object-storage/) | Linode OBJ buckets + scoped keys for registry/log storage, with key rotation |
-| [`llz-openbao`](terraform-modules/llz-openbao/) | OpenBao KV v2 + AppRole/K8s auth + CI read policy |
 
 ### Helm charts — `kubernetes-charts/`
 
@@ -168,7 +167,7 @@ chart are an Akamai-internal feature; they live in the private
 - [`instance-template/`](instance-template/) — genericized starter material an
   instance repo instantiates: the LandingZone spec examples
   (`landingzone.yaml.example`, `environments/<env>.yaml.example`), Terraform roots
-  (`cluster`, `cluster-bootstrap`, `object-storage`, `openbao-config`), the shared
+  (`cluster`, `cluster-bootstrap`, `object-storage`), the shared
   `apl-values` tree (`_shared/` base + per-component `components/`, from which
   `llz render` generates each env's thin overlay), and instance GitHub workflows +
   composite actions. The

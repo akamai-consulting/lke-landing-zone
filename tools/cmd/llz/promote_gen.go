@@ -143,7 +143,6 @@ on:
           - all
           - cluster
           - object-storage
-          - openbao-config
 
 permissions:
   contents: read

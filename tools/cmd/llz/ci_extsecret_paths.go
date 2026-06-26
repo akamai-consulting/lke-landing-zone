@@ -11,10 +11,12 @@ package main
 // llz-bootstrap-dns.yml), the `llz ci bao-seed-all` data-driven seed table
 // (ci_bao_seed_all.go), and the native Go seeders (ci_harbor.go
 // provision-harbor-robots, ci_seed_special.go), then verifies the bootstrap
-// (`llz ci bao-configure`) and Terraform-managed
-// (terraform-modules/llz-openbao) platform-ci OpenBao policies cover those
-// KV v2 paths. Every bootstrap-seeded KV path must have matching policy
-// coverage even when it is consumed by CI rather than an ExternalSecret.
+// (`llz ci bao-configure`) platform-ci OpenBao policy covers those KV v2 paths.
+// `llz ci bao-configure` is the SOLE owner of OpenBao auth/policy config (the
+// former terraform-modules/llz-openbao vault-provider module was retired), so
+// it is the only policy source cross-checked here. Every bootstrap-seeded KV
+// path must have matching policy coverage even when it is consumed by CI rather
+// than an ExternalSecret.
 //
 // Output (the `  ok:` / `::error file=…::` lines) and the exit semantics are
 // kept identical to the Python validator: exit 0 when everything is seeded and
@@ -38,15 +40,12 @@ import (
 // manual step is documented.
 var esManualPaths = map[string]bool{}
 
-// Policy sources parsed for literal `path "secret/data/…" { capabilities }`
-// stanzas (the OpenBao read/seed policy HCL lives as Go string constants in
-// `llz ci bao-configure`), plus the llz-openbao Terraform module whose CI read
-// policy is synthesized from its ci_read_paths variable.
+// Policy source parsed for literal `path "secret/data/…" { capabilities }`
+// stanzas — the OpenBao read/seed policy HCL lives as Go string constants in
+// `llz ci bao-configure`, the sole owner of OpenBao policy config.
 const (
 	esBaoConfigureLabel = "llz ci bao-configure (ci_openbao_configure.go)"
 	esBaoConfigurePath  = "tools/cmd/llz/ci_openbao_configure.go"
-	esModuleLabel       = "terraform-modules/llz-openbao"
-	esModuleVarsPath    = "terraform-modules/llz-openbao/variables.tf"
 )
 
 // esRepoPath resolves a repo-relative path, tolerating the template layout
@@ -270,16 +269,20 @@ func collectSeededSeedTableInto(text string, paths map[string]bool, fields map[s
 }
 
 var (
-	esPolicyRx    = regexp.MustCompile(`(?s)path\s+"secret/(data|metadata)/([^"]+)"\s*\{[^}]*capabilities\s*=\s*\[([^\]]*)\]`)
-	esCapRx       = regexp.MustCompile(`"([^"]+)"`)
-	esCIReadVarRx = regexp.MustCompile(`(?s)variable\s+"ci_read_paths"\s*\{.*?default\s*=\s*\[(.*?)\]`)
+	esPolicyRx = regexp.MustCompile(`(?s)path\s+"secret/(data|metadata)/([^"]+)"\s*\{[^}]*capabilities\s*=\s*\[([^\]]*)\]`)
+	esCapRx    = regexp.MustCompile(`"([^"]+)"`)
 )
 
 // esPolicy maps kv path → data|metadata → capability set for one policy source.
 type esPolicy = map[string]map[string]map[string]bool
 
 // collectPolicyPaths returns {kv path: {data|metadata: capability set}} for
-// every literal secret KV v2 policy stanza in the file.
+// every literal secret KV v2 policy stanza in the file. When the same path+kind
+// appears in more than one stanza (the file holds several policies — platform-ci,
+// secret-propagator — and a path may be granted by both), capabilities are
+// UNIONed, not overwritten: the file collectively grants the strongest set, so a
+// path read+listed by platform-ci stays covered even if secret-propagator also
+// grants it read-only.
 func collectPolicyPaths(path string) (esPolicy, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -288,38 +291,14 @@ func collectPolicyPaths(path string) (esPolicy, error) {
 	policies := esPolicy{}
 	for _, m := range esPolicyRx.FindAllStringSubmatch(string(b), -1) {
 		kind, kvPath, rawCaps := m[1], m[2], m[3]
-		caps := map[string]bool{}
-		for _, cm := range esCapRx.FindAllStringSubmatch(rawCaps, -1) {
-			caps[cm[1]] = true
-		}
 		if policies[kvPath] == nil {
 			policies[kvPath] = map[string]map[string]bool{}
 		}
-		policies[kvPath][kind] = caps
-	}
-	return policies, nil
-}
-
-// collectModuleCIReadPaths synthesizes the llz-openbao module's generated CI
-// read policy coverage: the module's main.tf generates, for every entry P in
-// the ci_read_paths variable, a `path "<kv>/data/P" { read }` and a
-// `path "<kv>/metadata/P" { read, list }` grant. Rather than re-implement that
-// templating, parse the variable's default list and reproduce the resulting
-// coverage map so this validator stays in lock-step with the module.
-func collectModuleCIReadPaths(path string) (esPolicy, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read module variables: %w", err)
-	}
-	policies := esPolicy{}
-	block := esCIReadVarRx.FindStringSubmatch(string(b))
-	if block == nil {
-		return policies, nil
-	}
-	for _, m := range esCapRx.FindAllStringSubmatch(block[1], -1) {
-		policies[m[1]] = map[string]map[string]bool{
-			"data":     {"read": true},
-			"metadata": {"read": true, "list": true},
+		if policies[kvPath][kind] == nil {
+			policies[kvPath][kind] = map[string]bool{}
+		}
+		for _, cm := range esCapRx.FindAllStringSubmatch(rawCaps, -1) {
+			policies[kvPath][kind][cm[1]] = true
 		}
 	}
 	return policies, nil
@@ -438,9 +417,6 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	if policyPaths[esBaoConfigureLabel], err = collectPolicyPaths(esRepoPath(root, esBaoConfigurePath)); err != nil {
 		return err
 	}
-	if policyPaths[esModuleLabel], err = collectModuleCIReadPaths(esRepoPath(root, esModuleVarsPath)); err != nil {
-		return err
-	}
 
 	errors := 0
 	keysToRefs := map[string][]esPropFiles{}
@@ -521,8 +497,8 @@ func ciExternalSecretPathsCmd() *cobra.Command {
 			"validate-externalsecret-paths.py (the Makefile's externalsecret-paths-check,\n" +
 			"run after render-charts). Validates every ExternalSecret remoteRef.key/\n" +
 			"property in apl-values/ + $RENDER_DIR against the bootstrap-workflow and\n" +
-			"ci_harbor.go seeding, then asserts the bao-configure and llz-openbao module\n" +
-			"policies cover every consumed and seeded KV v2 path.",
+			"ci_harbor.go seeding, then asserts the bao-configure platform-ci policy\n" +
+			"covers every consumed and seeded KV v2 path.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runCIExternalSecretPaths(root, os.Stdout)

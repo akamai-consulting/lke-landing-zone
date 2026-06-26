@@ -11,7 +11,6 @@ with GitOps via ArgoCD.
 | [`llz-node-firewall`](llz-node-firewall/) | Cloud Firewall with baseline rules; hands off to controller |
 | [`llz-pool`](llz-pool/) | Node pool with `disk_encryption` and `firewall_id` enforced |
 | [`llz-object-storage`](llz-object-storage/) | Linode OBJ buckets + scoped keys for registry/log storage, with 120-day key rotation |
-| [`llz-openbao`](llz-openbao/) | OpenBao KV v2 + AppRole/K8s auth + CI read policy (generated from a path list) |
 
 See [`../instance-template/terraform-iac-bootstrap/cluster/`](../instance-template/terraform-iac-bootstrap/cluster/) for a working composition of the cluster modules,
 and [`RELEASING.md`](RELEASING.md) for the version/tag (`git::?ref=`) contract that

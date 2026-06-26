@@ -144,13 +144,9 @@ default you usually keep.
 | `obj_key_rotation_days` | default | ≤120 per rotation guidelines |
 | `linode_token` | SECRET | `TF_VAR_linode_token` |
 
-### `openbao-config/` — configure a running OpenBao
-
-| Variable | Class | Notes |
-|---|---|---|
-| `openbao_address` | MUST-SET | Port-forward (`https://localhost:8200`) or in-cluster address |
-| `openbao_skip_tls_verify`, `openbao_ca_cert_file`, `kubernetes_host` | default | `skip_tls_verify=true` only when port-forwarding |
-| `openbao_token` | SECRET | Mint with `bao operator generate-root`; revoke after apply |
+OpenBao auth/policy/KV configuration is **not** a Terraform root — `llz ci
+bao-configure` (run from `bootstrap-openbao.yml` after the cluster is up) is the
+sole owner. There are no `openbao_*` tfvars to set.
 
 ## 4. Scaffold an instance, and pull template updates — Copier
 
@@ -306,8 +302,8 @@ new env, in order:
 4. **Converge** — the workflow polls ``llz ci converge`` (wrapping
    ``llz ci health``) until the cluster meets the convergence contract.
 5. **Bootstrap OpenBao** — dispatch `.github/workflows/bootstrap-openbao.yml` for
-   the env: `bao operator init`, seed unseal keys, then `openbao-config` writes the
-   KV engine, auth methods, and policies.
+   the env: `bao operator init`, seed unseal keys, then `llz ci bao-configure`
+   writes the KV engine, auth methods, and policies.
 6. **DNS** — dispatch `bootstrap-dns.yml` once its token is provisioned. (The
    Argo CD / apl-core values-repo credential is the `APL_VALUES_REPO_TOKEN` PAT,
    provisioned by `llz tokens`, not a per-run bootstrap workflow.)

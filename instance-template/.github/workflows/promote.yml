@@ -50,7 +50,6 @@ on:
           - all
           - cluster
           - object-storage
-          - openbao-config
   # Optional: auto-start the pipeline when a promotable change lands on main.
   # Left commented so promotion is an explicit, operator-initiated action by
   # default; uncomment to make every merge to main walk the pipeline.
