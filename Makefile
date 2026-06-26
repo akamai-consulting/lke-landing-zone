@@ -154,8 +154,7 @@ shellcheck:
 TF_DIRS := $(wildcard terraform-modules/llz-cluster \
                       terraform-modules/llz-pool \
                       terraform-modules/llz-object-storage \
-                      terraform-modules/llz-node-firewall \
-                      terraform-modules/llz-openbao)
+                      terraform-modules/llz-node-firewall)
 
 tf-fmt:
 	@for d in $(TF_DIRS); do tofu fmt "$$d"; done

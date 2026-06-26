@@ -23,7 +23,6 @@ var candidateTFDirs = []string{
 	"terraform-iac-bootstrap/cluster",
 	"terraform-iac-bootstrap/cluster-bootstrap",
 	"terraform-iac-bootstrap/object-storage",
-	"terraform-iac-bootstrap/openbao-config",
 }
 
 // tfDirs returns the candidate Terraform roots that exist as directories.

@@ -10,7 +10,6 @@ terraform-iac-bootstrap/
   cluster-bootstrap/  Installs Akamai App Platform (apl-core) via `helm install apl/apl`
                       and seeds the values-repo HTTPS PAT Secret. After this,
                       apl-core's in-cluster Argo CD takes over.
-  openbao-config/     OpenBao secret engines, AppRole, policies, Kubernetes auth — run after cluster
   object-storage/     Loki S3 buckets (Linode Object Storage) — run once per region
   modules/
     llz-cluster/     Reusable LKE cluster module
@@ -20,8 +19,9 @@ terraform-iac-bootstrap/
 
 ## Apply order
 
-`cluster` → `object-storage` → `cluster-bootstrap` → `openbao-config` (last, run via the
-GitHub workflow `bootstrap-openbao.yml`, not from this directory).
+`cluster` → `object-storage` → `cluster-bootstrap`. OpenBao auth/policy/KV config
+is NOT a Terraform root — it is owned by `llz ci bao-configure`, run from the
+GitHub workflow `bootstrap-openbao.yml` after the cluster is up.
 
 For two-cluster deployments, complete the **primary** cluster fully before applying to secondary. The primary bootstrap seeds Harbor robot credentials and CA certs that the secondary consumes.
 
@@ -93,7 +93,6 @@ terraform fmt -recursive -check
 | LKE-E cluster, node pool, VPC | All Kubernetes workloads |
 | Cluster-level Linode Cloud Firewall + node firewall | Helm releases (cert-manager, Harbor, Prometheus, Istio, Keycloak, OpenBao via `manifest/`, etc.) |
 | `helm install apl/apl` (one-time, then upgrade by bumping `apl_chart_version`) | Argo CD self-management after bootstrap |
-| OpenBao secret engines, policies, auth methods (`openbao-config/`) | ExternalSecret reconciliation |
 | Linode Object Storage buckets (`object-storage/`) | Loki configuration |
 | Values-repo HTTPS PAT Secret in argocd namespace | Everything reconciled from `apl-values/<env>/manifest/` |
 

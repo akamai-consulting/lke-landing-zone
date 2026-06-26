@@ -1,5 +1,5 @@
 # Reusable (`workflow_call`) version of the Terraform infra pipeline (plan /
-# apply / destroy across cluster, cluster-bootstrap, openbao-config,
+# apply / destroy across cluster, cluster-bootstrap,
 # object-storage + the OpenBao bootstrap + converge gate). Surface-reduction
 # pattern (docs/templatization-plan.md §"Keeping instances in sync"): the
 # instance ships a thin caller stub (owning the push / pull_request /
@@ -43,7 +43,7 @@ on:
         type: string
         default: ''
       module:
-        description: 'Target module: cluster | openbao-config | object-storage | all.'
+        description: 'Target module: cluster | object-storage | all.'
         required: false
         type: string
         default: ''
@@ -1515,172 +1515,6 @@ jobs:
         env:
           ORPHAN_THRESHOLD: ${{ vars.PREFLIGHT_ORPHAN_THRESHOLD || '5' }}
         run: llz ci assert-no-orphans --threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION" --attempts 5 --retry-delay 30
-
-  # ── Apply / plan openbao-config module ────────────────────────────────────────
-  # Plans or applies the openbao-config Terraform module — KV v2, AppRole,
-  # Kubernetes auth, policies, and roles. Requires an active admin token.
-  # Run bootstrap-openbao.yml first to obtain and unseal the cluster, then apply
-  # this module with OPENBAO_ROOT_TOKEN set, then revoke the token.
-  #
-  # Required infra-<region> environment secrets (beyond the standard set):
-  #   OPENBAO_ADDRESS    — HTTPS URL of the OpenBao server reachable from runners
-  #   OPENBAO_ROOT_TOKEN — Admin token with permission to configure OpenBao
-  apply-openbao-config:
-    name: Apply OpenBao Config
-    if: >
-      github.event_name == 'workflow_dispatch' &&
-      (inputs.action == 'apply' || inputs.action == 'plan') &&
-      inputs.module == 'openbao-config'
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    environment: infra-${{ inputs.region }}
-    permissions:
-      contents: read
-    timeout-minutes: 15
-    env:
-      REGION:                  ${{ inputs.region }}
-      ACTION:                  ${{ inputs.action }}
-      TF_VAR_openbao_address:  ${{ secrets.OPENBAO_ADDRESS }}
-      TF_VAR_openbao_token:    ${{ secrets.OPENBAO_ROOT_TOKEN }}
-      AWS_ACCESS_KEY_ID:       ${{ secrets.TF_STATE_ACCESS_KEY }}
-      AWS_SECRET_ACCESS_KEY:   ${{ secrets.TF_STATE_SECRET_KEY }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
-      - name: Terraform init — openbao-config
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
-        with:
-          module: openbao-config
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-
-      - name: Terraform plan — openbao-config
-        working-directory: terraform-iac-bootstrap/openbao-config
-        run: |
-          llz ci tf-plan --out plan.txt --title "OpenBao config plan" \
-            -- -out=tfplan.bin
-
-      - name: Terraform apply — openbao-config
-        if: env.ACTION == 'apply'
-        working-directory: terraform-iac-bootstrap/openbao-config
-        run: terraform apply -auto-approve tfplan.bin
-
-  # ── Destroy openbao-config (manual dispatch — requires environment approval) ───
-  plan-destroy-openbao-config:
-    name: Plan DESTROY OpenBao Config
-    if: >
-      github.event_name == 'workflow_dispatch' &&
-      inputs.action == 'destroy' &&
-      inputs.module == 'openbao-config'
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    environment: infra-${{ inputs.region }}
-    permissions:
-      contents: read
-    timeout-minutes: 15
-    env:
-      REGION:          ${{ inputs.region }}
-      CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
-    steps:
-      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
-      - name: Validate destroy confirmation
-        run: llz ci assert-destroy-confirm "$REGION" "openbao-config" "$CONFIRM_DESTROY"
-
-      - name: Terraform init — openbao-config
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
-        with:
-          module: openbao-config
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-
-      - name: Terraform plan destroy — openbao-config
-        working-directory: terraform-iac-bootstrap/openbao-config
-        env:
-          TF_VAR_openbao_address: ${{ secrets.OPENBAO_ADDRESS }}
-          TF_VAR_openbao_token:   ${{ secrets.OPENBAO_ROOT_TOKEN }}
-          AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
-        run: |
-          llz ci tf-plan --out destroy-plan.txt --title "OpenBao config destroy plan (review before approving destroy job)" \
-            -- -destroy
-
-  destroy-openbao-config:
-    name: DESTROY OpenBao Config
-    if: >
-      github.event_name == 'workflow_dispatch' &&
-      inputs.action == 'destroy' &&
-      inputs.module == 'openbao-config'
-    needs: [plan-destroy-openbao-config]
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    environment: infra-${{ inputs.region }}
-    permissions:
-      contents: read
-    timeout-minutes: 15
-    env:
-      REGION:          ${{ inputs.region }}
-      CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
-    steps:
-      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
-      - name: Validate destroy confirmation
-        run: llz ci assert-destroy-confirm "$REGION" "openbao-config" "$CONFIRM_DESTROY"
-
-      - name: Terraform init — openbao-config
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
-        with:
-          module: openbao-config
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-
-      - name: Terraform destroy — openbao-config
-        working-directory: terraform-iac-bootstrap/openbao-config
-        env:
-          TF_VAR_openbao_address: ${{ secrets.OPENBAO_ADDRESS }}
-          TF_VAR_openbao_token:   ${{ secrets.OPENBAO_ROOT_TOKEN }}
-          AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
-        run: |
-          terraform plan -destroy \
-            -out=destroy-plan.bin \
-            -no-color
-          terraform apply destroy-plan.bin
 
   # ── Apply / plan / destroy object-storage module ────────────────────────────
   # Creates the three Loki S3 buckets and a scoped Object Storage access key

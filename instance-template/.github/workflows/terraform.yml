@@ -1,7 +1,7 @@
 name: Terraform Infrastructure
 
 # Thin caller for the reusable LLZ workflow — the full pipeline body (plan /
-# apply / destroy across cluster, cluster-bootstrap, openbao-config,
+# apply / destroy across cluster, cluster-bootstrap,
 # object-storage + OpenBao bootstrap + converge gate), the terraform-init +
 # fetch-kubeconfig composite actions, and the llz CLI all live in the
 # template and are sourced there (see docs/templatization-plan.md §"Keeping
@@ -40,7 +40,6 @@ on:
         type: choice
         options:
           - cluster
-          - openbao-config
           - object-storage
           - all
       region:
@@ -58,7 +57,7 @@ on:
         required: true
         type: string
       confirm_destroy:
-        description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:openbao-config | destroy:<deployment>:object-storage'
+        description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:object-storage'
         required: false
         type: string
 

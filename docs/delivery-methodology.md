@@ -138,7 +138,7 @@ base (`_shared/` + `components/`) rather than cloning or hand-copying per-env fi
 gate.
 
 Bootstrap is **ordered and gated**, not a single button. The Terraform roots apply
-in sequence (`cluster → object-storage → openbao-config → cluster-bootstrap`);
+in sequence (`cluster → object-storage → cluster-bootstrap`);
 `cluster-bootstrap` installs apl-core, which stands up Argo CD, which fans out the
 first-party charts in sync-wave order (foundation → OpenBao platform → cert
 automation). The methodology's "convergence over completion" tenet is most visible

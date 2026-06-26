@@ -97,7 +97,6 @@ flowchart TB
         direction TB
         R1["cluster<br/>→ llz-cluster (VPC + LKE-E)<br/>→ llz-pool (encrypted nodes + firewall)"]
         R2["object-storage<br/>→ llz-object-storage (OBJ + scoped keys)"]
-        R3["openbao-config<br/>→ llz-openbao (KV v2 + AppRole/K8s auth)"]
         R4["cluster-bootstrap<br/>helm_release.apl + readiness gates"]
     end
 
@@ -114,7 +113,7 @@ flowchart TB
     GATE{{"Convergence contract<br/>0 = converged · 2 = in-progress (poll) · 1 = hard-fail (stop)"}}
 
     NEW --> R1
-    UP --> R1 --> R2 --> R3 --> R4
+    UP --> R1 --> R2 --> R4
     R4 -->|"helm_release.apl"| APL
     APL --> ARGO
     R4 -.->|"apl_pipeline_ready gate<br/>(controller Available)"| ARGO
@@ -145,7 +144,7 @@ flowchart TB
     classDef gate fill:#fce8e6,stroke:#ea4335,color:#111;
     classDef sch fill:#fef7e0,stroke:#f9ab00,color:#111;
     class NEW,UP,DAY2 cli;
-    class R1,R2,R3,R4 tf;
+    class R1,R2,R4 tf;
     class APL,ARGO,AOA,FOUND,BAO,CERT k8s;
     class GATE gate;
     class H,ROT,UNSEAL,CHK sch;
