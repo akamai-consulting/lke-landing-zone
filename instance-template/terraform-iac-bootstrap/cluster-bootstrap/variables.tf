@@ -82,7 +82,7 @@ variable "apps_repo_revision" {
 }
 
 variable "loki_admin_password" {
-  description = "Admin password for the Loki gateway's HTTP basic auth. Required by apl-core's apps.loki schema when loki.enabled=true; rendered into apl-values/<env>/values.yaml as apps.loki.adminPassword. Supply via TF_VAR_loki_admin_password (sourced from secrets.LOKI_ADMIN_PASSWORD). When empty (first apply, before the secret exists) cluster-bootstrap generates one via random_password.loki_admin and the llz-terraform workflow persists it to the infra-<region> environment as LOKI_ADMIN_PASSWORD; later runs pass the stored value back in. NOTE: not yet on the ESO+OpenBao rotation lifecycle the other support-plane creds use — see docs/secrets.md (Known limitation — Loki admin password); moving it there is a tracked follow-up."
+  description = "Admin password for the Loki gateway's HTTP basic auth. Required by apl-core's apps.loki schema when loki.enabled=true; rendered into apl-values/<env>/values.yaml as apps.loki.adminPassword. Always supplied via TF_VAR_loki_admin_password: the llz-terraform workflow runs `llz ci ensure-env-secret` BEFORE this apply, which generates+persists the infra-<region> LOKI_ADMIN_PASSWORD secret on first run and exports it as TF_VAR_loki_admin_password (idempotent — no per-run rotation). cluster-bootstrap no longer generates this (the former random_password.loki_admin) nor outputs it for a post-apply stash, so it is not held in TF state's secret set. NOTE: not yet on the ESO+OpenBao rotation lifecycle the other support-plane creds use — see docs/secrets.md (Known limitation — Loki admin password); moving it there is a tracked follow-up."
   type        = string
   sensitive   = true
   default     = ""

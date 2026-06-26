@@ -73,20 +73,14 @@ data "terraform_remote_state" "cluster" {
 # apl-operator does something unexpected with `_rawValues` or any other
 # templated field, the rendered file is the first artifact to look at — it
 # tells you what apl-operator actually saw, not what you intended.
-# Loki gateway HTTP basic-auth admin password. apl-core's apps.loki schema
-# REQUIRES adminPassword when loki is enabled. On the first apply — before the
-# infra-<region> environment holds a LOKI_ADMIN_PASSWORD secret —
-# var.loki_admin_password arrives empty and we generate one here; the
-# llz-terraform workflow then persists local.loki_admin_password_effective to
-# the env secret so every later run passes the stored value straight back in
-# (idempotent — no per-run rotation of the Loki credential).
 #
-# `special = false` keeps the value safe for HTTP basic-auth / URL contexts.
-# 32 chars of [A-Za-z0-9] gives ~190 bits of entropy, plenty.
-resource "random_password" "loki_admin" {
-  length  = 32
-  special = false
-}
+# Loki gateway HTTP basic-auth admin password (apl-core's apps.loki schema
+# REQUIRES adminPassword when loki is enabled). var.loki_admin_password is now
+# always supplied — the llz-terraform workflow runs `llz ci ensure-env-secret`
+# BEFORE this apply, which generates+persists the infra-<region> LOKI_ADMIN_PASSWORD
+# secret on first run and exports it as TF_VAR_loki_admin_password. cluster-bootstrap
+# no longer generates it (the former random_password.loki_admin) or outputs it for a
+# post-apply stash; it is a plain consumed input, kept out of TF state's secret set.
 
 # Cluster DNS Service ClusterIP, for the loki-gateway nginx `resolver`. The
 # grafana/loki gateway templates `resolver <dnsService>.kube-system.svc...;` as a
@@ -121,12 +115,6 @@ data "kubernetes_service" "coredns" {
 }
 
 locals {
-  # Loki admin password: use the operator-supplied value when present, otherwise
-  # the generated one (first apply). The llz-terraform workflow reads this back
-  # via `terraform output -raw loki_admin_password` and stashes it as the
-  # infra-<region> LOKI_ADMIN_PASSWORD env secret.
-  loki_admin_password_effective = var.loki_admin_password != "" ? var.loki_admin_password : random_password.loki_admin.result
-
   # Object-store wiring, derived from var.obj_cluster + var.deployment instead of a
   # cross-workspace `terraform_remote_state` read of the object-storage workspace
   # (dropping that coupling — object-storage no longer has to be applied first for
@@ -166,7 +154,7 @@ locals {
       apl_values_repo_password = var.apl_values_repo_token
       apl_values_repo_ref      = var.apl_values_repo_revision
       linode_dns_token         = var.linode_dns_token
-      loki_admin_password      = local.loki_admin_password_effective
+      loki_admin_password      = var.loki_admin_password
       coredns_cluster_ip       = try(data.kubernetes_service.coredns[0].spec[0].cluster_ip, "")
       loki_bucket_chunks       = local.loki_buckets.chunks
       loki_bucket_ruler        = local.loki_buckets.ruler

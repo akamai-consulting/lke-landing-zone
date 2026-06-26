@@ -592,7 +592,10 @@ jobs:
       # the GHCR repo Secret is skipped (only works if the charts are public).
       TF_VAR_ghcr_token:              ${{ secrets.GHCR_READ_TOKEN }}
       TF_VAR_ghcr_username:           ${{ vars.GHCR_USERNAME }}
-      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
+      # TF_VAR_loki_admin_password is intentionally NOT set here: the "Ensure Loki
+      # admin password" step below exports it to $GITHUB_ENV (generating + stashing
+      # the infra-<region> secret on first run). A job/step-level env: would shadow
+      # that $GITHUB_ENV value, so the variable lives only there.
       # Branch of the instance repo that the bootstrap ArgoCD Application targets.
       # Defaults to 'main'; override by setting APPS_REPO_REVISION as a
       # repository or environment **variable** (preferred, matches the existing
@@ -692,6 +695,22 @@ jobs:
             exit 1
           }
 
+      # Ensure the Loki gateway admin password exists BEFORE plan/apply and export
+      # it as TF_VAR_loki_admin_password. On the first run (secret unset) this
+      # GENERATES one and stashes it to the infra-<region> environment as
+      # LOKI_ADMIN_PASSWORD; later runs reuse the stored value. Replaces
+      # cluster-bootstrap's random_password.loki_admin + the post-apply
+      # `terraform output → stash` round-trip — the password is no longer held in
+      # TF state. Same OPENBAO_SECRETS_WRITE_TOKEN PAT as the other env-secret stashes.
+      - name: Ensure Loki admin password
+        if: env.ACTION == 'apply'
+        env:
+          GH_TOKEN:            ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+          LOKI_ADMIN_PASSWORD: ${{ secrets.LOKI_ADMIN_PASSWORD }}
+        run: |
+          llz ci ensure-env-secret --env "infra-${REGION}" \
+            --name LOKI_ADMIN_PASSWORD --export-tf-var loki_admin_password
+
       - name: Terraform plan — cluster-bootstrap
         working-directory: terraform-iac-bootstrap/cluster-bootstrap
         run: |
@@ -708,21 +727,6 @@ jobs:
         # after readiness passed) by settling + replan + retry. Any other apply
         # failure passes through unchanged.
         run: llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
-
-      # Persist the effective Loki admin password to the infra-<region> env as
-      # LOKI_ADMIN_PASSWORD. On the first apply (secret unset) cluster-bootstrap
-      # GENERATED it via random_password.loki_admin; we read it back from the TF
-      # output and stash it so every later run passes the same value straight
-      # back in via TF_VAR_loki_admin_password (idempotent — no rotation). Mirrors
-      # the object-storage LOKI_S3_* stash; same OPENBAO_SECRETS_WRITE_TOKEN PAT.
-      - name: Store Loki admin password as an environment secret
-        if: env.ACTION == 'apply'
-        working-directory: terraform-iac-bootstrap/cluster-bootstrap
-        env:
-          GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          llz ci stash-env-secret --env "infra-${REGION}" \
-            --from-tf-output loki_admin_password=LOKI_ADMIN_PASSWORD
 
       # ── Firewall-controller config (folded from the former bootstrap-cluster
       #    job) ────────────────────────────────────────────────────────────────

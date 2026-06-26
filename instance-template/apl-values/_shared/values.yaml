@@ -117,10 +117,10 @@ apps:
   grafana:       { enabled: true }
   loki:
     enabled: true
-    # Loki gateway HTTP basic-auth admin password. Rendered from
-    # random_password.loki_admin (cluster-bootstrap) and persisted to the
-    # infra-<env> GH environment secret LOKI_ADMIN_PASSWORD on first apply;
-    # reused on later runs. Required by apl-core's apps.loki schema.
+    # Loki gateway HTTP basic-auth admin password. Generated + stashed to the
+    # infra-<env> GH environment secret LOKI_ADMIN_PASSWORD by `llz ci
+    # ensure-env-secret` (pre-apply) on first run and reused on later runs, then
+    # passed in as TF_VAR_loki_admin_password. Required by apl-core's apps.loki schema.
     adminPassword: ${loki_admin_password}
     # S3 chunk store on Linode Object Storage. The grafana/loki chart reads
     # bucketNames + s3.{endpoint,region} from values (not env), so they are

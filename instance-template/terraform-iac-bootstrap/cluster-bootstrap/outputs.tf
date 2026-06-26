@@ -1,9 +1,3 @@
-output "loki_admin_password" {
-  description = "Effective Loki gateway admin password (operator-supplied or generated). The llz-terraform workflow reads this with `terraform output -raw loki_admin_password` and persists it to the infra-<region> environment as LOKI_ADMIN_PASSWORD."
-  value       = local.loki_admin_password_effective
-  sensitive   = true
-}
-
 output "next_steps" {
   description = "Post-apply checklist printed at the end of every apply."
   value       = <<-EOT
