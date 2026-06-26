@@ -71,10 +71,13 @@ data "terraform_remote_state" "object_storage" {
 # apl-operator, which in turn drives the helmfile pipeline that installs ~40
 # components (Istio, Argo CD, Keycloak, cert-manager, ESO, CNPG,
 # Sealed Secrets, kube-prometheus-stack, Grafana, Loki, OTel Operator,
-# Harbor, Kyverno, Trivy, ExternalDNS — apl-core's bundled Tekton AND Gitea
-# charts are disabled in our per-env values.yaml; cert-automation runs on Argo
-# Workflows + Events, and the values store is the external GitHub repo over
-# HTTPS, not the in-cluster Gitea) and then hands off to Argo CD
+# Harbor, Kyverno, Trivy, ExternalDNS — apl-core's bundled Tekton chart is
+# disabled in our per-env values.yaml; cert-automation runs on Argo Workflows +
+# Events. The values store is the external GitHub repo over HTTPS (otomi.git),
+# NOT the in-cluster Gitea — but Gitea itself stays ENABLED
+# (apl-values/_shared/values.yaml apps.gitea.enabled=true) because apl-core's
+# `gitops-global` Argo app is hardwired to clone gitea-http; keep it until
+# apl-core can source gitops-global from otomi.git) and then hands off to Argo CD
 # for continuous reconciliation from the values repo configured below.
 #
 # The values file is rendered per environment from apl-values/<env>/values.yaml
@@ -474,6 +477,10 @@ resource "kubectl_manifest" "argocd_namespace" {
         # TF so it was missing the convention. Observed: applying the label
         # flipped `gitops-global` from
         # Unknown/Healthy (timed out) to Synced/Healthy within 30s.
+        #
+        # LOAD-BEARING — do NOT remove as "gitea is gone": Gitea is still
+        # ENABLED (apl-values/_shared/values.yaml apps.gitea.enabled=true) for
+        # apl-core's gitops-global clone, so this gitea-NP selector is live.
         name                                              = "argocd"
         "lke-landing-zone.akamai.io/managed-by-bootstrap" = "true"
       }
@@ -587,11 +594,12 @@ resource "null_resource" "apl_pipeline_ready" {
         kubectl $ns_args wait --for="$for_arg" "$2" --timeout="$5"
       }
 
-      # NOTE — no gitea/otomi-values cold-bootstrap self-heal stage here. With
-      # the in-cluster Gitea obsoleted (apps.gitea.enabled=false) apl-operator
-      # reads/writes its values tree directly from the external GitHub repo over
-      # HTTPS (otomi.git), so the gitea-http DNS race that the old stage 0
-      # guarded against no longer exists.
+      # NOTE — no gitea/otomi-values cold-bootstrap self-heal stage here. otomi.git
+      # points at the external GitHub repo, so apl-operator reads/writes its values
+      # tree over HTTPS (NOT gitea-http) — the gitea-http DNS race the old stage 0
+      # guarded against no longer exists. (Gitea is still ENABLED —
+      # apl-values/_shared/values.yaml apps.gitea.enabled=true — but only for
+      # apl-core's gitops-global clone, which is not on apl-operator's values path.)
 
       # 1. Argo CD application-controller — the real "Argo can accept
       #    Applications" signal. Replaces wait_for_argo_application_crd.

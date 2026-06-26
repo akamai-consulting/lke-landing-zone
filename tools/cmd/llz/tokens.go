@@ -178,7 +178,8 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		ghTokenURL("repo,workflow", "llz-openbao-secrets-write"))
 	// HARD-required by terraform apply: apl-core's otomi.git.password + the
 	// argocd repo Secrets. apl-operator PUSHES its values tree to this repo, so
-	// the PAT needs Contents: write (the in-cluster Gitea is obsoleted). The
+	// the PAT needs Contents: write (the values store is this external GitHub
+	// repo, not the in-cluster Gitea — which stays enabled for gitops-global). The
 	// template URL pre-fills name/owner/Contents:write; GitHub can't pre-select
 	// the specific repo, so the note tells the operator to pick it.
 	gatherGH("APL_VALUES_REPO_TOKEN",
