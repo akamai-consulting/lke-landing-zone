@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -26,22 +27,34 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		t.Errorf("no-repo configure should omit JWT steps: got %d, want 11", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
-	// Two roles expected: platform-ci (read) and secret-propagator (write).
+	// Two roles expected: platform-ci (read) and secret-propagator (write). The
+	// role body is JSON over stdin (`write <path> -`) so bound_claims is a typed
+	// map, not a key=value string the API rejects — assert against the stdin JSON.
 	jwtRolePolicy := map[string]string{}
 	for _, s := range steps {
-		if len(s.args) > 1 && s.args[0] == "write" && strings.HasPrefix(s.args[1], "auth/jwt/role/") {
-			joined := strings.Join(s.args, " ")
-			if !strings.Contains(joined, `bound_claims={"repository":"acme/platform"}`) {
-				t.Errorf("jwt role %s must bound_claims the instance repo; got %v", s.args[1], s.args)
+		if len(s.args) >= 3 && s.args[0] == "write" && strings.HasPrefix(s.args[1], "auth/jwt/role/") {
+			if s.args[len(s.args)-1] != "-" || s.stdin == "" {
+				t.Errorf("jwt role %s must write its JSON body over stdin (got args %v, stdin %q)", s.args[1], s.args, s.stdin)
+				continue
 			}
-			if !strings.Contains(joined, "bound_audiences=https://github.com/acme") {
-				t.Errorf("jwt role %s must bound_audiences the owner; got %v", s.args[1], s.args)
+			var body struct {
+				BoundAudiences []string          `json:"bound_audiences"`
+				BoundClaims    map[string]string `json:"bound_claims"`
+				TokenPolicies  []string          `json:"token_policies"`
+			}
+			if err := json.Unmarshal([]byte(s.stdin), &body); err != nil {
+				t.Errorf("jwt role %s stdin is not valid JSON: %v", s.args[1], err)
+				continue
+			}
+			if body.BoundClaims["repository"] != "acme/platform" {
+				t.Errorf("jwt role %s must bound_claims the instance repo; got %v", s.args[1], body.BoundClaims)
+			}
+			if len(body.BoundAudiences) != 1 || body.BoundAudiences[0] != "https://github.com/acme" {
+				t.Errorf("jwt role %s must bound_audiences the owner; got %v", s.args[1], body.BoundAudiences)
 			}
 			role := strings.TrimPrefix(s.args[1], "auth/jwt/role/")
-			for _, a := range s.args {
-				if strings.HasPrefix(a, "token_policies=") {
-					jwtRolePolicy[role] = strings.TrimPrefix(a, "token_policies=")
-				}
+			if len(body.TokenPolicies) == 1 {
+				jwtRolePolicy[role] = body.TokenPolicies[0]
 			}
 		}
 	}
@@ -142,15 +155,16 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if calls[0] != "token lookup -format=json" || calls[16] != "audit list" {
 		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[16])
 	}
-	// The repo-bound jwt role must actually be written during the run.
+	// The jwt role must actually be written during the run (body is JSON over
+	// stdin; repo/audience binding is asserted in TestBaoConfigureStepsShape).
 	var sawJWT bool
 	for _, c := range calls {
-		if strings.Contains(c, "write auth/jwt/role/platform-ci") && strings.Contains(c, `bound_claims={"repository":"acme/platform"}`) {
+		if strings.Contains(c, "write auth/jwt/role/platform-ci -") {
 			sawJWT = true
 		}
 	}
 	if !sawJWT {
-		t.Errorf("expected a repo-bound jwt role write; calls=%v", calls)
+		t.Errorf("expected a jwt role write; calls=%v", calls)
 	}
 	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
 		b, _ := os.ReadFile(envFile)
