@@ -138,7 +138,7 @@ func catalog() []secretSpec {
 			Purpose: "GitHub PAT — apl-core's external values store (otomi.git) + the argocd repo Secrets; apl-operator PUSHES its values tree here",
 			Dest:    "infra-<env> environment secret",
 			URL:     ghFineGrainedTokenURL("llz-apl-values-repo", "", "apl-core values repo (otomi.git) + argocd repo Secrets"),
-			Note:    "Fine-grained PAT (Contents: write pre-filled) → set Resource owner to your org, then Only select repositories: your instance repo. The in-cluster Gitea is obsoleted; this is the only values-repo credential.",
+			Note:    "Fine-grained PAT (Contents: write pre-filled) → set Resource owner to your org, then Only select repositories: your instance repo. The values store is this external GitHub repo (not the in-cluster Gitea); this is the only values-repo credential.",
 		},
 		{
 			Name:    "TF_STATE_ACCESS_KEY",
