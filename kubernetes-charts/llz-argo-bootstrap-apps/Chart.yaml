@@ -18,7 +18,8 @@ type: application
 # 0.1.6: drop the eso-cert-watcher app-of-apps entry (ESO >=0.10.7 re-reads the
 #        openbao-tls CA via --store-requeue-interval; the watcher was retired).
 # 0.1.7: bump the llz-cert-automation pin to 0.1.2 (JetStream version pin).
-version: 0.1.7
+# 0.1.8: bump the llz-cert-automation pin to 0.1.3 (ExternalSecret refreshInterval 1h->1m).
+version: 0.1.8
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

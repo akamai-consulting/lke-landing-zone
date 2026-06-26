@@ -73,7 +73,7 @@ OCI chart (replacing the raw manifests under
 | `images.kubectl` | `registry.k8s.io/kubectl:v1.32.4@sha256:…` | extract-cert step image (digest-pinned). |
 | `images.buildah` | `quay.io/buildah/stable:v1.41` | build-image step image. |
 | `images.ghCli` | `ghcr.io/cli/cli:v2.65.0` | deploy-haproxy step image. |
-| `externalSecrets.refreshInterval` | `1h` | ESO refresh interval. |
+| `externalSecrets.refreshInterval` | `1m` | ESO refresh interval. Short so the ExternalSecrets re-sync quickly after the OpenBao store goes Ready on first boot (ESO doesn't re-trigger on store recovery). |
 | `externalSecrets.secretStore.kind` | `ClusterSecretStore` | Secret backend kind. |
 | `externalSecrets.secretStore.name` | `openbao` | Secret backend name. |
 | `externalSecrets.githubToken.secretName` | `cert-automation-github-token` | K8s Secret for the GH dispatch token. |

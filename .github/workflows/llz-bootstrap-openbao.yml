@@ -585,14 +585,18 @@ jobs:
       # ── Nudge Argo CD to converge the secrets pipeline now ─────────────────────
       # The `openbao` ClusterSecretStore and its ExternalSecrets (loki/harbor obj-
       # storage) could not reach Ready until the AppRole secret + object-storage KV
-      # paths above were seeded. Force an immediate sync of the two apps that own
-      # them so the registry/log Secrets appear now instead of at the next
-      # reconcile — AND, critically, re-trigger the sync if an earlier first-boot
-      # race already drove it to a terminally-failed state (Argo CD does NOT auto-
-      # retry a failed sync to the same revision; selfHeal only corrects drift after
-      # a successful one). The standing safety net is the in-cluster nudger CronJob
-      # (apl-values/_shared/manifest/argo-resync-nudger); this just collapses the
-      # latency at the exact moment seeding unblocks them. Never fails the bootstrap.
+      # paths above were seeded. nudge-argo (1) forces an immediate sync of the two
+      # apps that own them — re-triggering the sync if an earlier first-boot race
+      # already drove it to a terminally-failed state (Argo CD does NOT auto-retry a
+      # failed sync to the same revision; selfHeal only corrects drift after a
+      # successful one) — then (2) WAITS for the ClusterSecretStore to actually go
+      # Ready and force-syncs every ExternalSecret. ESO doesn't re-trigger an
+      # ExternalSecret when its store recovers, so without (2) the registry/log
+      # Secrets idle until their own refreshInterval (observed: ~14m of
+      # CreateContainerConfigError after the store was already Ready). The standing
+      # safety net is the in-cluster nudger CronJob
+      # (apl-values/_shared/manifest/argo-resync-nudger); this collapses the latency
+      # at the exact moment seeding unblocks them. Never fails the bootstrap.
       - name: Nudge Argo CD to converge secrets (post-seed)
         if: steps.ensure.outputs.available == 'true'
         continue-on-error: true

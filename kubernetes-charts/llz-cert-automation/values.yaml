@@ -90,7 +90,13 @@ images:
 # NOTE: remoteRef keys omit the mount prefix (cert-automation/..., NOT
 # secret/cert-automation/...) — the ClusterSecretStore is mounted at `secret/`.
 externalSecrets:
-  refreshInterval: 1h
+  # 1m, not 1h: on first boot the `openbao` ClusterSecretStore only goes Ready
+  # AFTER OpenBao is unsealed + seeded, and ESO does NOT re-trigger an
+  # ExternalSecret when its store recovers — the secret idles until its own
+  # refreshInterval, blocking cert-automation (and thus platform-app-ca / the
+  # convergence gate's phase1). 1m bounds that gap; the post-seed
+  # `llz ci nudge-argo` force-syncs immediately on top of it.
+  refreshInterval: 1m
   secretStore:
     kind: ClusterSecretStore
     name: openbao
