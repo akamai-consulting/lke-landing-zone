@@ -1125,93 +1125,13 @@ resource "null_resource" "unwedge_namespace_finalizers_on_destroy" {
       KUBECONFIG_B64 = self.triggers.kubeconfig_b64
     }
 
-    command = <<-EOT
-      set -uo pipefail
-
-      KUBECONFIG_FILE="$(mktemp)"
-      trap 'rm -f "$KUBECONFIG_FILE"' EXIT
-      printf '%s' "$KUBECONFIG_B64" | base64 -d > "$KUBECONFIG_FILE"
-      export KUBECONFIG="$KUBECONFIG_FILE"
-
-      # If the cluster is already gone (orphaned state, re-run after a prior
-      # destroy), there is nothing to unwedge — exit cleanly.
-      if ! kubectl get --raw='/healthz' --request-timeout=15s >/dev/null 2>&1; then
-        echo "Cluster API unreachable — skipping finalizer unwedge (already torn down)."
-        exit 0
-      fi
-
-      echo "=== Unwedge phase 1: stop Argo CD reconciliation ==="
-      # Scale the controllers to 0 BEFORE stripping finalizers; otherwise the
-      # app-of-apps re-syncs and re-applies resources-finalizer.argocd.
-      # argoproj.io to every Application we clear below. Best-effort: argocd
-      # may already be partially torn down.
-      kubectl -n argocd scale statefulset/argocd-application-controller --replicas=0 --request-timeout=30s 2>/dev/null || true
-      kubectl -n argocd scale deployment/argocd-applicationset-controller --replicas=0 --request-timeout=30s 2>/dev/null || true
-
-      echo "=== Unwedge phase 2: strip finalizers from Argo Applications + AppProjects ==="
-      # resources-finalizer.argocd.argoproj.io triggers a CASCADE prune via the
-      # controller we just scaled down — without the finalizer the CRs delete
-      # instantly and their managed children are reaped by the cluster delete.
-      # -A: app-of-apps may place child apps outside the argocd namespace.
-      for KIND in applications.argoproj.io appprojects.argoproj.io; do
-        while read -r NS NAME; do
-          [ -z "$NAME" ] && continue
-          kubectl patch "$KIND" "$NAME" -n "$NS" --type=merge \
-            -p '{"metadata":{"finalizers":[]}}' --request-timeout=30s 2>/dev/null \
-            && echo "  cleared finalizers on $KIND $NS/$NAME" || true
-        done < <(kubectl get "$KIND" -A \
-          -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' \
-          --request-timeout=30s 2>/dev/null)
-        kubectl delete "$KIND" -A --all --wait=false --request-timeout=30s 2>/dev/null || true
-      done
-
-      echo "=== Unwedge phase 3: delete stale aggregated APIServices ==="
-      # An APIService whose backing Service is gone reports Available=False and
-      # fails discovery for its group on EVERY namespace
-      # (NamespaceDeletionDiscoveryFailure). Only delete NON-core (aggregated)
-      # APIServices — those have .spec.service set — that are currently
-      # unavailable. Built-in groups (v1, apps, ...) have no .spec.service and
-      # are never touched.
-      kubectl get apiservices -o json --request-timeout=30s 2>/dev/null \
-        | jq -r '.items[]
-            | select(.spec.service != null)
-            | select(((.status.conditions // [])[] | select(.type == "Available") | .status) == "False")
-            | .metadata.name' \
-        | while read -r API; do
-            [ -z "$API" ] && continue
-            kubectl delete apiservice "$API" --wait=false --request-timeout=30s 2>/dev/null \
-              && echo "  deleted stale APIService $API" || true
-          done
-
-      echo "=== Unwedge phase 4: strip finalizers from operator-managed CRs that block namespace GC ==="
-      # Beyond Argo, the apl uninstall's --wait sits on namespaces that won't
-      # finalize because they still hold operator-managed CRs whose controller
-      # helm has already removed — the CR's finalizer has nothing left to
-      # process, so the namespace hangs in Terminating (NamespaceContentRemaining).
-      # CNPG (CloudNativePG) Postgres Clusters + Poolers — the Harbor/Keycloak/
-      # Gitea back ends, reconciled by the cnpg-system operator — are the
-      # observed offender: clusters.postgresql.cnpg.io / poolers.postgresql.
-      # cnpg.io carry cnpg.io finalizers. Strip them cluster-wide so the backing
-      # namespaces finalize and the uninstall completes instead of timing out.
-      # Mirrors the Argo phase above; CRD-existence-guarded so a cluster without
-      # CNPG is a clean no-op. Add other finalizer-bearing kinds here if a future
-      # destroy stalls on them.
-      for KIND in clusters.postgresql.cnpg.io poolers.postgresql.cnpg.io; do
-        # Skip kinds whose CRD isn't installed — avoids a noisy "the server
-        # doesn't have a resource type" error on clusters that never ran CNPG.
-        kubectl get crd "$KIND" --request-timeout=15s >/dev/null 2>&1 || continue
-        while read -r NS NAME; do
-          [ -z "$NAME" ] && continue
-          kubectl patch "$KIND" "$NAME" -n "$NS" --type=merge \
-            -p '{"metadata":{"finalizers":[]}}' --request-timeout=30s 2>/dev/null \
-            && echo "  cleared finalizers on $KIND $NS/$NAME" || true
-        done < <(kubectl get "$KIND" -A \
-          -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' \
-          --request-timeout=30s 2>/dev/null)
-      done
-
-      echo "Destroy unwedge complete — helm_release.apl uninstall and namespace GC should now proceed without a finalizer deadlock."
-    EOT
+    # The 4-phase unwedge state machine (healthz guard → scale down Argo → strip
+    # Argo finalizers + delete → delete stale aggregated APIServices → strip CNPG
+    # finalizers) is now `llz ci destroy-unwedge` (tools/cmd/llz/ci_destroy_unwedge.go):
+    # unit-tested Go driven through an injected kubectl seam, same best-effort/
+    # non-fatal semantics and per-phase rationale documented there. It reads the
+    # kubeconfig from $KUBECONFIG_B64 (above), never from argv.
+    command = "llz ci destroy-unwedge"
   }
 
   # Same hook as cleanup_platform_volumes_on_destroy: depends_on
