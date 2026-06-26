@@ -612,15 +612,7 @@ jobs:
       - name: Nudge Argo CD to converge secrets (post-seed)
         if: steps.ensure.outputs.available == 'true'
         continue-on-error: true
-        run: |
-          set -uo pipefail
-          for app in llz-secret-store platform-bootstrap; do
-            kubectl -n argocd annotate application "$app" \
-              argocd.argoproj.io/refresh=hard --overwrite || true
-            kubectl -n argocd patch application "$app" --type merge \
-              -p '{"operation":{"initiatedBy":{"username":"bootstrap-openbao"},"sync":{}}}' || true
-            echo "nudged $app"
-          done
+        run: llz ci nudge-argo
 
       # NOTE — the "Seed Gitea backup S3 credentials in OpenBao" step that
       # wrote secret/gitea/backup-s3 was removed in the apl-core anti-
@@ -651,18 +643,9 @@ jobs:
       - name: Extract standby CA cert
         id: secondary_ca
         if: env.HA_ROLE == 'standby'
-        run: |
-          set -euo pipefail
-          CA_B64=$(kubectl -n llz-openbao get secret openbao-tls \
-            -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
-          if [ -z "$CA_B64" ]; then
-            echo "::warning::openbao-tls Secret not found in standby cluster — CA not provisioned"
-            echo "ca_available=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "ca_b64=$CA_B64"     >> "$GITHUB_OUTPUT"
-          echo "ca_available=true"  >> "$GITHUB_OUTPUT"
-          echo "Standby CA cert extracted."
+        # Non-fatal: a standby whose openbao-tls isn't up yet just skips peer-CA
+        # provisioning (ca_available=false) rather than failing the bootstrap.
+        run: llz ci extract-openbao-ca
 
       # NOTE — the `Verify ExternalSecrets synced` step (and its backing
       # template-scripts/verify-externalsecrets.sh) was deleted in the convergence-
@@ -868,20 +851,9 @@ jobs:
 
       - name: Extract standby CA cert
         id: extract
-        run: |
-          set -euo pipefail
-          CA_B64=$(kubectl -n llz-openbao get secret openbao-tls \
-            -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
-          if [ -z "$CA_B64" ]; then
-            echo "::error::openbao-tls Secret not found in standby cluster — cannot extract CA"
-            echo "ca_available=false" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          # No ::add-mask:: — the CA cert is public material, and masking would
-          # empty this job output (see the note on the bootstrap job's twin step).
-          echo "ca_b64=$CA_B64"     >> "$GITHUB_OUTPUT"
-          echo "ca_available=true"  >> "$GITHUB_OUTPUT"
-          echo "Standby CA cert extracted."
+        # --required: this job exists solely to (re)provision the peer CA, so an
+        # absent openbao-tls is a hard error here (unlike the bootstrap job's twin).
+        run: llz ci extract-openbao-ca --required
 
       - name: Cleanup kubeconfig
         if: always()
