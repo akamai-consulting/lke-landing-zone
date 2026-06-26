@@ -119,20 +119,14 @@ namespaces:
     restricted: false
     labels:
       monitoring: enabled
-  # linode-volume-labeler — dual-owned with Terraform, which creates it pre-Argo
-  # for credential-injection ordering. This declaration exists so the Argo
-  # dry-run lint (kind cluster, no TF) sees the namespace before the labeler SA +
-  # NP + CronFob land; server-side apply makes TF's pre-existing namespace a
-  # no-op merge target. LABELS MUST MATCH TF's set exactly (cluster-bootstrap/
-  # main.tf ~line 1216) or SSA reports ownership conflicts — hence the explicit
-  # bootstrap label + restricted PSS WITHOUT a version pin (matching TF).
-  - name: llz-linode-volume-labeler
-    restricted: false
-    labels:
-      lke-landing-zone.akamai.io/managed-by-bootstrap: "true"
-      pod-security.kubernetes.io/enforce: restricted
-      pod-security.kubernetes.io/audit: restricted
-      pod-security.kubernetes.io/warn: restricted
+  # NOTE: llz-linode-volume-labeler is intentionally NOT listed here. It is owned
+  # solely by the volume-labeler tree in apl-values (components/volumeLabeler/
+  # .../namespace.yaml, under the platform-bootstrap Application). It used to be
+  # dual-owned with Terraform and pre-declared here for the Argo dry-run lint,
+  # but the namespace moved fully into Argo (the linode-api-token Secret now
+  # arrives via ESO, not TF injection), so this chart declaring it too produced a
+  # SharedResourceWarning ("part of applications platform-bootstrap and
+  # llz-cluster-foundation") that pinned platform-bootstrap OutOfSync.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NetworkPolicy knobs. apl-core's helmfile creates cert-manager/harbor/

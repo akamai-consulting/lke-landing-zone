@@ -17,7 +17,11 @@ type: application
 # 0.1.3: add cert-manager-allow-webhook-linode-ingress NP so the apiserver can
 #        reach the Linode DNS-01 webhook's :443 (else acme.slicen.me APIService
 #        stays Available=False and convergence hangs).
-version: 0.1.3
+# 0.1.4: drop the llz-linode-volume-labeler namespace from .namespaces — the
+#        volume-labeler tree in apl-values (platform-bootstrap) is its sole
+#        owner now, so declaring it here too raised a SharedResourceWarning that
+#        pinned platform-bootstrap OutOfSync.
+version: 0.1.4
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"
