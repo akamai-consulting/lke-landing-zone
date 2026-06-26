@@ -81,6 +81,13 @@ func BootstrapTFVars(env string, c Cluster) []Assign {
 	add("apl_values_env", hclStr(env))
 	add("cluster_name", hclStr(b.Name))
 	add("cluster_domain", hclStr(b.DomainSuffix))
+	// obj_cluster lets cluster-bootstrap derive the Loki/Harbor S3 bucket labels +
+	// endpoint as locals (mirroring the llz-object-storage naming) instead of
+	// reading the object-storage workspace's remote_state — dropping that
+	// cross-workspace coupling. Same source as object-storage/<env>.tfvars.
+	if c.ObjectStorage.Cluster != "" {
+		add("obj_cluster", hclStr(c.ObjectStorage.Cluster))
+	}
 	if b.AplChartVersion != "" {
 		add("apl_chart_version", hclStr(b.AplChartVersion))
 	}

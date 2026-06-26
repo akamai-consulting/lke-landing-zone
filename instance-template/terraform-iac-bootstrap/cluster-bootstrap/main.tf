@@ -52,20 +52,6 @@ data "terraform_remote_state" "cluster" {
   })
 }
 
-# Object-storage workspace state — applied BEFORE cluster-bootstrap (bootstrap
-# order: cluster → object-storage → cluster-bootstrap). Supplies the Loki S3
-# bucket labels + endpoint so apps.loki._rawValues can point Loki's chunk store
-# at object storage. (Harbor needs none of this here — its bucket/endpoint/region
-# arrive as REGISTRY_STORAGE_S3_* env vars via the harbor-registry-s3 ESO Secret.)
-data "terraform_remote_state" "object_storage" {
-  backend = "s3"
-  config = merge(local.remote_state_s3_defaults, {
-    bucket = var.tf_state_bucket
-    key    = "object-storage/${var.deployment}/terraform.tfstate"
-    region = "us-east-1"
-  })
-}
-
 # ── Akamai App Platform (apl-core) ────────────────────────────────────────────
 # Installs apl-core via its top-level Helm chart. The chart bootstraps the
 # apl-operator, which in turn drives the helmfile pipeline that installs ~40
@@ -141,13 +127,26 @@ locals {
   # infra-<region> LOKI_ADMIN_PASSWORD env secret.
   loki_admin_password_effective = var.loki_admin_password != "" ? var.loki_admin_password : random_password.loki_admin.result
 
-  # Object-store wiring (from the object-storage workspace). s3_endpoint is
-  # "https://<obj_cluster>.linodeobjects.com": Loki's chart wants the bare host
-  # for `s3.endpoint`; Harbor's registry wants the full URL for `regionendpoint`.
-  # `s3_region` is the OBJ cluster id (e.g. us-ord-1), used by both.
-  obj_s3_url    = data.terraform_remote_state.object_storage.outputs.s3_endpoint
-  loki_buckets  = data.terraform_remote_state.object_storage.outputs.bucket_names
-  harbor_bucket = data.terraform_remote_state.object_storage.outputs.harbor_registry_bucket
+  # Object-store wiring, derived from var.obj_cluster + var.deployment instead of a
+  # cross-workspace `terraform_remote_state` read of the object-storage workspace
+  # (dropping that coupling — object-storage no longer has to be applied first for
+  # cluster-bootstrap to plan). The bucket labels are deterministic: they mirror the
+  # llz-object-storage module's "${label_prefix}-<bucket>-${region_suffix}" naming,
+  # where label_prefix defaults to "platform" and region_suffix is the deployment
+  # (== var.deployment). obj_label_prefix MUST stay in lockstep with
+  # terraform-modules/llz-object-storage/variables.tf's label_prefix default.
+  #
+  # s3_endpoint is "https://<obj_cluster>.linodeobjects.com": Loki's chart wants the
+  # bare host for `s3.endpoint`; Harbor's registry wants the full URL for
+  # `regionendpoint`. `s3_region` is the OBJ cluster id (e.g. us-ord-1), used by both.
+  obj_label_prefix = "platform"
+  obj_s3_url       = "https://${var.obj_cluster}.linodeobjects.com"
+  loki_buckets = {
+    chunks = "${local.obj_label_prefix}-loki-chunks-${var.deployment}"
+    ruler  = "${local.obj_label_prefix}-loki-ruler-${var.deployment}"
+    admin  = "${local.obj_label_prefix}-loki-admin-${var.deployment}"
+  }
+  harbor_bucket = "${local.obj_label_prefix}-harbor-registry-${var.deployment}"
   s3_host       = replace(local.obj_s3_url, "https://", "")
   s3_region     = replace(local.s3_host, ".linodeobjects.com", "")
 

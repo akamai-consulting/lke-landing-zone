@@ -84,7 +84,7 @@ func TestBootstrapTFVars_Optionals(t *testing.T) {
 	for _, k := range []string{
 		"deployment", "apl_values_env", "cluster_name", "cluster_domain",
 		"apl_chart_version", "apl_values_repo_url", "apl_values_repo_revision",
-		"apl_values_repo_username", "apps_repo_revision",
+		"apl_values_repo_username", "apps_repo_revision", "obj_cluster",
 	} {
 		if _, ok := full[k]; !ok {
 			t.Errorf("BootstrapTFVars(full) missing %q", k)
@@ -93,11 +93,16 @@ func TestBootstrapTFVars_Optionals(t *testing.T) {
 	if full["deployment"] != `"prod"` {
 		t.Errorf("deployment = %q, want \"prod\"", full["deployment"])
 	}
+	// obj_cluster lets cluster-bootstrap derive the S3 wiring as locals instead of
+	// reading the object-storage remote_state; same source as object-storage tfvars.
+	if full["obj_cluster"] != `"us-ord-1"` {
+		t.Errorf("obj_cluster = %q, want \"us-ord-1\"", full["obj_cluster"])
+	}
 
 	var c Cluster
 	c.Bootstrap.Name, c.Bootstrap.DomainSuffix = "n", "d"
 	min := assignKeys(BootstrapTFVars("dev", c))
-	for _, k := range []string{"apl_chart_version", "apl_values_repo_url", "apps_repo_revision"} {
+	for _, k := range []string{"apl_chart_version", "apl_values_repo_url", "apps_repo_revision", "obj_cluster"} {
 		if _, ok := min[k]; ok {
 			t.Errorf("BootstrapTFVars(minimal) should omit %q", k)
 		}

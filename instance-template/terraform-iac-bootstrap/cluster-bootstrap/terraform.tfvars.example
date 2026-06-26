@@ -32,6 +32,16 @@ cluster_name = "platform-your-env"
 # issue subdomains under this. Use a per-env prefix so siblings don't collide.
 cluster_domain = "your-env.internal"
 
+# Linode Object Storage cluster id for this region (e.g. us-ord-1) — the SAME
+# value as object-storage/<env>.tfvars. cluster-bootstrap derives the Loki/Harbor
+# S3 bucket labels + endpoint from it instead of reading the object-storage
+# workspace's remote state.
+# MIGRATION NOTE: new requirement — instances upgrading the template must add this
+# (it was previously only needed in object-storage/<env>.tfvars and reached
+# cluster-bootstrap via terraform_remote_state). Spec instances get it from
+# `llz render` (spec.cluster.objectStorage.cluster).
+obj_cluster = "us-ord-1"
+
 # GitOps repo holding apl-values/ and manifest/ — apl-core's external values
 # store (the in-cluster Gitea is obsoleted). apl-core REQUIRES an HTTPS URL on a
 # publicly-reachable host. This points at the instance repo itself; apl-operator
