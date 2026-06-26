@@ -63,3 +63,61 @@ func TestExtractOpenbaoCAWiring(t *testing.T) {
 		t.Error("missing --required flag")
 	}
 }
+
+// withKubectlApply swaps the kubectlApplyFn seam, capturing the applied manifest.
+func withKubectlApply(t *testing.T) *string {
+	t.Helper()
+	var applied string
+	prev := kubectlApplyFn
+	kubectlApplyFn = func(manifest string) error { applied = manifest; return nil }
+	t.Cleanup(func() { kubectlApplyFn = prev })
+	return &applied
+}
+
+func TestRunCIProvisionPeerCA(t *testing.T) {
+	// "Y2VydA==" is base64 of "cert"; the applied Secret must carry that same
+	// base64 under data."ca.crt" (genericSecretManifest re-encodes the decoded PEM).
+	t.Setenv("CA_B64", "Y2VydA==")
+	applied := withKubectlApply(t)
+	if err := runCIProvisionPeerCA(globalOpts{}); err != nil {
+		t.Fatalf("provision-peer-ca: %v", err)
+	}
+	if !strings.Contains(*applied, "name: openbao-peer-tls") ||
+		!strings.Contains(*applied, "namespace: llz-openbao") ||
+		!strings.Contains(*applied, "ca.crt: Y2VydA==") {
+		t.Errorf("applied manifest missing expected fields:\n%s", *applied)
+	}
+}
+
+func TestRunCIProvisionPeerCAGuards(t *testing.T) {
+	t.Run("empty CA_B64 refuses", func(t *testing.T) {
+		t.Setenv("CA_B64", "")
+		applied := withKubectlApply(t)
+		if err := runCIProvisionPeerCA(globalOpts{}); err == nil {
+			t.Error("empty CA_B64 must error (refuse to provision an empty ca.crt)")
+		}
+		if *applied != "" {
+			t.Error("must not apply anything on empty CA_B64")
+		}
+	})
+	t.Run("invalid base64 errors", func(t *testing.T) {
+		t.Setenv("CA_B64", "!!not base64!!")
+		applied := withKubectlApply(t)
+		if err := runCIProvisionPeerCA(globalOpts{}); err == nil {
+			t.Error("invalid base64 must error")
+		}
+		if *applied != "" {
+			t.Error("must not apply anything on invalid base64")
+		}
+	})
+	t.Run("dry-run applies nothing", func(t *testing.T) {
+		t.Setenv("CA_B64", "Y2VydA==")
+		applied := withKubectlApply(t)
+		if err := runCIProvisionPeerCA(globalOpts{dryRun: true}); err != nil {
+			t.Fatal(err)
+		}
+		if *applied != "" {
+			t.Error("dry-run must not apply")
+		}
+	})
+}

@@ -10,6 +10,7 @@ package main
 // --required flag covers both and removes the copy.
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
@@ -60,4 +61,53 @@ func runCIExtractOpenbaoCA(required bool) error {
 	}
 	fmt.Println("Standby CA cert extracted.")
 	return appendGHAFile("GITHUB_OUTPUT", "ca_b64="+caB64, "ca_available=true")
+}
+
+// ── provision-peer-ca ───────────────────────────────────────────────────────
+// The consumer twin of extract-openbao-ca: the two byte-identical "Provision
+// openbao-peer-tls Secret" steps (one in the provision-peer-ca job after a
+// standby bootstrap, one in the standalone reprovision-ca job) differed only in
+// which job output fed $CA_B64, so one command covers both.
+
+func ciProvisionPeerCACmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "provision-peer-ca",
+		Short: "create the openbao-peer-tls Secret in the active peer cluster from $CA_B64",
+		Long: "Native port of the duplicated \"Provision openbao-peer-tls Secret\" steps.\n" +
+			"Reads the standby's CA cert from $CA_B64 (a base64 ca.crt extracted by\n" +
+			"extract-openbao-ca and passed across the job boundary), guards the empty\n" +
+			"handoff (a masked job output is redacted to empty — provisioning an empty\n" +
+			"ca.crt would silently break trust), and idempotently applies the\n" +
+			"openbao-peer-tls Secret in the llz-openbao namespace of the active peer\n" +
+			"(the runner's kubeconfig already points there). Establishes cross-cluster\n" +
+			"trust so standby operations can run with VAULT_SKIP_VERIFY=false.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return runCIProvisionPeerCA(gopts) },
+	}
+	return c
+}
+
+func runCIProvisionPeerCA(g globalOpts) error {
+	caB64 := strings.TrimSpace(os.Getenv("CA_B64"))
+	if caB64 == "" {
+		fmt.Fprintln(os.Stderr, "::error::CA_B64 is empty — refusing to provision an empty ca.crt")
+		return fmt.Errorf("CA_B64 is empty")
+	}
+	caPEM, err := base64.StdEncoding.DecodeString(caB64)
+	if err != nil {
+		return fmt.Errorf("CA_B64 is not valid base64: %w", err)
+	}
+	if g.dryRun {
+		fmt.Fprintf(os.Stderr, "→ (dry-run) would apply openbao-peer-tls Secret in %s\n", openbaoNS)
+		return nil
+	}
+	// genericSecretManifest base64-encodes the value, so passing the decoded PEM
+	// yields data."ca.crt" == the original CA_B64 — same Secret the bash produced
+	// via `kubectl create secret … --from-literal=ca.crt=$(base64 -d) | apply`.
+	if err := kubectlApplyFn(genericSecretManifest(openbaoNS, "openbao-peer-tls", "ca.crt", string(caPEM))); err != nil {
+		return fmt.Errorf("apply openbao-peer-tls: %w", err)
+	}
+	fmt.Println("openbao-peer-tls Secret provisioned in the active peer cluster.")
+	fmt.Println("Establishes cross-cluster trust (VAULT_SKIP_VERIFY=false) for standby operations.")
+	return nil
 }

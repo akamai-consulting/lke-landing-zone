@@ -235,6 +235,46 @@ func envPeerCmd() *cobra.Command {
 	}
 }
 
+// envResolveCmd is the combined role+peer probe the bootstrap-openbao "Resolve
+// role + peer" step ran as inline bash (two `llz env role`/`env peer` calls plus
+// a defensive case-guard against a stale binary printing help into
+// $GITHUB_OUTPUT). It emits role=/peer= to $GITHUB_OUTPUT in one call — peer is
+// empty for a standalone deployment (expected, not an error). The stale-binary
+// guard is unnecessary by construction: a binary too old to know this subcommand
+// fails cleanly with "unknown command" rather than corrupting the output file.
+func envResolveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "resolve <deployment>",
+		Short: "emit role= and peer= GitHub Actions outputs for a deployment (HA role + peer)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			tfDir, _, _ := instanceLayout()
+			deps, err := readTopology(tfDir)
+			if err != nil {
+				return err
+			}
+			return writeHAResolution(deps, args[0])
+		},
+	}
+}
+
+// writeHAResolution emits role=/peer= to $GITHUB_OUTPUT for one deployment
+// (peer empty for a standalone) and prints a human line. Split from envResolveCmd
+// so the output logic is unit-testable without an on-disk instance layout.
+func writeHAResolution(deps []deployment, name string) error {
+	d, ok := findDeployment(deps, name)
+	if !ok {
+		return fmt.Errorf("no such deployment %q (run `llz env list`)", name)
+	}
+	peer, _ := peerOf(deps, name) // empty for standalone — expected, not an error
+	shown := peer
+	if shown == "" {
+		shown = "<none>"
+	}
+	fmt.Printf("Resolved %s: role=%s peer=%s\n", name, d.haRole, shown)
+	return appendGHAFile("GITHUB_OUTPUT", "role="+d.haRole, "peer="+peer)
+}
+
 // haFilter narrows a deployment-name list per the `llz env list` flags.
 func haFilter(deps []deployment, haOnly bool, role string) []string {
 	switch {

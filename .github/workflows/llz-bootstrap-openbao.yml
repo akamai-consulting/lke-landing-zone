@@ -182,27 +182,11 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Resolve role + peer
         id: r
-        env:
-          REGION: ${{ inputs.region }}
-        run: |
-          set -euo pipefail
-          ROLE="$(llz env role "$REGION")"
-          # peer exits non-zero for a standalone deployment — empty is expected.
-          PEER="$(llz env peer "$REGION" 2>/dev/null || true)"
-          # Guard against a stale `llz` (a binary predating the role/peer
-          # subcommands exits 0 and prints multi-line help, which corrupts
-          # $GITHUB_OUTPUT with "Invalid format 'Usage:'"). A real role is a
-          # single bare word; reject anything else loudly.
-          case "$ROLE" in
-            active|standby|standalone) ;;
-            *)
-              echo "::error::llz env role returned an unexpected value (stale image?): ${ROLE}" >&2
-              exit 1
-              ;;
-          esac
-          echo "role=${ROLE}" >> "$GITHUB_OUTPUT"
-          echo "peer=${PEER}" >> "$GITHUB_OUTPUT"
-          echo "Resolved ${REGION}: role=${ROLE} peer=${PEER:-<none>}"
+        # Emits role=/peer= to $GITHUB_OUTPUT (peer empty for a standalone
+        # deployment). The former inline case-guard against a stale binary
+        # corrupting the output file is unnecessary now: an llz too old to know
+        # `env resolve` fails cleanly with "unknown command".
+        run: llz env resolve "$REGION"
 
   bootstrap:
     name: Bootstrap OpenBao (${{ inputs.region }})
@@ -778,19 +762,7 @@ jobs:
       - name: Provision openbao-peer-tls Secret in active peer cluster
         env:
           CA_B64: ${{ needs.bootstrap.outputs.ca_b64 }}
-        run: |
-          set -euo pipefail
-          # Guard against an empty handoff (e.g. a masked job output, which the
-          # runner redacts to empty) — an empty ca.crt would "provision" silently.
-          if [ -z "$CA_B64" ]; then
-            echo "::error::ca_b64 job output is empty — refusing to provision an empty ca.crt"
-            exit 1
-          fi
-          kubectl -n llz-openbao create secret generic openbao-peer-tls \
-            --from-literal=ca.crt="$(printf '%s' "$CA_B64" | base64 -d)" \
-            --dry-run=client -o yaml | kubectl apply -f -
-          echo "openbao-peer-tls Secret provisioned in the active peer cluster."
-          echo "Establishes cross-cluster trust (VAULT_SKIP_VERIFY=false) for standby operations."
+        run: llz ci provision-peer-ca
 
       - name: Cleanup kubeconfig
         if: always()
@@ -910,19 +882,7 @@ jobs:
       - name: Provision openbao-peer-tls Secret in active peer cluster
         env:
           CA_B64: ${{ needs.fetch-standby-ca.outputs.ca_b64 }}
-        run: |
-          set -euo pipefail
-          # Guard against an empty handoff (e.g. a masked job output, which the
-          # runner redacts to empty) — an empty ca.crt would "provision" silently.
-          if [ -z "$CA_B64" ]; then
-            echo "::error::ca_b64 job output is empty — refusing to provision an empty ca.crt"
-            exit 1
-          fi
-          kubectl -n llz-openbao create secret generic openbao-peer-tls \
-            --from-literal=ca.crt="$(printf '%s' "$CA_B64" | base64 -d)" \
-            --dry-run=client -o yaml | kubectl apply -f -
-          echo "openbao-peer-tls Secret provisioned in the active peer cluster."
-          echo "Establishes cross-cluster trust (VAULT_SKIP_VERIFY=false) for standby operations."
+        run: llz ci provision-peer-ca
 
       - name: Cleanup kubeconfig
         if: always()
