@@ -14,13 +14,25 @@ package main
 // The fiddly read-modify-write of the ACL address set lives, tested, in
 // internal/linode (ControlPlaneACL.WithIP/WithoutIP); this file is the
 // orchestration: token + cluster resolution, IP detection, the state file, and
-// the open-path PUT retry that absorbs a racing writer.
+// the read-modify-write retry that absorbs a racing writer.
+//
+// CONCURRENCY: the control-plane ACL is a single PUT-replaces-the-whole-list
+// resource with no server-side compare-and-swap. Two jobs opening/revoking THIS
+// cluster's ACL in parallel (e.g. the converge gate running alongside the Harbor
+// provisioning job) each do GET→modify→PUT; two *successful* PUTs silently
+// last-writer-wins, so one runner's IP can be dropped (its kubectl is then
+// refused) or a revoke can be undone (a dead runner IP left allowed). The PUT
+// here is therefore VERIFY-AFTER-WRITE: re-read the ACL and confirm our mutation
+// actually persisted; if a racer clobbered it, re-read their current list and
+// retry (with jitter, to break lockstep). This converges for the handful of
+// concurrent writers a bootstrap ever has without needing server-side CAS.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -61,8 +73,19 @@ type clusterRef struct {
 
 // Seams (overridden in tests).
 var (
-	newACLClient  = func(token string) aclClient { return linode.NewClient(token, 30*time.Second) }
-	aclRetryDelay = 3 * time.Second
+	newACLClient   = func(token string) aclClient { return linode.NewClient(token, 30*time.Second) }
+	aclRetryDelay  = 3 * time.Second
+	aclMaxAttempts = 4
+	// aclSleep backs off between ACL read-modify-write retries. The jitter
+	// (up to +50% of base) breaks lockstep between two runners retrying in
+	// parallel so they don't keep clobbering each other on the same cadence.
+	// base <= 0 (tests) sleeps not at all and never touches the RNG.
+	aclSleep = func(base time.Duration) {
+		if base <= 0 {
+			return
+		}
+		time.Sleep(base + time.Duration(rand.Int63n(int64(base/2)+1)))
+	}
 )
 
 type runnerACLOpts struct {
@@ -155,46 +178,61 @@ func runnerACLOpen(ctx context.Context, client aclClient, o runnerACLOpts) error
 	}
 	fmt.Printf("runner-acl(open): runner egress IP %s, cluster %d.\n", ip, cid)
 
-	acl, err := client.GetControlPlaneACL(ctx, cid)
-	if err != nil {
-		return err
-	}
-	if !acl.Enabled {
-		fmt.Printf("runner-acl(open): control-plane ACL is disabled (open to all) — no change needed.\n")
-		return writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: false})
-	}
-	if acl.ContainsIP(ip) {
-		fmt.Printf("runner-acl(open): %s already in cluster %d ACL — no change.\n", ip, cid)
-		// Still (re)lease it: the IP may be present only because a prior reconcile
-		// preserved an existing lease, which must be refreshed to keep it.
-		if o.configMap {
-			registerRunnerACLIP(ip)
+	// Read-modify-write with verify-after-write (see the CONCURRENCY note at the
+	// top of the file): each attempt re-reads the CURRENT ACL — so a racing
+	// writer's additions are preserved — adds our IP, PUTs, then re-reads to
+	// confirm our IP actually persisted before declaring success.
+	var lastErr error
+	for attempt := 1; attempt <= aclMaxAttempts; attempt++ {
+		acl, err := client.GetControlPlaneACL(ctx, cid)
+		if err != nil {
+			lastErr = err
+			fmt.Fprintf(os.Stderr, "::warning::runner-acl(open): GET attempt %d failed (%v); retrying.\n", attempt, err)
+			aclSleep(aclRetryDelay)
+			continue
 		}
-		return writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: false})
-	}
-
-	// Read-modify-write with a small retry to absorb a racing writer: on a failed
-	// PUT, re-read the ACL and re-add before retrying.
-	var putErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		next, _ := acl.WithIP(ip)
-		if putErr = client.PutControlPlaneACL(ctx, cid, next); putErr == nil {
-			fmt.Printf("runner-acl(open): added %s to cluster %d control-plane ACL.\n", ip, cid)
-			// Lease it so the internal-CIDR firewall controller's next reconcile
-			// preserves the IP instead of replacing it out from under a long-running
-			// kubectl job.
+		if !acl.Enabled {
+			fmt.Printf("runner-acl(open): control-plane ACL is disabled (open to all) — no change needed.\n")
+			return writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: false})
+		}
+		if acl.ContainsIP(ip) {
+			// Present already — either a prior reconcile preserved a lease or a
+			// concurrent open added us. Either way it's the desired end-state, and
+			// THIS invocation made no change (Modified=false), so revoke won't
+			// remove an IP this job didn't add.
+			fmt.Printf("runner-acl(open): %s present in cluster %d ACL — no change.\n", ip, cid)
+			// Still (re)lease it: the IP may be present only because a prior reconcile
+			// preserved an existing lease, which must be refreshed to keep it.
 			if o.configMap {
 				registerRunnerACLIP(ip)
 			}
-			return writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: true})
+			return writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: false})
 		}
-		fmt.Fprintf(os.Stderr, "::warning::runner-acl(open): PUT attempt %d failed (%v); re-reading and retrying.\n", attempt, putErr)
-		time.Sleep(aclRetryDelay)
-		if reread, gerr := client.GetControlPlaneACL(ctx, cid); gerr == nil {
-			acl = reread
+
+		next, _ := acl.WithIP(ip)
+		if err := client.PutControlPlaneACL(ctx, cid, next); err != nil {
+			lastErr = err
+			fmt.Fprintf(os.Stderr, "::warning::runner-acl(open): PUT attempt %d failed (%v); re-reading and retrying.\n", attempt, err)
+			aclSleep(aclRetryDelay)
+			continue
 		}
+		// Verify-after-write: confirm a concurrent writer didn't clobber our add.
+		if verify, gerr := client.GetControlPlaneACL(ctx, cid); gerr == nil && !verify.ContainsIP(ip) {
+			lastErr = fmt.Errorf("ACL did not retain %s after PUT (racing writer)", ip)
+			fmt.Fprintf(os.Stderr, "::warning::runner-acl(open): %s missing after PUT attempt %d (racing writer clobbered it); retrying.\n", ip, attempt)
+			aclSleep(aclRetryDelay)
+			continue
+		}
+		fmt.Printf("runner-acl(open): added %s to cluster %d control-plane ACL.\n", ip, cid)
+		// Lease it so the internal-CIDR firewall controller's next reconcile
+		// preserves the IP instead of replacing it out from under a long-running
+		// kubectl job.
+		if o.configMap {
+			registerRunnerACLIP(ip)
+		}
+		return writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: true})
 	}
-	return fmt.Errorf("failed to add %s to cluster %d control-plane ACL after retries: %w", ip, cid, putErr)
+	return fmt.Errorf("failed to add %s to cluster %d control-plane ACL after %d attempts: %w", ip, cid, aclMaxAttempts, lastErr)
 }
 
 func runnerACLRevoke(ctx context.Context, client aclClient, o runnerACLOpts) error {
@@ -221,24 +259,50 @@ func runnerACLRevoke(ctx context.Context, client aclClient, o runnerACLOpts) err
 		return fmt.Errorf("state file has a non-numeric cluster_id %q: %w", st.ClusterID, err)
 	}
 
-	acl, err := client.GetControlPlaneACL(ctx, cid)
-	if err != nil {
-		// A read failure must not strand the state file — surface a warning and
-		// leave it so a later revoke can retry; matches the action's tolerance.
-		fmt.Fprintf(os.Stderr, "::warning::runner-acl(revoke): GET ACL for cluster %d failed (%v); %s may persist — prune manually.\n", cid, err, st.IP)
-		return nil
-	}
-	next, changed := acl.WithoutIP(st.IP)
-	if !changed {
-		fmt.Printf("runner-acl(revoke): %s already absent from cluster %d ACL — no change.\n", st.IP, cid)
+	// Read-modify-write with verify-after-write, mirroring open: each attempt
+	// re-reads the CURRENT ACL (preserving a racer's concurrent additions),
+	// removes our IP, PUTs, then confirms our IP is actually gone — a racer that
+	// PUT a stale list could otherwise re-introduce it. Revoke stays TOLERANT:
+	// it never returns a hard error (it runs under `if: always()`, so a non-nil
+	// return would fail an otherwise-green job); on exhausted retries it warns
+	// and leaves the state file so a later revoke can retry.
+	for attempt := 1; attempt <= aclMaxAttempts; attempt++ {
+		acl, err := client.GetControlPlaneACL(ctx, cid)
+		if err != nil {
+			if attempt == aclMaxAttempts {
+				fmt.Fprintf(os.Stderr, "::warning::runner-acl(revoke): GET ACL for cluster %d failed (%v); %s may persist — prune manually.\n", cid, err, st.IP)
+				return nil
+			}
+			aclSleep(aclRetryDelay)
+			continue
+		}
+		next, changed := acl.WithoutIP(st.IP)
+		if !changed {
+			fmt.Printf("runner-acl(revoke): %s absent from cluster %d ACL — no change.\n", st.IP, cid)
+			return removeRunnerACLState(o.region)
+		}
+		if err := client.PutControlPlaneACL(ctx, cid, next); err != nil {
+			if attempt == aclMaxAttempts {
+				fmt.Fprintf(os.Stderr, "::warning::runner-acl(revoke): PUT ACL for cluster %d failed (%v); %s may still be allowed — prune manually.\n", cid, err, st.IP)
+				return nil
+			}
+			aclSleep(aclRetryDelay)
+			continue
+		}
+		// Verify-after-write: confirm a concurrent writer didn't re-add our IP.
+		if verify, gerr := client.GetControlPlaneACL(ctx, cid); gerr == nil && verify.ContainsIP(st.IP) {
+			if attempt == aclMaxAttempts {
+				fmt.Fprintf(os.Stderr, "::warning::runner-acl(revoke): %s still present after PUT for cluster %d (racing writer re-added it); may persist — prune manually.\n", st.IP, cid)
+				return nil
+			}
+			fmt.Fprintf(os.Stderr, "::warning::runner-acl(revoke): %s reappeared after PUT attempt %d (racing writer); retrying.\n", st.IP, attempt)
+			aclSleep(aclRetryDelay)
+			continue
+		}
+		fmt.Printf("runner-acl(revoke): removed %s from cluster %d control-plane ACL.\n", st.IP, cid)
 		return removeRunnerACLState(o.region)
 	}
-	if err := client.PutControlPlaneACL(ctx, cid, next); err != nil {
-		fmt.Fprintf(os.Stderr, "::warning::runner-acl(revoke): PUT ACL for cluster %d failed (%v); %s may still be allowed — prune manually.\n", cid, err, st.IP)
-		return nil
-	}
-	fmt.Printf("runner-acl(revoke): removed %s from cluster %d control-plane ACL.\n", st.IP, cid)
-	return removeRunnerACLState(o.region)
+	return nil
 }
 
 // resolveClusterID returns the target cluster's numeric ID from r.clusterID, else
