@@ -932,11 +932,11 @@ jobs:
       # convention for non-secret config like TF_IMAGE, HARBOR_URL, etc.) or as
       # a secret. Variable wins if both are present.
       TF_VAR_apps_repo_revision: ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
-      # Unlike the other destroy-path TF_VARs above, this one IS consumed
-      # at destroy time: null_resource.cleanup_platform_volumes_on_destroy's
-      # provisioner hits the Linode API to sweep Volumes tagged block-storage
-      # left unattached after PVC reap. Must be a valid token; otherwise the
-      # destroy succeeds but orphans accumulate against account quota.
+      # var.linode_token is now vestigial at destroy (the volume sweep moved to the
+      # DESTROY Cluster job's `llz ci reap-volumes`, and the destroy-time
+      # null_resources that read it were relocated to CI steps). Wired for
+      # back-compat; an empty value is harmless. The relocated unwedge step gets its
+      # own LINODE_TOKEN from secrets.LINODE_API_TOKEN.
       TF_VAR_linode_token:    ${{ secrets.LINODE_API_TOKEN }}
       # Match the destroy job: gate data.kubernetes_service.coredns off on the
       # teardown path (apply-only read; would time out against the dying cluster).
@@ -1020,11 +1020,11 @@ jobs:
       # convention for non-secret config like TF_IMAGE, HARBOR_URL, etc.) or as
       # a secret. Variable wins if both are present.
       TF_VAR_apps_repo_revision: ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
-      # Unlike the other destroy-path TF_VARs above, this one IS consumed
-      # at destroy time: null_resource.cleanup_platform_volumes_on_destroy's
-      # provisioner hits the Linode API to sweep Volumes tagged block-storage
-      # left unattached after PVC reap. Must be a valid token; otherwise the
-      # destroy succeeds but orphans accumulate against account quota.
+      # var.linode_token is now vestigial at destroy (the volume sweep moved to the
+      # DESTROY Cluster job's `llz ci reap-volumes`, and the destroy-time
+      # null_resources that read it were relocated to CI steps). Wired for
+      # back-compat; an empty value is harmless. The relocated unwedge step gets its
+      # own LINODE_TOKEN from secrets.LINODE_API_TOKEN.
       TF_VAR_linode_token:    ${{ secrets.LINODE_API_TOKEN }}
       # Teardown path: gate data.kubernetes_service.coredns off so the destroy's
       # `terraform plan -destroy` (refresh on) doesn't read the cluster API while
@@ -1100,6 +1100,29 @@ jobs:
           linode-token:    ${{ secrets.LINODE_API_TOKEN }}
           region:          ${{ env.REGION }}
           fail-on-missing: 'false'
+
+      # Clear the Argo/discovery/CNPG finalizer deadlocks while the cluster is
+      # still reachable, relocated from
+      # null_resource.unwedge_namespace_finalizers_on_destroy. --region resolves the
+      # cluster kubeconfig by its cluster/<region>.tfvars label via the Linode API
+      # (no extra terraform init). Best-effort: continue-on-error so an already-gone
+      # cluster (CASE B) or any resolution failure never blocks the teardown — the
+      # downstream DESTROY Cluster job reaps every in-cluster resource regardless.
+      - name: Unwedge namespace finalizers before destroy
+        continue-on-error: true
+        working-directory: terraform-iac-bootstrap/cluster
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci destroy-unwedge --region "$REGION"
+
+      # Delete the cluster-scoped OpenBao/Harbor GH env secrets, relocated from
+      # null_resource.clear_openbao_secrets_on_destroy, so a destroyed cluster's
+      # stale secrets (revoked root token, unseal keys, Harbor creds) can't poison
+      # the next bootstrap. Best-effort per-secret; an unset GH_TOKEN is a no-op.
+      - name: Clear cluster-scoped OpenBao/Harbor env secrets
+        env:
+          GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+        run: llz ci clear-cluster-secrets --env "infra-${REGION}"
 
       - name: Terraform destroy — cluster-bootstrap
         # Fails visibly if the cluster is unreachable WHILE cluster-backed

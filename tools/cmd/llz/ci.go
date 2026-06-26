@@ -103,7 +103,8 @@ func ciCmd() *cobra.Command {
 	// main.tf): the apl_pipeline_ready readiness gate, the kyverno_* policy apply
 	// (readiness poll + apply + webhook-race soft-fail + retrofit kick), and the
 	// destroy-time finalizer-deadlock unwedge.
-	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(), ciDestroyUnwedgeCmd())
+	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(), ciDestroyUnwedgeCmd(),
+		ciClearClusterSecretsCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(ciAssertImageFreshCmd())

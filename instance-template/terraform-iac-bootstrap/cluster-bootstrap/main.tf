@@ -993,243 +993,40 @@ resource "kubectl_manifest" "app_secret_store_application" {
 # Argo's selfHeal + the PostSync hook re-running on the next sync put
 # us back to "one default, and it's ours". TF no longer needs to know.
 
-# ── Destroy-time orphan-Volume cleanup (now a no-op — see below) ──────────────
-# Reaping orphaned Linode Block Storage Volumes on destroy keeps a destroyed
-# cluster's Volumes from counting against the account-wide service quota — the
-# failure mode that stalled gitea PVCs on the next bootstrap and silently
-# blocked Argo CD's install.
+# ── Destroy-time cleanup relocated from TF to the CI destroy job ──────────────
+# Three destroy-time `null_resource` provisioners used to run here: an
+# orphan-Volume sweep (already a no-op — the real sweep is the DESTROY Cluster
+# job's `llz ci reap-volumes`), the namespace-finalizer unwedge, and the
+# OpenBao/Harbor GH-env-secret cleanup. They are now explicit steps in
+# .github/workflows/llz-terraform.yml's destroy-cluster-bootstrap job
+# (`llz ci destroy-unwedge --region` and `llz ci clear-cluster-secrets`), so the
+# logic is unit-tested Go rather than inline-bash local-exec heredocs and TF
+# holds no destroy-time provisioners that could fire against a live cluster.
 #
-# That sweep MOVED to the DESTROY Cluster job
-# (.github/workflows/terraform.yml → "Sweep orphaned Block Storage Volumes"),
-# which runs AFTER the LKE nodes are deleted — the only point at which the
-# pvc-* Volumes are unattached and therefore actually deletable. It reuses
-# `llz ci reap-volumes` (region-scoped, unattached-only)
-# and catches ALL pvc-* Volumes regardless of reclaim policy (Retain AND
-# Delete). Sweeping HERE was structurally useless: this provisioner runs while
-# the nodes are still alive, so every Volume is still attached
-# (linode_id != null), the unattached-only filter deleted nothing, and the
-# old body burned ~240s on every destroy (a 180s `kubectl delete pvc -A` that
-# can never complete while StatefulSet pods still mount the PVCs, plus a 60s
-# settle window).
-#
-# This is intentionally a no-op resource, NOT a removed one. Its destroy-time
-# provisioner and triggers must stay byte-stable so TF never plans a
-# replacement: a replacement — or removing the resource — risks firing a
-# destroy-time provisioner during a normal `apply` against a LIVE cluster, and
-# the body this once held (`kubectl delete pvc --all -A`) would wipe every PVC
-# on a running cluster. Only the command text was changed, which produces no
-# plan diff and runs only on a real future destroy. The triggers below are now
-# vestigial (the no-op references none of them) but retained for that reason.
-resource "null_resource" "cleanup_platform_volumes_on_destroy" {
-  triggers = {
-    # base64 so the multiline kubeconfig survives the trigger map round-trip
-    # and re-decodes cleanly inside the bash heredoc.
-    kubeconfig_b64 = base64encode(local.kubeconfig_raw)
-    linode_token   = var.linode_token
-    # Tag we filter on. Hardcoded to match the volume-tags parameter in
-    # apl-values/_shared/manifest/foundation/storageclass.yaml — keep in sync
-    # if that ever changes.
-    volume_tag = "block-storage"
+# `removed` blocks (with `lifecycle { destroy = false }`) drop the resources from
+# any existing state WITHOUT running their destroy provisioners — the safe way to
+# retire a resource carrying a `when = destroy` provisioner. For a fresh instance
+# with no prior state they are harmless no-ops; they can be deleted once every
+# deployment's state has reconciled past this change.
+removed {
+  from = null_resource.cleanup_platform_volumes_on_destroy
+  lifecycle {
+    destroy = false
   }
-
-  provisioner "local-exec" {
-    when        = destroy
-    interpreter = ["bash", "-c"]
-    command     = <<-EOT
-      set -uo pipefail
-
-      # No-op: the authoritative orphan-Volume sweep now runs in the DESTROY
-      # Cluster job (.github/workflows/terraform.yml → "Sweep orphaned Block
-      # Storage Volumes"), AFTER the LKE nodes are deleted and the Volumes
-      # detach — the only window in which the unattached-only filter can match
-      # anything. See the resource header comment for why this stays a no-op
-      # instead of being removed (replacement/removal could fire a destroy
-      # provisioner during a live `apply`).
-      echo "orphan-Volume cleanup moved to the DESTROY Cluster job's post-node-delete sweep (llz ci reap-volumes) — nothing to do here."
-    EOT
-  }
-
-  # depends_on ensures this resource is created after the cluster is
-  # reachable and after apl-core has been installed; on destroy TF reverses
-  # the order, so this resource's destroy-time provisioner runs before
-  # helm_release.apl is uninstalled — i.e. while the cluster is still up and
-  # serving the kubeconfig.
-  depends_on = [helm_release.apl]
 }
 
-# ── Unwedge namespace finalization on destroy ───────────────────────────────
-# `helm_release.apl` has `wait = true`, so its uninstall blocks until the
-# release's resources (incl. namespaces) actually delete. Two things observed
-# make that wait run out the full `timeout` and then ERROR:
-#
-#   1. Argo CD deadlock. apl-core installs Argo CD, which creates ~60+
-#      Applications + AppProjects, each carrying `resources-finalizer.
-#      argocd.argoproj.io`. helm uninstall removes the argocd controller, so
-#      nothing is left to process those finalizers — the CRs are immortal and
-#      the `argocd` namespace never finalizes (NamespaceContentRemaining /
-#      NamespaceFinalizersRemaining stay True forever).
-#   2. Broken aggregated discovery. A stale APIService whose backing Service
-#      is gone (e.g. the cert-manager-webhook-linode ACME solver APIService)
-#      reports Available=False, which fails
-#      discovery for that group on EVERY namespace
-#      (NamespaceDeletionDiscoveryFailure=True) and stalls finalization
-#      cluster-wide.
-#   3. Operator-managed CRs left holding finalizers. helm removes an
-#      operator's Deployment, but the CRs it managed still carry that
-#      operator's finalizer — with nothing left to process it, the CR is
-#      immortal and its namespace never finalizes
-#      (NamespaceContentRemaining). Observed: CNPG (CloudNativePG) Postgres
-#      `Cluster`/`Pooler` CRs (the Harbor/Keycloak/Gitea back ends) carry
-#      cnpg.io finalizers; once the cnpg-system operator is gone the
-#      cnpg-system / harbor / keycloak / gitea namespaces hang in
-#      Terminating and helm's apl uninstall --wait sits there until the
-#      600s timeout, then ERRORs.
-#
-# This destroy-time provisioner runs BEFORE helm uninstalls apl (it
-# depends_on helm_release.apl, so TF tears it down first, while the cluster
-# is still serving the kubeconfig) and proactively clears both wedges so the
-# uninstall + namespace GC complete quickly instead of timing out. Everything
-# here is best-effort and non-fatal: if the cluster is already unreachable, or
-# a call fails, we continue — the subsequent DESTROY Cluster job deletes the
-# LKE cluster and reaps all of this regardless. The value is a clean, fast
-# `terraform destroy` instead of a 10-15m hang that ends in an error.
-resource "null_resource" "unwedge_namespace_finalizers_on_destroy" {
-  triggers = {
-    # base64 so the multiline kubeconfig survives the trigger map round-trip
-    # and re-decodes cleanly inside the bash heredoc (same as the volume
-    # cleanup resource above).
-    kubeconfig_b64 = base64encode(local.kubeconfig_raw)
+removed {
+  from = null_resource.unwedge_namespace_finalizers_on_destroy
+  lifecycle {
+    destroy = false
   }
-
-  provisioner "local-exec" {
-    when        = destroy
-    interpreter = ["bash", "-c"]
-
-    # Pass the kubeconfig through the environment, NOT interpolated into the
-    # command string. Terraform echoes the rendered `command` to the log (the
-    # "(local-exec): Executing: [\"bash\" \"-c\" ...]" line) but NEVER the
-    # `environment` block — so inlining ${self.triggers.kubeconfig_b64} into the
-    # command, as this once did, printed the full lke-admin kubeconfig
-    # (including a live bearer token) in plaintext on every destroy. Referencing
-    # $KUBECONFIG_B64 keeps the secret out of the logged command.
-    environment = {
-      KUBECONFIG_B64 = self.triggers.kubeconfig_b64
-    }
-
-    # The 4-phase unwedge state machine (healthz guard → scale down Argo → strip
-    # Argo finalizers + delete → delete stale aggregated APIServices → strip CNPG
-    # finalizers) is now `llz ci destroy-unwedge` (tools/cmd/llz/ci_destroy_unwedge.go):
-    # unit-tested Go driven through an injected kubectl seam, same best-effort/
-    # non-fatal semantics and per-phase rationale documented there. It reads the
-    # kubeconfig from $KUBECONFIG_B64 (above), never from argv.
-    command = "llz ci destroy-unwedge"
-  }
-
-  # Same hook as cleanup_platform_volumes_on_destroy: depends_on
-  # helm_release.apl so TF runs this destroy-time provisioner BEFORE the helm
-  # uninstall, while the kubeconfig still works.
-  depends_on = [helm_release.apl]
 }
 
-# ── Clear cluster-scoped GH env secrets on destroy ──────────────────────────
-# After a cluster destroy, the GH env secrets bound to the previous OpenBao /
-# Harbor instances are not just stale — they're actively harmful on the next
-# bootstrap. Concretely observed: the previous
-# run's "Revoke root token" if:always() step revoked OPENBAO_ROOT_TOKEN, the
-# next run's "Configure OpenBao" loaded the now-invalid token, lookup-self
-# returned 403, the regen step skipped on a stale gate (since fixed), and the
-# bootstrap was stuck. Even after the regen-gate fix, the
-# unseal keys and Harbor creds are still bound to a destroyed cluster — on
-# next apply the Initialize step would generate new ones (overwriting the
-# stale values) but the brief window between apply-time secret-rewrite and
-# the next run leaves the env in a confusing state.
-#
-# Simpler model: tear down the secrets when their backing cluster is torn
-# down. Each fresh apply re-seeds whatever's needed via Initialize +
-# Configure flows in bootstrap-openbao.yml.
-#
-# Token requirement: `repo` + `secrets:write` scope on this repo. Same PAT
-# used by bootstrap-openbao.yml's seed steps (OPENBAO_SECRETS_WRITE_TOKEN).
-# If the var is empty (default), the provisioner is a no-op and the operator
-# clears the secrets manually.
-resource "null_resource" "clear_openbao_secrets_on_destroy" {
-  triggers = {
-    # Trigger KEY stays `region` (referenced as self.triggers.region below and
-    # baked into existing state) — only the source variable was renamed to
-    # `deployment`. The value is unchanged.
-    region              = var.deployment
-    secrets_write_token = var.openbao_secrets_write_token
-    # AppRole GH-secret suffix this cluster owns: empty for active/standalone
-    # (base name), "_STANDBY" for the standby peer — mirrors the role branch in
-    # bootstrap-openbao.yml's secret-id seed so destroy clears the right name.
-    # ha_role is declared once in cluster/<deployment>.tfvars and read here via
-    # the cluster workspace's remote state. try() guards the empty-outputs case
-    # (cluster workspace already destroyed) — a bare reference hard-fails even
-    # `plan -destroy`; see the RESILIENCE note in providers.tf. On a live
-    # cluster try() resolves to the real value, so the trigger stays byte-stable.
-    approle_secret_suffix = try(data.terraform_remote_state.cluster.outputs.ha_role, "") == "standby" ? "_STANDBY" : ""
+removed {
+  from = null_resource.clear_openbao_secrets_on_destroy
+  lifecycle {
+    destroy = false
   }
-
-  provisioner "local-exec" {
-    when        = destroy
-    interpreter = ["bash", "-c"]
-
-    # secrets_write_token is a secrets:write PAT — pass it via the environment,
-    # never interpolated into the command. Terraform echoes the rendered command
-    # to the log but NOT the environment block, so inlining the token here would
-    # print it in plaintext on every destroy (same leak class as the unwedge
-    # kubeconfig). region is not sensitive and stays inline.
-    environment = {
-      GH_SECRETS_WRITE_TOKEN = self.triggers.secrets_write_token
-    }
-
-    command = <<-EOT
-      set -uo pipefail
-
-      if [ -z "$GH_SECRETS_WRITE_TOKEN" ]; then
-        echo "::warning::openbao_secrets_write_token not set — skipping GH env-secret cleanup. After this destroy, manually clear: gh secret delete OPENBAO_ROOT_TOKEN OPENBAO_UNSEAL_KEY_1 OPENBAO_UNSEAL_KEY_2 OPENBAO_UNSEAL_KEY_3 OPENBAO_APPROLE_SECRET_ID${self.triggers.approle_secret_suffix} HARBOR_ROBOT_NAME HARBOR_PASSWORD --env infra-${self.triggers.region}"
-        exit 0
-      fi
-
-      # github.com is the default host, so GH_TOKEN alone authenticates.
-      export GH_TOKEN="$GH_SECRETS_WRITE_TOKEN"
-      ENV_NAME="infra-${self.triggers.region}"
-
-      # Cluster-scoped GH env secrets — all bound to the OpenBao/Harbor that
-      # existed in THIS cluster. Anything not on this list is operator-shared
-      # (LINODE_API_TOKEN, GITHUB_TOKEN, APL_VALUES_REPO_TOKEN, TF_STATE_*,
-      # OPENBAO_SECRETS_WRITE_TOKEN itself, etc.) and must NOT be deleted.
-      SECRETS=(
-        OPENBAO_ROOT_TOKEN
-        OPENBAO_UNSEAL_KEY_1
-        OPENBAO_UNSEAL_KEY_2
-        OPENBAO_UNSEAL_KEY_3
-        OPENBAO_APPROLE_SECRET_ID${self.triggers.approle_secret_suffix}
-        HARBOR_ROBOT_NAME
-        HARBOR_PASSWORD
-      )
-
-      for SECRET in "$${SECRETS[@]}"; do
-        # `gh secret delete` returns non-zero (HTTP 404) when the secret
-        # doesn't exist — treat that as a no-op, NOT a destroy failure.
-        # Any other error (network, auth, scope) we surface to the operator
-        # but still proceed: the cluster IS being destroyed, blocking the
-        # whole destroy on a secrets-API hiccup is disproportionate.
-        if gh secret delete "$SECRET" --env "$ENV_NAME" 2>/dev/null; then
-          echo "Deleted GH env secret $ENV_NAME / $SECRET"
-        else
-          echo "::warning::Could not delete $ENV_NAME / $SECRET (already absent, or token lacks scope). Verify via: gh secret list --env $ENV_NAME"
-        fi
-      done
-
-      echo "OpenBao/Harbor GH env-secret cleanup complete for $ENV_NAME."
-    EOT
-  }
-
-  # No `depends_on` — this resource has nothing to create. The destroy
-  # provisioner is the entire payload, and it doesn't need any other
-  # cluster-bootstrap resource to be present for `gh secret delete` to work
-  # (GH API is independent of the cluster's existence).
 }
 
 # ── Linode Volume relabeler — fully Argo-owned (no TF→kube crossing) ─────────
