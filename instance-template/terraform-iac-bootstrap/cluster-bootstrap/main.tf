@@ -505,139 +505,31 @@ resource "kubectl_manifest" "argocd_namespace" {
 #   sequentially over 10-15 minutes. Everything TF does after helm_release.apl
 #   returns races that pipeline.
 #
-# WHAT WE WAIT FOR — and WHY each is a "real readiness" signal (not just
-# "CRD present" or "Deployment created"):
+# `llz ci wait-apl-pipeline` (tools/cmd/llz/ci_wait_apl_pipeline.go) blocks until
+# the three platform prerequisites are really SERVING — Argo CD application-
+# controller (readyReplicas), the Kyverno admission controller (Available), and
+# the cert-manager webhook (Available) — each gated on real readiness, not mere
+# CRD-Established (a CRD is Established ~60-90s before its controller serves). It
+# FAILS LOUD on a timeout (the convergence contract rejects soft-fail-and-
+# continue, which is how bootstraps declare success while half-broken) and dumps
+# apl-operator pods + logs when a resource never appears. The per-stage rationale,
+# the StatefulSet-has-no-Ready-condition quirk, and the deliberately-omitted ESO
+# and gitea stages are all documented in that command.
 #
-#   1. argocd-application-controller StatefulSet Ready
-#      → argocd is up and able to accept Applications. Stronger than waiting
-#        for `applications.argoproj.io` CRD alone (a CRD can be Established
-#        for ~60-90s before the controller is actually serving).
+# This REPLACES the prior wait_for_argo_application_crd + wait_for_kyverno_crd
+# null_resources AND the ~100-line inline bash that lived here: the poll/wait
+# state machine is now unit-tested Go driven through injected kubectl/clock seams.
 #
-#   2. kyverno-admission-controller Deployment Available
-#      → kyverno's mutating-webhook backend is reachable. Implies the CRD is
-#        registered, the webhook config is installed, AND the kyverno-svc has
-#        Ready endpoints — the three things the old wait_for_kyverno_crd
-#        polled for in sequence. `Available` is a single kubectl wait.
-#
-# Once both are true, every downstream TF resource that depends on this gate
-# (platform-bootstrap Application + AppProject, Kyverno ClusterPolicies) can
+# Once it returns, every downstream TF resource that depends on this gate
+# (platform-bootstrap Application + AppProject, the Kyverno race policies) can
 # apply without racing the pipeline.
-#
-# This resource REPLACES the prior wait_for_argo_application_crd and
-# wait_for_kyverno_crd null_resources (~140 lines of imperative polling,
-# four nested deadline loops, and three soft-fail branches). See PR for
-# the full convention-fighting analysis.
-#
-# TIMEOUTS: each wait gets 15m. apl-operator's helmfile typically reaches
-# both components within 5-8 min on a fresh LKE-E cluster; 15m absorbs
-# the slow-end of upstream chart variance. If either times out, fail loud —
-# unlike the previous wait_for_kyverno_crd, we don't soft-fail to "::warning::
-# + exit 0" here. The convergence contract says soft-fail-and-continue is
-# how cluster bootstraps end up declaring success while half-broken.
 resource "null_resource" "apl_pipeline_ready" {
   triggers = {
     apl_release = helm_release.apl.id
   }
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
-    command     = <<-EOT
-      set -euo pipefail
-      KUBECONFIG_FILE="$(mktemp)"
-      trap 'rm -f "$KUBECONFIG_FILE"' EXIT
-      printf '%s' "$KUBECONFIG_RAW" > "$KUBECONFIG_FILE"
-      export KUBECONFIG="$KUBECONFIG_FILE"
-
-      # Helper: poll for a resource's existence (kubectl wait --for=condition
-      # errors immediately on NotFound), then wait for the condition. Replaces
-      # the three near-identical
-      # deadline-loop blocks in the previous wait_for_*_crd resources.
-      wait_for_resource() {
-        # $1 namespace ("" for cluster-scoped)
-        # $2 resource kind/name (e.g. crd/applications.argoproj.io)
-        # $3 condition or full --for clause:
-        #     bare name           → wrapped as `--for=condition=<name>`
-        #                           (e.g. "Established", "Available")
-        #     contains "="        → passed verbatim as `--for=<clause>`
-        #                           (e.g. "jsonpath={.status.readyReplicas}=1")
-        #     Standard StatefulSets do NOT expose a Ready condition (verified:
-        #     `.status.conditions` is empty even when
-        #     readyReplicas=1). `--for=condition=Ready` times out indefinitely
-        #     on healthy StatefulSets — use jsonpath for those.
-        # $4 existence-poll deadline in seconds (e.g. 900 = 15m)
-        # $5 condition wait timeout (e.g. 5m)
-        local ns_args=""
-        [ -n "$1" ] && ns_args="-n $1"
-        local deadline=$(( $(date +%s) + $4 ))
-        # shellcheck disable=SC2086  # ns_args is intentionally word-split
-        until kubectl $ns_args get "$2" >/dev/null 2>&1; do
-          if [ "$(date +%s)" -ge "$deadline" ]; then
-            echo "::error::$2 did not appear within $4 seconds — apl-operator helmfile likely stalled." >&2
-            kubectl -n apl-operator get pods 2>&1 >&2 || true
-            kubectl -n apl-operator logs deploy/apl-operator --tail=80 2>&1 >&2 || true
-            return 1
-          fi
-          sleep 10
-        done
-        local for_arg="$3"
-        case "$3" in
-          *=*) ;;                       # already a full --for clause
-          *)   for_arg="condition=$3" ;;# bare condition name
-        esac
-        # shellcheck disable=SC2086
-        kubectl $ns_args wait --for="$for_arg" "$2" --timeout="$5"
-      }
-
-      # NOTE — no gitea/otomi-values cold-bootstrap self-heal stage here. With
-      # the in-cluster Gitea obsoleted (apps.gitea.enabled=false) apl-operator
-      # reads/writes its values tree directly from the external GitHub repo over
-      # HTTPS (otomi.git), so the gitea-http DNS race that the old stage 0
-      # guarded against no longer exists.
-
-      # 1. Argo CD application-controller — the real "Argo can accept
-      #    Applications" signal. Replaces wait_for_argo_application_crd.
-      #    StatefulSets have no Ready condition; gate on readyReplicas.
-      echo "Waiting for Argo CD application controller..."
-      wait_for_resource "" "crd/applications.argoproj.io" "Established" 900 5m
-      wait_for_resource "argocd" "statefulset/argocd-application-controller" "jsonpath={.status.readyReplicas}=1" 600 10m
-
-      # 2. Kyverno admission webhook backend — the real "Kyverno can intercept
-      #    PVC creates" signal. Replaces wait_for_kyverno_crd's CRD + two
-      #    webhook configs + svc endpoints poll chain.
-      echo "Waiting for Kyverno admission controller..."
-      wait_for_resource "" "crd/clusterpolicies.kyverno.io" "Established" 900 5m
-      wait_for_resource "kyverno" "deployment/kyverno-admission-controller" "Available" 600 5m
-
-      # 3. cert-manager webhook — Argo's first sync includes Certificate CRs
-      #    (openbao-tls, harbor-tls, otel-collector-tls). Applying any of
-      #    those before the cert-manager validating webhook is up returns
-      #    "failed calling webhook" 503s. The webhook Deployment's Available
-      #    condition is the real readiness signal — the CRD being Established
-      #    precedes the webhook by 30-90s.
-      echo "Waiting for cert-manager webhook..."
-      wait_for_resource "" "crd/certificates.cert-manager.io" "Established" 900 5m
-      wait_for_resource "cert-manager" "deployment/cert-manager-webhook" "Available" 600 5m
-
-      # NOTE — deliberately NO ESO stage here. ESO is not installed by apl-core
-      # (this stack runs apl-core's default sealed-secrets manager); the
-      # external-secrets operator is installed by the platform-bootstrap tree
-      # itself (apl-values/<env>/manifest -> external-secrets-operator.yaml at
-      # Argo sync-wave -15). That tree's root Application
-      # (kubectl_manifest.app_bootstrap_application) depends_on THIS gate, so
-      # waiting for ESO here is structurally circular: the gate blocks the very
-      # resource that installs ESO. On a fresh cluster the gate then hangs its
-      # full existence-poll deadline on the never-appearing ESO CRD and fails
-      # the apply (apl-core's sealed-secrets is healthy the whole time).
-      #
-      # The ordering an ESO wait would enforce ("operator up before the tree's
-      # ClusterSecretStore/ExternalSecret CRs apply") is already handled INSIDE
-      # the platform-bootstrap Application by Argo: operator at wave -15, consumer
-      # CRs at wave 0, with syncPolicy SkipDryRunOnMissingResource=true so the
-      # consumers fail dry-run silently and retry until the CRD registers. TF
-      # must not gate on it. Stages 1-3 above stay — those ARE apl-core platform
-      # prerequisites that come up before platform-bootstrap.
-
-      echo "apl-operator pipeline is ready — downstream TF resources can proceed."
-    EOT
+    command     = "llz ci wait-apl-pipeline"
     environment = {
       KUBECONFIG_RAW = local.kubeconfig_raw
     }

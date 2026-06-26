@@ -57,8 +57,10 @@ categories:
       - "template-scripts/**/*.py"
 
   terraform-provisioner-bash:
+    # Ratcheted 101 → 65: null_resource.apl_pipeline_ready's ~35-line readiness
+    # heredoc moved into the unit-tested `llz ci wait-apl-pipeline` (98 → 63).
     kind: terraform-provisioner
-    budget: 101
+    budget: 65
     include:
       - "terraform-modules/**/*.tf"
       - "instance-template/**/*.tf"
