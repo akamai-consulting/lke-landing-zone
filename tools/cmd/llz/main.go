@@ -97,7 +97,42 @@ func newRootCmd() *cobra.Command {
 	} else {
 		addExtCommands(root, cmds)
 	}
+
+	// Make unknown subcommands fail loud on every command group, not just the
+	// root. Cobra only auto-rejects an unknown subcommand at the ROOT (its
+	// legacyArgs validator guards on !HasParent); a non-runnable group like
+	// `llz ci` instead falls through to its own help text and exits 0. That trap
+	// turned a stale-image skew into a SILENT no-op in CI: a baked llz lacking a
+	// freshly-added `ci wait-apl-pipeline` ran `llz ci wait-apl-pipeline`, printed
+	// help, exited 0 — so the cluster-bootstrap apl_pipeline_ready readiness gate
+	// "succeeded" in 0s and the AppProject apply raced the Argo CD CRDs into a
+	// hard failure. Reject stray args on every group so the next such skew errors
+	// at the gate instead.
+	hardenUnknownSubcommands(root)
 	return root
+}
+
+// hardenUnknownSubcommands walks the command tree and makes every non-runnable
+// command group reject positional args, so `llz <group> <unknown>` errors
+// ("unknown command") instead of silently printing help and exiting 0. Leaf
+// commands (Runnable) and groups that already declare an Args validator are left
+// untouched. A real subcommand is dispatched before arg validation runs, so this
+// only fires on an arg that resolves AT the group — i.e. an unknown subcommand.
+//
+// NoArgs alone is not enough: cobra short-circuits a non-runnable command to its
+// help text BEFORE validating args (command.go — `if !c.Runnable() { return
+// flag.ErrHelp }` precedes ValidateArgs), so a pure group's Args validator is
+// never consulted. Pairing NoArgs with a help-printing RunE makes the group
+// runnable, so ValidateArgs runs: a stray token is rejected, while a bare
+// `llz <group>` falls through to RunE and still prints help + exits 0.
+func hardenUnknownSubcommands(cmd *cobra.Command) {
+	for _, sub := range cmd.Commands() {
+		hardenUnknownSubcommands(sub)
+	}
+	if cmd.HasSubCommands() && !cmd.Runnable() && cmd.Args == nil {
+		cmd.Args = cobra.NoArgs
+		cmd.RunE = func(c *cobra.Command, _ []string) error { return c.Help() }
+	}
 }
 
 // ── setup ────────────────────────────────────────────────────────────────────
