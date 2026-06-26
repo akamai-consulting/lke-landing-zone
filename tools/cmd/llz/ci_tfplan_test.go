@@ -181,6 +181,53 @@ func TestCITFPlanFailurePropagatesAndSkipsSummary(t *testing.T) {
 	}
 }
 
+func TestCITFPlanRetriesTransientAPIFlake(t *testing.T) {
+	prev := tfPlanFlakeSettle
+	tfPlanFlakeSettle = 0
+	t.Cleanup(func() { tfPlanFlakeSettle = prev })
+
+	dir := t.TempDir()
+	t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(dir, "summary.md"))
+
+	calls := 0
+	stubTFPlan(t, func(w io.Writer, _ []string) error {
+		calls++
+		if calls == 1 {
+			io.WriteString(w, `Error: Get "https://lke622766.api.us-ord.enterprise.linodelke.net:6443/api/v1/namespaces/kube-system/services/coredns": net/http: TLS handshake timeout`+"\n")
+			return errors.New("exit status 1")
+		}
+		io.WriteString(w, "Plan: 1 to add, 0 to change, 0 to destroy.\n")
+		return nil
+	})
+
+	if err := execTFPlan(t, "--out", filepath.Join(dir, "plan.txt"), "--title", "T"); err != nil {
+		t.Fatalf("transient flake should be retried to success, got %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("want 2 plan attempts (flake + retry), got %d", calls)
+	}
+}
+
+func TestCITFPlanDoesNotRetryGenuineError(t *testing.T) {
+	prev := tfPlanFlakeSettle
+	tfPlanFlakeSettle = 0
+	t.Cleanup(func() { tfPlanFlakeSettle = prev })
+
+	calls := 0
+	stubTFPlan(t, func(w io.Writer, _ []string) error {
+		calls++
+		io.WriteString(w, "Error: Reference to undeclared resource\n")
+		return errors.New("exit status 1")
+	})
+
+	if err := execTFPlan(t, "--out", filepath.Join(t.TempDir(), "plan.txt"), "--title", "T"); err == nil {
+		t.Fatal("a genuine plan error must propagate")
+	}
+	if calls != 1 {
+		t.Errorf("a non-flake error must NOT be retried; got %d attempts", calls)
+	}
+}
+
 func TestCITFPlanSummarySkippedWhenEnvUnset(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	stubTFPlan(t, func(w io.Writer, _ []string) error {

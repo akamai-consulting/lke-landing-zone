@@ -353,3 +353,11 @@ jobs:
       # set up above; `make untestable-loc-check` falls back to `go run`.
       - name: Untestable-LOC budget gate
         run: make untestable-loc-check
+
+      # Guard: every container-job `run:` step must resolve to bash, not the
+      # container's /bin/sh (dash). A missing default silently broke the scheduled
+      # discover → auto-unseal / scheduled-checks / secret-rotation workflows
+      # (`set -o pipefail` → "Illegal option" under dash). Fails lint if it recurs.
+      - name: Workflow shell-default guard
+        working-directory: tools
+        run: go run ./cmd/llz ci check-workflow-shells --dir ../.github/workflows

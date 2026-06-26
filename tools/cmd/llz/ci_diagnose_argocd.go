@@ -83,12 +83,46 @@ func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 	diagnoseNamespace(aplNS, "apl")
 	diagnoseNamespace(argoNS, "argocd")
 
+	// The install can REACH argocd yet still never pass the convergence gate —
+	// an Application wedged OutOfSync/Missing (a child's ComparisonError) or the
+	// phase1 platform-app-ca Secret never issuing. Neither shows in the namespace
+	// sweeps above, so capture them explicitly before teardown.
+	diagnoseConvergence(argoNS)
+
 	fmt.Println("Diagnostics complete. Common causes:")
 	fmt.Println("  • apl-operator pod stuck Pending  -> no Ready/schedulable node (check Nodes / Taints / Conditions above)")
 	fmt.Println("  • ImagePullBackOff                -> registry unreachable or image pull secret missing")
 	fmt.Println("  • CrashLoopBackOff                -> see Job / pod logs above")
 	fmt.Println("  • argocd namespace empty          -> apl-operator helmfile pipeline never reached argocd (see apl-operator above)")
+	fmt.Println("  • Application OutOfSync/Missing    -> see 'Argo CD Applications' below; a child ComparisonError stalls the parent app-of-apps")
+	fmt.Println("  • platform-app-ca never issues     -> convergence stays in phase1 forever; see the cert-manager CA chain below")
 	return nil
+}
+
+// diagnoseConvergence captures the two convergence-gate blockers the namespace
+// sweeps miss: the Argo CD Application states (sync/health + the condition
+// messages that carry a ComparisonError) and the phase1 gate — whether the
+// cert-manager platform-app-ca Secret and the CA chain that issues it exist.
+// Best-effort throughout; group titles keep it scannable in the run log.
+func diagnoseConvergence(argoNS string) {
+	diagGroup("convergence — Argo CD Applications (sync / health / condition messages)", func() {
+		// One line per app with its condition messages inline — a child's
+		// "ComparisonError: ... app path does not exist" is visible at a glance.
+		diagStream("kubectl", "-n", argoNS, "get", "applications",
+			"-o", "custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,MESSAGE:.status.conditions[*].message")
+	})
+	diagGroup("convergence — platform-bootstrap seed Application (full status)", func() {
+		// The seed app-of-apps; its conditions + operationState.message explain an
+		// OutOfSync/Missing stall (and whether a child app poisoned its sync).
+		diagStream("kubectl", "-n", argoNS, "get", "application", "platform-bootstrap", "-o", "yaml")
+	})
+	diagGroup("convergence — phase1 gate: cert-manager platform-app-ca + CA chain", func() {
+		// phase1 stays true until this Secret exists. Capture the Secret plus the
+		// Certificate/CertificateRequest/Issuer chain that should produce it.
+		diagStream("kubectl", "-n", "cert-manager", "get", "secret", "platform-app-ca", "-o", "wide")
+		diagStream("kubectl", "get", "certificate,certificaterequest", "--all-namespaces", "-o", "wide")
+		diagStream("kubectl", "get", "clusterissuer", "-o", "wide")
+	})
 }
 
 // diagGroup wraps fn in a collapsible ::group::/::endgroup:: block for the run
