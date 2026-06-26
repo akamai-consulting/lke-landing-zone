@@ -98,10 +98,10 @@ func ciCmd() *cobra.Command {
 	// Chart.yaml version, or Argo pulls a tag the registry never received and the
 	// support-plane app silently never syncs (llz-openbao namespace never created).
 	c.AddCommand(ciChartPinGuardCmd())
-	// Cluster-bootstrap local-exec body (the kyverno_* null_resources in
-	// instance-template cluster-bootstrap/main.tf): readiness poll + apply +
-	// webhook-race soft-fail + retrofit kick.
-	c.AddCommand(ciApplyKyvernoPolicyCmd())
+	// Cluster-bootstrap local-exec bodies (instance-template cluster-bootstrap/
+	// main.tf): the apl_pipeline_ready readiness gate, and the kyverno_* policy
+	// apply (readiness poll + apply + webhook-race soft-fail + retrofit kick).
+	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd())
 	return c
 }
 
