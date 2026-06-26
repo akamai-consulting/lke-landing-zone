@@ -140,7 +140,7 @@ jobs:
     permissions:
       contents: read
       packages: read   # docker login + manifest inspect to confirm this commit's ci images published
-      actions: read    # GITHUB_TOKEN lists THIS repo's Build Container Images runs (image-pin step)
+      actions: write   # list THIS repo's Build Container Images runs AND trigger one when an image is missing (--build-if-missing)
     outputs:
       head_sha: ${{ steps.push.outputs.head_sha }}
     steps:
@@ -312,12 +312,19 @@ jobs:
       # (llz ci pin-instance-images), not inline bash. Two distinct credentials:
       # GH_TOKEN_TEMPLATE reads THIS repo's runs + GHCR; GH_TOKEN_INSTANCE writes
       # the instance repo's variables (needs Variables:read/write).
-      - name: Pin instance CI images to this commit
-        if: github.event_name == 'release'
+      # Runs on BOTH release and workflow_dispatch. Previously release-only, which
+      # let a dispatch run with whatever stale TF_IMAGE was last set — the exact
+      # skew the image-fresh guard later catches mid-provision. --build-if-missing
+      # closes the loop: if this commit's images should exist (the commit changed
+      # tools/dockerfiles, so a build ran) but they're not published — the build
+      # failed or is mid-flight — it triggers Build Container Images on this ref and
+      # waits, instead of pinning stale or failing. One build covers both images.
+      - name: Pin instance CI images to this commit (build them first if missing)
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN_INSTANCE: ${{ secrets.E2E_DISPATCH_TOKEN }}
-        run: bin/llz ci pin-instance-images --instance "${INSTANCE_REPO}" --owner "${GITHUB_REPOSITORY_OWNER}" --template-repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}"
+        run: bin/llz ci pin-instance-images --instance "${INSTANCE_REPO}" --owner "${GITHUB_REPOSITORY_OWNER}" --template-repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF_NAME}" --build-if-missing
 
   # ── 2. Provision the real cluster by driving the instance's terraform.yml ────
   provision:

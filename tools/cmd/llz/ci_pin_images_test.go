@@ -60,11 +60,19 @@ func stubPinSeams(t *testing.T, builds int, manifest func(string) bool) *[]strin
 	t.Helper()
 	var setVars []string
 	pg, pm, pl, ps := pinGH, pinManifestExists, pinDockerLogin, pinSleep
-	t.Cleanup(func() { pinGH, pinManifestExists, pinDockerLogin, pinSleep = pg, pm, pl, ps })
+	pbip, ptb := pinBuildInProgress, pinTriggerBuild
+	t.Cleanup(func() {
+		pinGH, pinManifestExists, pinDockerLogin, pinSleep = pg, pm, pl, ps
+		pinBuildInProgress, pinTriggerBuild = pbip, ptb
+	})
 
 	pinDockerLogin = func(string, string) error { return nil }
 	pinSleep = func(time.Duration) {}
 	pinManifestExists = manifest
+	// Defaults for the build-ensure seams; flow tests that exercise
+	// --build-if-missing override these.
+	pinBuildInProgress = func(string, string, string) bool { return false }
+	pinTriggerBuild = func(string, string, string) error { return nil }
 	pinGH = func(_ string, args ...string) ([]byte, error) {
 		a := strings.Join(args, " ")
 		switch {
@@ -125,5 +133,57 @@ func TestRunPinInstanceImages(t *testing.T) {
 	o.instanceToken = ""
 	if err := runPinInstanceImages(o); err == nil || !strings.Contains(err.Error(), "GH_TOKEN_INSTANCE") {
 		t.Errorf("missing token: err=%v, want a GH_TOKEN_INSTANCE required error", err)
+	}
+}
+
+func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
+	// Built, but the sha image is missing on first check and a build is NOT in
+	// progress → --build-if-missing triggers a fresh build, then the image
+	// publishes and both vars pin to the sha tag.
+	publishedAfter := 2
+	calls := 0
+	setVars := stubPinSeams(t, 1, func(string) bool {
+		calls++
+		// First two checks (anyShaImageMissing + TF wait) miss; then publishes.
+		return calls > publishedAfter
+	})
+	var triggeredRef string
+	pinTriggerBuild = func(_, _, ref string) error { triggeredRef = ref; return nil }
+	pinBuildInProgress = func(string, string, string) bool { return false }
+
+	o := baseOpts()
+	o.buildIfMissing = true
+	o.ref = "main"
+	if err := runPinInstanceImages(o); err != nil {
+		t.Fatalf("build-if-missing flow: %v", err)
+	}
+	if triggeredRef != "main" {
+		t.Errorf("expected a build triggered on ref main, got %q", triggeredRef)
+	}
+	if !strings.Contains(strings.Join(*setVars, "\n"), "ci-terraform:sha-deadbeef") {
+		t.Errorf("should pin the sha image after the triggered build, got %v", *setVars)
+	}
+
+	// A build already in progress → do NOT trigger a duplicate; just wait.
+	stubPinSeams(t, 1, func(string) bool { return true })
+	triggered := false
+	pinTriggerBuild = func(string, string, string) error { triggered = true; return nil }
+	pinBuildInProgress = func(string, string, string) bool { return true }
+	o2 := baseOpts()
+	o2.buildIfMissing = true
+	o2.ref = "main"
+	if err := runPinInstanceImages(o2); err != nil {
+		t.Fatalf("in-progress flow: %v", err)
+	}
+	if triggered {
+		t.Error("must NOT trigger a build when one is already in progress")
+	}
+
+	// --build-if-missing without --ref → clear error.
+	stubPinSeams(t, 1, func(string) bool { return false })
+	o3 := baseOpts()
+	o3.buildIfMissing = true
+	if err := runPinInstanceImages(o3); err == nil || !strings.Contains(err.Error(), "--ref is required") {
+		t.Errorf("missing --ref: err=%v, want a --ref required error", err)
 	}
 }

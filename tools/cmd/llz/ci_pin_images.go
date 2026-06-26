@@ -59,11 +59,29 @@ var (
 		return cmd.Run()
 	}
 	pinSleep = func(d time.Duration) { time.Sleep(d) }
+
+	// pinBuildInProgress reports whether a "Build Container Images" run for sha is
+	// currently queued/running — so we wait for it instead of starting a duplicate.
+	pinBuildInProgress = func(token, templateRepo, sha string) bool {
+		out, err := pinGH(token, "api",
+			fmt.Sprintf("repos/%s/actions/runs?head_sha=%s&per_page=100", templateRepo, sha),
+			"--jq", `[.workflow_runs[] | select(.name=="Build Container Images") | select(.status=="queued" or .status=="in_progress")] | length`)
+		return err == nil && parseBuildCount(out) > 0
+	}
+	// pinTriggerBuild kicks off the Build Container Images workflow on ref (its
+	// HEAD = the commit under test in the e2e flow). Needs an actions:write token.
+	pinTriggerBuild = func(token, templateRepo, ref string) error {
+		cmd := exec.Command("gh", "workflow", "run", "build-images.yml",
+			"--repo", templateRepo, "--ref", ref, "-f", "image=all")
+		cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
+		return cmd.Run()
+	}
 )
 
 func ciPinInstanceImagesCmd() *cobra.Command {
-	var instance, owner, templateRepo, sha string
+	var instance, owner, templateRepo, sha, ref string
 	var interval, timeout int
+	var buildIfMissing bool
 	c := &cobra.Command{
 		Use:   "pin-instance-images",
 		Short: "pin the e2e instance's TF_IMAGE/KUBE_IMAGE to this commit's ci images",
@@ -77,10 +95,11 @@ func ciPinInstanceImagesCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runPinInstanceImages(pinOpts{
 				instance: instance, owner: strings.ToLower(owner), templateRepo: templateRepo,
-				sha: sha, actor: os.Getenv("GITHUB_ACTOR"),
+				sha: sha, ref: ref, actor: os.Getenv("GITHUB_ACTOR"),
 				templateToken: os.Getenv("GH_TOKEN_TEMPLATE"), instanceToken: os.Getenv("GH_TOKEN_INSTANCE"),
-				interval: time.Duration(interval) * time.Second,
-				retries:  timeout / max1(interval),
+				interval:       time.Duration(interval) * time.Second,
+				retries:        timeout / max1(interval),
+				buildIfMissing: buildIfMissing,
 			})
 		},
 	}
@@ -88,6 +107,8 @@ func ciPinInstanceImagesCmd() *cobra.Command {
 	c.Flags().StringVar(&owner, "owner", "", "GHCR namespace owner (this repo's org)")
 	c.Flags().StringVar(&templateRepo, "template-repo", "", "this (template) repo owner/name — queried for the build run")
 	c.Flags().StringVar(&sha, "sha", "", "the commit whose images to pin")
+	c.Flags().StringVar(&ref, "ref", "", "branch/tag to (re)trigger Build Container Images on with --build-if-missing (its HEAD must be --sha)")
+	c.Flags().BoolVar(&buildIfMissing, "build-if-missing", false, "if this commit's images should exist but are missing (build failed/incomplete), trigger Build Container Images and wait — instead of pinning a stale image or failing")
 	c.Flags().IntVar(&interval, "interval", 20, "seconds between manifest polls while waiting for a sha image")
 	c.Flags().IntVar(&timeout, "timeout", 1200, "max seconds to wait for a just-built sha image to publish")
 	return c
@@ -101,10 +122,11 @@ func max1(n int) int {
 }
 
 type pinOpts struct {
-	instance, owner, templateRepo, sha, actor string
-	templateToken, instanceToken              string
-	interval                                  time.Duration
-	retries                                   int
+	instance, owner, templateRepo, sha, ref, actor string
+	templateToken, instanceToken                   string
+	interval                                       time.Duration
+	retries                                        int
+	buildIfMissing                                 bool
 }
 
 func runPinInstanceImages(o pinOpts) error {
@@ -125,6 +147,26 @@ func runPinInstanceImages(o pinOpts) error {
 		return err
 	}
 
+	// This commit changed the image sources (a build ran) but its images aren't
+	// all published — the build failed or is still running. With --build-if-missing
+	// (the workflow_dispatch e2e path), kick a fresh build unless one is already
+	// running, then fall through to the per-image wait below. Without it, the wait
+	// loop alone fails loud if the image never publishes. Either way we never pin a
+	// stale image. One build covers every pinImages entry.
+	if built && o.buildIfMissing && anyShaImageMissing(o.owner, o.sha) {
+		if o.ref == "" {
+			return fmt.Errorf("pin-instance-images: --ref is required with --build-if-missing (the branch/tag to build)")
+		}
+		if pinBuildInProgress(o.templateToken, o.templateRepo, o.sha) {
+			fmt.Printf("Build Container Images already running for %.8s — waiting for it to publish.\n", o.sha)
+		} else {
+			fmt.Printf("Images for %.8s are missing and no build is in progress — triggering Build Container Images on %s.\n", o.sha, o.ref)
+			if err := pinTriggerBuild(o.templateToken, o.templateRepo, o.ref); err != nil {
+				return fmt.Errorf("could not trigger Build Container Images on %s — GH_TOKEN_TEMPLATE needs actions:write: %w", o.ref, err)
+			}
+		}
+	}
+
 	for _, im := range pinImages {
 		base := fmt.Sprintf("ghcr.io/%s/%s", o.owner, im.Name)
 		ref := imageRef(base, o.sha, built)
@@ -142,6 +184,17 @@ func runPinInstanceImages(o pinOpts) error {
 		fmt.Printf("Pinned %s %s=%s\n", o.instance, im.Var, ref)
 	}
 	return nil
+}
+
+// anyShaImageMissing reports whether any pinned image's sha-<sha> tag is not yet
+// published — the signal that a build is incomplete or failed.
+func anyShaImageMissing(owner, sha string) bool {
+	for _, im := range pinImages {
+		if !pinManifestExists(fmt.Sprintf("ghcr.io/%s/%s:sha-%s", owner, im.Name, sha)) {
+			return true
+		}
+	}
+	return false
 }
 
 // imageRef is the tag to pin: the exact sha when this commit built an image,
