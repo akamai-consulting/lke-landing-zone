@@ -25,25 +25,15 @@ func TestKyvernoOptsFromEnv(t *testing.T) {
 		if o.waitTimeout != 900*time.Second {
 			t.Errorf("waitTimeout = %v", o.waitTimeout)
 		}
-		if o.retrofitNamespace != "monitoring" {
-			t.Errorf("retrofitNamespace = %q", o.retrofitNamespace)
-		}
-		if o.retrofitWait != 60*time.Second {
-			t.Errorf("retrofitWait = %v", o.retrofitWait)
-		}
 	})
 
 	t.Run("overrides", func(t *testing.T) {
 		env := map[string]string{
-			"KUBECONFIG_RAW":        "kc",
-			"POLICY_MANIFEST":       "p.yaml",
-			"WAIT_FOR_KYVERNO":      "false",
-			"FIELD_MANAGER":         "fm",
-			"WAIT_TIMEOUT_SECONDS":  "30",
-			"RETROFIT_CONFIGMAP":    "loki-gateway",
-			"RETROFIT_NAMESPACE":    "obs",
-			"RETROFIT_ROLLOUT":      "loki-gateway",
-			"RETROFIT_WAIT_SECONDS": "10",
+			"KUBECONFIG_RAW":       "kc",
+			"POLICY_MANIFEST":      "p.yaml",
+			"WAIT_FOR_KYVERNO":     "false",
+			"FIELD_MANAGER":        "fm",
+			"WAIT_TIMEOUT_SECONDS": "30",
 		}
 		o, err := kyvernoOptsFromEnv(func(k string) string { return env[k] })
 		if err != nil {
@@ -54,9 +44,6 @@ func TestKyvernoOptsFromEnv(t *testing.T) {
 		}
 		if o.fieldManager != "fm" || o.waitTimeout != 30*time.Second {
 			t.Errorf("unexpected: %+v", o)
-		}
-		if o.retrofitConfigMap != "loki-gateway" || o.retrofitNamespace != "obs" || o.retrofitWait != 10*time.Second {
-			t.Errorf("retrofit fields wrong: %+v", o)
 		}
 	})
 
@@ -235,65 +222,4 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 			t.Error("expected apply")
 		}
 	})
-}
-
-func TestRetrofitKyvernoConfigMap(t *testing.T) {
-	base := kyvernoPolicyOpts{
-		policyManifest:    "manifests/kyverno-loki-gateway-resolver.yaml",
-		fieldManager:      "fm",
-		waitForKyverno:    true,
-		waitTimeout:       20 * time.Second,
-		retrofitConfigMap: "loki-gateway",
-		retrofitNamespace: "monitoring",
-		retrofitRollout:   "loki-gateway",
-		retrofitWait:      20 * time.Second,
-	}
-
-	t.Run("configmap present -> annotate + rollout", func(t *testing.T) {
-		f := &fakeKubectl{} // apply ok, get cm ok, annotate ok, rollout ok
-		if err := applyKyvernoPolicy(base, testDeps(f, time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		if !f.called("annotate configmap loki-gateway") {
-			t.Error("expected the retrofit annotate")
-		}
-		if !f.called("rollout restart deploy/loki-gateway") {
-			t.Error("expected the retrofit rollout")
-		}
-	})
-
-	t.Run("configmap absent -> notice, no annotate", func(t *testing.T) {
-		f := &fakeKubectl{responses: []kubectlRule{
-			{match: "get configmap loki-gateway", out: "", ok: false},
-		}}
-		o := base
-		o.retrofitWait = 30 * time.Second
-		if err := applyKyvernoPolicy(o, testDeps(f, 20*time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		if f.called("annotate configmap") {
-			t.Error("must not annotate a ConfigMap that never appeared")
-		}
-	})
-
-	t.Run("no rollout configured -> annotate only", func(t *testing.T) {
-		o := base
-		o.retrofitRollout = ""
-		f := &fakeKubectl{}
-		if err := applyKyvernoPolicy(o, testDeps(f, time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		if !f.called("annotate configmap loki-gateway") {
-			t.Error("expected annotate")
-		}
-		if f.called("rollout restart") {
-			t.Error("must not roll when RETROFIT_ROLLOUT is unset")
-		}
-	})
-}
-
-func TestPolicyName(t *testing.T) {
-	if got := policyName("manifests/kyverno-pvc-encrypted-storage-class.yaml"); got != "kyverno-pvc-encrypted-storage-class" {
-		t.Errorf("policyName = %q", got)
-	}
 }

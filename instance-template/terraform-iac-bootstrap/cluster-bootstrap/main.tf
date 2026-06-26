@@ -677,68 +677,67 @@ resource "null_resource" "apl_pipeline_ready" {
 # after the kyverno release), which needs apl-core custom-policy support;
 # tracked as a follow-up.
 #
-# All four kyverno_* policy resources share the `llz ci apply-kyverno-policy`
-# command (tools/cmd/llz/ci_kyverno.go, baked into the ci-terraform image):
-# kubeconfig tempfile + cleanup, an optional Kyverno-admission readiness poll
+# The kyverno_* policy resources share the `llz ci apply-kyverno-policy` command
+# (tools/cmd/llz/ci_kyverno.go, baked into the ci-terraform image): kubeconfig
+# tempfile + cleanup, an optional Kyverno-admission readiness poll
 # (WAIT_FOR_KYVERNO, 15m deadline → warn + exit 0), a server-side kubectl apply,
 # and a soft-fail (warn + exit 0) when the apply hits the transient kyverno-svc
-# admission-webhook race. Per-policy behavior — manifest, whether to poll, and
-# the exact ::warning:: texts — is injected via the environment block;
-# triggers/depends_on stay per-resource. (The apply logic now lives in the
-# pinned llz binary rather than a module script, so there is no script_sha
-# trigger; policies re-apply on apl_release or manifest-content changes.)
-resource "null_resource" "kyverno_pvc_encrypted_policy" {
+# admission-webhook race. Per-policy behavior — manifest and the exact
+# ::warning:: texts — is injected via the environment block. (The apply logic
+# lives in the pinned llz binary rather than a module script, so there is no
+# script_sha trigger; policies re-apply on apl_release or manifest-content
+# changes.)
+#
+# The two RACE policies below (pvc-encrypted storage class, loki-s3 object store)
+# share one lifecycle: depends_on helm_release.apl ONLY — deliberately NOT
+# apl_pipeline_ready (per the race window above; that gate also waits for
+# argocd/cert-manager, the window in which apl-operator's helmfile races ahead
+# and provisions the resources unmutated) — and WAIT_FOR_KYVERNO=true so they
+# poll for Kyverno and apply the instant it can admit, ahead of the helmfile
+# workload/loki charts. Identical lifecycle → one for_each over the map below.
+# The oauth2-proxy policy is NOT in this set: it gates on apl_pipeline_ready with
+# WAIT_FOR_KYVERNO=false, a deliberately different ordering (see its resource).
+locals {
+  # key → { manifest, ::warning:: texts }. The resource address is
+  # null_resource.kyverno_race_policy["<key>"].
+  kyverno_race_policies = {
+    pvc_encrypted_storage_class = {
+      manifest             = "kyverno-pvc-encrypted-storage-class.yaml"
+      timeout_warning      = "Kyverno admission controller not Ready within 15m — skipping PVC policy apply. gitea-valkey + oauth2-proxy redis PVCs may land on linode-block-storage; re-run terraform apply once Kyverno is up."
+      webhook_race_warning = "Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
+    }
+    # Applied at kyverno-ready, BEFORE apl-core's loki helmfile phase creates the
+    # loki ConfigMap — the mutation rewrites object_store filesystem->s3 on the
+    # cm's CREATE admission so Loki persists chunks to S3 from first start. See
+    # manifests/kyverno-loki-s3-object-store.yaml for why this can't be a values
+    # override (apl-core's pipeline corrupts the schema date).
+    loki_s3_object_store = {
+      manifest             = "kyverno-loki-s3-object-store.yaml"
+      timeout_warning      = "Kyverno admission controller not Ready within 15m — skipping loki-s3 policy apply. Loki will write to the read-only FS and persist no logs; re-run terraform apply once Kyverno is up."
+      webhook_race_warning = "Kyverno admission webhook not yet reachable — loki-s3 policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
+    }
+  }
+}
+
+resource "null_resource" "kyverno_race_policy" {
+  for_each = local.kyverno_race_policies
   triggers = {
     apl_release     = helm_release.apl.id
-    policy_yaml_sha = filesha256("${path.module}/manifests/kyverno-pvc-encrypted-storage-class.yaml")
+    policy_yaml_sha = filesha256("${path.module}/manifests/${each.value.manifest}")
   }
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
     command     = "llz ci apply-kyverno-policy"
     environment = {
       KUBECONFIG_RAW  = local.kubeconfig_raw
-      POLICY_MANIFEST = "${path.module}/manifests/kyverno-pvc-encrypted-storage-class.yaml"
+      POLICY_MANIFEST = "${path.module}/manifests/${each.value.manifest}"
       # Poll then apply IMMEDIATELY — do NOT wait on the rest of
       # apl_pipeline_ready (argocd/cert-manager); every second here is a second
       # in which apl-operator's helmfile may create the gitea-valkey /
-      # oauth2-proxy PVCs before this mutation enforces.
+      # oauth2-proxy PVCs (or the loki cm) before this mutation enforces.
       WAIT_FOR_KYVERNO     = "true"
-      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping PVC policy apply. gitea-valkey + oauth2-proxy redis PVCs may land on linode-block-storage; re-run terraform apply once Kyverno is up."
-      WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
-    }
-  }
-  depends_on = [
-    helm_release.apl,
-  ]
-}
-
-# Apply the Loki-S3-object_store ClusterPolicy. Same null_resource + local-exec
-# pattern as kyverno_pvc_encrypted_policy above (CRD-existence guard + soft-fail
-# on the kyverno-svc webhook race), applied at kyverno-ready so the policy is in
-# place BEFORE apl-core's loki helmfile phase creates the loki ConfigMap — the
-# mutation rewrites object_store filesystem->s3 on the cm's CREATE admission, so
-# Loki reads the s3 schema from first start and persists chunks to S3 instead of
-# the read-only container FS. See manifests/kyverno-loki-s3-object-store.yaml for
-# why this can't be a values override (apl-core's pipeline corrupts the schema
-# date).
-resource "null_resource" "kyverno_loki_s3_object_store" {
-  triggers = {
-    apl_release     = helm_release.apl.id
-    policy_yaml_sha = filesha256("${path.module}/manifests/kyverno-loki-s3-object-store.yaml")
-  }
-  # Shared apply wrapper — see kyverno_pvc_encrypted_policy above. Polls for
-  # kyverno-ready (don't gate on the rest of apl_pipeline_ready; loki installs
-  # in a later apl-core helmfile phase, so landing this at kyverno-ready leaves
-  # ample margin before the loki cm).
-  provisioner "local-exec" {
-    interpreter = ["bash", "-c"]
-    command     = "llz ci apply-kyverno-policy"
-    environment = {
-      KUBECONFIG_RAW       = local.kubeconfig_raw
-      POLICY_MANIFEST      = "${path.module}/manifests/kyverno-loki-s3-object-store.yaml"
-      WAIT_FOR_KYVERNO     = "true"
-      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping loki-s3 policy apply. Loki will write to the read-only FS and persist no logs; re-run terraform apply once Kyverno is up."
-      WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — loki-s3 policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
+      TIMEOUT_WARNING      = each.value.timeout_warning
+      WEBHOOK_RACE_WARNING = each.value.webhook_race_warning
     }
   }
   depends_on = [
@@ -759,10 +758,13 @@ resource "null_resource" "kyverno_loki_s3_object_store" {
 # capability is retained for reuse but no longer driven by any policy here.)
 
 # Apply the oauth2-proxy wait-for-keycloak TLS-trust ClusterPolicy. Same
-# null_resource + local-exec pattern as kyverno_pvc_encrypted_policy above —
-# CRD existence guard + soft-fail on the kyverno-svc webhook race. Kept as a
-# separate resource (rather than folded into the PVC one) so each policy's
-# trigger/apply lifecycle is independently inspectable in TF state.
+# `llz ci apply-kyverno-policy` wrapper as the race policies above, but NOT in
+# the kyverno_race_policy for_each: it has a deliberately different lifecycle —
+# depends_on null_resource.apl_pipeline_ready (so Kyverno is already up) with
+# WAIT_FOR_KYVERNO=false (only the CRD-existence guard, no readiness poll), where
+# the race policies depend on helm_release.apl + poll. Mixing the two profiles in
+# one for_each is impossible (depends_on is static across instances) and would
+# reintroduce the PVC race, so this stays its own resource.
 resource "null_resource" "kyverno_oauth2_proxy_wait_keycloak_trust" {
   triggers = {
     apl_release     = helm_release.apl.id

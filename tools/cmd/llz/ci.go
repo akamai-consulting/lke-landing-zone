@@ -101,7 +101,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciChartPinGuardCmd())
 	// Cluster-bootstrap local-exec body (the kyverno_* null_resources in
 	// instance-template cluster-bootstrap/main.tf): readiness poll + apply +
-	// webhook-race soft-fail + retrofit kick.
+	// webhook-race soft-fail.
 	c.AddCommand(ciApplyKyvernoPolicyCmd())
 	return c
 }
