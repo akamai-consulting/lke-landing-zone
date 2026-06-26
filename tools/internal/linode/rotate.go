@@ -155,6 +155,21 @@ func (c *Client) DeleteProfileToken(ctx context.Context, id uint64) error {
 	return c.deleteExpect2xx(ctx, fmt.Sprintf("%s/v4/profile/tokens/%d", c.base, id), fmt.Sprintf("revoking PAT id=%d", id))
 }
 
+// Verify confirms a token authenticates by GETting /v4/profile (readable by any
+// valid token). Used by the in-cluster rotator after a fresh mint, BEFORE the
+// prior credential is drained — so a bad mint can never break a consumer.
+func (c *Client) Verify(ctx context.Context) error {
+	resp, err := c.get(ctx, "v4", "profile")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("token verify (GET /v4/profile): HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // ── Object Storage keys ──────────────────────────────────────────────────────
 
 // ListObjectStorageKeys returns every Object Storage key on the account.

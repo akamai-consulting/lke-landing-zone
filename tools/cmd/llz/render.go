@@ -248,6 +248,12 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	if clusterspec.ComponentEnabled(e.Components, "volumeLabeler") {
 		targets[filepath.Join(manifest, "linode-volume-labeler-region-patch.yaml")] = clusterspec.RenderRegionPatch(first3(env))
 	}
+	// The Linode credential rotator's per-env REGION + OBJ_CLUSTER patch — emitted
+	// only when linodeCredRotator is enabled (region = deployment name, obj_cluster
+	// = the spec's object-storage cluster).
+	if clusterspec.ComponentEnabled(e.Components, "linodeCredRotator") {
+		targets[filepath.Join(manifest, "linode-cred-rotator-env-patch.yaml")] = clusterspec.RenderRotatorEnvPatch(env, e.Cluster.ObjectStorage.Cluster)
+	}
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances
 	// without the shared overlay.
