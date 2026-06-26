@@ -20,7 +20,6 @@ const policyPlatformCI = `path "secret/data/cert-automation/github-token" { capa
 path "secret/data/certmanager/dns01"            { capabilities = ["read"] }
 path "secret/data/grafana/admin"                { capabilities = ["read"] }
 path "secret/data/harbor/admin"                 { capabilities = ["read"] }
-path "secret/data/harbor/docker-config"         { capabilities = ["read"] }
 path "secret/data/harbor/pull-robot"            { capabilities = ["read"] }
 path "secret/data/harbor/registry-s3"           { capabilities = ["read"] }
 path "secret/data/harbor/robot"                 { capabilities = ["read"] }

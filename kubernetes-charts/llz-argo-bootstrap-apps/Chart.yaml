@@ -23,7 +23,8 @@ type: application
 #        Argo Workflows comment (the subsystem was retired; no rendered change).
 # 0.1.10: bump the llz-cluster-foundation pin to 0.1.4 (drops the duplicate
 #         llz-linode-volume-labeler namespace that raised a SharedResourceWarning).
-version: 0.1.10
+# 0.1.11: bump the llz-cert-automation pin to 0.1.4 (harbor docker-config derived in-cluster via ESO).
+version: 0.1.11
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

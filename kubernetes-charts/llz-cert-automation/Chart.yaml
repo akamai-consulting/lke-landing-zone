@@ -14,7 +14,11 @@ type: application
 # 0.1.2: pin the EventBus JetStream version (was `latest`) to 2.10.10 for reproducibility.
 # 0.1.3: externalSecrets.refreshInterval 1h -> 1m so cert-automation's ExternalSecrets
 #        re-sync within ~1m of the OpenBao store going Ready on first boot (was ~14m idle).
-version: 0.1.3
+# 0.1.4: derive the harbor docker config.json in-cluster — the harborDockerConfig
+#        ExternalSecret now reads the robot creds (username/password/registry_host)
+#        from secret/harbor/robot and renders the dockerconfigjson via an ESO v2
+#        template, replacing the separate secret/harbor/docker-config seed.
+version: 0.1.4
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"

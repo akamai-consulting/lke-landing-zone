@@ -106,10 +106,16 @@ externalSecrets:
     remoteKey: cert-automation/github-token
     remoteProperty: token
   # Harbor docker config.json consumed by the build-image step (REGISTRY_AUTH_FILE).
+  # The config.json is DERIVED in-cluster by ESO from the robot creds in robotKey
+  # (username/password/registry_host all live at secret/harbor/robot) — no separate
+  # secret/harbor/docker-config seed. configTemplate is an ESO v2 template rendered
+  # by ESO at sync time (NOT Helm — the braces are data here, injected verbatim),
+  # byte-for-byte the dockerconfigjson the retired `llz ci seed-harbor-dockerconfig`
+  # produced: host = registry_host (already scheme-stripped), auth = b64(user:pass).
   harborDockerConfig:
     secretName: harbor-docker-config
-    remoteKey: harbor/docker-config
-    remoteProperty: config_json
+    robotKey: harbor/robot
+    configTemplate: '{"auths":{{{ .registry_host | toJson }}:{"username":{{ .username | toJson }},"password":{{ .password | toJson }},"auth":{{ printf "%s:%s" .username .password | b64enc | toJson }}}}}'
 
 # NetworkPolicy egress targets. Linode/apl-core-shaped defaults; a sibling
 # deployment changes these only if its namespaces differ.
