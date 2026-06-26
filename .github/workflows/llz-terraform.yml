@@ -724,6 +724,65 @@ jobs:
           llz ci stash-env-secret --env "infra-${REGION}" \
             --from-tf-output loki_admin_password=LOKI_ADMIN_PASSWORD
 
+      # ── Firewall-controller config (folded from the former bootstrap-cluster
+      #    job) ────────────────────────────────────────────────────────────────
+      # Seeds the runtime firewall-controller Secret + ConfigMap so the in-cluster
+      # controller reconciles the SAME node firewall the TF cluster module created.
+      # This used to be a standalone job, but it did only ~38s of real work while
+      # paying a whole job's overhead (container init + checkouts + a fresh
+      # cluster-access / runner-ACL add+revoke, ~60-70s). Folded here it reuses the
+      # readiness kubeconfig + the open control-plane ACL already held by this job;
+      # only an extra `terraform init` of the cluster module (for its outputs) is
+      # added. Apply-only — the job-level `if:` already restricts to apply, but the
+      # guard keeps these steps inert under any future plan-through path.
+      - name: Pre-flight — resolve cloud-firewall token
+        if: env.ACTION == 'apply'
+        env:
+          CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
+          LINODE_TOKEN:         ${{ secrets.LINODE_API_TOKEN }}
+        run: |
+          set -u
+          if [ -z "${CLOUD_FIREWALL_TOKEN:-}" ] && [ -z "${LINODE_TOKEN:-}" ]; then
+            echo "::error::Neither CLOUD_FIREWALL_TOKEN nor LINODE_TOKEN is set for infra-${REGION}. The firewall-controller cannot authenticate to the Linode API and firewall rules will not sync."
+            exit 1
+          fi
+          if [ -z "${CLOUD_FIREWALL_TOKEN:-}" ]; then
+            echo "::warning::CLOUD_FIREWALL_TOKEN not set — falling back to LINODE_TOKEN for the firewall-controller. Set a least-privilege CLOUD_FIREWALL_TOKEN (cloud-firewall-scoped) in infra-${REGION} when possible."
+          fi
+
+      # `terraform output` for the cluster module reads remote state from S3, so
+      # that module must be init'd (backend wired) in addition to cluster-bootstrap
+      # above. The two init distinct workspace dirs, so they do not collide.
+      - name: Terraform init — cluster
+        if: env.ACTION == 'apply'
+        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        with:
+          module:                cluster
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+
+      - name: Bootstrap — seed firewall-controller Secret + ConfigMap
+        if: env.ACTION == 'apply'
+        env:
+          # Reuse the readiness kubeconfig fetched by "Cluster access" above (same
+          # cluster, same open control-plane ACL); no second fetch / ACL lease.
+          KUBECONFIG:           ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
+          CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
+          LINODE_TOKEN:         ${{ secrets.LINODE_API_TOKEN }}
+        run: |
+          CHDIR=terraform-iac-bootstrap/cluster
+          # All three derive from the cluster workspace so the runtime controller
+          # reconciles the SAME firewall the TF cluster module created: the node
+          # firewall ID, the VPC subnet CIDR (so VPC_CIDR matches the VPC, not the
+          # chart's stale /16 default), and the LKE cluster ID (so the EAA/bastion
+          # ranges are also synced into the control-plane ACL).
+          LINODE_FIREWALL_ID="$(terraform -chdir=$CHDIR output -raw node_firewall_id)"
+          VPC_CIDR="$(terraform -chdir=$CHDIR output -raw vpc_subnet_cidr)"
+          CLUSTER_ID="$(terraform -chdir=$CHDIR output -raw cluster_id)"
+          export LINODE_FIREWALL_ID VPC_CIDR CLUSTER_ID
+          llz ci bootstrap-cloud-firewall
+
       # ── Diagnostics ─────────────────────────────────────────────────────────
       # Runs only when a previous step failed (typically the helm_release.argocd
       # apply timing out on a pre-install hook).  Pulls the kubeconfig from the
@@ -736,8 +795,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
-          # $RUNNER_TEMP (shell var) not ${{ runner.temp }} — see the
-          # bootstrap-cluster fetch step for the container-path rationale.
+          # $RUNNER_TEMP (shell var → in-container /__w/_temp) not
+          # ${{ runner.temp }}, which bakes the host path into the composite
+          # action script and is not host→container translated for inputs.
           kubeconfig-path:       $RUNNER_TEMP/diag-${{ env.REGION }}.yaml
           allow-missing:         'true'
 
@@ -765,122 +825,6 @@ jobs:
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ env.REGION }}
 
-  bootstrap-cluster:
-    name: Bootstrap Cluster (firewall-controller config)
-    if: >
-      github.event_name == 'workflow_dispatch' &&
-      inputs.action == 'apply' &&
-      (inputs.module == 'cluster' || inputs.module == 'all')
-    needs: [apply-cluster-bootstrap]
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    environment: infra-${{ inputs.region }}
-    permissions:
-      contents: read
-    timeout-minutes: 30
-    env:
-      REGION:                ${{ inputs.region }}
-      LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
-      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
-      - name: Pre-flight — resolve cloud-firewall token
-        env:
-          CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
-        run: |
-          set -u
-          if [ -z "${CLOUD_FIREWALL_TOKEN:-}" ] && [ -z "${LINODE_TOKEN:-}" ]; then
-            echo "::error::Neither CLOUD_FIREWALL_TOKEN nor LINODE_TOKEN is set for infra-${REGION}. The firewall-controller cannot authenticate to the Linode API and firewall rules will not sync."
-            exit 1
-          fi
-          if [ -z "${CLOUD_FIREWALL_TOKEN:-}" ]; then
-            echo "::warning::CLOUD_FIREWALL_TOKEN not set — falling back to LINODE_TOKEN for the firewall-controller. Set a least-privilege CLOUD_FIREWALL_TOKEN (cloud-firewall-scoped) in infra-${REGION} when possible."
-          fi
-
-      # `terraform output` reads remote state from S3, so the cluster module
-      # must be init'd (backend wired) *and* AWS creds must be on the env —
-      # otherwise the S3 backend falls through to EC2 IMDS and fails with
-      # "No valid credential sources found".
-      - name: Terraform init — cluster
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
-        with:
-          module:                cluster
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-
-      # Fetch the kubeconfig and open this hosted-runner's dynamic egress IP in
-      # the LKE-E control-plane ACL before any kubectl (revoked at job end,
-      # if: always()).
-      - name: Cluster access (kubeconfig + runner ACL)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          # $RUNNER_TEMP (shell var → in-container /__w/_temp), NOT
-          # ${{ runner.temp }} which bakes the host path into the action
-          # script for container jobs and is not translated for composite
-          # inputs. KUBECONFIG below stays ${{ runner.temp }} (env values
-          # ARE runner-translated host→container); both resolve to the same
-          # /__w/_temp file.
-          kubeconfig-path:       $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ env.REGION }}
-
-      - name: Bootstrap — seed firewall-controller Secret + ConfigMap
-        env:
-          KUBECONFIG:           ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-          CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
-          LINODE_TOKEN:         ${{ secrets.LINODE_API_TOKEN }}
-        run: |
-          CHDIR=terraform-iac-bootstrap/cluster
-          # All three derive from the cluster workspace so the runtime controller
-          # reconciles the SAME firewall the TF cluster module created: the node
-          # firewall ID, the VPC subnet CIDR (so VPC_CIDR matches the VPC, not the
-          # chart's stale /16 default), and the LKE cluster ID (so the EAA/bastion
-          # ranges are also synced into the control-plane ACL).
-          LINODE_FIREWALL_ID="$(terraform -chdir=$CHDIR output -raw node_firewall_id)"
-          VPC_CIDR="$(terraform -chdir=$CHDIR output -raw vpc_subnet_cidr)"
-          CLUSTER_ID="$(terraform -chdir=$CHDIR output -raw cluster_id)"
-          export LINODE_FIREWALL_ID VPC_CIDR CLUSTER_ID
-          llz ci bootstrap-cloud-firewall
-
-      # NOTE — the convergence gate that used to live here has moved to the
-      # terminal `converge` job (below, after bootstrap-openbao). Running it
-      # here was an ordering inversion: the cluster cannot reach health until
-      # OpenBao is initialized/unsealed (the OpenBao→cert-manager→TLS→
-      # Harbor/oauth2-proxy cascade stays PENDING/Degraded until then), but
-      # bootstrap-openbao runs AFTER this job. A converge timeout failed
-      # bootstrap-cluster, which (via the `needs.bootstrap-cluster.result ==
-      # 'success'` guard on bootstrap-openbao) SKIPPED the OpenBao bootstrap
-      # entirely — so the cluster could never converge. See the `converge`
-      # job below.
-
-      - name: Cleanup kubeconfig
-        if: always()
-        run: rm -f "$RUNNER_TEMP/platform-${REGION}.yaml"
-
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ env.REGION }}
-
   # ── Chain: bootstrap-openbao after the cluster is up ──────────────────────────
   # Tier-1 streamlining: the operator used to trigger two workflows manually —
   # terraform.yml first, then bootstrap-openbao.yml within a 60-min window.
@@ -888,14 +832,16 @@ jobs:
   # so a single `module=all` apply walks the whole bootstrap path end-to-end:
   #   1. apply-object-storage         (buckets + auto-stash 6 S3 secrets)
   #   2. apply-cluster                (Linode LKE-E cluster)
-  #   3. apply-cluster-bootstrap      (apl-core + foundation + Kyverno policy)
-  #   4. bootstrap-cluster            (firewall-controller config)
-  #   5. bootstrap-openbao            (OpenBao init/unseal/seed + ESO sync)
-  #   6. converge                     (final health gate — runs AFTER OpenBao
+  #   3. apply-cluster-bootstrap      (apl-core + foundation + Kyverno policy +
+  #                                    firewall-controller config — the latter
+  #                                    folded in from the former bootstrap-cluster
+  #                                    job to drop a whole job's overhead)
+  #   4. bootstrap-openbao            (OpenBao init/unseal/seed + ESO sync)
+  #   5. converge                     (final health gate — runs AFTER OpenBao
   #                                    so the OpenBao→cert-manager→TLS cascade
   #                                    has cleared and convergence can pass)
   #
-  # Step 5 also gates the PreSync timeout window concern — by running it
+  # Step 4 also gates the PreSync timeout window concern — by running it
   # immediately as part of the same workflow, there's no chance the operator
   # forgets or runs out of the 60-min budget the gate enforces.
   #
@@ -905,8 +851,9 @@ jobs:
   bootstrap-openbao:
     name: Bootstrap OpenBao (${{ inputs.region }})
     # The `if:` mixes a default-skip-on-needs-failure guard with explicit
-    # `needs.*.result` checks so we can require apply-cluster-bootstrap +
-    # bootstrap-cluster to have SUCCEEDED while accepting apply-object-storage
+    # `needs.*.result` checks so we can require apply-cluster-bootstrap (which
+    # now also seeds the firewall-controller config, formerly its own
+    # bootstrap-cluster job) to have SUCCEEDED while accepting apply-object-storage
     # as either success OR skipped. apply-object-storage now runs on
     # module=cluster too (its buckets/keys are always needed), so on a normal
     # cluster bootstrap it SUCCEEDS and stashes the S3 secrets before this job
@@ -921,11 +868,10 @@ jobs:
       inputs.action == 'apply' &&
       (inputs.module == 'cluster' || inputs.module == 'all') &&
       needs.apply-cluster-bootstrap.result == 'success' &&
-      needs.bootstrap-cluster.result == 'success' &&
       (needs.apply-object-storage.result == 'success' || needs.apply-object-storage.result == 'skipped')
     # needs:
-    #   apply-cluster-bootstrap    cluster + apl-core ready
-    #   bootstrap-cluster          firewall-controller config seeded
+    #   apply-cluster-bootstrap    cluster + apl-core ready + firewall-controller
+    #                              config seeded (folded in from bootstrap-cluster)
     #   apply-object-storage       6 S3 secrets auto-stashed in infra-<region>
     #                              env (bootstrap-openbao's preflight asserts the
     #                              object-storage state is populated before any
@@ -934,7 +880,7 @@ jobs:
     #                              slow-Linode-OBJ days). Now runs on
     #                              module=cluster too; the `|| skipped` arm in
     #                              the `if:` above is a forward-compat backstop.
-    needs: [apply-cluster-bootstrap, bootstrap-cluster, apply-object-storage]
+    needs: [apply-cluster-bootstrap, apply-object-storage]
     uses: ./.github/workflows/llz-bootstrap-openbao.yml
     with:
       region: ${{ inputs.region }}
