@@ -42,20 +42,26 @@ func ciAssertLokiCmd() *cobra.Command {
 
 func ciWaitHarborCmd() *cobra.Command {
 	var harborURL string
+	var registryOnly bool
 	c := &cobra.Command{
 		Use:   "wait-harbor",
 		Short: "wait for Harbor to be ready (admin Secret, deployment/STS rollouts, API ping)",
 		Long: "Native port of wait-for-harbor.sh. Polls for the harbor-admin-password Secret\n" +
-			"(10s × up to 600s), waits for the Harbor Deployments + StatefulSets to roll\n" +
-			"out, then — if --harbor-url is set — pings the Harbor API. Exit 0 ready, 1 on\n" +
-			"any timeout.",
+			"(10s × up to 600s), waits for the Harbor control-plane Deployments +\n" +
+			"StatefulSets to roll out, then — if --harbor-url is set — pings the Harbor API.\n" +
+			"Exit 0 ready, 1 on any timeout.\n\n" +
+			"harbor-registry is NOT part of this gate: it mounts the harbor-registry-s3\n" +
+			"Secret, seeded + ExternalSecret-synced later in the bootstrap, so it can't be\n" +
+			"Ready here. Run `wait-harbor --registry-only` AFTER that seed (post nudge-argo)\n" +
+			"to gate on the registry rollout instead.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIWaitHarbor(harborURL))
+			os.Exit(runCIWaitHarbor(harborURL, registryOnly))
 			return nil
 		},
 	}
 	c.Flags().StringVar(&harborURL, "harbor-url", os.Getenv("HARBOR_URL"), "Harbor base URL for the API ping (empty skips the ping)")
+	c.Flags().BoolVar(&registryOnly, "registry-only", false, "wait only for the harbor-registry rollout (post-S3-seed gate); skips the admin-Secret/control-plane/API checks")
 	return c
 }
 
@@ -182,7 +188,20 @@ func lokiConfigText(match string) string {
 
 // ── wait-harbor ──────────────────────────────────────────────────────────────
 
-func runCIWaitHarbor(harborURL string) int {
+func runCIWaitHarbor(harborURL string, registryOnly bool) int {
+	// Post-seed gate: harbor-registry can only roll out once the harbor-registry-s3
+	// Secret exists (seeded + ExternalSecret-synced mid-bootstrap). Skip the
+	// admin-Secret/control-plane/API checks the pre-seed gate already covered.
+	if registryOnly {
+		for _, d := range health.HarborRegistryDeployments() {
+			if harborRollout("deployment/"+d) != nil {
+				return 1
+			}
+		}
+		fmt.Println("harbor-registry rolled out.")
+		return 0
+	}
+
 	fmt.Println("Waiting for harbor-admin-password Secret in harbor namespace...")
 	if !waitPoll(harborWaitBudget, 10*time.Second, func() bool {
 		return kExists("-n", "harbor", "get", "secret", "harbor-admin-password")

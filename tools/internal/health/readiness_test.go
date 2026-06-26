@@ -50,8 +50,17 @@ storage_config:
 }
 
 func TestHarborWorkloadSets(t *testing.T) {
-	if len(HarborDeployments()) != 4 || HarborDeployments()[0] != "harbor-core" {
+	if len(HarborDeployments()) != 3 || HarborDeployments()[0] != "harbor-core" {
 		t.Errorf("HarborDeployments = %v", HarborDeployments())
+	}
+	// harbor-registry is gated post-seed, not in the control-plane set.
+	for _, d := range HarborDeployments() {
+		if d == "harbor-registry" {
+			t.Errorf("harbor-registry must not be in the pre-seed control-plane gate: %v", HarborDeployments())
+		}
+	}
+	if len(HarborRegistryDeployments()) != 1 || HarborRegistryDeployments()[0] != "harbor-registry" {
+		t.Errorf("HarborRegistryDeployments = %v", HarborRegistryDeployments())
 	}
 	if len(HarborStatefulSets()) != 2 {
 		t.Errorf("HarborStatefulSets = %v", HarborStatefulSets())

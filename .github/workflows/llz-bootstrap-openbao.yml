@@ -445,6 +445,14 @@ jobs:
           # poll for the full ~10m timeout and time out. The kubectl rollout-status
           # checks confirm readiness; the later port-forward + robot smoke test
           # validate the API plane proper.
+          #
+          # This is the CONTROL-PLANE gate (harbor-core/jobservice/portal) — enough
+          # to unblock harbor-ensure-project / provision-harbor-robots below.
+          # harbor-registry is deliberately excluded: it mounts the
+          # harbor-registry-s3 Secret, which isn't seeded + ExternalSecret-synced
+          # until the "Seed Harbor registry S3 credentials" + "Nudge Argo" steps
+          # further down, so gating on it here always timed out. The registry
+          # rollout is gated post-seed by "Wait for Harbor registry rollout" below.
           llz ci wait-harbor --harbor-url ""
 
       # The external HARBOR_URL (e.g. harbor.<env>.internal) is the registry
@@ -603,6 +611,25 @@ jobs:
         if: steps.ensure.outputs.available == 'true'
         continue-on-error: true
         run: llz ci nudge-argo
+
+      # ── Gate: Harbor registry rollout (post-S3-seed) ───────────────────────────
+      # harbor-registry mounts the harbor-registry-s3 Secret via secretKeyRef, so it
+      # stays in CreateContainerConfigError until that Secret exists. It only appears
+      # after the registry-S3 KV path is seeded (above) AND nudge-argo force-syncs the
+      # ExternalSecret — which is why it's checked HERE rather than in the earlier
+      # control-plane "Wait for Harbor readiness" gate (gating on it there always hit
+      # the 2m rollout timeout on fresh bootstraps). continue-on-error matches the
+      # control-plane gate: a real registry stall is surfaced (and the release-e2e
+      # image push exercises the registry plane proper) without failing the bootstrap.
+      - name: Wait for Harbor registry rollout
+        if: steps.ensure.outputs.available == 'true'
+        continue-on-error: true
+        run: |
+          if ! kubectl -n harbor get svc harbor-core >/dev/null 2>&1; then
+            echo "harbor-core absent — Harbor not deployed here; skipping registry wait." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          llz ci wait-harbor --registry-only
 
       # NOTE — the "Seed Gitea backup S3 credentials in OpenBao" step that
       # wrote secret/gitea/backup-s3 was removed in the apl-core anti-
