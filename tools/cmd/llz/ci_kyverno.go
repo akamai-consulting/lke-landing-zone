@@ -8,26 +8,22 @@ package main
 // Flow (unchanged from the bash it replaced): write KUBECONFIG_RAW to a
 // tempfile, optionally poll until Kyverno can admit a ClusterPolicy (CRD present
 // AND the admission controller Available) up to a deadline, server-side-apply
-// the manifest, soft-fail (warn + exit 0) on the transient kyverno-svc
-// admission-webhook race, then optionally "retrofit kick" a pre-existing
-// ConfigMap through admission so the just-applied policy mutates it. Soft-fails
-// never fail the terraform apply.
+// the manifest, and soft-fail (warn + exit 0) on the transient kyverno-svc
+// admission-webhook race. Soft-fails never fail the terraform apply.
 //
 // The config arrives as the same environment variables the null_resource
 // `environment` blocks set, so main.tf only changed its `command`. The poll/
-// apply/retrofit state machine (applyKyvernoPolicy) is driven through injected
-// seams (kubectl runner, clock, sleep) so it is unit-tested without a cluster;
-// the env parsing and webhook-race classification are pure functions.
+// apply state machine (applyKyvernoPolicy) is driven through injected seams
+// (kubectl runner, clock, sleep) so it is unit-tested without a cluster; the env
+// parsing and webhook-race classification are pure functions.
 
 import (
 	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -43,11 +39,6 @@ type kyvernoPolicyOpts struct {
 	timeoutWarning     string
 	crdMissingWarning  string
 	webhookRaceWarning string
-
-	retrofitConfigMap string
-	retrofitNamespace string
-	retrofitRollout   string
-	retrofitWait      time.Duration
 }
 
 // kyvernoDeps are the seams the state machine drives. kubectl runs one kubectl
@@ -66,9 +57,9 @@ func ciApplyKyvernoPolicyCmd() *cobra.Command {
 		Long: "Shared local-exec body for the kyverno_* null_resources in cluster-bootstrap.\n" +
 			"Reads its config from the same environment variables those null_resources set\n" +
 			"(KUBECONFIG_RAW, POLICY_MANIFEST, WAIT_FOR_KYVERNO, WAIT_TIMEOUT_SECONDS,\n" +
-			"FIELD_MANAGER, {TIMEOUT,CRD_MISSING,WEBHOOK_RACE}_WARNING, RETROFIT_*), polls\n" +
-			"until Kyverno can admit the policy, server-side-applies it, soft-fails on the\n" +
-			"kyverno-svc admission-webhook race, and runs the optional retrofit kick.",
+			"FIELD_MANAGER, {TIMEOUT,CRD_MISSING,WEBHOOK_RACE}_WARNING), polls until\n" +
+			"Kyverno can admit the policy, server-side-applies it, and soft-fails on the\n" +
+			"kyverno-svc admission-webhook race.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIApplyKyvernoPolicy() },
 	}
@@ -115,9 +106,6 @@ func kyvernoOptsFromEnv(getenv func(string) string) (kyvernoPolicyOpts, error) {
 		timeoutWarning:     getenv("TIMEOUT_WARNING"),
 		crdMissingWarning:  getenv("CRD_MISSING_WARNING"),
 		webhookRaceWarning: getenv("WEBHOOK_RACE_WARNING"),
-		retrofitConfigMap:  getenv("RETROFIT_CONFIGMAP"),
-		retrofitNamespace:  envOrDefault(getenv, "RETROFIT_NAMESPACE", "monitoring"),
-		retrofitRollout:    getenv("RETROFIT_ROLLOUT"),
 	}
 	if o.kubeconfigRaw == "" {
 		return o, fmt.Errorf("KUBECONFIG_RAW must be set")
@@ -130,11 +118,6 @@ func kyvernoOptsFromEnv(getenv func(string) string) (kyvernoPolicyOpts, error) {
 		return o, err
 	}
 	o.waitTimeout = time.Duration(secs) * time.Second
-	rsecs, err := envSecondsOrDefault(getenv, "RETROFIT_WAIT_SECONDS", 60)
-	if err != nil {
-		return o, err
-	}
-	o.retrofitWait = time.Duration(rsecs) * time.Second
 	return o, nil
 }
 
@@ -203,39 +186,7 @@ func applyKyvernoPolicy(o kyvernoPolicyOpts, d kyvernoDeps) error {
 		fmt.Fprint(os.Stderr, out)
 		return fmt.Errorf("kubectl apply %s failed", o.policyManifest)
 	}
-
-	if o.retrofitConfigMap != "" {
-		retrofitKyvernoConfigMap(o, d)
-	}
 	return nil
-}
-
-// retrofitKyvernoConfigMap closes the admission race for a policy that mutates a
-// ConfigMap created by another controller: if the target predates the policy
-// (so the admission rule never fired on it), force one UPDATE through admission
-// and optionally roll the consumer. Best-effort — never returns an error.
-func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d kyvernoDeps) {
-	ns := o.retrofitNamespace
-	present := pollUntil(d, o.retrofitWait, func() bool {
-		_, ok := d.kubectl("-n", ns, "get", "configmap", o.retrofitConfigMap)
-		return ok
-	})
-	if !present {
-		notice(fmt.Sprintf("%s/%s absent after %s — it is created after this policy, so the admission CREATE rule mutates it. No retrofit needed.",
-			ns, o.retrofitConfigMap, o.retrofitWait))
-		return
-	}
-	// A changing annotation value guarantees a real UPDATE (admission fires).
-	annotation := "llz.akamai.com/kyverno-retrofit=" + strconv.FormatInt(d.now().Unix(), 10)
-	if _, ok := d.kubectl("-n", ns, "annotate", "configmap", o.retrofitConfigMap, annotation, "--overwrite"); ok {
-		notice(fmt.Sprintf("retrofit: kicked pre-existing %s/%s through admission so %s mutates it.",
-			ns, o.retrofitConfigMap, policyName(o.policyManifest)))
-	}
-	if o.retrofitRollout != "" {
-		if _, ok := d.kubectl("-n", ns, "rollout", "restart", "deploy/"+o.retrofitRollout); ok {
-			notice(fmt.Sprintf("retrofit: rolled %s/deploy/%s to reload the mutated config.", ns, o.retrofitRollout))
-		}
-	}
 }
 
 // pollUntil calls cond immediately then every 5s until it returns true or the
@@ -254,11 +205,4 @@ func pollUntil(d kyvernoDeps, timeout time.Duration, cond func() bool) bool {
 	}
 }
 
-func warn(msg string)   { fmt.Printf("::warning::%s\n", msg) }
-func notice(msg string) { fmt.Printf("::notice::%s\n", msg) }
-
-// policyName is the manifest's basename without the .yaml extension — the label
-// the bash logged via `basename … .yaml`.
-func policyName(manifest string) string {
-	return strings.TrimSuffix(filepath.Base(manifest), ".yaml")
-}
+func warn(msg string) { fmt.Printf("::warning::%s\n", msg) }

@@ -48,7 +48,7 @@ variable "apl_values_repo_username" {
 }
 
 variable "apl_values_repo_token" {
-  description = "Fine-grained GitHub PAT used as the HTTPS Git password for the values repo (apl-core's otomi.git.password) and the platform-apps repo (kubectl_manifest.argocd_apps_repo). Needs `Contents: write` on the instance repo because apl-operator PUSHES its rendered values tree there during bootstrap. Supply via TF_VAR_apl_values_repo_token (sourced from secrets.APL_VALUES_REPO_TOKEN). Replaces the former in-cluster Gitea admin password (random_password.gitops_repo_password) and the platform-apps SSH deploy key (apps_repo_ssh_key), both retired when Gitea was obsoleted."
+  description = "Fine-grained GitHub PAT used as the HTTPS Git password for the values repo (apl-core's otomi.git.password) and the platform-apps repo (kubectl_manifest.argocd_apps_repo). Needs `Contents: write` on the instance repo because apl-operator PUSHES its rendered values tree there during bootstrap. Supply via TF_VAR_apl_values_repo_token (sourced from secrets.APL_VALUES_REPO_TOKEN). Replaces the former in-cluster Gitea admin password (random_password.gitops_repo_password) and the platform-apps SSH deploy key (apps_repo_ssh_key), both retired when the values store moved to the external GitHub repo (apl-core's in-cluster Gitea itself stays enabled for its gitops-global clone)."
   type        = string
   sensitive   = true
 }
