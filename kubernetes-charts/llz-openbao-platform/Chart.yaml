@@ -19,7 +19,10 @@ type: application
 #        (the eso-cert-watcher chart was removed; no rendered change).
 # 0.1.7: drop the retired secret-propagator AppRole rotation pipeline from the
 #        approle-rotation CronWorkflow (GitHub CI now authenticates via GitHub-OIDC).
-version: 0.1.7
+# 0.1.8: retire the AppRole-rotation subsystem — ESO now uses Kubernetes auth and
+#        GitHub CI uses GitHub-OIDC, so the platform-ci AppRole, the rotation
+#        CronWorkflow + its NetworkPolicy/ESO, and the in-cluster PAT are gone.
+version: 0.1.8
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

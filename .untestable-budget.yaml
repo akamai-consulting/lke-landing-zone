@@ -31,11 +31,16 @@
 # Baseline (post check-coverage / chart-lock-drift / argocd-rendered-apps
 # conversion to `llz ci`): inline-bash 669, shell 576, python 56,
 # tf-provisioner 98. Budgets carry ~3% headroom over baseline.
+#
+# Ratcheted down (openbao-bootstrap conversion: bao-ensure-ready, bao-seed-all,
+# extract-openbao-ca, nudge-argo, provision-peer-ca, and `llz env resolve` moved
+# ~82 lines of inline bash into the unit-tested llz CLI): inline-bash now 587,
+# budget 605.
 
 categories:
   workflow-inline-bash:
     kind: workflow-run
-    budget: 680
+    budget: 605
     include:
       - ".github/workflows/*.yml"
       - "instance-template/.github/workflows/*.yml"

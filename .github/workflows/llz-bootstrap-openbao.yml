@@ -13,12 +13,19 @@ name: llz-bootstrap-openbao (reusable)
 #
 # CONVERGENCE CONTRACT — see docs/architecture/convergence-contract.md.
 #
-# The Branch A / Branch B / Re-configure mode selector below is the same
-# 0/1/2 shape the cluster-health contract uses, applied to OpenBao seal
-# state: detect → choose a path → re-verify. The verbatim seal-detect and
-# unseal blocks from this file are also reused by `openbao-auto-unseal.yml`
-# for the 10-minute scheduled re-unseal loop — keep that copy in sync if
-# you edit the blocks here.
+# The first-init / re-unseal / re-configure mode selection is the same
+# detect → choose a path → re-verify shape the cluster-health contract uses,
+# applied to OpenBao seal state — and it lives in ONE place now: the
+# `llz ci bao-ensure-ready` command (tools/cmd/llz/ci_bao_ensure_ready.go),
+# run as a single step below. It composes the same bao-init / bao-unseal /
+# bao-unseal-followers / bao-regen-root logic the individual `llz ci bao-*`
+# commands expose; `openbao-auto-unseal.yml` reuses those same commands
+# (`bao-status` + `bao-unseal`) for its scheduled re-unseal loop, so there is
+# no inline seal-detect/unseal copy to keep in sync.
+#
+# Likewise the generic KV seeds run from one data-driven step
+# (`llz ci bao-seed-all`, table in ci_bao_seed_all.go) rather than one inline
+# `bao-seed` step per secret.
 #
 # When adding new steps: classify failures into the 3 contract codes (poll
 # vs hard-fail vs converged) rather than dropping a 13th BOOTSTRAP_ERRORS=
@@ -33,7 +40,6 @@ name: llz-bootstrap-openbao (reusable)
 #     • Prints all 5 keys + root token to job summary (copy to offline storage)
 #     • Unseals all 3 pods and joins followers to the Raft leader
 #     • Configures KV v2, AppRole, Kubernetes auth, policies, roles, audit log
-#     • Seeds eso-approle-secret + OPENBAO_APPROLE_* GitHub secrets
 #     • Seeds secret/harbor/admin and secret/infra/github-dispatch-token
 #     • Revokes the root token on completion
 #
@@ -176,27 +182,11 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Resolve role + peer
         id: r
-        env:
-          REGION: ${{ inputs.region }}
-        run: |
-          set -euo pipefail
-          ROLE="$(llz env role "$REGION")"
-          # peer exits non-zero for a standalone deployment — empty is expected.
-          PEER="$(llz env peer "$REGION" 2>/dev/null || true)"
-          # Guard against a stale `llz` (a binary predating the role/peer
-          # subcommands exits 0 and prints multi-line help, which corrupts
-          # $GITHUB_OUTPUT with "Invalid format 'Usage:'"). A real role is a
-          # single bare word; reject anything else loudly.
-          case "$ROLE" in
-            active|standby|standalone) ;;
-            *)
-              echo "::error::llz env role returned an unexpected value (stale image?): ${ROLE}" >&2
-              exit 1
-              ;;
-          esac
-          echo "role=${ROLE}" >> "$GITHUB_OUTPUT"
-          echo "peer=${PEER}" >> "$GITHUB_OUTPUT"
-          echo "Resolved ${REGION}: role=${ROLE} peer=${PEER:-<none>}"
+        # Emits role=/peer= to $GITHUB_OUTPUT (peer empty for a standalone
+        # deployment). The former inline case-guard against a stale binary
+        # corrupting the output file is unnecessary now: an llz too old to know
+        # `env resolve` fails cleanly with "unknown command".
+        run: llz env resolve "$REGION"
 
   bootstrap:
     name: Bootstrap OpenBao (${{ inputs.region }})
@@ -363,134 +353,35 @@ jobs:
           llz ci wait-pods --namespace llz-openbao --timeout 600 \
             platform-openbao-0 platform-openbao-1 platform-openbao-2
 
-      # Probes all 3 pods (a partial seal must read as sealed=true or the
-      # emergency-reunseal branch never fires) and emits initialized/sealed
-      # step outputs. The `bao status` exit-code/JSON quirks live in the
-      # command now; openbao-auto-unseal.yml runs the same probe.
-      - name: Check OpenBao status
-        id: bao_status
-        run: llz ci bao-status
-
-      - name: Pre-flight — verify GitHub secrets-write token for first init
-        if: steps.bao_status.outputs.initialized == 'false'
+      # ── Seal/token lifecycle — one command (CONVERGENCE CONTRACT) ──────────────
+      # `llz ci bao-ensure-ready` collapses the former nine steps (status probe,
+      # first-init preflight, init, unseal pod-0, unseal followers, Branch-B
+      # re-unseal, load-root, regen-root-if-revoked, availability check) into one
+      # detect → choose-a-path → re-verify command:
+      #   uninitialized        → init + unseal pod-0 + join/unseal followers
+      #   initialized + sealed → re-unseal every pod with the quorum keys
+      #   initialized          → validate the loaded root token, regen via quorum
+      #                          if a prior run's revoke left a dead value behind
+      # It writes available=<bool> to $GITHUB_OUTPUT (the gate every step below
+      # checks) and re-exports the effective OPENBAO_ROOT_TOKEN to $GITHUB_ENV.
+      # The first-init secrets-write-token preflight is folded in (it fails fast
+      # if GH_TOKEN is unset on an uninitialized cluster). bao-init's no-manual-
+      # raft-join contract (chart retry_join handles membership; a duplicate join
+      # 500s) and the VAULT_SKIP_VERIFY local-hop rationale live in the command.
+      # GH_TOKEN/GH_REPO come from the job-level env; the keys + loaded root token
+      # are the infra-<region> secrets (empty on a first bootstrap — init mints
+      # and persists them).
+      - name: Ensure OpenBao initialized + unsealed + root token
+        id: ensure
         env:
-          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "required for first-time OpenBao bootstrap; stores unseal keys and AppRole credentials as GitHub Actions secrets."
-
-      # ── Branch A: first-time init ───────────────────────────────────────────────
-      - name: Initialize OpenBao
-        if: steps.bao_status.outputs.initialized == 'false'
-        id: init
-        run: llz ci bao-init --region "$REGION"
-
-      # UNSEAL_K1/2/3 come from bao-init's $GITHUB_ENV export above.
-      - name: Unseal pod 0 (post-init)
-        if: steps.bao_status.outputs.initialized == 'false'
-        run: llz ci bao-unseal --pods 0
-
-      - name: Unseal pods 1–2 (post-init)
-        if: steps.bao_status.outputs.initialized == 'false'
-        # NO MANUAL RAFT JOIN. The llz-openbao-platform OCI chart values
-        # (kubernetes-charts/llz-openbao-platform/values.yaml) declare `retry_join`
-        # blocks for all three peer FQDNs in the storage stanza. By the time pod 0 finishes `bao operator init`, pods 1 and 2
-        # have already auto-joined the raft cluster (they're at
-        # Initialized=true, Sealed=true). Running `bao operator raft join`
-        # against an already-joined member returns a 500 from the leader:
-        #
-        #   URL: POST https://127.0.0.1:8200/v1/sys/storage/raft/join
-        #   Code: 500. Errors:
-        #     * failed to join raft cluster: failed to get raft challenge
-        #
-        # Same surface error message as the OLD bug (http:// + short hostname),
-        # different root cause (duplicate join attempt). Confusing to debug —
-        # don't reintroduce the manual join.
-        #
-        # VAULT_SKIP_VERIFY is for the LOCAL client→bao hop (cert has no IP
-        # SAN for 127.0.0.1, which is fine — we know we're talking to
-        # ourselves). The cluster-internal Raft heartbeats use the production
-        # bootstrap cert + retry_join's leader_ca_cert_file, both handled by
-        # the chart config — nothing for the workflow to set up here.
-        run: llz ci bao-unseal-followers
-
-      # ── Branch B: emergency re-unseal ──────────────────────────────────────────
-      - name: Unseal all pods (already initialized, sealed)
-        if: steps.bao_status.outputs.initialized == 'true' && steps.bao_status.outputs.sealed == 'true'
-        env:
+          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
           UNSEAL_K1: ${{ secrets.OPENBAO_UNSEAL_KEY_1 }}
           UNSEAL_K2: ${{ secrets.OPENBAO_UNSEAL_KEY_2 }}
           UNSEAL_K3: ${{ secrets.OPENBAO_UNSEAL_KEY_3 }}
-        run: llz ci bao-unseal
-
-      # Load root token from environment secret for re-configuration runs.
-      # No-op if OPENBAO_ROOT_TOKEN was already set by the init step above.
-      - name: Load root token from environment secret
-        env:
-          _RT: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-        run: |
-          if [ -z "${OPENBAO_ROOT_TOKEN:-}" ] && [ -n "$_RT" ]; then
-            echo "::add-mask::$_RT"
-            echo "OPENBAO_ROOT_TOKEN=$_RT" >> "$GITHUB_ENV"
-          fi
-
-      # The "Revoke root token" step at the END of this workflow revokes the
-      # in-workflow token but doesn't update the GH secret. On the NEXT run,
-      # the GH secret still holds the revoked value. The check below validates
-      # the loaded token via `bao token lookup-self`; if it's revoked
-      # (Code 403 — permission denied), regenerate via the
-      # `bao operator generate-root` quorum flow and update the GH secret.
-      #
-      # This is the same flow operators run manually:
-      #   1. bao operator generate-root -init           → OTP + nonce
-      #   2. bao operator generate-root -nonce=N $RAFTk  → for each of 3 keys
-      #   3. bao operator generate-root -decode -otp     → new root token
-      #   4. gh secret set OPENBAO_ROOT_TOKEN            → write back to GH
-      #
-      # Gated on cluster being initialized AND unseal keys being available.
-      # Skipped if initialized=false (we'd be in the init branch).
-      #
-      # IMPORTANT — `bao_status.outputs.sealed` reflects the state from the
-      # "Check OpenBao status" step which runs BEFORE Branch A / Branch B
-      # unseal. A prior change made sealed=true if ANY pod is sealed, which is
-      # exactly the case when entering Branch B. After Branch B finishes
-      # all 3 pods are unsealed, but bao_status.outputs.sealed is still
-      # the stale 'true'. The previous `sealed == 'false'` gate then
-      # skipped this regen step on the Branch-B re-configure path,
-      # leaving a revoked token in place — Configure OpenBao's preflight
-      # then errored on 403 permission denied. Drop the sealed gate; the
-      # inner runtime sealed-check below handles the "cluster genuinely
-      # sealed" case explicitly with a clear error.
-      - name: Regenerate root token if revoked
-        if: steps.bao_status.outputs.initialized == 'true' && env.OPENBAO_ROOT_TOKEN != ''
-        env:
-          UNSEAL_K1:  ${{ secrets.OPENBAO_UNSEAL_KEY_1 }}
-          UNSEAL_K2:  ${{ secrets.OPENBAO_UNSEAL_KEY_2 }}
-          UNSEAL_K3:  ${{ secrets.OPENBAO_UNSEAL_KEY_3 }}
-          GH_TOKEN:   ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-          GH_REPO:    ${{ env.GH_REPO }}
-        run: llz ci bao-regen-root --region "$REGION"
-
-      # Expose root-token availability as a step output.
-      # env. context in step if: only reads the static job-level env block, not
-      # values written to $GITHUB_ENV by previous steps — hence the explicit check.
-      - name: Check root token availability
-        id: check_token
-        run: |
-          if [ -n "${OPENBAO_ROOT_TOKEN:-}" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            {
-              printf 'Root token unavailable — configure and seed steps will be skipped.\n'
-              printf 'To re-configure an existing cluster: set OPENBAO_ROOT_TOKEN as an\n'
-              printf 'infra-%s environment secret and re-run, OR ensure\n' "$REGION"
-              printf 'OPENBAO_UNSEAL_KEY_{1,2,3} are set so the workflow can regenerate.\n'
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+        run: llz ci bao-ensure-ready --region "$REGION"
 
       - name: Pre-flight — verify GitHub secrets-write token for configuration
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         env:
           OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
         run: |
@@ -505,13 +396,13 @@ jobs:
       # defaults to that, read from the cluster-bootstrap tfvars. vars.HARBOR_URL
       # (the job-level env) still overrides; fails only if neither is available.
       - name: Pre-flight — resolve Harbor URL for configuration
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         run: llz ci resolve-harbor-url --region "$REGION"
 
       # ── Configure: mounts, auth, policies, roles ───────────────────────────────
       # All enable commands are idempotent (|| true). Write commands are upserts.
       - name: Configure OpenBao
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         run: llz ci bao-configure --region "$REGION"
 
       # ── Apply the post-apl-bootstrap kustomize tree ───────────────────────────
@@ -532,34 +423,14 @@ jobs:
       # instance-wide (DRY — one copy under _shared, applied to every region's
       # cluster); ${REGION} selects the target cluster's kubeconfig.
       - name: Apply post-apl-bootstrap kustomize tree
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         run: |
           set -euo pipefail
           kubectl apply -k "apl-values/_shared/manifest/post-apl-bootstrap"
           echo "post-apl-bootstrap resources applied (OpenTelemetryCollector + future CRD-dependent resources)."
 
-      # ── Seed: ESO and CI AppRole credentials ───────────────────────────────────
-      # eso-approle-secret: ESO reads secretId to authenticate with OpenBao.
-      # The GH secrets use the same repo-level naming convention as the
-      # approle-rotation CronWorkflow so secrets stay consistent after the
-      # first rotation: OPENBAO_APPROLE_SECRET_ID for an active/standalone
-      # cluster, OPENBAO_APPROLE_SECRET_ID_STANDBY for the standby peer
-      # (`llz ci seed-approle` branches on HA_ROLE).
-      - name: Seed ESO AppRole secret and GitHub CI secrets
-        if: steps.check_token.outputs.available == 'true'
-        run: |
-          llz ci seed-approle --role platform-ci \
-            --k8s-secret llz-external-secrets/eso-approle-secret:secretId \
-            --gh-role-secret OPENBAO_APPROLE_ROLE_ID \
-            --gh-secret OPENBAO_APPROLE_SECRET_ID \
-            --gh-secret-standby OPENBAO_APPROLE_SECRET_ID_STANDBY \
-            --done-message "eso-approle-secret and GitHub CI secrets updated."
-
-      # continue-on-error: a Harbor problem (unreachable URL, unhealthy pods)
-      # must not abort the job — the ~12 unrelated seed steps below it still
-      # need to run. Harbor secrets can be seeded later by re-running.
       - name: Wait for Harbor readiness
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         continue-on-error: true
         run: |
           # Run wherever Harbor is deployed (not just 'primary' — e.g. e2e, which
@@ -589,7 +460,7 @@ jobs:
       # when harbor-core is absent (secondary has no in-cluster Harbor). Exports
       # HARBOR_API_URL; the pid lands in /tmp/harbor-pf.pid for the stop step.
       - name: Start Harbor API port-forward
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         run: llz ci harbor-port-forward
 
       # ── Ensure: Harbor platform project exists ────────────────────────────────────
@@ -598,24 +469,8 @@ jobs:
       # workflow pushes images. This step is idempotent: 409 means already exists.
       # Skipped gracefully if Harbor is not yet deployed — re-run after Harbor is up.
       - name: Ensure Harbor platform project exists
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         run: llz ci harbor-ensure-project
-
-      # ── Seed: Harbor admin password ─────────────────────────────────────────────
-      # Reads Harbor's Helm-generated admin password from the
-      # harbor/harbor-admin-password Secret (apl-core 5.x layout) and writes
-      # it to secret/harbor/admin so ESO can sync harbor-admin-credentials.
-      # Skipped gracefully if Harbor is not yet deployed — re-run after Harbor is up.
-      # apl-core 5.0.0 installs Harbor in the `harbor` namespace with the admin
-      # password Secret named harbor-admin-password.
-      - name: Seed Harbor admin secret in OpenBao
-        if: steps.check_token.outputs.available == 'true'
-        run: |
-          llz ci bao-seed --path secret/harbor/admin \
-            --field password=k8s:harbor/harbor-admin-password/HARBOR_ADMIN_PASSWORD \
-            --on-missing skip \
-            --missing-note 'harbor-admin-password Secret not found — Harbor not yet deployed.' \
-            --missing-note 'Re-run this workflow after Harbor is up to seed secret/harbor/admin.'
 
       # ── Seed: Harbor robot accounts ────────────────────────────────────────────
       # PRIMARY: Creates two Harbor system robots (ci-firewall-controller with
@@ -628,7 +483,7 @@ jobs:
       # continue-on-error: provision-harbor-robots hard-exits if the Harbor
       # API is unreachable; that must not block the non-Harbor seed steps below.
       - name: Provision Harbor robot accounts
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         continue-on-error: true
         env:
           HARBOR_URL:             ${{ env.HARBOR_URL }}
@@ -641,28 +496,6 @@ jobs:
           EXISTING_PULL_SECRET:   ${{ secrets.HARBOR_PULL_PASSWORD }}
         run: llz ci provision-harbor-robots
 
-      # ── Seed: GitHub dispatch token ─────────────────────────────────────────────
-      # Seeds secret/infra/github-dispatch-token used by the harbor-ready PostSync hook.
-      # Requires OPENBAO_SECRETS_WRITE_TOKEN (fine-grained PAT, Actions + Secrets: write) as an environment secret.
-      # On active/standalone (Harbor runs here): a missing token breaks the
-      # harbor-ready automation chain — the PostSync hook ExternalSecret stays
-      # in SecretSyncedError and build-firewall-controller never fires — so the
-      # miss defers failure (BOOTSTRAP_ERRORS=true). On a standby (no local
-      # Harbor): harbor-ready is the active's concern; summary-note skip only.
-      - name: Seed GitHub dispatch token in OpenBao
-        if: steps.check_token.outputs.available == 'true'
-        env:
-          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          llz ci bao-seed --path secret/infra/github-dispatch-token \
-            --field token=env:OPENBAO_SECRETS_WRITE_TOKEN \
-            --on-missing error \
-            --on-missing-standby skip \
-            --missing-annotation "OPENBAO_SECRETS_WRITE_TOKEN is not set for the infra-${REGION} environment." \
-            --missing-annotation "Without it, secret/infra/github-dispatch-token cannot be seeded and the harbor-ready" \
-            --missing-annotation "PostSync hook will fail to dispatch build-firewall-controller. Add the secret and re-run." \
-            --missing-note-standby 'OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/infra/github-dispatch-token (standby).'
-
       # ── Seed: Harbor buildah Docker config ──────────────────────────────────────
       # Generates a Docker config JSON from the Harbor robot credentials already
       # stored in secret/harbor/robot and seeds secret/harbor/docker-config.
@@ -672,7 +505,7 @@ jobs:
       # The config JSON (registry host = HARBOR_URL without its scheme,
       # auth = base64 user:pass) is built and masked inside the command.
       - name: Seed Harbor buildah Docker config in OpenBao
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         run: llz ci seed-harbor-dockerconfig
         env:
           HARBOR_URL: ${{ env.HARBOR_URL }}
@@ -683,99 +516,37 @@ jobs:
       # (e.g. first bootstrap before Harbor is deployed). Fails the job on a 401
       # (robot exists but credentials are wrong — this would break image pulls).
       - name: Smoke-test Harbor robot credentials
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         run: llz ci harbor-smoke
 
-      # ── Seed: cert-automation GitHub token ─────────────────────────────────────
-      # Seeds secret/cert-automation/github-token using the same OPENBAO_SECRETS_WRITE_TOKEN
-      # PAT (repo scope) already required for harbor-ready dispatch and AppRole rotation.
-      # Used by the cert-automation-github-token ExternalSecret (llz-cert-automation namespace).
-      - name: Seed cert-automation GitHub token in OpenBao
-        if: steps.check_token.outputs.available == 'true'
+      # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
+      # One step runs every generic `bao-seed` path from the bootstrapSeeds()
+      # table in `llz ci bao-seed-all` (tools/cmd/llz/ci_bao_seed_all.go):
+      #   secret/harbor/admin                  (k8s: harbor/harbor-admin-password)
+      #   secret/infra/github-dispatch-token   (harbor-ready PostSync hook)
+      #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
+      #   secret/grafana/admin                 (generated, idempotent)
+      #   secret/otel/ingress                  (generated bearer, idempotent)
+      #   secret/loki/object-store             (LOKI_S3_* env secrets)
+      # Per-seed on-missing modes, idempotency guards, and summary notes are
+      # UNCHANGED — they moved from these flags into the table. A missing env:/k8s:
+      # source defers per its mode (BOOTSTRAP_ERRORS for github-dispatch-token on
+      # active/standalone and loki; the rest skip with a summary note); a kv-put
+      # failure aborts before the remaining seeds, exactly as a failed inline step
+      # did. HA_ROLE (job env) drives the github-dispatch-token standby skip.
+      # The harbor-specific seeds that derive their own material — robot accounts
+      # and docker-config above, registry-S3 below — keep their dedicated commands.
+      # Runs AFTER the Harbor block so secret/harbor/admin finds the in-cluster
+      # harbor-admin-password Secret; OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV
+      # (the ensure step). harbor-ensure-project / provision-harbor-robots read the
+      # admin password from the k8s Secret directly, so they don't need this seed.
+      - name: Seed OpenBao KV bootstrap paths
+        if: steps.ensure.outputs.available == 'true'
         env:
           OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          llz ci bao-seed --path secret/cert-automation/github-token \
-            --field token=env:OPENBAO_SECRETS_WRITE_TOKEN \
-            --on-missing skip \
-            --missing-note 'OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/cert-automation/github-token.'
-
-      # ── Seed: AppRole rotation workflow credentials ─────────────────────────────
-      # Seeds secret/approle/rotation-secrets so the approle-rotation-secrets
-      # ExternalSecret (approle-rotation-externalsecrets.yaml) can create the K8s
-      # Secret consumed by the AppRole rotation CronWorkflow. Requires
-      # OPENBAO_SECRETS_WRITE_TOKEN (fine-grained PAT, Actions + Secrets: write) — same token
-      # used to seed secret/infra/github-dispatch-token above.
-      - name: Seed AppRole rotation workflow credentials in OpenBao
-        if: steps.check_token.outputs.available == 'true'
-        env:
-          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          llz ci bao-seed --path secret/approle/rotation-secrets \
-            --field github_token=env:OPENBAO_SECRETS_WRITE_TOKEN \
-            --on-missing skip \
-            --missing-note 'OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/approle/rotation-secrets.' \
-            --missing-note "Add it as an infra-${REGION} environment secret and re-run."
-
-      # ── Seed: Grafana admin credentials ────────────────────────────────────────
-      # Seeds secret/grafana/admin so the grafana-admin-externalsecret can create
-      # the K8s Secret consumed by Grafana. IDEMPOTENT: skip if a password
-      # already exists in OpenBao so workflow reruns don't break operator
-      # logins ~30 min after a successful first bootstrap (skip if already seeded).
-      - name: Seed Grafana admin credentials in OpenBao
-        if: steps.check_token.outputs.available == 'true'
-        run: |
-          # shellcheck disable=SC1003  # trailing \ in the kubectl-hint summary lines is literal display text, not a shell escape
-          llz ci bao-seed --path secret/grafana/admin \
-            --skip-if-present password \
-            --field username=literal:admin \
-            --field password=gen:base64:24 \
-            --seeded-message 'secret/grafana/admin seeded (new password generated).' \
-            --summary-on-seed '' \
-            --summary-on-seed '**Grafana admin credentials seeded.** Retrieve the password after deploy:' \
-            --summary-on-seed '```' \
-            --summary-on-seed 'kubectl -n llz-openbao exec platform-openbao-0 -- \' \
-            --summary-on-seed '  env VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true \' \
-            --summary-on-seed '  bao kv get -field=password secret/grafana/admin' \
-            --summary-on-seed '```'
-
-      # ── Seed: OTel Collector ingress bearer token ───────────────────────────────
-      # Seeds secret/otel/ingress so the otel-collector-auth-externalsecret can
-      # create the K8s Secret consumed by the OTel Collector auth extension.
-      # IDEMPOTENT: skip if a token already exists so reruns don't invalidate
-      # any in-flight client config that depends on the current bearer.
-      - name: Seed OTel Collector bearer token in OpenBao
-        if: steps.check_token.outputs.available == 'true'
-        run: |
-          llz ci bao-seed --path secret/otel/ingress \
-            --skip-if-present token \
-            --field token=gen:hex:32 \
-            --seeded-message 'secret/otel/ingress seeded (new token generated).'
-
-      # ── Seed: Loki object-store credentials ────────────────────────────────────
-      # Seeds secret/loki/object-store from the LOKI_S3_ACCESS_KEY /
-      # LOKI_S3_SECRET_KEY environment secrets (Linode Object Storage keys scoped
-      # to the platform-loki-* buckets). The loki-object-store ExternalSecret syncs
-      # this into the platform-loki-object-store K8s Secret consumed by Loki's
-      # extraEnvFrom block.
-      #
-      # Required secrets (infra-<region> environment):
-      #   LOKI_S3_ACCESS_KEY — Linode Object Storage access key for Loki buckets
-      #   LOKI_S3_SECRET_KEY — Linode Object Storage secret key for Loki buckets
-      - name: Seed Loki object-store credentials in OpenBao
-        if: steps.check_token.outputs.available == 'true'
-        env:
           LOKI_S3_ACCESS_KEY: ${{ secrets.LOKI_S3_ACCESS_KEY }}
           LOKI_S3_SECRET_KEY: ${{ secrets.LOKI_S3_SECRET_KEY }}
-        run: |
-          llz ci bao-seed --path secret/loki/object-store \
-            --field AWS_ACCESS_KEY_ID=env:LOKI_S3_ACCESS_KEY \
-            --field AWS_SECRET_ACCESS_KEY=env:LOKI_S3_SECRET_KEY \
-            --on-missing error \
-            --missing-annotation 'LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY not set — secret/loki/object-store not seeded; Loki will CrashLoopBackOff' \
-            --missing-note 'LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY not set — skipping secret/loki/object-store.' \
-            --missing-note "Add them as infra-${REGION} environment secrets and re-run." \
-            --missing-note "Create the keys via: linode-cli object-storage keys-create --label platform-loki-${REGION}"
+        run: llz ci bao-seed-all --region "$REGION"
 
       # ── Seed: Harbor registry S3 credentials ───────────────────────────────────
       # Seeds secret/harbor/registry-s3 from the HARBOR_REGISTRY_S3_ACCESS_KEY /
@@ -805,7 +576,7 @@ jobs:
       # (platform-harbor-registry-<region>, matching the TF resource label),
       # endpoint, and region from it.
       - name: Seed Harbor registry S3 credentials in OpenBao
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         env:
           HARBOR_REGISTRY_S3_ACCESS_KEY: ${{ secrets.HARBOR_REGISTRY_S3_ACCESS_KEY }}
           HARBOR_REGISTRY_S3_SECRET_KEY: ${{ secrets.HARBOR_REGISTRY_S3_SECRET_KEY }}
@@ -823,17 +594,9 @@ jobs:
       # (apl-values/_shared/manifest/argo-resync-nudger); this just collapses the
       # latency at the exact moment seeding unblocks them. Never fails the bootstrap.
       - name: Nudge Argo CD to converge secrets (post-seed)
-        if: steps.check_token.outputs.available == 'true'
+        if: steps.ensure.outputs.available == 'true'
         continue-on-error: true
-        run: |
-          set -uo pipefail
-          for app in llz-secret-store platform-bootstrap; do
-            kubectl -n argocd annotate application "$app" \
-              argocd.argoproj.io/refresh=hard --overwrite || true
-            kubectl -n argocd patch application "$app" --type merge \
-              -p '{"operation":{"initiatedBy":{"username":"bootstrap-openbao"},"sync":{}}}' || true
-            echo "nudged $app"
-          done
+        run: llz ci nudge-argo
 
       # NOTE — the "Seed Gitea backup S3 credentials in OpenBao" step that
       # wrote secret/gitea/backup-s3 was removed in the apl-core anti-
@@ -864,18 +627,9 @@ jobs:
       - name: Extract standby CA cert
         id: secondary_ca
         if: env.HA_ROLE == 'standby'
-        run: |
-          set -euo pipefail
-          CA_B64=$(kubectl -n llz-openbao get secret openbao-tls \
-            -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
-          if [ -z "$CA_B64" ]; then
-            echo "::warning::openbao-tls Secret not found in standby cluster — CA not provisioned"
-            echo "ca_available=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "ca_b64=$CA_B64"     >> "$GITHUB_OUTPUT"
-          echo "ca_available=true"  >> "$GITHUB_OUTPUT"
-          echo "Standby CA cert extracted."
+        # Non-fatal: a standby whose openbao-tls isn't up yet just skips peer-CA
+        # provisioning (ca_available=false) rather than failing the bootstrap.
+        run: llz ci extract-openbao-ca
 
       # NOTE — the `Verify ExternalSecrets synced` step (and its backing
       # template-scripts/verify-externalsecrets.sh) was deleted in the convergence-
@@ -907,13 +661,13 @@ jobs:
       # the policy now active). Does NOT fail the workflow — the cluster is
       # still functional, just less secure than intended.
       - name: Audit PVCs against encrypted-Retain StorageClass
-        if: steps.check_token.outputs.available == 'true' && env.HA_ROLE != 'standby'
+        if: steps.ensure.outputs.available == 'true' && env.HA_ROLE != 'standby'
         run: llz ci audit-pvc-storageclass
 
       # ── Stop Harbor API port-forward ───────────────────────────────────────────
       # Always-run cleanup for the background `kubectl port-forward` started
       # before the Harbor API steps. Idempotent — silently no-ops if the
-      # port-forward step never ran (e.g. secondary, or skipped check_token).
+      # port-forward step never ran (e.g. secondary, or no root token available).
       - name: Stop Harbor API port-forward
         if: always()
         run: |
@@ -1008,19 +762,7 @@ jobs:
       - name: Provision openbao-peer-tls Secret in active peer cluster
         env:
           CA_B64: ${{ needs.bootstrap.outputs.ca_b64 }}
-        run: |
-          set -euo pipefail
-          # Guard against an empty handoff (e.g. a masked job output, which the
-          # runner redacts to empty) — an empty ca.crt would "provision" silently.
-          if [ -z "$CA_B64" ]; then
-            echo "::error::ca_b64 job output is empty — refusing to provision an empty ca.crt"
-            exit 1
-          fi
-          kubectl -n llz-openbao create secret generic openbao-peer-tls \
-            --from-literal=ca.crt="$(printf '%s' "$CA_B64" | base64 -d)" \
-            --dry-run=client -o yaml | kubectl apply -f -
-          echo "openbao-peer-tls Secret provisioned in the active peer cluster."
-          echo "Establishes cross-cluster trust (VAULT_SKIP_VERIFY=false) for standby operations."
+        run: llz ci provision-peer-ca
 
       - name: Cleanup kubeconfig
         if: always()
@@ -1081,20 +823,9 @@ jobs:
 
       - name: Extract standby CA cert
         id: extract
-        run: |
-          set -euo pipefail
-          CA_B64=$(kubectl -n llz-openbao get secret openbao-tls \
-            -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
-          if [ -z "$CA_B64" ]; then
-            echo "::error::openbao-tls Secret not found in standby cluster — cannot extract CA"
-            echo "ca_available=false" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          # No ::add-mask:: — the CA cert is public material, and masking would
-          # empty this job output (see the note on the bootstrap job's twin step).
-          echo "ca_b64=$CA_B64"     >> "$GITHUB_OUTPUT"
-          echo "ca_available=true"  >> "$GITHUB_OUTPUT"
-          echo "Standby CA cert extracted."
+        # --required: this job exists solely to (re)provision the peer CA, so an
+        # absent openbao-tls is a hard error here (unlike the bootstrap job's twin).
+        run: llz ci extract-openbao-ca --required
 
       - name: Cleanup kubeconfig
         if: always()
@@ -1151,19 +882,7 @@ jobs:
       - name: Provision openbao-peer-tls Secret in active peer cluster
         env:
           CA_B64: ${{ needs.fetch-standby-ca.outputs.ca_b64 }}
-        run: |
-          set -euo pipefail
-          # Guard against an empty handoff (e.g. a masked job output, which the
-          # runner redacts to empty) — an empty ca.crt would "provision" silently.
-          if [ -z "$CA_B64" ]; then
-            echo "::error::ca_b64 job output is empty — refusing to provision an empty ca.crt"
-            exit 1
-          fi
-          kubectl -n llz-openbao create secret generic openbao-peer-tls \
-            --from-literal=ca.crt="$(printf '%s' "$CA_B64" | base64 -d)" \
-            --dry-run=client -o yaml | kubectl apply -f -
-          echo "openbao-peer-tls Secret provisioned in the active peer cluster."
-          echo "Establishes cross-cluster trust (VAULT_SKIP_VERIFY=false) for standby operations."
+        run: llz ci provision-peer-ca
 
       - name: Cleanup kubeconfig
         if: always()
