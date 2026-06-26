@@ -112,8 +112,12 @@ resource "random_password" "loki_admin" {
 # webhook being up at cm-create time (the failure mode that crashlooped the
 # gateway when Kyverno lagged). On LKE-E the cluster DNS Service is `coredns` in
 # kube-system; cluster-bootstrap already has working cluster access, so this read
-# is safe. The Kyverno loki-gateway-resolver policy is kept as a backstop: if this
-# value is ever empty the chart falls back to the hostname and the policy fixes it.
+# is safe. NOTE: this rendered value is now the SOLE mechanism — the Kyverno
+# loki-gateway-resolver policy that once backstopped an empty value was RETIRED
+# (see the retired-policy note further down, and apl-values/_shared/values.yaml).
+# So an empty value is NOT self-healing: it ships a crashlooping gateway. The read
+# must succeed on apply (it does on any reachable cluster; the only place it's
+# skipped is the destroy path, via the count guard below).
 #
 # count guards the destroy path: this is a data source, so `terraform destroy`
 # still refreshes it even after the teardown's "Untrack cluster-bootstrap
