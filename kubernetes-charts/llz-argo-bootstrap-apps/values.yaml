@@ -179,7 +179,7 @@ components:
       type: oci
       # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
       chart: llz-cluster-foundation
-      version: 0.1.3
+      version: 0.1.4
       releaseName: llz-cluster-foundation
     syncPolicy:
       automated:
