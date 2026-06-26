@@ -101,7 +101,7 @@ variable "linode_token" {
 }
 
 variable "openbao_secrets_write_token" {
-  description = "GitHub PAT with `repo` + `secrets:write` scope. Consumed by null_resource.clear_openbao_secrets_on_destroy to delete OPENBAO_ROOT_TOKEN (and downstream OPENBAO_UNSEAL_KEY_{1,2,3}, OPENBAO_APPROLE_SECRET_ID_<REGION>, HARBOR_ROBOT_NAME, HARBOR_PASSWORD) from the `infra-<region>` environment on cluster-bootstrap destroy. After a cluster destroy these are all bound to an OpenBao / Harbor instance that no longer exists; leaving them set lets stale-credential failures latch onto the next bootstrap (Configure OpenBao 403 permission denied). Optional: empty default = no-op + log a warning, operator clears manually."
+  description = "GitHub PAT with `repo` + `secrets:write` scope. Consumed by null_resource.clear_openbao_secrets_on_destroy to delete OPENBAO_ROOT_TOKEN (and downstream OPENBAO_RECOVERY_KEY_{1,2,3}, OPENBAO_SEAL_KEY, OPENBAO_APPROLE_SECRET_ID_<REGION>, HARBOR_ROBOT_NAME, HARBOR_PASSWORD) from the `infra-<region>` environment on cluster-bootstrap destroy. After a cluster destroy these are all bound to an OpenBao / Harbor instance that no longer exists; leaving them set lets stale-credential failures latch onto the next bootstrap (Configure OpenBao 403 permission denied). Optional: empty default = no-op + log a warning, operator clears manually."
   type        = string
   sensitive   = true
   default     = ""

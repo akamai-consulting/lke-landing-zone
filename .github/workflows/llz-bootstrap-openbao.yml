@@ -13,15 +13,15 @@ name: llz-bootstrap-openbao (reusable)
 #
 # CONVERGENCE CONTRACT — see docs/architecture/convergence-contract.md.
 #
-# The first-init / re-unseal / re-configure mode selection is the same
+# The first-init / wait-for-unseal / re-configure mode selection is the same
 # detect → choose a path → re-verify shape the cluster-health contract uses,
 # applied to OpenBao seal state — and it lives in ONE place now: the
 # `llz ci bao-ensure-ready` command (tools/cmd/llz/ci_bao_ensure_ready.go),
-# run as a single step below. It composes the same bao-init / bao-unseal /
-# bao-unseal-followers / bao-regen-root logic the individual `llz ci bao-*`
-# commands expose; `openbao-auto-unseal.yml` reuses those same commands
-# (`bao-status` + `bao-unseal`) for its scheduled re-unseal loop, so there is
-# no inline seal-detect/unseal copy to keep in sync.
+# run as a single step below. Under the chart's `seal "static"` auto-unseal each
+# pod unseals itself at boot from the static seal key (created by the
+# `bao-seed-seal-key` step before the pods start), so there is no submit-keys
+# flow and no scheduled re-unseal cron — bao-ensure-ready just runs `bao operator
+# init` on a fresh cluster and waits for the pods to converge to unsealed.
 #
 # Likewise the generic KV seeds run from one data-driven step
 # (`llz ci bao-seed-all`, table in ci_bao_seed_all.go) rather than one inline
@@ -35,17 +35,20 @@ name: llz-bootstrap-openbao (reusable)
 # Two modes depending on cluster state:
 #
 #   First-time bootstrap (uninitialized cluster):
-#     • Runs bao operator init → 5 unseal keys + root token
-#     • Stores keys 1–3 as infra-<region> environment secrets for automated re-unseal
-#     • Prints all 5 keys + root token to job summary (copy to offline storage)
-#     • Unseals all 3 pods and joins followers to the Raft leader
+#     • Seeds the 32-byte static auto-unseal key Secret so the pods can start +
+#       auto-unseal (bao-seed-seal-key; key backed up to infra-<region>)
+#     • Runs bao operator init → 5 RECOVERY keys + root token (recovery keys
+#       authorize generate-root; they do NOT unseal — the static seal key does)
+#     • Stores recovery keys 1–3 as infra-<region> environment secrets
+#     • Prints all 5 recovery keys + root token to job summary (copy offline)
+#     • Waits for all 3 pods to auto-unseal (followers join via retry_join)
 #     • Configures KV v2, Kubernetes auth, GitHub-OIDC auth, policies, roles, audit log
 #     • Seeds secret/infra/github-dispatch-token and the other env-sourced KV paths
 #       (secret/harbor/admin, grafana/admin, otel/ingress now arrive via ESO PushSecrets)
 #     • Revokes the root token on completion
 #
-#   Emergency re-unseal (initialized but sealed, e.g. after pod restart):
-#     • Uses OPENBAO_UNSEAL_KEY_1/2/3 from the infra-<region> environment
+#   Re-seal recovery (initialized but sealed, e.g. after pod restart):
+#     • Pods self-unseal from the static seal key; this path just waits for them
 #     • Skips all configuration steps
 #
 #   Re-configure (initialized + unsealed, configuration incomplete):
@@ -57,10 +60,12 @@ name: llz-bootstrap-openbao (reusable)
 #   LINODE_API_TOKEN         — Linode API token
 #   TF_STATE_ACCESS_KEY      — S3 backend access key
 #   TF_STATE_SECRET_KEY      — S3 backend secret key
-#   OPENBAO_UNSEAL_KEY_1/2/3 — set automatically on first bootstrap; needed for re-unseal
+#   OPENBAO_SEAL_KEY         — set automatically on first bootstrap; the 32-byte static
+#                              auto-unseal key (restored into the cluster on a rebuild)
+#   OPENBAO_RECOVERY_KEY_1/2/3 — set automatically on first bootstrap; authorize generate-root
 #   OPENBAO_ROOT_TOKEN       — (optional) set manually to trigger re-configuration
 #   OPENBAO_SECRETS_WRITE_TOKEN    — fine-grained PAT (github.com), this repo, Actions + Secrets: write; used by gh secret set for
-#                              unseal/Harbor credentials and seeds the harbor-ready
+#                              seal/recovery/Harbor credentials and seeds the harbor-ready
 #                              dispatch token
 #
 # Required repository variables:
@@ -117,11 +122,13 @@ on:
         required: false
       OPENBAO_SECRETS_WRITE_TOKEN:
         required: false
-      OPENBAO_UNSEAL_KEY_1:
+      OPENBAO_RECOVERY_KEY_1:
         required: false
-      OPENBAO_UNSEAL_KEY_2:
+      OPENBAO_RECOVERY_KEY_2:
         required: false
-      OPENBAO_UNSEAL_KEY_3:
+      OPENBAO_RECOVERY_KEY_3:
+        required: false
+      OPENBAO_SEAL_KEY:
         required: false
       HARBOR_PASSWORD:
         required: false
@@ -336,14 +343,31 @@ jobs:
             --ensure-namespace \
             --skip-if-secret-exists
 
+      # ── Seed the static auto-unseal key (must precede the pod wait) ────────────
+      # The chart's `seal "static"` stanza mounts the openbao-unseal-key Secret at
+      # /openbao/seal/unseal.key; without it the StatefulSet pods sit in
+      # ContainerCreating (a missing Secret volume waits, it does not crash-loop),
+      # so this must run BEFORE "Wait for OpenBao pods to be running" below.
+      # Idempotent + never-rotating: an existing Secret is left untouched; on a
+      # namespace rebuild the key is restored from the infra-<region>
+      # OPENBAO_SEAL_KEY secret; a first-ever bootstrap generates it, persists it
+      # to infra-<region> for DR (needs GH_TOKEN, the job-level secrets-write PAT),
+      # and prints an offline-backup banner — losing this key loses the data
+      # (recovery keys authorize generate-root but cannot decrypt the root key).
+      - name: Seed OpenBao static auto-unseal key
+        env:
+          OPENBAO_SEAL_KEY: ${{ secrets.OPENBAO_SEAL_KEY }}
+        run: llz ci bao-seed-seal-key --region "$REGION"
+
       # ── Wait and status check ───────────────────────────────────────────────────
       # `kubectl rollout status` waits for pods to be Ready, but a freshly
-      # deployed OpenBao comes up sealed and the readiness probe correctly
-      # marks sealed pods as not-Ready (keeps them out of Service endpoints).
-      # Readiness only happens AFTER this workflow inits + unseals — so
-      # rollout status would time out on every first bootstrap. The init and
-      # unseal steps below only `kubectl exec` into the pods, which just needs
-      # them Running — hence wait-pods polls phase, not readiness.
+      # deployed OpenBao comes up uninitialized — and an uninitialized pod reports
+      # sealed, which the readiness probe correctly marks as not-Ready (keeps it
+      # out of Service endpoints). Readiness only happens AFTER this workflow runs
+      # `bao operator init` (the pods then auto-unseal from the static seal key) —
+      # so rollout status would time out on every first bootstrap. The init step
+      # below only `kubectl exec`s into the pods, which just needs them Running —
+      # hence wait-pods polls phase, not readiness.
       #
       # 600s budget. Cold-bootstrap path: PVC binds → Linode Volume create
       # (~30s/PVC × 3 raft pods serially = 90s under WaitForFirstConsumer
@@ -358,30 +382,31 @@ jobs:
             platform-openbao-0 platform-openbao-1 platform-openbao-2
 
       # ── Seal/token lifecycle — one command (CONVERGENCE CONTRACT) ──────────────
-      # `llz ci bao-ensure-ready` collapses the former nine steps (status probe,
-      # first-init preflight, init, unseal pod-0, unseal followers, Branch-B
-      # re-unseal, load-root, regen-root-if-revoked, availability check) into one
-      # detect → choose-a-path → re-verify command:
-      #   uninitialized        → init + unseal pod-0 + join/unseal followers
-      #   initialized + sealed → re-unseal every pod with the quorum keys
-      #   initialized          → validate the loaded root token, regen via quorum
-      #                          if a prior run's revoke left a dead value behind
+      # `llz ci bao-ensure-ready` collapses the former steps (status probe,
+      # first-init preflight, init, wait-for-auto-unseal, load-root,
+      # regen-root-if-revoked, availability check) into one detect → choose-a-path
+      # → re-verify command:
+      #   uninitialized        → init (recovery keys) + wait for the pods to
+      #                          auto-unseal from the static seal key
+      #   initialized + sealed → wait for the pod(s) to self-unseal (no keys)
+      #   initialized          → validate the loaded root token, regen via the
+      #                          recovery-key quorum if a prior run revoked it
       # It writes available=<bool> to $GITHUB_OUTPUT (the gate every step below
       # checks) and re-exports the effective OPENBAO_ROOT_TOKEN to $GITHUB_ENV.
       # The first-init secrets-write-token preflight is folded in (it fails fast
       # if GH_TOKEN is unset on an uninitialized cluster). bao-init's no-manual-
       # raft-join contract (chart retry_join handles membership; a duplicate join
       # 500s) and the VAULT_SKIP_VERIFY local-hop rationale live in the command.
-      # GH_TOKEN/GH_REPO come from the job-level env; the keys + loaded root token
-      # are the infra-<region> secrets (empty on a first bootstrap — init mints
-      # and persists them).
+      # GH_TOKEN/GH_REPO come from the job-level env; the recovery keys + loaded
+      # root token are the infra-<region> secrets (empty on a first bootstrap —
+      # init mints and persists them).
       - name: Ensure OpenBao initialized + unsealed + root token
         id: ensure
         env:
           OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-          UNSEAL_K1: ${{ secrets.OPENBAO_UNSEAL_KEY_1 }}
-          UNSEAL_K2: ${{ secrets.OPENBAO_UNSEAL_KEY_2 }}
-          UNSEAL_K3: ${{ secrets.OPENBAO_UNSEAL_KEY_3 }}
+          RECOVERY_K1: ${{ secrets.OPENBAO_RECOVERY_KEY_1 }}
+          RECOVERY_K2: ${{ secrets.OPENBAO_RECOVERY_KEY_2 }}
+          RECOVERY_K3: ${{ secrets.OPENBAO_RECOVERY_KEY_3 }}
         run: llz ci bao-ensure-ready --region "$REGION"
 
       - name: Pre-flight — verify GitHub secrets-write token for configuration
@@ -696,16 +721,17 @@ jobs:
           region:                ${{ env.REGION }}
 
       # Re-acquire the OpenBao root token: `bootstrap` revoked it at its end, so
-      # bao-ensure-ready takes the initialized→regen-via-quorum path and re-exports
-      # OPENBAO_ROOT_TOKEN to $GITHUB_ENV. provision-harbor-robots (below) writes
-      # secret/harbor/robot to OpenBao and needs it.
+      # bao-ensure-ready takes the initialized→regen-via-quorum path (authorized by
+      # the recovery keys) and re-exports OPENBAO_ROOT_TOKEN to $GITHUB_ENV.
+      # provision-harbor-robots (below) writes secret/harbor/robot to OpenBao and
+      # needs it.
       - name: Ensure OpenBao reachable + root token
         id: ensure
         env:
           OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-          UNSEAL_K1: ${{ secrets.OPENBAO_UNSEAL_KEY_1 }}
-          UNSEAL_K2: ${{ secrets.OPENBAO_UNSEAL_KEY_2 }}
-          UNSEAL_K3: ${{ secrets.OPENBAO_UNSEAL_KEY_3 }}
+          RECOVERY_K1: ${{ secrets.OPENBAO_RECOVERY_KEY_1 }}
+          RECOVERY_K2: ${{ secrets.OPENBAO_RECOVERY_KEY_2 }}
+          RECOVERY_K3: ${{ secrets.OPENBAO_RECOVERY_KEY_3 }}
         run: llz ci bao-ensure-ready --region "$REGION"
 
       - name: Pre-flight — verify GitHub secrets-write token for configuration
