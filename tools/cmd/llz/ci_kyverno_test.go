@@ -172,6 +172,22 @@ func TestApplyKyvernoPolicy(t *testing.T) {
 		if !f.called("--field-manager=fm") {
 			t.Error("apply should pass the field manager")
 		}
+		// Post-apply: confirm the policy reached Ready.
+		if !f.called("wait --for=condition=Ready clusterpolicy/kyverno-pvc") {
+			t.Error("expected a post-apply ClusterPolicy Ready confirmation")
+		}
+	})
+
+	t.Run("policy never Ready -> warn, still nil err", func(t *testing.T) {
+		f := &fakeKubectl{responses: []kubectlRule{
+			{match: "wait --for=condition=Ready clusterpolicy", out: "timed out", ok: false},
+		}}
+		if err := applyKyvernoPolicy(base, testDeps(f, time.Second)); err != nil {
+			t.Fatalf("a not-Ready policy must soft-fail (nil err), got %v", err)
+		}
+		if !f.called("apply --server-side") {
+			t.Error("apply should still have run")
+		}
 	})
 
 	t.Run("readiness times out -> warn, no apply, nil err", func(t *testing.T) {

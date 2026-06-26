@@ -62,15 +62,35 @@ Error: Kubernetes cluster unreachable: Get "https://lke621819.api.us-ord.enterpr
  357: resource "helm_release" "apl" {
 `
 
-func TestTransientClusterUnreachable(t *testing.T) {
-	if !TransientClusterUnreachable(clusterUnreachableLog) {
-		t.Error("TransientClusterUnreachable should detect the cluster-unreachable error")
+// The plan-time data-source read that flaked in a real run — note there is NO
+// "Kubernetes cluster unreachable" wording here, only a bare API GET that timed
+// out, so the old narrow matcher missed it.
+const corednsPlanFlakeLog = `data.kubernetes_service.coredns[0]: Reading...
+
+Error: Get "https://lke622766.api.us-ord.enterprise.linodelke.net:6443/api/v1/namespaces/kube-system/services/coredns": net/http: TLS handshake timeout
+
+  with data.kubernetes_service.coredns[0],
+  on main.tf line 125, in data "kubernetes_service" "coredns":
+ 125: data "kubernetes_service" "coredns" {
+`
+
+func TestTransientAPIFlake(t *testing.T) {
+	if !TransientAPIFlake(clusterUnreachableLog) {
+		t.Error("should detect the provider 'cluster unreachable' wording")
 	}
-	// A genuine resource-level failure must NOT be treated as transient.
-	if TransientClusterUnreachable(fwCollisionLog) {
-		t.Error("TransientClusterUnreachable false positive on a firewall collision")
+	if !TransientAPIFlake(corednsPlanFlakeLog) {
+		t.Error("should detect a bare API GET TLS-handshake-timeout against the cluster endpoint")
 	}
-	if TransientClusterUnreachable("Apply complete!") {
-		t.Error("TransientClusterUnreachable false positive on a clean apply")
+	// A connection error that does NOT name the cluster API endpoint must not be
+	// treated as a control-plane blip.
+	if TransientAPIFlake(`Error: dial tcp 10.0.0.5:443: connect: connection refused`) {
+		t.Error("false positive on a connection error to a non-API endpoint")
+	}
+	// Genuine resource-level failures must NOT be treated as transient.
+	if TransientAPIFlake(fwCollisionLog) {
+		t.Error("false positive on a firewall collision")
+	}
+	if TransientAPIFlake("Apply complete!") {
+		t.Error("false positive on a clean apply")
 	}
 }

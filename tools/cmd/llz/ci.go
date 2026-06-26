@@ -104,6 +104,12 @@ func ciCmd() *cobra.Command {
 	// (readiness poll + apply + webhook-race soft-fail + retrofit kick), and the
 	// destroy-time finalizer-deadlock unwedge.
 	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(), ciDestroyUnwedgeCmd())
+	// Image/source skew guard: fail fast when the baked llz is older than the
+	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
+	c.AddCommand(ciAssertImageFreshCmd())
+	// CI guard: a container job whose run-steps lack a bash default falls back to
+	// dash and breaks `set -o pipefail` (the discover-workflow regression).
+	c.AddCommand(ciCheckWorkflowShellsCmd())
 	return c
 }
 
@@ -480,8 +486,8 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 	// wait-cluster-ready passed). Let it settle, then fall through to the shared
 	// re-plan + re-apply — the re-plan is load-bearing here, since the failed
 	// apply already created earlier resources and staled the saved plan.
-	if !healed && tf.TransientClusterUnreachable(applyLog) {
-		fmt.Fprintf(os.Stderr, "::warning::Apply hit a transient 'Kubernetes cluster unreachable' (control-plane TLS flake after readiness passed). Waiting %s for the control plane to settle, then retrying.\n", clusterUnreachableSettle)
+	if !healed && tf.TransientAPIFlake(applyLog) {
+		fmt.Fprintf(os.Stderr, "::warning::Apply hit a transient control-plane API flake (TLS handshake/timeout against :6443 after readiness passed). Waiting %s for the control plane to settle, then retrying.\n", clusterUnreachableSettle)
 		time.Sleep(clusterUnreachableSettle)
 		healed = true
 	}

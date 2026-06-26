@@ -204,6 +204,19 @@ func applyKyvernoPolicy(o kyvernoPolicyOpts, d kyvernoDeps) error {
 		return fmt.Errorf("kubectl apply %s failed", o.policyManifest)
 	}
 
+	// Confirm the policy actually reaches Ready — a ClusterPolicy can apply cleanly
+	// yet sit not-Ready (webhook/cert not wired), in which case it silently mutates
+	// nothing. Best-effort: surface a non-Ready policy as a ::warning:: (the
+	// PVC-storageclass audit still backstops any escapees) rather than failing the
+	// apply, since the cluster is otherwise functional.
+	if name := policyName(o.policyManifest); name != "" {
+		if _, ok := d.kubectl("wait", "--for=condition=Ready", "clusterpolicy/"+name, "--timeout=60s"); ok {
+			notice(fmt.Sprintf("clusterpolicy/%s is Ready (enforcing).", name))
+		} else {
+			warn(fmt.Sprintf("clusterpolicy/%s applied but did not report Ready within 60s — it may not be enforcing yet; the PVC-storageclass audit will flag any escapees.", name))
+		}
+	}
+
 	if o.retrofitConfigMap != "" {
 		retrofitKyvernoConfigMap(o, d)
 	}
