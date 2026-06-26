@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 )
 
 // fwCall records one stubbed kubectl invocation.
@@ -79,6 +81,65 @@ func captureFirewallOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	o, _ := io.ReadAll(ro)
 	e, _ := io.ReadAll(re)
 	return string(o), string(e)
+}
+
+// withFirewallResolve swaps the Linode-API resolver seam so --region tests run
+// without a live account.
+func withFirewallResolve(t *testing.T, fid, cid string, rErr error) {
+	t.Helper()
+	orig := firewallResolveFn
+	firewallResolveFn = func(string, tf.Labels) (string, string, error) { return fid, cid, rErr }
+	t.Cleanup(func() { firewallResolveFn = orig })
+}
+
+// TestResolveFirewallInputsIntoEnv covers the --region path: the firewall + cluster
+// IDs come from the (stubbed) API by label, VPC_CIDR straight from tfvars, and an
+// explicit env value is never clobbered.
+func TestResolveFirewallInputsIntoEnv(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "primary.tfvars"),
+		[]byte("cluster_label = \"c1\"\nvpc_subnet_cidr = \"10.8.0.0/14\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+	withFirewallResolve(t, "777", "888", nil)
+	t.Setenv("LINODE_TOKEN", "tok")
+	// Clear anything the harness might carry in so the resolver fills them.
+	t.Setenv("LINODE_FIREWALL_ID", "")
+	t.Setenv("CLUSTER_ID", "")
+	t.Setenv("VPC_CIDR", "")
+
+	if err := resolveFirewallInputsIntoEnv("primary"); err != nil {
+		t.Fatalf("resolveFirewallInputsIntoEnv: %v", err)
+	}
+	if got := os.Getenv("LINODE_FIREWALL_ID"); got != "777" {
+		t.Errorf("LINODE_FIREWALL_ID = %q, want 777", got)
+	}
+	if got := os.Getenv("CLUSTER_ID"); got != "888" {
+		t.Errorf("CLUSTER_ID = %q, want 888", got)
+	}
+	if got := os.Getenv("VPC_CIDR"); got != "10.8.0.0/14" {
+		t.Errorf("VPC_CIDR = %q, want 10.8.0.0/14 (from tfvars)", got)
+	}
+
+	// An explicit env value wins over resolution.
+	t.Setenv("LINODE_FIREWALL_ID", "override")
+	if err := resolveFirewallInputsIntoEnv("primary"); err != nil {
+		t.Fatalf("resolveFirewallInputsIntoEnv (override): %v", err)
+	}
+	if got := os.Getenv("LINODE_FIREWALL_ID"); got != "override" {
+		t.Errorf("LINODE_FIREWALL_ID = %q, want override (env wins)", got)
+	}
+}
+
+// Without a Linode token, --region resolution cannot list by label.
+func TestResolveFirewallInputsIntoEnvNoToken(t *testing.T) {
+	t.Setenv("LINODE_TOKEN", "")
+	t.Setenv("LINODE_API_TOKEN", "")
+	if err := resolveFirewallInputsIntoEnv("primary"); err == nil ||
+		!strings.Contains(err.Error(), "LINODE_TOKEN") {
+		t.Errorf("err = %v, want a LINODE_TOKEN requirement", err)
+	}
 }
 
 func TestRunCIBootstrapCloudFirewallEnvValidation(t *testing.T) {

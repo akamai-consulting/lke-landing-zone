@@ -30,6 +30,22 @@ variable "cluster_domain" {
   type        = string
 }
 
+variable "obj_cluster" {
+  description = <<-EOT
+    Linode Object Storage cluster id for this region (e.g. us-ord-1) — the SAME
+    value as object-storage/<env>.tfvars. cluster-bootstrap derives the Loki/Harbor
+    S3 bucket labels ("platform-<bucket>-<deployment>") and the S3 endpoint
+    ("https://<obj_cluster>.linodeobjects.com") from it as locals, replacing a
+    cross-workspace `terraform_remote_state` read of the object-storage workspace.
+    Spec instances: `llz render` writes it from spec.cluster.objectStorage.cluster;
+    non-spec instances MUST set it here (previously it was only needed in
+    object-storage/<env>.tfvars). Empty leaves the endpoint host blank — only
+    relevant when Loki/Harbor S3 is disabled.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "apl_values_repo_url" {
   description = "HTTPS URL of the GitOps repo that holds apl-values/ and manifest/ subtrees. **HTTPS is required** by apl-core's values schema (otomi.git.repoUrl pattern `^https?://.+`). A host that requires per-cluster node-IP allowlisting for HTTPS cannot satisfy LKE-E, so the values tree must be mirrored to a public-CA HTTPS-reachable host (GitHub.com, GitLab.com, or an internal HTTPS mirror). Example: https://github.com/<org>/platform-apl-values.git"
   type        = string
@@ -66,7 +82,7 @@ variable "apps_repo_revision" {
 }
 
 variable "loki_admin_password" {
-  description = "Admin password for the Loki gateway's HTTP basic auth. Required by apl-core's apps.loki schema when loki.enabled=true; rendered into apl-values/<env>/values.yaml as apps.loki.adminPassword. Supply via TF_VAR_loki_admin_password (sourced from secrets.LOKI_ADMIN_PASSWORD). When empty (first apply, before the secret exists) cluster-bootstrap generates one via random_password.loki_admin and the llz-terraform workflow persists it to the infra-<region> environment as LOKI_ADMIN_PASSWORD; later runs pass the stored value back in. NOTE: not yet on the ESO+OpenBao rotation lifecycle the other support-plane creds use — see docs/secrets.md (Known limitation — Loki admin password); moving it there is a tracked follow-up."
+  description = "Admin password for the Loki gateway's HTTP basic auth. Required by apl-core's apps.loki schema when loki.enabled=true; rendered into apl-values/<env>/values.yaml as apps.loki.adminPassword. Always supplied via TF_VAR_loki_admin_password: the llz-terraform workflow runs `llz ci ensure-env-secret` BEFORE this apply, which generates+persists the infra-<region> LOKI_ADMIN_PASSWORD secret on first run and exports it as TF_VAR_loki_admin_password (idempotent — no per-run rotation). cluster-bootstrap no longer generates this (the former random_password.loki_admin) nor outputs it for a post-apply stash, so it is not held in TF state's secret set. NOTE: not yet on the ESO+OpenBao rotation lifecycle the other support-plane creds use — see docs/secrets.md (Known limitation — Loki admin password); moving it there is a tracked follow-up."
   type        = string
   sensitive   = true
   default     = ""

@@ -147,10 +147,11 @@ if primary and secondary drift, requests routed to the drifted region fail.
 
 > **Known limitation — Loki admin password.** The Loki gateway's HTTP basic-auth
 > admin password (`LOKI_ADMIN_PASSWORD`) is **not yet** on the ESO+OpenBao rotation
-> lifecycle the other support-plane credentials use. `cluster-bootstrap` generates
-> it once (`random_password.loki_admin`), the `llz-terraform` workflow persists it
-> to the `infra-<region>` GitHub environment secret on first apply, and later runs
-> pass the stored value back in — but it is never rotated. Moving it onto the
+> lifecycle the other support-plane credentials use. The `llz-terraform` workflow's
+> `llz ci ensure-env-secret` step generates it once and persists it to the
+> `infra-<region>` GitHub environment secret on the first apply, then exports it as
+> `TF_VAR_loki_admin_password`; later runs reuse the stored value — but it is never
+> rotated, and `cluster-bootstrap` keeps no copy in TF state. Moving it onto the
 > ESO+OpenBao path is a tracked follow-up.
 
 ## Writing / rotating secrets — dual-write

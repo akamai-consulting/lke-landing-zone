@@ -66,7 +66,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciHealthApproleRotationCmd(), ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
 	// Apply-time secret stashes + failure diagnostics (llz-terraform.yml).
-	c.AddCommand(ciStashEnvSecretCmd(), ciDiagnoseArgoCDCmd())
+	c.AddCommand(ciStashEnvSecretCmd(), ciEnsureEnvSecretCmd(), ciDiagnoseArgoCDCmd())
 	// Release-e2e instantiate: pin the instance's TF_IMAGE/KUBE_IMAGE to this
 	// commit's ci images so the baked llz can't drift from the rendered workflow.
 	c.AddCommand(ciPinInstanceImagesCmd())
@@ -103,7 +103,8 @@ func ciCmd() *cobra.Command {
 	// main.tf): the apl_pipeline_ready readiness gate, the kyverno_* policy apply
 	// (readiness poll + apply + webhook-race soft-fail + retrofit kick), and the
 	// destroy-time finalizer-deadlock unwedge.
-	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(), ciDestroyUnwedgeCmd())
+	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(), ciDestroyUnwedgeCmd(),
+		ciClearClusterSecretsCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(ciAssertImageFreshCmd())

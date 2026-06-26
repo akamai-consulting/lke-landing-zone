@@ -26,6 +26,14 @@ const DefaultNodePoolLabel = "platform-pool"
 // llz can reject an over-long label before terraform ever runs.
 const MaxNodePoolLabelLen = 16
 
+// DefaultVPCSubnetCIDR is the effective vpc_subnet_cidr when <region>.tfvars omits
+// it — identical to the cluster module's variable default. MUST stay in lockstep
+// with the `vpc_subnet_cidr` default in
+// instance-template/terraform-iac-bootstrap/cluster/variables.tf so resolving the
+// firewall-controller's VPC_CIDR from tfvars matches what `terraform output
+// vpc_subnet_cidr` would have returned. TestDefaultVPCSubnetCIDR guards it.
+const DefaultVPCSubnetCIDR = "10.0.0.0/13"
+
 // TFVars holds the handful of values the CI terraform steps read out of a
 // <region>.tfvars file. FirewallLabel is the raw firewall_label override (""
 // when unset); use ResolveFirewallLabel for the effective label. NodeType /
@@ -44,6 +52,12 @@ type TFVars struct {
 	// to; empty means a dedicated VPC. It decides whether the module's counted
 	// linode_vpc.this resource exists (dedicated → this[0]) — see tf-import.
 	VPCNetwork string
+	// VPCSubnetCIDR is the IPv4 CIDR of the LKE worker-node VPC subnet. A missing
+	// vpc_subnet_cidr falls back to DefaultVPCSubnetCIDR, mirroring the cluster
+	// module's variable default. `llz ci bootstrap-cloud-firewall --region` feeds
+	// it to the firewall-controller as VPC_CIDR (the range its intra-VPC allow
+	// rules cover), replacing a `terraform output vpc_subnet_cidr` round-trip.
+	VPCSubnetCIDR string
 }
 
 // ParseTFVars extracts the cluster labels + node_type/node_count from tfvars
@@ -78,6 +92,10 @@ func ParseTFVars(content string) TFVars {
 			if v.VPCNetwork == "" {
 				v.VPCNetwork = val
 			}
+		case "vpc_subnet_cidr":
+			if v.VPCSubnetCIDR == "" {
+				v.VPCSubnetCIDR = val
+			}
 		case "node_type":
 			if v.NodeType == "" {
 				v.NodeType = val
@@ -92,6 +110,9 @@ func ParseTFVars(content string) TFVars {
 	}
 	if v.NodePoolLabel == "" {
 		v.NodePoolLabel = DefaultNodePoolLabel
+	}
+	if v.VPCSubnetCIDR == "" {
+		v.VPCSubnetCIDR = DefaultVPCSubnetCIDR
 	}
 	return v
 }

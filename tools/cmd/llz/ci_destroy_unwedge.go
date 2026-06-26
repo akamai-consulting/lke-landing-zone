@@ -32,13 +32,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
 )
 
@@ -47,51 +51,134 @@ import (
 type kubectlRunner func(args ...string) (string, bool)
 
 func ciDestroyUnwedgeCmd() *cobra.Command {
-	return &cobra.Command{
+	var region string
+	cmd := &cobra.Command{
 		Use:   "destroy-unwedge",
 		Short: "clear Argo/discovery/CNPG finalizer deadlocks before helm uninstalls apl (destroy-time)",
 		Long: "Native port of null_resource.unwedge_namespace_finalizers_on_destroy's\n" +
-			"local-exec heredoc. Runs as a destroy-time provisioner while the cluster is\n" +
+			"local-exec heredoc, now a standalone CI destroy step. Runs while the cluster is\n" +
 			"still up and clears the wedges that otherwise make `helm uninstall apl`'s\n" +
 			"--wait time out: scales down Argo CD, strips resources-finalizer.argocd from\n" +
 			"Applications/AppProjects, deletes stale aggregated APIServices (dead backing\n" +
 			"Service → Available=False → discovery failure), and strips CNPG cluster/pooler\n" +
 			"finalizers. All best-effort and non-fatal (always exit 0); a subsequent\n" +
-			"cluster delete reaps everything regardless. Reads the kubeconfig from the\n" +
-			"$KUBECONFIG_B64 environment var (base64), never from argv.",
+			"cluster delete reaps everything regardless.\n\n" +
+			"Kubeconfig source, in order: $KUBECONFIG_B64 (base64), then $KUBECONFIG (a\n" +
+			"file), then --region — which resolves the cluster by its <region>.tfvars\n" +
+			"label via the Linode API (LINODE_TOKEN / LINODE_API_TOKEN). When --region\n" +
+			"finds no live cluster (already reaped), this is a clean no-op.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIDestroyUnwedge() },
+		RunE: func(_ *cobra.Command, _ []string) error { return runCIDestroyUnwedge(region) },
 	}
+	cmd.Flags().StringVar(&region, "region", "", "tfvars prefix (e.g. primary); resolve the cluster kubeconfig by label via the Linode API when KUBECONFIG_B64/KUBECONFIG are unset")
+	return cmd
 }
 
-func runCIDestroyUnwedge() error {
-	b64 := os.Getenv("KUBECONFIG_B64")
-	if b64 == "" {
-		return fmt.Errorf("KUBECONFIG_B64 must be set")
+func runCIDestroyUnwedge(region string) error {
+	kubeconfigPath, cleanup, skip, err := resolveUnwedgeKubeconfig(region)
+	if cleanup != nil {
+		defer cleanup()
 	}
-	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
-		return fmt.Errorf("KUBECONFIG_B64 is not valid base64: %w", err)
+		return err
 	}
-	kubeconfig, err := os.CreateTemp("", "llz-unwedge-kubeconfig-*")
-	if err != nil {
-		return fmt.Errorf("create kubeconfig tempfile: %w", err)
+	if skip {
+		fmt.Println("destroy-unwedge: no reachable cluster (already reaped or unresolved) — nothing to unwedge; the cluster delete reaps everything regardless.")
+		return nil
 	}
-	defer os.Remove(kubeconfig.Name())
-	if _, err := kubeconfig.Write(raw); err != nil {
-		kubeconfig.Close()
-		return fmt.Errorf("write kubeconfig: %w", err)
-	}
-	kubeconfig.Close()
 
 	kubectl := func(args ...string) (string, bool) {
 		cmd := exec.Command("kubectl", args...)
-		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig.Name())
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 		var buf bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &buf, &buf
 		return buf.String(), cmd.Run() == nil
 	}
 	return destroyUnwedge(kubectl)
+}
+
+// unwedgeResolveKubeconfigFn resolves a cluster kubeconfig (base64) by its
+// <region>.tfvars label via the Linode API. found=false means no live cluster
+// (already reaped) → the caller skips, best-effort. Seamed for tests.
+var unwedgeResolveKubeconfigFn = func(region string) (b64 string, found bool, err error) {
+	token := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
+	if token == "" {
+		return "", false, fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) so --region can resolve the cluster kubeconfig by label")
+	}
+	varFile := region + ".tfvars"
+	if _, err := os.Stat(varFile); err != nil {
+		varFile = region + ".tfvars.example"
+	}
+	content, err := os.ReadFile(varFile)
+	if err != nil {
+		return "", false, fmt.Errorf("read %s: %w", varFile, err)
+	}
+	label := tf.ParseTFVars(string(content)).ClusterLabel
+	if label == "" {
+		return "", false, fmt.Errorf("%s has no cluster_label", varFile)
+	}
+	client := linode.NewClient(token, 60*time.Second)
+	ctx := context.Background()
+	ids, err := client.ClustersWithLabel(ctx, label)
+	if err != nil {
+		return "", false, fmt.Errorf("list LKE clusters labelled %q: %w", label, err)
+	}
+	if len(ids) == 0 {
+		return "", false, nil // cluster already gone — skip
+	}
+	kc, err := client.GetKubeconfig(ctx, ids[0])
+	if err != nil {
+		return "", false, nil // unreachable / no kubeconfig — skip, best-effort
+	}
+	return kc, true, nil
+}
+
+// resolveUnwedgeKubeconfig returns a path to a usable kubeconfig file plus a
+// cleanup func (nil when nothing to remove). skip=true means there is nothing to
+// unwedge (no live cluster); the caller exits 0. Sources, in order: $KUBECONFIG_B64,
+// $KUBECONFIG, then --region label resolution via the Linode API.
+func resolveUnwedgeKubeconfig(region string) (path string, cleanup func(), skip bool, err error) {
+	if b64 := os.Getenv("KUBECONFIG_B64"); b64 != "" {
+		raw, derr := base64.StdEncoding.DecodeString(b64)
+		if derr != nil {
+			return "", nil, false, fmt.Errorf("KUBECONFIG_B64 is not valid base64: %w", derr)
+		}
+		return writeTempKubeconfig(raw)
+	}
+	if kc := os.Getenv("KUBECONFIG"); kc != "" {
+		return kc, nil, false, nil
+	}
+	if region == "" {
+		return "", nil, false, fmt.Errorf("set KUBECONFIG_B64, KUBECONFIG, or --region to locate the cluster kubeconfig")
+	}
+	b64, found, rerr := unwedgeResolveKubeconfigFn(region)
+	if rerr != nil {
+		return "", nil, false, rerr
+	}
+	if !found {
+		return "", nil, true, nil
+	}
+	raw, stub := tf.KubeconfigContent(b64)
+	if stub {
+		return "", nil, true, nil // no kubeconfig material — skip
+	}
+	return writeTempKubeconfig(raw)
+}
+
+// writeTempKubeconfig writes raw kubeconfig bytes to a 0600 tempfile and returns
+// its path + a remove cleanup.
+func writeTempKubeconfig(raw []byte) (string, func(), bool, error) {
+	f, err := os.CreateTemp("", "llz-unwedge-kubeconfig-*")
+	if err != nil {
+		return "", nil, false, fmt.Errorf("create kubeconfig tempfile: %w", err)
+	}
+	if _, err := f.Write(raw); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", nil, false, fmt.Errorf("write kubeconfig: %w", err)
+	}
+	f.Close()
+	return f.Name(), func() { os.Remove(f.Name()) }, false, nil
 }
 
 // argoFinalizerKinds carry resources-finalizer.argocd.argoproj.io; cnpgFinalizerKinds

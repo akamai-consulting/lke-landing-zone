@@ -592,7 +592,10 @@ jobs:
       # the GHCR repo Secret is skipped (only works if the charts are public).
       TF_VAR_ghcr_token:              ${{ secrets.GHCR_READ_TOKEN }}
       TF_VAR_ghcr_username:           ${{ vars.GHCR_USERNAME }}
-      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
+      # TF_VAR_loki_admin_password is intentionally NOT set here: the "Ensure Loki
+      # admin password" step below exports it to $GITHUB_ENV (generating + stashing
+      # the infra-<region> secret on first run). A job/step-level env: would shadow
+      # that $GITHUB_ENV value, so the variable lives only there.
       # Branch of the instance repo that the bootstrap ArgoCD Application targets.
       # Defaults to 'main'; override by setting APPS_REPO_REVISION as a
       # repository or environment **variable** (preferred, matches the existing
@@ -692,6 +695,22 @@ jobs:
             exit 1
           }
 
+      # Ensure the Loki gateway admin password exists BEFORE plan/apply and export
+      # it as TF_VAR_loki_admin_password. On the first run (secret unset) this
+      # GENERATES one and stashes it to the infra-<region> environment as
+      # LOKI_ADMIN_PASSWORD; later runs reuse the stored value. Replaces
+      # cluster-bootstrap's random_password.loki_admin + the post-apply
+      # `terraform output → stash` round-trip — the password is no longer held in
+      # TF state. Same OPENBAO_SECRETS_WRITE_TOKEN PAT as the other env-secret stashes.
+      - name: Ensure Loki admin password
+        if: env.ACTION == 'apply'
+        env:
+          GH_TOKEN:            ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+          LOKI_ADMIN_PASSWORD: ${{ secrets.LOKI_ADMIN_PASSWORD }}
+        run: |
+          llz ci ensure-env-secret --env "infra-${REGION}" \
+            --name LOKI_ADMIN_PASSWORD --export-tf-var loki_admin_password
+
       - name: Terraform plan — cluster-bootstrap
         working-directory: terraform-iac-bootstrap/cluster-bootstrap
         run: |
@@ -708,21 +727,6 @@ jobs:
         # after readiness passed) by settling + replan + retry. Any other apply
         # failure passes through unchanged.
         run: llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
-
-      # Persist the effective Loki admin password to the infra-<region> env as
-      # LOKI_ADMIN_PASSWORD. On the first apply (secret unset) cluster-bootstrap
-      # GENERATED it via random_password.loki_admin; we read it back from the TF
-      # output and stash it so every later run passes the same value straight
-      # back in via TF_VAR_loki_admin_password (idempotent — no rotation). Mirrors
-      # the object-storage LOKI_S3_* stash; same OPENBAO_SECRETS_WRITE_TOKEN PAT.
-      - name: Store Loki admin password as an environment secret
-        if: env.ACTION == 'apply'
-        working-directory: terraform-iac-bootstrap/cluster-bootstrap
-        env:
-          GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          llz ci stash-env-secret --env "infra-${REGION}" \
-            --from-tf-output loki_admin_password=LOKI_ADMIN_PASSWORD
 
       # ── Firewall-controller config (folded from the former bootstrap-cluster
       #    job) ────────────────────────────────────────────────────────────────
@@ -750,38 +754,27 @@ jobs:
             echo "::warning::CLOUD_FIREWALL_TOKEN not set — falling back to LINODE_TOKEN for the firewall-controller. Set a least-privilege CLOUD_FIREWALL_TOKEN (cloud-firewall-scoped) in infra-${REGION} when possible."
           fi
 
-      # `terraform output` for the cluster module reads remote state from S3, so
-      # that module must be init'd (backend wired) in addition to cluster-bootstrap
-      # above. The two init distinct workspace dirs, so they do not collide.
-      - name: Terraform init — cluster
-        if: env.ACTION == 'apply'
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
-        with:
-          module:                cluster
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-
+      # `llz ci bootstrap-cloud-firewall --region` resolves all three inputs the
+      # runtime controller needs — the node firewall ID, the LKE cluster ID, and
+      # the VPC subnet CIDR — so the controller reconciles the SAME firewall the TF
+      # cluster module created. The firewall + cluster are looked up by their
+      # account-unique labels via the Linode API; the subnet CIDR comes straight
+      # from cluster/<region>.tfvars. This replaces the former `terraform init`
+      # (cluster module, just to wire its S3 backend) + three `terraform output`
+      # reads of remote state — no second workspace init, no state read.
       - name: Bootstrap — seed firewall-controller Secret + ConfigMap
         if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/cluster
         env:
           # Reuse the readiness kubeconfig fetched by "Cluster access" above (same
           # cluster, same open control-plane ACL); no second fetch / ACL lease.
           KUBECONFIG:           ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
           CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
+          # Account-read PAT used to resolve the firewall + cluster IDs by label
+          # (also the warned-about fallback token seeded into the controller Secret
+          # when CLOUD_FIREWALL_TOKEN is unset).
           LINODE_TOKEN:         ${{ secrets.LINODE_API_TOKEN }}
-        run: |
-          CHDIR=terraform-iac-bootstrap/cluster
-          # All three derive from the cluster workspace so the runtime controller
-          # reconciles the SAME firewall the TF cluster module created: the node
-          # firewall ID, the VPC subnet CIDR (so VPC_CIDR matches the VPC, not the
-          # chart's stale /16 default), and the LKE cluster ID (so the EAA/bastion
-          # ranges are also synced into the control-plane ACL).
-          LINODE_FIREWALL_ID="$(terraform -chdir=$CHDIR output -raw node_firewall_id)"
-          VPC_CIDR="$(terraform -chdir=$CHDIR output -raw vpc_subnet_cidr)"
-          CLUSTER_ID="$(terraform -chdir=$CHDIR output -raw cluster_id)"
-          export LINODE_FIREWALL_ID VPC_CIDR CLUSTER_ID
-          llz ci bootstrap-cloud-firewall
+        run: llz ci bootstrap-cloud-firewall --region "$REGION"
 
       # ── Diagnostics ─────────────────────────────────────────────────────────
       # Runs only when a previous step failed (typically the helm_release.argocd
@@ -939,11 +932,11 @@ jobs:
       # convention for non-secret config like TF_IMAGE, HARBOR_URL, etc.) or as
       # a secret. Variable wins if both are present.
       TF_VAR_apps_repo_revision: ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
-      # Unlike the other destroy-path TF_VARs above, this one IS consumed
-      # at destroy time: null_resource.cleanup_platform_volumes_on_destroy's
-      # provisioner hits the Linode API to sweep Volumes tagged block-storage
-      # left unattached after PVC reap. Must be a valid token; otherwise the
-      # destroy succeeds but orphans accumulate against account quota.
+      # var.linode_token is now vestigial at destroy (the volume sweep moved to the
+      # DESTROY Cluster job's `llz ci reap-volumes`, and the destroy-time
+      # null_resources that read it were relocated to CI steps). Wired for
+      # back-compat; an empty value is harmless. The relocated unwedge step gets its
+      # own LINODE_TOKEN from secrets.LINODE_API_TOKEN.
       TF_VAR_linode_token:    ${{ secrets.LINODE_API_TOKEN }}
       # Match the destroy job: gate data.kubernetes_service.coredns off on the
       # teardown path (apply-only read; would time out against the dying cluster).
@@ -1027,11 +1020,11 @@ jobs:
       # convention for non-secret config like TF_IMAGE, HARBOR_URL, etc.) or as
       # a secret. Variable wins if both are present.
       TF_VAR_apps_repo_revision: ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
-      # Unlike the other destroy-path TF_VARs above, this one IS consumed
-      # at destroy time: null_resource.cleanup_platform_volumes_on_destroy's
-      # provisioner hits the Linode API to sweep Volumes tagged block-storage
-      # left unattached after PVC reap. Must be a valid token; otherwise the
-      # destroy succeeds but orphans accumulate against account quota.
+      # var.linode_token is now vestigial at destroy (the volume sweep moved to the
+      # DESTROY Cluster job's `llz ci reap-volumes`, and the destroy-time
+      # null_resources that read it were relocated to CI steps). Wired for
+      # back-compat; an empty value is harmless. The relocated unwedge step gets its
+      # own LINODE_TOKEN from secrets.LINODE_API_TOKEN.
       TF_VAR_linode_token:    ${{ secrets.LINODE_API_TOKEN }}
       # Teardown path: gate data.kubernetes_service.coredns off so the destroy's
       # `terraform plan -destroy` (refresh on) doesn't read the cluster API while
@@ -1107,6 +1100,29 @@ jobs:
           linode-token:    ${{ secrets.LINODE_API_TOKEN }}
           region:          ${{ env.REGION }}
           fail-on-missing: 'false'
+
+      # Clear the Argo/discovery/CNPG finalizer deadlocks while the cluster is
+      # still reachable, relocated from
+      # null_resource.unwedge_namespace_finalizers_on_destroy. --region resolves the
+      # cluster kubeconfig by its cluster/<region>.tfvars label via the Linode API
+      # (no extra terraform init). Best-effort: continue-on-error so an already-gone
+      # cluster (CASE B) or any resolution failure never blocks the teardown — the
+      # downstream DESTROY Cluster job reaps every in-cluster resource regardless.
+      - name: Unwedge namespace finalizers before destroy
+        continue-on-error: true
+        working-directory: terraform-iac-bootstrap/cluster
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci destroy-unwedge --region "$REGION"
+
+      # Delete the cluster-scoped OpenBao/Harbor GH env secrets, relocated from
+      # null_resource.clear_openbao_secrets_on_destroy, so a destroyed cluster's
+      # stale secrets (revoked root token, unseal keys, Harbor creds) can't poison
+      # the next bootstrap. Best-effort per-secret; an unset GH_TOKEN is a no-op.
+      - name: Clear cluster-scoped OpenBao/Harbor env secrets
+        env:
+          GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+        run: llz ci clear-cluster-secrets --env "infra-${REGION}"
 
       - name: Terraform destroy — cluster-bootstrap
         # Fails visibly if the cluster is unreachable WHILE cluster-backed

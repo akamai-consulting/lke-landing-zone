@@ -24,12 +24,17 @@ package main
 // token never appears in a process listing.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
 )
 
@@ -63,7 +68,8 @@ var firewallKubectlFn = func(stdin string, args ...string) error {
 }
 
 func ciBootstrapCloudFirewallCmd() *cobra.Command {
-	return &cobra.Command{
+	var region string
+	cmd := &cobra.Command{
 		Use:   "bootstrap-cloud-firewall",
 		Short: "seed the firewall-controller's token Secret + config ConfigMap on the cluster",
 		Long: "Native port of bootstrap-cloud-firewall.sh. Seeds the in-cluster state the\n" +
@@ -71,14 +77,101 @@ func ciBootstrapCloudFirewallCmd() *cobra.Command {
 			"node-pool Linode Cloud Firewall in place: the kube-system/linode API-token\n" +
 			"Secret (key=token) and the linode-internal-cidr-firewall-config ConfigMap\n" +
 			"with LINODE_FIREWALL_ID (plus LKE_CLUSTER_ID when CLUSTER_ID is set, enabling\n" +
-			"control-plane ACL reconciliation). Idempotent — safe to re-run. Env:\n" +
-			"KUBECONFIG (an existing, non-empty kubeconfig) and LINODE_FIREWALL_ID (the TF\n" +
-			"node_firewall_id output) are required; the token comes from\n" +
-			"CLOUD_FIREWALL_TOKEN (preferred least-privilege scope: firewall:read_write on\n" +
-			"the node firewall) with LINODE_TOKEN as the warned-about fallback; CLUSTER_ID\n" +
-			"is optional.",
+			"control-plane ACL reconciliation). Idempotent — safe to re-run.\n\n" +
+			"--region <prefix> resolves LINODE_FIREWALL_ID, CLUSTER_ID and VPC_CIDR from\n" +
+			"<prefix>.tfvars + the Linode API (firewall + cluster by label, the subnet\n" +
+			"CIDR from tfvars), replacing the former `terraform init`+`terraform output`\n" +
+			"round-trip against the cluster workspace. Explicit env values still win.\n\n" +
+			"Env: KUBECONFIG (an existing, non-empty kubeconfig) is always required;\n" +
+			"LINODE_FIREWALL_ID is required unless --region resolves it. The Secret token\n" +
+			"comes from CLOUD_FIREWALL_TOKEN (preferred least-privilege scope:\n" +
+			"firewall:read_write on the node firewall) with LINODE_TOKEN as the\n" +
+			"warned-about fallback; CLUSTER_ID is optional. --region label resolution uses\n" +
+			"LINODE_TOKEN (or LINODE_API_TOKEN), which needs account read scope.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIBootstrapCloudFirewall() },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			if region != "" {
+				if err := resolveFirewallInputsIntoEnv(region); err != nil {
+					return err
+				}
+			}
+			return runCIBootstrapCloudFirewall()
+		},
+	}
+	cmd.Flags().StringVar(&region, "region", "", "tfvars prefix (e.g. primary); resolve LINODE_FIREWALL_ID / CLUSTER_ID / VPC_CIDR from <region>.tfvars + the Linode API instead of the environment")
+	return cmd
+}
+
+// firewallResolveFn resolves the node firewall ID and LKE cluster ID by label via
+// the Linode API. Seamed so tests exercise resolveFirewallInputsIntoEnv without a
+// live account.
+var firewallResolveFn = func(token string, labels tf.Labels) (firewallID, clusterID string, err error) {
+	client := linode.NewClient(token, 60*time.Second)
+	ctx := context.Background()
+
+	fws, err := client.ListFirewalls(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("list firewalls: %w", err)
+	}
+	fid, ok := linode.FindIDByLabel(fws, labels.Firewall)
+	if !ok {
+		return "", "", fmt.Errorf("no Linode Cloud Firewall labelled %q found — was the cluster workspace applied?", labels.Firewall)
+	}
+
+	ids, err := client.ClustersWithLabel(ctx, labels.Cluster)
+	if err != nil {
+		return "", "", fmt.Errorf("list LKE clusters labelled %q: %w", labels.Cluster, err)
+	}
+	if len(ids) == 0 {
+		return "", "", fmt.Errorf("no LKE cluster labelled %q found — was the cluster workspace applied?", labels.Cluster)
+	}
+	return strconv.FormatUint(fid, 10), strconv.FormatUint(ids[0], 10), nil
+}
+
+// resolveFirewallInputsIntoEnv derives the firewall-controller inputs from
+// <region>.tfvars + the Linode API and writes them into the environment that
+// runCIBootstrapCloudFirewall reads. Replaces the workflow's `terraform init`
+// (cluster module) + three `terraform output` reads of remote state — the
+// firewall/cluster IDs come from the API by their account-unique labels and the
+// VPC subnet CIDR straight from tfvars. Any value already set in the environment
+// is left untouched, so an explicit override still wins.
+func resolveFirewallInputsIntoEnv(region string) error {
+	token := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
+	if token == "" {
+		return fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) to a Linode PAT so --region can resolve the firewall + cluster IDs by label")
+	}
+
+	// tfvars file: prefer <region>.tfvars, fall back to the .example — mirrors
+	// runCITFImport so resolution works in the same working dirs.
+	varFile := region + ".tfvars"
+	if _, err := os.Stat(varFile); err != nil {
+		varFile = region + ".tfvars.example"
+	}
+	content, err := os.ReadFile(varFile)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", varFile, err)
+	}
+	vars := tf.ParseTFVars(string(content))
+	if vars.ClusterLabel == "" {
+		return fmt.Errorf("%s has no cluster_label", varFile)
+	}
+
+	fid, cid, err := firewallResolveFn(token, tf.DeriveLabels(vars))
+	if err != nil {
+		return err
+	}
+	setenvIfEmpty("LINODE_FIREWALL_ID", fid)
+	setenvIfEmpty("CLUSTER_ID", cid)
+	setenvIfEmpty("VPC_CIDR", vars.VPCSubnetCIDR)
+	return nil
+}
+
+// setenvIfEmpty sets an environment variable only when it is currently unset or
+// empty, so an explicit value passed by the caller is never clobbered by the
+// --region resolution.
+func setenvIfEmpty(key, value string) {
+	if os.Getenv(key) == "" {
+		_ = os.Setenv(key, value)
 	}
 }
 
