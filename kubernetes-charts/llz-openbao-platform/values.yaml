@@ -2,8 +2,8 @@
 #
 # This chart wraps the upstream OpenBao Helm chart (a subchart dependency) and
 # layers on the cluster integration the bare chart omits: a cert-manager serving
-# cert, NetworkPolicies, a ServiceMonitor, a Promtail audit-shipper config, and
-# the AppRole-rotation CronWorkflow. The defaults below capture the operational
+# cert, NetworkPolicies, a ServiceMonitor, and a Promtail audit-shipper config.
+# The defaults below capture the operational
 # scars this platform hit on Linode LKE-Enterprise + apl-core, so a sibling
 # deployment overrides only what genuinely differs (region, repo, CIDRs, names).
 #

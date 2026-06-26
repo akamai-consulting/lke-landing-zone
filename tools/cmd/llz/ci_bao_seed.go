@@ -3,8 +3,8 @@ package main
 // ci_bao_seed.go implements `llz ci bao-seed` — the generic OpenBao KV seeder
 // that replaced eight near-identical "Seed … in OpenBao" inline-bash steps in
 // llz-bootstrap-openbao.yml (harbor admin, github-dispatch-token, cert-
-// automation token, approle rotation-secrets, grafana admin, otel bearer,
-// loki object-store). Every one of those steps was the same
+// automation token, grafana admin, otel bearer, loki object-store). Every one
+// of those steps was the same
 // shape — resolve some secret material (an env secret, fresh random bytes, or
 // another K8s Secret), ::add-mask:: it, `kv put` ONE path, and when an input
 // is missing either skip with a step-summary note, warn, or defer failure via

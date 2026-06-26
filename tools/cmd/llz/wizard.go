@@ -116,7 +116,7 @@ func ghFineGrainedSecretsWriteURL(name, owner string) string {
 
 // catalog is the credential set the wizard walks. It mirrors docs/quickstart.md
 // §2 and runbooks/bootstrap-openbao.md — and deliberately OMITS the secrets the
-// build writes for you (OPENBAO_UNSEAL_KEY_*, LOKI_S3_*, HARBOR_*, AppRole IDs).
+// build writes for you (OPENBAO_UNSEAL_KEY_*, LOKI_S3_*, HARBOR_*).
 func catalog() []secretSpec {
 	return []secretSpec{
 		{
@@ -128,7 +128,7 @@ func catalog() []secretSpec {
 		},
 		{
 			Name:    "OPENBAO_SECRETS_WRITE_TOKEN",
-			Purpose: "GitHub PAT — CI stashes OBJ keys + persists OpenBao unseal keys / ESO AppRole",
+			Purpose: "GitHub PAT — CI stashes OBJ keys + persists OpenBao unseal keys",
 			Dest:    "infra-<env> environment secret",
 			URL:     ghFineGrainedSecretsWriteURL("llz-openbao-secrets-write", ""),
 			Note:    "Fine-grained PAT, Actions + Secrets: write (set Resource owner to your org, then Only select repositories: your instance repo) — or a classic repo+workflow PAT. Either way you must ALSO be Environment admin on every infra-<env> environment, or --env writes 401.",

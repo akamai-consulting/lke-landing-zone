@@ -63,7 +63,7 @@ func ciCmd() *cobra.Command {
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
-	c.AddCommand(ciHealthApproleRotationCmd(), ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
+	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
 	// Apply-time secret stashes + failure diagnostics (llz-terraform.yml).
 	c.AddCommand(ciStashEnvSecretCmd(), ciEnsureEnvSecretCmd(), ciDiagnoseArgoCDCmd())
@@ -72,9 +72,8 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciPinInstanceImagesCmd())
 	// OpenBao KV seed steps (formerly ~15 inline-bash blocks in
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
-	// material specials in ci_bao_seed.go / ci_seed_approle.go /
-	// ci_seed_special.go.
-	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciSeedApproleCmd(),
+	// material specials in ci_bao_seed.go / ci_seed_special.go.
+	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(),
 		ciSeedHarborDockerConfigCmd(), ciSeedHarborRegistryS3Cmd(),
 		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py

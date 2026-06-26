@@ -447,7 +447,7 @@ It writes everything to `my-instance/.llz/` (mode `0600`, **gitignored**), then
 pushes: secrets into the `infra-lab` GitHub Environment, variables at repo level.
 
 The remaining infra secrets — `OPENBAO_UNSEAL_KEY_*`, the OpenBao root token,
-Loki/Harbor OBJ keys, Harbor robots, AppRole IDs — are written **by the build**
+Loki/Harbor OBJ keys, Harbor robots — are written **by the build**
 (that's exactly what `OPENBAO_SECRETS_WRITE_TOKEN` is for); `llz` never asks for
 them.
 
@@ -496,7 +496,7 @@ the whole bootstrap end to end ([adopter-guide §6](adopter-guide.md#6-bootstrap
 2. **Object storage** — registry/log buckets; OBJ keys auto-stashed into env secrets.
 3. **Install apl-core** + apply the `apl-values/lab/manifest` Argo CD Applications.
 4. **Converge** — polls until the cluster meets the [convergence contract](architecture/convergence-contract.md).
-5. **Bootstrap OpenBao** (chained) — Raft init, unseal, KV v2, AppRole, seeds all
+5. **Bootstrap OpenBao** (chained) — Raft init, unseal, KV v2, auth methods, seeds all
    platform secrets, populates GitHub secrets, revokes root.
 
 </details>

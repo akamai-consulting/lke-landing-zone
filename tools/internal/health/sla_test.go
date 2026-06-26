@@ -58,9 +58,9 @@ func TestClassifyRotationAge(t *testing.T) {
 		{"just under critical", 89, 35, 90, CatWarn},
 		{"exactly critical", 90, 35, 90, CatFail},
 		{"past critical", 120, 35, 90, CatFail},
-		{"warn-only fresh (approle)", 50, 100, 0, CatOK},
-		{"warn-only at threshold (approle)", 100, 100, 0, CatWarn},
-		{"warn-only past threshold (approle)", 365, 100, 0, CatWarn},
+		{"warn-only fresh", 50, 100, 0, CatOK},
+		{"warn-only at threshold", 100, 100, 0, CatWarn},
+		{"warn-only past threshold", 365, 100, 0, CatWarn},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

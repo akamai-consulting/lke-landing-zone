@@ -211,7 +211,7 @@ func TestRunCIBaoConfigureFatalStepAborts(t *testing.T) {
 		t.Errorf("err = %v, want fatal policy-write failure", err)
 	}
 	for _, c := range calls {
-		if strings.HasPrefix(c, "write auth/approle") {
+		if strings.HasPrefix(c, "write auth/kubernetes/role") {
 			t.Errorf("steps after the fatal failure still ran: %q", c)
 		}
 	}

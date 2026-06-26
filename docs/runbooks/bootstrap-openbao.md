@@ -40,7 +40,7 @@ The workflow detects cluster state automatically and chooses the right path:
 | `OPENBAO_UNSEAL_KEY_2` | Re-unseal | Set automatically during first-time bootstrap |
 | `OPENBAO_UNSEAL_KEY_3` | Re-unseal | Set automatically during first-time bootstrap |
 | `OPENBAO_ROOT_TOKEN` | Re-configure only | Set manually; delete immediately after the run |
-| `OPENBAO_SECRETS_WRITE_TOKEN` | All configuration runs | `github.com` PAT used by `terraform.yml` apply-object-storage to stash S3 keys + by this workflow to persist OpenBao unseal keys + ESO AppRole credentials. **Required PAT scopes (classic):** `repo`, `workflow`. **Additionally required:** the PAT owner must be **Environment admin** on every `infra-<env>` GHA Environment whose secrets are written. Missing Environment admin causes `--env`-scoped `gh secret set` calls to 401 even though repo-level writes succeed — the partial state typically surfaces as `bootstrap-openbao.yml` failing its S3 preflight 5 minutes into a run that started 30 minutes earlier. Verify with: `GH_TOKEN=$PAT gh api user` (must succeed and return your username). |
+| `OPENBAO_SECRETS_WRITE_TOKEN` | All configuration runs | `github.com` PAT used by `terraform.yml` apply-object-storage to stash S3 keys + by this workflow to persist OpenBao unseal keys. **Required PAT scopes (classic):** `repo`, `workflow`. **Additionally required:** the PAT owner must be **Environment admin** on every `infra-<env>` GHA Environment whose secrets are written. Missing Environment admin causes `--env`-scoped `gh secret set` calls to 401 even though repo-level writes succeed — the partial state typically surfaces as `bootstrap-openbao.yml` failing its S3 preflight 5 minutes into a run that started 30 minutes earlier. Verify with: `GH_TOKEN=$PAT gh api user` (must succeed and return your username). |
 | `LOKI_S3_ACCESS_KEY` | All configuration runs | Linode Object Storage key for Loki buckets — **marks bootstrap error if absent**; Loki CrashLoopBackOff without it. **Stashed automatically by `terraform.yml` apply-object-storage** (see [terraform.yml](../../instance-template/.github/workflows/terraform.yml) "Store object-storage credentials" step). |
 | `LOKI_S3_SECRET_KEY` | All configuration runs | Linode Object Storage secret for Loki buckets — same as above; auto-stashed. |
 | `HARBOR_REGISTRY_S3_ACCESS_KEY` | All configuration runs | Linode Object Storage key for the Harbor registry bucket — Harbor registry container CrashLoopBackOff without it. Auto-stashed by `terraform.yml`. |
@@ -53,9 +53,6 @@ The workflow detects cluster state automatically and chooses the right path:
 
 | Secret | Set by | Description |
 |---|---|---|
-| `OPENBAO_APPROLE_ROLE_ID` | All clusters | AppRole `role_id` (the CI AppRole) — same for every cluster |
-| `OPENBAO_APPROLE_SECRET_ID` | First-cluster bootstrap | AppRole `secret_id` for the first cluster (quarterly rotation by CronWorkflow) |
-| `OPENBAO_APPROLE_SECRET_ID_STANDBY` | Additional-cluster bootstrap | AppRole `secret_id` for an additional cluster (quarterly rotation by CronWorkflow) |
 | `HARBOR_ROBOT_NAME` | First-cluster bootstrap | Harbor CI robot account name (push+pull+delete; used for buildah builds) |
 | `HARBOR_PASSWORD` | First-cluster bootstrap | Harbor CI robot account secret |
 | `HARBOR_PULL_ROBOT_NAME` | First-cluster bootstrap | Harbor pull-only robot account name (pull-only; distributed as imagePullSecret) |
@@ -90,7 +87,7 @@ This is the supported path on a fresh-cluster rebuild. The chained job has acces
 The standalone workflow is preserved for two cases:
 
 1. **Retries** — if the chained job fails mid-bootstrap and you've fixed the cause, re-run just bootstrap-openbao without re-doing terraform.yml.
-2. **Re-configuration** — seed a newly added secret path, rotate AppRole credentials, etc. on an already-bootstrapped cluster.
+2. **Re-configuration** — seed a newly added secret path, re-apply auth methods or policies, etc. on an already-bootstrapped cluster.
 
 ```bash
 gh workflow run bootstrap-openbao.yml \
@@ -107,31 +104,26 @@ gh workflow run bootstrap-openbao.yml \
 6. Stores unseal keys 1–3 as `OPENBAO_UNSEAL_KEY_1/2/3` in the `infra-<env>` environment secrets.
 7. Prints all 5 keys + root token to the job summary (copy to secure offline storage immediately).
 8. Unseals pod 0; Raft-joins and unseals pods 1–2.
-9. Configures KV v2, AppRole auth, Kubernetes auth, policies, roles, and the audit log.
+9. Configures KV v2, Kubernetes auth, GitHub-OIDC (`jwt`) auth, policies, roles, and the audit log.
 10. Seeds the following secrets into OpenBao:
-   - `eso-approle-secret` K8s Secret in `external-secrets` namespace (ESO ClusterSecretStore)
-   - `OPENBAO_APPROLE_ROLE_ID` / `OPENBAO_APPROLE_SECRET_ID[_STANDBY]` GitHub secrets
    - `secret/harbor/robot` (Harbor CI robot, push+pull+delete; creates the robot on the first cluster; used for buildah builds)
    - `secret/harbor/pull-robot` (Harbor pull-only robot; creates the robot on the first cluster; distributed as imagePullSecret)
    - `secret/harbor/docker-config` (Docker config JSON for buildah cert-automation builds, derived from `harbor/robot`)
    - `HARBOR_ROBOT_NAME` + `HARBOR_PASSWORD` GitHub secrets (first cluster only)
    - `HARBOR_PULL_ROBOT_NAME` + `HARBOR_PULL_PASSWORD` GitHub secrets (first cluster only)
    - `secret/infra/github-dispatch-token`
-   - `secret/approle/rotation-secrets` (used by AppRole rotation CronWorkflow via ESO)
    - `secret/cert-automation/github-token` (used by cert-automation Argo Workflow)
    - `secret/<release>/mtls-ca` (mTLS CA keypair for the platform's internal mTLS ClusterIssuer)
    - `secret/loki/object-store` (from `LOKI_S3_ACCESS_KEY` / `LOKI_S3_SECRET_KEY`)
    - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
    - Note: `secret/certmanager/dns01` is seeded by the separate `bootstrap-dns.yml` workflow once `LINODE_DNS_TOKEN` is provisioned — not by this workflow.
-11. Seeds the `secret-propagator` AppRole `secret_id` into the
-    `infra-<env>` environment as `OPENBAO_PROPAGATOR_ROLE_ID` /
-    `OPENBAO_PROPAGATOR_SECRET_ID`. These let
-    `secret-rotation.yml → propagate-linode-pat` write `secret/linode/api-token`
-    without root (the propagator policy grants write only on that single path).
-    The `approle-rotation` CronWorkflow rotates the `secret_id` quarterly and
-    re-writes the env secret via `gh secret set --env infra-<env>`. See
-    [linode-credential-rotation.md](linode-credential-rotation.md) "Why an
-    AppRole, not root" for the design rationale.
+11. Configures the `secret-propagator` GitHub-OIDC (`jwt`) role + policy. This
+    lets `llz ci propagate-pat` authenticate to OpenBao via the workflow's
+    GitHub OIDC token and write `secret/linode/api-token` without root (the
+    propagator policy grants write only on that single path). No long-lived
+    credential is seeded into the environment — the OIDC token is minted
+    per-run. See [linode-credential-rotation.md](linode-credential-rotation.md)
+    "Why GitHub-OIDC, not root" for the design rationale.
 12. Revokes the root token.
 
 ### After first-time bootstrap — required operator actions
@@ -188,7 +180,7 @@ Use this if the cluster is already initialized and unsealed but configuration st
      --field region=<env>
    ```
 
-3. The workflow detects the root token and runs all configure + seed steps (KV v2, AppRole, Kubernetes auth, policies, roles, audit log, GitHub secrets, Harbor, Grafana, OTel, Loki).
+3. The workflow detects the root token and runs all configure + seed steps (KV v2, Kubernetes auth, GitHub-OIDC auth, policies, roles, audit log, GitHub secrets, Harbor, Grafana, OTel, Loki).
 4. After the workflow completes: **delete `OPENBAO_ROOT_TOKEN` from the `infra-<env>` environment secrets immediately.** A live root token left in GitHub is a critical security exposure.
 
 ---
@@ -222,6 +214,5 @@ A full release workflow calls `bootstrap-openbao.yml` as a reusable workflow (`w
 
 ## See also
 
-- [`docs/runbooks/approle-rotation.md`](approle-rotation.md) — quarterly `secret_id` rotation via CronWorkflow
 - [`docs/secrets.md`](../secrets.md) — full secrets operations guide, dual-write rotation, query examples
 - [`instance-template/.github/workflows/bootstrap-openbao.yml`](../../instance-template/.github/workflows/bootstrap-openbao.yml) — workflow source

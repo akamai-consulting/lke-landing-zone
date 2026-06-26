@@ -17,12 +17,10 @@ variable "region" {
 variable "ha_role" {
   description = <<-EOT
     This deployment's role in its OpenBao HA topology:
-      • "active"     — the cluster that provisions Harbor robots, owns the
-                       base-named AppRole secret, and receives its standby
-                       peer's CA cross-region.
+      • "active"     — the cluster that provisions Harbor robots and receives
+                       its standby peer's CA cross-region.
       • "standby"    — mirrors the active: seeds Harbor creds from the active's
-                       published secrets, writes the _STANDBY-suffixed AppRole
-                       secret, and ships its CA to the active.
+                       published secrets and ships its CA to the active.
       • "standalone" — a single, self-contained OpenBao (no peer, single-write,
                        local Harbor). The default — most deployments are standalone.
     "active"/"standby" must come in pairs sharing one ha_group.

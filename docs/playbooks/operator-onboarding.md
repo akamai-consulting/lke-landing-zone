@@ -134,7 +134,6 @@ If anything is out-of-sync or unhealthy, see [argocd-ops.md](argocd-ops.md).
 Skim each [`docs/runbooks/`](../runbooks/) file once so you know what exists and where. You'll come back to them when alerts fire:
 
 - `lke-admin-rotation.md` — rotating LKE-Enterprise admin tokens (monthly)
-- `approle-rotation.md` — rotating the ESO ClusterSecretStore AppRole (quarterly)
 - `linode-credential-rotation.md` — Linode PAT + OBJ-key rotation
 - `bootstrap-openbao.md` — first-time / re-bootstrap of OpenBao
 - `orphan-volume-cleanup.md` — reclaiming orphaned block-storage volumes
@@ -161,7 +160,7 @@ Just so you don't burn time looking:
 
 Onboarding is complete when you've ticked every box in the checklist above AND you've shadowed at least one of:
 
-- A scheduled rotation run (monthly lke-admin or quarterly approle).
+- A scheduled rotation run (monthly lke-admin or Linode PAT rotation).
 - A Grafana-dashboard-driven investigation of a real alert.
 - An Argo CD sync of a non-trivial PR.
 

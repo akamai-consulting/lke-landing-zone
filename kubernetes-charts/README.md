@@ -11,7 +11,7 @@ values, not editing YAML.
 | Chart | Replaces | Deploys |
 |---|---|---|
 | [`llz-cluster-foundation`](llz-cluster-foundation/) | `foundation/` | Secure-by-default baseline: namespaces, default-deny NetworkPolicies, CoreDNS, storage-class defaulting |
-| [`llz-openbao-platform`](llz-openbao-platform/) | `openbao/argocd/applications/` | Opinionated OpenBao-on-K8s wrapper (TLS, NP, ServiceMonitor, AppRole rotation) |
+| [`llz-openbao-platform`](llz-openbao-platform/) | `openbao/argocd/applications/` | Opinionated OpenBao-on-K8s wrapper (TLS, NP, ServiceMonitor, audit shipping) |
 | [`llz-cert-automation`](llz-cert-automation/) | `llz-cert-automation/` | Event-driven cert renewal (Argo Events + Workflows) |
 | [`llz-argo-bootstrap-apps`](llz-argo-bootstrap-apps/) | per-component `argocd/applications/` wrappers | App-of-apps generator encoding sync-wave ordering |
 

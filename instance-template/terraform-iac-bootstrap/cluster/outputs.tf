@@ -4,7 +4,7 @@ output "cluster_id" {
 }
 
 output "ha_role" {
-  description = "OpenBao HA role of this deployment (active | standby | standalone). Read by cluster-bootstrap via remote state to derive the AppRole GH-secret suffix on destroy."
+  description = "OpenBao HA role of this deployment (active | standby | standalone). Read by cluster-bootstrap via remote state to identify this deployment's HA role on destroy."
   value       = var.ha_role
 }
 

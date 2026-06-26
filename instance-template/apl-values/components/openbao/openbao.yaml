@@ -2,7 +2,7 @@
 #
 # Wraps the upstream OpenBao HA Raft Helm chart (vendored as a subchart) plus the
 # cluster integration: cert-manager serving cert, NetworkPolicies, ServiceMonitor,
-# Promtail audit-shipper config, and the AppRole-rotation CronWorkflow. Default
+# and Promtail audit-shipper config. Default
 # wave: consumes ESO (-15) + the openbao-ca CA chain
 # (cert-manager/openbao-bootstrap-ca.yaml) laid down earlier.
 #
@@ -30,7 +30,7 @@ spec:
   source:
     repoURL: ghcr.io/<@ upstream_org @>/charts
     chart: llz-openbao-platform
-    targetRevision: 0.1.8
+    targetRevision: 0.1.9
     helm:
       # LOAD-BEARING: the upstream subchart derives the StatefulSet name
       # (platform-openbao → pod platform-openbao-0, which the bootstrap workflow
@@ -57,7 +57,7 @@ spec:
       prune: false
       selfHeal: true
     retry:
-      # First-boot ordering races (OpenBao unseal / AppRole seed) can outlast the
+      # First-boot ordering races (OpenBao unseal / secret seed) can outlast the
       # old ~5-retry (~5 min) budget; a failed automated sync then terminally pins
       # the revision and Argo will not re-attempt it. ~20 retries @ 3m cap (~1h)
       # rides out the bootstrap window instead.

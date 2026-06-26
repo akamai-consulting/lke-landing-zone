@@ -254,8 +254,7 @@ OPENBAO_CHART := kubernetes-charts/llz-openbao-platform
 
 helm-lint-argocd: helm-repos
 	helm dependency build $(OPENBAO_CHART)
-	helm lint --strict $(OPENBAO_CHART) \
-		--set "approleWorkflow.approleRotationEnabled=false"
+	helm lint --strict $(OPENBAO_CHART)
 
 helm-lint-real-values: helm-repos
 	helm dependency build $(OPENBAO_CHART)

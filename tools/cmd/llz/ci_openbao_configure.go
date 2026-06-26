@@ -1,8 +1,8 @@
 package main
 
 // ci_openbao_configure.go — `llz ci bao-configure`, the native port of
-// configure-openbao.sh: root-token preflight, KV v2 mount, AppRole +
-// Kubernetes auth, policies, roles, and the audit-device verify. Idempotent
+// configure-openbao.sh: root-token preflight, KV v2 mount, Kubernetes +
+// GitHub-OIDC auth, policies, roles, and the audit-device verify. Idempotent
 // like the bash (enables tolerate "already enabled", writes upsert), so
 // re-configure runs are safe. Part of the openbao CI family (ci_openbao.go).
 
@@ -16,8 +16,7 @@ import (
 
 // platform-ci: read-only KV v2 — used by the ESO ClusterSecretStore. Paths
 // are enumerated explicitly; wildcard read is intentionally avoided.
-const policyPlatformCI = `path "secret/data/approle/rotation-secrets"     { capabilities = ["read"] }
-path "secret/data/cert-automation/github-token" { capabilities = ["read"] }
+const policyPlatformCI = `path "secret/data/cert-automation/github-token" { capabilities = ["read"] }
 path "secret/data/certmanager/dns01"            { capabilities = ["read"] }
 path "secret/data/grafana/admin"                { capabilities = ["read"] }
 path "secret/data/harbor/admin"                 { capabilities = ["read"] }
@@ -30,7 +29,6 @@ path "secret/data/linode/api-token"             { capabilities = ["read"] }
 path "secret/data/loki/object-store"            { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
-path "secret/metadata/approle/rotation-secrets"     { capabilities = ["read", "list"] }
 path "secret/metadata/cert-automation/github-token" { capabilities = ["read", "list"] }
 path "secret/metadata/certmanager/dns01"            { capabilities = ["read", "list"] }
 path "secret/metadata/grafana/admin"                { capabilities = ["read", "list"] }
@@ -192,7 +190,7 @@ func ciBaoConfigureCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "bao-configure",
-		Short: "configure OpenBao: KV v2, AppRole + Kubernetes auth, policies, roles, audit verify",
+		Short: "configure OpenBao: KV v2, Kubernetes + GitHub-OIDC auth, policies, roles, audit verify",
 		Long: "Native port of configure-openbao.sh. Preflights $OPENBAO_ROOT_TOKEN (sha256\n" +
 			"audit line + `token lookup` + root-policy check — without it the failure\n" +
 			"mode is an unexplained cascade of 403s from every privileged call), then\n" +
@@ -219,7 +217,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	// configure) omits the JWT steps.
 	ghRepo := os.Getenv("GITHUB_REPOSITORY")
 	if ghRepo == "" {
-		fmt.Fprintln(os.Stderr, "::warning::GITHUB_REPOSITORY unset — skipping GitHub-OIDC (jwt) auth setup; CI will fall back to AppRole.")
+		fmt.Fprintln(os.Stderr, "::warning::GITHUB_REPOSITORY unset — skipping GitHub-OIDC (jwt) auth setup; CI propagation (llz ci propagate-pat) stays unavailable until re-run with GITHUB_REPOSITORY set.")
 	}
 	if g.dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would preflight the root token and apply the configure sequence:")

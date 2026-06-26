@@ -6,7 +6,7 @@ operational response for each is in the relevant runbook.
 
 ## Where alerts come from
 
-There are four independent alerting mechanisms in this template. They are
+There are three independent alerting mechanisms in this template. They are
 deliberately layered — the GitHub Actions checks are belt-and-suspenders that
 fire even if the in-cluster observability stack (kube-prometheus-stack, Grafana,
 Loki) is itself broken.
@@ -16,15 +16,14 @@ Loki) is itself broken.
 | Prometheus rules (custom) | `PrometheusRule` CRs under [apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/) — deployed source of truth, synced by apl-core's Argo CD and picked up by kube-prometheus-stack's `ruleSelector` | Prometheus UI / Grafana (see caveat below) |
 | Prometheus rules (defaults) | `kube-prometheus-stack.defaultRules.create: true` — node, kubelet, kube-state, and Prometheus self-monitoring | Prometheus UI / Grafana |
 | Scheduled CI checks | [.github/workflows/scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) | GitHub Actions `::warning::`/`::error::` annotations + job failure |
-| Rotation failure notice | the AppRole-rotation CronWorkflow `onExit` handler (under the OpenBao Argo CD application templates) | Opens a GitHub issue |
 
 > **Caveat — no paging yet.** `kube-prometheus-stack.alertmanager.enabled` is
 > `false` in [apl-values/_shared/values.yaml](../instance-template/apl-values/_shared/values.yaml).
 > Prometheus evaluates every rule and shows firing alerts in its own UI and via
 > Grafana, but there is **no Alertmanager routing / paging** for them today. The
 > only alerts that actively reach a human right now are the GitHub Actions
-> annotations, the AppRole-rotation GitHub issue, and any Grafana-configured
-> alerts (e.g. a TLS cert-expiry alert). Wire up Alertmanager (or Grafana
+> annotations and any Grafana-configured alerts (e.g. a TLS cert-expiry
+> alert). Wire up Alertmanager (or Grafana
 > notification policies) before production.
 
 ## Items that require alerts
@@ -79,8 +78,6 @@ resource-saturation alert per service.
 
 | Item | Trigger | Mechanism | Status |
 |------|---------|-----------|--------|
-| OpenBao AppRole `secret_id` rotation failure | CronWorkflow run fails | `onExit` handler opens a GitHub issue → run [docs/runbooks/approle-rotation.md](runbooks/approle-rotation.md) | ✅ covered |
-| AppRole rotation overdue | Last success > threshold (secret_id expires ~92 days) | `scheduled-checks.yml → approle-rotation-health` emits `::warning::` | ✅ covered |
 | `lke-admin-token` rotation overdue | Newest Secret age ≥35d (warn) / ≥90d (job red) | `scheduled-checks.yml → lke-admin-rotation-health` → [docs/runbooks/lke-admin-rotation.md](runbooks/lke-admin-rotation.md) | ✅ covered |
 | Linode PAT expiry policy breach | Any PAT with no expiry / >90d lifetime / expired (warn ≤14d before expiry) | `scheduled-checks.yml → linode-pat-expiry-health` runs the Linode credential audit tool (exit 1 → job red) → [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) | ✅ covered |
 | github.com service PAT expiry breach | Named service PAT with no expiry / >90d / 401 (warn ≤14d) | `scheduled-checks.yml → gh-pat-expiry-health` — per-token `GitHub-Authentication-Token-Expiration` header self-check (job red) → [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) | ✅ covered (named service PATs) |

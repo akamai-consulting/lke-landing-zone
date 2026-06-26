@@ -41,8 +41,8 @@ apps:
   # _rawValues to override two Argo CD resource health checks. Argo's built-in
   # checks for external-secrets.io resources report Degraded the moment the store
   # isn't Ready; during first boot the `openbao` ClusterSecretStore legitimately
-  # can't be Ready until OpenBao is unsealed and bootstrap-openbao.yml has seeded
-  # `eso-approle-secret`. A Degraded resource FAILS the platform-bootstrap sync
+  # can't be Ready until OpenBao is unsealed and bootstrap-openbao.yml has
+  # configured the `eso` Kubernetes-auth role. A Degraded resource FAILS the platform-bootstrap sync
   # wave (it was the exact hook that wedged the first lab bootstrap). These
   # overrides reclassify "not ready yet" as Progressing, so Argo waits + retries
   # (see the retry budget in terraform-iac-bootstrap/cluster-bootstrap/main.tf)
@@ -61,7 +61,7 @@ apps:
                   if c.status == "True" then
                     hs.status = "Healthy"
                   else
-                    -- OpenBao not yet reachable/unsealed or AppRole unseeded:
+                    -- OpenBao not yet reachable/unsealed or the eso role not yet configured:
                     -- still converging, do not fail the sync.
                     hs.status = "Progressing"
                   end

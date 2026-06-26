@@ -84,7 +84,7 @@ Do **not** `kubectl delete` the `lke-admin-token` Secret.
   - ≥ 35 days → `::warning::` (overdue vs monthly cadence)
   - ≥ 90 days → `::error::` + job failure (Critical SLA breached)
 
-  This is the alert surface (same as `approle-rotation-health`); there is no kube-state-metrics secret-age metric in this Prometheus, so a PrometheusRule would never fire. See [alerting.md](../alerting.md).
+  This is the alert surface (the GitHub Actions scheduled check); there is no kube-state-metrics secret-age metric in this Prometheus, so a PrometheusRule would never fire. See [alerting.md](../alerting.md).
 
 ---
 

@@ -1,13 +1,13 @@
 package main
 
 // ci_health_sla.go implements the rotation-SLA scheduled checks —
-// `llz ci health-approle-rotation`, `health-lke-admin-rotation`, and
-// `health-loki-objkey-rotation` — the native ports of the same-named jobs in
-// llz-scheduled-checks.yml. Each reads the age of a credential (an Argo
-// CronWorkflow's last success, the newest lke-admin-token Secret, the
+// `llz ci health-lke-admin-rotation` and `health-loki-objkey-rotation` — the
+// native ports of the same-named jobs in llz-scheduled-checks.yml. Each reads
+// the age of a credential (the newest lke-admin-token Secret, the
 // secret/loki/object-store metadata) and classifies it with the unit-tested
-// health.ClassifyRotationAge ladder. approle is warn-only; lke-admin and
-// loki-objkey fail the job past their hard critical SLA.
+// health.ClassifyRotationAge ladder; both fail the job past their hard critical
+// SLA. (A former health-approle-rotation check was removed with the retired
+// AppRole-rotation subsystem — ESO now uses Kubernetes auth.)
 
 import (
 	"encoding/json"
@@ -30,78 +30,6 @@ func schedRegion() string {
 		return r
 	}
 	return "cluster"
-}
-
-func ciHealthApproleRotationCmd() *cobra.Command {
-	var warnDays int
-	c := &cobra.Command{
-		Use:   "health-approle-rotation",
-		Short: "warn if the approle-rotation CronWorkflow has no recent success",
-		Long: "Native port of the approle-rotation-health scheduled job. Reads the newest\n" +
-			"Succeeded approle-rotation Argo Workflow in the openbao namespace and warns when\n" +
-			"it is older than --warn-days (the secret_id TTL is ~92 days). Warning-only.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runHealthApproleRotation(warnDays) },
-	}
-	c.Flags().IntVar(&warnDays, "warn-days", 100, "warn when the last success is older than this many days")
-	return c
-}
-
-func runHealthApproleRotation(warnDays int) error {
-	reg := schedRegion()
-	summary := []string{fmt.Sprintf("## AppRole Rotation Health — %s — %s", reg, schedStamp()), ""}
-
-	var succeeded, failed []time.Time
-	for _, raw := range kItems("-n", openbaoNamespace, "get", "workflows.argoproj.io", "-l", "workflows.argoproj.io/cron-workflow=approle-rotation") {
-		var w struct {
-			Status struct {
-				Phase      string `json:"phase"`
-				FinishedAt string `json:"finishedAt"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(raw, &w) != nil {
-			continue
-		}
-		t, ok := health.ParseExpiryTime(w.Status.FinishedAt)
-		if !ok {
-			continue
-		}
-		switch w.Status.Phase {
-		case "Succeeded":
-			succeeded = append(succeeded, t)
-		case "Failed":
-			failed = append(failed, t)
-		}
-	}
-
-	if last, ok := health.MaxTime(failed); ok {
-		ts := last.Format(time.RFC3339)
-		fmt.Fprintf(os.Stderr, "::warning::AppRole rotation has a recent failed run on %s (last failure: %s)\n", reg, ts)
-		summary = append(summary, fmt.Sprintf("- **Last failed run:** %s", ts))
-	}
-
-	lastSuccess, ok := health.MaxTime(succeeded)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "::warning::No successful approle-rotation workflow found on %s — rotation may never have run\n", reg)
-		summary = append(summary, "> **Action required:** No successful rotation found. Run the approle-rotation CronWorkflow manually or check docs/runbooks/approle-rotation.md")
-		return appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
-	}
-
-	days := health.DaysSince(lastSuccess, time.Now())
-	ts := lastSuccess.Format(time.RFC3339)
-	fmt.Printf("Last successful approle-rotation on %s: %s (%d days ago)\n", reg, ts, days)
-	summary = append(summary,
-		"| Metric | Value |", "|--------|-------|",
-		fmt.Sprintf("| Last success | %s (%d days ago) |", ts, days))
-
-	if health.ClassifyRotationAge(days, warnDays, 0) == health.CatWarn {
-		fmt.Fprintf(os.Stderr, "::warning::AppRole rotation on %s last succeeded %d days ago — secret_id expires at ~92 days, check CronWorkflow\n", reg, days)
-		summary = append(summary, fmt.Sprintf("> **Action required:** Rotation overdue (%dd ≥ %dd threshold). Run manually via docs/runbooks/approle-rotation.md.", days, warnDays))
-	} else {
-		fmt.Printf("AppRole rotation on %s is current (%dd < %dd threshold).\n", reg, days, warnDays)
-		summary = append(summary, "> Rotation current.")
-	}
-	return appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
 }
 
 func ciHealthLKEAdminRotationCmd() *cobra.Command {
@@ -165,8 +93,8 @@ func runHealthLKEAdminRotation(warnDays, criticalDays int) error {
 }
 
 // rotationVerdict carries the per-command specifics the shared fail-on-critical
-// SLA tail (reportRotationSLA) needs. The warn-only approle check reports inline
-// instead — it has no critical threshold and an extra failed-run path.
+// SLA tail (reportRotationSLA) needs (used by the lke-admin and loki-objkey
+// checks, both of which fail past their hard critical SLA).
 type rotationVerdict struct {
 	region       string
 	noun         string // annotation noun, e.g. "lke-admin", "Loki OBJ key"

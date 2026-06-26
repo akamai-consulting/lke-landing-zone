@@ -102,22 +102,22 @@ func TestCollectSeededBaoSeed(t *testing.T) {
 		`          llz ci bao-seed --path secret/cert-automation/github-token \`,
 		`            --field token=env:OPENBAO_SECRETS_WRITE_TOKEN`,
 		"      - run: |",
-		`          llz ci bao-seed --path secret/approle/rotation-secrets \`,
+		`          llz ci bao-seed --path secret/infra/github-dispatch-token \`,
 		`            --on-missing skip \`,
-		`            --field github_token=env:OPENBAO_SECRETS_WRITE_TOKEN`,
+		`            --field token=env:OPENBAO_SECRETS_WRITE_TOKEN`,
 	}, "\n"))
 	paths, fields, err := collectSeeded([]string{filepath.Join(root, "bootstrap.yml")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !paths["cert-automation/github-token"] || !paths["approle/rotation-secrets"] {
+	if !paths["cert-automation/github-token"] || !paths["infra/github-dispatch-token"] {
 		t.Errorf("paths = %v", paths)
 	}
 	if !fields["cert-automation/github-token"]["token"] {
 		t.Errorf("cert-automation fields = %v", fields["cert-automation/github-token"])
 	}
-	if !fields["approle/rotation-secrets"]["github_token"] {
-		t.Errorf("approle fields = %v", fields["approle/rotation-secrets"])
+	if !fields["infra/github-dispatch-token"]["token"] {
+		t.Errorf("dispatch-token fields = %v", fields["infra/github-dispatch-token"])
 	}
 }
 

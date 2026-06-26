@@ -803,8 +803,8 @@ resource "kubectl_manifest" "app_bootstrap_application" {
         }
         # Retry is load-bearing on first boot. Several wave-5 consumers depend on
         # an async, partly out-of-band chain — OpenBao deployed -> auto-unsealed ->
-        # `eso-approle-secret` seeded by bootstrap-openbao.yml -> the `openbao`
-        # ClusterSecretStore goes Ready -> its ExternalSecrets sync. If the sync
+        # the `eso` Kubernetes-auth role configured by bootstrap-openbao.yml -> the
+        # `openbao` ClusterSecretStore goes Ready -> its ExternalSecrets sync. If the sync
         # races ahead of that, the store's health-gate fails the wave; with NO
         # retry block a single failed automated sync becomes terminal and Argo
         # will NOT re-attempt the same revision (selfHeal only corrects drift
@@ -857,7 +857,7 @@ resource "kubectl_manifest" "app_bootstrap_application" {
 # ── llz-secret-store Application (blast-radius isolation for the ClusterSecretStore) ──
 # The `openbao` ClusterSecretStore is the single binding EVERY ExternalSecret
 # depends on, but on first boot it cannot go Ready until OpenBao is unsealed and
-# bootstrap-openbao.yml has seeded `eso-approle-secret`. When it lived in the
+# bootstrap-openbao.yml has configured the `eso` Kubernetes-auth role. When it lived in the
 # platform-bootstrap kustomize tree, its not-ready health FAILED that app's whole
 # sync wave (the exact hook that wedged the first lab bootstrap), stranding
 # unrelated wave-5 resources. Carving it into its own Application lets it converge

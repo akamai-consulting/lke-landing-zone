@@ -79,49 +79,33 @@ with `scope=linode-pat`, `pat-apply=true`. The pipeline:
    `secrets.LINODE_API_TOKEN`, verifies its sha256 matches the freshly-minted
    token (guards against stale GHA secret cache), then writes
    `secret/linode/api-token` in each environment's OpenBao using the
-   **`secret-propagator` AppRole** (not root — see below).
+   **`secret-propagator` GitHub-OIDC role** (not root — see below).
 3. **revoke-linode-pat** (daily, 03:30 UTC) — `linode-pat-rotator revoke-old`
    drains any same-labeled sibling PATs older than 7 days.
 
-#### Why an AppRole, not root
+#### Why GitHub-OIDC, not root
 
 `bootstrap-openbao.yml` revokes the OpenBao root token at the end of every run
 by design (the operator is told to delete the env secret too). So
 `secrets.OPENBAO_ROOT_TOKEN` is not a live root token outside an active
 bootstrap window — propagation can't depend on it.
 
-The **`secret-propagator` AppRole** (created by `bootstrap-openbao.yml` →
-"Configure OpenBao") has a narrow policy: write-only on
-`secret/data/linode/api-token`. The `propagate-linode-pat` job authenticates
-with the AppRole, gets a short-lived (15m TTL) token, writes, and exits.
-
-`role_id` is pinned to `secret-propagator`; initial `secret_id` is seeded by
-the bootstrap step "Seed secret-propagator AppRole credentials" into the
-`infra-<env>` GitHub environment as:
-
-- `OPENBAO_PROPAGATOR_ROLE_ID = secret-propagator`
-- `OPENBAO_PROPAGATOR_SECRET_ID = <minted secret_id>`
-
-`secret_id_ttl = 2208h` (~92 days). Rotation is automated by the in-cluster
-**`approle-rotation` CronWorkflow** (quarterly, same schedule as the CI
-AppRole) — it mints a new `secret_id`, writes it back to the env secret via
-`gh secret set --env infra-<env>`, then revokes the prior accessor.
+The **`secret-propagator` GitHub-OIDC (`jwt`) role** (created by
+`bootstrap-openbao.yml` → "Configure OpenBao") has a narrow policy: write-only
+on `secret/data/linode/api-token`. The `propagate-linode-pat` job presents the
+workflow's GitHub OIDC token, gets a short-lived (15m TTL) OpenBao token,
+writes, and exits. No long-lived credential is stored on the environment — the
+OIDC token is minted per-run by GitHub Actions, so there is nothing to seed,
+rotate, or re-seed.
 
 #### Recovery / propagate-only
 
 If the create step succeeds but propagate fails (e.g. OpenBao temporarily
-unreachable, or the `secret_id` has expired and rotation hasn't run yet),
-dispatch `secret-rotation.yml` with `scope=linode-pat-propagate-only`,
+unreachable), dispatch `secret-rotation.yml` with
+`scope=linode-pat-propagate-only`,
 `confirm=rotate:linode-pat-propagate-only`. This skips create and re-runs the
 propagate matrix using whatever value is currently in
 `secrets.LINODE_API_TOKEN`.
-
-#### Re-seeding the propagator AppRole
-
-If `OPENBAO_PROPAGATOR_SECRET_ID` is missing or stale on an environment (cluster
-was re-bootstrapped, env secret was deleted, etc.), re-run
-`bootstrap-openbao.yml` for that environment — the "Seed secret-propagator
-AppRole credentials" step re-mints and writes a fresh `secret_id`.
 
 #### Regenerating the root token (prerequisite for re-running bootstrap)
 
@@ -316,8 +300,8 @@ can automate. Track it as a quarterly manual review with the GitHub org admins.
 - **TF-state OBJ key:** revoke ≤120 days. **Calendar-tracked, manual** — no
   automated alert is possible.
 
-These jobs are the alert surface (same as `approle-rotation-health` /
-`lke-admin-rotation-health`); there is no kube-state-metrics secret-age metric
+These jobs are the alert surface (same as `lke-admin-rotation-health`); there
+is no kube-state-metrics secret-age metric
 in this Prometheus, so a PrometheusRule would never fire. See
 [alerting.md](../alerting.md).
 

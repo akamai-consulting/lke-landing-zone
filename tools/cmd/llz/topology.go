@@ -5,10 +5,9 @@ package main
 // resolves the role/peer questions the CI workflows used to answer by hardcoding
 // "primary"/"secondary":
 //
-//   • ha_role = active     — provisions Harbor robots, owns the base-named
-//                            AppRole GH-secret, receives the standby's CA.
-//   • ha_role = standby    — seeds Harbor creds from the active, owns the
-//                            _STANDBY-suffixed secret, ships its CA to the active.
+//   • ha_role = active     — provisions Harbor robots, receives the standby's CA.
+//   • ha_role = standby    — seeds Harbor creds from the active, ships its CA
+//                            to the active.
 //   • ha_role = standalone — a single self-contained OpenBao (no peer).
 //
 // `llz env role <name>` and `llz env peer <name>` expose this to the workflows;

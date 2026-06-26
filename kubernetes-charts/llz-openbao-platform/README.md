@@ -23,8 +23,6 @@ bare chart leaves to you:
 - **Prometheus ServiceMonitor** — scrapes `/v1/sys/metrics` over HTTPS.
 - **Promtail audit-shipper** — a sidecar config that tails the file audit device
   and ships to the in-cluster Loki gateway.
-- **AppRole-rotation CronWorkflow** — an Argo CronWorkflow (+ SA/RBAC/ESO) that
-  rotates the AppRole `secret_id` used by CI and ESO on a quarterly schedule.
 
 ## Why this chart exists
 
@@ -78,8 +76,7 @@ knobs live under `platform` and `openbaoPromtail`:
 helm dependency build kubernetes-charts/llz-openbao-platform
 helm install platform-openbao oci://ghcr.io/akamai-consulting/charts/llz-openbao-platform \
   --version 0.1.0 \
-  -n openbao --create-namespace \
-  --set approleWorkflow.approleRotationEnabled=true
+  -n openbao --create-namespace
 ```
 
 > Use release name `platform-openbao` (or set `platform.releaseName` to match your
@@ -96,4 +93,4 @@ StatefulSet `volumeClaimTemplates` + the ESO `deletionPolicy` defaulting.
 
 After first sync the pods come up **sealed**. Bootstrap is automated — run
 `.github/workflows/bootstrap-openbao.yml` for each region (init, unseal, Raft
-join, KV v2, AppRole, Kubernetes auth, policies, audit, secret seeding).
+join, KV v2, Kubernetes auth, GitHub-OIDC auth, policies, audit, secret seeding).
