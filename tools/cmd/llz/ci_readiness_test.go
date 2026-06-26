@@ -76,13 +76,22 @@ func TestRunCIWaitHarbor(t *testing.T) {
 		}
 		return nil, errors.New("nope")
 	})
-	if ec := runCIWaitHarbor(""); ec != 0 {
+	if ec := runCIWaitHarbor("", false); ec != 0 {
 		t.Errorf("ready Harbor (no URL) => exit %d, want 0", ec)
 	}
 
-	// A failing rollout => exit 1.
+	// registry-only: rolls out harbor-registry without touching the admin
+	// Secret/control-plane checks => exit 0 on success.
+	if ec := runCIWaitHarbor("", true); ec != 0 {
+		t.Errorf("registry-only ready => exit %d, want 0", ec)
+	}
+
+	// A failing rollout => exit 1 (both the full gate and registry-only).
 	harborRollout = func(string) error { return errors.New("timed out") }
-	if ec := runCIWaitHarbor(""); ec != 1 {
+	if ec := runCIWaitHarbor("", false); ec != 1 {
 		t.Errorf("rollout timeout => exit %d, want 1", ec)
+	}
+	if ec := runCIWaitHarbor("", true); ec != 1 {
+		t.Errorf("registry-only rollout timeout => exit %d, want 1", ec)
 	}
 }
