@@ -94,6 +94,30 @@ apps:
             hs.status = "Progressing"
             hs.message = "Waiting for ExternalSecret to sync"
             return hs
+          resource.customizations.health.external-secrets.io_PushSecret: |
+            local hs = {}
+            -- The generated-secrets PushSecrets (grafana/admin, otel/ingress) can't
+            -- write until OpenBao is unsealed and the eso-pusher role exists; ESO
+            -- retries on refreshInterval. Reclassify "not yet pushed" as Progressing
+            -- (same rationale as ExternalSecret above) so a pending push — Argo's
+            -- built-in ES health would otherwise call it Degraded — never fails the
+            -- platform-bootstrap sync wave. `llz ci health` is the real backstop.
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  if c.status == "True" then
+                    hs.status = "Healthy"
+                  else
+                    hs.status = "Progressing"
+                  end
+                  hs.message = c.message
+                  return hs
+                end
+              end
+            end
+            hs.status = "Progressing"
+            hs.message = "Waiting for PushSecret to sync"
+            return hs
   prometheus:
     enabled: true
     # Resource-conscious defaults matching the reference lab: single replica,
@@ -128,7 +152,8 @@ apps:
     # creds come from the `loki-object-store` ESO Secret (synced from OpenBao)
     # mounted as env vars on the singleBinary pod. The schema's
     # object_store=filesystem→s3 flip is done by the kyverno-loki-s3-object-store
-    # policy (cluster-bootstrap), NOT here — overriding schemaConfig corrupts it.
+    # policy (_shared/manifest/kyverno-policies/), NOT here — overriding
+    # schemaConfig corrupts it.
     _rawValues:
       gateway:
         nginxConfig:

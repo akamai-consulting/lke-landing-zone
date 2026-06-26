@@ -107,9 +107,8 @@ useful context for emergency recovery and understanding the secret layout.
    - `secret/infra/github-dispatch-token` (harbor-ready PostSync dispatch)
    - `secret/approle/rotation-secrets` (AppRole rotation CronWorkflow)
    - `secret/cert-automation/github-token` (cert-automation Argo Workflow)
-   - `secret/grafana/admin` (generated admin credentials)
-   - `secret/otel/ingress` (generated OTLP bearer token)
    - `secret/loki/object-store` (Linode Object Storage keys from `LOKI_S3_ACCESS_KEY/SECRET`)
+   - Note: `secret/grafana/admin` (admin credentials) and `secret/otel/ingress` (OTLP bearer) are NO LONGER seeded here — they are generated in-cluster by External Secrets Operator (a Password generator + a PushSecret with `updatePolicy: IfNotExists`) and written into the same OpenBao paths. See `apl-values/_shared/manifest/generated-secrets/`.
    - Note: `secret/certmanager/dns01` (Linode DNS token from `LINODE_DNS_TOKEN`) is seeded by the separate `bootstrap-dns.yml` workflow once a DNS-scoped token has been provisioned.
 
 5. **Revoke root token** — runs unconditionally even on failure.

@@ -4,9 +4,11 @@ package main
 // that runs the bootstrap's generic OpenBao KV seeds from one declarative table
 // instead of one hand-written workflow step per secret. It REPLACES the
 // scattered `llz ci bao-seed …` steps in llz-bootstrap-openbao.yml (harbor
-// admin, github-dispatch-token, cert-automation token, linode api-token, grafana
-// admin, otel bearer, loki object-store) with a single step; the per-seed flag wiring those
-// steps carried now lives in bootstrapSeeds() below. The harbor-specific seeds
+// admin, github-dispatch-token, cert-automation token, linode api-token, loki
+// object-store) with a single step; the per-seed flag wiring those steps carried
+// now lives in bootstrapSeeds() below. (grafana admin + otel bearer used to seed
+// here too; they are now generated in-cluster via ESO — see bootstrapSeeds.) The
+// harbor-specific seeds
 // that derive their own material (robot accounts → ci_harbor_steps.go,
 // docker-config → ci_seed_special.go, registry-S3 → ci_bao_seed registry-s3)
 // keep their dedicated commands — only the plain `bao-seed` invocations fold in.
@@ -81,32 +83,15 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 			onMissing:    "skip",
 			missingNotes: []string{"LINODE_API_TOKEN not set — skipping secret/linode/api-token (rotation will seed it)."},
 		},
-		// Grafana admin — generated once, then idempotent (never rotate a live cred).
-		{
-			path:          "secret/grafana/admin",
-			skipIfPresent: "password",
-			fieldSpecs:    []string{"username=literal:admin", "password=gen:base64:24"},
-			onMissing:     "error",
-			seededMessage: "secret/grafana/admin seeded (new password generated).",
-			summaryOnSeed: []string{
-				"",
-				"**Grafana admin credentials seeded.** Retrieve the password after deploy:",
-				"```",
-				`kubectl -n llz-openbao exec platform-openbao-0 -- \`,
-				`  env VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true \`,
-				"  bao kv get -field=password secret/grafana/admin",
-				"```",
-			},
-		},
-		// OTel Collector ingress bearer — generated once, idempotent so reruns
-		// don't invalidate in-flight client config bound to the current bearer.
-		{
-			path:          "secret/otel/ingress",
-			skipIfPresent: "token",
-			fieldSpecs:    []string{"token=gen:hex:32"},
-			onMissing:     "error",
-			seededMessage: "secret/otel/ingress seeded (new token generated).",
-		},
+		// secret/grafana/admin and secret/otel/ingress are NO LONGER seeded here.
+		// Both are self-generated, in-cluster-only secrets, so they moved to a
+		// kube-native ESO flow: a Password generator mints the value and a
+		// PushSecret writes it into OpenBao with updatePolicy: IfNotExists (the
+		// declarative equivalent of the old generate-once + skip-if-present). See
+		// apl-values/_shared/manifest/generated-secrets/ and the eso-pusher policy/
+		// role in ci_openbao_configure.go. This drops two root-token + kubectl-exec
+		// seed steps from the bootstrap.
+		//
 		// Loki object-store S3 credentials. Hard-defers if absent — Loki would
 		// CrashLoopBackOff with no chunk store.
 		{
@@ -132,8 +117,9 @@ func ciBaoSeedAllCmd() *cobra.Command {
 		Short: "seed every generic OpenBao KV bootstrap path from one declarative table",
 		Long: "Data-driven driver that runs the bootstrap's generic `bao-seed` paths\n" +
 			"(harbor admin, github-dispatch-token, cert-automation token, linode api-token,\n" +
-			"grafana admin, otel bearer, loki object-store) from the bootstrapSeeds() table —\n" +
-			"replacing near-identical inline steps in llz-bootstrap-openbao.yml with one. Each\n" +
+			"loki object-store) from the bootstrapSeeds() table — replacing near-identical\n" +
+			"inline steps in llz-bootstrap-openbao.yml with one. (grafana admin + otel bearer\n" +
+			"are generated in-cluster via ESO, not seeded here.) Each\n" +
 			"entry is the same flag set `bao-seed` parses, so behavior is unchanged:\n" +
 			"per-seed idempotency guards, on-missing modes, and summary notes. A missing\n" +
 			"env:/k8s: source follows that seed's on-missing mode (exit 0, deferring via\n" +

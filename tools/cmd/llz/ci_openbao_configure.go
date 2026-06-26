@@ -53,6 +53,21 @@ const policySecretPropagator = `path "secret/data/linode/api-token" { capabiliti
 path "secret/metadata/linode/api-token" { capabilities = ["read"] }
 `
 
+// eso-pusher: narrow create/update access to the two self-generated, in-cluster-
+// only secrets (grafana admin password, otel ingress bearer). Used by ESO
+// PushSecrets (apl-values/_shared/manifest/generated-secrets/) that mint the
+// value via an ESO Password generator and push it into OpenBao with
+// updatePolicy: IfNotExists — so this replaces the imperative `llz ci bao-seed`
+// of these two paths (root-token + kubectl exec) with a least-privilege,
+// in-cluster write. `read` is needed for the IfNotExists existence check; the
+// read-only `platform-ci` policy still serves every consumer. Mapped to the
+// `eso-pusher` Kubernetes-auth role below (same ESO controller SA as `eso`).
+const policyESOPusher = `path "secret/data/grafana/admin" { capabilities = ["create", "update", "read"] }
+path "secret/data/otel/ingress"  { capabilities = ["create", "update", "read"] }
+path "secret/metadata/grafana/admin" { capabilities = ["read"] }
+path "secret/metadata/otel/ingress"  { capabilities = ["read"] }
+`
+
 // baoConfigStep is one in-pod bao invocation of the configure sequence.
 // Non-fatal steps are the `|| true` enables of the bash — re-runs hit
 // "path is already in use" and must not abort the re-configure.
@@ -84,6 +99,11 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 			args: []string{"policy", "write", "platform-ci", "-"}},
 		{desc: "write policy secret-propagator", fatal: true, stdin: policySecretPropagator,
 			args: []string{"policy", "write", "secret-propagator", "-"}},
+		// eso-pusher policy: scoped create/update for the ESO PushSecrets that seed
+		// the self-generated grafana/admin + otel/ingress paths declaratively (see
+		// policyESOPusher). Replaces the imperative bao-seed of those two paths.
+		{desc: "write policy eso-pusher", fatal: true, stdin: policyESOPusher,
+			args: []string{"policy", "write", "eso-pusher", "-"}},
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
@@ -94,6 +114,15 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=llz-external-secrets",
 				"bound_service_account_namespaces=llz-external-secrets",
 				"policies=platform-ci", "ttl=15m"}},
+		// Second Kubernetes-auth role for the SAME ESO controller SA, mapped to the
+		// write-scoped eso-pusher policy. The `openbao-push` ClusterSecretStore
+		// selects this role (role: eso-pusher) so PushSecrets can write the two
+		// generated paths while the read `openbao` store stays read-only via `eso`.
+		{desc: "write kubernetes auth role eso-pusher", fatal: true,
+			args: []string{"write", "auth/kubernetes/role/eso-pusher",
+				"bound_service_account_names=llz-external-secrets",
+				"bound_service_account_namespaces=llz-external-secrets",
+				"policies=eso-pusher", "ttl=15m"}},
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in

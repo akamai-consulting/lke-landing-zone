@@ -17,8 +17,6 @@ func TestBootstrapSeedsTable(t *testing.T) {
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
-		"secret/grafana/admin",
-		"secret/otel/ingress",
 		"secret/loki/object-store",
 	}
 	if len(seeds) != len(wantPaths) {
@@ -45,7 +43,7 @@ func TestBootstrapSeedsTable(t *testing.T) {
 	if !strings.Contains(strings.Join(dispatch.missingAnnotations, " "), "infra-primary") {
 		t.Errorf("dispatch-token annotations missing infra-primary: %v", dispatch.missingAnnotations)
 	}
-	loki := seeds[6]
+	loki := seeds[4]
 	if !strings.Contains(strings.Join(loki.missingNotes, " "), "platform-loki-primary") {
 		t.Errorf("loki notes missing platform-loki-primary: %v", loki.missingNotes)
 	}
@@ -53,7 +51,7 @@ func TestBootstrapSeedsTable(t *testing.T) {
 
 // TestRunCIBaoSeedAllSeedsEvery drives the whole table with every source
 // present (env secrets set, harbor admin Secret readable, nothing pre-seeded)
-// and asserts all six paths are kv-put, in table order.
+// and asserts all five paths are kv-put, in table order.
 func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
@@ -80,8 +78,6 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
-		"secret/grafana/admin",
-		"secret/otel/ingress",
 		"secret/loki/object-store",
 	}
 	if strings.Join(gotPaths, " ") != strings.Join(want, " ") {

@@ -28,13 +28,14 @@ func ciWaitPodsCmd() *cobra.Command {
 		Use:   "wait-pods <pod>...",
 		Short: "wait for named pods to reach a status phase (default Running)",
 		Long: "Native port of the 'Wait for OpenBao pods to be running' loop in\n" +
-			"llz-bootstrap-openbao.yml. Polls each named pod's .status.phase until it\n" +
-			"matches --phase, under one shared --timeout. Phase (not Readiness) on\n" +
-			"purpose: a pod can stay unready until a later step acts on it (OpenBao\n" +
-			"pods are unready until unsealed), so a readiness wait would deadlock a\n" +
-			"first bootstrap. On timeout it dumps the namespace's workloads, the stuck\n" +
-			"pod's describe, and recent events (combined stdout+stderr, so an empty\n" +
-			"namespace or a NotFound still surfaces the reason), then exits 1.",
+			"llz-bootstrap-openbao.yml. Watches each named pod with `kubectl wait`\n" +
+			"(--for=create to ride out a not-yet-created pod, then\n" +
+			"--for=jsonpath={.status.phase}=<phase>), under one shared --timeout. Phase\n" +
+			"(not Readiness) on purpose: a pod can stay unready until a later step acts on\n" +
+			"it (OpenBao pods are unready until unsealed), so a readiness wait would\n" +
+			"deadlock a first bootstrap. On timeout it dumps the namespace's workloads,\n" +
+			"the stuck pod's describe, and recent events (combined stdout+stderr, so an\n" +
+			"empty namespace or a NotFound still surfaces the reason), then exits 1.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, pods []string) error {
 			os.Exit(runCIWaitPods(ns, phase, pods, timeout, interval))
@@ -55,8 +56,9 @@ func ciWaitSecretCmd() *cobra.Command {
 		Use:   "wait-secret",
 		Short: "wait for a K8s Secret to materialize (optionally until its ExternalSecret is Ready)",
 		Long: "Native port of the 'Wait for cert-manager-dns01-solver-token Secret' loop in\n" +
-			"llz-bootstrap-dns.yml. Polls Secret existence first — a bare `kubectl wait\n" +
-			"--for=condition` errors immediately on NotFound — then, with\n" +
+			"llz-bootstrap-dns.yml. Waits for the Secret with `kubectl wait --for=create`\n" +
+			"(kubectl 1.31+ — a bare --for=condition errors immediately on NotFound, which\n" +
+			"is why this used to be a hand-rolled existence poll) — then, with\n" +
 			"--externalsecret, waits for that ExternalSecret's Ready condition (ESO\n" +
 			"reports Ready=True only after the Secret has the expected keys). On timeout\n" +
 			"it dumps the ExternalSecret's status conditions and exits 1.",
@@ -150,6 +152,7 @@ func waitPoll(timeout, interval time.Duration, cond func() bool) bool {
 }
 
 func runCIWaitPods(ns, phase string, pods []string, timeout, interval int) int {
+	_ = interval // kubectl wait is watch-based; --interval retained for CLI compatibility
 	if ns == "" {
 		fmt.Fprintln(os.Stderr, "::error::--namespace is required")
 		return 1
@@ -159,11 +162,17 @@ func runCIWaitPods(ns, phase string, pods []string, timeout, interval int) int {
 	// be too tight for pod 0 or balloon the worst case.
 	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
 	for _, pod := range pods {
-		ok := waitPoll(time.Until(deadline), time.Duration(interval)*time.Second, func() bool {
-			out, err := execOutput("kubectl", "-n", ns, "get", "pod", pod, "-o", "jsonpath={.status.phase}")
-			return err == nil && strings.TrimSpace(string(out)) == phase
-		})
-		if !ok {
+		// Two watch-based waits under the shared deadline: --for=create rides out a
+		// pod that does not exist yet (a bare --for=jsonpath errors on NotFound),
+		// then --for=jsonpath blocks until .status.phase matches.
+		if err := kubectlWaitStream("-n", ns, "wait", "--for=create", "pod/"+pod,
+			fmt.Sprintf("--timeout=%ds", remainingSecs(deadline))); err != nil {
+			fmt.Fprintf(os.Stderr, "::error::%s was not created within %ds\n", pod, timeout)
+			dumpPodDiagnostics(ns, pod)
+			return 1
+		}
+		if err := kubectlWaitStream("-n", ns, "wait", "--for=jsonpath={.status.phase}="+phase,
+			"pod/"+pod, fmt.Sprintf("--timeout=%ds", remainingSecs(deadline))); err != nil {
 			fmt.Fprintf(os.Stderr, "::error::%s did not reach %s phase within %ds\n", pod, phase, timeout)
 			dumpPodDiagnostics(ns, pod)
 			return 1
@@ -171,6 +180,16 @@ func runCIWaitPods(ns, phase string, pods []string, timeout, interval int) int {
 		fmt.Printf("%s is %s\n", pod, phase)
 	}
 	return 0
+}
+
+// remainingSecs is the whole seconds left until deadline, floored at 1 so a
+// `kubectl wait --timeout` is always positive — passing 0 would mean "wait
+// forever", the opposite of an exhausted budget.
+func remainingSecs(deadline time.Time) int {
+	if s := int(time.Until(deadline).Seconds()); s > 1 {
+		return s
+	}
+	return 1
 }
 
 // dumpPodDiagnostics prints best-effort cluster state after a wait timeout. It
@@ -193,19 +212,16 @@ func dumpPodDiagnostics(ns, pod string) {
 }
 
 func runCIWaitSecret(ns, name, es string, timeout, interval, esTimeout int) int {
+	_ = interval // kubectl wait is watch-based; --interval retained for CLI compatibility
 	if ns == "" || name == "" {
 		fmt.Fprintln(os.Stderr, "::error::--namespace and --name are required")
 		return 1
 	}
-	start := time.Now()
-	ok := waitPoll(time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second, func() bool {
-		if kExists("-n", ns, "get", "secret", name) {
-			return true
-		}
-		fmt.Printf("waiting for %s/%s (%ds/%ds)...\n", ns, name, int(time.Since(start).Seconds()), timeout)
-		return false
-	})
-	if !ok {
+	// --for=create (kubectl 1.31+) rides out the Secret not existing yet; a bare
+	// --for=condition errors immediately on NotFound, which is why this used to be
+	// a hand-rolled existence poll.
+	if err := kubectlWaitStream("-n", ns, "wait", "--for=create", "secret/"+name,
+		fmt.Sprintf("--timeout=%ds", timeout)); err != nil {
 		hint := ""
 		if es != "" {
 			hint = fmt.Sprintf(" — check ExternalSecret status: kubectl -n %s describe externalsecret %s", ns, es)

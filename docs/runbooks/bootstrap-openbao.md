@@ -121,9 +121,8 @@ gh workflow run bootstrap-openbao.yml \
    - `secret/approle/rotation-secrets` (used by AppRole rotation CronWorkflow via ESO)
    - `secret/cert-automation/github-token` (used by cert-automation Argo Workflow)
    - `secret/<release>/mtls-ca` (mTLS CA keypair for the platform's internal mTLS ClusterIssuer)
-   - `secret/grafana/admin` (randomly generated password)
-   - `secret/otel/ingress` (randomly generated bearer token)
    - `secret/loki/object-store` (from `LOKI_S3_ACCESS_KEY` / `LOKI_S3_SECRET_KEY`)
+   - Note: `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator generates them in-cluster (Password generator + PushSecret, `updatePolicy: IfNotExists`) and writes them into OpenBao. See `apl-values/_shared/manifest/generated-secrets/`.
    - Note: `secret/certmanager/dns01` is seeded by the separate `bootstrap-dns.yml` workflow once `LINODE_DNS_TOKEN` is provisioned — not by this workflow.
 11. Seeds the `secret-propagator` AppRole `secret_id` into the
     `infra-<env>` environment as `OPENBAO_PROPAGATOR_ROLE_ID` /

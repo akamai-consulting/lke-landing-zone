@@ -1,0 +1,20 @@
+# Kyverno ClusterPolicies that patch apl-core gaps which values overrides can't
+# express. Applied declaratively by the platform-bootstrap Argo CD Application
+# (ServerSideApply + SkipDryRunOnMissingResource), NOT by a terraform
+# null_resource running `llz ci apply-kyverno-policy` — Argo's own
+# retry/health/SkipDryRunOnMissingResource replaces the bespoke poll-then-apply
+# state machine, and the early sync-wave (-15) lands each policy before apl-core's
+# helmfile creates the resource it mutates (so the admission CREATE rule fires on
+# first write). SkipDryRunOnMissingResource rides out the window before apl-core
+# installs the Kyverno ClusterPolicy CRD; Argo re-syncs until it exists.
+#
+# Only the LOW-RACE policies live here. The PVC-encrypted-storage-class policy
+# stays a terraform null_resource (cluster-bootstrap/main.tf): it must beat
+# apl-operator's non-Argo helmfile creating the gitea-valkey / oauth2-proxy PVCs,
+# a race sync-waves can't win, so it is applied imperatively the instant Kyverno
+# is Ready.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - kyverno-loki-s3-object-store.yaml
+  - kyverno-oauth2-proxy-wait-keycloak-trust.yaml

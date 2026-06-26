@@ -439,9 +439,10 @@ jobs:
       #   secret/infra/github-dispatch-token   (harbor-ready PostSync hook)
       #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
       #   secret/linode/api-token              (linode-volume-labeler ExternalSecret)
-      #   secret/grafana/admin                 (generated, idempotent)
-      #   secret/otel/ingress                  (generated bearer, idempotent)
       #   secret/loki/object-store             (LOKI_S3_* env secrets)
+      # (secret/grafana/admin + secret/otel/ingress are no longer seeded here —
+      #  ESO generates them in-cluster via a Password generator + PushSecret; see
+      #  apl-values/_shared/manifest/generated-secrets/.)
       # Per-seed on-missing modes, idempotency guards, and summary notes are
       # UNCHANGED — they moved from these flags into the table. A missing env:/k8s:
       # source defers per its mode (BOOTSTRAP_ERRORS for github-dispatch-token on
