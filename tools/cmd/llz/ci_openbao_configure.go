@@ -132,13 +132,17 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		// SECURITY — bound_claims pins each role to THIS instance repo and
 		// bound_audiences to the owner's GitHub-OIDC default audience. Without
 		// BOTH, any GitHub repo's OIDC token could mint a token here.
+		//
+		// The role body is written as a JSON object over stdin (`bao write <path> -`)
+		// rather than key=value args: bound_claims is a MAP field, and the CLI
+		// rejects a key=value string for it ("expected map[string]interface{}, got
+		// string"). JSON also types bound_audiences/token_policies as lists.
 		jwtRole := func(name, policy string) baoConfigStep {
-			return baoConfigStep{desc: "write jwt role " + name, fatal: true,
-				args: []string{"write", "auth/jwt/role/" + name,
-					"role_type=jwt", "user_claim=sub",
-					"bound_audiences=https://github.com/" + owner,
-					`bound_claims={"repository":"` + ghRepo + `"}`,
-					"token_policies=" + policy, "token_ttl=15m", "token_max_ttl=30m"}}
+			body := fmt.Sprintf(
+				`{"role_type":"jwt","user_claim":"sub","bound_audiences":["https://github.com/%s"],"bound_claims":{"repository":"%s"},"token_policies":["%s"],"token_ttl":"15m","token_max_ttl":"30m"}`,
+				owner, ghRepo, policy)
+			return baoConfigStep{desc: "write jwt role " + name, fatal: true, stdin: body,
+				args: []string{"write", "auth/jwt/role/" + name, "-"}}
 		}
 		steps = append(steps,
 			// Non-fatal enable (tolerates already-enabled on re-runs), matching
