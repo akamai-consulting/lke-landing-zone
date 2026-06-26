@@ -40,7 +40,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFUntrackCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(),
 		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciConvergeCmd(),
 		ciBaoStatusCmd(), ciBaoUnsealCmd(), ciBaoUnsealFollowersCmd(),
-		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd())
+		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
 	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
@@ -73,7 +73,7 @@ func ciCmd() *cobra.Command {
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
 	// material specials in ci_bao_seed.go / ci_seed_approle.go /
 	// ci_seed_special.go.
-	c.AddCommand(ciBaoSeedCmd(), ciSeedApproleCmd(),
+	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciSeedApproleCmd(),
 		ciSeedHarborDockerConfigCmd(), ciSeedHarborRegistryS3Cmd(),
 		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py

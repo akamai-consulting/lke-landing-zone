@@ -8,8 +8,10 @@ package main
 // It cross-validates every ExternalSecret remoteRef.key and remoteRef.property
 // in apl-values/ + the rendered chart output against the paths and field names
 // seeded by the bootstrap workflows (llz-bootstrap-openbao.yml /
-// llz-bootstrap-dns.yml) and by `llz ci provision-harbor-robots` (ci_harbor.go),
-// then verifies the bootstrap (`llz ci bao-configure`) and Terraform-managed
+// llz-bootstrap-dns.yml), the `llz ci bao-seed-all` data-driven seed table
+// (ci_bao_seed_all.go), and the native Go seeders (ci_harbor.go
+// provision-harbor-robots, ci_seed_special.go), then verifies the bootstrap
+// (`llz ci bao-configure`) and Terraform-managed
 // (terraform-modules/llz-openbao) platform-ci OpenBao policies cover those
 // KV v2 paths. Every bootstrap-seeded KV path must have matching policy
 // coverage even when it is consumed by CI rather than an ExternalSecret.
@@ -185,6 +187,13 @@ var (
 	esGoFieldRx    = regexp.MustCompile(`"(\w+)":`)
 	esGoSpecPathRx = regexp.MustCompile(`kvPath:\s*"secret/([^"]+)"`)
 	esGoSpecPutRx  = regexp.MustCompile(`(?s)baoKVPutFn\(\s*\w+\.kvPath,\s*map\[string\]string\{(.*?)\}`)
+	// The bootstrapSeeds() table (ci_bao_seed_all.go) declares each generic seed
+	// as a baoSeedOpts literal: `path: "secret/<p>", … fieldSpecs: []string{…}`.
+	// path: precedes fieldSpecs: in every entry (skipIfPresent: may sit between),
+	// so a lazy match from one path: to its next fieldSpecs: stays inside the
+	// entry. Each fieldSpecs string is "<name>=<source>".
+	esSeedTableEntryRx = regexp.MustCompile(`(?s)path:\s*"secret/([^"]+)",.*?fieldSpecs:\s*\[\]string\{(.*?)\}`)
+	esSeedTableFieldRx = regexp.MustCompile(`"(\w+)=`)
 )
 
 // collectSeededGo returns seeds written natively by llz Go code (ci_harbor.go)
@@ -219,6 +228,8 @@ func collectSeededGo(src string) (map[string]bool, map[string]map[string]bool, e
 		}
 	}
 
+	collectSeededSeedTableInto(text, paths, fields)
+
 	specFields := map[string]bool{}
 	for _, m := range esGoSpecPutRx.FindAllStringSubmatch(text, -1) {
 		for _, fm := range esGoFieldRx.FindAllStringSubmatch(m[1], -1) {
@@ -236,6 +247,26 @@ func collectSeededGo(src string) (map[string]bool, map[string]map[string]bool, e
 		}
 	}
 	return paths, fields, nil
+}
+
+// collectSeededSeedTableInto folds the bootstrapSeeds() table (ci_bao_seed_all.go)
+// into an existing paths/fields accumulator: each baoSeedOpts literal's
+// path: "secret/<p>" plus the field names parsed from its fieldSpecs strings.
+// This is the data-driven replacement for the former one-inline-bao-seed-step-
+// per-secret blocks collectSeeded scraped from llz-bootstrap-openbao.yml. A
+// no-op on files without the pattern (the other scanned Go sources), so it can
+// run over every Go seeding source uniformly.
+func collectSeededSeedTableInto(text string, paths map[string]bool, fields map[string]map[string]bool) {
+	for _, m := range esSeedTableEntryRx.FindAllStringSubmatch(text, -1) {
+		path, body := m[1], m[2]
+		paths[path] = true
+		if fields[path] == nil {
+			fields[path] = map[string]bool{}
+		}
+		for _, fm := range esSeedTableFieldRx.FindAllStringSubmatch(body, -1) {
+			fields[path][fm[1]] = true
+		}
+	}
 }
 
 var (
@@ -377,8 +408,15 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	}
 	// Native Go seeds: ci_harbor.go (provision-harbor-robots) and ci_seed_special.go
 	// (seed-harbor-dockerconfig / seed-harbor-registry-s3), each a
-	// literal baoKVPutFn("secret/<path>", …) call.
-	for _, goSrc := range []string{"tools/cmd/llz/ci_harbor.go", "tools/cmd/llz/ci_seed_special.go"} {
+	// literal baoKVPutFn("secret/<path>", …) call; ci_bao_seed_all.go, whose
+	// bootstrapSeeds() table declares the generic seeds the workflow used to run
+	// as one inline `bao-seed` step each (collectSeededGo also runs the
+	// seed-table parser over every source — a no-op on the harbor files).
+	for _, goSrc := range []string{
+		"tools/cmd/llz/ci_harbor.go",
+		"tools/cmd/llz/ci_seed_special.go",
+		"tools/cmd/llz/ci_bao_seed_all.go",
+	} {
 		goPaths, goFields, err := collectSeededGo(esRepoPath(root, goSrc))
 		if err != nil {
 			return err

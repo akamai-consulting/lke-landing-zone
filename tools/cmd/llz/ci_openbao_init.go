@@ -115,6 +115,15 @@ func runCIBaoInit(g globalOpts, region string) error {
 		"UNSEAL_K3="+res.UnsealKeysB64[2]); err != nil {
 		return err
 	}
+	// Also export to the PROCESS env. A standalone `bao-init` step relies on the
+	// $GITHUB_ENV write above (GitHub Actions injects it into the next step), but
+	// the `bao-ensure-ready` orchestrator runs init + unseal in ONE process — the
+	// unseal calls read UNSEAL_K1/2/3 (and the availability gate reads
+	// OPENBAO_ROOT_TOKEN) via os.Getenv, which the file write does not satisfy.
+	os.Setenv("OPENBAO_ROOT_TOKEN", res.RootToken)
+	os.Setenv("UNSEAL_K1", res.UnsealKeysB64[0])
+	os.Setenv("UNSEAL_K2", res.UnsealKeysB64[1])
+	os.Setenv("UNSEAL_K3", res.UnsealKeysB64[2])
 
 	// Keys 1-3 as environment secrets for automated re-unseal; the root token
 	// too, for two reasons: (1) the configure preflight prints the sha256 of
@@ -244,10 +253,14 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 	}
 	maskGHA(newRoot)
 
-	// Update env for downstream steps + the GH secret for the next run.
+	// Update env for downstream steps + the GH secret for the next run. The
+	// os.Setenv mirror lets the in-process `bao-ensure-ready` availability gate
+	// read the REGENERATED token (not the stale one it loaded) via os.Getenv;
+	// a standalone step gets it from the $GITHUB_ENV injection.
 	if err := appendGHAFile("GITHUB_ENV", "OPENBAO_ROOT_TOKEN="+newRoot); err != nil {
 		return err
 	}
+	os.Setenv("OPENBAO_ROOT_TOKEN", newRoot)
 	if err := ghSetSecretFn("OPENBAO_ROOT_TOKEN", "infra-"+region, newRoot); err != nil {
 		return err
 	}
