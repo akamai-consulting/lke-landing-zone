@@ -73,7 +73,7 @@ variable "loki_admin_password" {
 }
 
 variable "destroying" {
-  description = "Set true (TF_VAR_destroying=true) only on the teardown path. Gates data.kubernetes_service.coredns off so `terraform destroy` doesn't refresh that cluster-API read while the LKE cluster is being reaped in the same run — the read would time out (dial :6443 i/o timeout) and fail the destroy. The data source is apply-only (it just feeds the rendered Loki gateway resolver), so skipping it on destroy is safe; the Kyverno loki-gateway-resolver policy is the runtime backstop. Defaults false so the apply path is unaffected and no apply job needs to set it."
+  description = "Set true (TF_VAR_destroying=true) only on the teardown path. Gates data.kubernetes_service.coredns off so `terraform destroy` doesn't refresh that cluster-API read while the LKE cluster is being reaped in the same run — the read would time out (dial :6443 i/o timeout) and fail the destroy. The data source is apply-only (it just feeds the rendered Loki gateway resolver), so skipping it on destroy is safe (a destroy never needs the resolver). Defaults false so the apply path is unaffected and no apply job needs to set it."
   type        = bool
   default     = false
 }
