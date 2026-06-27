@@ -1,0 +1,7 @@
+# spec.components.linodeCredRotator → this kustomize Component. An env's overlay
+# lists it under components: when enabled (default-disabled). Template-managed —
+# edit upstream. See docs/designs/linode-credential-rotator.md.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - linode-cred-rotator

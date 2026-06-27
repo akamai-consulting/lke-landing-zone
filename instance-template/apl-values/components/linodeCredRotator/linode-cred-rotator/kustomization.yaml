@@ -1,0 +1,13 @@
+# Linode credential rotator — fully Argo-owned manifest tree (namespace, the
+# ESO-synced minting token, the SA, NetworkPolicy, and the CronJob). Per-env
+# REGION/OBJ_CLUSTER come from the manifest-root linode-cred-rotator-env-patch.yaml
+# that `llz render` emits when this component is enabled.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - externalsecret.yaml
+  - rbac.yaml
+  - network-policy.yaml
+  - cronjob.yaml

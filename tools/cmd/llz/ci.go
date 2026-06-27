@@ -76,6 +76,9 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(),
 		ciSeedHarborRegistryS3Cmd(),
 		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd())
+	// In-cluster Linode credential rotator (linodeCredRotator CronJob, slim llz
+	// image): rotates the in-cluster-only Linode creds (OBJ keys + DNS token).
+	c.AddCommand(ciRotateLinodeCredsCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())

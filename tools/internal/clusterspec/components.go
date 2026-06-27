@@ -108,6 +108,22 @@ var Components = []Component{
 		}},
 	},
 	{
+		// In-cluster Linode credential rotator (OBJ keys + DNS token). Default-
+		// disabled: opt in per env via spec.components.linodeCredRotator. The
+		// per-env REGION + OBJ_CLUSTER ride the patch below (rendered by `llz
+		// render`). See docs/designs/linode-credential-rotator.md.
+		Name:              "linodeCredRotator",
+		DefaultDisabled:   true,
+		ManifestResources: []string{"linode-cred-rotator"},
+		Patches: []Patch{{
+			Path:    "linode-cred-rotator-env-patch.yaml",
+			Group:   "batch",
+			Version: "v1",
+			Kind:    "CronJob",
+			Name:    "linode-cred-rotator",
+		}},
+	},
+	{
 		// apl-core's monitoring stack + the llz glue (loki S3 ExternalSecret, alert
 		// rules) that rides with it.
 		Name:        "observability",

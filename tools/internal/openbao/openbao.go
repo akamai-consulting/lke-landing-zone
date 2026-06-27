@@ -11,6 +11,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,12 +30,83 @@ type Client struct {
 }
 
 func New(addr, token, namespace string, timeout time.Duration) *Client {
+	return NewWithClient(addr, token, namespace, &http.Client{Timeout: timeout})
+}
+
+// NewWithClient is New with a caller-supplied *http.Client — used by in-cluster
+// callers that need a CA-trusting transport for OpenBao's private serving cert
+// (see HTTPClientWithCA) and reuse it across login + writes.
+func NewWithClient(addr, token, namespace string, httpClient *http.Client) *Client {
 	return &Client{
 		addr:      strings.TrimRight(addr, "/"),
 		token:     token,
 		namespace: namespace,
-		http:      &http.Client{Timeout: timeout},
+		http:      httpClient,
 	}
+}
+
+// HTTPClientInsecure builds an *http.Client that skips TLS verification — the
+// established in-cluster posture for OpenBao access (every `baoExec` call uses
+// VAULT_SKIP_VERIFY=true), since distributing OpenBao's private CA into each
+// consumer namespace needs a reflector this platform doesn't ship. Pod→OpenBao
+// traffic stays on the cluster pod network. Prefer HTTPClientWithCA where the CA
+// is mounted.
+func HTTPClientInsecure(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}, //nolint:gosec
+	}
+}
+
+// HTTPClientWithCA builds an *http.Client that trusts caPEM (the openbao-ca
+// bundle an in-cluster pod mounts) for TLS to OpenBao. OpenBao's serving cert is
+// signed by a private CA, so the system bundle alone can't verify it.
+func HTTPClientWithCA(caPEM []byte, timeout time.Duration) (*http.Client, error) {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("no valid certificate found in CA bundle")
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}},
+	}, nil
+}
+
+// KubernetesLogin exchanges a Kubernetes ServiceAccount JWT for an OpenBao token
+// via the kubernetes auth method (POST /v1/auth/<mount>/login {role, jwt}) and
+// returns the issued client_token. Unauthenticated by design — the JWT is the
+// credential — so it takes a bare *http.Client + addr rather than a *Client.
+func KubernetesLogin(ctx context.Context, httpClient *http.Client, addr, mount, role, jwt string) (string, error) {
+	body, err := json.Marshal(map[string]string{"role": role, "jwt": jwt})
+	if err != nil {
+		return "", err
+	}
+	url := strings.TrimRight(addr, "/") + "/v1/auth/" + mount + "/login"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("kubernetes auth login (role %s): %w", role, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("kubernetes auth login (role %s): HTTP %d: %s", role, resp.StatusCode, respBody(resp))
+	}
+	var out struct {
+		Auth struct {
+			ClientToken string `json:"client_token"`
+		} `json:"auth"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("parse kubernetes auth login response: %w", err)
+	}
+	if out.Auth.ClientToken == "" {
+		return "", fmt.Errorf("kubernetes auth login (role %s) returned no client_token", role)
+	}
+	return out.Auth.ClientToken, nil
 }
 
 // DataPath turns an operator KV path (secret/app/keys) into the KV v2 data API

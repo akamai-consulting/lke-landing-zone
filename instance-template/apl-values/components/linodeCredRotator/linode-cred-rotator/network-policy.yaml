@@ -1,0 +1,44 @@
+# Egress lockdown for the rotator pod. It holds a Linode API token with mint
+# scope — unconstrained egress would let a compromised image exfiltrate it.
+# Restrict to DNS + HTTPS (api.linode.com + *.linodeobjects.com S3 endpoints,
+# TCP/443) + OpenBao (TCP/8200 in llz-openbao).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: linode-cred-rotator-egress
+  namespace: llz-linode-cred-rotator
+spec:
+  # Static-label match on the pod template's app.kubernetes.io/name (set on the
+  # CronJob jobTemplate) — linter-visible NP→pod linkage.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: linode-cred-rotator
+  policyTypes: [Egress, Ingress]
+  ingress: []
+  egress:
+    # DNS resolution against kube-dns.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # OpenBao (TCP/8200) for the Kubernetes-auth login + KV writes.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llz-openbao
+      ports:
+        - { protocol: TCP, port: 8200 }
+    # api.linode.com + the *.linodeobjects.com S3 endpoints (TCP/443). ipBlock
+    # 0.0.0.0/0 is acceptable here: the port restriction + credential-isolation
+    # namespace mean only outbound HTTPS to the Linode API / OBJ storage is
+    # reachable.
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443 }

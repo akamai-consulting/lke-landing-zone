@@ -73,6 +73,20 @@ path "secret/metadata/otel/ingress"  { capabilities = ["create", "update", "read
 path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read"] }
 `
 
+// linode-rotator: write access to the in-cluster-only Linode credentials the
+// in-cluster rotator owns (the linodeCredRotator CronJob, `llz ci
+// rotate-linode-creds`). Scoped to exactly the rotated paths — the object-storage
+// keys (Loki, Harbor registry) and the DNS-scoped token — never the provisioning
+// PAT or any read-only consumer path. Mapped to the `linode-rotator`
+// Kubernetes-auth role below. See docs/designs/linode-credential-rotator.md.
+const policyLinodeRotator = `path "secret/data/loki/object-store"  { capabilities = ["create", "update", "read"] }
+path "secret/data/harbor/registry-s3" { capabilities = ["create", "update", "read"] }
+path "secret/data/certmanager/dns01"  { capabilities = ["create", "update", "read"] }
+path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
+path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
+path "secret/metadata/certmanager/dns01"  { capabilities = ["read"] }
+`
+
 // baoConfigStep is one in-pod bao invocation of the configure sequence.
 // Non-fatal steps are the `|| true` enables of the bash — re-runs hit
 // "path is already in use" and must not abort the re-configure.
@@ -109,6 +123,10 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		// policyESOPusher). Replaces the imperative bao-seed of those two paths.
 		{desc: "write policy eso-pusher", fatal: true, stdin: policyESOPusher,
 			args: []string{"policy", "write", "eso-pusher", "-"}},
+		// linode-rotator policy: scoped write for the in-cluster Linode credential
+		// rotator (OBJ keys + DNS token). Mapped to the linode-rotator k8s-auth role.
+		{desc: "write policy linode-rotator", fatal: true, stdin: policyLinodeRotator,
+			args: []string{"policy", "write", "linode-rotator", "-"}},
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
@@ -128,6 +146,14 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=llz-external-secrets",
 				"bound_service_account_namespaces=llz-external-secrets",
 				"policies=eso-pusher", "ttl=15m"}},
+		// Kubernetes auth role for the in-cluster Linode credential rotator — binds
+		// the linode-cred-rotator ServiceAccount to the write-scoped linode-rotator
+		// policy so the CronJob can write the rotated creds straight to OpenBao.
+		{desc: "write kubernetes auth role linode-rotator", fatal: true,
+			args: []string{"write", "auth/kubernetes/role/linode-rotator",
+				"bound_service_account_names=linode-cred-rotator",
+				"bound_service_account_namespaces=llz-linode-cred-rotator",
+				"policies=linode-rotator", "ttl=15m"}},
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in
