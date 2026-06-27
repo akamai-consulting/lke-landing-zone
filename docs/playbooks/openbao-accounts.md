@@ -2,7 +2,7 @@
 
 **Applies to:** OpenBao on every regional cluster (`<release>-openbao-0/1/2` in the `openbao` namespace). No external Ingress — all access is via `kubectl exec` into the pod.
 
-**Related:** [`docs/secrets.md`](../secrets.md) (architecture + dual-write), [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial bootstrap), [`docs/runbooks/approle-rotation.md`](../runbooks/approle-rotation.md) (CI AppRole rotation), [`llz ci bao-configure`](../../tools/cmd/llz/ci_openbao_configure.go) (auth methods + policies definition).
+**Related:** [`docs/secrets.md`](../secrets.md) (architecture + dual-write), [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial bootstrap), [`llz ci bao-configure`](../../tools/cmd/llz/ci_openbao_configure.go) (auth methods + policies definition).
 
 ---
 
@@ -13,10 +13,10 @@ OpenBao in this deployment has three auth methods enabled (`llz ci bao-configure
 | Method | Used by |
 |---|---|
 | **`token`** (root) | Operators for break-glass admin. Root token is **deleted** after bootstrap and re-issued via `bao operator generate-root` (requires 3 of 5 unseal-key holders) — see [`docs/secrets.md`](../secrets.md). |
-| **`approle`** | The CI AppRole (`<instance>-ci`) used by ESO's `ClusterSecretStore openbao` (read-only KV). Rotation is quarterly via the Argo `approle-rotation` CronWorkflow. |
-| **`kubernetes`** | The `approle-rotator` ServiceAccount in the `openbao` namespace — used only by the rotation CronWorkflow to mint new CI AppRole secret IDs. |
+| **`kubernetes`** | ESO's `ClusterSecretStore openbao` authenticates by its in-cluster ServiceAccount token via the `eso` Kubernetes-auth role, bound to the read-only `platform-ci` policy. No long-lived credential is stored. |
+| **`jwt`** (GitHub-OIDC) | The `secret-propagator` role, used by `llz ci propagate-pat` to write `secret/linode/api-token`. CI authenticates with the workflow's GitHub OIDC token — no static credential. |
 
-There is no LDAP, OIDC, or userpass. Humans use root tokens (emergency-only) or the operator-side dual-write scripts (`llz openbao set`, `llz openbao get`) which require a region-scoped operator token from `bao operator generate-root`.
+There is no LDAP, userpass, or AppRole. Humans use root tokens (emergency-only) or the operator-side dual-write scripts (`llz openbao set`, `llz openbao get`) which require a region-scoped operator token from `bao operator generate-root`.
 
 ---
 
@@ -65,11 +65,11 @@ Anything. Use root sparingly:
 
 ---
 
-## Machine account — AppRole (recommended pattern)
+## Machine account — Kubernetes auth (recommended pattern)
 
-Use AppRole for any in-cluster workload that needs read access to OpenBao. The existing CI AppRole (`<instance>-ci`) is the template.
+Use Kubernetes auth for any in-cluster workload that needs read access to OpenBao. The pod authenticates by its projected ServiceAccount token — there is no secret_id lifecycle to manage. ESO's `eso` role (bound to the read-only `platform-ci` policy) is the existing template.
 
-### Adding a new AppRole
+### Adding a new Kubernetes-auth role
 
 1. **Write a policy** — enumerate the exact KV paths the new principal reads (no wildcards):
 
@@ -82,47 +82,17 @@ Use AppRole for any in-cluster workload that needs read access to OpenBao. The e
 
     Also add the policy + paths to [`llz ci bao-configure`](../../tools/cmd/llz/ci_openbao_configure.go) (so the next bootstrap reproduces it) and to the ExternalSecret-path validation used by the lint job (so it covers any new ExternalSecret refs).
 
-2. **Create the AppRole**:
+2. **Bind the role to a ServiceAccount**:
 
     ```bash
-    llz openbao exec -- write auth/approle/role/<role-name> \
-      token_policies=<policy-name> \
-      token_ttl=15m \
-      token_max_ttl=30m \
-      secret_id_ttl=2208h     # 92 days — matches existing rotation cadence
+    llz openbao exec -- write auth/kubernetes/role/<role-name> \
+      bound_service_account_names=<sa-name> \
+      bound_service_account_namespaces=<ns> \
+      policies=<policy-name> \
+      ttl=15m
     ```
 
-3. **Pin the role_id** to a stable string (so consumers don't have to re-read it on each rotation):
-
-    ```bash
-    llz openbao exec -- write auth/approle/role/<role-name>/role-id \
-      role_id=<role-name>
-    ```
-
-4. **Mint the first secret_id** and hand it to the consumer:
-
-    ```bash
-    llz openbao exec -- write -f auth/approle/role/<role-name>/secret-id
-    # → returns secret_id + secret_id_accessor
-    ```
-
-    For ESO: write the secret_id into the appropriate region's GitHub environment secret (e.g. `OPENBAO_APPROLE_SECRET_ID_<MYAPP>`) and reference it from your `ClusterSecretStore`. Mirror the pattern in the OpenBao Argo application values under `instance-template/apl-values/components/openbao/` and the existing CI AppRole rotation workflow.
-
-5. **Schedule rotation** — extend the `approle-rotation` CronWorkflow (under the OpenBao Argo application templates in `instance-template/apl-values/components/openbao/`) to mint a new secret_id every 60-90 days and push it to the GitHub environment secret. The existing CI AppRole rotation step is a copy-pasteable template.
-
-### Adding a Kubernetes-auth role (alternative)
-
-For workloads that authenticate by their pod ServiceAccount (skips the secret_id lifecycle entirely — recommended for net-new workloads):
-
-```bash
-llz openbao exec -- write auth/kubernetes/role/<role-name> \
-  bound_service_account_names=<sa-name> \
-  bound_service_account_namespaces=<ns> \
-  policies=<policy-name> \
-  ttl=15m
-```
-
-The pod authenticates with its projected SA token; OpenBao validates against the cluster's TokenReview API (configured by `llz ci bao-configure`). The `approle-rotator` is the only example today.
+The pod authenticates with its projected SA token; OpenBao validates against the cluster's TokenReview API (configured by `llz ci bao-configure`). The `eso` role used by the ESO ClusterSecretStore is the canonical example.
 
 ---
 
@@ -130,10 +100,7 @@ The pod authenticates with its projected SA token; OpenBao validates against the
 
 | Action | Command |
 |---|---|
-| Rotate a secret_id (manual) | `llz openbao exec -- write -f auth/approle/role/<role>/secret-id` — then push the new value to the consumer |
-| Rotate a secret_id (scheduled) | The Argo `approle-rotation` CronWorkflow handles the CI AppRole; clone the workflow step for new roles |
-| Revoke a specific secret_id | `llz openbao exec -- write auth/approle/role/<role>/secret-id-accessor/destroy secret_id_accessor=<accessor>` |
-| Delete an entire AppRole | `llz openbao exec -- delete auth/approle/role/<role>` |
+| Update a role's policy/SA binding | `llz openbao exec -- write auth/kubernetes/role/<role> ...` (re-write with the new fields) |
 | Delete a policy | `llz openbao exec -- policy delete <policy-name>` (remove all bindings first) |
 | Drop a Kubernetes-auth role | `llz openbao exec -- delete auth/kubernetes/role/<role>` |
 

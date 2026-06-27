@@ -5,8 +5,7 @@ description: >-
   OpenBao Helm chart (HA integrated-Raft, 3 replicas) and adds the cluster
   integration the bare chart omits: a cert-manager-issued serving cert with the
   per-pod raft SANs, default-deny + explicit-allow NetworkPolicies, a Prometheus
-  ServiceMonitor, a Promtail audit-log shipper sidecar config, and an Argo
-  CronWorkflow that rotates the AppRole secret_id used by CI and ESO. Every
+  ServiceMonitor, and a Promtail audit-log shipper sidecar config. Every
   non-obvious value is a default that captures an operational scar (raft join
   ordering, PSS securityContexts, the LKE-E 443→6443 NetworkPolicy DNAT, audit
   HCL `type =` requirement) so a sibling deployment overrides only what differs.
@@ -22,7 +21,10 @@ type: application
 # 0.1.8: retire the AppRole-rotation subsystem — ESO now uses Kubernetes auth and
 #        GitHub CI uses GitHub-OIDC, so the platform-ci AppRole, the rotation
 #        CronWorkflow + its NetworkPolicy/ESO, and the in-cluster PAT are gone.
-version: 0.1.8
+# 0.1.9: doc-only — drop the stale AppRole-rotation CronWorkflow mention from the
+#        chart description/keywords/README (the subsystem was removed in 0.1.8;
+#        no rendered change).
+version: 0.1.9
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:
@@ -31,7 +33,6 @@ keywords:
   - secrets
   - raft
   - cert-manager
-  - approle-rotation
 home: https://github.com/akamai-consulting/lke-landing-zone
 maintainers:
   - name: lke-landing-zone platform team

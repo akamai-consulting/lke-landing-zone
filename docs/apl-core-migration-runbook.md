@@ -182,7 +182,7 @@ over one production region at a time.
 ## Phase 4 — Retire dead code
 
 Once all clusters are green for at least one full cycle (cert renewal,
-OpenBao quarterly AppRole rotation, cert-automation Workflow firing), delete
+cert-automation Workflow firing), delete
 any legacy paths left over from a pre-apl-core deployment.
 
 ## Rollback
@@ -208,7 +208,6 @@ Workflow) before touching primary.
 | cert-manager-webhook-linode chart URL placeholder | Resolve before lab apply succeeds with Let's Encrypt prod issuer |
 | Secondary OpenBao address | Updated after Phase 3 step 2 |
 | mTLS CA in K8s Secret rather than OpenBao PKI engine | Per your org's policy — PKI backlog |
-| AppRole rotation 92-day window | Tracked; see [docs/runbooks/approle-rotation.md](runbooks/approle-rotation.md) |
 | OTLP log pipeline disabled | Tracked |
 | apl-core apiserver NetworkPolicies vs LKE-E post-DNAT port 6443 | Audit during Phase 1; patch via `manifest/` if needed |
 | PSS `restricted` vs Istio sidecar injection | Verify during Phase 1; switch to `baseline` or selective injection if it breaks |

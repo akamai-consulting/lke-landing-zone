@@ -10,3 +10,6 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - cluster-secret-store-openbao.yaml
+  # Write-scoped sibling store (eso-pusher role) used by the generated-secrets
+  # PushSecrets to seed grafana/admin + otel/ingress into OpenBao.
+  - cluster-secret-store-openbao-push.yaml

@@ -560,16 +560,19 @@ resource "null_resource" "apl_pipeline_ready" {
 # after the kyverno release), which needs apl-core custom-policy support;
 # tracked as a follow-up.
 #
-# All four kyverno_* policy resources share the `llz ci apply-kyverno-policy`
-# command (tools/cmd/llz/ci_kyverno.go, baked into the ci-terraform image):
-# kubeconfig tempfile + cleanup, an optional Kyverno-admission readiness poll
-# (WAIT_FOR_KYVERNO, 15m deadline → warn + exit 0), a server-side kubectl apply,
-# and a soft-fail (warn + exit 0) when the apply hits the transient kyverno-svc
-# admission-webhook race. Per-policy behavior — manifest, whether to poll, and
-# the exact ::warning:: texts — is injected via the environment block;
-# triggers/depends_on stay per-resource. (The apply logic now lives in the
-# pinned llz binary rather than a module script, so there is no script_sha
-# trigger; policies re-apply on apl_release or manifest-content changes.)
+# This + sc-default-demote (below) are the two kyverno_* policies applied from
+# terraform — both override a NON-Argo system (apl-operator's helmfile PVCs / LKE
+# Flux's default StorageClass), a race an Argo sync-wave can't win. The low-race
+# loki-s3 + oauth2-proxy policies moved to the GitOps tree (see the relocation
+# note below). It runs `llz ci apply-kyverno-policy` (tools/cmd/llz/ci_kyverno.go,
+# baked into the ci-terraform image): kubeconfig tempfile + cleanup, a Kyverno-
+# admission readiness poll (WAIT_FOR_KYVERNO, 15m deadline → warn + exit 0), a
+# server-side kubectl apply, and a soft-fail (warn + exit 0) when the apply hits
+# the transient kyverno-svc admission-webhook race. Behavior — manifest, whether
+# to poll, the exact ::warning:: texts — is injected via the environment block.
+# (The apply logic lives in the pinned llz binary rather than a module script, so
+# there is no script_sha trigger; the policy re-applies on apl_release or
+# manifest-content changes.)
 resource "null_resource" "kyverno_pvc_encrypted_policy" {
   triggers = {
     apl_release     = helm_release.apl.id
@@ -595,39 +598,49 @@ resource "null_resource" "kyverno_pvc_encrypted_policy" {
   ]
 }
 
-# Apply the Loki-S3-object_store ClusterPolicy. Same null_resource + local-exec
-# pattern as kyverno_pvc_encrypted_policy above (CRD-existence guard + soft-fail
-# on the kyverno-svc webhook race), applied at kyverno-ready so the policy is in
-# place BEFORE apl-core's loki helmfile phase creates the loki ConfigMap — the
-# mutation rewrites object_store filesystem->s3 on the cm's CREATE admission, so
-# Loki reads the s3 schema from first start and persists chunks to S3 instead of
-# the read-only container FS. See manifests/kyverno-loki-s3-object-store.yaml for
-# why this can't be a values override (apl-core's pipeline corrupts the schema
-# date).
-resource "null_resource" "kyverno_loki_s3_object_store" {
+# sc-default-demote — the SECOND kyverno_* policy applied from terraform, and for
+# the same reason as the PVC-encryption one above: it overrides a NON-Argo system
+# (LKE's Flux-managed `workload` HelmRelease, which keeps marking
+# linode-block-storage-retain the default StorageClass), a race an Argo sync-wave
+# can't win. llz-cluster-foundation's sc-default-patcher PostSync hook demotes the
+# SC once, but Flux re-promotes it on reconcile and the one-shot hook never
+# re-fires — leaving two default StorageClasses, which hard-fails `llz ci
+# converge`. This admission policy, enforcing early, rewrites is-default-class
+# back to "false" on every Flux write so block-storage-retain stays the sole
+# default. (See manifests/kyverno-sc-default-demote.yaml for the full rationale.)
+resource "null_resource" "kyverno_sc_default_policy" {
   triggers = {
     apl_release     = helm_release.apl.id
-    policy_yaml_sha = filesha256("${path.module}/manifests/kyverno-loki-s3-object-store.yaml")
+    policy_yaml_sha = filesha256("${path.module}/manifests/kyverno-sc-default-demote.yaml")
   }
-  # Shared apply wrapper — see kyverno_pvc_encrypted_policy above. Polls for
-  # kyverno-ready (don't gate on the rest of apl_pipeline_ready; loki installs
-  # in a later apl-core helmfile phase, so landing this at kyverno-ready leaves
-  # ample margin before the loki cm).
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
     command     = "llz ci apply-kyverno-policy"
     environment = {
-      KUBECONFIG_RAW       = local.kubeconfig_raw
-      POLICY_MANIFEST      = "${path.module}/manifests/kyverno-loki-s3-object-store.yaml"
+      KUBECONFIG_RAW  = local.kubeconfig_raw
+      POLICY_MANIFEST = "${path.module}/manifests/kyverno-sc-default-demote.yaml"
+      # Poll then apply IMMEDIATELY so the admission rule is enforcing before
+      # Flux's workload HelmRelease reconciles linode-block-storage-retain back to
+      # default — the window the one-shot PostSync patcher loses.
       WAIT_FOR_KYVERNO     = "true"
-      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping loki-s3 policy apply. Loki will write to the read-only FS and persist no logs; re-run terraform apply once Kyverno is up."
-      WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — loki-s3 policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
+      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping sc-default-demote policy apply. linode-block-storage-retain may stay a second default StorageClass; re-run terraform apply once Kyverno is up."
+      WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — sc-default-demote policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
     }
   }
   depends_on = [
     helm_release.apl,
   ]
 }
+
+# The Loki-S3-object_store and oauth2-proxy-wait-keycloak-trust ClusterPolicies
+# were RELOCATED out of terraform to the GitOps tree at
+# apl-values/_shared/manifest/kyverno-policies/ (applied by the platform-bootstrap
+# Argo CD Application at sync-wave -15). Argo's own retry/health +
+# SkipDryRunOnMissingResource replace the poll-then-apply state machine these
+# null_resources ran, and the early wave lands each policy before apl-core's
+# helmfile creates the resource it mutates. Only the PVC-encryption policy stays
+# imperative (above): it must beat apl-operator's non-Argo PVC creation, a race
+# sync-waves can't win.
 
 # The loki-gateway nginx-resolver Kyverno policy was RETIRED here. The grafana/
 # loki gateway templates nginx `resolver <dnsService>...;` as a hostname, which
@@ -640,35 +653,6 @@ resource "null_resource" "kyverno_loki_s3_object_store" {
 # null_resource + manifests/kyverno-loki-gateway-resolver.yaml existed to patch).
 # Validated by a full e2e off main. (`llz ci apply-kyverno-policy`'s RETROFIT_*
 # capability is retained for reuse but no longer driven by any policy here.)
-
-# Apply the oauth2-proxy wait-for-keycloak TLS-trust ClusterPolicy. Same
-# null_resource + local-exec pattern as kyverno_pvc_encrypted_policy above —
-# CRD existence guard + soft-fail on the kyverno-svc webhook race. Kept as a
-# separate resource (rather than folded into the PVC one) so each policy's
-# trigger/apply lifecycle is independently inspectable in TF state.
-resource "null_resource" "kyverno_oauth2_proxy_wait_keycloak_trust" {
-  triggers = {
-    apl_release     = helm_release.apl.id
-    policy_yaml_sha = filesha256("${path.module}/manifests/kyverno-oauth2-proxy-wait-keycloak-trust.yaml")
-  }
-  # Shared apply wrapper — see kyverno_pvc_encrypted_policy above. No readiness
-  # poll (WAIT_FOR_KYVERNO=false): this resource already depends on
-  # apl_pipeline_ready, so only the CRD-existence guard applies here.
-  provisioner "local-exec" {
-    interpreter = ["bash", "-c"]
-    command     = "llz ci apply-kyverno-policy"
-    environment = {
-      KUBECONFIG_RAW       = local.kubeconfig_raw
-      POLICY_MANIFEST      = "${path.module}/manifests/kyverno-oauth2-proxy-wait-keycloak-trust.yaml"
-      WAIT_FOR_KYVERNO     = "false"
-      CRD_MISSING_WARNING  = "Kyverno ClusterPolicy CRD not present — skipping oauth2-proxy wait-for-keycloak mutation. oauth2-proxy init container will loop until the policy lands."
-      WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — oauth2-proxy mutation apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
-    }
-  }
-  depends_on = [
-    null_resource.apl_pipeline_ready,
-  ]
-}
 
 # Repo Secret — ArgoCD reads this to authenticate against the platform-apps
 # repo (the instance repo) over HTTPS. Labeled
@@ -855,8 +839,8 @@ resource "kubectl_manifest" "app_bootstrap_application" {
         }
         # Retry is load-bearing on first boot. Several wave-5 consumers depend on
         # an async, partly out-of-band chain — OpenBao deployed -> auto-unsealed ->
-        # `eso-approle-secret` seeded by bootstrap-openbao.yml -> the `openbao`
-        # ClusterSecretStore goes Ready -> its ExternalSecrets sync. If the sync
+        # the `eso` Kubernetes-auth role configured by bootstrap-openbao.yml -> the
+        # `openbao` ClusterSecretStore goes Ready -> its ExternalSecrets sync. If the sync
         # races ahead of that, the store's health-gate fails the wave; with NO
         # retry block a single failed automated sync becomes terminal and Argo
         # will NOT re-attempt the same revision (selfHeal only corrects drift
@@ -909,7 +893,7 @@ resource "kubectl_manifest" "app_bootstrap_application" {
 # ── llz-secret-store Application (blast-radius isolation for the ClusterSecretStore) ──
 # The `openbao` ClusterSecretStore is the single binding EVERY ExternalSecret
 # depends on, but on first boot it cannot go Ready until OpenBao is unsealed and
-# bootstrap-openbao.yml has seeded `eso-approle-secret`. When it lived in the
+# bootstrap-openbao.yml has configured the `eso` Kubernetes-auth role. When it lived in the
 # platform-bootstrap kustomize tree, its not-ready health FAILED that app's whole
 # sync wave (the exact hook that wedged the first lab bootstrap), stranding
 # unrelated wave-5 resources. Carving it into its own Application lets it converge
@@ -988,10 +972,17 @@ resource "kubectl_manifest" "app_secret_store_application" {
 # Removed in the convergence-contract cleanup PR; replaced by an Argo
 # CD PostSync hook Job at
 # `apl-values/_shared/manifest/foundation/sc-default-patcher-job.yaml`
-# (anti-pattern #1 — patcher Jobs run from TF). Argo now owns it: if
-# Flux's `workload` HelmRelease reconciles and reverts the demotion,
-# Argo's selfHeal + the PostSync hook re-running on the next sync put
-# us back to "one default, and it's ours". TF no longer needs to know.
+# (anti-pattern #1 — patcher Jobs run from TF). The PostSync hook still
+# does the initial demote, but the assumption that "Argo's selfHeal +
+# the PostSync hook re-running" would undo a later Flux re-promotion
+# proved FALSE: Argo doesn't own this Flux-managed SC, so it never sees
+# the drift, and the one-shot hook doesn't re-fire while
+# cluster-foundation stays Synced — so Flux re-promoting after the hook
+# ran leaves two default StorageClasses (observed wedging `llz ci
+# converge`). The durable enforcement is now the early-imperative
+# `null_resource.kyverno_sc_default_policy` above (a Kyverno admission
+# mutation that re-demotes on every Flux write) — the same TF-owned,
+# beats-a-non-Argo-system pattern as kyverno_pvc_encrypted_policy.
 
 # ── Destroy-time cleanup relocated from TF to the CI destroy job ──────────────
 # Three destroy-time `null_resource` provisioners used to run here: an

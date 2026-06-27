@@ -21,7 +21,7 @@ func TestUnknownSubcommandFailsLoud(t *testing.T) {
 		{"ci", "definitely-not-a-subcommand"},
 		{"env", "not-a-real-subcommand"},
 		{"credentials", "not-a-real-subcommand"},
-		{"check", "not-a-real-subcommand"},  // hidden group (lint/validate dispatch here)
+		{"check", "not-a-real-subcommand"}, // hidden group (lint/validate dispatch here)
 	}
 	for _, args := range groups {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {

@@ -1,0 +1,50 @@
+# OTel Collector ingress bearer — generated in-cluster, pushed to secret/otel/ingress.
+# Replaces the `secret/otel/ingress` entry in bootstrapSeeds (ci_bao_seed_all.go).
+# The collector (and any OTLP client config) reads this OpenBao path through the
+# read-only `openbao` store, unchanged.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: otel-ingress-generated
+  namespace: llz-external-secrets
+spec:
+  # 0 = generate exactly once and never refresh, so reruns don't invalidate
+  # in-flight client config bound to the current bearer (the PushSecret's
+  # IfNotExists is the second guard).
+  refreshInterval: "0"
+  target:
+    name: otel-ingress-generated
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      data:
+        # The generator emits `password`; the consumers expect the field `token`.
+        token: "{{ .password }}"
+  dataFrom:
+    - sourceRef:
+        generatorRef:
+          apiVersion: generators.external-secrets.io/v1alpha1
+          kind: Password
+          name: random-secret
+---
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: otel-ingress-push
+  namespace: llz-external-secrets
+spec:
+  refreshInterval: 1m
+  updatePolicy: IfNotExists
+  deletionPolicy: None
+  secretStoreRefs:
+    - name: openbao-push
+      kind: ClusterSecretStore
+  selector:
+    secret:
+      name: otel-ingress-generated
+  data:
+    - match:
+        secretKey: token
+        remoteRef:
+          remoteKey: otel/ingress
+          property: token

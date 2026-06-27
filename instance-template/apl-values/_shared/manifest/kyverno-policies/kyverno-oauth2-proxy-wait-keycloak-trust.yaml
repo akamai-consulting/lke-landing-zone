@@ -1,6 +1,11 @@
 # Kyverno ClusterPolicy: make oauth2-proxy's wait-for-keycloak init container
 # trust the Otomi-issued *.primary.internal wildcard cert.
 #
+# Applied by the platform-bootstrap Argo CD Application (sync-wave -15) so the
+# policy is enforcing before apl-core creates the oauth2-proxy Deployment; the
+# admission CREATE rule then patches the init container on first write (and
+# re-asserts on every apl-operator reconcile UPDATE).
+#
 # apl-core 5.0.0 templates this init container as:
 #
 #   initContainers:

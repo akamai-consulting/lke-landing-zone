@@ -47,8 +47,8 @@ func MaxTime(ts []time.Time) (time.Time, bool) {
 
 // ClassifyRotationAge classifies a credential's age (in whole days) against a
 // warn and an optional critical threshold — the shared verdict behind the
-// approle / lke-admin / loki-objkey rotation-SLA jobs. A criticalDays <= 0
-// means "no critical tier" (warn-only, e.g. approle's single 100-day window).
+// lke-admin / loki-objkey rotation-SLA jobs. A criticalDays <= 0 means
+// "no critical tier" (warn-only, a single warn window with no hard failure).
 //
 //	age >= critical (when set) -> CatFail   (::error::, fails the job)
 //	age >= warn                -> CatWarn   (::warning::, non-failing)

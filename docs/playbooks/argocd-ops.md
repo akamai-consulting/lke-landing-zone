@@ -99,7 +99,7 @@ kubectl -n <ns> get events --sort-by='.lastTimestamp' | tail -20
 kubectl describe externalsecret <name> -n <ns>
 # Compare the spec.data[].remoteRef.key against the OpenBao paths in
 # `llz ci bao-configure` (tools/cmd/llz/ci_openbao_configure.go) — anything new
-# must be in the CI AppRole (platform-ci) policy.
+# must be in the read-only `platform-ci` policy (ESO's Kubernetes-auth role).
 ```
 
 ### Sync hangs forever

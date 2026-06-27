@@ -133,7 +133,7 @@ by convention (bump `Chart.yaml` `version:` to release). See
 | Chart | Deploys |
 |---|---|
 | [`llz-cluster-foundation`](kubernetes-charts/llz-cluster-foundation/) | Secure-by-default baseline: namespaces, default-deny NetworkPolicies, CoreDNS, storage-class defaulting |
-| [`llz-openbao-platform`](kubernetes-charts/llz-openbao-platform/) | Opinionated OpenBao-on-K8s wrapper (TLS, NP, ServiceMonitor, AppRole rotation) |
+| [`llz-openbao-platform`](kubernetes-charts/llz-openbao-platform/) | Opinionated OpenBao-on-K8s wrapper (TLS, NP, ServiceMonitor, audit-log shipping) |
 | [`llz-cert-automation`](kubernetes-charts/llz-cert-automation/) | Event-driven cert renewal (Argo Events + Workflows) |
 | [`llz-argo-bootstrap-apps`](kubernetes-charts/llz-argo-bootstrap-apps/) | App-of-apps generator encoding sync-wave ordering |
 
@@ -268,7 +268,6 @@ failure mode the default already prevents.
 
 **Runbooks** ([docs/runbooks/](docs/runbooks/)) — bootstrap & rotation procedures:
 [bootstrap-openbao](docs/runbooks/bootstrap-openbao.md) ·
-[approle-rotation](docs/runbooks/approle-rotation.md) ·
 [lke-admin-rotation](docs/runbooks/lke-admin-rotation.md) ·
 [linode-credential-rotation](docs/runbooks/linode-credential-rotation.md) ·
 [apl-values-propagation](docs/runbooks/apl-values-propagation.md) ·

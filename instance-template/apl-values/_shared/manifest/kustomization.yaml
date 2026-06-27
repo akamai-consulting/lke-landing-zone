@@ -15,3 +15,12 @@ resources:
   # failed (Argo won't auto-retry a failed revision). Early wave (-18) so it's
   # running before the consumers that could fail. See argo-resync-nudger/.
   - argo-resync-nudger
+  # Low-race Kyverno ClusterPolicies that patch apl-core gaps (loki object_store,
+  # oauth2-proxy keycloak trust). Sync-wave -15 lands them before apl-core creates
+  # the resources they mutate. The PVC-encryption policy stays a TF null_resource
+  # (it must beat apl-operator's non-Argo PVC creation). See kyverno-policies/.
+  - kyverno-policies
+  # Self-generated, in-cluster-only secrets (grafana admin, otel bearer) minted by
+  # an ESO Password generator and pushed into OpenBao — replaces the imperative
+  # bao-seed of those two paths. See generated-secrets/.
+  - generated-secrets

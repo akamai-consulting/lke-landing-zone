@@ -35,7 +35,7 @@ spec:
       prune: true
       selfHeal: true
     retry:
-      # First-boot ordering races (OpenBao unseal / AppRole seed) can outlast the
+      # First-boot ordering races (OpenBao unseal / secret seed) can outlast the
       # old ~5-retry (~5 min) budget; a failed automated sync then terminally pins
       # the revision and Argo will not re-attempt it. ~20 retries @ 3m cap (~1h)
       # rides out the bootstrap window instead.

@@ -1,5 +1,12 @@
 # Kyverno ClusterPolicy: force Loki's chunk store onto S3.
 #
+# Applied by the platform-bootstrap Argo CD Application (sync-wave -15) so the
+# policy is enforcing BEFORE apl-core's loki helmfile phase creates the loki
+# ConfigMap — the mutation rewrites object_store filesystem->s3 on the cm's
+# CREATE admission, so Loki reads the s3 schema from first start. If apl-core
+# happens to create the cm first, the rule still fires on the next reconcile's
+# UPDATE (apl-operator re-applies the chart-default filesystem cm), self-healing.
+#
 # WHY A KYVERNO MUTATION INSTEAD OF VALUES
 # ----------------------------------------
 # The grafana/loki chart does NOT derive the schema's `object_store` from
@@ -26,8 +33,9 @@
 # carry the S3 client config and credentials.
 #
 # This mirrors the repo's existing pattern of patching apl-core gaps Kyverno
-# can express but values can't (see kyverno-pvc-encrypted-storage-class.yaml,
-# kyverno-oauth2-proxy-wait-keycloak-trust.yaml).
+# can express but values can't (see the sibling kyverno-oauth2-proxy-wait-
+# keycloak-trust.yaml and cluster-bootstrap's kyverno-pvc-encrypted-storage-
+# class.yaml).
 #
 # If/when apl-core (or the loki chart) lets `object_store` be set safely via
 # values, this policy can be removed.
@@ -36,6 +44,7 @@ kind: ClusterPolicy
 metadata:
   name: loki-s3-object-store
   annotations:
+    argocd.argoproj.io/sync-wave: "-15"
     policies.kyverno.io/title: Force Loki schema object_store=s3
     policies.kyverno.io/category: Storage
     policies.kyverno.io/severity: medium

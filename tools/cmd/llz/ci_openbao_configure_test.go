@@ -11,8 +11,8 @@ import (
 
 func TestBaoConfigureStepsShape(t *testing.T) {
 	steps := baoConfigureSteps("acme/platform")
-	if len(steps) != 10 {
-		t.Fatalf("got %d steps, want 10 (6 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
+	if len(steps) != 12 {
+		t.Fatalf("got %d steps, want 12 (8 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
 	// `enable` steps are the only non-fatal ones (the bash `|| true`) — check by
 	// shape, not index, so adding a new enable (jwt) can't silently violate it.
@@ -23,8 +23,8 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		}
 	}
 	// A repo-less configure omits the GitHub-OIDC steps entirely.
-	if n := len(baoConfigureSteps("")); n != 6 {
-		t.Errorf("no-repo configure should omit JWT steps: got %d, want 6", n)
+	if n := len(baoConfigureSteps("")); n != 8 {
+		t.Errorf("no-repo configure should omit JWT steps: got %d, want 8", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
 	// Two roles expected: platform-ci (read) and secret-propagator (write). The
@@ -71,7 +71,7 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 			policies = append(policies, s.args[2])
 		}
 	}
-	if strings.Join(policies, ",") != "platform-ci,secret-propagator" {
+	if strings.Join(policies, ",") != "platform-ci,secret-propagator,eso-pusher" {
 		t.Errorf("policies = %v", policies)
 	}
 }
@@ -89,6 +89,35 @@ func TestPolicyDocuments(t *testing.T) {
 	}
 	if !strings.Contains(policySecretPropagator, `path "secret/data/linode/api-token"`) {
 		t.Error("secret-propagator policy missing the linode api-token path")
+	}
+	// eso-pusher must grant create/update (push) on exactly the in-cluster-sourced
+	// paths (grafana admin, otel bearer, harbor admin) and nothing else; a wider
+	// grant would over-privilege the ESO SA.
+	for _, p := range []string{
+		`path "secret/data/grafana/admin"`,
+		`path "secret/data/otel/ingress"`,
+		`path "secret/data/harbor/admin"`,
+	} {
+		if !strings.Contains(policyESOPusher, p) {
+			t.Errorf("eso-pusher policy missing %s", p)
+		}
+	}
+	// The metadata paths must grant create/update, not just read: ESO stamps the
+	// managed-by custom_metadata on first push (PUT secret/metadata/<path>), so a
+	// read-only metadata grant 403s the first PushSecret and wedges convergence.
+	for _, p := range []string{
+		`path "secret/metadata/grafana/admin" { capabilities = ["create", "update", "read"] }`,
+		`path "secret/metadata/otel/ingress"  { capabilities = ["create", "update", "read"] }`,
+		`path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read"] }`,
+	} {
+		if !strings.Contains(policyESOPusher, p) {
+			t.Errorf("eso-pusher policy must grant create/update on metadata path: %s", p)
+		}
+	}
+	for _, forbidden := range []string{"linode/api-token", "harbor/registry-s3", "loki/object-store", `"*"`} {
+		if strings.Contains(policyESOPusher, forbidden) {
+			t.Errorf("eso-pusher policy is over-scoped: contains %q", forbidden)
+		}
 	}
 }
 
@@ -142,12 +171,12 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
 		t.Fatal(err)
 	}
-	// lookup + 10 steps (6 base + 4 GitHub-OIDC) + audit list.
-	if len(calls) != 12 {
-		t.Fatalf("got %d bao calls, want 12: %v", len(calls), calls)
+	// lookup + 12 steps (8 base + 4 GitHub-OIDC) + audit list.
+	if len(calls) != 14 {
+		t.Fatalf("got %d bao calls, want 14: %v", len(calls), calls)
 	}
-	if calls[0] != "token lookup -format=json" || calls[11] != "audit list" {
-		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[11])
+	if calls[0] != "token lookup -format=json" || calls[13] != "audit list" {
+		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[13])
 	}
 	// The jwt role must actually be written during the run (body is JSON over
 	// stdin; repo/audience binding is asserted in TestBaoConfigureStepsShape).
@@ -194,7 +223,7 @@ func TestRunCIBaoConfigureFatalStepAborts(t *testing.T) {
 		t.Errorf("err = %v, want fatal policy-write failure", err)
 	}
 	for _, c := range calls {
-		if strings.HasPrefix(c, "write auth/approle") {
+		if strings.HasPrefix(c, "write auth/kubernetes/role") {
 			t.Errorf("steps after the fatal failure still ran: %q", c)
 		}
 	}

@@ -41,7 +41,7 @@ spec:
           protocol: TCP
 ---
 # Allow ESO controller to reach OpenBao (port 8200) and the Kubernetes API.
-# ESO uses AppRole auth against OpenBao and calls the K8s API to create/update Secrets.
+# ESO uses Kubernetes auth against OpenBao and calls the K8s API to create/update Secrets.
 # Port 6443 covers LKE-Enterprise where the `kubernetes` Service DNATs 443→6443
 # and Cilium evaluates policy on the post-DNAT port.
 apiVersion: networking.k8s.io/v1

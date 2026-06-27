@@ -30,25 +30,39 @@ func TestWaitPoll(t *testing.T) {
 	}
 }
 
+// stubKubectlWait replaces kubectlWaitStream with a recorder whose per-call
+// result is decided by fn (keyed off the joined args), restoring it on cleanup.
+func stubKubectlWait(t *testing.T, fn func(args string) error) *[]string {
+	t.Helper()
+	var calls []string
+	orig := kubectlWaitStream
+	kubectlWaitStream = func(args ...string) error {
+		a := strings.Join(args, " ")
+		calls = append(calls, a)
+		return fn(a)
+	}
+	t.Cleanup(func() { kubectlWaitStream = orig })
+	return &calls
+}
+
 func TestRunCIWaitPods(t *testing.T) {
-	// Both pods Running → 0, no diagnostics fetched.
-	withKubectl(t, func(a string) ([]byte, error) {
-		if strings.HasPrefix(a, "-n ns get pod ") && strings.HasSuffix(a, "-o jsonpath={.status.phase}") {
-			return []byte("Running"), nil
-		}
-		return nil, errors.New("unexpected: " + a)
-	})
+	// Both pods reach the phase → 0, no diagnostics fetched. Each pod is a
+	// create-wait then a phase-wait, so two pods = four kubectl wait calls.
+	calls := stubKubectlWait(t, func(string) error { return nil })
 	if got := runCIWaitPods("ns", "Running", []string{"p-0", "p-1"}, 0, 0); got != 0 {
 		t.Errorf("wait-pods (all Running) = %d, want 0", got)
 	}
+	if len(*calls) != 4 {
+		t.Errorf("wait-pods (2 pods) made %d kubectl wait calls, want 4: %v", len(*calls), *calls)
+	}
 
-	// Pod stuck Pending → 1, and the timeout path dumps diagnostics via the
-	// combined-output seam: workloads, the stuck pod's describe, and events.
-	withKubectl(t, func(a string) ([]byte, error) {
-		if strings.HasSuffix(a, "jsonpath={.status.phase}") {
-			return []byte("Pending"), nil
+	// Pod stuck (phase wait times out) → 1, and the timeout path dumps diagnostics
+	// via the combined-output seam: workloads, the stuck pod's describe, and events.
+	stubKubectlWait(t, func(a string) error {
+		if strings.Contains(a, "jsonpath") {
+			return errors.New("timed out waiting for phase")
 		}
-		return nil, errors.New("unexpected execOutput: " + a)
+		return nil
 	})
 	var sawWorkloads, sawDescribe, sawEvents bool
 	origCombined := execCombined
@@ -80,41 +94,31 @@ func TestRunCIWaitPods(t *testing.T) {
 }
 
 func TestRunCIWaitSecret(t *testing.T) {
-	stubWait := func(t *testing.T, err error) *[]string {
-		t.Helper()
-		var calls []string
-		orig := kubectlWaitStream
-		kubectlWaitStream = func(args ...string) error {
-			calls = append(calls, strings.Join(args, " "))
-			return err
-		}
-		t.Cleanup(func() { kubectlWaitStream = orig })
-		return &calls
-	}
-
-	// Secret present + ExternalSecret goes Ready → 0.
-	withKubectl(t, func(a string) ([]byte, error) {
-		if a == "-n cert-manager get secret tok" {
-			return nil, nil
-		}
-		return nil, errors.New("unexpected: " + a)
-	})
-	calls := stubWait(t, nil)
+	// Secret materializes (--for=create) + ExternalSecret goes Ready → 0: two
+	// wait calls, one for the Secret and one for the ExternalSecret.
+	calls := stubKubectlWait(t, func(string) error { return nil })
 	if got := runCIWaitSecret("cert-manager", "tok", "tok-es", 0, 0, 60); got != 0 {
 		t.Errorf("wait-secret (present, ES Ready) = %d, want 0", got)
 	}
-	if len(*calls) != 1 || !strings.Contains((*calls)[0], "externalsecret/tok-es") {
-		t.Errorf("kubectl wait calls = %v, want one for externalsecret/tok-es", *calls)
+	if len(*calls) != 2 ||
+		!strings.Contains((*calls)[0], "--for=create secret/tok") ||
+		!strings.Contains((*calls)[1], "externalsecret/tok-es") {
+		t.Errorf("kubectl wait calls = %v, want create secret then ES Ready", *calls)
 	}
 
 	// Secret present but the ExternalSecret never goes Ready → 1.
-	withKubectl(t, func(a string) ([]byte, error) { return nil, nil })
-	stubWait(t, errors.New("timed out"))
+	stubKubectlWait(t, func(a string) error {
+		if strings.Contains(a, "externalsecret/") {
+			return errors.New("timed out")
+		}
+		return nil
+	})
 	if got := runCIWaitSecret("cert-manager", "tok", "tok-es", 0, 0, 60); got != 1 {
 		t.Errorf("wait-secret (ES never Ready) = %d, want 1", got)
 	}
 
-	// Secret never appears → 1, conditions dumped from the ExternalSecret.
+	// Secret never materializes (create-wait errors) → 1, conditions dumped from
+	// the ExternalSecret, and the ES-Ready wait never runs.
 	var sawConditions bool
 	withKubectl(t, func(a string) ([]byte, error) {
 		if a == "-n cert-manager get externalsecret tok-es -o jsonpath={.status.conditions}" {
@@ -123,25 +127,34 @@ func TestRunCIWaitSecret(t *testing.T) {
 		}
 		return nil, errors.New("nope")
 	})
-	calls = stubWait(t, nil)
+	calls = stubKubectlWait(t, func(a string) error {
+		if strings.Contains(a, "--for=create") {
+			return errors.New("not created in time")
+		}
+		return nil
+	})
 	if got := runCIWaitSecret("cert-manager", "tok", "tok-es", 0, 0, 60); got != 1 {
 		t.Errorf("wait-secret (absent) = %d, want 1", got)
 	}
 	if !sawConditions {
 		t.Error("timeout path should dump the ExternalSecret conditions")
 	}
-	if len(*calls) != 0 {
-		t.Errorf("kubectl wait should not run when the Secret never appears, got %v", *calls)
+	if len(*calls) != 1 {
+		t.Errorf("only the create-wait should run when the Secret never appears, got %v", *calls)
 	}
 
-	// No --externalsecret: existence alone is success, no condition wait.
-	withKubectl(t, func(a string) ([]byte, error) { return nil, nil })
-	calls = stubWait(t, errors.New("must not be called"))
+	// No --externalsecret: the Secret materializing is success, no condition wait.
+	calls = stubKubectlWait(t, func(a string) error {
+		if strings.Contains(a, "externalsecret") {
+			return errors.New("must not be called")
+		}
+		return nil
+	})
 	if got := runCIWaitSecret("ns", "s", "", 0, 0, 60); got != 0 {
 		t.Errorf("wait-secret (no ES) = %d, want 0", got)
 	}
-	if len(*calls) != 0 {
-		t.Errorf("kubectl wait should not run without --externalsecret, got %v", *calls)
+	if len(*calls) != 1 {
+		t.Errorf("only the create-wait should run without --externalsecret, got %v", *calls)
 	}
 
 	// Missing flags are an immediate usage failure.

@@ -106,7 +106,7 @@ flowchart TB
         ARGO["Argo CD<br/>application-controller"]
         AOA["llz-argo-bootstrap-apps<br/>(app-of-apps, encodes sync waves)"]
         FOUND["llz-cluster-foundation<br/>namespaces · default-deny NetworkPolicy · CoreDNS"]
-        BAO["llz-openbao-platform<br/>(TLS · ServiceMonitor · AppRole rotation)"]
+        BAO["llz-openbao-platform<br/>(TLS · ServiceMonitor · audit-log shipping)"]
         CERT["llz-cert-automation<br/>(event-driven cert renewal)"]
     end
 

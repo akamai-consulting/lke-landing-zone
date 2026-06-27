@@ -47,46 +47,6 @@ func setSummary(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(t.TempDir(), "summary.md"))
 }
 
-func TestRunHealthApproleRotation(t *testing.T) {
-	t.Run("no success warns but does not fail", func(t *testing.T) {
-		setSummary(t)
-		stubKubectl(t, func([]string) ([]byte, error) { return itemsJSON(), nil })
-		captureStdout(t, func() {
-			if err := runHealthApproleRotation(100); err != nil {
-				t.Errorf("err = %v, want nil (warn-only)", err)
-			}
-		})
-	})
-
-	t.Run("overdue success warns but does not fail", func(t *testing.T) {
-		setSummary(t)
-		wf := fmt.Sprintf(`{"status":{"phase":"Succeeded","finishedAt":%q}}`, rfc(200))
-		stubKubectl(t, func([]string) ([]byte, error) { return itemsJSON(wf), nil })
-		out := captureStdout(t, func() {
-			if err := runHealthApproleRotation(100); err != nil {
-				t.Errorf("err = %v, want nil", err)
-			}
-		})
-		if !strings.Contains(out, "200 days ago") {
-			t.Errorf("missing age line, got:\n%s", out)
-		}
-	})
-
-	t.Run("recent success is current", func(t *testing.T) {
-		setSummary(t)
-		wf := fmt.Sprintf(`{"status":{"phase":"Succeeded","finishedAt":%q}}`, rfc(1))
-		stubKubectl(t, func([]string) ([]byte, error) { return itemsJSON(wf), nil })
-		out := captureStdout(t, func() {
-			if err := runHealthApproleRotation(100); err != nil {
-				t.Errorf("err = %v, want nil", err)
-			}
-		})
-		if !strings.Contains(out, "is current") {
-			t.Errorf("expected current verdict, got:\n%s", out)
-		}
-	})
-}
-
 func TestRunHealthLKEAdminRotation(t *testing.T) {
 	t.Run("unreachable cluster skips", func(t *testing.T) {
 		setSummary(t)

@@ -1,9 +1,13 @@
 package main
 
-// ci_kyverno.go implements `llz ci apply-kyverno-policy` — the shared local-exec
-// body the four kyverno_* null_resources in instance-template cluster-bootstrap/
-// main.tf run (it replaced the former scripts/apply-kyverno-policy.sh; the
-// null_resources now call `llz ci apply-kyverno-policy` directly).
+// ci_kyverno.go implements `llz ci apply-kyverno-policy` — the local-exec body
+// the kyverno_pvc_encrypted_policy null_resource in instance-template
+// cluster-bootstrap/main.tf runs (it replaced the former
+// scripts/apply-kyverno-policy.sh). The low-race loki-s3 + oauth2-proxy policies
+// it used to also drive now ship via the GitOps tree
+// (apl-values/_shared/manifest/kyverno-policies/); only the PVC-encryption
+// policy stays imperative here, because it must beat apl-operator's non-Argo PVC
+// creation — a race Argo sync-waves can't win.
 //
 // Flow (unchanged from the bash it replaced): write KUBECONFIG_RAW to a
 // tempfile, optionally poll until Kyverno can admit a ClusterPolicy (CRD present

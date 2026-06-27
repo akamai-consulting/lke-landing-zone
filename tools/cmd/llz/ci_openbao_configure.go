@@ -1,8 +1,8 @@
 package main
 
 // ci_openbao_configure.go — `llz ci bao-configure`, the native port of
-// configure-openbao.sh: root-token preflight, KV v2 mount, AppRole +
-// Kubernetes auth, policies, roles, and the audit-device verify. Idempotent
+// configure-openbao.sh: root-token preflight, KV v2 mount, Kubernetes +
+// GitHub-OIDC auth, policies, roles, and the audit-device verify. Idempotent
 // like the bash (enables tolerate "already enabled", writes upsert), so
 // re-configure runs are safe. Part of the openbao CI family (ci_openbao.go).
 
@@ -16,8 +16,7 @@ import (
 
 // platform-ci: read-only KV v2 — used by the ESO ClusterSecretStore. Paths
 // are enumerated explicitly; wildcard read is intentionally avoided.
-const policyPlatformCI = `path "secret/data/approle/rotation-secrets"     { capabilities = ["read"] }
-path "secret/data/cert-automation/github-token" { capabilities = ["read"] }
+const policyPlatformCI = `path "secret/data/cert-automation/github-token" { capabilities = ["read"] }
 path "secret/data/certmanager/dns01"            { capabilities = ["read"] }
 path "secret/data/grafana/admin"                { capabilities = ["read"] }
 path "secret/data/harbor/admin"                 { capabilities = ["read"] }
@@ -30,7 +29,6 @@ path "secret/data/linode/api-token"             { capabilities = ["read"] }
 path "secret/data/loki/object-store"            { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
-path "secret/metadata/approle/rotation-secrets"     { capabilities = ["read", "list"] }
 path "secret/metadata/cert-automation/github-token" { capabilities = ["read", "list"] }
 path "secret/metadata/certmanager/dns01"            { capabilities = ["read", "list"] }
 path "secret/metadata/grafana/admin"                { capabilities = ["read", "list"] }
@@ -51,6 +49,29 @@ path "secret/metadata/otel/ingress"                 { capabilities = ["read", "l
 // (auth method, not the retired AppRole). Add paths here when extending it.
 const policySecretPropagator = `path "secret/data/linode/api-token" { capabilities = ["create", "update", "read"] }
 path "secret/metadata/linode/api-token" { capabilities = ["read"] }
+`
+
+// eso-pusher: narrow create/update access to the in-cluster-sourced secrets that
+// ESO PushSecrets write into OpenBao — the self-generated grafana admin password
+// and otel ingress bearer (apl-values/_shared/manifest/generated-secrets/), plus
+// the Harbor admin password mirrored from Harbor's Helm Secret
+// (apl-values/components/harbor/harbor-admin-push.yaml). Replaces the imperative
+// `llz ci bao-seed` of these paths (root-token + kubectl exec) with a
+// least-privilege, in-cluster write. On the data paths `read` covers the
+// IfNotExists existence check. The metadata paths need create/update, not just
+// read: ESO stamps a `managed-by: external-secrets` marker into the secret's
+// custom_metadata on first push (a PUT to secret/metadata/<path>), so a
+// read-only metadata grant makes the very first PushSecret fail with a 403 on
+// the metadata write — which stalls the platform-bootstrap sync hooks and
+// wedges convergence on a fresh cluster. The read-only `platform-ci` policy
+// still serves every consumer. Mapped to the `eso-pusher` Kubernetes-auth role
+// below (same ESO controller SA as `eso`).
+const policyESOPusher = `path "secret/data/grafana/admin" { capabilities = ["create", "update", "read"] }
+path "secret/data/otel/ingress"  { capabilities = ["create", "update", "read"] }
+path "secret/data/harbor/admin"  { capabilities = ["create", "update", "read"] }
+path "secret/metadata/grafana/admin" { capabilities = ["create", "update", "read"] }
+path "secret/metadata/otel/ingress"  { capabilities = ["create", "update", "read"] }
+path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read"] }
 `
 
 // baoConfigStep is one in-pod bao invocation of the configure sequence.
@@ -84,6 +105,11 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 			args: []string{"policy", "write", "platform-ci", "-"}},
 		{desc: "write policy secret-propagator", fatal: true, stdin: policySecretPropagator,
 			args: []string{"policy", "write", "secret-propagator", "-"}},
+		// eso-pusher policy: scoped create/update for the ESO PushSecrets that seed
+		// the self-generated grafana/admin + otel/ingress paths declaratively (see
+		// policyESOPusher). Replaces the imperative bao-seed of those two paths.
+		{desc: "write policy eso-pusher", fatal: true, stdin: policyESOPusher,
+			args: []string{"policy", "write", "eso-pusher", "-"}},
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
@@ -94,6 +120,15 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=llz-external-secrets",
 				"bound_service_account_namespaces=llz-external-secrets",
 				"policies=platform-ci", "ttl=15m"}},
+		// Second Kubernetes-auth role for the SAME ESO controller SA, mapped to the
+		// write-scoped eso-pusher policy. The `openbao-push` ClusterSecretStore
+		// selects this role (role: eso-pusher) so PushSecrets can write the two
+		// generated paths while the read `openbao` store stays read-only via `eso`.
+		{desc: "write kubernetes auth role eso-pusher", fatal: true,
+			args: []string{"write", "auth/kubernetes/role/eso-pusher",
+				"bound_service_account_names=llz-external-secrets",
+				"bound_service_account_namespaces=llz-external-secrets",
+				"policies=eso-pusher", "ttl=15m"}},
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in
@@ -160,7 +195,7 @@ func ciBaoConfigureCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "bao-configure",
-		Short: "configure OpenBao: KV v2, AppRole + Kubernetes auth, policies, roles, audit verify",
+		Short: "configure OpenBao: KV v2, Kubernetes + GitHub-OIDC auth, policies, roles, audit verify",
 		Long: "Native port of configure-openbao.sh. Preflights $OPENBAO_ROOT_TOKEN (sha256\n" +
 			"audit line + `token lookup` + root-policy check — without it the failure\n" +
 			"mode is an unexplained cascade of 403s from every privileged call), then\n" +
@@ -187,7 +222,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	// configure) omits the JWT steps.
 	ghRepo := os.Getenv("GITHUB_REPOSITORY")
 	if ghRepo == "" {
-		fmt.Fprintln(os.Stderr, "::warning::GITHUB_REPOSITORY unset — skipping GitHub-OIDC (jwt) auth setup; CI will fall back to AppRole.")
+		fmt.Fprintln(os.Stderr, "::warning::GITHUB_REPOSITORY unset — skipping GitHub-OIDC (jwt) auth setup; CI propagation (llz ci propagate-pat) stays unavailable until re-run with GITHUB_REPOSITORY set.")
 	}
 	if g.dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would preflight the root token and apply the configure sequence:")

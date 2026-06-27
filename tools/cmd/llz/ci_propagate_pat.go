@@ -114,8 +114,8 @@ func runCIPropagatePAT() error {
 	}
 	maskGHA(login.Auth.ClientToken)
 
-	// Write the PAT with the AppRole-issued token, NOT root. The payload rides
-	// stdin so the token never appears in argv / ps / kubectl audit logs.
+	// Write the PAT with the OIDC-issued (jwt-login) token, NOT root. The payload
+	// rides stdin so the token never appears in argv / ps / kubectl audit logs.
 	payload, err := json.Marshal(map[string]string{"token": newToken})
 	if err != nil {
 		return err

@@ -283,7 +283,6 @@ in the published `kubernetes-charts/` chart values (which Copier doesn't templat
 |---|---|---|
 | `kubernetes-charts/llz-argo-bootstrap-apps/values.yaml` | `gitRepoURL: "REPLACE_ME-git-repo-url"` | Your GitOps repo URL (intentional placeholder) |
 | `kubernetes-charts/llz-cert-automation/values.yaml` + its Application overlay | `githubDeploy.repo`, `harborUrl` | Your repo / Harbor host |
-| `kubernetes-charts/llz-openbao-platform/values.yaml` | `approleWorkflow.githubRepo` | Your repo (overridable per-env via the Argo Application patch) |
 
 These are overridable values/literals, not abstraction seams — the platform stays
 Linode + apl-core shaped by design.

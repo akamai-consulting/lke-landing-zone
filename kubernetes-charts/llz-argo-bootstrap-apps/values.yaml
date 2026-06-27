@@ -179,7 +179,7 @@ components:
       type: oci
       # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
       chart: llz-cluster-foundation
-      version: 0.1.3
+      version: 0.1.4
       releaseName: llz-cluster-foundation
     syncPolicy:
       automated:
@@ -213,8 +213,8 @@ components:
           create: true
 
   # Wave -15: Argo Workflows. apl-core doesn't ship it; needed for the
-  # Workflow/CronWorkflow CRDs the AppRole-rotation CronWorkflow and the
-  # cert-automation WorkflowTemplate consume. Same wave as ESO — installs
+  # Workflow/CronWorkflow CRDs the cert-automation WorkflowTemplate
+  # consumes. Same wave as ESO — installs
   # alongside it, before default-wave consumers.
   - name: llz-argo-workflows
     enabled: true

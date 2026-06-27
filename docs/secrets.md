@@ -3,7 +3,7 @@
 This document is the runbook for the platform's secret backend. It covers:
 
 - What OpenBao is and why this template chose it (summary; brief rationale inline below)
-- Initial per-region cluster bring-up (init, unseal, KV v2, AppRole)
+- Initial per-region cluster bring-up (init, unseal, KV v2, auth methods)
 - Rotating secrets via the dual-write script
 - How CI reads secrets at deploy time
 - Regional failover behavior
@@ -49,11 +49,11 @@ and observability stack.
 The active/standby relationship above is **declared per deployment** in its
 cluster tfvars, not baked into "primary"/"secondary" strings:
 
-- `ha_role = "active"` — provisions Harbor robots, owns the base-named AppRole
-  GH-secret (`OPENBAO_APPROLE_SECRET_ID`), and receives its standby peer's CA.
+- `ha_role = "active"` — provisions Harbor robots and receives its standby
+  peer's CA.
 - `ha_role = "standby"` — mirrors the active: seeds Harbor creds from the
-  active's published secrets, owns `OPENBAO_APPROLE_SECRET_ID_STANDBY`, and
-  ships its CA to the active. Pairs share one `ha_group`.
+  active's published secrets and ships its CA to the active. Pairs share one
+  `ha_group`.
 - `ha_role = "standalone"` (the default) — a single self-contained OpenBao. No
   peer, no cross-region CA, Harbor provisioned locally, and `llz openbao set`
   **single-writes** (no standby to dual-write to).
@@ -82,7 +82,8 @@ Vault Enterprise feature, intentionally not ported into OpenBao. The choices wer
 
 **This process is automated.** Run `instance-template/.github/workflows/bootstrap-openbao.yml`
 for each region. The workflow handles the full bootstrap: Raft init, unseal, KV v2
-setup, AppRole configuration, all secret seeding, and GitHub secrets population. See
+setup, auth-method configuration (Kubernetes auth + GitHub-OIDC), all secret
+seeding, and GitHub secrets population. See
 [`docs/runbooks/bootstrap-openbao.md`](runbooks/bootstrap-openbao.md) for the
 step-by-step procedure and required secrets.
 
@@ -95,21 +96,16 @@ useful context for emergency recovery and understanding the secret layout.
 
 2. **Unseal** — unseals pod 0 with 3 keys; Raft-joins and unseals pods 1–2.
 
-3. **Configure** — enables KV v2 at `secret/`, AppRole auth, Kubernetes auth. Creates the CI policy (read-only, paths enumerated explicitly — no wildcard) and AppRole role. Pins `role_id=<instance>-ci`. Enables the file audit device.
+3. **Configure** — enables KV v2 at `secret/`, Kubernetes auth, and GitHub-OIDC (`jwt`) auth. Creates the read-only `platform-ci` policy (paths enumerated explicitly — no wildcard) bound to the `eso` Kubernetes-auth role for ESO, and the `secret-propagator` GitHub-OIDC role + policy used by `llz ci propagate-pat`. Enables the file audit device.
 
 4. **Seed secrets** — writes the following into OpenBao KV v2 and sets the corresponding GitHub secrets:
-   - `eso-approle-secret` K8s Secret (ESO ClusterSecretStore auth)
-   - `OPENBAO_APPROLE_ROLE_ID` / `OPENBAO_APPROLE_SECRET_ID[_STANDBY]` GitHub secrets
-   - `secret/harbor/admin` (Harbor admin password)
    - `secret/harbor/robot` (Harbor CI robot credentials, push+pull+delete; stored for buildah builds via `harbor/docker-config`)
    - `secret/harbor/pull-robot` (Harbor pull-only robot credentials; distributed as imagePullSecret to kube-system and workload namespaces)
    - `secret/harbor/docker-config` (Docker config JSON for buildah cert-automation builds)
    - `secret/infra/github-dispatch-token` (harbor-ready PostSync dispatch)
-   - `secret/approle/rotation-secrets` (AppRole rotation CronWorkflow)
    - `secret/cert-automation/github-token` (cert-automation Argo Workflow)
-   - `secret/grafana/admin` (generated admin credentials)
-   - `secret/otel/ingress` (generated OTLP bearer token)
    - `secret/loki/object-store` (Linode Object Storage keys from `LOKI_S3_ACCESS_KEY/SECRET`)
+   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are NO LONGER seeded here — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`), through the write-scoped `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
    - Note: `secret/certmanager/dns01` (Linode DNS token from `LINODE_DNS_TOKEN`) is seeded by the separate `bootstrap-dns.yml` workflow once a DNS-scoped token has been provisioned.
 
 5. **Revoke root token** — runs unconditionally even on failure.
@@ -164,7 +160,7 @@ payload matches, and rolls back the primary if the secondary write fails. It
 Prerequisites:
 
 ```bash
-# Operator-level token for each region. Do NOT use the CI AppRole (<instance>-ci) — it is read-only.
+# Operator-level token for each region. Do NOT use the ESO platform-ci credentials — they are read-only.
 # Obtain via your normal operator auth method, or via `bao operator generate-root` for
 # emergency access (requires three of the five unseal key holders).
 export OPENBAO_ADDR_ACTIVE=https://openbao.primary.<cluster_domain>
@@ -310,7 +306,7 @@ Common filters:
 |------|-------|
 | All writes to `secret/<project>/*`   | `{app="openbao", component="audit"} \|= "request.path" \|= "secret/data/<project>" \| json \| request_operation="update"` |
 | Failed authentications               | `{app="openbao", component="audit"} \| json \| error!=""` |
-| CI AppRole activity                  | `{app="openbao", component="audit"} \|= "auth/approle/login" \| json` |
+| ESO Kubernetes-auth activity         | `{app="openbao", component="audit"} \|= "auth/kubernetes/login" \| json` |
 | Root-token usage (should be rare)    | `{app="openbao", component="audit"} \| json \| auth_display_name="root"` |
 
 Region is exposed as the `region` label on each stream, set by the chart's Promtail
@@ -340,7 +336,6 @@ runbook for humans to unseal after any pod restart.
 - `llz openbao get` — CI read helper
 - [docs/architecture/convergence-contract.md](architecture/convergence-contract.md) — cluster convergence contract
 - [docs/runbooks/bootstrap-openbao.md](runbooks/bootstrap-openbao.md) — OpenBao bring-up procedure
-- [docs/runbooks/approle-rotation.md](runbooks/approle-rotation.md) — CI AppRole rotation
 - [docs/runbooks/lke-admin-rotation.md](runbooks/lke-admin-rotation.md) — lke-admin credential rotation
 - [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) — Linode token rotation
 - [docs/runbooks/apl-values-propagation.md](runbooks/apl-values-propagation.md) — apl-values propagation

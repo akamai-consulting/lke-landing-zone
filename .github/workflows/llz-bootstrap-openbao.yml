@@ -39,8 +39,9 @@ name: llz-bootstrap-openbao (reusable)
 #     • Stores keys 1–3 as infra-<region> environment secrets for automated re-unseal
 #     • Prints all 5 keys + root token to job summary (copy to offline storage)
 #     • Unseals all 3 pods and joins followers to the Raft leader
-#     • Configures KV v2, AppRole, Kubernetes auth, policies, roles, audit log
-#     • Seeds secret/harbor/admin and secret/infra/github-dispatch-token
+#     • Configures KV v2, Kubernetes auth, GitHub-OIDC auth, policies, roles, audit log
+#     • Seeds secret/infra/github-dispatch-token and the other env-sourced KV paths
+#       (secret/harbor/admin, grafana/admin, otel/ingress now arrive via ESO PushSecrets)
 #     • Revokes the root token on completion
 #
 #   Emergency re-unseal (initialized but sealed, e.g. after pod restart):
@@ -59,8 +60,8 @@ name: llz-bootstrap-openbao (reusable)
 #   OPENBAO_UNSEAL_KEY_1/2/3 — set automatically on first bootstrap; needed for re-unseal
 #   OPENBAO_ROOT_TOKEN       — (optional) set manually to trigger re-configuration
 #   OPENBAO_SECRETS_WRITE_TOKEN    — fine-grained PAT (github.com), this repo, Actions + Secrets: write; used by gh secret set for
-#                              unseal/AppRole/Harbor credentials and seeds harbor-ready
-#                              dispatch token + approle rotation workflow credentials
+#                              unseal/Harbor credentials and seeds the harbor-ready
+#                              dispatch token
 #
 # Required repository variables:
 #   TF_STATE_BUCKET   — S3 bucket name for Terraform state
@@ -162,8 +163,8 @@ jobs:
   # ── Resolve this deployment's HA role + peer ─────────────────────────────────
   # role (active|standby|standalone) and peer (the other member of its ha_group)
   # are read from the cluster tfvars via `llz env` (baked into vars.TF_IMAGE) and
-  # drive: the AppRole GH-secret suffix (base vs _STANDBY), the Harbor seed
-  # direction (standby seeds from its active peer), and the cross-region CA
+  # drive: the Harbor seed direction (standby seeds from its active peer), the
+  # github-dispatch-token standby skip, and the cross-region CA
   # provisioning (standby ships its CA to infra-<peer>). Replaces the former
   # hardcoded primary/secondary string branches. peer is empty for standalone.
   resolve:
@@ -208,8 +209,8 @@ jobs:
       GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
       HARBOR_URL: ${{ vars.HARBOR_URL }}
       # HA role/peer resolved from the cluster tfvars (see the `resolve` job).
-      # HA_ROLE drives the AppRole-secret suffix, the Harbor seed direction
-      # (ci_harbor reads it), and the cross-region CA extract gate below.
+      # HA_ROLE drives the Harbor seed direction (ci_harbor reads it), the
+      # github-dispatch-token standby skip, and the cross-region CA extract gate below.
       HA_ROLE: ${{ needs.resolve.outputs.role }}
       HA_PEER: ${{ needs.resolve.outputs.peer }}
     outputs:
@@ -389,7 +390,7 @@ jobs:
           OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
         run: |
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "required for OpenBao configuration runs; writes AppRole, Harbor, and pull-robot credentials back to GitHub Actions secrets."
+            --hint "required for OpenBao configuration runs; writes Harbor and pull-robot credentials back to GitHub Actions secrets."
 
       # HARBOR_URL is the registry hostname buildah pushes to / images pull
       # from (stored in OpenBao as registry_host) — NOT how this job reaches
@@ -435,13 +436,14 @@ jobs:
       # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
       # One step runs every generic `bao-seed` path from the bootstrapSeeds()
       # table in `llz ci bao-seed-all` (tools/cmd/llz/ci_bao_seed_all.go):
-      #   secret/harbor/admin                  (k8s: harbor/harbor-admin-password)
       #   secret/infra/github-dispatch-token   (harbor-ready PostSync hook)
       #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
       #   secret/linode/api-token              (linode-volume-labeler ExternalSecret)
-      #   secret/grafana/admin                 (generated, idempotent)
-      #   secret/otel/ingress                  (generated bearer, idempotent)
       #   secret/loki/object-store             (LOKI_S3_* env secrets)
+      # (secret/harbor/admin, secret/grafana/admin + secret/otel/ingress are no
+      #  longer seeded here — ESO writes them in-cluster via PushSecrets: harbor
+      #  mirrors its Helm Secret, grafana/otel use a Password generator. See
+      #  apl-values/components/harbor/ and _shared/manifest/generated-secrets/.)
       # Per-seed on-missing modes, idempotency guards, and summary notes are
       # UNCHANGED — they moved from these flags into the table. A missing env:/k8s:
       # source defers per its mode (BOOTSTRAP_ERRORS for github-dispatch-token on
@@ -450,11 +452,8 @@ jobs:
       # did. HA_ROLE (job env) drives the github-dispatch-token standby skip.
       # The harbor-specific seeds that derive their own material — robot accounts
       # and docker-config (now in the parallel `harbor` job), registry-S3 below —
-      # keep their dedicated commands. secret/harbor/admin reads the in-cluster
-      # harbor-admin-password k8s Secret, created by apl-core's Harbor helm release
-      # (independent of the robot provisioning that moved to `harbor`); if it isn't
-      # present yet this single seed defers with a summary note (its on-missing
-      # mode), non-fatal. OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
+      # keep their dedicated commands.
+      # OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
       - name: Seed OpenBao KV bootstrap paths
         if: steps.ensure.outputs.available == 'true'
         env:
@@ -500,7 +499,7 @@ jobs:
 
       # ── Nudge Argo CD to converge the secrets pipeline now ─────────────────────
       # The `openbao` ClusterSecretStore and its ExternalSecrets (loki/harbor obj-
-      # storage) could not reach Ready until the AppRole secret + object-storage KV
+      # storage) could not reach Ready until OpenBao was unsealed and the object-storage KV
       # paths above were seeded. nudge-argo (1) forces an immediate sync of the two
       # apps that own them — re-triggering the sync if an earlier first-boot race
       # already drove it to a terminally-failed state (Argo CD does NOT auto-retry a
@@ -774,20 +773,11 @@ jobs:
         if: steps.ensure.outputs.available == 'true'
         run: llz ci harbor-smoke
 
-      # secret/harbor/admin reads the in-cluster harbor-admin-password Secret. The
-      # core `bootstrap` job's bao-seed-all also seeds it, but that now runs before
-      # this job waits for Harbor, so on a cold boot Harbor may not be up yet there
-      # and that one path defers (on-missing=skip). Re-seed it HERE, after the
-      # control-plane readiness gate above, where harbor-admin-password is present.
-      # Idempotent upsert; on-missing=skip keeps it non-fatal on a secondary
-      # (Harbor not deployed in-cluster).
-      - name: Seed Harbor admin password in OpenBao (post-Harbor-up)
-        if: steps.ensure.outputs.available == 'true'
-        run: |
-          llz ci bao-seed --path secret/harbor/admin \
-            --field "password=k8s:harbor/harbor-admin-password/HARBOR_ADMIN_PASSWORD" \
-            --on-missing skip \
-            --missing-note "harbor-admin-password Secret not found — Harbor not deployed here; skipping secret/harbor/admin."
+      # secret/harbor/admin is no longer seeded here (nor in bao-seed-all): the
+      # harbor-admin-push PushSecret (apl-values/components/harbor/) mirrors the
+      # in-cluster harbor-admin-password Secret into OpenBao via the openbao-push
+      # store. ESO watches the source Secret, so it fires once Harbor is up without
+      # this job's readiness gate — no timing race, no kubectl-exec kv put.
 
       # ── Stop Harbor API port-forward ───────────────────────────────────────────
       - name: Stop Harbor API port-forward
@@ -925,7 +915,7 @@ jobs:
   # ── Provision the standby CA cert in its active peer's cluster ───────────────
   # Runs only after a standby bootstrap that successfully extracted the CA cert.
   # Creates (or updates) the openbao-peer-tls Secret in the active peer's openbao
-  # namespace so the AppRole rotation CronWorkflow can verify TLS when connecting
+  # namespace so cross-peer clients can verify TLS when connecting
   # to the standby OpenBao without VAULT_SKIP_VERIFY=true. The peer (the active
   # member of this deployment's ha_group) is resolved from the cluster tfvars.
   provision-peer-ca:

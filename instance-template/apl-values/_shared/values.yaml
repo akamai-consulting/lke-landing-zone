@@ -41,8 +41,8 @@ apps:
   # _rawValues to override two Argo CD resource health checks. Argo's built-in
   # checks for external-secrets.io resources report Degraded the moment the store
   # isn't Ready; during first boot the `openbao` ClusterSecretStore legitimately
-  # can't be Ready until OpenBao is unsealed and bootstrap-openbao.yml has seeded
-  # `eso-approle-secret`. A Degraded resource FAILS the platform-bootstrap sync
+  # can't be Ready until OpenBao is unsealed and bootstrap-openbao.yml has
+  # configured the `eso` Kubernetes-auth role. A Degraded resource FAILS the platform-bootstrap sync
   # wave (it was the exact hook that wedged the first lab bootstrap). These
   # overrides reclassify "not ready yet" as Progressing, so Argo waits + retries
   # (see the retry budget in terraform-iac-bootstrap/cluster-bootstrap/main.tf)
@@ -61,7 +61,7 @@ apps:
                   if c.status == "True" then
                     hs.status = "Healthy"
                   else
-                    -- OpenBao not yet reachable/unsealed or AppRole unseeded:
+                    -- OpenBao not yet reachable/unsealed or the eso role not yet configured:
                     -- still converging, do not fail the sync.
                     hs.status = "Progressing"
                   end
@@ -93,6 +93,30 @@ apps:
             end
             hs.status = "Progressing"
             hs.message = "Waiting for ExternalSecret to sync"
+            return hs
+          resource.customizations.health.external-secrets.io_PushSecret: |
+            local hs = {}
+            -- The generated-secrets PushSecrets (grafana/admin, otel/ingress) can't
+            -- write until OpenBao is unsealed and the eso-pusher role exists; ESO
+            -- retries on refreshInterval. Reclassify "not yet pushed" as Progressing
+            -- (same rationale as ExternalSecret above) so a pending push — Argo's
+            -- built-in ES health would otherwise call it Degraded — never fails the
+            -- platform-bootstrap sync wave. `llz ci health` is the real backstop.
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  if c.status == "True" then
+                    hs.status = "Healthy"
+                  else
+                    hs.status = "Progressing"
+                  end
+                  hs.message = c.message
+                  return hs
+                end
+              end
+            end
+            hs.status = "Progressing"
+            hs.message = "Waiting for PushSecret to sync"
             return hs
   prometheus:
     enabled: true
@@ -128,7 +152,8 @@ apps:
     # creds come from the `loki-object-store` ESO Secret (synced from OpenBao)
     # mounted as env vars on the singleBinary pod. The schema's
     # object_store=filesystem→s3 flip is done by the kyverno-loki-s3-object-store
-    # policy (cluster-bootstrap), NOT here — overriding schemaConfig corrupts it.
+    # policy (_shared/manifest/kyverno-policies/), NOT here — overriding
+    # schemaConfig corrupts it.
     _rawValues:
       gateway:
         nginxConfig:

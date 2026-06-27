@@ -19,7 +19,11 @@ type: application
 #        openbao-tls CA via --store-requeue-interval; the watcher was retired).
 # 0.1.7: bump the llz-cert-automation pin to 0.1.2 (JetStream version pin).
 # 0.1.8: bump the llz-cert-automation pin to 0.1.3 (ExternalSecret refreshInterval 1h->1m).
-version: 0.1.8
+# 0.1.9: doc-only — drop the stale AppRole-rotation CronWorkflow mention from the
+#        Argo Workflows comment (the subsystem was retired; no rendered change).
+# 0.1.10: bump the llz-cluster-foundation pin to 0.1.4 (drops the duplicate
+#         llz-linode-volume-labeler namespace that raised a SharedResourceWarning).
+version: 0.1.10
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"
