@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ── stash-env-secret ─────────────────────────────────────────────────────────
@@ -269,10 +270,18 @@ func TestFetchKubeconfigState(t *testing.T) {
 		t.Error("empty kubeconfig_raw without allow-missing must fail")
 	}
 
-	// Failed init aborts before any output read.
-	tfInitStream = func(...string) error { return errors.New("backend error") }
+	// Failed init aborts before any output read — and is retried before giving up.
+	prevSleep := tfInitSleep
+	var initSleeps int
+	tfInitSleep = func(time.Duration) { initSleeps++ }
+	t.Cleanup(func() { tfInitSleep = prevSleep })
+	var initCalls int
+	tfInitStream = func(...string) error { initCalls++; return errors.New("backend error") }
 	if err := runCIFetchKubeconfigState("primary", outPath, false); err == nil ||
 		!strings.Contains(err.Error(), "terraform init failed") {
 		t.Errorf("init failure: err = %v", err)
+	}
+	if initCalls != tfInitAttempts || initSleeps != tfInitAttempts-1 {
+		t.Errorf("init tried %d times with %d sleeps, want %d/%d", initCalls, initSleeps, tfInitAttempts, tfInitAttempts-1)
 	}
 }

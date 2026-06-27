@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,9 +22,19 @@ type fakeACLClient struct {
 	// landed immediately after ours), exercising the verify-after-write retry.
 	clobberN   int
 	clobberACL linode.ControlPlaneACL
+	// listErrs is consumed one-per-ListClusters-call to simulate transient
+	// failures before a success — exercises listClustersWithRetry.
+	listErrs []error
 }
 
 func (f *fakeACLClient) ListClusters(context.Context) ([]map[string]any, error) {
+	if len(f.listErrs) > 0 {
+		err := f.listErrs[0]
+		f.listErrs = f.listErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	return f.clusters, nil
 }
 func (f *fakeACLClient) GetControlPlaneACL(context.Context, uint64) (linode.ControlPlaneACL, error) {
@@ -264,5 +275,28 @@ func TestResolveClusterIDFromTFVars(t *testing.T) {
 	}
 	if id != 7 {
 		t.Errorf("resolved cluster id = %d, want 7 (label+region from tfvars)", id)
+	}
+}
+
+// A transient transport blip on the cluster-list GET must be retried, not
+// surfaced as a misleading "no cluster matched".
+func TestResolveClusterIDRetriesTransientListFailure(t *testing.T) {
+	fake := &fakeACLClient{
+		clusters: []map[string]any{
+			{"id": json.Number("4242"), "label": "lke-e2e", "region": "us-ord"},
+		},
+		listErrs: []error{errors.New("connection reset by peer"), errors.New("TLS handshake timeout")},
+	}
+	withFakeACL(t, fake) // zeroes aclRetryDelay so the retries are instant
+	id, err := resolveClusterID(context.Background(), fake,
+		clusterRef{clusterLabel: "lke-e2e", linodeRegion: "us-ord"})
+	if err != nil {
+		t.Fatalf("resolveClusterID should retry transient list failures: %v", err)
+	}
+	if id != 4242 {
+		t.Errorf("resolved cluster id = %d, want 4242 (after 2 transient list failures)", id)
+	}
+	if len(fake.listErrs) != 0 {
+		t.Errorf("%d simulated list failures left unconsumed — retry stopped early", len(fake.listErrs))
 	}
 }

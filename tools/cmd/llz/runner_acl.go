@@ -305,6 +305,28 @@ func runnerACLRevoke(ctx context.Context, client aclClient, o runnerACLOpts) err
 	return nil
 }
 
+// listClustersWithRetry wraps the cluster-list lookup in the same bounded retry
+// the ACL read-modify-write uses. A transient transport blip (connection reset,
+// TLS timeout) on this single GET would otherwise fail cluster resolution with a
+// misleading "no cluster matched" and block every cluster-touching job that
+// opens the control-plane ACL. The caller's match logic stays single-shot, so a
+// genuinely empty result (a definitive "not found") is not retried.
+func listClustersWithRetry(ctx context.Context, lister clusterLister) ([]map[string]any, error) {
+	var clusters []map[string]any
+	var err error
+	for attempt := 1; attempt <= aclMaxAttempts; attempt++ {
+		if clusters, err = lister.ListClusters(ctx); err == nil {
+			return clusters, nil
+		}
+		if attempt < aclMaxAttempts {
+			fmt.Fprintf(os.Stderr, "::warning::list LKE clusters attempt %d/%d failed (%v); retrying.\n",
+				attempt, aclMaxAttempts, err)
+			aclSleep(aclRetryDelay)
+		}
+	}
+	return nil, err
+}
+
 // resolveClusterID returns the target cluster's numeric ID from r.clusterID, else
 // r.clusterLabel (+ r.linodeRegion), else cluster_label/region read from
 // <tfvarsDir>/<region>.tfvars — mirroring the action's resolve_cluster_id.
@@ -332,7 +354,7 @@ func resolveClusterID(ctx context.Context, lister clusterLister, r clusterRef) (
 	if label == "" {
 		return 0, fmt.Errorf("cannot determine cluster label (no --cluster-id, no --cluster-label, no cluster_label in %s/%s.tfvars)", r.tfvarsDir, r.region)
 	}
-	clusters, err := lister.ListClusters(ctx)
+	clusters, err := listClustersWithRetry(ctx, lister)
 	if err != nil {
 		return 0, fmt.Errorf("listing LKE clusters: %w", err)
 	}
