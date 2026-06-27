@@ -296,7 +296,7 @@ storageClassPatcher:
   # default within `schedule` — well inside the `llz ci converge` budget.
   cron:
     enabled: true
-    schedule: "*/5 * * * *"
+    schedule: "*/2 * * * *"
   resources:
     limits:
       cpu: "200m"
