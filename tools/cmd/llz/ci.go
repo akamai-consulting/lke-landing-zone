@@ -39,7 +39,7 @@ func ciCmd() *cobra.Command {
 	}
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFUntrackCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(),
 		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciConvergeCmd(),
-		ciBaoStatusCmd(), ciBaoUnsealCmd(), ciBaoUnsealFollowersCmd(),
+		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
@@ -72,8 +72,9 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciPinInstanceImagesCmd())
 	// OpenBao KV seed steps (formerly ~15 inline-bash blocks in
 	// llz-bootstrap-openbao.yml): the generic bao-seed plus the derive-their-
-	// material specials in ci_bao_seed.go / ci_seed_special.go.
-	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(),
+	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
+	// ci_seed_special.go.
+	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciBaoSeedSealKeyCmd(),
 		ciSeedHarborRegistryS3Cmd(),
 		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd())
 	// In-cluster Linode credential rotator (linodeCredRotator CronJob, slim llz

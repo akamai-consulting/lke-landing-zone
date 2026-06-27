@@ -25,17 +25,17 @@ func withGHSetSecret(t *testing.T, fail func(name string) error) *[]string {
 	return calls
 }
 
-const initJSON = `{"unseal_keys_b64":["uk1","uk2","uk3","uk4","uk5"],"root_token":"s.root"}`
+const initJSON = `{"recovery_keys_b64":["uk1","uk2","uk3","uk4","uk5"],"root_token":"s.root"}`
 
 func TestParseBaoInit(t *testing.T) {
 	r, err := parseBaoInit(initJSON)
-	if err != nil || r.RootToken != "s.root" || len(r.UnsealKeysB64) != 5 {
+	if err != nil || r.RootToken != "s.root" || len(r.RecoveryKeysB64) != 5 {
 		t.Fatalf("parseBaoInit = (%+v, %v), want full payload", r, err)
 	}
 	for _, bad := range []string{
 		"", "not json",
-		`{"unseal_keys_b64":["a","b"],"root_token":"s.x"}`, // too few shares
-		`{"unseal_keys_b64":["a","b","c","d","e"]}`,        // no root
+		`{"recovery_keys_b64":["a","b"],"root_token":"s.x"}`, // too few shares
+		`{"recovery_keys_b64":["a","b","c","d","e"]}`,        // no root
 	} {
 		if _, err := parseBaoInit(bad); err == nil {
 			t.Errorf("parseBaoInit(%q) = nil error, want failure", bad)
@@ -49,7 +49,7 @@ func TestRunCIBaoInit(t *testing.T) {
 		t.Setenv(v, filepath.Join(dir, v))
 	}
 	withBaoExec(t, func(pod, token, stdin string, args ...string) (string, string, error) {
-		want := "operator init -key-shares=5 -key-threshold=3 -format=json"
+		want := "operator init -recovery-shares=5 -recovery-threshold=3 -format=json"
 		if pod != "platform-openbao-0" || strings.Join(args, " ") != want {
 			t.Errorf("init exec = %s %v", pod, args)
 		}
@@ -62,7 +62,7 @@ func TestRunCIBaoInit(t *testing.T) {
 	}
 
 	env, _ := os.ReadFile(filepath.Join(dir, "GITHUB_ENV"))
-	wantEnv := "OPENBAO_ROOT_TOKEN=s.root\nUNSEAL_K1=uk1\nUNSEAL_K2=uk2\nUNSEAL_K3=uk3\n"
+	wantEnv := "OPENBAO_ROOT_TOKEN=s.root\nRECOVERY_K1=uk1\nRECOVERY_K2=uk2\nRECOVERY_K3=uk3\n"
 	if string(env) != wantEnv {
 		t.Errorf("GITHUB_ENV = %q, want %q", env, wantEnv)
 	}
@@ -75,9 +75,9 @@ func TestRunCIBaoInit(t *testing.T) {
 		t.Errorf("summary missing banner or init payload: %q", summary)
 	}
 	want := []string{
-		"OPENBAO_UNSEAL_KEY_1@infra-primary=uk1",
-		"OPENBAO_UNSEAL_KEY_2@infra-primary=uk2",
-		"OPENBAO_UNSEAL_KEY_3@infra-primary=uk3",
+		"OPENBAO_RECOVERY_KEY_1@infra-primary=uk1",
+		"OPENBAO_RECOVERY_KEY_2@infra-primary=uk2",
+		"OPENBAO_RECOVERY_KEY_3@infra-primary=uk3",
 		"OPENBAO_ROOT_TOKEN@infra-primary=s.root",
 	}
 	if strings.Join(*ghCalls, " ") != strings.Join(want, " ") {
@@ -153,9 +153,9 @@ func TestRunCIBaoRegenRootSealedLeaderFails(t *testing.T) {
 
 func TestRunCIBaoRegenRootFullQuorumFlow(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "s.revoked")
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
 	envFile := filepath.Join(t.TempDir(), "env")
 	t.Setenv("GITHUB_ENV", envFile)
 
@@ -207,9 +207,9 @@ func TestRunCIBaoRegenRootFullQuorumFlow(t *testing.T) {
 
 func TestRunCIBaoRegenRootQuorumWithoutToken(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "s.revoked")
-	t.Setenv("UNSEAL_K1", "k1")
-	t.Setenv("UNSEAL_K2", "k2")
-	t.Setenv("UNSEAL_K3", "k3")
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
 	withBaoExec(t, func(pod, token, stdin string, args ...string) (string, string, error) {
 		cmd := strings.Join(args, " ")
 		switch {
@@ -234,16 +234,16 @@ func TestRunCIBaoRegenRootQuorumWithoutToken(t *testing.T) {
 
 func TestRunCIBaoRegenRootMissingKeys(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "s.revoked")
-	t.Setenv("UNSEAL_K1", "")
-	t.Setenv("UNSEAL_K2", "")
-	t.Setenv("UNSEAL_K3", "")
+	t.Setenv("RECOVERY_K1", "")
+	t.Setenv("RECOVERY_K2", "")
+	t.Setenv("RECOVERY_K3", "")
 	withBaoExec(t, func(pod, token, stdin string, args ...string) (string, string, error) {
 		if args[0] == "status" {
 			return `{"initialized":true,"sealed":false}`, "", nil
 		}
 		return "", "", errors.New("exit status 2")
 	})
-	if err := runCIBaoRegenRoot(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "UNSEAL_K1") {
+	if err := runCIBaoRegenRoot(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "RECOVERY_K1") {
 		t.Errorf("err = %v, want missing-keys error", err)
 	}
 }

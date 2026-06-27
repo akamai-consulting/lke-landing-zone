@@ -56,7 +56,7 @@ func ClassifyBaoSeal(s BaoStatus) (Category, string) {
 	case !s.Initialized:
 		return CatFail, "NOT initialized — not part of the Raft cluster; needs raft join + unseal"
 	default:
-		return CatFail, "sealed — needs unseal with OPENBAO_UNSEAL_KEY_1/2/3"
+		return CatFail, "sealed — pods auto-unseal from the static seal key at boot; check the openbao-unseal-key Secret and Raft storage"
 	}
 }
 

@@ -24,7 +24,12 @@ type: application
 # 0.1.9: doc-only — drop the stale AppRole-rotation CronWorkflow mention from the
 #        chart description/keywords/README (the subsystem was removed in 0.1.8;
 #        no rendered change).
-version: 0.1.9
+# 0.1.10: static-key auto-unseal — add a `seal "static"` stanza (key mounted from
+#        the openbao-unseal-key Secret at file:///openbao/seal/unseal.key) so
+#        pods unseal themselves at boot. Replaces the Shamir submit-keys flow and
+#        the openbao-auto-unseal re-unseal cron. The key Secret is created by
+#        `llz ci bao-seed-seal-key` before bootstrap.
+version: 0.1.10
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

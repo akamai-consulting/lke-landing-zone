@@ -161,7 +161,7 @@ poll/stop/fail decision is the three-exit-code contract — never a human eyebal
 state the rest of the methodology protects.
 
 Day-2 is **scheduled and reconciling**, not on-call toil. A set of reusable
-workflows — `cluster-health`, `secret-rotation`, `openbao-auto-unseal`,
+workflows — `cluster-health`, `secret-rotation`,
 `scheduled-checks` — poll the same readiness model and keep the cluster converged
 with no standing operator effort. They fan out across **all** deployments via
 `llz env list --json`.

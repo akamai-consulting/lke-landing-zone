@@ -301,8 +301,9 @@ new env, in order:
 4. **Converge** — the workflow polls ``llz ci converge`` (wrapping
    ``llz ci health``) until the cluster meets the convergence contract.
 5. **Bootstrap OpenBao** — dispatch `.github/workflows/bootstrap-openbao.yml` for
-   the env: `bao operator init`, seed unseal keys, then `llz ci bao-configure`
-   writes the KV engine, auth methods, and policies.
+   the env: seed the static seal key, `bao operator init` (recovery keys; the pods
+   auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
+   engine, auth methods, and policies.
 6. **DNS** — dispatch `bootstrap-dns.yml` once its token is provisioned. (The
    Argo CD / apl-core values-repo credential is the `APL_VALUES_REPO_TOKEN` PAT,
    provisioned by `llz tokens`, not a per-run bootstrap workflow.)

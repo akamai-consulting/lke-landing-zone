@@ -116,7 +116,7 @@ func ghFineGrainedSecretsWriteURL(name, owner string) string {
 
 // catalog is the credential set the wizard walks. It mirrors docs/quickstart.md
 // §2 and runbooks/bootstrap-openbao.md — and deliberately OMITS the secrets the
-// build writes for you (OPENBAO_UNSEAL_KEY_*, LOKI_S3_*, HARBOR_*).
+// build writes for you (OPENBAO_RECOVERY_KEY_*, LOKI_S3_*, HARBOR_*).
 func catalog() []secretSpec {
 	return []secretSpec{
 		{

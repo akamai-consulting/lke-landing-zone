@@ -130,13 +130,11 @@ flowchart TB
         direction LR
         H["cluster-health"]
         ROT["secret-rotation<br/>(lke-admin · Linode PAT · TF-state keys)"]
-        UNSEAL["openbao-auto-unseal<br/>(self-healing)"]
         CHK["scheduled-checks"]
     end
 
     DAY2 --> SCHED
     SCHED -.->|"poll readiness"| GATE
-    UNSEAL -.-> BAO
 
     classDef cli fill:#e8f0fe,stroke:#4285f4,color:#111;
     classDef tf fill:#f3e8fd,stroke:#a142f4,color:#111;
@@ -147,7 +145,7 @@ flowchart TB
     class R1,R2,R4 tf;
     class APL,ARGO,AOA,FOUND,BAO,CERT k8s;
     class GATE gate;
-    class H,ROT,UNSEAL,CHK sch;
+    class H,ROT,CHK sch;
 ```
 
 **Reading the bootstrap chain**

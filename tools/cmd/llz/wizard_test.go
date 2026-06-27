@@ -16,7 +16,7 @@ func TestGhTokenURL(t *testing.T) {
 
 func TestCatalogExcludesAutoStashed(t *testing.T) {
 	// These are written by the build, not the operator — the wizard must not ask.
-	banned := []string{"OPENBAO_UNSEAL_KEY_1", "LOKI_S3_ACCESS_KEY", "HARBOR_PASSWORD", "OPENBAO_APPROLE_ROLE_ID"}
+	banned := []string{"OPENBAO_RECOVERY_KEY_1", "LOKI_S3_ACCESS_KEY", "HARBOR_PASSWORD", "OPENBAO_APPROLE_ROLE_ID"}
 	for _, s := range catalog() {
 		for _, b := range banned {
 			if s.Name == b {

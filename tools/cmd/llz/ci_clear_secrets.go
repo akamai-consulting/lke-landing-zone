@@ -32,9 +32,10 @@ import (
 // doesn't own is a harmless 404, so no ha_role lookup is needed.
 var clusterScopedSecrets = []string{
 	"OPENBAO_ROOT_TOKEN",
-	"OPENBAO_UNSEAL_KEY_1",
-	"OPENBAO_UNSEAL_KEY_2",
-	"OPENBAO_UNSEAL_KEY_3",
+	"OPENBAO_RECOVERY_KEY_1",
+	"OPENBAO_RECOVERY_KEY_2",
+	"OPENBAO_RECOVERY_KEY_3",
+	"OPENBAO_SEAL_KEY",
 	"OPENBAO_APPROLE_SECRET_ID",
 	"OPENBAO_APPROLE_SECRET_ID_STANDBY",
 	"HARBOR_ROBOT_NAME",
@@ -58,7 +59,7 @@ func ciClearClusterSecretsCmd() *cobra.Command {
 		Short: "delete the cluster-scoped OpenBao/Harbor GitHub environment secrets on teardown",
 		Long: "Native port of null_resource.clear_openbao_secrets_on_destroy. Deletes the\n" +
 			"GH environment secrets bound to THIS cluster's OpenBao + Harbor (root token,\n" +
-			"unseal keys, both AppRole secret-id names, Harbor robot creds) from the --env\n" +
+			"recovery keys, both AppRole secret-id names, Harbor robot creds) from the --env\n" +
 			"Environment, so a destroyed cluster's stale secrets can't poison the next\n" +
 			"bootstrap. Best-effort: a 404 (already absent) or a per-secret API failure is\n" +
 			"a warning, not an error. Auth: the ambient GH_TOKEN (a secrets:write PAT); an\n" +
