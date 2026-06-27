@@ -288,6 +288,15 @@ storageClassPatcher:
   # The LKE default we demote (annotate is-default-class=false). If absent on a
   # single-class cluster the Job no-ops that step.
   demote: linode-block-storage-retain
+  # Durable backstop CronJob. The PostSync Job demotes once per Argo sync and the
+  # Kyverno admission policy demotes on each SC write, but neither self-recovers
+  # once a Flux re-promotion slips past the (failurePolicy: Ignore) webhook and
+  # Flux goes quiet (live==desired → no further admission events). This CronJob
+  # re-runs the idempotent demote on a fixed cadence so the cluster is back to one
+  # default within `schedule` — well inside the `llz ci converge` budget.
+  cron:
+    enabled: true
+    schedule: "*/2 * * * *"
   resources:
     limits:
       cpu: "200m"

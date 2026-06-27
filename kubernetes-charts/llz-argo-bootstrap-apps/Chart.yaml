@@ -24,7 +24,10 @@ type: application
 # 0.1.10: bump the llz-cluster-foundation pin to 0.1.4 (drops the duplicate
 #         llz-linode-volume-labeler namespace that raised a SharedResourceWarning).
 # 0.1.11: bump the llz-cert-automation pin to 0.1.4 (harbor docker-config derived in-cluster via ESO).
-version: 0.1.11
+# 0.1.12: bump the llz-cluster-foundation pin to 0.1.5 (durable sc-default-patcher
+#         CronJob backstop so a slipped-through Flux re-promotion can't leave 2
+#         default StorageClasses wedging `llz ci converge`).
+version: 0.1.12
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"
