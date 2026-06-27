@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -57,6 +58,34 @@ var tfInitStream = func(args ...string) error {
 	return cmd.Run()
 }
 
+// tfInitAttempts / tfInitBackoff / tfInitSleep bound the retry around terraform
+// init below. Package vars so tests can neutralize the wait.
+var (
+	tfInitAttempts = 3
+	tfInitBackoff  = func(attempt int) time.Duration { return time.Duration(attempt) * 5 * time.Second }
+	tfInitSleep    = time.Sleep
+)
+
+// tfInitWithRetry runs `terraform init`, retrying a few times on failure.
+// init pulls providers from the registry, modules over git, and reaches the S3
+// state backend — all transient-prone on a hosted runner — and is idempotent,
+// so a single blip must not fail a long (~30-min) provisioning run on the first
+// attempt.
+func tfInitWithRetry(args ...string) error {
+	var err error
+	for attempt := 1; attempt <= tfInitAttempts; attempt++ {
+		if err = tfInitStream(args...); err == nil {
+			return nil
+		}
+		if attempt < tfInitAttempts {
+			fmt.Fprintf(os.Stderr, "llz: terraform init failed (attempt %d/%d), retrying: %v\n",
+				attempt, tfInitAttempts, err)
+			tfInitSleep(tfInitBackoff(attempt))
+		}
+	}
+	return err
+}
+
 func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 	if region == "" || output == "" {
 		return fmt.Errorf("--region and --output are required")
@@ -67,11 +96,11 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 	}
 	stateKey := fmt.Sprintf("cluster/%s/terraform.tfstate", region)
 
-	if err := tfInitStream(
+	if err := tfInitWithRetry(
 		"-backend-config=bucket="+bucket,
 		"-backend-config=key="+stateKey,
 		"-backend-config=region=us-east-1"); err != nil {
-		return fmt.Errorf("terraform init failed for %s (bucket=%s)", stateKey, bucket)
+		return fmt.Errorf("terraform init failed for %s (bucket=%s) after %d attempts", stateKey, bucket, tfInitAttempts)
 	}
 
 	if dir := filepath.Dir(output); dir != "" && dir != "." {
