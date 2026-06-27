@@ -268,7 +268,7 @@ components:
       type: oci
       # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
       chart: llz-cert-automation
-      version: 0.1.4
+      version: 0.1.5
       releaseName: llz-cert-automation
       valuesObject:
         namespace: llz-cert-automation
