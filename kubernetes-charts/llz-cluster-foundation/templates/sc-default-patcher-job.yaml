@@ -138,7 +138,9 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      ttlSecondsAfterFinished: 120
+      # No ttlSecondsAfterFinished here — for a CronJob, finished-Job cleanup is
+      # owned by successfulJobsHistoryLimit/failedJobsHistoryLimit above; setting
+      # both conflicts (kube-linter job-ttl-seconds-after-finished).
       activeDeadlineSeconds: 300
       template:
         {{- include "scPatcher.podTemplate" . | nindent 8 }}
