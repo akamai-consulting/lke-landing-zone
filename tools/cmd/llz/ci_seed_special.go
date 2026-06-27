@@ -4,16 +4,18 @@ package main
 // llz-bootstrap-openbao.yml that don't fit the generic `llz ci bao-seed`
 // shape (they derive their material instead of just relaying it):
 //
-//   seed-harbor-dockerconfig build the buildah docker-config JSON from the
-//                            robot creds already in secret/harbor/robot
 //   seed-harbor-registry-s3  resolve obj_cluster from the object-storage
 //                            tfvars and seed the registry's S3 backend creds
 //   resolve-harbor-url       default HARBOR_URL to harbor.<cluster_domain>
 //   audit-pvc-storageclass   report PVCs that escaped the Kyverno encrypted-
 //                            StorageClass mutation
+//
+// (seed-harbor-dockerconfig was retired: the harbor docker config.json is now
+// derived in-cluster by the llz-cert-automation chart's harborDockerConfig
+// ExternalSecret, which renders the dockerconfigjson from the robot creds in
+// secret/harbor/robot via an ESO template — no separate seed/path.)
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -42,59 +44,6 @@ func tfvarsValue(content, key string) string {
 		return val
 	}
 	return ""
-}
-
-// ── seed-harbor-dockerconfig ──────────────────────────────────────────────────
-
-// harborDockerConfigJSON builds the docker config JSON buildah consumes, with
-// the registry host = HARBOR_URL stripped of its http(s):// scheme and
-// auth = base64("user:pass") — byte-identical to the bash printf for the
-// alphanumeric credentials Harbor mints, JSON-safe for anything else.
-func harborDockerConfigJSON(harborURL, user, pass string) string {
-	host := strings.TrimPrefix(strings.TrimPrefix(harborURL, "http://"), "https://")
-	auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
-	return fmt.Sprintf(`{"auths":{%s:{"username":%s,"password":%s,"auth":%s}}}`,
-		jsonQuote(host), jsonQuote(user), jsonQuote(pass), jsonQuote(auth))
-}
-
-// jsonQuote renders s as a JSON string literal.
-func jsonQuote(s string) string {
-	b, _ := json.Marshal(s) // cannot fail for a string
-	return string(b)
-}
-
-func ciSeedHarborDockerConfigCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "seed-harbor-dockerconfig",
-		Short: "seed secret/harbor/docker-config from the robot creds in secret/harbor/robot",
-		Long: "Native port of the 'Seed Harbor buildah Docker config in OpenBao' bootstrap\n" +
-			"step. Reads the robot username/password back from secret/harbor/robot,\n" +
-			"builds the docker config JSON (registry host = HARBOR_URL without its\n" +
-			"scheme), masks it, and writes secret/harbor/docker-config — consumed by the\n" +
-			"harbor-docker-config ExternalSecret so the cert-automation job can push to\n" +
-			"Harbor. Skips with a summary note while secret/harbor/robot is unseeded.\n" +
-			"Reads HARBOR_URL, OPENBAO_ROOT_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCISeedHarborDockerConfig() },
-	}
-}
-
-func runCISeedHarborDockerConfig() error {
-	user := baoKVGetField("secret/harbor/robot", "username")
-	pass := baoKVGetField("secret/harbor/robot", "password")
-	if user == "" || pass == "" {
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
-			"secret/harbor/robot not yet populated — skipping buildah config seed.",
-			"Re-run after Harbor is bootstrapped to seed secret/harbor/docker-config.")
-	}
-	maskGHA(pass)
-	cfg := harborDockerConfigJSON(os.Getenv("HARBOR_URL"), user, pass)
-	maskGHA(cfg)
-	if err := baoKVPutFn("secret/harbor/docker-config", map[string]string{"config_json": cfg}); err != nil {
-		return err
-	}
-	fmt.Println("secret/harbor/docker-config seeded.")
-	return nil
 }
 
 // ── seed-harbor-registry-s3 ───────────────────────────────────────────────────

@@ -451,7 +451,7 @@ jobs:
       # failure aborts before the remaining seeds, exactly as a failed inline step
       # did. HA_ROLE (job env) drives the github-dispatch-token standby skip.
       # The harbor-specific seeds that derive their own material — robot accounts
-      # and docker-config (now in the parallel `harbor` job), registry-S3 below —
+      # (now in the parallel `harbor` job), registry-S3 below —
       # keep their dedicated commands.
       # OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
       - name: Seed OpenBao KV bootstrap paths
@@ -652,7 +652,7 @@ jobs:
   #
   # It re-establishes its own kubeconfig + control-plane ACL and re-acquires the
   # OpenBao root token (bootstrap revokes it at its end; bao-ensure-ready
-  # regenerates via the unseal-key quorum) because seed-harbor-dockerconfig writes
+  # regenerates via the unseal-key quorum) because provision-harbor-robots writes
   # to OpenBao. Running concurrently with `converge` means two jobs mutate THIS
   # cluster's control-plane ACL at once; the open/revoke is verify-after-write
   # (llz ci runner-acl) so neither runner's IP can be silently dropped.
@@ -697,8 +697,8 @@ jobs:
 
       # Re-acquire the OpenBao root token: `bootstrap` revoked it at its end, so
       # bao-ensure-ready takes the initialized→regen-via-quorum path and re-exports
-      # OPENBAO_ROOT_TOKEN to $GITHUB_ENV. seed-harbor-dockerconfig (below) writes
-      # secret/harbor/docker-config to OpenBao and needs it.
+      # OPENBAO_ROOT_TOKEN to $GITHUB_ENV. provision-harbor-robots (below) writes
+      # secret/harbor/robot to OpenBao and needs it.
       - name: Ensure OpenBao reachable + root token
         id: ensure
         env:
@@ -763,11 +763,10 @@ jobs:
           EXISTING_PULL_SECRET: ${{ secrets.HARBOR_PULL_PASSWORD }}
         run: llz ci provision-harbor-robots
 
-      - name: Seed Harbor buildah Docker config in OpenBao
-        if: steps.ensure.outputs.available == 'true'
-        run: llz ci seed-harbor-dockerconfig
-        env:
-          HARBOR_URL: ${{ env.HARBOR_URL }}
+      # secret/harbor/docker-config is no longer seeded: the cert-automation
+      # chart's harborDockerConfig ExternalSecret derives the dockerconfigjson
+      # in-cluster from the robot creds (username/password/registry_host) in
+      # secret/harbor/robot via an ESO template.
 
       - name: Smoke-test Harbor robot credentials
         if: steps.ensure.outputs.available == 'true'

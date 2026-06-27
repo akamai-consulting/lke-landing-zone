@@ -99,13 +99,13 @@ useful context for emergency recovery and understanding the secret layout.
 3. **Configure** — enables KV v2 at `secret/`, Kubernetes auth, and GitHub-OIDC (`jwt`) auth. Creates the read-only `platform-ci` policy (paths enumerated explicitly — no wildcard) bound to the `eso` Kubernetes-auth role for ESO, and the `secret-propagator` GitHub-OIDC role + policy used by `llz ci propagate-pat`. Enables the file audit device.
 
 4. **Seed secrets** — writes the following into OpenBao KV v2 and sets the corresponding GitHub secrets:
-   - `secret/harbor/robot` (Harbor CI robot credentials, push+pull+delete; stored for buildah builds via `harbor/docker-config`)
+   - `secret/harbor/robot` (Harbor CI robot credentials, push+pull+delete; the buildah `config.json` is derived from these in-cluster by ESO — see note below)
    - `secret/harbor/pull-robot` (Harbor pull-only robot credentials; distributed as imagePullSecret to kube-system and workload namespaces)
-   - `secret/harbor/docker-config` (Docker config JSON for buildah cert-automation builds)
    - `secret/infra/github-dispatch-token` (harbor-ready PostSync dispatch)
    - `secret/cert-automation/github-token` (cert-automation Argo Workflow)
    - `secret/loki/object-store` (Linode Object Storage keys from `LOKI_S3_ACCESS_KEY/SECRET`)
    - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are NO LONGER seeded here — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`), through the write-scoped `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
+   - Note: `secret/harbor/docker-config` is NO LONGER seeded — the buildah `config.json` is derived in-cluster by the `llz-cert-automation` chart's `harborDockerConfig` ExternalSecret, which renders the dockerconfigjson from the robot creds (`username`/`password`/`registry_host`) in `secret/harbor/robot` via an ESO template.
    - Note: `secret/certmanager/dns01` (Linode DNS token from `LINODE_DNS_TOKEN`) is seeded by the separate `bootstrap-dns.yml` workflow once a DNS-scoped token has been provisioned.
 
 5. **Revoke root token** — runs unconditionally even on failure.

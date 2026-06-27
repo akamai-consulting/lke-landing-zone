@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -32,72 +31,6 @@ unquoted = bare
 	}
 	if got := tfvarsValue("", "obj_cluster"); got != "" {
 		t.Errorf("empty content must yield empty, got %q", got)
-	}
-}
-
-// ── seed-harbor-dockerconfig ──────────────────────────────────────────────────
-
-func TestHarborDockerConfigJSON(t *testing.T) {
-	// Byte-identical to the bash printf for scheme-stripped host + plain creds.
-	got := harborDockerConfigJSON("https://harbor.primary.internal", "robot$ci", "s3cret")
-	auth := base64.StdEncoding.EncodeToString([]byte("robot$ci:s3cret"))
-	want := `{"auths":{"harbor.primary.internal":{"username":"robot$ci","password":"s3cret","auth":"` + auth + `"}}}`
-	if got != want {
-		t.Errorf("docker config:\n got %s\nwant %s", got, want)
-	}
-	// http:// strips too; no scheme passes through.
-	if got := harborDockerConfigJSON("http://h.example", "u", "p"); !strings.Contains(got, `{"h.example":`) {
-		t.Errorf("http scheme not stripped: %s", got)
-	}
-	if got := harborDockerConfigJSON("h.example", "u", "p"); !strings.Contains(got, `{"h.example":`) {
-		t.Errorf("schemeless host mangled: %s", got)
-	}
-	// A quote in a credential must not produce invalid JSON (bash printf did).
-	if got := harborDockerConfigJSON("h", `u"x`, "p"); !strings.Contains(got, `"username":"u\"x"`) {
-		t.Errorf("quote not JSON-escaped: %s", got)
-	}
-}
-
-func TestRunCISeedHarborDockerConfig(t *testing.T) {
-	// Robot unseeded → summary skip, no kv put.
-	puts := stubBaoSeedKV(t, "", "")
-	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
-	sum := withGHASummaryFile(t)
-	if err := runCISeedHarborDockerConfig(); err != nil {
-		t.Fatal(err)
-	}
-	if len(*puts) != 0 {
-		t.Errorf("unseeded robot must skip, got %v", *puts)
-	}
-	b, _ := os.ReadFile(sum)
-	if !strings.Contains(string(b), "secret/harbor/robot not yet populated — skipping buildah config seed.") {
-		t.Errorf("summary missing skip note: %q", b)
-	}
-
-	// Robot present → one kv put with the rendered config_json.
-	prev := baoExecFn
-	var putArgs []string
-	baoExecFn = func(_, _, _ string, args ...string) (string, string, error) {
-		joined := strings.Join(args, " ")
-		switch {
-		case strings.Contains(joined, "-field=username"):
-			return "robot$ci\n", "", nil
-		case strings.Contains(joined, "-field=password"):
-			return "s3cret\n", "", nil
-		case strings.HasPrefix(joined, "kv put"):
-			putArgs = args
-			return "", "", nil
-		}
-		return "", "", errors.New("unexpected: " + joined)
-	}
-	t.Cleanup(func() { baoExecFn = prev })
-	t.Setenv("HARBOR_URL", "https://harbor.primary.internal")
-	if err := runCISeedHarborDockerConfig(); err != nil {
-		t.Fatal(err)
-	}
-	want := "config_json=" + harborDockerConfigJSON("https://harbor.primary.internal", "robot$ci", "s3cret")
-	if len(putArgs) != 4 || putArgs[2] != "secret/harbor/docker-config" || putArgs[3] != want {
-		t.Errorf("kv put = %v, want path secret/harbor/docker-config field %q", putArgs, want)
 	}
 }
 

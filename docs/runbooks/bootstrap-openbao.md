@@ -108,7 +108,7 @@ gh workflow run bootstrap-openbao.yml \
 10. Seeds the following secrets into OpenBao:
    - `secret/harbor/robot` (Harbor CI robot, push+pull+delete; creates the robot on the first cluster; used for buildah builds)
    - `secret/harbor/pull-robot` (Harbor pull-only robot; creates the robot on the first cluster; distributed as imagePullSecret)
-   - `secret/harbor/docker-config` (Docker config JSON for buildah cert-automation builds, derived from `harbor/robot`)
+   - (`secret/harbor/docker-config` is no longer seeded — the buildah `config.json` is derived in-cluster by the cert-automation chart's `harborDockerConfig` ExternalSecret from the robot creds in `secret/harbor/robot`.)
    - `HARBOR_ROBOT_NAME` + `HARBOR_PASSWORD` GitHub secrets (first cluster only)
    - `HARBOR_PULL_ROBOT_NAME` + `HARBOR_PULL_PASSWORD` GitHub secrets (first cluster only)
    - `secret/infra/github-dispatch-token`
