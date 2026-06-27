@@ -2,16 +2,18 @@ name: Build Container Images
 
 on:
   push:
+    # Rebuild on EVERY push to main — no path filter. The ci images bake the
+    # `llz` binary stamped with `dev-<github.sha>` (--build-arg LLZ_VERSION), and
+    # `llz ci assert-image-fresh` (run by release-e2e.yml + the instance dispatch
+    # preflight) hard-fails when the `:latest` image's baked sha doesn't match the
+    # checked-out template-ref. A path filter on dockerfiles/tools meant any main
+    # merge that DIDN'T touch those paths (a chart-only or docs-only change) left
+    # `:latest` stamped at an older sha, so the next e2e tripped the freshness
+    # guard ("image/template skew"). Building on every main push keeps `:latest`'s
+    # baked sha == HEAD; the LLZ_VERSION build-arg cache-busts the `go build` layer
+    # so the sha is genuinely re-stamped, while unchanged source layers stay cached
+    # (a no-op rebuild is mostly cache hits + a re-tag/push).
     branches: [main, master]
-    paths:
-      - 'dockerfiles/**'
-      # The ci images bake the `llz` binary from the Go tools module via
-      # `--build-context tools-src=tools`, so a tools change must rebuild them —
-      # otherwise the static `:1.9.8` / `:1.31.0` tags keep serving a stale
-      # binary (e.g. a workflow or Makefile target calling a freshly added `llz`
-      # subcommand gets "unknown command").
-      - 'tools/**'
-      - '.github/workflows/build-images.yml'
   schedule:
     - cron: '0 3 * * 1'  # Weekly Monday rebuild
   workflow_dispatch:
