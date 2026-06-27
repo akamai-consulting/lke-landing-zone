@@ -31,3 +31,64 @@ app.kubernetes.io/component: llz-cluster-foundation
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
+
+{{/*
+scPatcher.podTemplate — the shared PodTemplateSpec (demote linode-block-storage-retain
++ verify-one-default script) used by BOTH the PostSync Job and the durable CronJob in
+sc-default-patcher-job.yaml, so the logic lives in exactly one place. Emitted at column
+0; callers `nindent` it under their `template:`. Takes the root context.
+*/}}
+{{- define "scPatcher.podTemplate" -}}
+{{- $sc := .Values.storageClassPatcher -}}
+metadata:
+  labels:
+    app.kubernetes.io/name: sc-default-patcher
+spec:
+  serviceAccountName: sc-default-patcher
+  restartPolicy: OnFailure
+  containers:
+    - name: patch
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command: [sh, -c]
+      args:
+        - |
+          set -euo pipefail
+          echo "Verifying {{ $sc.desiredDefault }} exists..."
+          if ! kubectl get sc {{ $sc.desiredDefault }} >/dev/null 2>&1; then
+            # The SC is rendered before this runs, so this is a "the SC didn't
+            # actually install" symptom — fail loud so `llz ci converge` sees it.
+            echo "::error::{{ $sc.desiredDefault }} not found. Not demoting {{ $sc.demote }} — would leave the cluster with no default StorageClass." >&2
+            exit 1
+          fi
+
+          echo "=== Demote {{ $sc.demote }} from default ==="
+          if kubectl get sc {{ $sc.demote }} >/dev/null 2>&1; then
+            kubectl annotate sc {{ $sc.demote }} \
+              storageclass.kubernetes.io/is-default-class=false --overwrite
+          else
+            echo "{{ $sc.demote }} not found on cluster — nothing to demote (single-class cluster?)."
+          fi
+
+          # Verify exactly one default remains, and it's ours.
+          DEFAULTS=$(kubectl get sc -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}{"\n"}{end}' \
+            | awk -F'\t' '$2=="true"{print $1}')
+          echo "Default StorageClasses after patch:"
+          echo "$DEFAULTS"
+          if [ "$DEFAULTS" != "{{ $sc.desiredDefault }}" ]; then
+            echo "::error::expected exactly '{{ $sc.desiredDefault }}' as default; got: $DEFAULTS" >&2
+            exit 1
+          fi
+          echo "Done."
+      resources:
+        {{- toYaml $sc.resources | nindent 8 }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+{{- end -}}

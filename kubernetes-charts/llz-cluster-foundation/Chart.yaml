@@ -21,7 +21,11 @@ type: application
 #        volume-labeler tree in apl-values (platform-bootstrap) is its sole
 #        owner now, so declaring it here too raised a SharedResourceWarning that
 #        pinned platform-bootstrap OutOfSync.
-version: 0.1.4
+# 0.1.5: add a durable sc-default-patcher CronJob backstop (every 5m) so a Flux
+#        re-promotion of linode-block-storage-retain that slips past the Kyverno
+#        admission policy is re-demoted even after Flux goes quiet — the PostSync
+#        Job + admission-only policy could leave 2 defaults wedging `llz ci converge`.
+version: 0.1.5
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"

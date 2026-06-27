@@ -1,7 +1,7 @@
 {{- if .Values.storageClassPatcher.enabled }}
 {{- $np := .Values.networkPolicies }}
 {{- $sc := .Values.storageClassPatcher }}
-# Default StorageClass demotion — PostSync hook owned by Argo CD.
+# Default StorageClass demotion — keep block-storage-retain the SOLE cluster default.
 #
 # WHY THIS EXISTS:
 #   LKE's `workload` HelmRelease (Flux-managed) installs `{{ $sc.demote }}` with
@@ -10,26 +10,33 @@
 #   that doesn't explicitly set `storageClassName` (gitea, keycloak, eventual
 #   argo-cd/Prometheus/Loki PVCs) provisions unencrypted, untagged Volumes — and
 #   untagged Volumes can't be reaped by the tag-filtered destroy hook, leaving
-#   Linode account-quota orphans.
+#   Linode account-quota orphans. Two defaults also hard-fail `llz ci converge`
+#   ("2 default StorageClasses … non-deterministic selection").
 #
-# WHAT THIS DOES:
-#   Wait for `{{ $sc.desiredDefault }}` to exist, then demote `{{ $sc.demote }}`
-#   by overwriting its is-default-class annotation to `"false"`. Verify exactly
-#   one default remains and it's ours.
+# THREE LAYERS, because no single one self-recovers:
+#   1. Kyverno admission policy (cluster-bootstrap TF, sibling
+#      manifests/kyverno-sc-default-demote.yaml) rewrites is-default-class→"false"
+#      on every SC write — FAST, but `failurePolicy: Ignore` means a write can slip
+#      through when the webhook is briefly unready, and it only acts on admission
+#      events. Once a `true` write slips through, the live SC matches Flux's desired
+#      state, so Flux STOPS reconciling it → no more admission events → the policy
+#      is starved and never re-demotes. (Observed: 2 defaults stuck across an entire
+#      30-min `llz ci converge` budget.)
+#   2. PostSync Job (below) — demotes once after each Argo sync. But cluster-foundation
+#      stays Synced, so it does NOT re-fire on its own; it only covers the initial demote.
+#   3. CronJob (below) — the DURABLE backstop: re-runs the same idempotent demote on a
+#      fixed cadence ({{ $sc.cron.schedule }}), independent of admission events and Argo
+#      syncs, so a slipped-through Flux re-promotion is corrected within one cron period
+#      regardless of whether Flux ever writes again. This is what guarantees convergence.
 #
-#   The SC itself is rendered by Terraform (cluster-bootstrap module), NOT by
-#   Argo — it must land before apl-operator's helmfile starts creating PVCs, and
-#   Argo's sync of this tree happens later. The SC is present by the time this
-#   PostSync hook runs, so the demotion succeeds whether or not Argo owns the SC.
+#   The SC itself is rendered by Terraform (cluster-bootstrap module), NOT by Argo —
+#   it must land before apl-operator's helmfile starts creating PVCs.
 #
-# WHY POSTSYNC:
-#   PostSync runs after every successful sync — so if Flux's helm-controller
-#   reconciles the `workload` HelmRelease (~every 10m) and reverts the demotion,
-#   the next Argo selfHeal re-runs this Job and restores it. (Previously a TF
-#   null_resource that only re-ran on `terraform apply`.)
+# The shared PodTemplateSpec (demote + verify script) is the `scPatcher.podTemplate`
+# helper in _helpers.tpl, used by both the Job and the CronJob below.
 ---
-# Isolating NetworkPolicy. Same pattern as the coredns-restart Job. The Job's pod
-# only needs egress to the K8s apiserver (kubectl) + DNS.
+# Isolating NetworkPolicy. Same pattern as the coredns-restart Job. The patcher
+# pod only needs egress to the K8s apiserver (kubectl) + DNS.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -91,14 +98,15 @@ subjects:
     name: sc-default-patcher
     namespace: kube-system
 ---
+# Initial demote — PostSync hook. Runs after every successful sync; gives the fast
+# first demote on bootstrap. Durable re-assertion is the CronJob below (this Job
+# does not re-fire while cluster-foundation stays Synced).
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: sc-default-patcher
   namespace: kube-system
   annotations:
-    # PostSync — runs after every successful sync. If Flux reverts the demotion
-    # mid-cycle, the next sync re-runs us.
     argocd.argoproj.io/hook: PostSync
     # Replace lets the next sync re-create the Job cleanly even if a previous run
     # is still in TTL.
@@ -108,56 +116,31 @@ spec:
   ttlSecondsAfterFinished: 600
   activeDeadlineSeconds: 1500
   template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: sc-default-patcher
+    {{- include "scPatcher.podTemplate" . | nindent 4 }}
+{{- if $sc.cron.enabled }}
+---
+# Durable backstop — re-demotes {{ $sc.demote }} every {{ $sc.cron.schedule }} so a
+# Flux re-promotion that slipped past the Kyverno admission policy is corrected even
+# after Flux goes quiet (live==desired → no more admission events to mutate). The
+# script is idempotent, so a steady-state run is a no-op that just re-verifies one
+# default. concurrencyPolicy Forbid + tight history limits keep at most one run around.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sc-default-patcher
+  namespace: kube-system
+spec:
+  schedule: {{ $sc.cron.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
     spec:
-      serviceAccountName: sc-default-patcher
-      restartPolicy: OnFailure
-      containers:
-        - name: patch
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: [sh, -c]
-          args:
-            - |
-              set -euo pipefail
-              echo "Verifying {{ $sc.desiredDefault }} exists..."
-              if ! kubectl get sc {{ $sc.desiredDefault }} >/dev/null 2>&1; then
-                # PostSync runs after the SC has been rendered, so this is a "the
-                # sync didn't actually install the SC" symptom — fail loud so
-                # `llz ci converge` sees it.
-                echo "::error::{{ $sc.desiredDefault }} not found. Not demoting {{ $sc.demote }} — would leave the cluster with no default StorageClass." >&2
-                exit 1
-              fi
-
-              echo "=== Demote {{ $sc.demote }} from default ==="
-              if kubectl get sc {{ $sc.demote }} >/dev/null 2>&1; then
-                kubectl annotate sc {{ $sc.demote }} \
-                  storageclass.kubernetes.io/is-default-class=false --overwrite
-              else
-                echo "{{ $sc.demote }} not found on cluster — nothing to demote (single-class cluster?)."
-              fi
-
-              # Verify exactly one default remains, and it's ours.
-              DEFAULTS=$(kubectl get sc -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}{"\n"}{end}' \
-                | awk -F'\t' '$2=="true"{print $1}')
-              echo "Default StorageClasses after patch:"
-              echo "$DEFAULTS"
-              if [ "$DEFAULTS" != "{{ $sc.desiredDefault }}" ]; then
-                echo "::error::expected exactly '{{ $sc.desiredDefault }}' as default; got: $DEFAULTS" >&2
-                exit 1
-              fi
-              echo "Done."
-          resources:
-            {{- toYaml $sc.resources | nindent 12 }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 1000
-            seccompProfile:
-              type: RuntimeDefault
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 120
+      activeDeadlineSeconds: 300
+      template:
+        {{- include "scPatcher.podTemplate" . | nindent 8 }}
+{{- end }}
 {{- end }}
