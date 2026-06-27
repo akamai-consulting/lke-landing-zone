@@ -29,7 +29,11 @@ type: application
 #        pods unseal themselves at boot. Replaces the Shamir submit-keys flow and
 #        the openbao-auto-unseal re-unseal cron. The key Secret is created by
 #        `llz ci bao-seed-seal-key` before bootstrap.
-version: 0.1.10
+# 0.1.11: fix the promtail audit-shipper sidecar — add `-config.expand-env=true`
+#         (+ a downward-API HOSTNAME env) so the `pod: ${HOSTNAME}` label resolves
+#         to the pod name instead of shipping the literal string `${HOSTNAME}` to
+#         Loki on every OpenBao audit line.
+version: 0.1.11
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

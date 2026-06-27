@@ -289,6 +289,19 @@ openbao:
         imagePullPolicy: Always
         args:
           - -config.file=/etc/promtail/promtail.yaml
+          # The promtail config sets `pod: ${HOSTNAME}` (openbao-promtail-config.yaml).
+          # Promtail does NOT expand ${VAR} in its config without this flag — without
+          # it every shipped audit line gets the LITERAL label `pod="${HOSTNAME}"`
+          # (indistinguishable across the 3 raft pods). `${HOSTNAME}` is the only
+          # variable in the config, so expanding env is safe.
+          - -config.expand-env=true
+        env:
+          # Guarantee HOSTNAME = the pod name (platform-openbao-N) for the label
+          # above, rather than relying on the container runtime to inject it.
+          - name: HOSTNAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
         securityContext:
           runAsNonRoot: true
           runAsUser: 10000
