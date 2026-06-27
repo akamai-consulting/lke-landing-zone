@@ -18,7 +18,11 @@ type: application
 #        ExternalSecret now reads the robot creds (username/password/registry_host)
 #        from secret/harbor/robot and renders the dockerconfigjson via an ESO v2
 #        template, replacing the separate secret/harbor/docker-config seed.
-version: 0.1.4
+# 0.1.5: fix the harborDockerConfig configTemplate — `{"auths":{{{ .registry_host`
+#        was an unparseable Go template (`{{{` = `{{` delimiter + literal `{` →
+#        "unexpected \"{\" in command"), so the ExternalSecret never rendered and the
+#        harbor-docker-config Secret was never created. Separate the brace: `{ {{- `.
+version: 0.1.5
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"

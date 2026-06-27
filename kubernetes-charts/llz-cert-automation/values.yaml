@@ -112,10 +112,16 @@ externalSecrets:
   # by ESO at sync time (NOT Helm — the braces are data here, injected verbatim),
   # byte-for-byte the dockerconfigjson the retired `llz ci seed-harbor-dockerconfig`
   # produced: host = registry_host (already scheme-stripped), auth = b64(user:pass).
+  #
+  # NOTE the `{ {{- ` after `"auths":` — the opening object brace MUST be separated
+  # from the `{{` action by whitespace, or Go's template parser reads `{{{` as the
+  # `{{` delimiter followed by a literal `{` and fails with `unexpected "{" in
+  # command` (the template never renders → the Secret is never created). `{{-`
+  # left-trims that separating space back out, so the rendered JSON is unchanged.
   harborDockerConfig:
     secretName: harbor-docker-config
     robotKey: harbor/robot
-    configTemplate: '{"auths":{{{ .registry_host | toJson }}:{"username":{{ .username | toJson }},"password":{{ .password | toJson }},"auth":{{ printf "%s:%s" .username .password | b64enc | toJson }}}}}'
+    configTemplate: '{"auths":{ {{- .registry_host | toJson }}:{"username":{{ .username | toJson }},"password":{{ .password | toJson }},"auth":{{ printf "%s:%s" .username .password | b64enc | toJson }}}}}'
 
 # NetworkPolicy egress targets. Linode/apl-core-shaped defaults; a sibling
 # deployment changes these only if its namespaces differ.

@@ -19,7 +19,7 @@ spec:
   source:
     repoURL: ghcr.io/<@ upstream_org @>/charts
     chart: llz-cert-automation
-    targetRevision: 0.1.4
+    targetRevision: 0.1.5
     helm:
       releaseName: llz-cert-automation
       valuesObject:
