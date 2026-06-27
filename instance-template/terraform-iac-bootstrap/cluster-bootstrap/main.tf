@@ -560,7 +560,9 @@ resource "null_resource" "apl_pipeline_ready" {
 # after the kyverno release), which needs apl-core custom-policy support;
 # tracked as a follow-up.
 #
-# This is the only kyverno_* policy applied from terraform — the low-race
+# This + sc-default-demote (below) are the two kyverno_* policies applied from
+# terraform — both override a NON-Argo system (apl-operator's helmfile PVCs / LKE
+# Flux's default StorageClass), a race an Argo sync-wave can't win. The low-race
 # loki-s3 + oauth2-proxy policies moved to the GitOps tree (see the relocation
 # note below). It runs `llz ci apply-kyverno-policy` (tools/cmd/llz/ci_kyverno.go,
 # baked into the ci-terraform image): kubeconfig tempfile + cleanup, a Kyverno-
@@ -589,6 +591,40 @@ resource "null_resource" "kyverno_pvc_encrypted_policy" {
       WAIT_FOR_KYVERNO     = "true"
       TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping PVC policy apply. gitea-valkey + oauth2-proxy redis PVCs may land on linode-block-storage; re-run terraform apply once Kyverno is up."
       WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
+    }
+  }
+  depends_on = [
+    helm_release.apl,
+  ]
+}
+
+# sc-default-demote — the SECOND kyverno_* policy applied from terraform, and for
+# the same reason as the PVC-encryption one above: it overrides a NON-Argo system
+# (LKE's Flux-managed `workload` HelmRelease, which keeps marking
+# linode-block-storage-retain the default StorageClass), a race an Argo sync-wave
+# can't win. llz-cluster-foundation's sc-default-patcher PostSync hook demotes the
+# SC once, but Flux re-promotes it on reconcile and the one-shot hook never
+# re-fires — leaving two default StorageClasses, which hard-fails `llz ci
+# converge`. This admission policy, enforcing early, rewrites is-default-class
+# back to "false" on every Flux write so block-storage-retain stays the sole
+# default. (See manifests/kyverno-sc-default-demote.yaml for the full rationale.)
+resource "null_resource" "kyverno_sc_default_policy" {
+  triggers = {
+    apl_release     = helm_release.apl.id
+    policy_yaml_sha = filesha256("${path.module}/manifests/kyverno-sc-default-demote.yaml")
+  }
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = "llz ci apply-kyverno-policy"
+    environment = {
+      KUBECONFIG_RAW  = local.kubeconfig_raw
+      POLICY_MANIFEST = "${path.module}/manifests/kyverno-sc-default-demote.yaml"
+      # Poll then apply IMMEDIATELY so the admission rule is enforcing before
+      # Flux's workload HelmRelease reconciles linode-block-storage-retain back to
+      # default — the window the one-shot PostSync patcher loses.
+      WAIT_FOR_KYVERNO     = "true"
+      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping sc-default-demote policy apply. linode-block-storage-retain may stay a second default StorageClass; re-run terraform apply once Kyverno is up."
+      WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — sc-default-demote policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
     }
   }
   depends_on = [
@@ -936,10 +972,17 @@ resource "kubectl_manifest" "app_secret_store_application" {
 # Removed in the convergence-contract cleanup PR; replaced by an Argo
 # CD PostSync hook Job at
 # `apl-values/_shared/manifest/foundation/sc-default-patcher-job.yaml`
-# (anti-pattern #1 — patcher Jobs run from TF). Argo now owns it: if
-# Flux's `workload` HelmRelease reconciles and reverts the demotion,
-# Argo's selfHeal + the PostSync hook re-running on the next sync put
-# us back to "one default, and it's ours". TF no longer needs to know.
+# (anti-pattern #1 — patcher Jobs run from TF). The PostSync hook still
+# does the initial demote, but the assumption that "Argo's selfHeal +
+# the PostSync hook re-running" would undo a later Flux re-promotion
+# proved FALSE: Argo doesn't own this Flux-managed SC, so it never sees
+# the drift, and the one-shot hook doesn't re-fire while
+# cluster-foundation stays Synced — so Flux re-promoting after the hook
+# ran leaves two default StorageClasses (observed wedging `llz ci
+# converge`). The durable enforcement is now the early-imperative
+# `null_resource.kyverno_sc_default_policy` above (a Kyverno admission
+# mutation that re-demotes on every Flux write) — the same TF-owned,
+# beats-a-non-Argo-system pattern as kyverno_pvc_encrypted_policy.
 
 # ── Destroy-time cleanup relocated from TF to the CI destroy job ──────────────
 # Three destroy-time `null_resource` provisioners used to run here: an

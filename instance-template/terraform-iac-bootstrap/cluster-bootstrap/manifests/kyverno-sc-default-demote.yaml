@@ -1,0 +1,70 @@
+# Kyverno ClusterPolicy: keep linode-block-storage-retain non-default.
+#
+# WHY THIS IS A TERRAFORM null_resource (not a GitOps sync-wave policy)
+# --------------------------------------------------------------------
+# LKE's `workload` HelmRelease (Flux-managed, not ours) installs the
+# linode-block-storage-retain StorageClass with
+# `storageclass.kubernetes.io/is-default-class: "true"` and re-asserts it on Flux
+# reconciles. We want our Terraform-created block-storage-retain (encrypted +
+# tagged) to be the SOLE cluster default.
+#
+# llz-cluster-foundation's sc-default-patcher PostSync hook demotes it once, but
+# that is one-shot: if Flux re-promotes after the hook ran, the hook does NOT
+# re-fire (cluster-foundation stays Synced, and Argo doesn't own this Flux SC so
+# selfHeal never sees the drift) — leaving TWO default StorageClasses, which
+# hard-fails `llz ci converge` ("2 default StorageClasses … non-deterministic
+# selection"). This is the same class of race as the PVC-encryption policy: it
+# must beat / continuously override a NON-Argo system, which an Argo sync-wave
+# can't win — so, like that policy, it is applied imperatively from Terraform the
+# instant Kyverno is Ready (see null_resource.kyverno_sc_default_policy).
+#
+# The patcher Job still does the fast initial demote; this admission policy makes
+# it DURABLE by rewriting is-default-class back to "false" on every CREATE/UPDATE
+# of the SC, so each Flux re-promotion is overridden before it persists. Mirrors
+# the kyverno-pvc-encrypted-storage-class.yaml sibling in this directory.
+#
+# Scoped to exactly one SC by name; on a single-class cluster where it is absent
+# the rule simply never matches. If/when LKE stops defaulting its retain class,
+# this policy + its null_resource can be removed.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: sc-default-demote
+  annotations:
+    policies.kyverno.io/title: Keep linode-block-storage-retain non-default
+    policies.kyverno.io/category: Storage
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: StorageClass
+    policies.kyverno.io/description: >-
+      Rewrites linode-block-storage-retain's is-default-class annotation to
+      "false" on every write so LKE's Flux-managed workload HelmRelease can't
+      leave the cluster with two default StorageClasses. block-storage-retain
+      (Terraform-created) stays the sole default.
+spec:
+  # Mutate on admission for CREATE (Flux first install) and UPDATE (every Flux
+  # reconcile that re-asserts is-default-class=true), so the demotion is
+  # re-applied each time the SC is written.
+  background: false
+  # Best-effort: never block the SC write on a webhook hiccup — Flux continues
+  # and the next reconcile re-applies the mutation.
+  failurePolicy: Ignore
+  rules:
+    - name: demote-linode-block-storage-retain
+      match:
+        any:
+          - resources:
+              kinds: [StorageClass]
+              names: [linode-block-storage-retain]
+              operations: [CREATE, UPDATE]
+      preconditions:
+        all:
+          # No-op once it is already "false" (or unset) — only rewrite when the
+          # incoming object marks it the default class.
+          - key: '{{ request.object.metadata.annotations."storageclass.kubernetes.io/is-default-class" || '''' }}'
+            operator: Equals
+            value: "true"
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            annotations:
+              storageclass.kubernetes.io/is-default-class: "false"
