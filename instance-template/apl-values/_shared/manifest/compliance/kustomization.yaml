@@ -1,0 +1,19 @@
+# Compliance evidence sources for the auditor evidence pack.
+#
+# trivy-operator (the apl-core `trivy` app) owns the
+# clustercompliancereports.aquasecurity.github.io CRD and reconciles these two
+# reports' .status with per-control PASS/FAIL. `llz ci cis-evidence` harvests
+# that status into the signed pack (docs/infosec/control-mapping.md).
+#
+#   - cis           : standard CIS Kubernetes Benchmark (in-scope controls)
+#   - llz-org-controls : the org's SOG checklist subset that is trivy-checkable
+#
+# Applied via the platform-bootstrap Argo CD Application (ServerSideApply +
+# SkipDryRunOnMissingResource), late sync-wave so trivy-operator's CRD exists
+# first. If the CRD is absent the harvester degrades gracefully (records the
+# control rows as "not collected").
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - clustercompliancereport-cis.yaml
+  - clustercompliancereport-llz-org.yaml

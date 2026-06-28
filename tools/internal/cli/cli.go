@@ -70,6 +70,14 @@ func EnvInt(key string, def int64) int64 {
 	return def
 }
 
+// EnvOr reads a string env var, falling back to def when unset/empty.
+func EnvOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 // EnvBool reads a bool env var, falling back to def when unset/invalid.
 func EnvBool(key string, def bool) bool {
 	if v := os.Getenv(key); v != "" {

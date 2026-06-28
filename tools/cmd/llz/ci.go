@@ -62,6 +62,9 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd())
+	// Auditor evidence pack: harvest CIS + org-control ClusterComplianceReports
+	// and supplemental evidence into a signed pack (docs/infosec/control-mapping.md).
+	c.AddCommand(ciCISEvidenceCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
