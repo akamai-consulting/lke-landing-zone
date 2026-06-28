@@ -264,6 +264,7 @@ failure mode the default already prevents.
 | Secret backend (OpenBao) operations guide | [docs/secrets.md](docs/secrets.md) |
 | Alerting inventory + coverage | [docs/alerting.md](docs/alerting.md) |
 | apl-core cutover runbook | [docs/apl-core-migration-runbook.md](docs/apl-core-migration-runbook.md) |
+| Resilience & disaster recovery (HA/PDB posture, RTO/RPO) | [docs/resilience.md](docs/resilience.md) |
 | Linode account request + InfoSec checklist | [docs/infosec/linode-account-request-checklist.md](docs/infosec/linode-account-request-checklist.md) |
 
 **Runbooks** ([docs/runbooks/](docs/runbooks/)) — bootstrap & rotation procedures:
@@ -272,7 +273,8 @@ failure mode the default already prevents.
 [linode-credential-rotation](docs/runbooks/linode-credential-rotation.md) ·
 [apl-values-propagation](docs/runbooks/apl-values-propagation.md) ·
 [orphan-volume-cleanup](docs/runbooks/orphan-volume-cleanup.md) ·
-[volume-labels](docs/runbooks/volume-labels.md)
+[volume-labels](docs/runbooks/volume-labels.md) ·
+[cluster-upgrade](docs/runbooks/cluster-upgrade.md)
 
 **Playbooks** ([docs/playbooks/](docs/playbooks/)) — day-2 access & ops:
 [operator-onboarding](docs/playbooks/operator-onboarding.md) (start here) ·
