@@ -265,63 +265,16 @@ resource "kubectl_manifest" "apl_operator_namespace" {
   force_conflicts   = true
 }
 
-# ── apl-sops-secrets — empty placeholder ─────────────────────────────────────
-# apl-core 5.0.0's apl-operator chart unconditionally references
-# `apl-sops-secrets` Secret via envFrom in templates/deployment.yaml:49-51,
-# but `templates/secrets.yaml` only CREATES that Secret when `kms.sops` is
-# set in chart values (it isn't — we don't use SOPS). The mismatch leaves
-# apl-operator pods stuck in CreateContainerConfigError on every rollout.
-#
-# Observed during bootstrap: the first apl-operator pod
-# (created by Helm install with no envFrom) ran fine. Argo CD's
-# `apl-operator-apl-operator` Application then reconciled the Deployment
-# from apl-core source, which DOES set envFrom, and the new ReplicaSet
-# stalled because `apl-sops-secrets` doesn't exist. The old pod kept service
-# alive but the cluster was in a permanent half-rollout state — and on a
-# fresh bootstrap there's no old pod to fall back to.
-#
-# Workaround: TF creates an EMPTY `apl-sops-secrets` Secret so the
-# Deployment's envFrom resolves (kubelet treats envFrom of an empty Secret
-# as a no-op rather than CreateContainerConfigError). The apl-operator
-# binary calls `getK8sSecret('apl-sops-secrets')` at runtime
-# (src/operator/installer.ts:149) and only USES the SOPS_AGE_KEY value if
-# SOPS-encrypted secrets are configured in apl-values; we're not, so the
-# empty Secret is sufficient.
-#
-# If/when apl-core upstream fixes the chart (conditional envFrom on
-# `hasKey $kms "sops"`), this resource can be deleted.
-resource "kubectl_manifest" "apl_sops_secrets_placeholder" {
-  yaml_body = yamlencode({
-    apiVersion = "v1"
-    kind       = "Secret"
-    metadata = {
-      name      = "apl-sops-secrets"
-      namespace = "apl-operator"
-      labels = {
-        "lke-landing-zone.akamai.io/managed-by-bootstrap" = "true"
-      }
-      annotations = {
-        "lke-landing-zone.akamai.io/note" = "Empty placeholder; apl-operator may populate at runtime if SOPS is configured"
-      }
-    }
-    type = "Opaque"
-    # Empty data — kubelet accepts envFrom of an empty Secret. The operator
-    # binary defensively handles missing keys (treats SOPS_AGE_KEY as
-    # optional), so no key here means no SOPS decryption attempted — which
-    # matches our configuration (no `kms.sops` in apl-values/<env>/values.yaml).
-    data = {}
-  })
-  server_side_apply = true
-  # Don't fight apl-operator's own writes to this Secret. apl-core's
-  # bootstrap.ts (src/cmd/bootstrap.ts:95) may add SOPS_AGE_KEY at runtime
-  # if SOPS gets configured later; that's fine, TF stays out of its way.
-  lifecycle {
-    ignore_changes = [yaml_body]
-  }
-  depends_on = [
-    kubectl_manifest.apl_operator_namespace,
-  ]
-}
+# NOTE (apl-core 6.x): the former `apl_sops_secrets_placeholder` resource was
+# removed here. On apl-core 5.0.0 the apl-operator chart referenced the
+# `apl-sops-secrets` Secret via an UNCONDITIONAL envFrom while only creating it
+# when `kms.sops` was set, so a no-SOPS install (ours) wedged apl-operator pods
+# in CreateContainerConfigError; TF supplied an empty placeholder Secret to
+# satisfy the reference. apl-core 6.x fixes the chart — the envFrom is now
+# `optional: true` (charts/apl-operator/templates/deployment.yaml), so kubelet
+# tolerates the missing Secret and no placeholder is needed. Removing the TF
+# resource makes `terraform apply` delete the now-orphaned Secret on upgrade,
+# which is safe on 6.x. (If you ever pin back to 5.x, restore this resource.)
 
 # ── block-storage StorageClass — must exist before apl-operator's helmfile ─────
 # apl-operator (installed by helm_release.apl below) drives a helmfile pipeline
