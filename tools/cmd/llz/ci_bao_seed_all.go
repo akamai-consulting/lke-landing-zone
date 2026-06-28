@@ -101,6 +101,20 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 				fmt.Sprintf("Create the keys via: linode-cli object-storage keys-create --label platform-loki-%s", region),
 			},
 		},
+		// Velero backup S3 credentials → the velero-cloud-credentials ExternalSecret
+		// (apl-values/components/velero/). on-missing skip: Velero is an opt-in
+		// component (spec.components.velero, default-disabled); a cluster that hasn't
+		// enabled it must not fail the bootstrap for a missing key.
+		{
+			path:       "secret/velero/object-store",
+			fieldSpecs: []string{"access_key_id=env:VELERO_S3_ACCESS_KEY", "secret_access_key=env:VELERO_S3_SECRET_KEY"},
+			onMissing:  "skip",
+			missingNotes: []string{
+				"VELERO_S3_ACCESS_KEY / VELERO_S3_SECRET_KEY not set — skipping secret/velero/object-store.",
+				fmt.Sprintf("Add them as infra-%s environment secrets (only if the velero component is enabled) and re-run.", region),
+				fmt.Sprintf("Create the keys via: linode-cli object-storage keys-create --label platform-velero-%s", region),
+			},
+		},
 	}
 }
 

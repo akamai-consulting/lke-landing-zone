@@ -126,6 +126,22 @@ func TestRenderRegionPatch(t *testing.T) {
 	}
 }
 
+func TestRenderVeleroBSLPatch(t *testing.T) {
+	out := RenderVeleroBSLPatch("ord", "us-ord-1")
+	for _, want := range []string{
+		"name: llz-velero",
+		"backupStorageLocation",
+		"bucket: platform-velero-ord",
+		"region: us-ord-1",
+		"s3Url: https://us-ord-1.linodeobjects.com",
+		`s3ForcePathStyle: "true"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("RenderVeleroBSLPatch missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCidrsOverlap(t *testing.T) {
 	cases := []struct {
 		a, b string
