@@ -41,6 +41,16 @@ resource "linode_object_storage_bucket" "harbor_registry" {
 # Three buckets per region matching the names in loki-values.yaml (and the
 # secondary override in loki-values-secondary.yaml). All buckets are private.
 
+# ── Velero backup bucket ──────────────────────────────────────────────────────
+# Holds Velero's backup metadata + (with CSI snapshot data movement) volume data.
+# Velero's BackupStorageLocation reads bucket + s3Url + region from chart values
+# (rendered per-env by `llz render`); its S3 credentials arrive via the
+# OpenBao→ESO path like loki/harbor (the velero-cloud-credentials Secret). Private.
+resource "linode_object_storage_bucket" "velero" {
+  region = local.obj_region
+  label  = "${var.label_prefix}-velero-${var.region_suffix}"
+}
+
 resource "linode_object_storage_bucket" "loki_chunks" {
   region = local.obj_region
   label  = "${var.label_prefix}-loki-chunks-${var.region_suffix}"
@@ -105,6 +115,26 @@ resource "linode_object_storage_key" "loki" {
 
   bucket_access {
     bucket_name = linode_object_storage_bucket.loki_admin.label
+    region      = local.obj_region
+    permissions = "read_write"
+  }
+
+  lifecycle {
+    replace_triggered_by = [time_rotating.loki_key.rotation_rfc3339]
+  }
+}
+
+# ── Scoped access key for Velero ──────────────────────────────────────────────
+# Read/write key limited to the velero bucket, on the same 120-day rotation clock
+# as the loki/harbor keys. A separate scoped key (not extending an existing one)
+# so a Velero-side leak can't reach telemetry or registry storage and vice versa.
+# Credentials are seeded into OpenBao via bootstrap-openbao.yml ("Seed Velero S3
+# credentials") and synced into the cluster by the velero-cloud-credentials ESO.
+resource "linode_object_storage_key" "velero" {
+  label = "${var.label_prefix}-velero-${var.region_suffix}"
+
+  bucket_access {
+    bucket_name = linode_object_storage_bucket.velero.label
     region      = local.obj_region
     permissions = "read_write"
   }
