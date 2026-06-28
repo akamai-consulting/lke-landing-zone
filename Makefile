@@ -6,7 +6,7 @@ SHELL := /bin/bash
 		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
-        install-tools install-syft install-trivy
+        install-tools install-syft install-trivy install-gitleaks
 
 KUBECTL_VERSION  := 1.31.0
 
@@ -115,6 +115,11 @@ install-syft:
 # Override TRIVY_VERSION / TRIVY_INSTALL_DIR via env.
 install-trivy:
 	@./template-scripts/ci/install-trivy.sh
+
+# Pinned, SHA-verified gitleaks install. Used by the `gitleaks` secret-scan gate.
+# Override GITLEAKS_VERSION / GITLEAKS_INSTALL_DIR via env.
+install-gitleaks:
+	@./template-scripts/ci/install-gitleaks.sh
 
 # ── Build ────────────────────────────────────────────────────────────────────
 
@@ -456,10 +461,14 @@ tidy:
 update:
 	cd $(GO_DIR) && go get -u ./... && go mod tidy
 
+# Secret scan of the full git history (honours .gitleaks.toml allowlists).
+# Auto-installs a pinned, SHA-verified gitleaks (into $HOME/.local/bin) when the
+# binary is absent — same self-bootstrapping convention as the actionlint target
+# — so the CI gate and a fresh checkout both Just Work. --redact keeps any match
+# out of the logs; the non-zero exit on a finding is what makes this a gate.
 gitleaks:
-	@command -v gitleaks >/dev/null 2>&1 || \
-	  { echo "gitleaks not found — install with: brew install gitleaks"; exit 1; }
-	gitleaks detect --source .
+	@command -v gitleaks >/dev/null 2>&1 || ./template-scripts/ci/install-gitleaks.sh
+	@PATH="$$HOME/.local/bin:$$PATH" gitleaks detect --source . --redact --no-banner
 
 # SBOM generation — release evidence. Three sources:
 #   * sbom-go         — `trivy fs` CycloneDX SBOM of the Go tools module.

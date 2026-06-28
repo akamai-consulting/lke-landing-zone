@@ -46,6 +46,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Keyless cosign signing trades this OIDC token to Fulcio for a
+      # short-lived signing cert; the signature + the cert's workflow identity
+      # are recorded in the public Rekor transparency log (only the image digest
+      # and identity — never image content).
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -76,14 +81,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Build and push ci-terraform
+        id: build
         # --build-context tools-src=tools exposes the Go tools module to the
         # Dockerfile's `llz` build stage without broadening the primary
         # build context. The gha cache is wired up by setup-buildx-action above.
+        # --provenance/--sbom attach SLSA provenance + an SBOM as OCI
+        # attestations in the pushed image index; --metadata-file captures the
+        # pushed manifest-list digest so the next step signs by digest (immune to
+        # tag re-pointing).
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
+            --provenance=true \
+            --sbom=true \
+            --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
             --build-arg LLZ_VERSION=dev-${{ github.sha }} \
             --tag ${{ steps.ns.outputs.repo }}/ci-terraform:1.9.8 \
@@ -92,6 +108,17 @@ jobs:
             --cache-from type=gha,scope=ci-terraform \
             --cache-to   type=gha,scope=ci-terraform,mode=max \
             dockerfiles/terraform
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Sign ci-terraform (keyless)
+        # Sign the manifest-list by digest. Keyless: cosign uses the job's OIDC
+        # token (id-token: write) + Fulcio/Rekor public-good instances, so no
+        # signing key is stored. The Kyverno verifyImages policy in
+        # instance-template verifies this same identity at admission.
+        env:
+          IMAGE: ${{ steps.ns.outputs.repo }}/ci-terraform
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
   build-kubernetes:
     name: Build ci-kubernetes
@@ -103,6 +130,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Keyless cosign signing trades this OIDC token to Fulcio for a
+      # short-lived signing cert; the signature + the cert's workflow identity
+      # are recorded in the public Rekor transparency log (only the image digest
+      # and identity — never image content).
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -127,14 +159,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Build and push ci-kubernetes
+        id: build
         # --build-context tools-src=tools exposes the Go tools module to the
         # Dockerfile's llz build stage (the image bakes `llz` for the Makefile's
         # externalsecret-paths-check), exactly like ci-terraform/devcontainer.
+        # --provenance/--sbom + --metadata-file: see ci-terraform above.
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
+            --provenance=true \
+            --sbom=true \
+            --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
             --build-arg LLZ_VERSION=dev-${{ github.sha }} \
             --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:1.31.0 \
@@ -143,6 +183,14 @@ jobs:
             --cache-from type=gha,scope=ci-kubernetes \
             --cache-to   type=gha,scope=ci-kubernetes,mode=max \
             dockerfiles/kubernetes
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Sign ci-kubernetes (keyless)
+        # Keyless cosign sign by digest — see ci-terraform above.
+        env:
+          IMAGE: ${{ steps.ns.outputs.repo }}/ci-kubernetes
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
   build-devcontainer:
     name: Build devcontainer
@@ -158,6 +206,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Keyless cosign signing trades this OIDC token to Fulcio for a
+      # short-lived signing cert; the signature + the cert's workflow identity
+      # are recorded in the public Rekor transparency log (only the image digest
+      # and identity — never image content).
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -182,15 +235,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Build and push devcontainer
+        id: build
         # --build-context tools-src=tools exposes the Go tools module to the
         # Dockerfile's llz build stage. LLZ_VERSION stamps main.version so the
         # baked-in `llz version` is traceable to this build. Adopters pin :latest
         # to a :sha-... tag in .devcontainer/devcontainer.json for reproducibility.
+        # --provenance/--sbom + --metadata-file: see ci-terraform above.
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
+            --provenance=true \
+            --sbom=true \
+            --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
             --build-arg LLZ_VERSION=dev-${{ github.sha }} \
             --tag ${{ steps.ns.outputs.repo }}/devcontainer:latest \
@@ -198,6 +259,14 @@ jobs:
             --cache-from type=gha,scope=devcontainer \
             --cache-to   type=gha,scope=devcontainer,mode=max \
             dockerfiles/devcontainer
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Sign devcontainer (keyless)
+        # Keyless cosign sign by digest — see ci-terraform above.
+        env:
+          IMAGE: ${{ steps.ns.outputs.repo }}/devcontainer
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
   build-llz:
     name: Build llz (slim in-cluster image)
@@ -213,6 +282,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Keyless cosign signing trades this OIDC token to Fulcio for a
+      # short-lived signing cert; the signature + the cert's workflow identity
+      # are recorded in the public Rekor transparency log (only the image digest
+      # and identity — never image content).
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -237,14 +311,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Build and push llz
+        id: build
         # --build-context tools-src=tools exposes the Go tools module to the
         # Dockerfile's llz build stage. In-cluster consumers pin :latest to a
         # :sha-... tag for reproducibility (same convention as devcontainer).
+        # --provenance/--sbom + --metadata-file: see ci-terraform above. This is
+        # the one image that runs IN the cluster (credential-rotator CronJob),
+        # so its signature is what the Kyverno verifyImages policy enforces.
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
+            --provenance=true \
+            --sbom=true \
+            --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
             --build-arg LLZ_VERSION=dev-${{ github.sha }} \
             --tag ${{ steps.ns.outputs.repo }}/llz:latest \
@@ -252,3 +336,11 @@ jobs:
             --cache-from type=gha,scope=llz \
             --cache-to   type=gha,scope=llz,mode=max \
             dockerfiles/llz
+          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Sign llz (keyless)
+        # Keyless cosign sign by digest — see ci-terraform above.
+        env:
+          IMAGE: ${{ steps.ns.outputs.repo }}/llz
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"

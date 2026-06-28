@@ -81,4 +81,5 @@ exclude:
   - "template-scripts/install-llz.sh"        # pinned-release installer for the llz CLI, no logic
   - "template-scripts/ci/install-trivy.sh"   # pinned-release installer, no logic
   - "template-scripts/ci/install-syft.sh"    # pinned-release installer, no logic
+  - "template-scripts/ci/install-gitleaks.sh" # pinned-release installer, no logic
   - "template-scripts/ci/llz-functional.sh"  # functional test harness for the built llz binary — its assertions ARE the test (exercised every CI run), not decision logic to push into Go
