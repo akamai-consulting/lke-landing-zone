@@ -46,7 +46,7 @@ spec:
     bootstrap:                                     # → cluster-bootstrap/<env>.tfvars
       name: platform-prod-web                      # → cluster.name (apl-core identity)
       domainSuffix: web.prod.example.com           # → cluster.domainSuffix + dns.domainFilters
-      aplChartVersion: 5.0.0                       # → apl_chart_version (optional)
+      aplChartVersion: 6.0.0-rc.12                 # → apl_chart_version (optional)
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git
         revision: main

@@ -19,7 +19,9 @@ deployment = "your-env"
 
 # apl-core Helm chart — pin a version and bump deliberately.
 # Verify with: helm search repo apl/apl --versions
-apl_chart_version = "5.0.0"
+# NOTE: 6.0.0 is not yet GA — the 6.x line is release-candidate only
+# (latest tag v6.0.0-rc.12). Re-pin to the stable 6.0.0 tag once it ships.
+apl_chart_version = "6.0.0-rc.12"
 
 # Subdirectory under apl-values/ for this cluster's overlay.
 apl_values_env = "your-env"
