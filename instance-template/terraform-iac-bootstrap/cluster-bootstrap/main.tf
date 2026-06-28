@@ -405,19 +405,20 @@ resource "kubectl_manifest" "argocd_namespace" {
     metadata = {
       name = "argocd"
       labels = {
-        # apl-core's auto-generated NetworkPolicies (notably
-        # gitea/gitea-platform-policy from the apl-network-policies chart)
-        # use namespaceSelector `matchLabels: { name: argocd }` to authorize
-        # argocd-repo-server ingress to gitea-http. Without this label the
-        # selector doesn't match → `gitops-global` Argo Application times
-        # out cloning the in-cluster gitea repo with `context deadline
-        # exceeded`. EVERY OTHER apl-core-managed namespace (istio-system,
-        # monitoring, apl-operator, apl-gitea-operator, otomi, cnpg-system,
-        # harbor, cert-manager, grafana, keycloak) ships with the `name=<ns>`
-        # label from apl-core's helmfile; argocd's namespace is set here in
-        # TF so it was missing the convention. Observed: applying the label
-        # flipped `gitops-global` from
-        # Unknown/Healthy (timed out) to Synced/Healthy within 30s.
+        # apl-core convention: every apl-core-managed namespace (istio-system,
+        # monitoring, apl-operator, otomi, cnpg-system, harbor, cert-manager,
+        # grafana, keycloak, …) carries a `name=<ns>` label from apl-core's
+        # helmfile, and apl-core's auto-generated NetworkPolicies select on it.
+        # argocd's namespace is created here in TF (before apl-core's helmfile),
+        # so we stamp the same label to stay consistent with the convention and
+        # satisfy any apl-network-policies rule that authorizes argocd-* ingress
+        # via namespaceSelector `matchLabels: { name: argocd }`.
+        #
+        # (On 5.0.0 this label was load-bearing for a specific reason: the
+        # gitea-platform-policy NP used it to allow argocd-repo-server → gitea-http
+        # so `gitops-global` could clone the in-cluster gitea. apl-core 6.x runs
+        # gitops against the external BYO-Git repo with gitea disabled, so that
+        # path is gone — but the label stays for the general convention above.)
         name                                              = "argocd"
         "lke-landing-zone.akamai.io/managed-by-bootstrap" = "true"
       }
@@ -493,10 +494,10 @@ resource "null_resource" "apl_pipeline_ready" {
 #
 # TIMING IS THE WHOLE POINT. The policy is admission-only (background: false)
 # and PVC storageClassName is immutable, so it MUST be enforcing BEFORE
-# apl-operator's helmfile creates the gitea-valkey / oauth2-proxy PVCs — those
-# two charts ignore cluster.defaultStorageClass and hardcode
-# linode-block-storage, so this mutation is their only path onto the
-# encrypted + block-storage-tagged SC.
+# apl-operator's helmfile creates the oauth2-proxy redis PVC (and, on apl-core
+# ≤5.x, the gitea-valkey PVC — gitea is disabled on 6.x): those charts ignore
+# cluster.defaultStorageClass and hardcode linode-block-storage, so this
+# mutation is their only path onto the encrypted + block-storage-tagged SC.
 #
 # It deliberately does NOT depend on null_resource.apl_pipeline_ready: that
 # gate also waits for argocd + cert-manager, and that extra ~minute is exactly
@@ -539,10 +540,10 @@ resource "null_resource" "kyverno_pvc_encrypted_policy" {
       POLICY_MANIFEST = "${path.module}/manifests/kyverno-pvc-encrypted-storage-class.yaml"
       # Poll then apply IMMEDIATELY — do NOT wait on the rest of
       # apl_pipeline_ready (argocd/cert-manager); every second here is a second
-      # in which apl-operator's helmfile may create the gitea-valkey /
-      # oauth2-proxy PVCs before this mutation enforces.
+      # in which apl-operator's helmfile may create the oauth2-proxy redis PVC
+      # before this mutation enforces.
       WAIT_FOR_KYVERNO     = "true"
-      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping PVC policy apply. gitea-valkey + oauth2-proxy redis PVCs may land on linode-block-storage; re-run terraform apply once Kyverno is up."
+      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping PVC policy apply. The oauth2-proxy redis PVC may land on linode-block-storage; re-run terraform apply once Kyverno is up."
       WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
     }
   }

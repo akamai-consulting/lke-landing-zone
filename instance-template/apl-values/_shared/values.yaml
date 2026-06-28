@@ -229,12 +229,15 @@ apps:
   # reconciles drift with the llz-linode-cidr-firewall chart, so disable
   # apl-core's bundled Cloud Firewall chart to avoid conflicts.
   linode-cfw:    { enabled: false }
-  # TEMPORARY — in-cluster Gitea re-enabled. otomi.git points at the external
-  # GitHub repo (see otomi.git below), but apl-core's `gitops-global` Argo app
-  # still clones the in-cluster gitea (cluster-bootstrap/main.tf:428); with gitea
-  # disabled it hard-fails "gitea-http … no such host". Keep enabled until apl-core
-  # supports a fully gitea-less global gitops.
-  gitea:         { enabled: true }
+  # apl-core 6.x: in-cluster Gitea DISABLED. On 5.0.0 gitea had to stay on because
+  # apl-core's apl-gitea-operator / `gitops-global` Argo app cloned the in-cluster
+  # gitea even though otomi.git points at the external GitHub repo (BYO Git); with
+  # gitea off it hard-failed "gitea-http … no such host". In 6.x apl-gitea-operator
+  # is gated on gitea.enabled (helmfile-03.init), so disabling gitea removes that
+  # clone path entirely. apl-core's lightweight git-server (apps.git-server,
+  # enabled by default in 6.x) provides any in-cluster git apl-core still needs;
+  # the values repo itself stays the external GitHub repo via otomi.git below.
+  gitea:         { enabled: false }
   # Unused optional apps.
   knative:       { enabled: false }
   kserve:        { enabled: false }
