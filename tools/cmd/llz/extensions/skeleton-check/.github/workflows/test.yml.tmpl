@@ -1,0 +1,15 @@
+# Produces the test attestation the extension lock will require: this extension's
+# logic is unit-tested and green at the pinned SHA. Literal ${{ … }} survives
+# scaffolding because the renderer uses copier's angle-at delimiters, not braces.
+name: <@ .Name @> tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go test ./...
+      - run: echo "tested ${{ github.sha }}"

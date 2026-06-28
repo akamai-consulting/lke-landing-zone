@@ -1,0 +1,12 @@
+# <@ .Name @>
+
+A thin `llz` extension (`kind: tool`) scaffolded by `llz extension new`. It wraps
+the external tool `<@ .Tool @>`: `recipe.yaml`'s `check:` argv invokes it directly.
+
+There is no logic to unit-test here — `<@ .Tool @>` is the tested unit, upstream —
+so `llz extension lint` requires no `*_test.go`. Just keep the manifest argv-only
+(no inline `sh -c "…"`).
+
+```sh
+llz extension lint .
+```

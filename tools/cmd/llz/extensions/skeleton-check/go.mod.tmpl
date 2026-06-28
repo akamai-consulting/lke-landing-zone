@@ -1,0 +1,5 @@
+// Its own module: the extension is an independently-testable unit, and a nested
+// module keeps these files out of any parent repo's `go build ./...` graph.
+module <@ .Name @>
+
+go 1.25

@@ -1,0 +1,27 @@
+// Command check is the THIN I/O wrapper around the tested guard logic in the
+// internal package — argv parsing + exit codes here, all real logic (and its
+// tests) in ../../internal. Exit 0 = clean, 1 = findings, 2 = error. This is the
+// entrypoint recipe.yaml's `check:` argv points at.
+package main
+
+import (
+	"fmt"
+	"os"
+
+	guard "<@ .Name @>/internal"
+)
+
+func main() {
+	findings, err := guard.Check(os.DirFS("."))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "<@ .Name @>:", err)
+		os.Exit(2)
+	}
+	for _, f := range findings {
+		fmt.Fprintln(os.Stderr, "  •", f)
+	}
+	if len(findings) > 0 {
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "<@ .Name @>: ok")
+}

@@ -1,0 +1,6 @@
+schemaVersion: 2
+name: gitattributes
+short: normalize line endings + mark generated paths (built-in)
+kind: tool
+files:
+  - {src: gitattributes, dst: .gitattributes}

@@ -1,0 +1,3 @@
+* text=auto eol=lf
+.llz/cache/** linguist-generated
+.llz/extensions.lock linguist-generated

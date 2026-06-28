@@ -1,0 +1,15 @@
+# Append to the REMOTE extension template's copier.yml.
+#
+# On `copier update`, copier 3-way-merges the rendered files (comment-preserving),
+# THEN runs this migration to apply the computed schema fixups the templates can't
+# express (e.g. inferring `kind` from the tree). The tested logic lives in the llz
+# binary; copier only sequences WHEN it runs. `llz extension upgrade` is idempotent,
+# so a no-op update is harmless.
+#
+# Requires `llz` on PATH in the copier-update environment. The exact migrations
+# key/shape varies by copier version — see the copier docs; this is the legacy
+# `_migrations` form gated on the template tag where schema v<@ .Version @> landed.
+_migrations:
+  - version: v<@ .Version @>.0.0
+    after:
+      - ["llz", "extension", "upgrade", "."]
