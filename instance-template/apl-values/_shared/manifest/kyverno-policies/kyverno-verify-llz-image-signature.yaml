@@ -1,0 +1,83 @@
+# Kyverno ClusterPolicy: verify the cosign signature on the first-party `llz`
+# image before any pod that uses it is admitted.
+#
+# WHY
+# ---
+# build-images.yml signs every published image keyless (Sigstore: GitHub Actions
+# OIDC → Fulcio cert → Rekor transparency log), and publish-charts.yml does the
+# same for charts. A signature nobody verifies is theatre — this policy closes
+# the loop at admission so a tampered or unsigned `llz` image (e.g. a typo-
+# squatted ghcr namespace, or a registry-side swap) is REJECTED, not run.
+#
+# SCOPE — deliberately narrow.
+# Only `ghcr.io/<upstream_org>/llz` is matched. That is the one first-party image
+# that runs IN the cluster (the Linode credential-rotator CronJob,
+# components/linodeCredRotator/.../cronjob.yaml). apl-core, Linode, and other
+# upstream images are NOT signed by us, so verifying them here would brick the
+# cluster. verifyImages only checks images whose ref matches imageReferences;
+# pods with no matching image skip the rule, so a broad `kinds: [Pod]` match is
+# safe — only llz-image pods are gated.
+#
+# DEPENDENCY: this enforces against the SIGNED image. It is wired into new
+# instances via instance-template, so by the time a fresh instance bootstraps,
+# upstream `:latest` is already signed by build-images.yml. If you point an
+# instance at a pre-signing image tag, either bump to a signed tag or set
+# validationFailureAction: Audit until the image is re-published signed.
+#
+# HARDENING NOTE: failurePolicy is Ignore (repo convention) so a transient
+# Sigstore/Rekor outage can't wedge admission cluster-wide — at the cost that a
+# webhook error admits the image unverified. Flip to Fail once you are confident
+# in Sigstore reachability from the kyverno namespace (it needs egress to
+# fulcio/rekor.sigstore.dev) and want hard fail-closed enforcement.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-llz-image-signature
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+    policies.kyverno.io/title: Verify llz image cosign signature
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod, Image
+    policies.kyverno.io/description: >-
+      Requires the first-party ghcr.io/<upstream_org>/llz image to carry a valid
+      keyless cosign signature from the build-images.yml workflow (GitHub Actions
+      OIDC issuer) before any pod using it is admitted. Mutates the matched image
+      reference to its verified digest. Other (upstream) images are untouched.
+spec:
+  validationFailureAction: Enforce
+  # verifyImages must run at admission only (no background scans of existing
+  # pods — there is no image to re-pull on a background pass).
+  background: false
+  # Don't wedge cluster-wide admission on a Sigstore hiccup; see HARDENING NOTE.
+  failurePolicy: Ignore
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: verify-llz-keyless
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      verifyImages:
+        # Tag and digest forms of the first-party in-cluster image. Both globs so
+        # :latest, :sha-<...>, and @sha256:<...> references all match.
+        - imageReferences:
+            - "ghcr.io/<@ upstream_org @>/llz:*"
+            - "ghcr.io/<@ upstream_org @>/llz@*"
+          # Rewrite the matched ref to the verified digest so what runs is exactly
+          # what was verified (defeats a tag re-point between verify and pull).
+          mutateDigest: true
+          required: true
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    # Any repo under the upstream org, any ref, signed by the
+                    # build-images.yml workflow. Narrow to a single repo/branch
+                    # (…/lke-landing-zone/.github/workflows/build-images.yml@refs/heads/main)
+                    # for a tighter trust anchor.
+                    subject: "https://github.com/<@ upstream_org @>/*/.github/workflows/build-images.yml@*"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev

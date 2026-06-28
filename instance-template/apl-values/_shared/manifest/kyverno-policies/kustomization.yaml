@@ -18,3 +18,4 @@ kind: Kustomization
 resources:
   - kyverno-loki-s3-object-store.yaml
   - kyverno-oauth2-proxy-wait-keycloak-trust.yaml
+  - kyverno-verify-llz-image-signature.yaml
