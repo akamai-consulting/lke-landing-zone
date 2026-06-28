@@ -32,10 +32,10 @@ cluster:
 # and are omitted here. Toggle the optional platform apps the landing zone uses.
 #
 # IMPORTANT: keys MUST be apl-core's canonical app names. apps.additionalProperties
-# is `true` in the 5.0.0 schema, so a wrong key (e.g. `kube-prometheus-stack`,
+# is `true` in the schema, so a wrong key (e.g. `kube-prometheus-stack`,
 # `opentelemetry-operator`, `trivy-operator`) is SILENTLY IGNORED — no schema
 # error — and the app falls back to its chart default. Names verified against
-# linode/apl-core@v5.0.0 values-schema.yaml.
+# linode/apl-core@v6.0.0-rc.12 values-schema.yaml.
 apps:
   # argocd is a core app (cannot be disabled — no `enabled` key). We only pass
   # _rawValues to override two Argo CD resource health checks. Argo's built-in

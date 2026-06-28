@@ -33,7 +33,12 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`
       and update `apl_chart_version` in each
       `instance-template/terraform-iac-bootstrap/cluster-bootstrap/<env>.tfvars` to match.
-      The current pin (`5.0.0`) is provisional.
+      The current pin (`6.0.0-rc.12`) is a **pre-release** — apl-core 6.0.0 is not
+      yet GA. Re-pin to the stable `6.0.0` tag once it ships. If you are upgrading
+      an existing 5.x cluster (rather than cutting over a fresh one), read the
+      [apl-core v6 migration design](designs/apl-core-v6-migration.md) first — it
+      covers the breaking changes (ESO becomes a core app, Gitea→git-server,
+      ingress-nginx→Gateway API) and the in-place upgrade path.
 - [ ] **Mirror `apl-values/` to an HTTPS-reachable Git host** (the placeholder
       is `https://github.com/<org>/apl-values.git`). apl-core's values
       schema enforces `^https?://.+` on the values-repo URL; SSH is not

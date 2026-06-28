@@ -131,11 +131,11 @@ namespaces:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NetworkPolicy knobs. apl-core's helmfile creates cert-manager/harbor/
-# istio-system/observability but ships NO NetworkPolicies into them (its 5.0.0
-# values schema has no per-app NP knob), so on a default-permit cluster every
-# workload runs unrestricted. We drop additive default-deny + minimum-viable
-# allows here. openbao NPs come from its OWN Application tree and is NOT
-# covered here.
+# istio-system/observability but ships NO NetworkPolicies into them (through 6.x
+# its apl-network-policies chart only covers gitea/git-server/otomi-api), so on a
+# default-permit cluster every workload runs unrestricted. We drop additive
+# default-deny + minimum-viable allows here. openbao NPs come from its OWN
+# Application tree and is NOT covered here.
 # ─────────────────────────────────────────────────────────────────────────────
 networkPolicies:
   # Master toggle for the whole foundation NP set.
