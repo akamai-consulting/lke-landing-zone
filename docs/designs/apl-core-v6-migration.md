@@ -56,6 +56,17 @@ design captures what changed, what we did to the **template**, and how to
    PVC-encryption-policy comments (no more `gitea-valkey` PVC).
 5. **Docs / comments** — this design, the runbook pin reference, and the stale
    `apl-core 5.0.0` comments.
+6. **Loki admin password → apl-core-managed.** v6 made `apps.loki.adminPassword`
+   an x-secret with a generator (`x-secret: '{{ randAlphaNum 20 }}'`) and sources
+   the loki reverse-proxy auth Secret from apl-core's `core-secrets-store`. So we
+   stopped supplying it: removed the `loki_admin_password` TF variable + templatefile
+   input, the `LOKI_ADMIN_PASSWORD` GitHub env secret, the `ensure-env-secret`
+   workflow step, the destroy-path TF_VAR wiring, the token/state inventories
+   (`tokens.go`, `state.go`), and the related docs. This resolves the former
+   "Known limitation — Loki admin password" in [secrets.md](../secrets.md). (The
+   ESO push-to-OpenBao pattern used for grafana/otel does NOT fit here — apl-core
+   owns the loki auth Secret, and the value is needed at render time, which a
+   runtime-generated ESO secret can't provide.)
 
 ## Lab-validation checklist (must pass before promoting past lab)
 
@@ -79,6 +90,14 @@ These could not be verified statically against an RC; confirm on a live v6 lab:
       git-server default-on.
 - [ ] Loki gateway comes up (promtail removed / Loki chart restructured) — the
       nginx-resolver render still works.
+- [ ] **Loki admin password x-secret persists.** With `adminPassword` omitted,
+      apl-core must auto-generate it AND persist it stably (via its secret backend
+      / core-secrets-store) so it does not churn on each reconcile. Confirm the
+      loki reverse-proxy ExternalSecret resolves and grafana's loki datasource
+      authenticates. If apl-core's x-secret persistence is unreliable in this
+      BYO-git setup, the fallback is to supply `adminPassword` explicitly again
+      (revert commit) — there is no clean ESO-generated middle ground for a
+      render-time values field.
 - [ ] Gateway-API CRDs are provisioned (ingress-nginx removed).
 - [ ] CoreDNS `*.internal` resolution still needed (5.1.0 ServiceEntry fix may
       reduce the rewrite workaround).

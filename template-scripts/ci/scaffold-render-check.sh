@@ -137,7 +137,7 @@ elif [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
   # Same variable set cluster-bootstrap/main.tf feeds to templatefile(); a
   # values.yaml that references anything outside this set fails here (correctly).
   # Keep in sync with the templatefile(...) call in cluster-bootstrap/main.tf.
-  vars='{cluster_name="x",cluster_domain="x",apl_values_repo_url="x",apl_values_repo_username="x",apl_values_repo_password="x",apl_values_repo_ref="x",linode_dns_token="x",loki_admin_password="x",coredns_cluster_ip="x",loki_bucket_chunks="x",loki_bucket_ruler="x",loki_bucket_admin="x",loki_s3_endpoint="x",loki_s3_region="x",harbor_bucket="x",harbor_s3_endpoint="x",harbor_s3_region="x",env_revision_configmap_content="x",env_revision_in_configmap=true}'
+  vars='{cluster_name="x",cluster_domain="x",apl_values_repo_url="x",apl_values_repo_username="x",apl_values_repo_password="x",apl_values_repo_ref="x",linode_dns_token="x",coredns_cluster_ip="x",loki_bucket_chunks="x",loki_bucket_ruler="x",loki_bucket_admin="x",loki_s3_endpoint="x",loki_s3_region="x",harbor_bucket="x",harbor_s3_endpoint="x",harbor_s3_region="x",env_revision_configmap_content="x",env_revision_in_configmap=true}'
   tmp="$(mktemp -d)"
   printf 'terraform {}\n' > "$tmp/main.tf"
   ( cd "$tmp" && "$TF" init -backend=false >/dev/null 2>&1 ) || true

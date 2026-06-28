@@ -74,13 +74,10 @@ data "terraform_remote_state" "cluster" {
 # templated field, the rendered file is the first artifact to look at — it
 # tells you what apl-operator actually saw, not what you intended.
 #
-# Loki gateway HTTP basic-auth admin password (apl-core's apps.loki schema
-# REQUIRES adminPassword when loki is enabled). var.loki_admin_password is now
-# always supplied — the llz-terraform workflow runs `llz ci ensure-env-secret`
-# BEFORE this apply, which generates+persists the infra-<region> LOKI_ADMIN_PASSWORD
-# secret on first run and exports it as TF_VAR_loki_admin_password. cluster-bootstrap
-# no longer generates it (the former random_password.loki_admin) or outputs it for a
-# post-apply stash; it is a plain consumed input, kept out of TF state's secret set.
+# (apl-core 6.x no longer needs a Loki gateway admin password rendered here:
+# apps.loki.adminPassword is an x-secret with a generator, so apl-core
+# auto-generates and self-wires it in-cluster — the former loki_admin_password
+# input was removed in the v6 migration.)
 
 # Cluster DNS Service ClusterIP, for the loki-gateway nginx `resolver`. The
 # grafana/loki gateway templates `resolver <dnsService>.kube-system.svc...;` as a
@@ -154,7 +151,6 @@ locals {
       apl_values_repo_password = var.apl_values_repo_token
       apl_values_repo_ref      = var.apl_values_repo_revision
       linode_dns_token         = var.linode_dns_token
-      loki_admin_password      = var.loki_admin_password
       coredns_cluster_ip       = try(data.kubernetes_service.coredns[0].spec[0].cluster_ip, "")
       loki_bucket_chunks       = local.loki_buckets.chunks
       loki_bucket_ruler        = local.loki_buckets.ruler

@@ -89,8 +89,6 @@ on:
         required: false
       APPS_REPO_REVISION:
         required: false
-      LOKI_ADMIN_PASSWORD:
-        required: false
       OPENBAO_ADDRESS:
         required: false
       OPENBAO_ROOT_TOKEN:
@@ -399,7 +397,7 @@ jobs:
           llz ci require-secret APL_VALUES_REPO_TOKEN \
             --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys + LOKI_ADMIN_PASSWORD and by bootstrap-openbao." || FAIL=1
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys and by bootstrap-openbao." || FAIL=1
           [ "$FAIL" -eq 0 ]
 
       # Which shared VPC (if any) this deployment attaches to is resolved from the
@@ -592,10 +590,8 @@ jobs:
       # the GHCR repo Secret is skipped (only works if the charts are public).
       TF_VAR_ghcr_token:              ${{ secrets.GHCR_READ_TOKEN }}
       TF_VAR_ghcr_username:           ${{ vars.GHCR_USERNAME }}
-      # TF_VAR_loki_admin_password is intentionally NOT set here: the "Ensure Loki
-      # admin password" step below exports it to $GITHUB_ENV (generating + stashing
-      # the infra-<region> secret on first run). A job/step-level env: would shadow
-      # that $GITHUB_ENV value, so the variable lives only there.
+      # (apl-core 6.x auto-generates the Loki gateway admin password as an
+      # x-secret; no TF_VAR_loki_admin_password is wired here anymore.)
       # Branch of the instance repo that the bootstrap ArgoCD Application targets.
       # Defaults to 'main'; override by setting APPS_REPO_REVISION as a
       # repository or environment **variable** (preferred, matches the existing
@@ -649,7 +645,7 @@ jobs:
           llz ci require-secret APL_VALUES_REPO_TOKEN \
             --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys + LOKI_ADMIN_PASSWORD and by bootstrap-openbao." || FAIL=1
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys and by bootstrap-openbao." || FAIL=1
           [ "$FAIL" -eq 0 ]
 
       - name: Terraform init — cluster-bootstrap
@@ -694,22 +690,6 @@ jobs:
             echo "Persisting failure = control plane still provisioning (re-run later), OR the node pool never reached the expected Ready count (Linode capacity/quota for the node type, or a node_pool_label ≥ 16 chars wedging node join), OR the 'Open control-plane ACL for this runner' step did not add this runner's egress IP to the LKE-E control-plane ACL (check that step's log + LINODE_API_TOKEN scope). Static github_runner_ipv4_cidrs / acl inventory are no longer required for hosted-runner access — the runner IP is opened at runtime by the lke-runner-acl action."
             exit 1
           }
-
-      # Ensure the Loki gateway admin password exists BEFORE plan/apply and export
-      # it as TF_VAR_loki_admin_password. On the first run (secret unset) this
-      # GENERATES one and stashes it to the infra-<region> environment as
-      # LOKI_ADMIN_PASSWORD; later runs reuse the stored value. Replaces
-      # cluster-bootstrap's random_password.loki_admin + the post-apply
-      # `terraform output → stash` round-trip — the password is no longer held in
-      # TF state. Same OPENBAO_SECRETS_WRITE_TOKEN PAT as the other env-secret stashes.
-      - name: Ensure Loki admin password
-        if: env.ACTION == 'apply'
-        env:
-          GH_TOKEN:            ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-          LOKI_ADMIN_PASSWORD: ${{ secrets.LOKI_ADMIN_PASSWORD }}
-        run: |
-          llz ci ensure-env-secret --env "infra-${REGION}" \
-            --name LOKI_ADMIN_PASSWORD --export-tf-var loki_admin_password
 
       - name: Terraform plan — cluster-bootstrap
         working-directory: terraform-iac-bootstrap/cluster-bootstrap
@@ -921,7 +901,6 @@ jobs:
       # because the resources consuming it are being torn down. Wire the same
       # secret for consistency; if it's missing on this env, "" is fine.
       TF_VAR_apl_values_repo_token:   ${{ secrets.APL_VALUES_REPO_TOKEN }}
-      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
       # Required (no default), unused at destroy — mirror the apply placeholder
       # fallback so `terraform plan -destroy` doesn't prompt and fail with
       # "No value for required variable" (observed on a primary cluster destroy).
@@ -1009,7 +988,6 @@ jobs:
       # because the resources consuming it are being torn down. Wire the same
       # secret for consistency; if it's missing on this env, "" is fine.
       TF_VAR_apl_values_repo_token:   ${{ secrets.APL_VALUES_REPO_TOKEN }}
-      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
       # Required (no default), unused at destroy — mirror the apply placeholder
       # fallback so `terraform plan -destroy` doesn't prompt and fail with
       # "No value for required variable" (observed on a primary cluster destroy).

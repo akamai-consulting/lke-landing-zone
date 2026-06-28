@@ -141,11 +141,15 @@ apps:
   grafana:       { enabled: true }
   loki:
     enabled: true
-    # Loki gateway HTTP basic-auth admin password. Generated + stashed to the
-    # infra-<env> GH environment secret LOKI_ADMIN_PASSWORD by `llz ci
-    # ensure-env-secret` (pre-apply) on first run and reused on later runs, then
-    # passed in as TF_VAR_loki_admin_password. Required by apl-core's apps.loki schema.
-    adminPassword: ${loki_admin_password}
+    # apl-core 6.x: the Loki gateway admin password is NOT set here. On 6.x the
+    # `apps.loki.adminPassword` schema field is an x-secret with a generator
+    # (`x-secret: '{{ randAlphaNum 20 }}'`) and the loki reverse-proxy auth secret
+    # is an ExternalSecret sourced from apl-core's own core-secrets-store — so
+    # apl-core generates, persists, and self-wires the password in-cluster when we
+    # omit it. (On 5.0.0 the x-secret had no generator, so it had to be supplied
+    # via TF_VAR_loki_admin_password / the infra-<env> GitHub secret; that whole
+    # path was removed in the v6 migration.) Nothing on the landing-zone side
+    # consumes this password — only apl-core's loki does.
     # S3 chunk store on Linode Object Storage. The grafana/loki chart reads
     # bucketNames + s3.{endpoint,region} from values (not env), so they are
     # rendered from the object-storage workspace via templatefile(). The AWS
