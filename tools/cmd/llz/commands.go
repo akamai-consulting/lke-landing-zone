@@ -41,10 +41,16 @@ func copierCopyArgv(org, ref, dir string) []string {
 		"gh:" + org + "/" + templateName, dir}
 }
 
-func copierUpdateArgv(ref string) []string {
+func copierUpdateArgv(ref string, excludes ...string) []string {
 	a := []string{"copier", "update", "--trust"}
 	if ref != "" {
 		a = append(a, "--vcs-ref", ref, "--data", "llz_version="+ref)
+	}
+	// Fence: paths an extension owns (from .llz/extensions.lock) are excluded so
+	// `copier update` never clobbers or 3-way-merge-conflicts them — the issue's
+	// "recipe-managed" 4th ownership class, made real instance-side.
+	for _, e := range excludes {
+		a = append(a, "--exclude", e)
 	}
 	return a
 }
@@ -276,7 +282,7 @@ func runUpgrade(g globalOpts, ref string) error {
 	// lockstep with the template code (a bare `copier update` would float the code
 	// to the latest tag but leave the recorded llz_version stale).
 	ref = resolveScaffoldRef(ref)
-	if err := run(g, copierUpdateArgv(ref)...); err != nil {
+	if err := run(g, copierUpdateArgv(ref, ownedPaths(loadExtLock("."))...)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
 	}
 	// copier update never deletes a file the template dropped between versions, so
@@ -284,6 +290,13 @@ func runUpgrade(g globalOpts, ref string) error {
 	// up to date from the copier update above. Honors --dry-run internally.
 	if err := applyTemplateRemovals(g); err != nil {
 		return fmt.Errorf("apply template removals: %w", err)
+	}
+	// llz upgrade = copier update + recipe apply (issue #10): re-render every
+	// built-in + enabled extension's files: so a changed template/binary propagates
+	// without a manual re-scaffold. Best-effort — a misconfigured extension warns,
+	// it does not abort the upgrade. Honors --dry-run internally.
+	if err := runExtensionApplyAll(g, ".", false); err != nil {
+		fmt.Fprintf(os.Stderr, "llz: extension apply during upgrade: %v\n", err)
 	}
 	// Re-stamp natively: an instance carries no template-scripts/ to shell out to.
 	if g.dryRun {

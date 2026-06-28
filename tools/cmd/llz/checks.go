@@ -236,6 +236,11 @@ func runLint(g globalOpts) error {
 			return err
 		}
 	}
+	// Tail: each enabled (and built-in) extension's check: steps — the Gate-phase
+	// contribution folded into the fast gate (issue #10). A missing tool skips.
+	if err := runExtensionGate(g, "."); err != nil {
+		return err
+	}
 	fmt.Fprintln(os.Stderr, "lint: ok")
 	return nil
 }

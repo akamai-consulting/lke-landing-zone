@@ -55,7 +55,7 @@ func TestAddExtCommands(t *testing.T) {
 		{Name: "lint", Argv: []string{"echo", "nope"}}, // collides -> skipped
 		{Name: "", Argv: []string{"echo"}},             // malformed -> skipped
 		{Name: "bad", Argv: nil},                       // malformed -> skipped
-	})
+	}, extCommandsFile)
 
 	has := func(name string) *cobra.Command {
 		for _, c := range root.Commands() {
