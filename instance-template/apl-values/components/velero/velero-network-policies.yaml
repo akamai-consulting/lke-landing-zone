@@ -1,0 +1,67 @@
+# Default-deny + minimum-viable allows for the velero namespace. apl-core ships no
+# NetworkPolicies into namespaces it doesn't own, so without these Velero runs
+# unrestricted. Velero needs: DNS, apiserver (it reconciles Backup/Restore/
+# VolumeSnapshot CRs cluster-wide), and HTTPS egress to Linode Object Storage for
+# backup upload/download. Ingress is the Prometheus metrics scrape only.
+# Dual-port apiserver (443 + 6443) per the LKE-E Cilium post-DNAT quirk.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: velero-default-deny
+  namespace: velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: velero-allow-dns
+  namespace: velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+---
+# apiserver (dual-port) + HTTPS to Linode Object Storage. The OBJ endpoint is an
+# arbitrary public IP, so no `to:` selector — scoped by port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: velero-allow-egress
+  namespace: velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - { port: 443, protocol: TCP }
+        - { port: 6443, protocol: TCP }
+---
+# Prometheus (monitoring namespace) scrapes Velero's :8085 metrics.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: velero-allow-metrics-ingress
+  namespace: velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - { port: 8085, protocol: TCP }

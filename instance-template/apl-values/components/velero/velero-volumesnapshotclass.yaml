@@ -1,0 +1,20 @@
+# Velero (with the EnableCSI feature) snapshots a PVC by creating a VolumeSnapshot
+# against the VolumeSnapshotClass carrying the
+# `velero.io/csi-volumesnapshot-class: "true"` label. Points at the Linode
+# block-storage CSI driver. deletionPolicy: Retain so expiring a Backup's
+# VolumeSnapshot does not delete the underlying Linode snapshot mid-restore.
+#
+# PREREQUISITE: the cluster must have the external-snapshotter CRDs
+# (VolumeSnapshot/Class/Content) + snapshot-controller. LKE-E ships these with the
+# Linode CSI driver; if a cluster lacks them this object will not apply.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: linode-csi-velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  labels:
+    app.kubernetes.io/part-of: lke-landing-zone
+    velero.io/csi-volumesnapshot-class: "true"
+driver: linodebs.csi.linode.com
+deletionPolicy: Retain

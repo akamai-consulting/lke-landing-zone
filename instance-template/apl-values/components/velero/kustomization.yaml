@@ -1,0 +1,13 @@
+# spec.components.velero → this kustomize Component. An env's overlay lists it
+# under components: when enabled (default-disabled). The per-env
+# BackupStorageLocation patch (velero-backup-location-patch.yaml) is added to the
+# overlay's patches: by `llz render`. Template-managed — edit upstream.
+# See docs/runbooks/velero-dr.md.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - velero-namespace.yaml
+  - velero-volumesnapshotclass.yaml
+  - velero-network-policies.yaml
+  - velero-cloud-credentials-externalsecret.yaml
+  - velero.yaml

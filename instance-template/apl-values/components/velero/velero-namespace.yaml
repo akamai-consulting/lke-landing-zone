@@ -1,0 +1,20 @@
+# The velero namespace. Created here (wave -20, before the velero Application at
+# -14) with restricted Pod Security Standards — Velero's server runs
+# restricted-compliant (no node-agent → no host access). The PSS version pin must
+# track the cluster's Kubernetes minor (kept in lockstep with cluster-foundation's
+# podSecurityStandardsVersion default).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+  labels:
+    app.kubernetes.io/part-of: lke-landing-zone
+    monitoring: enabled
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
