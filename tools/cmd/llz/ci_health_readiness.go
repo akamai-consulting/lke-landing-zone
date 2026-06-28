@@ -17,7 +17,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const esoNamespace = "llz-external-secrets"
+// apl-core 6.x ships ESO as a core app in the `external-secrets` namespace; the
+// landing zone no longer runs its own controller. (The `openbao`
+// ClusterSecretStore probed below is cluster-scoped, so the -n is cosmetic, but
+// keep it pointed at the live ESO namespace.)
+const esoNamespace = "external-secrets"
 
 func ciHealthOpenbaoCmd() *cobra.Command {
 	return &cobra.Command{

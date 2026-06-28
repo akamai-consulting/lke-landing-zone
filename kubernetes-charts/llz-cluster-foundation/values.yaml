@@ -102,20 +102,21 @@ namespaces:
     restricted: true
     labels:
       monitoring: enabled
-  # argo-workflows / argo-events / external-secrets — their install Apps (wave
-  # -15) set CreateNamespace=true, but Argo treats -15 "complete" when the
-  # Application resource is created, NOT when its Helm chart finishes. The NPs in
-  # those trees (wave -10) would race the eventual namespace creation. Pre-create
-  # at -20 to kill the race; the install Apps' later Helm create is a no-op merge.
+  # argo-workflows / argo-events — their install Apps (wave -15) set
+  # CreateNamespace=true, but Argo treats -15 "complete" when the Application
+  # resource is created, NOT when its Helm chart finishes. The NPs in those trees
+  # (wave -10) would race the eventual namespace creation. Pre-create at -20 to
+  # kill the race; the install Apps' later Helm create is a no-op merge.
+  #
+  # NOTE (apl-core 6.x): the former `llz-external-secrets` namespace was removed.
+  # ESO is now a core app shipped by apl-core in the `external-secrets` namespace,
+  # so the landing zone no longer runs its own controller. The gap-fill NPs for
+  # that apl-managed namespace ship from the externalSecrets component instead.
   - name: llz-argo-workflows
     restricted: false
     labels:
       monitoring: enabled
   - name: llz-argo-events
-    restricted: false
-    labels:
-      monitoring: enabled
-  - name: llz-external-secrets
     restricted: false
     labels:
       monitoring: enabled

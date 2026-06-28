@@ -2,10 +2,16 @@
 # components: when the component is enabled. Template-managed — edit upstream.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
-# NOTE: the `openbao` ClusterSecretStore moved OUT of this component into its own
-# Argo CD Application (apl-values/_shared/manifest-secret-store/, applied by the
-# llz-secret-store app in cluster-bootstrap/main.tf) for blast-radius isolation —
-# its first-boot not-ready health used to fail the whole platform-bootstrap sync.
+# apl-core 6.x: the External Secrets Operator is now a CORE, always-on app shipped
+# by apl-core in the `external-secrets` namespace (gated on apps.sealed-secrets.enabled,
+# which we keep on). The landing zone no longer installs its own ESO controller —
+# the former external-secrets-operator.yaml Application was removed. This component
+# now only ships the NetworkPolicies that apl-core does NOT supply for the ESO
+# namespace (OpenBao egress + webhook ingress); see network-policies.yaml.
+#
+# NOTE: the `openbao` ClusterSecretStore lives in its own Argo CD Application
+# (apl-values/_shared/manifest-secret-store/, applied by the llz-secret-store app
+# in cluster-bootstrap/main.tf) for blast-radius isolation — its first-boot
+# not-ready health used to fail the whole platform-bootstrap sync.
 resources:
   - network-policies.yaml
-  - external-secrets-operator.yaml

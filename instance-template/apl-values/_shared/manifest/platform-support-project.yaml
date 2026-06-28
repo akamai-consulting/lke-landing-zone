@@ -64,7 +64,7 @@ spec:
     - { namespace: monitoring,                 server: https://kubernetes.default.svc }
     - { namespace: grafana,                    server: https://kubernetes.default.svc }
     - { namespace: llz-openbao,                server: https://kubernetes.default.svc }
-    - { namespace: llz-external-secrets,       server: https://kubernetes.default.svc }
+    - { namespace: external-secrets,           server: https://kubernetes.default.svc }
     - { namespace: llz-cert-automation,        server: https://kubernetes.default.svc }
     - { namespace: llz-argo-workflows,         server: https://kubernetes.default.svc }
     - { namespace: llz-argo-events,            server: https://kubernetes.default.svc }
