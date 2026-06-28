@@ -1,0 +1,39 @@
+# Scrapes cert-manager's controller metrics so certificate expiry/readiness is
+# visible in Prometheus (today cert health is only caught reactively by the daily
+# scheduled-checks.yml `certmanager-health` GitHub Actions job).
+#
+# cert-manager is shipped by apl-core in the `cert-manager` namespace; the
+# upstream chart exposes the controller metrics on the `cert-manager` Service,
+# port 9402 named `tcp-prometheus-servicemonitor`, but ships with the chart's own
+# serviceMonitor disabled. We add our own ServiceMonitor here rather than flipping
+# an apl-core value. kube-prometheus-stack's serviceMonitorSelector is empty ({}),
+# so this is picked up regardless of labels/namespace.
+#
+# VALIDATION NOTE: the port name/labels below are the long-standing upstream
+# cert-manager defaults; confirm against apl-core's cert-manager chart version on
+# a live cluster (`kubectl -n cert-manager get svc cert-manager -o yaml`) — if the
+# metrics port was renamed (e.g. to `http-metrics`), update `port:` accordingly,
+# otherwise the scrape silently produces no series and cert-manager-alerts.yaml
+# never fires.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - cert-manager
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+  endpoints:
+    - port: tcp-prometheus-servicemonitor
+      path: /metrics
+      interval: 60s
+      scrapeTimeout: 10s

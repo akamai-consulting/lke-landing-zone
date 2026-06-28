@@ -1,0 +1,73 @@
+# Prometheus Pushgateway for the token/credential single-pane-of-glass. The
+# daily scheduled-checks `token-inventory-push` job PUTs the `llz ci
+# token-inventory` metrics here (per-region group), Prometheus scrapes it
+# (servicemonitor.yaml), and the Grafana dashboard + token-inventory-alerts.yaml
+# turn it into one inventory/expiry pane — including CI-managed tokens (GitHub /
+# Linode PATs) that Prometheus cannot scrape directly.
+#
+# Ephemeral by design: no persistence is configured, so a restart drops the
+# pushed series until the next daily push. That gap is bounded and surfaced by
+# the TokenInventoryStale alert (the freshness heartbeat). Restricted-PSS
+# compliant; no ServiceAccount token (it never calls the API).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llz-token-pushgateway
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  labels:
+    app.kubernetes.io/name: llz-token-pushgateway
+    app.kubernetes.io/part-of: platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llz-token-pushgateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llz-token-pushgateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pushgateway
+          # Upstream Prometheus Pushgateway. Persistence is off by default
+          # (no --persistence.file), so the root FS stays read-only.
+          image: docker.io/prom/pushgateway:v1.10.0
+          args:
+            - --web.listen-address=:9091
+          ports:
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi

@@ -1,0 +1,58 @@
+# Alert rules for the External Secrets Operator secret-sync plane. Deployed as a
+# PrometheusRule CR; apl-core's kube-prometheus-stack picks it up via its
+# ruleSelector. Depends on eso-podmonitor.yaml scraping the ESO controller
+# (without it these series are absent and the rules never fire).
+#
+# This is the alerting that would have caught the harbor-docker-config wedge
+# (an ExternalSecret with an unparseable configTemplate that silently never
+# synced) and the cascade where a sealed/misconfigured OpenBao flips the
+# ClusterSecretStore to NotReady and every ExternalSecret stops syncing.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: eso-alerts
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: eso-alerts
+      interval: 30s
+      rules:
+        # The ESO controller itself isn't being scraped — secret-sync health is
+        # blind. Distinct from any individual secret failing.
+        - alert: ESOMetricsTargetDown
+          expr: up{namespace="llz-external-secrets", pod=~"llz-external-secrets-.*"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: external-secrets
+          annotations:
+            summary: External Secrets Operator metrics target is down
+            description: Prometheus cannot scrape the ESO controller; ExternalSecret sync health is not observable.
+        # A ClusterSecretStore Ready=False cascades — EVERY ExternalSecret bound to
+        # it stops syncing (the classic sealed/misconfigured-OpenBao failure mode),
+        # so this is critical and fires faster than the per-secret rule below.
+        - alert: ClusterSecretStoreNotReady
+          expr: max by (name) (clustersecretstore_status_condition{condition="Ready", status="False"}) == 1
+          for: 10m
+          labels:
+            severity: critical
+            service: external-secrets
+          annotations:
+            summary: ClusterSecretStore {{ $labels.name }} is not Ready
+            description: ESO cannot reach its backend (likely OpenBao sealed/misconfigured); all ExternalSecrets bound to this store will stop syncing.
+        # A single ExternalSecret stuck NotReady — a template/path/permission bug on
+        # one secret while the store is otherwise healthy (the harbor-docker-config
+        # class of bug). 15m rides out normal bootstrap-window refresh races.
+        - alert: ExternalSecretNotReady
+          expr: max by (namespace, name) (externalsecret_status_condition{condition="Ready", status="False"}) == 1
+          for: 15m
+          labels:
+            severity: warning
+            service: external-secrets
+          annotations:
+            summary: ExternalSecret {{ $labels.namespace }}/{{ $labels.name }} is not Ready
+            description: This ExternalSecret has not reached a synced/Ready state; its target Secret may be missing or stale (template, source path, or auth error).

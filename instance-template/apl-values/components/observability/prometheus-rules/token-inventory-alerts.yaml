@@ -1,0 +1,57 @@
+# Unified alert rules for the credential/token single-pane-of-glass, off the
+# llz_token_* metrics the scheduled-checks `token-inventory-push` job PUTs to the
+# Pushgateway. These alert on CI-managed/external tokens (GitHub + Linode PATs)
+# that Prometheus cannot otherwise see, alongside the in-cluster ones — one rule
+# set regardless of source.
+#
+# Depends on the Pushgateway (pushgateway/) being scraped. If the daily push
+# stops, TokenInventoryStale fires (the metrics go stale rather than disappear,
+# since the Pushgateway retains the last PUT until the pod restarts).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: token-inventory-alerts
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: token-inventory-alerts
+      interval: 60s
+      rules:
+        # A credential is in policy breach: no expiry, already expired, lifetime
+        # over the 90-day policy, or an invalid/revoked token. status="breach" is
+        # emitted by `llz ci token-inventory` for both Linode and GitHub PATs.
+        - alert: TokenAuditBreach
+          expr: llz_token_audit_status{status="breach"} == 1
+          for: 15m
+          labels:
+            severity: critical
+            service: token-inventory
+          annotations:
+            summary: Credential {{ $labels.name }} ({{ $labels.source }}) is in policy breach
+            description: 'Token {{ $labels.name }} [kind={{ $labels.kind }}, managed_by={{ $labels.managed_by }}] is expired, has no expiry, exceeds the 90-day lifetime policy, or is invalid. Rotate it.'
+        # A credential is within the warn window (default ≤14 days to expiry).
+        - alert: TokenExpiringSoon
+          expr: llz_token_audit_status{status="warn"} == 1
+          for: 1h
+          labels:
+            severity: warning
+            service: token-inventory
+          annotations:
+            summary: Credential {{ $labels.name }} ({{ $labels.source }}) expires soon
+            description: 'Token {{ $labels.name }} [kind={{ $labels.kind }}, managed_by={{ $labels.managed_by }}] is within the expiry warn window. Plan its rotation.'
+        # The daily push has not landed — the inventory pane is going stale and
+        # breach/warn detection above is no longer current. push_timestamp carries
+        # the per-region group key, so this fires per region.
+        - alert: TokenInventoryStale
+          expr: time() - llz_token_inventory_push_timestamp_seconds > 36 * 3600
+          for: 1h
+          labels:
+            severity: warning
+            service: token-inventory
+          annotations:
+            summary: Token inventory has not been refreshed in over 36h
+            description: The scheduled-checks token-inventory-push job has not pushed fresh metrics; the credential inventory pane and its breach/expiry alerts are stale.

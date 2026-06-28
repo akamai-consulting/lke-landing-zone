@@ -68,11 +68,29 @@ coverage is a known gap.
 The desired end-state coverage bar is one availability + one error-rate + one
 resource-saturation alert per service.
 
+### Secret-sync plane — External Secrets Operator
+
+Covered by `eso-alerts` (under
+[apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/)),
+fed by the `external-secrets` **PodMonitor** in the observability component
+(apl-core does not ship ESO or scrape it, so without that PodMonitor these series
+are absent). This is the coverage that would have caught the
+`harbor-docker-config` wedge (an ExternalSecret that silently never synced).
+
+| Condition | Alert | Severity | Status |
+|-----------|-------|----------|--------|
+| ESO controller not scraped for 10m | `ESOMetricsTargetDown` | warning | ✅ covered |
+| ClusterSecretStore `Ready=False` for 10m (cascades to all ExternalSecrets) | `ClusterSecretStoreNotReady` | critical | ✅ covered |
+| An ExternalSecret `Ready=False` for 15m | `ExternalSecretNotReady` | warning | ✅ covered |
+
 ### TLS certificates
 
 | Item | Trigger | Mechanism | Status |
 |------|---------|-----------|--------|
 | cert-manager Certificates | `Ready=False` | `certmanager-health` job in [scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) (daily) | ✅ covered |
+| cert-manager Certificate `Ready=False` for 1h | `CertManagerCertNotReady` (warning) | `cert-manager-alerts` PrometheusRule, fed by the `cert-manager` ServiceMonitor | ✅ covered |
+| Certificate expires in < 7d (renewal stuck) | `CertManagerCertExpiringSoon` (warning) | same | ✅ covered |
+| Certificate expires in < 48h | `CertManagerCertExpiringCritical` (critical) | same | ✅ covered |
 
 ### Credential rotation
 
@@ -85,13 +103,46 @@ resource-saturation alert per service.
 | Loki object-storage bucket key overdue (≤120d) | `secret/loki/object-store` version age ≥105d (warn) / ≥120d (job red) | `scheduled-checks.yml → loki-objkey-rotation-health`; declarative `time_rotating` replacement in the `object-storage` Terraform module | ✅ covered |
 | TF-state object-storage bucket key overdue (≤120d) | — | **Manual, calendar-tracked** — bootstrapping paradox (the key guards the state any automation would need). No automated alert possible. | ⚠️ manual only |
 | Prometheus rule drift | Expected rule groups missing from cluster | `scheduled-checks.yml` — surfaces silently-broken alerting before an incident | ✅ covered |
+| Credential-rotation CronJob stopped succeeding | `linode-cred-rotator` no success in 36h (critical), `linode-volume-labeler` no success in 2h (warning), `argo-resync-nudger` no success in 1h (warning) | `job-alerts` PrometheusRule, off kube-state-metrics' `kube_cronjob_status_last_successful_time`. Complements the default `KubeJobFailed` (which only fires on a *failing* Job, not a CronJob that has silently stopped running) | ✅ covered |
+
+### Token & credential inventory (single pane of glass)
+
+A unified inventory of every platform credential — including the CI-managed /
+external tokens Prometheus cannot scrape directly (GitHub service PATs, Linode
+account PATs + OBJ keys) — funnelled into one Grafana pane and alerted on. The
+daily `token-inventory-push` job in
+[llz-scheduled-checks.yml](../instance-template/.github/workflows/llz-scheduled-checks.yml)
+runs `llz ci token-inventory` (reusing the same Linode + GitHub expiry ladders as
+`cred-audit` / `gh-pat-expiry`) and PUTs the `llz_token_*` metrics to the
+in-cluster **Pushgateway** (`pushgateway/` in the observability component, scraped
+with `honorLabels: true`), per-region group. The
+**"LLZ — Token & Credential Inventory"** Grafana dashboard
+(`grafana-dashboards/token-inventory-dashboard.yaml`, auto-loaded via the
+`grafana_dashboard` ConfigMap label) renders the inventory table + expiry
+countdowns alongside the natively-scraped cert-manager certificate expiries.
+
+Covered by `token-inventory-alerts`:
+
+| Condition | Alert | Severity | Status |
+|-----------|-------|----------|--------|
+| A credential in policy breach (no-expiry / expired / >90d lifetime / invalid) | `TokenAuditBreach` | critical | ✅ covered |
+| A credential within the expiry warn window (≤14d) | `TokenExpiringSoon` | warning | ✅ covered |
+| The daily inventory push has not landed in >36h (pane going stale) | `TokenInventoryStale` | warning | ✅ covered |
+
+Static-by-design credentials (OpenBao seal/recovery keys, generated admin
+passwords) and out-of-band ones (Harbor robots) appear in the inventory with
+`status="static"` for completeness — they are listed, not alerted. Keep the
+static list in `tools/cmd/llz/ci_token_inventory.go` in sync with the rotation
+inventory above.
 
 ### Cluster / platform
 
 Node pressure, kubelet health, kube-state anomalies and Prometheus
 self-monitoring are covered by the kube-prometheus-stack default rules
 (`defaultRules.create: true`). No custom rules are maintained for these in this
-template.
+template. Generic Job failures are covered by the default `KubeJobFailed` /
+`KubeJobNotCompleted` rules; the platform's own rotation CronJobs additionally
+get the "stopped succeeding" rules under `job-alerts` (see above).
 
 ## Adding or changing an alert
 

@@ -1,0 +1,38 @@
+# The llz-observability namespace is default-deny (observability-default-deny in
+# the llz-cluster-foundation chart). NetworkPolicies are additive, so this opens
+# exactly the one path the Pushgateway needs as a target: Prometheus (in the
+# `monitoring` namespace, where apl-core runs the kube-prometheus-stack) scraping
+# :9091.
+#
+# Egress: none needed — the Pushgateway is passive (it never dials out). DNS
+# egress, if the image ever needs it, is already granted to every pod here by
+# observability-allow-dns.
+#
+# The daily push from the GitHub runner arrives via `kubectl port-forward`, which
+# the kubelet proxies to the pod from the node's host namespace — Cilium permits
+# host→local-pod by default (allow-localhost: auto), so it does not need an
+# ingress rule here. (Validate on first run; if a future CNI/host-firewall change
+# blocks it, add an ingress allow for the node CIDR.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llz-token-pushgateway-allow-scrape
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llz-token-pushgateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9091
+          protocol: TCP

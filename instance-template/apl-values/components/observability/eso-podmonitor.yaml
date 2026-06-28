@@ -1,0 +1,40 @@
+# Scrapes the External Secrets Operator controller's metrics so the secret-sync
+# health of every ExternalSecret / ClusterSecretStore is visible in Prometheus.
+#
+# apl-core 5.0.0 does NOT ship ESO (it's installed by llz-argo-bootstrap-apps at
+# wave -15) and the upstream ESO chart is deployed WITHOUT serviceMonitor.enabled,
+# so the cluster has zero ESO metrics out of the box. A PodMonitor (rather than
+# enabling the chart's ServiceMonitor) keeps this decoupled from the ESO install
+# ordering: it's a plain CR applied with the rest of the observability component,
+# and it scrapes the controller pods directly on their named `metrics` port (8080)
+# without depending on a metrics Service existing.
+#
+# Lives in llz-observability but selects pods in llz-external-secrets via
+# namespaceSelector; kube-prometheus-stack's podMonitorSelector/Selector are both
+# empty ({}) so it is picked up regardless of labels/namespace.
+#
+# The controller exports per-resource gauges (externalsecret_status_condition,
+# clustersecretstore_status_condition) + sync counters that eso-alerts.yaml rules.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: external-secrets
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - llz-external-secrets
+  selector:
+    matchLabels:
+      # The core controller Deployment only (NOT the -webhook / -cert-controller
+      # Deployments, which carry their own app.kubernetes.io/name values).
+      app.kubernetes.io/name: external-secrets
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

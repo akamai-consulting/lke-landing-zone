@@ -1,0 +1,35 @@
+# Companion to cert-manager-servicemonitor.yaml. The cert-manager namespace is
+# default-deny (cert-manager-default-deny in the llz-cluster-foundation chart) and
+# its only ingress allows are for the webhooks (10250 / 443) — nothing permits the
+# controller's :9402 metrics port. Without this, Prometheus (in the `monitoring`
+# namespace) cannot scrape cert-manager and the cert-manager-alerts rules would
+# silently never fire. NetworkPolicies are additive, so this opens exactly that
+# one path.
+#
+# Lives in the observability component (alongside the ServiceMonitor it enables)
+# rather than the cluster-foundation chart to keep "turn on cert-manager
+# monitoring" in one reviewable place and avoid a chart-version cascade.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-allow-metrics-ingress
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9402
+          protocol: TCP

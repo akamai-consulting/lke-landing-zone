@@ -1,0 +1,73 @@
+# Alert rules for the platform's in-cluster scheduled jobs (credential rotation,
+# volume labelling, Argo resync). Deployed as a PrometheusRule CR; apl-core's
+# kube-prometheus-stack picks it up via its ruleSelector.
+#
+# Scope: kube-prometheus-stack's `defaultRules.create: true` already ships the
+# generic KubeJobFailed / KubeJobNotCompleted rules (off kube-state-metrics, which
+# the stack bundles), so a job that *fails* is already covered cluster-wide. What
+# the defaults do NOT catch is a CronJob that has silently *stopped succeeding* —
+# suspended, unschedulable, or its pods evicted before completion — which for the
+# credential rotator means creds quietly march toward expiry with no failing Job
+# to trip KubeJobFailed. These rules close that gap for the jobs we care about,
+# keyed on kube-state-metrics' kube_cronjob_status_last_successful_time.
+#
+# The `> 0` guard skips CronJobs that have never recorded a success yet (value 0),
+# so a freshly-bootstrapped cluster doesn't false-alarm before the first run.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: job-alerts
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: job-alerts
+      interval: 30s
+      rules:
+        # Credential rotator runs daily (30 3 * * *); rotates Linode OBJ/DNS creds
+        # that back Loki, Harbor registry, and cert-manager DNS-01. No success in
+        # 36h means creds are no longer being refreshed — critical, because the
+        # eventual failure mode is silent credential expiry, not a crashing pod.
+        - alert: LinodeCredRotatorStale
+          expr: |
+            kube_cronjob_status_last_successful_time{namespace="llz-linode-cred-rotator", cronjob="linode-cred-rotator"} > 0
+            and
+            (time() - kube_cronjob_status_last_successful_time{namespace="llz-linode-cred-rotator", cronjob="linode-cred-rotator"}) > 36 * 3600
+          for: 1h
+          labels:
+            severity: critical
+            service: linode-cred-rotator
+          annotations:
+            summary: Linode credential rotator has not succeeded in over 36h
+            description: The linode-cred-rotator CronJob (daily) has not completed successfully recently; Loki/Harbor/cert-manager credentials will not be refreshed and may expire.
+        # Volume labeller runs every 15m; failure only degrades the human-readable
+        # PV labels in the Linode UI, so a longer window + warning severity.
+        - alert: LinodeVolumeLabelerStale
+          expr: |
+            kube_cronjob_status_last_successful_time{namespace="llz-linode-volume-labeler", cronjob="linode-volume-labeler"} > 0
+            and
+            (time() - kube_cronjob_status_last_successful_time{namespace="llz-linode-volume-labeler", cronjob="linode-volume-labeler"}) > 2 * 3600
+          for: 30m
+          labels:
+            severity: warning
+            service: linode-volume-labeler
+          annotations:
+            summary: Linode volume labeller has not succeeded in over 2h
+            description: The linode-volume-labeler CronJob (every 15m) has not completed successfully recently; new PVs will lack human-readable labels in the Linode UI.
+        # Argo resync nudger is the defence-in-depth that re-triggers failed Argo CD
+        # syncs. If IT stops running, a wedged Application can sit failed unnoticed.
+        - alert: ArgoResyncNudgerStale
+          expr: |
+            kube_cronjob_status_last_successful_time{namespace="argocd", cronjob="argo-resync-nudger"} > 0
+            and
+            (time() - kube_cronjob_status_last_successful_time{namespace="argocd", cronjob="argo-resync-nudger"}) > 1 * 3600
+          for: 30m
+          labels:
+            severity: warning
+            service: argo-resync-nudger
+          annotations:
+            summary: Argo resync nudger has not succeeded in over 1h
+            description: The argo-resync-nudger CronJob (every 10m) has not completed successfully recently; failed Argo CD syncs may no longer be auto-retried.

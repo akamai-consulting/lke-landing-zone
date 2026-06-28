@@ -1,0 +1,21 @@
+# ClusterIP for the token-inventory Pushgateway. Scraped by Prometheus via
+# servicemonitor.yaml; the scheduled-checks push job reaches it through
+# `kubectl port-forward svc/llz-token-pushgateway`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: llz-token-pushgateway
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  labels:
+    app.kubernetes.io/name: llz-token-pushgateway
+    app.kubernetes.io/part-of: platform
+spec:
+  selector:
+    app.kubernetes.io/name: llz-token-pushgateway
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP
