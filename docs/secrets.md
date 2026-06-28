@@ -96,7 +96,13 @@ useful context for emergency recovery and understanding the secret layout.
 
 2. **Auto-unseal** — each pod unseals itself at boot from the static seal key (`seal "static"` in the chart); the workflow waits for all 3 to converge to unsealed (followers join the leader via Raft `retry_join`). There is no manual key submission.
 
-3. **Configure** — enables KV v2 at `secret/`, Kubernetes auth, and GitHub-OIDC (`jwt`) auth. Creates the read-only `platform-ci` policy (paths enumerated explicitly — no wildcard) bound to the `eso` Kubernetes-auth role for ESO, and the `secret-propagator` GitHub-OIDC role + policy used by `llz ci propagate-pat`. Enables the file audit device.
+3. **Configure** — enables KV v2 at `secret/`, Kubernetes auth, and GitHub-OIDC (`jwt`) auth. Creates four least-privilege policies (paths enumerated explicitly — no wildcard):
+   - the read-only `platform-ci` policy, bound to the `eso` Kubernetes-auth role, which every in-cluster consumer reads through;
+   - the write-scoped `eso-pusher` policy, bound to the `eso-pusher` Kubernetes-auth role (same ESO controller SA as `eso`), for the in-cluster-sourced PushSecret paths (`grafana/admin`, `otel/ingress`, `harbor/admin`);
+   - the `linode-rotator` policy, bound to the `linode-rotator` Kubernetes-auth role, for the in-cluster credential rotator's paths (`loki/object-store`, `harbor/registry-s3`, `certmanager/dns01`);
+   - the `secret-propagator` GitHub-OIDC role + policy used by `llz ci propagate-pat`.
+
+   Enables the file audit device.
 
 4. **Seed secrets** — writes the following into OpenBao KV v2 and sets the corresponding GitHub secrets:
    - `secret/harbor/robot` (Harbor CI robot credentials, push+pull+delete; the buildah `config.json` is derived from these in-cluster by ESO — see note below)
@@ -121,9 +127,11 @@ equivalent `bao` commands can be found in the workflow source
 ## Secret layout
 
 The table below covers the operator-managed application secrets. Infrastructure
-secrets seeded by `bootstrap-openbao.yml` (Harbor credentials, Grafana admin, OTel
-bearer token, Loki object-store keys, etc.) are listed in the
-[Initial cluster bring-up](#initial-cluster-bring-up) section above.
+secrets seeded by `bootstrap-openbao.yml` (Harbor robot credentials, Loki
+object-store keys, etc.) are listed in the
+[Initial cluster bring-up](#initial-cluster-bring-up) section above; the paths that
+are instead sourced or rotated in-cluster are covered in
+[In-cluster rotation lifecycle](#in-cluster-rotation-lifecycle) below.
 
 | Path                          | Keys                          | Writer   | Reader      |
 |-------------------------------|-------------------------------|----------|-------------|
@@ -141,14 +149,101 @@ Any secret that must be **identical across both regions** (for example, a shared
 seed that every instance derives the same configuration from) must be kept in sync:
 if primary and secondary drift, requests routed to the drifted region fail.
 
+### In-cluster rotation lifecycle
+
+Three Linode-minted support-plane credentials are rotated **in-cluster** — no CI
+step, no GitHub secret — by the `linodeCredRotator` CronJob (`llz ci
+rotate-linode-creds`; see [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md)
+and [docs/designs/linode-credential-rotator.md](designs/linode-credential-rotator.md)):
+
+- `secret/loki/object-store` — Loki's Object Storage keys
+- `secret/harbor/registry-s3` — Harbor registry's Object Storage keys
+- `secret/certmanager/dns01` — the DNS-scoped Linode token
+
+For each, when the OpenBao `rotated_at` stamp is older than the threshold (or absent
+on a fresh seed), the rotator mints a replacement via the Linode API, **verifies it
+before touching the old one**, writes it to OpenBao through the `linode-rotator`
+Kubernetes-auth role, then drains older same-labeled resources (keep-newest-N).
+`bootstrap-openbao.yml` seeds `secret/loki/object-store` once and `bootstrap-dns.yml`
+seeds `secret/certmanager/dns01`; the rotator adopts each seeded secret on its first
+run and owns it thereafter. `secret/harbor/registry-s3` is **not** seeded at
+bootstrap — the rotator creates it on first run.
+
+Separately, three secrets are **sourced in-cluster** by ESO PushSecrets (not minted
+by the rotator) and pushed up to OpenBao through the `eso-pusher` Kubernetes-auth
+role: `secret/grafana/admin` and `secret/otel/ingress` (generated once via a Password
+generator, `updatePolicy: IfNotExists`) and `secret/harbor/admin` (mirrored from
+Harbor's Helm-generated Secret).
+
 > **Known limitation — Loki admin password.** The Loki gateway's HTTP basic-auth
-> admin password (`LOKI_ADMIN_PASSWORD`) is **not yet** on the ESO+OpenBao rotation
-> lifecycle the other support-plane credentials use. The `llz-terraform` workflow's
-> `llz ci ensure-env-secret` step generates it once and persists it to the
-> `infra-<region>` GitHub environment secret on the first apply, then exports it as
-> `TF_VAR_loki_admin_password`; later runs reuse the stored value — but it is never
-> rotated, and `cluster-bootstrap` keeps no copy in TF state. Moving it onto the
-> ESO+OpenBao path is a tracked follow-up.
+> admin password (`LOKI_ADMIN_PASSWORD`) is **not yet** on the in-cluster rotation
+> lifecycle above. The `llz-terraform` workflow's `llz ci ensure-env-secret` step
+> generates it once and persists it to the `infra-<region>` GitHub environment secret
+> on the first apply, then exports it as `TF_VAR_loki_admin_password`; later runs
+> reuse the stored value — but it is never rotated, and `cluster-bootstrap` keeps no
+> copy in TF state. This is a constraint of the pinned **apl-core 5.0.0**: it consumes
+> `apps.loki.adminPassword` as an inline values field, rendering it (together with
+> every team password) into the k8spin multi-tenant-proxy's `reverse-proxy-auth-config`
+> Secret, so ESO cannot own just the admin slice. **apl-core 6 fixes this** — it drops
+> the inline field and builds that auth-config Secret from an ExternalSecret sourced
+> from a `loki-secrets` backend (5-minute refresh), which makes in-cluster rotation
+> viable. Putting the Loki admin password on the rotation lifecycle is therefore gated
+> on the **apl-core 6 upgrade**.
+
+### Secret & token inventory
+
+Every credential the platform manages and how it is rotated. (Non-secret config
+variables — `TF_IMAGE`, `KUBE_IMAGE`, `TF_STATE_BUCKET/ENDPOINT`, `HARBOR_URL`,
+`E2E_*` — are omitted.) "Rotation method" legend: **automated** (workflow/CronJob on a
+cadence), **on-demand** (operator-triggered workflow), **manual** (operator action,
+policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral**
+(short-TTL, minted per use), **static** (never rotated by design).
+
+**GitHub Actions secrets** (operator/CI-managed; `infra-<env>` scope unless noted):
+
+| Secret | What it is | Rotation method |
+|--------|------------|-----------------|
+| `LINODE_API_TOKEN` | Linode provisioning PAT (read/write) | **Automated** — `secret-rotation.yml` mints + propagates monthly (`0 4 1 * *`), revokes old daily (`30 3 * * *`); ≤90-day policy with daily expiry audit |
+| `LINODE_DNS_TOKEN` | DNS-scoped PAT — seed input for `secret/certmanager/dns01` | **Manual** provision; the live DNS token is then **automated** in-cluster (see `certmanager/dns01` below) |
+| `CLOUD_FIREWALL_TOKEN` | Firewall-scoped PAT (optional) | **Manual** (Cloud Manager); ≤90-day policy |
+| `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` | Object Storage key for the TF-state backend bucket | **On-demand** via `secret-rotation.yml` (`tf-state-key` / `tf-state-key-revoke` scopes); no scheduled rotation (bootstrap dependency) |
+| `OPENBAO_SECRETS_WRITE_TOKEN` | GitHub classic PAT (Actions + Secrets: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
+| `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
+| `LOKI_ADMIN_PASSWORD` | Loki gateway HTTP basic-auth password | **Generate-once** (`llz ci ensure-env-secret`); **not rotated** — gated on the apl-core 6 upgrade (see limitation above) |
+| LKE admin kubeconfig | Cluster-admin credential | **Automated** — `secret-rotation.yml` (`lke-admin` scope), monthly; see [lke-admin-rotation.md](runbooks/lke-admin-rotation.md) |
+| `E2E_DISPATCH_TOKEN` | GitHub classic PAT for the e2e harness (template-repo scope) | **Manual** (template-repo admin) |
+
+**OpenBao KV v2 secrets** (`secret/…`):
+
+| Path | What it holds | Rotation method |
+|------|---------------|-----------------|
+| `secret/linode/api-token` | Linode provisioning PAT | **Automated** — `secret-rotation.yml` → `propagate-pat` (GitHub-OIDC `secret-propagator` role) |
+| `secret/loki/object-store` | Loki Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
+| `secret/harbor/registry-s3` | Harbor registry Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
+| `secret/certmanager/dns01` | DNS-scoped Linode token | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold); seeded by `bootstrap-dns.yml` |
+| `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |
+| `secret/otel/ingress` | OTel ingress bearer token | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |
+| `secret/harbor/admin` | Harbor admin password | **Tracks Harbor** — ESO PushSecret mirrors Harbor's Helm-generated Secret (`Replace`) via `eso-pusher` role |
+| `secret/harbor/robot` | Harbor CI robot (push/pull/delete) | **Static** — bootstrap seed; re-seed to rotate |
+| `secret/harbor/pull-robot` | Harbor pull-only robot (imagePullSecret) | **Static** — bootstrap seed; re-seed to rotate |
+| `secret/harbor/docker-config` | buildah `dockerconfigjson` | **Derived** — rendered in-cluster by ESO from `harbor/robot`; follows the robot creds (not seeded/stored) |
+| `secret/cert-automation/github-token` | cert-automation Argo Workflow token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
+| `secret/infra/github-dispatch-token` | harbor-ready PostSync dispatch token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
+
+**OpenBao runtime auth & seal/recovery material:**
+
+| Token / key | Lifetime | Rotation method |
+|-------------|----------|-----------------|
+| Kubernetes-auth tokens (`eso`, `eso-pusher`, `linode-rotator`) | 15m TTL | **Ephemeral** — minted per pod auth, auto-expires |
+| GitHub-OIDC tokens (`platform-ci`, `secret-propagator`) | 15m TTL / 30m max | **Ephemeral** — minted per workflow run, auto-expires |
+| `OPENBAO_ROOT_TOKEN` | Per bootstrap run | **Ephemeral** — revoked unconditionally at end of bootstrap; regenerated via recovery-key quorum |
+| `OPENBAO_SEAL_KEY` | Permanent | **Static by design** — a changed key bricks auto-unseal; escrow offline |
+| `OPENBAO_RECOVERY_KEY_1/2/3` | Permanent | **Static by design** — offline escrow; authorize `generate-root`/`rekey` quorum only |
+
+Scheduled verification of these lives in `scheduled-checks.yml` (daily `0 6 * * *`):
+Linode + GitHub PAT expiry audits (≤90-day policy, warn before expiry) and the
+in-cluster rotation-SLA age checks. `secret-rotation.yml` carries the automated and
+on-demand rotation jobs.
 
 ## Writing / rotating secrets — dual-write
 
