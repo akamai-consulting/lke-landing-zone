@@ -13,7 +13,7 @@ set -euo pipefail
 # shellcheck source=template-scripts/lib-common.sh
 source "$(dirname "$0")/../lib-common.sh"
 
-GITLEAKS_VERSION="${GITLEAKS_VERSION:-8.21.2}"
+GITLEAKS_VERSION="${GITLEAKS_VERSION:-8.30.1}"
 GITLEAKS_INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-$HOME/.local/bin}"
 
 if command -v gitleaks >/dev/null 2>&1; then
