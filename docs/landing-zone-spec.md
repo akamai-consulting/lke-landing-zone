@@ -220,6 +220,8 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 `certManager`, `openbao` (requires `externalSecrets` + `certManager`),
 `argoWorkflows`, `argoEvents`, `volumeLabeler`, `observability`, `harbor`,
 `policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
+`velero` (cluster backup/DR — default off, requires `externalSecrets`; see
+[docs/runbooks/velero-dr.md](runbooks/velero-dr.md)),
 `dns` (default off — applied separately by `bootstrap-dns.yml`).
 
 **Per-component sizing (config in the spec, mechanism in the base).** A few

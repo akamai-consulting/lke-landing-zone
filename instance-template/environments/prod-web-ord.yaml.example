@@ -72,4 +72,5 @@ spec:
       registryStorage: 100Gi                       # → registry image-store PVC (default 20Gi)
     imageScanning: { enabled: true }               # Trivy
     policyEngine:   { enabled: true }              # Kyverno + policy-reporter
+    velero:         { enabled: true }              # cluster backup/DR (needs VELERO_S3_* seeded; see docs/runbooks/velero-dr.md)
     # dns stays default-off — applied separately by bootstrap-dns.yml.

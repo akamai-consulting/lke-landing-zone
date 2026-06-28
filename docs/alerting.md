@@ -86,6 +86,19 @@ resource-saturation alert per service.
 | TF-state object-storage bucket key overdue (≤120d) | — | **Manual, calendar-tracked** — bootstrapping paradox (the key guards the state any automation would need). No automated alert possible. | ⚠️ manual only |
 | Prometheus rule drift | Expected rule groups missing from cluster | `scheduled-checks.yml` — surfaces silently-broken alerting before an incident | ✅ covered |
 
+### Backup / DR (when the `velero` component is enabled)
+
+Velero exposes Prometheus metrics (ServiceMonitor enabled by the component);
+kube-prometheus-stack scrapes them. Coverage is a **known gap** today — the
+metrics flow but no `PrometheusRule` ships yet. See
+[docs/runbooks/velero-dr.md](runbooks/velero-dr.md).
+
+| Condition | Metric | Severity | Status |
+|-----------|--------|----------|--------|
+| Last successful backup older than ~26h | `velero_backup_last_successful_timestamp` | critical | ⚠️ gap (metric available; rule TODO) |
+| Backup failures increasing | `velero_backup_failure_total` | warning | ⚠️ gap |
+| Volume-snapshot failures increasing | `velero_volume_snapshot_failure_total` | warning | ⚠️ gap |
+
 ### Cluster / platform
 
 Node pressure, kubelet health, kube-state anomalies and Prometheus

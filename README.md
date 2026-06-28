@@ -272,7 +272,8 @@ failure mode the default already prevents.
 [linode-credential-rotation](docs/runbooks/linode-credential-rotation.md) ·
 [apl-values-propagation](docs/runbooks/apl-values-propagation.md) ·
 [orphan-volume-cleanup](docs/runbooks/orphan-volume-cleanup.md) ·
-[volume-labels](docs/runbooks/volume-labels.md)
+[volume-labels](docs/runbooks/volume-labels.md) ·
+[velero-dr](docs/runbooks/velero-dr.md)
 
 **Playbooks** ([docs/playbooks/](docs/playbooks/)) — day-2 access & ops:
 [operator-onboarding](docs/playbooks/operator-onboarding.md) (start here) ·
