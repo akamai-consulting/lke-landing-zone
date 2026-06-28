@@ -4,5 +4,17 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:
   - loki-object-store-externalsecret.yaml
+  - eso-podmonitor.yaml
+  - cert-manager-servicemonitor.yaml
+  - cert-manager-allow-metrics-ingress.yaml
+  - pushgateway/deployment.yaml
+  - pushgateway/service.yaml
+  - pushgateway/servicemonitor.yaml
+  - pushgateway/networkpolicy.yaml
+  - grafana-dashboards/token-inventory-dashboard.yaml
   - prometheus-rules/openbao-alerts.yaml
   - prometheus-rules/support-plane-alerts.yaml
+  - prometheus-rules/eso-alerts.yaml
+  - prometheus-rules/job-alerts.yaml
+  - prometheus-rules/cert-manager-alerts.yaml
+  - prometheus-rules/token-inventory-alerts.yaml

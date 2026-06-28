@@ -1,0 +1,31 @@
+# Scrapes the token-inventory Pushgateway. honorLabels is LOAD-BEARING here:
+# without it Prometheus would overwrite the `job`/`instance` (and any conflicting)
+# labels that the push carries, collapsing every region's push into one series and
+# destroying the per-region/per-token identity the dashboard keys on. The
+# Pushgateway adds the `region` group key as a label to every series, so each
+# region's pane stays distinct.
+#
+# kube-prometheus-stack's serviceMonitorSelector is empty ({}), so this is picked
+# up regardless of labels/namespace.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: llz-token-pushgateway
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - llz-observability
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llz-token-pushgateway
+  endpoints:
+    - port: metrics
+      path: /metrics
+      honorLabels: true
+      interval: 60s
+      scrapeTimeout: 10s

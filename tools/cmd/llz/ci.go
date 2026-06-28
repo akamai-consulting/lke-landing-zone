@@ -61,7 +61,7 @@ func ciCmd() *cobra.Command {
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
-	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd())
+	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd(), ciTokenInventoryCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())

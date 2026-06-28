@@ -1,0 +1,54 @@
+# Alert rules for cert-manager-issued certificates. Deployed as a PrometheusRule
+# CR; apl-core's kube-prometheus-stack picks it up via its ruleSelector. Depends
+# on cert-manager-servicemonitor.yaml scraping the controller (without it these
+# certmanager_* series are absent and the rules never fire).
+#
+# Covers the platform's cert-manager certificates broadly (OpenBao serving/raft
+# TLS, the HAProxy cert driven by cert-automation, and any others). Proactive
+# Prometheus warning supplements the reactive daily scheduled-checks.yml job.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cert-manager-alerts
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: cert-manager-alerts
+      interval: 60s
+      rules:
+        # A Certificate resource reporting Ready=False — issuance/renewal is
+        # failing right now (bad issuer, DNS-01 solver token expired, etc.).
+        - alert: CertManagerCertNotReady
+          expr: certmanager_certificate_ready_status{condition="False"} == 1
+          for: 1h
+          labels:
+            severity: warning
+            service: cert-manager
+          annotations:
+            summary: Certificate {{ $labels.namespace }}/{{ $labels.name }} is not Ready
+            description: cert-manager reports this Certificate as not Ready; issuance or renewal is failing.
+        # Renewal hasn't happened and expiry is approaching. cert-manager normally
+        # renews at renewBefore (e.g. 30d out), so <7d means renewal is stuck.
+        - alert: CertManagerCertExpiringSoon
+          expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < 7 * 24 * 3600
+          for: 1h
+          labels:
+            severity: warning
+            service: cert-manager
+          annotations:
+            summary: Certificate {{ $labels.namespace }}/{{ $labels.name }} expires in under 7 days
+            description: cert-manager has not renewed this Certificate and it expires within 7 days; investigate the issuer / renewal pipeline.
+        # Under 48h is an imminent outage (TLS will start failing). Critical.
+        - alert: CertManagerCertExpiringCritical
+          expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < 48 * 3600
+          for: 30m
+          labels:
+            severity: critical
+            service: cert-manager
+          annotations:
+            summary: Certificate {{ $labels.namespace }}/{{ $labels.name }} expires in under 48 hours
+            description: cert-manager has not renewed this Certificate and it expires within 48 hours; TLS for the affected service will fail imminently.

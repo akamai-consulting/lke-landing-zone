@@ -142,6 +142,98 @@ jobs:
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ matrix.region }}
 
+  # ── Token inventory → Pushgateway (single pane of glass) ─────────────────────
+  # Runs daily (06:00 UTC) and on demand. Gathers the unified credential
+  # inventory (Linode PATs + OBJ keys, GitHub service PATs, and the static
+  # in-cluster secrets) with `llz ci token-inventory` and PUTs it to the
+  # in-cluster Pushgateway (per-region group) so Prometheus can scrape it and the
+  # Grafana "Token & Credential Inventory" dashboard + token-inventory-alerts can
+  # surface/alert on CI-managed tokens Prometheus cannot see directly. The push
+  # rides over `kubectl port-forward` (no external Pushgateway ingress).
+  # Warning-only: a push failure must not fail the scheduled run.
+  token-inventory-push:
+    name: Token Inventory Push (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    continue-on-error: true
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+      MAX_PAT_DAYS:        "90"
+      WARN_DAYS:           "14"
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
+          ref: ${{ inputs.template-ref }}
+          token: ${{ github.token }}
+          path: _llz-template
+
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: kubeconfig
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      # Gather the inventory (Linode + GitHub self-checks happen here) and PUT it
+      # to the Pushgateway over a short-lived port-forward. PUT replaces the whole
+      # per-region group, so a removed token disappears on the next run.
+      - name: Gather token inventory + push to Pushgateway
+        if: steps.kubeconfig.outputs.available == 'true'
+        env:
+          LINODE_TOKEN:                ${{ secrets.LINODE_API_TOKEN }}
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          llz ci token-inventory --output /tmp/token-metrics.txt
+          kubectl -n llz-observability rollout status deploy/llz-token-pushgateway --timeout=60s \
+            || echo "::warning::llz-token-pushgateway not Ready — attempting the push anyway"
+          kubectl -n llz-observability port-forward svc/llz-token-pushgateway 9091:9091 >/tmp/pf.log 2>&1 &
+          PF_PID=$!
+          trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 10); do
+            if curl -sf -o /dev/null "http://127.0.0.1:9091/-/ready"; then break; fi
+            sleep 1
+          done
+          curl -sf -X PUT --data-binary @/tmp/token-metrics.txt \
+            "http://127.0.0.1:9091/metrics/job/token-inventory/region/${REGION}"
+          COUNT="$(grep -c '^llz_token_inventory_info' /tmp/token-metrics.txt || echo 0)"
+          echo "Pushed ${COUNT} credential inventory entries for ${REGION}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ matrix.region }}
+
   # ── LKE-E lke-admin rotation SLA ─────────────────────────────────────────────
   # Runs daily (06:00 UTC). On LKE-Enterprise the only sanctioned rotation is
   # lke-admin-token (see .github/workflows/secret-rotation.yml). This is the
@@ -439,7 +531,7 @@ jobs:
         if: steps.kubeconfig.outputs.available == 'true'
         run: |
           set -euo pipefail
-          EXPECTED_RULES="openbao-alerts support-plane-alerts"
+          EXPECTED_RULES="openbao-alerts support-plane-alerts eso-alerts job-alerts cert-manager-alerts token-inventory-alerts"
           MISSING=0
 
           {
