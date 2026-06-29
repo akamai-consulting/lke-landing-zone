@@ -414,23 +414,20 @@ Distinct from the instance spine, an extension itself moves through a
 framework-owned state lifecycle:
 
 ```mermaid
-stateDiagram-v2
-  [*] --> available: built-in or synced source
-  available --> enabled: enable records it and scaffolds files; remote first-enable is gated
-  enabled --> enabled: apply or upgrade re-renders and overwrites; check probes drift
-  enabled --> disabled: disable drops it from the enabled list; files left in place
-  disabled --> enabled: enable
-  disabled --> decommissioned: teardown removes files and unseed revokes secrets
-  decommissioned --> [*]
-  note right of disabled
-    doctor flags orphaned files and seeded secrets;
-    decommission is the explicit gated cleanup arc
-  end note
+flowchart LR
+  s((start)) --> A["available<br/>built-in or synced source"]
+  A -->|"enable: scaffold files,<br/>remote first-enable gated"| E["enabled"]
+  E -->|"apply / upgrade:<br/>re-render + overwrite, check probes drift"| E
+  E -->|"disable:<br/>files left in place"| D["disabled"]
+  D -->|"enable"| E
+  D -->|"teardown + unseed:<br/>gated cleanup arc"| X["decommissioned"]
+  X --> f((end))
 ```
 
 Note the asymmetry the Decommission arc closes: `disable` is intentionally
 non-destructive (it never deletes a file or revokes a credential), so `teardown` and
-`unseed` are the *separate, gated* inverses of `scaffold` and `seed`.
+`unseed` are the *separate, gated* inverses of `scaffold` and `seed`. While disabled,
+`doctor` flags the orphaned files and seeded secrets the extension left behind.
 
 ### Hook points
 
