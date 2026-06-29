@@ -660,7 +660,12 @@ that is neither a render var nor a secret:
   expression, not `render`), and the value is config, not a credential — so a `Default`
   is allowed (unlike a secret). `doctor` reports a declared-but-unset ghVar (fatal when
   `required`), and `llz extension seed` pushes its `Default` (or `LLZ_VAR_<NAME>`
-  override) to the repo/Environment variable via `gh variable set`.
+  override) to the repo/Environment variable via `gh variable set`. A ghVar that holds a
+  container image is marked **`image: true`**: its `Default` must be digest-pinned, and a
+  workflow `image: ${{ vars.NAME }}` is only accepted when `NAME` is an `image` ghVar (see
+  the image-pin section). Note `doctor` checks **seed-readiness** (a default/override exists
+  to push), not that the variable is actually set on GitHub — a live `gh variable list`
+  lookup is an open question.
 
 ```mermaid
 flowchart LR
@@ -747,11 +752,15 @@ otherwise escape that check while still running with the workflow's permissions 
 app-kit pattern that needs it most. `lintWorkflowImages` (`extension_ci.go`) closes the
 gap: for every `files:` entry that targets `.github/workflows/**`, it reads the source and
 requires each `image:` / `container:` reference to be either **digest-pinned**
-(`…@sha256:<64hex>`) or a **`${{ vars.NAME }}` whose `NAME` is declared in `ghVars:`** — an
-operator-owned, `doctor`-checked, reviewable image source. A mutable `:latest` or an
-undeclared `vars` reference is a lint finding. This is what ties the two prior sections
-together: `akamai-functions` passes because `RUST_IMAGE` is a declared ghVar, and the
-check holds without forcing the app pipeline into the `ci:` DAG.
+(`…@sha256:<64hex>`) or a **`${{ vars.NAME }}` whose `NAME` is an `image: true` ghVar** —
+an operator-owned, `doctor`-checked image source whose own `Default` is digest-pin-enforced
+by `lintManifest`. A mutable `:latest`, an undeclared `vars` reference, or a declared but
+**not** `image`-flagged ghVar is a lint finding. This ties the sections together:
+`akamai-functions` passes because `RUST_IMAGE` is declared `image: true`, and the check
+holds without forcing the app pipeline into the `ci:` DAG. The one residual gap is the
+**live** variable value: lint can pin the declared `Default`, but the value actually set on
+GitHub is resolved by the runner and would need a `gh variable list` lookup in `doctor`
+(open question).
 
 ## Per-repo state
 
@@ -1050,8 +1059,11 @@ flowchart TD
 - **Apply depth**: render → write with a per-file `managed` (overwrite) / `seed`
   (write-once) mode + `--check` drift; the full three-way *conflict* model is deferred.
 - **GitHub Actions variables**: a third input category `ghVars:` ships — declared,
-  `doctor`-checked, `seed`-pushed via `gh variable set`, and honored by the workflow
-  image-pin lint. Distinct from render `vars:` and `secrets:`.
+  `doctor`-checked (seed-readiness), `seed`-pushed via `gh variable set`, and honored by the
+  workflow image-pin lint. Distinct from render `vars:` and `secrets:`. An `image: true`
+  ghVar carries the digest-pin metadata: its `Default` must be pinned and a workflow image
+  expression must reference it. Declaring only `ghVars:` is a Configure-phase declaration
+  (`manifestDeclaresHook(HookConfig)`).
 - **Scaffolded-workflow image pins**: `lintWorkflowImages` extends the digest-pin check
   to `files:` entries under `.github/workflows/**` — a workflow image must be digest-pinned
   or a declared `ghVars:` reference. The trust property now covers the app-kit pattern.
@@ -1071,6 +1083,12 @@ flowchart TD
   formalized as **scaffold (`files:`) + `config:`** only, dropping the `check`/`validate`/`ci`
   surface that the platform gate skips anyway? (The `validate:`-rendered matrix keeps the
   `validate:` block useful even if the engine never fires it.)
+- **doctor: live GitHub variable lookup**: `doctor` checks ghVar *seed-readiness* (a
+  default/override exists), not whether the variable is actually set on the repo/Environment,
+  and the workflow image-pin lint pins the declared *default* but not the *live* value. Add a
+  `gh variable list` lookup so `doctor` reports the real GitHub state (and flags a live image
+  variable whose value is an unpinned tag), or keep doctor offline + table-testable and leave
+  live state to CI?
 - **Recipe granularity for ohttp**: one `akamai-functions` vs. several composable
   extensions.
 - **Anchor set sufficiency**: is `pre-converge | post-converge | operate` enough, or

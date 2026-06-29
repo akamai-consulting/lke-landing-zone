@@ -157,7 +157,8 @@ short: x
 kind: tool
 stage: app
 ghVars:
-  - {name: RUST_IMAGE}
+  - {name: RUST_IMAGE, image: true}
+  - {name: PLAIN_VAR}
 files:
   - {src: wf, dst: .github/workflows}
 `
@@ -166,8 +167,9 @@ files:
 		image     string
 		wantClean bool
 	}{
-		{"declared vars ref", "${{ vars.RUST_IMAGE }}", true},
+		{"image-flagged vars ref", "${{ vars.RUST_IMAGE }}", true},
 		{"digest pinned", "ghcr.io/o/img@sha256:" + strings.Repeat("a", 64), true},
+		{"declared but not image-flagged", "${{ vars.PLAIN_VAR }}", false},
 		{"undeclared vars ref", "${{ vars.NOPE }}", false},
 		{"mutable tag", "ghcr.io/o/img:latest", false},
 	}
@@ -188,6 +190,45 @@ files:
 			}
 		})
 	}
+}
+
+// An image-valued ghVar's declared default must itself be digest-pinned (lint can only see
+// the default; the live GitHub value needs a doctor API lookup — tracked as an open question).
+func TestImageGHVarDefaultMustBePinned(t *testing.T) {
+	base := func(def string) extManifest {
+		return extManifest{Name: "k", Short: "x", Kind: "tool", Stage: StageApp,
+			GHVars: []extGHVar{{Name: "RUST_IMAGE", Image: true, Default: def}}}
+	}
+	if f := lintManifest(base("ghcr.io/o/img:latest")); !hasFindingContaining(f, "must be digest-pinned") {
+		t.Fatalf("a mutable image default should be rejected, got %v", f)
+	}
+	if f := lintManifest(base("ghcr.io/o/img@sha256:" + strings.Repeat("a", 64))); hasFindingContaining(f, "digest-pinned") {
+		t.Fatalf("a digest-pinned image default should be accepted, got %v", f)
+	}
+	// A non-image ghVar with a mutable-looking default is fine (it isn't an image).
+	plain := extManifest{Name: "k", Short: "x", Kind: "tool", Stage: StageApp,
+		GHVars: []extGHVar{{Name: "APP_SUFFIX", Default: "-lab"}}}
+	if f := lintManifest(plain); hasFindingContaining(f, "digest-pinned") {
+		t.Fatalf("a non-image ghVar default must not be image-checked, got %v", f)
+	}
+}
+
+// GHVars are Configure-phase declarations, so manifestDeclaresHook must report HookConfig
+// for a manifest that declares only ghVars (not just vars/secrets).
+func TestManifestDeclaresHookConfigCoversGHVars(t *testing.T) {
+	m := extManifest{GHVars: []extGHVar{{Name: "RUST_IMAGE"}}}
+	if !manifestDeclaresHook(m, HookConfig) {
+		t.Fatal("a manifest declaring only ghVars should declare HookConfig")
+	}
+}
+
+func hasFindingContaining(findings []string, sub string) bool {
+	for _, f := range findings {
+		if strings.Contains(f, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // A non-workflow file is never image-checked, even if it mentions a mutable image.

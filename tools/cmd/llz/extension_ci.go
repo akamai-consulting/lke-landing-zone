@@ -89,8 +89,10 @@ func isWorkflowPath(dst string) bool {
 // literal, never <@ @>-templated), so it needs no instance root.
 func lintWorkflowImages(ext Extension) []string {
 	declared := map[string]bool{}
+	imageVar := map[string]bool{}
 	for _, gv := range ext.Manifest.GHVars {
 		declared[gv.Name] = true
+		imageVar[gv.Name] = gv.Image
 	}
 	var findings []string
 	scan := func(dst string, body []byte) {
@@ -100,8 +102,12 @@ func lintWorkflowImages(ext Extension) []string {
 				continue // flow-map container: {…} (image handled on its own line) or a comment
 			}
 			if vm := reVarsRef.FindStringSubmatch(val); vm != nil {
-				if !declared[vm[1]] {
+				switch {
+				case !declared[vm[1]]:
 					findings = append(findings, fmt.Sprintf("%s: image uses ${{ vars.%s }} but %s is not declared in ghVars: — declare it so it is doctor-checked and operator-owned", dst, vm[1], vm[1]))
+				case !imageVar[vm[1]]:
+					// declared, but not flagged as an image: its default/value isn't digest-checked.
+					findings = append(findings, fmt.Sprintf("%s: image uses ${{ vars.%s }} but ghVar %s is not marked `image: true` — flag it so its default is digest-pin-enforced", dst, vm[1], vm[1]))
 				}
 				continue
 			}

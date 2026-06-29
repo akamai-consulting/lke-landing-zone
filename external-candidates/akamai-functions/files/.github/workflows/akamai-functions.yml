@@ -47,7 +47,7 @@ jobs:
     name: Deploy (lab)
     needs: [build]
     runs-on: ubuntu-latest
-    environment: infra-prod        # the GH Environment seed targets; gates the deploy
+    environment: <@ .gh_env @>     # rendered from the gh_env var; the GH Environment seed targets; gates the deploy
     container:
       image: ${{ vars.RUST_IMAGE }}
       credentials: {username: ${{ vars.GHCR_USER }}, password: ${{ secrets.GHCR_PAT }}}

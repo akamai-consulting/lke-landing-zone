@@ -186,11 +186,20 @@ type extSecret struct {
 // the value is non-sensitive a Default is allowed (unlike a secret). The lint workflow
 // image-pin check (extension_ci.go) also treats a declared ghVar as an operator-owned,
 // reviewable image source, so a workflow may use `image: ${{ vars.NAME }}` when NAME is here.
+//
+// Image marks a ghVar that holds a CONTAINER IMAGE reference (the toolchain image a
+// workflow's `image: ${{ vars.NAME }}` resolves to). It is the digest-pin metadata the
+// workflow image-pin lint needs: a workflow image expression must point at an Image ghVar,
+// and an Image ghVar's Default must itself be digest-pinned (…@sha256:<64hex>). The LIVE
+// GitHub variable value cannot be checked at lint time (the runner resolves it) — that
+// needs the doctor live-lookup tracked in the open questions; lint enforces what it can
+// see (the declared default).
 type extGHVar struct {
 	Name     string `json:"name"`
 	Default  string `json:"default,omitempty"`
 	Doc      string `json:"doc,omitempty"`
 	Required bool   `json:"required,omitempty"`
+	Image    bool   `json:"image,omitempty"` // holds a container image ref; Default must be digest-pinned
 	GHEnv    string `json:"ghEnv,omitempty"` // GitHub Environment to set it in (empty = repo-level variable)
 }
 
@@ -230,7 +239,7 @@ func manifestDeclaresHook(m extManifest, k HookKind) bool {
 	case HookFiles:
 		return len(m.Files) > 0
 	case HookConfig:
-		return len(m.Vars) > 0 || len(m.Secrets) > 0
+		return len(m.Vars) > 0 || len(m.Secrets) > 0 || len(m.GHVars) > 0
 	case HookCheck:
 		return len(m.Check) > 0
 	case HookValidate:
@@ -340,6 +349,11 @@ func lintManifest(m extManifest) []string {
 	for i, gv := range m.GHVars {
 		if gv.Name == "" {
 			f = append(f, fmt.Sprintf("ghVar #%d: name is required", i))
+		}
+		// An image-valued ghVar's default is trust surface (a workflow runs in it), so a
+		// declared default must be digest-pinned — the same rule as a ci: step's image:.
+		if gv.Image && gv.Default != "" && !reImageDigest.MatchString(gv.Default) {
+			f = append(f, fmt.Sprintf("ghVar %s: image default %q must be digest-pinned (…@sha256:<64hex>), not a mutable tag", gv.Name, gv.Default))
 		}
 	}
 	for i, file := range m.Files {

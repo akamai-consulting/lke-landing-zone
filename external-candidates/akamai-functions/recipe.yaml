@@ -8,13 +8,19 @@
 # (validate: below) so they are typed + visible in `llz extension lifecycle` / `stages`,
 # but because App-stage is not platform-gated they are SKIPPED by `llz lint` / `llz
 # validate` (the platform gate, which owns IaC + Kube-Infra) and RUN instead by the app's
-# own scaffolded CI. The CI matrix and these validate: steps both dispatch through
-# scripts/app/quality.sh, so the gate behavior has a single source of truth.
-schemaVersion: 2
+# own scaffolded CI. The validate: step names are the SINGLE SOURCE for the workflow's
+# quality matrix (rendered via `target: <@ .validate_targets @>`); quality.sh implements
+# each target's commands.
+schemaVersion: 3
 name: akamai-functions
 short: build + deploy a Rust/Spin app to Akamai Fermyon Wasm Functions (external candidate)
 kind: tool
 stage: app
+
+# Render var — substituted into the scaffolded workflow at apply time. The deploy target
+# GH Environment; keep it in sync with the secrets' ghEnv seed target below.
+vars:
+  - {name: gh_env, default: infra-prod, doc: "GitHub Environment the deploy job targets"}
 
 # Configure — operator points these at their app; seed wires secrets into OpenBao + GH env
 # and pushes ghVars: to the repo's GitHub Actions variables.
@@ -27,11 +33,12 @@ stage: app
 # defaults — and it is what makes `image: ${{ vars.RUST_IMAGE }}` pass the workflow
 # image-pin lint (a declared ghVar is an operator-owned, reviewable image source).
 ghVars:
-  - {name: RUST_IMAGE, required: true, doc: "digest-pinned ci-rust toolchain image the CI jobs run in (…@sha256:…)"}
+  - {name: RUST_IMAGE, required: true, image: true, doc: "digest-pinned ci-rust toolchain image the CI jobs run in (…@sha256:…)"}
   - {name: GHCR_USER, required: true, doc: "GHCR username used to pull the private RUST_IMAGE"}
   - {name: SPIN_MANIFEST, default: spin.toml, doc: "path to the app's spin.toml"}
   - {name: APP_SUFFIX, default: "-lab", doc: "env suffix on app names (-lab/-staging/\"\")"}
 secrets:
+  # ghEnv is the deploy GH Environment seed target — keep it equal to the gh_env render var.
   - {name: FERMYON_CLOUD_TOKEN, required: true, bao: "secret/akamai#fermyon_cloud_token", ghEnv: infra-prod}
   - {name: GHCR_PAT, required: true, ghEnv: infra-prod}   # pulls the private ci-rust toolchain image
 
