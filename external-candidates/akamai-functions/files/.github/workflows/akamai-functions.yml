@@ -1,0 +1,42 @@
+# Scaffolded by the akamai-functions kit. App-agnostic Spin→Akamai build+deploy. Point
+# the SPIN_MANIFEST repo Variable at your app's spin.toml. A workload pipeline ships as a
+# file (not a ci: anchor DAG) because it needs a private toolchain container, composite
+# actions, and a scripted deploy with secrets.
+name: Akamai Functions
+on:
+  pull_request: {paths: ['**/spin.toml', 'src/**', '.github/workflows/akamai-functions.yml']}
+  push: {branches: [main]}
+  workflow_dispatch: {}
+permissions: {contents: read}
+env:
+  # Repo Variables: RUST_IMAGE=ghcr.io/<org>/ci-rust:<tag> (private), SPIN_MANIFEST=path/to/spin.toml
+  SPIN_MANIFEST: ${{ vars.SPIN_MANIFEST || 'spin.toml' }}
+defaults: {run: {shell: bash}}
+concurrency: {group: '${{ github.workflow }}-${{ github.ref }}', cancel-in-progress: true}
+
+jobs:
+  build:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.RUST_IMAGE }}
+      credentials: {username: ${{ vars.GHCR_USER }}, password: ${{ secrets.GHCR_PAT }}}
+    steps:
+      - uses: actions/checkout@v4
+      - run: spin build -f "$SPIN_MANIFEST"
+
+  deploy-lab:
+    name: Deploy (lab)
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: infra-prod        # the GH Environment seed targets; gates the deploy
+    container:
+      image: ${{ vars.RUST_IMAGE }}
+      credentials: {username: ${{ vars.GHCR_USER }}, password: ${{ secrets.GHCR_PAT }}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/spin-cloud-deploy
+        with:
+          fermyon-cloud-token: ${{ secrets.FERMYON_CLOUD_TOKEN }}
+          spin-manifest: ${{ vars.SPIN_MANIFEST || 'spin.toml' }}
+          app-suffix: ${{ vars.APP_SUFFIX }}

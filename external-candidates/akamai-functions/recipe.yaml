@@ -1,0 +1,29 @@
+# akamai-functions — the REUSABLE delivery machinery for building a Rust/Spin app and
+# deploying it to Akamai (Fermyon Wasm Functions). It is app-agnostic: it ships the CI
+# pipeline, the composite deploy action, the deploy script, the toolchain, and the
+# Fermyon deploy secret — NOT any specific workload. The Spin app(s) (e.g. the OHTTP
+# gateway/relay) are the operator's own code, brought separately; the operator points
+# SPIN_MANIFEST at their spin.toml. Workload dashboards/alerts come via `llz extension
+# new --kind observability`. (Modeled on the functions/ohttp prototype, with the
+# ohttp-specific bits factored out.)
+schemaVersion: 2
+name: akamai-functions
+short: build + deploy a Rust/Spin app to Akamai Fermyon Wasm Functions (external candidate)
+kind: tool
+
+# Configure — operator points these at their app; seed wires the secret into OpenBao + GH env.
+vars:
+  - {name: SPIN_MANIFEST, default: spin.toml}   # path to the app's spin.toml
+  - {name: APP_SUFFIX, default: "-lab"}          # env suffix on app names (-lab/-staging/"")
+secrets:
+  - {name: FERMYON_CLOUD_TOKEN, required: true, bao: "secret/akamai#fermyon_cloud_token", ghEnv: infra-prod}
+  - {name: GHCR_PAT, required: true, ghEnv: infra-prod}   # pulls the private ci-rust toolchain image
+
+# Tools — local build/test supply (CI uses the pinned container in the scaffolded workflow).
+tools:
+  - {name: spin, via: "aqua:fermyon/spin", version: "3.1.0"}
+  - {name: cargo, via: "rust", version: "1.82.0"}
+
+# Scaffold — the delivery machinery (CI pipeline + deploy action + script). No app code.
+files:
+  - {src: files, dst: .}
