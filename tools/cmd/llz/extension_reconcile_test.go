@@ -31,9 +31,10 @@ func TestBuiltinExtensionsLoad(t *testing.T) {
 // capability ceiling (built-ins bypass enable-time lint, so guard them here), and carry
 // the expected hook shape. This pins the migrated candidates against drift.
 func TestShippedOptionalBuiltins(t *testing.T) {
-	want := map[string]struct{ files, check bool }{
-		"devcontainer": {files: true},
-		"lint-yaml":    {files: true, check: true},
+	want := map[string]struct{ files, check, ci, health bool }{
+		"devcontainer":     {files: true},
+		"lint-yaml":        {files: true, check: true},
+		"scheduled-checks": {ci: true, health: true},
 	}
 	seen := map[string]bool{}
 	for _, b := range builtinExtensions() {
@@ -48,11 +49,17 @@ func TestShippedOptionalBuiltins(t *testing.T) {
 		if findings := lintManifest(b.Manifest); len(findings) > 0 {
 			t.Errorf("%s fails the capability ceiling: %v", b.Name, findings)
 		}
-		if exp.files && len(b.Manifest.Files) == 0 {
-			t.Errorf("%s should declare files:", b.Name)
+		if (len(b.Manifest.Files) > 0) != exp.files {
+			t.Errorf("%s files presence = %v, want %v", b.Name, len(b.Manifest.Files) > 0, exp.files)
 		}
 		if (len(b.Manifest.Check) > 0) != exp.check {
 			t.Errorf("%s check presence = %v, want %v", b.Name, len(b.Manifest.Check) > 0, exp.check)
+		}
+		if (len(b.Manifest.CI) > 0) != exp.ci {
+			t.Errorf("%s ci presence = %v, want %v", b.Name, len(b.Manifest.CI) > 0, exp.ci)
+		}
+		if (len(b.Manifest.Health) > 0) != exp.health {
+			t.Errorf("%s health presence = %v, want %v", b.Name, len(b.Manifest.Health) > 0, exp.health)
 		}
 	}
 	for name := range want {
@@ -60,6 +67,34 @@ func TestShippedOptionalBuiltins(t *testing.T) {
 			t.Errorf("shipped built-in %q not found in the embed", name)
 		}
 	}
+}
+
+// scheduled-checks proves HookCI + TriggerSchedule end-to-end from a shipped built-in:
+// every ci: step carries a cron and renders into the scheduled workflow.
+func TestScheduledChecksBuiltinGeneratesScheduledWorkflow(t *testing.T) {
+	var m extManifest
+	for _, b := range builtinExtensions() {
+		if b.Name == "scheduled-checks" {
+			m = b.Manifest
+		}
+	}
+	if m.Name == "" {
+		t.Fatal("scheduled-checks built-in not found")
+	}
+	for _, s := range m.CI {
+		if s.Schedule == "" {
+			t.Errorf("scheduled-checks ci step %q must carry a schedule (TriggerSchedule)", s.Name)
+		}
+	}
+	anchored, scheduled := partitionCIJobs(manifestCIJobs(m))
+	if len(anchored) != 0 || len(scheduled) == 0 {
+		t.Fatalf("expected all jobs scheduled; got %d anchored, %d scheduled", len(anchored), len(scheduled))
+	}
+	out, err := renderScheduledWorkflow(scheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out, "  schedule:", "workflow_dispatch: {}", "llz ci cred-audit")
 }
 
 // Origin-erasure: a built-in's files: render through the SAME applyExtensionFiles
