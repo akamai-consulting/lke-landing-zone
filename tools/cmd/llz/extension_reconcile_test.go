@@ -70,23 +70,30 @@ func TestShippedOptionalBuiltins(t *testing.T) {
 	}
 }
 
-// missingExtTools reports declared tools: that are absent from PATH — the readiness gap
-// behind a silent check-skip.
+// missingExtTools reports declared tools whose executable is absent from PATH — the
+// readiness gap behind a silent check-skip.
 func TestMissingExtTools(t *testing.T) {
-	m := extManifest{Tools: []string{"sh", "llz-definitely-absent-xyz"}}
-	if miss := missingExtTools(m); len(miss) != 1 || miss[0] != "llz-definitely-absent-xyz" {
-		t.Fatalf("missingExtTools = %v, want [llz-definitely-absent-xyz]", miss)
+	m := extManifest{Tools: []extTool{{Name: "sh"}, {Name: "llz-definitely-absent-xyz", Via: "aqua:x/y"}}}
+	miss := missingExtTools(m)
+	if len(miss) != 1 || miss[0].Name != "llz-definitely-absent-xyz" {
+		t.Fatalf("missingExtTools = %v, want one (llz-definitely-absent-xyz)", miss)
+	}
+	if fixHint(miss[0]) != "run `llz extension provision`" {
+		t.Errorf("a provisionable tool should hint at provision, got %q", fixHint(miss[0]))
 	}
 }
 
 // Every shipped built-in declares every external tool its check/validate steps invoke,
-// so doctor/enable can flag a missing dep instead of the check silently skipping. `llz`
-// (self) is exempt. This pins tools: to the steps so the declaration can't drift.
+// and every declared tool that's auto-provisionable carries a pinned mise ref+version.
+// `llz` (self) is exempt. This pins tools: to the steps and keeps provisioning reproducible.
 func TestShippedBuiltinsDeclareTheirTools(t *testing.T) {
 	for _, b := range builtinExtensions() {
 		declared := map[string]bool{}
 		for _, tl := range b.Manifest.Tools {
-			declared[tl] = true
+			declared[tl.Name] = true
+			if tl.Via != "" && tl.Version == "" {
+				t.Errorf("built-in %q tool %q has via:%q but no pinned version", b.Name, tl.Name, tl.Via)
+			}
 		}
 		steps := append(append([]extStep{}, b.Manifest.Check...), b.Manifest.Validate...)
 		for _, s := range steps {

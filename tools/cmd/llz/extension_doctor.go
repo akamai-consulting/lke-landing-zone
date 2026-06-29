@@ -6,17 +6,26 @@ import (
 	"text/tabwriter"
 )
 
-// missingExtTools returns the declared tools: an extension needs that are not on PATH.
-// This is the readiness gap that otherwise hides behind a silent check-skip (haveTool):
-// an enabled lint pack whose tool is absent does nothing and, without this, says nothing.
-func missingExtTools(m extManifest) []string {
-	var miss []string
+// missingExtTools returns the declared tools an extension needs whose executable is not
+// on PATH. This is the readiness gap that otherwise hides behind a silent check-skip
+// (haveTool): an enabled lint pack whose tool is absent does nothing and says nothing.
+func missingExtTools(m extManifest) []extTool {
+	var miss []extTool
 	for _, t := range m.Tools {
-		if !lookable(t) {
+		if !lookable(t.Name) {
 			miss = append(miss, t)
 		}
 	}
 	return miss
+}
+
+// fixHint tells the operator how to get a missing tool: provision it (if the extension
+// declared a mise spec) or install it themselves.
+func fixHint(t extTool) string {
+	if t.Via != "" {
+		return "run `llz extension provision`"
+	}
+	return "install it"
 }
 
 // reportMissingExtTools prints a loud readiness warning for every enabled extension whose
@@ -25,7 +34,7 @@ func missingExtTools(m extManifest) []string {
 func reportMissingExtTools(exts []Extension) {
 	for _, e := range exts {
 		for _, t := range missingExtTools(e.Manifest) {
-			fmt.Printf("  %s %s requires %q — not installed; its check will skip until you install it\n", yellow("⚠"), e.Name, t)
+			fmt.Printf("  %s %s requires %q — not installed; %s (its check skips until then)\n", yellow("⚠"), e.Name, t.Name, fixHint(t))
 		}
 	}
 }
@@ -35,7 +44,7 @@ func reportMissingExtTools(exts []Extension) {
 // later `llz lint` skip line.
 func warnMissingExtTools(m extManifest) {
 	for _, t := range missingExtTools(m) {
-		fmt.Fprintf(os.Stderr, "  %s requires %q — not installed; install it or its check will silently skip\n", m.Name, t)
+		fmt.Fprintf(os.Stderr, "  %s requires %q — not installed; %s, or its check will silently skip\n", m.Name, t.Name, fixHint(t))
 	}
 }
 

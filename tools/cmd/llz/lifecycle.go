@@ -18,9 +18,9 @@ package main
 // An extension touches a phase through one of TWO disjoint registers:
 //   - a HookKind — a declarative artifact FIRED idempotently by the phase (a
 //     Contribution); safe to run unattended under reconcile.
-//   - an Action — an imperative, usually cloud-mutating day-2/maintenance operation
-//     (seed, rotate, upgrade, unseed, teardown) run ONLY via a gated operator command
-//     or a cadence workflow, and NEVER fired by reconcile.
+//   - an Action — an imperative, usually cloud/host-mutating day-2/maintenance operation
+//     (seed, rotate, upgrade, unseed, teardown, provision) run ONLY via a gated operator
+//     command or a cadence workflow, and NEVER fired by reconcile.
 // Keeping Actions as their own typed register (rather than smuggling seed/rotate back
 // into HookKind) is what makes the "never reconciled" safety boundary something the
 // registry states and lifecycle_test.go enforces, instead of an absence.
@@ -155,11 +155,12 @@ func applyPosture(p Posture, label string, err error) error {
 type Action string
 
 const (
-	ActionSeed     Action = "seed"     // wire declared secrets into their stores (OpenBao / GH env)
-	ActionRotate   Action = "rotate"   // mint a fresh token and re-seed it (TokenRotator)
-	ActionUpgrade  Action = "upgrade"  // migrate manifest schema + re-apply files + emit copier/renovate wiring
-	ActionUnseed   Action = "unseed"   // revoke seeded secrets from their stores (the inverse of seed)
-	ActionTeardown Action = "teardown" // remove an extension's scaffolded files (the inverse of scaffold)
+	ActionSeed      Action = "seed"      // wire declared secrets into their stores (OpenBao / GH env)
+	ActionRotate    Action = "rotate"    // mint a fresh token and re-seed it (TokenRotator)
+	ActionUpgrade   Action = "upgrade"   // migrate manifest schema + re-apply files + emit copier/renovate wiring
+	ActionUnseed    Action = "unseed"    // revoke seeded secrets from their stores (the inverse of seed)
+	ActionTeardown  Action = "teardown"  // remove an extension's scaffolded files (the inverse of scaffold)
+	ActionProvision Action = "provision" // install enabled extensions' declared tools via mise (the host/local supply side)
 )
 
 // ActionMeta records, in one place, how a day-2 action is invoked and what drives it —
@@ -196,6 +197,8 @@ var actions = []ActionMeta{
 		Summary: "revoke seeded secrets — delete the GH env secret; print the bao removal (shared-path safety) — the inverse of seed, closing the disable→orphaned-credential gap"},
 	{Action: ActionTeardown, Gated: true, Command: "llz extension teardown",
 		Summary: "remove an extension's scaffolded files (per the lock) and clear its lock entries — the inverse of scaffold"},
+	{Action: ActionProvision, Gated: true, Command: "llz extension provision", Iface: "mise",
+		Summary: "install enabled extensions' declared tools (pinned mise refs) into a generated .mise.toml — the host/local supply side; the extension declares pinned data, never an install script"},
 }
 
 func actionMeta(a Action) (ActionMeta, bool) {
@@ -372,7 +375,7 @@ func (p LifecyclePhase) Performs(a Action) bool {
 var lifecyclePhases = []LifecyclePhase{
 	{ID: "entitle", Methodology: true, Name: "Entitle", Runners: []Runner{RunnerExternal}, Engine: "external (accounts / InfoSec)"},
 	{ID: "scaffold", Methodology: true, Name: "Scaffold", Runners: []Runner{RunnerLaptop}, Engine: "copier + laptop (llz new)", Hooks: []HookKind{HookFiles}},
-	{ID: "configure", Methodology: true, Name: "Configure", Runners: []Runner{RunnerLaptop}, Engine: "laptop (llz render)", Hooks: []HookKind{HookConfig}, Actions: []Action{ActionSeed}},
+	{ID: "configure", Methodology: true, Name: "Configure", Runners: []Runner{RunnerLaptop}, Engine: "laptop (llz render)", Hooks: []HookKind{HookConfig}, Actions: []Action{ActionSeed, ActionProvision}},
 	{ID: "gate", Name: "Gate", Runners: []Runner{RunnerLaptop, RunnerActions}, Engine: "laptop (llz lint) + Actions (validate job)", Hooks: []HookKind{HookCheck, HookValidate}},
 	{ID: "bootstrap", Methodology: true, Name: "Bootstrap", Runners: []Runner{RunnerActions}, Engine: "GitHub Actions (llz-terraform.yml → converge)", Hooks: []HookKind{HookCI}, CoreJobID: "converge"},
 	{ID: "operate", Methodology: true, Name: "Operate", Runners: []Runner{RunnerActions, RunnerLaptop}, Engine: "GitHub Actions (scheduled) + the llz CLI", Hooks: []HookKind{HookCI, HookHealth, HookCommands}, Actions: []Action{ActionRotate}, CoreJobID: "operate"},

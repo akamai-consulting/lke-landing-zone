@@ -53,9 +53,9 @@ the implementation enforces is deliberately narrow:
     a `schedule:` cron emits the step into a separate `llz-extensions-scheduled.yml`
     (`on: schedule`), distinct from the converge-anchored `llz-extensions.yml` — what
     scheduled-checks, cluster-health, and a secret-rotation cadence ride.
-  - An **action** (`Action`: `seed`, `rotate`, `upgrade`, `unseed`, `teardown`) is an
-    imperative, usually cloud-mutating day-2 operation run *only* via a gated operator
-    command or a cadence workflow, and **never fired by reconcile**. `seed` lives at Configure,
+  - An **action** (`Action`: `seed`, `rotate`, `upgrade`, `unseed`, `teardown`, `provision`)
+    is an imperative, usually cloud/host-mutating day-2 operation run *only* via a gated
+    operator command or a cadence workflow, and **never fired by reconcile**. `seed` lives at Configure,
     `rotate` at Operate (backed by the `TokenRotator` interface; it *belongs to* the
     `llz-secret-rotation.yml` cadence but is operator-invoked today — the TokenRotator
     step is not yet wired into that workflow, recorded as `ActionMeta.DriverWired=false`),
@@ -100,6 +100,19 @@ so a core command never reaches into an extension internal: `runLint` → `lifec
 `runDrift` → `lifecycleDrift` (Sustain output drift, report-only). The Actions-run
 phases (Bootstrap / Operate / Promote) fire through generated workflows instead, which
 is why they have no laptop entry point.
+
+**Tool supply.** An extension's steps need external tools, so each tool is declared in
+`tools:` (`extTool{name, via, version}`). Declaration drives two things: doctor/enable
+*verify* presence (a missing tool is surfaced, not a silent check-skip), and
+`llz extension provision` (the Configure-phase `ActionProvision`) *installs* the host/local
+set by aggregating the enabled extensions' pinned `via` refs into a generated `.mise.toml`
+and running `mise`. The trust boundary is the same one the argv-only ceiling holds: an
+extension declares **what** to install — a pinned, registry-resolvable ref (`pipx:yamllint`,
+`npm:markdownlint-cli`, `aqua:crate-ci/typos`) — and **never how**. There is no install-script
+field, so a remote, git-pinned extension cannot smuggle host execution; `mise` installs from
+its backends' registries (checksum-verified for the binary backends), the version pins ride
+the source SHA+digest lock, and the install is gated (`--yes`). For CI-run tools the supply is
+instead the job's container image; for trusted built-in packs, the devcontainer image.
 
 ## Motivation
 

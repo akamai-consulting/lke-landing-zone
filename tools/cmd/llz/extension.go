@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -58,7 +59,7 @@ type extManifest struct {
 	Short         string       `json:"short"`
 	Kind          string       `json:"kind"`               // "check" (logic-bearing, ships tests) | "tool" (thin argv wrap)
 	Optional      bool         `json:"optional,omitempty"` // built-ins only: ships with the binary but OFF by default (opt-in via `llz extension enable`)
-	Tools         []string     `json:"tools,omitempty"`
+	Tools         []extTool    `json:"tools,omitempty"`    // external tools the steps need; doctor verifies, `llz extension provision` installs (via mise)
 	Vars          []extVar     `json:"vars,omitempty"`     // Configure phase: declared template inputs
 	Secrets       []extSecret  `json:"secrets,omitempty"`  // Configure phase: declared runtime secrets
 	Files         []extFile    `json:"files,omitempty"`    // Scaffold phase: rendered into the instance
@@ -68,6 +69,39 @@ type extManifest struct {
 	Health        []extStep    `json:"health,omitempty"`   // Operate phase: report-only probes surfaced by doctor/status
 	Commands      []extCommand `json:"commands,omitempty"` // Operate phase: operator CLI (reuses ext.go's extCommand)
 	Rotate        *extRotate   `json:"rotate,omitempty"`   // Operate/Sustain: implements the TokenRotator interface
+}
+
+// extTool is an external tool a step invokes. Name is the executable on PATH (what
+// doctor verifies). Via + Version are the DECLARATIVE provisioning spec consumed by
+// `llz extension provision`: Via is a mise backend ref (e.g. "pipx:yamllint",
+// "npm:markdownlint-cli", "aqua:crate-ci/typos") and Version pins it. Crucially the
+// extension declares WHAT to install (a pinned, registry-resolvable ref) — never HOW:
+// there is no install-script field, so a remote extension cannot smuggle host execution.
+// An empty Via means "operator-supplied" (declared + verified, but not auto-provisioned).
+type extTool struct {
+	Name    string `json:"name"`
+	Via     string `json:"via,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+// UnmarshalJSON accepts either a bare string — `tools: [yamllint]`, the shorthand for an
+// operator-supplied tool with no provisioning spec — or the full object form
+// `{name, via, version}`. Keeping the string shorthand makes the structured-Tools change
+// backward-compatible with every pre-existing manifest (and sigs.k8s.io/yaml routes YAML
+// through encoding/json, so this covers YAML too).
+func (t *extTool) UnmarshalJSON(b []byte) error {
+	var name string
+	if err := json.Unmarshal(b, &name); err == nil {
+		t.Name, t.Via, t.Version = name, "", ""
+		return nil
+	}
+	type raw extTool // shed the custom unmarshaler to avoid recursion
+	var r raw
+	if err := json.Unmarshal(b, &r); err != nil {
+		return err
+	}
+	*t = extTool(r)
+	return nil
 }
 
 // extRotate is the declarative side of the TokenRotator interface: Argv mints a

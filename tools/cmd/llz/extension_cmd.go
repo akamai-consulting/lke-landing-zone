@@ -259,6 +259,25 @@ func extensionCmd() *cobra.Command {
 	}
 	unseedC.Flags().StringVar(&unseedRoot, "root", ".", "instance repo root")
 
+	var provisionRoot string
+	var provisionCheck bool
+	provisionC := &cobra.Command{
+		Use:   "provision",
+		Short: "install enabled extensions' declared tools via mise (generates .mise.toml) — needs --yes",
+		Long: "The host/local supply side (Configure-phase ActionProvision): aggregates every\n" +
+			"enabled extension's declared tools (a pinned mise backend ref like `pipx:yamllint`)\n" +
+			"into a generated .mise.toml and runs `mise install`. The extension declares WHAT to\n" +
+			"install (pinned, registry-resolvable) — never HOW — so a remote extension cannot\n" +
+			"smuggle host execution. Host-mutating: --dry-run / no --yes prints the plan; --check\n" +
+			"reports config drift without installing.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runExtensionProvision(gopts, provisionRoot, provisionCheck)
+		},
+	}
+	provisionC.Flags().StringVar(&provisionRoot, "root", ".", "instance repo root")
+	provisionC.Flags().BoolVar(&provisionCheck, "check", false, "report .mise.toml drift and exit non-zero; install nothing")
+
 	var syncRoot string
 	var syncUpdate bool
 	syncC := &cobra.Command{
@@ -278,6 +297,6 @@ func extensionCmd() *cobra.Command {
 		c.Flags().StringVar(&regRoot, "root", ".", "instance repo root")
 	}
 
-	x.AddCommand(newC, lintC, upgradeC, wiringC, ciWorkflowC, lifecycleC, applyC, excludeC, listC, enableC, disableC, syncC, doctorC, seedC, rotateC, teardownC, unseedC, reconcileC)
+	x.AddCommand(newC, lintC, upgradeC, wiringC, ciWorkflowC, lifecycleC, applyC, excludeC, listC, enableC, disableC, syncC, doctorC, seedC, rotateC, teardownC, unseedC, provisionC, reconcileC)
 	return x
 }
