@@ -19,11 +19,11 @@ func extensionCmd() *cobra.Command {
 	var kind, dir string
 	newC := &cobra.Command{
 		Use:   "new <name>",
-		Short: "scaffold an extension from an embedded skeleton (--kind check|tool)",
+		Short: "scaffold an extension from an embedded skeleton (--kind check|tool|observability)",
 		Args:  cobra.ExactArgs(1),
 		RunE:  func(_ *cobra.Command, a []string) error { return runExtensionNew(gopts, a[0], dir, kind) },
 	}
-	newC.Flags().StringVar(&kind, "kind", "check", "skeleton to clone: check (logic-bearing, ships tests) | tool (thin wrap of an external tool)")
+	newC.Flags().StringVar(&kind, "kind", "check", "skeleton to clone: check (logic-bearing, ships tests) | tool (thin wrap of an external tool) | observability (custom alerts + dashboard component)")
 	newC.Flags().StringVar(&dir, "dir", "extensions", "parent directory to create <name>/ under")
 
 	lintC := &cobra.Command{

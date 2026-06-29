@@ -1,0 +1,24 @@
+# <@ .Name @> — scaffolded by `llz extension new --kind observability`.
+#
+# Custom alerts + dashboards pattern. This extension ships a SELF-CONTAINED kustomize
+# Component (so it never edits the template-owned observability kustomization) scaffolded
+# into apl-values/components/<@ .Name @>/. Edit the PrometheusRule + dashboard freely —
+# they are YOUR content; you own this local extension. Then:
+#   1. llz extension enable <@ .Name @>      # scaffolds the component into the instance
+#   2. add `<@ .Name @>` to your env overlay's components: list   # the GitOps picks it up
+# The rule is validated by the core promtool check — no logic lives here (argv-only).
+schemaVersion: 2
+name: <@ .Name @>
+short: TODO custom alerts + dashboard for <@ .Name @>
+kind: tool
+tools:
+  # promtool backs `llz ci check-prom-rules`. No via: (operator-supplied) — install it or
+  # add a mise ref; doctor/enable will flag it if absent so the check can't silently skip.
+  - {name: promtool}
+files:
+  - {src: kustomization.yaml, dst: apl-values/components/<@ .Name @>/kustomization.yaml}
+  - {src: alerts.yaml, dst: apl-values/components/<@ .Name @>/alerts.yaml}
+  - {src: dashboard.yaml, dst: apl-values/components/<@ .Name @>/dashboard.yaml}
+check:
+  - name: prom-rules
+    argv: [llz, ci, check-prom-rules, apl-values/components/<@ .Name @>/alerts.yaml]

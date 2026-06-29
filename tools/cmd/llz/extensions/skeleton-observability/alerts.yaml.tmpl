@@ -1,0 +1,25 @@
+# Custom alert rules for <@ .Name @> — this is YOUR content; edit freely. Validated by
+# `llz ci check-prom-rules` (promtool) via this extension's check:. Picked up by
+# kube-prometheus-stack's ruleSelector (set permissively in the env values.yaml), the same
+# way the platform's own prometheus-rules are — no extra wiring needed for pickup.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: <@ .Name @>-alerts
+  namespace: llz-observability
+  labels:
+    app.kubernetes.io/part-of: <@ .Name @>
+spec:
+  groups:
+    - name: <@ .Name @>
+      interval: 30s
+      rules:
+        # Starter rule — replace with a real signal for <@ .Name @>.
+        - alert: <@ .Name @>ExampleHighErrorRate
+          expr: sum(rate(http_requests_total{code=~"5.."}[5m])) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "<@ .Name @>: example 5xx rate alert — replace me"
+            description: "This is a scaffolded placeholder. Point expr at a real metric."

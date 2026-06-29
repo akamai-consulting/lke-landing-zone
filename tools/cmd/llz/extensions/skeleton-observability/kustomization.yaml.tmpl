@@ -1,0 +1,10 @@
+# Self-contained kustomize Component for <@ .Name @>'s custom observability. It stands
+# ALONE — it does not edit the template-owned components/observability kustomization — so
+# there is no two-channel conflict. Add `<@ .Name @>` to your env overlay's components:
+# list to deploy it; kube-prometheus-stack's permissive ruleSelector picks up the alert
+# and the Grafana sidecar picks up the dashboard (both by label, not by this file).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - alerts.yaml
+  - dashboard.yaml

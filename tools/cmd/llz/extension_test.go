@@ -75,7 +75,7 @@ func TestLintKind(t *testing.T) {
 // scaffolded extension passes its own ceiling check out of the box — the
 // gradient starts at "green", not "blank page".
 func TestScaffoldThenLint(t *testing.T) {
-	for _, kind := range []string{"check", "tool"} {
+	for _, kind := range []string{"check", "tool", "observability"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := t.TempDir()
 			if err := runExtensionNew(globalOpts{}, "demo", dir, kind); err != nil {

@@ -1,0 +1,30 @@
+# <@ .Name @> — custom alerts + dashboard
+
+Scaffolded by `llz extension new --kind observability <@ .Name @>`. A local extension you
+own: edit the artifacts, then enable it.
+
+## What it ships
+
+A **self-contained kustomize Component** scaffolded into `apl-values/components/<@ .Name @>/`:
+
+- `alerts.yaml` — a `PrometheusRule` (custom alerts). Edit freely.
+- `dashboard.yaml` — a Grafana dashboard `ConfigMap` (sidecar-loaded). Paste your JSON.
+- `kustomization.yaml` — the Component that bundles them.
+
+It deliberately does **not** touch the template-owned `components/observability`
+kustomization, so `copier update` never fights you.
+
+## Use it
+
+1. Customize `alerts.yaml` / `dashboard.yaml`.
+2. `llz extension enable <@ .Name @>` — scaffolds the Component into the instance and runs
+   the check.
+3. Add `<@ .Name @>` to your env overlay's `components:` list so the GitOps layer deploys
+   it. Pickup is automatic after that: kube-prometheus-stack's permissive `ruleSelector`
+   loads the alert, the Grafana sidecar loads the dashboard.
+
+## Validation
+
+The `check:` runs `llz ci check-prom-rules` (the core promtool validator) over `alerts.yaml`
+— so a malformed rule fails `llz lint`/`reconcile`. Install `promtool` (or declare a mise
+`via:` for it); `llz doctor` flags it if missing.

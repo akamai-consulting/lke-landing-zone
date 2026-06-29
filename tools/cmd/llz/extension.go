@@ -392,9 +392,9 @@ type extScaffoldData struct {
 
 func runExtensionNew(g globalOpts, name, dir, kind string) error {
 	switch kind {
-	case "check", "tool":
+	case "check", "tool", "observability":
 	default:
-		return fmt.Errorf("unknown --kind %q (choose check | tool); the menu of kinds IS the capability ceiling", kind)
+		return fmt.Errorf("unknown --kind %q (choose check | tool | observability); the menu of kinds IS the capability ceiling", kind)
 	}
 	dst := filepath.Join(dir, name)
 	if _, err := os.Stat(dst); err == nil {
@@ -432,7 +432,11 @@ func runExtensionNew(g globalOpts, name, dir, kind string) error {
 	}
 	if !g.dryRun {
 		fmt.Fprintf(os.Stderr, "scaffolded %s (kind: %s)\n", dst, kind)
-		fmt.Fprintf(os.Stderr, "next: (cd %s && go test ./...) && llz extension lint %s\n", dst, dst)
+		if kind == "check" { // only the check skeleton ships Go logic + tests
+			fmt.Fprintf(os.Stderr, "next: (cd %s && go test ./...) && llz extension lint %s\n", dst, dst)
+		} else {
+			fmt.Fprintf(os.Stderr, "next: edit the scaffold, then llz extension lint %s\n", dst)
+		}
 	}
 	return nil
 }

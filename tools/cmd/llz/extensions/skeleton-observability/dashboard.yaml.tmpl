@@ -1,0 +1,19 @@
+# Custom Grafana dashboard for <@ .Name @>, delivered as a ConfigMap the Grafana sidecar
+# auto-loads (label grafana_dashboard: "1") — no datasource or provisioning wiring needed.
+# Replace the empty panels with your dashboard JSON (export from Grafana, paste under data).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: <@ .Name @>-dashboard
+  namespace: llz-observability
+  labels:
+    grafana_dashboard: "1"
+data:
+  <@ .Name @>.json: |
+    {
+      "title": "<@ .Name @> (starter)",
+      "uid": "<@ .Name @>-starter",
+      "schemaVersion": 39,
+      "tags": ["llz", "<@ .Name @>"],
+      "panels": []
+    }
