@@ -771,10 +771,12 @@ Actions workflow is not strict YAML: `${{ … }}` expressions in flow-map positi
 not remove them (they are runtime, not `<@ @>`). So a structural parse would need a
 GitHub-expression-aware preprocessor; the scan handles both the block `image:` and the
 flow-map `container: {image: …}` forms (the latter via `reFlowMapImage`, capturing a whole
-`${{ … }}` value), the same tactic actionlint uses. Two residual gaps remain, both tracked
-as open questions: the **live** variable value (lint pins the declared `Default`, but the
-value actually set on GitHub is resolved by the runner — needs a `gh variable list` lookup
-in `doctor`), and any exotic YAML layout a line scan could miss.
+`${{ … }}` value), the same tactic actionlint uses. The **live** variable value is now covered by an advisory
+`doctor` pass (`liveGHVarFindings` — see *Vars, secrets, and ghVars*): lint pins the declared
+`Default`, and `doctor` best-effort verifies the value actually set on GitHub is pinned. The
+one residual gap is any exotic YAML layout the line scan could miss — acceptable while this
+is an experiment; a GitHub-expression-aware parser is the eventual end-state, not generic
+YAML.
 
 ## Per-repo state
 
@@ -1076,11 +1078,17 @@ flowchart TD
   `doctor`-checked (seed-readiness), `seed`-pushed via `gh variable set`, and honored by the
   workflow image-pin lint. Distinct from render `vars:` and `secrets:`. An `image: true`
   ghVar carries the digest-pin metadata: its `Default` must be pinned and a workflow image
-  expression must reference it. Declaring only `ghVars:` is a Configure-phase declaration
-  (`manifestDeclaresHook(HookConfig)`). A secret/ghVar `bao`/`ghEnv` target may reference a
+  expression must reference it; a best-effort `doctor` pass also verifies the **live** value
+  on GitHub is set and (for `image: true`) digest-pinned (`liveGHVarFindings`, advisory).
+  Declaring only `ghVars:` is a Configure-phase declaration (`manifestDeclaresHook(HookConfig)`). A secret/ghVar `bao`/`ghEnv` target may reference a
   render var (`<@ .gh_env @>`), so one declared var single-sources an address used in more
   than one place (the workflow `environment:` and the seed target) — scoped to target
-  fields, not general manifest templating.
+  fields, not general manifest templating. A best-effort live `doctor` pass
+  (`liveGHVarFindings`) additionally verifies the variable is actually set on GitHub and that
+  an `image: true` value is digest-pinned (advisory; skips cleanly when GitHub is unreachable).
+- **Candidate seam guard**: a unit test asserts every `akamai-functions` `validate:` target
+  (which renders the CI matrix) is a case `quality.sh` accepts — closing the manifest↔script
+  drift the matrix-from-`validate:` rendering would otherwise hide.
 - **Scaffolded-workflow image pins**: `lintWorkflowImages` extends the digest-pin check
   to `files:` entries under `.github/workflows/**` — a workflow image must be digest-pinned
   or a declared `ghVars:` reference. The trust property now covers the app-kit pattern.
@@ -1100,12 +1108,14 @@ flowchart TD
   formalized as **scaffold (`files:`) + `config:`** only, dropping the `check`/`validate`/`ci`
   surface that the platform gate skips anyway? (The `validate:`-rendered matrix keeps the
   `validate:` block useful even if the engine never fires it.)
-- **doctor: live GitHub variable lookup**: `doctor` checks ghVar *seed-readiness* (a
-  default/override exists), not whether the variable is actually set on the repo/Environment,
-  and the workflow image-pin lint pins the declared *default* but not the *live* value. Add a
-  `gh variable list` lookup so `doctor` reports the real GitHub state (and flags a live image
-  variable whose value is an unpinned tag), or keep doctor offline + table-testable and leave
-  live state to CI?
+- **Structural workflow parsing**: the image-pin lint is a line/flow-map regex scan
+  (a structural YAML parse is blocked by GitHub `${{ }}` expressions — see that section). When
+  this graduates from experiment, the end-state is a GitHub-expression-aware parser
+  (actionlint-style), not generic YAML. Acceptable as-is for now.
+- **Live doctor posture**: `liveGHVarFindings` is **advisory** (report-only) so a flaky
+  network or a 404 never fails the gate. Should a *confirmed* unpinned `image: true` live
+  value (lookup succeeded, value is a mutable tag) escalate to a hard `doctor` failure, or
+  stay advisory?
 - **Recipe granularity for ohttp**: one `akamai-functions` vs. several composable
   extensions.
 - **Anchor set sufficiency**: is `pre-converge | post-converge | operate` enough, or

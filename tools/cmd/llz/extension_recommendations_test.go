@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // These tests cover the four extension-model recommendations implemented in issue #10:
@@ -222,6 +224,48 @@ func TestManifestDeclaresHookConfigCoversGHVars(t *testing.T) {
 	}
 }
 
+// The live GitHub check flags an unset ghVar and an image:true ghVar whose LIVE value is a
+// mutable tag (the gap the offline default-pin lint can't see), while staying quiet when the
+// live value is pinned. A scope the lookup can't read is skipped (no false alarms offline).
+func TestLiveGHVarFindings(t *testing.T) {
+	ext := Extension{Name: "kit", Manifest: extManifest{GHVars: []extGHVar{
+		{Name: "RUST_IMAGE", Image: true, GHEnv: "infra-prod"},
+		{Name: "GHCR_USER"},
+	}}}
+
+	// RUST_IMAGE live value is a mutable tag; GHCR_USER is unset at repo level.
+	lookup := func(env string) (map[string]string, bool) {
+		if env == "infra-prod" {
+			return map[string]string{"RUST_IMAGE": "ghcr.io/o/img:latest"}, true
+		}
+		return map[string]string{}, true // repo-level: GHCR_USER absent
+	}
+	f := liveGHVarFindings([]Extension{ext}, lookup)
+	if !hasFindingContaining(f, "RUST_IMAGE") || !hasFindingContaining(f, "not digest-pinned") {
+		t.Fatalf("should flag the unpinned live image value, got %v", f)
+	}
+	if !hasFindingContaining(f, "GHCR_USER") || !hasFindingContaining(f, "not set on GitHub") {
+		t.Fatalf("should flag the unset variable, got %v", f)
+	}
+
+	// Pinned live value + variable set → no findings.
+	clean := func(env string) (map[string]string, bool) {
+		if env == "infra-prod" {
+			return map[string]string{"RUST_IMAGE": "ghcr.io/o/img@sha256:" + strings.Repeat("a", 64)}, true
+		}
+		return map[string]string{"GHCR_USER": "bot"}, true
+	}
+	if f := liveGHVarFindings([]Extension{ext}, clean); len(f) != 0 {
+		t.Fatalf("pinned + set should be clean, got %v", f)
+	}
+
+	// Lookup can't read the scope (GitHub unreachable) → skipped, no false alarms.
+	unavailable := func(string) (map[string]string, bool) { return nil, false }
+	if f := liveGHVarFindings([]Extension{ext}, unavailable); len(f) != 0 {
+		t.Fatalf("an unreadable scope must be skipped, got %v", f)
+	}
+}
+
 func hasFindingContaining(findings []string, sub string) bool {
 	for _, f := range findings {
 		if strings.Contains(f, sub) {
@@ -305,6 +349,39 @@ func TestValidateTargets(t *testing.T) {
 	}
 	if got := validateTargets(extManifest{}); got != "[]" {
 		t.Fatalf("empty validate: should render [], got %q", got)
+	}
+}
+
+// Candidate consistency: every validate: target the akamai-functions manifest declares (the
+// matrix is rendered from these) must be a case quality.sh accepts — otherwise the rendered
+// CI matrix would dispatch a target the script rejects. The manifest NAMES the contract; the
+// script IMPLEMENTS it; this guards the seam between them.
+func TestAkamaiValidateTargetsCoveredByQualityScript(t *testing.T) {
+	wd, _ := os.Getwd()
+	kit := filepath.Join(wd, "..", "..", "..", "external-candidates", "akamai-functions")
+	manifestBytes, err := os.ReadFile(filepath.Join(kit, "recipe.yaml"))
+	if err != nil {
+		t.Skipf("akamai-functions kit not present: %v", err)
+	}
+	scriptBytes, err := os.ReadFile(filepath.Join(kit, "files", "scripts", "app", "quality.sh"))
+	if err != nil {
+		t.Skipf("quality.sh not present: %v", err)
+	}
+	var m extManifest
+	if err := yaml.Unmarshal(manifestBytes, &m); err != nil {
+		t.Fatalf("parse recipe.yaml: %v", err)
+	}
+	script := string(scriptBytes)
+	if len(m.Validate) == 0 {
+		t.Fatal("expected validate: targets in the akamai-functions manifest")
+	}
+	for _, s := range m.Validate {
+		if s.Name == "" {
+			continue
+		}
+		if !strings.Contains(script, s.Name+")") { // quality.sh dispatches via `<name>)` cases
+			t.Errorf("validate target %q has no matching case in quality.sh", s.Name)
+		}
 	}
 }
 

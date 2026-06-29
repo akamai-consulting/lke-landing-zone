@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -48,43 +49,108 @@ func warnMissingExtTools(m extManifest) {
 	}
 }
 
-func checkExtensionConfig(root string, env func(string) string) ([]configFinding, error) {
-	exts, err := loadEnabledExtensions(root)
-	if err != nil {
-		return nil, err
-	}
-	var out []configFinding
-	for _, e := range exts {
-		out = append(out, manifestConfigFindings(e.Name, e.Manifest, env)...)
-	}
-	return out, nil
-}
-
-// runExtensionConfigDoctor reports declared vars/secrets that are unsatisfied
-// across the enabled set, exiting non-zero when a required secret is missing.
+// runExtensionConfigDoctor reports declared vars/secrets/ghVars that are unsatisfied
+// across the enabled set, exiting non-zero when a required input is missing. The OFFLINE
+// findings (local seed-readiness) are the gate; the LIVE GitHub check below is advisory.
 func runExtensionConfigDoctor(root string) error {
-	findings, err := checkExtensionConfig(root, os.Getenv)
+	exts, err := loadEnabledExtensions(root)
 	if err != nil {
 		return err
 	}
-	if len(findings) == 0 {
-		fmt.Fprintln(os.Stderr, "extension config: all declared vars/secrets satisfied")
-		return nil
+	var findings []configFinding
+	for _, e := range exts {
+		findings = append(findings, manifestConfigFindings(e.Name, e.Manifest, os.Getenv)...)
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "EXTENSION\tKIND\tNAME\tSEVERITY\tSTATUS")
 	fatal := 0
-	for _, f := range findings {
-		sev := "info"
-		if f.Fatal {
-			sev = "REQUIRED"
-			fatal++
+	if len(findings) == 0 {
+		fmt.Fprintln(os.Stderr, "extension config: all declared vars/secrets/ghVars locally satisfied")
+	} else {
+		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "EXTENSION\tKIND\tNAME\tSEVERITY\tSTATUS")
+		for _, f := range findings {
+			sev := "info"
+			if f.Fatal {
+				sev = "REQUIRED"
+				fatal++
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", f.Ext, f.Kind, f.Name, sev, f.Status)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", f.Ext, f.Kind, f.Name, sev, f.Status)
+		tw.Flush()
 	}
-	tw.Flush()
+	// Best-effort live GitHub check — advisory, never fails doctor on infra absence.
+	if live := liveGHVarFindings(exts, liveGHVarsFn); len(live) > 0 {
+		fmt.Fprintln(os.Stderr, "\nlive GitHub variables (advisory — verified against the repo/Environment):")
+		for _, x := range live {
+			fmt.Fprintf(os.Stderr, "  %s %s\n", yellow("⚠"), x)
+		}
+	}
 	if fatal > 0 {
 		return fmt.Errorf("%d required input(s) unsatisfied", fatal)
 	}
 	return nil
+}
+
+// liveGHVarsFn returns the GitHub Actions variables (name→value) actually set for a scope
+// (ghEnv=="" → repo-level; otherwise the named Environment), and ok=false when the lookup
+// cannot run (no gh, unknown repo, network/auth/404). BEST-EFFORT: doctor never fails just
+// because GitHub was unreachable. Seam for tests.
+var liveGHVarsFn = func(ghEnv string) (map[string]string, bool) {
+	if !lookable("gh") {
+		return nil, false
+	}
+	repo, err := resolveInstanceRepo("", false)
+	if err != nil || repo == "" {
+		return nil, false
+	}
+	path := "repos/" + repo + "/actions/variables"
+	if ghEnv != "" {
+		path = "repos/" + repo + "/environments/" + ghEnv + "/variables"
+	}
+	raw := ghAPI(path)
+	if raw == nil {
+		return nil, false
+	}
+	var parsed struct {
+		Variables []ghVar `json:"variables"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil {
+		return nil, false
+	}
+	out := map[string]string{}
+	for _, v := range parsed.Variables {
+		out[v.Name] = v.Value
+	}
+	return out, true
+}
+
+// liveGHVarFindings is the live GitHub trust check: for each enabled extension's declared
+// ghVars, is the variable actually SET on GitHub, and for image: true, is the LIVE value
+// digest-pinned? This is what closes the gap the offline lint can't — lintManifest pins a
+// declared Default, but the value an operator actually stored could be a mutable tag.
+// Report-only/advisory: lookup is injected (tests stub it); a scope it can't read is
+// skipped (no false alarms when GitHub is unreachable).
+func liveGHVarFindings(exts []Extension, lookup func(string) (map[string]string, bool)) []string {
+	var out []string
+	for _, e := range exts {
+		vals := varValues(e.Manifest, os.Getenv)
+		for _, gv := range e.Manifest.GHVars {
+			gv = resolveGHVarEnv(gv, vals)
+			live, ok := lookup(gv.GHEnv)
+			if !ok {
+				continue
+			}
+			scope := "repo-level"
+			if gv.GHEnv != "" {
+				scope = "env " + gv.GHEnv
+			}
+			v, set := live[gv.Name]
+			switch {
+			case !set:
+				out = append(out, fmt.Sprintf("%s: ghVar %s is not set on GitHub (%s) — `gh variable set %s`", e.Name, gv.Name, scope, gv.Name))
+			case gv.Image && !reImageDigest.MatchString(v):
+				out = append(out, fmt.Sprintf("%s: ghVar %s (image: true) live value %q is not digest-pinned (…@sha256:<64hex>)", e.Name, gv.Name, v))
+			}
+		}
+	}
+	return out
 }
