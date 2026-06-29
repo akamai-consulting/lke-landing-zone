@@ -32,7 +32,6 @@ func TestBuiltinExtensionsLoad(t *testing.T) {
 // the expected hook shape. This pins the migrated candidates against drift.
 func TestShippedOptionalBuiltins(t *testing.T) {
 	want := map[string]struct{ files, check, ci, health bool }{
-		"devcontainer":     {files: true},
 		"lint-yaml":        {files: true, check: true},
 		"lint-typos":       {check: true},
 		"lint-markdown":    {files: true, check: true},

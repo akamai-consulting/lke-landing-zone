@@ -80,8 +80,12 @@ the implementation enforces is deliberately narrow:
   with `llz extension enable <name>` (scaffolding from the embed), with `optional` absent
   it is always-on (core hygiene like `gitattributes`). A local/remote extension is opt-in
   but instance-authored, not shipped with the binary. The optional-built-in tier is the
-  home for capabilities that should *travel with llz* yet stay off until wanted — checkov,
-  devcontainer, an optionalized cluster-health monitor.
+  home for **net-new** capabilities that should *travel with llz* yet stay off until
+  wanted — the lint packs (`lint-yaml`/`lint-typos`/`lint-markdown`), `scheduled-checks`.
+  A capability the **instance template already delivers** is NOT a built-in candidate:
+  the devcontainer, for instance, is template-shipped (`merge .devcontainer/**`) and backed
+  by a cosign-signed multi-arch CI image — a built-in would only conflict with it and lose
+  the image build. Migrate what the template does *not* already own.
 
 Failure semantics live with the hook kind, not the call site (`HookMeta`): `check`
 and `ci` are blocking, `files` is blocking when invoked directly but downgraded to
