@@ -75,6 +75,13 @@ the implementation enforces is deliberately narrow:
 - **Extensions do not redefine bootstrap, promotion, or convergence.** Those are
   core phases. An extension contributes artifacts *around* them (a job that
   `needs:` converge, files re-applied on Sustain); it never owns the phase itself.
+- **There are three enablement tiers, including a shipped-but-optional one.** A built-in
+  ships compiled into the binary; with `optional: true` it is OFF by default and turned on
+  with `llz extension enable <name>` (scaffolding from the embed), with `optional` absent
+  it is always-on (core hygiene like `gitattributes`). A local/remote extension is opt-in
+  but instance-authored, not shipped with the binary. The optional-built-in tier is the
+  home for capabilities that should *travel with llz* yet stay off until wanted — checkov,
+  devcontainer, an optionalized cluster-health monitor.
 
 Failure semantics live with the hook kind, not the call site (`HookMeta`): `check`
 and `ci` are blocking, `files` is blocking when invoked directly but downgraded to

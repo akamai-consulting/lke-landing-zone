@@ -56,7 +56,8 @@ type extManifest struct {
 	SchemaVersion int          `json:"schemaVersion,omitempty"`
 	Name          string       `json:"name"`
 	Short         string       `json:"short"`
-	Kind          string       `json:"kind"` // "check" (logic-bearing, ships tests) | "tool" (thin argv wrap)
+	Kind          string       `json:"kind"`               // "check" (logic-bearing, ships tests) | "tool" (thin argv wrap)
+	Optional      bool         `json:"optional,omitempty"` // built-ins only: ships with the binary but OFF by default (opt-in via `llz extension enable`)
 	Tools         []string     `json:"tools,omitempty"`
 	Vars          []extVar     `json:"vars,omitempty"`     // Configure phase: declared template inputs
 	Secrets       []extSecret  `json:"secrets,omitempty"`  // Configure phase: declared runtime secrets

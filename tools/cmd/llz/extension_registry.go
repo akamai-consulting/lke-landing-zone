@@ -8,6 +8,26 @@ import (
 	"text/tabwriter"
 )
 
+// builtinExtensionsFn is a seam so tests can inject a built-in set (e.g. an optional
+// built-in) without touching the embed.
+var builtinExtensionsFn = builtinExtensions
+
+// optionalBuiltin returns the compiled-in built-in named name IF it ships off-by-default
+// (Optional). These are the third tier: shipped with the binary, but opt-in like a
+// local/remote extension — the home an always-on built-in (gitattributes) and an
+// instance-local extension leave between them.
+func optionalBuiltin(name string) (Extension, bool) {
+	for _, b := range builtinExtensionsFn() {
+		if b.Name == name && b.Manifest.Optional {
+			return b, true
+		}
+	}
+	return Extension{}, false
+}
+
+// loadEnabledExtensions is the opt-in set: every name in .llz/extensions.yaml, resolved
+// to an enabled OPTIONAL built-in (from the embed), else a local extensions/<name>/, else
+// a synced source. Always-on built-ins are NOT here (they come from loadAllExtensions).
 func loadEnabledExtensions(root string) ([]Extension, error) {
 	cfg, err := loadExtConfig(root)
 	if err != nil {
@@ -16,8 +36,19 @@ func loadEnabledExtensions(root string) ([]Extension, error) {
 	if err := verifyRemoteCache(root); err != nil { // integrity-check fetched sources before reading them
 		return nil, err
 	}
+	builtinName := map[string]bool{}
+	for _, b := range builtinExtensionsFn() {
+		builtinName[b.Name] = true
+	}
 	var out []Extension
 	for _, name := range cfg.Enabled {
+		if b, ok := optionalBuiltin(name); ok { // a shipped, off-by-default built-in
+			out = append(out, b)
+			continue
+		}
+		if builtinName[name] {
+			continue // an always-on built-in redundantly listed → loadAllExtensions owns it
+		}
 		dir, ok := resolveExtensionDir(root, cfg, name)
 		if !ok {
 			return nil, fmt.Errorf("enabled extension %q: not found locally or in any synced source (run `llz extension sync`)", name)
@@ -35,15 +66,21 @@ func loadEnabledExtensions(root string) ([]Extension, error) {
 	return out, nil
 }
 
-// loadAllExtensions is the lifecycle view: compiled-in built-ins (always on) plus
-// the enabled local/remote set. Built-ins come first so they reconcile before
-// operator extensions.
+// loadAllExtensions is the lifecycle view: ALWAYS-ON built-ins plus the enabled set
+// (which already includes any enabled optional built-ins). Built-ins come first so they
+// reconcile before operator extensions.
 func loadAllExtensions(root string) ([]Extension, error) {
 	enabled, err := loadEnabledExtensions(root)
 	if err != nil {
 		return nil, err
 	}
-	return append(builtinExtensions(), enabled...), nil
+	var alwaysOn []Extension
+	for _, b := range builtinExtensionsFn() {
+		if !b.Manifest.Optional {
+			alwaysOn = append(alwaysOn, b)
+		}
+	}
+	return append(alwaysOn, enabled...), nil
 }
 
 // resolveExtensionDir finds an enabled extension: local extensions/<name>/ first,
@@ -82,6 +119,25 @@ func runExtensionEnable(g globalOpts, root, name string) error {
 	cfg, err := loadExtConfig(root)
 	if err != nil {
 		return err
+	}
+	// An optional built-in ships with the binary, so it is trusted (no remote gate) and
+	// scaffolds from the embed, not a local dir.
+	if b, ok := optionalBuiltin(name); ok {
+		if slices.Contains(cfg.Enabled, name) {
+			fmt.Fprintf(os.Stderr, "extension %q already enabled\n", name)
+		} else {
+			cfg.Enabled = append(cfg.Enabled, name)
+			if !g.dryRun {
+				if err := saveExtConfig(root, cfg); err != nil {
+					return err
+				}
+			}
+			fmt.Fprintf(os.Stderr, "enabled %q (built-in)\n", name)
+		}
+		for _, f := range manifestConfigFindings(name, b.Manifest, os.Getenv) {
+			fmt.Fprintf(os.Stderr, "  needs %s %q: %s\n", f.Kind, f.Name, f.Status)
+		}
+		return applyExtensionFiles(g, b, root, false)
 	}
 	dir, ok := resolveExtensionDir(root, cfg, name)
 	if !ok {
@@ -163,6 +219,15 @@ func runExtensionListEnabled(root string) error {
 		seen[e.Name()] = true
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Name(), yesNo(enabled[e.Name()]), m.Kind, m.Short)
 	}
+	// Optional built-ins: shipped with the binary but off until enabled — list them so
+	// `llz extension list` shows what is available to enable, not just what is local.
+	for _, b := range builtinExtensionsFn() {
+		if !b.Manifest.Optional || seen[b.Name] {
+			continue
+		}
+		seen[b.Name] = true
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.Name, yesNo(enabled[b.Name]), b.Manifest.Kind, b.Manifest.Short+" (built-in)")
+	}
 	// enabled extensions resolved from a synced source (not a local subdir), plus
 	// any that resolve nowhere (truly missing).
 	for _, n := range cfg.Enabled {
@@ -217,6 +282,9 @@ func runExtensionUpgradeAll(g globalOpts, root string, check bool) error {
 	}
 	var firstErr error
 	for _, e := range exts {
+		if e.Source == "builtin" {
+			continue // built-ins ship with the binary — no schema migration / copier wiring
+		}
 		if err := runExtensionUpgrade(g, e.Dir, root, check); err != nil && firstErr == nil {
 			firstErr = err
 		}

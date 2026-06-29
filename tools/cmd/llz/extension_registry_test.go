@@ -4,7 +4,76 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 )
+
+// The third tier: an optional built-in ships with the binary but is OFF until enabled,
+// then loads + scaffolds from the embed like any extension; disabling drops it again.
+// Always-on built-ins stay always-on. (Seamed via builtinExtensionsFn — no real embed.)
+func TestOptionalBuiltinTier(t *testing.T) {
+	root := t.TempDir()
+	orig := builtinExtensionsFn
+	t.Cleanup(func() { builtinExtensionsFn = orig })
+	builtinExtensionsFn = func() []Extension {
+		return []Extension{
+			{Name: "core-hygiene", Source: "builtin", Manifest: extManifest{Name: "core-hygiene", Short: "x", Kind: "tool"}},
+			{Name: "optx", Source: "builtin", fsys: fstest.MapFS{"hello.txt": &fstest.MapFile{Data: []byte("hi\n")}},
+				Manifest: extManifest{Name: "optx", Short: "optional one", Kind: "tool", Optional: true,
+					Files: []extFile{{Src: "hello.txt", Dst: "hello.txt"}}}},
+		}
+	}
+	has := func(exts []Extension, name string) bool {
+		for _, e := range exts {
+			if e.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	// not enabled: always-on present, optional absent
+	all, err := loadAllExtensions(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has(all, "core-hygiene") {
+		t.Error("always-on built-in must always load")
+	}
+	if has(all, "optx") {
+		t.Error("optional built-in must NOT load until enabled")
+	}
+
+	// enable → records it AND scaffolds from the embed
+	if err := runExtensionEnable(globalOpts{yes: true}, root, "optx"); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "hello.txt")); err != nil {
+		t.Fatalf("enable should scaffold from the embed: %v", err)
+	}
+
+	// now loaded by both views, exactly once
+	all, _ = loadAllExtensions(root)
+	count := 0
+	for _, e := range all {
+		if e.Name == "optx" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("enabled optional built-in loaded %d times, want exactly 1", count)
+	}
+	if en, _ := loadEnabledExtensions(root); !has(en, "optx") {
+		t.Error("enabled optional built-in must appear in the enabled set (seed/ci/commands see it)")
+	}
+
+	// disable → absent again
+	if err := runExtensionDisable(globalOpts{yes: true}, root, "optx"); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if all, _ = loadAllExtensions(root); has(all, "optx") {
+		t.Error("disabled optional built-in must not load")
+	}
+}
 
 // installExt writes an extension under <root>/extensions/<name>/.
 func installExt(t *testing.T, root, name, manifest string, srcs map[string]string) {
