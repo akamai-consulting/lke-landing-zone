@@ -29,6 +29,37 @@ func TestRenderScheduledWorkflow(t *testing.T) {
 	)
 }
 
+// The CI tool-supply: a ci step's digest-pinned image renders into the job's container:,
+// for both the converge-anchored and the scheduled workflow.
+func TestCIStepImageRendersContainer(t *testing.T) {
+	const img = "ghcr.io/org/spin-toolchain@sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	anchored := []extCIJob{{Ext: "fn", Name: "deploy", Anchor: anchorPostConverge, Image: img, Argv: []string{"spin", "deploy"}}}
+	out, err := renderExtensionsWorkflow(anchored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out, "container: "+img, "run: spin deploy")
+
+	scheduled := []extCIJob{{Ext: "fn", Name: "scan", Schedule: "0 0 * * 0", Image: img, Argv: []string{"trivy", "fs", "."}}}
+	sout, err := renderScheduledWorkflow(scheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, sout, "container: "+img)
+}
+
+// A mutable tag (not digest-pinned) is rejected at generation — a remote extension's CI
+// image is trust surface, so :latest can't be swapped under you after review.
+func TestCIStepImageMustBeDigestPinned(t *testing.T) {
+	for _, bad := range []string{"ghcr.io/org/img:latest", "alpine", "alpine:3.20"} {
+		jobs := []extCIJob{{Ext: "a", Name: "x", Anchor: anchorPostConverge, Image: bad, Argv: []string{"y"}}}
+		if _, err := renderExtensionsWorkflow(jobs); err == nil {
+			t.Errorf("image %q must be rejected (not digest-pinned)", bad)
+		}
+	}
+}
+
 // A scheduled step may depend only on another scheduled step — a cross-trigger edge
 // (to a converge-anchored job in the other workflow) can't be a needs: edge.
 func TestScheduledRejectsCrossTriggerDep(t *testing.T) {

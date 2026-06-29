@@ -111,8 +111,18 @@ extension declares **what** to install — a pinned, registry-resolvable ref (`p
 `npm:markdownlint-cli`, `aqua:crate-ci/typos`) — and **never how**. There is no install-script
 field, so a remote, git-pinned extension cannot smuggle host execution; `mise` installs from
 its backends' registries (checksum-verified for the binary backends), the version pins ride
-the source SHA+digest lock, and the install is gated (`--yes`). For CI-run tools the supply is
-instead the job's container image; for trusted built-in packs, the devcontainer image.
+the source SHA+digest lock, and the install is gated (`--yes`).
+
+For **CI-run tools** the supply is the job's container image, not a host install: a `ci:`
+step declares a `image:` and its generated job runs in `container: …`. The image must be
+**digest-pinned** (`…@sha256:<64hex>`) — enforced at both `extension lint` and workflow
+generation — because a remote extension's CI image runs with the workflow's permissions, so
+a mutable `:latest` is trust surface that could be swapped after review (the same reasoning
+as the source SHA pin). This is the right home for heavy workload kits (a `spin`/`cargo`
+deploy runs in the extension's pinned toolchain image, never installed on the runner). For
+trusted built-in packs, the devcontainer image remains an option. So supply is organized by
+`Runner`: `laptop` → mise (`provision`), `actions` → a digest-pinned container, with the
+"declare pinned data, never execute" boundary holding across both.
 
 ## Motivation
 

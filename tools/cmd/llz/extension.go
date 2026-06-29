@@ -175,6 +175,7 @@ type extStep struct {
 	Name      string   `json:"name,omitempty"`
 	Anchor    string   `json:"anchor,omitempty"`   // ci: only — pre-converge | post-converge | operate
 	Schedule  string   `json:"schedule,omitempty"` // ci: only — a cron expr makes this a scheduled (vs converge-anchored) job
+	Image     string   `json:"image,omitempty"`    // ci: only — a digest-pinned image the job runs in (the CI tool-supply: container: ...)
 	Argv      []string `json:"argv"`
 	DependsOn []string `json:"dependsOn,omitempty"` // ci: only — other "ext:step" ids
 }
@@ -264,6 +265,17 @@ func lintManifest(m extManifest) []string {
 		case isInlineShell(s.Argv):
 			f = append(f, fmt.Sprintf("step %s: inline shell (`%s -c …`) is rejected — call a tested entrypoint, not inline script",
 				label, filepath.Base(s.Argv[0])))
+		}
+	}
+	// A ci: step's container image (the CI tool-supply) must be digest-pinned — a remote
+	// image runs with the workflow's permissions, so a mutable tag is trust surface.
+	for i, s := range m.CI {
+		label := s.Name
+		if label == "" {
+			label = fmt.Sprintf("#%d", i)
+		}
+		if err := validateCIImage("ci step "+label, s.Image); err != nil {
+			f = append(f, err.Error())
 		}
 	}
 	// Configure-phase declarations need a name to be checkable.

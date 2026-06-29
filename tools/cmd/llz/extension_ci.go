@@ -42,7 +42,25 @@ type dagNode struct {
 	id, title string
 	run       []string
 	note      string
+	image     string // digest-pinned image → the job runs in `container:` (CI tool-supply)
 	core      bool
+}
+
+// reImageDigest matches a digest-pinned image reference (…@sha256:<64 hex>).
+var reImageDigest = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
+
+// validateCIImage requires a ci: step's image to be digest-pinned, not a mutable tag. A
+// remote extension's CI image runs with the workflow's permissions, so it is trust
+// surface; a digest pin makes it immutable and reviewable (like the source SHA pin),
+// where `:latest` could be swapped under you after review.
+func validateCIImage(jobID, image string) error {
+	if image == "" {
+		return nil
+	}
+	if !reImageDigest.MatchString(image) {
+		return fmt.Errorf("%s: ci image %q must be digest-pinned (…@sha256:<64hex>), not a mutable tag", jobID, image)
+	}
+	return nil
 }
 
 // dag is a tiny directed acyclic graph over job ids. Edges express `needs`: an
@@ -251,6 +269,7 @@ type extCIJob struct {
 	Name      string   // step name
 	Anchor    string   // one of ciAnchors (ignored when Schedule is set)
 	Schedule  string   // a cron expr → TriggerSchedule (a standalone scheduled job, not converge-anchored)
+	Image     string   // a digest-pinned image the job runs in (container:) — the CI tool-supply
 	Argv      []string // the command to run
 	DependsOn []string // other job ids this must follow (an inter-job edge)
 }
@@ -281,7 +300,10 @@ func buildCIDAG(jobs []extCIJob) (*dag, error) {
 			return nil, fmt.Errorf("%s: unknown anchor %q (want %s)", ciJobID(j.Ext, j.Name), j.Anchor, strings.Join(ciAnchors, " | "))
 		}
 		id := ciJobID(j.Ext, j.Name)
-		d.addNode(&dagNode{id: id, title: fmt.Sprintf("%s:%s (%s)", j.Ext, j.Name, j.Anchor), run: j.Argv})
+		if err := validateCIImage(id, j.Image); err != nil {
+			return nil, err
+		}
+		d.addNode(&dagNode{id: id, title: fmt.Sprintf("%s:%s (%s)", j.Ext, j.Name, j.Anchor), run: j.Argv, image: j.Image})
 	}
 	for _, j := range jobs {
 		id := ciJobID(j.Ext, j.Name)
@@ -333,7 +355,11 @@ func renderExtensionsWorkflow(jobs []extCIJob) (string, error) {
 		if needs := d.needsOf(id); len(needs) > 0 {
 			b.WriteString(fmt.Sprintf("    needs: [%s]\n", strings.Join(needs, ", ")))
 		}
-		b.WriteString("    runs-on: ubuntu-latest\n    steps:\n")
+		b.WriteString("    runs-on: ubuntu-latest\n")
+		if n.image != "" { // the CI tool-supply: the step's tools live in this digest-pinned image
+			b.WriteString(fmt.Sprintf("    container: %s\n", n.image))
+		}
+		b.WriteString("    steps:\n")
 		b.WriteString("      - uses: actions/checkout@v4\n")
 		runLine := "      - run: " + shellQuote(n.run)
 		if n.note != "" {
@@ -359,7 +385,7 @@ func manifestCIJobs(m extManifest) []extCIJob {
 		if name == "" {
 			name = fmt.Sprintf("step%d", i)
 		}
-		jobs = append(jobs, extCIJob{Ext: m.Name, Name: name, Anchor: anchor, Schedule: s.Schedule, Argv: s.Argv, DependsOn: s.DependsOn})
+		jobs = append(jobs, extCIJob{Ext: m.Name, Name: name, Anchor: anchor, Schedule: s.Schedule, Image: s.Image, Argv: s.Argv, DependsOn: s.DependsOn})
 	}
 	return jobs
 }
@@ -416,7 +442,10 @@ func buildScheduledDAG(jobs []extCIJob) (*dag, error) {
 	d := newDAG()
 	for _, j := range jobs {
 		id := ciJobID(j.Ext, j.Name)
-		d.addNode(&dagNode{id: id, title: fmt.Sprintf("%s:%s (scheduled)", j.Ext, j.Name), run: j.Argv})
+		if err := validateCIImage(id, j.Image); err != nil {
+			return nil, err
+		}
+		d.addNode(&dagNode{id: id, title: fmt.Sprintf("%s:%s (scheduled)", j.Ext, j.Name), run: j.Argv, image: j.Image})
 	}
 	for _, j := range jobs {
 		id := ciJobID(j.Ext, j.Name)
@@ -477,7 +506,11 @@ func renderScheduledWorkflow(jobs []extCIJob) (string, error) {
 		if needs := d.needsOf(id); len(needs) > 0 {
 			b.WriteString(fmt.Sprintf("    needs: [%s]\n", strings.Join(needs, ", ")))
 		}
-		b.WriteString("    runs-on: ubuntu-latest\n    steps:\n")
+		b.WriteString("    runs-on: ubuntu-latest\n")
+		if n.image != "" { // the CI tool-supply: the step's tools live in this digest-pinned image
+			b.WriteString(fmt.Sprintf("    container: %s\n", n.image))
+		}
+		b.WriteString("    steps:\n")
 		b.WriteString("      - uses: actions/checkout@v4\n")
 		b.WriteString("      - run: " + shellQuote(n.run) + "\n")
 	}
