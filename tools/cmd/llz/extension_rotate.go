@@ -71,8 +71,9 @@ func runExtensionRotate(g globalOpts, root, only string) error {
 		matched = true
 		r := declRotator{name: e.Name, secret: e.Manifest.Rotate.Secret, argv: e.Manifest.Rotate.Argv}
 
-		// Cloud-mutating (mints a real token + writes a store) — gate + plan.
-		if g.dryRun || !g.yes {
+		// Cloud-mutating (mints a real token + writes a store) — the gate is driven by
+		// ActionRotate.Gated in the registry.
+		if !proceedGated(g, ActionRotate) {
 			fmt.Fprintf(os.Stderr, "→ would rotate %s: mint via %s, re-seed %q\n", e.Name, shellQuote(r.argv), r.secret)
 			if !g.yes && !g.dryRun {
 				fmt.Fprintln(os.Stderr, "  (re-run with --yes to rotate)")

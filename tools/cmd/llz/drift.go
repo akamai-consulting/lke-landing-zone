@@ -62,6 +62,10 @@ func runDrift(branch, repoURL string, strict bool) error {
 		compareURL = fmt.Sprintf("https://github.com/%s/compare/%s...%s", slug, tv.TemplateSHA, latest)
 	}
 
+	// Extension output drift (Sustain-phase lifecycle health) alongside template drift
+	// — report-only, prints in both the up-to-date and drifted paths below.
+	lifecycleDrift(gopts, ".")
+
 	if tv.TemplateSHA == latest {
 		fmt.Printf("%s Up to date with %s@%s (%s).\n", green("✓"), tv.TemplateRepo, branch, short(latest))
 		emitDriftSummary(tv, branch, latest, "", "✅ up to date")

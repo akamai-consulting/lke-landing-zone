@@ -98,8 +98,9 @@ func runExtensionSeed(g globalOpts, root string) error {
 		return nil
 	}
 
-	// Cloud-mutating — gate here so the plan is reviewable before any write.
-	if g.dryRun || !g.yes {
+	// Cloud-mutating — the gate is driven by ActionSeed.Gated in the registry, so the
+	// plan is reviewable before any write.
+	if !proceedGated(g, ActionSeed) {
 		for _, a := range actions {
 			fmt.Fprintf(os.Stderr, "→ would seed %s → %s (%s)\n", a.ext, a.target, a.kind)
 		}

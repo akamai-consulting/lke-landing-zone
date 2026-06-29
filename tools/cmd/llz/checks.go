@@ -236,9 +236,11 @@ func runLint(g globalOpts) error {
 			return err
 		}
 	}
-	// Tail: each enabled (and built-in) extension's check: steps — the Gate-phase
-	// contribution folded into the fast gate (issue #10). A missing tool skips.
-	if err := runExtensionGate(g, "."); err != nil {
+	// Tail: fire the lifecycle Gate phase (check: hook) — each enabled (and built-in)
+	// extension's check: steps, folded into the fast gate (issue #10). A missing tool
+	// skips; a failing check blocks. runLint names the lifecycle event, not the
+	// extension internal.
+	if err := lifecycleGate(g, "."); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "lint: ok")
@@ -266,6 +268,12 @@ func runValidate(g globalOpts) error {
 		if err := step(g); err != nil {
 			return err
 		}
+	}
+	// Tail: the CI-tier validate: hook — each extension's heavyweight validation, with
+	// tools required (a missing tool fails, unlike the lint gate). Posture lives in the
+	// lifecycle layer, not here.
+	if err := lifecycleValidate(g, "."); err != nil {
+		return err
 	}
 	fmt.Fprintln(os.Stderr, "validate: ok")
 	return nil

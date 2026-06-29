@@ -140,12 +140,22 @@ func TestRunExtensionGate(t *testing.T) {
 	}
 }
 
+// Reconcile runs contributions in lifecycle (registry) order — derived from the
+// phase index, never a hand-kept slice order. With Gate sitting between Configure and
+// Bootstrap, the sequence is scaffold → configure → gate → bootstrap.
 func TestContributionPhaseOrder(t *testing.T) {
-	got := make([]string, len(contributions))
-	for i, c := range contributions {
-		got[i] = c.Phase()
+	ordered := orderedContributions()
+	got := make([]string, len(ordered))
+	for i, c := range ordered {
+		got[i] = c.PhaseID()
 	}
-	if strings.Join(got, ",") != "Configure,Scaffold,Bootstrap,Gate" {
-		t.Fatalf("phase order = %v", got)
+	if strings.Join(got, ",") != "scaffold,configure,gate,bootstrap" {
+		t.Fatalf("lifecycle order = %v", got)
+	}
+	// indices must be strictly ascending (sorted by the registry, not by luck)
+	for i := 1; i < len(ordered); i++ {
+		if phaseIndex(ordered[i-1].PhaseID()) >= phaseIndex(ordered[i].PhaseID()) {
+			t.Fatalf("contributions not in ascending registry order: %v", got)
+		}
 	}
 }

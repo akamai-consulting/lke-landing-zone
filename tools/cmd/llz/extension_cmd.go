@@ -1,6 +1,11 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+)
 
 func extensionCmd() *cobra.Command {
 	x := &cobra.Command{
@@ -117,11 +122,12 @@ func extensionCmd() *cobra.Command {
 	applyC.Flags().StringVar(&applyRoot, "root", ".", "instance repo root to scaffold into")
 	applyC.Flags().BoolVar(&applyCheck, "check", false, "report scaffold drift; write nothing; exit non-zero")
 
-	anchorsC := &cobra.Command{
-		Use:   "anchors",
-		Short: "list the delivery lifecycle phases, which are anchorable in ci-workflow, and where each phase's hook lives",
-		Args:  cobra.NoArgs,
-		RunE:  func(_ *cobra.Command, _ []string) error { return runExtensionAnchors() },
+	lifecycleC := &cobra.Command{
+		Use:     "lifecycle",
+		Aliases: []string{"anchors"},
+		Short:   "print the lifecycle registry: phases, engines, CI anchor jobs, fired hooks, and day-2 actions",
+		Args:    cobra.NoArgs,
+		RunE:    func(_ *cobra.Command, _ []string) error { return runLifecycle() },
 	}
 
 	var regRoot string
@@ -141,17 +147,26 @@ func extensionCmd() *cobra.Command {
 		Use:   "disable <name>",
 		Short: "disable an extension (removes it from .llz/extensions.yaml; leaves files in place)",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(_ *cobra.Command, a []string) error { return runExtensionDisable(gopts, regRoot, a[0]) },
+		RunE: func(_ *cobra.Command, a []string) error {
+			if err := runExtensionDisable(gopts, regRoot, a[0]); err != nil {
+				return err
+			}
+			// Disable is non-destructive by design; point at the Decommission actions
+			// that undo the scaffold/seed it leaves behind (the inverse arc).
+			fmt.Fprintf(os.Stderr, "hint: files + seeded secrets are left in place — `llz extension teardown %s` removes its files; `llz extension unseed %s` revokes its secrets\n", a[0], a[0])
+			return nil
+		},
 	}
 	var reconcileRoot string
 	var reconcileCheck bool
 	reconcileC := &cobra.Command{
 		Use:   "reconcile",
-		Short: "run every contribution (config/scaffold/ci/gate) in phase order over built-ins + enabled",
+		Short: "run every contribution in lifecycle order over built-ins + enabled",
 		Long: "The lifecycle driver: loads the unified Extension set (compiled-in built-ins +\n" +
-			"enabled local/remote) and runs each Contribution in phase order — Configure,\n" +
-			"Scaffold, Bootstrap, Gate. One idempotent pass; --check reports drift without\n" +
-			"writing. (`llz upgrade` should call this; the Gate also belongs in runLint.)",
+			"enabled local/remote) and runs each Contribution in lifecycle order, derived\n" +
+			"from the central registry — Scaffold (files), Configure (config), Gate (check),\n" +
+			"Bootstrap (ci). One idempotent pass; --check reports drift without writing.\n" +
+			"(`llz upgrade` fires Sustain/files; runLint fires the Gate via lifecycleGate.)",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runExtensionReconcile(gopts, reconcileRoot, reconcileCheck)
@@ -204,6 +219,46 @@ func extensionCmd() *cobra.Command {
 	}
 	rotateC.Flags().StringVar(&rotateRoot, "root", ".", "instance repo root")
 
+	var teardownRoot, teardownOnly string
+	var teardownForce bool
+	teardownC := &cobra.Command{
+		Use:   "teardown [name]",
+		Short: "remove an extension's scaffolded files (per the lock) and clear its lock entries — needs --yes",
+		Long: "The inverse of `extension apply` (the Decommission phase): removes the files an\n" +
+			"extension owns per .llz/extensions.lock and drops its lock entry. With no [name] it\n" +
+			"tears down every recorded extension; pass one to scope it. Refuses to strip files an\n" +
+			"enabled extension's check/ci hook still consumes (disable it first, or --force).\n" +
+			"--dry-run / no --yes prints the plan and removes nothing.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, a []string) error {
+			if len(a) == 1 {
+				teardownOnly = a[0]
+			}
+			return runExtensionTeardown(gopts, teardownRoot, teardownOnly, teardownForce)
+		},
+	}
+	teardownC.Flags().StringVar(&teardownRoot, "root", ".", "instance repo root")
+	teardownC.Flags().BoolVar(&teardownForce, "force", false, "tear down even a still-enabled extension whose hooks depend on the files")
+
+	var unseedRoot, unseedOnly string
+	unseedC := &cobra.Command{
+		Use:   "unseed [name]",
+		Short: "revoke secrets an extension seeded — delete GH env secrets; print OpenBao removals — needs --yes",
+		Long: "The inverse of `extension seed` (the Decommission phase): deletes each declared\n" +
+			"secret's GitHub Environment entry (reusing the gh machinery `llz ci clear-cluster-\n" +
+			"secrets` uses). OpenBao `bao:` targets are NOT auto-deleted — a path may hold sibling\n" +
+			"keys — so the exact per-key removal is printed for the operator. With no [name] it\n" +
+			"covers every enabled extension. Cloud-mutating: --dry-run / no --yes prints the plan.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, a []string) error {
+			if len(a) == 1 {
+				unseedOnly = a[0]
+			}
+			return runExtensionUnseed(gopts, unseedRoot, unseedOnly)
+		},
+	}
+	unseedC.Flags().StringVar(&unseedRoot, "root", ".", "instance repo root")
+
 	var syncRoot string
 	var syncUpdate bool
 	syncC := &cobra.Command{
@@ -223,6 +278,6 @@ func extensionCmd() *cobra.Command {
 		c.Flags().StringVar(&regRoot, "root", ".", "instance repo root")
 	}
 
-	x.AddCommand(newC, lintC, upgradeC, wiringC, ciWorkflowC, anchorsC, applyC, excludeC, listC, enableC, disableC, syncC, doctorC, seedC, rotateC, reconcileC)
+	x.AddCommand(newC, lintC, upgradeC, wiringC, ciWorkflowC, lifecycleC, applyC, excludeC, listC, enableC, disableC, syncC, doctorC, seedC, rotateC, teardownC, unseedC, reconcileC)
 	return x
 }

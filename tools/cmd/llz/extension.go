@@ -61,8 +61,10 @@ type extManifest struct {
 	Vars          []extVar     `json:"vars,omitempty"`     // Configure phase: declared template inputs
 	Secrets       []extSecret  `json:"secrets,omitempty"`  // Configure phase: declared runtime secrets
 	Files         []extFile    `json:"files,omitempty"`    // Scaffold phase: rendered into the instance
-	Check         []extStep    `json:"check,omitempty"`    // Gate phase: folded into runLint
+	Check         []extStep    `json:"check,omitempty"`    // Gate phase (lint tier): folded into runLint; missing tool skips
+	Validate      []extStep    `json:"validate,omitempty"` // Gate phase (CI tier): folded into runValidate; tools REQUIRED
 	CI            []extStep    `json:"ci,omitempty"`       // Bootstrap phase: the workflow DAG
+	Health        []extStep    `json:"health,omitempty"`   // Operate phase: report-only probes surfaced by doctor/status
 	Commands      []extCommand `json:"commands,omitempty"` // Operate phase: operator CLI (reuses ext.go's extCommand)
 	Rotate        *extRotate   `json:"rotate,omitempty"`   // Operate/Sustain: implements the TokenRotator interface
 }
@@ -136,13 +138,41 @@ func manifestVersion(m extManifest) int {
 // both consumed by the workflow codegen (extension_ci.go), not by lint.
 type extStep struct {
 	Name      string   `json:"name,omitempty"`
-	Anchor    string   `json:"anchor,omitempty"` // ci: only — pre-converge | post-converge | operate
+	Anchor    string   `json:"anchor,omitempty"`   // ci: only — pre-converge | post-converge | operate
+	Schedule  string   `json:"schedule,omitempty"` // ci: only — a cron expr makes this a scheduled (vs converge-anchored) job
 	Argv      []string `json:"argv"`
 	DependsOn []string `json:"dependsOn,omitempty"` // ci: only — other "ext:step" ids
 }
 
+// manifestDeclaresHook reports whether manifest m declares anything for hook kind k —
+// the bridge from the lifecycle hook taxonomy to the manifest sections (used by
+// dependency-aware teardown to ask "does this extension have a files-dependent hook?").
+func manifestDeclaresHook(m extManifest, k HookKind) bool {
+	switch k {
+	case HookFiles:
+		return len(m.Files) > 0
+	case HookConfig:
+		return len(m.Vars) > 0 || len(m.Secrets) > 0
+	case HookCheck:
+		return len(m.Check) > 0
+	case HookValidate:
+		return len(m.Validate) > 0
+	case HookCI:
+		return len(m.CI) > 0
+	case HookHealth:
+		return len(m.Health) > 0
+	case HookCommands:
+		return len(m.Commands) > 0
+	}
+	return false
+}
+
 func allSteps(m extManifest) []extStep {
-	return append(append([]extStep{}, m.Check...), m.CI...)
+	out := append([]extStep{}, m.Check...)
+	out = append(out, m.Validate...)
+	out = append(out, m.CI...)
+	out = append(out, m.Health...)
+	return out
 }
 
 // ── lint: the capability ceiling ─────────────────────────────────────────────

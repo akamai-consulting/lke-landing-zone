@@ -20,6 +20,76 @@ workload rather than guessed from toy examples: it must be able to reconstruct
 function*). The `ohttp − llz` delta is the spec; if recipes cannot reproduce
 ohttp, the framework is incomplete.
 
+## The lifecycle contract (as implemented)
+
+The design narrative below uses "recipe / hook point"; the shipped code calls
+these **extensions** firing **typed hooks** at **lifecycle phases**. The contract
+the implementation enforces is deliberately narrow:
+
+- **Lifecycle phases are core-owned.** There is one registry —
+  `lifecyclePhases` in `tools/cmd/llz/lifecycle.go` — and it is the single source
+  of truth. The CI anchor spine, the reconcile contributions, and the
+  `runLint` / `runUpgrade` tails all *derive* from it; none re-declares the table.
+  `llz extension lifecycle` (alias `anchors`) prints it. Each phase carries a
+  structured set of `Runners` (`external` / `laptop` / `actions` / `bot` / `human`)
+  beside its prose engine, so "what runs in CI?" is queryable, not parsed from a string —
+  and a phase may legitimately span engines (Gate is laptop + Actions; Sustain is laptop
+  + the Renovate bot).
+- **The lifecycle has a teardown arc, not just a birth arc.** Beyond the eight
+  methodology phases (and the code-only Gate), there is a code-only **Decommission**
+  phase carrying the inverse actions `unseed` (revoke seeded secrets — the inverse of
+  `seed`) and `teardown` (remove scaffolded files — the inverse of `scaffold`). This
+  closes the `disable`→orphaned-{credential,file} asymmetry: `extension disable` is
+  non-destructive and points at these gated actions.
+- **An extension touches a phase through one of two disjoint registers.**
+  - A **hook** (`HookKind`: `config`, `files`, `check`, `validate`, `ci`, `health`,
+    `commands`) is a declarative artifact a phase drives. `check` is the lint tier
+    (missing tool skips); `validate` is the heavyweight CI tier (tools *required*, folded
+    into `runValidate`); `health` is a report-only probe surfaced by doctor/status; `ci`
+    is the only hook permitted to cloud-mutate, and only at workflow runtime. `HookMeta.FiredBy`
+    records *what* drives each (`reconcile` / `validate` / `doctor` / `startup`) — so
+    `commands` (startup registration, not a phase) is visibly distinct from the rest.
+    A `ci:` step also has a *trigger* axis (`Trigger`: converge / dispatch / schedule):
+    a `schedule:` cron emits the step into a separate `llz-extensions-scheduled.yml`
+    (`on: schedule`), distinct from the converge-anchored `llz-extensions.yml` — what
+    scheduled-checks, cluster-health, and a secret-rotation cadence ride.
+  - An **action** (`Action`: `seed`, `rotate`, `upgrade`, `unseed`, `teardown`) is an
+    imperative, usually cloud-mutating day-2 operation run *only* via a gated operator
+    command or a cadence workflow, and **never fired by reconcile**. `seed` lives at Configure,
+    `rotate` at Operate (backed by the `TokenRotator` interface; it *belongs to* the
+    `llz-secret-rotation.yml` cadence but is operator-invoked today — the TokenRotator
+    step is not yet wired into that workflow, recorded as `ActionMeta.DriverWired=false`),
+    `upgrade` at Sustain. `ActionMeta` records each one's command, cadence driver, wiring
+    status, and interface, so the day-2 story — including what is *not yet automated* — is
+    legible from the registry rather than grepped from command files. `TestActionDriverWiring`
+    keeps the wiring flag honest against the actual workflow contents.
+
+  The two registers are kept disjoint by test (`TestActionsAreNotHooks`,
+  `TestActionsAreNeverReconciled`): an action can never be mistaken for a fired hook.
+  There are no arbitrary `onEnable` / `onUpgrade` callbacks in either register.
+- **CI anchors are only the GitHub Actions subset of the lifecycle.** A `ci:` step
+  may anchor only to a phase that runs as a generated workflow job
+  (`LifecyclePhase.Anchorable()` — today Bootstrap/`converge` and Operate). The
+  other phases run in other engines (copier, the spec renderer, `promote.yml`,
+  `llz upgrade`, humans) and are reached through their typed hook or action, not an anchor.
+- **Extensions do not redefine bootstrap, promotion, or convergence.** Those are
+  core phases. An extension contributes artifacts *around* them (a job that
+  `needs:` converge, files re-applied on Sustain); it never owns the phase itself.
+
+Failure semantics live with the hook kind, not the call site (`HookMeta`): `check`
+and `ci` are blocking, `files` is blocking when invoked directly but downgraded to
+best-effort during `llz upgrade`, `config` is report-only, and only hooks marked
+`ToolSkip` may skip on a missing external tool. Actions carry their own posture in
+`ActionMeta` (`Gated` ⇒ `--yes` required before any cloud mutation).
+
+Laptop-driven phases fire extension work through named entry points in `lifecycle.go`,
+so a core command never reaches into an extension internal: `runLint` → `lifecycleGate`
+(Gate), `runUpgrade` → `lifecycleSustain` (Sustain), `runDoctor` → `lifecycleDoctor`
+(Configure readiness — a required extension secret missing fails the doctor gate), and
+`runDrift` → `lifecycleDrift` (Sustain output drift, report-only). The Actions-run
+phases (Bootstrap / Operate / Promote) fire through generated workflows instead, which
+is why they have no laptop entry point.
+
 ## Motivation
 
 llz already has two patterns that bracket what we want:

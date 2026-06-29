@@ -1,9 +1,76 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// ── scheduled trigger (the WHEN axis) ────────────────────────────────────────
+
+// A schedule: cron makes a ci step a standalone scheduled job in its own workflow,
+// with on: schedule (distinct crons unioned) + workflow_dispatch and dependency order.
+func TestRenderScheduledWorkflow(t *testing.T) {
+	jobs := []extCIJob{
+		{Ext: "mon", Name: "expiry", Schedule: "0 0 * * 0", Argv: []string{"llz", "ci", "expiry-audit"}},
+		{Ext: "mon", Name: "report", Schedule: "0 0 * * 0", Argv: []string{"llz", "status"}, DependsOn: []string{"x-mon-expiry"}},
+	}
+	out, err := renderScheduledWorkflow(jobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out,
+		"name: llz extensions (scheduled)",
+		"  schedule:\n    - cron: \"0 0 * * 0\"", // the two identical crons collapse to one
+		"workflow_dispatch: {}",
+		"x-mon-expiry:",
+		"needs: [x-mon-expiry]", // dependsOn among scheduled steps rides needs:
+	)
+}
+
+// A scheduled step may depend only on another scheduled step — a cross-trigger edge
+// (to a converge-anchored job in the other workflow) can't be a needs: edge.
+func TestScheduledRejectsCrossTriggerDep(t *testing.T) {
+	jobs := []extCIJob{{Ext: "mon", Name: "x", Schedule: "0 0 * * 0", Argv: []string{"y"}, DependsOn: []string{"x-other-anchored"}}}
+	if _, err := renderScheduledWorkflow(jobs); err == nil {
+		t.Fatal("a scheduled step must not depend on a non-scheduled job")
+	}
+}
+
+// partitionCIJobs routes by trigger, and runExtensionCIWorkflow emits BOTH files,
+// removing the scheduled file when its last scheduled step is dropped.
+func TestCIWorkflowGeneratesBothFilesAndCleansUp(t *testing.T) {
+	root := t.TempDir()
+	jobs := []extCIJob{
+		{Ext: "a", Name: "anchored", Anchor: anchorPostConverge, Argv: []string{"llz", "x"}},
+		{Ext: "a", Name: "cron", Schedule: "0 0 1 * *", Argv: []string{"llz", "y"}},
+	}
+	if anchored, scheduled := partitionCIJobs(jobs); len(anchored) != 1 || len(scheduled) != 1 {
+		t.Fatalf("partition = %d anchored, %d scheduled", len(anchored), len(scheduled))
+	}
+	if err := runExtensionCIWorkflow(globalOpts{}, jobs, root, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{extensionsWorkflowPath, extensionsScheduledWorkflowPath} {
+		if _, err := os.Stat(filepath.Join(root, p)); err != nil {
+			t.Fatalf("%s should exist: %v", p, err)
+		}
+	}
+	if err := runExtensionCIWorkflow(globalOpts{}, jobs, root, true); err != nil {
+		t.Fatalf("--check should pass when up to date: %v", err)
+	}
+	// drop the scheduled job → --check flags drift, regen removes the scheduled file
+	if err := runExtensionCIWorkflow(globalOpts{}, jobs[:1], root, true); err == nil {
+		t.Fatal("--check should fail after dropping the scheduled step")
+	}
+	if err := runExtensionCIWorkflow(globalOpts{}, jobs[:1], root, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, extensionsScheduledWorkflowPath)); !os.IsNotExist(err) {
+		t.Fatal("scheduled workflow should be removed once no scheduled steps remain")
+	}
+}
 
 func TestCIJobID(t *testing.T) {
 	cases := []struct{ ext, name, want string }{
@@ -124,11 +191,18 @@ func TestAnchorRegistryBindings(t *testing.T) {
 	}
 }
 
-// coreSpine must hold exactly the lifecycle phases marked Anchorable — so adding
-// an anchorable phase without a spine node (or vice versa) fails CI.
+// coreSpine is DERIVED from the lifecycle registry's anchorable phases — same count,
+// same ids, same order. Adding an anchorable phase (or a spine node) on only one side
+// fails here.
 func TestCoreSpineMatchesAnchorablePhases(t *testing.T) {
-	if len(coreSpine) != anchorablePhases() {
-		t.Fatalf("coreSpine has %d nodes but %d lifecycle phases are Anchorable", len(coreSpine), anchorablePhases())
+	anchorable := anchorablePhases()
+	if len(coreSpine) != len(anchorable) {
+		t.Fatalf("coreSpine has %d nodes but %d lifecycle phases are Anchorable", len(coreSpine), len(anchorable))
+	}
+	for i, p := range anchorable {
+		if coreSpine[i].id != p.CoreJobID {
+			t.Errorf("coreSpine[%d].id = %q, want phase %q CoreJobID %q", i, coreSpine[i].id, p.ID, p.CoreJobID)
+		}
 	}
 }
 

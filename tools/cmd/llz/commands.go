@@ -291,12 +291,13 @@ func runUpgrade(g globalOpts, ref string) error {
 	if err := applyTemplateRemovals(g); err != nil {
 		return fmt.Errorf("apply template removals: %w", err)
 	}
-	// llz upgrade = copier update + recipe apply (issue #10): re-render every
+	// llz upgrade fires the lifecycle Sustain phase (files: hook): re-render every
 	// built-in + enabled extension's files: so a changed template/binary propagates
-	// without a manual re-scaffold. Best-effort — a misconfigured extension warns,
-	// it does not abort the upgrade. Honors --dry-run internally.
-	if err := runExtensionApplyAll(g, ".", false); err != nil {
-		fmt.Fprintf(os.Stderr, "llz: extension apply during upgrade: %v\n", err)
+	// without a manual re-scaffold. The best-effort posture (a misconfigured extension
+	// warns, never aborts the upgrade) lives in lifecycleSustain now, not here — so a
+	// non-nil return is a genuine failure worth surfacing. Honors --dry-run internally.
+	if err := lifecycleSustain(g, "."); err != nil {
+		return err
 	}
 	// Re-stamp natively: an instance carries no template-scripts/ to shell out to.
 	if g.dryRun {
@@ -391,6 +392,9 @@ func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
 	// Standing security-hygiene check: the OpenBao root token must not linger in
 	// infra-<env> after first-time bootstrap (report-only — it does not gate health).
 	warnIfRootTokenPresent(args[0])
+	// Operate-phase extension health probes (report-only): the same lifecycle health
+	// surface doctor folds in, so an optionalized cluster-health monitor reports here too.
+	lifecycleHealth(".")
 	return firstErr
 }
 

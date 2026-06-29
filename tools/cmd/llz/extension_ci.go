@@ -27,8 +27,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
-	"text/tabwriter"
 
 	"sigs.k8s.io/yaml"
 )
@@ -140,6 +140,9 @@ const (
 // lifecycle tie-in is one entry in anchorRegistry — there is no switch to touch.
 type Anchor interface {
 	Name() string
+	// Target is the core spine job id this anchor binds against — which must be the
+	// CoreJobID of an anchorable lifecycle phase (TestAnchorTargets... enforces).
+	Target() string
 	// Bind installs the edge the anchor's semantics imply, between a core spine
 	// node and the extension job.
 	Bind(d *dag, jobID string)
@@ -149,6 +152,7 @@ type Anchor interface {
 type afterAnchor struct{ name, phase string }
 
 func (a afterAnchor) Name() string            { return a.name }
+func (a afterAnchor) Target() string          { return a.phase }
 func (a afterAnchor) Bind(d *dag, job string) { d.need(job, a.phase) }
 
 // beforeAnchor runs the job BEFORE a core phase node (phase needs job) — the
@@ -157,6 +161,7 @@ func (a afterAnchor) Bind(d *dag, job string) { d.need(job, a.phase) }
 type beforeAnchor struct{ name, phase string }
 
 func (a beforeAnchor) Name() string            { return a.name }
+func (a beforeAnchor) Target() string          { return a.phase }
 func (a beforeAnchor) Bind(d *dag, job string) { d.need(a.phase, job) }
 
 // anchorRegistry is the single source of truth for the tie-in points: each binds
@@ -194,92 +199,58 @@ func validAnchor(a string) bool {
 	return ok
 }
 
-// core lifecycle phase node ids. converge is the bootstrap pivot every anchor is
-// relative to; operate is the day-2 steady-state gate. Chained (operate needs
-// converge). In production converge `uses:` llz-terraform.yml (the placeholder
-// here runs `llz ci converge`).
+// core lifecycle phase node ids. These MUST equal the CoreJobID of the matching
+// anchorable phase in the lifecycle registry (lifecycle.go) — TestCoreJobSpecsMatch
+// enforces it. converge is the bootstrap pivot every anchor is relative to; operate
+// is the day-2 steady-state gate. In production converge `uses:` llz-terraform.yml
+// (the placeholder here runs `llz ci converge`).
 const (
 	convergeJob = "converge"
 	operateJob  = "operate"
 )
 
-// coreSpine is the ordered set of phase nodes seeded into every graph. It is the
-// ANCHORABLE subset of the delivery lifecycle (lifecyclePhases below): only phases
-// that run as a job in THIS generated workflow can be a DAG node an extension
-// needs:-attaches to. Bootstrap (the converge pivot) and Operate qualify; the
-// other six methodology phases run in other engines (copier, the spec renderer,
-// promote.yml, `llz upgrade`, humans) and are therefore not nodes here — the same
-// granularity ceiling the spike found. Extend this only when a phase becomes a
-// generated job in this workflow; the chain edge is wired in buildCIDAG.
-var coreSpine = []*dagNode{
-	{id: convergeJob, title: "converge (core bootstrap pivot)", core: true,
+// coreJobSpec is the CI-rendering specifics — job title, step argv, trailing comment
+// — for an anchorable phase's generated job. The lifecycle registry owns WHICH phases
+// are jobs (Anchorable + CoreJobID); this owns only HOW each renders, so the workflow
+// codegen detail does not pull the lifecycle table back into this file.
+type coreJobSpec struct {
+	title string
+	run   []string
+	note  string
+}
+
+var coreJobSpecs = map[string]coreJobSpec{
+	convergeJob: {title: "converge (core bootstrap pivot)",
 		run: []string{"llz", "ci", "converge"}, note: "placeholder; in prod: uses: …/llz-terraform.yml"},
-	{id: operateJob, title: "operate (day-2 steady-state gate)", core: true,
+	operateJob: {title: "operate (day-2 steady-state gate)",
 		run: []string{"llz", "status", "--wait"}},
 }
 
-// lifecyclePhase is one stage of the LLZ delivery methodology
-// (docs/delivery-methodology.md). The methodology has EIGHT phases across four
-// execution engines; only the two that run as jobs in this CI workflow are
-// Anchorable here. The rest are recorded so the whole lifecycle is visible in code
-// and each phase points at the engine that owns ITS extensibility — the same
-// split-by-engine conclusion the rest of the extension vehicle follows. `llz
-// extension anchors` prints this.
-type lifecyclePhase struct {
-	Num        int
-	Name       string
-	Engine     string // who runs the phase
-	Anchorable bool   // is it a generated job in THIS workflow's DAG?
-	HookVia    string // where an extension attaches at this phase
-}
+// coreSpine is the ordered phase nodes seeded into every graph: the Anchorable subset
+// of the lifecycle, DERIVED from the registry (anchorablePhases) so it cannot drift
+// from it. Only phases that run as a job in THIS generated workflow can be a DAG node
+// an extension needs:-attaches to; the chain edge between them is wired in buildCIDAG.
+// To make a phase anchorable, set its CoreJobID in the registry and add a coreJobSpec
+// — never edit a parallel list here.
+var coreSpine = buildCoreSpine()
 
-var lifecyclePhases = []lifecyclePhase{
-	{0, "Entitle", "external (accounts / InfoSec)", false, "n/a — precondition"},
-	{1, "Scaffold", "copier + laptop (llz new)", false, "files: rendered into the instance (llz extension apply)"},
-	{2, "Configure", "laptop (llz render)", false, "vars:/secrets: declared; doctor checks, seed wires (OpenBao/GH)"},
-	{3, "Bootstrap", "GitHub Actions (llz-terraform.yml → converge)", true, "ci: anchor pre-converge | post-converge"},
-	{4, "Operate", "GitHub Actions (scheduled) + the llz CLI", true, "ci: anchor operate; commands: operator CLI (ext.go registration)"},
-	{5, "Promote", "GitHub Actions (promote.yml — a separate generated workflow)", false, "llz env pipeline"},
-	{6, "Sustain", "laptop + Renovate (llz upgrade / drift)", false, "copier migrations (llz extension upgrade + wiring)"},
-	{7, "Handover", "human", false, "docs"},
-}
-
-// anchorablePhases is the count of lifecycle phases that are nodes in this DAG;
-// TestCoreSpineMatchesAnchorablePhases keeps it in lockstep with coreSpine.
-func anchorablePhases() int {
-	n := 0
-	for _, p := range lifecyclePhases {
-		if p.Anchorable {
-			n++
-		}
+func buildCoreSpine() []*dagNode {
+	var spine []*dagNode
+	for _, p := range anchorablePhases() {
+		spec := coreJobSpecs[p.CoreJobID] // keyed by job id; validated by TestCoreJobSpecsMatch
+		spine = append(spine, &dagNode{
+			id: p.CoreJobID, title: spec.title, core: true, run: spec.run, note: spec.note,
+		})
 	}
-	return n
-}
-
-// runExtensionAnchors prints the full delivery lifecycle, which phases are
-// anchorable in this workflow's DAG, and where every other phase's extension hook
-// lives — so the answer to "where can an extension tie in?" is one table.
-func runExtensionAnchors() error {
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "PHASE\tNAME\tENGINE\tDAG NODE HERE?\tEXTENSION HOOK")
-	for _, p := range lifecyclePhases {
-		here := "—"
-		if p.Anchorable {
-			here = "yes"
-		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", p.Num, p.Name, p.Engine, here, p.HookVia)
-	}
-	tw.Flush()
-	fmt.Fprintf(os.Stderr, "\nci: anchors usable in this workflow: %s\n", strings.Join(ciAnchors, ", "))
-	fmt.Fprintln(os.Stderr, "(other phases run in other engines — attach via the hook in the last column)")
-	return nil
+	return spine
 }
 
 // extCIJob is one extension ci: step, flattened from a manifest, ready to graph.
 type extCIJob struct {
 	Ext       string   // owning extension name
 	Name      string   // step name
-	Anchor    string   // one of ciAnchors
+	Anchor    string   // one of ciAnchors (ignored when Schedule is set)
+	Schedule  string   // a cron expr → TriggerSchedule (a standalone scheduled job, not converge-anchored)
 	Argv      []string // the command to run
 	DependsOn []string // other job ids this must follow (an inter-job edge)
 }
@@ -388,7 +359,7 @@ func manifestCIJobs(m extManifest) []extCIJob {
 		if name == "" {
 			name = fmt.Sprintf("step%d", i)
 		}
-		jobs = append(jobs, extCIJob{Ext: m.Name, Name: name, Anchor: anchor, Argv: s.Argv, DependsOn: s.DependsOn})
+		jobs = append(jobs, extCIJob{Ext: m.Name, Name: name, Anchor: anchor, Schedule: s.Schedule, Argv: s.Argv, DependsOn: s.DependsOn})
 	}
 	return jobs
 }
@@ -418,31 +389,123 @@ func loadExtensionCIJobs(dir string) ([]extCIJob, error) {
 	return jobs, nil
 }
 
-const extensionsWorkflowPath = ".github/workflows/llz-extensions.yml"
+const (
+	extensionsWorkflowPath          = ".github/workflows/llz-extensions.yml"
+	extensionsScheduledWorkflowPath = ".github/workflows/llz-extensions-scheduled.yml"
+)
 
-// runExtensionCIWorkflow generates the workflow under root from the given jobs
-// (sourced from an explicit dir or the enabled set by the caller).
-func runExtensionCIWorkflow(g globalOpts, jobs []extCIJob, root string, check bool) error {
-	out := filepath.Join(root, extensionsWorkflowPath)
+// partitionCIJobs splits jobs by trigger: a Schedule (cron) makes a job a standalone
+// scheduled job (TriggerSchedule); the rest are converge-anchored (TriggerConverge).
+// The two cannot share a workflow — a converge-anchored job needs: the converge pivot,
+// which never runs on a cron — so they emit two files.
+func partitionCIJobs(jobs []extCIJob) (anchored, scheduled []extCIJob) {
+	for _, j := range jobs {
+		if j.Schedule != "" {
+			scheduled = append(scheduled, j)
+		} else {
+			anchored = append(anchored, j)
+		}
+	}
+	return anchored, scheduled
+}
+
+// buildScheduledDAG graphs the scheduled jobs alone — no core spine, no anchors (a
+// scheduled job runs independently of converge). dependsOn may reference only another
+// scheduled job (a cross-trigger edge can't be expressed in needs:).
+func buildScheduledDAG(jobs []extCIJob) (*dag, error) {
+	d := newDAG()
+	for _, j := range jobs {
+		id := ciJobID(j.Ext, j.Name)
+		d.addNode(&dagNode{id: id, title: fmt.Sprintf("%s:%s (scheduled)", j.Ext, j.Name), run: j.Argv})
+	}
+	for _, j := range jobs {
+		id := ciJobID(j.Ext, j.Name)
+		for _, dep := range j.DependsOn {
+			if _, ok := d.nodes[dep]; !ok {
+				return nil, fmt.Errorf("%s: dependsOn %q — a scheduled step may only depend on another scheduled step", id, dep)
+			}
+			d.need(id, dep)
+		}
+	}
+	return d, nil
+}
+
+// renderScheduledWorkflow emits llz-extensions-scheduled.yml: an `on: schedule` workflow
+// (the union of the steps' distinct crons, plus workflow_dispatch) with each scheduled
+// step a job in dependency order. Pure + deterministic for the --check drift gate, like
+// renderExtensionsWorkflow. This is the trigger axis the anchor model lacked — what
+// scheduled-checks / cluster-health / a rotation cadence ride.
+func renderScheduledWorkflow(jobs []extCIJob) (string, error) {
+	d, err := buildScheduledDAG(jobs)
+	if err != nil {
+		return "", err
+	}
+	order, err := d.topo()
+	if err != nil {
+		return "", err
+	}
+	seen := map[string]bool{}
+	var crons []string
+	for _, j := range jobs {
+		if !seen[j.Schedule] {
+			seen[j.Schedule] = true
+			crons = append(crons, j.Schedule)
+		}
+	}
+	sort.Strings(crons) // deterministic emission for the drift gate
+
+	var b strings.Builder
+	b.WriteString("# GENERATED from each enabled extension's scheduled ci: steps (steps with a\n" +
+		"# `schedule:` cron) by `llz extension ci-workflow`. DO NOT EDIT BY HAND. Separate\n" +
+		"# from llz-extensions.yml because a cron-triggered job cannot share a workflow with\n" +
+		"# the converge-anchored DAG. `--check` is the drift gate.\n\n" +
+		"name: llz extensions (scheduled)\n\n" +
+		"on:\n  schedule:\n")
+	for _, c := range crons {
+		b.WriteString(fmt.Sprintf("    - cron: %q\n", c))
+	}
+	b.WriteString("  workflow_dispatch: {}\n\n" +
+		"permissions:\n  contents: read\n\n" +
+		"jobs:\n")
+	for i, id := range order {
+		n := d.nodes[id]
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("  %s:\n", id))
+		b.WriteString(fmt.Sprintf("    name: %s\n", n.title))
+		if needs := d.needsOf(id); len(needs) > 0 {
+			b.WriteString(fmt.Sprintf("    needs: [%s]\n", strings.Join(needs, ", ")))
+		}
+		b.WriteString("    runs-on: ubuntu-latest\n    steps:\n")
+		b.WriteString("      - uses: actions/checkout@v4\n")
+		b.WriteString("      - run: " + shellQuote(n.run) + "\n")
+	}
+	return b.String(), nil
+}
+
+// syncWorkflowFile writes / checks / removes one generated workflow file: up-to-date is
+// a no-op, --check fails on drift, an empty job set removes a stale file. Shared by the
+// anchored and scheduled paths so the drift semantics are identical.
+func syncWorkflowFile(g globalOpts, out string, jobs []extCIJob, render func([]extCIJob) (string, error), check bool) error {
 	if len(jobs) == 0 {
-		if _, statErr := os.Stat(out); statErr == nil { // workflow exists but nothing needs it → stale
-			if check {
-				return fmt.Errorf("%s is stale — no enabled ci: steps but the workflow exists; run `llz extension ci-workflow`", out)
-			}
-			if g.dryRun {
-				fmt.Fprintf(os.Stderr, "(dry-run) would remove %s (no enabled ci: steps)\n", out)
-				return nil
-			}
-			if err := os.Remove(out); err != nil {
-				return err
-			}
-			fmt.Fprintf(os.Stderr, "%s: removed (no enabled ci: steps)\n", out)
+		if _, statErr := os.Stat(out); statErr != nil {
+			return nil // nothing to generate, nothing stale
+		}
+		if check {
+			return fmt.Errorf("%s is stale — no matching ci: steps but the workflow exists; run `llz extension ci-workflow`", out)
+		}
+		if g.dryRun {
+			fmt.Fprintf(os.Stderr, "(dry-run) would remove %s (no matching ci: steps)\n", out)
 			return nil
 		}
-		fmt.Fprintln(os.Stderr, "no extension ci: steps — nothing to generate")
+		if err := os.Remove(out); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "%s: removed (no matching ci: steps)\n", out)
 		return nil
 	}
-	want, err := renderExtensionsWorkflow(jobs)
+	want, err := render(jobs)
 	if err != nil {
 		return err
 	}
@@ -466,4 +529,15 @@ func runExtensionCIWorkflow(g globalOpts, jobs []extCIJob, root string, check bo
 	}
 	fmt.Fprintf(os.Stderr, "%s: regenerated (%d job(s))\n", out, len(jobs))
 	return nil
+}
+
+// runExtensionCIWorkflow generates BOTH the converge-anchored workflow and the scheduled
+// workflow from the given jobs, partitioned by trigger. Either file is removed when its
+// job set is empty, so disabling the last scheduled step cleans up its workflow.
+func runExtensionCIWorkflow(g globalOpts, jobs []extCIJob, root string, check bool) error {
+	anchored, scheduled := partitionCIJobs(jobs)
+	if err := syncWorkflowFile(g, filepath.Join(root, extensionsWorkflowPath), anchored, renderExtensionsWorkflow, check); err != nil {
+		return err
+	}
+	return syncWorkflowFile(g, filepath.Join(root, extensionsScheduledWorkflowPath), scheduled, renderScheduledWorkflow, check)
 }
