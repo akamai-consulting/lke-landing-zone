@@ -13,7 +13,21 @@ import (
 type extMigration func(m extManifest, dir string) (extManifest, []string, error)
 
 var extMigrations = []extMigration{
-	migrateAddKind, // v1 → v2: manifests predate the `kind` ceiling selector
+	migrateAddKind,        // v1 → v2: manifests predate the `kind` ceiling selector
+	migrateStageUniversal, // v2 → v3: an empty stage was the implicit cross-cutting marker; make it explicit
+}
+
+// migrateStageUniversal stamps the explicit `universal` stage on a v2 manifest that
+// left stage empty. Empty used to mean "cross-cutting, platform-gated"; v3 makes that
+// an authored value (lintManifest now rejects an empty stage), so the migration writes
+// what the manifest already meant. A manifest that already declares a delivery stage is
+// left untouched.
+func migrateStageUniversal(m extManifest, _ string) (extManifest, []string, error) {
+	if m.Stage != "" {
+		return m, nil, nil
+	}
+	m.Stage = StageUniversal
+	return m, []string{"set stage: universal (the explicit cross-cutting marker; empty stage is no longer valid)"}, nil
 }
 
 // migrateAddKind infers and stamps `kind` on a v1 manifest that predates it: an
@@ -111,7 +125,7 @@ func runExtensionUpgrade(g globalOpts, dir, root string, check bool) error {
 // keeping the operator's comments and key order: it edits the parsed YAML node
 // tree in place rather than re-marshalling the struct (which sigs.k8s.io/yaml
 // would reorder + strip comments from). It syncs only the scalar top-level keys
-// the experiment's migrations touch (schemaVersion, kind) — a migration that adds
+// the experiment's migrations touch (schemaVersion, kind, stage) — a migration that adds
 // lists/maps would extend this. This is what makes `upgrade` safe to run on a
 // human-owned, just-merged manifest, including when copier's `migrations:` hook
 // invokes it after a `copier update` 3-way merge.
@@ -128,6 +142,9 @@ func writeManifestPreserving(path string, orig []byte, m extManifest) error {
 	setScalarKey(root, "schemaVersion", strconv.Itoa(m.SchemaVersion), "!!int")
 	if m.Kind != "" {
 		setScalarKey(root, "kind", m.Kind, "!!str")
+	}
+	if m.Stage != "" {
+		setScalarKey(root, "stage", string(m.Stage), "!!str")
 	}
 	out, err := yamlv3.Marshal(&doc)
 	if err != nil {

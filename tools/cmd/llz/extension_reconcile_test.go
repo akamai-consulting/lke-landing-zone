@@ -75,12 +75,12 @@ func TestShippedOptionalBuiltins(t *testing.T) {
 }
 
 // The stage-tagged built-ins carry the right delivery layer (validate-trivy is IaC, the
-// scheduled audits are Kube-Infra); the lint packs stay stage-less (cross-cutting).
+// scheduled audits are Kube-Infra); the lint packs declare `universal` (cross-cutting).
 func TestShippedBuiltinStages(t *testing.T) {
 	want := map[string]Stage{
 		"validate-trivy":   StageIaC,
 		"scheduled-checks": StageKubeInfra,
-		"lint-yaml":        "", // cross-cutting
+		"lint-yaml":        StageUniversal, // cross-cutting
 	}
 	got := map[string]Stage{}
 	for _, b := range builtinExtensions() {

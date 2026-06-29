@@ -138,7 +138,7 @@ func TestEnableRemoteGatedWithoutYes(t *testing.T) {
 	cache := sourceCacheDir(root, src)
 	os.MkdirAll(filepath.Join(cache, "renovate"), 0o755)
 	os.WriteFile(filepath.Join(cache, "renovate", extensionManifest),
-		[]byte("schemaVersion: 2\nname: renovate\nshort: x\nkind: tool\n"), 0o644)
+		[]byte("schemaVersion: 3\nname: renovate\nshort: x\nkind: tool\nstage: universal\n"), 0o644)
 
 	if err := runExtensionEnable(globalOpts{yes: false}, root, "renovate"); err == nil {
 		t.Fatal("enabling a remote extension without --yes should be refused")
@@ -190,7 +190,7 @@ func TestEnableResolvesFromSyncedSource(t *testing.T) {
 	cache := sourceCacheDir(root, src)
 	os.MkdirAll(filepath.Join(cache, "renovate"), 0o755)
 	os.WriteFile(filepath.Join(cache, "renovate", extensionManifest),
-		[]byte("schemaVersion: 2\nname: renovate\nshort: x\nkind: tool\n"), 0o644)
+		[]byte("schemaVersion: 3\nname: renovate\nshort: x\nkind: tool\nstage: universal\n"), 0o644)
 
 	cfg, _ := loadExtConfig(root)
 	if dir, ok := resolveExtensionDir(root, cfg, "renovate"); !ok || dir != filepath.Join(cache, "renovate") {

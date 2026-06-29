@@ -86,10 +86,11 @@ func writeExt(t *testing.T, manifest string, srcs map[string]string) string {
 	return dir
 }
 
-const filesManifest = `schemaVersion: 2
+const filesManifest = `schemaVersion: 3
 name: codeowners
 short: drops a CODEOWNERS file
 kind: tool
+stage: universal
 files:
   - {src: tpl/CODEOWNERS, dst: .github/CODEOWNERS}
 `

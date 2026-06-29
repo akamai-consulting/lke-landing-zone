@@ -1,4 +1,4 @@
-schemaVersion: 2
+schemaVersion: 3
 name: scheduled-checks
 short: scheduled credential/cluster audits + a PAT-expiry health probe (built-in, opt-in)
 kind: tool

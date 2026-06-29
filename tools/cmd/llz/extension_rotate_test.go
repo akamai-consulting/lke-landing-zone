@@ -93,7 +93,7 @@ func TestRotateOnlyNamed(t *testing.T) {
 
 func TestLintRotate(t *testing.T) {
 	base := func(r *extRotate, secs []extSecret) extManifest {
-		return extManifest{Name: "x", Short: "y", Kind: "tool", Secrets: secs, Rotate: r}
+		return extManifest{Name: "x", Short: "y", Kind: "tool", Stage: StageUniversal, Secrets: secs, Rotate: r}
 	}
 	targeted := []extSecret{{Name: "T", Bao: "secret/x#t"}}
 	cases := []struct {

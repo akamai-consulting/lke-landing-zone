@@ -86,7 +86,7 @@ func TestConfigDoctorFatalOnRequiredSecret(t *testing.T) {
 }
 
 func TestLintRequiresVarSecretNames(t *testing.T) {
-	m := extManifest{Name: "x", Short: "y", Kind: "tool",
+	m := extManifest{Name: "x", Short: "y", Kind: "tool", Stage: StageUniversal,
 		Vars: []extVar{{Default: "d"}}, Secrets: []extSecret{{Required: true}}}
 	if findings := lintManifest(m); len(findings) != 2 {
 		t.Fatalf("an unnamed var + secret should yield 2 findings, got %v", findings)

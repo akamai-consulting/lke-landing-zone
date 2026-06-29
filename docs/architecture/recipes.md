@@ -1,245 +1,295 @@
-# Recipes: user-enablable capabilities for llz
+# Extensions: user-enablable capabilities for llz
 
-Status: **draft / design** — nothing here is implemented yet.
+Status: **implemented (issue #10)** — the `llz extension` command surface, the
+lifecycle registry, the built-in tier, and the git-pinned remote loader are all in
+the binary on this branch. This document is the **as-built** spec. Where the design
+once said something the code now contradicts, the code wins and the divergence is
+called out in *Reconciliation note* below.
+
+## Naming: "recipe" → "extension"
+
+This subsystem was designed under the name **recipe** and shipped under the name
+**extension**. They are the same thing. The shipped vocabulary is:
+
+- the capability is an **extension**; the command group is `llz extension …`;
+- the operator's enable/source state lives in **`.llz/extensions.yaml`**;
+- the lock lives in **`.llz/extensions.lock`**;
+- but each extension's **manifest file is still named `recipe.yaml`**
+  (`const extensionManifest = "recipe.yaml"`), so authoring still reads "drop a
+  `recipe.yaml`." That one residual "recipe" is deliberate and load-bearing in the
+  loader; everywhere else the noun is "extension."
+
+When this doc says "extension" it means the shipped value; "recipe.yaml" always
+means the on-disk manifest file.
 
 ## Summary
 
-A **recipe** is a named, user-enablable capability bundle for an llz instance.
+An **extension** is a named, user-enablable capability bundle for an llz instance.
 It can scaffold files into the instance repo, contribute steps to llz's gates
-(pre-commit, validate), register CI steps bound to lifecycle anchors, declare
-the vars and secrets it needs, and surface its health in `llz doctor`. Recipes
-come from two origins — **built-in** (compiled into the binary) and **remote**
-(declarative manifests pulled from a pinned git repo) — that share one runtime
-model: past the load boundary, built-in vs. remote is invisible because both
-normalize to a single `recipe` value whose files are read through an `fs.FS`.
+(`check`/`validate`), register CI jobs anchored to lifecycle positions, declare the
+vars and secrets it needs, seed those secrets into a store, and surface its health
+in `llz extension doctor`. Extensions come from two origins — **built-in** (compiled
+into the binary) and **remote** (declarative manifests pulled from a pinned git
+repo) — that share one runtime model: past the load boundary, built-in vs. remote is
+invisible because both normalize to a single `Extension` value whose files are read
+through an `fs.FS`.
 
-The first built-in recipe is **lint**, demoting today's hardcoded `llz lint`
-into the framework it bootstraps. The framework's *scope* is fixed by a real
-workload rather than guessed from toy examples: it must be able to reconstruct
-`functions/ohttp` from a clean llz instance plus recipes (see *The forcing
-function*). The `ohttp − llz` delta is the spec; if recipes cannot reproduce
-ohttp, the framework is incomplete.
+The framework's *scope* is fixed by a real workload rather than guessed from toy
+examples: it must be able to reconstruct the Rust/Spin delivery of the
+`functions/ohttp` prototype from a clean llz instance plus extensions (see *The
+forcing function*). The `ohttp − llz` delta is the spec.
+
+### Reconciliation note (design → as-built)
+
+Five design decisions in the original draft were reversed or simplified in the
+shipped code. They are corrected throughout, but collected here so the delta is
+legible:
+
+| Original design said | As-built |
+| --- | --- |
+| concept = **recipe**, `llz recipe …`, `.llz/recipes.yaml` | **extension**, `llz extension …`, `.llz/extensions.yaml` (manifest file still `recipe.yaml`) |
+| render through **copier's Jinja engine**, "byte-identical" | Go **`text/template`** with copier's `<@ @>` / `<% %>` delimiters — byte-identical to copier only for bare `<@ .var @>` substitution; the two are different template languages |
+| outputs in a **separate `.llz/recipes-state.yaml`**; lock stays source-only | `Sources` **and** `Outputs` live in **one `.llz/extensions.lock`** |
+| apply = **three-way render → plan → write** (create/adopt/update/conflict/respect-delete/orphan, `--force`, per-file `managed`/`seed` mode) | apply = **render → write (overwrite)**; `--check` is a read-only drift probe (in-sync / missing / modified / orphaned). No three-way plan, no conflict resolution, no per-file ownership mode — `extFile` is just `{src, dst}` |
+| secrets are **declare + doctor-check only**; wiring deferred | `llz extension seed` / `unseed` **ship** — they wire declared secrets into OpenBao + GH env and revoke them |
+| **provider integrations** (four VCS/runner host drivers, `ciEnv`, `platform.go`) land as Phase 0 | **not built** — there is no `platform.go`; the system is GitHub-Actions-only today. The section is retained as *design-only / future* |
 
 ## The lifecycle contract (as implemented)
 
-The design narrative below uses "recipe / hook point"; the shipped code calls
-these **extensions** firing **typed hooks** at **lifecycle phases**. The contract
-the implementation enforces is deliberately narrow:
+The contract the implementation enforces is deliberately narrow:
 
 - **The lifecycle has three top-level stages (IaC → Kube-Infra → App).** Above the
-  phases sits a coarser axis: the delivery stack's three layers, in dependency order —
-  **IaC** (Terraform provisions the cloud + cluster), **Kube-Infra** (the GitOps-converged
-  platform layer), and **App** (workloads on the platform). The phases are the temporal
-  cycle each stage passes through; the stage (`Stage` enum, `stages` registry) fixes the
-  engine, the gate vocabulary, and the toolchain. An extension declares its `stage:`, and
-  `llz extension stages` prints the layers + which extensions target each. The load-bearing
-  rule is `StageMeta.PlatformGated`: **IaC and Kube-Infra checks run in the platform gate
-  (`llz lint`/`validate`); App checks do NOT** — an app's quality bar (cargo coverage/
-  mutants) runs in the app's own scaffolded CI, with the app's toolchain, on the app's PRs.
-  That is why `akamai-functions` (stage `app`) ships its gates as a workflow, not as
-  platform-fired `check:`/`validate:` steps; a stage-less extension is cross-cutting and
-  platform-gated (the lint packs).
+  phases sits a coarser axis: the delivery stack's three layers, in dependency order
+  — **IaC** (Terraform provisions the cloud + cluster), **Kube-Infra** (the
+  GitOps-converged platform layer), and **App** (workloads on the platform). The
+  phases are the temporal cycle each stage passes through; the stage (`Stage` enum,
+  `stages` registry in `lifecycle.go`) fixes the engine, the gate vocabulary, and
+  the toolchain. An extension declares its `stage:`, and `llz extension stages`
+  prints the layers + which extensions target each. The load-bearing rule is
+  `StageMeta.PlatformGated`: **IaC and Kube-Infra checks run in the platform gate
+  (`llz lint`/`validate`); App checks do NOT** — an app's quality bar (cargo
+  coverage/mutants) runs in the app's own scaffolded CI, with the app's toolchain,
+  on the app's PRs. That is why `akamai-functions` (stage `app`) ships its gates as a
+  workflow, and its `check:`/`validate:` steps are **skipped** by the platform gate
+  (`stagePlatformGated` returns false for app). An extension that targets no single
+  layer declares `stage: universal` — cross-cutting and platform-gated (the lint packs).
+  `stage:` is required; `universal` is the explicit value a cross-cutting extension uses
+  instead of leaving it empty (`llz extension upgrade` migrates pre-v3 empty stages to it).
+
+```mermaid
+flowchart LR
+  subgraph gated["platform-gated: run in `llz lint` / `llz validate`"]
+    iac["IaC<br/>Terraform · fmt/tflint/checkov"]
+    kube["Kube-Infra<br/>GitOps · kubeconform/kube-linter/conftest"]
+  end
+  subgraph notgated["NOT platform-gated: run in the app's own CI"]
+    app["App<br/>Spin/Akamai deploy · cargo fmt/clippy/coverage/mutants"]
+  end
+  xcut["stage: universal<br/>(cross-cutting linter)"] -.->|platform-gated| gated
+  iac --> kube --> app
+```
+
 - **Lifecycle phases are core-owned.** There is one registry —
-  `lifecyclePhases` in `tools/cmd/llz/lifecycle.go` — and it is the single source
-  of truth. The CI anchor spine, the reconcile contributions, and the
-  `runLint` / `runUpgrade` tails all *derive* from it; none re-declares the table.
+  `lifecyclePhases` in `tools/cmd/llz/lifecycle.go` — and it is the single source of
+  truth. The CI anchor spine, the reconcile contributions, and the `runLint` /
+  upgrade tails all *derive* from it; none re-declares the table.
   `llz extension lifecycle` (alias `anchors`) prints it. Each phase carries a
   structured set of `Runners` (`external` / `laptop` / `actions` / `bot` / `human`)
-  beside its prose engine, so "what runs in CI?" is queryable, not parsed from a string —
-  and a phase may legitimately span engines (Gate is laptop + Actions; Sustain is laptop
-  + the Renovate bot).
+  beside its prose engine, so "what runs in CI?" is queryable, not parsed from a
+  string — and a phase may legitimately span engines (Gate is laptop + Actions;
+  Sustain is laptop + the Renovate bot).
 - **The lifecycle has a teardown arc, not just a birth arc.** Beyond the eight
-  methodology phases (and the code-only Gate), there is a code-only **Decommission**
-  phase carrying the inverse actions `unseed` (revoke seeded secrets — the inverse of
-  `seed`) and `teardown` (remove scaffolded files — the inverse of `scaffold`). This
-  closes the `disable`→orphaned-{credential,file} asymmetry: `extension disable` is
-  non-destructive and points at these gated actions.
+  methodology phases (and the code-only Gate / Converge), there is a code-only
+  **Decommission** phase carrying the inverse actions `unseed` (revoke seeded
+  secrets — the inverse of `seed`) and `teardown` (remove scaffolded files — the
+  inverse of `scaffold`). This closes the `disable`→orphaned-{credential,file}
+  asymmetry: `extension disable` is non-destructive and points at these gated
+  actions.
 - **An extension touches a phase through one of two disjoint registers.**
   - A **hook** (`HookKind`: `config`, `files`, `check`, `validate`, `ci`, `health`,
     `commands`) is a declarative artifact a phase drives. `check` is the lint tier
-    (missing tool skips); `validate` is the heavyweight CI tier (tools *required*, folded
-    into `runValidate`); `health` is a report-only probe surfaced by doctor/status; `ci`
-    is the only hook permitted to cloud-mutate, and only at workflow runtime. `HookMeta.FiredBy`
-    records *what* drives each (`reconcile` / `validate` / `doctor` / `startup`) — so
-    `commands` (startup registration, not a phase) is visibly distinct from the rest.
-    A `ci:` step also has a *trigger* axis (`Trigger`: converge / dispatch / schedule):
-    a `schedule:` cron emits the step into a separate `llz-extensions-scheduled.yml`
-    (`on: schedule`), distinct from the converge-anchored `llz-extensions.yml` — what
-    scheduled-checks, cluster-health, and a secret-rotation cadence ride.
-  - An **action** (`Action`: `seed`, `rotate`, `upgrade`, `unseed`, `teardown`, `provision`)
-    is an imperative, usually cloud/host-mutating day-2 operation run *only* via a gated
-    operator command or a cadence workflow, and **never fired by reconcile**. `seed` lives at Configure,
-    `rotate` at Operate (backed by the `TokenRotator` interface; it *belongs to* the
-    `llz-secret-rotation.yml` cadence but is operator-invoked today — the TokenRotator
-    step is not yet wired into that workflow, recorded as `ActionMeta.DriverWired=false`),
-    `upgrade` at Sustain. `ActionMeta` records each one's command, cadence driver, wiring
-    status, and interface, so the day-2 story — including what is *not yet automated* — is
-    legible from the registry rather than grepped from command files. `TestActionDriverWiring`
-    keeps the wiring flag honest against the actual workflow contents.
+    (missing tool skips); `validate` is the heavyweight CI tier (tools *required*,
+    folded into `runValidate`); `health` is a report-only probe surfaced by
+    doctor/status; `ci` is the only hook permitted to cloud-mutate, and only at
+    workflow runtime. `HookMeta.FiredBy` records *what* drives each (`reconcile` /
+    `validate` / `doctor` / `startup`). A `ci:` step also has a *trigger* axis
+    (`Trigger`: converge / dispatch / schedule): a `schedule:` cron emits the step
+    into a separate `llz-extensions-scheduled.yml` (`on: schedule`), distinct from
+    the converge-anchored `llz-extensions.yml`.
+  - An **action** (`Action`: `seed`, `rotate`, `upgrade`, `unseed`, `teardown`,
+    `provision`) is an imperative, usually cloud/host-mutating day-2 operation run
+    *only* via a gated operator command or a cadence workflow, and **never fired by
+    reconcile**. `seed` lives at Configure, `rotate` at Operate (backed by the
+    `TokenRotator` interface; it *belongs to* the `llz-secret-rotation.yml` cadence
+    but is operator-invoked today — recorded as `ActionMeta.DriverWired=false`),
+    `upgrade` at Sustain. `ActionMeta` records each one's command, cadence driver,
+    wiring status, and interface, so the day-2 story — including what is *not yet
+    automated* — is legible from the registry. `TestActionDriverWiring` keeps the
+    wiring flag honest against the actual workflow contents.
+
+```mermaid
+flowchart TB
+  subgraph hooks["HOOKS — fired by a phase (reconcile-safe)"]
+    direction LR
+    h1["config"]:::r
+    h2["files"]
+    h3["check"]
+    h4["validate"]
+    h5["ci ⚡ may cloud-mutate"]
+    h6["health"]:::r
+    h7["commands"]:::r
+  end
+  subgraph actions["ACTIONS — gated day-2, NEVER reconciled"]
+    direction LR
+    a1["seed"]
+    a2["rotate ⚠ DriverWired=false"]
+    a3["upgrade"]
+    a4["unseed"]
+    a5["teardown"]
+    a6["provision"]
+  end
+  hooks -. "disjoint sets — TestActionsAreNotHooks<br/>TestActionsAreNeverReconciled" .- actions
+  classDef r fill:#eef,stroke:#88a;
+```
 
   The two registers are kept disjoint by test (`TestActionsAreNotHooks`,
   `TestActionsAreNeverReconciled`): an action can never be mistaken for a fired hook.
   There are no arbitrary `onEnable` / `onUpgrade` callbacks in either register.
 - **CI anchors are only the GitHub Actions subset of the lifecycle.** A `ci:` step
   may anchor only to a phase that runs as a generated workflow job
-  (`LifecyclePhase.Anchorable()` — today Bootstrap/`converge` and Operate). The
-  other phases run in other engines (copier, the spec renderer, `promote.yml`,
-  `llz upgrade`, humans) and are reached through their typed hook or action, not an anchor.
+  (`LifecyclePhase.Anchorable()` — today Converge/`converge` and Operate). A
+  `post-converge` step runs only after `llz ci converge` returns exit 0 (see
+  `docs/architecture/convergence-contract.md`). The other
+  phases run in other engines (copier, the spec renderer, `promote.yml`, upgrade,
+  humans) and are reached through their typed hook or action, not an anchor.
 - **Extensions do not redefine bootstrap, promotion, or convergence.** Those are
-  core phases. An extension contributes artifacts *around* them (a job that
-  `needs:` converge, files re-applied on Sustain); it never owns the phase itself.
-- **There are three enablement tiers, including a shipped-but-optional one.** A built-in
-  ships compiled into the binary; with `optional: true` it is OFF by default and turned on
-  with `llz extension enable <name>` (scaffolding from the embed), with `optional` absent
-  it is always-on (core hygiene like `gitattributes`). A local/remote extension is opt-in
-  but instance-authored, not shipped with the binary. The optional-built-in tier is the
-  home for **net-new** capabilities that should *travel with llz* yet stay off until
-  wanted — the lint packs (`lint-yaml`/`lint-typos`/`lint-markdown`), `validate-trivy`
-  (the heavyweight CI-tier IaC scan), `scheduled-checks`.
-  A capability the **instance template already delivers** is NOT a built-in candidate:
-  the devcontainer, for instance, is template-shipped (`merge .devcontainer/**`) and backed
-  by a cosign-signed multi-arch CI image — a built-in would only conflict with it and lose
-  the image build. Migrate what the template does *not* already own.
+  core phases. An extension contributes artifacts *around* them (a job that `needs:`
+  converge, files re-applied on Sustain); it never owns the phase itself.
+- **There are three enablement tiers, including a shipped-but-optional one.** A
+  built-in ships compiled into the binary; with `optional: true` it is OFF by default
+  and turned on with `llz extension enable <name>` (scaffolding from the embed), with
+  `optional` absent it is always-on (core hygiene). A local/remote extension is
+  opt-in but instance-authored. The optional-built-in tier is the home for **net-new**
+  capabilities that should *travel with llz* yet stay off until wanted — the lint
+  packs (`lint-yaml` / `lint-typos` / `lint-markdown`), `validate-trivy` (the
+  heavyweight CI-tier IaC scan), `scheduled-checks`. A capability the **instance
+  template already delivers** is NOT a built-in candidate: the devcontainer, for
+  instance, is template-shipped and backed by a cosign-signed CI image — a built-in
+  would only conflict with it (`c61006f` dropped the devcontainer built-in for
+  exactly this reason).
 
 Failure semantics live with the hook kind, not the call site (`HookMeta`): `check`
 and `ci` are blocking, `files` is blocking when invoked directly but downgraded to
-best-effort during `llz upgrade`, `config` is report-only, and only hooks marked
+best-effort during upgrade, `config`/`health` is report-only, and only hooks marked
 `ToolSkip` may skip on a missing external tool. Actions carry their own posture in
-`ActionMeta` (`Gated` ⇒ `--yes` required before any cloud mutation).
+`ActionMeta` (`Gated` ⇒ `--yes` required before any cloud mutation), routed through
+`proceedGated`.
 
-Laptop-driven phases fire extension work through named entry points in `lifecycle.go`,
-so a core command never reaches into an extension internal: `runLint` → `lifecycleGate`
-(Gate), `runUpgrade` → `lifecycleSustain` (Sustain), `runDoctor` → `lifecycleDoctor`
-(Configure readiness — a required extension secret missing fails the doctor gate), and
-`runDrift` → `lifecycleDrift` (Sustain output drift, report-only). The Actions-run
-phases (Bootstrap / Operate / Promote) fire through generated workflows instead, which
-is why they have no laptop entry point.
+**Tool supply.** An extension's steps need external tools, so each tool is declared
+in `tools:` (`extTool{name, via, version}`). Declaration drives two things:
+doctor/enable *verify* presence (a missing tool is surfaced, not a silent
+check-skip), and `llz extension provision` (the Configure-phase `ActionProvision`)
+*installs* the host/local set by aggregating the enabled extensions' pinned `via`
+refs into a generated `.mise.toml` and running `mise`. The trust boundary is the
+argv-only ceiling: an extension declares **what** to install — a pinned,
+registry-resolvable ref (`pipx:yamllint`, `npm:markdownlint-cli`,
+`aqua:crate-ci/typos`) — and **never how**. There is no install-script field, so a
+remote, git-pinned extension cannot smuggle host execution; `mise` installs from its
+backends' registries (checksum-verified), the version pins ride the source SHA+digest
+lock, and the install is gated (`--yes`).
 
-**Tool supply.** An extension's steps need external tools, so each tool is declared in
-`tools:` (`extTool{name, via, version}`). Declaration drives two things: doctor/enable
-*verify* presence (a missing tool is surfaced, not a silent check-skip), and
-`llz extension provision` (the Configure-phase `ActionProvision`) *installs* the host/local
-set by aggregating the enabled extensions' pinned `via` refs into a generated `.mise.toml`
-and running `mise`. The trust boundary is the same one the argv-only ceiling holds: an
-extension declares **what** to install — a pinned, registry-resolvable ref (`pipx:yamllint`,
-`npm:markdownlint-cli`, `aqua:crate-ci/typos`) — and **never how**. There is no install-script
-field, so a remote, git-pinned extension cannot smuggle host execution; `mise` installs from
-its backends' registries (checksum-verified for the binary backends), the version pins ride
-the source SHA+digest lock, and the install is gated (`--yes`).
+For **CI-run tools** the supply is the job's container image, not a host install: a
+`ci:` step declares an `image:` and its generated job runs in `container: …`. The
+image must be **digest-pinned** (`…@sha256:<64hex>`) — enforced at both
+`extension lint` and workflow generation — because a remote extension's CI image runs
+with the workflow's permissions. This is the right home for heavy workload kits (a
+`spin`/`cargo` deploy runs in the extension's pinned toolchain image, never installed
+on the runner).
 
-For **CI-run tools** the supply is the job's container image, not a host install: a `ci:`
-step declares a `image:` and its generated job runs in `container: …`. The image must be
-**digest-pinned** (`…@sha256:<64hex>`) — enforced at both `extension lint` and workflow
-generation — because a remote extension's CI image runs with the workflow's permissions, so
-a mutable `:latest` is trust surface that could be swapped after review (the same reasoning
-as the source SHA pin). This is the right home for heavy workload kits (a `spin`/`cargo`
-deploy runs in the extension's pinned toolchain image, never installed on the runner). For
-trusted built-in packs, the devcontainer image remains an option. So supply is organized by
-`Runner`: `laptop` → mise (`provision`), `actions` → a digest-pinned container, with the
-"declare pinned data, never execute" boundary holding across both.
+## The lifecycle registry, drawn
+
+`lifecyclePhases` is the canonical table. Index = lifecycle order; eight methodology
+phases (■) plus three code-only subphases (□). Each phase lists the stages it
+materializes and the hook/action surface it exposes to extensions.
+
+```mermaid
+flowchart TB
+  E["■ Entitle<br/>IaC · external"]
+  S["■ Scaffold<br/>all stages · laptop<br/>hooks: files"]
+  C["■ Configure<br/>all stages · laptop<br/>hooks: config · actions: seed, provision"]
+  G["□ Gate<br/>all stages · laptop+actions<br/>hooks: check, validate"]
+  B["■ Bootstrap<br/>IaC · actions (terraform apply)"]
+  V["□ Converge ⚓<br/>Kube-Infra · actions+GitOps<br/>hooks: ci · job id: converge"]
+  O["■ Operate ⚓<br/>Kube-Infra+App · actions+laptop<br/>hooks: ci, health, commands · actions: rotate · job id: operate"]
+  P["■ Promote<br/>all stages · actions (promote.yml)"]
+  U["■ Sustain<br/>all stages · laptop+bot<br/>hooks: files · actions: upgrade"]
+  H["■ Handover<br/>all stages · human"]
+  D["□ Decommission<br/>all stages · laptop<br/>actions: unseed, teardown"]
+  E --> S --> C --> G --> B --> V --> O --> P --> U --> H --> D
+```
+
+⚓ = Anchorable (`CoreJobID != ""`); a `ci:` step may anchor only here.
 
 ## Motivation
 
-llz already has two patterns that bracket what we want:
+llz already had two patterns that bracket what we want:
 
 | Pattern | What it is | Lives where |
 | --- | --- | --- |
 | `.llz/commands.yaml` (`ext.go`) | operator's ad-hoc shell aliases; no scaffolding; unversioned | operator repo, committed |
-| checks/steps (`checks.go`) | curated capabilities (lint/validate), ported into the binary "so they propagate with the binary instead of via copier update" | embedded in llz |
+| checks/steps (`checks.go`) | curated capabilities (lint/validate), compiled into the binary "so they propagate with the binary instead of via copier update" | embedded in llz |
 
-Neither covers the middle: a **curated, versioned, optional** capability that
-bundles scaffolded files with the steps that consume them. The gap is visible
-in `checks.go`'s own header comment — the lint *steps* ship with the binary
-while the lint *configs* (`.tflintrc.hcl`, `.gitleaks.toml`, `.checkov.yaml`)
-still ship via copier, so the two halves version independently and drift.
+Neither covers the middle: a **curated, versioned, optional** capability that bundles
+scaffolded files with the steps that consume them. The gap is visible in
+`checks.go`'s own header — the lint *steps* ship with the binary while the lint
+*configs* (`.tflintrc.hcl`, `.gitleaks.toml`, `.checkov.yaml`) still ship via copier,
+so the two halves version independently and drift.
 
-The codebase is closer to this design than it looks: `func(globalOpts) error`
-is already the step interface — every check in `checks.go` has that exact
-signature, and `runLint` / `runValidate` / `runPrecommit` are three hardcoded
-mini flow-engines iterating slices of them. The framework is mostly *hoisting
-those slices into a registry keyed by named hook points*, not inventing a new
-execution model.
+Why remote extensions are declarative: an extension fetched at runtime cannot be
+compiled Go (plugins are platform-fragile and version-locked). A remote extension is
+`commands.yaml`'s declarative argv model extended with scaffolding, templating, and
+versioning. Everything flows through the existing `run` / `runGated` seam, so
+`--dry-run`, the `→ argv` echo, and tool-skip carry over unchanged.
 
-Why remote recipes are declarative: a recipe fetched at runtime cannot be
-compiled Go (plugins are platform-fragile and version-locked). A remote recipe
-is `commands.yaml`'s declarative argv model extended with scaffolding,
-templating, and versioning. Everything flows through the existing `run` /
-`runGated` seam, so `--dry-run`, the `→ argv` echo, and tool-skip carry over
-unchanged.
+The scaffolder-first thesis (`extension.go` header): the relief valve for core bloat
+is a **gradient** — `llz extension new` must make a well-formed, testable,
+ceiling-respecting extension cheaper to create than a new `ci_*.go` in core, so the
+path of least resistance points OUT of the binary. The `extension lint` ceiling
+(argv-only manifest; logic-bearing `kind: check` extensions must ship tests) travels
+*with* the extension rather than being enforced in core.
+
+> **Stale code comment.** `extension.go`'s top comment still frames this as a
+> two-command "EXPERIMENT" with "the loader/registry, git fetch, and the lock … out
+> of scope." That was true at the spike; the loader, registry, remote git fetch, and
+> SHA/digest lock all shipped since. Treat this document, not that header, as the
+> current contract.
 
 ## The forcing function: rebuild ohttp atop llz
 
-The framework's feature set is derived from a real delta, not invented from
-`lint`/`renovate` toy cases.
+The framework's feature set is derived from a real delta, not invented from toy cases.
 
-**History.** `functions/ohttp` is the **prototype that predates llz**. llz was
-generalized and extracted *from* it — ohttp's own `docs/templatization-plan.md`
-("turn the ohttp-beta cluster into a modular, reusable template another team can
-adopt without forking-and-praying") is essentially the llz genesis doc. ohttp is
-the upstream original, not a downstream fork.
+**History.** `functions/ohttp` (the `ohttp-bits` remote) is the **prototype that
+predates llz**; llz was generalized and extracted *from* it. ohttp is a hybrid
+monorepo: Rust/Spin functions (relay/gateway/target-echo), `terraform-iac-bootstrap/`,
+`apl-values/`, a native Rust `tools/` workspace, and the full CI quality bar — all in
+one repo.
 
-**The vehicle.** Rebuild `functions/ohttp` *on top of* a clean llz instance —
-reconstruct it from **llz + recipes** instead of as a bespoke repo — and use
-that rebuild as the forcing function to design the recipe framework. The delta
-between a base llz instance and ohttp **is** the recipe spec. Decomposing "what
-ohttp adds on top of llz" reverse-engineers the framework's actual requirements
-instead of guessing them.
+**The vehicle.** Reconstruct ohttp's Rust/Spin delivery from **llz + extensions**
+instead of as a bespoke repo, and use that as the forcing function. The delta between
+a base llz instance and ohttp is the extension spec.
 
-**The delta (`ohttp − llz`).** A freshly-scaffolded llz instance diffed against
-`functions/ohttp` clusters into:
+**The delta (`ohttp − llz`).** It clusters into:
 
-- **`akamai-functions/` Rust + Spin components** — relay (opaque OHTTP forward +
-  Apple PAT + OTel), gateway (HPKE X25519/AES-128-GCM), target-echo. Each a
-  standalone Cargo workspace (`crate-type=["cdylib"]`, `spin-sdk` v6, thin Wasm
-  adapter over a `*-core` crate, Wasm-tuned release profile) with `spin.toml`
-  v2 (variables block, HTTP trigger, `cargo build --target wasm32-wasip2
-  --release`).
-- **CI + deploy** — `.github/workflows/akamai-functions.yml`
-  (`build-wasm → e2e → deploy-lab`), the `.github/actions/spin-cloud-deploy`
-  composite action, `scripts/app/deploy-{local,cloud}.sh`.
+- **`akamai-functions/` Rust + Spin components** — relay, gateway, target-echo. Each
+  a standalone Cargo workspace (`crate-type=["cdylib"]`, `spin-sdk` v6, thin Wasm
+  adapter over a `*-core` crate, Wasm-tuned release profile) with `spin.toml`.
+- **CI + deploy** — the build-wasm → e2e → deploy pipeline, the
+  `spin-cloud-deploy` composite action, `scripts/app/deploy-{local,cloud}.sh`.
 - **Secrets/vars** — `FERMYON_CLOUD_TOKEN`, `OHTTP_KEY_SEED`,
-  `PAT_ISSUER_PRIVATE_PEM`, `PAT_ORIGIN`; OpenBao paths + GH env secrets;
-  injected via `spin deploy --variable` / `spin cloud variables set`.
-- **apl-values / manifests** — PAT issuer deployment, `otel`/`gateway` Istio
-  ingress hosts, OHTTP AppProjects + Grafana dashboards.
-- **Toolchain** — `spin`, `rustup target add wasm32-wasip2`, the pinned
-  `ci-rust` image.
-
-That delta groups into candidate recipes — `akamai-functions` as the headline
-remote recipe, with `pat-issuer` and `ohttp-observability` as possible smaller
-ones. **The union of their needs defines the framework feature set.**
-
-**What the delta validates (formerly "design gaps").** The thin recipe shape
-(`files: [{src,dst}]` straight copy, `check/ci: [{argv}]`) is too thin for
-ohttp. The delta turns three speculative gaps into validated requirements:
-
-1. **Tree scaffolding + templated values.** ohttp needs a whole
-   `akamai-functions/` subtree with substituted values (domain, per-env app
-   name/suffix, gateway URL) — not a flat list of byte-for-byte copies. This is
-   the biggest change and it reverses the earlier "no templating" stance; see
-   *The apply pipeline → Templated render*.
-2. **CI contribution as a multi-step job, not a single argv.** The deploy is
-   `build-wasm → e2e → deploy` with prebuilt-Wasm artifact passing and secret
-   injection — a workflow fragment bound to a lifecycle anchor, not a one-line
-   `argv`. See *CI contribution*.
-3. **A secrets/vars contract.** The manifest must *declare* required secrets and
-   vars so `doctor` checks them and `enable` prompts. See *Vars and secrets*.
-
-**What the delta confirms (keep as designed).**
-
-- **Git-pin + lock (SHA + digest).** ohttp already pins everything this way
-  (`git::…//…?ref=v0.1.0` TF modules, OCI charts by tag, a git-`rev`-pinned
-  `opentelemetry-wasi`).
-- **Built-in vs. remote split.** `akamai-functions` is unambiguously *remote* —
-  it exercises the Phase 3 fetch/lock path end-to-end where `lint`/`renovate`
-  only hit the easy cases.
-- **Tool-skip + `doctor` via `tools`** — maps cleanly onto the heavier
-  `spin`/wasm toolchain.
-
-**Acceptance criterion (definition of done for the milestone).** A clean llz
-instance + `llz recipe enable akamai-functions …` (+ values) reproduces a
-working `functions/ohttp` deployment. That is the milestone, and the regression
-test thereafter.
+  `PAT_ISSUER_PRIVATE_PEM`, `PAT_ORIGIN`; GH-environment secrets.
+- **apl-values / manifests** — PAT issuer deployment, otel/gateway Istio ingress,
+  OHTTP AppProjects + Grafana dashboards.
+- **Toolchain** — `spin`, `wasm32-wasip2`, the pinned `ci-rust` image.
 
 ```mermaid
 flowchart LR
@@ -247,1142 +297,713 @@ flowchart LR
   base["clean llz instance"]
   ohttp --> delta{"ohttp − llz<br/>delta"}
   base --> delta
-  delta --> spec["recipe spec<br/>= framework feature set"]
+  delta --> spec["extension spec<br/>= framework feature set"]
   spec --> reqs["validated requirements<br/>tree templating · CI anchors · vars/secrets"]
-  reqs --> recipes["akamai-functions<br/>(+ pat-issuer, ohttp-observability)"]
-  recipes --> rebuild["llz + recipes<br/>reproduce ohttp"]
-  rebuild -. "acceptance criterion" .-> ohttp
+  reqs --> exts["akamai-functions<br/>(+ pat-issuer, ohttp-observability — not yet authored)"]
+  exts --> rebuild["llz + extensions<br/>reproduce ohttp"]
+  rebuild -. "acceptance criterion (not yet met)" .-> ohttp
 ```
 
-## Recipe vs. chart: when to reach for which
+**What the delta validates.** Three requirements:
 
-A natural question, once recipes exist: if I want to ship an optional
-capability, why not just publish another Helm chart under `kubernetes-charts/`?
-The answer is that the two operate on **different layers and at different
-times**, and the boundary is sharp enough to be a decision rule rather than a
-judgment call.
+1. **Tree scaffolding + templated values.** ohttp needs a whole `akamai-functions/`
+   subtree with substituted values — not a flat list of byte-for-byte copies.
+   *Built:* `extFile.Src` may be a directory; `renderScaffold` walks it and renders
+   every file (`e040bde`).
+2. **CI contribution as a multi-step job, not a single argv.** The deploy is
+   `build → e2e → deploy` with secret injection — a workflow fragment bound to a
+   lifecycle anchor. *Built:* `extension_ci.go` lowers `ci:` steps (anchor +
+   `dependsOn` + `schedule` + `image`) into a `needs:`-chained workflow.
+3. **A secrets/vars contract.** *Built:* `vars:` / `secrets:` declarations checked by
+   `extension doctor`; `secrets:` additionally carry optional `bao`/`ghEnv` targets
+   that `extension seed` wires.
 
-| | Helm chart (`kubernetes-charts/*`) | Recipe |
+**Where the criterion stands today.** The shipped `akamai-functions` kit
+(`external-candidates/`) is the **app-agnostic delivery machinery** — CI pipeline,
+deploy action/script, toolchain, the Fermyon secret, and a reusable Rust quality bar
+— and **no workload**. It is the reusable ~20%. The OHTTP-specific 80% (the crates,
+the multi-gateway shared-`OHTTP_KEY_SEED` coordination, the PAT issuer, the
+observability/apl-values) is still "bring your own app" plus the not-yet-authored
+`pat-issuer` / `ohttp-observability` extensions. **The acceptance criterion —
+"reproduces a working `functions/ohttp` deployment" — is therefore not yet met**; the
+kit covers delivery, not the workload's stateful coordination.
+
+## Extension vs. chart: when to reach for which
+
+If I want to ship an optional capability, why not just publish another Helm chart
+under `kubernetes-charts/`? Because the two operate on **different layers and at
+different times**.
+
+| | Helm chart (`kubernetes-charts/*`) | Extension |
 | --- | --- | --- |
 | Operates on | the **cluster** — runtime Kubernetes state | the **instance repo** + the operator's gate/CI/doctor workflow |
-| Artifact | templated K8s manifests (NetworkPolicies, namespaces, CRs, Jobs) | scaffolded repo files + steps bound to `check` / `validate` / `ci` / `doctor` |
-| Delivered by | OCI publish → ArgoCD sync onto a live cluster | the apply pipeline, written into the repo and committed |
-| Acts at | cluster runtime (reconcile loop) | author / commit / validate / CI / `doctor` time — no cluster required |
-| Reconciler | ArgoCD (sync, prune, self-heal) | three-way `render → plan → write`; enable/disable lifecycle |
-| Versioned as | chart version + OCI tag | tap tag (remote) or the binary (built-in) |
+| Artifact | templated K8s manifests | scaffolded repo files + steps bound to `check`/`validate`/`ci`/`health` |
+| Delivered by | OCI publish → ArgoCD sync | the scaffold pipeline, written into the repo and committed |
+| Acts at | cluster runtime (reconcile loop) | author / commit / validate / CI / doctor time — no cluster required |
+| Reconciler | ArgoCD (sync, prune, self-heal) | `render → write`; `--check` drift; enable/disable lifecycle |
+| Versioned as | chart version + OCI tag | source tag (remote) or the binary (built-in) |
 | Answers | "what must be *running in* the cluster" | "what must be *in the repo* and enforced around it" |
 
-**The decision rule.** Is the thing you want to ship *Kubernetes runtime
-state* — workloads, policies, CRs that must exist in a cluster to have any
-effect? That is a chart; `llz-cluster-foundation` (default-deny NetworkPolicies,
-namespaces, the CoreDNS rewrite) is the archetype, and nothing about it wants to
-become a recipe. Is it instead *repo-side capability* — config files plus the
-gates, CI steps, and health checks that consume them at author/build time
-(lint's `.tflintrc.hcl` + its four check steps; renovate's `renovate.json` + its
-config-validator; the optional monitors' workflows + ci steps)? That is a
-recipe. A chart deployed onto no cluster does nothing; a recipe runs entirely
-before — and independently of — any cluster existing.
+**The decision rule.** Is the thing *Kubernetes runtime state* — workloads, policies,
+CRs that must exist in a cluster to have any effect? That is a chart;
+`llz-cluster-foundation` is the archetype. Is it instead *repo-side capability* —
+config files plus the gates, CI steps, and health checks that consume them at
+author/build time? That is an extension.
 
-**They compose; they don't compete.** The layers stack rather than overlap. A
-recipe is in fact the natural way to ship the *repo-side half* of a chart-backed
-capability: scaffold the ArgoCD `Application` (or the chart's values override)
-that points GitOps at an OCI chart, add a `check` step that lints those values,
-and add a `doctor` step that reports the chart's sync health — while the chart
-itself still does all the in-cluster work. The chart owns runtime; the recipe
-owns the repo wiring around it and keeps that wiring versioned with the binary
-that generates and gates it. `akamai-functions` is exactly this composition: the
-recipe scaffolds the Spin components, CI, and apl-values overrides; the cluster
-state those overrides drive is still ArgoCD's job.
+**They compose; they don't compete.** An extension is the natural way to ship the
+*repo-side half* of a chart-backed capability: scaffold the ArgoCD `Application` (or
+the chart's values override), add a `check` step that lints those values, add a
+`health` step that reports the chart's sync status — while the chart itself still does
+all the in-cluster work.
 
-### What a recipe gives you that a chart cannot
-
-When a capability *could* be expressed either way — typically because it is
-mostly config files plus some glue — these are the things that tip it toward a
-recipe, none of which a chart provides:
+### What an extension gives you that a chart cannot
 
 - **It gates your workflow.** A chart cannot fail your pre-commit or block
-  `llz validate`; a recipe contributes blocking `check` / `validate` steps. The
-  capability stops bad commits, not just bad cluster state.
-- **It scaffolds into the repo and keeps files + steps in lockstep.** A chart
-  versions cluster manifests; it has no answer for "the `.tflintrc.hcl` in your
-  repo must match the lint step in this binary." Recipes close exactly the
-  copier/binary drift the framework exists to fix, and three-way apply (the
-  `managed` / `seed` modes) refreshes the recipe's version without clobbering
-  operator edits — semantics a `helm upgrade` does not have for repo files.
-- **It reports in `doctor`.** Tool presence, declared-secret presence,
-  credential expiry, and per-file drift ("`renovate.json` modified since
-  renovate@v1.4.0") surface in `llz doctor`. A chart's health lives in ArgoCD,
-  off to one side of the operator's daily loop.
-- **It has an operator-legible lifecycle.** `recipe enable` / `disable`,
-  adoption detection, and the `recipes.yaml` diff make "is this capability on"
-  a reviewable repo fact — versus a chart's presence being implicit in
-  whatever Argo is syncing.
-- **It needs no running cluster.** Recipes act at author time, so a capability
-  that is fundamentally about *the repo and its CI* (linting, dependency
-  updates, scheduled monitors, the `akamai-functions` build/deploy pipeline)
-  gets a home that does not pretend to be a cluster workload.
+  `llz validate`; an extension contributes blocking `check` / `validate` steps.
+- **It scaffolds into the repo and keeps files + steps in lockstep**, closing the
+  copier/binary drift the framework exists to fix. The lock records each owned file's
+  digest so `--check` measures drift and `extension exclude` fences copier off.
+- **It reports in doctor.** Tool presence, declared-secret presence, per-file drift
+  surface in `llz extension doctor`.
+- **It has an operator-legible lifecycle.** `extension enable` / `disable`, the
+  `extensions.yaml` diff, and the lock make "is this capability on" a reviewable repo
+  fact.
+- **It needs no running cluster.** Extensions act at author time.
 
 The inverse holds and bounds the framework: anything whose entire job is to put
-resources *into* a cluster gains nothing from being a recipe and should stay a
-chart. Recipes are deliberately not a Kubernetes deployment mechanism — see
-*Keep core* and *Out of scope*.
+resources *into* a cluster should stay a chart.
 
 ## Concepts
 
-### The instance lifecycle recipes hook into
+### The instance lifecycle extensions hook into
 
-An llz instance moves through a fixed spine (condensed from
-`docs/delivery-methodology.md`):
+An llz instance moves through the fixed spine (the `lifecyclePhases` registry). The
+verbs an extension contributes at each step:
 
 ```mermaid
 flowchart LR
-  scaffold["scaffold<br/>llz new (copier)"]
-  configure["configure<br/>llz env add"]
-  bootstrap["bootstrap<br/>terraform.yml + llz ci converge"]
-  operate["operate<br/>llz status / drift"]
-  sustain["sustain<br/>llz upgrade / drift"]
-  scaffold --> configure --> bootstrap --> operate --> sustain
+  scaffold["Scaffold<br/>llz new (copier)"]
+  configure["Configure<br/>llz render"]
+  gate["Gate<br/>llz lint / validate"]
+  converge["Converge ⚓<br/>llz ci converge"]
+  operate["Operate ⚓<br/>llz status / scheduled CI"]
+  sustain["Sustain<br/>llz upgrade / drift"]
+  scaffold --> configure --> gate --> converge --> operate --> sustain
 
-  scaffold -. "apply" .-> h1["scaffold files"]
-  configure -. "vars / secrets" .-> h2["declared inputs"]
-  bootstrap -. "ci + anchor" .-> h3["llz ci recipe:&lt;name&gt;"]
-  operate -. "commands" .-> h4["operator verbs"]
-  sustain -. "apply re-run" .-> h5["refresh + recipe drift"]
+  scaffold -. "files:" .-> h1["extension apply<br/>(render → write)"]
+  configure -. "config: + seed" .-> h2["doctor checks vars/secrets<br/>extension seed wires them"]
+  gate -. "check: / validate:" .-> h3["folded into runLint / runValidate<br/>(app-stage skipped)"]
+  converge -. "ci: anchor" .-> h4["generated llz-extensions.yml job"]
+  operate -. "commands / health / rotate" .-> h5["operator verbs + probes"]
+  sustain -. "files: re-apply" .-> h6["extension upgrade<br/>+ --check drift"]
 ```
 
-Two **delivery channels** already feed this spine; recipes are a *third*:
+Two **delivery channels** already feed this spine; extensions are a *third*:
 
 1. **Copier** — files rendered from `instance-template/`, governed by
-   `.template-manifest`'s ownership classes (`managed` = overwritten on update,
-   `merge` = 3-way, `owned` = never touched). Updated by `llz upgrade` →
-   `copier update` + re-stamp `.template-version`.
-2. **Binary-embedded logic** — checks/ci/commands compiled into llz "so they
-   propagate with the binary instead of via copier update" (`checks.go`). No
-   `embed.FS` for *files* yet.
-3. **Recipes (new)** — unify built-in + remote, scaffold files *and* contribute
-   logic, re-applied by `llz recipe apply`.
+   `.template-manifest`'s ownership classes. Updated by `llz upgrade`.
+2. **Binary-embedded logic** — checks/ci/commands compiled into llz.
+3. **Extensions (new)** — unify built-in + remote, scaffold files *and* contribute
+   logic, re-applied by `llz extension apply`. To keep channel 3 from fighting
+   channel 1, extension-owned paths are recorded in the lock and emitted as a copier
+   `_exclude` block by `llz extension exclude`.
 
-The design question the framework answers: **what fires a recipe's hooks, when
-in the spine, and who owns the files it writes** so channel 3 doesn't fight
-channel 1. The mapping:
+### The extension state lifecycle
 
-| Stage | Core driver (today) | Recipe hook | Fires when |
-| --- | --- | --- | --- |
-| **Scaffold** | `llz new` (copier copy) | `apply` (render files → instance repo) | on `recipe enable`; re-run by `llz recipe apply` / `llz upgrade` |
-| **Configure** | `llz env add` | `vars` / `secrets` (declared inputs) | `doctor` checks presence; `enable` prompts |
-| **Pre-commit gate** | `llz lint` → `runLint` | `check` | folded into the hook engine on every commit |
-| **Validate** | `llz validate` | `validate` | `llz validate` (no-`--env` path) |
-| **Bootstrap** | `terraform.yml` + `llz ci converge` | `ci` + **anchor** | invoked as `llz ci recipe:<name> <step>` at its declared anchor |
-| **Operate** | `llz status` | `commands` | registered at startup (after built-ins, `ext.go` collision rule) |
-| **Sustain** | `llz upgrade` / `llz drift` | `apply` re-run + **recipe drift** | `upgrade` runs `recipe apply`; `drift` reports recipe output + source drift |
-
-The seams already exist for two of these (the `runLint`/`runValidate` loops for
-`check`/`validate`, `ext.go` registration for `commands`); the framework makes
-`apply`, `vars`/`secrets`, and bootstrap `ci` first-class at the same level.
-
-### Two lifecycles
-
-Distinct from the instance spine above, recipes themselves undergo a
-**framework-owned state lifecycle** — they don't hook these; they undergo them:
+Distinct from the instance spine, an extension itself moves through a
+framework-owned state lifecycle:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> available: registry or synced source
-  available --> enabled: enable — fires apply once<br/>(remote: gated, --yes)
-  enabled --> enabled: llz upgrade / recipe apply<br/>(apply re-fires)
-  enabled --> dormant: disable — files left in place
-  dormant --> enabled: enable
-  dormant: dormant<br/>(doctor flags orphans)
+  [*] --> available: built-in, or a synced source
+  available --> enabled: enable — records in extensions.yaml + scaffolds files<br/>(remote first-enable: gated, --yes)
+  enabled --> enabled: extension apply / upgrade<br/>(re-render → overwrite; --check probes drift)
+  enabled --> disabled: disable — removed from enabled:, FILES LEFT IN PLACE
+  disabled --> enabled: enable
+  disabled --> decommissioned: teardown (remove files, per lock)<br/>+ unseed (revoke secrets)
+  decommissioned --> [*]
+  note right of disabled
+    doctor flags orphaned files + seeded secrets;
+    decommission is the explicit, gated cleanup arc
+  end note
 ```
+
+Note the asymmetry the Decommission arc closes: `disable` is intentionally
+non-destructive (it never deletes a file or revokes a credential), so `teardown` and
+`unseed` are the *separate, gated* inverses of `scaffold` and `seed`.
 
 ### Hook points
 
-Rule: **a hook point exists only when a shipping recipe needs it.** Every hook
-below is justified by a concrete candidate (see Candidates) — the ohttp delta
-in particular justifies `ci` anchors and the `vars`/`secrets` contract. Adding a
-hook later is one constant plus one firing site — the engine doesn't change — so
-the vocabulary starts minimal. Every hook point is trust surface for remote
-recipes and a compatibility promise to recipe authors.
+Rule: **a hook point exists only when a shipping extension needs it.** Every hook is
+a typed `HookKind`; there are no arbitrary-code callbacks. The set:
 
-| Hook | Fired by | Justified by | Failure semantics |
-| --- | --- | --- | --- |
-| `apply` | `recipe enable`, `recipe apply`, tail of `llz upgrade` | every recipe (renovate, devcontainer are apply-only; `akamai-functions` scaffolds a tree) | see Apply pipeline below |
-| `check` | `llz precommit` (after the core secrets guard), `llz lint` | lint's four steps; renovate's config-validator | blocking; tool-absent skips with a warning |
-| `validate` | `llz validate` (no-`--env` path) | validate recipe (tf-validate + checkov) | blocking; tool-skip |
-| `ci` | scaffolded workflows via `llz ci recipe:<name> <step>`, bound to an **anchor** | the four optional-monitor workflows; `akamai-functions` `build-wasm → e2e → deploy` | step-declared: blocking by default, `warnOnly` for the health-* style monitors |
-| `doctor` | `llz doctor` | monitors (credential presence); declared-secret presence; framework itself (orphans, lock staleness) | never blocks — report-only |
+| Hook | Fired by | Posture / failure semantics |
+| --- | --- | --- |
+| `config` | reconcile (readiness) / `doctor` | report-only; a missing *required* secret fails the doctor gate |
+| `files` | `extension apply`, `enable`, upgrade tail | blocking when invoked directly; best-effort under `upgrade` |
+| `check` | `runLint` / `extension reconcile` | blocking; tool-absent skips with a warning; **app-stage skipped** |
+| `validate` | `runValidate` | blocking; a missing tool is a **hard failure** (not a skip); **app-stage skipped** |
+| `ci` | generated workflow at its anchor | step-declared blocking; the only hook that may cloud-mutate (at workflow runtime) |
+| `health` | `doctor` / status | report-only — never blocks |
+| `commands` | CLI startup (`addExtCommands`) | registration, not a phase firing |
 
 Two deliberate properties:
 
-- **Failure semantics belong to the hook point, not the recipe.** The point
-  defines the contract (check blocks commits, doctor never blocks), so an
-  operator reasoning about "what can a recipe do to my commit flow" needs only
-  this table. A remote recipe cannot opt its doctor step into blocking.
-- **Hooks are data, not callbacks.** A recipe attaches *steps* (name, tool,
-  argv-or-func, anchor) to named points. There are no `onEnable` / `onUpgrade`
-  arbitrary-code hooks: `apply` is the only thing that runs at state
-  transitions, and it is constrained to the `files:` projection plus the
-  framework's own manifest stamping. This keeps declarative remote recipes at
-  full parity with built-ins, and keeps the trust story honest: the complete
-  set of moments where remote-supplied argv executes is `check` / `validate` /
-  `ci` — all operator-initiated, all echoed through `run()`.
+- **Failure semantics belong to the hook kind, not the extension** (`HookMeta`), and
+  `applyPosture` reads the table — so flipping a hook's `Posture` actually changes
+  behavior, and a remote extension cannot opt its `health` step into blocking.
+- **Hooks are data, not callbacks.** An extension attaches *steps* (name, argv,
+  anchor) to named points. The complete set of moments where remote-supplied argv
+  executes is `check` / `validate` / `ci` — all operator-initiated, all echoed
+  through `run()`.
 
-Deferred hook points, and the trigger that would add them:
+### The Extension value: one type, two origins
 
-- `env-add` (per-deployment scaffolding) — the day a monitor recipe needs
-  per-env config scaffolded by `llz env add`.
-- `prebuild` (gate inside `llz build`) — orthogonal behavior change; if wanted
-  later it is `runHook(validate)` at the top of `cmdBuild`.
-- `teardown` / `reap` — no candidate; high blast radius; keep out.
-
-### The recipe value: one type, two origins
-
-The only real difference between a built-in and a remote recipe is *where its
-files live*. Hide that behind `fs.FS` and no downstream code branches on origin
-— this is the same trick `ext.go` already uses for `.llz/commands.yaml`, with
-more structure.
+The only real difference between a built-in and a remote extension is *where its
+files live*. Hide that behind `fs.FS` and no downstream code branches on origin.
 
 ```mermaid
 flowchart TB
   subgraph builtin["built-in origin"]
-    emb["//go:embed recipes/*"] --> efs["embed.FS subtree"]
+    emb["//go:embed all:extensions / builtins"] --> efs["embed.FS subtree"]
   end
-  subgraph remote["remote origin"]
-    clone["git clone --pinned"] --> dfs["os.DirFS(cache dir)"]
+  subgraph remote["remote / local origin"]
+    clone["git clone --pinned → .llz/cache"] --> dfs["os.DirFS(dir)"]
   end
-  efs --> R["one recipe value<br/>fsys fs.FS · source string"]
+  efs --> R["one Extension value<br/>{Name, Source, Dir, fsys, Manifest}"]
   dfs --> R
-  R --> reg["dynamic AddCommand<br/>(recipe / ci recipe:&lt;name&gt;)"]
-  R --> hooks["runHook registry<br/>check / validate / ci"]
-  R --> apply["apply: fs.ReadFile(r.fsys)<br/>origin-agnostic"]
+  R --> reg["dynamic AddCommand<br/>(extension subtree, Recipes: group)"]
+  R --> hooks["reconcile driver<br/>check / validate / ci / files"]
+  R --> apply["apply: fs.ReadFile(fsys)<br/>origin-agnostic render → write"]
 ```
 
 ```go
-type hook string
-
-const (
-    hookCheck    hook = "check"
-    hookValidate hook = "validate"
-    hookCI       hook = "ci"
-)
-
-// recipe is the single runtime value built-in and remote recipes both load into.
-type recipe struct {
-    name, short string
-    tools       []toolDep             // doctor + haveTool skip-with-warning if absent
-    files       []fileMap             // apply: src in fsys → instance path, + mode + platform
-    vars        []varDecl             // declared inputs; doctor checks, enable prompts, render substitutes
-    secrets     []secretDecl          // declared inputs; doctor checks presence
-    steps       map[hook][]recipeStep // check / validate / ci, with ci carrying an anchor
-
-    fsys   fs.FS  // embed.FS subtree (built-in) | os.DirFS(cacheDir) (remote)
-    source string // "" built-in | "host/path@ref" remote
+// extension_value.go — the single runtime value both origins load into.
+type Extension struct {
+    Name     string
+    Source   string      // "" built-in | "host/path@ref" remote
+    Dir      string
+    fsys     fs.FS       // embed.FS subtree (built-in) | os.DirFS(dir) (remote/local)
+    Manifest extManifest
 }
 
-type fileMap struct {
-    src, dst string
-    mode     string // "managed" | "seed"  (default seed)
-    platform string // runner selector; "" / "all" → scaffold everywhere
-}
-type recipeStep struct {
-    name     string                 // surfaces in `llz check <name>` / `ci recipe:<r> <name>`
-    short    string
-    tool     string                 // optional: haveTool skip-with-warning if absent
-    anchor   string                 // ci only: "pre-commit" | "post-converge" | "operate"
-    warnOnly bool                   // ci only: monitor semantics
-    run      func(globalOpts) error // built-in fn, or an argv adapter for declarative
-}
-type varDecl    struct{ name, deflt, doc string }
-type secretDecl struct{ name, doc string; required bool }
-```
-
-One engine replaces the three hardcoded loops:
-
-```go
-func runHook(g globalOpts, h hook) error {
-    for _, r := range enabledRecipes() {       // enabled-list order: deterministic
-        for _, s := range r.steps[h] {         // declaration order
-            if err := s.run(g); err != nil {
-                return fmt.Errorf("%s/%s: %w", r.name, s.name, err)
-            }
-        }
-    }
-    return nil
+// extension.go — the declarative manifest (recipe.yaml).
+type extManifest struct {
+    SchemaVersion int                       // absent/0 ⇒ v1; current extSchemaVersion = 3
+    Name, Short   string
+    Kind          string       // "check" | "tool" | "observability"
+    Stage         Stage        // required: "iac" | "kube-infra" | "app" | "universal" (cross-cutting)
+    Optional      bool         // built-ins: ships but OFF by default
+    Tools         []extTool    // {name, via, version}; provision installs, doctor verifies
+    Vars          []extVar     // {name, default, doc}
+    Secrets       []extSecret  // {name, doc, required, bao, ghEnv}
+    Files         []extFile    // {src, dst} — src may be a directory (whole subtree)
+    Check         []extStep    // lint-tier gate
+    Validate      []extStep    // CI-tier gate (tools REQUIRED)
+    CI            []extStep    // {name, anchor, schedule, image, argv, dependsOn}
+    Health        []extStep    // report-only probes
+    Commands      []extCommand // operator CLI (reuses ext.go's extCommand)
+    Rotate        *extRotate   // {argv, secret} — the TokenRotator interface
 }
 ```
 
-A remote `check: [{argv: [...]}]` entry becomes a `recipeStep` whose `run` is
-`func(g) error { return run(g, argv...) }` — it inherits `--dry-run`, the argv
-echo, and tool-skip from the existing seam with no new machinery.
+The reconcile driver replaces the old hardcoded loops: `Contribution` implementations
+(`extension_reconcile.go`) are sorted by `phaseIndex` and run in lifecycle order over
+built-ins + enabled extensions. A remote `check: [{argv: […]}]` becomes a step whose
+`run` is `func(g) error { return run(g, argv...) }` — inheriting `--dry-run`, the argv
+echo, and tool-skip from the existing seam.
 
-`apply` reads from `r.fsys` and renders into the instance repo — identical for
-both origins, because `fs.ReadFile` does not care whether `fsys` is an
-`embed.FS` subtree or `os.DirFS` over the synced cache:
+## The scaffold (apply) pipeline — as built
 
-```go
-//go:embed recipes/*
-var recipeFS embed.FS
+> The original design specified an elaborate three-way `render → plan → write` model
+> (recorded vs. desired vs. actual, with create/adopt/update/conflict/respect-delete/
+> orphan actions, a `--force` override, and a per-file `managed`/`seed` ownership
+> mode). **None of that shipped.** The as-built pipeline is render → write, with a
+> read-only `--check` drift probe. The richer model is retained below under *Deferred:
+> three-way apply* as a future option, but it is not the current behavior.
 
-func builtinRecipes() []recipe {
-    sub, _ := fs.Sub(recipeFS, "recipes/lint")
-    return []recipe{{name: "lint", short: "repo lint gate", fsys: sub /* steps: runLint */}}
-}
-
-func recipeFromManifest(m manifest, dir fs.FS, src string) recipe {
-    return recipe{name: m.Name, short: m.Short, tools: m.Tools, files: m.Files,
-        vars: m.Vars, secrets: m.Secrets, steps: m.steps(), fsys: dir, source: src}
-}
-```
-
-Loading mirrors `loadExtCommands` (missing-is-not-an-error); registration is the
-dynamic `AddCommand` path `addExtCommands` already uses (see *What cobra gives
-us*):
-
-```go
-func loadRecipes(root string) ([]recipe, error) {
-    rs := builtinRecipes()
-    cfg, _ := loadRecipeConfig(root)                 // .llz/recipes.yaml absent → no error
-    for _, src := range cfg.Sources {
-        dir, err := ensureSyncedAndVerified(root, src) // sync + lock check
-        if err != nil { return nil, err }
-        for _, name := range enabledFrom(src, cfg.Enabled) {
-            m := parseManifest(filepath.Join(dir, name, "recipe.yaml"))
-            rs = append(rs, recipeFromManifest(m, os.DirFS(filepath.Join(dir, name)), src.ref()))
-        }
-    }
-    return rs, nil
-}
-```
-
-## The apply pipeline
-
-`apply` is not a single verb. As one operation it conflates four things —
-first scaffold, version refresh, drift detection, and operator-edit
-reconciliation — and the refresh path has a clobber hazard: if `llz upgrade`
-re-applies the lint recipe after the operator added rules to `.tflintrc.hcl`,
-a naive apply silently reverts their config. That is the copier-update problem
-again, and it gets the same answer: a three-way model with a pipeline you can
-stop partway through.
+`extension apply` (`extension_scaffold.go`) has two stages:
 
 ```mermaid
 flowchart LR
-  src["recipe source<br/>embed.FS / synced cache"]
-  vars["declared vars"]
-  src --> render["render<br/>(pure)"]
+  src["extension source<br/>embed.FS / os.DirFS"]
+  vars["declared vars<br/>+ LLZ_VAR_* + copier answers"]
+  src --> render["render (pure)<br/>text/template, &lt;@ @&gt; delims"]
   vars --> render
-  render --> desired["desired<br/>file contents"]
+  render --> desired["rendered files<br/>{Dst, Body, SHA}"]
 
-  desired --> plan["plan<br/>(pure-read, three-way)"]
-  recorded["recorded<br/>recipes-state.yaml"] --> plan
-  actual["actual<br/>working tree"] --> plan
-  plan --> decisions["(path, action)<br/>decisions"]
-
-  decisions --> write["write<br/>(only mutating stage)"]
-  write -->|files| actual
-  write -->|re-stamp| recorded
+  desired -->|"apply (default)"| write["write: overwrite every file<br/>record {path, sha256} in extensions.lock"]
+  desired -->|"--check (read-only)"| probe["drift probe<br/>(no write)"]
+  desired -->|"--dry-run"| echo["print would-write paths"]
 ```
 
-- **render** — pure: compute desired file contents from the recipe source
-  (embed.FS or synced cache), substituting declared vars. No reads of the
-  instance tree.
-- **plan** — pure-read: three-way classify each file against `desired` (what
-  render produced), `recorded` (digest in the per-recipe state from the last
-  apply), and `actual` (working tree) → a list of (path, action) decisions.
-  Touches nothing.
-- **write** — execute the plan; re-stamp the state file. The only mutating
-  stage.
+- **render** — pure: walk each `files:` entry (a file *or* a directory subtree),
+  render every body through Go `text/template` with copier's `<@ @>` / `<% %>`
+  delimiters, substituting `name` / `instance_repo` / `upstream_org` / declared vars
+  (overridable by `LLZ_VAR_<NAME>`). `Dst` is fixed at author time (only file *bodies*
+  are templated). `WalkDir` lexical order ⇒ a deterministic lock.
+- **write** — overwrite each rendered file (`0644`), `MkdirAll` parents, and record
+  `{path, sha256}` under the extension's name in `.llz/extensions.lock`. There is no
+  conflict detection: apply is authoritative and clobbers. Operator edits are
+  *surfaced* by `--check`, not *preserved* by apply.
 
-The state stamped at write time is the linchpin: it is the "last-applied" base
-that lets plan distinguish *the recipe changed* from *the operator changed
-it*, which a two-way diff cannot.
+### `--check`: the drift probe
 
-### Templated render
-
-ohttp's `akamai-functions/` subtree needs values substituted at scaffold time
-(domain, per-env app name/suffix, gateway URL), so `render` is a templating
-stage, not a byte-copy. The earlier "plain copy, no templating" stance is
-reversed — but the reason it was held (don't reimplement copier) is honored by
-**reusing copier's engine rather than building a new one**:
-
-- Render through the **same Jinja engine copier uses**, with the `{{ }}`
-  delimiters from `copier.yml`. Built-in, remote, and copier then produce
-  byte-identical output for the same inputs — which is what makes digest-based
-  drift detection in `plan` meaningful (a hand-edit is the only way on-disk
-  diverges from a re-render).
-- Inputs to render are the recipe's declared `vars` (see *Vars and secrets*),
-  resolved from `.llz/recipes.yaml` values + copier answers + defaults. Files
-  with no template markers pass through unchanged, so neutral files
-  (`renovate.json`, CODEOWNERS) cost nothing.
-- A recipe scaffolds a **tree**, not just a flat file list: a `fileMap.src`
-  that is a directory renders every file beneath it, preserving structure into
-  `dst`. This is what `akamai-functions/relay/…`, `gateway/…`, `target-echo/…`
-  require.
-
-No new templating *language* is introduced — the cap is "whatever copier's
-Jinja already does," nothing more exotic.
-
-### Per-file ownership mode
-
-Candidates split into two intents, declared per file in the recipe manifest:
-
-- **`managed`** — the recipe owns the file and it must track the recipe
-  version. Forcing case: a scaffolded workflow calls
-  `llz ci recipe:<name> <step>`, so it *must* refresh when the binary's
-  command surface changes. Lint's `.gitleaks.toml` and ohttp's `spin.toml` /
-  build workflow are likewise managed.
-- **`seed`** — written once as a starting point, then operator-owned forever.
-  Archetype: `renovate.json` (operators customize schedules immediately);
-  `.devcontainer`, CODEOWNERS likewise. Re-apply never touches an existing
-  seed file.
-
-Default is `seed` — the safe direction: the worst a stale seed does is go
-stale, while a wrongly-managed file clobbers operator work.
-
-This is in effect a **fourth ownership class** alongside copier's `managed` /
-`merge` / `owned`: recipe-written files are re-rendered idempotently from the
-binary/remote source but must be **invisible to copier**, or `copier update`
-clobbers them or flags them as drift. Two mechanics enforce that:
-
-- **Record outputs.** Every file `apply` writes is recorded (path + mode +
-  digest + recipe-version) in `.llz/recipes-state.yaml` — the three-way base
-  for `plan`.
-- **Fence copier off.** Recipe output paths are `_exclude`d in `copier.yml`
-  (alongside `.llz/cache/`), so `copier update` never touches them and never
-  reports them as drift.
-
-### Idempotency contract
-
-`apply` runs unattended on every `upgrade`/`drift`, so it must be safe to
-re-run. Render and plan are **pure** functions over (recipe source, declared
-vars, recorded state, on-disk digests) — table-testable without a real tree,
-same pattern as the argv builders in `checks.go`. Write fails hard but is
-idempotent: re-running converges. Because render is byte-deterministic for
-fixed inputs, "nothing changed" plans to an empty write.
-
-### Plan classification
+`--check` writes nothing and exits non-zero on any drift, classifying each path:
 
 ```mermaid
 flowchart TD
-  d{"in desired?"}
-  d -->|no| orphan["orphan — recorded but dropped:<br/>report, never delete"]
-  d -->|yes| rec{"previously recorded?"}
-  rec -->|no| a1{"on disk?"}
-  a1 -->|absent| create["create"]
-  a1 -->|present| adopt["adopt — match: stamp silently;<br/>differ: managed→conflict / seed→leave"]
-  rec -->|yes| a2{"actual vs recorded?"}
-  a2 -->|recipe changed only| update["update — managed only"]
-  a2 -->|operator edited| conflict["conflict — keep operator file;<br/>--force to overwrite"]
-  a2 -->|operator deleted| respect["respect-delete — don't resurrect"]
+  f["for each rendered file"]
+  f --> r{"on disk?"}
+  r -->|"absent"| miss["missing — never scaffolded"]
+  r -->|"present"| h{"digest == lock?"}
+  h -->|"yes"| ok["in sync"]
+  h -->|"no"| mod["modified since scaffold"]
+  lk["for each path in lock.Outputs[name]"] --> o{"still in manifest?"}
+  o -->|"no"| orph["orphaned — extension no longer ships it"]
+  o -->|"yes"| skip["(covered above)"]
 ```
 
-| desired | recorded | actual | action |
-| --- | --- | --- | --- |
-| ✓ | — | absent | **create** |
-| ✓ | — | present | **adopt** — matches desired: stamp silently (this *is* the copier→recipe migration path); differs: managed → conflict, seed → leave + stamp |
-| ✓ | ✓ | = recorded, desired changed | **update** (managed only) |
-| ✓ | ✓ | ≠ recorded | **conflict** — keep the operator's file, warn with a diff hint; overwrite only with `--force` |
-| ✓ | ✓ | absent | **respect-delete** — operator removed it deliberately; warn once, don't resurrect |
-| — | ✓ | present | **orphan** — recipe dropped the file (or was disabled); report, never delete |
+So the as-built outcomes are exactly four: **in-sync**, **missing**, **modified**,
+**orphaned**. `extension upgrade` re-runs apply (overwriting), which is the resolution
+for *modified* and *missing*; *orphaned* files are reported for manual removal (or
+removed by `extension teardown`).
 
-No sidecar conflict files (`.rej` / `.new`) in phase 1 — warn-and-keep plus
-`--force` covers the real cases; sidecars are easy to add later and noisy to
-retract.
+### Template engine reconciliation
 
-### Stage firing matrix
+The design called for "the same Jinja engine copier uses … byte-identical." The code
+uses **Go `text/template`**, not Jinja. The delimiters match copier's (`copier.yml`
+sets `_envops` to `<@ @>` for variables and `<% %>` for blocks, chosen because the
+tree is bash- and Actions-heavy and the default `{{ }}` would collide), so a bare
+`<@ .var @>` substitution renders identically across copier, built-in, and remote.
+But Go templates and Jinja diverge on anything richer (filters, loops, conditionals),
+so the "byte-identical for all inputs" guarantee holds **only for plain variable
+substitution** — which is all the shipping extensions use.
 
-| Trigger | Stages | Posture |
-| --- | --- | --- |
-| `recipe enable` | render → plan → write | fresh tree; mostly creates/adopts |
-| `recipe apply` / `llz upgrade` tail | render → plan → write | full three-way; conflicts surface here |
-| `recipe apply --dry-run` | render → plan, print | existing `--dry-run` philosophy; no new verb |
-| `llz doctor` / `llz drift` | render → plan, report | "unscaffolded drift" is a free read-only reuse of plan, not a feature to build |
-| `recipe disable` | plan only | reports the would-be orphans it leaves behind |
+### Fencing copier off
+
+Every file apply writes is recorded in `.llz/extensions.lock`. `llz extension exclude`
+emits those paths as a copier `_exclude:` block so `copier update` never clobbers a
+path an extension owns. This is the de-facto "fourth ownership class" — but it is
+enforced by the lock + exclude emitter, not by a per-file `mode:` field.
+
+### Deferred: three-way apply
+
+If operator-edit preservation becomes necessary (e.g. a `seed`-style file an operator
+is meant to customize), the original three-way model is the design: keep a
+last-applied digest, and on re-apply classify `desired × recorded × actual` into
+create / adopt / update / conflict / respect-delete / orphan, with `--force` to
+override a conflict. The lock already stores the per-file digest that would serve as
+the "recorded" base, so this is an additive change to `applyExtensionFiles`, not a
+rearchitecture. It is **not implemented**.
 
 ## Vars and secrets
 
-The ohttp delta forces a configuration contract: `akamai-functions` cannot
-deploy without `FERMYON_CLOUD_TOKEN`, `OHTTP_KEY_SEED`,
-`PAT_ISSUER_PRIVATE_PEM`, `PAT_ORIGIN`, plus render-time vars (domain, app
-name/suffix, gateway URL). The manifest **declares** these; the framework
-checks and prompts.
+The ohttp delta forces a configuration contract. The manifest **declares** vars and
+secrets; the framework checks, prompts, and (for secrets with a target) wires.
 
 ```yaml
+# recipe.yaml
 vars:
   - { name: gateway_url, doc: "public OHTTP gateway URL", default: "" }
   - { name: app_suffix,  doc: "per-env Fermyon app suffix" }
 secrets:
-  - { name: FERMYON_CLOUD_TOKEN, doc: "Fermyon Cloud deploy token", required: true }
-  - { name: OHTTP_KEY_SEED,      doc: "HPKE key seed",              required: true }
+  - { name: FERMYON_CLOUD_TOKEN, doc: "Fermyon deploy token", required: true, bao: "secret/akamai#fermyon_cloud_token", ghEnv: infra-prod }
+  - { name: OHTTP_KEY_SEED,      doc: "HPKE key seed",         required: true }
 ```
 
-- **`vars`** feed `render` (Templated render above) and are resolved from
-  `.llz/recipes.yaml` values → copier answers → declared default. A required
-  var with no value is an `enable`-time prompt and a `doctor` finding.
-- **`secrets`** are **declare + doctor-check only** in the first cut — `doctor`
-  reports declared-but-absent secrets against the active provider integration's
-  secret store; `enable` prints what must be set. The framework does **not**
-  wire them (seed OpenBao paths / push GH env secrets) initially; wiring is a
-  later increment once the declare-only contract proves out. Secret *values*
-  never enter recipe state or the lock.
+- **`vars`** feed `render` and resolve from `LLZ_VAR_<NAME>` → declared default
+  (with `name`/`instance_repo`/`upstream_org` always available). A required var with
+  no value is a `doctor` finding.
+- **`secrets`** are checked by `doctor` (a missing *required* secret is a hard
+  finding) against the environment (the `TF_VAR_*`/CI model — the value is read from
+  env, never stored in the manifest, repo, or lock).
+- **Wiring shipped** (reversing the design's "declare-only first cut"): a secret may
+  carry a `bao: "path#key"` and/or `ghEnv: <env>` target. `llz extension seed`
+  (gated, `ActionSeed`) reads the value from the environment at seed time and wires it
+  into OpenBao and/or the GitHub Environment; `llz extension unseed` (gated,
+  `ActionUnseed`) revokes it — deletes the GH env secret, prints the OpenBao removal
+  (shared-path safety). `extRotate{argv, secret}` (the `TokenRotator` interface) mints
+  a fresh token and re-seeds it through the same targets.
 
-## CI contribution: anchors and multi-step jobs
+```mermaid
+flowchart LR
+  env["secret value<br/>(from environment)"] -->|"extension seed --yes"| bao[("OpenBao<br/>path#key")]
+  env -->|"extension seed --yes"| gh[("GitHub Environment<br/>secret")]
+  rot["extension rotate<br/>(TokenRotator)"] -->|"mint + re-seed"| env
+  bao -->|"extension unseed --yes"| revoked["revoked"]
+  gh -->|"extension unseed --yes"| revoked
+```
 
-A recipe's CI is more than a single argv. ohttp's deploy is a three-step job
-(`build-wasm → e2e → deploy`) with artifact passing and secret injection, and it
-**cannot run anywhere** — deploy must run *after* apl-core + Istio ingress are
-converged. Two mechanics cover this without a full DAG:
+## CI contribution: anchors, triggers, and multi-step jobs
 
-- **Anchors.** Each `ci` step binds to a small enum of named lifecycle anchors —
-  the recipe-level analog of Argo sync-waves (llz owns bootstrap ordering, Argo
-  owns in-cluster fan-out):
+An extension's CI is more than a single argv. Two mechanics cover the ohttp deploy
+shape (`build → e2e → deploy`, with the deploy gated behind cluster convergence)
+without a full DAG language.
 
-  ```yaml
-  ci:
-    - name: build-wasm
-      anchor: pre-commit       # pre-commit | post-converge | operate
-      argv: [cargo, build, --target, wasm32-wasip2, --release]
-    - name: deploy
-      anchor: post-converge    # runs only after `llz ci converge` returns exit 0
-      argv: [./scripts/app/deploy-cloud.sh]
-  ```
+- **Anchors.** Each `ci:` step binds to a small enum of lifecycle positions
+  (`extension_ci.go`): `pre-converge` (an edge *into* the core converge job),
+  `post-converge` (runs only after `llz ci converge` returns 0), and `operate`. The
+  anchor target must be an `Anchorable()` phase (`converge` / `operate`).
+  `dependsOn` adds arbitrary inter-step edges. There is deliberately **no**
+  "mid-converge" anchor — a `needs:` edge cannot splice into a step *inside* a
+  reusable workflow.
+- **Triggers.** The `Trigger` axis is *when* a step's job runs: `converge` (anchored
+  into the generated bootstrap DAG), `dispatch` (`workflow_dispatch`), and
+  `schedule` (a `schedule:` cron emits the job into a separate
+  `llz-extensions-scheduled.yml`). All three are wired (`TestCITriggersWiredHonesty`).
 
-  `post-converge` steps run only after `llz ci converge` returns exit 0 (per
-  `docs/architecture/convergence-contract.md`).
+```mermaid
+flowchart TB
+  ci["enabled extensions' ci: steps"]
+  ci -->|"anchor: pre/post-converge, operate<br/>+ dependsOn edges"| gen["llz extension ci-workflow"]
+  ci -->|"schedule: cron"| gen
+  gen --> wf1[".github/workflows/llz-extensions.yml<br/>(needs:-chained converge DAG, workflow_dispatch)"]
+  gen --> wf2[".github/workflows/llz-extensions-scheduled.yml<br/>(on: schedule, workflow_dispatch)"]
+  wf1 -->|"each job runs"| step["llz ci … (provider-clean Go)"]
+  wf2 --> step
+```
 
-- **Workflow fragments, invoked not inlined.** CI wiring composes via
-  scaffolding: the recipe's `files:` ships a workflow yml (one variant per
-  runner — see Provider integrations) whose steps call
-  `llz ci recipe:<name> <step>`. The namespaced command is the stable
-  entrypoint; the scaffolded workflow is what makes CI invoke it at the right
-  anchor. llz never edits workflows in place — the loop closes through the repo.
-  Multi-step jobs and artifact passing live in the workflow fragment; the step
-  bodies stay provider-clean Go reading `ciEnv`.
+llz never edits a workflow in place: `ci-workflow` regenerates the two files from the
+enabled set, and each generated job shells back into a stable `llz ci …` entrypoint.
+A `ci:` step that deploys declares a digest-pinned `image:`, so the deploy runs in the
+extension's toolchain container with the workflow's permissions.
+
+> **Note for app-stage workloads.** `akamai-functions` (stage `app`) does *not* use
+> this codegen: it scaffolds a static `akamai-functions.yml` workflow as a `files:`
+> entry, because its deploy targets Fermyon/Akamai (a SaaS) rather than the LKE
+> cluster, so the `post-converge` anchor is semantically irrelevant. This is the
+> sharpest current seam between the framework and its flagship workload — see the
+> review notes.
 
 ## Per-repo state
 
-Three committed files plus a cache, each with one job — they change at different
-times and merging them would muddy every diff:
+Two committed files plus a gitignored cache:
 
-**`.llz/recipes.yaml`** (committed, operator-owned; missing is not an error,
-per the `ext.go` convention) — *what the operator wants*:
-
-```yaml
-sources:
-  - repo: github.com/apple/llz-recipes
-    ref: v1.4.0          # tag or SHA — pinned; floating branches rejected
-enabled:
-  - apple/llz-recipes/renovate   # additive: non-default recipes, namespaced by source
-disabled: []                      # explicit opt-out of built-in defaults
-values:                           # var inputs to render, per recipe
-  apple/llz-recipes/akamai-functions:
-    gateway_url: https://gw.example.com
-    app_suffix: lab
+```mermaid
+flowchart TB
+  y[".llz/extensions.yaml<br/>(committed) — what the operator WANTS"]
+  l[".llz/extensions.lock<br/>(committed) — what sources RESOLVE to + what apply WROTE"]
+  c[".llz/cache/...<br/>(gitignored) — fetched sources"]
+  y -->|"sources: + sync"| c
+  c -->|"resolved SHA+digest"| l
+  y -->|"enabled: + apply"| l
 ```
 
-Built-in defaults (`lint`, `validate`) are **implicitly enabled unless listed
-in `disabled:`**. This is deliberate: with a fully-owned `enabled:` list, the
-day an operator writes `enabled: [apple/llz-recipes/renovate]` — the obvious
-thing to write — lint silently drops out of the pre-commit gate. And every
-existing instance has no `recipes.yaml` at all, so missing-file must mean
-"defaults on." `llz recipe disable lint` writes `disabled: [lint]` and warns
-loudly.
+**`.llz/extensions.yaml`** (`extConfig`) — *what the operator wants*:
 
-**`.llz/recipes.lock`** (committed) — *what the sources resolve to*: the
-resolved commit SHA and content digest per source (go.sum / package-lock
-model). Digest mismatch on re-sync is a hard error.
+```yaml
+dir: extensions            # local extensions directory (default)
+sources:                   # git-pinned remote taps
+  - { repo: github.com/apple/llz-extensions, ref: v1.4.0 }   # tag or SHA; floating refs drift
+enabled:                   # names that are ON (built-ins implicit unless optional)
+  - akamai-functions
+```
 
-**`.llz/recipes-state.yaml`** (committed) — *what apply last wrote*: per
-recipe, entries of `(path, mode, digest, recipe-version)`. This is the
-three-way base for plan, and the source of doctor's per-file drift report. Kept
-separate from `recipes.lock` so the lock stays source-only (sources change on
-`sync`; outputs change on `apply`).
+**`.llz/extensions.lock`** (`extLock`) — **one file, two maps** (the design's separate
+`recipes.lock` + `recipes-state.yaml` were merged):
 
-**`.llz/cache/recipes/<host>/<path>@<ref>/`** (gitignored) holds fetched
-sources, alongside the other `.llz/*` local state.
+```yaml
+sources:                   # per-source resolved pin (the trust base)
+  github.com/apple/llz-extensions:
+    ref: v1.4.0
+    sha: <commit>
+    digest: <tree-hash>
+outputs:                   # per-extension owned files (the drift + exclude base)
+  akamai-functions:
+    - { path: .github/workflows/akamai-functions.yml, sha256: <digest> }
+```
 
-## Remote recipes
+**`.llz/cache/...`** (gitignored) holds fetched sources.
+
+## Remote extensions
 
 ### Authoring model
 
-A recipe repo is a **tap** (Homebrew model): one directory per recipe, one
-repo tag versions all recipes in it. Per-recipe versioning is deferred until
-someone needs it.
+A remote source is a **tap**: one directory per extension, each with a `recipe.yaml`;
+one repo tag versions all extensions in it. Discovery is **by scan** — after cloning
+the pinned source into the cache, llz globs for `recipe.yaml` manifests; no index
+file to drift.
 
 ```
-llz-recipes/
-  renovate/
-    recipe.yaml
-    renovate.json
+llz-extensions/
+  renovate/recipe.yaml
   akamai-functions/
     recipe.yaml
-    akamai-functions/          # a whole subtree, rendered with vars
-      relay/ gateway/ target-echo/
-    ci/gha/akamai-functions.yml
-    scripts/app/deploy-cloud.sh
+    files/                 # a whole subtree, rendered with vars
+      .github/workflows/akamai-functions.yml
+      scripts/app/{quality,deploy-cloud}.sh
 ```
-
-Discovery is **by scan, not index**: after cloning the pinned source into the
-cache, llz globs `*/recipe.yaml`. No index file to drift out of sync with the
-directories.
-
-### Manifest
-
-The declarative projection of the `recipe` struct:
-
-```yaml
-# akamai-functions/recipe.yaml
-name: akamai-functions
-short: OHTTP relay/gateway Spin components + deploy
-tools: [spin, cargo]
-files:
-  - { src: akamai-functions/, dst: akamai-functions/, mode: managed }   # tree, templated
-  - { src: ci/gha/akamai-functions.yml, dst: .github/workflows/akamai-functions.yml, mode: managed, platform: gha }
-  - { src: scripts/app/deploy-cloud.sh, dst: scripts/app/deploy-cloud.sh, mode: managed }
-vars:
-  - { name: gateway_url, doc: "public OHTTP gateway URL" }
-  - { name: app_suffix,  doc: "per-env Fermyon app suffix" }
-secrets:
-  - { name: FERMYON_CLOUD_TOKEN, doc: "Fermyon Cloud deploy token", required: true }
-  - { name: OHTTP_KEY_SEED,      doc: "HPKE key seed",              required: true }
-check:
-  - argv: [cargo, fmt, --check]
-ci:
-  - { name: build-wasm, anchor: pre-commit,    argv: [cargo, build, --target, wasm32-wasip2, --release] }
-  - { name: deploy,     anchor: post-converge, argv: [./scripts/app/deploy-cloud.sh] }
-```
-
-Templating is bounded to copier's Jinja engine (see *Templated render*) — no new
-language. The lighter recipes (`renovate`, CODEOWNERS) carry no `vars`/`secrets`
-and no template markers, so they remain effectively plain copies.
 
 ### Transport: git, pinned
 
-Source = git repo + tag/SHA. Fetch via the existing git/gh shell-out through
-`runGated` (`git clone --depth=1 --branch <ref> …`) — no new dependency.
-OCI-via-Harbor considered and deferred; git works against any host. The source
-spec is host-qualified already (`github.com/apple/llz-recipes`), so a tap can
-live on GitLab, Bitbucket, or a GHE host with no per-provider code, and
-independently of which provider the consuming instance runs on — see Provider
-integrations (source transport).
-
-```
-git clone --depth=1 --branch <ref> https://<host>/<path> .llz/cache/<host>/<path>@<ref>
-git -C <cache> rev-parse HEAD        # ref → SHA
-hash(tree)                           # content digest
-# verify against .llz/recipes.lock (hard error on mismatch) or write on first enable
-```
-
-Network policy: **never touch the network implicitly except on a cold cache.**
-On cold-cache fetch, verify the fetched SHA + digest against the lock — hard
-error on mismatch. Re-resolve upstream refs only on an explicit
-`llz recipe sync --update` (which also detects force-moved tags by comparing
-against the lock).
-
-End to end, a remote `recipe enable` threads the transport, trust, and apply
-seams together:
+Source = git repo + tag/SHA. Fetch via the existing git shell-out through `runGated`
+(`git clone --depth=1 --branch <ref> …`) into `.llz/cache/<host>/<path>@<ref>`, then
+`rev-parse HEAD` for the SHA and a tree hash for the digest, verified against
+`.llz/extensions.lock`. The source spec is host-qualified, so a tap can live on any
+git host.
 
 ```mermaid
 sequenceDiagram
   actor Op as operator
   participant llz
-  participant Git as git / gh
+  participant Git as git
   participant Repo as instance repo
-  Op->>llz: recipe enable apple/llz-recipes/akamai-functions
-  Note over llz: source in allowlisted .llz/recipes.yaml?
-  llz->>Git: shallow clone at pinned ref v1.4.0 (cold cache)
-  Git-->>llz: .llz/cache/HOST/PATH@v1.4.0
-  llz->>llz: verify SHA + digest vs .llz/recipes.lock
-  llz->>Op: print source + ref + every argv then require confirmation
-  Op->>llz: approves (yes)
-  llz->>llz: render (fs.FS + vars) → plan (three-way) → write
-  llz->>Repo: scaffold files + stamp .llz/recipes-state.yaml
+  Op->>llz: extension enable akamai-functions
+  Note over llz: source listed in committed .llz/extensions.yaml?
+  llz->>Git: shallow clone at pinned ref (cold cache)
+  Git-->>llz: .llz/cache/HOST/PATH@ref
+  llz->>llz: verify SHA + digest vs .llz/extensions.lock
+  llz->>Op: print source + ref + scaffold plan, require --yes (remote first-enable)
+  Op->>llz: re-run with --yes
+  llz->>llz: render (fs.FS + vars) → write (overwrite)
+  llz->>Repo: scaffold files + record outputs in .llz/extensions.lock
 ```
+
+Network policy: **never touch the network implicitly except on a cold cache.** On
+fetch, verify SHA + digest against the lock — hard error on mismatch. Re-resolve
+upstream refs only on an explicit `llz extension sync --update`.
 
 ## Trust model
 
-Remote recipes execute third-party argv and write files. Mitigations:
+Remote extensions execute third-party argv and write files. Mitigations:
 
-- **Pin + lock** — sources resolve to SHA + digest in `.llz/recipes.lock`;
-  floating refs rejected; drift is a hard error.
-- **Cache re-verification** — the lock digest is verified against the *cache
-  contents* before executing remote argv (cheap hash per gate run, or at
-  minimum per sync), not only at fetch time. Otherwise a tampered cache dir is
-  an argv-injection path that pin+lock never re-checks.
-- **Allowlist by construction** — llz only fetches sources listed in the
-  committed `.llz/recipes.yaml`; adding a source is a reviewable diff.
-- **First-enable gated** — routed through `runGated`; refuses without
-  `--yes`; prints source + ref + every argv before executing.
-- **No implicit binaries** — recipes invoke tools by name; tool-skip applies;
-  a recipe cannot fetch-and-run an arbitrary binary.
-- **Bounded execution moments** — remote argv runs only at `check` /
-  `validate` / `ci`, all operator-initiated, all echoing through `run()`.
-- **Secrets never leave the operator** — recipes *declare* secrets; values are
-  resolved by the provider integration's store and never written to recipe
-  state, the lock, or the cache.
-- **doctor surfaces it** — enabled-but-unscaffolded drift; lock/cache status;
-  declared-but-absent secrets.
+- **Pin + lock** — sources resolve to SHA + digest in `.llz/extensions.lock`;
+  floating refs drift; mismatch is a hard error.
+- **Cache re-verification** — `verifyRemoteCache` recomputes tree digests at load
+  time, catching a tampered/stale cache, not only at fetch.
+- **Allowlist by construction** — llz only fetches sources listed in the committed
+  `.llz/extensions.yaml`; adding a source is a reviewable diff.
+- **First-enable gated** — remote scaffolding refuses without `--yes`; prints source
+  + ref + plan first.
+- **Argv-only ceiling** — `extension lint` rejects inline shell; an extension invokes
+  tools by name (tool-skip applies); it cannot fetch-and-run an arbitrary binary, and
+  `tools:` declares *what* to install, never *how*.
+- **Bounded execution moments** — remote argv runs only at `check` / `validate` /
+  `ci`, all operator-initiated, all echoing through `run()`.
+- **Secrets never leave the operator** — values are read from env at `seed` time and
+  never written to the manifest, repo, lock, or cache.
 
-Net blast radius equals `.llz/commands.yaml` today (runs argv against tools
-you already have, writes files you review in the diff) — just versioned and
-shared.
+Net blast radius equals `.llz/commands.yaml` today (runs argv against tools you have,
+writes files you review in the diff) — just versioned, pinned, and shared.
 
-## Provider integrations (VCS + runner)
+## Provider integrations (VCS + runner) — DESIGN ONLY, NOT BUILT
 
-VCS/runner support is a **first-class integration, not a recipe.** The two are
-deliberately different kinds of thing, and conflating them was the mistake the
-earlier draft made:
+> The original Phase 0 called for a multi-provider integration layer (host drivers
+> for github / ghe / gitlab / bitbucket, a `ciEnv` normalizer, per-provider core CI
+> surface, and a `platform:` selector in `platform.go`). **None of this is
+> implemented** — there is no `platform.go`, and the system is GitHub-Actions-only.
+> The section is retained as a future design; everything below is aspirational.
 
-| | Provider integration | Recipe |
-| --- | --- | --- |
-| What it is | the binding of llz to one {VCS host, CI runner} | an optional capability bundle |
-| Count | exactly one per instance | zero-to-many |
-| Chosen | once, at `llz new` | enable/disable anytime |
-| Backs | the *core* product (terraform/bootstrap CI, secret push, repo create) | optional add-ons only |
-| Code | compiled-in Go per provider (a host driver) | declarative argv + scaffolded files; no remote Go |
-| Trust | trusted core | pin/lock/gate surface |
+The intent: VCS/runner support is a **first-class integration, not an extension** —
+exactly one per instance, chosen once at `llz new`, backing the *core* product
+(terraform/bootstrap CI, secret push, repo create) with compiled-in Go. Because it is
+load-bearing for the core landing zone, it cannot be an optional declarative
+extension; it would be the foundation extensions ride on.
 
-The operator journey is **download llz → `llz new` → pick a provider →
-everything (core *and* recipes) targets it.** Because the provider is
-load-bearing for the core landing zone — not an optional capability — it cannot
-be a recipe: recipes are optional and carry no compiled Go. It is a foundation
-recipes ride on. This is why it lands as **Phase 0, before the recipe
-framework** (see Plan).
+It would supply three things the rest of llz consumes:
 
-### What an integration supplies
+1. **Host driver** — `dispatch` / `setSecret` / `setVariable` / `createRepo` /
+   `pushRepo`, with `github` / `ghe` / `gitlab` / `bitbucket` implementations,
+   hoisting today's scattered `gh …` argv builders and the `ghHost()` / `LLZ_GH_HOST`
+   seam. The `secrets` seed/unseed wiring would resolve through `setSecret` here.
+2. **Runner env (`ciEnv`)** — normalizes runner env vars so every `llz ci …` step is
+   provider-agnostic Go instead of reading `$GITHUB_*` directly.
+3. **Core CI surface** — the core pipeline files in each runner's dialect.
 
-Selected by the `platform:` config, a provider integration supplies three things
-the rest of llz consumes:
-
-1. **Host driver** — the Go interface for operations llz performs *against* the
-   host: `dispatch` (run a pipeline/workflow), `setSecret`, `setVariable`,
-   `createRepo`, `pushRepo`. Implementations: `github`, `ghe`, `gitlab`,
-   `bitbucket`. This hoists today's scattered `gh …` argv builders
-   (`commands.go`) and the lone `ghHost()` / `LLZ_GH_HOST` seam into one
-   selected interface. The hardest host operations live here too: `runner-acl`
-   (egress-IP ACL) and the credential-expiry monitors (`ghe-pat-expiry`) — each
-   provider implements its own ACL/IP-detection and PAT model. The recipe
-   `secrets` contract resolves through `setSecret`/secret-store reads here.
-2. **Runner env (`ciEnv`)** — normalizes the runner's concrete env vars
-   (job-summary sink, scratch dir, repo slug, commit SHA, ref) so every
-   `llz ci …` step — core and recipe — is provider-agnostic Go instead of
-   reading `$GITHUB_STEP_SUMMARY` / `$RUNNER_TEMP` / `GITHUB_*` directly.
-3. **Core CI surface** — the integration owns the *core* pipeline files in its
-   runner's dialect: terraform/bootstrap as GitHub Actions
-   (`.github/workflows/*.yml`), GitLab CI (`.gitlab-ci.yml`), or Bitbucket
-   Pipelines (`bitbucket-pipelines.yml`). `llz new` scaffolds the variant for
-   the chosen provider.
-
-### Config
-
-The `platform:` block — a copier answer surfaced through `.copier-answers.yml`,
-chosen at `llz new` and read where `ghHost()` reads today:
-
-```yaml
-platform:
-  vcs: github       # github | ghe | gitlab | bitbucket
-  host: github.com  # the enterprise / self-hosted host
-  runner: gha       # gha | gitlab-ci | bitbucket-pipelines
-```
-
-`vcs` and `runner` are separate fields because they're separable (a GitHub repo
-with self-hosted GitLab runners is legal), but `runner` defaults from `vcs`
-since the native pairing dominates.
-
-### How recipes consume the active integration
-
-Recipes carry **no** provider logic; they target the integration's abstractions:
-
-- **Recipe CI scaffolding** — a recipe that wires CI ships one workflow variant
-  per runner; `render` selects by the active integration's `runner`. The
-  contract underneath is identical across variants — every one calls the same
-  `llz ci recipe:<name> <step>` entrypoint at its anchor; only the surrounding
-  YAML dialect differs:
-
-  ```yaml
-  files:
-    - { src: ci/gha/scheduled-checks.yml,        dst: .github/workflows/scheduled-checks.yml, mode: managed, platform: gha }
-    - { src: ci/gitlab/scheduled-checks.yml,      dst: .gitlab-ci.yml,                          mode: managed, platform: gitlab-ci }
-    - { src: ci/bitbucket/scheduled-checks.yml,   dst: bitbucket-pipelines.yml,                 mode: managed, platform: bitbucket-pipelines }
-  ```
-
-  `platform:` defaults to "all" — a file with no selector scaffolds everywhere
-  (neutral files like `renovate.json` / CODEOWNERS). Cross-runner variance is N
-  committed files the plan filters, not branches inside one file; *within-file*
-  variance (per-env names, URLs) is Jinja vars. A deselected file is simply
-  absent from `desired` and falls through the plan table's existing orphan /
-  respect-delete rows.
-- **Recipe steps** — `check` / `validate` / `ci` steps read `ciEnv` and call the
-  host driver, so they are provider-agnostic Go and port for free.
-- **Recipe source transport** — orthogonal to the instance's integration. A tap
-  is a pinned git repo cloned host-agnostically, so a recipe can be hosted
-  anywhere regardless of which provider the consuming instance runs on (see
-  Transport).
-
-### What this costs
-
-This is the load-bearing consequence of "all four providers, recipe CI recipes
-must actually run": the integration layer (four host drivers + `ciEnv` + the
-per-provider core CI surface) is itself a substantial multi-provider program,
-and it lands **before** the recipe framework. Later phases are authored against
-the integration interfaces, so they stay provider-clean by construction.
-Recipes stay small precisely because the provider complexity is paid once, in
-Phase 0, not re-litigated in every recipe.
+Until that exists, extensions' CI codegen emits GitHub Actions only, and a `files:`
+entry's `platform:` selector (also unbuilt — `extFile` is `{src, dst}` today) would be
+the eventual mechanism for shipping one workflow variant per runner.
 
 ## Command surface
 
-`llz recipe` parent command, in the style of `checkCmd`:
+`llz extension` parent command (Cobra subtree, `Recipes:` help group). Twenty
+subcommands, grouped by lifecycle role:
 
-- `llz recipe list` — available vs. enabled, missing tools and unset required
-  vars/secrets flagged (reuses `haveTool`).
-- `llz recipe enable <name>` — apply pipeline + record in `recipes.yaml`;
-  prompts for required vars; remote first-enable gated.
-- `llz recipe disable <name>` — records in `disabled:` (built-in) or removes
-  from `enabled:` (remote); leaves files; reports orphans.
-- `llz recipe apply [--force] [--dry-run]` — full pipeline for every enabled
-  recipe; also fired by the `llz upgrade` tail.
-- `llz recipe sync [--update]` — clone/verify sources at pinned refs; run
-  implicitly before apply/enable only when the cache is cold.
+| Group | Commands |
+| --- | --- |
+| **author** | `new <name> --kind check\|tool\|observability` · `lint <dir>` (the ceiling) · `wiring <dir>` (copier/renovate glue) |
+| **enable** | `list` · `enable <name>` · `disable <name>` · `sync [--update]` |
+| **scaffold** | `apply [dir] [--check]` · `exclude` (copier `_exclude` block) · `upgrade [dir]` (schema migrate + re-apply) |
+| **configure** | `doctor` · `seed --yes` · `unseed [name] --yes` · `provision --yes` |
+| **operate** | `reconcile` · `rotate [name] --yes` |
+| **decommission** | `teardown [name] --yes` |
+| **introspect** | `lifecycle` (alias `anchors`) · `stages` · `ci-workflow [dir]` |
 
-Compatibility surface (unchanged verbs, new engine):
-
-- `llz lint` ≡ `runHook(check)` — the verb survives as an alias; muscle
-  memory, docs, and the quickstart all reference it.
-- `llz validate` ≡ `runHook(validate)`; its `--env` readiness mode stays core.
-- `llz precommit` ≡ core secrets guard → `runHook(check)` →
-  `.githooks/pre-commit.local`. Installed hook shims exec by absolute path and
-  keep working untouched.
-- `llz check <step>` enumerates enabled recipes' steps; lint's keep bare names
-  (`fmt-check`, `tf-lint`, …) for compat; other recipes' are prefixed
-  (`renovate:config-validate`).
-- `llz ci recipe:<name> <step>` — recipe CI steps are namespaced so they are
-  visibly recipe-owned and cannot shadow a core ci step.
-
-Collision rule (from `ext.go`): built-ins win; recipe commands and steps
-warn-and-skip on clash. Registration order: built-ins → enabled recipes →
-`.llz/commands.yaml` ext commands.
+Compatibility surface (unchanged verbs): `llz lint` folds in enabled extensions'
+`check:` steps via the reconcile driver; `llz validate` folds in `validate:` steps;
+`llz upgrade` runs `extension upgrade` in its tail. Collision rule (from `ext.go`):
+built-ins win; extension commands warn-and-skip on clash.
 
 ## Wiring into current code
 
-- **check** — `runPrecommit` (hooks.go) replaces its `runLint` call with
-  `runHook(check)`. Order is fixed: core secrets guard → recipes in enabled
-  order → `.githooks/pre-commit.local`. The secrets guard does **not** become
-  a recipe — it is the safety floor and must not be disableable via the
-  recipe knob. Same for the branch policy (branchpolicy.go).
-- **validate** — `runValidate` (checks.go) becomes `runHook(validate)`.
-- **apply** — new tail in `runUpgrade` (commands.go) after the version stamp,
-  so `llz upgrade` = `copier update` (channel 1) **then** `llz recipe apply`
-  (channel 3) — one command converges both. `llz new` arms recipes the same
-  way it arms hooks.
-- **ci** — one `ci recipe` parent registered in `ciCmd()` (ci.go), subcommands
-  generated from enabled recipes; anchor dictates which core CI step the
-  scaffolded workflow invokes it after.
-- **drift** — `llz drift` already compares `.template-version` to the template
-  head; it gains two recipe reports: **output drift** (on-disk digest vs
-  `.llz/recipes-state.yaml`) and **source drift** (lock SHA vs upstream pinned
-  ref).
-- **doctor** — `runDoctor` gains a recipes section: per-recipe tool presence,
-  declared-but-absent vars/secrets, plan-derived file drift, lock/cache status
-  for remote sources. Note: doctor's tool checks are currently ad-hoc — a small
-  refactor to expose a tool-check primitive comes first.
+- **check** — `runLint` fires the gate contribution (`runExtensionChecks`), which
+  iterates enabled extensions in lifecycle order, skipping app-stage and
+  tool-absent steps.
+- **validate** — `runValidate` fires `runExtensionValidate` (tools required; app-stage
+  skipped; a load failure is fatal).
+- **apply** — `extension upgrade` migrates each manifest's schema then re-applies
+  `files:`; `llz upgrade` invokes it after the copier update so both channels
+  converge.
+- **ci** — `extension ci-workflow` regenerates `llz-extensions.yml` (+ the scheduled
+  variant) from enabled `ci:` steps; the anchor dictates the `needs:` edge.
+- **doctor** — `extension doctor` reports per-extension tool presence and
+  declared-but-absent vars/secrets.
+- **drift** — `llz drift` reports extension **output drift** (on-disk digest vs the
+  lock's `outputs:`, the same probe `extension apply --check` runs) alongside template
+  drift, as Sustain-phase lifecycle health (`drift.go`).
+- **copier fence** — `extension exclude` prints the owned-path `_exclude` block from
+  the lock.
 
-### What cobra gives us, and what we build
+### What cobra gives us, and what we built
 
-We are on cobra v1.10.2. The split is sharp: cobra owns the *command surface*;
-the *flow engine* is ours.
-
-Cobra primitives the framework leans on (most already used in the codebase):
-
-- **Dynamic `root.AddCommand()` at startup** — exactly what `ext.go`'s
-  `addExtCommands` already does. Cobra does not care that a command was built
-  from an embed.FS or a synced YAML manifest, so the `recipe` parent, the
-  generated `ci recipe:<name>` tree, and recipe-contributed commands all use
-  the same registration path. Built eagerly (not lazily) before `Execute()` so
-  help and completion stay correct.
-- **`cobra.Group` + `AddGroup` + `GroupID`** (since v1.6) — register a
-  `"Recipes:"` help group and stamp `GroupID` on recipe commands so
-  `llz --help` visibly segregates them from core porcelain (the same legibility
-  concern that made `ci.go` its own grouped subtree). New to this codebase;
-  adopt it here.
-- **`Command.Annotations` (`map[string]string`)** — tag recipe-contributed
-  commands with `{"recipe": name}` so doctor, collision handling, and
-  `recipe list` introspect the live command tree instead of a side registry.
-  Annotations are used elsewhere in the tree but not yet on commands.
-- **`DisableFlagParsing: true`** — already the trick `ext.go` uses to forward
-  argv verbatim; the declarative `argv:` projection wants identical treatment.
-- **`Hidden: true`** — for the `ci recipe:` plumbing entrypoints, same as the
-  hidden `precommit` command today.
-- **`root.Commands()` enumeration** — there is no built-in duplicate-rejection,
-  so the built-in-wins collision loop from `ext.go` stays as-is and we extend
-  it to recipe commands.
-
-What cobra does **not** provide, by design — these are ours:
-
-- **The hook engine.** `check` / `validate` / `apply` are not new commands;
-  they are existing command `RunE`s that call `runHook(...)`. Cobra has no
-  notion of a named extension point that multiple registered units contribute
-  steps to. The registry-and-iterate model is the part we own.
-- **Do not use `PersistentPreRunE` as a hook mechanism.** It fires before
-  *every* subcommand and only the nearest one in the chain runs unless parents
-  are manually chained — wrong semantics for hooks that must fire at specific
-  points (precommit, validate) and nowhere else. Keep hooks as explicit
-  `runHook()` calls in the handful of `RunE`s that own them. (`credentials.go`
-  uses `PersistentPreRun` for its own setup; that is not a precedent for hooks.)
-- **A plugin system.** Cobra has none; the kubectl/git "exec a `cobra-foo`
-  binary on PATH" pattern is convention, not a feature — and it is the opposite
-  of the declarative-argv remote model, which deliberately avoids fetch-and-run
-  binaries. Cobra giving us nothing here is fine; we don't want it.
+Cobra owns the command surface (dynamic `AddCommand` at startup — the same path
+`ext.go` uses; a `Recipes:` `cobra.Group`; `Annotations`; `DisableFlagParsing` for
+verbatim argv; `Hidden` for plumbing). The *flow engine* is ours: the typed
+`Contribution`/reconcile driver, the apply pipeline, the lifecycle registry, and the
+remote loader. `PersistentPreRunE` is deliberately **not** the hook mechanism (wrong
+firing semantics); hooks are explicit calls in the handful of `RunE`s that own them.
+There is no Go-plugin system — built-in = compiled Go + `//go:embed`; remote =
+declarative `recipe.yaml`; both normalize to one `Extension`.
 
 ## Candidates
 
-What makes a good candidate — at least two of: **optional** (not every
-instance wants it), **spans the copier/binary divide** (scaffolded files +
-binary steps that must stay in sync), **tool-dependent** (skippable when
-absent), **different cadence** than the core bootstrap flow.
+What makes a good candidate — at least two of: **optional**, **spans the
+copier/binary divide**, **tool-dependent** (skippable), **different cadence** than
+core bootstrap.
 
-### Wave 1 — built-ins that prove the framework
+### Shipped built-ins (prove the framework)
 
-- **lint** (default-enabled) — the four check steps **plus** `.tflintrc.hcl`
-  and `.gitleaks.toml` as its `files:`, closing the exact gap `checks.go`'s
-  header laments: config and step finally travel together.
-- **validate** (default-enabled) — `tf-validate` + `checkov` steps plus
-  `.checkov.yaml`. Checkov is heavyweight; instances that don't want it get a
-  clean `recipe disable validate` instead of perpetual skip-warnings.
-- **renovate** — `instance-template/renovate.json` exists today; moving it is
-  the cheapest proof of the `files:` + embed.FS path.
-- **devcontainer** — scaffold-only recipe with zero steps; exercises the
-  degenerate case.
+- **lint packs** — `lint-yaml`, `lint-typos`, `lint-markdown`: optional built-ins
+  that harvest whole-repo linters (`f4495d5`).
+- **validate-trivy** — the heavyweight CI-tier IaC scan; exercises the `validate`
+  tier (`edab02a`).
+- **scheduled-checks** — migrated as an optional built-in (`ad5d55f`); rides the
+  `schedule:` trigger into `llz-extensions-scheduled.yml`.
 
-### Wave 2 — the optional workflows
+### External candidate (remote path, app-stage)
 
-The instance template's workflows split into a core pair (terraform.yml,
-bootstrap-*.yml — the product) and four optional monitors, each exactly
-recipe-shaped: a scaffolded workflow + a family of existing `llz ci` steps +
-tool/credential deps for doctor. The Go implementations stay compiled in; the
-recipe contributes the workflow file and the namespaced ci surface.
+- **akamai-functions** (`external-candidates/`) — the app-agnostic Spin→Akamai
+  delivery machinery + the reusable Rust quality bar. Exercises directory-tree
+  scaffolding, the `secrets` contract with `bao`/`ghEnv` targets, and the `tools:` +
+  `provision` path — but as `stage: app` its gates run in the app's own CI, not the
+  platform gate.
 
-- **scheduled-checks** — scheduled-checks.yml + the warn-only SLA family
-  (tls-cert-expiry, ghe-pat-expiry, cred-audit, health-approle-rotation,
-  health-lkeadmin-rotation, health-loki-objkey-rotation, health-openbao,
-  health-cert-manager, health-prom-rules).
-- **cluster-health** — cluster-health.yml + ci health/converge.
-- **secret-rotation** — secret-rotation.yml + ci rotation-plan/propagate-pat.
-- **openbao-auto-unseal** — openbao-auto-unseal.yml + the bao-unseal* steps.
+### Not yet authored (the milestone)
 
-These are the bulk of what forces copier updates today when only a monitor
-changed; migrating them thins instance-template's workflows to the core pair.
-
-### Wave 3 — the ohttp rebuild (remote, the milestone)
-
-The headline remote recipe(s), authored in the `llz-recipes` tap, that reproduce
-`functions/ohttp` from a base instance and satisfy the acceptance criterion:
-
-- **akamai-functions** — the `akamai-functions/` Rust+Spin subtree (templated
-  tree scaffold), the `build-wasm → e2e → deploy` CI job (anchors +
-  multi-step), the `spin`/wasm toolchain deps, and the
-  `FERMYON_CLOUD_TOKEN` / `OHTTP_KEY_SEED` / `PAT_*` secret declarations. This
-  is the recipe that exercises every validated requirement end-to-end.
-- **pat-issuer**, **ohttp-observability** — candidate smaller recipes
-  (PAT issuer deployment; otel/gateway ingress + Grafana dashboards), pending
-  the Phase 0 delta analysis decision on granularity (one big recipe vs.
-  several composable ones).
-
-### Wave 4 — remote/community (seed the llz-recipes repo)
-
-CODEOWNERS / PR templates, extra linters (yamllint, shellcheck for
-`.githooks/`), kubeconform/kube-score over `apl-values/`, conftest/OPA policy
-packs. None built-in; they are the existence proof for the remote model beyond
-ohttp.
+- **pat-issuer**, **ohttp-observability** — the OHTTP-specific remainder
+  (multi-gateway shared-seed coordination, PAT issuer, otel/gateway ingress + Grafana
+  dashboards) that the acceptance criterion actually requires. These are where the
+  `seed` wiring and cross-instance vars get stress-tested.
 
 ### Keep core — and why
 
-- **Secrets guard + branch policy** — security floors; not disableable via
-  the recipe knob.
-- **The lifecycle** — new/tokens/secrets/build/bootstrap/status/verify/env/
-  upgrade/drift/doctor. This is the product.
-- **terraform.yml + bootstrap workflows and their ci steps** — core path,
-  deep `internal/*` logic, no optionality.
-- **reap, runner-acl, openbao commands** — operator tooling with no
-  scaffolding component; a recipe wrapper adds indirection without benefit.
+- **Secrets guard + branch policy** — security floors; not disableable via the
+  extension knob.
+- **The lifecycle** — new/render/bootstrap/status/verify/upgrade/drift/doctor.
+- **terraform.yml + bootstrap workflows and their ci steps** — core path.
 - **`.llz/commands.yaml`** — stays as the unversioned one-off escape hatch.
 
 ## Migration
 
-Two hazards to design for up front:
+Two hazards:
 
-**The copier→recipe ownership handoff.** When a file leaves
-`instance-template/` for a recipe, the next `copier update` on an existing
-instance *deletes* it (it vanished from the template) while `recipe apply`
-re-creates it. The `llz upgrade` ordering works (update deletes → apply
-restores) — but only if the recipe is enabled. Hence **adoption detection**:
-on first run against a pre-recipe instance, seed the enabled set from what is
-already scaffolded (renovate.json present → renovate enabled) rather than
-defaulting existing instances to nothing and dropping their files on the next
-upgrade. The plan table's `adopt` action handles the file side.
+**The copier→extension ownership handoff.** When a file leaves `instance-template/`
+for an extension, the next `copier update` *deletes* it while `extension apply`
+re-creates it. The `llz upgrade` ordering works (update deletes → apply restores) —
+but only if the extension is enabled, and only if the path is `_exclude`d
+(`extension exclude`).
 
-**`.template-manifest` and `llz drift` must learn recipe ownership.** Files
-that move to recipes must leave the copier manifest (and be `_exclude`d in
-`copier.yml`), or drift reports recipe-owned files as template drift forever.
-The flip side is an opportunity: `.llz/recipes-state.yaml` gives doctor/drift
-the same story per capability — "renovate.json modified since renovate@v1.4.0
-applied."
+**`.template-manifest` and `llz drift` must learn extension ownership.** Files that
+move to extensions must leave the copier manifest and be `_exclude`d, or drift reports
+extension-owned files as template drift forever. The flip side: `extensions.lock`
+gives doctor/`--check` the same per-capability story.
 
-## Plan
+**Adoption detection is NOT built — a live risk.** `enable` only reads an explicit
+`enabled:` list (`loadEnabledExtensions`); nothing seeds that list from files already
+scaffolded in a pre-extension instance. So on an existing instance, the
+update-deletes-→-apply-restores handoff only works *if the operator first manually
+enables the extension*. Until adoption detection exists (on first run, infer the
+enabled set from present scaffolded files — `renovate.json` present ⇒ renovate
+enabled), migrating a file out of `instance-template/` into a built-in extension can
+silently drop it from an instance that upgrades without enabling. This is the single
+largest unmitigated migration hazard.
 
-Each phase is independently testable and lands behind the prior one. **Phase 0
-has a design half and a build half**: the `ohttp − llz` delta analysis produces
-the spec (above), and the provider-integration layer is the foundation every
-later phase is authored against.
+## Plan — status
 
 ```mermaid
 flowchart TD
-  P0["Phase 0 — delta analysis<br/>+ provider integrations (foundation)"]
-  P1["Phase 1 — built-in framework<br/>+ lint demoted fully"]
-  P2["Phase 2 — declarative loader<br/>+ richer schema (ohttp fixture)"]
-  P3["Phase 3 — git fetch + lock<br/>+ real akamai-functions recipe"]
-  P4["Phase 4 — polish + CI job model<br/>+ drift"]
-  P5["Phase 5 — wave-2 migration<br/>(optional monitors)"]
-  M(["Milestone — rebuild ohttp<br/>purely via recipes"])
-  P0 --> P1 --> P2 --> P3 --> P4 --> P5
+  P0["Phase 0 — provider integrations<br/>NOT BUILT (design only)"]:::todo
+  P1["Phase 1 — built-in framework<br/>+ lint demoted ✓"]:::done
+  P2["Phase 2 — declarative loader<br/>+ richer schema ✓"]:::done
+  P3["Phase 3 — git fetch + lock ✓<br/>real akamai-functions kit ◐ (app-agnostic only)"]:::part
+  P4["Phase 4 — CI job model + drift<br/>ci-workflow ✓ · --check drift ✓"]:::done
+  P5["Phase 5 — wave-2 migration<br/>scheduled-checks ✓ · rest pending"]:::part
+  M(["Milestone — rebuild ohttp<br/>NOT met (workload 80% remains)"]):::todo
+  P1 --> P2 --> P3 --> P4 --> P5
   P3 --> M
-  P4 --> M
-  class M milestone
-  classDef milestone fill:#dff0d8,stroke:#3c763d,color:#1a3c1a
+  classDef done fill:#dff0d8,stroke:#3c763d,color:#1a3c1a;
+  classDef part fill:#fcf8e3,stroke:#8a6d3b,color:#3a2f12;
+  classDef todo fill:#f2dede,stroke:#a94442,color:#3a1414;
 ```
 
-- [ ] **Phase 0 — Delta analysis + provider integrations (foundation).**
-  *Design:* finish the `ohttp − llz` delta (see The forcing function), fixing
-  the framework feature set, the recipe granularity (`akamai-functions` alone
-  vs. + `pat-issuer` + `ohttp-observability`), and which anchors / vars /
-  secrets the framework must support. *Build:* the platform layer the recipe
-  phases are authored against (see Provider integrations) — `platform.go`: the
-  `platform:` copier answer + `llz new` provider selection (vcs/host/runner,
-  validated against the four supported providers); the host-driver interface
-  (`dispatch` / `setSecret` / `setVariable` / `createRepo` / `pushRepo`) with
-  `github` / `ghe` / `gitlab` / `bitbucket` implementations, extracting today's
-  `gh …` argv builders (`commands.go`) and folding `ghHost()` / `LLZ_GH_HOST`
-  into it; the `ciEnv` normalizer, with every core `llz ci …` step ported off
-  raw `$GITHUB_*`; per-provider core CI surface; and per-provider `runner-acl` +
-  credential-expiry. Largest phase by far — it is the cost of "all four
-  providers, recipe CI recipes must run" — but paid once. Ends with a working
-  core landing zone on each of the four providers, no recipes yet.
-- [ ] **Phase 1 — Built-in framework + lint demoted fully.** `recipe.go`:
-  types, registry, hook engine, `recipeFS` embed, recipe
-  list/enable/disable/apply commands, `recipes.yaml` load/save (mirror
-  `loadExtCommands`), apply pipeline (render/plan/write + state file).
-  `lintRecipe()` + `validateRecipe()` registered; `runLint` ≡
-  `runHook(check)` — no hybrid "tail" (temporary hybrids ossify, and full
-  demotion exercises the framework's hottest path on every commit from day
-  one). `renovate` + `devcontainer` recipes prove `files:`. Wiring in
-  main.go via the existing dynamic-`AddCommand` path, with a `"Recipes:"`
-  `cobra.Group` and `{"recipe": name}` command `Annotations` from the start.
-  No network/trust surface. The `files:` projection carries a `platform:`
-  selector (default "all"), so render filters by the active integration's
-  runner (Phase 0) — recipe CI scaffolding is provider-clean from the first
-  recipe.
-- [ ] **Phase 2 — Declarative loader + richer schema.** `recipe.yaml` manifest
-  parser mapping YAML → `recipe`, tested against a local fixture (no fetch) —
-  including an **ohttp-shaped fixture** that exercises the validated
-  requirements: the templated **tree** render (req 1), `ci` **anchors** +
-  multi-step (req 2), and `vars`/`secrets` declaration (req 3). Proves remote
-  and built-in converge on one value, and that templating reuses copier's Jinja
-  engine.
-- [ ] **Phase 3 — Git fetch + lock + the real ohttp recipe.** `recipe_remote.go`:
-  clone into `.llz/cache/...` via `runGated`, lock write/verify (SHA + digest),
-  cache re-verification before executing remote argv, `llz recipe sync
-  [--update]`, `--yes` gating on first enable, source allowlist enforcement.
-  Source parser is host-agnostic. Author the real `akamai-functions` recipe in
-  the `llz-recipes` tap as the end-to-end test of the remote path.
-- [ ] **Phase 4 — Polish + CI job model + drift.** doctor recipes section
-  (declared-but-absent vars/secrets, plan-derived drift, lock/cache status),
-  `ci recipe:<name>` namespacing + anchor binding (hidden cobra subcommands),
-  `root.Commands()`-based collision handling extended to recipe commands,
-  `.template-manifest` / `copier.yml` ownership handoff, adoption detection,
-  recipe output + source drift in `llz drift`, docs in `docs/extending-llz.md`.
-- [ ] **Phase 5 — Wave-2 migration.** Move the four optional-monitor workflows
-  out of instance-template into built-in recipes, each shipping a workflow
-  variant per runner selected by `platform:`. The `llz ci` step bodies are
-  already provider-clean from Phase 0's `ciEnv` port, so this is migration +
-  per-runner workflow authoring; no new framework.
-- [ ] **Milestone — rebuild ohttp purely via recipes.** A clean llz instance +
-  `llz recipe enable akamai-functions …` (+ values) reproduces a working
-  `functions/ohttp` deployment. Meets the acceptance criterion; becomes the
-  regression test.
+- ✓ **Built-in framework + lint demotion** — the reconcile driver, `recipeFS` embed,
+  enable/disable/apply/list, the lock, and `runLint`/`runValidate` folding all ship.
+- ✓ **Declarative loader + richer schema** — `recipe.yaml` → `extManifest`, schema
+  v2 + `extension upgrade` migration, directory-tree scaffolding.
+- ✓ **Git fetch + lock** — clone into `.llz/cache`, SHA+digest lock,
+  `verifyRemoteCache`, `sync [--update]`, `--yes` gating, allowlist.
+- ◐ **The real ohttp recipe** — the delivery machinery ships as an external
+  candidate; the OHTTP workload itself (and `pat-issuer` / `ohttp-observability`) is
+  not authored, so the milestone is **not met**.
+- ✗ **Provider integrations** — not started; GitHub-Actions-only.
 
-## Resolved questions
+## Resolved questions (as decided in code)
 
-- **Framework scope is set by ohttp, not toy cases**: the `ohttp − llz` delta
-  defines the feature set; reproducing ohttp is the acceptance criterion.
-- **Templating**: in scope, but **bounded to copier's existing Jinja engine**
-  (reuse, not reimplement) so built-in/remote/copier render byte-identically.
-  Reverses the earlier "plain copy only" stance — the ohttp `akamai-functions/`
-  subtree requires substituted values.
-- **CI model**: recipes emit **workflow fragments** (composable, per-runner)
-  invoking `llz ci recipe:<name> <step>` at a bound **anchor** (`pre-commit |
-  post-converge | operate`) — not argv-only. ohttp's `build-wasm → e2e →
-  deploy` forces this.
-- **Secrets**: **declare + doctor-check only** in the first cut; wiring
-  (seed OpenBao paths / push GH env secrets) is a later increment. Values never
-  enter recipe state or the lock.
-- **Cache location**: per-repo `.llz/cache` — self-contained, digest-verified
-  anyway; instance count per machine is small.
-- **sync verification cadence**: verify cached SHA + digest against the lock
-  on every implicit sync (no network); re-resolve upstream refs only on
-  explicit `--update`.
-- **enabled-list schema**: implicit built-in defaults + explicit `disabled:`
-  list, not a fully-owned `enabled:` list (see Per-repo state).
-- **recipe ownership class / output tracking**: outputs recorded in a separate
-  `.llz/recipes-state.yaml` (not the source-only lock); recipe paths `_exclude`d
-  in `copier.yml` so copier never fights channel 3.
-- **lint demotion depth**: full demotion in phase 1, no transitional tail.
-- **cobra's role**: command surface only (dynamic AddCommand, Groups,
-  Annotations, DisableFlagParsing, Hidden); the hook engine, apply pipeline,
-  registry, and remote loader are ours. `PersistentPreRunE` is explicitly not
-  the hook mechanism.
-- **Not Go plugins**: built-in = compiled Go values + `//go:embed`; remote =
-  declarative `recipe.yaml`; both normalize to one `recipe` value with files
-  behind `fs.FS`. Go's `plugin` package is platform-locked and rejected.
-- **VCS/runner support is a first-class integration, not a recipe**: providers
-  bind the *core* product and carry compiled-in Go, so they cannot be optional
-  declarative recipes. Selected once at `llz new`; recipes consume the active
-  integration's host driver, `ciEnv`, and runner selection.
-- **provider scope**: all four (github / ghe / gitlab / bitbucket) ship working,
-  including the core landing-zone CI, so the recipe CI recipes actually run on
-  the chosen provider. This makes Phase 0 (integrations) a prerequisite.
+- **Framework scope is set by ohttp**, not toy cases.
+- **Templating**: Go `text/template` with copier's `<@ @>` delimiters — *not* Jinja.
+  Byte-identical to copier for bare variable substitution only.
+- **CI model**: extensions emit **generated workflows** (`llz-extensions.yml` +
+  scheduled) invoking `llz ci …` at a bound **anchor** (`pre-converge` /
+  `post-converge` / `operate`) with a `Trigger` axis (converge / dispatch / schedule).
+- **Secrets**: declare + doctor-check **and wire** — `seed`/`unseed` ship (reversing
+  the declare-only first cut). Values never enter the manifest, lock, or cache.
+- **Lock**: one `.llz/extensions.lock` carries both source pins and output digests
+  (the design's two-file split was merged).
+- **Apply depth**: render → write (overwrite) + `--check` drift; the three-way
+  conflict model is deferred.
+- **enabled-list schema**: explicit `enabled:`; built-ins implicit unless `optional`.
+- **cobra's role**: command surface only; the engine is ours. `PersistentPreRunE` is
+  not the hook mechanism. Not Go plugins.
 
 ## Open questions
 
-- **Recipe granularity for ohttp**: one big `akamai-functions` recipe vs. several
-  composable ones (`akamai-functions` + `pat-issuer` + `ohttp-observability`).
-  Phase 0's delta analysis decides this.
-- **Anchor set sufficiency**: is `pre-commit | post-converge | operate` enough,
-  or do we need per-Terraform-root anchors (cluster vs. cluster-bootstrap) for
-  recipes that contribute TF?
-- **`llz new` default recipes**: auto-enable defaults (`lint`/`validate`) at
-  scaffold, or only on first `recipe enable`?
-- **Secret wiring later**: once declare-only proves out, do recipes graduate to
-  *wiring* secrets (seed OpenBao paths / push GH env secrets), or stay
-  declare-only permanently?
-- **`seed` staleness in doctor**: report when a `seed` file differs from the
-  current recipe version ("re-seed with `--force` if wanted"), or is that noise
-  for files the operator deliberately owns?
-- **Adoption detection scope**: detect only the files we migrate out of copier
-  (closed list, safe), or generically match any enabled-recipe file already
-  present (broader, riskier)?
-- **Disable friction**: does `recipe disable` of a default (`lint`) need
-  stronger friction than a loud warning — e.g. require `--yes`?
+- **App-stage in the engine**: an app-stage extension is skipped by every platform
+  gate, doesn't use the anchor DAG (its deploy targets a SaaS, not the cluster), and
+  ships a static workflow. Should app-stage be a pure `files:` + `config:` scaffold,
+  dropping the `check`/`validate`/`ci` pretense? (See review notes.)
+- **The `validate:` triplication**: `akamai-functions` lists its 10 quality targets in
+  `recipe.yaml` `validate:`, in the scaffolded workflow's `matrix.target`, and in
+  `quality.sh` — three hand-maintained copies, and the `recipe.yaml` copy is skipped
+  by the engine. Should the workflow matrix be *generated* from `validate:` so there is
+  one source?
+- **Recipe granularity for ohttp**: one `akamai-functions` vs. several composable
+  extensions.
+- **Anchor set sufficiency**: is `pre-converge | post-converge | operate` enough, or
+  do TF-contributing extensions need per-root anchors?
+- **`rotate` cadence**: wire `ActionRotate` into `llz-secret-rotation.yml`
+  (`DriverWired` flips true), or keep it operator-invoked?
+- **Three-way apply**: build it when a `seed`-style operator-owned file appears, or
+  keep apply authoritative?
 
 ## Out of scope (for now)
 
-- OCI/Harbor transport (revisit once remote authoring stabilizes).
-- Operator-authored local recipe directories (hybrid discovery path).
-- Compiled/plugin remote recipes.
-- A *new* templating language — render is capped at copier's existing Jinja
-  engine; nothing more exotic.
-- Per-recipe versioning within a source repo (tap model: one tag versions
-  all).
-- Secret *wiring* (seeding stores / pushing env secrets) — declare + doctor-check
-  only in the first cut.
-- Providers beyond the supported four (github / ghe / gitlab / bitbucket) — the
-  host-driver interface admits a fifth, but none is planned. Note: the four
-  integrations themselves are explicitly **in** scope, as Phase 0 (see Provider
-  integrations) — they are the foundation, not a deferral.
+- OCI/Harbor transport (git works against any host).
+- Compiled/plugin remote extensions (platform-locked; rejected).
+- A *new* templating language — render is capped at Go `text/template` with copier's
+  delimiters.
+- Per-extension versioning within a source repo (tap model: one tag versions all).
+- Three-way conflict-resolving apply (deferred; the lock already stores the digest
+  base it would need).
+- Provider integrations beyond GitHub Actions — **the entire four-provider layer is
+  unbuilt**, retained above as design only.

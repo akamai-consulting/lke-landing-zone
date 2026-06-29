@@ -200,12 +200,12 @@ func TestEnabledExtCommandsGathersAndDefaultsShort(t *testing.T) {
 
 // the argv-only ceiling extends to commands: — inline shell is rejected.
 func TestLintRejectsInlineShellCommand(t *testing.T) {
-	m := extManifest{Name: "x", Short: "y", Kind: "tool",
+	m := extManifest{Name: "x", Short: "y", Kind: "tool", Stage: StageUniversal,
 		Commands: []extCommand{{Name: "bad", Argv: []string{"bash", "-c", "rm -rf /"}}}}
 	if findings := lintManifest(m); len(findings) != 1 {
 		t.Fatalf("expected 1 finding for an inline-shell command, got %v", findings)
 	}
-	ok := extManifest{Name: "x", Short: "y", Kind: "tool",
+	ok := extManifest{Name: "x", Short: "y", Kind: "tool", Stage: StageUniversal,
 		Commands: []extCommand{{Name: "good", Argv: []string{"kubectl", "get", "pods"}}}}
 	if findings := lintManifest(ok); len(findings) != 0 {
 		t.Fatalf("a plain argv command should pass, got %v", findings)

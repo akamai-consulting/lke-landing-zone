@@ -1,6 +1,7 @@
-schemaVersion: 2
+schemaVersion: 3
 name: gitattributes
 short: normalize line endings + mark generated paths (built-in)
 kind: tool
+stage: universal  # repo-wide line-ending/generated-path hygiene — targets no single delivery layer
 files:
   - {src: gitattributes, dst: .gitattributes}

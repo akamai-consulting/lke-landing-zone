@@ -276,8 +276,11 @@ func TestStagesOrderedAndPlatformGating(t *testing.T) {
 	if stagePlatformGated(StageApp) {
 		t.Error("app checks must NOT run in the platform gate (they run in the app's own CI)")
 	}
+	if !stagePlatformGated(StageUniversal) {
+		t.Error("a universal (cross-cutting) extension must be platform-gated")
+	}
 	if !stagePlatformGated("") {
-		t.Error("a stage-less (cross-cutting) extension must be platform-gated")
+		t.Error("an empty stage must fail safe to platform-gated at runtime (it's rejected at lint time)")
 	}
 }
 
@@ -291,7 +294,7 @@ func TestPlatformGateSkipsAppStage(t *testing.T) {
 	}
 	for _, e := range []Extension{
 		{Name: "iacx", Manifest: extManifest{Stage: StageIaC, Check: failing}},
-		{Name: "crossx", Manifest: extManifest{Check: failing}}, // stage-less → cross-cutting
+		{Name: "crossx", Manifest: extManifest{Stage: StageUniversal, Check: failing}}, // universal → cross-cutting, platform-gated
 	} {
 		if err := runExtensionChecks(globalOpts{}, []Extension{e}); err == nil {
 			t.Errorf("%s checks must run in the platform gate (and this one fails)", e.Name)
@@ -299,15 +302,18 @@ func TestPlatformGateSkipsAppStage(t *testing.T) {
 	}
 }
 
-// A manifest stage must be one of the three (or empty); an unknown stage is a lint finding.
+// A manifest stage is required and must be one of the three delivery layers or the
+// cross-cutting `universal` marker; an empty or unknown stage is a lint finding.
 func TestLintValidatesStage(t *testing.T) {
 	base := extManifest{Name: "x", Short: "y", Kind: "tool"}
-	bad := base
-	bad.Stage = "frontend"
-	if len(lintManifest(bad)) == 0 {
-		t.Error("an unknown stage must be a lint finding")
+	for _, bad := range []Stage{"frontend", ""} {
+		m := base
+		m.Stage = bad
+		if len(lintManifest(m)) == 0 {
+			t.Errorf("stage %q must be a lint finding (empty + unknown are both rejected)", bad)
+		}
 	}
-	for _, ok := range []Stage{"", StageIaC, StageKubeInfra, StageApp} {
+	for _, ok := range []Stage{StageIaC, StageKubeInfra, StageApp, StageUniversal} {
 		m := base
 		m.Stage = ok
 		if f := lintManifest(m); len(f) != 0 {

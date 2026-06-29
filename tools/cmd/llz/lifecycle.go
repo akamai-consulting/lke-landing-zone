@@ -49,7 +49,27 @@ const (
 	StageIaC       Stage = "iac"        // Terraform provisions the cloud + the LKE cluster
 	StageKubeInfra Stage = "kube-infra" // the Kubernetes platform layer, GitOps-converged
 	StageApp       Stage = "app"        // application workloads running on the platform
+	// StageUniversal is the explicit cross-cutting marker: an extension that targets
+	// no single delivery layer because it applies to every one (a repo-wide spell/yaml/
+	// markdown linter, line-ending hygiene). It is NOT a delivery layer — it is absent
+	// from the `stages` registry, so it never enters the promotion order or the apl
+	// pipeline — but it IS platform-gated (it fires in `llz lint`/`validate`). Authoring
+	// a stage is now mandatory; `universal` is what a cross-cutting extension declares
+	// instead of leaving stage empty.
+	StageUniversal Stage = "universal"
 )
+
+// validStage reports whether s is a stage an extension may declare: one of the three
+// delivery layers or the cross-cutting `universal` marker. Authoring-time gate (see
+// lintManifest); distinct from stageMeta, which only knows the three ordered layers.
+func validStage(s Stage) bool {
+	switch s {
+	case StageIaC, StageKubeInfra, StageApp, StageUniversal:
+		return true
+	default:
+		return false
+	}
+}
 
 // StageMeta is the per-stage specialization, in one place.
 //
@@ -57,7 +77,7 @@ const (
 // PLATFORM gate (`llz lint` / `llz validate`), because the platform owns that layer. App
 // checks do NOT — an app's quality bar (cargo coverage/mutants) runs in the app's own
 // scaffolded CI, with the app's toolchain, on the app's PRs. So the platform gate fires
-// IaC + Kube-Infra (+ stage-less, cross-cutting) checks and skips App-stage ones.
+// IaC + Kube-Infra (+ universal, cross-cutting) checks and skips App-stage ones.
 type StageMeta struct {
 	Stage         Stage
 	Name          string
@@ -87,10 +107,12 @@ func stageMeta(s Stage) (StageMeta, bool) {
 }
 
 // stagePlatformGated reports whether a stage's checks fire in the llz platform gate. A
-// stage-less ("") extension is cross-cutting (e.g. a yaml/spell linter) and IS platform-
-// gated; only App-stage checks are excluded (they belong to the app's own CI).
+// `universal` (cross-cutting, e.g. a yaml/spell linter) extension IS platform-gated; only
+// App-stage checks are excluded (they belong to the app's own CI). An empty stage is
+// rejected at authoring time (lintManifest), but is treated as gated here so the runtime
+// fails safe (gate it) rather than silently skipping a misauthored extension.
 func stagePlatformGated(s Stage) bool {
-	if s == "" {
+	if s == "" || s == StageUniversal {
 		return true
 	}
 	m, ok := stageMeta(s)

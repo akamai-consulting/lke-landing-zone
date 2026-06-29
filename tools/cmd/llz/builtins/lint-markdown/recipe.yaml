@@ -1,7 +1,8 @@
-schemaVersion: 2
+schemaVersion: 3
 name: lint-markdown
 short: markdownlint config + check for docs hygiene (built-in, opt-in)
 kind: tool
+stage: universal  # docs hygiene across the whole repo — targets no single delivery layer
 optional: true
 tools:
   - {name: markdownlint, via: "npm:markdownlint-cli", version: "0.41.0"}

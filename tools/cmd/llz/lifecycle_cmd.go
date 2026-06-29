@@ -19,7 +19,9 @@ func runStages(root string) error {
 	byStage := map[Stage][]string{}
 	var crosscut []string
 	for _, e := range exts {
-		if e.Manifest.Stage == "" {
+		// `universal` (and a not-yet-migrated empty stage) is cross-cutting: it targets no
+		// single delivery layer, so it lists separately rather than under one stage row.
+		if e.Manifest.Stage == StageUniversal || e.Manifest.Stage == "" {
 			crosscut = append(crosscut, e.Name)
 			continue
 		}
@@ -46,7 +48,7 @@ func runStages(root string) error {
 	}
 	tw.Flush()
 	if len(crosscut) > 0 {
-		fmt.Fprintf(os.Stderr, "\ncross-cutting (no stage; platform-gated): %s\n", strings.Join(crosscut, ", "))
+		fmt.Fprintf(os.Stderr, "\ncross-cutting (stage: universal; platform-gated): %s\n", strings.Join(crosscut, ", "))
 	}
 	fmt.Fprintln(os.Stderr, "App-stage checks run in the app's own scaffolded CI, never the platform gate (`llz lint`/`validate`).")
 	return nil

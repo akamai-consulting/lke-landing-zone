@@ -36,14 +36,15 @@ func TestLintManifest(t *testing.T) {
 		m         extManifest
 		wantCount int
 	}{
-		{"clean tool", extManifest{Name: "renovate", Short: "deps", Kind: "tool",
+		{"clean tool", extManifest{Name: "renovate", Short: "deps", Kind: "tool", Stage: StageUniversal,
 			Check: []extStep{{Name: "v", Argv: []string{"renovate-config-validator"}}}}, 0},
-		{"missing name+short", extManifest{Kind: "check"}, 2},
-		{"unknown kind", extManifest{Name: "x", Short: "y", Kind: "plugin"}, 1},
-		{"empty kind", extManifest{Name: "x", Short: "y"}, 1},
-		{"inline shell rejected", extManifest{Name: "x", Short: "y", Kind: "check",
+		{"missing name+short", extManifest{Kind: "check", Stage: StageUniversal}, 2},
+		{"unknown kind", extManifest{Name: "x", Short: "y", Kind: "plugin", Stage: StageUniversal}, 1},
+		{"empty kind", extManifest{Name: "x", Short: "y", Stage: StageUniversal}, 1},
+		{"missing stage", extManifest{Name: "x", Short: "y", Kind: "tool"}, 1},
+		{"inline shell rejected", extManifest{Name: "x", Short: "y", Kind: "check", Stage: StageUniversal,
 			CI: []extStep{{Name: "deploy", Argv: []string{"bash", "-c", "kubectl apply"}}}}, 1},
-		{"empty argv rejected", extManifest{Name: "x", Short: "y", Kind: "check",
+		{"empty argv rejected", extManifest{Name: "x", Short: "y", Kind: "check", Stage: StageUniversal,
 			Check: []extStep{{Name: "v", Argv: nil}}}, 1},
 	}
 	for _, c := range cases {
@@ -104,7 +105,7 @@ func TestSchemaVersionMatchesMigrations(t *testing.T) {
 }
 
 func TestManifestVersion(t *testing.T) {
-	cases := []struct{ in, want int }{{0, 1}, {1, 1}, {2, 2}}
+	cases := []struct{ in, want int }{{0, 1}, {1, 1}, {2, 2}, {3, 3}}
 	for _, c := range cases {
 		if got := manifestVersion(extManifest{SchemaVersion: c.in}); got != c.want {
 			t.Errorf("manifestVersion(%d) = %d, want %d", c.in, got, c.want)
@@ -149,6 +150,9 @@ func TestUpgradeV1ToCurrent(t *testing.T) {
 	}
 	if m.Kind != "tool" { // no internal/ or tests ⇒ tool
 		t.Fatalf("kind = %q, want tool", m.Kind)
+	}
+	if m.Stage != StageUniversal { // v2→v3 makes the implicit cross-cutting stage explicit
+		t.Fatalf("stage = %q, want universal", m.Stage)
 	}
 	// Idempotent: a second upgrade is a no-op and --check passes.
 	if err := runExtensionUpgrade(globalOpts{}, dir, dir, true); err != nil {
@@ -199,8 +203,9 @@ func TestUpgradePreservesComments(t *testing.T) {
 		"# pin reviewed by security 2026-06", // head comment survives
 		"# keep me",                          // inline comment survives
 		"name: legacy",                       // original key untouched
-		"kind: tool",                         // migration stamped
-		"schemaVersion: 2",                   // schema stamped
+		"kind: tool",                         // v1→v2 migration stamped
+		"stage: universal",                   // v2→v3 migration stamped
+		"schemaVersion: 3",                   // schema stamped
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("migrated manifest missing %q\n---\n%s", want, s)

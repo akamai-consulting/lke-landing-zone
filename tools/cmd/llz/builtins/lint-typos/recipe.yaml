@@ -1,7 +1,8 @@
-schemaVersion: 2
+schemaVersion: 3
 name: lint-typos
 short: source-wide spell check (typos) across code + docs (built-in, opt-in)
 kind: tool
+stage: universal  # source-wide spell check — applies to every layer, not one
 optional: true
 tools:
   - {name: typos, via: "aqua:crate-ci/typos", version: "1.24.6"}

@@ -7,10 +7,13 @@
 #   1. llz extension enable <@ .Name @>      # scaffolds the component into the instance
 #   2. add `<@ .Name @>` to your env overlay's components: list   # the GitOps picks it up
 # The rule is validated by the core promtool check — no logic lives here (argv-only).
-schemaVersion: 2
+schemaVersion: 3
 name: <@ .Name @>
 short: TODO custom alerts + dashboard for <@ .Name @>
 kind: tool
+# Alerts + dashboards converge as a kustomize Component on the cluster, so this targets the
+# kube-infra layer (its prom-rules check runs in the platform gate).
+stage: kube-infra
 tools:
   # promtool backs `llz ci check-prom-rules`. No via: (operator-supplied) — install it or
   # add a mise ref; doctor/enable will flag it if absent so the check can't silently skip.

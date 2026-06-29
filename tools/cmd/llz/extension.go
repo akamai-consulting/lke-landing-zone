@@ -58,7 +58,7 @@ type extManifest struct {
 	Name          string       `json:"name"`
 	Short         string       `json:"short"`
 	Kind          string       `json:"kind"`               // "check" (logic-bearing, ships tests) | "tool" (thin argv wrap)
-	Stage         Stage        `json:"stage,omitempty"`    // delivery layer: iac | kube-infra | app (empty = cross-cutting). App checks gate in the app's CI, not the platform gate.
+	Stage         Stage        `json:"stage,omitempty"`    // delivery layer: iac | kube-infra | app | universal (universal = cross-cutting, every layer). Required. App checks gate in the app's CI, not the platform gate.
 	Optional      bool         `json:"optional,omitempty"` // built-ins only: ships with the binary but OFF by default (opt-in via `llz extension enable`)
 	Tools         []extTool    `json:"tools,omitempty"`    // external tools the steps need; doctor verifies, `llz extension provision` installs (via mise)
 	Vars          []extVar     `json:"vars,omitempty"`     // Configure phase: declared template inputs
@@ -163,7 +163,7 @@ type extSecret struct {
 // extSchemaVersion is the current manifest schema this binary speaks. Bump it
 // when a skeleton/manifest convention changes and append the migration that
 // carries older extensions forward.
-const extSchemaVersion = 2
+const extSchemaVersion = 3
 
 // manifestVersion is m's schema version, defaulting absent/0 to v1 (the schema
 // before SchemaVersion existed).
@@ -262,10 +262,11 @@ func lintManifest(m extManifest) []string {
 	default:
 		f = append(f, fmt.Sprintf("kind: %q is not one of check|tool", m.Kind))
 	}
-	if m.Stage != "" {
-		if _, ok := stageMeta(m.Stage); !ok {
-			f = append(f, fmt.Sprintf("stage: %q is not one of iac|kube-infra|app", m.Stage))
-		}
+	switch {
+	case m.Stage == "":
+		f = append(f, "stage: is required (iac | kube-infra | app | universal — universal for a cross-cutting extension)")
+	case !validStage(m.Stage):
+		f = append(f, fmt.Sprintf("stage: %q is not one of iac|kube-infra|app|universal", m.Stage))
 	}
 	for i, s := range allSteps(m) {
 		label := s.Name
