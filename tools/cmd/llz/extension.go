@@ -126,6 +126,13 @@ func findSecret(m extManifest, name string) (extSecret, bool) {
 // instance repo. The body is rendered through the same <@ @> engine (copier's
 // variable delimiters) the skeleton scaffolder uses, so built-in and remote files
 // render identically — and identically to copier for the variable-substitution case.
+//
+// Src may be a FILE or a DIRECTORY. A directory scaffolds the whole subtree: each file
+// renders to Dst joined with its path relative to Src — so a workload kit can ship a
+// Cargo workspace (or any tree) without hand-listing every file. It flattens to per-file
+// outputs, so the lock, --check drift, exclude, and teardown all treat it like any other
+// scaffolded file. Dst is NOT templated at apply time (only file bodies are); it is fixed
+// when the extension is authored (`extension new` renders it).
 type extFile struct {
 	Src string `json:"src"`
 	Dst string `json:"dst"`

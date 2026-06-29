@@ -7,6 +7,65 @@ import (
 	"testing"
 )
 
+// A files: entry whose src is a DIRECTORY scaffolds the whole subtree — each file
+// rendered to dst joined with its path relative to src. The flattened per-file outputs
+// keep drift/--check, the lock, and teardown working. (dst is concrete: only file BODIES
+// render at apply time, via scaffoldVals; the dst is fixed by `extension new`.)
+func TestDirScaffold(t *testing.T) {
+	root := t.TempDir()
+	extDir := filepath.Join(root, "extensions", "kit")
+	installExt(t, root, "kit",
+		"schemaVersion: 2\nname: kit\nshort: x\nkind: tool\nfiles:\n  - {src: app, dst: apps/kit}\n",
+		map[string]string{
+			"app/Cargo.toml":        "[package]\nname = \"<@ .name @>\"\n", // body renders <@ .name @> → kit
+			"app/src/lib.rs":        "// <@ .name @> gateway\n",
+			"app/spin.toml":         "spin_manifest_version = 2\n",
+			"app/.cargo/audit.toml": "[advisories]\n",
+		})
+
+	if err := runExtensionApply(globalOpts{}, extDir, root, false); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	// the whole subtree landed under apps/kit/ (incl. nested + dotfile dirs), body rendered
+	for rel, want := range map[string]string{
+		"apps/kit/Cargo.toml":        `name = "kit"`,
+		"apps/kit/src/lib.rs":        "// kit gateway",
+		"apps/kit/spin.toml":         "spin_manifest_version",
+		"apps/kit/.cargo/audit.toml": "[advisories]",
+	} {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatalf("%s missing: %v", rel, err)
+		}
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s = %q, want contains %q", rel, b, want)
+		}
+	}
+	// the lock recorded all four as per-file outputs
+	if got := len(loadExtLock(root).Outputs["kit"]); got != 4 {
+		t.Fatalf("lock recorded %d files, want 4", got)
+	}
+	// --check is in sync right after apply...
+	if err := runExtensionApply(globalOpts{}, extDir, root, true); err != nil {
+		t.Fatalf("--check should be in sync after apply: %v", err)
+	}
+	// ...and flags a hand-edited file in the subtree
+	if err := os.WriteFile(filepath.Join(root, "apps/kit/spin.toml"), []byte("tampered\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runExtensionApply(globalOpts{}, extDir, root, true); err == nil {
+		t.Fatal("--check should detect the edited scaffolded file in the subtree")
+	}
+
+	// teardown removes every flattened file (the lock keyed them like any other)
+	if err := runExtensionTeardown(globalOpts{yes: true}, root, "kit", true); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "apps/kit/Cargo.toml")); !os.IsNotExist(err) {
+		t.Fatal("teardown should have removed the dir-scaffolded files")
+	}
+}
+
 // writeExt creates an extension dir with a manifest body and optional source
 // files (path->content), returning the extension dir.
 func writeExt(t *testing.T, manifest string, srcs map[string]string) string {

@@ -14,9 +14,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"sigs.k8s.io/yaml"
 )
@@ -113,13 +116,50 @@ func renderScaffold(ext Extension, root string) (files []renderedFile, err error
 		vals[k] = v
 	}
 	for _, f := range ext.Manifest.Files {
-		out, rerr := renderBytes(ext.fsys, f.Src, vals)
+		rendered, rerr := renderEntry(ext.fsys, f, vals)
+		if rerr != nil {
+			return nil, rerr
+		}
+		files = append(files, rendered...)
+	}
+	return files, nil
+}
+
+// renderEntry renders one files: entry. When Src is a regular file it yields one output;
+// when Src is a DIRECTORY it walks the subtree and yields one output per file, each
+// rendered to Dst joined with the file's path relative to Src. The directory form lets a
+// workload kit scaffold a whole tree (e.g. a Cargo workspace) without hand-listing every
+// file — and because it flattens to the same per-file renderedFile list, drift/--check,
+// the lock, and teardown all keep working unchanged.
+func renderEntry(fsys fs.FS, f extFile, vals map[string]string) ([]renderedFile, error) {
+	info, err := fs.Stat(fsys, f.Src)
+	if err != nil {
+		return nil, fmt.Errorf("render %s: %w", f.Src, err)
+	}
+	if !info.IsDir() {
+		out, rerr := renderBytes(fsys, f.Src, vals)
 		if rerr != nil {
 			return nil, fmt.Errorf("render %s: %w", f.Src, rerr)
 		}
-		files = append(files, renderedFile{Dst: f.Dst, Body: out, SHA: digest(out)})
+		return []renderedFile{{Dst: f.Dst, Body: out, SHA: digest(out)}}, nil
 	}
-	return files, nil
+	var out []renderedFile
+	walkErr := fs.WalkDir(fsys, f.Src, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil || d.IsDir() {
+			return werr
+		}
+		body, rerr := renderBytes(fsys, p, vals)
+		if rerr != nil {
+			return fmt.Errorf("render %s: %w", p, rerr)
+		}
+		rel := strings.TrimPrefix(strings.TrimPrefix(p, f.Src), "/") // fs paths are slash-separated
+		out = append(out, renderedFile{Dst: path.Join(f.Dst, rel), Body: body, SHA: digest(body)})
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	return out, nil // WalkDir yields lexical order → deterministic lock
 }
 
 // runExtensionApply is the explicit-[dir] adapter over applyExtensionFiles.
