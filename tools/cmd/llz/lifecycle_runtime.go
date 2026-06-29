@@ -48,9 +48,8 @@ func lifecycleDoctor(root string) error {
 		return nil
 	}
 	fmt.Println("\n" + bold("Extensions (Configure readiness):"))
-	// Declared tools: that aren't installed — otherwise the check silently skips, giving
-	// false assurance that an enabled lint/policy pack is running when it isn't.
-	reportMissingExtTools(exts)
+	// Missing-tool reporting + config/ghVar checks both live in runExtensionConfigDoctor,
+	// so core `llz doctor` and the standalone `llz extension doctor` give the same picture.
 	return runExtensionConfigDoctor(root)
 }
 

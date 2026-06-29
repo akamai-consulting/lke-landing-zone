@@ -138,7 +138,13 @@ func runExtensionEnable(g globalOpts, root, name string) error {
 			fmt.Fprintf(os.Stderr, "  needs %s %q: %s\n", f.Kind, f.Name, f.Status)
 		}
 		warnMissingExtTools(b.Manifest)
-		return applyExtensionFiles(g, b, root, false)
+		if g.dryRun {
+			return applyExtensionFiles(g, b, root, false) // preview just the newly-enabled one
+		}
+		// Apply the FULL enabled + always-on set, so the instance is left consistent —
+		// otherwise an always-on built-in's files (e.g. .gitattributes) stay unapplied and
+		// the next `apply --check` / `llz drift` flags them as drift.
+		return runExtensionApplyAll(g, root, false)
 	}
 	dir, ok := resolveExtensionDir(root, cfg, name)
 	if !ok {
@@ -172,8 +178,13 @@ func runExtensionEnable(g globalOpts, root, name string) error {
 	for _, f := range manifestConfigFindings(name, m, os.Getenv) {
 		fmt.Fprintf(os.Stderr, "  needs %s %q: %s\n", f.Kind, f.Name, f.Status)
 	}
-	warnMissingExtTools(m)                        // a declared tool that's absent → its check would silently skip
-	return runExtensionApply(g, dir, root, false) // enable scaffolds, like the issue specifies
+	warnMissingExtTools(m) // a declared tool that's absent → its check would silently skip
+	if g.dryRun {
+		return runExtensionApply(g, dir, root, false) // preview just the newly-enabled one
+	}
+	// Apply the full enabled + always-on set so the instance is left consistent (see the
+	// built-in path above); the just-saved enabled set means loadAllExtensions includes this one.
+	return runExtensionApplyAll(g, root, false)
 }
 
 func runExtensionDisable(g globalOpts, root, name string) error {

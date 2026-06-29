@@ -19,6 +19,12 @@ func runDrift(branch, repoURL string, strict bool) error {
 	if branch == "" {
 		branch = "main"
 	}
+	// Extension output drift is a SEPARATE delivery channel from the copier template, so it
+	// is reported first and unconditionally — an instance can carry extensions without a
+	// .template-version (e.g. one not created via `llz new`), and its scaffolded files
+	// still drift. Report-only.
+	lifecycleDrift(gopts, ".")
+
 	b, err := os.ReadFile(".template-version")
 	if err != nil {
 		return fmt.Errorf("no .template-version found — run `llz env add` or `llz upgrade` first")
@@ -61,10 +67,6 @@ func runDrift(branch, repoURL string, strict bool) error {
 	if slug != "" {
 		compareURL = fmt.Sprintf("https://github.com/%s/compare/%s...%s", slug, tv.TemplateSHA, latest)
 	}
-
-	// Extension output drift (Sustain-phase lifecycle health) alongside template drift
-	// — report-only, prints in both the up-to-date and drifted paths below.
-	lifecycleDrift(gopts, ".")
 
 	if tv.TemplateSHA == latest {
 		fmt.Printf("%s Up to date with %s@%s (%s).\n", green("✓"), tv.TemplateRepo, branch, short(latest))

@@ -57,6 +57,10 @@ func runExtensionConfigDoctor(root string) error {
 	if err != nil {
 		return err
 	}
+	// Declared tools that aren't installed — surfaced here too (not only in core `llz
+	// doctor`), so the standalone `extension doctor` is a COMPLETE Configure-readiness
+	// check; otherwise an enabled lint/policy pack whose tool is absent silently skips.
+	reportMissingExtTools(exts)
 	var findings []configFinding
 	for _, e := range exts {
 		findings = append(findings, manifestConfigFindings(e.Name, e.Manifest, os.Getenv)...)

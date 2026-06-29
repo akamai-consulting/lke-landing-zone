@@ -1031,6 +1031,25 @@ enabled), migrating a file out of `instance-template/` into a built-in extension
 silently drop it from an instance that upgrades without enabling. This is the single
 largest unmitigated migration hazard.
 
+### End-to-end validation (lint-yaml)
+
+Driving a real built-in (`lint-yaml`) through `enable → apply → doctor → drift` surfaced
+three integration warts, now fixed:
+
+- **`enable` left the instance inconsistent.** It scaffolded only the enabled extension,
+  so an always-on built-in's files (`.gitattributes`) stayed unapplied and the next
+  `apply --check` / `llz drift` flagged them. Fixed: a non-dry-run `enable` applies the
+  full enabled + always-on set (`runExtensionApplyAll`); dry-run still previews only the
+  target.
+- **`extension doctor` omitted the tool check.** Missing-tool reporting lived only in core
+  `llz doctor`, so the standalone `extension doctor` said "all satisfied" with `yamllint`
+  absent. Fixed: `reportMissingExtTools` moved into `runExtensionConfigDoctor` (one source;
+  both paths report it).
+- **`llz drift` skipped extension drift without a `.template-version`.** Extension output
+  drift was reported *after* the template-version read, which errors early on an instance
+  not created via `llz new`. Fixed: extension drift is reported first and unconditionally —
+  it is a separate delivery channel from the copier template.
+
 ## Plan — status
 
 ```mermaid
