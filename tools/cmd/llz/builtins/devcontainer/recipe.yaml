@@ -1,0 +1,7 @@
+schemaVersion: 2
+name: devcontainer
+short: VS Code dev container for a uniform llz toolchain (built-in, opt-in)
+kind: tool
+optional: true
+files:
+  - {src: devcontainer.json, dst: .devcontainer/devcontainer.json}

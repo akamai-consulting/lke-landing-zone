@@ -27,6 +27,41 @@ func TestBuiltinExtensionsLoad(t *testing.T) {
 	}
 }
 
+// The shipped optional built-ins are well-formed: Optional (off by default), pass the
+// capability ceiling (built-ins bypass enable-time lint, so guard them here), and carry
+// the expected hook shape. This pins the migrated candidates against drift.
+func TestShippedOptionalBuiltins(t *testing.T) {
+	want := map[string]struct{ files, check bool }{
+		"devcontainer": {files: true},
+		"lint-yaml":    {files: true, check: true},
+	}
+	seen := map[string]bool{}
+	for _, b := range builtinExtensions() {
+		exp, ok := want[b.Name]
+		if !ok {
+			continue
+		}
+		seen[b.Name] = true
+		if !b.Manifest.Optional {
+			t.Errorf("%s must be optional (off by default, not forced on every instance)", b.Name)
+		}
+		if findings := lintManifest(b.Manifest); len(findings) > 0 {
+			t.Errorf("%s fails the capability ceiling: %v", b.Name, findings)
+		}
+		if exp.files && len(b.Manifest.Files) == 0 {
+			t.Errorf("%s should declare files:", b.Name)
+		}
+		if (len(b.Manifest.Check) > 0) != exp.check {
+			t.Errorf("%s check presence = %v, want %v", b.Name, len(b.Manifest.Check) > 0, exp.check)
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("shipped built-in %q not found in the embed", name)
+		}
+	}
+}
+
 // Origin-erasure: a built-in's files: render through the SAME applyExtensionFiles
 // path as a local extension, reading from its embed fsys.
 func TestBuiltinScaffoldsThroughSharedPath(t *testing.T) {

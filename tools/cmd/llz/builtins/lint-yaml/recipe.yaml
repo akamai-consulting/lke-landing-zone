@@ -1,0 +1,9 @@
+schemaVersion: 2
+name: lint-yaml
+short: yamllint config + check for repo YAML hygiene (built-in, opt-in)
+kind: tool
+optional: true
+files:
+  - {src: yamllint.yaml, dst: .yamllint.yaml}
+check:
+  - {name: yamllint, argv: [yamllint, --strict, -c, .yamllint.yaml, .]}
