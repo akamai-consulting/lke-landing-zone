@@ -1,19 +1,27 @@
 # akamai-functions (external candidate)
 
-The reusable **Spin → Akamai Fermyon Wasm Functions** delivery kit: a CI pipeline, a
-composite deploy action, a deploy script, the toolchain (spin + rust), and the Fermyon
-deploy secret. It is **app-agnostic** — it does not ship any workload.
+The reusable **Spin → Akamai Fermyon Wasm Functions** delivery kit + the standard **Rust
+quality bar**. App-agnostic: it ships the CI pipeline, deploy action/script, toolchain,
+and Fermyon secret — but no workload.
 
-Bring your own Spin app and point `SPIN_MANIFEST` at its `spin.toml`. Workload-specific
-alerts/dashboards are a separate concern (`llz extension new --kind observability`).
+## What it scaffolds
 
-## Try it (from this candidate dir, before publishing)
+- `.github/workflows/akamai-functions.yml` — quality matrix → build → deploy.
+- `scripts/app/quality.sh` — the reusable gates, each over the whole workspace:
+  `fmt-check`, `clippy`, `test`, **`coverage`** (cargo-tarpaulin, `--fail-under 90`),
+  **`mutants`** (cargo-mutants — mutation testing), `audit`/`deny`/`machete` (supply
+  chain), `semver` (cargo-semver-checks), `shellcheck`.
+- `mutants.toml`, `deny.toml` — starter quality configs.
+- `.github/actions/spin-cloud-deploy/`, `scripts/app/deploy-cloud.sh` — the deploy.
+
+Bring your own Spin app and point `SPIN_MANIFEST` at its `spin.toml`. Run a gate locally
+with `./scripts/app/quality.sh coverage`; thresholds are env-tunable (`COV_MIN`,
+`MUTANTS_TIMEOUT`). Workload alerts/dashboards: `llz extension new --kind observability`.
+
+## Try it / spin it out
 
     llz extension lint  external-candidates/akamai-functions
     llz extension apply external-candidates/akamai-functions --root /path/to/instance --dry-run
 
-## Spin it out
-
-Push this directory to its own repo; an instance consumes it as a pinned remote source
-(`.llz/extensions.yaml` sources: + `llz extension sync`), gated on enable. `FERMYON_CLOUD_TOKEN`
-seeds into OpenBao + the GH Environment; the toolchain installs via `llz extension provision`.
+Push to its own repo; consume as a pinned remote source (gated enable). The quality
+toolchain installs via `llz extension provision` (mise); `llz doctor` flags any missing.

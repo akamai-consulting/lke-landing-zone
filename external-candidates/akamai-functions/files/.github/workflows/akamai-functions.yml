@@ -1,22 +1,39 @@
-# Scaffolded by the akamai-functions kit. App-agnostic Spin→Akamai build+deploy. Point
-# the SPIN_MANIFEST repo Variable at your app's spin.toml. A workload pipeline ships as a
-# file (not a ci: anchor DAG) because it needs a private toolchain container, composite
-# actions, and a scripted deploy with secrets.
+# Scaffolded by the akamai-functions kit. App-agnostic Spin→Akamai pipeline with the full
+# Rust quality bar (incl. coverage + mutation testing). Every gate runs over the workspace
+# via scripts/app/quality.sh in the private toolchain container; point SPIN_MANIFEST at
+# your app. A workload pipeline ships as a FILE (not a ci: DAG): it needs a private
+# container, secrets, and a scripted deploy.
 name: Akamai Functions
 on:
-  pull_request: {paths: ['**/spin.toml', 'src/**', '.github/workflows/akamai-functions.yml']}
+  pull_request: {paths: ['**/*.rs', '**/Cargo.*', '**/spin.toml', 'scripts/**', '.github/workflows/akamai-functions.yml']}
   push: {branches: [main]}
   workflow_dispatch: {}
 permissions: {contents: read}
 env:
-  # Repo Variables: RUST_IMAGE=ghcr.io/<org>/ci-rust:<tag> (private), SPIN_MANIFEST=path/to/spin.toml
   SPIN_MANIFEST: ${{ vars.SPIN_MANIFEST || 'spin.toml' }}
 defaults: {run: {shell: bash}}
 concurrency: {group: '${{ github.workflow }}-${{ github.ref }}', cancel-in-progress: true}
 
 jobs:
+  quality:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # fmt/clippy/test + coverage (cargo-tarpaulin --fail-under 90) + mutation
+        # (cargo-mutants) + supply chain (audit/deny/machete) + semver + shellcheck.
+        target: [fmt-check, clippy, test, coverage, mutants, audit, deny, machete, semver, shellcheck]
+    container:
+      image: ${{ vars.RUST_IMAGE }}
+      credentials: {username: ${{ vars.GHCR_USER }}, password: ${{ secrets.GHCR_PAT }}}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/app/quality.sh ${{ matrix.target }}
+
   build:
     name: Build WASM
+    needs: [quality]
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.RUST_IMAGE }}

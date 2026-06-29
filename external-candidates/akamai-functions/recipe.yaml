@@ -19,11 +19,23 @@ secrets:
   - {name: FERMYON_CLOUD_TOKEN, required: true, bao: "secret/akamai#fermyon_cloud_token", ghEnv: infra-prod}
   - {name: GHCR_PAT, required: true, ghEnv: infra-prod}   # pulls the private ci-rust toolchain image
 
-# Tools — local build/test supply (CI uses the pinned container in the scaffolded workflow).
+# Tools — the full local build + quality toolchain (CI uses the pinned container; locally,
+# `llz extension provision` installs these via mise and doctor flags any that are missing,
+# so a quality gate can't silently skip). cargo-* gates: coverage (tarpaulin), mutation
+# (mutants), supply chain (audit/deny/machete), API stability (semver-checks).
 tools:
   - {name: spin, via: "aqua:fermyon/spin", version: "3.1.0"}
   - {name: cargo, via: "rust", version: "1.82.0"}
+  - {name: cargo-tarpaulin, via: "cargo:cargo-tarpaulin", version: "0.31.2"}
+  - {name: cargo-mutants, via: "cargo:cargo-mutants", version: "24.9.0"}
+  - {name: cargo-audit, via: "cargo:cargo-audit", version: "0.21.0"}
+  - {name: cargo-deny, via: "aqua:EmbarkStudios/cargo-deny", version: "0.16.2"}
+  - {name: cargo-machete, via: "cargo:cargo-machete", version: "0.7.0"}
+  - {name: cargo-semver-checks, via: "aqua:obi1kenobi/cargo-semver-checks", version: "0.38.0"}
+  - {name: shellcheck, via: "aqua:koalaman/shellcheck", version: "0.10.0"}
 
-# Scaffold — the delivery machinery (CI pipeline + deploy action + script). No app code.
+# Scaffold — the delivery machinery + the reusable Rust quality bar: CI pipeline (fmt,
+# clippy, test, COVERAGE, MUTATION, audit/deny/machete, semver, shellcheck → build → deploy),
+# the quality dispatcher, the deploy action/script, and mutants/deny configs. No app code.
 files:
   - {src: files, dst: .}
