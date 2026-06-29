@@ -6,7 +6,7 @@ apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
   name: grafana-admin-generated
-  namespace: llz-external-secrets
+  namespace: external-secrets
 spec:
   # 0 = generate exactly once and never refresh: ESO mints the password on first
   # reconcile and leaves the intermediate Secret stable, so the value can't churn
@@ -32,7 +32,7 @@ apiVersion: external-secrets.io/v1alpha1
 kind: PushSecret
 metadata:
   name: grafana-admin-push
-  namespace: llz-external-secrets
+  namespace: external-secrets
 spec:
   # Retry roughly every minute until OpenBao is unsealed + the eso-pusher role
   # exists; once written, IfNotExists makes every subsequent reconcile a no-op.

@@ -264,6 +264,7 @@ failure mode the default already prevents.
 | Secret backend (OpenBao) operations guide | [docs/secrets.md](docs/secrets.md) |
 | Alerting inventory + coverage | [docs/alerting.md](docs/alerting.md) |
 | apl-core cutover runbook | [docs/apl-core-migration-runbook.md](docs/apl-core-migration-runbook.md) |
+| apl-core 5.x → 6.x migration design | [docs/designs/apl-core-v6-migration.md](docs/designs/apl-core-v6-migration.md) |
 | Linode account request + InfoSec checklist | [docs/infosec/linode-account-request-checklist.md](docs/infosec/linode-account-request-checklist.md) |
 
 **Runbooks** ([docs/runbooks/](docs/runbooks/)) — bootstrap & rotation procedures:

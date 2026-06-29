@@ -35,8 +35,8 @@ name: Release E2E — provision, validate, destroy a real cluster
 # every run) that has: terraform.yml + cluster-health.yml active (on GitHub-hosted
 # runners), and an `infra-e2e` Environment holding LINODE_API_TOKEN / TF_STATE_* /
 # APL_VALUES_REPO_TOKEN / OPENBAO_* (all the infra secrets — they live THERE, not
-# here). LOKI_ADMIN_PASSWORD is generated + stashed by terraform.yml on first
-# apply, so it need not be pre-seeded. It also needs `e2e` added to terraform.yml's region
+# here). (apl-core 6.x auto-generates the Loki admin password in-cluster, so there
+# is no LOKI_ADMIN_PASSWORD to seed.) It also needs `e2e` added to terraform.yml's region
 # choices (done) and an `e2e.tfvars` set produced by instantiate. The instance's
 # TF_IMAGE / KUBE_IMAGE vars are auto-pinned by the instantiate job on `release`
 # runs (see "Pin instance CI images to this commit") so the baked llz can never

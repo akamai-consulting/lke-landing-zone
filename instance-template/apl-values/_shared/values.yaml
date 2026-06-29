@@ -32,10 +32,10 @@ cluster:
 # and are omitted here. Toggle the optional platform apps the landing zone uses.
 #
 # IMPORTANT: keys MUST be apl-core's canonical app names. apps.additionalProperties
-# is `true` in the 5.0.0 schema, so a wrong key (e.g. `kube-prometheus-stack`,
+# is `true` in the schema, so a wrong key (e.g. `kube-prometheus-stack`,
 # `opentelemetry-operator`, `trivy-operator`) is SILENTLY IGNORED — no schema
 # error — and the app falls back to its chart default. Names verified against
-# linode/apl-core@v5.0.0 values-schema.yaml.
+# linode/apl-core@v6.0.0-rc.12 values-schema.yaml.
 apps:
   # argocd is a core app (cannot be disabled — no `enabled` key). We only pass
   # _rawValues to override two Argo CD resource health checks. Argo's built-in
@@ -141,11 +141,15 @@ apps:
   grafana:       { enabled: true }
   loki:
     enabled: true
-    # Loki gateway HTTP basic-auth admin password. Generated + stashed to the
-    # infra-<env> GH environment secret LOKI_ADMIN_PASSWORD by `llz ci
-    # ensure-env-secret` (pre-apply) on first run and reused on later runs, then
-    # passed in as TF_VAR_loki_admin_password. Required by apl-core's apps.loki schema.
-    adminPassword: ${loki_admin_password}
+    # apl-core 6.x: the Loki gateway admin password is NOT set here. On 6.x the
+    # `apps.loki.adminPassword` schema field is an x-secret with a generator
+    # (`x-secret: '{{ randAlphaNum 20 }}'`) and the loki reverse-proxy auth secret
+    # is an ExternalSecret sourced from apl-core's own core-secrets-store — so
+    # apl-core generates, persists, and self-wires the password in-cluster when we
+    # omit it. (On 5.0.0 the x-secret had no generator, so it had to be supplied
+    # via TF_VAR_loki_admin_password / the infra-<env> GitHub secret; that whole
+    # path was removed in the v6 migration.) Nothing on the landing-zone side
+    # consumes this password — only apl-core's loki does.
     # S3 chunk store on Linode Object Storage. The grafana/loki chart reads
     # bucketNames + s3.{endpoint,region} from values (not env), so they are
     # rendered from the object-storage workspace via templatefile(). The AWS
@@ -229,12 +233,15 @@ apps:
   # reconciles drift with the llz-linode-cidr-firewall chart, so disable
   # apl-core's bundled Cloud Firewall chart to avoid conflicts.
   linode-cfw:    { enabled: false }
-  # TEMPORARY — in-cluster Gitea re-enabled. otomi.git points at the external
-  # GitHub repo (see otomi.git below), but apl-core's `gitops-global` Argo app
-  # still clones the in-cluster gitea (cluster-bootstrap/main.tf:428); with gitea
-  # disabled it hard-fails "gitea-http … no such host". Keep enabled until apl-core
-  # supports a fully gitea-less global gitops.
-  gitea:         { enabled: true }
+  # apl-core 6.x: in-cluster Gitea DISABLED. On 5.0.0 gitea had to stay on because
+  # apl-core's apl-gitea-operator / `gitops-global` Argo app cloned the in-cluster
+  # gitea even though otomi.git points at the external GitHub repo (BYO Git); with
+  # gitea off it hard-failed "gitea-http … no such host". In 6.x apl-gitea-operator
+  # is gated on gitea.enabled (helmfile-03.init), so disabling gitea removes that
+  # clone path entirely. apl-core's lightweight git-server (apps.git-server,
+  # enabled by default in 6.x) provides any in-cluster git apl-core still needs;
+  # the values repo itself stays the external GitHub repo via otomi.git below.
+  gitea:         { enabled: false }
   # Unused optional apps.
   knative:       { enabled: false }
   kserve:        { enabled: false }

@@ -103,7 +103,7 @@ spec:
     bootstrap:                                    # → cluster-bootstrap/<env>.tfvars
       name: platform-prod                         # → cluster_name
       domainSuffix: prod.example.com              # → cluster_domain
-      aplChartVersion: 5.0.0                      # → apl_chart_version
+      aplChartVersion: 6.0.0-rc.12                # → apl_chart_version
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git  # → apl_values_repo_url
         revision: main                            # → apl_values_repo_revision

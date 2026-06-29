@@ -81,12 +81,11 @@ variable "apps_repo_revision" {
   default     = "main"
 }
 
-variable "loki_admin_password" {
-  description = "Admin password for the Loki gateway's HTTP basic auth. Required by apl-core's apps.loki schema when loki.enabled=true; rendered into apl-values/<env>/values.yaml as apps.loki.adminPassword. Always supplied via TF_VAR_loki_admin_password: the llz-terraform workflow runs `llz ci ensure-env-secret` BEFORE this apply, which generates+persists the infra-<region> LOKI_ADMIN_PASSWORD secret on first run and exports it as TF_VAR_loki_admin_password (idempotent — no per-run rotation). cluster-bootstrap no longer generates this (the former random_password.loki_admin) nor outputs it for a post-apply stash, so it is not held in TF state's secret set. NOTE: not yet on the ESO+OpenBao rotation lifecycle the other support-plane creds use — see docs/secrets.md (Known limitation — Loki admin password); moving it there is a tracked follow-up."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
+# NOTE (apl-core 6.x): the former `loki_admin_password` variable was removed. On
+# 6.x apl-core's apps.loki.adminPassword is an x-secret with a generator, so
+# apl-core auto-generates and self-wires the Loki gateway password in-cluster —
+# the landing zone no longer supplies it (no TF_VAR, no infra-<env> GitHub secret,
+# no ensure-env-secret step). See docs/designs/apl-core-v6-migration.md.
 
 variable "destroying" {
   description = "Set true (TF_VAR_destroying=true) only on the teardown path. Gates data.kubernetes_service.coredns off so `terraform destroy` doesn't refresh that cluster-API read while the LKE cluster is being reaped in the same run — the read would time out (dial :6443 i/o timeout) and fail the destroy. The data source is apply-only (it just feeds the rendered Loki gateway resolver), so skipping it on destroy is safe (a destroy never needs the resolver). Defaults false so the apply path is unaffected and no apply job needs to set it."

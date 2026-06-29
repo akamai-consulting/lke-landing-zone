@@ -82,7 +82,7 @@ add a one-line annotation above it so the annotation manager bumps it too:
 
 ```hcl
 # renovate: datasource=helm depName=apl registryUrl=https://<your-apl-helm-repo>
-apl_chart_version = "5.0.0"
+apl_chart_version = "6.0.0-rc.12"
 ```
 
 Renovate keeps the *published artifacts* current. For the **copied** scaffolding
@@ -133,7 +133,7 @@ default you usually keep.
 | `apl_values_repo_url` | MUST-SET | **HTTPS**, publicly reachable (see §1). apl-core's external values store — the in-cluster Gitea is obsoleted |
 | `apl_chart_version` | MUST-SET | Pin deliberately |
 | `apl_values_repo_revision`, `apps_repo_revision`, `apl_values_repo_username` | default | |
-| `tf_state_bucket`, `linode_dns_token`, `apl_values_repo_token`, `loki_admin_password`, `linode_token`, `openbao_secrets_write_token` | SECRET | All via `TF_VAR_*` in CI. `apl_values_repo_token` = fine-grained PAT (Contents: write). `loki_admin_password` optional — generated + stashed if empty |
+| `tf_state_bucket`, `linode_dns_token`, `apl_values_repo_token`, `linode_token`, `openbao_secrets_write_token` | SECRET | All via `TF_VAR_*` in CI. `apl_values_repo_token` = fine-grained PAT (Contents: write). (apl-core 6.x auto-generates the Loki admin password — no `loki_admin_password` input.) |
 
 ### `object-storage/` — registry + logs OBJ buckets
 

@@ -1,7 +1,7 @@
 # cluster-foundation — wave -20, the FIRST support-plane app to sync.
 #
-# Creates the namespaces apl-core does NOT manage (llz-openbao, llz-external-secrets,
-# llz-observability, llz-argo-workflows/events, grafana, monitoring, …),
+# Creates the namespaces apl-core does NOT manage (llz-openbao, llz-observability,
+# llz-argo-workflows/events, grafana, monitoring, …),
 # plus the default-deny + component NetworkPolicies, the CoreDNS *.internal
 # rewrite + restart Job, and the storage-class default patcher. Argo health-gates
 # the wave, so the namespaces + NPs are Healthy before any wave -15+ consumer.

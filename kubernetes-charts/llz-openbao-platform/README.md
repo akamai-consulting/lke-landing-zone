@@ -56,7 +56,7 @@ knobs live under `platform` and `openbaoPromtail`:
 | `platform.tls.issuerRef.kind` | `ClusterIssuer` | |
 | `platform.tls.duration` / `renewBefore` | `8760h` / `720h` | |
 | `platform.networkPolicy.enabled` | `true` | |
-| `platform.networkPolicy.allowedClientNamespaces` | `[llz-external-secrets, llz-cert-automation, llz-observability]` | Namespaces allowed to reach `:8200`. |
+| `platform.networkPolicy.allowedClientNamespaces` | `[external-secrets, llz-cert-automation, llz-observability]` | Namespaces allowed to reach `:8200`. `external-secrets` is apl-core 6.x's namespace for the bundled ESO controller. |
 | `platform.networkPolicy.observabilityNamespace` | `observability` | Audit egress target on `:80`. |
 | `platform.serviceMonitor.enabled` | `true` | Decoupled from the old `Release.Name == "platform-prom"` magic gate. |
 | `platform.serviceMonitor.releaseLabel` | `platform-prom` | The `release:` label the Prometheus Operator selects on. |
