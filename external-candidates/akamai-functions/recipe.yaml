@@ -1,11 +1,15 @@
 # akamai-functions — the REUSABLE delivery machinery for building a Rust/Spin app and
-# deploying it to Akamai (Fermyon Wasm Functions). It is app-agnostic: it ships the CI
-# pipeline, the composite deploy action, the deploy script, the toolchain, and the
-# Fermyon deploy secret — NOT any specific workload. The Spin app(s) (e.g. the OHTTP
-# gateway/relay) are the operator's own code, brought separately; the operator points
-# SPIN_MANIFEST at their spin.toml. Workload dashboards/alerts come via `llz extension
-# new --kind observability`. (Modeled on the functions/ohttp prototype, with the
-# ohttp-specific bits factored out.)
+# deploying it to Akamai (Fermyon Wasm Functions). App-agnostic: it ships the CI pipeline,
+# the composite deploy action, the deploy script, the toolchain, and the Fermyon deploy
+# secret — NOT any workload. The Spin app(s) are the operator's own code; point
+# SPIN_MANIFEST at their spin.toml. (Modeled on the functions/ohttp prototype.)
+#
+# stage: app — this is the Application-Code delivery layer. Its gates are DECLARED here
+# (validate: below) so they are typed + visible in `llz extension lifecycle` / `stages`,
+# but because App-stage is not platform-gated they are SKIPPED by `llz lint` / `llz
+# validate` (the platform gate, which owns IaC + Kube-Infra) and RUN instead by the app's
+# own scaffolded CI. The CI matrix and these validate: steps both dispatch through
+# scripts/app/quality.sh, so the gate behavior has a single source of truth.
 schemaVersion: 2
 name: akamai-functions
 short: build + deploy a Rust/Spin app to Akamai Fermyon Wasm Functions (external candidate)
@@ -20,10 +24,9 @@ secrets:
   - {name: FERMYON_CLOUD_TOKEN, required: true, bao: "secret/akamai#fermyon_cloud_token", ghEnv: infra-prod}
   - {name: GHCR_PAT, required: true, ghEnv: infra-prod}   # pulls the private ci-rust toolchain image
 
-# Tools — the full local build + quality toolchain (CI uses the pinned container; locally,
-# `llz extension provision` installs these via mise and doctor flags any that are missing,
-# so a quality gate can't silently skip). cargo-* gates: coverage (tarpaulin), mutation
-# (mutants), supply chain (audit/deny/machete), API stability (semver-checks).
+# Tools — the full local build + quality toolchain. `llz extension provision` installs
+# these via mise and doctor flags any that are missing, so an App-stage gate (declared
+# below) can't silently skip for want of its tool.
 tools:
   - {name: spin, via: "aqua:fermyon/spin", version: "3.1.0"}
   - {name: cargo, via: "rust", version: "1.82.0"}
@@ -35,8 +38,25 @@ tools:
   - {name: cargo-semver-checks, via: "aqua:obi1kenobi/cargo-semver-checks", version: "0.38.0"}
   - {name: shellcheck, via: "aqua:koalaman/shellcheck", version: "0.10.0"}
 
-# Scaffold — the delivery machinery + the reusable Rust quality bar: CI pipeline (fmt,
-# clippy, test, COVERAGE, MUTATION, audit/deny/machete, semver, shellcheck → build → deploy),
-# the quality dispatcher, the deploy action/script, and mutants/deny configs. No app code.
+# Gate — the App-Code quality bar, declared as typed validate: steps over the whole
+# workspace. App-stage ⇒ the platform gate SKIPS these (they don't run in `llz lint`/
+# `validate`); the scaffolded CI matrix runs the same scripts/app/quality.sh targets on
+# the app's PRs. Declaring them makes the bar a first-class, visible contract instead of
+# logic buried in a workflow.
+validate:
+  - {name: fmt-check, argv: [scripts/app/quality.sh, fmt-check]}
+  - {name: clippy, argv: [scripts/app/quality.sh, clippy]}
+  - {name: test, argv: [scripts/app/quality.sh, test]}
+  - {name: coverage, argv: [scripts/app/quality.sh, coverage]}   # cargo-tarpaulin --fail-under 90
+  - {name: mutants, argv: [scripts/app/quality.sh, mutants]}     # cargo-mutants (mutation testing)
+  - {name: audit, argv: [scripts/app/quality.sh, audit]}
+  - {name: deny, argv: [scripts/app/quality.sh, deny]}
+  - {name: machete, argv: [scripts/app/quality.sh, machete]}
+  - {name: semver, argv: [scripts/app/quality.sh, semver]}
+  - {name: shellcheck, argv: [scripts/app/quality.sh, shellcheck]}
+
+# Scaffold — the delivery machinery + the reusable quality bar: CI pipeline (the quality
+# matrix → build → deploy), the quality dispatcher, the deploy action/script, and the
+# mutants/deny configs. No app code. One dir entry lays down the whole tree.
 files:
   - {src: files, dst: .}
