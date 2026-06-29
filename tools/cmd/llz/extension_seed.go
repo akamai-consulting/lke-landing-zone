@@ -22,6 +22,12 @@ var seedGHEnvFn = func(_ globalOpts, env, name, value string) error {
 	return ghSecretSetStdin(name, env, value)
 }
 
+// seedGHVarFn pushes a declared GitHub Actions variable's value (non-secret) into the
+// repo/Environment. Stubbed in tests.
+var seedGHVarFn = func(_ globalOpts, env, name, value string) error {
+	return ghVariableSet(name, env, value)
+}
+
 // seedSecretValue writes value to sec's declared target(s) — the per-secret write
 // shared by `seed` and rotation's re-seed.
 func seedSecretValue(g globalOpts, sec extSecret, value string) error {
@@ -91,6 +97,28 @@ func runExtensionSeed(g globalOpts, root string) error {
 				actions = append(actions, seedAction{e.Name, "gh-env", env + "/" + name,
 					func(g globalOpts) error { return seedGHEnvFn(g, env, name, v) }})
 			}
+		}
+		// GitHub Actions variables: non-secret CI config. The value is Default (or its
+		// LLZ_VAR_<NAME> override); seed pushes it to the repo or Environment variable.
+		for _, gv := range e.Manifest.GHVars {
+			val := gv.Default
+			if o := os.Getenv(varOverrideEnv(gv.Name)); o != "" {
+				val = o
+			}
+			if val == "" {
+				if gv.Required {
+					return fmt.Errorf("required ghVar %s (extension %q) has no default and %s is unset — cannot seed", gv.Name, e.Name, varOverrideEnv(gv.Name))
+				}
+				fmt.Fprintf(os.Stderr, "skip %s (extension %q): no default, %s unset (optional)\n", gv.Name, e.Name, varOverrideEnv(gv.Name))
+				continue
+			}
+			env, name, v := gv.GHEnv, gv.Name, val
+			target := "repo/" + name
+			if env != "" {
+				target = env + "/" + name
+			}
+			actions = append(actions, seedAction{e.Name, "gh-var", target,
+				func(g globalOpts) error { return seedGHVarFn(g, env, name, v) }})
 		}
 	}
 	if len(actions) == 0 {

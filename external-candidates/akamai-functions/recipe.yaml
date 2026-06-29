@@ -16,10 +16,21 @@ short: build + deploy a Rust/Spin app to Akamai Fermyon Wasm Functions (external
 kind: tool
 stage: app
 
-# Configure — operator points these at their app; seed wires the secret into OpenBao + GH env.
-vars:
-  - {name: SPIN_MANIFEST, default: spin.toml}   # path to the app's spin.toml
-  - {name: APP_SUFFIX, default: "-lab"}          # env suffix on app names (-lab/-staging/"")
+# Configure — operator points these at their app; seed wires secrets into OpenBao + GH env
+# and pushes ghVars: to the repo's GitHub Actions variables.
+#
+# secrets: are sensitive (read from env at seed time, never stored). ghVars: are the
+# NON-secret GitHub Actions variables the scaffolded workflow reads as `${{ vars.* }}` at
+# runtime — a distinct category from render `vars:` (which substitute into file bodies at
+# apply time; this kit's workflow is shipped verbatim, so it has none). Declaring ghVars:
+# is what lets `doctor` warn when RUST_IMAGE/GHCR_USER are unset and lets `seed` push the
+# defaults — and it is what makes `image: ${{ vars.RUST_IMAGE }}` pass the workflow
+# image-pin lint (a declared ghVar is an operator-owned, reviewable image source).
+ghVars:
+  - {name: RUST_IMAGE, required: true, doc: "digest-pinned ci-rust toolchain image the CI jobs run in (…@sha256:…)"}
+  - {name: GHCR_USER, required: true, doc: "GHCR username used to pull the private RUST_IMAGE"}
+  - {name: SPIN_MANIFEST, default: spin.toml, doc: "path to the app's spin.toml"}
+  - {name: APP_SUFFIX, default: "-lab", doc: "env suffix on app names (-lab/-staging/\"\")"}
 secrets:
   - {name: FERMYON_CLOUD_TOKEN, required: true, bao: "secret/akamai#fermyon_cloud_token", ghEnv: infra-prod}
   - {name: GHCR_PAT, required: true, ghEnv: infra-prod}   # pulls the private ci-rust toolchain image
@@ -40,9 +51,10 @@ tools:
 
 # Gate — the App-Code quality bar, declared as typed validate: steps over the whole
 # workspace. App-stage ⇒ the platform gate SKIPS these (they don't run in `llz lint`/
-# `validate`); the scaffolded CI matrix runs the same scripts/app/quality.sh targets on
-# the app's PRs. Declaring them makes the bar a first-class, visible contract instead of
-# logic buried in a workflow.
+# `validate`). They are the SINGLE SOURCE for the gate: the scaffolded workflow's matrix is
+# rendered from these step names (`target: <@ .validate_targets @>`), so adding/removing a
+# gate here changes the CI matrix too — no hand-copied list to drift. quality.sh implements
+# each target's commands; this block names them.
 validate:
   - {name: fmt-check, argv: [scripts/app/quality.sh, fmt-check]}
   - {name: clippy, argv: [scripts/app/quality.sh, clippy]}
@@ -56,7 +68,13 @@ validate:
   - {name: shellcheck, argv: [scripts/app/quality.sh, shellcheck]}
 
 # Scaffold — the delivery machinery + the reusable quality bar: CI pipeline (the quality
-# matrix → build → deploy), the quality dispatcher, the deploy action/script, and the
-# mutants/deny configs. No app code. One dir entry lays down the whole tree.
+# matrix → build → deploy), the quality dispatcher, and the deploy action/script. No app
+# code. The CI workflow + scripts are `managed` (the kit owns them; re-rendered on upgrade,
+# and `--check` flags hand-edits). The starter quality configs are `seed` (write-once):
+# operators tune deny/mutants for their crates, so apply lays them down once and then
+# leaves them alone forever.
 files:
-  - {src: files, dst: .}
+  - {src: files/.github, dst: .github}                       # workflow + composite action (managed)
+  - {src: files/scripts, dst: scripts}                       # quality.sh + deploy-cloud.sh (managed)
+  - {src: files/deny.toml, dst: deny.toml, mode: seed}       # starter supply-chain policy (operator-owned)
+  - {src: files/mutants.toml, dst: mutants.toml, mode: seed} # starter mutation config (operator-owned)

@@ -24,7 +24,9 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -61,6 +63,82 @@ func validateCIImage(jobID, image string) error {
 		return fmt.Errorf("%s: ci image %q must be digest-pinned (…@sha256:<64hex>), not a mutable tag", jobID, image)
 	}
 	return nil
+}
+
+// reWorkflowImageLine captures the value of an `image:` or scalar `container:` key in a
+// workflow YAML (the container the job runs in). The block form `container:` with nothing
+// after the colon yields no match (the nested `image:` line is matched instead).
+var reWorkflowImageLine = regexp.MustCompile(`(?m)^\s*(?:image|container)\s*:\s*(\S.*?)\s*$`)
+
+// reVarsRef matches a GitHub Actions variable reference `${{ vars.NAME }}` and captures NAME.
+var reVarsRef = regexp.MustCompile(`\$\{\{\s*vars\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
+
+// isWorkflowPath reports whether dst is a GitHub Actions workflow file.
+func isWorkflowPath(dst string) bool {
+	return strings.Contains(dst, ".github/workflows/") && (strings.HasSuffix(dst, ".yml") || strings.HasSuffix(dst, ".yaml"))
+}
+
+// lintWorkflowImages closes the digest-pin gap for SCAFFOLDED workflows (the app-kit
+// pattern): a ci: step's image: is pin-checked (validateCIImage), but a workflow shipped
+// as a files: blob escaped that check entirely, yet it runs with the workflow's
+// permissions just the same. For every files: entry that targets .github/workflows/**,
+// this reads the source bytes and requires each `image:`/`container:` reference to be
+// either digest-pinned (…@sha256:<64hex>) or a `${{ vars.NAME }}` whose NAME is declared
+// in ghVars: (an operator-owned, reviewable, doctor-checked image source). A mutable
+// `:latest` or an undeclared vars ref is a finding. Reads raw bytes (image refs are
+// literal, never <@ @>-templated), so it needs no instance root.
+func lintWorkflowImages(ext Extension) []string {
+	declared := map[string]bool{}
+	for _, gv := range ext.Manifest.GHVars {
+		declared[gv.Name] = true
+	}
+	var findings []string
+	scan := func(dst string, body []byte) {
+		for _, m := range reWorkflowImageLine.FindAllSubmatch(body, -1) {
+			val := strings.Trim(string(m[1]), `"'`)
+			if val == "" || strings.HasPrefix(val, "{") || strings.HasPrefix(val, "#") {
+				continue // flow-map container: {…} (image handled on its own line) or a comment
+			}
+			if vm := reVarsRef.FindStringSubmatch(val); vm != nil {
+				if !declared[vm[1]] {
+					findings = append(findings, fmt.Sprintf("%s: image uses ${{ vars.%s }} but %s is not declared in ghVars: — declare it so it is doctor-checked and operator-owned", dst, vm[1], vm[1]))
+				}
+				continue
+			}
+			if reImageDigest.MatchString(val) {
+				continue
+			}
+			findings = append(findings, fmt.Sprintf("%s: workflow image %q must be digest-pinned (…@sha256:<64hex>) or a declared ghVars: image variable, not a mutable tag", dst, val))
+		}
+	}
+	for _, f := range ext.Manifest.Files {
+		info, err := fs.Stat(ext.fsys, f.Src)
+		if err != nil {
+			continue // a bad src is already reported by render/apply; not this check's job
+		}
+		if !info.IsDir() {
+			if isWorkflowPath(f.Dst) {
+				if b, rerr := fs.ReadFile(ext.fsys, f.Src); rerr == nil {
+					scan(f.Dst, b)
+				}
+			}
+			continue
+		}
+		_ = fs.WalkDir(ext.fsys, f.Src, func(p string, d fs.DirEntry, werr error) error {
+			if werr != nil || d.IsDir() {
+				return werr
+			}
+			rel := strings.TrimPrefix(strings.TrimPrefix(p, f.Src), "/")
+			dst := path.Join(f.Dst, rel)
+			if isWorkflowPath(dst) {
+				if b, rerr := fs.ReadFile(ext.fsys, p); rerr == nil {
+					scan(dst, b)
+				}
+			}
+			return nil
+		})
+	}
+	return findings
 }
 
 // dag is a tiny directed acyclic graph over job ids. Edges express `needs`: an

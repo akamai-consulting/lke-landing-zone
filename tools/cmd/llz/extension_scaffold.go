@@ -45,6 +45,7 @@ type extLock struct {
 type lockedFile struct {
 	Path string `json:"path"`
 	SHA  string `json:"sha256"`
+	Mode string `json:"mode,omitempty"` // "" / "managed" (default) | "seed" (write-once, operator-owned)
 }
 
 func loadExtLock(root string) extLock {
@@ -78,11 +79,14 @@ func digest(b []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
-// renderedFile is one file: entry rendered, ready to write or compare.
+// renderedFile is one file: entry rendered, ready to write or compare. Mode carries the
+// extFile ownership class ("managed" | "seed"), normalized, so apply and --check can treat
+// a seed file as write-once + operator-owned.
 type renderedFile struct {
 	Dst  string
 	Body []byte
 	SHA  string
+	Mode string
 }
 
 // scaffoldVals builds the template context for an extension's files: the
@@ -95,6 +99,21 @@ func scaffoldVals(root, name string) map[string]string {
 		vals["upstream_org"] = a.UpstreamOrg
 	}
 	return vals
+}
+
+// validateTargets renders the manifest's validate: step names as a YAML flow sequence
+// (e.g. "[fmt-check, clippy, test]"), the value a scaffolded workflow interpolates into
+// its matrix. Empty validate: yields "[]". Steps without a name are skipped (they have no
+// matrix identity). This is what makes the validate: declaration load-bearing for an
+// app-stage kit whose gates run in its own workflow rather than the platform gate.
+func validateTargets(m extManifest) string {
+	var names []string
+	for _, s := range m.Validate {
+		if s.Name != "" {
+			names = append(names, s.Name)
+		}
+	}
+	return "[" + strings.Join(names, ", ") + "]"
 }
 
 // extensionFromDir builds an Extension from an on-disk extension directory — the
@@ -115,6 +134,11 @@ func renderScaffold(ext Extension, root string) (files []renderedFile, err error
 	for k, v := range varValues(ext.Manifest, os.Getenv) { // Configure → Scaffold: declared vars feed the render
 		vals[k] = v
 	}
+	// Derived: the extension's own validate: step names as a YAML flow sequence, so an
+	// app-stage workflow can render its CI matrix from the declared validate bar
+	// (`target: <@ .validate_targets @>`) instead of hand-copying the list — making
+	// validate: the single source for both the platform-visible gate and the app matrix.
+	vals["validate_targets"] = validateTargets(ext.Manifest)
 	for _, f := range ext.Manifest.Files {
 		rendered, rerr := renderEntry(ext.fsys, f, vals)
 		if rerr != nil {
@@ -136,12 +160,13 @@ func renderEntry(fsys fs.FS, f extFile, vals map[string]string) ([]renderedFile,
 	if err != nil {
 		return nil, fmt.Errorf("render %s: %w", f.Src, err)
 	}
+	mode := fileMode(f.Mode)
 	if !info.IsDir() {
 		out, rerr := renderBytes(fsys, f.Src, vals)
 		if rerr != nil {
 			return nil, fmt.Errorf("render %s: %w", f.Src, rerr)
 		}
-		return []renderedFile{{Dst: f.Dst, Body: out, SHA: digest(out)}}, nil
+		return []renderedFile{{Dst: f.Dst, Body: out, SHA: digest(out), Mode: mode}}, nil
 	}
 	var out []renderedFile
 	walkErr := fs.WalkDir(fsys, f.Src, func(p string, d fs.DirEntry, werr error) error {
@@ -153,7 +178,7 @@ func renderEntry(fsys fs.FS, f extFile, vals map[string]string) ([]renderedFile,
 			return fmt.Errorf("render %s: %w", p, rerr)
 		}
 		rel := strings.TrimPrefix(strings.TrimPrefix(p, f.Src), "/") // fs paths are slash-separated
-		out = append(out, renderedFile{Dst: path.Join(f.Dst, rel), Body: body, SHA: digest(body)})
+		out = append(out, renderedFile{Dst: path.Join(f.Dst, rel), Body: body, SHA: digest(body), Mode: mode})
 		return nil
 	})
 	if walkErr != nil {
@@ -191,6 +216,9 @@ func applyExtensionFiles(g globalOpts, ext Extension, root string, check bool) e
 		manifestSet := map[string]bool{}
 		for _, f := range files {
 			manifestSet[f.Dst] = true
+			if f.Mode == "seed" {
+				continue // write-once + operator-owned: a missing/edited seed file is not drift
+			}
 			got, rerr := os.ReadFile(filepath.Join(root, f.Dst))
 			switch {
 			case rerr != nil:
@@ -225,13 +253,22 @@ func applyExtensionFiles(g globalOpts, ext Extension, root string, check bool) e
 	var locked []lockedFile
 	for _, f := range files {
 		dst := filepath.Join(root, f.Dst)
+		// A seed file is write-once: if it already exists, the operator owns it — record
+		// it (so exclude/teardown still know we own the path) but never overwrite.
+		if f.Mode == "seed" {
+			if _, statErr := os.Stat(dst); statErr == nil {
+				locked = append(locked, lockedFile{Path: f.Dst, SHA: f.SHA, Mode: "seed"})
+				fmt.Fprintf(os.Stderr, "seed %s already present — left as-is\n", dst)
+				continue
+			}
+		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
 		if err := os.WriteFile(dst, f.Body, 0o644); err != nil {
 			return err
 		}
-		locked = append(locked, lockedFile{Path: f.Dst, SHA: f.SHA})
+		locked = append(locked, lockedFile{Path: f.Dst, SHA: f.SHA, Mode: f.Mode})
 		fmt.Fprintf(os.Stderr, "scaffolded %s\n", dst)
 	}
 	lock := loadExtLock(root)

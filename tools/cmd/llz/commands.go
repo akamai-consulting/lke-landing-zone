@@ -97,6 +97,22 @@ func variableSetArgv(name string) []string {
 	return []string{"gh", "variable", "set", name}
 }
 
+// ghVariableSet sets a GitHub Actions variable (non-secret CI config) at the repo level,
+// or in an Environment when ghEnv is non-empty. Unlike a secret the value is non-sensitive,
+// so it rides --body rather than stdin. Backs the seedGHVarFn seam (extension_seed.go).
+func ghVariableSet(name, ghEnv, value string) error {
+	args := []string{"variable", "set", name, "--body", value}
+	label := name
+	if ghEnv != "" {
+		args = append(args, "--env", ghEnv)
+		label = fmt.Sprintf("%s --env %s", name, ghEnv)
+	}
+	if out, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("gh variable set %s: %s", label, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // statusArgv is the read-only convergence check set (matches the verify steps in
 // docs/runbooks/bootstrap-openbao.md).
 func statusArgv() [][]string {

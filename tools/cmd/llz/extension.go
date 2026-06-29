@@ -63,6 +63,7 @@ type extManifest struct {
 	Tools         []extTool    `json:"tools,omitempty"`    // external tools the steps need; doctor verifies, `llz extension provision` installs (via mise)
 	Vars          []extVar     `json:"vars,omitempty"`     // Configure phase: declared template inputs
 	Secrets       []extSecret  `json:"secrets,omitempty"`  // Configure phase: declared runtime secrets
+	GHVars        []extGHVar   `json:"ghVars,omitempty"`   // Configure phase: declared GitHub Actions variables a scaffolded workflow reads (${{ vars.NAME }})
 	Files         []extFile    `json:"files,omitempty"`    // Scaffold phase: rendered into the instance
 	Check         []extStep    `json:"check,omitempty"`    // Gate phase (lint tier): folded into runLint; missing tool skips
 	Validate      []extStep    `json:"validate,omitempty"` // Gate phase (CI tier): folded into runValidate; tools REQUIRED
@@ -134,9 +135,24 @@ func findSecret(m extManifest, name string) (extSecret, bool) {
 // outputs, so the lock, --check drift, exclude, and teardown all treat it like any other
 // scaffolded file. Dst is NOT templated at apply time (only file bodies are); it is fixed
 // when the extension is authored (`extension new` renders it).
+//
+// Mode is the ownership class. "managed" (the default) means the extension owns the file:
+// apply re-renders and overwrites it, and `--check` reports it as drift if hand-edited.
+// "seed" means write-once: apply lays it down only when absent, then it is operator-owned
+// forever — apply never clobbers it and `--check` never flags it. Seed is for starter
+// configs an operator is expected to customize (e.g. deny.toml, a quality config).
 type extFile struct {
-	Src string `json:"src"`
-	Dst string `json:"dst"`
+	Src  string `json:"src"`
+	Dst  string `json:"dst"`
+	Mode string `json:"mode,omitempty"` // "managed" (default) | "seed"
+}
+
+// fileMode normalizes an extFile.Mode: empty defaults to "managed" (overwrite-on-apply).
+func fileMode(m string) string {
+	if m == "seed" {
+		return "seed"
+	}
+	return "managed"
 }
 
 // extVar is a declared template input. Its Default feeds the Scaffold render
@@ -158,6 +174,24 @@ type extSecret struct {
 	Required bool   `json:"required,omitempty"`
 	Bao      string `json:"bao,omitempty"`   // OpenBao target "path#key"
 	GHEnv    string `json:"ghEnv,omitempty"` // GitHub Environment to set <Name> in
+}
+
+// extGHVar is a declared GitHub Actions *variable* — the third input category beside
+// render `vars:` (substituted into file bodies at apply time) and `secrets:` (sensitive,
+// seeded into a store). A scaffolded workflow reads these as `${{ vars.NAME }}` at
+// workflow runtime; they are neither rendered (the workflow ships verbatim) nor secret
+// (they are non-sensitive CI config like a container image ref or app suffix). doctor
+// reports a declared-but-unset variable; `llz extension seed` pushes Default (or its
+// LLZ_VAR_<NAME> override) to the repo/Environment variable via `gh variable set`. Because
+// the value is non-sensitive a Default is allowed (unlike a secret). The lint workflow
+// image-pin check (extension_ci.go) also treats a declared ghVar as an operator-owned,
+// reviewable image source, so a workflow may use `image: ${{ vars.NAME }}` when NAME is here.
+type extGHVar struct {
+	Name     string `json:"name"`
+	Default  string `json:"default,omitempty"`
+	Doc      string `json:"doc,omitempty"`
+	Required bool   `json:"required,omitempty"`
+	GHEnv    string `json:"ghEnv,omitempty"` // GitHub Environment to set it in (empty = repo-level variable)
 }
 
 // extSchemaVersion is the current manifest schema this binary speaks. Bump it
@@ -303,6 +337,16 @@ func lintManifest(m extManifest) []string {
 			f = append(f, fmt.Sprintf("secret #%d: name is required", i))
 		}
 	}
+	for i, gv := range m.GHVars {
+		if gv.Name == "" {
+			f = append(f, fmt.Sprintf("ghVar #%d: name is required", i))
+		}
+	}
+	for i, file := range m.Files {
+		if file.Mode != "" && file.Mode != "managed" && file.Mode != "seed" {
+			f = append(f, fmt.Sprintf("file #%d: mode %q is not managed|seed", i, file.Mode))
+		}
+	}
 	// A rotate: block (TokenRotator) is argv-only and must refresh a declared,
 	// targeted secret — otherwise the rotation has nowhere to land.
 	if r := m.Rotate; r != nil {
@@ -368,6 +412,11 @@ func runExtensionLint(dir string) error {
 		return fmt.Errorf("%s: %w", extensionManifest, err)
 	}
 	findings := append(lintManifest(m), lintKind(m, hasGoTests(dir))...)
+	// Scaffolded-workflow image-pin check needs the tree (fsys), so it runs here, not in
+	// the pure lintManifest. A manifest that doesn't parse into an Extension just skips it.
+	if ext, eerr := extensionFromDir(dir); eerr == nil {
+		findings = append(findings, lintWorkflowImages(ext)...)
+	}
 	if len(findings) == 0 {
 		fmt.Fprintf(os.Stderr, "extension %q: ok\n", m.Name)
 		return nil

@@ -46,5 +46,17 @@ func manifestConfigFindings(ext string, m extManifest, env func(string) string) 
 			out = append(out, configFinding{ext, "secret", s.Name, status, s.Required})
 		}
 	}
+	// A GitHub Actions variable is satisfied if it has a Default (seedable) or an
+	// LLZ_VAR_<NAME> override is present; otherwise the scaffolded workflow reads it
+	// empty in CI. A required ghVar with neither is a fatal finding.
+	for _, gv := range m.GHVars {
+		if gv.Default == "" && env(varOverrideEnv(gv.Name)) == "" {
+			status := "no default; set the GitHub Actions variable (`gh variable set " + gv.Name + "`) or it renders empty in CI"
+			if gv.Doc != "" {
+				status += " — " + gv.Doc
+			}
+			out = append(out, configFinding{ext, "gh-var", gv.Name, status, gv.Required})
+		}
+	}
 	return out
 }

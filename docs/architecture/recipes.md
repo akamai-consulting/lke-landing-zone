@@ -50,7 +50,7 @@ legible:
 | concept = **recipe**, `llz recipe …`, `.llz/recipes.yaml` | **extension**, `llz extension …`, `.llz/extensions.yaml` (manifest file still `recipe.yaml`) |
 | render through **copier's Jinja engine**, "byte-identical" | Go **`text/template`** with copier's `<@ @>` / `<% %>` delimiters — byte-identical to copier only for bare `<@ .var @>` substitution; the two are different template languages |
 | outputs in a **separate `.llz/recipes-state.yaml`**; lock stays source-only | `Sources` **and** `Outputs` live in **one `.llz/extensions.lock`** |
-| apply = **three-way render → plan → write** (create/adopt/update/conflict/respect-delete/orphan, `--force`, per-file `managed`/`seed` mode) | apply = **render → write (overwrite)**; `--check` is a read-only drift probe (in-sync / missing / modified / orphaned). No three-way plan, no conflict resolution, no per-file ownership mode — `extFile` is just `{src, dst}` |
+| apply = **three-way render → plan → write** (create/adopt/update/conflict/respect-delete/orphan, `--force`) | apply = **render → write**; `managed` (default) overwrites, `seed` is write-once + operator-owned; `--check` is a read-only drift probe (in-sync / missing / modified / orphaned; seed files exempt). No three-way conflict plan, but the `managed`/`seed` per-file mode **did** ship |
 | secrets are **declare + doctor-check only**; wiring deferred | `llz extension seed` / `unseed` **ship** — they wire declared secrets into OpenBao + GH env and revoke them |
 | **provider integrations** (four VCS/runner host drivers, `ciEnv`, `platform.go`) land as Phase 0 | **not built** — there is no `platform.go`; the system is GitHub-Actions-only today. The section is retained as *design-only / future* |
 
@@ -497,7 +497,8 @@ type extManifest struct {
     Tools         []extTool    // {name, via, version}; provision installs, doctor verifies
     Vars          []extVar     // {name, default, doc}
     Secrets       []extSecret  // {name, doc, required, bao, ghEnv}
-    Files         []extFile    // {src, dst} — src may be a directory (whole subtree)
+    GHVars        []extGHVar   // {name, default, doc, required, ghEnv} — GitHub Actions variables
+    Files         []extFile    // {src, dst, mode} — src may be a directory (whole subtree); mode: managed|seed
     Check         []extStep    // lint-tier gate
     Validate      []extStep    // CI-tier gate (tools REQUIRED)
     CI            []extStep    // {name, anchor, schedule, image, argv, dependsOn}
@@ -542,10 +543,18 @@ flowchart LR
   delimiters, substituting `name` / `instance_repo` / `upstream_org` / declared vars
   (overridable by `LLZ_VAR_<NAME>`). `Dst` is fixed at author time (only file *bodies*
   are templated). `WalkDir` lexical order ⇒ a deterministic lock.
-- **write** — overwrite each rendered file (`0644`), `MkdirAll` parents, and record
-  `{path, sha256}` under the extension's name in `.llz/extensions.lock`. There is no
-  conflict detection: apply is authoritative and clobbers. Operator edits are
-  *surfaced* by `--check`, not *preserved* by apply.
+- **write** — for each rendered file, behave per its `mode:` (`extFile.Mode`):
+  - **`managed`** (default) — overwrite, `MkdirAll` parents, record `{path, sha256,
+    mode}` in `.llz/extensions.lock`. Apply is authoritative; operator edits are
+    *surfaced* by `--check`, not preserved.
+  - **`seed`** — write only when the file is *absent*; if it already exists the operator
+    owns it and apply leaves it untouched (still recorded in the lock so `exclude` /
+    `teardown` know the path). For *starter* configs an operator is meant to customize
+    (`deny.toml`, a mutation config), so a re-apply/upgrade never clobbers their tuning.
+
+  Default is `managed` (the safe-for-the-extension direction: a stale managed file is
+  caught by `--check`; a wrongly-`seed` file just goes stale). `seed` is the explicit
+  opt-out for operator-owned starter files.
 
 ### `--check`: the drift probe
 
@@ -565,9 +574,11 @@ flowchart TD
 ```
 
 So the as-built outcomes are exactly four: **in-sync**, **missing**, **modified**,
-**orphaned**. `extension upgrade` re-runs apply (overwriting), which is the resolution
-for *modified* and *missing*; *orphaned* files are reported for manual removal (or
-removed by `extension teardown`).
+**orphaned**. `extension upgrade` re-runs apply (overwriting managed files), which is the
+resolution for *modified* and *missing*; *orphaned* files are reported for manual removal
+(or removed by `extension teardown`). **`seed` files are exempt** from the missing/modified
+classification — they are write-once and operator-owned, so a hand-edit or deletion is
+never drift (the orphan check still applies if the extension drops the file entirely).
 
 ### Template engine reconciliation
 
@@ -582,25 +593,27 @@ substitution** — which is all the shipping extensions use.
 
 ### Fencing copier off
 
-Every file apply writes is recorded in `.llz/extensions.lock`. `llz extension exclude`
-emits those paths as a copier `_exclude:` block so `copier update` never clobbers a
-path an extension owns. This is the de-facto "fourth ownership class" — but it is
-enforced by the lock + exclude emitter, not by a per-file `mode:` field.
+Every file apply writes (or seeds) is recorded in `.llz/extensions.lock`. `llz extension
+exclude` emits those paths as a copier `_exclude:` block so `copier update` never clobbers
+a path an extension owns. Together with the per-file `mode:` (`managed` / `seed`), this is
+the "fourth ownership class" alongside copier's `managed` / `merge` / `owned`.
 
-### Deferred: three-way apply
+### Deferred: full three-way conflict apply
 
-If operator-edit preservation becomes necessary (e.g. a `seed`-style file an operator
-is meant to customize), the original three-way model is the design: keep a
-last-applied digest, and on re-apply classify `desired × recorded × actual` into
-create / adopt / update / conflict / respect-delete / orphan, with `--force` to
-override a conflict. The lock already stores the per-file digest that would serve as
-the "recorded" base, so this is an additive change to `applyExtensionFiles`, not a
-rearchitecture. It is **not implemented**.
+The `seed` mode gives the common operator-owned-file case (write-once, never clobber). The
+heavier original design — a full three-way `desired × recorded × actual` classification
+into create / adopt / update / conflict / respect-delete / orphan, with `--force` to
+override a *conflict* on a `managed` file — is **not** implemented. The lock already stores
+the per-file digest that would serve as the "recorded" base, so it remains an additive
+change to `applyExtensionFiles` if a managed-file-merge case ever appears; today a managed
+file is authoritative (overwrite) and `seed` covers the rest.
 
-## Vars and secrets
+## Vars, secrets, and ghVars
 
-The ohttp delta forces a configuration contract. The manifest **declares** vars and
-secrets; the framework checks, prompts, and (for secrets with a target) wires.
+The ohttp delta forces a configuration contract. The manifest **declares** its inputs in
+three categories — render `vars`, `secrets`, and GitHub Actions `ghVars` (see *the third
+input category* below); the framework checks, prompts, and (for secrets/ghVars with a
+target) wires.
 
 ```yaml
 # recipe.yaml
@@ -634,6 +647,36 @@ flowchart LR
   bao -->|"extension unseed --yes"| revoked["revoked"]
   gh -->|"extension unseed --yes"| revoked
 ```
+
+### GitHub Actions *variables* — the third input category (`ghVars:`)
+
+The manifest models **three** input kinds, because a scaffolded workflow consumes a third
+that is neither a render var nor a secret:
+
+- **`vars:`** — render-time: substituted into scaffolded file *bodies* at apply time.
+- **`secrets:`** — sensitive: read from env at seed time, wired into a store, never stored.
+- **`ghVars:`** — non-secret GitHub Actions *variables* a workflow reads as `${{ vars.* }}`
+  at workflow runtime. The workflow file ships verbatim (the runner resolves the
+  expression, not `render`), and the value is config, not a credential — so a `Default`
+  is allowed (unlike a secret). `doctor` reports a declared-but-unset ghVar (fatal when
+  `required`), and `llz extension seed` pushes its `Default` (or `LLZ_VAR_<NAME>`
+  override) to the repo/Environment variable via `gh variable set`.
+
+```mermaid
+flowchart LR
+  v["vars:<br/>render-time → scaffolded file bodies"] --> render["apply / render"]
+  s["secrets:<br/>sensitive → seed into store"] --> store[("OpenBao / GH env")]
+  g["ghVars:<br/>non-secret → GH Actions variables"] -->|"extension seed → gh variable set"| gh[("repo / environment variables")]
+  wf["scaffolded workflow"] -->|"${{ vars.* }} at runtime"| gh
+```
+
+`akamai-functions` declares all four variables its workflow reads — `RUST_IMAGE` /
+`GHCR_USER` (`required`, no default → `doctor` warns until set) and `SPIN_MANIFEST` /
+`APP_SUFFIX` (with defaults). Declaring `RUST_IMAGE` here is also what lets its workflow's
+`image: ${{ vars.RUST_IMAGE }}` pass the workflow image-pin lint (next section): a declared
+ghVar is an operator-owned, reviewable image source. Before `ghVars:`, `RUST_IMAGE` /
+`GHCR_USER` were declared nowhere and `SPIN_MANIFEST` / `APP_SUFFIX` were mis-declared as
+render `vars:` (never rendered), so the CI variable contract was invisible to `doctor`.
 
 ## CI contribution: anchors, triggers, and multi-step jobs
 
@@ -669,12 +712,46 @@ enabled set, and each generated job shells back into a stable `llz ci …` entry
 A `ci:` step that deploys declares a digest-pinned `image:`, so the deploy runs in the
 extension's toolchain container with the workflow's permissions.
 
-> **Note for app-stage workloads.** `akamai-functions` (stage `app`) does *not* use
-> this codegen: it scaffolds a static `akamai-functions.yml` workflow as a `files:`
-> entry, because its deploy targets Fermyon/Akamai (a SaaS) rather than the LKE
-> cluster, so the `post-converge` anchor is semantically irrelevant. This is the
-> sharpest current seam between the framework and its flagship workload — see the
-> review notes.
+### Two CI patterns — both first-class
+
+There are **two** legitimate ways an extension contributes CI, and the framework should
+bless both explicitly rather than implying every CI extension should use `ci:`. The
+choice is not optional taste — it follows from what the job needs:
+
+| | **Lifecycle CI** (`ci:` hook) | **Scaffolded workflow** (`files:` workflow) |
+| --- | --- | --- |
+| Mechanism | `ci:` steps → codegen into `llz-extensions.yml` / `…-scheduled.yml` | a workflow `.yml` shipped as a `files:` entry |
+| Shape it expresses | a `needs:`-chained DAG of `llz ci …` jobs, anchored to converge/operate | anything GitHub Actions can express: matrix jobs, private-container credentials, environment-gated deploys, path filters, artifact flow, app-specific triggers |
+| Lifecycle-coupled? | yes — ordered against the core converge/operate spine | no — runs on its own triggers (PR/push/dispatch), often against an external target |
+| Typical stage | `kube-infra`, `universal` (scheduled monitors) | `app` (the workload's own pipeline) |
+| Owns | the platform's converge-time and scheduled checks | the application's build → test → deploy |
+
+`akamai-functions` is the **scaffolded-workflow** pattern, by design: its pipeline
+needs a matrix, a private GHCR container, an environment-gated deploy, and a target
+that is Fermyon/Akamai (a SaaS), not the LKE cluster — so the `post-converge` anchor is
+semantically irrelevant and the `ci:` DAG cannot express the job. This is correct, not a
+workaround. `HookCI` is therefore *lifecycle* CI only; an app pipeline is `HookFiles`,
+and the framework owns it through **scaffold + drift**, not codegen.
+
+```mermaid
+flowchart TB
+  need{"does the job need matrix / private container /<br/>env-gated deploy / non-cluster target / app triggers?"}
+  need -->|no, it's lifecycle-coupled| lc["ci: hook<br/>→ generated llz-extensions.yml"]
+  need -->|yes| sw["files: workflow<br/>→ scaffolded .yml, owned by scaffold+drift"]
+```
+
+### Digest-pin parity for scaffolded workflows
+
+`validateCIImage` pins `ci:` step images, but a workflow shipped as a `files:` blob would
+otherwise escape that check while still running with the workflow's permissions — the
+app-kit pattern that needs it most. `lintWorkflowImages` (`extension_ci.go`) closes the
+gap: for every `files:` entry that targets `.github/workflows/**`, it reads the source and
+requires each `image:` / `container:` reference to be either **digest-pinned**
+(`…@sha256:<64hex>`) or a **`${{ vars.NAME }}` whose `NAME` is declared in `ghVars:`** — an
+operator-owned, `doctor`-checked, reviewable image source. A mutable `:latest` or an
+undeclared `vars` reference is a lint finding. This is what ties the two prior sections
+together: `akamai-functions` passes because `RUST_IMAGE` is a declared ghVar, and the
+check holds without forcing the app pipeline into the `ci:` DAG.
 
 ## Per-repo state
 
@@ -970,8 +1047,18 @@ flowchart TD
   the declare-only first cut). Values never enter the manifest, lock, or cache.
 - **Lock**: one `.llz/extensions.lock` carries both source pins and output digests
   (the design's two-file split was merged).
-- **Apply depth**: render → write (overwrite) + `--check` drift; the three-way
-  conflict model is deferred.
+- **Apply depth**: render → write with a per-file `managed` (overwrite) / `seed`
+  (write-once) mode + `--check` drift; the full three-way *conflict* model is deferred.
+- **GitHub Actions variables**: a third input category `ghVars:` ships — declared,
+  `doctor`-checked, `seed`-pushed via `gh variable set`, and honored by the workflow
+  image-pin lint. Distinct from render `vars:` and `secrets:`.
+- **Scaffolded-workflow image pins**: `lintWorkflowImages` extends the digest-pin check
+  to `files:` entries under `.github/workflows/**` — a workflow image must be digest-pinned
+  or a declared `ghVars:` reference. The trust property now covers the app-kit pattern.
+- **App CI single-source**: a scaffolded workflow renders its matrix from the manifest's
+  `validate:` step names (`<@ .validate_targets @>`), so the gate list lives in one place
+  and the `validate:` declaration is load-bearing (not decorative) even when app-stage
+  gating skips it from the platform gate.
 - **enabled-list schema**: explicit `enabled:`; built-ins implicit unless `optional`.
 - **cobra's role**: command surface only; the engine is ours. `PersistentPreRunE` is
   not the hook mechanism. Not Go plugins.
@@ -980,21 +1067,18 @@ flowchart TD
 
 - **App-stage in the engine**: an app-stage extension is skipped by every platform
   gate, doesn't use the anchor DAG (its deploy targets a SaaS, not the cluster), and
-  ships a static workflow. Should app-stage be a pure `files:` + `config:` scaffold,
-  dropping the `check`/`validate`/`ci` pretense? (See review notes.)
-- **The `validate:` triplication**: `akamai-functions` lists its 10 quality targets in
-  `recipe.yaml` `validate:`, in the scaffolded workflow's `matrix.target`, and in
-  `quality.sh` — three hand-maintained copies, and the `recipe.yaml` copy is skipped
-  by the engine. Should the workflow matrix be *generated* from `validate:` so there is
-  one source?
+  ships a static workflow. Now that the *two CI patterns* are named, should app-stage be
+  formalized as **scaffold (`files:`) + `config:`** only, dropping the `check`/`validate`/`ci`
+  surface that the platform gate skips anyway? (The `validate:`-rendered matrix keeps the
+  `validate:` block useful even if the engine never fires it.)
 - **Recipe granularity for ohttp**: one `akamai-functions` vs. several composable
   extensions.
 - **Anchor set sufficiency**: is `pre-converge | post-converge | operate` enough, or
   do TF-contributing extensions need per-root anchors?
 - **`rotate` cadence**: wire `ActionRotate` into `llz-secret-rotation.yml`
   (`DriverWired` flips true), or keep it operator-invoked?
-- **Three-way apply**: build it when a `seed`-style operator-owned file appears, or
-  keep apply authoritative?
+- **Full three-way conflict apply**: `seed` covers the write-once operator-owned case; do
+  we ever need a `managed`-file conflict/merge (with `--force`), or is overwrite enough?
 
 ## Out of scope (for now)
 

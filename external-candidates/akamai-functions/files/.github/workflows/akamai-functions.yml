@@ -21,9 +21,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # fmt/clippy/test + coverage (cargo-tarpaulin --fail-under 90) + mutation
-        # (cargo-mutants) + supply chain (audit/deny/machete) + semver + shellcheck.
-        target: [fmt-check, clippy, test, coverage, mutants, audit, deny, machete, semver, shellcheck]
+        # Rendered from the recipe's validate: step names (single source of truth) — do not
+        # hand-edit. fmt/clippy/test + coverage (tarpaulin) + mutation (cargo-mutants) +
+        # supply chain (audit/deny/machete) + semver + shellcheck, each via quality.sh.
+        target: <@ .validate_targets @>
     container:
       image: ${{ vars.RUST_IMAGE }}
       credentials: {username: ${{ vars.GHCR_USER }}, password: ${{ secrets.GHCR_PAT }}}

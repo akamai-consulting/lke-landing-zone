@@ -84,7 +84,7 @@ func runExtensionConfigDoctor(root string) error {
 	}
 	tw.Flush()
 	if fatal > 0 {
-		return fmt.Errorf("%d required secret(s) unsatisfied", fatal)
+		return fmt.Errorf("%d required input(s) unsatisfied", fatal)
 	}
 	return nil
 }
