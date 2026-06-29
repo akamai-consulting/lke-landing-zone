@@ -34,6 +34,8 @@ func TestShippedOptionalBuiltins(t *testing.T) {
 	want := map[string]struct{ files, check, ci, health bool }{
 		"devcontainer":     {files: true},
 		"lint-yaml":        {files: true, check: true},
+		"lint-typos":       {check: true},
+		"lint-markdown":    {files: true, check: true},
 		"scheduled-checks": {ci: true, health: true},
 	}
 	seen := map[string]bool{}
