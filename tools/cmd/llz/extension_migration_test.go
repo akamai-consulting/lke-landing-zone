@@ -3,9 +3,78 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
+
+// Adoption: a file present on disk, matching an available built-in's output, not yet in the
+// lock (evidence it migrated out of the template) → the extension is enabled + recorded,
+// without overwriting the present file.
+func TestAdoptDetectsMigratedFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".yamllint.yaml"), []byte("rules: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() {
+		if err := runExtensionAdopt(globalOpts{}, root); err != nil {
+			t.Fatalf("adopt: %v", err)
+		}
+	})
+	cfg, _ := loadExtConfig(root)
+	if !slices.Contains(cfg.Enabled, "lint-yaml") {
+		t.Fatalf("lint-yaml should be adopted/enabled, got %v", cfg.Enabled)
+	}
+	if _, ok := loadExtLock(root).Outputs["lint-yaml"]; !ok {
+		t.Fatal("the adopted file should be recorded in the lock")
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, ".yamllint.yaml")); string(got) != "rules: {}\n" {
+		t.Fatalf("adoption must not overwrite the present file, got %q", got)
+	}
+}
+
+// The adopted path must land in ownedPaths — that is the exact set runUpgrade excludes from
+// `copier update`, so the migrated file survives the update instead of being deleted.
+func TestAdoptedPathFencesCopier(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".yamllint.yaml"), []byte("y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() { _ = runExtensionAdopt(globalOpts{}, root) })
+	if !slices.Contains(ownedPaths(loadExtLock(root)), ".yamllint.yaml") {
+		t.Fatal("adopted path must be in ownedPaths so `copier update` excludes (keeps) it")
+	}
+}
+
+// A deliberately DISABLED extension keeps its lock entry, so adoption must NOT re-enable it
+// (the lock discriminates a migrated-in file from one we applied then the operator disabled).
+func TestAdoptSkipsDeliberatelyDisabled(t *testing.T) {
+	root := t.TempDir()
+	captureStdout(t, func() {
+		_ = runExtensionEnable(globalOpts{}, root, "lint-yaml")
+		_ = runExtensionDisable(globalOpts{}, root, "lint-yaml")
+		if err := runExtensionAdopt(globalOpts{}, root); err != nil {
+			t.Fatalf("adopt: %v", err)
+		}
+	})
+	if cfg, _ := loadExtConfig(root); slices.Contains(cfg.Enabled, "lint-yaml") {
+		t.Fatal("a deliberately-disabled extension must not be re-adopted")
+	}
+}
+
+func TestAdoptDryRunWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".yamllint.yaml"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() { _ = runExtensionAdopt(globalOpts{dryRun: true}, root) })
+	if cfg, _ := loadExtConfig(root); slices.Contains(cfg.Enabled, "lint-yaml") {
+		t.Fatal("dry-run adopt must not enable")
+	}
+	if _, ok := loadExtLock(root).Outputs["lint-yaml"]; ok {
+		t.Fatal("dry-run adopt must not record the lock")
+	}
+}
 
 // These tests pin the three integration fixes surfaced by driving a built-in candidate
 // (lint-yaml) end-to-end through enable → apply → doctor → drift (issue #10).

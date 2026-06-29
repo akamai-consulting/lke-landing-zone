@@ -926,7 +926,7 @@ subcommands, grouped by lifecycle role:
 | --- | --- |
 | **author** | `new <name> --kind check\|tool\|observability` · `lint <dir>` (the ceiling) · `wiring <dir>` (copier/renovate glue) |
 | **enable** | `list` · `enable <name>` · `disable <name>` · `sync [--update]` |
-| **scaffold** | `apply [dir] [--check]` · `exclude` (copier `_exclude` block) · `upgrade [dir]` (schema migrate + re-apply) |
+| **scaffold** | `apply [dir] [--check]` · `adopt [--dry-run]` (enable + record migrated-in files) · `exclude` (copier `_exclude` block) · `upgrade [dir]` (schema migrate + re-apply) |
 | **configure** | `doctor` · `seed --yes` · `unseed [name] --yes` · `provision --yes` |
 | **operate** | `reconcile` · `rotate [name] --yes` |
 | **decommission** | `teardown [name] --yes` |
@@ -1021,15 +1021,26 @@ move to extensions must leave the copier manifest and be `_exclude`d, or drift r
 extension-owned files as template drift forever. The flip side: `extensions.lock`
 gives doctor/`--check` the same per-capability story.
 
-**Adoption detection is NOT built — a live risk.** `enable` only reads an explicit
-`enabled:` list (`loadEnabledExtensions`); nothing seeds that list from files already
-scaffolded in a pre-extension instance. So on an existing instance, the
-update-deletes-→-apply-restores handoff only works *if the operator first manually
-enables the extension*. Until adoption detection exists (on first run, infer the
-enabled set from present scaffolded files — `renovate.json` present ⇒ renovate
-enabled), migrating a file out of `instance-template/` into a built-in extension can
-silently drop it from an instance that upgrades without enabling. This is the single
-largest unmitigated migration hazard.
+**Adoption detection — built (`extension_adopt.go`).** Previously the single largest
+migration hazard: `enable` reads an explicit `enabled:` list, so a file that migrated out
+of `instance-template/` into an extension would be deleted by the next `copier update`
+(it vanished from the template) on an instance that never enabled the extension. Now
+`runExtensionAdopt` detects it: an available, not-enabled extension whose `files:` outputs
+are **all present** on disk and that has **no lock entry** (never applied by us → evidence
+it migrated in from the template) is **adopted** — enabled and its present files recorded in
+the lock. The discriminators make it safe:
+
+- **all-files-present** — a multi-file extension is never adopted from a single coincidental
+  collision;
+- **no-lock-entry** — a *deliberately disabled* extension keeps its lock entries, so it is
+  never re-adopted (adoption can't fight `disable`);
+- **non-destructive** — adoption records the file as-is and never overwrites, so a
+  customized file is preserved.
+
+Crucially, adoption runs **first in `llz upgrade`, before the `copier update`** — and that
+update already excludes `ownedPaths(lock)`. So recording the migrated file in the lock fences
+copier off it: the file survives the update instead of being deleted (preserving even an
+operator-customized `seed` file). It is also exposed as `llz extension adopt [--dry-run]`.
 
 ### End-to-end validation (lint-yaml)
 
@@ -1115,6 +1126,11 @@ flowchart TD
   `validate:` step names (`<@ .validate_targets @>`), so the gate list lives in one place
   and the `validate:` declaration is load-bearing (not decorative) even when app-stage
   gating skips it from the platform gate.
+- **Adoption detection**: built (`extension_adopt.go`) — an available, not-enabled
+  extension whose files are all present and unlocked is adopted (enabled + recorded) at the
+  top of `llz upgrade`, before the copier update fences its now-owned paths. The lock entry
+  discriminates a migrated-in file from a deliberately-disabled one. Was the *largest*
+  migration hazard; now closed.
 - **enabled-list schema**: explicit `enabled:`; built-ins implicit unless `optional`.
 - **cobra's role**: command surface only; the engine is ours. `PersistentPreRunE` is
   not the hook mechanism. Not Go plugins.

@@ -122,6 +122,17 @@ func extensionCmd() *cobra.Command {
 	applyC.Flags().StringVar(&applyRoot, "root", ".", "instance repo root to scaffold into")
 	applyC.Flags().BoolVar(&applyCheck, "check", false, "report scaffold drift; write nothing; exit non-zero")
 
+	adoptC := &cobra.Command{
+		Use:   "adopt",
+		Short: "enable + record any available extension whose files are already present (copier→extension migration)",
+		Long: "Detects extensions whose files: outputs already exist in the instance but were\n" +
+			"never recorded — evidence they migrated out of the template — and enables them +\n" +
+			"records the files in the lock so a later `copier update` (which excludes owned\n" +
+			"paths) cannot delete them. Runs automatically at the top of `llz upgrade`.\n" +
+			"--dry-run lists candidates and writes nothing.",
+		RunE: func(_ *cobra.Command, _ []string) error { return runExtensionAdopt(gopts, ".") },
+	}
+
 	lifecycleC := &cobra.Command{
 		Use:     "lifecycle",
 		Aliases: []string{"anchors"},
@@ -306,6 +317,6 @@ func extensionCmd() *cobra.Command {
 		c.Flags().StringVar(&regRoot, "root", ".", "instance repo root")
 	}
 
-	x.AddCommand(newC, lintC, upgradeC, wiringC, ciWorkflowC, lifecycleC, stagesC, applyC, excludeC, listC, enableC, disableC, syncC, doctorC, seedC, rotateC, teardownC, unseedC, provisionC, reconcileC)
+	x.AddCommand(newC, lintC, upgradeC, wiringC, ciWorkflowC, lifecycleC, stagesC, applyC, adoptC, excludeC, listC, enableC, disableC, syncC, doctorC, seedC, rotateC, teardownC, unseedC, provisionC, reconcileC)
 	return x
 }

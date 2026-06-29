@@ -294,6 +294,13 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 }
 
 func runUpgrade(g globalOpts, ref string) error {
+	// Adoption runs FIRST, before the copier update: an extension whose files migrated out
+	// of the template is detected (files present, never locked) and enabled + recorded in
+	// the lock, so the `ownedPaths` exclusion below fences copier off them and they survive
+	// the update instead of being deleted. Best-effort: a hiccup here must not block upgrade.
+	if err := runExtensionAdopt(g, "."); err != nil {
+		fmt.Fprintf(os.Stderr, "llz: extension adopt skipped: %v\n", err)
+	}
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
 	// to the latest tag but leave the recorded llz_version stale).
