@@ -216,6 +216,72 @@ func TestLifecyclePrintsFromRegistry(t *testing.T) {
 	}
 }
 
+// ── the Stage axis (IaC → Kube-Infra → App) ──────────────────────────────────
+
+// The three stages are ordered by dependency (IaC is the base; each depends on the prior),
+// and App is the ONLY non-platform-gated stage — its gates run in the app's own CI.
+func TestStagesOrderedAndPlatformGating(t *testing.T) {
+	want := []Stage{StageIaC, StageKubeInfra, StageApp}
+	if len(stages) != len(want) {
+		t.Fatalf("stages = %d, want %d", len(stages), len(want))
+	}
+	for i, m := range stages {
+		if m.Stage != want[i] {
+			t.Errorf("stage[%d] = %q, want %q", i, m.Stage, want[i])
+		}
+		if i == 0 && m.DependsOn != "" {
+			t.Errorf("%s is the base layer; it must not DependsOn anything", m.Stage)
+		}
+		if i > 0 && m.DependsOn != want[i-1] {
+			t.Errorf("%s DependsOn = %q, want %q", m.Stage, m.DependsOn, want[i-1])
+		}
+	}
+	if !stagePlatformGated(StageIaC) || !stagePlatformGated(StageKubeInfra) {
+		t.Error("iac + kube-infra checks must run in the platform gate")
+	}
+	if stagePlatformGated(StageApp) {
+		t.Error("app checks must NOT run in the platform gate (they run in the app's own CI)")
+	}
+	if !stagePlatformGated("") {
+		t.Error("a stage-less (cross-cutting) extension must be platform-gated")
+	}
+}
+
+// The platform gate (runExtensionChecks) runs IaC + cross-cutting checks but SKIPS
+// App-stage ones — the formal reason cargo coverage/mutants don't run in `llz lint`.
+func TestPlatformGateSkipsAppStage(t *testing.T) {
+	failing := []extStep{{Name: "x", Argv: []string{"sh", "-c", "exit 1"}}}
+	app := Extension{Name: "appx", Manifest: extManifest{Stage: StageApp, Check: failing}}
+	if err := runExtensionChecks(globalOpts{}, []Extension{app}); err != nil {
+		t.Fatalf("App-stage checks must be skipped by the platform gate, got: %v", err)
+	}
+	for _, e := range []Extension{
+		{Name: "iacx", Manifest: extManifest{Stage: StageIaC, Check: failing}},
+		{Name: "crossx", Manifest: extManifest{Check: failing}}, // stage-less → cross-cutting
+	} {
+		if err := runExtensionChecks(globalOpts{}, []Extension{e}); err == nil {
+			t.Errorf("%s checks must run in the platform gate (and this one fails)", e.Name)
+		}
+	}
+}
+
+// A manifest stage must be one of the three (or empty); an unknown stage is a lint finding.
+func TestLintValidatesStage(t *testing.T) {
+	base := extManifest{Name: "x", Short: "y", Kind: "tool"}
+	bad := base
+	bad.Stage = "frontend"
+	if len(lintManifest(bad)) == 0 {
+		t.Error("an unknown stage must be a lint finding")
+	}
+	for _, ok := range []Stage{"", StageIaC, StageKubeInfra, StageApp} {
+		m := base
+		m.Stage = ok
+		if f := lintManifest(m); len(f) != 0 {
+			t.Errorf("stage %q must lint clean, got %v", ok, f)
+		}
+	}
+}
+
 // ── the Hooks/Actions safety boundary, made executable ───────────────────────
 
 // The two registers are disjoint: no Action string equals a HookKind string, so the

@@ -74,6 +74,25 @@ func TestShippedOptionalBuiltins(t *testing.T) {
 	}
 }
 
+// The stage-tagged built-ins carry the right delivery layer (validate-trivy is IaC, the
+// scheduled audits are Kube-Infra); the lint packs stay stage-less (cross-cutting).
+func TestShippedBuiltinStages(t *testing.T) {
+	want := map[string]Stage{
+		"validate-trivy":   StageIaC,
+		"scheduled-checks": StageKubeInfra,
+		"lint-yaml":        "", // cross-cutting
+	}
+	got := map[string]Stage{}
+	for _, b := range builtinExtensions() {
+		got[b.Name] = b.Manifest.Stage
+	}
+	for n, s := range want {
+		if got[n] != s {
+			t.Errorf("built-in %q stage = %q, want %q", n, got[n], s)
+		}
+	}
+}
+
 // missingExtTools reports declared tools whose executable is absent from PATH — the
 // readiness gap behind a silent check-skip.
 func TestMissingExtTools(t *testing.T) {

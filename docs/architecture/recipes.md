@@ -26,6 +26,19 @@ The design narrative below uses "recipe / hook point"; the shipped code calls
 these **extensions** firing **typed hooks** at **lifecycle phases**. The contract
 the implementation enforces is deliberately narrow:
 
+- **The lifecycle has three top-level stages (IaC → Kube-Infra → App).** Above the
+  phases sits a coarser axis: the delivery stack's three layers, in dependency order —
+  **IaC** (Terraform provisions the cloud + cluster), **Kube-Infra** (the GitOps-converged
+  platform layer), and **App** (workloads on the platform). The phases are the temporal
+  cycle each stage passes through; the stage (`Stage` enum, `stages` registry) fixes the
+  engine, the gate vocabulary, and the toolchain. An extension declares its `stage:`, and
+  `llz extension stages` prints the layers + which extensions target each. The load-bearing
+  rule is `StageMeta.PlatformGated`: **IaC and Kube-Infra checks run in the platform gate
+  (`llz lint`/`validate`); App checks do NOT** — an app's quality bar (cargo coverage/
+  mutants) runs in the app's own scaffolded CI, with the app's toolchain, on the app's PRs.
+  That is why `akamai-functions` (stage `app`) ships its gates as a workflow, not as
+  platform-fired `check:`/`validate:` steps; a stage-less extension is cross-cutting and
+  platform-gated (the lint packs).
 - **Lifecycle phases are core-owned.** There is one registry —
   `lifecyclePhases` in `tools/cmd/llz/lifecycle.go` — and it is the single source
   of truth. The CI anchor spine, the reconcile contributions, and the

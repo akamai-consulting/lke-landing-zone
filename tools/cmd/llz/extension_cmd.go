@@ -130,6 +130,15 @@ func extensionCmd() *cobra.Command {
 		RunE:    func(_ *cobra.Command, _ []string) error { return runLifecycle() },
 	}
 
+	var stagesRoot string
+	stagesC := &cobra.Command{
+		Use:   "stages",
+		Short: "print the 3 delivery stages (IaC → Kube-Infra → App), their gates, and the extensions in each",
+		Args:  cobra.NoArgs,
+		RunE:  func(_ *cobra.Command, _ []string) error { return runStages(stagesRoot) },
+	}
+	stagesC.Flags().StringVar(&stagesRoot, "root", ".", "instance repo root")
+
 	var regRoot string
 	listC := &cobra.Command{
 		Use:   "list",
@@ -297,6 +306,6 @@ func extensionCmd() *cobra.Command {
 		c.Flags().StringVar(&regRoot, "root", ".", "instance repo root")
 	}
 
-	x.AddCommand(newC, lintC, upgradeC, wiringC, ciWorkflowC, lifecycleC, applyC, excludeC, listC, enableC, disableC, syncC, doctorC, seedC, rotateC, teardownC, unseedC, provisionC, reconcileC)
+	x.AddCommand(newC, lintC, upgradeC, wiringC, ciWorkflowC, lifecycleC, stagesC, applyC, excludeC, listC, enableC, disableC, syncC, doctorC, seedC, rotateC, teardownC, unseedC, provisionC, reconcileC)
 	return x
 }

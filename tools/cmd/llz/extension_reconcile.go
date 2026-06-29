@@ -91,9 +91,15 @@ func (gateContribution) Reconcile(g globalOpts, exts []Extension, _ string, _ bo
 	return runExtensionChecks(g, exts)
 }
 
-// runExtensionChecks runs every extension's check: steps (missing tool skips).
+// runExtensionChecks runs every extension's check: steps (missing tool skips). App-stage
+// extensions are skipped: their gates belong to the app's own CI, not the platform gate
+// (stagePlatformGated) — the same reason cargo coverage/mutants don't run in `llz lint`.
 func runExtensionChecks(g globalOpts, exts []Extension) error {
 	for _, e := range exts {
+		if !stagePlatformGated(e.Manifest.Stage) {
+			fmt.Fprintf(os.Stderr, "  skip %s: %s-stage checks run in the app's own CI, not the platform gate\n", e.Name, e.Manifest.Stage)
+			continue
+		}
 		for _, s := range e.Manifest.Check {
 			if len(s.Argv) == 0 || !haveTool(s.Argv[0]) {
 				continue
@@ -116,6 +122,9 @@ func runExtensionValidate(g globalOpts, root string) error {
 		return fmt.Errorf("extension validate: %w", err)
 	}
 	for _, e := range exts {
+		if !stagePlatformGated(e.Manifest.Stage) {
+			continue // App-stage validation runs in the app's own CI, not the platform gate
+		}
 		for _, s := range e.Manifest.Validate {
 			if len(s.Argv) == 0 {
 				continue

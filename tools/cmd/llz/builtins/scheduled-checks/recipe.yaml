@@ -2,6 +2,7 @@ schemaVersion: 2
 name: scheduled-checks
 short: scheduled credential/cluster audits + a PAT-expiry health probe (built-in, opt-in)
 kind: tool
+stage: kube-infra
 optional: true
 # HookCI + TriggerSchedule: a `schedule:` cron emits each step into the generated
 # llz-extensions-scheduled.yml (separate from the converge-anchored workflow).

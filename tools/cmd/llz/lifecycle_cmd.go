@@ -10,6 +10,48 @@ import (
 	"text/tabwriter"
 )
 
+// runStages prints the three top-level delivery stages (IaC → Kube-Infra → App) — the
+// coarse layer axis above the phases — with each stage's engine, gate vocabulary, whether
+// its checks run in the platform gate, and the enabled extensions that target it. It makes
+// the App-vs-platform gate boundary visible: App-stage checks run in the app's own CI.
+func runStages(root string) error {
+	exts, _ := loadAllExtensions(root) // best-effort; show the structure even with none enabled
+	byStage := map[Stage][]string{}
+	var crosscut []string
+	for _, e := range exts {
+		if e.Manifest.Stage == "" {
+			crosscut = append(crosscut, e.Name)
+			continue
+		}
+		byStage[e.Manifest.Stage] = append(byStage[e.Manifest.Stage], e.Name)
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "STAGE\tDEPENDS ON\tENGINE\tGATE\tPLATFORM-GATED\tEXTENSIONS")
+	for _, m := range stages {
+		dep := "—"
+		if m.DependsOn != "" {
+			if d, ok := stageMeta(m.DependsOn); ok {
+				dep = d.Name
+			}
+		}
+		gated := "yes"
+		if !m.PlatformGated {
+			gated = "no — app's own CI"
+		}
+		exts := "—"
+		if len(byStage[m.Stage]) > 0 {
+			exts = strings.Join(byStage[m.Stage], ", ")
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", m.Name, dep, m.Engine, m.Gate, gated, exts)
+	}
+	tw.Flush()
+	if len(crosscut) > 0 {
+		fmt.Fprintf(os.Stderr, "\ncross-cutting (no stage; platform-gated): %s\n", strings.Join(crosscut, ", "))
+	}
+	fmt.Fprintln(os.Stderr, "App-stage checks run in the app's own scaffolded CI, never the platform gate (`llz lint`/`validate`).")
+	return nil
+}
+
 // runLifecycle prints the lifecycle registry straight from the central table: every
 // phase, the engine that runs it, the core CI job it is anchorable through (if any),
 // the typed HOOK kinds fired there, and the day-2 ACTIONS run there — so "where can an

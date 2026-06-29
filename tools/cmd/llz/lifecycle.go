@@ -15,6 +15,15 @@ package main
 // live here — tracked, ordered, typed — rather than surviving as untracked vocabulary
 // words in a local comment.
 //
+// ABOVE the phases sits a coarser axis: the lifecycle delivers three STAGES (the Stage
+// enum) in dependency order — IaC (Terraform provisions the cloud + cluster), Kube-Infra
+// (the GitOps-converged platform layer), and App (workloads on the platform). The phases
+// are the temporal cycle that each stage passes through; the stage fixes the engine, the
+// gate vocabulary, and the toolchain. That is why an App-Code gate (cargo coverage/mutants)
+// is not the same gate as an IaC gate (tflint): different stage. Critically, App-stage
+// checks run in the app's OWN ci (its scaffolded workflow), not the platform gate — see
+// StageMeta.PlatformGated.
+//
 // An extension touches a phase through one of TWO disjoint registers:
 //   - a HookKind — a declarative artifact FIRED idempotently by the phase (a
 //     Contribution); safe to run unattended under reconcile.
@@ -29,6 +38,64 @@ import (
 	"fmt"
 	"os"
 )
+
+// Stage is a top-level layer of the delivery stack — the three things an LLZ instance
+// delivers, in dependency order (each builds on the one before). It is the coarse axis
+// ABOVE the phases: a phase is the temporal cycle, a stage is the layer. Every extension
+// targets a stage, and the stage fixes the engine, the gate vocabulary, and the toolchain.
+type Stage string
+
+const (
+	StageIaC       Stage = "iac"        // Terraform provisions the cloud + the LKE cluster
+	StageKubeInfra Stage = "kube-infra" // the Kubernetes platform layer, GitOps-converged
+	StageApp       Stage = "app"        // application workloads running on the platform
+)
+
+// StageMeta is the per-stage specialization, in one place.
+//
+// PlatformGated is the load-bearing field: IaC and Kube-Infra checks run in the llz
+// PLATFORM gate (`llz lint` / `llz validate`), because the platform owns that layer. App
+// checks do NOT — an app's quality bar (cargo coverage/mutants) runs in the app's own
+// scaffolded CI, with the app's toolchain, on the app's PRs. So the platform gate fires
+// IaC + Kube-Infra (+ stage-less, cross-cutting) checks and skips App-stage ones.
+type StageMeta struct {
+	Stage         Stage
+	Name          string
+	DependsOn     Stage  // the stage that must exist first ("" for IaC, the base layer)
+	Engine        string // what materializes the stage
+	Gate          string // the gate/check vocabulary for this stage
+	PlatformGated bool   // do this stage's checks run in the llz platform gate?
+	Summary       string
+}
+
+var stages = []StageMeta{
+	{StageIaC, "IaC", "", "Terraform (terraform-iac-bootstrap → llz-terraform.yml)",
+		"fmt / tflint / checkov", true, "provisions the cloud + the LKE cluster"},
+	{StageKubeInfra, "Kube-Infra", StageIaC, "GitOps over apl-values/otomi (Flux/ArgoCD converge)",
+		"kubeconform / kube-linter / conftest / prom-rules", true, "the platform layer on the cluster"},
+	{StageApp, "Application Code", StageKubeInfra, "the app's own CI + Spin/Akamai deploy",
+		"cargo fmt/clippy/coverage/mutants — in the app's CI, not the platform gate", false, "workloads on the platform"},
+}
+
+func stageMeta(s Stage) (StageMeta, bool) {
+	for _, m := range stages {
+		if m.Stage == s {
+			return m, true
+		}
+	}
+	return StageMeta{}, false
+}
+
+// stagePlatformGated reports whether a stage's checks fire in the llz platform gate. A
+// stage-less ("") extension is cross-cutting (e.g. a yaml/spell linter) and IS platform-
+// gated; only App-stage checks are excluded (they belong to the app's own CI).
+func stagePlatformGated(s Stage) bool {
+	if s == "" {
+		return true
+	}
+	m, ok := stageMeta(s)
+	return ok && m.PlatformGated
+}
 
 // HookKind is the finite, typed set of declarative artifacts an extension may
 // contribute to a phase — the WHAT ceiling. There is no open/arbitrary callback hook.

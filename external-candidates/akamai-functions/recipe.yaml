@@ -10,6 +10,7 @@ schemaVersion: 2
 name: akamai-functions
 short: build + deploy a Rust/Spin app to Akamai Fermyon Wasm Functions (external candidate)
 kind: tool
+stage: app
 
 # Configure — operator points these at their app; seed wires the secret into OpenBao + GH env.
 vars:
