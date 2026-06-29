@@ -68,7 +68,20 @@ func validateCIImage(jobID, image string) error {
 // reWorkflowImageLine captures the value of an `image:` or scalar `container:` key in a
 // workflow YAML (the container the job runs in). The block form `container:` with nothing
 // after the colon yields no match (the nested `image:` line is matched instead).
+//
+// Why regex and not a structural YAML parse: a GitHub Actions workflow is NOT strict YAML —
+// `${{ … }}` expressions in flow-map positions (e.g. `credentials: {username: ${{ vars.X }}}`)
+// fail a standard YAML parser, and `render` does not remove them (they are runtime, not
+// `<@ @>`). So a structural parse would need a GitHub-expression-aware preprocessor; a
+// line/flow-map scan is the pragmatic equivalent (the same tactic actionlint uses). The
+// flow-map `container: {image: …}` form is handled by reFlowMapImage below.
 var reWorkflowImageLine = regexp.MustCompile(`(?m)^\s*(?:image|container)\s*:\s*(\S.*?)\s*$`)
+
+// reFlowMapImage captures an `image:` value INSIDE a flow map, e.g. `container: {image: x,
+// credentials: …}` — the form the line scan above skips (it sees `container: {…}` and bails).
+// The value is either a full `${{ … }}` expression (whose own braces must not terminate the
+// capture) or a plain token up to the next `,`/`}`.
+var reFlowMapImage = regexp.MustCompile(`\bimage\s*:\s*(\$\{\{[^}]*\}\}|[^\s,}{]+)`)
 
 // reVarsRef matches a GitHub Actions variable reference `${{ vars.NAME }}` and captures NAME.
 var reVarsRef = regexp.MustCompile(`\$\{\{\s*vars\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
@@ -95,26 +108,37 @@ func lintWorkflowImages(ext Extension) []string {
 		imageVar[gv.Name] = gv.Image
 	}
 	var findings []string
+	checkVal := func(dst, val string) {
+		val = strings.Trim(val, `"'`)
+		if val == "" || strings.HasPrefix(val, "#") {
+			return
+		}
+		if vm := reVarsRef.FindStringSubmatch(val); vm != nil {
+			switch {
+			case !declared[vm[1]]:
+				findings = append(findings, fmt.Sprintf("%s: image uses ${{ vars.%s }} but %s is not declared in ghVars: — declare it so it is doctor-checked and operator-owned", dst, vm[1], vm[1]))
+			case !imageVar[vm[1]]:
+				// declared, but not flagged as an image: its default/value isn't digest-checked.
+				findings = append(findings, fmt.Sprintf("%s: image uses ${{ vars.%s }} but ghVar %s is not marked `image: true` — flag it so its default is digest-pin-enforced", dst, vm[1], vm[1]))
+			}
+			return
+		}
+		if reImageDigest.MatchString(val) {
+			return
+		}
+		findings = append(findings, fmt.Sprintf("%s: workflow image %q must be digest-pinned (…@sha256:<64hex>) or a declared ghVars: image variable, not a mutable tag", dst, val))
+	}
 	scan := func(dst string, body []byte) {
 		for _, m := range reWorkflowImageLine.FindAllSubmatch(body, -1) {
-			val := strings.Trim(string(m[1]), `"'`)
-			if val == "" || strings.HasPrefix(val, "{") || strings.HasPrefix(val, "#") {
-				continue // flow-map container: {…} (image handled on its own line) or a comment
-			}
-			if vm := reVarsRef.FindStringSubmatch(val); vm != nil {
-				switch {
-				case !declared[vm[1]]:
-					findings = append(findings, fmt.Sprintf("%s: image uses ${{ vars.%s }} but %s is not declared in ghVars: — declare it so it is doctor-checked and operator-owned", dst, vm[1], vm[1]))
-				case !imageVar[vm[1]]:
-					// declared, but not flagged as an image: its default/value isn't digest-checked.
-					findings = append(findings, fmt.Sprintf("%s: image uses ${{ vars.%s }} but ghVar %s is not marked `image: true` — flag it so its default is digest-pin-enforced", dst, vm[1], vm[1]))
+			val := strings.TrimSpace(string(m[1]))
+			if strings.HasPrefix(val, "{") {
+				// flow-map container: {image: …, credentials: …} — pull the image out of it
+				for _, fm := range reFlowMapImage.FindAllStringSubmatch(val, -1) {
+					checkVal(dst, strings.TrimSpace(fm[1]))
 				}
 				continue
 			}
-			if reImageDigest.MatchString(val) {
-				continue
-			}
-			findings = append(findings, fmt.Sprintf("%s: workflow image %q must be digest-pinned (…@sha256:<64hex>) or a declared ghVars: image variable, not a mutable tag", dst, val))
+			checkVal(dst, val)
 		}
 	}
 	for _, f := range ext.Manifest.Files {

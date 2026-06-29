@@ -17,10 +17,11 @@ short: build + deploy a Rust/Spin app to Akamai Fermyon Wasm Functions (external
 kind: tool
 stage: app
 
-# Render var — substituted into the scaffolded workflow at apply time. The deploy target
-# GH Environment; keep it in sync with the secrets' ghEnv seed target below.
+# Render var — the SINGLE source for the deploy GH Environment. It is substituted into the
+# scaffolded workflow's `environment:` at apply time AND into the secrets' ghEnv seed
+# targets below (`<@ .gh_env @>`), so there is one value, not a duplicated literal.
 vars:
-  - {name: gh_env, default: infra-prod, doc: "GitHub Environment the deploy job targets"}
+  - {name: gh_env, default: infra-prod, doc: "GitHub Environment the deploy job + secret seeding target"}
 
 # Configure — operator points these at their app; seed wires secrets into OpenBao + GH env
 # and pushes ghVars: to the repo's GitHub Actions variables.
@@ -38,9 +39,9 @@ ghVars:
   - {name: SPIN_MANIFEST, default: spin.toml, doc: "path to the app's spin.toml"}
   - {name: APP_SUFFIX, default: "-lab", doc: "env suffix on app names (-lab/-staging/\"\")"}
 secrets:
-  # ghEnv is the deploy GH Environment seed target — keep it equal to the gh_env render var.
-  - {name: FERMYON_CLOUD_TOKEN, required: true, bao: "secret/akamai#fermyon_cloud_token", ghEnv: infra-prod}
-  - {name: GHCR_PAT, required: true, ghEnv: infra-prod}   # pulls the private ci-rust toolchain image
+  # ghEnv resolves the gh_env render var — single-sourced with the workflow's environment.
+  - {name: FERMYON_CLOUD_TOKEN, required: true, bao: "secret/akamai#fermyon_cloud_token", ghEnv: "<@ .gh_env @>"}
+  - {name: GHCR_PAT, required: true, ghEnv: "<@ .gh_env @>"}   # pulls the private ci-rust toolchain image
 
 # Tools — the full local build + quality toolchain. `llz extension provision` installs
 # these via mise and doctor flags any that are missing, so an App-stage gate (declared

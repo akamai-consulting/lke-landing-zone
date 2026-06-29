@@ -534,6 +534,41 @@ func renderBytes(fsys fs.FS, path string, data any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// renderString substitutes <@ .var @> markers in a short manifest field (a seed-TARGET
+// address — ghEnv / bao) using the manifest's render-var values. It is the string analog
+// of renderBytes, deliberately scoped to target-address fields so one declared var (e.g.
+// gh_env) can drive BOTH the scaffolded workflow and the seed target — single-sourcing the
+// deploy environment instead of duplicating a literal. It is NOT a general manifest-
+// templating axis. Best-effort: a field with no markers, or any parse/exec hiccup, returns
+// unchanged (a missing var would otherwise yield "<no value>").
+func renderString(s string, vals map[string]string) string {
+	if !strings.Contains(s, "<@") {
+		return s
+	}
+	t, err := template.New("target").Delims("<@", "@>").Parse(s)
+	if err != nil {
+		return s
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, vals); err != nil || strings.Contains(buf.String(), "<no value>") {
+		return s
+	}
+	return buf.String()
+}
+
+// resolveSecretTargets returns sec with its Bao/GHEnv addresses rendered through vals.
+func resolveSecretTargets(sec extSecret, vals map[string]string) extSecret {
+	sec.Bao = renderString(sec.Bao, vals)
+	sec.GHEnv = renderString(sec.GHEnv, vals)
+	return sec
+}
+
+// resolveGHVarEnv returns gv with its GHEnv address rendered through vals.
+func resolveGHVarEnv(gv extGHVar, vals map[string]string) extGHVar {
+	gv.GHEnv = renderString(gv.GHEnv, vals)
+	return gv
+}
+
 // runExtensionWiring prints the reuse-path glue for a REMOTE extension: a copier
 // `migrations:` block (copier sequences the update + 3-way merge, then calls the
 // binary's tested `extension upgrade`) and a renovate custom manager (opens a PR

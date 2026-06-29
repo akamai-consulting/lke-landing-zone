@@ -71,7 +71,9 @@ func runExtensionSeed(g globalOpts, root string) error {
 	}
 	var actions []seedAction
 	for _, e := range exts {
+		vals := varValues(e.Manifest, os.Getenv) // render <@ .var @> in seed targets (e.g. gh_env)
 		for _, s := range e.Manifest.Secrets {
+			s = resolveSecretTargets(s, vals)
 			if s.Bao == "" && s.GHEnv == "" {
 				continue // declare-only secret — doctor checks it, seed leaves it
 			}
@@ -101,6 +103,7 @@ func runExtensionSeed(g globalOpts, root string) error {
 		// GitHub Actions variables: non-secret CI config. The value is Default (or its
 		// LLZ_VAR_<NAME> override); seed pushes it to the repo or Environment variable.
 		for _, gv := range e.Manifest.GHVars {
+			gv = resolveGHVarEnv(gv, vals)
 			val := gv.Default
 			if o := os.Getenv(varOverrideEnv(gv.Name)); o != "" {
 				val = o

@@ -101,12 +101,13 @@ func runExtensionRotate(g globalOpts, root, only string) error {
 
 // reseedRotation writes each rotated value to its declared secret target.
 func reseedRotation(g globalOpts, m extManifest, res RotationResult) error {
+	vals := varValues(m, os.Getenv) // resolve <@ .var @> in targets, same as seed
 	for name, val := range res.Secrets {
 		sec, ok := findSecret(m, name)
 		if !ok {
 			return fmt.Errorf("rotation produced undeclared secret %q", name)
 		}
-		if err := seedSecretValue(g, sec, val); err != nil {
+		if err := seedSecretValue(g, resolveSecretTargets(sec, vals), val); err != nil {
 			return err
 		}
 	}

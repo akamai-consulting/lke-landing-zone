@@ -105,7 +105,9 @@ func runExtensionUnseed(g globalOpts, root, only string) error {
 		if only != "" && e.Name != only {
 			continue
 		}
+		vals := varValues(e.Manifest, os.Getenv) // resolve <@ .var @> targets, same as seed
 		for _, s := range e.Manifest.Secrets {
+			s = resolveSecretTargets(s, vals)
 			if s.GHEnv != "" {
 				ghDels = append(ghDels, ghDel{e.Name, s.GHEnv, s.Name})
 			}

@@ -231,6 +231,55 @@ func hasFindingContaining(findings []string, sub string) bool {
 	return false
 }
 
+// The image-pin lint also reaches into the flow-map `container: {image: …, credentials: …}`
+// form (not just block form), and a ${{ vars.X }} inside it is captured whole (the inner
+// braces must not truncate it).
+func TestLintWorkflowFlowMapImage(t *testing.T) {
+	const m = `schemaVersion: 3
+name: kit
+short: x
+kind: tool
+stage: app
+ghVars:
+  - {name: RUST_IMAGE, image: true}
+files:
+  - {src: wf, dst: .github/workflows}
+`
+	clean, err := extensionFromDir(writeExt(t, m, map[string]string{
+		"wf/ci.yml": "    container: {image: ${{ vars.RUST_IMAGE }}, credentials: {username: ${{ vars.GHCR_USER }}}}\n",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := lintWorkflowImages(clean); len(f) != 0 {
+		t.Fatalf("flow-map image with an image-flagged ghVar should be clean, got %v", f)
+	}
+	dirty, _ := extensionFromDir(writeExt(t, m, map[string]string{
+		"wf/ci.yml": "    container: {image: ghcr.io/o/img:latest, credentials: {}}\n",
+	}))
+	if f := lintWorkflowImages(dirty); !hasFindingContaining(f, "must be digest-pinned") {
+		t.Fatalf("flow-map mutable image must be flagged, got %v", f)
+	}
+}
+
+// A secret's ghEnv target may reference a render var (<@ .gh_env @>), so one declared var
+// single-sources both the workflow environment and the seed target.
+func TestSeedResolvesGHEnvVar(t *testing.T) {
+	root := t.TempDir()
+	installExt(t, root, "kit", "schemaVersion: 3\nname: kit\nshort: x\nkind: tool\nstage: app\n"+
+		"vars:\n  - {name: gh_env, default: infra-prod}\n"+
+		"secrets:\n  - {name: TOK, ghEnv: '<@ .gh_env @>'}\n", nil)
+	saveExtConfig(root, extConfig{Enabled: []string{"kit"}})
+	t.Setenv("TOK", "v")
+	_, gh := stubSeed(t)
+	if err := runExtensionSeed(globalOpts{yes: true}, root); err != nil {
+		t.Fatal(err)
+	}
+	if len(*gh) == 0 || (*gh)[0] != "infra-prod" {
+		t.Fatalf("ghEnv should resolve gh_env → infra-prod, got %v", *gh)
+	}
+}
+
 // A non-workflow file is never image-checked, even if it mentions a mutable image.
 func TestLintWorkflowImagesIgnoresNonWorkflow(t *testing.T) {
 	ext, err := extensionFromDir(writeExt(t, "schemaVersion: 3\nname: kit\nshort: x\nkind: tool\nstage: app\nfiles:\n  - {src: notes.md, dst: docs/notes.md}\n",

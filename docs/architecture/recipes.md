@@ -638,6 +638,12 @@ secrets:
   `ActionUnseed`) revokes it — deletes the GH env secret, prints the OpenBao removal
   (shared-path safety). `extRotate{argv, secret}` (the `TokenRotator` interface) mints
   a fresh token and re-seeds it through the same targets.
+- **Targets may reference a render var**: a `bao` / `ghEnv` address (and a ghVar's
+  `ghEnv`) is resolved through the manifest's render vars (`renderString`), so a single
+  declared var single-sources an address used in more than one place — e.g.
+  `ghEnv: "<@ .gh_env @>"` makes one `gh_env` var drive both the scaffolded workflow's
+  `environment:` and the secret's seed target, with no duplicated literal. This is bounded
+  to target-address fields, deliberately *not* a general manifest-templating axis.
 
 ```mermaid
 flowchart LR
@@ -757,10 +763,18 @@ an operator-owned, `doctor`-checked image source whose own `Default` is digest-p
 by `lintManifest`. A mutable `:latest`, an undeclared `vars` reference, or a declared but
 **not** `image`-flagged ghVar is a lint finding. This ties the sections together:
 `akamai-functions` passes because `RUST_IMAGE` is declared `image: true`, and the check
-holds without forcing the app pipeline into the `ci:` DAG. The one residual gap is the
-**live** variable value: lint can pin the declared `Default`, but the value actually set on
-GitHub is resolved by the runner and would need a `gh variable list` lookup in `doctor`
-(open question).
+holds without forcing the app pipeline into the `ci:` DAG.
+
+The scan is line/flow-map regex, **not** a structural YAML parse — deliberately. A GitHub
+Actions workflow is not strict YAML: `${{ … }}` expressions in flow-map positions (e.g.
+`credentials: {username: ${{ vars.X }}}`) fail a standard YAML parser, and `render` does
+not remove them (they are runtime, not `<@ @>`). So a structural parse would need a
+GitHub-expression-aware preprocessor; the scan handles both the block `image:` and the
+flow-map `container: {image: …}` forms (the latter via `reFlowMapImage`, capturing a whole
+`${{ … }}` value), the same tactic actionlint uses. Two residual gaps remain, both tracked
+as open questions: the **live** variable value (lint pins the declared `Default`, but the
+value actually set on GitHub is resolved by the runner — needs a `gh variable list` lookup
+in `doctor`), and any exotic YAML layout a line scan could miss.
 
 ## Per-repo state
 
@@ -1063,7 +1077,10 @@ flowchart TD
   workflow image-pin lint. Distinct from render `vars:` and `secrets:`. An `image: true`
   ghVar carries the digest-pin metadata: its `Default` must be pinned and a workflow image
   expression must reference it. Declaring only `ghVars:` is a Configure-phase declaration
-  (`manifestDeclaresHook(HookConfig)`).
+  (`manifestDeclaresHook(HookConfig)`). A secret/ghVar `bao`/`ghEnv` target may reference a
+  render var (`<@ .gh_env @>`), so one declared var single-sources an address used in more
+  than one place (the workflow `environment:` and the seed target) — scoped to target
+  fields, not general manifest templating.
 - **Scaffolded-workflow image pins**: `lintWorkflowImages` extends the digest-pin check
   to `files:` entries under `.github/workflows/**` — a workflow image must be digest-pinned
   or a declared `ghVars:` reference. The trust property now covers the app-kit pattern.
