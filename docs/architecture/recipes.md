@@ -415,16 +415,16 @@ framework-owned state lifecycle:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> available: built-in, or a synced source
-  available --> enabled: enable — records in extensions.yaml + scaffolds files<br/>(remote first-enable: gated, --yes)
-  enabled --> enabled: extension apply / upgrade<br/>(re-render → overwrite; --check probes drift)
-  enabled --> disabled: disable — removed from enabled:, FILES LEFT IN PLACE
+  [*] --> available: built-in or synced source
+  available --> enabled: enable records it and scaffolds files; remote first-enable is gated
+  enabled --> enabled: apply or upgrade re-renders and overwrites; check probes drift
+  enabled --> disabled: disable drops it from the enabled list; files left in place
   disabled --> enabled: enable
-  disabled --> decommissioned: teardown (remove files, per lock)<br/>+ unseed (revoke secrets)
+  disabled --> decommissioned: teardown removes files and unseed revokes secrets
   decommissioned --> [*]
   note right of disabled
-    doctor flags orphaned files + seeded secrets;
-    decommission is the explicit, gated cleanup arc
+    doctor flags orphaned files and seeded secrets;
+    decommission is the explicit gated cleanup arc
   end note
 ```
 
