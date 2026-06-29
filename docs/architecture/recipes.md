@@ -6,6 +6,10 @@ the binary on this branch. This document is the **as-built** spec. Where the des
 once said something the code now contradicts, the code wins and the divergence is
 called out in *Reconciliation note* below.
 
+> **New to recipes?** Start with the hands-on
+> [recipes-quickstart.md](../recipes-quickstart.md) — write a hello-world extension in a
+> few minutes. This document is the deep reference behind it.
+
 ## Naming: "recipe" → "extension"
 
 This subsystem was designed under the name **recipe** and shipped under the name
