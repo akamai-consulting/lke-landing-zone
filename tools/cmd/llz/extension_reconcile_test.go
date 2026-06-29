@@ -31,10 +31,11 @@ func TestBuiltinExtensionsLoad(t *testing.T) {
 // capability ceiling (built-ins bypass enable-time lint, so guard them here), and carry
 // the expected hook shape. This pins the migrated candidates against drift.
 func TestShippedOptionalBuiltins(t *testing.T) {
-	want := map[string]struct{ files, check, ci, health bool }{
+	want := map[string]struct{ files, check, validate, ci, health bool }{
 		"lint-yaml":        {files: true, check: true},
 		"lint-typos":       {check: true},
 		"lint-markdown":    {files: true, check: true},
+		"validate-trivy":   {validate: true},
 		"scheduled-checks": {ci: true, health: true},
 	}
 	seen := map[string]bool{}
@@ -55,6 +56,9 @@ func TestShippedOptionalBuiltins(t *testing.T) {
 		}
 		if (len(b.Manifest.Check) > 0) != exp.check {
 			t.Errorf("%s check presence = %v, want %v", b.Name, len(b.Manifest.Check) > 0, exp.check)
+		}
+		if (len(b.Manifest.Validate) > 0) != exp.validate {
+			t.Errorf("%s validate presence = %v, want %v", b.Name, len(b.Manifest.Validate) > 0, exp.validate)
 		}
 		if (len(b.Manifest.CI) > 0) != exp.ci {
 			t.Errorf("%s ci presence = %v, want %v", b.Name, len(b.Manifest.CI) > 0, exp.ci)

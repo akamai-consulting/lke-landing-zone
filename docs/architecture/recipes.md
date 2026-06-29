@@ -81,7 +81,8 @@ the implementation enforces is deliberately narrow:
   it is always-on (core hygiene like `gitattributes`). A local/remote extension is opt-in
   but instance-authored, not shipped with the binary. The optional-built-in tier is the
   home for **net-new** capabilities that should *travel with llz* yet stay off until
-  wanted — the lint packs (`lint-yaml`/`lint-typos`/`lint-markdown`), `scheduled-checks`.
+  wanted — the lint packs (`lint-yaml`/`lint-typos`/`lint-markdown`), `validate-trivy`
+  (the heavyweight CI-tier IaC scan), `scheduled-checks`.
   A capability the **instance template already delivers** is NOT a built-in candidate:
   the devcontainer, for instance, is template-shipped (`merge .devcontainer/**`) and backed
   by a cosign-signed multi-arch CI image — a built-in would only conflict with it and lose
