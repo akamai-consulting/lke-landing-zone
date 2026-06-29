@@ -3,6 +3,7 @@ name: lint-typos
 short: source-wide spell check (typos) across code + docs (built-in, opt-in)
 kind: tool
 optional: true
+tools: [typos]
 # typos self-discovers (recurses the repo) and applies uniformly to every file, so it is
 # a clean argv-only check — no caller-side file discovery needed.
 check:

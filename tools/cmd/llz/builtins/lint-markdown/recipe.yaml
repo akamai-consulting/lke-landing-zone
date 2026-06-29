@@ -3,6 +3,7 @@ name: lint-markdown
 short: markdownlint config + check for docs hygiene (built-in, opt-in)
 kind: tool
 optional: true
+tools: [markdownlint]
 files:
   - {src: markdownlint.json, dst: .markdownlint.json}
 # markdownlint-cli expands the glob itself (no shell), and auto-discovers the scaffolded

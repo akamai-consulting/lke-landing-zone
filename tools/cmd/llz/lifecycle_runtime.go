@@ -48,6 +48,9 @@ func lifecycleDoctor(root string) error {
 		return nil
 	}
 	fmt.Println("\n" + bold("Extensions (Configure readiness):"))
+	// Declared tools: that aren't installed — otherwise the check silently skips, giving
+	// false assurance that an enabled lint/policy pack is running when it isn't.
+	reportMissingExtTools(exts)
 	return runExtensionConfigDoctor(root)
 }
 

@@ -6,6 +6,39 @@ import (
 	"text/tabwriter"
 )
 
+// missingExtTools returns the declared tools: an extension needs that are not on PATH.
+// This is the readiness gap that otherwise hides behind a silent check-skip (haveTool):
+// an enabled lint pack whose tool is absent does nothing and, without this, says nothing.
+func missingExtTools(m extManifest) []string {
+	var miss []string
+	for _, t := range m.Tools {
+		if !lookable(t) {
+			miss = append(miss, t)
+		}
+	}
+	return miss
+}
+
+// reportMissingExtTools prints a loud readiness warning for every enabled extension whose
+// declared tool is absent — surfaced by doctor. Report-only: the check still skips (an
+// opt-in capability should not wedge bootstrap), but the gap is now visible.
+func reportMissingExtTools(exts []Extension) {
+	for _, e := range exts {
+		for _, t := range missingExtTools(e.Manifest) {
+			fmt.Printf("  %s %s requires %q — not installed; its check will skip until you install it\n", yellow("⚠"), e.Name, t)
+		}
+	}
+}
+
+// warnMissingExtTools warns at enable time that an extension's declared tool is absent —
+// so "enabled lint-yaml but yamllint is missing" surfaces immediately, not buried in a
+// later `llz lint` skip line.
+func warnMissingExtTools(m extManifest) {
+	for _, t := range missingExtTools(m) {
+		fmt.Fprintf(os.Stderr, "  %s requires %q — not installed; install it or its check will silently skip\n", m.Name, t)
+	}
+}
+
 func checkExtensionConfig(root string, env func(string) string) ([]configFinding, error) {
 	exts, err := loadEnabledExtensions(root)
 	if err != nil {

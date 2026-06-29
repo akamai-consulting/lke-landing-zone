@@ -70,6 +70,36 @@ func TestShippedOptionalBuiltins(t *testing.T) {
 	}
 }
 
+// missingExtTools reports declared tools: that are absent from PATH — the readiness gap
+// behind a silent check-skip.
+func TestMissingExtTools(t *testing.T) {
+	m := extManifest{Tools: []string{"sh", "llz-definitely-absent-xyz"}}
+	if miss := missingExtTools(m); len(miss) != 1 || miss[0] != "llz-definitely-absent-xyz" {
+		t.Fatalf("missingExtTools = %v, want [llz-definitely-absent-xyz]", miss)
+	}
+}
+
+// Every shipped built-in declares every external tool its check/validate steps invoke,
+// so doctor/enable can flag a missing dep instead of the check silently skipping. `llz`
+// (self) is exempt. This pins tools: to the steps so the declaration can't drift.
+func TestShippedBuiltinsDeclareTheirTools(t *testing.T) {
+	for _, b := range builtinExtensions() {
+		declared := map[string]bool{}
+		for _, tl := range b.Manifest.Tools {
+			declared[tl] = true
+		}
+		steps := append(append([]extStep{}, b.Manifest.Check...), b.Manifest.Validate...)
+		for _, s := range steps {
+			if len(s.Argv) == 0 || s.Argv[0] == "llz" {
+				continue
+			}
+			if !declared[s.Argv[0]] {
+				t.Errorf("built-in %q step %q invokes %q but does not declare it in tools:", b.Name, s.Name, s.Argv[0])
+			}
+		}
+	}
+}
+
 // scheduled-checks proves HookCI + TriggerSchedule end-to-end from a shipped built-in:
 // every ci: step carries a cron and renders into the scheduled workflow.
 func TestScheduledChecksBuiltinGeneratesScheduledWorkflow(t *testing.T) {

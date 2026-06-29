@@ -3,6 +3,7 @@ name: lint-yaml
 short: yamllint config + check for repo YAML hygiene (built-in, opt-in)
 kind: tool
 optional: true
+tools: [yamllint]
 files:
   - {src: yamllint.yaml, dst: .yamllint.yaml}
 check:

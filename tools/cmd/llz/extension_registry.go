@@ -137,6 +137,7 @@ func runExtensionEnable(g globalOpts, root, name string) error {
 		for _, f := range manifestConfigFindings(name, b.Manifest, os.Getenv) {
 			fmt.Fprintf(os.Stderr, "  needs %s %q: %s\n", f.Kind, f.Name, f.Status)
 		}
+		warnMissingExtTools(b.Manifest)
 		return applyExtensionFiles(g, b, root, false)
 	}
 	dir, ok := resolveExtensionDir(root, cfg, name)
@@ -171,6 +172,7 @@ func runExtensionEnable(g globalOpts, root, name string) error {
 	for _, f := range manifestConfigFindings(name, m, os.Getenv) {
 		fmt.Fprintf(os.Stderr, "  needs %s %q: %s\n", f.Kind, f.Name, f.Status)
 	}
+	warnMissingExtTools(m)                        // a declared tool that's absent → its check would silently skip
 	return runExtensionApply(g, dir, root, false) // enable scaffolds, like the issue specifies
 }
 
