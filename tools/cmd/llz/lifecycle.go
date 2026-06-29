@@ -392,11 +392,22 @@ type LifecyclePhase struct {
 	ID          string     // stable identifier Contributions and tests reference
 	Methodology bool       // one of the eight documented methodology phases (vs a code-only subphase like Gate)
 	Name        string     // human name
+	Stages      []Stage    // delivery layer(s) this phase materializes (a phase may span layers)
 	Runners     []Runner   // engine(s) that run the phase (structured; a phase may span several)
 	Engine      string     // human-readable engine detail (for the table)
 	Hooks       []HookKind // typed declarative artifacts FIRED at this phase
 	Actions     []Action   // typed day-2 operations run here, NEVER fired by reconcile
 	CoreJobID   string     // non-empty → generated CI job id (phase is Anchorable)
+}
+
+// Materializes reports whether this phase does work in delivery stage s.
+func (p LifecyclePhase) Materializes(s Stage) bool {
+	for _, x := range p.Stages {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // Anchorable reports whether the phase runs as a generated job a ci: step can attach
@@ -435,21 +446,27 @@ func (p LifecyclePhase) Performs(a Action) bool {
 
 // lifecyclePhases is THE registry: the ordered, canonical lifecycle. Index in this
 // slice is lifecycle order (entitle → decommission); the eight methodology phases keep
-// their doc numbers, while Gate (the pre-bootstrap verification subphase, between
-// Configure and Bootstrap) and Decommission (the teardown arc, after Handover) are
-// code-only. Anchor and core-job tables in extension_ci.go, and the reconcile
+// their doc numbers, while Gate (pre-bootstrap verification), Converge (the Kube-Infra
+// GitOps reconcile, between Bootstrap's IaC apply and Operate), and Decommission (the
+// teardown arc) are code-only subphases. Each phase carries the delivery Stage(s) it
+// materializes. Anchor and core-job tables in extension_ci.go, and the reconcile
 // contributions, all derive from this — none re-declares it.
 var lifecyclePhases = []LifecyclePhase{
-	{ID: "entitle", Methodology: true, Name: "Entitle", Runners: []Runner{RunnerExternal}, Engine: "external (accounts / InfoSec)"},
-	{ID: "scaffold", Methodology: true, Name: "Scaffold", Runners: []Runner{RunnerLaptop}, Engine: "copier + laptop (llz new)", Hooks: []HookKind{HookFiles}},
-	{ID: "configure", Methodology: true, Name: "Configure", Runners: []Runner{RunnerLaptop}, Engine: "laptop (llz render)", Hooks: []HookKind{HookConfig}, Actions: []Action{ActionSeed, ActionProvision}},
-	{ID: "gate", Name: "Gate", Runners: []Runner{RunnerLaptop, RunnerActions}, Engine: "laptop (llz lint) + Actions (validate job)", Hooks: []HookKind{HookCheck, HookValidate}},
-	{ID: "bootstrap", Methodology: true, Name: "Bootstrap", Runners: []Runner{RunnerActions}, Engine: "GitHub Actions (llz-terraform.yml → converge)", Hooks: []HookKind{HookCI}, CoreJobID: "converge"},
-	{ID: "operate", Methodology: true, Name: "Operate", Runners: []Runner{RunnerActions, RunnerLaptop}, Engine: "GitHub Actions (scheduled) + the llz CLI", Hooks: []HookKind{HookCI, HookHealth, HookCommands}, Actions: []Action{ActionRotate}, CoreJobID: "operate"},
-	{ID: "promote", Methodology: true, Name: "Promote", Runners: []Runner{RunnerActions}, Engine: "GitHub Actions (promote.yml — a separate generated workflow)"},
-	{ID: "sustain", Methodology: true, Name: "Sustain", Runners: []Runner{RunnerLaptop, RunnerBot}, Engine: "laptop + Renovate (llz upgrade / drift)", Hooks: []HookKind{HookFiles}, Actions: []Action{ActionUpgrade}},
-	{ID: "handover", Methodology: true, Name: "Handover", Runners: []Runner{RunnerHuman}, Engine: "human"},
-	{ID: "decommission", Name: "Decommission", Runners: []Runner{RunnerLaptop}, Engine: "laptop (llz extension teardown / unseed)", Actions: []Action{ActionUnseed, ActionTeardown}},
+	{ID: "entitle", Methodology: true, Name: "Entitle", Stages: []Stage{StageIaC}, Runners: []Runner{RunnerExternal}, Engine: "external (accounts / InfoSec)"},
+	{ID: "scaffold", Methodology: true, Name: "Scaffold", Stages: []Stage{StageIaC, StageKubeInfra, StageApp}, Runners: []Runner{RunnerLaptop}, Engine: "copier + laptop (llz new)", Hooks: []HookKind{HookFiles}},
+	{ID: "configure", Methodology: true, Name: "Configure", Stages: []Stage{StageIaC, StageKubeInfra, StageApp}, Runners: []Runner{RunnerLaptop}, Engine: "laptop (llz render)", Hooks: []HookKind{HookConfig}, Actions: []Action{ActionSeed, ActionProvision}},
+	{ID: "gate", Name: "Gate", Stages: []Stage{StageIaC, StageKubeInfra, StageApp}, Runners: []Runner{RunnerLaptop, RunnerActions}, Engine: "laptop (llz lint) + Actions (validate job)", Hooks: []HookKind{HookCheck, HookValidate}},
+	// Bootstrap was one phase conflating two stages; split: provision (IaC, terraform apply)
+	// then converge (Kube-Infra, the GitOps reconcile). The `converge` CoreJobID + anchors
+	// move here from the old bootstrap, so the CI spine is unchanged — extensions still tie
+	// in around the platform converge, not the TF apply.
+	{ID: "bootstrap", Methodology: true, Name: "Bootstrap", Stages: []Stage{StageIaC}, Runners: []Runner{RunnerActions}, Engine: "GitHub Actions (llz-terraform.yml — terraform apply)"},
+	{ID: "converge", Name: "Converge", Stages: []Stage{StageKubeInfra}, Runners: []Runner{RunnerActions}, Engine: "GitHub Actions (`llz ci converge` poll) + in-cluster GitOps (Flux/ArgoCD)", Hooks: []HookKind{HookCI}, CoreJobID: "converge"},
+	{ID: "operate", Methodology: true, Name: "Operate", Stages: []Stage{StageKubeInfra, StageApp}, Runners: []Runner{RunnerActions, RunnerLaptop}, Engine: "GitHub Actions (scheduled) + the llz CLI", Hooks: []HookKind{HookCI, HookHealth, HookCommands}, Actions: []Action{ActionRotate}, CoreJobID: "operate"},
+	{ID: "promote", Methodology: true, Name: "Promote", Stages: []Stage{StageIaC, StageKubeInfra, StageApp}, Runners: []Runner{RunnerActions}, Engine: "GitHub Actions (promote.yml — a separate generated workflow)"},
+	{ID: "sustain", Methodology: true, Name: "Sustain", Stages: []Stage{StageIaC, StageKubeInfra, StageApp}, Runners: []Runner{RunnerLaptop, RunnerBot}, Engine: "laptop + Renovate (llz upgrade / drift)", Hooks: []HookKind{HookFiles}, Actions: []Action{ActionUpgrade}},
+	{ID: "handover", Methodology: true, Name: "Handover", Stages: []Stage{StageIaC, StageKubeInfra, StageApp}, Runners: []Runner{RunnerHuman}, Engine: "human"},
+	{ID: "decommission", Name: "Decommission", Stages: []Stage{StageIaC, StageKubeInfra, StageApp}, Runners: []Runner{RunnerLaptop}, Engine: "laptop (llz extension teardown / unseed)", Actions: []Action{ActionUnseed, ActionTeardown}},
 }
 
 // lifecyclePhaseByID resolves a phase by its stable id.

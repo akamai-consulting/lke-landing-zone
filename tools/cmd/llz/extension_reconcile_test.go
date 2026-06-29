@@ -271,16 +271,16 @@ func TestRunExtensionGate(t *testing.T) {
 	}
 }
 
-// Reconcile runs contributions in lifecycle (registry) order — derived from the
-// phase index, never a hand-kept slice order. With Gate sitting between Configure and
-// Bootstrap, the sequence is scaffold → configure → gate → bootstrap.
+// Reconcile runs contributions in lifecycle (registry) order — derived from the phase
+// index, never a hand-kept slice order. ci fires at Converge (the Kube-Infra reconcile,
+// after the IaC apply), so the sequence is scaffold → configure → gate → converge.
 func TestContributionPhaseOrder(t *testing.T) {
 	ordered := orderedContributions()
 	got := make([]string, len(ordered))
 	for i, c := range ordered {
 		got[i] = c.PhaseID()
 	}
-	if strings.Join(got, ",") != "scaffold,configure,gate,bootstrap" {
+	if strings.Join(got, ",") != "scaffold,configure,gate,converge" {
 		t.Fatalf("lifecycle order = %v", got)
 	}
 	// indices must be strictly ascending (sorted by the registry, not by luck)

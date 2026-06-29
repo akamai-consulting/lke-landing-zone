@@ -66,11 +66,12 @@ func (filesContribution) Reconcile(g globalOpts, exts []Extension, root string, 
 	return firstErr
 }
 
-// ciContribution (Bootstrap / ci): generate the one needs:-chained workflow from
-// every extension's ci: steps — the extension hook at the Bootstrap phase.
+// ciContribution (Converge / ci): generate the one needs:-chained workflow from every
+// extension's ci: steps — the extension hook at the Converge phase (the Kube-Infra GitOps
+// reconcile), where ci anchors tie in (post-converge), not the IaC terraform apply.
 type ciContribution struct{}
 
-func (ciContribution) PhaseID() string { return "bootstrap" }
+func (ciContribution) PhaseID() string { return "converge" }
 func (ciContribution) Hook() HookKind  { return HookCI }
 func (ciContribution) Reconcile(g globalOpts, exts []Extension, root string, check bool) error {
 	var jobs []extCIJob

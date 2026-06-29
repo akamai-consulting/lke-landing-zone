@@ -59,7 +59,7 @@ func runStages(root string) error {
 // phase; actions never are (gated operator commands / cadence workflows only).
 func runLifecycle() error {
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "PHASE\tNAME\tENGINE\tANCHOR JOB\tHOOKS\tDAY-2 ACTIONS")
+	fmt.Fprintln(tw, "PHASE\tNAME\tSTAGE\tENGINE\tANCHOR JOB\tHOOKS\tDAY-2 ACTIONS")
 	anyUnfired, anyUnwired := false, false
 	for _, p := range lifecyclePhases {
 		num := "—"
@@ -96,7 +96,15 @@ func runLifecycle() error {
 			}
 			acts = strings.Join(parts, ", ")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", num, p.Name, p.Engine, job, hooks, acts)
+		stg := "all"
+		if len(p.Stages) < len(stages) {
+			parts := make([]string, len(p.Stages))
+			for i, s := range p.Stages {
+				parts[i] = string(s)
+			}
+			stg = strings.Join(parts, "+")
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", num, p.Name, stg, p.Engine, job, hooks, acts)
 	}
 	tw.Flush()
 	if anyUnfired {

@@ -15,7 +15,7 @@ import (
 // Phases are ordered, stable, uniquely identified, and the eight methodology phases
 // keep ascending doc numbers (Gate is the only code-only subphase, Num -1).
 func TestLifecyclePhasesOrderedAndStable(t *testing.T) {
-	wantIDs := []string{"entitle", "scaffold", "configure", "gate", "bootstrap", "operate", "promote", "sustain", "handover", "decommission"}
+	wantIDs := []string{"entitle", "scaffold", "configure", "gate", "bootstrap", "converge", "operate", "promote", "sustain", "handover", "decommission"}
 	if len(lifecyclePhases) != len(wantIDs) {
 		t.Fatalf("registry has %d phases, want %d", len(lifecyclePhases), len(wantIDs))
 	}
@@ -47,8 +47,42 @@ func TestLifecyclePhasesOrderedAndStable(t *testing.T) {
 	if wantNum != 8 {
 		t.Errorf("found %d methodology phases, want 8", wantNum)
 	}
-	if _, ok := methodologyNum("gate"); ok {
-		t.Error("gate is a code-only subphase and must have no methodology number")
+	for _, codeOnly := range []string{"gate", "converge", "decommission"} {
+		if _, ok := methodologyNum(codeOnly); ok {
+			t.Errorf("%s is a code-only subphase and must have no methodology number", codeOnly)
+		}
+	}
+}
+
+// Every phase materializes at least one known delivery stage; the split is honest — the
+// IaC apply (bootstrap) and the Kube-Infra reconcile (converge) are distinct phases, the
+// converge pivot is Kube-Infra and anchorable, and every stage is materialized somewhere.
+func TestPhasesCarryStages(t *testing.T) {
+	known := map[Stage]bool{StageIaC: true, StageKubeInfra: true, StageApp: true}
+	used := map[Stage]bool{}
+	for _, p := range lifecyclePhases {
+		if len(p.Stages) == 0 {
+			t.Errorf("phase %q materializes no stage", p.ID)
+		}
+		for _, s := range p.Stages {
+			if !known[s] {
+				t.Errorf("phase %q has unknown stage %q", p.ID, s)
+			}
+			used[s] = true
+		}
+	}
+	bootstrap, _ := lifecyclePhaseByID("bootstrap")
+	if !bootstrap.Materializes(StageIaC) || bootstrap.Materializes(StageKubeInfra) {
+		t.Error("bootstrap is the IaC apply — IaC only, not Kube-Infra")
+	}
+	converge, _ := lifecyclePhaseByID("converge")
+	if !converge.Materializes(StageKubeInfra) || !converge.Anchorable() {
+		t.Error("converge is the Kube-Infra reconcile and the anchorable pivot")
+	}
+	for s := range known {
+		if !used[s] {
+			t.Errorf("stage %q is materialized by no phase", s)
+		}
 	}
 }
 
