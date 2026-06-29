@@ -497,7 +497,7 @@ type extManifest struct {
     Tools         []extTool    // {name, via, version}; provision installs, doctor verifies
     Vars          []extVar     // {name, default, doc}
     Secrets       []extSecret  // {name, doc, required, bao, ghEnv}
-    GHVars        []extGHVar   // {name, default, doc, required, ghEnv} — GitHub Actions variables
+    GHVars        []extGHVar   // {name, default, doc, required, image, ghEnv} — GitHub Actions variables (required = live-runtime readiness)
     Files         []extFile    // {src, dst, mode} — src may be a directory (whole subtree); mode: managed|seed
     Check         []extStep    // lint-tier gate
     Validate      []extStep    // CI-tier gate (tools REQUIRED)
@@ -1158,10 +1158,11 @@ flowchart TD
   (a structural YAML parse is blocked by GitHub `${{ }}` expressions — see that section). When
   this graduates from experiment, the end-state is a GitHub-expression-aware parser
   (actionlint-style), not generic YAML. Acceptable as-is for now.
-- **Live doctor posture**: `liveGHVarFindings` is **advisory** (report-only) so a flaky
-  network or a 404 never fails the gate. Should a *confirmed* unpinned `image: true` live
-  value (lookup succeeded, value is a mutable tag) escalate to a hard `doctor` failure, or
-  stay advisory?
+- **Live doctor posture**: `liveGHVarFindings` already **fails** on a confirmed-absent
+  required, non-seedable ghVar, and stays non-fatal ("unverified") when GitHub is
+  unreachable. The remaining advisory case is a *confirmed* unpinned `image: true` live value
+  (lookup succeeded, value is a mutable tag) — should that escalate to a hard `doctor`
+  failure too, or stay advisory?
 - **Recipe granularity for ohttp**: one `akamai-functions` vs. several composable
   extensions.
 - **Anchor set sufficiency**: is `pre-converge | post-converge | operate` enough, or
