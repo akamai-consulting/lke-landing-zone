@@ -664,14 +664,21 @@ that is neither a render var nor a secret:
 - **`ghVars:`** — non-secret GitHub Actions *variables* a workflow reads as `${{ vars.* }}`
   at workflow runtime. The workflow file ships verbatim (the runner resolves the
   expression, not `render`), and the value is config, not a credential — so a `Default`
-  is allowed (unlike a secret). `doctor` reports a declared-but-unset ghVar (fatal when
-  `required`), and `llz extension seed` pushes its `Default` (or `LLZ_VAR_<NAME>`
-  override) to the repo/Environment variable via `gh variable set`. A ghVar that holds a
-  container image is marked **`image: true`**: its `Default` must be digest-pinned, and a
-  workflow `image: ${{ vars.NAME }}` is only accepted when `NAME` is an `image` ghVar (see
-  the image-pin section). Note `doctor` checks **seed-readiness** (a default/override exists
-  to push), not that the variable is actually set on GitHub — a live `gh variable list`
-  lookup is an open question.
+  is allowed (unlike a secret). `llz extension seed` pushes a ghVar's `Default` (or
+  `LLZ_VAR_<NAME>` override) to the repo/Environment variable via `gh variable set`; a ghVar
+  with no value to push is skipped (it is set on GitHub directly), never an error. A ghVar
+  that holds a container image is marked **`image: true`**: its `Default` must be
+  digest-pinned, and a workflow `image: ${{ vars.NAME }}` is only accepted when `NAME` is an
+  `image` ghVar (see the image-pin section).
+
+  **`required` for a ghVar means live-runtime readiness, not local seed-material.** A ghVar's
+  source of truth is GitHub, so it is **not** checked offline — a required ghVar like
+  `RUST_IMAGE` legitimately has no local default and is set directly on the repo, and an
+  offline "no default ⇒ fatal" check would fail a correctly-configured instance. Instead the
+  live `doctor` pass (`liveGHVarFindings`) is authoritative and fails **only on a confirmed
+  problem**: a required, non-seedable ghVar the live lookup proves *absent* is fatal; an
+  unreachable GitHub yields a non-fatal **"unverified"** row (an offline doctor cannot prove
+  live state); a set value is clean; a set-but-mutable `image:` value is a non-fatal advisory.
 
 ```mermaid
 flowchart LR
@@ -1104,13 +1111,17 @@ flowchart TD
   (the design's two-file split was merged).
 - **Apply depth**: render → write with a per-file `managed` (overwrite) / `seed`
   (write-once) mode + `--check` drift; the full three-way *conflict* model is deferred.
-- **GitHub Actions variables**: a third input category `ghVars:` ships — declared,
-  `doctor`-checked (seed-readiness), `seed`-pushed via `gh variable set`, and honored by the
-  workflow image-pin lint. Distinct from render `vars:` and `secrets:`. An `image: true`
-  ghVar carries the digest-pin metadata: its `Default` must be pinned and a workflow image
-  expression must reference it; a best-effort `doctor` pass also verifies the **live** value
-  on GitHub is set and (for `image: true`) digest-pinned (`liveGHVarFindings`, advisory).
-  Declaring only `ghVars:` is a Configure-phase declaration (`manifestDeclaresHook(HookConfig)`). A secret/ghVar `bao`/`ghEnv` target may reference a
+- **GitHub Actions variables**: a third input category `ghVars:` ships — distinct from
+  render `vars:` and `secrets:`, `seed`-pushed via `gh variable set`, and honored by the
+  workflow image-pin lint. `required` means **live-runtime readiness**, not local
+  seed-material: ghVars are NOT checked offline (their source of truth is GitHub), so a
+  correctly-configured instance never fails offline; the authoritative live `doctor` pass
+  (`liveGHVarFindings`) fails only on a *confirmed-absent* required, non-seedable ghVar, and
+  reports "unverified" (non-fatal) when GitHub is unreachable. `seed` skips a ghVar with no
+  value to push rather than aborting. An `image: true` ghVar carries the digest-pin metadata
+  (its `Default` must be pinned; a workflow image expression must reference it; the live pass
+  also flags a set-but-mutable live value). Declaring only `ghVars:` is a Configure-phase
+  declaration (`manifestDeclaresHook(HookConfig)`). A secret/ghVar `bao`/`ghEnv` target may reference a
   render var (`<@ .gh_env @>`), so one declared var single-sources an address used in more
   than one place (the workflow `environment:` and the seed target) — scoped to target
   fields, not general manifest templating. A best-effort live `doctor` pass

@@ -84,40 +84,70 @@ func TestFileModeNormalizes(t *testing.T) {
 
 // ── 2. ghVars: declared GitHub Actions variables ─────────────────────────────
 
-func TestGHVarConfigFindings(t *testing.T) {
+// ghVars are NOT checked offline: their source of truth is GitHub, so a required ghVar with
+// no local default must NOT produce an offline fatal (that would fail a correctly-configured
+// instance). They are verified by the live pass instead.
+func TestGHVarsNotCheckedOffline(t *testing.T) {
 	m := extManifest{GHVars: []extGHVar{
-		{Name: "RUST_IMAGE", Required: true},          // no default, no override → fatal finding
-		{Name: "SPIN_MANIFEST", Default: "spin.toml"}, // default → satisfied
-		{Name: "APP_SUFFIX"},                          // no default, optional → non-fatal finding
+		{Name: "RUST_IMAGE", Required: true}, // no local default — would have been a false offline fatal
+		{Name: "APP_SUFFIX"},
 	}}
-	env := func(string) string { return "" }
-	findings := manifestConfigFindings("kit", m, env)
+	if f := manifestConfigFindings("kit", m, func(string) string { return "" }); len(f) != 0 {
+		t.Fatalf("ghVars must not produce offline findings (they are live-verified), got %+v", f)
+	}
+}
 
-	byName := map[string]configFinding{}
+func anyFatal(findings []configFinding) bool {
 	for _, f := range findings {
-		byName[f.Name] = f
+		if f.Fatal {
+			return true
+		}
 	}
-	if f, ok := byName["RUST_IMAGE"]; !ok || f.Kind != "gh-var" || !f.Fatal {
-		t.Fatalf("RUST_IMAGE should be a fatal gh-var finding: %+v", byName)
-	}
-	if f, ok := byName["APP_SUFFIX"]; !ok || f.Fatal {
-		t.Fatalf("APP_SUFFIX should be a non-fatal gh-var finding: %+v", byName)
-	}
-	if _, ok := byName["SPIN_MANIFEST"]; ok {
-		t.Fatalf("SPIN_MANIFEST has a default and should be satisfied: %+v", byName)
+	return false
+}
+
+// The live ghVar check fails ONLY on a confirmed problem: a required, non-seedable variable
+// the live lookup proves absent. An unreachable GitHub is "unverified", never fatal.
+func TestLiveGHVarFatalOnlyWhenConfirmedAbsent(t *testing.T) {
+	ext := Extension{Name: "kit", Manifest: extManifest{GHVars: []extGHVar{
+		{Name: "RUST_IMAGE", Image: true, Required: true}, // required, no local default
+	}}}
+
+	unavailable := func(string) (map[string]string, bool) { return nil, false }
+	if f := liveGHVarFindings([]Extension{ext}, unavailable); anyFatal(f) {
+		t.Fatalf("unreachable GitHub must not be fatal (unverified), got %+v", f)
 	}
 
-	// An LLZ_VAR_<NAME> override satisfies a ghVar with no default.
-	env2 := func(k string) string {
-		if k == varOverrideEnv("RUST_IMAGE") {
-			return "ghcr.io/x@sha256:abc"
-		}
-		return ""
+	absent := func(string) (map[string]string, bool) { return map[string]string{}, true }
+	if f := liveGHVarFindings([]Extension{ext}, absent); !anyFatal(f) {
+		t.Fatalf("a required, non-seedable ghVar confirmed absent must be fatal, got %+v", f)
 	}
-	for _, f := range manifestConfigFindings("kit", m, env2) {
-		if f.Name == "RUST_IMAGE" {
-			t.Fatalf("RUST_IMAGE override should satisfy the finding, got %+v", f)
-		}
+
+	pinned := func(string) (map[string]string, bool) {
+		return map[string]string{"RUST_IMAGE": "ghcr.io/o/i@sha256:" + strings.Repeat("a", 64)}, true
+	}
+	if f := liveGHVarFindings([]Extension{ext}, pinned); len(f) != 0 {
+		t.Fatalf("a set, digest-pinned ghVar should be clean, got %+v", f)
+	}
+
+	mutable := func(string) (map[string]string, bool) {
+		return map[string]string{"RUST_IMAGE": "ghcr.io/o/i:latest"}, true
+	}
+	if f := liveGHVarFindings([]Extension{ext}, mutable); len(f) == 0 || anyFatal(f) {
+		t.Fatalf("a set-but-mutable image value should be a NON-fatal advisory, got %+v", f)
+	}
+}
+
+// A required ghVar that IS seedable (has a default) and is absent live is non-fatal — seed
+// can supply it; it's not a hard gate failure.
+func TestLiveGHVarSeedableAbsentNotFatal(t *testing.T) {
+	ext := Extension{Name: "kit", Manifest: extManifest{GHVars: []extGHVar{
+		{Name: "APP_SUFFIX", Required: true, Default: "-lab"},
+	}}}
+	absent := func(string) (map[string]string, bool) { return map[string]string{}, true }
+	f := liveGHVarFindings([]Extension{ext}, absent)
+	if len(f) == 0 || anyFatal(f) {
+		t.Fatalf("a required-but-seedable absent ghVar should be non-fatal (run seed), got %+v", f)
 	}
 }
 
@@ -224,46 +254,54 @@ func TestManifestDeclaresHookConfigCoversGHVars(t *testing.T) {
 	}
 }
 
-// The live GitHub check flags an unset ghVar and an image:true ghVar whose LIVE value is a
-// mutable tag (the gap the offline default-pin lint can't see), while staying quiet when the
-// live value is pinned. A scope the lookup can't read is skipped (no false alarms offline).
-func TestLiveGHVarFindings(t *testing.T) {
+// Multi-var live behavior: unreachable GitHub surfaces required live-only vars as non-fatal
+// "unverified"; everything set + pinned is clean; an optional absent var is a non-fatal
+// advisory. (Per-scope: image var at env level, user at repo level.)
+func TestLiveGHVarUnverifiedCleanAndOptional(t *testing.T) {
 	ext := Extension{Name: "kit", Manifest: extManifest{GHVars: []extGHVar{
-		{Name: "RUST_IMAGE", Image: true, GHEnv: "infra-prod"},
-		{Name: "GHCR_USER"},
+		{Name: "RUST_IMAGE", Image: true, Required: true, GHEnv: "infra-prod"},
+		{Name: "GHCR_USER"}, // optional, no default, repo-level
 	}}}
+	pinnedImage := "ghcr.io/o/img@sha256:" + strings.Repeat("a", 64)
 
-	// RUST_IMAGE live value is a mutable tag; GHCR_USER is unset at repo level.
-	lookup := func(env string) (map[string]string, bool) {
-		if env == "infra-prod" {
-			return map[string]string{"RUST_IMAGE": "ghcr.io/o/img:latest"}, true
-		}
-		return map[string]string{}, true // repo-level: GHCR_USER absent
+	unavailable := func(string) (map[string]string, bool) { return nil, false }
+	f := liveGHVarFindings([]Extension{ext}, unavailable)
+	if anyFatal(f) {
+		t.Fatalf("unreachable GitHub must never be fatal, got %+v", f)
 	}
-	f := liveGHVarFindings([]Extension{ext}, lookup)
-	if !hasFindingContaining(f, "RUST_IMAGE") || !hasFindingContaining(f, "not digest-pinned") {
-		t.Fatalf("should flag the unpinned live image value, got %v", f)
-	}
-	if !hasFindingContaining(f, "GHCR_USER") || !hasFindingContaining(f, "not set on GitHub") {
-		t.Fatalf("should flag the unset variable, got %v", f)
+	if !containsStatus(f, "RUST_IMAGE", "unverified") {
+		t.Fatalf("a required live-only var should be reported unverified, got %+v", f)
 	}
 
-	// Pinned live value + variable set → no findings.
 	clean := func(env string) (map[string]string, bool) {
 		if env == "infra-prod" {
-			return map[string]string{"RUST_IMAGE": "ghcr.io/o/img@sha256:" + strings.Repeat("a", 64)}, true
+			return map[string]string{"RUST_IMAGE": pinnedImage}, true
 		}
 		return map[string]string{"GHCR_USER": "bot"}, true
 	}
 	if f := liveGHVarFindings([]Extension{ext}, clean); len(f) != 0 {
-		t.Fatalf("pinned + set should be clean, got %v", f)
+		t.Fatalf("all set + pinned should be clean, got %+v", f)
 	}
 
-	// Lookup can't read the scope (GitHub unreachable) → skipped, no false alarms.
-	unavailable := func(string) (map[string]string, bool) { return nil, false }
-	if f := liveGHVarFindings([]Extension{ext}, unavailable); len(f) != 0 {
-		t.Fatalf("an unreadable scope must be skipped, got %v", f)
+	optAbsent := func(env string) (map[string]string, bool) {
+		if env == "infra-prod" {
+			return map[string]string{"RUST_IMAGE": pinnedImage}, true
+		}
+		return map[string]string{}, true // repo-level: GHCR_USER absent
 	}
+	f2 := liveGHVarFindings([]Extension{ext}, optAbsent)
+	if anyFatal(f2) || !containsStatus(f2, "GHCR_USER", "optional") {
+		t.Fatalf("an optional absent var should be a non-fatal advisory, got %+v", f2)
+	}
+}
+
+func containsStatus(findings []configFinding, name, sub string) bool {
+	for _, f := range findings {
+		if f.Name == name && strings.Contains(f.Status, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasFindingContaining(findings []string, sub string) bool {

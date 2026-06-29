@@ -109,10 +109,11 @@ func runExtensionSeed(g globalOpts, root string) error {
 				val = o
 			}
 			if val == "" {
-				if gv.Required {
-					return fmt.Errorf("required ghVar %s (extension %q) has no default and %s is unset — cannot seed", gv.Name, e.Name, varOverrideEnv(gv.Name))
-				}
-				fmt.Fprintf(os.Stderr, "skip %s (extension %q): no default, %s unset (optional)\n", gv.Name, e.Name, varOverrideEnv(gv.Name))
+				// No local value to push — `seed` has nothing to do. This is NOT an error,
+				// even when required: a required ghVar (e.g. RUST_IMAGE) is legitimately set
+				// directly on GitHub, not seeded from llz. Skipping it must not abort seeding
+				// the rest; live readiness is doctor's job, not seed's.
+				fmt.Fprintf(os.Stderr, "skip %s (extension %q): no default/override to push — set it on GitHub directly\n", gv.Name, e.Name)
 				continue
 			}
 			env, name, v := gv.GHEnv, gv.Name, val

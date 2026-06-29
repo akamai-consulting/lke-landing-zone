@@ -65,29 +65,28 @@ func runExtensionConfigDoctor(root string) error {
 	for _, e := range exts {
 		findings = append(findings, manifestConfigFindings(e.Name, e.Manifest, os.Getenv)...)
 	}
+	// ghVars are verified live (their source of truth is GitHub, not local env). A finding
+	// here is fatal ONLY when the live lookup confirms a required, non-seedable variable is
+	// absent; an unreachable GitHub yields a non-fatal "unverified" row, so a correctly-
+	// configured instance passes and an offline doctor never fails on unknown live state.
+	findings = append(findings, liveGHVarFindings(exts, liveGHVarsFn)...)
+
 	fatal := 0
 	if len(findings) == 0 {
-		fmt.Fprintln(os.Stderr, "extension config: all declared vars/secrets/ghVars locally satisfied")
-	} else {
-		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "EXTENSION\tKIND\tNAME\tSEVERITY\tSTATUS")
-		for _, f := range findings {
-			sev := "info"
-			if f.Fatal {
-				sev = "REQUIRED"
-				fatal++
-			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", f.Ext, f.Kind, f.Name, sev, f.Status)
-		}
-		tw.Flush()
+		fmt.Fprintln(os.Stderr, "extension config: all declared vars/secrets/ghVars satisfied")
+		return nil
 	}
-	// Best-effort live GitHub check — advisory, never fails doctor on infra absence.
-	if live := liveGHVarFindings(exts, liveGHVarsFn); len(live) > 0 {
-		fmt.Fprintln(os.Stderr, "\nlive GitHub variables (advisory — verified against the repo/Environment):")
-		for _, x := range live {
-			fmt.Fprintf(os.Stderr, "  %s %s\n", yellow("⚠"), x)
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "EXTENSION\tKIND\tNAME\tSEVERITY\tSTATUS")
+	for _, f := range findings {
+		sev := "info"
+		if f.Fatal {
+			sev = "REQUIRED"
+			fatal++
 		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", f.Ext, f.Kind, f.Name, sev, f.Status)
 	}
+	tw.Flush()
 	if fatal > 0 {
 		return fmt.Errorf("%d required input(s) unsatisfied", fatal)
 	}
@@ -127,32 +126,49 @@ var liveGHVarsFn = func(ghEnv string) (map[string]string, bool) {
 	return out, true
 }
 
-// liveGHVarFindings is the live GitHub trust check: for each enabled extension's declared
-// ghVars, is the variable actually SET on GitHub, and for image: true, is the LIVE value
-// digest-pinned? This is what closes the gap the offline lint can't — lintManifest pins a
-// declared Default, but the value an operator actually stored could be a mutable tag.
-// Report-only/advisory: lookup is injected (tests stub it); a scope it can't read is
-// skipped (no false alarms when GitHub is unreachable).
-func liveGHVarFindings(exts []Extension, lookup func(string) (map[string]string, bool)) []string {
-	var out []string
+// liveGHVarFindings is the AUTHORITATIVE ghVar check (ghVars are not checked offline): for
+// each declared ghVar, is the variable actually SET on GitHub, and for image: true, is the
+// LIVE value digest-pinned? The severity rules implement "fail only on a confirmed problem":
+//
+//   - lookup unavailable (gh down / 404 / unknown repo) → "unverified" advisory, NEVER fatal
+//     (an offline doctor cannot prove GitHub state) — only for ghVars with no local material;
+//   - required + live-confirmed ABSENT + no local default/override → FATAL (genuinely missing
+//     and not auto-seedable);
+//   - required + absent but seedable (has a default) → advisory "run seed";
+//   - optional + absent → advisory;
+//   - image: true + present-but-unpinned → advisory.
+//
+// So a correctly-configured instance (variable set live) yields NO finding and doctor
+// passes; doctor fails only when the live lookup CONFIRMS a required, non-seedable variable
+// is absent. lookup is injected for tests.
+func liveGHVarFindings(exts []Extension, lookup func(string) (map[string]string, bool)) []configFinding {
+	var out []configFinding
 	for _, e := range exts {
 		vals := varValues(e.Manifest, os.Getenv)
 		for _, gv := range e.Manifest.GHVars {
 			gv = resolveGHVarEnv(gv, vals)
-			live, ok := lookup(gv.GHEnv)
-			if !ok {
-				continue
-			}
+			seedable := gv.Default != "" || os.Getenv(varOverrideEnv(gv.Name)) != ""
 			scope := "repo-level"
 			if gv.GHEnv != "" {
 				scope = "env " + gv.GHEnv
 			}
+			live, ok := lookup(gv.GHEnv)
+			if !ok {
+				if !seedable { // a live-only ghVar we couldn't verify — surface, don't fail
+					out = append(out, configFinding{e.Name, "gh-var", gv.Name, "unverified — gh unavailable; ensure it is set on GitHub (" + scope + ")", false})
+				}
+				continue
+			}
 			v, set := live[gv.Name]
 			switch {
+			case !set && gv.Required && !seedable:
+				out = append(out, configFinding{e.Name, "gh-var", gv.Name, "REQUIRED but not set on GitHub (" + scope + ") — `gh variable set " + gv.Name + "`", true})
+			case !set && gv.Required:
+				out = append(out, configFinding{e.Name, "gh-var", gv.Name, "not set on GitHub (" + scope + ") — run `llz extension seed`", false})
 			case !set:
-				out = append(out, fmt.Sprintf("%s: ghVar %s is not set on GitHub (%s) — `gh variable set %s`", e.Name, gv.Name, scope, gv.Name))
+				out = append(out, configFinding{e.Name, "gh-var", gv.Name, "not set on GitHub (" + scope + ", optional)", false})
 			case gv.Image && !reImageDigest.MatchString(v):
-				out = append(out, fmt.Sprintf("%s: ghVar %s (image: true) live value %q is not digest-pinned (…@sha256:<64hex>)", e.Name, gv.Name, v))
+				out = append(out, configFinding{e.Name, "gh-var", gv.Name, "live value not digest-pinned (image: true): " + v, false})
 			}
 		}
 	}
