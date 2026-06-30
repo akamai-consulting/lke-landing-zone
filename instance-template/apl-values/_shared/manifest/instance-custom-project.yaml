@@ -1,0 +1,52 @@
+# instance-custom AppProject — the operator escape hatch for custom workloads.
+#
+# Scopes the `instance-custom` Application (applications/instance-custom.yaml),
+# which syncs the operator-owned apl-values/_shared/custom/ tree. This is the
+# kube-native equivalent of the .llz/commands.yaml / .githooks/pre-commit.local
+# escape hatches (docs/extending-llz.md): a place for an instance to apply its
+# OWN resources without touching Terraform or the LLZ-managed bootstrap tree.
+#
+# DELIBERATELY PERMISSIVE. Unlike platform-support (pinned to the specific
+# support-plane registries + namespaces), this project is wide-open WITHIN the
+# cluster: any source repo, any namespace, any resource kind — including Argo CD
+# Application, so operators can drop their own Helm/OCI app-of-apps children. An
+# escape hatch the operator can't actually deploy into isn't one. The trust
+# boundary is the cluster edge, not this project; tighten the lists below if your
+# instance wants a narrower blast radius.
+#
+# Wave -20: the project must exist before the wave-10 Application that references
+# it (Argo evaluates `project` on the referencing app's first reconcile, and an
+# absent project fails it with InvalidSpecError).
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: instance-custom
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # AppProject spec.description max is 255 bytes (k8s validation); keep it short.
+  description: >-
+    Operator escape hatch: instance-owned custom Kubernetes resources synced from
+    apl-values/_shared/custom/. Wide-open within the cluster by design.
+  # Any repo: the operator's own git tree (raw manifests) plus any chart repo a
+  # dropped-in child Application points at (Helm/OCI). Narrow to specific repos
+  # if you want to constrain what this instance can pull.
+  sourceRepos:
+    - '*'
+  # Any namespace in this cluster. Operators declare/own their own namespaces.
+  destinations:
+    - namespace: '*'
+      server: https://kubernetes.default.svc
+  # Allow cluster-scoped resources (Namespaces, CRDs, ClusterRoles, and the
+  # Application CRs of a dropped-in app-of-apps).
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  orphanedResources:
+    warn: true
