@@ -59,6 +59,76 @@ llz psql --db readonly    # extra args are appended to argv: ./hack/psql.sh --db
 
 This replaces the old `Makefile.local` escape hatch.
 
+## Your own Kubernetes resources — `apl-values/_shared/custom/`
+
+Need to apply your own manifests to the cluster — a NetworkPolicy, a ConfigMap,
+an app Deployment, an ExternalSecret, or a whole Helm chart? Drop them in
+`apl-values/_shared/custom/`. **No Terraform, no edits to the LLZ-managed
+bootstrap tree.** Like the hatches above, this directory is `owned` (see
+`.template-manifest`): the template ships it once and a `copier update` never
+touches it again, and `llz render` never overwrites it.
+
+Argo CD applies whatever you put there via a dedicated `instance-custom`
+Application. It syncs at **sync-wave 10** — after the platform support plane is
+healthy — so your resources can rely on cert-manager, External Secrets + the
+`openbao` ClusterSecretStore, namespaces, and the default-deny NetworkPolicies
+already being up.
+
+The directory is a **kustomize root**. Edit its `kustomization.yaml`:
+
+### Raw manifests / kustomize
+
+```yaml
+# apl-values/_shared/custom/kustomization.yaml — owned; commit it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - my-namespace.yaml
+  - my-app-deployment.yaml
+  - my-networkpolicy.yaml
+  - my-externalsecret.yaml
+```
+
+### Helm / OCI charts
+
+Drop in your own Argo CD `Application` pointing at a chart and list it under
+`resources:`. It rides the permissive `instance-custom` AppProject, so any chart
+repo works. **Pin the chart version in your Application** — that's your source of
+truth:
+
+```yaml
+# apl-values/_shared/custom/apps/my-helm-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: my-helm-app, namespace: argocd }
+spec:
+  project: instance-custom
+  source:
+    repoURL: <your chart repo>
+    chart: <chart>
+    targetRevision: <pinned version>
+  destination: { server: https://kubernetes.default.svc, namespace: my-app }
+  syncPolicy: { automated: { prune: true, selfHeal: true } }
+```
+
+### Behavior & rules
+
+- **Isolated blast radius.** A broken manifest here degrades only the
+  `instance-custom` Application — it **cannot** wedge the platform bootstrap. The
+  app-of-apps only syncs the always-valid `instance-custom` Application object;
+  your content is health-gated by `instance-custom` itself.
+- **Wide-open AppProject by design.** `instance-custom` allows any source repo,
+  any namespace, and any resource kind (including `Application`, so you can run
+  your own app-of-apps). It's an escape hatch — the trust boundary is the cluster
+  edge, not the project. Tighten `sourceRepos` / `destinations` in
+  `apl-values/_shared/manifest/instance-custom-project.yaml` if you want a
+  narrower scope (that file is template-managed, so re-apply on update).
+- **`prune: false`.** Your resources are yours to remove deliberately; an
+  accidental empty render won't cascade-delete them.
+- **Revision.** The Application tracks the values repo's default branch (`HEAD`).
+  If you pin `apps_repo_revision` to a tag/sha, pin the Application's
+  `targetRevision` in `applications/instance-custom.yaml` to match.
+
 ## Extra pre-commit checks — `.githooks/pre-commit.local`
 
 The pre-commit hook (installed by `llz hooks`, see below) runs a secrets guard +

@@ -123,6 +123,11 @@ managed  apl-values/components/**
 # wide, rendered once). Owned so a template update never clobbers the operator's
 # rendered email; it ships with a REPLACE_PER_ENV placeholder that render replaces.
 owned    apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml
+# Operator escape hatch for custom Kubernetes resources: the template ships the
+# custom/ kustomize root once (an empty starter) and never touches it again, so an
+# instance's own manifests here survive every `copier update`. The instance-custom
+# Application that syncs it stays template-managed (above). See docs/extending-llz.md.
+owned    apl-values/_shared/custom/**
 # Generated per-env Terraform inputs (llz env add writes these; not the
 # committed *.example). Never present in the template tree itself.
 owned    terraform-iac-bootstrap/**/*.auto.tfvars

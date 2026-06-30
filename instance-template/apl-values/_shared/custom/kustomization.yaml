@@ -1,0 +1,47 @@
+# ── Operator-owned custom Kubernetes resources ───────────────────────────────
+#
+# THIS DIRECTORY IS YOURS. The template ships it once and never touches it again
+# (it's `owned` in .template-manifest, so `copier update` skips it, and `llz
+# render` never overwrites it). Drop your own Kubernetes manifests here and Argo
+# CD applies them to the cluster — no Terraform, no edits to the LLZ-managed
+# bootstrap tree.
+#
+# It is synced by the dedicated `instance-custom` Argo CD Application
+# (apl-values/_shared/manifest/applications/instance-custom.yaml), wave 10 — it
+# lands AFTER the platform is healthy, and it has its OWN health gate: a broken
+# manifest here degrades only `instance-custom`, it cannot wedge the platform
+# bootstrap. See docs/extending-llz.md → "Custom Kubernetes resources".
+#
+# This is a kustomize root. Two ways to use it:
+#
+#   1. Raw manifests / kustomize — list your YAML under `resources:`:
+#
+#        resources:
+#          - my-namespace.yaml
+#          - my-app-deployment.yaml
+#          - my-networkpolicy.yaml
+#          - my-externalsecret.yaml      # the openbao ClusterSecretStore is ready
+#
+#   2. Helm / OCI charts — drop your own Argo CD Application that points at a
+#      chart, and list it here. It rides the permissive `instance-custom`
+#      AppProject (sourceRepos: '*'), so any chart repo works. Pin the chart
+#      version in your Application — that's your source of truth, not a branch:
+#
+#        # apps/my-helm-app.yaml
+#        apiVersion: argoproj.io/v1alpha1
+#        kind: Application
+#        metadata: { name: my-helm-app, namespace: argocd }
+#        spec:
+#          project: instance-custom
+#          source:
+#            repoURL: <your chart repo>
+#            chart: <chart>
+#            targetRevision: <pinned version>
+#          destination: { server: https://kubernetes.default.svc, namespace: my-app }
+#          syncPolicy: { automated: { prune: true, selfHeal: true } }
+#
+#      then add `- apps/my-helm-app.yaml` to `resources:` below.
+#
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: []
