@@ -183,6 +183,7 @@ func runImportScan(g globalOpts, o importScanOpts) error {
 		snapshotClassJSON:  get("get", "volumesnapshotclasses", "-o", "json"),
 		peerAuthJSON:       get("get", "peerauthentications.security.istio.io", "-A", "-o", "json"),
 		authzPolicyJSON:    get("get", "authorizationpolicies.security.istio.io", "-A", "-o", "json"),
+		podJSON:            get("get", "pods", "-A", "-o", "json"),
 	})
 
 	// Linode-API enrichment (opt-in): the provisioning detail kubectl can't see.
@@ -236,6 +237,9 @@ func printImportSummary(r importReport, output string) {
 	if len(r.Storage.Volumes) > 0 || len(r.Storage.Databases) > 0 {
 		fmt.Printf("  data      %d PV(s)   %d database(s)   %d snapshot class(es)\n",
 			len(r.Storage.Volumes), len(r.Storage.Databases), len(r.Storage.SnapshotClasses))
+		if bc := r.Storage.VolumesByClass; len(bc) > 0 {
+			fmt.Printf("  PV class  %s\n", formatClassCounts(bc))
+		}
 	}
 	if r.Security.NetworkPolicies > 0 || len(r.Security.MTLSModes) > 0 {
 		fmt.Printf("  security  %d NetworkPolic(ies)   %d AuthorizationPolic(ies)   mTLS=%s\n",
@@ -273,6 +277,30 @@ func suggestedInstanceDir(r importReport) string {
 // suggestedEnv proposes a deployment/env name. The source is one cluster, so a
 // single conventional default keeps the suggested command runnable.
 func suggestedEnv(importReport) string { return "prod" }
+
+// formatClassCounts renders a PV-classification count map as "database 6, cache 5, …"
+// in a stable (descending count, then name) order.
+func formatClassCounts(byClass map[string]int) string {
+	type kv struct {
+		k string
+		n int
+	}
+	pairs := make([]kv, 0, len(byClass))
+	for k, n := range byClass {
+		pairs = append(pairs, kv{k, n})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].n != pairs[j].n {
+			return pairs[i].n > pairs[j].n
+		}
+		return pairs[i].k < pairs[j].k
+	})
+	parts := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		parts = append(parts, fmt.Sprintf("%s %d", p.k, p.n))
+	}
+	return strings.Join(parts, ", ")
+}
 
 // vpcCIDRSummary renders a VPC's subnet CIDRs (or "" when none / no VPC).
 func vpcCIDRSummary(v *lkeVPC) string {
@@ -423,6 +451,7 @@ type reportInputs struct {
 	// Migration-planning sources (batch 3).
 	configMapJSON, serviceAccountJSON, networkPolicyJSON, roleJSON, roleBindingJSON string
 	pvJSON, cnpgJSON, snapshotClassJSON, peerAuthJSON, authzPolicyJSON              string
+	podJSON                                                                         string // PVC→workload usage classification
 }
 
 // buildReport assembles the inventory from raw kubectl JSON. It is pure (no exec,
@@ -529,10 +558,14 @@ func buildReport(in reportInputs) importReport {
 		HelmReleases: parseHelmReleases(in.secretJSON),
 	}
 
+	classifiedPVs, pvByClass := classifyVolumes(parsePVs(in.pvJSON), parsePVCConsumers(in.podJSON))
+	databases := append(parseCNPGClusters(in.cnpgJSON), detectDBWorkloads(workloads)...)
+	databases = attachDBClients(databases, parsePodSecretRefs(in.podJSON))
 	storage := importStorage{
-		Volumes:         parsePVs(in.pvJSON),
+		Volumes:         classifiedPVs,
+		VolumesByClass:  pvByClass,
 		SnapshotClasses: parseSnapshotClasses(in.snapshotClassJSON),
-		Databases:       append(parseCNPGClusters(in.cnpgJSON), detectDBWorkloads(workloads)...),
+		Databases:       databases,
 	}
 	security := importSecurity{
 		NetworkPolicies:       totalCount(npByNS),

@@ -319,9 +319,13 @@ func buildMigrationTodo(rep importReport, env string) string {
 	w("## Data — migrate (Velero / dump-restore)\n")
 	w("- [ ] %d PersistentVolume(s), %s total — see `storage.volumes` (Linode volume handles) in the report.\n", rep.Summary.PVCs, orNA(rep.Summary.TotalStorage))
 	if len(rep.Storage.Databases) > 0 {
-		w("- [ ] %d database(s):\n", len(rep.Storage.Databases))
+		w("- [ ] %d database(s) — migrate via the owning app, not raw volume/CDC (version jump):\n", len(rep.Storage.Databases))
 		for _, d := range rep.Storage.Databases {
-			w("    - %s/%s (%s, %s)\n", d.Namespace, d.Name, d.Engine, d.Kind)
+			client := "no client found"
+			if len(d.Clients) > 0 {
+				client = "client: " + strings.Join(d.Clients, ", ")
+			}
+			w("    - %s/%s (%s, %s) — %s\n", d.Namespace, d.Name, d.Engine, d.Kind, client)
 		}
 	}
 	if rep.Linode != nil && len(rep.Linode.ObjectStorage) > 0 {

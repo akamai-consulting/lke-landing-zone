@@ -74,6 +74,103 @@ func TestParsePVs(t *testing.T) {
 	}
 }
 
+func TestParsePVCConsumersAndWorkloadFromOwner(t *testing.T) {
+	js := `{"items":[
+		{"metadata":{"name":"harbor-otomi-db-1","namespace":"harbor","labels":{"cnpg.io/cluster":"harbor-otomi-db"},
+		 "ownerReferences":[{"kind":"StatefulSet","name":"harbor-otomi-db"}]},
+		 "spec":{"containers":[{"image":"ghcr.io/cloudnative-pg/postgresql:16"}],
+		         "volumes":[{"persistentVolumeClaim":{"claimName":"harbor-otomi-db-1"}}]}},
+		{"metadata":{"name":"grafana-7d9f8c-abc","namespace":"monitoring","labels":{"app.kubernetes.io/name":"grafana"},
+		 "ownerReferences":[{"kind":"ReplicaSet","name":"grafana-7d9f8c"}]},
+		 "spec":{"containers":[{"image":"grafana/grafana:10"}],
+		         "volumes":[{"persistentVolumeClaim":{"claimName":"grafana-pvc"}}]}},
+		{"metadata":{"name":"loner","namespace":"x"},
+		 "spec":{"containers":[{"image":"app:1"}],"volumes":[{"persistentVolumeClaim":{"claimName":"loner-data"}}]}}
+	]}`
+	got := parsePVCConsumers(js)
+
+	if c := got["harbor/harbor-otomi-db-1"]; c.Workload != "StatefulSet/harbor-otomi-db" || c.Image != "ghcr.io/cloudnative-pg/postgresql:16" {
+		t.Errorf("cnpg consumer=%+v", c)
+	}
+	if c := got["monitoring/grafana-pvc"]; c.Workload != "Deployment/grafana" || c.App != "grafana" {
+		t.Errorf("ReplicaSet should fold to Deployment/grafana, got %+v", c)
+	}
+	if c := got["x/loner-data"]; c.Workload != "Pod/loner" { // no controller
+		t.Errorf("ownerless pod=%+v", c)
+	}
+}
+
+func TestClassifyVolumes(t *testing.T) {
+	pvs := []pvInfo{
+		{Name: "pv-db", Claim: "harbor/harbor-otomi-db-1"},
+		{Name: "pv-cache", Claim: "argocd/redis-data"},
+		{Name: "pv-loki", Claim: "monitoring/loki-0"},
+		{Name: "pv-metrics", Claim: "monitoring/prometheus-0"},
+		{Name: "pv-app", Claim: "team-gsap/yakpurger-data"},
+		{Name: "pv-tekton", Claim: "team-gsap/pvc-build123"},
+		{Name: "pv-orphan", Claim: "team-gsap/leftover"},
+	}
+	consumers := map[string]pvcConsumer{
+		"harbor/harbor-otomi-db-1": {Workload: "StatefulSet/harbor-otomi-db", Image: "cloudnative-pg/postgresql:16"},
+		"argocd/redis-data":        {Workload: "StatefulSet/argocd-redis", Image: "redis:7"},
+		"monitoring/loki-0":        {Workload: "StatefulSet/loki", App: "loki", Image: "grafana/loki:2.9"},
+		"monitoring/prometheus-0":  {Workload: "StatefulSet/prometheus", Image: "prom/prometheus:v2"},
+		"team-gsap/yakpurger-data": {Workload: "Deployment/yakpurger", Image: "ghcr.io/gsap/yakpurger:1"},
+		"team-gsap/pvc-build123":   {Workload: "TaskRun/docker-trigger-build-fetch-source", Image: "gcr.io/tekton/entrypoint"},
+		// leftover has no consumer → unused
+	}
+	out, byClass := classifyVolumes(pvs, consumers)
+
+	want := map[string]string{
+		"pv-db": "database", "pv-cache": "cache", "pv-loki": "object-store-cache",
+		"pv-metrics": "metrics", "pv-app": "standalone", "pv-tekton": "ephemeral", "pv-orphan": "unused",
+	}
+	for _, pv := range out {
+		if pv.Classification != want[pv.Name] {
+			t.Errorf("%s classified %q, want %q", pv.Name, pv.Classification, want[pv.Name])
+		}
+	}
+	if out[0].UsedBy != "StatefulSet/harbor-otomi-db" || !out[0].InUse {
+		t.Errorf("pv-db usage not set: %+v", out[0])
+	}
+	if pv := out[6]; pv.Name != "pv-orphan" || pv.InUse || pv.UsedBy != "" {
+		t.Errorf("orphan should be not-in-use: %+v", pv)
+	}
+	if byClass["database"] != 1 || byClass["unused"] != 1 || byClass["standalone"] != 1 {
+		t.Errorf("byClass=%v", byClass)
+	}
+}
+
+func TestParsePodSecretRefsAndAttachDBClients(t *testing.T) {
+	// harbor-core references the CNPG -app secret via env; an unrelated pod doesn't.
+	pods := `{"items":[
+		{"metadata":{"name":"harbor-core-5dbcf89759-x","namespace":"harbor","ownerReferences":[{"kind":"ReplicaSet","name":"harbor-core-5dbcf89759"}]},
+		 "spec":{"containers":[{"env":[{"valueFrom":{"secretKeyRef":{"name":"harbor-otomi-db-app"}}}]}]}},
+		{"metadata":{"name":"keycloak-keycloakx-0","namespace":"keycloak","ownerReferences":[{"kind":"StatefulSet","name":"keycloak-keycloakx"}]},
+		 "spec":{"containers":[{"envFrom":[{"secretRef":{"name":"keycloak-db-app"}}]}]}},
+		{"metadata":{"name":"random","namespace":"harbor"},
+		 "spec":{"containers":[{"env":[{"valueFrom":{"secretKeyRef":{"name":"some-other-secret"}}}]}]}}
+	]}`
+	uses := parsePodSecretRefs(pods)
+
+	dbs := []dbInfo{
+		{Namespace: "harbor", Name: "harbor-otomi-db", Kind: "CNPG", Engine: "postgres"},
+		{Namespace: "keycloak", Name: "keycloak-db", Kind: "CNPG", Engine: "postgres"},
+		{Namespace: "team-gsap", Name: "redis-cache", Kind: "workload", Engine: "redis"}, // not CNPG → no clients
+	}
+	got := attachDBClients(dbs, uses)
+
+	if !reflect.DeepEqual(got[0].Clients, []string{"Deployment/harbor-core"}) { // ReplicaSet folded
+		t.Errorf("harbor clients=%v", got[0].Clients)
+	}
+	if !reflect.DeepEqual(got[1].Clients, []string{"StatefulSet/keycloak-keycloakx"}) {
+		t.Errorf("keycloak clients=%v", got[1].Clients)
+	}
+	if got[2].Clients != nil { // workload-kind DBs are left alone
+		t.Errorf("workload DB should have no clients, got %v", got[2].Clients)
+	}
+}
+
 func TestParseCNPGClusters(t *testing.T) {
 	js := `{"items":[{"metadata":{"name":"pg","namespace":"team-gsap"},"spec":{"instances":3}}]}`
 	got := parseCNPGClusters(js)

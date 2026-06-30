@@ -105,9 +105,10 @@ func skipNoiseConfigMap(name string) bool { return name == "kube-root-ca.crt" }
 // ── persistent volumes + databases (pure) ────────────────────────────────────
 
 type importStorage struct {
-	Volumes         []pvInfo `json:"volumes,omitempty"`
-	SnapshotClasses []string `json:"snapshotClasses,omitempty"`
-	Databases       []dbInfo `json:"databases,omitempty"`
+	Volumes         []pvInfo       `json:"volumes,omitempty"`
+	VolumesByClass  map[string]int `json:"volumesByClass,omitempty"` // classification → count, for the migrate-vs-rebuild plan
+	SnapshotClasses []string       `json:"snapshotClasses,omitempty"`
+	Databases       []dbInfo       `json:"databases,omitempty"`
 }
 
 type pvInfo struct {
@@ -118,14 +119,20 @@ type pvInfo struct {
 	AccessModes   []string `json:"accessModes,omitempty"`
 	ReclaimPolicy string   `json:"reclaimPolicy,omitempty"`
 	VolumeHandle  string   `json:"volumeHandle,omitempty"` // CSI handle = the Linode Volume id
+	// Usage + migration classification (filled by classifyVolumes from the pods).
+	UsedBy         string `json:"usedBy,omitempty"` // Kind/name of the workload that mounts the claim
+	App            string `json:"app,omitempty"`    // app label of the mounting pod
+	InUse          bool   `json:"inUse,omitempty"`  // a running pod mounts the claim
+	Classification string `json:"classification,omitempty"`
 }
 
 type dbInfo struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`             // CNPG | workload
-	Engine    string `json:"engine,omitempty"` // postgres | mysql | …
-	Instances int    `json:"instances,omitempty"`
+	Namespace string   `json:"namespace"`
+	Name      string   `json:"name"`
+	Kind      string   `json:"kind"`             // CNPG | workload
+	Engine    string   `json:"engine,omitempty"` // postgres | mysql | …
+	Instances int      `json:"instances,omitempty"`
+	Clients   []string `json:"clients,omitempty"` // workloads that reference the DB's connection secret (the actual writers)
 }
 
 func parsePVs(js string) []pvInfo {
@@ -170,6 +177,251 @@ func parsePVs(js string) []pvInfo {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// ── PV usage + classification (pure) ─────────────────────────────────────────
+
+type ownerRef struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}
+
+// pvcConsumer is the workload that mounts a PVC — resolved from the pods that
+// reference it, so we know whether a PV is used and by what.
+type pvcConsumer struct {
+	Workload string // Kind/name (ReplicaSet folded to its Deployment)
+	App      string // app label
+	Image    string // first container image (drives the classification)
+}
+
+// parsePVCConsumers maps "namespace/pvcName" → the workload that mounts it, read
+// from `kubectl get pods`. A PVC with no entry is mounted by no running pod
+// (orphaned / scaled to zero). First pod wins for an RWX claim.
+func parsePVCConsumers(podsJSON string) map[string]pvcConsumer {
+	var d struct {
+		Items []struct {
+			Metadata struct {
+				Name            string            `json:"name"`
+				Namespace       string            `json:"namespace"`
+				Labels          map[string]string `json:"labels"`
+				OwnerReferences []ownerRef        `json:"ownerReferences"`
+			} `json:"metadata"`
+			Spec struct {
+				Containers []struct {
+					Image string `json:"image"`
+				} `json:"containers"`
+				Volumes []struct {
+					PersistentVolumeClaim struct {
+						ClaimName string `json:"claimName"`
+					} `json:"persistentVolumeClaim"`
+				} `json:"volumes"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal([]byte(podsJSON), &d) != nil {
+		return nil
+	}
+	out := map[string]pvcConsumer{}
+	for _, p := range d.Items {
+		c := pvcConsumer{
+			Workload: workloadFromOwner(p.Metadata.OwnerReferences, p.Metadata.Name),
+			App:      firstLabel(p.Metadata.Labels, "app.kubernetes.io/name", "app.kubernetes.io/instance", "app"),
+		}
+		if len(p.Spec.Containers) > 0 {
+			c.Image = p.Spec.Containers[0].Image
+		}
+		for _, v := range p.Spec.Volumes {
+			if cn := v.PersistentVolumeClaim.ClaimName; cn != "" {
+				key := p.Metadata.Namespace + "/" + cn
+				if _, seen := out[key]; !seen {
+					out[key] = c
+				}
+			}
+		}
+	}
+	return out
+}
+
+// workloadFromOwner reduces a pod's ownerReferences to a "Kind/name" — folding a
+// ReplicaSet to its owning Deployment (trim the pod-template-hash suffix). A pod
+// with no controller reports as "Pod/<name>".
+func workloadFromOwner(refs []ownerRef, podName string) string {
+	if len(refs) == 0 {
+		return "Pod/" + podName
+	}
+	kind, name := refs[0].Kind, refs[0].Name
+	if kind == "ReplicaSet" {
+		kind = "Deployment"
+		if i := strings.LastIndex(name, "-"); i > 0 {
+			name = name[:i]
+		}
+	}
+	return kind + "/" + name
+}
+
+// pvClassByHint maps a substring (of the mounting pod's image / app / workload /
+// claim) to a migration classification. First match wins; default is "standalone".
+// "unused" is assigned separately when no pod mounts the claim.
+var pvClassByHint = []struct{ sub, class string }{
+	{"postgres", "database"}, {"cnpg", "database"}, {"mariadb", "database"}, {"mysql", "database"}, {"mongo", "database"},
+	{"redis", "cache"},
+	{"prometheus", "metrics"},
+	{"loki", "object-store-cache"}, {"thanos", "object-store-cache"}, {"harbor", "object-store-cache"},
+}
+
+// classifyVolumes annotates each PV with its mounting workload + a migration
+// classification, and returns the per-class counts. Classifications:
+//   - database          → replicate (postgres logical/physical, etc.); don't copy the datadir
+//   - cache             → rebuild (or app-native replication)
+//   - metrics           → rebuild (long-term history is in object storage)
+//   - object-store-cache→ skip; the real data lives in the app's bucket
+//   - ephemeral         → Tekton TaskRun/PipelineRun build workspace; rebuild, never migrate
+//   - standalone        → back up + restore (Velero/restic) — the genuine PV migration set
+//   - unused            → no pod mounts it; verify before migrating
+func classifyVolumes(pvs []pvInfo, consumers map[string]pvcConsumer) ([]pvInfo, map[string]int) {
+	byClass := map[string]int{}
+	out := make([]pvInfo, 0, len(pvs))
+	for _, pv := range pvs {
+		c, inUse := consumers[pv.Claim]
+		if inUse {
+			pv.UsedBy = c.Workload
+			pv.App = c.App
+			pv.InUse = true
+		}
+		pv.Classification = classifyPV(pv, c, inUse)
+		byClass[pv.Classification]++
+		out = append(out, pv)
+	}
+	if len(byClass) == 0 {
+		byClass = nil
+	}
+	return out, byClass
+}
+
+func classifyPV(pv pvInfo, c pvcConsumer, inUse bool) string {
+	if !inUse {
+		return "unused"
+	}
+	// Tekton build workspaces are transient CI scratch — never migrate.
+	if strings.HasPrefix(c.Workload, "TaskRun/") || strings.HasPrefix(c.Workload, "PipelineRun/") {
+		return "ephemeral"
+	}
+	hay := strings.ToLower(imageName(c.Image) + " " + c.App + " " + c.Workload + " " + pv.Claim)
+	for _, m := range pvClassByHint {
+		if strings.Contains(hay, m.sub) {
+			return m.class
+		}
+	}
+	return "standalone"
+}
+
+// ── DB clients (pure) ────────────────────────────────────────────────────────
+
+// podSecretUse is one pod's workload + the secret names it references — used to
+// find which workload actually connects to a database (CNPG publishes a
+// "<cluster>-app" secret; the client mounts it).
+type podSecretUse struct {
+	Namespace string
+	Workload  string
+	Secrets   []string
+}
+
+// podContainer captures just the secret-bearing fields of a container spec.
+type podContainer struct {
+	Env []struct {
+		ValueFrom struct {
+			SecretKeyRef struct {
+				Name string `json:"name"`
+			} `json:"secretKeyRef"`
+		} `json:"valueFrom"`
+	} `json:"env"`
+	EnvFrom []struct {
+		SecretRef struct {
+			Name string `json:"name"`
+		} `json:"secretRef"`
+	} `json:"envFrom"`
+}
+
+// parsePodSecretRefs lists, per pod, the secrets it references (via env
+// secretKeyRef, envFrom secretRef, or a secret volume) plus its workload.
+func parsePodSecretRefs(podsJSON string) []podSecretUse {
+	var d struct {
+		Items []struct {
+			Metadata struct {
+				Name            string     `json:"name"`
+				Namespace       string     `json:"namespace"`
+				OwnerReferences []ownerRef `json:"ownerReferences"`
+			} `json:"metadata"`
+			Spec struct {
+				Containers     []podContainer `json:"containers"`
+				InitContainers []podContainer `json:"initContainers"`
+				Volumes        []struct {
+					Secret struct {
+						SecretName string `json:"secretName"`
+					} `json:"secret"`
+				} `json:"volumes"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal([]byte(podsJSON), &d) != nil {
+		return nil
+	}
+	var out []podSecretUse
+	for _, p := range d.Items {
+		set := map[string]bool{}
+		for _, c := range append(append([]podContainer{}, p.Spec.Containers...), p.Spec.InitContainers...) {
+			for _, e := range c.Env {
+				if n := e.ValueFrom.SecretKeyRef.Name; n != "" {
+					set[n] = true
+				}
+			}
+			for _, ef := range c.EnvFrom {
+				if n := ef.SecretRef.Name; n != "" {
+					set[n] = true
+				}
+			}
+		}
+		for _, v := range p.Spec.Volumes {
+			if n := v.Secret.SecretName; n != "" {
+				set[n] = true
+			}
+		}
+		if len(set) == 0 {
+			continue
+		}
+		out = append(out, podSecretUse{
+			Namespace: p.Metadata.Namespace,
+			Workload:  workloadFromOwner(p.Metadata.OwnerReferences, p.Metadata.Name),
+			Secrets:   sortedSetKeys(set),
+		})
+	}
+	return out
+}
+
+// attachDBClients fills dbInfo.Clients for each CNPG cluster with the workloads
+// that reference its connection secret (a same-namespace secret whose name starts
+// with the cluster name, e.g. "<cluster>-app"). Workload-kind DBs are left alone
+// (no published connection secret to key on).
+func attachDBClients(dbs []dbInfo, uses []podSecretUse) []dbInfo {
+	for i := range dbs {
+		if dbs[i].Kind != "CNPG" {
+			continue
+		}
+		set := map[string]bool{}
+		for _, u := range uses {
+			if u.Namespace != dbs[i].Namespace {
+				continue
+			}
+			for _, s := range u.Secrets {
+				if strings.HasPrefix(s, dbs[i].Name) {
+					set[u.Workload] = true
+					break
+				}
+			}
+		}
+		dbs[i].Clients = sortedSetKeys(set)
+	}
+	return dbs
 }
 
 // parseCNPGClusters reads CloudNativePG Clusters (clusters.postgresql.cnpg.io).
