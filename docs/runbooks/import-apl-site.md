@@ -14,7 +14,8 @@ LLZ-managed instance configured to match the source and migrating onto it.
 1. **`llz import scan`** — read-only inventory of the source site → `import-report.yaml`
 2. **review** the report
 3. **`llz import init`** — scaffold a new LLZ instance from the report (`llz new` + spec + `llz render`) and write `MIGRATION-TODO.md`
-4. **work the checklist** — the migration steps a scan can't perform (see [Not yet covered](#not-yet-covered))
+4. **`llz import plan`** — emit `MIGRATION-PLAN.md`, a runnable data-migration runbook (Object Storage + databases) from the report
+5. **work the checklist + plan** — the steps a scan can't perform (see [Not yet covered](#not-yet-covered))
 
 ---
 
@@ -92,6 +93,21 @@ them via apl-values `_rawValues` if intended.
 - **Workloads** — per-team workload/image counts to redeploy
 
 ---
+
+## 5. Data-migration plan
+
+`llz import plan --report import-report.yaml` writes `MIGRATION-PLAN.md` — concrete,
+copy-pasteable commands generated from the inventory:
+
+- **Object Storage** — `rclone` remotes (source + target) and an incremental
+  `rclone sync` per bucket; re-run as a final pass after the write freeze.
+- **Databases** — per CNPG cluster, the **owning app** (from the DB-clients
+  mapping) with its preferred app-native export/import, plus a CNPG-aware
+  `pg_dump`/`pg_restore` fallback (same-version only).
+- **Caches** (redis/valkey) — listed as rebuild-don't-migrate.
+
+Target endpoints/credentials/bucket names are `${PLACEHOLDER}` env vars you fill.
+The plan still does **not** cover block-PV contents (see below).
 
 ## Not yet covered
 

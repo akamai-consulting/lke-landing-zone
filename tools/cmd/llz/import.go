@@ -43,7 +43,7 @@ func importCmd() *cobra.Command {
 		Example: "  # inventory a live cluster + the APL platform-values file + an IaC repo\n" +
 			"  llz import scan --apl-values ./platform-values.yaml --repo ./clones/gsap",
 	}
-	c.AddCommand(importScanCmd(), importInitCmd())
+	c.AddCommand(importScanCmd(), importInitCmd(), importPlanCmd())
 	return c
 }
 
