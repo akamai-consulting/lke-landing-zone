@@ -12,6 +12,11 @@ tools/llz
 # Tokens gathered by `llz new` / `llz secrets gather` (0600, never committed)
 .llz/
 
+# `llz import scan` output — an inventory of a real customer cluster (domains,
+# pool IDs, secret refs). Generated per-run, never belongs in the template repo.
+import-report.yaml
+**/import-report.yaml
+
 # Coverage reports (go test -coverprofile output)
 **/coverage/
 **/cobertura.xml
