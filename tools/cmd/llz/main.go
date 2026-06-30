@@ -64,7 +64,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), specCmd(), networkCmd(), componentsCmd(),
-		secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
+		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
 	)
@@ -78,7 +78,7 @@ func newRootCmd() *cobra.Command {
 		&cobra.Group{ID: "day2", Title: "Day-2 & maintenance:"},
 	)
 	groupOf := map[string]string{
-		"new": "spec", "env": "spec", "spec": "spec", "network": "spec", "components": "spec", "render": "spec",
+		"new": "spec", "env": "spec", "spec": "spec", "network": "spec", "components": "spec", "render": "spec", "import": "spec",
 		"tokens": "build", "secrets": "build", "doctor": "build", "validate": "build",
 		"build": "build", "up": "build", "status": "build", "bootstrap": "build",
 		"upgrade": "day2", "drift": "day2", "credentials": "day2", "openbao": "day2",
