@@ -124,6 +124,31 @@ var Components = []Component{
 		}},
 	},
 	{
+		// Velero cluster backup/DR. Default-disabled: opt in per env via
+		// spec.components.velero. Deploys the upstream Velero chart (an Argo
+		// Application) + the llz glue (namespace, Linode CSI VolumeSnapshotClass,
+		// NetworkPolicies, the velero-cloud-credentials ExternalSecret). The per-env
+		// BackupStorageLocation bucket/region/s3Url ride the patch below (rendered by
+		// `llz render`, mirroring the cred-rotator). See docs/runbooks/velero-dr.md.
+		Name:            "velero",
+		DefaultDisabled: true,
+		DependsOn:       []string{"externalSecrets"},
+		ManifestResources: []string{
+			"velero-namespace.yaml",
+			"velero-volumesnapshotclass.yaml",
+			"velero-network-policies.yaml",
+			"velero-cloud-credentials-externalsecret.yaml",
+		},
+		ArgoApps: []string{"velero.yaml"},
+		Patches: []Patch{{
+			Path:    "velero-backup-location-patch.yaml",
+			Group:   "argoproj.io",
+			Version: "v1alpha1",
+			Kind:    "Application",
+			Name:    "llz-velero",
+		}},
+	},
+	{
 		// apl-core's monitoring stack + the llz glue (loki S3 ExternalSecret, alert
 		// rules) that rides with it.
 		Name:        "observability",

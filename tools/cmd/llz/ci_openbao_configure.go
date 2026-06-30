@@ -27,6 +27,7 @@ path "secret/data/infra/github-dispatch-token"  { capabilities = ["read"] }
 path "secret/data/linode/api-token"             { capabilities = ["read"] }
 path "secret/data/loki/object-store"            { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
+path "secret/data/velero/object-store"          { capabilities = ["read"] }
 
 path "secret/metadata/cert-automation/github-token" { capabilities = ["read", "list"] }
 path "secret/metadata/certmanager/dns01"            { capabilities = ["read", "list"] }
@@ -40,6 +41,7 @@ path "secret/metadata/infra/github-dispatch-token"  { capabilities = ["read", "l
 path "secret/metadata/linode/api-token"             { capabilities = ["read", "list"] }
 path "secret/metadata/loki/object-store"            { capabilities = ["read", "list"] }
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
+path "secret/metadata/velero/object-store"          { capabilities = ["read", "list"] }
 `
 
 // secret-propagator: narrow write access to secret/linode/api-token, used by the

@@ -254,6 +254,12 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	if clusterspec.ComponentEnabled(e.Components, "linodeCredRotator") {
 		targets[filepath.Join(manifest, "linode-cred-rotator-env-patch.yaml")] = clusterspec.RenderRotatorEnvPatch(env, e.Cluster.ObjectStorage.Cluster)
 	}
+	// The per-env Velero BackupStorageLocation patch (bucket/region/s3Url) — emitted
+	// only when velero is enabled (region = deployment name, obj_cluster = the spec's
+	// object-storage cluster). Mirrors the cred-rotator patch above.
+	if clusterspec.ComponentEnabled(e.Components, "velero") {
+		targets[filepath.Join(manifest, "velero-backup-location-patch.yaml")] = clusterspec.RenderVeleroBSLPatch(env, e.Cluster.ObjectStorage.Cluster)
+	}
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances
 	// without the shared overlay.

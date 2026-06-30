@@ -36,6 +36,23 @@ output "harbor_registry_secret_key" {
   sensitive   = true
 }
 
+output "velero_bucket" {
+  description = "Velero backup bucket label for this region. Consumed by the llz-velero chart's BackupStorageLocation (rendered per-env by `llz render`)."
+  value       = linode_object_storage_bucket.velero.label
+}
+
+output "velero_access_key" {
+  description = "Velero Object Storage access key. Store as VELERO_S3_ACCESS_KEY in the infra-<region> GitHub environment, then run bootstrap-openbao.yml."
+  value       = linode_object_storage_key.velero.access_key
+  sensitive   = true
+}
+
+output "velero_secret_key" {
+  description = "Velero Object Storage secret key. Store as VELERO_S3_SECRET_KEY in the infra-<region> GitHub environment, then run bootstrap-openbao.yml."
+  value       = linode_object_storage_key.velero.secret_key
+  sensitive   = true
+}
+
 output "s3_endpoint" {
   description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster (which is the Linode-OBJ region code like 'us-ord-1') so destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
   value       = "https://${var.obj_cluster}.linodeobjects.com"
@@ -66,17 +83,25 @@ output "next_steps" {
          terraform output -raw harbor_registry_access_key
          terraform output -raw harbor_registry_secret_key
 
-    3. Store all four values as GitHub environment secrets in infra-<region>:
+    3. Extract the Velero backup credentials from Terraform state:
+
+         terraform output -raw velero_access_key
+         terraform output -raw velero_secret_key
+
+    4. Store all six values as GitHub environment secrets in infra-<region>:
          LOKI_S3_ACCESS_KEY
          LOKI_S3_SECRET_KEY
          HARBOR_REGISTRY_S3_ACCESS_KEY
          HARBOR_REGISTRY_S3_SECRET_KEY
+         VELERO_S3_ACCESS_KEY
+         VELERO_S3_SECRET_KEY
 
-    4. Run bootstrap-openbao.yml for the region to reseed
-       secret/loki/object-store + secret/harbor/registry-s3 so the
-       loki-object-store and harbor-registry-s3 ExternalSecrets sync the
-       new K8s Secrets, then restart Loki / harbor-registry to pick up
-       the rotated keys.
+    5. Run bootstrap-openbao.yml for the region to reseed
+       secret/loki/object-store + secret/harbor/registry-s3 +
+       secret/velero/object-store so the loki-object-store,
+       harbor-registry-s3, and velero-cloud-credentials ExternalSecrets sync
+       the new K8s Secrets, then restart Loki / harbor-registry / velero to
+       pick up the rotated keys.
 
     Next forced rotation: ${time_rotating.loki_key.rotation_rfc3339}
     Full procedure: docs/runbooks/linode-credential-rotation.md

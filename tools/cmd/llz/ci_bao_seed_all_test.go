@@ -17,6 +17,7 @@ func TestBootstrapSeedsTable(t *testing.T) {
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
 		"secret/loki/object-store",
+		"secret/velero/object-store",
 	}
 	if len(seeds) != len(wantPaths) {
 		t.Fatalf("bootstrapSeeds returned %d entries, want %d", len(seeds), len(wantPaths))
@@ -57,6 +58,8 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("LINODE_API_TOKEN", "linode-tok")
 	t.Setenv("LOKI_S3_ACCESS_KEY", "ak")
 	t.Setenv("LOKI_S3_SECRET_KEY", "sk")
+	t.Setenv("VELERO_S3_ACCESS_KEY", "vak")
+	t.Setenv("VELERO_S3_SECRET_KEY", "vsk")
 	t.Setenv("HA_ROLE", "")
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent → skip-if-present never skips
 	if err := runCIBaoSeedAll("primary"); err != nil {
@@ -71,6 +74,7 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
 		"secret/loki/object-store",
+		"secret/velero/object-store",
 	}
 	if strings.Join(gotPaths, " ") != strings.Join(want, " ") {
 		t.Errorf("seeded paths = %v, want %v", gotPaths, want)
