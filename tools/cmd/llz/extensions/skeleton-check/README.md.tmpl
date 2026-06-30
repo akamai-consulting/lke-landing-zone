@@ -1,0 +1,22 @@
+# <@ .Name @>
+
+A logic-bearing `llz` extension (`kind: check`) scaffolded by `llz extension new`.
+
+- `internal/guard.go` — the pure check logic. **Put your real rule here.**
+- `internal/guard_test.go` — its table tests. Ships green; extend as you go.
+- `cmd/check` — the thin entrypoint `recipe.yaml`'s `check:` argv invokes.
+- `.github/workflows/test.yml` — runs `go test ./...` to produce the lock attestation.
+
+## The ceiling
+
+This extension obeys two rules `llz extension lint` enforces, so the "logic must
+be unit-tested" principle travels with it instead of living in `llz` core:
+
+1. **Argv-only manifest.** `recipe.yaml` steps call a named entrypoint; no inline
+   `sh -c "…"` (that would just relocate untestable bash here).
+2. **Logic-bearing kinds ship tests.** A `kind: check` with no `*_test.go` fails lint.
+
+```sh
+go test ./...
+llz extension lint .
+```

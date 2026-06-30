@@ -1,0 +1,14 @@
+schemaVersion: 3
+name: lint-markdown
+short: markdownlint config + check for docs hygiene (built-in, opt-in)
+kind: tool
+stage: universal  # docs hygiene across the whole repo — targets no single delivery layer
+optional: true
+tools:
+  - {name: markdownlint, via: "npm:markdownlint-cli", version: "0.41.0"}
+files:
+  - {src: markdownlint.json, dst: .markdownlint.json}
+# markdownlint-cli expands the glob itself (no shell), and auto-discovers the scaffolded
+# .markdownlint.json — the same config→check hookDep as lint-yaml.
+check:
+  - {name: markdownlint, argv: [markdownlint, "**/*.md"]}

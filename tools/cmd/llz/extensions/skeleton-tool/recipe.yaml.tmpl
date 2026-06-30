@@ -1,0 +1,17 @@
+# <@ .Name @> — scaffolded by `llz extension new --kind tool`.
+#
+# Thin extension: it only shells to an already-tested external tool, so it has no
+# logic of its own to unit-test — `llz extension lint` requires no tests for
+# kind:tool (the tool is the tested unit, upstream). Keep it argv-only.
+schemaVersion: 3
+name: <@ .Name @>
+short: TODO one-line description (wraps the <@ .Tool @> tool)
+kind: tool
+# stage: which delivery layer this targets — iac | kube-infra | app, or `universal` for a
+# cross-cutting tool that applies to every layer. App-stage checks run in the app's own
+# CI, not the platform gate. Default to universal; narrow it if the tool is layer-specific.
+stage: universal
+tools: [<@ .Tool @>]
+check:
+  - name: <@ .Name @>
+    argv: [<@ .Tool @>, --version]

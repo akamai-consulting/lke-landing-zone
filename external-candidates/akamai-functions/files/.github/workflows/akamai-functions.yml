@@ -1,0 +1,60 @@
+# Scaffolded by the akamai-functions kit. App-agnostic Spin→Akamai pipeline with the full
+# Rust quality bar (incl. coverage + mutation testing). Every gate runs over the workspace
+# via scripts/app/quality.sh in the private toolchain container; point SPIN_MANIFEST at
+# your app. A workload pipeline ships as a FILE (not a ci: DAG): it needs a private
+# container, secrets, and a scripted deploy.
+name: Akamai Functions
+on:
+  pull_request: {paths: ['**/*.rs', '**/Cargo.*', '**/spin.toml', 'scripts/**', '.github/workflows/akamai-functions.yml']}
+  push: {branches: [main]}
+  workflow_dispatch: {}
+permissions: {contents: read}
+env:
+  SPIN_MANIFEST: ${{ vars.SPIN_MANIFEST || 'spin.toml' }}
+defaults: {run: {shell: bash}}
+concurrency: {group: '${{ github.workflow }}-${{ github.ref }}', cancel-in-progress: true}
+
+jobs:
+  quality:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Rendered from the recipe's validate: step names (single source of truth) — do not
+        # hand-edit. fmt/clippy/test + coverage (tarpaulin) + mutation (cargo-mutants) +
+        # supply chain (audit/deny/machete) + semver + shellcheck, each via quality.sh.
+        target: <@ .validate_targets @>
+    container:
+      image: ${{ vars.RUST_IMAGE }}
+      credentials: {username: ${{ vars.GHCR_USER }}, password: ${{ secrets.GHCR_PAT }}}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/app/quality.sh ${{ matrix.target }}
+
+  build:
+    name: Build WASM
+    needs: [quality]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.RUST_IMAGE }}
+      credentials: {username: ${{ vars.GHCR_USER }}, password: ${{ secrets.GHCR_PAT }}}
+    steps:
+      - uses: actions/checkout@v4
+      - run: spin build -f "$SPIN_MANIFEST"
+
+  deploy-lab:
+    name: Deploy (lab)
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: <@ .gh_env @>     # rendered from the gh_env var; the GH Environment seed targets; gates the deploy
+    container:
+      image: ${{ vars.RUST_IMAGE }}
+      credentials: {username: ${{ vars.GHCR_USER }}, password: ${{ secrets.GHCR_PAT }}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/spin-cloud-deploy
+        with:
+          fermyon-cloud-token: ${{ secrets.FERMYON_CLOUD_TOKEN }}
+          spin-manifest: ${{ vars.SPIN_MANIFEST || 'spin.toml' }}
+          app-suffix: ${{ vars.APP_SUFFIX }}

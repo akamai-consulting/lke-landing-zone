@@ -1,0 +1,449 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"sigs.k8s.io/yaml"
+)
+
+// These tests cover the four extension-model recommendations implemented in issue #10:
+//   1. seed/managed file ownership mode,
+//   2. ghVars: (declared GitHub Actions variables) + doctor + seed,
+//   3. digest-pin parity for scaffolded workflow files (lintWorkflowImages),
+//   4. validate_targets render value (the single-source app CI matrix).
+
+// ── 1. seed mode: write-once, then operator-owned ────────────────────────────
+
+func TestSeedModeWriteOnceAndNotDrift(t *testing.T) {
+	manifest := `schemaVersion: 3
+name: kit
+short: x
+kind: tool
+stage: app
+files:
+  - {src: tpl/deny.toml, dst: deny.toml, mode: seed}
+  - {src: tpl/ci.yml, dst: .github/workflows/ci.yml}
+`
+	ext := writeExt(t, manifest, map[string]string{
+		"tpl/deny.toml": "[bans]\nmultiple-versions = \"warn\"\n",
+		"tpl/ci.yml":    "name: ci\n",
+	})
+	root := t.TempDir()
+	if err := runExtensionApply(globalOpts{}, ext, root, false); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	// The operator customizes the seed file.
+	seedPath := filepath.Join(root, "deny.toml")
+	if err := os.WriteFile(seedPath, []byte("[bans]\nmultiple-versions = \"deny\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Re-apply must NOT clobber the operator's seed edit...
+	if err := runExtensionApply(globalOpts{}, ext, root, false); err != nil {
+		t.Fatalf("re-apply: %v", err)
+	}
+	got, _ := os.ReadFile(seedPath)
+	if !strings.Contains(string(got), `"deny"`) {
+		t.Fatalf("seed file was clobbered on re-apply: %q", got)
+	}
+	// ...and --check must NOT report the edited seed file as drift.
+	if err := runExtensionApply(globalOpts{}, ext, root, true); err != nil {
+		t.Fatalf("--check should ignore an operator-edited seed file: %v", err)
+	}
+
+	// The managed workflow, by contrast, still drifts on a hand-edit.
+	if err := os.WriteFile(filepath.Join(root, ".github/workflows/ci.yml"), []byte("name: tampered\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runExtensionApply(globalOpts{}, ext, root, true); err == nil {
+		t.Fatal("--check should flag a hand-edited managed file even when a seed file is present")
+	}
+
+	// The lock records the ownership class so exclude/teardown still own the seed path.
+	var seedLocked bool
+	for _, lf := range loadExtLock(root).Outputs["kit"] {
+		if lf.Path == "deny.toml" && lf.Mode == "seed" {
+			seedLocked = true
+		}
+	}
+	if !seedLocked {
+		t.Fatalf("lock should record deny.toml as mode=seed: %+v", loadExtLock(root).Outputs["kit"])
+	}
+}
+
+func TestFileModeNormalizes(t *testing.T) {
+	for in, want := range map[string]string{"": "managed", "managed": "managed", "seed": "seed", "bogus": "managed"} {
+		if got := fileMode(in); got != want {
+			t.Errorf("fileMode(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// ── 2. ghVars: declared GitHub Actions variables ─────────────────────────────
+
+// ghVars are NOT checked offline: their source of truth is GitHub, so a required ghVar with
+// no local default must NOT produce an offline fatal (that would fail a correctly-configured
+// instance). They are verified by the live pass instead.
+func TestGHVarsNotCheckedOffline(t *testing.T) {
+	m := extManifest{GHVars: []extGHVar{
+		{Name: "RUST_IMAGE", Required: true}, // no local default — would have been a false offline fatal
+		{Name: "APP_SUFFIX"},
+	}}
+	if f := manifestConfigFindings("kit", m, func(string) string { return "" }); len(f) != 0 {
+		t.Fatalf("ghVars must not produce offline findings (they are live-verified), got %+v", f)
+	}
+}
+
+func anyFatal(findings []configFinding) bool {
+	for _, f := range findings {
+		if f.Fatal {
+			return true
+		}
+	}
+	return false
+}
+
+// The live ghVar check fails ONLY on a confirmed problem: a required, non-seedable variable
+// the live lookup proves absent. An unreachable GitHub is "unverified", never fatal.
+func TestLiveGHVarFatalOnlyWhenConfirmedAbsent(t *testing.T) {
+	ext := Extension{Name: "kit", Manifest: extManifest{GHVars: []extGHVar{
+		{Name: "RUST_IMAGE", Image: true, Required: true}, // required, no local default
+	}}}
+
+	unavailable := func(string) (map[string]string, bool) { return nil, false }
+	if f := liveGHVarFindings([]Extension{ext}, unavailable); anyFatal(f) {
+		t.Fatalf("unreachable GitHub must not be fatal (unverified), got %+v", f)
+	}
+
+	absent := func(string) (map[string]string, bool) { return map[string]string{}, true }
+	if f := liveGHVarFindings([]Extension{ext}, absent); !anyFatal(f) {
+		t.Fatalf("a required, non-seedable ghVar confirmed absent must be fatal, got %+v", f)
+	}
+
+	pinned := func(string) (map[string]string, bool) {
+		return map[string]string{"RUST_IMAGE": "ghcr.io/o/i@sha256:" + strings.Repeat("a", 64)}, true
+	}
+	if f := liveGHVarFindings([]Extension{ext}, pinned); len(f) != 0 {
+		t.Fatalf("a set, digest-pinned ghVar should be clean, got %+v", f)
+	}
+
+	mutable := func(string) (map[string]string, bool) {
+		return map[string]string{"RUST_IMAGE": "ghcr.io/o/i:latest"}, true
+	}
+	if f := liveGHVarFindings([]Extension{ext}, mutable); len(f) == 0 || anyFatal(f) {
+		t.Fatalf("a set-but-mutable image value should be a NON-fatal advisory, got %+v", f)
+	}
+}
+
+// A required ghVar that IS seedable (has a default) and is absent live is non-fatal — seed
+// can supply it; it's not a hard gate failure.
+func TestLiveGHVarSeedableAbsentNotFatal(t *testing.T) {
+	ext := Extension{Name: "kit", Manifest: extManifest{GHVars: []extGHVar{
+		{Name: "APP_SUFFIX", Required: true, Default: "-lab"},
+	}}}
+	absent := func(string) (map[string]string, bool) { return map[string]string{}, true }
+	f := liveGHVarFindings([]Extension{ext}, absent)
+	if len(f) == 0 || anyFatal(f) {
+		t.Fatalf("a required-but-seedable absent ghVar should be non-fatal (run seed), got %+v", f)
+	}
+}
+
+func TestSeedPushesGHVars(t *testing.T) {
+	root := t.TempDir()
+	installExt(t, root, "kit", "schemaVersion: 3\nname: kit\nshort: x\nkind: tool\nstage: app\nghVars:\n"+
+		"  - {name: RUST_IMAGE, default: 'ghcr.io/x@sha256:abc'}\n"+ // repo-level
+		"  - {name: SPIN_MANIFEST, ghEnv: infra-prod, default: spin.toml}\n", nil)
+	saveExtConfig(root, extConfig{Enabled: []string{"kit"}})
+
+	var got [][]string
+	orig := seedGHVarFn
+	seedGHVarFn = func(_ globalOpts, env, name, value string) error {
+		got = append(got, []string{env, name, value})
+		return nil
+	}
+	t.Cleanup(func() { seedGHVarFn = orig })
+
+	if err := runExtensionSeed(globalOpts{yes: true}, root); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"RUST_IMAGE": "ghcr.io/x@sha256:abc", "SPIN_MANIFEST": "spin.toml"}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 gh-var writes, got %v", got)
+	}
+	for _, w := range got {
+		if want[w[1]] != w[2] {
+			t.Fatalf("gh-var %s pushed %q, want %q", w[1], w[2], want[w[1]])
+		}
+	}
+}
+
+// ── 3. digest-pin parity for scaffolded workflow files ───────────────────────
+
+func TestLintWorkflowImages(t *testing.T) {
+	const wfManifest = `schemaVersion: 3
+name: kit
+short: x
+kind: tool
+stage: app
+ghVars:
+  - {name: RUST_IMAGE, image: true}
+  - {name: PLAIN_VAR}
+files:
+  - {src: wf, dst: .github/workflows}
+`
+	cases := []struct {
+		name      string
+		image     string
+		wantClean bool
+	}{
+		{"image-flagged vars ref", "${{ vars.RUST_IMAGE }}", true},
+		{"digest pinned", "ghcr.io/o/img@sha256:" + strings.Repeat("a", 64), true},
+		{"declared but not image-flagged", "${{ vars.PLAIN_VAR }}", false},
+		{"undeclared vars ref", "${{ vars.NOPE }}", false},
+		{"mutable tag", "ghcr.io/o/img:latest", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ext, err := extensionFromDir(writeExt(t, wfManifest, map[string]string{
+				"wf/ci.yml": "jobs:\n  q:\n    container:\n      image: " + tc.image + "\n",
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			findings := lintWorkflowImages(ext)
+			if tc.wantClean && len(findings) != 0 {
+				t.Fatalf("expected clean, got %v", findings)
+			}
+			if !tc.wantClean && len(findings) == 0 {
+				t.Fatalf("expected a finding for image %q", tc.image)
+			}
+		})
+	}
+}
+
+// An image-valued ghVar's declared default must itself be digest-pinned (lint can only see
+// the default; the live GitHub value needs a doctor API lookup — tracked as an open question).
+func TestImageGHVarDefaultMustBePinned(t *testing.T) {
+	base := func(def string) extManifest {
+		return extManifest{Name: "k", Short: "x", Kind: "tool", Stage: StageApp,
+			GHVars: []extGHVar{{Name: "RUST_IMAGE", Image: true, Default: def}}}
+	}
+	if f := lintManifest(base("ghcr.io/o/img:latest")); !hasFindingContaining(f, "must be digest-pinned") {
+		t.Fatalf("a mutable image default should be rejected, got %v", f)
+	}
+	if f := lintManifest(base("ghcr.io/o/img@sha256:" + strings.Repeat("a", 64))); hasFindingContaining(f, "digest-pinned") {
+		t.Fatalf("a digest-pinned image default should be accepted, got %v", f)
+	}
+	// A non-image ghVar with a mutable-looking default is fine (it isn't an image).
+	plain := extManifest{Name: "k", Short: "x", Kind: "tool", Stage: StageApp,
+		GHVars: []extGHVar{{Name: "APP_SUFFIX", Default: "-lab"}}}
+	if f := lintManifest(plain); hasFindingContaining(f, "digest-pinned") {
+		t.Fatalf("a non-image ghVar default must not be image-checked, got %v", f)
+	}
+}
+
+// GHVars are Configure-phase declarations, so manifestDeclaresHook must report HookConfig
+// for a manifest that declares only ghVars (not just vars/secrets).
+func TestManifestDeclaresHookConfigCoversGHVars(t *testing.T) {
+	m := extManifest{GHVars: []extGHVar{{Name: "RUST_IMAGE"}}}
+	if !manifestDeclaresHook(m, HookConfig) {
+		t.Fatal("a manifest declaring only ghVars should declare HookConfig")
+	}
+}
+
+// Multi-var live behavior: unreachable GitHub surfaces required live-only vars as non-fatal
+// "unverified"; everything set + pinned is clean; an optional absent var is a non-fatal
+// advisory. (Per-scope: image var at env level, user at repo level.)
+func TestLiveGHVarUnverifiedCleanAndOptional(t *testing.T) {
+	ext := Extension{Name: "kit", Manifest: extManifest{GHVars: []extGHVar{
+		{Name: "RUST_IMAGE", Image: true, Required: true, GHEnv: "infra-prod"},
+		{Name: "GHCR_USER"}, // optional, no default, repo-level
+	}}}
+	pinnedImage := "ghcr.io/o/img@sha256:" + strings.Repeat("a", 64)
+
+	unavailable := func(string) (map[string]string, bool) { return nil, false }
+	f := liveGHVarFindings([]Extension{ext}, unavailable)
+	if anyFatal(f) {
+		t.Fatalf("unreachable GitHub must never be fatal, got %+v", f)
+	}
+	if !containsStatus(f, "RUST_IMAGE", "unverified") {
+		t.Fatalf("a required live-only var should be reported unverified, got %+v", f)
+	}
+
+	clean := func(env string) (map[string]string, bool) {
+		if env == "infra-prod" {
+			return map[string]string{"RUST_IMAGE": pinnedImage}, true
+		}
+		return map[string]string{"GHCR_USER": "bot"}, true
+	}
+	if f := liveGHVarFindings([]Extension{ext}, clean); len(f) != 0 {
+		t.Fatalf("all set + pinned should be clean, got %+v", f)
+	}
+
+	optAbsent := func(env string) (map[string]string, bool) {
+		if env == "infra-prod" {
+			return map[string]string{"RUST_IMAGE": pinnedImage}, true
+		}
+		return map[string]string{}, true // repo-level: GHCR_USER absent
+	}
+	f2 := liveGHVarFindings([]Extension{ext}, optAbsent)
+	if anyFatal(f2) || !containsStatus(f2, "GHCR_USER", "optional") {
+		t.Fatalf("an optional absent var should be a non-fatal advisory, got %+v", f2)
+	}
+}
+
+func containsStatus(findings []configFinding, name, sub string) bool {
+	for _, f := range findings {
+		if f.Name == name && strings.Contains(f.Status, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFindingContaining(findings []string, sub string) bool {
+	for _, f := range findings {
+		if strings.Contains(f, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// The image-pin lint also reaches into the flow-map `container: {image: …, credentials: …}`
+// form (not just block form), and a ${{ vars.X }} inside it is captured whole (the inner
+// braces must not truncate it).
+func TestLintWorkflowFlowMapImage(t *testing.T) {
+	const m = `schemaVersion: 3
+name: kit
+short: x
+kind: tool
+stage: app
+ghVars:
+  - {name: RUST_IMAGE, image: true}
+files:
+  - {src: wf, dst: .github/workflows}
+`
+	clean, err := extensionFromDir(writeExt(t, m, map[string]string{
+		"wf/ci.yml": "    container: {image: ${{ vars.RUST_IMAGE }}, credentials: {username: ${{ vars.GHCR_USER }}}}\n",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := lintWorkflowImages(clean); len(f) != 0 {
+		t.Fatalf("flow-map image with an image-flagged ghVar should be clean, got %v", f)
+	}
+	dirty, _ := extensionFromDir(writeExt(t, m, map[string]string{
+		"wf/ci.yml": "    container: {image: ghcr.io/o/img:latest, credentials: {}}\n",
+	}))
+	if f := lintWorkflowImages(dirty); !hasFindingContaining(f, "must be digest-pinned") {
+		t.Fatalf("flow-map mutable image must be flagged, got %v", f)
+	}
+}
+
+// A secret's ghEnv target may reference a render var (<@ .gh_env @>), so one declared var
+// single-sources both the workflow environment and the seed target.
+func TestSeedResolvesGHEnvVar(t *testing.T) {
+	root := t.TempDir()
+	installExt(t, root, "kit", "schemaVersion: 3\nname: kit\nshort: x\nkind: tool\nstage: app\n"+
+		"vars:\n  - {name: gh_env, default: infra-prod}\n"+
+		"secrets:\n  - {name: TOK, ghEnv: '<@ .gh_env @>'}\n", nil)
+	saveExtConfig(root, extConfig{Enabled: []string{"kit"}})
+	t.Setenv("TOK", "v")
+	_, gh := stubSeed(t)
+	if err := runExtensionSeed(globalOpts{yes: true}, root); err != nil {
+		t.Fatal(err)
+	}
+	if len(*gh) == 0 || (*gh)[0] != "infra-prod" {
+		t.Fatalf("ghEnv should resolve gh_env → infra-prod, got %v", *gh)
+	}
+}
+
+// A non-workflow file is never image-checked, even if it mentions a mutable image.
+func TestLintWorkflowImagesIgnoresNonWorkflow(t *testing.T) {
+	ext, err := extensionFromDir(writeExt(t, "schemaVersion: 3\nname: kit\nshort: x\nkind: tool\nstage: app\nfiles:\n  - {src: notes.md, dst: docs/notes.md}\n",
+		map[string]string{"notes.md": "use image: ghcr.io/x:latest in prod\n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := lintWorkflowImages(ext); len(f) != 0 {
+		t.Fatalf("non-workflow file must not be image-checked, got %v", f)
+	}
+}
+
+// ── 4. validate_targets: single-source app CI matrix ─────────────────────────
+
+func TestValidateTargets(t *testing.T) {
+	m := extManifest{Validate: []extStep{
+		{Name: "fmt-check", Argv: []string{"q", "fmt-check"}},
+		{Name: "clippy", Argv: []string{"q", "clippy"}},
+		{Argv: []string{"q", "noname"}}, // no name → no matrix identity → skipped
+	}}
+	if got := validateTargets(m); got != "[fmt-check, clippy]" {
+		t.Fatalf("validateTargets = %q, want [fmt-check, clippy]", got)
+	}
+	if got := validateTargets(extManifest{}); got != "[]" {
+		t.Fatalf("empty validate: should render [], got %q", got)
+	}
+}
+
+// Candidate consistency: every validate: target the akamai-functions manifest declares (the
+// matrix is rendered from these) must be a case quality.sh accepts — otherwise the rendered
+// CI matrix would dispatch a target the script rejects. The manifest NAMES the contract; the
+// script IMPLEMENTS it; this guards the seam between them.
+func TestAkamaiValidateTargetsCoveredByQualityScript(t *testing.T) {
+	wd, _ := os.Getwd()
+	kit := filepath.Join(wd, "..", "..", "..", "external-candidates", "akamai-functions")
+	manifestBytes, err := os.ReadFile(filepath.Join(kit, "recipe.yaml"))
+	if err != nil {
+		t.Skipf("akamai-functions kit not present: %v", err)
+	}
+	scriptBytes, err := os.ReadFile(filepath.Join(kit, "files", "scripts", "app", "quality.sh"))
+	if err != nil {
+		t.Skipf("quality.sh not present: %v", err)
+	}
+	var m extManifest
+	if err := yaml.Unmarshal(manifestBytes, &m); err != nil {
+		t.Fatalf("parse recipe.yaml: %v", err)
+	}
+	script := string(scriptBytes)
+	if len(m.Validate) == 0 {
+		t.Fatal("expected validate: targets in the akamai-functions manifest")
+	}
+	for _, s := range m.Validate {
+		if s.Name == "" {
+			continue
+		}
+		if !strings.Contains(script, s.Name+")") { // quality.sh dispatches via `<name>)` cases
+			t.Errorf("validate target %q has no matching case in quality.sh", s.Name)
+		}
+	}
+}
+
+// A scaffolded workflow renders its matrix from the manifest's validate: names, so the
+// list lives in exactly one place.
+func TestValidateTargetsRendersIntoWorkflow(t *testing.T) {
+	manifest := `schemaVersion: 3
+name: kit
+short: x
+kind: app
+stage: app
+validate:
+  - {name: fmt-check, argv: [scripts/q.sh, fmt-check]}
+  - {name: clippy, argv: [scripts/q.sh, clippy]}
+files:
+  - {src: ci.yml, dst: .github/workflows/ci.yml}
+`
+	ext := writeExt(t, manifest, map[string]string{"ci.yml": "    target: <@ .validate_targets @>\n"})
+	root := t.TempDir()
+	if err := runExtensionApply(globalOpts{}, ext, root, false); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
+	if !strings.Contains(string(got), "target: [fmt-check, clippy]") {
+		t.Fatalf("workflow matrix should render from validate:, got %q", got)
+	}
+}

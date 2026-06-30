@@ -1,0 +1,21 @@
+// Package guard holds <@ .Name @>'s logic. It is PURE (instance tree in →
+// findings out), so it is unit-testable without a cluster. That testability is
+// the contract every logic-bearing extension carries: `llz extension lint`
+// fails a kind:check extension that ships no tests.
+package guard
+
+import "io/fs"
+
+// Check inspects the instance tree (rooted at fsys) and returns one finding per
+// problem — empty means the gate passes. Replace the placeholder rule below with
+// the real one, and extend guard_test.go to match.
+func Check(fsys fs.FS) ([]string, error) {
+	var findings []string
+	// TODO: implement the real check. Placeholder rule: a leftover REPLACE_ME
+	// marker file is a finding, so a freshly-scaffolded extension has something
+	// concrete (and tested) to run before you fill in real logic.
+	if _, err := fs.Stat(fsys, "REPLACE_ME"); err == nil {
+		findings = append(findings, "REPLACE_ME marker is still present")
+	}
+	return findings, nil
+}

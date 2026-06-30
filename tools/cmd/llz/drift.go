@@ -19,6 +19,12 @@ func runDrift(branch, repoURL string, strict bool) error {
 	if branch == "" {
 		branch = "main"
 	}
+	// Extension output drift is a SEPARATE delivery channel from the copier template, so it
+	// is reported first and unconditionally — an instance can carry extensions without a
+	// .template-version (e.g. one not created via `llz new`), and its scaffolded files
+	// still drift. Report-only.
+	lifecycleDrift(gopts, ".")
+
 	b, err := os.ReadFile(".template-version")
 	if err != nil {
 		return fmt.Errorf("no .template-version found — run `llz env add` or `llz upgrade` first")

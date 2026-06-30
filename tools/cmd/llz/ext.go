@@ -46,8 +46,10 @@ func loadExtCommands(dir string) ([]extCommand, error) {
 }
 
 // addExtCommands registers each valid extension command on root, warning (and
-// skipping) on malformed entries or names that collide with a built-in.
-func addExtCommands(root *cobra.Command, cmds []extCommand) {
+// skipping) on malformed entries or names that collide with a built-in. source
+// names where the commands came from (.llz/commands.yaml, or an extension's
+// enable-list) so a collision warning points at the right place.
+func addExtCommands(root *cobra.Command, cmds []extCommand, source string) {
 	builtin := map[string]bool{}
 	for _, c := range root.Commands() {
 		builtin[c.Name()] = true
@@ -56,15 +58,15 @@ func addExtCommands(root *cobra.Command, cmds []extCommand) {
 		ec := ec
 		switch {
 		case ec.Name == "" || len(ec.Argv) == 0:
-			fmt.Fprintf(os.Stderr, "llz: skipping %s entry with empty name/argv\n", extCommandsFile)
+			fmt.Fprintf(os.Stderr, "llz: skipping %s entry with empty name/argv\n", source)
 			continue
 		case builtin[ec.Name]:
-			fmt.Fprintf(os.Stderr, "llz: skipping %s command %q (shadows a built-in)\n", extCommandsFile, ec.Name)
+			fmt.Fprintf(os.Stderr, "llz: skipping %s command %q (shadows a built-in)\n", source, ec.Name)
 			continue
 		}
 		short := ec.Short
 		if short == "" {
-			short = "operator-defined command (" + extCommandsFile + ")"
+			short = "operator-defined command (" + source + ")"
 		}
 		root.AddCommand(&cobra.Command{
 			Use:   ec.Name,

@@ -1,0 +1,12 @@
+schemaVersion: 3
+name: lint-yaml
+short: yamllint config + check for repo YAML hygiene (built-in, opt-in)
+kind: tool
+stage: universal  # repo-wide YAML hygiene — spans IaC, kube-infra, and app YAML alike
+optional: true
+tools:
+  - {name: yamllint, via: "pipx:yamllint", version: "1.35.1"}
+files:
+  - {src: yamllint.yaml, dst: .yamllint.yaml}
+check:
+  - {name: yamllint, argv: [yamllint, --strict, -c, .yamllint.yaml, .]}

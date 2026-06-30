@@ -431,6 +431,14 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		}
 	}
 
+	// Extension config readiness — the Configure-phase lifecycle health folded into
+	// the one doctor gate (a required extension secret missing fails readiness).
+	if err := lifecycleDoctor("."); err != nil {
+		errs = append(errs, err)
+	}
+	// Operate-phase health probes (report-only): surfaced here but never fail the gate.
+	lifecycleHealth(".")
+
 	// e2e readiness — .llz/*.env merged with the live repo config. Needs a repo:
 	// the flag, an instance's .copier-answers.yml, or --admin (the example repo).
 	if repo == "" && !admin {

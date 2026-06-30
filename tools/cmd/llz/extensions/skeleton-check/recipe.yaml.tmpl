@@ -1,0 +1,18 @@
+# <@ .Name @> — scaffolded by `llz extension new --kind check`.
+#
+# Logic-bearing extension: the guard logic lives in internal/ (PURE + unit-tested);
+# this manifest only declares argv to a tested entrypoint. Keep it argv-only —
+# `llz extension lint` rejects inline shell here, the same way `llz ci
+# untestable-loc` rejects inline logic in core's workflows.
+schemaVersion: 3
+name: <@ .Name @>
+short: TODO one-line description of what <@ .Name @> checks
+kind: check
+# stage: which delivery layer this targets — iac | kube-infra | app, or `universal` for a
+# cross-cutting check that applies to every layer. App-stage checks run in the app's own
+# CI, not the platform gate. Default to universal; narrow it if the check is layer-specific.
+stage: universal
+tools: [go]
+check:
+  - name: <@ .Name @>
+    argv: [go, run, ./cmd/check]

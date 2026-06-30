@@ -1,0 +1,16 @@
+name: Spin Cloud deploy
+description: Authenticate with Fermyon Cloud and deploy a Spin app to Akamai Wasm Functions.
+inputs:
+  fermyon-cloud-token: {description: Fermyon Cloud API token, required: true}
+  spin-manifest: {description: Path to the app's spin.toml, required: false, default: spin.toml}
+  app-suffix: {description: 'App-name suffix (e.g. -lab); empty for prod', required: false, default: ''}
+runs:
+  using: composite
+  steps:
+    - name: Authenticate with Fermyon Cloud
+      shell: bash
+      env: {FERMYON_CLOUD_TOKEN: '${{ inputs.fermyon-cloud-token }}'}
+      run: spin cloud login --token "$FERMYON_CLOUD_TOKEN"
+    - name: Deploy
+      shell: bash
+      run: ./scripts/app/deploy-cloud.sh --manifest "${{ inputs.spin-manifest }}" --app-suffix "${{ inputs.app-suffix }}"

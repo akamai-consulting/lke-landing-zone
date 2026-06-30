@@ -67,6 +67,7 @@ func newRootCmd() *cobra.Command {
 		secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
+		extensionCmd(), // EXPERIMENT (issue #10): scaffolder-first extension vehicle
 	)
 
 	// Group the adopter-facing commands in `llz --help` so the front door is
@@ -95,7 +96,18 @@ func newRootCmd() *cobra.Command {
 	if cmds, err := loadExtCommands("."); err != nil {
 		fmt.Fprintln(os.Stderr, red("llz:"), err)
 	} else {
-		addExtCommands(root, cmds)
+		addExtCommands(root, cmds, extCommandsFile)
+	}
+
+	// Operate-phase: commands contributed by enabled extensions (.llz/
+	// extensions.yaml). Registered after .llz/commands.yaml so precedence is
+	// built-ins > operator commands.yaml > extension commands (addExtCommands
+	// rebuilds the collision set from the current root each call). Best-effort: a
+	// registry/source problem warns but never breaks the CLI.
+	if cmds, err := enabledExtCommands("."); err != nil {
+		fmt.Fprintln(os.Stderr, red("llz:"), err)
+	} else {
+		addExtCommands(root, cmds, extensionsConfigFile)
 	}
 
 	// Make unknown subcommands fail loud on every command group, not just the

@@ -1,0 +1,10 @@
+---
+# Scaffolded by the lint-yaml built-in extension (llz extension enable lint-yaml).
+extends: default
+rules:
+  line-length: disable
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  truthy:
+    check-keys: false

@@ -1,0 +1,29 @@
+// Add to the CONSUMING instance's renovate config (renovate.json5).
+//
+// This custom manager watches each pinned extension source in .llz/recipes.yaml
+// and opens a PR when the upstream git tag moves — the "keep the pin fresh" half
+// of the loop, with no human polling. It only proposes the bump; copier's
+// migration (or `llz extension upgrade`) applies it.
+//
+// Notes: packageName must be the clonable git URL; git-tags is the datasource.
+// Older renovate calls `managerFilePatterns` `fileMatch` — rename if needed.
+{
+  customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^\\.llz/recipes\\.ya?ml$/"],
+      matchStrings: [
+        "repo:\\s*(?<packageName>[^\\s#]+)\\s+ref:\\s*(?<currentValue>v[0-9][^\\s#]*)",
+      ],
+      datasourceTemplate: "git-tags",
+      depNameTemplate: "<@ .Name @>",
+    },
+  ],
+
+  // Self-hosted only: materialize the bump in the SAME PR (needs allowedCommands).
+  // Drop this block to keep renovate proposal-only and let copier apply on update.
+  postUpgradeTasks: {
+    commands: ["llz extension upgrade <@ .Dir @>"],
+    executionMode: "branch",
+  },
+}

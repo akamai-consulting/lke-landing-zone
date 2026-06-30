@@ -1,0 +1,32 @@
+package guard
+
+import (
+	"testing"
+	"testing/fstest"
+)
+
+// Ships GREEN: a logic-bearing extension must prove its logic is unit-tested.
+// `llz extension lint` checks these exist; the production gate is the lock
+// recording the pinned SHA's CI as passing. Extend the table as you implement
+// Check.
+func TestCheck(t *testing.T) {
+	cases := []struct {
+		name  string
+		files fstest.MapFS
+		want  int
+	}{
+		{"clean tree has no findings", fstest.MapFS{"main.tf": {Data: []byte("# ok")}}, 0},
+		{"placeholder rule fires", fstest.MapFS{"REPLACE_ME": {Data: []byte("")}}, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := Check(c.files)
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			if len(got) != c.want {
+				t.Fatalf("findings = %d, want %d (%v)", len(got), c.want, got)
+			}
+		})
+	}
+}

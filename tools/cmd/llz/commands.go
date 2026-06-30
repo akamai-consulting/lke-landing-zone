@@ -41,10 +41,16 @@ func copierCopyArgv(org, ref, dir string) []string {
 		"gh:" + org + "/" + templateName, dir}
 }
 
-func copierUpdateArgv(ref string) []string {
+func copierUpdateArgv(ref string, excludes ...string) []string {
 	a := []string{"copier", "update", "--trust"}
 	if ref != "" {
 		a = append(a, "--vcs-ref", ref, "--data", "llz_version="+ref)
+	}
+	// Fence: paths an extension owns (from .llz/extensions.lock) are excluded so
+	// `copier update` never clobbers or 3-way-merge-conflicts them — the issue's
+	// "recipe-managed" 4th ownership class, made real instance-side.
+	for _, e := range excludes {
+		a = append(a, "--exclude", e)
 	}
 	return a
 }
@@ -89,6 +95,22 @@ func ghSecretSetStdin(name, ghEnv, value string) error {
 
 func variableSetArgv(name string) []string {
 	return []string{"gh", "variable", "set", name}
+}
+
+// ghVariableSet sets a GitHub Actions variable (non-secret CI config) at the repo level,
+// or in an Environment when ghEnv is non-empty. Unlike a secret the value is non-sensitive,
+// so it rides --body rather than stdin. Backs the seedGHVarFn seam (extension_seed.go).
+func ghVariableSet(name, ghEnv, value string) error {
+	args := []string{"variable", "set", name, "--body", value}
+	label := name
+	if ghEnv != "" {
+		args = append(args, "--env", ghEnv)
+		label = fmt.Sprintf("%s --env %s", name, ghEnv)
+	}
+	if out, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("gh variable set %s: %s", label, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // statusArgv is the read-only convergence check set (matches the verify steps in
@@ -272,11 +294,18 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 }
 
 func runUpgrade(g globalOpts, ref string) error {
+	// Adoption runs FIRST, before the copier update: an extension whose files migrated out
+	// of the template is detected (files present, never locked) and enabled + recorded in
+	// the lock, so the `ownedPaths` exclusion below fences copier off them and they survive
+	// the update instead of being deleted. Best-effort: a hiccup here must not block upgrade.
+	if err := runExtensionAdopt(g, "."); err != nil {
+		fmt.Fprintf(os.Stderr, "llz: extension adopt skipped: %v\n", err)
+	}
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
 	// to the latest tag but leave the recorded llz_version stale).
 	ref = resolveScaffoldRef(ref)
-	if err := run(g, copierUpdateArgv(ref)...); err != nil {
+	if err := run(g, copierUpdateArgv(ref, ownedPaths(loadExtLock("."))...)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
 	}
 	// copier update never deletes a file the template dropped between versions, so
@@ -284,6 +313,14 @@ func runUpgrade(g globalOpts, ref string) error {
 	// up to date from the copier update above. Honors --dry-run internally.
 	if err := applyTemplateRemovals(g); err != nil {
 		return fmt.Errorf("apply template removals: %w", err)
+	}
+	// llz upgrade fires the lifecycle Sustain phase (files: hook): re-render every
+	// built-in + enabled extension's files: so a changed template/binary propagates
+	// without a manual re-scaffold. The best-effort posture (a misconfigured extension
+	// warns, never aborts the upgrade) lives in lifecycleSustain now, not here — so a
+	// non-nil return is a genuine failure worth surfacing. Honors --dry-run internally.
+	if err := lifecycleSustain(g, "."); err != nil {
+		return err
 	}
 	// Re-stamp natively: an instance carries no template-scripts/ to shell out to.
 	if g.dryRun {
@@ -378,6 +415,9 @@ func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
 	// Standing security-hygiene check: the OpenBao root token must not linger in
 	// infra-<env> after first-time bootstrap (report-only — it does not gate health).
 	warnIfRootTokenPresent(args[0])
+	// Operate-phase extension health probes (report-only): the same lifecycle health
+	// surface doctor folds in, so an optionalized cluster-health monitor reports here too.
+	lifecycleHealth(".")
 	return firstErr
 }
 

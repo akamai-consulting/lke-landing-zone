@@ -1,0 +1,4 @@
+# cargo-mutants config (starter) — tune exclusions for your crates. Mutation testing
+# verifies your tests actually catch injected faults (a coverage % can lie; this can't).
+timeout_multiplier = 2.0
+exclude_globs = ["**/build.rs", "**/tests/**", "**/benches/**"]

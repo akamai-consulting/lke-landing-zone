@@ -44,6 +44,11 @@ func TestCopierUpdateArgv(t *testing.T) {
 		[]string{"copier", "update", "--trust", "--vcs-ref", "v0.2.0", "--data", "llz_version=v0.2.0"}) {
 		t.Errorf("ref: got %v", got)
 	}
+	// the fence: extension-owned paths become --exclude flags
+	if got := copierUpdateArgv("", ".github/CODEOWNERS", "ohttp/config.yaml"); !reflect.DeepEqual(got,
+		[]string{"copier", "update", "--trust", "--exclude", ".github/CODEOWNERS", "--exclude", "ohttp/config.yaml"}) {
+		t.Errorf("exclude: got %v", got)
+	}
 }
 
 func TestResolveScaffoldRef(t *testing.T) {

@@ -1,0 +1,16 @@
+schemaVersion: 3
+name: validate-trivy
+short: trivy IaC misconfiguration scan — heavyweight CI-tier policy validation (built-in, opt-in)
+kind: tool
+stage: iac
+optional: true
+tools:
+  - {name: trivy, via: "aqua:aquasecurity/trivy", version: "0.55.2"}
+# validate: (HookValidate) is the CI tier, folded into `llz validate`, NOT the fast
+# pre-commit gate — and tools are REQUIRED (a missing trivy fails, it does not skip),
+# because a "passed" security scan that never ran is worse than a loud failure. `trivy
+# config` self-discovers (recurses the repo's terraform/k8s/Dockerfile), so it is a clean
+# argv-only step with no caller-side file discovery. Static repo IaC scan — distinct from
+# the in-cluster trivy-operator compliance reports.
+validate:
+  - {name: trivy-config, argv: [trivy, config, --severity, "HIGH,CRITICAL", --exit-code, "1", .]}
