@@ -5,24 +5,29 @@
 #
 #     llz env add <env> --template-env example
 #
-# That copies this directory to apl-values/<env>/ and fills it in. The $${...}
-# placeholders are rendered by Terraform's cluster-bootstrap (templatefile()):
-# the cluster identity (cluster_name/cluster_domain, from the env's tfvars) plus
-# the secrets + infra outputs (repo creds, dns token, loki/harbor object-store,
-# coredns IP). For a SPEC-driven instance (landingzone.yaml present), `llz render`
-# additionally writes the identity + platform keys — cluster.name/domainSuffix,
-# dns.domainFilters, otomi.has* — straight in from spec.environments.<env> +
-# spec.defaults.platform, so the ${cluster_name}/${cluster_domain} placeholders
-# below are already resolved before Terraform runs (single source = the spec).
-# Values written REPLACE_PER_ENV are filled in by you per environment.
+# That copies this directory to apl-values/<env>/ and fills it in. A
+# landingzone.yaml spec is REQUIRED — there is no non-spec path. `llz render`
+# resolves every non-secret $${...} placeholder below straight from the spec into
+# the committed apl-values/<env>/values.yaml: the cluster identity
+# (cluster.name/domainSuffix, dns.domainFilters), the platform flags (otomi.has*),
+# the object-store wiring (Loki/Harbor bucket names + S3 endpoint/region), and the
+# values-repo coordinates (otomi.git repoUrl/username/branch) — all from
+# spec.environments.<env> + spec.defaults.platform (single source = the spec).
+#
+# Only the genuine runtime secrets + the live coredns IP are left as $${...} for
+# Terraform's cluster-bootstrap templatefile() to fill: $${loki_admin_password},
+# $${apl_values_repo_password}, $${linode_dns_token}, $${coredns_cluster_ip}.
+# (The $${...} here are ESCAPED for templatefile() — this whole file is passed
+# through it, so a bare (unescaped) placeholder in a comment would be parsed as an
+# interpolation and break the render.)
 #
 # Schema reference: https://raw.githubusercontent.com/linode/apl-core/main/values-schema.yaml
 
-# ── Cluster identity (Terraform-rendered; spec instances: llz-render-rendered) ──
+# ── Cluster identity (llz-render-rendered from the spec) ────────────────────────
 cluster:
-  name:         ${cluster_name}       # env's cluster_name (spec: cluster.bootstrap.name)
+  name:         ${cluster_name}       # llz render ← spec.cluster.bootstrap.name
   provider:     linode
-  domainSuffix: ${cluster_domain}     # env's cluster_domain (spec: cluster.bootstrap.domainSuffix)
+  domainSuffix: ${cluster_domain}     # llz render ← spec.cluster.bootstrap.domainSuffix
   # Promote the encrypted, retain-policy block-storage class shipped by the
   # llz-cluster-foundation chart (kubernetes-charts/llz-cluster-foundation).
   defaultStorageClass: block-storage-retain
@@ -147,8 +152,9 @@ apps:
     # passed in as TF_VAR_loki_admin_password. Required by apl-core's apps.loki schema.
     adminPassword: ${loki_admin_password}
     # S3 chunk store on Linode Object Storage. The grafana/loki chart reads
-    # bucketNames + s3.{endpoint,region} from values (not env), so they are
-    # rendered from the object-storage workspace via templatefile(). The AWS
+    # bucketNames + s3.{endpoint,region} from values (not env); `llz render`
+    # writes them in from the spec (env name + spec.cluster.objectStorage.cluster),
+    # mirroring the llz-object-storage module's naming. The AWS
     # creds come from the `loki-object-store` ESO Secret (synced from OpenBao)
     # mounted as env vars on the singleBinary pod. The schema's
     # object_store=filesystem→s3 flip is done by the kyverno-loki-s3-object-store
@@ -192,7 +198,7 @@ apps:
   harbor:
     enabled: true
     # Registry image storage on Linode Object Storage (vs a local block PVC).
-    # bucket/region/endpoint are rendered from the object-storage workspace; the
+    # bucket/region/endpoint are written in by `llz render` from the spec; the
     # S3 access/secret keys are injected from the `harbor-registry-s3` ESO Secret
     # as REGISTRY_STORAGE_S3_* env vars (which also override the rendered values
     # at runtime). PVC sizes are for the non-registry components.
@@ -250,11 +256,12 @@ otomi:
   hasExternalIDP: false   # standalone Keycloak
   git:
     # External GitHub repo over HTTPS + a fine-grained PAT (Contents: write —
-    # apl-operator PUSHES its rendered values tree here during bootstrap). All
-    # four fields are rendered by terraform-iac-bootstrap/cluster-bootstrap templatefile():
-    # repoUrl/username/branch come from the cluster-bootstrap vars; password is
-    # the APL_VALUES_REPO_TOKEN PAT. `path` is intentionally absent — apl-core's
-    # otomi.git schema does not permit it.
+    # apl-operator PUSHES its rendered values tree here during bootstrap).
+    # repoUrl/username/branch are written in by `llz render` from
+    # spec.cluster.bootstrap.aplValues (username/branch default to x-access-token/
+    # main); only password stays a $${...} placeholder filled by cluster-bootstrap
+    # templatefile() from the APL_VALUES_REPO_TOKEN PAT. `path` is intentionally
+    # absent — apl-core's otomi.git schema does not permit it.
     repoUrl:  ${apl_values_repo_url}      # https://github.com/<org>/<instance-repo>.git
     username: ${apl_values_repo_username}
     password: ${apl_values_repo_password}

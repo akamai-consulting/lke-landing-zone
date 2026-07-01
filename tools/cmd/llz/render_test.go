@@ -40,7 +40,7 @@ func stageRoots(t *testing.T, tfDir string) {
 	t.Helper()
 	examples := map[string]string{
 		"cluster":           "cluster_label = \"x\"\nregion = \"x\"\nk8s_version = \"x\"\nnode_type = \"x\"\nnode_count = 1\ntags = []\ncontrol_plane_high_availability = false\ncontrol_plane_audit_logs_enabled = false\nha_role = \"standalone\"\n",
-		"cluster-bootstrap": "deployment = \"your-env\"\napl_values_env = \"your-env\"\ncluster_name = \"platform-your-env\"\ncluster_domain = \"your-env.internal\"\n",
+		"cluster-bootstrap": "deployment = \"your-env\"\napl_values_env = \"your-env\"\ncluster_domain = \"your-env.internal\"\n",
 		"object-storage":    "region_suffix = \"your-env\"\nobj_cluster = \"us-ord-1\"\n",
 	}
 	for root, body := range examples {

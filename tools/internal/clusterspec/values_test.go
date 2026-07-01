@@ -157,6 +157,134 @@ func TestRenderValues_Sizing(t *testing.T) {
 	}
 }
 
+func TestObjectStoreWiring(t *testing.T) {
+	chunks, ruler, admin, lokiEndpoint, region, harborBucket, harborEndpoint :=
+		objectStoreWiring("primary", "us-ord-1")
+	for got, want := range map[string]string{
+		chunks:         "platform-loki-chunks-primary",
+		ruler:          "platform-loki-ruler-primary",
+		admin:          "platform-loki-admin-primary",
+		lokiEndpoint:   "us-ord-1.linodeobjects.com",         // Loki: bare host
+		region:         "us-ord-1",                           // OBJ cluster id
+		harborBucket:   "platform-harbor-registry-primary",   // registry bucket
+		harborEndpoint: "https://us-ord-1.linodeobjects.com", // Harbor: full URL
+	} {
+		if got != want {
+			t.Errorf("objectStoreWiring = %q, want %q", got, want)
+		}
+	}
+	// Empty OBJ cluster → all blank (setStr then no-ops, leaving the placeholder).
+	c, _, _, _, _, _, _ := objectStoreWiring("dev", "")
+	if c != "" {
+		t.Errorf("empty objCluster should yield blank wiring, got %q", c)
+	}
+}
+
+func TestValuesIdentity_DerivedAndDefaults(t *testing.T) {
+	lz := &LandingZone{}
+	lz.Spec.Environments = map[string]Environment{"primary": func() Environment {
+		var e Environment
+		e.Cluster.Bootstrap.Name = "platform-primary"
+		e.Cluster.Bootstrap.DomainSuffix = "primary.example.com"
+		e.Cluster.Bootstrap.AplValues.RepoURL = "https://github.com/acme/platform.git"
+		// Username + Revision intentionally omitted → defaults.
+		e.Cluster.ObjectStorage.Cluster = "us-ord-1"
+		return e
+	}()}
+
+	id := lz.ValuesIdentity("primary")
+	for got, want := range map[string]string{
+		id.ClusterName:      "platform-primary",
+		id.LokiBucketChunks: "platform-loki-chunks-primary",
+		id.HarborBucket:     "platform-harbor-registry-primary",
+		id.LokiS3Endpoint:   "us-ord-1.linodeobjects.com",
+		id.HarborS3Endpoint: "https://us-ord-1.linodeobjects.com",
+		id.LokiS3Region:     "us-ord-1",
+		id.RepoURL:          "https://github.com/acme/platform.git",
+		id.RepoUsername:     "x-access-token", // default
+		id.RepoBranch:       "main",           // default
+	} {
+		if got != want {
+			t.Errorf("ValuesIdentity field = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestRenderValues_ObjectStoreAndRepo(t *testing.T) {
+	const base = `apps:
+  loki:
+    enabled: true
+    _rawValues:
+      loki:
+        storage:
+          bucketNames:
+            chunks: ${loki_bucket_chunks}
+            ruler:  ${loki_bucket_ruler}
+            admin:  ${loki_bucket_admin}
+          s3:
+            endpoint: ${loki_s3_endpoint}
+            region:   ${loki_s3_region}
+  harbor:
+    enabled: true
+    _rawValues:
+      persistence:
+        imageChartStorage:
+          s3:
+            bucket:         ${harbor_bucket}
+            region:         ${harbor_s3_region}
+            regionendpoint: ${harbor_s3_endpoint}
+otomi:
+  git:
+    repoUrl:  ${apl_values_repo_url}
+    username: ${apl_values_repo_username}
+    branch:   ${apl_values_repo_ref}
+    password: ${apl_values_repo_password}
+`
+	id := ValuesIdentity{
+		LokiBucketChunks: "platform-loki-chunks-primary",
+		LokiBucketRuler:  "platform-loki-ruler-primary",
+		LokiBucketAdmin:  "platform-loki-admin-primary",
+		LokiS3Endpoint:   "us-ord-1.linodeobjects.com",
+		LokiS3Region:     "us-ord-1",
+		HarborBucket:     "platform-harbor-registry-primary",
+		HarborS3Endpoint: "https://us-ord-1.linodeobjects.com",
+		HarborS3Region:   "us-ord-1",
+		RepoURL:          "https://github.com/acme/platform.git",
+		RepoUsername:     "x-access-token",
+		RepoBranch:       "main",
+	}
+	out, err := RenderValues([]byte(base), nil, id)
+	if err != nil {
+		t.Fatalf("RenderValues: %v", err)
+	}
+	s := string(out)
+	for _, w := range []string{
+		"chunks: platform-loki-chunks-primary",
+		"ruler: platform-loki-ruler-primary",
+		"admin: platform-loki-admin-primary",
+		"endpoint: us-ord-1.linodeobjects.com",
+		"bucket: platform-harbor-registry-primary",
+		"regionendpoint: https://us-ord-1.linodeobjects.com",
+		"repoUrl: https://github.com/acme/platform.git",
+		"username: x-access-token",
+		"branch: main",
+	} {
+		if !strings.Contains(s, w) {
+			t.Errorf("object-store/repo not rendered: missing %q:\n%s", w, s)
+		}
+	}
+	// The genuine secret placeholder is left for Terraform's templatefile().
+	if !strings.Contains(s, "${apl_values_repo_password}") {
+		t.Errorf("secret placeholder must be preserved for templatefile():\n%s", s)
+	}
+	// No derivable placeholder should survive.
+	for _, ph := range []string{"${loki_bucket_chunks}", "${harbor_bucket}", "${apl_values_repo_url}", "${apl_values_repo_ref}"} {
+		if strings.Contains(s, ph) {
+			t.Errorf("derivable placeholder %q should be resolved, still present:\n%s", ph, s)
+		}
+	}
+}
+
 func intPtr(i int) *int { return &i }
 
 // mustDecodeValues pulls apps.<name>.enabled out of a rendered values.yaml.

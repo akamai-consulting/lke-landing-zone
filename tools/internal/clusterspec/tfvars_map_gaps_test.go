@@ -82,9 +82,9 @@ func TestClusterTFVars_MinimalOmitsOptionals(t *testing.T) {
 func TestBootstrapTFVars_Optionals(t *testing.T) {
 	full := assignKeys(BootstrapTFVars("prod", fullCluster()))
 	for _, k := range []string{
-		"deployment", "apl_values_env", "cluster_name", "cluster_domain",
-		"apl_chart_version", "apl_values_repo_url", "apl_values_repo_revision",
-		"apl_values_repo_username", "apps_repo_revision", "obj_cluster",
+		"deployment", "apl_values_env", "cluster_domain",
+		"apl_chart_version", "apl_values_repo_url",
+		"apl_values_repo_username", "apps_repo_revision",
 	} {
 		if _, ok := full[k]; !ok {
 			t.Errorf("BootstrapTFVars(full) missing %q", k)
@@ -93,16 +93,20 @@ func TestBootstrapTFVars_Optionals(t *testing.T) {
 	if full["deployment"] != `"prod"` {
 		t.Errorf("deployment = %q, want \"prod\"", full["deployment"])
 	}
-	// obj_cluster lets cluster-bootstrap derive the S3 wiring as locals instead of
-	// reading the object-storage remote_state; same source as object-storage tfvars.
-	if full["obj_cluster"] != `"us-ord-1"` {
-		t.Errorf("obj_cluster = %q, want \"us-ord-1\"", full["obj_cluster"])
+	// cluster_name, obj_cluster and apl_values_repo_revision are NO LONGER emitted:
+	// `llz render` writes cluster identity, the object-store wiring and
+	// otomi.git.branch straight into the committed values.yaml, so cluster-bootstrap
+	// doesn't need them as tfvars.
+	for _, k := range []string{"cluster_name", "obj_cluster", "apl_values_repo_revision"} {
+		if _, ok := full[k]; ok {
+			t.Errorf("BootstrapTFVars should no longer emit %q (moved into values.yaml via llz render)", k)
+		}
 	}
 
 	var c Cluster
 	c.Bootstrap.Name, c.Bootstrap.DomainSuffix = "n", "d"
 	min := assignKeys(BootstrapTFVars("dev", c))
-	for _, k := range []string{"apl_chart_version", "apl_values_repo_url", "apps_repo_revision", "obj_cluster"} {
+	for _, k := range []string{"apl_chart_version", "apl_values_repo_url", "apps_repo_revision"} {
 		if _, ok := min[k]; ok {
 			t.Errorf("BootstrapTFVars(minimal) should omit %q", k)
 		}
