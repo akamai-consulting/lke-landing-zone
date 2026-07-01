@@ -94,18 +94,11 @@ variable "destroying" {
   default     = false
 }
 
-variable "linode_token" {
-  description = "Linode account API token. Consumed by the destroy-time provisioner on null_resource.cleanup_platform_volumes_on_destroy to sweep any Block Storage Volume tagged `block-storage` that's left unattached after PVC reap — this is the orphan-prevention that keeps account-quota exhaustion from blocking the next bootstrap. Same value as the cluster module's linode_token; in CI both are wired from secrets.LINODE_API_TOKEN via TF_VAR_linode_token."
-  type        = string
-  sensitive   = true
-}
-
-variable "openbao_secrets_write_token" {
-  description = "GitHub PAT with `repo` + `secrets:write` scope. Consumed by null_resource.clear_openbao_secrets_on_destroy to delete OPENBAO_ROOT_TOKEN (and downstream OPENBAO_RECOVERY_KEY_{1,2,3}, OPENBAO_SEAL_KEY, OPENBAO_APPROLE_SECRET_ID_<REGION>, HARBOR_ROBOT_NAME, HARBOR_PASSWORD) from the `infra-<region>` environment on cluster-bootstrap destroy. After a cluster destroy these are all bound to an OpenBao / Harbor instance that no longer exists; leaving them set lets stale-credential failures latch onto the next bootstrap (Configure OpenBao 403 permission denied). Optional: empty default = no-op + log a warning, operator clears manually."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
+# linode_token and openbao_secrets_write_token were removed here: their only
+# consumers were the destroy-time provisioners on null_resource.cleanup_platform_
+# volumes_on_destroy and .clear_openbao_secrets_on_destroy, both retired via the
+# `removed {}` blocks in main.tf. The vpc/object-storage roots keep their own
+# linode_token (they still call the Linode provider); this root no longer does.
 
 variable "ghcr_username" {
   description = "GitHub username that owns the GHCR read token (ghcr_token). GHCR OCI auth needs a real account name (the PAT owner), not a placeholder. Supply via TF_VAR_ghcr_username (sourced from vars.GHCR_USERNAME). Empty default = the ArgoCD GHCR repo Secret is skipped (kept optional so plan/destroy work without it)."
