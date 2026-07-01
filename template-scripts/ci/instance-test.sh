@@ -72,7 +72,12 @@ rm -rf "$BUILD"
 mkdir -p "$BUILD"
 # --vcs-ref HEAD + the working tree (DirtyLocalWarning) so local edits are tested.
 # --trust runs copier.yml _tasks (copies the operator docs/ into the instance).
-copier copy --trust --defaults --vcs-ref HEAD "$ROOT" "$INSTANCE"
+# llz_version is fail-closed (copier.yml validator rejects an unpinned main/HEAD),
+# so pass the latest published v* tag explicitly — the same concrete pin `llz new`
+# renders. The validate stage below rewrites git:: sources to in-repo paths, so the
+# exact tag value is not resolved over the network here.
+LLZ_VERSION="$(git -C "$ROOT" describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.0.0)"
+copier copy --trust --defaults --vcs-ref HEAD -d "llz_version=$LLZ_VERSION" "$ROOT" "$INSTANCE"
 
 # ── 2. Token residue ──────────────────────────────────────────────────────────
 step "Token residue (no unrendered copier delimiters)"

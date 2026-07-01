@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -55,9 +56,41 @@ func TestResolveScaffoldRef(t *testing.T) {
 		t.Errorf("explicit branch = %q, want some-branch", got)
 	}
 	// Empty ref falls back to the binary version. In tests `version` is "dev"
-	// (not semver), so it resolves to main.
-	if got := resolveScaffoldRef(""); got != "main" {
-		t.Errorf("dev-build default = %q, want main", got)
+	// (not semver), so it resolves to "" — the signal for scaffoldRef to look up
+	// the latest published release instead of floating on main.
+	if got := resolveScaffoldRef(""); got != "" {
+		t.Errorf("dev-build sentinel = %q, want \"\"", got)
+	}
+}
+
+func TestScaffoldRef(t *testing.T) {
+	// Explicit ref and the released-binary anchor short-circuit before any lookup.
+	if got, err := scaffoldRef("v0.3.0", "org/repo"); err != nil || got != "v0.3.0" {
+		t.Errorf("explicit ref = (%q, %v), want (v0.3.0, nil)", got, err)
+	}
+
+	orig := latestReleaseFn
+	t.Cleanup(func() { latestReleaseFn = orig })
+
+	// Dev build (version=="dev" in tests) → empty sentinel → resolve latest release.
+	latestReleaseFn = func(repo string) (string, error) {
+		if repo != "org/repo" {
+			t.Errorf("latestRelease called with %q, want org/repo", repo)
+		}
+		return "v9.9.9", nil
+	}
+	if got, err := scaffoldRef("", "org/repo"); err != nil || got != "v9.9.9" {
+		t.Errorf("dev fallback = (%q, %v), want (v9.9.9, nil)", got, err)
+	}
+
+	// A resolution failure surfaces an actionable error, never a silent `main`.
+	latestReleaseFn = func(string) (string, error) { return "", fmt.Errorf("boom") }
+	got, err := scaffoldRef("", "org/repo")
+	if err == nil {
+		t.Fatalf("expected error on resolution failure, got %q", got)
+	}
+	if !strings.Contains(err.Error(), "--ref vX.Y.Z") {
+		t.Errorf("error %q missing the --ref hint", err)
 	}
 }
 

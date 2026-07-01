@@ -602,17 +602,15 @@ jobs:
       # convention for non-secret config like TF_IMAGE, HARBOR_URL, etc.) or as
       # a secret. Variable wins if both are present.
       TF_VAR_apps_repo_revision: ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
-      # Consumed by null_resource.cleanup_platform_volumes_on_destroy's
-      # destroy-time provisioner to sweep Linode Volumes tagged block-storage
-      # left unattached after PVC reap. Required for orphan-prevention; same
-      # token the cluster module uses, sourced from the same secret.
+      # The destroy-time volume-sweep provisioner this once fed was retired (see
+      # cluster-bootstrap variables.tf), but the token is still passed: `llz ci
+      # tf-apply` reads TF_VAR_linode_token to self-heal a firewall-name collision
+      # (ci.go). Same account token the cluster module uses, from the same secret.
       TF_VAR_linode_token:            ${{ secrets.LINODE_API_TOKEN }}
-      # Consumed by null_resource.clear_openbao_secrets_on_destroy's destroy-
-      # time provisioner to delete cluster-scoped GH env secrets (root token,
-      # unseal keys, Harbor robot creds, AppRole secret_id) when the cluster
-      # is torn down. Same PAT bootstrap-openbao.yml uses for `gh secret set`.
-      # Optional in TF (default ""); empty value falls back to a warning + no-op.
-      TF_VAR_openbao_secrets_write_token: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+      # (TF_VAR_openbao_secrets_write_token was dropped: its only consumer,
+      # null_resource.clear_openbao_secrets_on_destroy, was retired via a
+      # `removed {}` block, and cluster-bootstrap no longer declares the var.
+      # The OPENBAO_SECRETS_WRITE_TOKEN secret itself is still used elsewhere.)
       AWS_ACCESS_KEY_ID:         ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:     ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
