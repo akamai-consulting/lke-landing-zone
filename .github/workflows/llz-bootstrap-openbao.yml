@@ -314,34 +314,18 @@ jobs:
       # (The raft retry_join pod-FQDN SAN requirement is satisfied by the
       # dnsNames in openbao-tls-cert.yaml, so raft TLS forms on first boot.)
 
-      # ── Bootstrap TLS cert for OTel Collector (break circular dependency) ────────
-      # The OTel Collector mounts `platform-otel-collector-tls` (a cert-manager Certificate)
-      # as a required volume. With the custom-ca issuer (apl-values/<env>/values.yaml:
-      # apps.cert-manager.issuer=custom-ca), cert-manager issues from the in-cluster
-      # CA for `otel.<env>.internal`. On a cold bootstrap that CA is not yet
-      # available, so without this step the pods fail with CreateContainerError
-      # because the Secret never gets created. Break the circle: generate a
-      # self-signed cert now and create the Secret directly. cert-manager replaces
-      # it in-place once the custom-ca is up. No pod restart needed.
-      # Temporary CA + serving cert (RSA 4096, 1-year validity); cert-manager
-      # replaces it once the custom-ca issuer is up. SAN uses the per-env
-      # `otel.${REGION}.internal` hostname (env-prefixed `.internal` per the
-      # cluster_domain convention in terraform-iac-bootstrap/cluster-bootstrap/
-      # <region>.tfvars). --ensure-namespace creates llz-observability now
-      # (ArgoCD CreateNamespace=true would also create it on first sync, but the
-      # Secret needs it immediately); --k8s-secret applies the Secret straight
-      # from memory, so no key files ever land on the runner. Skip/namespace/
-      # apply logic lives in `llz ci gen-bootstrap-tls` (tools/cmd/llz/ci_tls.go).
-      - name: Ensure OTel Collector bootstrap TLS cert exists
-        run: |
-          llz ci gen-bootstrap-tls \
-            --prefix otel-bootstrap \
-            --ca-subj "/CN=platform-otel-bootstrap-ca/O=app/OU=bootstrap" \
-            --cert-subj "/CN=otel.${REGION}.internal/O=app/OU=bootstrap" \
-            --dns "otel.${REGION}.internal,platform-otel-collector.llz-observability.svc,platform-otel-collector.llz-observability.svc.cluster.local" \
-            --k8s-secret llz-observability/platform-otel-collector-tls \
-            --ensure-namespace \
-            --skip-if-secret-exists
+      # ── OTel Collector serving TLS — issued by cert-manager, no bootstrap seed ──
+      # The `llz ci gen-bootstrap-tls` step that used to hand-seed
+      # `platform-otel-collector-tls` here (a throwaway runner-generated CA + cert,
+      # replaced in-place by the custom-ca issuer later) has been REMOVED — the
+      # same anti-pattern the openbao-tls seed removal above fixed. The cert is
+      # now issued from FIRST boot by the stable, self-signed cert-manager CA
+      # `otel-bootstrap-ca` (apl-values/components/observability/
+      # otel-bootstrap-ca.yaml, synced by the platform-bootstrap Application),
+      # with the per-env otel.<env>.internal SAN rendered by `llz render`. No
+      # workflow step, no mid-bootstrap CA rotation. If the Secret is missing,
+      # the fix is to ensure the otel-bootstrap-ca ClusterIssuer is Ready, not
+      # to hand-seed a cert.
 
       # ── Seed the static auto-unseal key (must precede the pod wait) ────────────
       # The chart's `seal "static"` stanza mounts the openbao-unseal-key Secret at

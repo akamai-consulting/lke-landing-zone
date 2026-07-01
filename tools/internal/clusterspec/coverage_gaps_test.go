@@ -126,6 +126,24 @@ func TestRenderRegionPatch(t *testing.T) {
 	}
 }
 
+func TestRenderOtelSANPatch(t *testing.T) {
+	out := RenderOtelSANPatch("primary")
+	for _, want := range []string{
+		"kind: Certificate",
+		"name: platform-otel-collector-tls",
+		"namespace: llz-observability",
+		"- otel.primary.internal",
+		// The patch replaces spec.dnsNames wholesale (CR lists are atomic under
+		// kustomize), so the static Service SANs must ride along with the env one.
+		"- platform-otel-collector.llz-observability.svc\n",
+		"- platform-otel-collector.llz-observability.svc.cluster.local",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("RenderOtelSANPatch missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCidrsOverlap(t *testing.T) {
 	cases := []struct {
 		a, b string

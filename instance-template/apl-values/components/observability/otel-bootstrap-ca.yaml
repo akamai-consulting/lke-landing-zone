@@ -1,0 +1,114 @@
+# Dedicated, self-signed cert-manager CA for the OTel Collector's serving TLS
+# (`platform-otel-collector-tls`). Mirrors the openbao-bootstrap-ca pattern
+# (components/certManager/openbao-bootstrap-ca.yaml) — a CA that lives ENTIRELY
+# in cert-manager, so the serving cert can issue on a cold bootstrap with no
+# dependency on apl-core's custom-ca being ready.
+#
+# REPLACES the `llz ci gen-bootstrap-tls` workflow step (llz-bootstrap-openbao.yml)
+# that hand-seeded a throwaway runner-generated CA + cert as the Secret and let
+# cert-manager's custom-ca replace it in-place later. That was the same
+# anti-pattern the openbao-tls seed removal fixed: a hand-seeded cert whose CA
+# rotates mid-bootstrap when the real issuer replaces it. Here cert-manager owns
+# `platform-otel-collector-tls` from FIRST issuance under a stable 10-year CA —
+# no workflow step, no mid-bootstrap CA rotation, no replace-in-place handoff.
+#
+# MIGRATION (instances upgrading the template): if your env overlay carries its
+# own `platform-otel-collector-tls` Certificate (issuerRef custom-ca), remove it —
+# two Certificates must not manage one Secret. Clients that pinned the custom-ca
+# chain must instead trust this CA (`otel-bootstrap-ca` Secret's ca.crt); per
+# docs/lessons-learned.md the otel.<env>.internal hostnames are still internal
+# placeholders with no external DNS, so no external client verifies this chain yet.
+#
+# The Secret name/namespace and SANs are preserved verbatim from the workflow
+# step (platform-* is an existing load-bearing identity, kept as-is). The
+# env-shaped SAN (otel.<env>.internal) rides the per-env kustomize patch
+# `otel-collector-tls-san-patch.yaml` emitted by `llz render`; this shared base
+# carries only the static Service SANs.
+#
+# WAVES — same shape as openbao-bootstrap-ca; cert-manager (installed by
+# apl-core, gated by cluster-bootstrap's apl_pipeline_ready before this tree's
+# Application exists) is up before any of this syncs. The llz-observability
+# namespace is pre-created at wave -20 by the llz-cluster-foundation chart —
+# the same cross-app dependency the loki-object-store ExternalSecret in this
+# component already relies on.
+#   -16  self-signed issuer + the CA Certificate
+#   -15  the CA ClusterIssuer that signs the serving cert
+#    -5  the serving Certificate (Secret lands well before the OTel Collector
+#        CR is applied post-bootstrap)
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: otel-selfsigned
+  annotations:
+    argocd.argoproj.io/sync-wave: "-16"
+spec:
+  selfSigned: {}
+---
+# Self-signed root that signs platform-otel-collector-tls. Long-lived (10y) so
+# the serving CA is effectively immutable across the cluster's life; the leaf
+# rotates under it on renewal without changing ca.crt.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-bootstrap-ca
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "-16"
+spec:
+  isCA: true
+  commonName: platform-otel-bootstrap-ca
+  subject:
+    organizations: ["app"]
+    organizationalUnits: ["bootstrap"]
+  secretName: otel-bootstrap-ca
+  duration: 87600h    # 10 years
+  renewBefore: 2160h  # 90 days
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: otel-selfsigned
+    kind: ClusterIssuer
+---
+# CA ClusterIssuer that signs the serving cert. Reads the keypair from the
+# `otel-bootstrap-ca` Secret minted by the Certificate above (cert-manager's
+# cluster-resource-namespace is `cert-manager`, where that Secret lives).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: otel-bootstrap-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  ca:
+    secretName: otel-bootstrap-ca
+---
+# The OTel Collector serving cert. Secret name + subject + SANs preserved from
+# the retired `llz ci gen-bootstrap-tls` step (365-day leaf, same as the step
+# generated). The per-env `otel.<env>.internal` SAN is added by the
+# llz-render-emitted otel-collector-tls-san-patch.yaml, which replaces
+# spec.dnsNames wholesale (CR lists are atomic under kustomize patching).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: platform-otel-collector-tls
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  commonName: platform-otel-collector
+  subject:
+    organizations: ["app"]
+    organizationalUnits: ["bootstrap"]
+  secretName: platform-otel-collector-tls
+  duration: 8760h    # 365 days, matching the retired step's leaf validity
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  dnsNames:
+    - platform-otel-collector.llz-observability.svc
+    - platform-otel-collector.llz-observability.svc.cluster.local
+  issuerRef:
+    name: otel-bootstrap-ca
+    kind: ClusterIssuer
