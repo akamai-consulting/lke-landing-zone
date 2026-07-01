@@ -423,29 +423,15 @@ jobs:
         if: steps.ensure.outputs.available == 'true'
         run: llz ci bao-configure --region "$REGION"
 
-      # ── Apply the post-apl-bootstrap kustomize tree ───────────────────────────
-      # Apply resources whose CRDs are registered by apl-core's helmfile
-      # rather than by the main bootstrap App's own kustomize tree. By the
-      # time this step runs, "Configure OpenBao" above has already succeeded,
-      # which implies apl-core's helmfile has been running long enough to
-      # install kyverno, ESO, otel-operator, etc. and register all the CRDs.
-      #
-      # Currently includes:
-      #   - OpenTelemetryCollector (opentelemetry.io/v1beta1)
-      #
-      # Split from the shared manifest tree because including those resources
-      # there makes `kubectl kustomize | kubectl apply --dry-run=server`
-      # validation fail against a fresh cluster (CRD isn't yet registered at
-      # lint time). See apl-values/_shared/manifest/post-apl-bootstrap/kustomization.yaml
-      # header for the full rationale + the precedent (DNS split). The tree is
-      # instance-wide (DRY — one copy under _shared, applied to every region's
-      # cluster); ${REGION} selects the target cluster's kubeconfig.
-      - name: Apply post-apl-bootstrap kustomize tree
-        if: steps.ensure.outputs.available == 'true'
-        run: |
-          set -euo pipefail
-          kubectl apply -k "apl-values/_shared/manifest/post-apl-bootstrap"
-          echo "post-apl-bootstrap resources applied (OpenTelemetryCollector + future CRD-dependent resources)."
+      # ── post-apl-bootstrap tree — MOVED into the Argo-synced tree ──────────────
+      # The `kubectl apply -k post-apl-bootstrap` step that used to run here
+      # (OpenTelemetryCollector, whose CRD apl-core's helmfile registers) has
+      # been REMOVED: the CR now rides the observability component
+      # (apl-values/components/observability/otel-collector.yaml) at a late
+      # sync-wave. The platform-bootstrap App's SkipDryRunOnMissingResource +
+      # retry budget absorb the CRD-registration race the imperative step
+      # existed to sidestep; the server-side dry-run lint path that motivated
+      # the split no longer exists (CI builds the manifest tree client-side).
 
       # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
       # One step runs every generic `bao-seed` path from the bootstrapSeeds()

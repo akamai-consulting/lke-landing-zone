@@ -11,11 +11,11 @@ components on/off. Consumed by Terraform's `cluster-bootstrap` root
 apl-values/
   _shared/                    # the single source of truth (template-managed)
     manifest/                 # the always-on base: platform-support AppProject,
-      kustomization.yaml      #   cluster-foundation apps, the dns/ + post-apl-
-      platform-support-project.yaml   #   bootstrap/ trees applied out-of-band
-      applications/           #   by `llz bootstrap dns` / `bootstrap-openbao`
+      kustomization.yaml      #   cluster-foundation apps, plus the dns/ tree
+      platform-support-project.yaml   #   applied out-of-band by `llz bootstrap dns`
+      applications/
       dns/                    # cert-manager DNS-01 issuer (instance-wide; the
-      post-apl-bootstrap/     #   ACME email is rendered once into letsencrypt-*)
+                              #   ACME email is rendered once into letsencrypt-*)
     values.yaml               # apl-core values base (identity/secrets tokenized)
   components/                 # one kustomize Component per toggleable component
     externalSecrets/  certManager/  openbao/  harbor/  observability/

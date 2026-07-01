@@ -131,6 +131,7 @@ var Components = []Component{
 		ManifestResources: []string{
 			"observability/loki-object-store-externalsecret.yaml",
 			"observability/otel-bootstrap-ca.yaml",
+			"observability/otel-collector.yaml",
 			"observability/prometheus-rules/openbao-alerts.yaml",
 			"observability/prometheus-rules/support-plane-alerts.yaml",
 		},
