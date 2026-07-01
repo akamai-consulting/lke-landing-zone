@@ -101,6 +101,22 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 				fmt.Sprintf("Create the keys via: linode-cli object-storage keys-create --label platform-loki-%s", region),
 			},
 		},
+		// cert-manager DNS-01 token (Linode PAT scoped to DNS zone write). Seeding
+		// it here folds the common case of bootstrap-dns.yml into this bootstrap:
+		// when LINODE_DNS_TOKEN is provisioned up front, the KV path is ready
+		// before the dns tree is ever applied. on-missing skip: DNS is optional at
+		// bootstrap (cluster-bootstrap uses a placeholder for apl-core's schema),
+		// and bootstrap-dns.yml remains the late-provisioning/recovery path that
+		// seeds this same path once the token exists.
+		{
+			path:       "secret/certmanager/dns01",
+			fieldSpecs: []string{"token=env:LINODE_DNS_TOKEN"},
+			onMissing:  "skip",
+			missingNotes: []string{
+				"LINODE_DNS_TOKEN not set — skipping secret/certmanager/dns01.",
+				fmt.Sprintf("Provision it as an infra-%s environment secret, then run bootstrap-dns.yml (the late-provisioning path).", region),
+			},
+		},
 	}
 }
 
@@ -111,7 +127,7 @@ func ciBaoSeedAllCmd() *cobra.Command {
 		Short: "seed every generic OpenBao KV bootstrap path from one declarative table",
 		Long: "Data-driven driver that runs the bootstrap's generic `bao-seed` paths\n" +
 			"(github-dispatch-token, cert-automation token, linode api-token, loki\n" +
-			"object-store) from the bootstrapSeeds() table — replacing near-identical\n" +
+			"object-store, certmanager dns01) from the bootstrapSeeds() table — replacing near-identical\n" +
 			"inline steps in llz-bootstrap-openbao.yml with one. (harbor admin, grafana\n" +
 			"admin + otel bearer are written in-cluster via ESO PushSecrets, not seeded\n" +
 			"here.) Each\n" +

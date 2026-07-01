@@ -1,6 +1,15 @@
 name: llz-bootstrap-dns (reusable)
 
 # Reusable (`workflow_call`) version of the cert-manager DNS-01 token seed.
+#
+# LATE-PROVISIONING PATH: when LINODE_DNS_TOKEN is already provisioned at
+# bootstrap time, `llz ci bao-seed-all` (llz-bootstrap-openbao.yml) seeds
+# secret/certmanager/dns01 as part of the normal bootstrap — no separate
+# dispatch needed. Dispatch THIS workflow only when the token arrives after
+# the bootstrap (it also applies the dns kustomize tree + waits for the synced
+# Secret, which the generic seed does not do). Re-running over an existing
+# seed is a same-value overwrite — safe.
+#
 # Surface-reduction pattern (docs/templatization-plan.md §"Keeping instances in
 # sync"). Dual checkout (Option A): the caller instance sits at the workspace
 # root — so the fetch-kubeconfig action's `terraform-iac-bootstrap/cluster`

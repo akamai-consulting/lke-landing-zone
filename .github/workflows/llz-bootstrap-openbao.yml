@@ -130,6 +130,11 @@ on:
         required: false
       OPENBAO_SEAL_KEY:
         required: false
+      # Optional: when provisioned, bao-seed-all seeds secret/certmanager/dns01
+      # during the bootstrap; when absent the seed skips and bootstrap-dns.yml
+      # is the late-provisioning path.
+      LINODE_DNS_TOKEN:
+        required: false
       HARBOR_PASSWORD:
         required: false
       HARBOR_PULL_PASSWORD:
@@ -449,6 +454,9 @@ jobs:
       #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
       #   secret/linode/api-token              (linode-volume-labeler ExternalSecret)
       #   secret/loki/object-store             (LOKI_S3_* env secrets)
+      #   secret/certmanager/dns01             (LINODE_DNS_TOKEN; skip when unset —
+      #                                         bootstrap-dns.yml is then the
+      #                                         late-provisioning path)
       # (secret/harbor/admin, secret/grafana/admin + secret/otel/ingress are no
       #  longer seeded here — ESO writes them in-cluster via PushSecrets: harbor
       #  mirrors its Helm Secret, grafana/otel use a Password generator. See
@@ -470,6 +478,11 @@ jobs:
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
           LOKI_S3_ACCESS_KEY: ${{ secrets.LOKI_S3_ACCESS_KEY }}
           LOKI_S3_SECRET_KEY: ${{ secrets.LOKI_S3_SECRET_KEY }}
+          # Raw secret, deliberately NO placeholder fallback (unlike cluster-
+          # bootstrap's TF_VAR_linode_dns_token): empty must mean "skip the dns01
+          # seed", not "seed a placeholder that cert-manager then presents to the
+          # Linode API".
+          LINODE_DNS_TOKEN: ${{ secrets.LINODE_DNS_TOKEN }}
         run: llz ci bao-seed-all --region "$REGION"
 
       # ── Seed: Harbor registry S3 credentials ───────────────────────────────────

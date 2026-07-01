@@ -315,9 +315,12 @@ new env, in order:
    the env: seed the static seal key, `bao operator init` (recovery keys; the pods
    auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
    engine, auth methods, and policies.
-6. **DNS** — dispatch `bootstrap-dns.yml` once its token is provisioned. (The
-   Argo CD / apl-core values-repo credential is the `APL_VALUES_REPO_TOKEN` PAT,
-   provisioned by `llz tokens`, not a per-run bootstrap workflow.)
+6. **DNS** — if `LINODE_DNS_TOKEN` was provisioned before step 5, the OpenBao
+   bootstrap's `bao-seed-all` already seeded `secret/certmanager/dns01` and no
+   dispatch is needed; dispatch `bootstrap-dns.yml` only when the token arrives
+   later (it also applies the dns kustomize tree + waits for the synced Secret).
+   (The Argo CD / apl-core values-repo credential is the `APL_VALUES_REPO_TOKEN`
+   PAT, provisioned by `llz tokens`, not a per-run bootstrap workflow.)
 
 See [docs/runbooks/](runbooks/) for per-step detail (`bootstrap-openbao.md`,
 `apl-values-propagation.md`) and [docs/playbooks/operator-onboarding.md](playbooks/operator-onboarding.md)
