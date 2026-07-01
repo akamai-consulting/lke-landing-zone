@@ -25,6 +25,7 @@ COVERAGE_MINS := \
 	cmd/llz=48 \
 	internal/cli=95 \
 	internal/clusterspec=95 \
+	internal/evidence=90 \
 	internal/health=95 \
 	internal/linode=80 \
 	internal/openbao=88 \

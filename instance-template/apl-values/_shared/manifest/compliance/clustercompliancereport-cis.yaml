@@ -1,0 +1,43 @@
+# Standard CIS Kubernetes Benchmark compliance report.
+#
+# The `trivy` apl-core app installs trivy-operator, which owns the
+# clustercompliancereports.aquasecurity.github.io CRD and reconciles this
+# resource's status with per-control PASS/FAIL derived from its config-audit and
+# RBAC checks. We declare the report ourselves (rather than relying on an
+# apl-core trivy-operator value) so it exists deterministically on every cluster
+# regardless of how apl-core's values-schema gates trivy-operator settings.
+#
+# `llz ci cis-evidence` harvests this report's .status into the auditor evidence
+# pack (the in-scope CIS rows in docs/infosec/control-mapping.md, Section B).
+# The id below selects trivy-operator's built-in CIS spec; pin the version suffix
+# to whatever the deployed trivy-operator ships (verify with
+# `kubectl get clustercompliancereports`).
+apiVersion: aquasecurity.github.io/v1alpha1
+kind: ClusterComplianceReport
+metadata:
+  name: cis
+  labels:
+    app.kubernetes.io/managed-by: llz
+    llz.akamai.com/evidence: cis-kubernetes-benchmark
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # Late wave: trivy-operator (and its CRD) must be installed by apl-core first.
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  cron: "0 */6 * * *"
+  # `all` keeps per-check detail in .status so the evidence pack can cite the
+  # specific failing checks, not just the rolled-up control tallies.
+  reportType: all
+  compliance:
+    id: k8s-cis
+    title: CIS Kubernetes Benchmark
+    description: CIS Kubernetes Benchmark — in-scope controls for managed LKE-Enterprise
+    version: "1.0.0"
+    relatedResources:
+      - https://www.cisecurity.org/benchmark/kubernetes
+    platform: k8s
+    type: cis
+    # Built-in control set; trivy-operator fills .status. The managed control
+    # plane (CIS sections 1-3) is not user-auditable on LKE-E and is recorded as
+    # out-of-scope in docs/infosec/control-mapping.md.
+    controls: []

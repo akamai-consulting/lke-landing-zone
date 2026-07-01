@@ -25,6 +25,20 @@ func TestEnvInt(t *testing.T) {
 	}
 }
 
+func TestEnvOr(t *testing.T) {
+	t.Setenv("X_STR", "value")
+	if got := EnvOr("X_STR", "def"); got != "value" {
+		t.Errorf("EnvOr(set) = %q, want value", got)
+	}
+	if got := EnvOr("X_UNSET_STR", "def"); got != "def" {
+		t.Errorf("EnvOr(unset) = %q, want def", got)
+	}
+	t.Setenv("X_STR", "")
+	if got := EnvOr("X_STR", "def"); got != "def" {
+		t.Errorf("EnvOr(empty) = %q, want def", got)
+	}
+}
+
 func TestEnvBool(t *testing.T) {
 	t.Setenv("X_BOOL", "true")
 	if !EnvBool("X_BOOL", false) {

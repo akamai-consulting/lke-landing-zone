@@ -29,3 +29,7 @@ resources:
   # an ESO Password generator and pushed into OpenBao — replaces the imperative
   # bao-seed of those two paths. See generated-secrets/.
   - generated-secrets
+  # CIS + org-control ClusterComplianceReports (trivy-operator), harvested into
+  # the auditor evidence pack by `llz ci cis-evidence`. Late sync-wave so the
+  # trivy-operator CRD exists first. See compliance/ and docs/infosec/control-mapping.md.
+  - compliance

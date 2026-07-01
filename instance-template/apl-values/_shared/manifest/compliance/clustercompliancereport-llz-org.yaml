@@ -1,0 +1,66 @@
+# Custom compliance report mapping the org's in-cluster security controls onto
+# trivy-operator checks, so the InfoSec team's checklist (the SOG requirements in
+# docs/infosec/linode-account-request-checklist.md, Step 5) is scored by the same
+# engine as CIS — and harvested into the same evidence pack.
+#
+# SCOPE: only the SOG rows that are trivy-checkable in-cluster config land here
+# (Pod Security posture for SOG #9 "encrypt/secure-by-default", least-privilege
+# RBAC). Controls that live outside the cluster (firewall DROP, PAT rotation,
+# CSPM, SSO, training) are NOT trivy-scannable; `llz ci cis-evidence` joins their
+# evidence (Terraform state, cred-audit JSON, manual attestations) into the pack.
+#
+# VERIFY THE CHECK IDs against the deployed trivy-operator's trivy-checks bundle
+# (`kubectl get clustercompliancereport llz-org-controls -o yaml` → .status), as
+# AVD-KSV ids occasionally change across trivy-checks releases. The set below is
+# the stable Pod Security / RBAC core.
+apiVersion: aquasecurity.github.io/v1alpha1
+kind: ClusterComplianceReport
+metadata:
+  name: llz-org-controls
+  labels:
+    app.kubernetes.io/managed-by: llz
+    llz.akamai.com/evidence: org-security-controls
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  cron: "0 */6 * * *"
+  reportType: all
+  compliance:
+    id: llz-org-controls
+    title: LLZ Org Security Controls (SOG)
+    description: >-
+      In-cluster subset of the org security requirements from
+      docs/infosec/linode-account-request-checklist.md, scored by trivy-operator.
+    version: "1.0"
+    relatedResources:
+      - https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/infosec/control-mapping.md
+    platform: k8s
+    type: cis
+    controls:
+      # SOG #9 — secure-by-default workloads / no excess privilege (maps to the
+      # enforced `restricted` Pod Security Standard on platform namespaces).
+      - id: SOG-9-PSS
+        name: Pod Security — restricted posture enforced
+        description: >-
+          Workloads run non-root, drop all capabilities, disallow privilege
+          escalation, use a read-only root filesystem and a seccomp profile, and
+          are never privileged.
+        severity: HIGH
+        checks:
+          - id: AVD-KSV-0001 # process can elevate own privileges
+          - id: AVD-KSV-0003 # default capabilities not dropped
+          - id: AVD-KSV-0012 # runs as root (runAsNonRoot not set)
+          - id: AVD-KSV-0014 # root filesystem not read-only
+          - id: AVD-KSV-0017 # privileged container
+          - id: AVD-KSV-0030 # seccomp profile not set
+      # SOG #8 / #9 — least-privilege RBAC over secrets.
+      - id: SOG-RBAC
+        name: Least-privilege RBAC
+        description: >-
+          Roles avoid wildcards and broad secret access; service accounts are
+          scoped to what each component needs.
+        severity: HIGH
+        checks:
+          - id: AVD-KSV-0041 # manages Kubernetes secrets
+          - id: AVD-KSV-0044 # wildcard use in Roles/ClusterRoles
