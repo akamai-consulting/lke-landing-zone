@@ -126,8 +126,20 @@ llz_version:
     The landing-zone release this instance pins to — the git tag rendered into the
     Terraform module `?ref=` sources and the reusable-workflow `uses:@` /
     `template-ref:` refs, so a scaffold references the very release it was cut from.
-    Normally set automatically by `llz new` / `llz upgrade` to the version of the
-    `llz` binary you ran (the CLI is the version anchor). For a manual `copier
-    copy`, pass `-d llz_version=vX.Y.Z` to pin a release; the `main` default tracks
-    the tip unpinned.
+    Normally set automatically by `llz new` / `llz upgrade` to a published release
+    (the CLI is the version anchor; a dev build resolves the latest tag). For a
+    manual `copier copy`, pass `-d llz_version=vX.Y.Z` to pin a release.
+  # Fail closed: there is no safe default. An unpinned `main`/`master`/`HEAD` ref
+  # floats the first-party module `?ref=` sources on a branch, which the template's
+  # own tflint gate (terraform_module_pinned_source) rejects and Renovate cannot
+  # bump. `llz new`/`llz upgrade` always pass a concrete tag via -d; a raw `copier
+  # copy` must too. (`main` is still the pre-filled default an interactive prompt
+  # shows — the validator forces it to be replaced.)
   default: main
+  # Uses the custom _envops delimiters (<% %> blocks, <@ @> vars), not stock Jinja.
+  validator: >-
+    <% if llz_version in ["", "main", "master", "HEAD"] %>llz_version must be a
+    pinned release tag like v0.0.18, not "<@ llz_version @>". `llz new` / `llz
+    upgrade` set it for you; for a manual `copier copy` pass -d llz_version=vX.Y.Z.
+    An unpinned ref fails the template's own tflint pinned-source gate and Renovate
+    cannot bump it.<% endif %>

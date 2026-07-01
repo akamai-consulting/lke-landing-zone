@@ -102,7 +102,9 @@ merge    renovate.json
 # Dev Container: devcontainer.json pins the prebuilt toolchain image by the
 # upstream template org (<@ upstream_org @>) — repoint it if you build your own.
 merge    .devcontainer/**
-# TF roots: the `git::` module source host/org (the ?ref= version is Renovate's).
+# TF roots: the `git::` module source host/org you repoint to your fork. The
+# ?ref= is the copier llz_version (a pinned vX.Y.Z tag), re-pinned in lockstep by
+# `llz upgrade` — NOT Renovate-managed (renovate.json disables the self-reference).
 merge    terraform-iac-bootstrap/*/main.tf
 # Backend: template ships the backend block; you fill in bucket/key/endpoint.
 merge    terraform-iac-bootstrap/*/backend.tf

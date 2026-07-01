@@ -22,9 +22,11 @@ func validateEnvName(env string) error { return validate.EnvName(env) }
 
 // resolveScaffoldRef picks the template ref to scaffold/upgrade from: an explicit
 // --ref verbatim (tag, branch, or SHA), else this llz binary's own version when it
-// is a real release (the CLI is the version anchor), else "main" for a dev build.
-// The same value is rendered into the instance's pins as copier's llz_version, so
-// the scaffold references exactly the release it was cut from.
+// is a real release (the CLI is the version anchor), else "" — signalling the
+// caller (scaffoldRef) to resolve the latest published release tag, since a dev
+// build has no version to anchor to. The chosen value is rendered into the
+// instance's pins as copier's llz_version, so the scaffold references exactly the
+// release it was cut from.
 func resolveScaffoldRef(ref string) string {
 	if ref != "" {
 		return ref
@@ -32,7 +34,29 @@ func resolveScaffoldRef(ref string) string {
 	if _, _, _, ok := semver(version); ok {
 		return normalizeLLZTag(version)
 	}
-	return "main"
+	return ""
+}
+
+// latestReleaseFn resolves the newest published vX.Y.Z release of a template repo;
+// seamed for tests. It reuses self-update's release picker, which drops drafts /
+// pre-releases and ignores the llz/v* CLI tag track (latestLLZTag).
+var latestReleaseFn = latestRelease
+
+// scaffoldRef resolves the concrete ref to scaffold/pin to. It falls back from a
+// dev build (no anchor version) to the latest published vX.Y.Z release of repo, so
+// a scaffold never floats on `main` — which the template's own tflint gate
+// (terraform_module_pinned_source) rejects, Renovate can't bump, and copier now
+// refuses (the llz_version validator). repo is the template's <org>/<name>.
+func scaffoldRef(ref, repo string) (string, error) {
+	if r := resolveScaffoldRef(ref); r != "" {
+		return r, nil
+	}
+	tag, err := latestReleaseFn(repo)
+	if err != nil {
+		return "", fmt.Errorf("this is a dev build of llz (no anchor version) and the latest %s release could not be resolved to pin to: %w\n"+
+			"  pass --ref vX.Y.Z to pin to a release explicitly", repo, err)
+	}
+	return tag, nil
 }
 
 func copierCopyArgv(org, ref, dir string) []string {
@@ -178,9 +202,13 @@ func missingTemplateSourceErr(org string) error {
 }
 
 func runNew(g globalOpts, org, ref, dir string, push bool) error {
-	ref = resolveScaffoldRef(ref)
-	if !templateSourceExistsFn(org + "/" + templateName) {
+	repo := org + "/" + templateName
+	if !templateSourceExistsFn(repo) {
 		return missingTemplateSourceErr(org)
+	}
+	ref, err := scaffoldRef(ref, repo)
+	if err != nil {
+		return err
 	}
 	fmt.Printf("Scaffolding a new LKE landing-zone instance into %q from %s/%s@%s\n\n",
 		dir, org, templateName, ref)
@@ -274,8 +302,12 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 func runUpgrade(g globalOpts, ref string) error {
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
-	// to the latest tag but leave the recorded llz_version stale).
-	ref = resolveScaffoldRef(ref)
+	// to the latest tag but leave the recorded llz_version stale). updateRepo()
+	// names the template this instance tracks (its .copier-answers upstream_org).
+	ref, err := scaffoldRef(ref, updateRepo())
+	if err != nil {
+		return err
+	}
 	if err := run(g, copierUpdateArgv(ref)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
 	}
