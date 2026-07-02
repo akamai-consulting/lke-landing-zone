@@ -143,14 +143,9 @@ on:
         required: false
       HARBOR_ROBOT_NAME:
         required: false
-      HARBOR_REGISTRY_S3_ACCESS_KEY:
-        required: false
-      HARBOR_REGISTRY_S3_SECRET_KEY:
-        required: false
-      LOKI_S3_ACCESS_KEY:
-        required: false
-      LOKI_S3_SECRET_KEY:
-        required: false
+      # (LOKI_S3_* / HARBOR_REGISTRY_S3_* were RETIRED: the object-storage keys
+      # are minted by `llz ci mint-bootstrap-objkeys` below and rotated
+      # in-cluster — the credentials never transit GitHub.)
 
 permissions:
   contents: read
@@ -254,24 +249,9 @@ jobs:
       # NOT re-checked here to avoid duplicate annotations; this preflight
       # covers the ones whose absence would otherwise only surface at the
       # seed step itself.
-      - name: Pre-flight — verify infra-${{ env.REGION }} env secrets
-        env:
-          LOKI_S3_ACCESS_KEY:            ${{ secrets.LOKI_S3_ACCESS_KEY }}
-          LOKI_S3_SECRET_KEY:            ${{ secrets.LOKI_S3_SECRET_KEY }}
-          HARBOR_REGISTRY_S3_ACCESS_KEY: ${{ secrets.HARBOR_REGISTRY_S3_ACCESS_KEY }}
-          HARBOR_REGISTRY_S3_SECRET_KEY: ${{ secrets.HARBOR_REGISTRY_S3_SECRET_KEY }}
-        run: |
-          set -u
-          FAIL=0
-          llz ci require-secret LOKI_S3_ACCESS_KEY \
-            --hint "Source: terraform-iac-bootstrap/object-storage/ output loki_access_key" || FAIL=1
-          llz ci require-secret LOKI_S3_SECRET_KEY \
-            --hint "Source: terraform-iac-bootstrap/object-storage/ output loki_secret_key" || FAIL=1
-          llz ci require-secret HARBOR_REGISTRY_S3_ACCESS_KEY \
-            --hint "Source: terraform-iac-bootstrap/object-storage/ output harbor_registry_access_key" || FAIL=1
-          llz ci require-secret HARBOR_REGISTRY_S3_SECRET_KEY \
-            --hint "Source: terraform-iac-bootstrap/object-storage/ output harbor_registry_secret_key" || FAIL=1
-          [ "$FAIL" -eq 0 ]
+      # (The LOKI_S3_* / HARBOR_REGISTRY_S3_* env-secret preflight was RETIRED
+      # with the secrets themselves: `llz ci mint-bootstrap-objkeys` below mints
+      # the keys directly — the bucket preflight next is the remaining gate.)
 
       # ── Pre-flight: object-storage buckets/keys actually exist ──────────────────
       # The check above only confirms the S3 GH secrets are PRESENT — not that
@@ -439,31 +419,25 @@ jobs:
       #   secret/infra/github-dispatch-token   (harbor-ready PostSync hook)
       #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
       #   secret/linode/api-token              (linode-volume-labeler ExternalSecret)
-      #   secret/loki/object-store             (LOKI_S3_* env secrets)
       #   secret/certmanager/dns01             (LINODE_DNS_TOKEN; skip when unset —
       #                                         bootstrap-dns.yml is then the
       #                                         late-provisioning path)
       # (secret/harbor/admin, secret/grafana/admin + secret/otel/ingress are no
-      #  longer seeded here — ESO writes them in-cluster via PushSecrets: harbor
-      #  mirrors its Helm Secret, grafana/otel use a Password generator. See
-      #  apl-values/components/harbor/ and _shared/manifest/generated-secrets/.)
+      #  longer seeded here — ESO writes them in-cluster via PushSecrets.
+      #  secret/loki/object-store + secret/harbor/registry-s3 moved to the
+      #  mint-bootstrap-objkeys step below: the keys are minted, not relayed.)
       # Per-seed on-missing modes, idempotency guards, and summary notes are
       # UNCHANGED — they moved from these flags into the table. A missing env:/k8s:
       # source defers per its mode (BOOTSTRAP_ERRORS for github-dispatch-token on
-      # active/standalone and loki; the rest skip with a summary note); a kv-put
-      # failure aborts before the remaining seeds, exactly as a failed inline step
-      # did. HA_ROLE (job env) drives the github-dispatch-token standby skip.
-      # The harbor-specific seeds that derive their own material — robot accounts
-      # (now in the parallel `harbor` job), registry-S3 below —
-      # keep their dedicated commands.
+      # active/standalone; the rest skip with a summary note); a kv-put failure
+      # aborts before the remaining seeds, exactly as a failed inline step did.
+      # HA_ROLE (job env) drives the github-dispatch-token standby skip.
       # OPENBAO_ROOT_TOKEN comes from $GITHUB_ENV (the ensure step).
       - name: Seed OpenBao KV bootstrap paths
         if: steps.ensure.outputs.available == 'true'
         env:
           OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
-          LOKI_S3_ACCESS_KEY: ${{ secrets.LOKI_S3_ACCESS_KEY }}
-          LOKI_S3_SECRET_KEY: ${{ secrets.LOKI_S3_SECRET_KEY }}
           # Raw secret, deliberately NO placeholder fallback (unlike cluster-
           # bootstrap's TF_VAR_linode_dns_token): empty must mean "skip the dns01
           # seed", not "seed a placeholder that cert-manager then presents to the
@@ -471,39 +445,28 @@ jobs:
           LINODE_DNS_TOKEN: ${{ secrets.LINODE_DNS_TOKEN }}
         run: llz ci bao-seed-all --region "$REGION"
 
-      # ── Seed: Harbor registry S3 credentials ───────────────────────────────────
-      # Seeds secret/harbor/registry-s3 from the HARBOR_REGISTRY_S3_ACCESS_KEY /
-      # HARBOR_REGISTRY_S3_SECRET_KEY env secrets (Linode Object Storage keys
-      # scoped to the platform-harbor-registry-<region> bucket — see
-      # terraform-iac-bootstrap/object-storage/). The harbor-registry-s3
-      # ExternalSecret syncs this into the harbor/harbor-registry-s3 K8s Secret;
-      # Harbor's chart wires extraEnvVars on the registry container with
-      # REGISTRY_STORAGE_S3_ACCESSKEY / REGISTRY_STORAGE_S3_SECRETKEY sourced
-      # from that Secret (the docker-registry binary reads those env vars and
-      # they OVERRIDE the values in /etc/registry/config.yml — that's how
-      # we avoid baking keys into chart values).
-      #
-      # Replaces the previous 100Gi harbor-registry block PVC (project-lke-
-      # rebuild-orphans-quota: every additional Linode volume worsens the
-      # account-quota orphan problem during cluster rebuilds).
-      #
-      # Region-derived Linode Object Storage cluster: must match
-      # terraform-iac-bootstrap/object-storage/<region>.tfvars `obj_cluster`.
-      # Per-env mapping kept in one place at the head of each Harbor/Gitea
-      # S3 seed step so secondary bootstrap doesn't write the wrong endpoint
-      # (project-lke-rebuild-orphans-quota for the analogous pitfall).
-      # The command reads obj_cluster from the object-storage tfvars — the
-      # source of truth for which Linode OBJ cluster TF provisioned the bucket
-      # into; it is NOT derivable from the env name (e2e/staging/lab or an
-      # adopter's env can sit in ANY OBJ cluster) — and derives the bucket name
-      # (platform-harbor-registry-<region>, matching the TF resource label),
-      # endpoint, and region from it.
-      - name: Seed Harbor registry S3 credentials in OpenBao
+      # ── Mint + seed: object-storage keys (Loki + Harbor registry) ──────────────
+      # `llz ci mint-bootstrap-objkeys` mints the region's scoped keys via the
+      # Linode API (labels/buckets mirror the rotation table:
+      # platform-loki-<region> spanning the chunks/ruler/admin buckets,
+      # platform-harbor-registry-<region> on its bucket) and seeds
+      # secret/loki/object-store + secret/harbor/registry-s3 directly,
+      # rotated_at-stamped so the in-cluster linodeCredRotator adopts them on
+      # its own cadence. REPLACES the TF-minted keys and the whole GitHub relay
+      # (stash-env-secret → LOKI_S3_*/HARBOR_REGISTRY_S3_* → bao-seed /
+      # seed-harbor-registry-s3): the credentials never transit GitHub, and key
+      # lifecycle has one owner (mint here, rotate in-cluster). Idempotent —
+      # already-seeded paths are skipped, so a re-bootstrap never clobbers a
+      # rotator-minted key. obj_cluster comes from the object-storage tfvars —
+      # the source of truth for which OBJ cluster TF provisioned the buckets
+      # into (NOT derivable from the env name). The downstream ESO wiring
+      # (harbor-registry-s3 / loki-object-store ExternalSecrets → K8s Secrets →
+      # REGISTRY_STORAGE_S3_* env vars / singleBinary extraEnvFrom) is unchanged.
+      - name: Mint + seed object-storage keys
         if: steps.ensure.outputs.available == 'true'
         env:
-          HARBOR_REGISTRY_S3_ACCESS_KEY: ${{ secrets.HARBOR_REGISTRY_S3_ACCESS_KEY }}
-          HARBOR_REGISTRY_S3_SECRET_KEY: ${{ secrets.HARBOR_REGISTRY_S3_SECRET_KEY }}
-        run: llz ci seed-harbor-registry-s3 --region "$REGION"
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci mint-bootstrap-objkeys --region "$REGION"
 
       # ── Standby: replicate the active's Harbor robot credentials ───────────────
       # A standby peer has no in-cluster Harbor (the active/standalone path is the

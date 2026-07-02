@@ -110,7 +110,8 @@ spec:
       appsRepoRevision: main                      # → apps_repo_revision
     objectStorage:                                # → object-storage/<env>.tfvars
       cluster: us-ord-7                           # → obj_cluster
-      keyRotationDays: 90                         # → obj_key_rotation_days (≤120)
+      # keyRotationDays: DEPRECATED/ignored — rotation is owned by the
+      # in-cluster linodeCredRotator CronJob (obj_key_rotation_days was removed).
   # components omitted → all default-enabled except dns (see "Component defaults")
 ```
 

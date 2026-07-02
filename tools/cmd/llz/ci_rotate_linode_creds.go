@@ -77,7 +77,11 @@ type credEntry struct {
 	buckets     []string // objkey only — every bucket the key grants (one bucket_access each)
 	permissions string   // objkey only
 	baoPath     string
-	fields      func(a, b string) map[string]string // (token,"") for PAT; (access,secret) for objkey
+	// presentField is the KV field whose presence means "already seeded" — the
+	// bootstrap mint's idempotency probe (mint-bootstrap-objkeys skips a path
+	// the rotator or an earlier bootstrap already owns).
+	presentField string
+	fields       func(a, b string) map[string]string // (token,"") for PAT; (access,secret) for objkey
 }
 
 // buildRotationTable is the Phase-1 set of in-cluster-only Linode credentials.
@@ -91,8 +95,8 @@ func buildRotationTable(region, objCluster string) []credEntry {
 	return []credEntry{
 		{
 			name: "dns-token", kind: credKindPAT, label: "llz-dns-" + region, scopes: dnsTokenScopes,
-			baoPath: "secret/certmanager/dns01",
-			fields:  func(token, _ string) map[string]string { return map[string]string{"token": token} },
+			baoPath: "secret/certmanager/dns01", presentField: "token",
+			fields: func(token, _ string) map[string]string { return map[string]string{"token": token} },
 		},
 		{
 			name: "loki-object-store", kind: credKindObjKey, label: "platform-loki-" + region,
@@ -103,15 +107,15 @@ func buildRotationTable(region, objCluster string) []credEntry {
 				"platform-loki-admin-" + region,
 			},
 			permissions: "read_write",
-			baoPath:     "secret/loki/object-store",
-			fields:      func(access, secret string) map[string]string { return lokiObjectStoreFields(access, secret) },
+			baoPath:     "secret/loki/object-store", presentField: "AWS_ACCESS_KEY_ID",
+			fields: func(access, secret string) map[string]string { return lokiObjectStoreFields(access, secret) },
 		},
 		{
 			name: "harbor-registry-s3", kind: credKindObjKey, label: "platform-harbor-registry-" + region,
 			objCluster:  objCluster,
 			buckets:     []string{"platform-harbor-registry-" + region},
 			permissions: "read_write",
-			baoPath:     "secret/harbor/registry-s3",
+			baoPath:     "secret/harbor/registry-s3", presentField: "access_key_id",
 			fields: func(access, secret string) map[string]string {
 				return harborRegistryS3Fields(region, objCluster, access, secret)
 			},
@@ -123,6 +127,22 @@ func buildRotationTable(region, objCluster string) []credEntry {
 // names the Loki singleBinary pod reads, matching the loki ExternalSecret).
 func lokiObjectStoreFields(access, secret string) map[string]string {
 	return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
+}
+
+// harborRegistryS3Fields derives the five secret/harbor/registry-s3 fields.
+// The bucket name encodes the deployment region (matches the bucket resource
+// label); endpoint/region come from the obj_cluster the object-storage tfvars
+// actually provisioned into — NOT guessed from the env name. Lives here (not
+// ci_seed_special.go) because the rotation table owns this path now: both the
+// bootstrap mint and the rotator write the same complete field set.
+func harborRegistryS3Fields(region, objCluster, accessKey, secretKey string) map[string]string {
+	return map[string]string{
+		"access_key_id":     accessKey,
+		"secret_access_key": secretKey,
+		"bucket_name":       "platform-harbor-registry-" + region,
+		"endpoint":          "https://" + objCluster + ".linodeobjects.com",
+		"region":            objCluster,
+	}
 }
 
 // isDue reports whether a credential whose OpenBao secret carries rotatedAt

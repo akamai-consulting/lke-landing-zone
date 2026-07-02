@@ -185,6 +185,13 @@ var (
 	esGoPutRx      = regexp.MustCompile(`(?s)baoKVPutFn\(\s*"secret/([^"]+)",\s*map\[string\]string\{(.*?)\}`)
 	esGoFieldRx    = regexp.MustCompile(`"(\w+)":`)
 	esGoSpecPathRx = regexp.MustCompile(`kvPath:\s*"secret/([^"]+)"`)
+	// The rotation table's paths (ci_rotate_linode_creds.go) — seeded by
+	// mint-bootstrap-objkeys at bootstrap and rewritten by the rotator
+	// in-cluster. Their field sets live in the table's fields-builder map
+	// literals in the same file (lokiObjectStoreFields, harborRegistryS3Fields,
+	// the dns token literal), so the collector unions every map-literal key in
+	// the file (+ rotated_at, stamped at write time) for these paths.
+	esGoBaoPathRx = regexp.MustCompile(`baoPath:\s*"secret/([^"]+)"`)
 	// Matches both the CI-side root-token put (baoKVPutFn) and the in-cluster
 	// provisioner's k8s-auth write (bao.Write(ctx, spec.kvPath, …)) driving a
 	// harborRobotSpec kvPath.
@@ -246,6 +253,28 @@ func collectSeededGo(src string) (map[string]bool, map[string]map[string]bool, e
 		}
 		for f := range specFields {
 			fields[path][f] = true
+		}
+	}
+
+	// Rotation-table paths: the write site takes the fields-builder's return
+	// value (not a map literal), so pair each baoPath with the union of every
+	// map-literal key in the file (the builders live alongside the table) plus
+	// rotated_at. Union over-claims per-path (safe: this validator guards
+	// against MISSING seeds, not extra fields).
+	if ms := esGoBaoPathRx.FindAllStringSubmatch(text, -1); len(ms) > 0 {
+		tableFields := map[string]bool{"rotated_at": true}
+		for _, fm := range esGoFieldRx.FindAllStringSubmatch(text, -1) {
+			tableFields[fm[1]] = true
+		}
+		for _, m := range ms {
+			path := m[1]
+			paths[path] = true
+			if fields[path] == nil {
+				fields[path] = map[string]bool{}
+			}
+			for f := range tableFields {
+				fields[path][f] = true
+			}
 		}
 	}
 	return paths, fields, nil
@@ -388,17 +417,20 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// Native Go seeds: ci_harbor.go (provision-harbor-robots) and ci_seed_special.go
-	// (seed-harbor-dockerconfig / seed-harbor-registry-s3), each a
-	// literal baoKVPutFn("secret/<path>", …) call; ci_bao_seed_all.go, whose
-	// bootstrapSeeds() table declares the generic seeds the workflow used to run
-	// as one inline `bao-seed` step each (collectSeededGo also runs the
-	// seed-table parser over every source — a no-op on the harbor files).
+	// Native Go seeds: ci_harbor.go (standby robot seed, literal baoKVPutFn
+	// calls) + ci_harbor_provisioner.go (in-cluster robot provisioner,
+	// harborRobotSpec kvPath: entries); ci_bao_seed_all.go, whose
+	// bootstrapSeeds() table declares the generic seeds; and
+	// ci_rotate_linode_creds.go, whose rotation table (baoPath: entries) is
+	// seeded by mint-bootstrap-objkeys at bootstrap and rewritten by the
+	// in-cluster rotator (collectSeededGo runs every parser over every source —
+	// no-ops where a pattern is absent).
 	for _, goSrc := range []string{
 		"tools/cmd/llz/ci_harbor.go",
 		"tools/cmd/llz/ci_harbor_provisioner.go",
 		"tools/cmd/llz/ci_seed_special.go",
 		"tools/cmd/llz/ci_bao_seed_all.go",
+		"tools/cmd/llz/ci_rotate_linode_creds.go",
 	} {
 		goPaths, goFields, err := collectSeededGo(esRepoPath(root, goSrc))
 		if err != nil {

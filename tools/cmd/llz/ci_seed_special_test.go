@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTfvarsValue(t *testing.T) {
@@ -77,56 +79,81 @@ func writeTFVars(t *testing.T, dir, sub, region, content string) {
 	}
 }
 
-func TestRunCISeedHarborRegistryS3(t *testing.T) {
+// ── mint-bootstrap-objkeys ────────────────────────────────────────────────────
+
+func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	dir := chdirTempDir(t)
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
+	t.Setenv("LINODE_API_TOKEN", "linode-tok")
+	withGHASummaryFile(t)
 
-	// Missing env secrets → summary + deferred failure, exit 0, no kv put.
-	puts := stubBaoSeedKV(t, "", "")
-	t.Setenv("HARBOR_REGISTRY_S3_ACCESS_KEY", "")
-	t.Setenv("HARBOR_REGISTRY_S3_SECRET_KEY", "")
-	envFile := withGHAEnvFile(t)
-	sum := withGHASummaryFile(t)
-	if err := runCISeedHarborRegistryS3("primary"); err != nil {
-		t.Fatalf("missing secrets must defer, not fail: %v", err)
-	}
-	if !ghaEnvContains(t, envFile, "BOOTSTRAP_ERRORS=true") {
-		t.Error("missing secrets must set BOOTSTRAP_ERRORS=true")
-	}
-	b, _ := os.ReadFile(sum)
-	if !strings.Contains(string(b), "skipping secret/harbor/registry-s3") ||
-		!strings.Contains(string(b), "Add them as infra-primary environment secrets and re-run.") {
-		t.Errorf("summary missing remediation: %q", b)
-	}
-	if len(*puts) != 0 {
-		t.Errorf("missing secrets must not kv put, got %v", *puts)
-	}
+	fixedNow := time.Unix(1_700_000_000, 0)
+	prevNow := rotatorNow
+	rotatorNow = func() time.Time { return fixedNow }
+	t.Cleanup(func() { rotatorNow = prevNow })
 
-	// Secrets present but obj_cluster unresolvable → hard error (exit 1).
-	t.Setenv("HARBOR_REGISTRY_S3_ACCESS_KEY", "AK")
-	t.Setenv("HARBOR_REGISTRY_S3_SECRET_KEY", "SK")
-	if err := runCISeedHarborRegistryS3("primary"); err == nil {
+	stub := &stubLinode{}
+	prevClient := mintObjkeysLinodeClient
+	mintObjkeysLinodeClient = func(string) rotatorLinodeAPI { return stub }
+	t.Cleanup(func() { mintObjkeysLinodeClient = prevClient })
+
+	// obj_cluster unresolvable → hard error, no mint.
+	if err := runCIMintBootstrapObjkeys("primary"); err == nil {
 		t.Error("missing obj_cluster must hard-fail")
 	}
-
-	// Full path: tfvars resolve, all 5 fields land on one kv put argv.
 	writeTFVars(t, dir, "object-storage", "primary", `obj_cluster = "us-ord-1"`)
-	puts = stubBaoSeedKV(t, "", "")
-	if err := runCISeedHarborRegistryS3("primary"); err != nil {
+
+	// Fresh bootstrap: both objkey paths absent → two mints + two seeds carrying
+	// the complete field sets + rotated_at; the DNS PAT entry is never minted here.
+	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent
+	if err := runCIMintBootstrapObjkeys("primary"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*puts) != 1 {
-		t.Fatalf("want one kv put, got %d", len(*puts))
+	if stub.objCreates != 2 {
+		t.Fatalf("objkey mints = %d, want 2 (loki + harbor; never the DNS PAT)", stub.objCreates)
 	}
-	got := strings.Join((*puts)[0], " ")
-	want := "kv put secret/harbor/registry-s3 access_key_id=AK bucket_name=platform-harbor-registry-primary " +
-		"endpoint=https://us-ord-1.linodeobjects.com region=us-ord-1 secret_access_key=SK"
-	if got != want {
-		t.Errorf("kv put argv:\n got %q\nwant %q", got, want)
+	if stub.patCreates != 0 {
+		t.Errorf("PAT mints = %d, want 0", stub.patCreates)
+	}
+	if len(*puts) != 2 {
+		t.Fatalf("want two kv puts, got %d: %v", len(*puts), *puts)
+	}
+	rotatedAt := strconv.FormatInt(fixedNow.Unix(), 10)
+	wantPuts := []string{
+		"kv put secret/loki/object-store AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
+		"kv put secret/harbor/registry-s3 access_key_id=AK bucket_name=platform-harbor-registry-primary " +
+			"endpoint=https://us-ord-1.linodeobjects.com region=us-ord-1 rotated_at=" + rotatedAt + " secret_access_key=SK",
+	}
+	for i, want := range wantPuts {
+		if got := strings.Join((*puts)[i], " "); got != want {
+			t.Errorf("kv put %d:\n got %q\nwant %q", i, got, want)
+		}
 	}
 
-	if err := runCISeedHarborRegistryS3(""); err == nil {
+	// Idempotency: already-seeded paths (presentField has a value) → no mint,
+	// no put — a rotator-minted key is never clobbered.
+	stub.objCreates = 0
+	var putsAfterSkip [][]string
+	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
+		if strings.HasPrefix(strings.Join(args, " "), "kv get") {
+			return "present\n", "", nil // every probe finds a value
+		}
+		putsAfterSkip = append(putsAfterSkip, args)
+		return "", "", nil
+	})
+	if err := runCIMintBootstrapObjkeys("primary"); err != nil {
+		t.Fatal(err)
+	}
+	if stub.objCreates != 0 || len(putsAfterSkip) != 0 {
+		t.Errorf("seeded paths must skip: mints=%d puts=%v", stub.objCreates, putsAfterSkip)
+	}
+
+	if err := runCIMintBootstrapObjkeys(""); err == nil {
 		t.Error("missing --region must error")
+	}
+	t.Setenv("LINODE_API_TOKEN", "")
+	if err := runCIMintBootstrapObjkeys("primary"); err == nil || !strings.Contains(err.Error(), "LINODE_API_TOKEN") {
+		t.Errorf("err = %v, want missing-token refusal", err)
 	}
 }
 

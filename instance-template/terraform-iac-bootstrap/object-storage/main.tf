@@ -1,6 +1,6 @@
 # This root is a thin consumer of the reusable `object-storage` module
-# (terraform-modules/llz-object-storage) — the OBJ buckets + scoped
-# keys + 120-day rotation clock now live in the module so a sibling system team
+# (terraform-modules/llz-object-storage) — the OBJ buckets live in the module
+# so a sibling system team
 # can provision the same registry/telemetry storage by calling it with their own
 # label_prefix. The module's scar-comments (force_destroy quirk, rotation model,
 # Harbor wiring) travel with the code. See modules/object-storage/README.md.
@@ -16,5 +16,4 @@ module "object_storage" {
 
   region_suffix         = var.region_suffix
   obj_cluster           = var.obj_cluster
-  obj_key_rotation_days = var.obj_key_rotation_days
 }

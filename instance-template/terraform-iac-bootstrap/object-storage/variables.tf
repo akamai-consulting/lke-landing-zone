@@ -22,13 +22,7 @@ variable "obj_cluster" {
   type        = string
 }
 
-variable "obj_key_rotation_days" {
-  description = "Maximum Loki Object Storage key age before forced rotation. The LKE Secrets Rotation Guidelines mandate ≤120 days for bucket access keys; do not raise above 120 without an InfoSec exception."
-  type        = number
-  default     = 120
+# (obj_key_rotation_days was REMOVED with the TF-managed access keys — the
+# in-cluster linodeCredRotator CronJob owns rotation; first keys are minted by
+# `llz ci mint-bootstrap-objkeys` at bootstrap.)
 
-  validation {
-    condition     = var.obj_key_rotation_days > 0 && var.obj_key_rotation_days <= 120
-    error_message = "obj_key_rotation_days must be between 1 and 120 (Guidelines cap)."
-  }
-}

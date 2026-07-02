@@ -65,72 +65,26 @@ resource "linode_object_storage_bucket" "loki_admin" {
 # seeding were all dropped. See apl-values/primary/values.yaml apps.gitea
 # for the full rationale.
 
-# ── 120-day rotation clock ─────────────────────────────────────────────────────
-# Linode Object Storage keys have no native expiry — the only way to "revoke
-# after 120 days" (LKE Secrets Rotation Guidelines) is to destroy and recreate
-# the key. rotation_rfc3339 advances by var.obj_key_rotation_days once the
-# window elapses; the next `terraform apply` of this module then forces the
-# access key below to be replaced (old key destroyed = revoked). Routine
-# applies inside the window are a no-op.
-
-resource "time_rotating" "loki_key" {
-  rotation_days = var.obj_key_rotation_days
-}
-
-# ── Scoped access key for Loki ─────────────────────────────────────────────────
-# Read/write key limited to the three Loki buckets. The key credentials are
-# sensitive outputs; store them as LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY
-# in the infra-<region> GitHub environment, then run bootstrap-openbao.yml to
-# seed secret/loki/object-store in OpenBao.
+# ── Access keys — NOT Terraform-managed ───────────────────────────────────────
+# The scoped Loki/Harbor access keys (and their 120-day `time_rotating`
+# replacement clock) were REMOVED from this module. Key lifecycle now has ONE
+# owner end to end, outside Terraform:
 #
-# Rotation is NOT zero-touch: replacement mints new credentials but the
-# GitHub-env-secret → bootstrap-openbao reseed hop is manual (see
-# docs/runbooks/linode-credential-rotation.md). The loki-objkey-rotation-health
-# check alerts if the OpenBao secret falls behind this 120-day clock.
-
-resource "linode_object_storage_key" "loki" {
-  label = "${var.label_prefix}-loki-${var.region_suffix}"
-
-  bucket_access {
-    bucket_name = linode_object_storage_bucket.loki_chunks.label
-    region      = local.obj_region
-    permissions = "read_write"
-  }
-
-  bucket_access {
-    bucket_name = linode_object_storage_bucket.loki_ruler.label
-    region      = local.obj_region
-    permissions = "read_write"
-  }
-
-  bucket_access {
-    bucket_name = linode_object_storage_bucket.loki_admin.label
-    region      = local.obj_region
-    permissions = "read_write"
-  }
-
-  lifecycle {
-    replace_triggered_by = [time_rotating.loki_key.rotation_rfc3339]
-  }
-}
-
-# ── Scoped access key for Harbor registry ─────────────────────────────────────
-# Read/write key limited to the harbor_registry bucket. Same 120-day rotation
-# clock as the Loki + Gitea-backup keys; deliberately a separate scoped key
-# (not extending the Loki key) so a Harbor-side leak doesn't expose telemetry
-# storage and vice versa. Credentials are manually seeded via
-# bootstrap-openbao.yml's "Seed Harbor registry S3 credentials in OpenBao"
-# step.
-resource "linode_object_storage_key" "harbor_registry" {
-  label = "${var.label_prefix}-harbor-registry-${var.region_suffix}"
-
-  bucket_access {
-    bucket_name = linode_object_storage_bucket.harbor_registry.label
-    region      = local.obj_region
-    permissions = "read_write"
-  }
-
-  lifecycle {
-    replace_triggered_by = [time_rotating.loki_key.rotation_rfc3339]
-  }
-}
+#   - first boot:  `llz ci mint-bootstrap-objkeys` (llz-bootstrap-openbao.yml)
+#     mints the scoped keys via the Linode API and seeds
+#     secret/loki/object-store + secret/harbor/registry-s3 in OpenBao directly
+#     (rotated_at-stamped). No LOKI_S3_* / HARBOR_REGISTRY_S3_* GitHub secrets,
+#     no stash/reseed relay.
+#   - rotation:    the in-cluster linodeCredRotator CronJob
+#     (`llz ci rotate-linode-creds`) mints replacements when due and drains
+#     older same-labeled keys.
+#
+# WHY Terraform could not keep the keys: the rotator drains SAME-LABELED keys,
+# so a TF-tracked key is drained on the rotator's second rotation and TF
+# recreates it on the next apply — a permanent tug-of-war (see
+# docs/designs/linode-credential-rotator.md). Buckets stay here (stable,
+# never rotated); keys don't.
+#
+# Destroy-time bucket drain: terraform.yml's destroy-object-storage job mints a
+# TEMPORARY scoped key (`llz ci temp-objkey create`) for the s5cmd drain and
+# deletes it afterwards — it no longer reads key credentials from TF outputs.

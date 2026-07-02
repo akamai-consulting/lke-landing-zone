@@ -115,21 +115,24 @@ func TestBootstrapTFVars_Optionals(t *testing.T) {
 
 func TestObjectStorageTFVars(t *testing.T) {
 	full := assignKeys(ObjectStorageTFVars("prod", fullCluster()))
-	for _, k := range []string{"region_suffix", "obj_cluster", "obj_key_rotation_days"} {
+	for _, k := range []string{"region_suffix", "obj_cluster"} {
 		if _, ok := full[k]; !ok {
 			t.Errorf("ObjectStorageTFVars(full) missing %q", k)
 		}
 	}
-	// Minimal: only region_suffix; optional cluster/rotation omitted.
+	// obj_key_rotation_days is NEVER emitted (the TF variable was removed with
+	// the TF-managed keys; the in-cluster rotator owns rotation) — even when the
+	// deprecated spec field is set.
+	if _, ok := full["obj_key_rotation_days"]; ok {
+		t.Error("obj_key_rotation_days must not be emitted (variable removed; rotator owns rotation)")
+	}
+	// Minimal: only region_suffix; optional cluster omitted.
 	min := assignKeys(ObjectStorageTFVars("dev", Cluster{}))
 	if _, ok := min["region_suffix"]; !ok {
 		t.Error("region_suffix should always be emitted")
 	}
 	if _, ok := min["obj_cluster"]; ok {
 		t.Error("obj_cluster should be omitted when unset")
-	}
-	if _, ok := min["obj_key_rotation_days"]; ok {
-		t.Error("obj_key_rotation_days should be omitted when zero")
 	}
 }
 

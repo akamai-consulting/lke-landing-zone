@@ -30,6 +30,12 @@ func TestMatchExternalDep(t *testing.T) {
 	if _, ok := MatchExternalDep("kube-system/something-else", entries); ok {
 		t.Error("unrelated workload must not match")
 	}
+	// otomi-api (apl-core-internal, deferred): the real pod carries a ReplicaSet
+	// suffix — the suffix-tolerant form must still match so its CrashLoopBackOff
+	// is deferred, not hard-failed.
+	if _, ok := MatchExternalDep("otomi/otomi-api-54c87866fb-jf65w", entries); !ok {
+		t.Error("otomi-api pod (with ReplicaSet suffix) should be deferred")
+	}
 	// A bad regex pattern is skipped, not panicked.
 	if _, ok := MatchExternalDep("x", []DepEntry{{"(", "broken"}}); ok {
 		t.Error("malformed pattern should not match")

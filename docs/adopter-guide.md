@@ -152,7 +152,7 @@ are never committed. Everything else is a Linode/apl-core default you usually ke
 |---|---|---|
 | `region_suffix` | MUST-SET | Must match the cluster workspace deployment |
 | `obj_cluster` | MUST-SET | `linode-cli object-storage clusters-list` |
-| `obj_key_rotation_days` | default | ≤120 per rotation guidelines |
+| `keyRotationDays` | deprecated/ignored | Key rotation is owned by the in-cluster `linodeCredRotator` CronJob (first keys minted at bootstrap by `llz ci mint-bootstrap-objkeys`); the `obj_key_rotation_days` TF variable was removed |
 | `linode_token` | SECRET | `TF_VAR_linode_token` |
 
 OpenBao auth/policy/KV configuration is **not** a Terraform root — `llz ci

@@ -122,9 +122,10 @@ func ObjectStorageTFVars(env string, c Cluster) []Assign {
 	if c.ObjectStorage.Cluster != "" {
 		add("obj_cluster", hclStr(c.ObjectStorage.Cluster))
 	}
-	if c.ObjectStorage.KeyRotationDays > 0 {
-		add("obj_key_rotation_days", strconv.Itoa(c.ObjectStorage.KeyRotationDays))
-	}
+	// spec.cluster.objectStorage.keyRotationDays is NO LONGER emitted: the
+	// obj_key_rotation_days variable was removed with the TF-managed keys (the
+	// in-cluster linodeCredRotator owns rotation). The spec field is accepted
+	// but ignored so existing specs keep strict-parsing.
 	return a
 }
 

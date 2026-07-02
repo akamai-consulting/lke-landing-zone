@@ -187,6 +187,14 @@ func TestDiagnoseArgoCD(t *testing.T) {
 			return []byte("job.batch/hook-1\n"), nil
 		case a == "-n apl-operator get pods -o name":
 			return []byte("pod/apl-0\n"), nil
+		// All-namespace failing-workload sweep: one crashlooping pod + one failed Job.
+		case a == "get pods -A -o json":
+			return items(
+				`{"metadata":{"namespace":"otomi","name":"otomi-api-x"},"status":{"phase":"Running","containerStatuses":[{"name":"otomi-api","ready":false,"state":{"waiting":{"reason":"CrashLoopBackOff"}}},{"name":"tools","ready":true,"state":{"running":{}}}]}}`,
+				`{"metadata":{"namespace":"x","name":"healthy"},"status":{"phase":"Running","containerStatuses":[{"name":"c","ready":true,"state":{"running":{}}}]}}`,
+			), nil
+		case a == "get jobs -A -o json":
+			return items(`{"metadata":{"namespace":"harbor","name":"harbor-robot-provisioner-123"},"status":{"failed":2}}`), nil
 		}
 		return nil, errors.New("best-effort")
 	})
@@ -211,10 +219,20 @@ func TestDiagnoseArgoCD(t *testing.T) {
 		"kubectl -n cert-manager get secret platform-app-ca -o wide",
 		"kubectl get certificate,certificaterequest --all-namespaces -o wide",
 		"kubectl get clusterissuer -o wide",
+		// Failing-workload sweep: describe + previous/current logs for the
+		// crashlooping pod's containers, and logs for the failed Job.
+		"kubectl -n otomi describe pod otomi-api-x",
+		"kubectl -n otomi logs otomi-api-x -c otomi-api --previous --tail=60",
+		"kubectl -n otomi logs otomi-api-x -c otomi-api --tail=40",
+		"kubectl -n harbor logs job/harbor-robot-provisioner-123 --all-containers --tail=120",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("probes missing %q:\n%s", want, joined)
 		}
+	}
+	// The healthy pod must NOT be probed.
+	if strings.Contains(joined, "describe pod healthy") {
+		t.Error("healthy pod should not be swept")
 	}
 }
 

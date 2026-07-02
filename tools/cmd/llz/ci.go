@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	tf "github.com/akamai-consulting/lke-landing-zone/tools/internal/terraform"
 	"github.com/spf13/cobra"
@@ -81,11 +82,13 @@ func ciCmd() *cobra.Command {
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
 	// ci_seed_special.go.
 	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciBaoSeedSealKeyCmd(),
-		ciSeedHarborRegistryS3Cmd(),
 		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd())
-	// In-cluster Linode credential rotator (linodeCredRotator CronJob, slim llz
-	// image): rotates the in-cluster-only Linode creds (OBJ keys + DNS token).
-	c.AddCommand(ciRotateLinodeCredsCmd())
+	// Object-storage key lifecycle, one owner end to end: mint-bootstrap-objkeys
+	// mints the FIRST Loki/Harbor keys at bootstrap and seeds OpenBao (replacing
+	// the TF-minted keys + LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub relay +
+	// seed-harbor-registry-s3); the in-cluster rotator (linodeCredRotator
+	// CronJob, slim llz image) owns rotation after first boot.
+	c.AddCommand(ciMintBootstrapObjkeysCmd(), ciRotateLinodeCredsCmd(), ciTempObjkeyCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())
@@ -127,18 +130,20 @@ func ciVerifyObjectStorageCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "verify-object-storage",
-		Short: "verify a region's Loki/Harbor object-storage keys exist before openbao seeds them",
-		Long: "Native port of verify-object-storage-provisioned.sh. Lists Linode\n" +
-			"object-storage keys and checks the region's scoped keys exist\n" +
-			"(platform-loki-<region>, platform-harbor-registry-<region>) — a present key\n" +
-			"implies its bucket. The backstop against seeding STALE LOKI_S3_* /\n" +
-			"HARBOR_REGISTRY_S3_* secrets (which yield InvalidAccessKeyId at runtime with\n" +
-			"no other signal). Non-fatal on a Linode API hiccup (warn + succeed); fails\n" +
-			"only when the API responds and a key is genuinely absent. Reads LINODE_API_TOKEN.",
+		Short: "verify a region's Loki/Harbor object-storage BUCKETS exist before the key mint + seeds",
+		Long: "Lists Linode object-storage buckets and checks the region's four exist\n" +
+			"(platform-loki-{chunks,ruler,admin}-<region>, platform-harbor-registry-\n" +
+			"<region>) — i.e. terraform.yml's apply-object-storage ran. Buckets only:\n" +
+			"the scoped KEYS are no longer Terraform-minted — `llz ci\n" +
+			"mint-bootstrap-objkeys` mints them AFTER this preflight and the in-cluster\n" +
+			"rotator owns them after first boot, so key absence here is normal on a\n" +
+			"fresh bootstrap. Non-fatal on a Linode API hiccup (warn + succeed); fails\n" +
+			"only when the API responds and a bucket is genuinely absent. Reads\n" +
+			"LINODE_API_TOKEN.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIVerifyObjectStorage(region) },
 	}
-	c.Flags().StringVar(&region, "region", "", "region whose scoped keys to verify (required)")
+	c.Flags().StringVar(&region, "region", "", "region whose buckets to verify (required)")
 	return c
 }
 
@@ -150,28 +155,37 @@ func runCIVerifyObjectStorage(region string) error {
 	if err != nil {
 		return err
 	}
-	keys, err := linode.NewClient(token, 30*time.Second).ListObjectStorageKeys(context.Background())
+	buckets, err := linode.NewClient(token, 30*time.Second).ListObjectStorageBuckets(context.Background())
 	if err != nil {
 		// Transient API hiccup / auth page / non-JSON body — don't block the
-		// bootstrap on a parsing edge case; the seed steps below still run.
-		fmt.Fprintf(os.Stderr, "::warning::could not verify object-storage keys for %s (%v) — skipping this preflight (non-fatal).\n", region, err)
+		// bootstrap on a parsing edge case; the mint + seed steps below still run.
+		fmt.Fprintf(os.Stderr, "::warning::could not verify object-storage buckets for %s (%v) — skipping this preflight (non-fatal).\n", region, err)
 		return nil
 	}
-	want := []string{"platform-loki-" + region, "platform-harbor-registry-" + region}
+	have := map[string]bool{}
+	for _, b := range buckets {
+		have[cli.AsString(b["label"])] = true
+	}
+	want := []string{
+		"platform-loki-chunks-" + region,
+		"platform-loki-ruler-" + region,
+		"platform-loki-admin-" + region,
+		"platform-harbor-registry-" + region,
+	}
 	var missing []string
 	for _, label := range want {
-		if _, ok := linode.FindIDByLabel(keys, label); !ok {
+		if !have[label] {
 			missing = append(missing, label)
 		}
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(os.Stderr, "::error::object-storage scoped key(s) not found on Linode for %s: %s\n", region, strings.Join(missing, " "))
-		fmt.Fprintln(os.Stderr, "The Loki/Harbor S3 keys are absent, so LOKI_S3_* / HARBOR_REGISTRY_S3_* secrets are STALE — seeding them yields InvalidAccessKeyId at runtime. Remediate:")
+		fmt.Fprintf(os.Stderr, "::error::object-storage bucket(s) not found on Linode for %s: %s\n", region, strings.Join(missing, " "))
+		fmt.Fprintln(os.Stderr, "The Loki/Harbor buckets are absent — the key mint below would fail and Loki/Harbor would have no object store. Remediate:")
 		fmt.Fprintf(os.Stderr, "  gh workflow run terraform.yml -f action=apply -f module=object-storage -f region=%s\n", region)
 		fmt.Fprintf(os.Stderr, "  gh workflow run bootstrap-openbao.yml -f region=%s\n", region)
-		return fmt.Errorf("object-storage preflight failed: %d key(s) missing for %s", len(missing), region)
+		return fmt.Errorf("object-storage preflight failed: %d bucket(s) missing for %s", len(missing), region)
 	}
-	fmt.Printf("object-storage preflight OK for %s: %s exist on Linode.\n", region, strings.Join(want, " + "))
+	fmt.Printf("object-storage preflight OK for %s: all four buckets exist on Linode.\n", region)
 	return nil
 }
 

@@ -33,7 +33,7 @@ type: application
 #         (+ a downward-API HOSTNAME env) so the `pod: ${HOSTNAME}` label resolves
 #         to the pod name instead of shipping the literal string `${HOSTNAME}` to
 #         Loki on every OpenBao audit line.
-version: 0.1.11
+version: 0.1.12
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:
