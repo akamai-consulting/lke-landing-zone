@@ -68,6 +68,10 @@ managed  docs/**
 # Template-owned (like the other READMEs) so improvements reach instances on update;
 # instance-specific notes belong in docs/ or a separate file, not here.
 managed  README.md
+# Instance-root agent/contributor conventions (spec-is-truth, manifest ownership,
+# no-secrets/no-AI-attribution). Template-owned like the other AGENTS.md files so
+# rule updates reach instances; terraform-iac-bootstrap/AGENTS.md overrides in-tree.
+managed  AGENTS.md
 managed  terraform-iac-bootstrap/AGENTS.md
 managed  terraform-iac-bootstrap/*/README.md
 managed  terraform-iac-bootstrap/*/variables.tf
