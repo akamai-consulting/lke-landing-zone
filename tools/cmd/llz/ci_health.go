@@ -132,12 +132,13 @@ func healthExitCode() int {
 		fmt.Printf("  %s applications.argoproj.io CRD or platform-bootstrap Application not yet present\n", cyan("PENDING"))
 		return 2
 	}
-	// Phase 1: bootstrap-cluster ran but bootstrap-openbao hasn't (no platform-app-ca).
-	// Probe with retry: phase1 flips downstream hard-fails to in-progress, so a
-	// single transient kubectl error on this one call must not masquerade as
-	// "secret absent" and misclassify the phase. Any attempt that finds the
-	// Secret wins (present => not phase1); only a consistent miss means phase1.
-	phase1 := !secretPresentWithRetry("-n", "cert-manager", "get", "secret", "platform-app-ca")
+	// Phase 1: cluster-bootstrap ran but bootstrap-openbao has not completed yet.
+	// Historically this was keyed only on cert-manager/platform-app-ca being absent,
+	// but apl-core 5.x no longer emits that Secret while the replacement CA chain can
+	// already be healthy. Once the openbao ClusterSecretStore is Ready, OpenBao has
+	// been unsealed/configured and later failures must fail fast instead of being
+	// masked as "still installing" until the converge budget expires.
+	phase1 := phase1OpenBaoBootstrapPending()
 
 	var r health.Report
 	checkNodes(&r)
@@ -240,6 +241,38 @@ func secretPresentWithRetry(args ...string) bool {
 		}
 	}
 	return false
+}
+
+func phase1OpenBaoBootstrapPending() bool {
+	if secretPresentWithRetry("-n", "cert-manager", "get", "secret", "platform-app-ca") {
+		return false
+	}
+	return !openBaoClusterSecretStoreReadyWithRetry()
+}
+
+func openBaoClusterSecretStoreReadyWithRetry() bool {
+	for attempt := 0; attempt < phase1ProbeRetries; attempt++ {
+		if openBaoClusterSecretStoreReady() {
+			return true
+		}
+		if attempt < phase1ProbeRetries-1 {
+			time.Sleep(phase1ProbeDelay)
+		}
+	}
+	return false
+}
+
+func openBaoClusterSecretStoreReady() bool {
+	out, err := execOutput("kubectl", "get", "clustersecretstore", defaultSecretStore, "-o", "json")
+	if err != nil {
+		return false
+	}
+	var item readyResourceItem
+	if err := json.Unmarshal(out, &item); err != nil {
+		return false
+	}
+	status, _, _ := health.FindReady(item.Status.Conditions)
+	return status == "True"
 }
 
 // kItems runs `kubectl get <args> -o json` and returns its .items[] as raw

@@ -85,8 +85,8 @@ func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 
 	// The install can REACH argocd yet still never pass the convergence gate —
 	// an Application wedged OutOfSync/Missing (a child's ComparisonError) or the
-	// phase1 platform-app-ca Secret never issuing. Neither shows in the namespace
-	// sweeps above, so capture them explicitly before teardown.
+	// phase gate misreading the OpenBao/cert-manager handoff. Neither shows in the
+	// namespace sweeps above, so capture them explicitly before teardown.
 	diagnoseConvergence(argoNS)
 
 	fmt.Println("Diagnostics complete. Common causes:")
@@ -95,14 +95,15 @@ func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 	fmt.Println("  • CrashLoopBackOff                -> see Job / pod logs above")
 	fmt.Println("  • argocd namespace empty          -> apl-operator helmfile pipeline never reached argocd (see apl-operator above)")
 	fmt.Println("  • Application OutOfSync/Missing    -> see 'Argo CD Applications' below; a child ComparisonError stalls the parent app-of-apps")
-	fmt.Println("  • platform-app-ca never issues     -> convergence stays in phase1 forever; see the cert-manager CA chain below")
+	fmt.Println("  • phase gate stuck                 -> see platform-app-ca plus OpenBao ClusterSecretStore / cert-manager CA chain below")
 	return nil
 }
 
 // diagnoseConvergence captures the two convergence-gate blockers the namespace
 // sweeps miss: the Argo CD Application states (sync/health + the condition
-// messages that carry a ComparisonError) and the phase1 gate — whether the
-// cert-manager platform-app-ca Secret and the CA chain that issues it exist.
+// messages that carry a ComparisonError) and the phase gate — whether the
+// legacy cert-manager platform-app-ca Secret, the OpenBao ClusterSecretStore,
+// and the CA chain are present/Ready.
 // Best-effort throughout; group titles keep it scannable in the run log.
 func diagnoseConvergence(argoNS string) {
 	diagGroup("convergence — Argo CD Applications (sync / health / condition messages)", func() {
@@ -116,10 +117,11 @@ func diagnoseConvergence(argoNS string) {
 		// OutOfSync/Missing stall (and whether a child app poisoned its sync).
 		diagStream("kubectl", "-n", argoNS, "get", "application", "platform-bootstrap", "-o", "yaml")
 	})
-	diagGroup("convergence — phase1 gate: cert-manager platform-app-ca + CA chain", func() {
-		// phase1 stays true until this Secret exists. Capture the Secret plus the
-		// Certificate/CertificateRequest/Issuer chain that should produce it.
+	diagGroup("convergence — phase gate: platform-app-ca, OpenBao store, CA chain", func() {
+		// platform-app-ca is legacy but still useful context; OpenBao store Ready is
+		// the post-bootstrap signal that ends phase1. Capture both plus the CA chain.
 		diagStream("kubectl", "-n", "cert-manager", "get", "secret", "platform-app-ca", "-o", "wide")
+		diagStream("kubectl", "get", "clustersecretstore", "openbao", "-o", "wide")
 		diagStream("kubectl", "get", "certificate,certificaterequest", "--all-namespaces", "-o", "wide")
 		diagStream("kubectl", "get", "clusterissuer", "-o", "wide")
 	})

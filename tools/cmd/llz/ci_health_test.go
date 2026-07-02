@@ -286,6 +286,40 @@ func TestSecretPresentWithRetry(t *testing.T) {
 	}
 }
 
+func TestPhase1OpenBaoBootstrapPending(t *testing.T) {
+	prevDelay := phase1ProbeDelay
+	phase1ProbeDelay = 0 // no real sleeps in the test
+	t.Cleanup(func() { phase1ProbeDelay = prevDelay })
+
+	withKubectl(t, func(a string) ([]byte, error) {
+		switch a {
+		case "-n cert-manager get secret platform-app-ca":
+			return nil, errors.New("NotFound")
+		case "get clustersecretstore openbao -o json":
+			return []byte(`{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected kubectl args %q", a)
+		}
+	})
+	if phase1OpenBaoBootstrapPending() {
+		t.Error("openbao ClusterSecretStore Ready should end phase1 even when platform-app-ca is absent")
+	}
+
+	withKubectl(t, func(a string) ([]byte, error) {
+		switch a {
+		case "-n cert-manager get secret platform-app-ca":
+			return nil, errors.New("NotFound")
+		case "get clustersecretstore openbao -o json":
+			return []byte(`{"status":{"conditions":[{"type":"Ready","status":"False"}]}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected kubectl args %q", a)
+		}
+	})
+	if !phase1OpenBaoBootstrapPending() {
+		t.Error("platform-app-ca absent and openbao ClusterSecretStore not Ready should remain phase1")
+	}
+}
+
 func TestCheckReadyResources(t *testing.T) {
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch a {
