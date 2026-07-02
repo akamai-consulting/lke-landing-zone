@@ -742,6 +742,60 @@ jobs:
           region:                ${{ env.REGION }}
           register-runner-lease: 'true'
 
+      # Install cosign (not baked into the CI image) for the signature preflight
+      # below. Same pinned installer build-images.yml signs with.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # PREFLIGHT — clear the verify-llz-image-signature race before the gate.
+      #
+      # verify-llz-image-signature (Enforce, sync-wave -15) blocks the in-cluster
+      # llz CronJobs (linode-cred-rotator, harbor-robot-provisioner) until Kyverno
+      # can verify the keyless cosign signature on ghcr.io/<org>/llz:sha-<ref>. On
+      # a freshly-built main sha the Sigstore/Rekor + GHCR signature can lag the
+      # cluster's FIRST admission attempt during cluster-bootstrap; that denial
+      # fails the platform-bootstrap sync, and because Argo backs off to 5m retries
+      # (and does not auto-retry a failed sync to the same revision), the cascade
+      # (harbor-docker-config ExternalSecret; harbor-registry / loki object-store
+      # CreateContainerConfigError) is STILL stuck when this gate starts — even
+      # though the signature is verifiable by now. So: wait for the SAME keyless
+      # verification to succeed here, then force platform-bootstrap to re-attempt
+      # admission immediately against the now-live signature (nudge-argo). Once a
+      # real released tag is used the signature is long-published and the verify
+      # passes first try. Best-effort: on any failure the converge poll still runs
+      # and remains the actual verdict.
+      - name: Preflight — wait for a verifiable llz image signature, then re-sync
+        env:
+          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
+          TEMPLATE_REF: ${{ inputs.template-ref }}
+          TF_IMAGE: ${{ vars.TF_IMAGE }}
+        run: |
+          set -uo pipefail
+          # Derive the upstream GHCR org from TF_IMAGE (ghcr.io/<org>/ci-terraform:…).
+          ORG="$(printf '%s' "${TF_IMAGE}" | sed -E 's#^[^/]+/([^/]+)/.*#\1#')"
+          IMAGE="ghcr.io/${ORG}/llz:sha-${TEMPLATE_REF}"
+          # Same trust anchor as kyverno-verify-llz-image-signature.yaml: the
+          # build-images.yml workflow under any repo in the org, GitHub OIDC issuer.
+          IDENTITY_RE="^https://github.com/${ORG}/[^/]+/\.github/workflows/build-images\.yml@"
+          ISSUER="https://token.actions.githubusercontent.com"
+          echo "Preflight: waiting for a verifiable keyless signature on ${IMAGE}"
+          ok=0
+          for i in $(seq 1 20); do
+            if cosign verify "${IMAGE}" \
+                 --certificate-identity-regexp "${IDENTITY_RE}" \
+                 --certificate-oidc-issuer "${ISSUER}" >/dev/null 2>&1; then
+              echo "signature verified on attempt ${i}"; ok=1; break
+            fi
+            echo "not verifiable yet (attempt ${i}/20) — retrying in 15s"; sleep 15
+          done
+          if [ "${ok}" != 1 ]; then
+            echo "::warning::llz image signature still not verifiable after retries — converge will poll and may hit the Kyverno block"
+          fi
+          # Argo does not fast-retry a sync that terminally failed on the earlier
+          # (pre-signature) admission denial; force platform-bootstrap to re-apply
+          # now so the CronJobs are re-admitted against the live signature.
+          llz ci nudge-argo || true
+
       - name: Wait for cluster to converge
         env:
           KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
