@@ -107,11 +107,17 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 		// before the dns tree is ever applied. on-missing skip: DNS is optional at
 		// bootstrap (cluster-bootstrap uses a placeholder for apl-core's schema),
 		// and bootstrap-dns.yml remains the late-provisioning/recovery path that
-		// seeds this same path once the token exists.
+		// seeds this same path once the token exists. skip-if-present: on a
+		// linodeCredRotator env the in-cluster rotator OWNS this path after first
+		// boot (it mints fresh DNS-scoped PATs and drains old ones) — a re-run
+		// re-seeding the stale GitHub copy would clobber a live rotator-minted
+		// token with a possibly-drained one. Deliberate updates go through
+		// bootstrap-dns.yml, whose kv put is unconditional.
 		{
-			path:       "secret/certmanager/dns01",
-			fieldSpecs: []string{"token=env:LINODE_DNS_TOKEN"},
-			onMissing:  "skip",
+			path:          "secret/certmanager/dns01",
+			fieldSpecs:    []string{"token=env:LINODE_DNS_TOKEN"},
+			skipIfPresent: "token",
+			onMissing:     "skip",
 			missingNotes: []string{
 				"LINODE_DNS_TOKEN not set — skipping secret/certmanager/dns01.",
 				fmt.Sprintf("Provision it as an infra-%s environment secret, then run bootstrap-dns.yml (the late-provisioning path).", region),

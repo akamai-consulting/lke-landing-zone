@@ -6,7 +6,8 @@ package main
 //
 //   seed-harbor-registry-s3  resolve obj_cluster from the object-storage
 //                            tfvars and seed the registry's S3 backend creds
-//   resolve-harbor-url       default HARBOR_URL to harbor.<cluster_domain>
+//   resolve-harbor-url       default HARBOR_URL to harbor.<domainSuffix> from
+//                            the LandingZone spec
 //   audit-pvc-storageclass   report PVCs that escaped the Kyverno encrypted-
 //                            StorageClass mutation
 //
@@ -23,12 +24,14 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 // tfvarsValue returns the first `key = "value"` assignment in tfvars content
 // (quotes stripped, comments ignored) — the same first-wins grep/sed
 // semantics as internal/terraform.ParseTFVars, for keys outside its fixed
-// struct (obj_cluster, cluster_domain).
+// struct (obj_cluster).
 func tfvarsValue(content, key string) string {
 	for _, line := range strings.Split(content, "\n") {
 		i := strings.IndexByte(line, '=')
@@ -121,19 +124,22 @@ func ciResolveHarborURLCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "resolve-harbor-url",
-		Short: "default HARBOR_URL to harbor.<cluster_domain> from the cluster-bootstrap tfvars",
+		Short: "default HARBOR_URL to harbor.<domainSuffix> from the LandingZone spec",
 		Long: "Native port of the 'Pre-flight — resolve Harbor URL for configuration'\n" +
 			"step. HARBOR_URL is the registry hostname buildah pushes to / images pull\n" +
-			"from (stored in OpenBao as registry_host) — NOT how the job reaches\n" +
-			"Harbor's API (that's the kubectl port-forward). When the HARBOR_URL env\n" +
-			"(vars.HARBOR_URL) is set it wins; otherwise harbor.<cluster_domain> is\n" +
-			"derived from terraform-iac-bootstrap/cluster-bootstrap/<region>.tfvars —\n" +
-			"the host apl-core already serves Harbor at — and written to $GITHUB_ENV.\n" +
-			"Fails only when neither is available.",
+			"from (stored in OpenBao as registry_host) — NOT how the API is reached\n" +
+			"(the in-cluster harbor-robot-provisioner talks to harbor-core.harbor.svc).\n" +
+			"When the HARBOR_URL env (vars.HARBOR_URL) is set it wins; otherwise\n" +
+			"harbor.<domainSuffix> is derived from the LandingZone spec\n" +
+			"(spec.environments.<region>.cluster.bootstrap.domainSuffix — the host\n" +
+			"apl-core already serves Harbor at) and written to $GITHUB_ENV. This used\n" +
+			"to read cluster_domain from the rendered cluster-bootstrap tfvars; the\n" +
+			"spec is mandatory now, so that tfvars side-channel (and the cluster_domain\n" +
+			"variable it existed for) was retired. Fails only when neither is available.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIResolveHarborURL(region) },
 	}
-	c.Flags().StringVar(&region, "region", "", "deployment whose cluster-bootstrap tfvars hold cluster_domain (required)")
+	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) whose domainSuffix derives the Harbor host (required)")
 	return c
 }
 
@@ -145,14 +151,18 @@ func runCIResolveHarborURL(region string) error {
 		fmt.Printf("HARBOR_URL: %s (from vars.HARBOR_URL).\n", v)
 		return nil
 	}
-	tfv := filepath.Join("terraform-iac-bootstrap", "cluster-bootstrap", region+".tfvars")
-	content, _ := os.ReadFile(tfv)
-	domain := tfvarsValue(string(content), "cluster_domain")
-	if domain == "" {
-		fmt.Fprintf(os.Stderr, "::error::HARBOR_URL is unset and cluster_domain not found in %s. Set the vars.HARBOR_URL variable, or cluster_domain in the cluster-bootstrap tfvars.\n", tfv)
-		return fmt.Errorf("cluster_domain not found in %s", tfv)
+	lz, err := clusterspec.LoadInstance(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "::error::HARBOR_URL is unset and the LandingZone spec could not be loaded (%v). Set the vars.HARBOR_URL variable, or fix the spec.\n", err)
+		return fmt.Errorf("resolve harbor url: %w", err)
 	}
-	fmt.Printf("HARBOR_URL unset — derived harbor.<cluster_domain> = harbor.%s\n", domain)
+	e, ok := lz.Env(region)
+	domain := e.Cluster.Bootstrap.DomainSuffix
+	if !ok || domain == "" {
+		fmt.Fprintf(os.Stderr, "::error::HARBOR_URL is unset and spec.environments.%s.cluster.bootstrap.domainSuffix is empty. Set the vars.HARBOR_URL variable, or fill the spec field.\n", region)
+		return fmt.Errorf("domainSuffix not found in the spec for env %s", region)
+	}
+	fmt.Printf("HARBOR_URL unset — derived harbor.<domainSuffix> = harbor.%s\n", domain)
 	return appendGHAFile("GITHUB_ENV", "HARBOR_URL=harbor."+domain)
 }
 

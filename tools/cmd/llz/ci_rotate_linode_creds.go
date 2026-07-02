@@ -48,7 +48,7 @@ type rotatorLinodeAPI interface {
 	CreateProfileToken(ctx context.Context, label, scopes, expiry string) (map[string]any, error)
 	DeleteProfileToken(ctx context.Context, id uint64) error
 	ListObjectStorageKeys(ctx context.Context) ([]map[string]any, error)
-	CreateObjectStorageKey(ctx context.Context, label, cluster, bucket, permissions string) (map[string]any, error)
+	CreateObjectStorageKeyBuckets(ctx context.Context, label, cluster string, buckets []string, permissions string) (map[string]any, error)
 	DeleteObjectStorageKey(ctx context.Context, id uint64) error
 	Verify(ctx context.Context) error
 }
@@ -69,20 +69,24 @@ var (
 // COMPLETE OpenBao field set (KV v2 writes replace the whole secret), so the
 // builder re-derives any static fields (bucket/endpoint/region) too.
 type credEntry struct {
-	name        string // log label
-	kind        string // credKindPAT | credKindObjKey
-	label       string // Linode resource label (mint + drain target)
-	scopes      string // PAT only
-	objCluster  string // objkey only
-	bucket      string // objkey only
-	permissions string // objkey only
+	name        string   // log label
+	kind        string   // credKindPAT | credKindObjKey
+	label       string   // Linode resource label (mint + drain target)
+	scopes      string   // PAT only
+	objCluster  string   // objkey only
+	buckets     []string // objkey only — every bucket the key grants (one bucket_access each)
+	permissions string   // objkey only
 	baoPath     string
 	fields      func(a, b string) map[string]string // (token,"") for PAT; (access,secret) for objkey
 }
 
 // buildRotationTable is the Phase-1 set of in-cluster-only Linode credentials.
 // region/objCluster come from the CronJob env (rendered per-env, like the
-// volume-labeler's REGION). Pure — unit-tested.
+// volume-labeler's REGION). Labels + bucket grants MIRROR the llz-object-storage
+// module's bootstrap-minted keys ("<label_prefix>-<name>-<region_suffix>",
+// label_prefix "platform"): the Loki key spans the chunks/ruler/admin buckets —
+// the actual bucket names, NOT the key label (an earlier revision minted against
+// the nonexistent "platform-loki-<region>" bucket). Pure — unit-tested.
 func buildRotationTable(region, objCluster string) []credEntry {
 	return []credEntry{
 		{
@@ -92,14 +96,22 @@ func buildRotationTable(region, objCluster string) []credEntry {
 		},
 		{
 			name: "loki-object-store", kind: credKindObjKey, label: "platform-loki-" + region,
-			objCluster: objCluster, bucket: "platform-loki-" + region, permissions: "read_write",
-			baoPath: "secret/loki/object-store",
-			fields:  func(access, secret string) map[string]string { return lokiObjectStoreFields(access, secret) },
+			objCluster: objCluster,
+			buckets: []string{
+				"platform-loki-chunks-" + region,
+				"platform-loki-ruler-" + region,
+				"platform-loki-admin-" + region,
+			},
+			permissions: "read_write",
+			baoPath:     "secret/loki/object-store",
+			fields:      func(access, secret string) map[string]string { return lokiObjectStoreFields(access, secret) },
 		},
 		{
 			name: "harbor-registry-s3", kind: credKindObjKey, label: "platform-harbor-registry-" + region,
-			objCluster: objCluster, bucket: "platform-harbor-registry-" + region, permissions: "read_write",
-			baoPath: "secret/harbor/registry-s3",
+			objCluster:  objCluster,
+			buckets:     []string{"platform-harbor-registry-" + region},
+			permissions: "read_write",
+			baoPath:     "secret/harbor/registry-s3",
 			fields: func(access, secret string) map[string]string {
 				return harborRegistryS3Fields(region, objCluster, access, secret)
 			},
@@ -260,7 +272,7 @@ func rotateOne(ctx context.Context, lc rotatorLinodeAPI, bao baoStore, e credEnt
 		}
 		fields = e.fields(token, "")
 	case credKindObjKey:
-		m, err := lc.CreateObjectStorageKey(ctx, e.label, e.objCluster, e.bucket, e.permissions)
+		m, err := lc.CreateObjectStorageKeyBuckets(ctx, e.label, e.objCluster, e.buckets, e.permissions)
 		if err != nil {
 			return err
 		}

@@ -20,11 +20,6 @@ variable "apl_values_env" {
   type        = string
 }
 
-variable "cluster_domain" {
-  description = "Base DNS domain for this cluster (e.g. lab.<domain>, <domain> for primary). Set in the tfvars by `llz render` (spec: cluster.bootstrap.domainSuffix) and read back from them by `llz ci resolve-harbor-url` to derive harbor.<cluster_domain>. The values.yaml cluster.domainSuffix + dns.domainFilters are written straight in by `llz render`, so this is NOT a templatefile input — it is kept purely for the resolve-harbor-url read."
-  type        = string
-}
-
 variable "apl_values_repo_url" {
   description = "HTTPS URL of the GitOps repo that holds apl-values/ and manifest/ subtrees. **HTTPS is required** by apl-core's values schema (otomi.git.repoUrl pattern `^https?://.+`). A host that requires per-cluster node-IP allowlisting for HTTPS cannot satisfy LKE-E, so the values tree must be mirrored to a public-CA HTTPS-reachable host (GitHub.com, GitLab.com, or an internal HTTPS mirror). `llz render` writes otomi.git.repoUrl into values.yaml from spec.cluster.bootstrap.aplValues.repoURL; this var feeds only the Argo CD values-repo credential Secret (kubectl_manifest.apl_values_repo_creds). Example: https://github.com/<org>/platform-apl-values.git"
   type        = string

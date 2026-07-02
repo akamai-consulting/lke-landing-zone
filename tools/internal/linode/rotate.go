@@ -180,13 +180,25 @@ func (c *Client) ListObjectStorageKeys(ctx context.Context) ([]map[string]any, e
 // CreateObjectStorageKey mints a new bucket-scoped key. The returned map
 // includes `id`, `access_key`, and the one-time `secret_key`.
 func (c *Client) CreateObjectStorageKey(ctx context.Context, label, cluster, bucket, permissions string) (map[string]any, error) {
-	body := map[string]any{
-		"label": label,
-		"bucket_access": []any{map[string]any{
+	return c.CreateObjectStorageKeyBuckets(ctx, label, cluster, []string{bucket}, permissions)
+}
+
+// CreateObjectStorageKeyBuckets mints a key scoped to SEVERAL buckets in one
+// cluster (one bucket_access entry per bucket, same permissions). Needed for
+// the Loki key, which spans the chunks/ruler/admin buckets — the same shape
+// the llz-object-storage module's bucket_access blocks grant.
+func (c *Client) CreateObjectStorageKeyBuckets(ctx context.Context, label, cluster string, buckets []string, permissions string) (map[string]any, error) {
+	access := make([]any, 0, len(buckets))
+	for _, b := range buckets {
+		access = append(access, map[string]any{
 			"cluster":     cluster,
-			"bucket_name": bucket,
+			"bucket_name": b,
 			"permissions": permissions,
-		}},
+		})
+	}
+	body := map[string]any{
+		"label":         label,
+		"bucket_access": access,
 	}
 	return c.postJSON(ctx, c.base+"/v4/object-storage/keys", body)
 }
