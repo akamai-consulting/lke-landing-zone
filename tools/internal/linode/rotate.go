@@ -208,6 +208,11 @@ func (c *Client) DeleteObjectStorageKey(ctx context.Context, id uint64) error {
 	return c.deleteExpect2xx(ctx, fmt.Sprintf("%s/v4/object-storage/keys/%d", c.base, id), fmt.Sprintf("revoking OBJ key id=%d", id))
 }
 
+// ListObjectStorageBuckets returns every Object Storage bucket on the account.
+func (c *Client) ListObjectStorageBuckets(ctx context.Context) ([]map[string]any, error) {
+	return c.listAllPages(ctx, "/v4/object-storage/buckets")
+}
+
 // ── Object Storage clusters + buckets ────────────────────────────────────────
 
 // ListObjectStorageClusters returns every OBJ cluster on the account. Each map

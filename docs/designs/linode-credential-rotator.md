@@ -1,7 +1,13 @@
 # Design: in-cluster Linode credential rotator (CronJob)
 
-**Status:** Phase 1 wired for e2e — release-e2e enables
-`components.linodeCredRotator` on its env; still default-OFF fleet-wide. The
+**Status:** Phase 2 — DEFAULT-ON fleet-wide, sole owner of the object-storage
+key lifecycle. The llz-object-storage module is buckets-only (keys +
+`time_rotating` + `obj_key_rotation_days` + key outputs removed); the FIRST
+keys are minted at bootstrap by `llz ci mint-bootstrap-objkeys`
+(rotated_at-stamped, skip-if-present) and seeded straight into OpenBao — the
+`stash-env-secret` S3 hop and the `LOKI_S3_*`/`HARBOR_REGISTRY_S3_*` GitHub
+secrets are retired, and the destroy-time bucket drain mints a temporary key
+(`llz ci temp-objkey`). Phase 1 (below) was the e2e-gated wiring pass. The
 rollout-blocking bugs found while wiring are fixed: the Loki table entry now
 mints against the three REAL bucket names (chunks/ruler/admin — an earlier
 revision targeted the nonexistent `platform-loki-<region>` bucket;
@@ -9,7 +15,7 @@ revision targeted the nonexistent `platform-loki-<region>` bucket;
 bootstrap dns01 seed is `skip-if-present` so a re-bootstrap can't clobber a
 rotator-minted token with the stale GitHub copy.
 
-> **Terraform key ownership — the gap to close before default-ON.** The
+> **Terraform key ownership — RESOLVED (Phase 2, as prescribed below).** The
 > llz-object-storage module creates the Loki/Harbor keys with the SAME labels
 > the rotator drains (`platform-loki-<region>`, `platform-harbor-registry-<region>`).
 > With keep-newest-2 the TF-created key is drained on the rotator's SECOND
@@ -24,8 +30,8 @@ rotator-minted token with the stale GitHub copy.
 > `LOKI_S3_*`/`HARBOR_REGISTRY_S3_*` GitHub secrets, and the
 > `seed-harbor-registry-s3` step). The destroy-time bucket drain must then mint
 > a temporary scoped key instead of reading key creds from TF outputs. That
-> follow-up, plus one green e2e cycle of this Phase 1, gates the default flip
-> and the `time_rotating`/`obj_key_rotation_days` deletion.
+> follow-up, plus one green e2e cycle of this Phase 1, gated the default flip
+> and the `time_rotating`/`obj_key_rotation_days` deletion — all now landed.
 >
 > Known gap carried into Phase 1: the objkey path has no verify probe before
 > drain (the PAT path verifies via `GET /v4/profile`); an S3 HEAD against the

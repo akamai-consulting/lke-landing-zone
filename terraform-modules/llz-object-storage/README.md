@@ -1,7 +1,20 @@
 # `object-storage`
 
-Linode Object Storage buckets + scoped access keys for a platform's container
-registry and log storage, with a declarative 120-day key-rotation clock.
+Linode Object Storage buckets for a platform's container registry and log
+storage. **Buckets only** — the scoped access keys are NOT Terraform-managed.
+
+> **MAJOR interface change (SemVer):** earlier releases minted the Loki/Harbor
+> scoped keys here with a 120-day `time_rotating` clock and exported them as
+> sensitive outputs for a GitHub-secret relay. That whole surface was removed:
+> the first keys are minted at bootstrap by `llz ci mint-bootstrap-objkeys`
+> (bootstrap-openbao.yml) and seeded straight into OpenBao, and the in-cluster
+> `linodeCredRotator` CronJob owns rotation. Terraform could not keep the keys:
+> the rotator drains same-labeled keys, so a TF-tracked key gets drained and
+> then recreated on the next apply — a permanent tug-of-war (see
+> `docs/designs/linode-credential-rotator.md`). Removed: the two
+> `linode_object_storage_key` resources, `time_rotating`,
+> `obj_key_rotation_days`, and the `loki_*`/`harbor_registry_*_key` +
+> `loki_key_rotates_at` outputs.
 
 Extracted from the `object-storage/` root config so a sibling
 system team can provision the same registry/telemetry storage by setting values
@@ -9,42 +22,35 @@ instead of copying YAML. The operational scars travel with the module:
 
 - **No native `force_destroy`.** The Linode provider's
   `linode_object_storage_bucket` does not support auto-emptying on destroy, so
-  buckets must be drained (`aws s3 rm --recursive`) before `terraform destroy` —
-  see the destroy-time drain step in `.github/workflows/terraform.yml`.
-- **Rotation = destroy+recreate.** OBJ keys have no native expiry; the 120-day
-  SLA is enforced by a `time_rotating` resource that forces key replacement.
-  Reseeding the new credentials into OpenBao is a **manual** hop (see `next_steps`).
-- **Separate scoped keys** for Harbor vs Loki so a leak on one side doesn't
-  expose the other.
+  buckets must be drained before `terraform destroy` — the destroy-time drain
+  step in `.github/workflows/terraform.yml` mints a temporary scoped key
+  (`llz ci temp-objkey`) for the sweep and deletes it afterwards.
+- **Separate scoped keys** for Harbor vs Loki (minted outside TF) so a leak on
+  one side doesn't expose the other.
 
 ## What it deploys
 
 | Resource | Count | Notes |
 |---|---|---|
 | `linode_object_storage_bucket` | 4 | `<prefix>-harbor-registry-<suffix>`, `<prefix>-loki-{chunks,ruler,admin}-<suffix>` |
-| `linode_object_storage_key` | 2 | Loki key (3 buckets, read_write), Harbor key (1 bucket, read_write) |
-| `time_rotating` | 1 | drives the 120-day forced-rotation clock |
 
 ## Inputs
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `region_suffix` | string | — | `primary` \| `secondary` \| `staging` \| `lab` — appended to all labels |
+| `region_suffix` | string | — | deployment/env name (e.g. `primary`, `e2e`) — appended to all labels |
 | `obj_cluster` | string | — | Linode OBJ cluster id (e.g. `us-ord-1`) |
-| `obj_key_rotation_days` | number | `120` | Max key age before forced rotation (≤120, Guidelines cap) |
-| `label_prefix` | string | `"platform"` | Bucket/key label prefix. **Override per sibling deployment** so labels don't collide. |
+| `label_prefix` | string | `"platform"` | Bucket label prefix. **Override per sibling deployment** so labels don't collide. Key labels (minted by llz) mirror it. |
 
 ## Outputs
 
-`loki_access_key` / `loki_secret_key` (sensitive), `bucket_names`,
-`harbor_registry_bucket`, `harbor_registry_access_key` /
-`harbor_registry_secret_key` (sensitive), `s3_endpoint`, `loki_key_rotates_at`,
-`next_steps` (post-apply / post-rotation reseed checklist).
+`bucket_names`, `harbor_registry_bucket`, `s3_endpoint`,
+`next_steps` (post-apply checklist).
 
 ## Provider
 
 Inherits the `linode` provider from the calling root (configure
-`provider "linode" { token = … }` there). The `time` provider is config-less.
+`provider "linode" { token = … }` there).
 
 ## Usage
 

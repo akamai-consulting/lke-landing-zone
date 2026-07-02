@@ -197,11 +197,11 @@ jobs:
           bin/llz env add "${E2E_ENV}" \
             --region "${E2E_LINODE_REGION}" \
             --obj-cluster "${E2E_OBJ_CLUSTER}"
-          # Phase-1 rotator rollout (docs/designs/linode-credential-rotator.md):
-          # linodeCredRotator is default-OFF fleet-wide — e2e is where a real
-          # mint → OpenBao → ESO → consumer cycle gets validated before any
-          # default flips. env set re-renders the overlay + tfvars.
-          bin/llz env set "${E2E_ENV}" components.linodeCredRotator.enabled=true
+          # (linodeCredRotator is default-ON now — Phase 2 of
+          # docs/designs/linode-credential-rotator.md made it the sole rotation
+          # mechanism for the object-storage keys, so no explicit env set is
+          # needed; e2e exercises the mint → OpenBao → ESO → consumer cycle by
+          # construction.)
           # otomi.git.repoUrl must point at the INSTANCE repo (apl-operator
           # pushes its rendered values tree there). This env add runs at the
           # TEMPLATE root, where .copier-answers.yml doesn't exist, so the

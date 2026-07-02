@@ -16,16 +16,10 @@ variable "obj_cluster" {
   type        = string
 }
 
-variable "obj_key_rotation_days" {
-  description = "Maximum Loki Object Storage key age before forced rotation. The LKE Secrets Rotation Guidelines mandate ≤120 days for bucket access keys; do not raise above 120 without an InfoSec exception."
-  type        = number
-  default     = 120
-
-  validation {
-    condition     = var.obj_key_rotation_days > 0 && var.obj_key_rotation_days <= 120
-    error_message = "obj_key_rotation_days must be between 1 and 120 (Guidelines cap)."
-  }
-}
+# (obj_key_rotation_days was REMOVED with the TF-managed access keys: key
+# rotation is owned by the in-cluster linodeCredRotator CronJob — its
+# rotate-after-days knob — and the first keys are minted at bootstrap by
+# `llz ci mint-bootstrap-objkeys`. See main.tf's "Access keys" note.)
 
 # Org/deployment identity, variabilized per the templatization plan (§8 / §11).
 # Default is the in-repo deployment's prefix; a sibling system team overrides it
