@@ -185,7 +185,10 @@ var (
 	esGoPutRx      = regexp.MustCompile(`(?s)baoKVPutFn\(\s*"secret/([^"]+)",\s*map\[string\]string\{(.*?)\}`)
 	esGoFieldRx    = regexp.MustCompile(`"(\w+)":`)
 	esGoSpecPathRx = regexp.MustCompile(`kvPath:\s*"secret/([^"]+)"`)
-	esGoSpecPutRx  = regexp.MustCompile(`(?s)baoKVPutFn\(\s*\w+\.kvPath,\s*map\[string\]string\{(.*?)\}`)
+	// Matches both the CI-side root-token put (baoKVPutFn) and the in-cluster
+	// provisioner's k8s-auth write (bao.Write(ctx, spec.kvPath, …)) driving a
+	// harborRobotSpec kvPath.
+	esGoSpecPutRx = regexp.MustCompile(`(?s)(?:baoKVPutFn\(\s*\w+\.kvPath|\w+\.Write\(ctx,\s*\w+\.kvPath),\s*map\[string\]string\{(.*?)\}`)
 	// The bootstrapSeeds() table (ci_bao_seed_all.go) declares each generic seed
 	// as a baoSeedOpts literal: `path: "secret/<p>", … fieldSpecs: []string{…}`.
 	// path: precedes fieldSpecs: in every entry (skipIfPresent: may sit between),
@@ -393,6 +396,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// seed-table parser over every source — a no-op on the harbor files).
 	for _, goSrc := range []string{
 		"tools/cmd/llz/ci_harbor.go",
+		"tools/cmd/llz/ci_harbor_provisioner.go",
 		"tools/cmd/llz/ci_seed_special.go",
 		"tools/cmd/llz/ci_bao_seed_all.go",
 	} {

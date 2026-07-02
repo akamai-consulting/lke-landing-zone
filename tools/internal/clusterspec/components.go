@@ -146,9 +146,22 @@ var Components = []Component{
 		}},
 	},
 	{
-		Name:              "harbor",
-		AplCoreApps:       []string{"harbor"},
-		ManifestResources: []string{"harbor/harbor-registry-s3-externalsecret.yaml"},
+		Name:        "harbor",
+		AplCoreApps: []string{"harbor"},
+		ManifestResources: []string{
+			"harbor/harbor-registry-s3-externalsecret.yaml",
+			"harbor/harbor-admin-push.yaml",
+			"harbor/harbor-robot-provisioner",
+		},
+		// The env-shaped HARBOR_HOST (registry host) on the robot-provisioner
+		// CronJob — rendered per env by RenderHarborHostPatch.
+		Patches: []Patch{{
+			Path:    "harbor-provisioner-env-patch.yaml",
+			Group:   "batch",
+			Version: "v1",
+			Kind:    "CronJob",
+			Name:    "harbor-robot-provisioner",
+		}},
 	},
 	{
 		// apl-core policy engine (Kyverno + policy-reporter). apl-core-only.

@@ -259,6 +259,11 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	if clusterspec.ComponentEnabled(e.Components, "observability") {
 		targets[filepath.Join(manifest, "otel-collector-tls-san-patch.yaml")] = clusterspec.RenderOtelSANPatch(env)
 	}
+	// The harbor robot provisioner's per-env HARBOR_HOST patch — emitted only
+	// when harbor is enabled (which ships the CronJob).
+	if clusterspec.ComponentEnabled(e.Components, "harbor") {
+		targets[filepath.Join(manifest, "harbor-provisioner-env-patch.yaml")] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix)
+	}
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances
 	// without the shared overlay.
