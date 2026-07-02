@@ -54,11 +54,25 @@ platform:
   # (53/443/6443) rules are structural and stay in the template.
   networkPolicy:
     enabled: true
-    # Namespaces permitted to connect to OpenBao's API port (8200).
+    # Namespaces permitted to connect to OpenBao's API port (8200). Whole-namespace
+    # grants — use only for dedicated llz infra namespaces.
     allowedClientNamespaces:
       - llz-external-secrets
       - llz-cert-automation
       - llz-observability
+    # Pod-scoped clients: a single workload in a SHARED namespace that needs :8200,
+    # where a whole-namespace grant would over-expose OpenBao. The in-cluster llz
+    # CronJobs (harbor robot provisioner + Linode credential rotator) log into
+    # OpenBao via Kubernetes-auth; without this their kubernetes-auth login is
+    # L4-blocked (TCP timeout → the harbor-docker-config ExternalSecret can never
+    # sync, pinning the convergence gate). OpenBao's k8s-auth roles still gate what
+    # each SA can actually read/write; this is just the L4 door. Match on the pod's
+    # app.kubernetes.io/name.
+    allowedClientPods:
+      - namespace: harbor
+        name: harbor-robot-provisioner
+      - namespace: llz-linode-cred-rotator
+        name: linode-cred-rotator
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
     observabilityNamespace: llz-observability
 
