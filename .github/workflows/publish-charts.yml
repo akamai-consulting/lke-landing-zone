@@ -65,6 +65,11 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Pin cosign v2.6.0 for legacy `.sig`-tag signing — v3.x defaults to the
+          # new-bundle/OCI-referrers format Kyverno + GHCR can't reliably verify.
+          # See build-images.yml for the full rationale.
+          cosign-release: v2.6.0
 
       - name: Log in to GHCR (Helm OCI)
         env:
@@ -111,7 +116,7 @@ jobs:
             digest="$(printf '%s\n' "$push_out" | awk '/[Dd]igest:/ {print $2; exit}')"
             [ -n "$digest" ] || { echo "::error::no digest returned by helm push for ${name} ${version}"; exit 1; }
             echo "Signing ${name} ${version} (${digest}) — keyless cosign"
-            cosign sign --yes --new-bundle-format=false "${OCI_DEST}/${name}@${digest}"
+            cosign sign --yes "${OCI_DEST}/${name}@${digest}"
             PUSHED=$((PUSHED + 1))
           done
           echo "::notice::Published ${PUSHED} chart(s)"
