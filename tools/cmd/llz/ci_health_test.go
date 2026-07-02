@@ -237,13 +237,21 @@ func TestCheckPods(t *testing.T) {
 			// Ephemeral CronJob pod (owned by a Job) caught mid-ContainerCreating —
 			// must be SKIPPED, not counted as a failing workload (the flake we fixed).
 			`{"metadata":{"namespace":"argocd","name":"argo-resync-nudger-29706490-n6n7n","ownerReferences":[{"kind":"Job","controller":true}]},"status":{"phase":"Pending","containerStatuses":[{"name":"nudger","ready":false,"state":{"waiting":{"reason":"ContainerCreating"}}}]}}`,
+			// harbor-registry stranded on the harbor-registry-s3 ExternalSecret (not yet
+			// synced) — CreateContainerConfigError is in-progress (PENDING), not a hard
+			// fail, so converge keeps polling instead of aborting in the post-store-Ready window.
+			`{"metadata":{"namespace":"harbor","name":"harbor-registry-1"},"status":{"phase":"Pending","containerStatuses":[{"name":"registry","ready":false,"state":{"waiting":{"reason":"CreateContainerConfigError"}}},{"name":"registryctl","ready":true,"state":{"running":{}}}]}}`,
 		), nil
 	})
 	var r health.Report
 	checkPods(&r, false)
-	// 1 failed (bad) + 1 deferred (external-dns); the Job-owned nudger pod is skipped.
-	if len(r.Failed) != 1 || len(r.Deferred) != 1 {
-		t.Errorf("checkPods = failed %v deferred %v, want 1 each (Job pod must be skipped)", r.Failed, r.Deferred)
+	// 1 failed (bad) + 1 deferred (external-dns) + 1 pending (harbor-registry config-error);
+	// the Job-owned nudger pod is skipped.
+	if len(r.Failed) != 1 || len(r.Deferred) != 1 || len(r.Pending) != 1 {
+		t.Errorf("checkPods = failed %v deferred %v pending %v, want 1 each (Job pod must be skipped)", r.Failed, r.Deferred, r.Pending)
+	}
+	if len(r.Pending) == 1 && !strings.Contains(r.Pending[0], "harbor-registry") {
+		t.Errorf("checkPods pending = %v, want the harbor-registry config-error pod", r.Pending)
 	}
 	for _, f := range r.Failed {
 		if strings.Contains(f, "nudger") {

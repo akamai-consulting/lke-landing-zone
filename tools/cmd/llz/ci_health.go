@@ -1015,6 +1015,12 @@ func checkPods(r *health.Report, phase1 bool) {
 			case extDepMatch(key):
 				reason, _ := health.MatchExternalDep(key, health.ExternalDepWorkloads())
 				record(r, health.CatDeferred, detail+" — "+reason)
+			case health.PodConfigPending(p.Status):
+				// A container blocked on a Secret/ConfigMap that hasn't synced yet
+				// (CreateContainerConfigError) is in-progress, not terminal: it self-heals
+				// once ESO finishes its refresh. Poll it against the budget instead of
+				// tripping converge's hard-failed-twice abort in the post-store-Ready window.
+				record(r, health.CatPending, detail+" — container config not synced yet (Secret/ConfigMap still provisioning); polling")
 			default:
 				record(r, health.CatFail, detail)
 			}

@@ -79,6 +79,64 @@ func PodIsFailing(s PodStatus) bool {
 	return total > 0 && ready < total
 }
 
+// transientWaitReasons are container `waiting` reasons that are self-healing:
+// the container is blocked on a resource that is still being provisioned —
+// typically a Secret or ConfigMap an ExternalSecret has not finished syncing —
+// not on a terminal fault. A pod stranded on one of these is in-progress, not
+// hard-failed: it comes up on its own once the dependency lands (e.g. the
+// openbao ClusterSecretStore goes Ready, then the loki-object-store /
+// harbor-registry-s3 ExternalSecrets sync on their 1m refresh and the pod
+// restarts). The converge loop should poll it against the budget, exactly as it
+// does for the phase1 bootstrap window.
+var transientWaitReasons = map[string]bool{
+	"CreateContainerConfigError": true, // envFrom/volume Secret or ConfigMap (or a referenced key) not present yet
+	"CreateContainerError":       true, // runtime couldn't create the container yet — usually the same missing dep, mid-restart
+}
+
+// terminalWaitReasons are container `waiting` reasons the reconciler cannot
+// resolve on its own. They must fail fast even when a sibling container is only
+// transiently config-pending, so a genuinely broken pod is never masked as
+// in-progress until the budget expires.
+var terminalWaitReasons = map[string]bool{
+	"CrashLoopBackOff":  true,
+	"ImagePullBackOff":  true,
+	"ErrImagePull":      true,
+	"ErrImageNeverPull": true,
+	"InvalidImageName":  true,
+	"RunContainerError": true,
+}
+
+// PodConfigPending reports whether a failing pod's failure is (only) a transient
+// config-provisioning wait — a container blocked on a Secret/ConfigMap that has
+// not synced yet — rather than a terminal fault. Such a pod self-heals once the
+// dependency lands, so converge should poll it against the budget instead of
+// hard-failing. It returns false the moment any container is in a terminal
+// waiting state or has terminated with an error, so a genuinely broken pod
+// still fails. Only meaningful for a pod PodIsFailing already flagged.
+func PodConfigPending(s PodStatus) bool {
+	sawTransient := false
+	all := append(append([]ContainerStatus{}, s.InitContainerStatuses...), s.ContainerStatuses...)
+	for _, c := range all {
+		switch {
+		case c.State.Waiting != nil:
+			r := c.State.Waiting.Reason
+			if terminalWaitReasons[r] {
+				return false
+			}
+			if transientWaitReasons[r] {
+				sawTransient = true
+			}
+		case c.State.Terminated != nil:
+			// A container that terminated for any reason other than a clean exit is
+			// a real fault, not a config-provisioning wait.
+			if r := c.State.Terminated.Reason; r != "" && r != "Completed" {
+				return false
+			}
+		}
+	}
+	return sawTransient
+}
+
 // ReadyRatio is the "ready/total" main-container string the script reports.
 func ReadyRatio(s PodStatus) string {
 	total := len(s.ContainerStatuses)

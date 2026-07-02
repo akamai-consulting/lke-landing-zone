@@ -67,6 +67,63 @@ func TestPodIsFailing(t *testing.T) {
 	}
 }
 
+func TestPodConfigPending(t *testing.T) {
+	waiting := func(reason string) ContainerState { return ContainerState{Waiting: &StateDetail{Reason: reason}} }
+	term := func(reason string) ContainerState { return ContainerState{Terminated: &StateDetail{Reason: reason}} }
+	running := ContainerState{Running: &struct{}{}}
+	cases := []struct {
+		name string
+		s    PodStatus
+		want bool
+	}{
+		// The failure this fixes: loki-0 / harbor-registry stranded on an ESO secret.
+		{"registry waiting on secret + sibling running -> pending", PodStatus{
+			Phase:                 "Pending",
+			InitContainerStatuses: []ContainerStatus{{Name: "istio-init", State: term("Completed")}},
+			ContainerStatuses: []ContainerStatus{
+				{Name: "registry", State: waiting("CreateContainerConfigError")},
+				{Name: "registryctl", Ready: true, State: running},
+			},
+		}, true},
+		{"CreateContainerError -> pending", PodStatus{
+			Phase:             "Pending",
+			ContainerStatuses: []ContainerStatus{{Name: "c", State: waiting("CreateContainerError")}},
+		}, true},
+		// Terminal reasons must stay hard-fail even beside a transient sibling.
+		{"crashloop -> not pending", PodStatus{
+			Phase:             "Running",
+			ContainerStatuses: []ContainerStatus{{Name: "c", State: waiting("CrashLoopBackOff")}},
+		}, false},
+		{"imagepull beside config-error -> not pending", PodStatus{
+			Phase: "Pending",
+			ContainerStatuses: []ContainerStatus{
+				{Name: "a", State: waiting("CreateContainerConfigError")},
+				{Name: "b", State: waiting("ImagePullBackOff")},
+			},
+		}, false},
+		{"terminated with Error -> not pending", PodStatus{
+			Phase: "Pending",
+			ContainerStatuses: []ContainerStatus{
+				{Name: "a", State: waiting("CreateContainerConfigError")},
+				{Name: "b", State: term("Error")},
+			},
+		}, false},
+		// No transient signal -> leave the verdict to the caller (hard-fail).
+		{"plain ContainerCreating -> not pending", PodStatus{
+			Phase:             "Pending",
+			ContainerStatuses: []ContainerStatus{{Name: "c", State: waiting("ContainerCreating")}},
+		}, false},
+		{"pending with no statuses -> not pending", PodStatus{Phase: "Pending"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := PodConfigPending(c.s); got != c.want {
+				t.Errorf("PodConfigPending = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 func TestIsJobControlled(t *testing.T) {
 	cases := []struct {
 		name string
