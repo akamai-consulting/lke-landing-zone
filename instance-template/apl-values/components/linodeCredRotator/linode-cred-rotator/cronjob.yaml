@@ -39,10 +39,10 @@ spec:
           restartPolicy: OnFailure
           serviceAccountName: linode-cred-rotator
           containers:
-            # Slim distroless llz image (dockerfiles/llz). Pin :latest to a
-            # :sha-... tag in your instance for reproducibility.
+            # Slim distroless llz image (dockerfiles/llz). Rendered by copier;
+            # release-e2e pins it to the signed sha image for the commit under test.
             - name: rotate
-              image: ghcr.io/<@ upstream_org @>/llz:latest
+              image: <@ llz_image_ref @>
               args: ["ci", "rotate-linode-creds", "--apply"]
               env:
                 # Per-env; patched by `llz render` (see header).
