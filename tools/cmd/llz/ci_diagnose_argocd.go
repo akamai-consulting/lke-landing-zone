@@ -17,11 +17,13 @@ package main
 // the operator install is what failed.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/spf13/cobra"
 )
 
@@ -37,6 +39,8 @@ func ciDiagnoseArgoCDCmd() *cobra.Command {
 			"apl-operator is swept first because helm_release.apl timing out (operator\n" +
 			"Deployment never Available) is the most common fresh-cluster failure, and\n" +
 			"the argocd namespace is empty by design until the operator gets that far.\n" +
+			"Then sweeps every failing pod / Job across ALL namespaces and dumps its\n" +
+			"container logs — the crash reason the state-only captures miss.\n" +
 			"Skips cleanly when $KUBECONFIG is absent/empty (cluster may not exist).\n" +
 			"Always exits 0: diagnostics must never mask the failure that triggered them.",
 		Args: cobra.NoArgs,
@@ -89,6 +93,11 @@ func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 	// namespace sweeps above, so capture them explicitly before teardown.
 	diagnoseConvergence(argoNS)
 
+	// The captures above report STATES; a workload's root cause is a container LOG
+	// they never grab. Sweep every failing pod / Job across all namespaces and dump
+	// its logs — on a torn-down cluster this is the only record of WHY it failed.
+	diagnoseFailingWorkloads()
+
 	fmt.Println("Diagnostics complete. Common causes:")
 	fmt.Println("  • apl-operator pod stuck Pending  -> no Ready/schedulable node (check Nodes / Taints / Conditions above)")
 	fmt.Println("  • ImagePullBackOff                -> registry unreachable or image pull secret missing")
@@ -124,6 +133,54 @@ func diagnoseConvergence(argoNS string) {
 		diagStream("kubectl", "get", "clustersecretstore", "openbao", "-o", "wide")
 		diagStream("kubectl", "get", "certificate,certificaterequest", "--all-namespaces", "-o", "wide")
 		diagStream("kubectl", "get", "clusterissuer", "-o", "wide")
+	})
+}
+
+// diagnoseFailingWorkloads dumps describe + previous/current container logs for
+// every crashlooping / not-starting pod and every failed Job across ALL
+// namespaces. The namespace sweeps and Argo/CA captures above report STATES; a
+// workload's root cause is a container LOG they never grab — so on a torn-down
+// cluster this is the only record of WHY a workload failed (e.g. otomi-api
+// CrashLoopBackOff, harbor-robot-provisioner Job Failed). Best-effort throughout:
+// PodIsFailing is the same predicate the convergence gate uses, so this captures
+// exactly the pods that pinned it.
+func diagnoseFailingWorkloads() {
+	diagGroup("convergence — failing-workload logs (crashloop / not-starting pods + failed Jobs)", func() {
+		for _, raw := range kItems("get", "pods", "-A") {
+			var p struct {
+				Metadata struct {
+					Namespace string `json:"namespace"`
+					Name      string `json:"name"`
+				} `json:"metadata"`
+				Status health.PodStatus `json:"status"`
+			}
+			if json.Unmarshal(raw, &p) != nil || !health.PodIsFailing(p.Status) {
+				continue
+			}
+			fmt.Printf("### %s/%s — %s\n", p.Metadata.Namespace, p.Metadata.Name, health.SummarizeStates(p.Status))
+			diagStream("kubectl", "-n", p.Metadata.Namespace, "describe", "pod", p.Metadata.Name)
+			all := append(append([]health.ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...)
+			for _, c := range all {
+				diagStream("kubectl", "-n", p.Metadata.Namespace, "logs", p.Metadata.Name, "-c", c.Name, "--previous", "--tail=60")
+				diagStream("kubectl", "-n", p.Metadata.Namespace, "logs", p.Metadata.Name, "-c", c.Name, "--tail=40")
+			}
+		}
+		for _, raw := range kItems("get", "jobs", "-A") {
+			var j struct {
+				Metadata struct {
+					Namespace string `json:"namespace"`
+					Name      string `json:"name"`
+				} `json:"metadata"`
+				Status struct {
+					Failed int `json:"failed"`
+				} `json:"status"`
+			}
+			if json.Unmarshal(raw, &j) != nil || j.Status.Failed == 0 {
+				continue
+			}
+			fmt.Printf("### job %s/%s (failed=%d)\n", j.Metadata.Namespace, j.Metadata.Name, j.Status.Failed)
+			diagStream("kubectl", "-n", j.Metadata.Namespace, "logs", "job/"+j.Metadata.Name, "--all-containers", "--tail=120")
+		}
 	})
 }
 
