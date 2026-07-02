@@ -315,10 +315,11 @@ new env, in order:
    the env: seed the static seal key, `bao operator init` (recovery keys; the pods
    auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
    engine, auth methods, and policies.
-6. **DNS** — if `LINODE_DNS_TOKEN` was provisioned before step 5, the OpenBao
-   bootstrap's `bao-seed-all` already seeded `secret/certmanager/dns01` and no
-   dispatch is needed; dispatch `bootstrap-dns.yml` only when the token arrives
-   later (it also applies the dns kustomize tree + waits for the synced Secret).
+6. **DNS** — dispatch `bootstrap-dns.yml` to apply the `llz-letsencrypt-*`
+   ClusterIssuers to the cluster. DNS-01 challenges are solved by apl-core's
+   `cert-manager-webhook-linode`, which holds its own Linode token
+   (`TF_VAR_linode_dns_token` from the `LINODE_DNS_TOKEN` secret) — no OpenBao
+   seed or ExternalSecret is involved, so this is a plain, idempotent kubectl apply.
    (The Argo CD / apl-core values-repo credential is the `APL_VALUES_REPO_TOKEN`
    PAT, provisioned by `llz tokens`, not a per-run bootstrap workflow.)
 

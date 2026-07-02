@@ -1,30 +1,26 @@
 name: llz-bootstrap-dns (reusable)
 
-# Reusable (`workflow_call`) version of the cert-manager DNS-01 token seed.
+# Reusable (`workflow_call`) version of the DNS-01 ClusterIssuer apply.
 #
-# LATE-PROVISIONING PATH: when LINODE_DNS_TOKEN is already provisioned at
-# bootstrap time, `llz ci bao-seed-all` (llz-bootstrap-openbao.yml) seeds
-# secret/certmanager/dns01 as part of the normal bootstrap — no separate
-# dispatch needed. Dispatch THIS workflow only when the token arrives after
-# the bootstrap (it also applies the dns kustomize tree + waits for the synced
-# Secret, which the generic seed does not do). Re-running over an existing
-# seed is a same-value overwrite — safe.
+# Applies the llz-letsencrypt DNS-01 ClusterIssuers
+# (apl-values/_shared/manifest/dns) to a region's cluster. DNS-01 challenges are
+# solved by apl-core's cert-manager-webhook-linode (API group `acme.slicen.me`),
+# which holds its own Linode API token — the landing zone neither seeds an
+# OpenBao path nor materializes a solver Secret. This tree is split out of the
+# main manifest kustomization so the ClusterIssuers can be (re)applied
+# independently.
 #
 # Surface-reduction pattern (docs/templatization-plan.md §"Keeping instances in
 # sync"). Dual checkout (Option A): the caller instance sits at the workspace
 # root — so the fetch-kubeconfig action's `terraform-iac-bootstrap/cluster`
 # working-dir resolves AND the apl-values/_shared/manifest/dns kustomize tree is
 # present — while the LLZ template is checked out into _llz-template/ for the
-# fetch-kubeconfig action (the require-secret gate and OpenBao writes both go
-# through llz, which is baked into TF_IMAGE). The instance
-# therefore copies neither the action nor the scripts — only this caller + its
-# own overlays. The caller forwards `region`.
+# fetch-kubeconfig action. The instance therefore copies neither the action nor
+# the scripts — only this caller + its own overlays. The caller forwards `region`.
 #
 # Effect:
-#   • Writes secret/certmanager/dns01 with `token=$LINODE_DNS_TOKEN`
-#   • Applies apl-values/_shared/manifest/dns so the dns01-solver-token
-#     ExternalSecret materializes the cert-manager Secret
-#   • Waits (bounded) for that Secret with the existence-then-condition pattern
+#   • Applies apl-values/_shared/manifest/dns (the llz-letsencrypt ClusterIssuers)
+#     to the target region's cluster
 
 on:
   workflow_call:
@@ -39,10 +35,6 @@ on:
         type: string
         default: main
     secrets:
-      LINODE_DNS_TOKEN:
-        required: true
-      OPENBAO_ROOT_TOKEN:
-        required: true
       TF_STATE_ACCESS_KEY:
         required: true
       TF_STATE_SECRET_KEY:
@@ -59,8 +51,8 @@ defaults:
     shell: bash
 
 jobs:
-  seed-dns:
-    name: Seed cert-manager DNS-01 token (${{ inputs.region }})
+  apply-dns:
+    name: Apply DNS-01 ClusterIssuers (${{ inputs.region }})
     runs-on: ubuntu-latest
     container:
       image: ${{ vars.TF_IMAGE }}
@@ -87,29 +79,10 @@ jobs:
           token: ${{ github.token }}
           path: _llz-template
 
-      # ── Pre-flight: both env secrets must be present ──────────────────────────
-      # Fail fast — there's no graceful-degrade path here. Without
-      # LINODE_DNS_TOKEN we have nothing to seed; without OPENBAO_ROOT_TOKEN we
-      # can't authenticate to write into the KV mount.
-      - name: Pre-flight — verify env secrets
-        env:
-          LINODE_DNS_TOKEN:   ${{ secrets.LINODE_DNS_TOKEN }}
-          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-        run: |
-          set -u
-          FAIL=0
-          llz ci require-secret LINODE_DNS_TOKEN \
-            --hint "Create a Linode API token with DNS-zone-write scope, add it as LINODE_DNS_TOKEN in the infra-${REGION} environment" || FAIL=1
-          llz ci require-secret OPENBAO_ROOT_TOKEN \
-            --hint "Set manually as an infra-${REGION} environment secret; bootstrap-openbao.yml writes it back on init. Delete after this run." || FAIL=1
-          [ "$FAIL" -eq 0 ]
-
       # ── Cluster access ──────────────────────────────────────────────────────────
       # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
       # LKE-E control-plane ACL before any kubectl (revoked at job end,
-      # if: always()), and install llz (the `openbao exec` passthrough the steps
-      # below drive). llz was already installed for the pre-flight above, so
-      # this build is a no-op.
+      # if: always()), and install llz.
       - name: Cluster access (kubeconfig + runner ACL + llz)
         uses: ./_llz-template/instance-template/.github/actions/cluster-access
         with:
@@ -120,73 +93,18 @@ jobs:
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ inputs.region }}
 
-      # ── Verify root token is valid before any write ───────────────────────────
-      # Mirrors the "Check root token availability" step in bootstrap-openbao.yml.
-      # An invalid/revoked token here would otherwise surface as an opaque
-      # "permission denied" three steps later.
-      - name: Verify OpenBao root token
-        env:
-          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-        run: |
-          set -euo pipefail
-          if ! llz openbao exec -- token lookup -format=json \
-                > /tmp/tok.json 2>/tmp/tok.err; then
-            echo "::error::OPENBAO_ROOT_TOKEN on ${REGION} is invalid (token lookup failed). Regenerate with 'bao operator generate-root' and re-seed."
-            cat /tmp/tok.err
-            exit 1
-          fi
-          POLICIES="$(jq -r '.data.policies | join(",")' /tmp/tok.json)"
-          if ! printf '%s' "$POLICIES" | tr ',' '\n' | grep -qx root; then
-            echo "::error::OPENBAO_ROOT_TOKEN on ${REGION} is valid but not root (policies=[${POLICIES}]). Writing to secret/ requires root."
-            exit 1
-          fi
-          echo "Root token OK (policies=[${POLICIES}])."
-
-      # ── Seed: cert-manager DNS-01 Linode token ────────────────────────────────
-      - name: Seed cert-manager DNS-01 token in OpenBao
-        env:
-          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-          LINODE_DNS_TOKEN:   ${{ secrets.LINODE_DNS_TOKEN }}
-        run: |
-          set -euo pipefail
-          echo "::add-mask::$LINODE_DNS_TOKEN"
-          llz openbao exec -- kv put secret/certmanager/dns01 token="$LINODE_DNS_TOKEN"
-          echo "secret/certmanager/dns01 seeded."
-
-      # ── Apply the DNS kustomize tree (consumer resources) ─────────────────────
-      # Apply AFTER seeding the OpenBao path so that the dns01-solver-token
-      # ExternalSecret, created here, finds a populated upstream on its first
-      # reconcile (avoids the 5-min refresh wait that would otherwise gate
-      # the cert-manager-dns01-solver-token Secret materialisation).
-      #
+      # ── Apply the DNS kustomize tree (llz-letsencrypt ClusterIssuers) ─────────
       # The dns/ tree is split out of the shared manifest kustomization
-      # (apl-values/_shared/manifest/kustomization.yaml does NOT include dns/)
-      # because including it there made the platform-bootstrap App fail at
-      # dns01-solver-token's hook phase (no upstream secret) and abort BEFORE
-      # applying ~16 downstream resources (harbor-registry-s3,
-      # observability/loki-object-store, Gateway/VirtualService). Observed:
-      # the whole cluster stayed Degraded because of
-      # one missing operator input. See apl-values/_shared/manifest/dns/kustomization.yaml
-      # for the full rationale. The dns/ tree is instance-wide (DRY — one copy
-      # under _shared, applied to every region's cluster); ${REGION} selects the
-      # target cluster's kubeconfig, not a per-env manifest copy.
+      # (apl-values/_shared/manifest/kustomization.yaml does NOT include dns/) so
+      # the llz-letsencrypt ClusterIssuers can be (re)applied independently. The
+      # dns/ tree is instance-wide (DRY — one copy under _shared, applied to every
+      # region's cluster); ${REGION} selects the target cluster's kubeconfig, not
+      # a per-env manifest copy.
       - name: Apply DNS kustomize tree
         run: |
           set -euo pipefail
           kubectl apply -k "apl-values/_shared/manifest/dns"
-          echo "DNS kustomize tree applied (dns01-solver-token ES + letsencrypt"
-          echo "ClusterIssuers + cert-manager-webhook-linode App)."
-
-      # ── Wait for the K8s Secret to materialize ────────────────────────────────
-      # wait-secret polls existence first (a bare `kubectl wait --for=condition`
-      # errors immediately on NotFound), then requires the ExternalSecret Ready
-      # (ESO reports Ready=True only after the Secret has the expected keys).
-      # 180s is generous for ESO reconcile + apiserver write.
-      - name: Wait for cert-manager-dns01-solver-token Secret
-        run: |
-          llz ci wait-secret --namespace cert-manager \
-            --name cert-manager-dns01-solver-token \
-            --externalsecret dns01-solver-token --timeout 180
+          echo "DNS kustomize tree applied (llz-letsencrypt ClusterIssuers)."
 
       # ── Summary ───────────────────────────────────────────────────────────────
       - name: Write run summary
@@ -194,10 +112,7 @@ jobs:
         run: |
           {
             printf '## DNS bootstrap (%s)\n\n' "$REGION"
-            printf -- "- Wrote \`secret/certmanager/dns01\` in OpenBao\n"
-            printf -- "- Applied \`apl-values/_shared/manifest/dns\` (dns01-solver-token ES) to the %s cluster\n" "$REGION"
-            printf -- "- Verified \`cert-manager-dns01-solver-token\` Secret present\n\n"
-            printf -- "Delete the \`OPENBAO_ROOT_TOKEN\` env secret if it was seeded just for this run.\n"
+            printf -- "- Applied \`apl-values/_shared/manifest/dns\` (llz-letsencrypt ClusterIssuers) to the %s cluster\n" "$REGION"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Revoke control-plane ACL for this runner

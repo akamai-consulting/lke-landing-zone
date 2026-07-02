@@ -12,10 +12,6 @@
 # solvers below target `groupName: acme.slicen.me` + `solverName: linode`. The
 # landing zone does NOT ship its own webhook Application — apl-core's is canonical.
 #
-# Note: dns01-solver-externalsecret.yaml (this dir) still syncs
-# `cert-manager-dns01-solver-token` from OpenBao because `llz ci wait` gates the
-# bootstrap on that Secret; it is no longer read by a landing-zone webhook.
-#
 # REPLACE_PER_ENV: set `spec.acme.email` to your operations contact before use
 # (Let's Encrypt requires a valid registration email).
 apiVersion: cert-manager.io/v1

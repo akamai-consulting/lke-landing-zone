@@ -235,14 +235,16 @@ func esFixtureRepo(t *testing.T) string {
 		`          llz openbao exec -- kv put secret/otel/ingress token="$T"`,
 		`          llz openbao exec -- kv put secret/infra/github-dispatch-token token="$D"`,
 	}, "\n"))
+	// bootstrap-dns.yml is scanned as a seeding source but no longer seeds any
+	// OpenBao path (it only applies the llz-letsencrypt ClusterIssuers).
 	fixWrite(t, root, ".github/workflows/llz-bootstrap-dns.yml",
-		`          llz openbao exec -- kv put secret/certmanager/dns01 token="$LINODE_DNS_TOKEN"`+"\n")
+		"          kubectl apply -k apl-values/_shared/manifest/dns\n")
 	fixWrite(t, root, "tools/cmd/llz/ci_harbor.go",
 		"package main\nvar _ = baoKVPutFn(\"secret/harbor/admin\", map[string]string{\"password\": p})\n")
 
 	var policy strings.Builder
 	policy.WriteString("package main\nconst policyPlatformCI = `\n")
-	for _, p := range []string{"grafana/admin", "otel/ingress", "infra/github-dispatch-token", "certmanager/dns01", "harbor/admin"} {
+	for _, p := range []string{"grafana/admin", "otel/ingress", "infra/github-dispatch-token", "harbor/admin"} {
 		policy.WriteString(`path "secret/data/` + p + `" { capabilities = ["read"] }` + "\n")
 		policy.WriteString(`path "secret/metadata/` + p + `" { capabilities = ["read", "list"] }` + "\n")
 	}
@@ -262,7 +264,6 @@ func TestRunCIExternalSecretPathsHappyPath(t *testing.T) {
 		"  ok: grafana/admin.password",
 		"  ok: grafana/admin.user",
 		"  ok: otel/ingress",
-		"  ok (seeded policy): certmanager/dns01",
 		"  ok (seeded policy): harbor/admin",
 		"  ok (seeded policy): infra/github-dispatch-token",
 		"",
@@ -311,11 +312,6 @@ func TestRunCIExternalSecretPathsFailures(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
-	}
-	// certmanager/dns01 was replaced in the dns workflow, so it is no longer
-	// seeded — but it is also no longer referenced, so it simply drops out.
-	if strings.Contains(out, "ok (seeded policy): certmanager/dns01") {
-		t.Errorf("dns01 should no longer be reported seeded:\n%s", out)
 	}
 }
 

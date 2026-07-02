@@ -4,7 +4,7 @@ package main
 // in-cluster Linode credential rotator (cred-hardening #4, Phase 1). It runs in
 // the cluster (the linodeCredRotator CronJob, on the slim llz image) and rotates
 // the in-cluster-ONLY Linode-minted credentials — the object-storage keys (Loki,
-// Harbor registry) and the DNS-scoped token — writing each straight to OpenBao.
+// Harbor registry) — writing each straight to OpenBao.
 // No CI step, no `propagate-pat`, no GitHub secret. See
 // docs/designs/linode-credential-rotator.md.
 //
@@ -35,8 +35,6 @@ import (
 const (
 	credKindPAT    = "pat"
 	credKindObjKey = "objkey"
-	// DNS token scope — narrower than the provisioning PAT (DNS zones only).
-	dnsTokenScopes = "domains:read_write"
 	// PAT validity must exceed the rotation cadence so the live token never
 	// expires between rotations.
 	patValidityDays = 90
@@ -93,11 +91,6 @@ type credEntry struct {
 // the nonexistent "platform-loki-<region>" bucket). Pure — unit-tested.
 func buildRotationTable(region, objCluster string) []credEntry {
 	return []credEntry{
-		{
-			name: "dns-token", kind: credKindPAT, label: "llz-dns-" + region, scopes: dnsTokenScopes,
-			baoPath: "secret/certmanager/dns01", presentField: "token",
-			fields: func(token, _ string) map[string]string { return map[string]string{"token": token} },
-		},
 		{
 			name: "loki-object-store", kind: credKindObjKey, label: "platform-loki-" + region,
 			objCluster: objCluster,
@@ -189,7 +182,7 @@ func ciRotateLinodeCredsCmd() *cobra.Command {
 	var apply bool
 	c := &cobra.Command{
 		Use:   "rotate-linode-creds",
-		Short: "rotate the in-cluster Linode creds (OBJ keys + DNS token) and write them to OpenBao",
+		Short: "rotate the in-cluster Linode object-storage keys and write them to OpenBao",
 		Long: "In-cluster Linode credential rotator (runs in the linodeCredRotator CronJob).\n" +
 			"For each in-cluster-only Linode credential that is DUE (OpenBao `rotated_at`\n" +
 			"older than --rotate-after-days, or absent), mints a fresh one via the Linode\n" +

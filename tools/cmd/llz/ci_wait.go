@@ -55,8 +55,8 @@ func ciWaitSecretCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "wait-secret",
 		Short: "wait for a K8s Secret to materialize (optionally until its ExternalSecret is Ready)",
-		Long: "Native port of the 'Wait for cert-manager-dns01-solver-token Secret' loop in\n" +
-			"llz-bootstrap-dns.yml. Waits for the Secret with `kubectl wait --for=create`\n" +
+		Long: "Waits for a Kubernetes Secret to materialize (a bounded existence-then-\n" +
+			"condition poll for ESO-synced Secrets). Waits for the Secret with `kubectl wait --for=create`\n" +
 			"(kubectl 1.31+ — a bare --for=condition errors immediately on NotFound, which\n" +
 			"is why this used to be a hand-rolled existence poll) — then, with\n" +
 			"--externalsecret, waits for that ExternalSecret's Ready condition (ESO\n" +

@@ -81,20 +81,12 @@ func TestIdsByLabel(t *testing.T) {
 
 func TestBuildRotationTable(t *testing.T) {
 	table := buildRotationTable("primary", "us-ord-1")
-	if len(table) != 3 {
-		t.Fatalf("table has %d entries, want 3", len(table))
+	if len(table) != 2 {
+		t.Fatalf("table has %d entries, want 2", len(table))
 	}
 	byName := map[string]credEntry{}
 	for _, e := range table {
 		byName[e.name] = e
-	}
-
-	dns := byName["dns-token"]
-	if dns.kind != credKindPAT || dns.label != "llz-dns-primary" || dns.baoPath != "secret/certmanager/dns01" {
-		t.Errorf("dns entry = %+v", dns)
-	}
-	if f := dns.fields("tok123", ""); f["token"] != "tok123" || len(f) != 1 {
-		t.Errorf("dns fields = %v, want {token: tok123}", f)
 	}
 
 	loki := byName["loki-object-store"]
@@ -182,10 +174,9 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 	t.Setenv("OBJ_CLUSTER", "us-ord-1")
 	t.Setenv("LINODE_TOKEN", "minting")
 
-	t.Run("all due -> mint+write all three, drain old", func(t *testing.T) {
+	t.Run("all due -> mint+write both, drain old", func(t *testing.T) {
 		lc := &stubLinode{
 			// pre-existing older resources to drain (keep-newest default 2)
-			pats:    []map[string]any{{"id": jn(1), "label": "llz-dns-primary"}, {"id": jn(2), "label": "llz-dns-primary"}, {"id": jn(101), "label": "llz-dns-primary"}},
 			objkeys: []map[string]any{{"id": jn(10), "label": "platform-loki-primary"}, {"id": jn(11), "label": "platform-loki-primary"}, {"id": jn(201), "label": "platform-loki-primary"}},
 		}
 		bao := &stubBao{data: map[string]map[string]string{}} // empty -> all due
@@ -193,13 +184,10 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		if err := runRotateLinodeCreds(context.Background(), true); err != nil {
 			t.Fatal(err)
 		}
-		for _, p := range []string{"secret/certmanager/dns01", "secret/loki/object-store", "secret/harbor/registry-s3"} {
+		for _, p := range []string{"secret/loki/object-store", "secret/harbor/registry-s3"} {
 			if bao.data[p]["rotated_at"] == "" {
 				t.Errorf("%s not written with rotated_at: %v", p, bao.data[p])
 			}
-		}
-		if bao.data["secret/certmanager/dns01"]["token"] != "new-pat" {
-			t.Errorf("dns token not written: %v", bao.data["secret/certmanager/dns01"])
 		}
 		if bao.data["secret/loki/object-store"]["AWS_ACCESS_KEY_ID"] != "AK" {
 			t.Errorf("loki key not written: %v", bao.data["secret/loki/object-store"])
@@ -213,7 +201,6 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		recent := strconvI(now.Unix() - 1*86400)
 		lc := &stubLinode{}
 		bao := &stubBao{data: map[string]map[string]string{
-			"secret/certmanager/dns01":  {"rotated_at": recent},
 			"secret/loki/object-store":  {"rotated_at": recent},
 			"secret/harbor/registry-s3": {"rotated_at": recent},
 		}}
@@ -238,15 +225,4 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		}
 	})
 
-	t.Run("bad new token -> error, old not drained", func(t *testing.T) {
-		lc := &stubLinode{verifyErr: errStub}
-		bao := &stubBao{data: map[string]map[string]string{}}
-		withRotatorStubs(t, lc, bao, now)
-		if err := runRotateLinodeCreds(context.Background(), true); err == nil {
-			t.Error("expected error when the new token fails verification")
-		}
-		if len(lc.deleted) != 0 {
-			t.Error("must not drain when verification failed")
-		}
-	})
 }
