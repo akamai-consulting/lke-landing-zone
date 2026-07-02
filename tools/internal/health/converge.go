@@ -27,7 +27,7 @@ const (
 
 // PhaseAwareExitCode downgrades a hard-fail (exit 1) to in-progress (exit 2)
 // while the cluster is still in the early-bootstrap window — phase1: bootstrap-
-// cluster has run but bootstrap-openbao has not, so platform-app-ca is absent.
+// cluster has run but bootstrap-openbao has not completed.
 // In phase1 the support plane is provably still installing: apl-core brings up
 // its CRDs, webhook Services, and component endpoints across LATER helmfile
 // phases, so a "not yet present / 0 endpoints" check is in-progress, not a
