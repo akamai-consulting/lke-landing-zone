@@ -212,7 +212,7 @@ func TestPrintManualActions(t *testing.T) {
 		"llz status lab",
 		"unseal keys 4 & 5",
 		"OPENBAO_ROOT_TOKEN from infra-lab",
-		"llz bootstrap dns lab",
+		"TF_VAR_linode_dns_token",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printManualActions missing %q:\n%s", want, out)

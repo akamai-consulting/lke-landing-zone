@@ -30,8 +30,8 @@ func TestIsEmptyCIDRList(t *testing.T) {
 }
 
 func TestIsDeferrable(t *testing.T) {
-	// cert/DNS overlay placeholders are deferred to `llz bootstrap dns` (post-build),
-	// so they must not block the apply…
+	// cert/DNS overlay placeholders are deferred (settable post-build; the
+	// Argo-synced letsencrypt ClusterIssuers pick them up), so they must not block the apply…
 	deferred := []string{
 		"apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml",
 	}

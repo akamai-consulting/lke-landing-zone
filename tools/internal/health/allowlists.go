@@ -22,8 +22,8 @@ func Phase1PendingWorkloads() []string {
 func ExternalDepApps() []DepEntry {
 	return []DepEntry{
 		{"linode-internal-cidr-firewall", "release.yml build job has not run yet — firewall-controller image not at ghcr.io; publish a release tag (or fire harbor-ready) to build+push and pin the App's image.tag"},
-		{"external-dns-external-dns", "LINODE_DNS_TOKEN not seeded — run bootstrap-dns.yml + re-apply TF so apl-values dns.provider.linode.apiToken is populated"},
-		{"istio-system-oauth2-proxy", "Keycloak OIDC issuer (keycloak.<domain>) not resolvable until DNS is wired — run bootstrap-dns.yml; deferred alongside external-dns"},
+		{"external-dns-external-dns", "LINODE_DNS_TOKEN not provisioned — re-apply TF so apl-values dns.provider.linode.apiToken is populated (from TF_VAR_linode_dns_token)"},
+		{"istio-system-oauth2-proxy", "Keycloak OIDC issuer (keycloak.<domain>) not resolvable until DNS is wired; deferred alongside external-dns"},
 		{"gitops-global", "apl-core's global-values Argo app is hardwired to clone the in-cluster gitea (gitea-http.gitea.svc), which this landing zone obsoletes — otomi.git points at the external GitHub repo. Bound deep in apl-core, not our config; deferred until apl-core sources gitops-global from otomi.git"},
 		{"team-[a-z0-9-]+-values-gitops", "apl-core/otomi generates a per-team values-gitops Application pointing at env/teams/<team>/sealedsecrets — a path that does not exist in this landing zone (we use ESO + OpenBao, not otomi per-team sealed-secrets), so it sits Unknown with a ComparisonError ('app path does not exist'). Same class as gitops-global: an apl-core-internal app this LZ obsoletes, not our config; deferred so it can't pin the convergence gate."},
 		{"gitops-ns-apl-[a-z0-9-]+", "apl-core's v6 operator creates one gitops Application per env/manifests/namespaces/<ns> dir (apply-as-apps.ts addGitOpsApps); the apl-*-prefixed namespaces (apl-secrets, apl-users) are operator-owned SealedSecret stores. This landing zone never populates that path (it uses ESO + OpenBao, not otomi SealedSecrets), so the apps sit Unknown with a ComparisonError ('env/manifests/namespaces/apl-... app path does not exist'). Same class as gitops-global / team-*-values-gitops — an apl-core-internal app this LZ obsoletes, deferred so it can't pin the convergence gate."},
@@ -34,9 +34,9 @@ func ExternalDepApps() []DepEntry {
 // operator-supplied inputs (namespace/name patterns).
 func ExternalDepWorkloads() []DepEntry {
 	return []DepEntry{
-		{"external-dns/external-dns", "LINODE_DNS_TOKEN not seeded — run bootstrap-dns.yml + re-apply TF"},
+		{"external-dns/external-dns", "LINODE_DNS_TOKEN not provisioned — re-apply TF (from TF_VAR_linode_dns_token)"},
 		{"kube-system/linode-internal-cidr-firewall", "release.yml build-firewall-controller has not run — ImagePullBackOff until the image is pushed to ghcr.io and the App's image.tag is pinned"},
-		{"istio-system/oauth2-proxy", "init-blocks on the Keycloak OIDC issuer URL — unresolvable until DNS is wired (run bootstrap-dns.yml)"},
+		{"istio-system/oauth2-proxy", "init-blocks on the Keycloak OIDC issuer URL — unresolvable until DNS is wired"},
 		{"otomi/otomi-api", "apl-core-internal otomi API server — this landing zone drives gitops via external GitHub + ESO/OpenBao, not the otomi console/API, so otomi-api is not configured or load-bearing here (zero references in apl-values; same apl-core-internal class as gitops-global). It CrashLoopBackOffs on a fresh install; the exact cause is captured by the on-failure workload-log diagnostic (llz-bootstrap-openbao.yml). Deferred at pod level so an apl-core-internal component the LZ doesn't drive can't pin the convergence gate — revisit (un-defer + fix) if those logs show a shared-dependency failure."},
 	}
 }

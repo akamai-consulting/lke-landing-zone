@@ -57,7 +57,7 @@ spec:
       keyRotationDays: 90                           # → obj_key_rotation_days (≤120)
 
   # ── Components: one toggle, two backends (apl-core apps + llz Argo manifests) ──
-  # Omit this block entirely → every component on except dns. A partial block
+  # Omit this block entirely → every component on. A partial block
   # changes only what you name; an explicit enabled:false sticks. Sizing knobs
   # (config in the spec, mechanism stays in apl-values/example/values.yaml) render
   # into the env's values.yaml — set them where prod should differ from defaults.
@@ -72,4 +72,3 @@ spec:
       registryStorage: 100Gi                       # → registry image-store PVC (default 20Gi)
     imageScanning: { enabled: true }               # Trivy
     policyEngine:   { enabled: true }              # Kyverno + policy-reporter
-    # dns stays default-off — applied separately by bootstrap-dns.yml.

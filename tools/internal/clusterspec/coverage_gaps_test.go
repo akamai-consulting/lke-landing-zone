@@ -20,7 +20,7 @@ func TestComponentBackends(t *testing.T) {
 		{"llz-argo via argo apps", Component{ArgoApps: []string{"a.yaml"}}, []string{"llz-argo"}},
 		{"llz-argo via patch", Component{Patches: []Patch{{Path: "p.yaml"}}}, []string{"llz-argo"}},
 		{"both backends", Component{AplCoreApps: []string{"loki"}, ArgoApps: []string{"a.yaml"}}, []string{"apl-core", "llz-argo"}},
-		{"marker only", Component{Name: "dns"}, nil},
+		{"marker only", Component{Name: "marker"}, nil},
 	}
 	for _, tc := range cases {
 		got := tc.c.Backends()

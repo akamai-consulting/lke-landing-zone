@@ -53,7 +53,7 @@ func TestDecodeAndValidate_OK(t *testing.T) {
 
 func TestDefaults_ComponentsAndDomain(t *testing.T) {
 	// A spec env with no components and no domainSuffix should get the full
-	// default component set (dns disabled) and the <env>.internal domain.
+	// default component set and the <env>.internal domain.
 	const y = `
 apiVersion: llz.akamai-consulting.io/v1alpha1
 kind: LandingZone
@@ -78,8 +78,8 @@ spec:
 	if !ComponentEnabled(env.Components, "openbao") {
 		t.Error("openbao component should default enabled")
 	}
-	if ComponentEnabled(env.Components, "dns") {
-		t.Error("dns component should default disabled")
+	if ComponentEnabled(env.Components, "nonexistent") {
+		t.Error("an unknown component should not be enabled")
 	}
 	if errs := lz.Validate(); len(errs) != 0 {
 		t.Fatalf("defaulted spec should validate, got: %v", errs)

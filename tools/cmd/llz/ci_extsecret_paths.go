@@ -7,8 +7,8 @@ package main
 //
 // It cross-validates every ExternalSecret remoteRef.key and remoteRef.property
 // in apl-values/ + the rendered chart output against the paths and field names
-// seeded by the bootstrap workflows (llz-bootstrap-openbao.yml /
-// llz-bootstrap-dns.yml), the `llz ci bao-seed-all` data-driven seed table
+// seeded by the bootstrap workflow (llz-bootstrap-openbao.yml), the
+// `llz ci bao-seed-all` data-driven seed table
 // (ci_bao_seed_all.go), and the native Go seeders (ci_harbor.go
 // provision-harbor-robots, ci_seed_special.go), then verifies the bootstrap
 // (`llz ci bao-configure`) platform-ci OpenBao policy covers those KV v2 paths.
@@ -412,7 +412,6 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// collector). See docs/templatization-plan.md §"Keeping instances in sync".
 	seededPaths, seededFields, err := collectSeeded([]string{
 		esRepoPath(root, ".github/workflows/llz-bootstrap-openbao.yml"),
-		esRepoPath(root, ".github/workflows/llz-bootstrap-dns.yml"),
 	})
 	if err != nil {
 		return err
@@ -474,7 +473,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 
 		if !seededPaths[key] {
 			for _, f := range esUniqueSortedFiles(propFiles) {
-				fmt.Fprintf(w, "::error file=%s::ExternalSecret remoteRef.key '%s' is not seeded by any bootstrap workflow — add a 'bao kv put secret/%s' step to bootstrap-openbao.yml or bootstrap-dns.yml, or add to MANUAL_PATHS if intentionally manual\n", f, key, key)
+				fmt.Fprintf(w, "::error file=%s::ExternalSecret remoteRef.key '%s' is not seeded by any bootstrap workflow — add a 'bao kv put secret/%s' step to bootstrap-openbao.yml, or add to MANUAL_PATHS if intentionally manual\n", f, key, key)
 			}
 			errors++
 			continue
@@ -484,7 +483,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		for _, pf := range propFiles {
 			if pf.hasProp && !seededFields[key][pf.prop] {
 				for _, f := range pf.files {
-					fmt.Fprintf(w, "::error file=%s::ExternalSecret remoteRef.key '%s' property '%s' is not written by any 'bao kv put secret/%s' step in bootstrap-openbao.yml or bootstrap-dns.yml\n", f, key, pf.prop, key)
+					fmt.Fprintf(w, "::error file=%s::ExternalSecret remoteRef.key '%s' property '%s' is not written by any 'bao kv put secret/%s' step in bootstrap-openbao.yml\n", f, key, pf.prop, key)
 				}
 				errors++
 			} else {

@@ -126,8 +126,8 @@ func TestComponentsRegistryView(t *testing.T) {
 	if got := componentDefault(byName["argocd"]); got != "on (required)" {
 		t.Errorf("argocd default = %q", got)
 	}
-	if got := componentDefault(byName["dns"]); got != "off" {
-		t.Errorf("dns default = %q", got)
+	if got := componentDefault(byName["harbor"]); got != "on" {
+		t.Errorf("harbor default = %q", got)
 	}
 	if b := byName["observability"].Backends(); strings.Join(b, ",") != "apl-core,llz-argo" {
 		t.Errorf("observability backends = %v, want apl-core,llz-argo", b)

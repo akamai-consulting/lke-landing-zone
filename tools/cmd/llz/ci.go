@@ -47,7 +47,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
-	c.AddCommand(ciWaitPodsCmd(), ciWaitSecretCmd(), ciWaitClusterReadyCmd())
+	c.AddCommand(ciWaitPodsCmd(), ciWaitClusterReadyCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
 	// Rotation routing + PAT propagation (formerly inline in llz-secret-rotation.yml).

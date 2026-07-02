@@ -146,8 +146,9 @@ func runEnvReadiness(env string) error {
 		fmt.Println("  " + green("✓") + " no residual scaffold placeholders in the tfvars or overlay")
 	}
 	// DNS/cert overlay placeholders are DEFERRABLE, not blocking: they configure
-	// cert-manager DNS-01 issuance, which `llz bootstrap dns` provisions AFTER the
-	// first build (quickstart §4). Split them out so the build isn't gated on them.
+	// cert-manager DNS-01 issuance (the Argo-synced letsencrypt ClusterIssuers),
+	// which only needs the ACME email + TF_VAR_linode_dns_token — settable after the
+	// first build. Split them out so the build isn't gated on them.
 	var deferred []finding
 	for _, f := range findings {
 		if isDeferrable(f.file) {
@@ -213,7 +214,7 @@ func runEnvReadiness(env string) error {
 		for _, f := range deferred {
 			fmt.Printf("  %s %s:%d  %s %s\n", cyan("○ later"), f.file, f.line, f.token, dim("— "+f.hint))
 		}
-		fmt.Println("  " + dim("↳ fine to leave for now — run `llz bootstrap dns "+env+" --yes` once LINODE_DNS_TOKEN exists (quickstart §4)."))
+		fmt.Println("  " + dim("↳ fine to leave for now — set the ACME email + TF_VAR_linode_dns_token; the Argo-synced letsencrypt ClusterIssuers issue certs once both exist (quickstart §4)."))
 	}
 
 	fmt.Println()
@@ -226,7 +227,7 @@ func runEnvReadiness(env string) error {
 	}
 	if len(deferred) > 0 {
 		fmt.Printf("%s deployment %q is ready to build (`llz build %s --yes`) %s\n",
-			green("✓"), env, env, dim(fmt.Sprintf("— %d cert/DNS item(s) deferred to `llz bootstrap dns`", len(deferred))))
+			green("✓"), env, env, dim(fmt.Sprintf("— %d cert/DNS item(s) deferred (set ACME email + TF_VAR_linode_dns_token)", len(deferred))))
 		return nil
 	}
 	fmt.Printf("%s deployment %q is ready to build (`llz build %s --yes`).\n", green("✓"), env, env)
@@ -235,8 +236,8 @@ func runEnvReadiness(env string) error {
 
 // isDeferrable reports whether a readiness finding lives in the cert/DNS tree
 // (apl-values/_shared/manifest/dns/...). Those placeholders configure cert-manager
-// DNS-01 issuance, which `llz bootstrap dns` provisions AFTER the first build
-// (quickstart §4), so they must not block the apply.
+// DNS-01 issuance (the Argo-synced letsencrypt ClusterIssuers), which is settable
+// after the first build (quickstart §4), so they must not block the apply.
 func isDeferrable(file string) bool {
 	return strings.Contains(filepath.ToSlash(file), "/manifest/dns/")
 }

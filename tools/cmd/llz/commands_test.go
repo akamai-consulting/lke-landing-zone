@@ -103,19 +103,6 @@ func TestBuildArgv(t *testing.T) {
 	}
 }
 
-func TestBootstrapArgv(t *testing.T) {
-	dns, err := bootstrapArgv("dns", "lab")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"gh", "workflow", "run", "bootstrap-dns.yml", "--field", "region=lab"}; !reflect.DeepEqual(dns, want) {
-		t.Errorf("dns: got %v want %v", dns, want)
-	}
-	if _, err := bootstrapArgv("nope", "lab"); err == nil {
-		t.Error("expected error for unknown bootstrap kind")
-	}
-}
-
 func TestSecretAndVariableArgv(t *testing.T) {
 	// The value must NEVER appear in argv — it is piped via stdin.
 	got := secretSetArgv("lab", "LINODE_API_TOKEN")

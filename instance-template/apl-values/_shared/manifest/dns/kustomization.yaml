@@ -1,13 +1,11 @@
-# DNS-bootstrap kustomize tree — applied SEPARATELY from the main manifest tree
-# by .github/workflows/llz-bootstrap-dns.yml, NOT included in the parent
-# manifest/kustomization.yaml.
+# DNS ClusterIssuer kustomize tree — Argo-synced as part of the mandatory
+# _shared/manifest base (pulled in via the parent manifest/kustomization.yaml
+# resources: list). No longer applied out-of-band.
 #
-# This tree now holds only the llz-letsencrypt ClusterIssuers. DNS-01 challenges
+# This tree holds only the llz-letsencrypt ClusterIssuers. DNS-01 challenges
 # are solved by apl-core's cert-manager-webhook-linode (API group
 # `acme.slicen.me`), which holds its own Linode API token; the ClusterIssuers
-# below target that webhook. No OpenBao seed or ExternalSecret is involved, so
-# this tree can be applied at any time — llz-bootstrap-dns.yml simply applies it
-# against the target region's cluster.
+# below target that webhook. No OpenBao seed or ExternalSecret is involved.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

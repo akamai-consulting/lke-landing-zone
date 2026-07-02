@@ -37,8 +37,7 @@ type Component struct {
 	// Patches are kustomize patches this component contributes to the parent
 	// manifest/kustomization.yaml patches: list.
 	Patches []Patch
-	// DefaultDisabled components default to enabled:false (e.g. dns, applied
-	// separately by bootstrap-dns.yml and never in the synced tree).
+	// DefaultDisabled components default to enabled:false.
 	DefaultDisabled bool
 }
 
@@ -191,12 +190,6 @@ var Components = []Component{
 		AplCoreApps:     []string{"gitea"},
 		DefaultDisabled: true,
 	},
-	{
-		// Applied separately by .github/workflows/bootstrap-dns.yml once the
-		// operator seeds the Linode DNS token; never part of the Argo-synced tree.
-		Name:            "dns",
-		DefaultDisabled: true,
-	},
 }
 
 // componentByName indexes Components for lookup.
@@ -241,7 +234,7 @@ func ComponentKnobs(name string) []string { return sizingKnobs[name] }
 
 // Backends returns the human-readable delivery backends a component routes to:
 // "apl-core" (apps.<key>.enabled in values.yaml) and/or "llz-argo" (manifest /
-// Argo Application resources). Empty for a marker-only component (e.g. dns).
+// Argo Application resources). Empty for a marker-only component.
 func (c Component) Backends() []string {
 	var b []string
 	if len(c.AplCoreApps) > 0 {
