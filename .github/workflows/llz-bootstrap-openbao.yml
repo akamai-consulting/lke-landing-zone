@@ -751,50 +751,77 @@ jobs:
       #
       # verify-llz-image-signature (Enforce, sync-wave -15) blocks the in-cluster
       # llz CronJobs (linode-cred-rotator, harbor-robot-provisioner) until Kyverno
-      # can verify the keyless cosign signature on ghcr.io/<org>/llz:sha-<ref>. On
-      # a freshly-built main sha the Sigstore/Rekor + GHCR signature can lag the
-      # cluster's FIRST admission attempt during cluster-bootstrap; that denial
-      # fails the platform-bootstrap sync, and because Argo backs off to 5m retries
-      # (and does not auto-retry a failed sync to the same revision), the cascade
+      # can verify the keyless cosign signature on the llz image. On a freshly-built
+      # main sha the Sigstore/Rekor + GHCR signature can lag the cluster's FIRST
+      # admission attempt during cluster-bootstrap; that denial fails the
+      # platform-bootstrap sync, and because Argo backs off to 5m retries (and does
+      # not auto-retry a failed sync to the same revision), the cascade
       # (harbor-docker-config ExternalSecret; harbor-registry / loki object-store
       # CreateContainerConfigError) is STILL stuck when this gate starts — even
-      # though the signature is verifiable by now. So: wait for the SAME keyless
-      # verification to succeed here, then force platform-bootstrap to re-attempt
-      # admission immediately against the now-live signature (nudge-argo). Once a
-      # real released tag is used the signature is long-published and the verify
-      # passes first try. Best-effort: on any failure the converge poll still runs
-      # and remains the actual verdict.
-      - name: Preflight — wait for a verifiable llz image signature, then re-sync
+      # though the signature is verifiable by now. So confirm the cluster can admit
+      # the image, then force platform-bootstrap to re-attempt admission (nudge-argo).
+      #
+      # TWO checks, because they can disagree:
+      #   1. cosign verify from here proves the signature is PUBLISHED + Rekor-visible
+      #      (rules out the propagation-lag cause), but not that the CLUSTER can see it.
+      #   2. a server-side dry-run Pod exercises Kyverno's OWN verifyImages path
+      #      (registry creds, egress, policy) — the actual failing admission.
+      # Only nudge once the dry-run admits; nudging into a still-denied policy is
+      # pointless. Best-effort throughout — the converge poll below is the verdict.
+      #
+      # The image is read from the RENDERED instance manifests (source of truth),
+      # NOT reconstructed from template-ref: template-ref is a release tag (vX.Y.Z)
+      # for normal instances and llz_image_ref defaults to :latest, so the CronJobs
+      # use ghcr.io/<org>/llz:latest there and ghcr.io/<org>/llz:sha-<sha> only under
+      # release-e2e. A released :latest is long-signed, so this passes first try.
+      - name: Preflight — confirm the cluster admits the llz image, then re-sync
         env:
           KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-          TEMPLATE_REF: ${{ inputs.template-ref }}
-          TF_IMAGE: ${{ vars.TF_IMAGE }}
         run: |
           set -uo pipefail
-          # Derive the upstream GHCR org from TF_IMAGE (ghcr.io/<org>/ci-terraform:…).
-          ORG="$(printf '%s' "${TF_IMAGE}" | sed -E 's#^[^/]+/([^/]+)/.*#\1#')"
-          IMAGE="ghcr.io/${ORG}/llz:sha-${TEMPLATE_REF}"
-          # Same trust anchor as kyverno-verify-llz-image-signature.yaml: the
-          # build-images.yml workflow under any repo in the org, GitHub OIDC issuer.
-          IDENTITY_RE="^https://github.com/${ORG}/[^/]+/\.github/workflows/build-images\.yml@"
-          ISSUER="https://token.actions.githubusercontent.com"
-          echo "Preflight: waiting for a verifiable keyless signature on ${IMAGE}"
-          ok=0
-          for i in $(seq 1 20); do
-            if cosign verify "${IMAGE}" \
-                 --certificate-identity-regexp "${IDENTITY_RE}" \
-                 --certificate-oidc-issuer "${ISSUER}" >/dev/null 2>&1; then
-              echo "signature verified on attempt ${i}"; ok=1; break
-            fi
-            echo "not verifiable yet (attempt ${i}/20) — retrying in 15s"; sleep 15
-          done
-          if [ "${ok}" != 1 ]; then
-            echo "::warning::llz image signature still not verifiable after retries — converge will poll and may hit the Kyverno block"
+          # The actual llz image(s) the rendered CronJobs run (exclude the template
+          # checkout, whose manifests still carry the unrendered <@ llz_image_ref @>).
+          IMAGES="$(grep -rhoE 'ghcr\.io/[A-Za-z0-9._-]+/llz:[A-Za-z0-9._-]+' . \
+            --include='*.yaml' --include='*.yml' --exclude-dir='_llz-template' 2>/dev/null | sort -u || true)"
+          if [ -z "${IMAGES}" ]; then
+            echo "no in-cluster llz image in the instance manifests — nothing to gate; skipping"
+            exit 0
           fi
+          ISSUER="https://token.actions.githubusercontent.com"
+          all_ok=1
+          for IMAGE in ${IMAGES}; do
+            ORG="$(printf '%s' "${IMAGE}" | sed -E 's#^ghcr\.io/([^/]+)/llz:.*#\1#')"
+            # Same trust anchor as kyverno-verify-llz-image-signature.yaml.
+            IDENTITY_RE="^https://github.com/${ORG}/[^/]+/\.github/workflows/build-images\.yml@"
+            echo "== preflight ${IMAGE} =="
+            ok=0
+            for i in $(seq 1 20); do
+              # (1) signature published + Rekor-visible, AND (2) Kyverno itself admits
+              # it (server dry-run runs the verifyImages webhook without persisting).
+              if cosign verify "${IMAGE}" \
+                   --certificate-identity-regexp "${IDENTITY_RE}" \
+                   --certificate-oidc-issuer "${ISSUER}" >/dev/null 2>&1 \
+                 && kubectl run llz-sig-preflight --dry-run=server --restart=Never \
+                      --image="${IMAGE}" --command -- true >/dev/null 2>/tmp/preflight-admit.err; then
+                echo "  cosign-verified AND Kyverno admits (attempt ${i})"; ok=1; break
+              fi
+              echo "  not admissible yet (attempt ${i}/20) — retrying in 15s"; sleep 15
+            done
+            if [ "${ok}" != 1 ]; then
+              all_ok=0
+              echo "::warning::${IMAGE}: cosign verify and/or Kyverno server dry-run still failing — $(tr '\n' ' ' </tmp/preflight-admit.err 2>/dev/null | tail -c 300)"
+            fi
+          done
           # Argo does not fast-retry a sync that terminally failed on the earlier
           # (pre-signature) admission denial; force platform-bootstrap to re-apply
-          # now so the CronJobs are re-admitted against the live signature.
-          llz ci nudge-argo || true
+          # now so the CronJobs are re-admitted. Skip the nudge if admission is still
+          # denied (a real Kyverno-side gap: creds/egress) — surfaced above; the
+          # converge poll is the verdict.
+          if [ "${all_ok}" = 1 ]; then
+            llz ci nudge-argo || true
+          else
+            echo "::warning::skipping the re-sync nudge — llz image admission not confirmed; converge will report the verdict"
+          fi
 
       - name: Wait for cluster to converge
         env:
