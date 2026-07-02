@@ -256,20 +256,25 @@ jobs:
           #    exercises THIS commit, not a past release — a full SHA is valid both as a
           #    cross-repo `uses:` ref and as a git `?ref=`. (Rendering it here also
           #    matters because it embeds spaces, which the ref-rewrite in step 2 below
-          #    can't span.)
+          #    can't span.) `<@ llz_image_ref @>` is pinned to the signed sha-tagged
+          #    in-cluster llz image for the same commit, so Kyverno verifies the exact
+          #    artifact this e2e run built instead of a mutable latest tag.
           #    This sed-render only knows the token FORMS below, so any new copier
           #    expression in the template must be added here. instance-template's
           #    README heading uses the jinja `<@ instance_repo.split('/')[-1] @>`
           #    (the repo name) — render it to ${INSTANCE_REPO##*/}; otherwise it
           #    survives the check below and fails the run.
           REPO_NAME="${INSTANCE_REPO##*/}"
+          LLZ_IMAGE_REF="ghcr.io/${OWNER}/llz:sha-${GITHUB_SHA}"
           grep -rlZ -e '<@ upstream_org @>' -e '<@ instance_repo @>' -e '<@ llz_version @>' \
+                    -e '<@ llz_image_ref @>' \
                     -e '<@ instance_repo\.split' . \
             | xargs -0 -r sed -i \
                 -e "s#<@ instance_repo\.split('/')\[-1\] @>#${REPO_NAME}#g" \
                 -e "s#<@ upstream_org @>#${OWNER}#g" \
                 -e "s#<@ instance_repo @>#${INSTANCE_REPO}#g" \
-                -e "s#<@ llz_version @>#${GITHUB_SHA}#g"
+                -e "s#<@ llz_version @>#${GITHUB_SHA}#g" \
+                -e "s#<@ llz_image_ref @>#${LLZ_IMAGE_REF}#g"
           # 2. Backstop: repin any LLZ ref that is a literal tag (not the llz_version
           #    placeholder) to the SHA under test too, so e2e never exercises a past
           #    release. With the placeholder model above this is normally a no-op.

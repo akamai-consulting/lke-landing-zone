@@ -143,3 +143,13 @@ llz_version:
     upgrade` set it for you; for a manual `copier copy` pass -d llz_version=vX.Y.Z.
     An unpinned ref fails the template's own tflint pinned-source gate and Renovate
     cannot bump it.<% endif %>
+
+llz_image_ref:
+  type: str
+  default: "ghcr.io/<@ upstream_org @>/llz:latest"
+  when: false
+  help: >-
+    Fully-qualified in-cluster llz image reference for CronJobs that run the llz
+    CLI. Hidden from adopters: release-e2e renders it to the signed sha image for
+    the commit under test, while normal copier scaffolds keep the signed latest
+    image unless explicitly overridden by automation.
