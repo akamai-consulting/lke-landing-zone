@@ -173,11 +173,53 @@ func healthExitCode() int {
 	// is "not yet installed", not terminal — downgrade it to in-progress so
 	// converge keeps polling until the cluster advances past phase1 instead of
 	// aborting on still-installing infra. See health.PhaseAwareExitCode.
-	code := health.PhaseAwareExitCode(r.ExitCode(), phase1)
-	if phase1 && code != r.ExitCode() {
-		fmt.Println(bold("== phase1 (support plane still installing) — hard failures above are treated as in-progress; converge will keep polling =="))
+	// After phase1 (the OpenBao store goes Ready) there is a SECOND settling
+	// window: ESO is still syncing the workload-critical secrets (object-store /
+	// registry / harbor-docker) it reads from OpenBao, so harbor-registry, loki-0,
+	// and everything downstream of them (their Services, Deployments, and the
+	// app-of-apps) are transiently unhealthy. Extend the fail-fast grace across
+	// that window so converge polls it against the budget instead of aborting the
+	// instant the store is Ready — the regression PR #123 introduced by ending
+	// phase1 at store-Ready. Once those secrets sync, real failures fail fast again.
+	grace, graceReason := phase1, "phase1 (support plane still installing)"
+	if !grace && r.ExitCode() == 1 && secretPlaneSettling() {
+		grace, graceReason = true, "secret plane still settling (object-store / registry ExternalSecrets syncing)"
+	}
+	code := health.PhaseAwareExitCode(r.ExitCode(), grace)
+	if grace && code != r.ExitCode() {
+		fmt.Println(bold("== " + graceReason + " — hard failures above are treated as in-progress; converge will keep polling =="))
 	}
 	return code
+}
+
+// secretPlaneSettling reports whether any workload-critical ExternalSecret (the
+// object-store / registry / harbor-docker creds ESO syncs from OpenBao AFTER the
+// ClusterSecretStore goes Ready) exists but has not synced yet. During that
+// window the dependent harbor/loki workloads — and the Services, Deployments,
+// and app-of-apps that fan out from them — are transiently unhealthy, so
+// converge must keep polling rather than fail fast the instant the store is
+// Ready. A secret that is ABSENT (not created yet, or not part of this cluster's
+// config) is NOT treated as settling, so a removed secret can't wedge the gate
+// open until the budget expires.
+func secretPlaneSettling() bool {
+	for _, nsName := range health.SecretPlaneSettlingSecrets() {
+		ns, name, ok := strings.Cut(nsName, "/")
+		if !ok {
+			continue
+		}
+		out, err := execOutput("kubectl", "-n", ns, "get", "externalsecret", name, "-o", "json")
+		if err != nil {
+			continue // absent / unreachable → don't gate on it
+		}
+		var item readyResourceItem
+		if json.Unmarshal(out, &item) != nil {
+			continue
+		}
+		if status, _, _ := health.FindReady(item.Status.Conditions); status != "True" {
+			return true
+		}
+	}
+	return false
 }
 
 func printHealthSummary(r *health.Report) {

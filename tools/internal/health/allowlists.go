@@ -45,6 +45,23 @@ func ExternalDepExternalSecrets() []DepEntry {
 	return []DepEntry{}
 }
 
+// SecretPlaneSettlingSecrets are the workload-critical ExternalSecrets ESO syncs
+// from OpenBao AFTER the ClusterSecretStore goes Ready. Their dependent
+// workloads — harbor-registry (registry-s3), loki-0 (object-store), and the
+// harbor image-pull path (harbor-docker-config) — plus the Services,
+// Deployments, and app-of-apps that fan out from them, sit transiently
+// unhealthy (CreateContainerConfigError / 0-endpoints / OutOfSync-Missing)
+// during that sync window. The converge fail-fast grace stays open until each of
+// these is Ready, so the gate polls the window against its budget instead of
+// aborting the instant the store is Ready. Values are namespace/name.
+func SecretPlaneSettlingSecrets() []string {
+	return []string{
+		"harbor/harbor-registry-s3",
+		"monitoring/loki-object-store",
+		"llz-cert-automation/harbor-docker-config",
+	}
+}
+
 // NPExternalDepNamespaces are namespaces whose default-deny NetworkPolicies
 // arrive only once an operator-deferred Application syncs.
 func NPExternalDepNamespaces() []DepEntry {

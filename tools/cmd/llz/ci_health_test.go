@@ -260,6 +260,34 @@ func TestCheckPods(t *testing.T) {
 	}
 }
 
+func TestSecretPlaneSettling(t *testing.T) {
+	ready := `{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`
+	notReady := `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"SecretSyncedError"}]}}`
+
+	// All critical ExternalSecrets Ready → not settling (fail fast resumes).
+	withKubectl(t, func(string) ([]byte, error) { return []byte(ready), nil })
+	if secretPlaneSettling() {
+		t.Error("all-Ready critical secrets must not be settling")
+	}
+
+	// harbor-docker-config not Ready (the observed e2e failure) → settling.
+	withKubectl(t, func(a string) ([]byte, error) {
+		if strings.Contains(a, "harbor-docker-config") {
+			return []byte(notReady), nil
+		}
+		return []byte(ready), nil
+	})
+	if !secretPlaneSettling() {
+		t.Error("an unsynced critical ExternalSecret must count as settling")
+	}
+
+	// Absent secret (kubectl errors) must NOT wedge the grace open forever.
+	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("NotFound") })
+	if secretPlaneSettling() {
+		t.Error("absent critical secrets must not be treated as settling")
+	}
+}
+
 func TestSecretPresentWithRetry(t *testing.T) {
 	prevDelay := phase1ProbeDelay
 	phase1ProbeDelay = 0 // no real sleeps in the test
