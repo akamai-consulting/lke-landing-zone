@@ -1,6 +1,35 @@
 # Design: in-cluster Linode credential rotator (CronJob)
 
-**Status:** Draft / design-stage (skeleton below is not yet wired into any env).
+**Status:** Phase 1 wired for e2e — release-e2e enables
+`components.linodeCredRotator` on its env; still default-OFF fleet-wide. The
+rollout-blocking bugs found while wiring are fixed: the Loki table entry now
+mints against the three REAL bucket names (chunks/ruler/admin — an earlier
+revision targeted the nonexistent `platform-loki-<region>` bucket;
+`CreateObjectStorageKeyBuckets` grants multiple buckets per key), and the
+bootstrap dns01 seed is `skip-if-present` so a re-bootstrap can't clobber a
+rotator-minted token with the stale GitHub copy.
+
+> **Terraform key ownership — the gap to close before default-ON.** The
+> llz-object-storage module creates the Loki/Harbor keys with the SAME labels
+> the rotator drains (`platform-loki-<region>`, `platform-harbor-registry-<region>`).
+> With keep-newest-2 the TF-created key is drained on the rotator's SECOND
+> rotation; Terraform's next refresh then sees its tracked key deleted and
+> recreates it — a permanent TF↔rotator tug-of-war (`apply-object-storage` runs
+> on every cluster bootstrap). Deleting only `time_rotating` does not fix this:
+> TF always recreates a deleted tracked resource. Resolution: remove key-minting
+> from Terraform entirely (module shrinks to buckets-only — a MAJOR module bump)
+> and mint the BOOTSTRAP keys from the bootstrap-openbao job via llz (reusing
+> this table's mint path, stamping `rotated_at`, seeding OpenBao directly —
+> which also retires the `stash-env-secret` S3 hop, the
+> `LOKI_S3_*`/`HARBOR_REGISTRY_S3_*` GitHub secrets, and the
+> `seed-harbor-registry-s3` step). The destroy-time bucket drain must then mint
+> a temporary scoped key instead of reading key creds from TF outputs. That
+> follow-up, plus one green e2e cycle of this Phase 1, gates the default flip
+> and the `time_rotating`/`obj_key_rotation_days` deletion.
+>
+> Known gap carried into Phase 1: the objkey path has no verify probe before
+> drain (the PAT path verifies via `GET /v4/profile`); an S3 HEAD against the
+> first granted bucket is the intended check.
 **Item:** kube-native cred-hardening #4 (generalized) — move the rotation of every
 long-lived **Linode-issued** credential out of CI and into the cluster.
 **Relates to:** [secrets.md](../secrets.md), the `linode-volume-labeler` CronJob

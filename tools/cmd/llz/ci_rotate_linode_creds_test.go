@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -97,8 +98,12 @@ func TestBuildRotationTable(t *testing.T) {
 	}
 
 	loki := byName["loki-object-store"]
-	if loki.kind != credKindObjKey || loki.bucket != "platform-loki-primary" || loki.objCluster != "us-ord-1" {
-		t.Errorf("loki entry = %+v", loki)
+	// The Loki key spans the three REAL bucket names (chunks/ruler/admin) — the
+	// grant set the llz-object-storage module's bootstrap key carries. An earlier
+	// revision minted against the nonexistent "platform-loki-<region>" bucket.
+	wantLokiBuckets := "platform-loki-chunks-primary,platform-loki-ruler-primary,platform-loki-admin-primary"
+	if loki.kind != credKindObjKey || strings.Join(loki.buckets, ",") != wantLokiBuckets || loki.objCluster != "us-ord-1" {
+		t.Errorf("loki entry = %+v (want buckets %s)", loki, wantLokiBuckets)
 	}
 	if f := loki.fields("AK", "SK"); f["AWS_ACCESS_KEY_ID"] != "AK" || f["AWS_SECRET_ACCESS_KEY"] != "SK" {
 		t.Errorf("loki fields = %v", f)
@@ -139,7 +144,7 @@ func (s *stubLinode) DeleteProfileToken(_ context.Context, id uint64) error {
 func (s *stubLinode) ListObjectStorageKeys(context.Context) ([]map[string]any, error) {
 	return s.objkeys, nil
 }
-func (s *stubLinode) CreateObjectStorageKey(context.Context, string, string, string, string) (map[string]any, error) {
+func (s *stubLinode) CreateObjectStorageKeyBuckets(context.Context, string, string, []string, string) (map[string]any, error) {
 	s.objCreates++
 	return map[string]any{"id": 200 + s.objCreates, "access_key": "AK", "secret_key": "SK"}, nil
 }

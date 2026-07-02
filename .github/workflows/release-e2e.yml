@@ -197,6 +197,11 @@ jobs:
           bin/llz env add "${E2E_ENV}" \
             --region "${E2E_LINODE_REGION}" \
             --obj-cluster "${E2E_OBJ_CLUSTER}"
+          # Phase-1 rotator rollout (docs/designs/linode-credential-rotator.md):
+          # linodeCredRotator is default-OFF fleet-wide — e2e is where a real
+          # mint → OpenBao → ESO → consumer cycle gets validated before any
+          # default flips. env set re-renders the overlay + tfvars.
+          bin/llz env set "${E2E_ENV}" components.linodeCredRotator.enabled=true
 
       - name: Lay the template out as an instance
         run: |
