@@ -104,6 +104,18 @@ func (lz *LandingZone) ValuesIdentity(env string) ValuesIdentity {
 	if branch == "" {
 		branch = "main"
 	}
+	// otomi.git.repoUrl defaults to the instance repo itself — the same literal
+	// the copier-rendered tfvars example carried
+	// ("https://github.com/<@ instance_repo @>.git"). Without this an env whose
+	// spec omits aplValues.repoURL keeps the ${apl_values_repo_url} placeholder
+	// in its committed values.yaml, and cluster-bootstrap's secrets-only
+	// templatefile() hard-fails on the unknown variable (the release-e2e
+	// regression this default fixes). Left empty only when spec.instance.repo is
+	// also unset — which Validate rejects.
+	repoURL := b.AplValues.RepoURL
+	if repoURL == "" && lz.Spec.Instance.Repo != "" {
+		repoURL = "https://github.com/" + lz.Spec.Instance.Repo + ".git"
+	}
 	return ValuesIdentity{
 		ClusterName:  b.Name,
 		DomainSuffix: b.DomainSuffix,
@@ -119,7 +131,7 @@ func (lz *LandingZone) ValuesIdentity(env string) ValuesIdentity {
 		HarborS3Endpoint: harborEndpoint,
 		HarborS3Region:   region,
 
-		RepoURL:      b.AplValues.RepoURL,
+		RepoURL:      repoURL,
 		RepoUsername: username,
 		RepoBranch:   branch,
 	}
