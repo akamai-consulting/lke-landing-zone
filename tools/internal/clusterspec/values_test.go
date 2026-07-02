@@ -180,6 +180,33 @@ func TestObjectStoreWiring(t *testing.T) {
 	}
 }
 
+func TestValuesIdentity_RepoURLDefaultsToInstanceRepo(t *testing.T) {
+	lz := &LandingZone{}
+	lz.Spec.Instance.Repo = "acme/platform-instance"
+	lz.Spec.Environments = map[string]Environment{"e2e": func() Environment {
+		var e Environment
+		e.Cluster.Bootstrap.Name = "platform-e2e"
+		e.Cluster.Bootstrap.DomainSuffix = "e2e.internal"
+		// aplValues.repoURL deliberately omitted — the common `llz env add` shape.
+		return e
+	}()}
+	id := lz.ValuesIdentity("e2e")
+	// Must resolve to the instance repo (the copier tfvars-example default this
+	// replaces); an empty RepoURL would leave ${apl_values_repo_url} in the
+	// committed values.yaml and hard-fail cluster-bootstrap's secrets-only
+	// templatefile() — the release-e2e regression.
+	if id.RepoURL != "https://github.com/acme/platform-instance.git" {
+		t.Errorf("RepoURL = %q, want the instance-repo default", id.RepoURL)
+	}
+	// An explicit spec value still wins.
+	e := lz.Spec.Environments["e2e"]
+	e.Cluster.Bootstrap.AplValues.RepoURL = "https://github.com/acme/values.git"
+	lz.Spec.Environments["e2e"] = e
+	if id := lz.ValuesIdentity("e2e"); id.RepoURL != "https://github.com/acme/values.git" {
+		t.Errorf("explicit RepoURL = %q, want the spec value to win", id.RepoURL)
+	}
+}
+
 func TestValuesIdentity_DerivedAndDefaults(t *testing.T) {
 	lz := &LandingZone{}
 	lz.Spec.Environments = map[string]Environment{"primary": func() Environment {

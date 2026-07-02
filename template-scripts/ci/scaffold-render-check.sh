@@ -136,8 +136,13 @@ if [[ -z "$TF" || "${SKIP_TF:-0}" == "1" ]]; then
 elif [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
   # Same variable set cluster-bootstrap/main.tf feeds to templatefile(); a
   # values.yaml that references anything outside this set fails here (correctly).
-  # Keep in sync with the templatefile(...) call in cluster-bootstrap/main.tf.
-  vars='{cluster_name="x",cluster_domain="x",apl_values_repo_url="x",apl_values_repo_username="x",apl_values_repo_password="x",apl_values_repo_ref="x",linode_dns_token="x",loki_admin_password="x",coredns_cluster_ip="x",loki_bucket_chunks="x",loki_bucket_ruler="x",loki_bucket_admin="x",loki_s3_endpoint="x",loki_s3_region="x",harbor_bucket="x",harbor_s3_endpoint="x",harbor_s3_region="x",env_revision_configmap_content="x",env_revision_in_configmap=true}'
+  # MUST mirror the templatefile(...) call in cluster-bootstrap/main.tf EXACTLY —
+  # the secrets-only set (llz render resolves everything else from the spec into
+  # the committed values.yaml). A stale SUPERSET here masks unresolved
+  # placeholders: the old 17-key map happily rendered ${apl_values_repo_url}
+  # after the spec render missed it, and the gap only surfaced as a Release-E2E
+  # plan failure — the exact 20-minute round-trip this check exists to prevent.
+  vars='{apl_values_repo_password="x",linode_dns_token="x",loki_admin_password="x",coredns_cluster_ip="x"}'
   tmp="$(mktemp -d)"
   printf 'terraform {}\n' > "$tmp/main.tf"
   ( cd "$tmp" && "$TF" init -backend=false >/dev/null 2>&1 ) || true

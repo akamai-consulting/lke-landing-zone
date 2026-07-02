@@ -202,6 +202,15 @@ jobs:
           # mint → OpenBao → ESO → consumer cycle gets validated before any
           # default flips. env set re-renders the overlay + tfvars.
           bin/llz env set "${E2E_ENV}" components.linodeCredRotator.enabled=true
+          # otomi.git.repoUrl must point at the INSTANCE repo (apl-operator
+          # pushes its rendered values tree there). This env add runs at the
+          # TEMPLATE root, where .copier-answers.yml doesn't exist, so the
+          # spec's instance.repo fallback is a dirname guess and the render-time
+          # repoUrl default would bake the wrong URL into values.yaml — set it
+          # explicitly from E2E_INSTANCE_REPO. (Real instances get the right
+          # default from their answers-derived spec.instance.repo.)
+          bin/llz env set "${E2E_ENV}" \
+            cluster.bootstrap.aplValues.repoURL="https://github.com/${INSTANCE_REPO}.git"
 
       - name: Lay the template out as an instance
         run: |
