@@ -115,10 +115,18 @@ jobs:
         # token (id-token: write) + Fulcio/Rekor public-good instances, so no
         # signing key is stored. The Kyverno verifyImages policy in
         # instance-template verifies this same identity at admission.
+        #
+        # --new-bundle-format=false: cosign v3 (installed here) DEFAULTS to the new
+        # Sigstore-bundle format, stored via the OCI 1.1 referrers API — which
+        # produces NO `sha256-<digest>.sig` tag. Kyverno's keyless verifyImages reads
+        # the legacy `.sig` tag, and GHCR's referrers API is flaky (303), so a
+        # bundle-format signature is undiscoverable → admission fails "no signatures
+        # found" and the in-cluster llz CronJobs are blocked. Pin legacy `.sig`-tag
+        # storage so the signature is where both Kyverno and GHCR expect it.
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/ci-terraform
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-kubernetes:
     name: Build ci-kubernetes
@@ -190,7 +198,7 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/ci-kubernetes
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-devcontainer:
     name: Build devcontainer
@@ -266,7 +274,7 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/devcontainer
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-llz:
     name: Build llz (slim in-cluster image)
@@ -343,4 +351,4 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/llz
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --new-bundle-format=false "${IMAGE}@${DIGEST}"
