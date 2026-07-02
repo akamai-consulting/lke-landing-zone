@@ -46,6 +46,18 @@ spec:
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
+          annotations:
+            # OpenBao serves its OWN TLS on :8200 (a non-standard port). The harbor
+            # namespace is istio-injected, and the sidecar mangles the app-originated
+            # TLS to OpenBao — the kubernetes-auth login gets "connection reset by
+            # peer" (istio access log: UF,URX), so runCIHarborProvisioner dies before
+            # it can seed secret/harbor/robot, which the harbor-docker-config
+            # ExternalSecret reads → the convergence gate hangs on that ES. Exclude
+            # :8200 from sidecar interception so the OpenBao egress goes direct
+            # (VAULT_SKIP_VERIFY handles the self-signed cert); istio still fronts the
+            # in-mesh harbor-core call for mTLS. The linode-cred-rotator avoids this by
+            # running in a namespace that isn't istio-injected.
+            traffic.sidecar.istio.io/excludeOutboundPorts: "8200"
           # Static label so the NetworkPolicy can podSelector-match it.
           labels:
             app.kubernetes.io/name: harbor-robot-provisioner
