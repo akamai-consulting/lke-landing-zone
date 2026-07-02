@@ -83,13 +83,6 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          # Pin cosign v2.6.0: v3.x defaults --new-bundle-format=true, storing the
-          # signature as an OCI 1.1 referrer (no `sha256-<digest>.sig` tag) that GHCR
-          # serves flakily (303) and Kyverno's keyless verifyImages can't find →
-          # admission fails "no signatures found". v2.6.0 defaults to the legacy
-          # `.sig` tag both Kyverno and GHCR handle. See verify-llz-image-signature.
-          cosign-release: v2.6.0
 
       - name: Build and push ci-terraform
         id: build
@@ -123,15 +116,20 @@ jobs:
         # signing key is stored. The Kyverno verifyImages policy in
         # instance-template verifies this same identity at admission.
         #
-        # Legacy `sha256-<digest>.sig` tag storage (cosign v2.6.0, pinned at the
-        # installer above) is what Kyverno's keyless verifyImages reads and GHCR
-        # serves reliably — v3.x's default new-bundle/referrers format is
-        # undiscoverable here ("no signatures found"). No sign-time flag needed:
-        # v2.6.0 defaults to the legacy tag.
+        # --use-signing-config=false --new-bundle-format=false: force legacy
+        # `sha256-<digest>.sig` tag storage. cosign v3.x (installed above) defaults
+        # to the new Sigstore-bundle format stored via the OCI 1.1 referrers API,
+        # which produces NO `.sig` tag — GHCR serves referrers flakily (303) and
+        # Kyverno's keyless verifyImages reads the legacy `.sig` tag, so a
+        # bundle-format signature is undiscoverable → admission fails "no signatures
+        # found" and the in-cluster llz CronJobs are blocked. --use-signing-config
+        # must be false too: v3 defaults it true and then REJECTS --new-bundle-format
+        # =false. Verified: this pair yields the same simplesigning `.sig` manifest
+        # cosign v2 produced. See the verify-llz-image-signature policy.
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/ci-terraform
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-kubernetes:
     name: Build ci-kubernetes
@@ -174,13 +172,6 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          # Pin cosign v2.6.0: v3.x defaults --new-bundle-format=true, storing the
-          # signature as an OCI 1.1 referrer (no `sha256-<digest>.sig` tag) that GHCR
-          # serves flakily (303) and Kyverno's keyless verifyImages can't find →
-          # admission fails "no signatures found". v2.6.0 defaults to the legacy
-          # `.sig` tag both Kyverno and GHCR handle. See verify-llz-image-signature.
-          cosign-release: v2.6.0
 
       - name: Build and push ci-kubernetes
         id: build
@@ -210,7 +201,7 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/ci-kubernetes
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-devcontainer:
     name: Build devcontainer
@@ -257,13 +248,6 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          # Pin cosign v2.6.0: v3.x defaults --new-bundle-format=true, storing the
-          # signature as an OCI 1.1 referrer (no `sha256-<digest>.sig` tag) that GHCR
-          # serves flakily (303) and Kyverno's keyless verifyImages can't find →
-          # admission fails "no signatures found". v2.6.0 defaults to the legacy
-          # `.sig` tag both Kyverno and GHCR handle. See verify-llz-image-signature.
-          cosign-release: v2.6.0
 
       - name: Build and push devcontainer
         id: build
@@ -293,7 +277,7 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/devcontainer
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-llz:
     name: Build llz (slim in-cluster image)
@@ -340,13 +324,6 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          # Pin cosign v2.6.0: v3.x defaults --new-bundle-format=true, storing the
-          # signature as an OCI 1.1 referrer (no `sha256-<digest>.sig` tag) that GHCR
-          # serves flakily (303) and Kyverno's keyless verifyImages can't find →
-          # admission fails "no signatures found". v2.6.0 defaults to the legacy
-          # `.sig` tag both Kyverno and GHCR handle. See verify-llz-image-signature.
-          cosign-release: v2.6.0
 
       - name: Build and push llz
         id: build
@@ -377,4 +354,4 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/llz
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
