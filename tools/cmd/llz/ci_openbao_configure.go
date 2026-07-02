@@ -190,7 +190,7 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 	// rotates it via `gh secret set`). The `secret-propagator` role is the live
 	// GitHub-CI auth path (llz ci propagate-pat); `platform-ci` is read-only,
 	// reserved for any future GitHub workflow that reads OpenBao directly (ESO
-	// reads in-cluster via AppRole, not GitHub OIDC). Appended only when the
+	// reads in-cluster via Kubernetes auth, not GitHub OIDC). Appended only when the
 	// instance repo is known; a repo-less configure (local/dry-run without
 	// GITHUB_REPOSITORY) omits them rather than create an unbindable role.
 	if ghRepo != "" {
