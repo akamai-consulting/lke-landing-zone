@@ -125,14 +125,25 @@ var Components = []Component{
 	},
 	{
 		// apl-core's monitoring stack + the llz glue (loki S3 ExternalSecret, alert
-		// rules) that rides with it.
+		// rules, the OTel collector serving-TLS CA chain) that rides with it.
 		Name:        "observability",
 		AplCoreApps: []string{"prometheus", "alertmanager", "grafana", "loki", "otel"},
 		ManifestResources: []string{
 			"observability/loki-object-store-externalsecret.yaml",
+			"observability/otel-bootstrap-ca.yaml",
+			"observability/otel-collector.yaml",
 			"observability/prometheus-rules/openbao-alerts.yaml",
 			"observability/prometheus-rules/support-plane-alerts.yaml",
 		},
+		// The env-shaped otel.<env>.internal SAN on the collector serving cert —
+		// rendered per env by RenderOtelSANPatch (replaces spec.dnsNames wholesale).
+		Patches: []Patch{{
+			Path:    "otel-collector-tls-san-patch.yaml",
+			Group:   "cert-manager.io",
+			Version: "v1",
+			Kind:    "Certificate",
+			Name:    "platform-otel-collector-tls",
+		}},
 	},
 	{
 		Name:              "harbor",

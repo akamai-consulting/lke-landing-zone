@@ -367,8 +367,17 @@ func TestBootstrapAndObjTFVars_InjectEnvName(t *testing.T) {
 	if b["deployment"] != `"primary"` || b["apl_values_env"] != `"primary"` {
 		t.Errorf("deployment/apl_values_env must be the env name; got %v", b)
 	}
-	if b["cluster_name"] != `"platform-primary"` || b["cluster_domain"] != `"primary.example.com"` {
-		t.Errorf("bootstrap name/domain mismatch; got %v", b)
+	// cluster_domain stays in the tfvars (llz ci resolve-harbor-url reads it back);
+	// cluster_name is now written into values.yaml by llz render, not emitted here.
+	if b["cluster_domain"] != `"primary.example.com"` {
+		t.Errorf("cluster_domain mismatch; got %v", b)
+	}
+	if _, ok := b["cluster_name"]; ok {
+		t.Errorf("cluster_name should no longer be a bootstrap tfvar; got %v", b)
+	}
+	// The cluster name lives in the render identity instead.
+	if id := lz.ValuesIdentity("primary"); id.ClusterName != "platform-primary" {
+		t.Errorf("ValuesIdentity.ClusterName = %q, want platform-primary", id.ClusterName)
 	}
 	o := assignMap(ObjectStorageTFVars("primary", c))
 	if o["region_suffix"] != `"primary"` || o["obj_cluster"] != `"us-ord-1"` {

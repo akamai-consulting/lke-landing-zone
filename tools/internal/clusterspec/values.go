@@ -11,44 +11,117 @@ import (
 // values.go renders the apl-core backend: a deployment's component toggles flip
 // apps.<key>.enabled in the committed apl-values/<env>/values.yaml, and the
 // spec-owned identity + platform settings (cluster.name/domainSuffix,
-// dns.domainFilters, otomi.has*) plus per-component sizing are written in. For
-// identity this RESOLVES the ${cluster_name}/${cluster_domain} placeholders from
-// the spec before Terraform runs — so for a spec instance landingzone.yaml is the
-// single source and the cluster-bootstrap templatefile() (which still fills those
-// for non-spec instances) finds nothing left to substitute. apl-core is a Helm
-// umbrella whose bundled apps (prometheus, loki, harbor, kyverno, …) are switched
-// inside ONE values.yaml — so unlike the manifest backend, this is not a resource
-// selection but a targeted edit of existing keys.
+// dns.domainFilters, otomi.has*), the object-store wiring (Loki/Harbor bucket
+// names + S3 endpoint/region), the values-repo coordinates (otomi.git
+// repoUrl/username/branch), plus per-component sizing are written in. All of
+// these RESOLVE their ${...} placeholders from the spec before Terraform runs —
+// so landingzone.yaml is the single source and the cluster-bootstrap
+// templatefile() is left with only the genuine runtime secrets + the live
+// coredns IP to substitute (loki_admin_password, apl_values_repo_password,
+// linode_dns_token, coredns_cluster_ip). apl-core is a Helm umbrella whose
+// bundled apps (prometheus, loki, harbor, kyverno, …) are switched inside ONE
+// values.yaml — so unlike the manifest backend, this is not a resource selection
+// but a targeted edit of existing keys.
 //
-// values.yaml is hand-authored with load-bearing comments and ${...} placeholders
-// the cluster-bootstrap Terraform renders via templatefile() (the secrets + infra
-// outputs: loki/harbor buckets, coredns IP, repo creds, dns token — plus identity
-// for non-spec instances); we therefore parse + re-emit with yaml.v3's Node API,
-// which preserves comments AND each scalar's quoting style (so "${coredns_cluster_ip}"
-// stays quoted). Only the keys the spec owns are touched; everything else
+// A landingzone.yaml spec is REQUIRED: the object-store + identity + repo keys
+// are no longer filled by Terraform, so an instance that never runs `llz render`
+// would ship values.yaml with literal "${loki_bucket_chunks}" strings. There is
+// no non-spec path.
+//
+// values.yaml is hand-authored with load-bearing comments and ${...} placeholders;
+// we parse + re-emit with yaml.v3's Node API, which preserves comments AND each
+// scalar's quoting style (so the secret "${...}" placeholders left for Terraform
+// stay quoted). Only the keys the spec owns are touched; everything else
 // round-trips unchanged in meaning.
 
 // ValuesIdentity carries the spec-derived settings RenderValues writes directly
-// into a deployment's values.yaml, resolving the identity placeholders from the
-// spec before Terraform's templatefile() runs. Build it with
+// into a deployment's values.yaml, resolving every non-secret ${...} placeholder
+// from the spec before Terraform's templatefile() runs. Build it with
 // (*LandingZone).ValuesIdentity.
 type ValuesIdentity struct {
 	ClusterName  string // cluster.name (was ${cluster_name})
 	DomainSuffix string // cluster.domainSuffix + dns.domainFilters[0] (was ${cluster_domain})
 	ExternalDNS  bool   // otomi.hasExternalDNS
 	ExternalIDP  bool   // otomi.hasExternalIDP
+
+	// Object-store wiring — the Loki/Harbor bucket names + S3 endpoint/region.
+	// Derived from the env name (== deployment) + spec.cluster.objectStorage.cluster,
+	// mirroring the llz-object-storage module's naming; see objectStoreWiring.
+	LokiBucketChunks string // apps.loki._rawValues.loki.storage.bucketNames.chunks (was ${loki_bucket_chunks})
+	LokiBucketRuler  string // …bucketNames.ruler  (was ${loki_bucket_ruler})
+	LokiBucketAdmin  string // …bucketNames.admin  (was ${loki_bucket_admin})
+	LokiS3Endpoint   string // …s3.endpoint — bare host (was ${loki_s3_endpoint})
+	LokiS3Region     string // …s3.region — OBJ cluster id (was ${loki_s3_region})
+	HarborBucket     string // apps.harbor._rawValues.persistence.imageChartStorage.s3.bucket (was ${harbor_bucket})
+	HarborS3Endpoint string // …s3.regionendpoint — full https URL (was ${harbor_s3_endpoint})
+	HarborS3Region   string // …s3.region — OBJ cluster id (was ${harbor_s3_region})
+
+	// Values-repo coordinates (otomi.git). URL is required; username/branch fall
+	// back to the same defaults the cluster-bootstrap tfvars carried.
+	RepoURL      string // otomi.git.repoUrl  (was ${apl_values_repo_url})
+	RepoUsername string // otomi.git.username (was ${apl_values_repo_username})
+	RepoBranch   string // otomi.git.branch   (was ${apl_values_repo_ref})
 }
 
-// ValuesIdentity resolves the values.yaml identity + platform settings for env
-// from the assembled spec (env identity is already merged with spec.defaults; the
-// platform flags are instance-wide).
+// objectStoreWiring returns the Loki/Harbor bucket names + S3 endpoint/region for
+// a deployment, derived from the env name (== the object-storage region_suffix ==
+// deployment) and the Linode OBJ cluster id. It MIRRORS the llz-object-storage
+// module's "<label_prefix>-<bucket>-<region_suffix>" naming (label_prefix defaults
+// to "platform") and its endpoint shape — the same derivation cluster-bootstrap's
+// TF locals used before this moved into the render. If the module's label_prefix
+// default changes, change objLabelPrefix here in lockstep.
+func objectStoreWiring(env, objCluster string) (chunks, ruler, admin, lokiEndpoint, region, harborBucket, harborEndpoint string) {
+	const objLabelPrefix = "platform"
+	if objCluster == "" {
+		return "", "", "", "", "", "", ""
+	}
+	host := objCluster + ".linodeobjects.com" // Loki wants the bare host…
+	return objLabelPrefix + "-loki-chunks-" + env,
+		objLabelPrefix + "-loki-ruler-" + env,
+		objLabelPrefix + "-loki-admin-" + env,
+		host,
+		objCluster,
+		objLabelPrefix + "-harbor-registry-" + env,
+		"https://" + host // …Harbor wants the full URL for regionendpoint
+}
+
+// ValuesIdentity resolves the values.yaml identity + platform + object-store +
+// repo settings for env from the assembled spec (env identity is already merged
+// with spec.defaults; the platform flags are instance-wide).
 func (lz *LandingZone) ValuesIdentity(env string) ValuesIdentity {
 	e, _ := lz.Env(env)
+	b := e.Cluster.Bootstrap
+	chunks, ruler, admin, lokiEndpoint, region, harborBucket, harborEndpoint :=
+		objectStoreWiring(env, e.Cluster.ObjectStorage.Cluster)
+	// otomi.git.username/branch mirror the cluster-bootstrap variable defaults
+	// (x-access-token / main) so an omitted spec field renders the same literal
+	// the tfvars example carried.
+	username := b.AplValues.Username
+	if username == "" {
+		username = "x-access-token"
+	}
+	branch := b.AplValues.Revision
+	if branch == "" {
+		branch = "main"
+	}
 	return ValuesIdentity{
-		ClusterName:  e.Cluster.Bootstrap.Name,
-		DomainSuffix: e.Cluster.Bootstrap.DomainSuffix,
+		ClusterName:  b.Name,
+		DomainSuffix: b.DomainSuffix,
 		ExternalDNS:  lz.Spec.Defaults.Platform.HasExternalDNS(),
 		ExternalIDP:  lz.Spec.Defaults.Platform.HasExternalIDP(),
+
+		LokiBucketChunks: chunks,
+		LokiBucketRuler:  ruler,
+		LokiBucketAdmin:  admin,
+		LokiS3Endpoint:   lokiEndpoint,
+		LokiS3Region:     region,
+		HarborBucket:     harborBucket,
+		HarborS3Endpoint: harborEndpoint,
+		HarborS3Region:   region,
+
+		RepoURL:      b.AplValues.RepoURL,
+		RepoUsername: username,
+		RepoBranch:   branch,
 	}
 }
 
@@ -108,7 +181,25 @@ func RenderValues(base []byte, components map[string]ComponentToggle, id ValuesI
 	if otomi := mapValue(root, "otomi"); otomi != nil {
 		setBool(mapValue(otomi, "hasExternalDNS"), id.ExternalDNS)
 		setBool(mapValue(otomi, "hasExternalIDP"), id.ExternalIDP)
+		if git := mapValue(otomi, "git"); git != nil {
+			setStr(mapValue(git, "repoUrl"), id.RepoURL)
+			setStr(mapValue(git, "username"), id.RepoUsername)
+			setStr(mapValue(git, "branch"), id.RepoBranch)
+		}
 	}
+
+	// Object-store wiring — the Loki/Harbor bucket names + S3 endpoint/region,
+	// derived from the spec (was cluster-bootstrap's TF locals + templatefile()).
+	// Each is set only when its node already exists in the base, so a slimmed-down
+	// values.yaml is never grown new structure.
+	setStr(dig(apps, "loki", "_rawValues", "loki", "storage", "bucketNames", "chunks"), id.LokiBucketChunks)
+	setStr(dig(apps, "loki", "_rawValues", "loki", "storage", "bucketNames", "ruler"), id.LokiBucketRuler)
+	setStr(dig(apps, "loki", "_rawValues", "loki", "storage", "bucketNames", "admin"), id.LokiBucketAdmin)
+	setStr(dig(apps, "loki", "_rawValues", "loki", "storage", "s3", "endpoint"), id.LokiS3Endpoint)
+	setStr(dig(apps, "loki", "_rawValues", "loki", "storage", "s3", "region"), id.LokiS3Region)
+	setStr(dig(apps, "harbor", "_rawValues", "persistence", "imageChartStorage", "s3", "bucket"), id.HarborBucket)
+	setStr(dig(apps, "harbor", "_rawValues", "persistence", "imageChartStorage", "s3", "regionendpoint"), id.HarborS3Endpoint)
+	setStr(dig(apps, "harbor", "_rawValues", "persistence", "imageChartStorage", "s3", "region"), id.HarborS3Region)
 
 	// Per-component sizing (config in the spec, mechanism in the base). Each knob
 	// overwrites an existing scalar in the base; unset knobs leave the base default.

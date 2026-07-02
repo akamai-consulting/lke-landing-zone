@@ -130,6 +130,11 @@ on:
         required: false
       OPENBAO_SEAL_KEY:
         required: false
+      # Optional: when provisioned, bao-seed-all seeds secret/certmanager/dns01
+      # during the bootstrap; when absent the seed skips and bootstrap-dns.yml
+      # is the late-provisioning path.
+      LINODE_DNS_TOKEN:
+        required: false
       HARBOR_PASSWORD:
         required: false
       HARBOR_PULL_PASSWORD:
@@ -314,34 +319,18 @@ jobs:
       # (The raft retry_join pod-FQDN SAN requirement is satisfied by the
       # dnsNames in openbao-tls-cert.yaml, so raft TLS forms on first boot.)
 
-      # ── Bootstrap TLS cert for OTel Collector (break circular dependency) ────────
-      # The OTel Collector mounts `platform-otel-collector-tls` (a cert-manager Certificate)
-      # as a required volume. With the custom-ca issuer (apl-values/<env>/values.yaml:
-      # apps.cert-manager.issuer=custom-ca), cert-manager issues from the in-cluster
-      # CA for `otel.<env>.internal`. On a cold bootstrap that CA is not yet
-      # available, so without this step the pods fail with CreateContainerError
-      # because the Secret never gets created. Break the circle: generate a
-      # self-signed cert now and create the Secret directly. cert-manager replaces
-      # it in-place once the custom-ca is up. No pod restart needed.
-      # Temporary CA + serving cert (RSA 4096, 1-year validity); cert-manager
-      # replaces it once the custom-ca issuer is up. SAN uses the per-env
-      # `otel.${REGION}.internal` hostname (env-prefixed `.internal` per the
-      # cluster_domain convention in terraform-iac-bootstrap/cluster-bootstrap/
-      # <region>.tfvars). --ensure-namespace creates llz-observability now
-      # (ArgoCD CreateNamespace=true would also create it on first sync, but the
-      # Secret needs it immediately); --k8s-secret applies the Secret straight
-      # from memory, so no key files ever land on the runner. Skip/namespace/
-      # apply logic lives in `llz ci gen-bootstrap-tls` (tools/cmd/llz/ci_tls.go).
-      - name: Ensure OTel Collector bootstrap TLS cert exists
-        run: |
-          llz ci gen-bootstrap-tls \
-            --prefix otel-bootstrap \
-            --ca-subj "/CN=platform-otel-bootstrap-ca/O=app/OU=bootstrap" \
-            --cert-subj "/CN=otel.${REGION}.internal/O=app/OU=bootstrap" \
-            --dns "otel.${REGION}.internal,platform-otel-collector.llz-observability.svc,platform-otel-collector.llz-observability.svc.cluster.local" \
-            --k8s-secret llz-observability/platform-otel-collector-tls \
-            --ensure-namespace \
-            --skip-if-secret-exists
+      # ── OTel Collector serving TLS — issued by cert-manager, no bootstrap seed ──
+      # The `llz ci gen-bootstrap-tls` step that used to hand-seed
+      # `platform-otel-collector-tls` here (a throwaway runner-generated CA + cert,
+      # replaced in-place by the custom-ca issuer later) has been REMOVED — the
+      # same anti-pattern the openbao-tls seed removal above fixed. The cert is
+      # now issued from FIRST boot by the stable, self-signed cert-manager CA
+      # `otel-bootstrap-ca` (apl-values/components/observability/
+      # otel-bootstrap-ca.yaml, synced by the platform-bootstrap Application),
+      # with the per-env otel.<env>.internal SAN rendered by `llz render`. No
+      # workflow step, no mid-bootstrap CA rotation. If the Secret is missing,
+      # the fix is to ensure the otel-bootstrap-ca ClusterIssuer is Ready, not
+      # to hand-seed a cert.
 
       # ── Seed the static auto-unseal key (must precede the pod wait) ────────────
       # The chart's `seal "static"` stanza mounts the openbao-unseal-key Secret at
@@ -434,29 +423,15 @@ jobs:
         if: steps.ensure.outputs.available == 'true'
         run: llz ci bao-configure --region "$REGION"
 
-      # ── Apply the post-apl-bootstrap kustomize tree ───────────────────────────
-      # Apply resources whose CRDs are registered by apl-core's helmfile
-      # rather than by the main bootstrap App's own kustomize tree. By the
-      # time this step runs, "Configure OpenBao" above has already succeeded,
-      # which implies apl-core's helmfile has been running long enough to
-      # install kyverno, ESO, otel-operator, etc. and register all the CRDs.
-      #
-      # Currently includes:
-      #   - OpenTelemetryCollector (opentelemetry.io/v1beta1)
-      #
-      # Split from the shared manifest tree because including those resources
-      # there makes `kubectl kustomize | kubectl apply --dry-run=server`
-      # validation fail against a fresh cluster (CRD isn't yet registered at
-      # lint time). See apl-values/_shared/manifest/post-apl-bootstrap/kustomization.yaml
-      # header for the full rationale + the precedent (DNS split). The tree is
-      # instance-wide (DRY — one copy under _shared, applied to every region's
-      # cluster); ${REGION} selects the target cluster's kubeconfig.
-      - name: Apply post-apl-bootstrap kustomize tree
-        if: steps.ensure.outputs.available == 'true'
-        run: |
-          set -euo pipefail
-          kubectl apply -k "apl-values/_shared/manifest/post-apl-bootstrap"
-          echo "post-apl-bootstrap resources applied (OpenTelemetryCollector + future CRD-dependent resources)."
+      # ── post-apl-bootstrap tree — MOVED into the Argo-synced tree ──────────────
+      # The `kubectl apply -k post-apl-bootstrap` step that used to run here
+      # (OpenTelemetryCollector, whose CRD apl-core's helmfile registers) has
+      # been REMOVED: the CR now rides the observability component
+      # (apl-values/components/observability/otel-collector.yaml) at a late
+      # sync-wave. The platform-bootstrap App's SkipDryRunOnMissingResource +
+      # retry budget absorb the CRD-registration race the imperative step
+      # existed to sidestep; the server-side dry-run lint path that motivated
+      # the split no longer exists (CI builds the manifest tree client-side).
 
       # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
       # One step runs every generic `bao-seed` path from the bootstrapSeeds()
@@ -465,6 +440,9 @@ jobs:
       #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
       #   secret/linode/api-token              (linode-volume-labeler ExternalSecret)
       #   secret/loki/object-store             (LOKI_S3_* env secrets)
+      #   secret/certmanager/dns01             (LINODE_DNS_TOKEN; skip when unset —
+      #                                         bootstrap-dns.yml is then the
+      #                                         late-provisioning path)
       # (secret/harbor/admin, secret/grafana/admin + secret/otel/ingress are no
       #  longer seeded here — ESO writes them in-cluster via PushSecrets: harbor
       #  mirrors its Helm Secret, grafana/otel use a Password generator. See
@@ -486,6 +464,11 @@ jobs:
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
           LOKI_S3_ACCESS_KEY: ${{ secrets.LOKI_S3_ACCESS_KEY }}
           LOKI_S3_SECRET_KEY: ${{ secrets.LOKI_S3_SECRET_KEY }}
+          # Raw secret, deliberately NO placeholder fallback (unlike cluster-
+          # bootstrap's TF_VAR_linode_dns_token): empty must mean "skip the dns01
+          # seed", not "seed a placeholder that cert-manager then presents to the
+          # Linode API".
+          LINODE_DNS_TOKEN: ${{ secrets.LINODE_DNS_TOKEN }}
         run: llz ci bao-seed-all --region "$REGION"
 
       # ── Seed: Harbor registry S3 credentials ───────────────────────────────────

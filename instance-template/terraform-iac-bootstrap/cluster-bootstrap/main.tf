@@ -115,55 +115,22 @@ data "kubernetes_service" "coredns" {
 }
 
 locals {
-  # Object-store wiring, derived from var.obj_cluster + var.deployment instead of a
-  # cross-workspace `terraform_remote_state` read of the object-storage workspace
-  # (dropping that coupling — object-storage no longer has to be applied first for
-  # cluster-bootstrap to plan). The bucket labels are deterministic: they mirror the
-  # llz-object-storage module's "${label_prefix}-<bucket>-${region_suffix}" naming,
-  # where label_prefix defaults to "platform" and region_suffix is the deployment
-  # (== var.deployment). obj_label_prefix MUST stay in lockstep with
-  # terraform-modules/llz-object-storage/variables.tf's label_prefix default.
-  #
-  # s3_endpoint is "https://<obj_cluster>.linodeobjects.com": Loki's chart wants the
-  # bare host for `s3.endpoint`; Harbor's registry wants the full URL for
-  # `regionendpoint`. `s3_region` is the OBJ cluster id (e.g. us-ord-1), used by both.
-  obj_label_prefix = "platform"
-  obj_s3_url       = "https://${var.obj_cluster}.linodeobjects.com"
-  loki_buckets = {
-    chunks = "${local.obj_label_prefix}-loki-chunks-${var.deployment}"
-    ruler  = "${local.obj_label_prefix}-loki-ruler-${var.deployment}"
-    admin  = "${local.obj_label_prefix}-loki-admin-${var.deployment}"
-  }
-  harbor_bucket = "${local.obj_label_prefix}-harbor-registry-${var.deployment}"
-  s3_host       = replace(local.obj_s3_url, "https://", "")
-  s3_region     = replace(local.s3_host, ".linodeobjects.com", "")
-
-  # Fills the values.yaml placeholders: the cluster identity (cluster_name/
-  # cluster_domain) + the secrets/infra outputs (repo creds, dns token, loki/harbor
-  # object-store, coredns IP). For a SPEC instance, `llz render` has already written
-  # the identity literals into the committed values.yaml from the LandingZone spec,
-  # so those two are resolved before this runs and the vars here are a no-op for it;
-  # for a non-spec instance they ARE the identity render path.
+  # Fills the ONLY placeholders left in the committed values.yaml: the runtime
+  # secrets (loki admin password, values-repo PAT, DNS token) and the live coredns
+  # ClusterIP. Everything else — cluster identity, the Loki/Harbor object-store
+  # wiring (bucket names + S3 endpoint/region), and the otomi.git repo coordinates —
+  # is resolved into the committed values.yaml by `llz render` from the LandingZone
+  # spec (see tools/internal/clusterspec/values.go), so a landingzone.yaml spec is
+  # REQUIRED: there is no non-spec render path. templatefile() errors if the file
+  # references a var absent from this map, which catches a stale placeholder the
+  # render should have resolved.
   apl_rendered_values = templatefile(
     "${path.module}/../../apl-values/${var.apl_values_env}/values.yaml",
     {
-      cluster_name             = var.cluster_name
-      cluster_domain           = var.cluster_domain
-      apl_values_repo_url      = var.apl_values_repo_url
-      apl_values_repo_username = var.apl_values_repo_username
       apl_values_repo_password = var.apl_values_repo_token
-      apl_values_repo_ref      = var.apl_values_repo_revision
       linode_dns_token         = var.linode_dns_token
       loki_admin_password      = var.loki_admin_password
       coredns_cluster_ip       = try(data.kubernetes_service.coredns[0].spec[0].cluster_ip, "")
-      loki_bucket_chunks       = local.loki_buckets.chunks
-      loki_bucket_ruler        = local.loki_buckets.ruler
-      loki_bucket_admin        = local.loki_buckets.admin
-      loki_s3_endpoint         = local.s3_host
-      loki_s3_region           = local.s3_region
-      harbor_bucket            = local.harbor_bucket
-      harbor_s3_endpoint       = local.obj_s3_url
-      harbor_s3_region         = local.s3_region
     }
   )
 

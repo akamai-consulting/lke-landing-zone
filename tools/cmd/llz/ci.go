@@ -55,9 +55,10 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciHarborPortForwardCmd(), ciHarborEnsureProjectCmd(), ciHarborSmokeCmd())
 	// Pre-flight guards (require-secret.sh / assert-destroy-confirm.sh).
 	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd())
-	// Bootstrap seeding (gen-bootstrap-tls.sh / bootstrap-cloud-firewall.sh /
-	// provision-harbor-robots.sh).
-	c.AddCommand(ciGenBootstrapTLSCmd(), ciBootstrapCloudFirewallCmd(), ciProvisionHarborRobotsCmd())
+	// Bootstrap seeding (bootstrap-cloud-firewall.sh / provision-harbor-robots.sh).
+	// (gen-bootstrap-tls was retired: the OTel collector serving cert is now issued
+	// by the otel-bootstrap-ca cert-manager chain in the observability component.)
+	c.AddCommand(ciBootstrapCloudFirewallCmd(), ciProvisionHarborRobotsCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).

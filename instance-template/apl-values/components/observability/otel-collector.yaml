@@ -1,11 +1,20 @@
 # Minimal OpenTelemetry Collector instance.
 #
-# Applied SEPARATELY from the main manifest tree — see kustomization.yaml in
-# this dir for the rationale (the opentelemetry.io/v1beta1 CRD is registered by
-# apl-core's otel-operator helmfile, which may not be done at main-tree
-# lint/apply time). Operator step: .github/workflows/bootstrap-openbao.yml's
-# "Apply post-apl-bootstrap" step runs `kubectl apply -k` on this directory
-# once OpenBao is configured.
+# Argo-synced with the observability component (previously a separate
+# `post-apl-bootstrap` tree kubectl-applied by bootstrap-openbao.yml — a split
+# whose stated reason was a server-side dry-run lint path that no longer
+# exists; today's checks build the manifest tree client-side only, which does
+# not resolve CRDs). The opentelemetry.io/v1beta1 CRD is registered by
+# apl-core's otel-operator helmfile, which races the first platform-bootstrap
+# sync: the app-level SkipDryRunOnMissingResource=true syncOption
+# (cluster-bootstrap/main.tf) keeps the missing CRD from failing the dry-run,
+# and the late sync-wave below + the app's retry budget (limit 20, capped 5m
+# backoff; argo-resync-nudger as the terminal backstop) re-applies until the
+# operator has registered it. Everything earlier-waved has already landed by
+# then, so the pre-CRD retries gate nothing. Riding the observability
+# component also fixes a latent bug in the old step: it applied the CR
+# unconditionally, which would hard-fail on an observability-disabled env
+# where the otel-operator (and its CRD) never installs.
 #
 # Why this exists: apl-core installs the otel-OPERATOR but does NOT create a
 # Collector instance. Without this CR the Service `otel-collector` doesn't
@@ -29,6 +38,10 @@ metadata:
   # NAME MUST BE `otel` so the operator creates Service `otel-collector`.
   name: otel
   namespace: llz-observability
+  annotations:
+    # Last wave: the CRD may not exist until apl-core's helmfile installs the
+    # otel-operator; a failing apply here must not gate any other resource.
+    argocd.argoproj.io/sync-wave: "10"
   labels:
     app.kubernetes.io/name: otel-collector
     app.kubernetes.io/component: otlp-ingress

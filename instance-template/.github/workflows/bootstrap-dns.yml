@@ -10,6 +10,12 @@ name: Bootstrap DNS
 # ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
 # a template release tag (Renovate keeps both current — instance-template/renovate.json).
 #
+# LATE-PROVISIONING PATH: if LINODE_DNS_TOKEN was already provisioned when
+# bootstrap-openbao.yml ran, its `bao-seed-all` step seeded
+# secret/certmanager/dns01 automatically — dispatch this only when the token
+# arrives after the bootstrap (it also applies the dns kustomize tree and waits
+# for the synced Secret). Re-running over an existing seed is safe.
+#
 # Pre-requisites:
 #   • OpenBao initialized + unsealed + KV v2 mounted at `secret/` (bootstrap-openbao.yml)
 #   • ESO + ClusterSecretStore `openbao` Ready (implied by the above)

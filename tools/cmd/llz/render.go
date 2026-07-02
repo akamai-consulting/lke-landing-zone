@@ -254,6 +254,11 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	if clusterspec.ComponentEnabled(e.Components, "linodeCredRotator") {
 		targets[filepath.Join(manifest, "linode-cred-rotator-env-patch.yaml")] = clusterspec.RenderRotatorEnvPatch(env, e.Cluster.ObjectStorage.Cluster)
 	}
+	// The OTel Collector serving cert's per-env otel.<env>.internal SAN patch —
+	// emitted only when observability is enabled (which ships the Certificate).
+	if clusterspec.ComponentEnabled(e.Components, "observability") {
+		targets[filepath.Join(manifest, "otel-collector-tls-san-patch.yaml")] = clusterspec.RenderOtelSANPatch(env)
+	}
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances
 	// without the shared overlay.

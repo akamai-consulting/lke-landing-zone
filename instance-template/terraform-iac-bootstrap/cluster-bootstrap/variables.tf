@@ -20,45 +20,18 @@ variable "apl_values_env" {
   type        = string
 }
 
-variable "cluster_name" {
-  description = "Logical cluster name injected into apl-core values as cluster.name (Istio Gateway hostnames, Argo CD context, Console banner). For a spec instance this matches cluster.bootstrap.name, which `llz render` has already written into the committed values.yaml."
-  type        = string
-}
-
 variable "cluster_domain" {
-  description = "Base DNS domain for this cluster (e.g. lab.<domain>, <domain> for primary). Injected as cluster.domainSuffix + dns.domainFilters; also read from these tfvars by `llz ci resolve-harbor-url` to derive harbor.<cluster_domain>. ExternalDNS uses it; cert-manager Let's Encrypt covers its subdomains. Spec instances: cluster.bootstrap.domainSuffix."
+  description = "Base DNS domain for this cluster (e.g. lab.<domain>, <domain> for primary). Set in the tfvars by `llz render` (spec: cluster.bootstrap.domainSuffix) and read back from them by `llz ci resolve-harbor-url` to derive harbor.<cluster_domain>. The values.yaml cluster.domainSuffix + dns.domainFilters are written straight in by `llz render`, so this is NOT a templatefile input — it is kept purely for the resolve-harbor-url read."
   type        = string
-}
-
-variable "obj_cluster" {
-  description = <<-EOT
-    Linode Object Storage cluster id for this region (e.g. us-ord-1) — the SAME
-    value as object-storage/<env>.tfvars. cluster-bootstrap derives the Loki/Harbor
-    S3 bucket labels ("platform-<bucket>-<deployment>") and the S3 endpoint
-    ("https://<obj_cluster>.linodeobjects.com") from it as locals, replacing a
-    cross-workspace `terraform_remote_state` read of the object-storage workspace.
-    Spec instances: `llz render` writes it from spec.cluster.objectStorage.cluster;
-    non-spec instances MUST set it here (previously it was only needed in
-    object-storage/<env>.tfvars). Empty leaves the endpoint host blank — only
-    relevant when Loki/Harbor S3 is disabled.
-  EOT
-  type        = string
-  default     = ""
 }
 
 variable "apl_values_repo_url" {
-  description = "HTTPS URL of the GitOps repo that holds apl-values/ and manifest/ subtrees. **HTTPS is required** by apl-core's values schema (otomi.git.repoUrl pattern `^https?://.+`). A host that requires per-cluster node-IP allowlisting for HTTPS cannot satisfy LKE-E, so the values tree must be mirrored to a public-CA HTTPS-reachable host (GitHub.com, GitLab.com, or an internal HTTPS mirror). Example: https://github.com/<org>/platform-apl-values.git"
+  description = "HTTPS URL of the GitOps repo that holds apl-values/ and manifest/ subtrees. **HTTPS is required** by apl-core's values schema (otomi.git.repoUrl pattern `^https?://.+`). A host that requires per-cluster node-IP allowlisting for HTTPS cannot satisfy LKE-E, so the values tree must be mirrored to a public-CA HTTPS-reachable host (GitHub.com, GitLab.com, or an internal HTTPS mirror). `llz render` writes otomi.git.repoUrl into values.yaml from spec.cluster.bootstrap.aplValues.repoURL; this var feeds only the Argo CD values-repo credential Secret (kubectl_manifest.apl_values_repo_creds). Example: https://github.com/<org>/platform-apl-values.git"
   type        = string
-}
-
-variable "apl_values_repo_revision" {
-  description = "Branch or tag the in-cluster Argo CD tracks in the values repo."
-  type        = string
-  default     = "main"
 }
 
 variable "apl_values_repo_username" {
-  description = "Username for HTTPS Git basic-auth against the values repo. With a GitHub fine-grained PAT the username is ignored by the server, so the conventional 'x-access-token' is used (any non-empty string works). Supply via TF_VAR_apl_values_repo_username to override."
+  description = "Username for HTTPS Git basic-auth against the values repo. With a GitHub fine-grained PAT the username is ignored by the server, so the conventional 'x-access-token' is used (any non-empty string works). `llz render` writes otomi.git.username into values.yaml; this var feeds only the Argo CD values-repo credential Secret. Supply via TF_VAR_apl_values_repo_username to override."
   type        = string
   default     = "x-access-token"
 }
