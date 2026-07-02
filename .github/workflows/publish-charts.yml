@@ -111,7 +111,7 @@ jobs:
             digest="$(printf '%s\n' "$push_out" | awk '/[Dd]igest:/ {print $2; exit}')"
             [ -n "$digest" ] || { echo "::error::no digest returned by helm push for ${name} ${version}"; exit 1; }
             echo "Signing ${name} ${version} (${digest}) — keyless cosign"
-            cosign sign --yes "${OCI_DEST}/${name}@${digest}"
+            cosign sign --yes --new-bundle-format=false "${OCI_DEST}/${name}@${digest}"
             PUSHED=$((PUSHED + 1))
           done
           echo "::notice::Published ${PUSHED} chart(s)"
