@@ -79,12 +79,12 @@ func BootstrapTFVars(env string, c Cluster) []Assign {
 
 	add("deployment", hclStr(env))
 	add("apl_values_env", hclStr(env))
-	// cluster_domain stays in the tfvars (read back by `llz ci resolve-harbor-url`
-	// to derive harbor.<cluster_domain>); cluster.name, obj_cluster and the values-
-	// repo revision are NOT emitted — `llz render` writes them straight into the
-	// committed values.yaml (identity, object-store wiring, otomi.git.branch), so
-	// cluster-bootstrap no longer needs them as tfvars/templatefile inputs.
-	add("cluster_domain", hclStr(b.DomainSuffix))
+	// cluster.name, cluster_domain, obj_cluster and the values-repo revision are
+	// NOT emitted: `llz render` writes cluster identity, the object-store wiring
+	// and otomi.git.branch straight into the committed values.yaml, and
+	// `llz ci resolve-harbor-url` reads domainSuffix straight from the spec — so
+	// cluster-bootstrap needs none of them as tfvars/templatefile inputs (the
+	// tfvars-as-side-channel read for cluster_domain was retired with the var).
 	if b.AplChartVersion != "" {
 		add("apl_chart_version", hclStr(b.AplChartVersion))
 	}

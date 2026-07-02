@@ -135,7 +135,7 @@ func TestRunCISeedHarborRegistryS3(t *testing.T) {
 func TestRunCIResolveHarborURL(t *testing.T) {
 	dir := chdirTempDir(t)
 
-	// vars.HARBOR_URL wins; nothing written to $GITHUB_ENV.
+	// vars.HARBOR_URL wins; nothing written to $GITHUB_ENV, no spec needed.
 	t.Setenv("HARBOR_URL", "harbor.example.com")
 	envFile := withGHAEnvFile(t)
 	if err := runCIResolveHarborURL("primary"); err != nil {
@@ -145,9 +145,15 @@ func TestRunCIResolveHarborURL(t *testing.T) {
 		t.Error("explicit HARBOR_URL must not be re-derived")
 	}
 
-	// Unset → derived from cluster_domain and exported.
+	// Unset + no spec → hard error (the spec is mandatory; the tfvars
+	// side-channel this used to fall back to was retired).
 	t.Setenv("HARBOR_URL", "")
-	writeTFVars(t, dir, "cluster-bootstrap", "primary", `cluster_domain = "primary.internal"`)
+	if err := runCIResolveHarborURL("primary"); err == nil {
+		t.Error("missing spec must error")
+	}
+
+	// Unset → derived from the spec's domainSuffix and exported.
+	writeResolveSpec(t, dir, "primary", "primary.internal")
 	envFile = withGHAEnvFile(t)
 	if err := runCIResolveHarborURL("primary"); err != nil {
 		t.Fatal(err)
@@ -156,12 +162,30 @@ func TestRunCIResolveHarborURL(t *testing.T) {
 		t.Error("derived HARBOR_URL must be exported to $GITHUB_ENV")
 	}
 
-	// Neither available → hard error.
+	// Env absent from the spec / empty domainSuffix → hard error.
 	if err := runCIResolveHarborURL("absent-region"); err == nil {
-		t.Error("missing cluster_domain must error")
+		t.Error("env absent from the spec must error")
 	}
 	if err := runCIResolveHarborURL(""); err == nil {
 		t.Error("missing --region must error")
+	}
+}
+
+// writeResolveSpec writes a minimal split-layout spec (landingzone.yaml +
+// environments/<env>.yaml) with just the domainSuffix resolve-harbor-url reads.
+func writeResolveSpec(t *testing.T, dir, env, domainSuffix string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "landingzone.yaml"),
+		[]byte("apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata:\n  name: itest\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "environments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cd := "apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: ClusterDefinition\nmetadata:\n  name: " + env +
+		"\nspec:\n  cluster:\n    bootstrap:\n      domainSuffix: " + domainSuffix + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "environments", env+".yaml"), []byte(cd), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

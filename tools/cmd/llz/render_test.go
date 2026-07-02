@@ -40,7 +40,7 @@ func stageRoots(t *testing.T, tfDir string) {
 	t.Helper()
 	examples := map[string]string{
 		"cluster":           "cluster_label = \"x\"\nregion = \"x\"\nk8s_version = \"x\"\nnode_type = \"x\"\nnode_count = 1\ntags = []\ncontrol_plane_high_availability = false\ncontrol_plane_audit_logs_enabled = false\nha_role = \"standalone\"\n",
-		"cluster-bootstrap": "deployment = \"your-env\"\napl_values_env = \"your-env\"\ncluster_domain = \"your-env.internal\"\n",
+		"cluster-bootstrap": "deployment = \"your-env\"\napl_values_env = \"your-env\"\n",
 		"object-storage":    "region_suffix = \"your-env\"\nobj_cluster = \"us-ord-1\"\n",
 	}
 	for root, body := range examples {
@@ -95,10 +95,15 @@ func TestRenderEnvTfvars(t *testing.T) {
 		}
 	}
 	boot := read("cluster-bootstrap")
-	for _, want := range []string{`deployment = "prod"`, `apl_values_env = "prod"`, `cluster_domain = "prod.example.com"`} {
+	for _, want := range []string{`deployment = "prod"`, `apl_values_env = "prod"`} {
 		if !strings.Contains(boot, want) {
 			t.Errorf("cluster-bootstrap/prod.tfvars missing %q:\n%s", want, boot)
 		}
+	}
+	// cluster_domain is no longer a cluster-bootstrap tfvar (resolve-harbor-url
+	// reads domainSuffix straight from the spec).
+	if strings.Contains(boot, "cluster_domain") {
+		t.Errorf("cluster-bootstrap tfvars should no longer carry cluster_domain:\n%s", boot)
 	}
 	if strings.Contains(boot, "your-env") {
 		t.Errorf("cluster-bootstrap still has your-env sentinel:\n%s", boot)

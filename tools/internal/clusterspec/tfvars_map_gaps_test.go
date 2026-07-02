@@ -82,7 +82,7 @@ func TestClusterTFVars_MinimalOmitsOptionals(t *testing.T) {
 func TestBootstrapTFVars_Optionals(t *testing.T) {
 	full := assignKeys(BootstrapTFVars("prod", fullCluster()))
 	for _, k := range []string{
-		"deployment", "apl_values_env", "cluster_domain",
+		"deployment", "apl_values_env",
 		"apl_chart_version", "apl_values_repo_url",
 		"apl_values_repo_username", "apps_repo_revision",
 	} {
@@ -93,13 +93,13 @@ func TestBootstrapTFVars_Optionals(t *testing.T) {
 	if full["deployment"] != `"prod"` {
 		t.Errorf("deployment = %q, want \"prod\"", full["deployment"])
 	}
-	// cluster_name, obj_cluster and apl_values_repo_revision are NO LONGER emitted:
-	// `llz render` writes cluster identity, the object-store wiring and
-	// otomi.git.branch straight into the committed values.yaml, so cluster-bootstrap
-	// doesn't need them as tfvars.
-	for _, k := range []string{"cluster_name", "obj_cluster", "apl_values_repo_revision"} {
+	// cluster_name, cluster_domain, obj_cluster and apl_values_repo_revision are
+	// NO LONGER emitted: `llz render` writes cluster identity, the object-store
+	// wiring and otomi.git.branch straight into the committed values.yaml, and
+	// resolve-harbor-url reads domainSuffix from the spec.
+	for _, k := range []string{"cluster_name", "cluster_domain", "obj_cluster", "apl_values_repo_revision"} {
 		if _, ok := full[k]; ok {
-			t.Errorf("BootstrapTFVars should no longer emit %q (moved into values.yaml via llz render)", k)
+			t.Errorf("BootstrapTFVars should no longer emit %q (spec/values.yaml own it)", k)
 		}
 	}
 

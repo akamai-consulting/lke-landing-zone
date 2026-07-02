@@ -139,7 +139,7 @@ are never committed. Everything else is a Linode/apl-core default you usually ke
 |---|---|---|
 | `region`, `apl_values_env` (env name) | MUST-SET | Deployment discriminator; must match the cluster workspace + `apl-values/<env>` dir |
 | `cluster.bootstrap.name` | MUST-SET | → apl-core `cluster.name` (Istio hosts, Argo context). Written straight into values.yaml by `llz render` — **no longer a cluster-bootstrap tfvar** |
-| `cluster.bootstrap.domainSuffix` (`cluster_domain`) | MUST-SET | → apl-core `cluster.domainSuffix`. Written into values.yaml by `llz render`; the `cluster_domain` tfvar is kept only so `llz ci resolve-harbor-url` can derive `harbor.<domain>`. Per-env prefix so siblings don't collide |
+| `cluster.bootstrap.domainSuffix` | MUST-SET | → apl-core `cluster.domainSuffix`. Written into values.yaml by `llz render`; `llz ci resolve-harbor-url` derives `harbor.<domain>` from the spec directly (no `cluster_domain` tfvar). Per-env prefix so siblings don't collide |
 | `cluster.bootstrap.aplValues.repoURL` (`apl_values_repo_url`) | MUST-SET | **HTTPS**, publicly reachable (see §1). `llz render` writes `otomi.git.repoUrl`; the tfvar also feeds the Argo CD values-repo credential Secret |
 | `cluster.bootstrap.aplChartVersion` | MUST-SET | Pin deliberately |
 | `cluster.bootstrap.aplValues.revision` / `.username`, `appsRepoRevision` | default | `revision`/`username` → `otomi.git.branch`/`username` in values.yaml (default `main` / `x-access-token`); the values-repo `revision` is **no longer a tfvar** |

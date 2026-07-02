@@ -24,14 +24,11 @@ apl_chart_version = "5.0.0"
 # Subdirectory under apl-values/ for this cluster's overlay.
 apl_values_env = "your-env"
 
-# Base DNS domain → apl-core cluster.domainSuffix. ExternalDNS + cert-manager
-# issue subdomains under this. Use a per-env prefix so siblings don't collide.
-# NOTE: `llz render` writes cluster.domainSuffix + dns.domainFilters straight into
-# the committed values.yaml; this tfvar is kept only so `llz ci resolve-harbor-url`
-# can derive harbor.<cluster_domain>. The logical cluster.name, the Loki/Harbor S3
-# bucket labels + endpoint, and the values-repo branch are ALSO written into
-# values.yaml by `llz render` — they are no longer cluster-bootstrap tfvars.
-cluster_domain = "your-env.internal"
+# NOTE: the base DNS domain (cluster.domainSuffix), the logical cluster.name,
+# the Loki/Harbor S3 bucket labels + endpoint, and the values-repo branch are
+# NOT cluster-bootstrap tfvars — `llz render` writes them straight into the
+# committed values.yaml from the spec, and `llz ci resolve-harbor-url` derives
+# harbor.<domainSuffix> from the spec too.
 
 # GitOps repo holding apl-values/ and manifest/ — apl-core's external values
 # store (the in-cluster Gitea is obsoleted). apl-core REQUIRES an HTTPS URL on a
