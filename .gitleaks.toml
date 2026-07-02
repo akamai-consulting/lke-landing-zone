@@ -38,3 +38,24 @@ id           = "shell-token-placeholder-region-env"
 description  = "Bash placeholder <token> followed by REGION env var assignment"
 regexTarget  = "match"
 regexes      = ['''token>\s+REGION=''']
+
+# False-positive: the linode object-key CI command (ci_temp_objkey.go) writes the
+# minted key to GITHUB_ENV via `"TEMP_OBJKEY_SECRET="+secret`. Gitleaks'
+# generic-api-key heuristic captures that Go string LITERAL — the env-var NAME
+# concatenated with the runtime value — as if it were a hardcoded credential. The
+# value only ever lives in the `secret`/`access` variables at runtime, never in
+# source. Match just the exact var-name literal so a real secret can't hide here.
+[[allowlists]]
+id           = "temp-objkey-env-var-name-literals"
+description  = "GITHUB_ENV var-name literals in ci_temp_objkey.go (names, not secrets)"
+regexTarget  = "match"
+regexes      = ['''TEMP_OBJKEY_(ACCESS|SECRET)=''']
+
+# False-positive: generic-api-key matches the `keyRotationDays: DEPRECATED/ignored`
+# note in the landing-zone spec doc (the `key…` word plus following prose). It is
+# documentation in a spec example, not a credential. Narrow to that exact phrase.
+[[allowlists]]
+id           = "spec-keyrotationdays-doc-note"
+description  = "keyRotationDays deprecation note in docs/landing-zone-spec.md"
+regexTarget  = "match"
+regexes      = ['''keyRotationDays:\s+DEPRECATED''']
