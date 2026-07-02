@@ -36,6 +36,7 @@ func ExternalDepWorkloads() []DepEntry {
 		{"external-dns/external-dns", "LINODE_DNS_TOKEN not seeded — run bootstrap-dns.yml + re-apply TF"},
 		{"kube-system/linode-internal-cidr-firewall", "release.yml build-firewall-controller has not run — ImagePullBackOff until the image is pushed to ghcr.io and the App's image.tag is pinned"},
 		{"istio-system/oauth2-proxy", "init-blocks on the Keycloak OIDC issuer URL — unresolvable until DNS is wired (run bootstrap-dns.yml)"},
+		{"otomi/otomi-api", "apl-core-internal otomi API server — this landing zone drives gitops via external GitHub + ESO/OpenBao, not the otomi console/API, so otomi-api is not configured or load-bearing here (zero references in apl-values; same apl-core-internal class as gitops-global). It CrashLoopBackOffs on a fresh install; the exact cause is captured by the on-failure workload-log diagnostic (llz-bootstrap-openbao.yml). Deferred at pod level so an apl-core-internal component the LZ doesn't drive can't pin the convergence gate — revisit (un-defer + fix) if those logs show a shared-dependency failure."},
 	}
 }
 
