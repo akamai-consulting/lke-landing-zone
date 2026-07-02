@@ -1,26 +1,30 @@
 package main
 
-// ci_harbor.go implements `llz ci provision-harbor-robots` — the native port of
-// provision-harbor-robots.sh, the bootstrap step that provisions Harbor robot
-// accounts and seeds their credentials into OpenBao.
+// ci_harbor.go — the CI-side remainder of Harbor provisioning, plus the Harbor
+// REST plumbing shared with the in-cluster provisioner.
 //
-// On primary: creates system robots ci-firewall-controller (push/pull/delete)
-// and pull-platform (pull-only) in Harbor, seeds OpenBao, and sets the
-// repo-level GitHub secrets HARBOR_ROBOT_NAME / HARBOR_PASSWORD /
-// HARBOR_PULL_ROBOT_NAME / HARBOR_PULL_PASSWORD. On secondary: seeds
-// secret/harbor/robot and secret/harbor/pull-robot from the GitHub secrets
-// written by the primary run. Every not-ready-yet state (HARBOR_URL unset,
-// admin Secret absent, Harbor unreachable, primary's secrets not written yet)
-// is a $GITHUB_STEP_SUMMARY note + clean exit so bootstrap can simply re-run.
+// The ACTIVE-path provisioning (ensure `platform` project, create the
+// ci-firewall-controller / pull-platform robots, seed OpenBao, publish the
+// repo-level HARBOR_* GitHub secrets, smoke) moved IN-CLUSTER: the
+// harbor-robot-provisioner CronJob (apl-values/components/harbor/) runs
+// `llz ci harbor-provisioner` (ci_harbor_provisioner.go) on the slim llz
+// image. That retired the workflow's port-forward (only needed because
+// HARBOR_URL is internal DNS the runner can't resolve), the root-token
+// re-acquire via recovery-key quorum (the CronJob writes through a scoped
+// Kubernetes-auth role), and a whole cluster-access/ACL cycle.
 //
-// Env contract (identical to the script; set by the workflow step env: block):
-//   REGION                — primary | secondary
-//   HARBOR_URL            — Harbor registry base URL (may be empty on
-//                           secondary) — used for registry_host in OpenBao
-//   HARBOR_API_URL        — Harbor REST API base URL (set by the workflow's
-//                           port-forward step to http://localhost:18080;
-//                           falls back to HARBOR_URL if unset for callers
-//                           that already run in-cluster)
+// What stays here is `llz ci seed-standby-harbor-robots` — the STANDBY path.
+// A standby peer has no in-cluster Harbor; it replicates the active's robot
+// credentials from the repo-level GitHub secrets the active's provisioner
+// published (HARBOR_ROBOT_NAME / HARBOR_PASSWORD / HARBOR_PULL_ROBOT_NAME /
+// HARBOR_PULL_PASSWORD — the EXISTING_* env). It runs inside the bootstrap
+// job while the root token is live, so the OpenBao writes go through the same
+// in-pod bao CLI passthrough as the generic seeds.
+//
+// Env contract (set by the workflow step env: block):
+//   HARBOR_URL            — Harbor registry base URL (the ACTIVE's registry —
+//                           standby consumers pull from it); used for
+//                           registry_host in OpenBao
 //   EXISTING_ROBOT        — secrets.HARBOR_ROBOT_NAME
 //   EXISTING_SECRET       — secrets.HARBOR_PASSWORD
 //   EXISTING_PULL_ROBOT   — secrets.HARBOR_PULL_ROBOT_NAME
@@ -29,7 +33,6 @@ package main
 //   GITHUB_STEP_SUMMARY   — step summary file path (set by GitHub Actions)
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,7 +40,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -68,68 +70,36 @@ var baoKVPutFn = func(path string, fields map[string]string) error {
 	return nil
 }
 
-// ghSetRepoSecretFn writes a repo-level GitHub secret with the value piped
-// over stdin (never argv-visible). The repo-level sibling of
-// ci_openbao_init.go's ghSetSecretFn (--env), which must stay environment-
-// scoped; the Harbor robot credentials are read by region-agnostic workflows.
-// gh resolves auth + repo from the ambient GH_TOKEN/GH_REPO. Seamed for tests.
-var ghSetRepoSecretFn = func(name, value string) error {
-	return ghSecretSetStdin(name, "", value)
-}
-
-func ciProvisionHarborRobotsCmd() *cobra.Command {
+func ciSeedStandbyHarborRobotsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "provision-harbor-robots",
-		Short: "create Harbor CI robot accounts and seed their credentials into OpenBao",
-		Long: "Native port of provision-harbor-robots.sh. On primary: ensures the `platform`\n" +
-			"Harbor project, creates system robots ci-firewall-controller (push/pull/\n" +
-			"delete) and pull-platform (pull-only), seeds secret/harbor/{robot,pull-robot}\n" +
-			"in OpenBao, and sets the repo-level GitHub secrets HARBOR_ROBOT_NAME /\n" +
-			"HARBOR_PASSWORD / HARBOR_PULL_ROBOT_NAME / HARBOR_PULL_PASSWORD. On\n" +
-			"secondary: seeds the same OpenBao paths from those secrets (the EXISTING_*\n" +
-			"env). Every not-ready-yet state (HARBOR_URL unset, admin Secret absent,\n" +
-			"Harbor unreachable, primary's secrets not written yet) is a step-summary\n" +
-			"note + exit 0 so bootstrap can re-run. Env: REGION, HARBOR_URL,\n" +
-			"HARBOR_API_URL, EXISTING_{ROBOT,SECRET,PULL_ROBOT,PULL_SECRET},\n" +
-			"OPENBAO_ROOT_TOKEN, GITHUB_STEP_SUMMARY.",
+		Use:   "seed-standby-harbor-robots",
+		Short: "seed secret/harbor/{robot,pull-robot} on a standby peer from the active's published GitHub secrets",
+		Long: "The standby half of Harbor robot provisioning. A standby peer has no\n" +
+			"in-cluster Harbor, so it replicates the active's robot credentials from the\n" +
+			"repo-level HARBOR_* GitHub secrets the active's in-cluster\n" +
+			"harbor-robot-provisioner CronJob published (the EXISTING_* env). Each\n" +
+			"not-ready state (active's secrets not published yet) is a step-summary note\n" +
+			"+ clean exit so bootstrap can simply re-run. Env: HARBOR_URL,\n" +
+			"EXISTING_{ROBOT,SECRET,PULL_ROBOT,PULL_SECRET}, OPENBAO_ROOT_TOKEN.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIProvisionHarborRobots() },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			harborURL := os.Getenv("HARBOR_URL")
+			registryHost := strings.TrimPrefix(strings.TrimPrefix(harborURL, "http://"), "https://")
+			return seedStandbyHarborRobots(registryHost)
+		},
 	}
 }
-
-func runCIProvisionHarborRobots() error {
-	// HARBOR_URL (e.g. harbor.<env>.internal) is internal-only DNS not
-	// resolvable from the GitHub Actions runner. The workflow's port-forward
-	// step exposes the Harbor API on localhost; the API calls here must target
-	// it. Fallback to HARBOR_URL preserves the legacy path for callers running
-	// in-cluster (where the internal hostname IS resolvable).
-	harborURL := os.Getenv("HARBOR_URL")
-	apiURL := firstNonEmpty(os.Getenv("HARBOR_API_URL"), harborURL)
-	registryHost := strings.TrimPrefix(strings.TrimPrefix(harborURL, "http://"), "https://")
-
-	// Provision robots wherever Harbor is deployed in-cluster — i.e. on an
-	// `active` or `standalone` deployment. Only the `standby` peer has no
-	// in-cluster Harbor; it replicates the active's credentials from the GitHub
-	// secrets the active run published. HA_ROLE is resolved from the cluster
-	// tfvars (`llz env role`) by the calling workflow.
-	if os.Getenv("HA_ROLE") == roleStandby {
-		return seedStandbyHarborRobots(registryHost)
-	}
-	return provisionLocalHarborRobots(harborURL, apiURL, registryHost)
-}
-
-// ── standby: replicate the active's credentials ──────────────────────────────
 
 // seedStandbyHarborRobots seeds both robot credentials from the GitHub secrets
-// the active run set. The two pairs gate independently — a re-run after only the
-// push robot was provisioned still seeds it before skipping on the missing pull
-// pair — and each skip is a summary note + clean exit.
+// the active's provisioner set. The two pairs gate independently — a re-run
+// after only the push robot was provisioned still seeds it before skipping on
+// the missing pull pair — and each skip is a summary note + clean exit.
 func seedStandbyHarborRobots(registryHost string) error {
 	robot, secret := os.Getenv("EXISTING_ROBOT"), os.Getenv("EXISTING_SECRET")
 	if robot == "" || secret == "" {
 		return appendGHAFile("GITHUB_STEP_SUMMARY",
-			"HARBOR_ROBOT_NAME / HARBOR_PASSWORD not yet set — run primary bootstrap first.",
-			"Re-run this workflow after primary bootstrap completes.")
+			"HARBOR_ROBOT_NAME / HARBOR_PASSWORD not yet published — the active peer's harbor-robot-provisioner CronJob sets them once Harbor is up.",
+			"Re-run this workflow after the active peer's provisioner has run.")
 	}
 	maskGHA(secret)
 	if err := baoKVPutFn("secret/harbor/robot", map[string]string{
@@ -141,7 +111,7 @@ func seedStandbyHarborRobots(registryHost string) error {
 	pullRobot, pullSecret := os.Getenv("EXISTING_PULL_ROBOT"), os.Getenv("EXISTING_PULL_SECRET")
 	if pullRobot == "" || pullSecret == "" {
 		return appendGHAFile("GITHUB_STEP_SUMMARY",
-			"HARBOR_PULL_ROBOT_NAME / HARBOR_PULL_PASSWORD not set — run primary bootstrap first.")
+			"HARBOR_PULL_ROBOT_NAME / HARBOR_PULL_PASSWORD not published — re-run after the active peer's provisioner has run.")
 	}
 	maskGHA(pullSecret)
 	if err := baoKVPutFn("secret/harbor/pull-robot", map[string]string{
@@ -154,7 +124,7 @@ func seedStandbyHarborRobots(registryHost string) error {
 	return nil
 }
 
-// ── primary: create the robot accounts in Harbor ──────────────────────────────
+// ── Harbor REST (shared with ci_harbor_provisioner.go) ───────────────────────
 
 // harborRobotSpec is one robot to provision plus where its credentials land.
 type harborRobotSpec struct {
@@ -164,91 +134,6 @@ type harborRobotSpec struct {
 	passSecret string // repo-level GitHub secret for the robot secret
 	doneMsg    string
 }
-
-func provisionLocalHarborRobots(harborURL, apiURL, registryHost string) error {
-	if harborURL == "" {
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
-			"HARBOR_URL variable not set — skipping Harbor robot account provisioning.")
-	}
-
-	// apl-core 5.0.0 installs Harbor in the `harbor` namespace with the admin
-	// password in harbor-admin-password.
-	adminPass := harborAdminPassword()
-	if adminPass == "" {
-		return appendGHAFile("GITHUB_STEP_SUMMARY",
-			"harbor/harbor-admin-password Secret not found — Harbor not yet deployed.",
-			"Re-run this workflow after Harbor is up to provision robot accounts.")
-	}
-	maskGHA(adminPass)
-
-	// The script's curl ran without -k: default TLS verification (the
-	// port-forward target is plain http://localhost:18080 anyway). The 15s
-	// timeout bounds the transport-error path the curl-000 handling expects.
-	h := &harborAPI{baseURL: apiURL, adminPass: adminPass,
-		client: &http.Client{Timeout: 15 * time.Second}}
-
-	proceed, err := h.ensurePlatformProject()
-	if err != nil || !proceed {
-		return err
-	}
-
-	for _, spec := range []harborRobotSpec{
-		{
-			payload:    newHarborRobotPayload("ci-firewall-controller", "push", "pull", "delete"),
-			kvPath:     "secret/harbor/robot",
-			nameSecret: "HARBOR_ROBOT_NAME",
-			passSecret: "HARBOR_PASSWORD",
-			doneMsg:    "Harbor CI robot account created; HARBOR_ROBOT_NAME and HARBOR_PASSWORD set.",
-		},
-		{
-			payload:    newHarborRobotPayload("pull-platform", "pull"),
-			kvPath:     "secret/harbor/pull-robot",
-			nameSecret: "HARBOR_PULL_ROBOT_NAME",
-			passSecret: "HARBOR_PULL_PASSWORD",
-			doneMsg:    "Harbor pull-only robot account created; HARBOR_PULL_ROBOT_NAME and HARBOR_PULL_PASSWORD set.",
-		},
-	} {
-		name, secret, created, err := h.createRobot(spec.payload)
-		if err != nil {
-			return err
-		}
-		if !created { // 409: summary already notes the credentials are unchanged
-			continue
-		}
-		if err := baoKVPutFn(spec.kvPath, map[string]string{
-			"username": name, "password": secret, "registry_host": registryHost,
-		}); err != nil {
-			return err
-		}
-		if err := ghSetRepoSecretFn(spec.nameSecret, name); err != nil {
-			return err
-		}
-		if err := ghSetRepoSecretFn(spec.passSecret, secret); err != nil {
-			return err
-		}
-		fmt.Println(spec.doneMsg)
-	}
-	return nil
-}
-
-// harborAdminPassword reads Harbor's admin password from the
-// harbor/harbor-admin-password Secret. Empty on any failure (Secret absent,
-// bad base64): Harbor isn't deployed yet, which the caller treats as a
-// graceful skip — the script's `2>/dev/null | base64 -d || true`.
-func harborAdminPassword() string {
-	out, err := execOutput("kubectl", "-n", "harbor", "get", "secret", "harbor-admin-password",
-		"-o", "jsonpath={.data.HARBOR_ADMIN_PASSWORD}")
-	if err != nil {
-		return ""
-	}
-	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
-	if err != nil {
-		return ""
-	}
-	return string(dec)
-}
-
-// ── Harbor REST ───────────────────────────────────────────────────────────────
 
 type harborAPI struct {
 	baseURL   string
@@ -273,45 +158,6 @@ func (h *harborAPI) post(path, payload string) (status int, body string, err err
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, strings.TrimSpace(string(b)), nil
-}
-
-// ensurePlatformProject ensures the `platform` Harbor project exists before
-// robot accounts scoped to it are created. Harbor only ships the default
-// `library` project; robot creation against a missing project returns HTTP
-// 404 "project platform not found", which is what bit the first
-// cold-bootstrap attempt.
-//
-// Status handling:
-//
-//	201, 409          → success (idempotent).
-//	transport error   → curl's 000: Harbor unreachable (DNS unresolved or
-//	                    connection refused). Common during early bootstrap
-//	                    when *.<env>.internal hostnames are placeholders
-//	                    without external DNS entries yet. Warn and signal
-//	                    the caller to skip, mirroring the sibling "Ensure
-//	                    Harbor platform project exists" workflow step.
-//	anything else     → fatal.
-//
-// Returns proceed=true to continue, proceed=false (nil error) to gracefully
-// skip the rest of the provisioning.
-func (h *harborAPI) ensurePlatformProject() (proceed bool, err error) {
-	status, body, err := h.post("/api/v2.0/projects",
-		`{"project_name":"platform","metadata":{"public":"false"}}`)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "::warning::Harbor not reachable at %s — skipping robot provisioning. Check that the port-forward step succeeded.\n", h.baseURL)
-		return false, appendGHAFile("GITHUB_STEP_SUMMARY",
-			fmt.Sprintf("Harbor not reachable at `%s` — robot provisioning skipped.", h.baseURL))
-	}
-	switch status {
-	case http.StatusCreated:
-		fmt.Println("Harbor project 'platform' created.")
-	case http.StatusConflict:
-		fmt.Println("Harbor project 'platform' already exists.")
-	default:
-		fmt.Fprintf(os.Stderr, "::error::Harbor project create failed (HTTP %d): %s\n", status, body)
-		return false, fmt.Errorf("harbor project create failed (HTTP %d)", status)
-	}
-	return true, nil
 }
 
 // Robot create payloads MUST include `duration` in Harbor 2.x — `-1` = never
@@ -356,9 +202,8 @@ func newHarborRobotPayload(name string, actions ...string) harborRobotPayload {
 }
 
 // createRobot creates one robot account. created=false with a nil error is
-// the 409 already-exists case (summary noted, caller moves on); a transport
-// failure is fatal like the script's status-000 fallthrough to the != 201
-// branch.
+// the 409 already-exists case (the caller decides how loud that is); a
+// transport failure is fatal.
 func (h *harborAPI) createRobot(payload harborRobotPayload) (name, secret string, created bool, err error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -372,7 +217,7 @@ func (h *harborAPI) createRobot(payload harborRobotPayload) (name, secret string
 	if status == http.StatusConflict {
 		return "", "", false, appendGHAFile("GITHUB_STEP_SUMMARY",
 			fmt.Sprintf("Harbor robot \"%s\" already exists — credentials unchanged.", payload.Name),
-			"To rotate: delete the robot in Harbor UI and re-run this workflow.")
+			"To rotate: delete the robot in Harbor UI; the provisioner CronJob recreates it next tick.")
 	}
 	if status != http.StatusCreated {
 		fmt.Fprintf(os.Stderr, "::error::Harbor robot creation failed (HTTP %d): %s\n", status, respBody)

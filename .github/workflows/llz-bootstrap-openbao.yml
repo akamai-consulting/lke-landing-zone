@@ -505,6 +505,24 @@ jobs:
           HARBOR_REGISTRY_S3_SECRET_KEY: ${{ secrets.HARBOR_REGISTRY_S3_SECRET_KEY }}
         run: llz ci seed-harbor-registry-s3 --region "$REGION"
 
+      # ── Standby: replicate the active's Harbor robot credentials ───────────────
+      # A standby peer has no in-cluster Harbor (the active/standalone path is the
+      # in-cluster harbor-robot-provisioner CronJob — see the MOVED note where the
+      # `harbor` job used to be). It seeds secret/harbor/{robot,pull-robot} from
+      # the repo-level HARBOR_* secrets the active's provisioner published; each
+      # not-published-yet state is a summary note + clean exit (re-run after the
+      # active's provisioner has run). Sits before the nudge so the force-sync
+      # below picks the fresh seeds up immediately.
+      - name: Seed standby Harbor robot credentials (standby only)
+        if: steps.ensure.outputs.available == 'true' && env.HA_ROLE == 'standby'
+        env:
+          HARBOR_URL:           ${{ vars.HARBOR_URL }}
+          EXISTING_ROBOT:       ${{ secrets.HARBOR_ROBOT_NAME }}
+          EXISTING_SECRET:      ${{ secrets.HARBOR_PASSWORD }}
+          EXISTING_PULL_ROBOT:  ${{ secrets.HARBOR_PULL_ROBOT_NAME }}
+          EXISTING_PULL_SECRET: ${{ secrets.HARBOR_PULL_PASSWORD }}
+        run: llz ci seed-standby-harbor-robots
+
       # ── Nudge Argo CD to converge the secrets pipeline now ─────────────────────
       # The `openbao` ClusterSecretStore and its ExternalSecrets (loki/harbor obj-
       # storage) could not reach Ready until OpenBao was unsealed and the object-storage KV
@@ -648,183 +666,29 @@ jobs:
             exit 1
           fi
 
-  # ── Provision Harbor (control plane + robots), parallel to converge ──────────
-  # Split out of the `bootstrap` job so the convergence gate (`converge`, below)
-  # does not serialize behind the ~2min Harbor control-plane rollout + robot
-  # provisioning. These produce credentials for the release / image-push pipeline,
-  # which runs only AFTER a cluster is healthy — on a fresh bootstrap platform pods
-  # pull from ghcr.io, NOT from in-cluster Harbor. The convergence-critical Harbor
-  # bits (the registry-S3 KV seed + the post-seed registry rollout) stayed in
-  # `bootstrap`. Both this job and `converge` depend ONLY on `bootstrap`, so they
-  # run concurrently.
-  #
-  # It re-establishes its own kubeconfig + control-plane ACL and re-acquires the
-  # OpenBao root token (bootstrap revokes it at its end; bao-ensure-ready
-  # regenerates via the unseal-key quorum) because provision-harbor-robots writes
-  # to OpenBao. Running concurrently with `converge` means two jobs mutate THIS
-  # cluster's control-plane ACL at once; the open/revoke is verify-after-write
-  # (llz ci runner-acl) so neither runner's IP can be silently dropped.
-  harbor:
-    name: Provision Harbor robots (${{ inputs.region }})
-    needs: [resolve, bootstrap]
-    if: needs.bootstrap.result == 'success' && needs.bootstrap.outputs.available == 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    permissions:
-      contents: read
-    environment: infra-${{ inputs.region }}
-    timeout-minutes: 20
-    env:
-      GH_REPO:    ${{ inputs.instance_repo }}
-      GH_TOKEN:   ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-      HARBOR_URL: ${{ vars.HARBOR_URL }}
-      HA_ROLE:    ${{ needs.resolve.outputs.role }}
-      HA_PEER:    ${{ needs.resolve.outputs.peer }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
+  # ── Harbor provisioning — MOVED IN-CLUSTER ──────────────────────────────────
+  # The `harbor` job that ran here (its own cluster-access + ACL cycle, a
+  # root-token re-acquire via the recovery-key quorum, a kubectl port-forward to
+  # harbor-core, ensure-project, provision-harbor-robots, smoke) has been
+  # REMOVED. The active/standalone path is now the harbor-robot-provisioner
+  # CronJob (apl-values/components/harbor/, `llz ci harbor-provisioner` on the
+  # slim llz image): it talks to harbor-core.harbor.svc directly (the
+  # port-forward existed only because HARBOR_URL is internal DNS the runner
+  # cannot resolve), writes OpenBao through the scoped harbor-provisioner
+  # Kubernetes-auth role (no root token), publishes the repo-level HARBOR_*
+  # secrets natively over the GitHub API, and smoke-tests every tick. Robot
+  # rotation is now "delete the robot in Harbor UI" — the next tick recreates
+  # and re-publishes it. The STANDBY half (replicating the active's published
+  # credentials) is the "Seed standby Harbor robot credentials" step in the
+  # `bootstrap` job above.
 
-      - name: Cluster access (kubeconfig + runner ACL)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          kubeconfig-path:       $HOME/.kube/config
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ env.REGION }}
-
-      # Re-acquire the OpenBao root token: `bootstrap` revoked it at its end, so
-      # bao-ensure-ready takes the initialized→regen-via-quorum path (authorized by
-      # the recovery keys) and re-exports OPENBAO_ROOT_TOKEN to $GITHUB_ENV.
-      # provision-harbor-robots (below) writes secret/harbor/robot to OpenBao and
-      # needs it.
-      - name: Ensure OpenBao reachable + root token
-        id: ensure
-        env:
-          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-          RECOVERY_K1: ${{ secrets.OPENBAO_RECOVERY_KEY_1 }}
-          RECOVERY_K2: ${{ secrets.OPENBAO_RECOVERY_KEY_2 }}
-          RECOVERY_K3: ${{ secrets.OPENBAO_RECOVERY_KEY_3 }}
-        run: llz ci bao-ensure-ready --region "$REGION"
-
-      - name: Pre-flight — verify GitHub secrets-write token for configuration
-        if: steps.ensure.outputs.available == 'true'
-        env:
-          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "required to write Harbor robot + pull-robot credentials back to GitHub Actions secrets."
-
-      - name: Pre-flight — resolve Harbor URL for configuration
-        if: steps.ensure.outputs.available == 'true'
-        run: llz ci resolve-harbor-url --region "$REGION"
-
-      # CONTROL-PLANE gate (harbor-core/jobservice/portal) — enough to unblock
-      # project/robot provisioning. harbor-registry is gated post-seed back in the
-      # `bootstrap` job ("Wait for Harbor registry rollout"), which is where its
-      # S3 Secret is seeded; gating on it here would always time out.
-      - name: Wait for Harbor readiness
-        if: steps.ensure.outputs.available == 'true'
-        continue-on-error: true
-        run: |
-          # Run wherever Harbor is deployed (not just 'primary' — e.g. e2e). Skip
-          # gracefully on clusters without it (secondary copies robot creds from
-          # primary's GitHub secrets).
-          if ! kubectl -n harbor get svc harbor-core >/dev/null 2>&1; then
-            echo "harbor-core absent — Harbor not deployed here; skipping wait." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          # --harbor-url "" skips the API ping (HARBOR_URL is internal-only DNS,
-          # unresolvable from the runner); the rollout-status checks + the later
-          # port-forward + robot smoke test validate the API plane proper.
-          llz ci wait-harbor --harbor-url ""
-
-      # Tunnel to Harbor's API through the kube-apiserver (HARBOR_URL is internal-
-      # only DNS). Exports HARBOR_API_URL; the pid lands in /tmp/harbor-pf.pid.
-      - name: Start Harbor API port-forward
-        if: steps.ensure.outputs.available == 'true'
-        run: llz ci harbor-port-forward
-
-      - name: Ensure Harbor platform project exists
-        if: steps.ensure.outputs.available == 'true'
-        run: llz ci harbor-ensure-project
-
-      # continue-on-error: provision-harbor-robots hard-exits if the Harbor API is
-      # unreachable; the smoke test below is the hard gate (fails on a 401).
-      - name: Provision Harbor robot accounts
-        if: steps.ensure.outputs.available == 'true'
-        continue-on-error: true
-        env:
-          HARBOR_URL:           ${{ env.HARBOR_URL }}
-          EXISTING_ROBOT:       ${{ secrets.HARBOR_ROBOT_NAME }}
-          EXISTING_SECRET:      ${{ secrets.HARBOR_PASSWORD }}
-          EXISTING_PULL_ROBOT:  ${{ secrets.HARBOR_PULL_ROBOT_NAME }}
-          EXISTING_PULL_SECRET: ${{ secrets.HARBOR_PULL_PASSWORD }}
-        run: llz ci provision-harbor-robots
-
-      # secret/harbor/docker-config is no longer seeded: the cert-automation
-      # chart's harborDockerConfig ExternalSecret derives the dockerconfigjson
-      # in-cluster from the robot creds (username/password/registry_host) in
-      # secret/harbor/robot via an ESO template.
-
-      - name: Smoke-test Harbor robot credentials
-        if: steps.ensure.outputs.available == 'true'
-        run: llz ci harbor-smoke
-
-      # secret/harbor/admin is no longer seeded here (nor in bao-seed-all): the
-      # harbor-admin-push PushSecret (apl-values/components/harbor/) mirrors the
-      # in-cluster harbor-admin-password Secret into OpenBao via the openbao-push
-      # store. ESO watches the source Secret, so it fires once Harbor is up without
-      # this job's readiness gate — no timing race, no kubectl-exec kv put.
-
-      # ── Stop Harbor API port-forward ───────────────────────────────────────────
-      - name: Stop Harbor API port-forward
-        if: always()
-        run: |
-          if [ -f /tmp/harbor-pf.pid ]; then
-            PID=$(cat /tmp/harbor-pf.pid)
-            kill "$PID" 2>/dev/null || true
-            rm -f /tmp/harbor-pf.pid
-          fi
-
-      # Revoke the root token this job re-acquired (fail-closed; same contract as
-      # the `bootstrap` job). preserve_root_on_failure leaves it usable on failure
-      # for operator iteration; success always revokes.
-      - name: Revoke root token
-        if: |
-          always() && (success() || inputs.preserve_root_on_failure != true)
-        run: |
-          if [ -z "${OPENBAO_ROOT_TOKEN:-}" ]; then
-            exit 0
-          fi
-          llz openbao exec -- token revoke -self \
-          && echo "Root token revoked." \
-          || echo "::warning::Root token revocation failed — delete OPENBAO_ROOT_TOKEN from the infra-${REGION} environment secrets manually to prevent credential reuse"
-
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ env.REGION }}
-
-  # ── Final convergence gate, parallel to `harbor` ────────────────────────────
-  # MOVED here from llz-terraform.yml's `converge` job so it runs as a sibling of
-  # `harbor` — both depend ONLY on the core `bootstrap`. Cluster health does not
-  # depend on the Harbor robot credentials (platform pods pull from ghcr.io on a
-  # fresh bootstrap; the registry-S3 seed + post-seed registry rollout that DO
-  # gate health stayed in `bootstrap`), so there is no reason to serialize
+  # ── Final convergence gate ───────────────────────────────────────────────────
+  # MOVED here from llz-terraform.yml's `converge` job; depends ONLY on the core
+  # `bootstrap`. Cluster health does not depend on the Harbor robot credentials
+  # (platform pods pull from ghcr.io on a fresh bootstrap; the registry-S3 seed +
+  # post-seed registry rollout that DO gate health stayed in `bootstrap` — and
+  # the in-cluster harbor-robot-provisioner converges the robots on its own
+  # cadence), so there is no reason to serialize
   # convergence behind Harbor provisioning. `llz ci converge` exits 0 (converged)
   # or 1 (budget exhausted / check error); per
   # docs/architecture/convergence-contract.md this gate is what makes "the

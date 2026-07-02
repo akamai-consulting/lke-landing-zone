@@ -2,7 +2,7 @@
 
 **Applies to:** Harbor (`harbor.<primary-cluster>.internal:5000`), deployed on the primary cluster only. Other clusters consume Harbor remotely via `secret/harbor/pull-robot`.
 
-**Related:** [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial Harbor admin + robot bootstrap), `llz ci provision-harbor-robots` ([`tools/cmd/llz/ci_harbor.go`](../../tools/cmd/llz/ci_harbor.go), canonical robot creation).
+**Related:** [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial Harbor admin + robot bootstrap), `llz ci harbor-provisioner` ([`tools/cmd/llz/ci_harbor_provisioner.go`](../../tools/cmd/llz/ci_harbor_provisioner.go), canonical robot creation — the in-cluster harbor-robot-provisioner CronJob).
 
 ---
 
@@ -43,7 +43,7 @@ Harbor has no OIDC / LDAP integration in this deployment (`harbor-values.yaml`, 
 
 ## Machine account — system robot (CI / in-cluster)
 
-Two robots already exist (the CI robot, `pull-<project>`) — both seeded by `llz ci provision-harbor-robots` ([`tools/cmd/llz/ci_harbor.go`](../../tools/cmd/llz/ci_harbor.go)) during the primary bootstrap. To add a new robot, run the same shape of API call by hand or extend that command and re-run `bootstrap-openbao.yml`.
+Two robots already exist (the CI robot, `pull-<project>`) — both created by the in-cluster `harbor-robot-provisioner` CronJob (`llz ci harbor-provisioner`, [`tools/cmd/llz/ci_harbor_provisioner.go`](../../tools/cmd/llz/ci_harbor_provisioner.go)) once Harbor is up. To rotate one, delete the robot in Harbor UI — the next CronJob tick (~5m) recreates it, re-seeds OpenBao, and re-publishes the repo-level GitHub secrets. To add a new robot, run the same shape of API call by hand or extend that command.
 
 ### Adding a new robot by hand
 

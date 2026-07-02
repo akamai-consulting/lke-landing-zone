@@ -54,10 +54,10 @@ The workflow detects cluster state automatically and chooses the right path:
 
 | Secret | Set by | Description |
 |---|---|---|
-| `HARBOR_ROBOT_NAME` | First-cluster bootstrap | Harbor CI robot account name (push+pull+delete; used for buildah builds) |
-| `HARBOR_PASSWORD` | First-cluster bootstrap | Harbor CI robot account secret |
-| `HARBOR_PULL_ROBOT_NAME` | First-cluster bootstrap | Harbor pull-only robot account name (pull-only; distributed as imagePullSecret) |
-| `HARBOR_PULL_PASSWORD` | First-cluster bootstrap | Harbor pull-only robot account secret |
+| `HARBOR_ROBOT_NAME` | In-cluster harbor-robot-provisioner (active cluster) | Harbor CI robot account name (push+pull+delete; used for buildah builds) |
+| `HARBOR_PASSWORD` | In-cluster harbor-robot-provisioner (active cluster) | Harbor CI robot account secret |
+| `HARBOR_PULL_ROBOT_NAME` | In-cluster harbor-robot-provisioner (active cluster) | Harbor pull-only robot account name (pull-only; distributed as imagePullSecret) |
+| `HARBOR_PULL_PASSWORD` | In-cluster harbor-robot-provisioner (active cluster) | Harbor pull-only robot account secret |
 
 ---
 
@@ -108,8 +108,7 @@ gh workflow run bootstrap-openbao.yml \
 9. Waits for all 3 pods to auto-unseal from the static seal key (followers join the leader via Raft `retry_join`).
 10. Configures KV v2, Kubernetes auth, GitHub-OIDC (`jwt`) auth, policies, roles, and the audit log.
 11. Seeds the following secrets into OpenBao:
-   - `secret/harbor/robot` (Harbor CI robot, push+pull+delete; creates the robot on the first cluster; used for buildah builds)
-   - `secret/harbor/pull-robot` (Harbor pull-only robot; creates the robot on the first cluster; distributed as imagePullSecret)
+   - `secret/harbor/robot` + `secret/harbor/pull-robot` — on an **active/standalone** cluster these are NO LONGER seeded by the workflow: the in-cluster `harbor-robot-provisioner` CronJob (`apl-values/components/harbor/`, `llz ci harbor-provisioner`) creates the robots, seeds OpenBao through a scoped Kubernetes-auth role, publishes the repo-level `HARBOR_*` GitHub secrets, and smoke-tests every ~5 minutes. On a **standby** peer the workflow's "Seed standby Harbor robot credentials" step replicates the active's published secrets into OpenBao. Robot rotation: delete the robot in Harbor UI; the next CronJob tick recreates and re-publishes it.
    - (`secret/harbor/docker-config` is no longer seeded — the buildah `config.json` is derived in-cluster by the cert-automation chart's `harborDockerConfig` ExternalSecret from the robot creds in `secret/harbor/robot`.)
    - `HARBOR_ROBOT_NAME` + `HARBOR_PASSWORD` GitHub secrets (first cluster only)
    - `HARBOR_PULL_ROBOT_NAME` + `HARBOR_PULL_PASSWORD` GitHub secrets (first cluster only)
@@ -189,9 +188,9 @@ These steps are not automated and must be done manually after the workflow compl
 
 ## Additional-cluster ordering constraint
 
-When you run more than one cluster, an additional cluster's bootstrap reads `HARBOR_ROBOT_NAME`, `HARBOR_PASSWORD`, `HARBOR_PULL_ROBOT_NAME`, and `HARBOR_PULL_PASSWORD` from repo-level GitHub secrets to seed `secret/harbor/robot` and `secret/harbor/pull-robot` into that cluster's OpenBao. These secrets are set during the first cluster's bootstrap. **Always bootstrap the first cluster before any additional cluster.**
+When you run more than one cluster, an additional (standby) cluster's bootstrap reads `HARBOR_ROBOT_NAME`, `HARBOR_PASSWORD`, `HARBOR_PULL_ROBOT_NAME`, and `HARBOR_PULL_PASSWORD` from repo-level GitHub secrets to seed `secret/harbor/robot` and `secret/harbor/pull-robot` into that cluster's OpenBao. These secrets are published by the **active cluster's in-cluster `harbor-robot-provisioner` CronJob** once Harbor is up there (within ~5 minutes of Harbor becoming healthy). **Always bootstrap the active cluster before any standby.**
 
-If an additional cluster's bootstrap runs before the first (or before Harbor is deployed on the first), the Harbor robot seeding step exits with a warning and is skipped. Re-run the additional cluster's bootstrap after the first completes.
+If a standby's bootstrap runs before the active's provisioner has published the secrets, the standby seeding step exits with a summary note and is skipped. Re-run the standby's bootstrap after the active's provisioner has run.
 
 ---
 

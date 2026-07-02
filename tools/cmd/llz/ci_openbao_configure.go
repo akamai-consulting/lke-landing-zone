@@ -87,6 +87,18 @@ path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
 path "secret/metadata/certmanager/dns01"  { capabilities = ["read"] }
 `
 
+// harbor-provisioner: read/write on exactly the two robot-credential paths the
+// in-cluster harbor-robot-provisioner CronJob owns (`llz ci harbor-provisioner`,
+// apl-values/components/harbor/). Read covers the steady-state "already seeded?"
+// check; create/update covers the seed after a robot create. Mapped to the
+// `harbor-provisioner` Kubernetes-auth role below. Never the harbor admin path
+// (ESO's harbor-admin-push owns that) and never any consumer path.
+const policyHarborProvisioner = `path "secret/data/harbor/robot"      { capabilities = ["create", "update", "read"] }
+path "secret/data/harbor/pull-robot" { capabilities = ["create", "update", "read"] }
+path "secret/metadata/harbor/robot"      { capabilities = ["read"] }
+path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
+`
+
 // baoConfigStep is one in-pod bao invocation of the configure sequence.
 // Non-fatal steps are the `|| true` enables of the bash — re-runs hit
 // "path is already in use" and must not abort the re-configure.
@@ -127,6 +139,11 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		// rotator (OBJ keys + DNS token). Mapped to the linode-rotator k8s-auth role.
 		{desc: "write policy linode-rotator", fatal: true, stdin: policyLinodeRotator,
 			args: []string{"policy", "write", "linode-rotator", "-"}},
+		// harbor-provisioner policy: scoped read/write on the two robot-credential
+		// paths for the in-cluster harbor-robot-provisioner CronJob. Mapped to the
+		// harbor-provisioner k8s-auth role.
+		{desc: "write policy harbor-provisioner", fatal: true, stdin: policyHarborProvisioner,
+			args: []string{"policy", "write", "harbor-provisioner", "-"}},
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
@@ -154,6 +171,15 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=linode-cred-rotator",
 				"bound_service_account_namespaces=llz-linode-cred-rotator",
 				"policies=linode-rotator", "ttl=15m"}},
+		// Kubernetes auth role for the in-cluster Harbor robot provisioner — binds
+		// the harbor-robot-provisioner ServiceAccount (harbor namespace, where the
+		// CronJob mounts harbor-admin-password) to the harbor-provisioner policy so
+		// it can seed secret/harbor/{robot,pull-robot} without a root token.
+		{desc: "write kubernetes auth role harbor-provisioner", fatal: true,
+			args: []string{"write", "auth/kubernetes/role/harbor-provisioner",
+				"bound_service_account_names=harbor-robot-provisioner",
+				"bound_service_account_namespaces=harbor",
+				"policies=harbor-provisioner", "ttl=15m"}},
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in

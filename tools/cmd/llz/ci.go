@@ -52,13 +52,18 @@ func ciCmd() *cobra.Command {
 	// Rotation routing + PAT propagation (formerly inline in llz-secret-rotation.yml).
 	c.AddCommand(ciRotationPlanCmd(), ciPropagatePATCmd())
 	// Harbor API steps (formerly inline curl in llz-bootstrap-openbao.yml).
-	c.AddCommand(ciHarborPortForwardCmd(), ciHarborEnsureProjectCmd(), ciHarborSmokeCmd())
+	// Harbor: the active-path provisioning (project + robots + OpenBao seed +
+	// repo-secret publication + smoke) runs IN-CLUSTER via harbor-provisioner
+	// (the harbor-robot-provisioner CronJob); seed-standby-harbor-robots is the
+	// CI-side standby half. port-forward/ensure-project/smoke were retired with
+	// the workflow's harbor job.
+	c.AddCommand(ciHarborProvisionerCmd(), ciSeedStandbyHarborRobotsCmd())
 	// Pre-flight guards (require-secret.sh / assert-destroy-confirm.sh).
 	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd())
 	// Bootstrap seeding (bootstrap-cloud-firewall.sh / provision-harbor-robots.sh).
 	// (gen-bootstrap-tls was retired: the OTel collector serving cert is now issued
 	// by the otel-bootstrap-ca cert-manager chain in the observability component.)
-	c.AddCommand(ciBootstrapCloudFirewallCmd(), ciProvisionHarborRobotsCmd())
+	c.AddCommand(ciBootstrapCloudFirewallCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
