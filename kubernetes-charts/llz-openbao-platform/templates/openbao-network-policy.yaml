@@ -42,6 +42,21 @@ spec:
         - port: 8200
           protocol: TCP
     {{- end }}
+    # Pod-scoped clients: a single workload in a shared namespace. Both selectors
+    # sit in ONE `from` element, so they AND — only the named pod in that namespace
+    # reaches :8200, not the whole namespace. See allowedClientPods.
+    {{- range .Values.platform.networkPolicy.allowedClientPods }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .name }}
+      ports:
+        - port: 8200
+          protocol: TCP
+    {{- end }}
     - from:
         - podSelector:
             matchLabels:
