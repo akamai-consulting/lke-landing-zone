@@ -1402,17 +1402,14 @@ jobs:
         run: llz ci assert-no-orphans --threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION" --attempts 5 --retry-delay 30
 
   # ── Apply / plan / destroy object-storage module ────────────────────────────
-  # Creates the three Loki S3 buckets and a scoped Object Storage access key
-  # for each region. After apply, the job automatically writes the generated
-  # access and secret keys as LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY into the
-  # matching infra-<region> GitHub environment secret so bootstrap-openbao.yml
-  # can seed secret/loki/object-store without an operator copy-paste step.
+  # Creates the Loki + Harbor-registry S3 BUCKETS for each region. Buckets
+  # only: the scoped access keys are no longer TF-managed — bootstrap-openbao's
+  # `llz ci mint-bootstrap-objkeys` mints and seeds them, and the in-cluster
+  # linodeCredRotator rotates them (no LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub
+  # secrets, no stash step).
   #
   # Required infra-<region> environment secrets (beyond the standard set):
   #   LINODE_API_TOKEN — Linode API token for the Object Storage provider
-  #
-  # Required environment secrets for automated key storage:
-  #   OPENBAO_SECRETS_WRITE_TOKEN — PAT with repo + secrets:write scope
   apply-object-storage:
     name: Apply Object Storage (${{ inputs.region }})
     # Runs on module=cluster too (not just object-storage/all). Loki and Harbor
@@ -1475,41 +1472,20 @@ jobs:
         working-directory: terraform-iac-bootstrap/object-storage
         run: terraform apply -auto-approve tfplan.bin
 
-      - name: Store object-storage credentials as environment secrets
+      # (The "Store object-storage credentials as environment secrets" stash step
+      # was RETIRED with the TF-minted keys: `llz ci mint-bootstrap-objkeys` in
+      # bootstrap-openbao.yml mints the scoped keys and seeds OpenBao directly —
+      # no LOKI_S3_* / HARBOR_REGISTRY_S3_* GitHub secrets, no reseed relay.)
+      - name: Bucket summary
         if: env.ACTION == 'apply'
         shell: bash
         working-directory: terraform-iac-bootstrap/object-storage
-        env:
-          # github.com is the default host, so GH_TOKEN alone authenticates.
-          # OPENBAO_SECRETS_WRITE_TOKEN is a fine-grained PAT scoped
-          # to this repo with Actions + Secrets: write.
-          GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
         run: |
           set -euo pipefail
-
-          # Stash the S3 access/secret pairs (Loki + Harbor registry) as
-          # infra-<region> environment secrets so the operator doesn't have to
-          # copy them manually. stash-env-secret reads each via `terraform
-          # output -raw`, masks it, writes it via `gh secret set --env`, and
-          # attempts every mapping before failing (a partial failure mid-list
-          # must not go unflagged). The bootstrap-openbao.yml workflow's early
-          # pre-flight step asserts these are present before any further
-          # bootstrap work runs; common failure modes (PAT absent/expired, PAT
-          # not granted this repo, missing Secrets: write) are diagnosed by the
-          # command's remediation output.
-          llz ci stash-env-secret --env "infra-${REGION}" \
-            --from-tf-output loki_access_key=LOKI_S3_ACCESS_KEY \
-            --from-tf-output loki_secret_key=LOKI_S3_SECRET_KEY \
-            --from-tf-output harbor_registry_access_key=HARBOR_REGISTRY_S3_ACCESS_KEY \
-            --from-tf-output harbor_registry_secret_key=HARBOR_REGISTRY_S3_SECRET_KEY
-
           BUCKETS=$(terraform output -json bucket_names)
           HARBOR_BUCKET=$(terraform output -raw harbor_registry_bucket)
           {
-            echo "### Object Storage credentials stored"
-            echo ""
-            echo "All four S3 access/secret pairs (Loki ×1, Harbor registry ×1)"
-            echo "have been written to the \`infra-${REGION}\` environment secrets automatically."
+            echo "### Object Storage buckets provisioned"
             echo ""
             echo "**Loki buckets:**"
             echo '```json'
@@ -1518,8 +1494,9 @@ jobs:
             echo ""
             echo "**Harbor registry bucket:** \`${HARBOR_BUCKET}\`"
             echo ""
-            echo "**Next step:** run \`bootstrap-openbao.yml\` → \`${REGION}\` to seed"
-            echo "\`secret/loki/object-store\` and \`secret/harbor/registry-s3\` in OpenBao."
+            echo "**Next step:** run \`bootstrap-openbao.yml\` → \`${REGION}\` — its"
+            echo "mint-bootstrap-objkeys step mints the scoped keys and seeds"
+            echo "\`secret/loki/object-store\` + \`secret/harbor/registry-s3\` in OpenBao."
           } >> "$GITHUB_STEP_SUMMARY"
 
   plan-destroy-object-storage:
@@ -1711,25 +1688,51 @@ jobs:
               || echo "::warning::drain of $bucket exited non-zero (may already be empty, or terraform destroy will surface the real failure)"
           }
 
-          # Loki — 3 buckets sharing one key. Bucket names come from the
-          # `bucket_names` output's value (a map).
-          LOKI_AK="$(read_output loki_access_key)"; mask "$LOKI_AK"
-          LOKI_SK="$(read_output loki_secret_key)"; mask "$LOKI_SK"
+          # Credentials: a TEMPORARY scoped key minted around this sweep (the
+          # Loki/Harbor keys are no longer TF-managed — see the module's
+          # "Access keys" note — so there are no key outputs to read).
+          # temp-objkey create exports TEMP_OBJKEY_{ID,ACCESS,SECRET} to
+          # $GITHUB_ENV for the always() delete step below; this same shell
+          # reads the creds back from that file (env-file writes only apply to
+          # LATER steps).
+          BUCKET_LIST=""
           for b in chunks ruler admin; do
             bucket="$(printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$b" '.bucket_names.value[$k] // empty')"
-            drain_bucket "loki/$b" "$LOKI_AK" "$LOKI_SK" "$bucket"
+            [ -n "$bucket" ] && BUCKET_LIST="${BUCKET_LIST:+$BUCKET_LIST,}$bucket"
           done
-
-          # Harbor registry — single bucket + scoped key.
-          HARBOR_AK="$(read_output harbor_registry_access_key)"; mask "$HARBOR_AK"
-          HARBOR_SK="$(read_output harbor_registry_secret_key)"; mask "$HARBOR_SK"
           HARBOR_BUCKET="$(read_output harbor_registry_bucket)"
-          drain_bucket "harbor-registry" "$HARBOR_AK" "$HARBOR_SK" "$HARBOR_BUCKET"
+          [ -n "$HARBOR_BUCKET" ] && BUCKET_LIST="${BUCKET_LIST:+$BUCKET_LIST,}$HARBOR_BUCKET"
+          if [ -z "$BUCKET_LIST" ]; then
+            echo "no buckets left in state — nothing to drain."
+            exit 0
+          fi
+          if ! llz ci temp-objkey create --region "$REGION" --endpoint "$ENDPOINT" --buckets "$BUCKET_LIST"; then
+            echo "::warning::temp drain key mint failed — skipping drain; terraform destroy will surface a non-empty-bucket failure if one matters"
+            exit 0
+          fi
+          TEMP_AK="$(grep '^TEMP_OBJKEY_ACCESS=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+          TEMP_SK="$(grep '^TEMP_OBJKEY_SECRET=' "$GITHUB_ENV" | tail -1 | cut -d= -f2-)"
+          mask "$TEMP_SK"
+
+          # Loki — 3 buckets; Harbor registry — 1. All under the temp key.
+          for b in chunks ruler admin; do
+            bucket="$(printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$b" '.bucket_names.value[$k] // empty')"
+            drain_bucket "loki/$b" "$TEMP_AK" "$TEMP_SK" "$bucket"
+          done
+          drain_bucket "harbor-registry" "$TEMP_AK" "$TEMP_SK" "$HARBOR_BUCKET"
 
           # NOTE — the gitea-backup bucket drain was removed alongside the
           # bucket/key/outputs in the apl-core anti-pattern cleanup.
 
           echo "drain pass complete."
+
+      # Revoke the temporary drain key regardless of drain outcome. No-op when
+      # the create was skipped (already-drained re-run, mint failure).
+      - name: Delete temporary drain key
+        if: always()
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci temp-objkey delete
 
       - name: Terraform destroy — object-storage
         working-directory: terraform-iac-bootstrap/object-storage

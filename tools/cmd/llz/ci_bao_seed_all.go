@@ -4,14 +4,15 @@ package main
 // that runs the bootstrap's generic OpenBao KV seeds from one declarative table
 // instead of one hand-written workflow step per secret. It REPLACES the
 // scattered `llz ci bao-seed …` steps in llz-bootstrap-openbao.yml
-// (github-dispatch-token, cert-automation token, linode api-token, loki
-// object-store) with a single step; the per-seed flag wiring those steps carried
+// (github-dispatch-token, cert-automation token, linode api-token, certmanager
+// dns01) with a single step; the per-seed flag wiring those steps carried
 // now lives in bootstrapSeeds() below. (harbor admin, grafana admin + otel bearer
-// used to seed here too; they are now written in-cluster via ESO PushSecrets —
-// see bootstrapSeeds.) The harbor-specific seeds
-// that derive their own material (robot accounts → ci_harbor_steps.go,
-// docker-config → ci_seed_special.go, registry-S3 → ci_bao_seed registry-s3)
-// keep their dedicated commands — only the plain `bao-seed` invocations fold in.
+// used to seed here too; they are now written in-cluster via ESO PushSecrets.
+// loki object-store + harbor registry-s3 moved to `llz ci
+// mint-bootstrap-objkeys`, which mints the keys itself instead of relaying
+// GitHub secrets.) The seeds that derive their own material (harbor robots →
+// the in-cluster provisioner / seed-standby-harbor-robots) keep their
+// dedicated commands — only the plain `bao-seed` invocations fold in.
 //
 // Each entry IS a baoSeedOpts (the exact flag set ci_bao_seed.go parses), so the
 // behavior of every seed — sources, idempotency guard, on-missing mode, summary
@@ -86,21 +87,12 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 		// role in ci_openbao_configure.go. This drops two root-token + kubectl-exec
 		// seed steps from the bootstrap.
 		//
-		// Loki object-store S3 credentials. Hard-defers if absent — Loki would
-		// CrashLoopBackOff with no chunk store.
-		{
-			path:       "secret/loki/object-store",
-			fieldSpecs: []string{"AWS_ACCESS_KEY_ID=env:LOKI_S3_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY=env:LOKI_S3_SECRET_KEY"},
-			onMissing:  "error",
-			missingAnnotations: []string{
-				"LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY not set — secret/loki/object-store not seeded; Loki will CrashLoopBackOff",
-			},
-			missingNotes: []string{
-				"LOKI_S3_ACCESS_KEY / LOKI_S3_SECRET_KEY not set — skipping secret/loki/object-store.",
-				fmt.Sprintf("Add them as infra-%s environment secrets and re-run.", region),
-				fmt.Sprintf("Create the keys via: linode-cli object-storage keys-create --label platform-loki-%s", region),
-			},
-		},
+		// secret/loki/object-store is NO LONGER seeded here (nor from LOKI_S3_*
+		// GitHub secrets): `llz ci mint-bootstrap-objkeys` mints the scoped key via
+		// the Linode API and seeds the path directly (rotated_at-stamped), and the
+		// in-cluster rotator owns it after first boot — the credential never
+		// transits GitHub.
+		//
 		// cert-manager DNS-01 token (Linode PAT scoped to DNS zone write). Seeding
 		// it here folds the common case of bootstrap-dns.yml into this bootstrap:
 		// when LINODE_DNS_TOKEN is provisioned up front, the KV path is ready
@@ -132,18 +124,18 @@ func ciBaoSeedAllCmd() *cobra.Command {
 		Use:   "bao-seed-all",
 		Short: "seed every generic OpenBao KV bootstrap path from one declarative table",
 		Long: "Data-driven driver that runs the bootstrap's generic `bao-seed` paths\n" +
-			"(github-dispatch-token, cert-automation token, linode api-token, loki\n" +
-			"object-store, certmanager dns01) from the bootstrapSeeds() table — replacing near-identical\n" +
-			"inline steps in llz-bootstrap-openbao.yml with one. (harbor admin, grafana\n" +
-			"admin + otel bearer are written in-cluster via ESO PushSecrets, not seeded\n" +
-			"here.) Each\n" +
-			"entry is the same flag set `bao-seed` parses, so behavior is unchanged:\n" +
-			"per-seed idempotency guards, on-missing modes, and summary notes. A missing\n" +
-			"env:/k8s: source follows that seed's on-missing mode (exit 0, deferring via\n" +
-			"BOOTSTRAP_ERRORS where the inline step did); a genuine kv-put failure aborts\n" +
-			"before the remaining seeds, exactly as a failed inline step did. Reads\n" +
-			"OPENBAO_ROOT_TOKEN, OPENBAO_SECRETS_WRITE_TOKEN, LINODE_API_TOKEN, LOKI_S3_*,\n" +
-			"and HA_ROLE; harbor/admin reads the in-cluster harbor-admin-password Secret.",
+			"(github-dispatch-token, cert-automation token, linode api-token,\n" +
+			"certmanager dns01) from the bootstrapSeeds() table — replacing\n" +
+			"near-identical inline steps in llz-bootstrap-openbao.yml with one. (harbor\n" +
+			"admin, grafana admin + otel bearer are written in-cluster via ESO\n" +
+			"PushSecrets; loki object-store + harbor registry-s3 are minted + seeded by\n" +
+			"`llz ci mint-bootstrap-objkeys`.) Each entry is the same flag set\n" +
+			"`bao-seed` parses, so behavior is unchanged: per-seed idempotency guards,\n" +
+			"on-missing modes, and summary notes. A missing env:/k8s: source follows\n" +
+			"that seed's on-missing mode (exit 0, deferring via BOOTSTRAP_ERRORS where\n" +
+			"the inline step did); a genuine kv-put failure aborts before the remaining\n" +
+			"seeds. Reads OPENBAO_ROOT_TOKEN, OPENBAO_SECRETS_WRITE_TOKEN,\n" +
+			"LINODE_API_TOKEN, LINODE_DNS_TOKEN, and HA_ROLE.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoSeedAll(region) },
 	}

@@ -66,7 +66,7 @@ hand-rolled or that doesn't fit apl-core's defaults before touching staging.
    cd ../object-storage
    terraform apply -var-file=<env>.tfvars
    ```
-   Copy `LOKI_S3_ACCESS_KEY` / `LOKI_S3_SECRET_KEY` outputs into the
+   (Historical: earlier releases copied `LOKI_S3_*` outputs into the
    `infra-<env>` GitHub environment secrets.
 
 3. **Apply cluster-bootstrap Terraform** — this is the apl-core install:

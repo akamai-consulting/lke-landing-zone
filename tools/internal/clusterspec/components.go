@@ -108,12 +108,17 @@ var Components = []Component{
 		}},
 	},
 	{
-		// In-cluster Linode credential rotator (OBJ keys + DNS token). Default-
-		// disabled: opt in per env via spec.components.linodeCredRotator. The
-		// per-env REGION + OBJ_CLUSTER ride the patch below (rendered by `llz
-		// render`). See docs/designs/linode-credential-rotator.md.
+		// In-cluster Linode credential rotator (OBJ keys + DNS token). Default-ON:
+		// with the TF-minted keys and their time_rotating clock removed from
+		// llz-object-storage (buckets-only module), this CronJob is the ONLY
+		// rotation mechanism for the Loki/Harbor object-storage keys — an env
+		// that disables it while observability/harbor are enabled runs on
+		// never-rotating credentials. The bootstrap mint
+		// (`llz ci mint-bootstrap-objkeys`) stamps rotated_at so the rotator
+		// adopts on its own cadence. The per-env REGION + OBJ_CLUSTER ride the
+		// patch below (rendered by `llz render`). See
+		// docs/designs/linode-credential-rotator.md.
 		Name:              "linodeCredRotator",
-		DefaultDisabled:   true,
 		ManifestResources: []string{"linode-cred-rotator"},
 		Patches: []Patch{{
 			Path:    "linode-cred-rotator-env-patch.yaml",

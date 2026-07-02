@@ -214,8 +214,12 @@ type AplValues struct {
 }
 
 type ObjectStorage struct {
-	Cluster         string `json:"cluster"`                   // obj_cluster
-	KeyRotationDays int    `json:"keyRotationDays,omitempty"` // obj_key_rotation_days
+	Cluster string `json:"cluster"` // obj_cluster
+	// KeyRotationDays is DEPRECATED and ignored: rotation is owned by the
+	// in-cluster linodeCredRotator CronJob (the obj_key_rotation_days TF
+	// variable was removed with the TF-managed keys). Accepted so existing
+	// specs keep strict-parsing.
+	KeyRotationDays int `json:"keyRotationDays,omitempty"`
 }
 
 // Env returns the named environment and whether it exists.

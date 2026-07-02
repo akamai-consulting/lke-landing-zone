@@ -146,7 +146,9 @@ func (s *stubLinode) ListObjectStorageKeys(context.Context) ([]map[string]any, e
 }
 func (s *stubLinode) CreateObjectStorageKeyBuckets(context.Context, string, string, []string, string) (map[string]any, error) {
 	s.objCreates++
-	return map[string]any{"id": 200 + s.objCreates, "access_key": "AK", "secret_key": "SK"}, nil
+	// id as json.Number — the only numeric type cli.AsUint64 accepts, mirroring
+	// how the real client decodes API responses.
+	return map[string]any{"id": jn(200 + s.objCreates), "access_key": "AK", "secret_key": "SK"}, nil
 }
 func (s *stubLinode) DeleteObjectStorageKey(_ context.Context, id uint64) error {
 	s.deleted = append(s.deleted, id)

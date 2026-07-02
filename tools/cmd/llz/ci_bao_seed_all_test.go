@@ -16,7 +16,6 @@ func TestBootstrapSeedsTable(t *testing.T) {
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
-		"secret/loki/object-store",
 		"secret/certmanager/dns01",
 	}
 	if len(seeds) != len(wantPaths) {
@@ -38,14 +37,14 @@ func TestBootstrapSeedsTable(t *testing.T) {
 			}
 		}
 	}
-	// Region interpolation reached the dispatch-token annotation and the loki notes.
+	// Region interpolation reached the dispatch-token annotation and the dns01 notes.
 	dispatch := seeds[0]
 	if !strings.Contains(strings.Join(dispatch.missingAnnotations, " "), "infra-primary") {
 		t.Errorf("dispatch-token annotations missing infra-primary: %v", dispatch.missingAnnotations)
 	}
-	loki := seeds[3]
-	if !strings.Contains(strings.Join(loki.missingNotes, " "), "platform-loki-primary") {
-		t.Errorf("loki notes missing platform-loki-primary: %v", loki.missingNotes)
+	dns := seeds[3]
+	if !strings.Contains(strings.Join(dns.missingNotes, " "), "infra-primary") {
+		t.Errorf("dns01 notes missing infra-primary: %v", dns.missingNotes)
 	}
 }
 
@@ -56,8 +55,6 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
 	t.Setenv("LINODE_API_TOKEN", "linode-tok")
-	t.Setenv("LOKI_S3_ACCESS_KEY", "ak")
-	t.Setenv("LOKI_S3_SECRET_KEY", "sk")
 	t.Setenv("LINODE_DNS_TOKEN", "dns-tok")
 	t.Setenv("HA_ROLE", "")
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent → skip-if-present never skips
@@ -72,7 +69,6 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
-		"secret/loki/object-store",
 		"secret/certmanager/dns01",
 	}
 	if strings.Join(gotPaths, " ") != strings.Join(want, " ") {
@@ -87,8 +83,6 @@ func TestRunCIBaoSeedAllSkipsDNSWhenUnset(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
 	t.Setenv("LINODE_API_TOKEN", "linode-tok")
-	t.Setenv("LOKI_S3_ACCESS_KEY", "ak")
-	t.Setenv("LOKI_S3_SECRET_KEY", "sk")
 	t.Setenv("LINODE_DNS_TOKEN", "")
 	t.Setenv("HA_ROLE", "")
 	puts := stubBaoSeedKV(t, "", "")

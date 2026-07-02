@@ -4,8 +4,6 @@ package main
 // llz-bootstrap-openbao.yml that don't fit the generic `llz ci bao-seed`
 // shape (they derive their material instead of just relaying it):
 //
-//   seed-harbor-registry-s3  resolve obj_cluster from the object-storage
-//                            tfvars and seed the registry's S3 backend creds
 //   resolve-harbor-url       default HARBOR_URL to harbor.<domainSuffix> from
 //                            the LandingZone spec
 //   audit-pvc-storageclass   report PVCs that escaped the Kyverno encrypted-
@@ -13,14 +11,15 @@ package main
 //
 // (seed-harbor-dockerconfig was retired: the harbor docker config.json is now
 // derived in-cluster by the llz-cert-automation chart's harborDockerConfig
-// ExternalSecret, which renders the dockerconfigjson from the robot creds in
-// secret/harbor/robot via an ESO template — no separate seed/path.)
+// ExternalSecret. seed-harbor-registry-s3 was retired too: the object-storage
+// keys are no longer TF-minted and GH-relayed — `llz ci mint-bootstrap-objkeys`
+// mints and seeds secret/loki/object-store + secret/harbor/registry-s3 in one
+// step, and the in-cluster rotator owns them after first boot.)
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -47,75 +46,6 @@ func tfvarsValue(content, key string) string {
 		return val
 	}
 	return ""
-}
-
-// ── seed-harbor-registry-s3 ───────────────────────────────────────────────────
-
-// harborRegistryS3Fields derives the five secret/harbor/registry-s3 fields.
-// The bucket name encodes the deployment region (matches the TF resource
-// label); endpoint/region come from the obj_cluster the object-storage tfvars
-// actually provisioned into — NOT guessed from the env name.
-func harborRegistryS3Fields(region, objCluster, accessKey, secretKey string) map[string]string {
-	return map[string]string{
-		"access_key_id":     accessKey,
-		"secret_access_key": secretKey,
-		"bucket_name":       "platform-harbor-registry-" + region,
-		"endpoint":          "https://" + objCluster + ".linodeobjects.com",
-		"region":            objCluster,
-	}
-}
-
-func ciSeedHarborRegistryS3Cmd() *cobra.Command {
-	var region string
-	c := &cobra.Command{
-		Use:   "seed-harbor-registry-s3",
-		Short: "seed secret/harbor/registry-s3 (S3 creds + endpoint derived from the object-storage tfvars)",
-		Long: "Native port of the 'Seed Harbor registry S3 credentials in OpenBao'\n" +
-			"bootstrap step. Reads HARBOR_REGISTRY_S3_ACCESS_KEY/SECRET_KEY (missing →\n" +
-			"::error:: + BOOTSTRAP_ERRORS=true + exit 0 so the remaining seeds run),\n" +
-			"resolves obj_cluster from terraform-iac-bootstrap/object-storage/\n" +
-			"<region>.tfvars — the source of truth for which Linode OBJ cluster TF\n" +
-			"provisioned the bucket into — and writes the access keys + bucket/endpoint/\n" +
-			"region in one `kv put`. Reads OPENBAO_ROOT_TOKEN.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCISeedHarborRegistryS3(region) },
-	}
-	c.Flags().StringVar(&region, "region", "", "deployment whose object-storage tfvars + bucket label to use (required)")
-	return c
-}
-
-func runCISeedHarborRegistryS3(region string) error {
-	if region == "" {
-		return fmt.Errorf("--region is required")
-	}
-	accessKey := os.Getenv("HARBOR_REGISTRY_S3_ACCESS_KEY")
-	secretKey := os.Getenv("HARBOR_REGISTRY_S3_SECRET_KEY")
-	if accessKey == "" || secretKey == "" {
-		if err := appendGHAFile("GITHUB_STEP_SUMMARY",
-			"HARBOR_REGISTRY_S3_ACCESS_KEY / HARBOR_REGISTRY_S3_SECRET_KEY not set — skipping secret/harbor/registry-s3.",
-			fmt.Sprintf("Add them as infra-%s environment secrets and re-run. Source these from", region),
-			`"terraform output -raw harbor_registry_access_key" in the cluster-bootstrap/object-storage workspace.`); err != nil {
-			return err
-		}
-		return flagBootstrapError("HARBOR_REGISTRY_S3_ACCESS_KEY / HARBOR_REGISTRY_S3_SECRET_KEY not set — Harbor registry will CrashLoopBackOff on missing S3 creds")
-	}
-	maskGHA(accessKey)
-	maskGHA(secretKey)
-
-	tfv := filepath.Join("terraform-iac-bootstrap", "object-storage", region+".tfvars")
-	content, _ := os.ReadFile(tfv)
-	objCluster := tfvarsValue(string(content), "obj_cluster")
-	if objCluster == "" {
-		fmt.Fprintf(os.Stderr, "::error::obj_cluster not found in %s — cannot resolve the Harbor registry S3 endpoint.\n", tfv)
-		return fmt.Errorf("obj_cluster not found in %s", tfv)
-	}
-
-	fields := harborRegistryS3Fields(region, objCluster, accessKey, secretKey)
-	if err := baoKVPutFn("secret/harbor/registry-s3", fields); err != nil {
-		return err
-	}
-	fmt.Printf("secret/harbor/registry-s3 seeded (bucket=%s, region=%s).\n", fields["bucket_name"], objCluster)
-	return nil
 }
 
 // ── resolve-harbor-url ────────────────────────────────────────────────────────
