@@ -116,17 +116,20 @@ jobs:
         # signing key is stored. The Kyverno verifyImages policy in
         # instance-template verifies this same identity at admission.
         #
-        # --new-bundle-format=false: cosign v3 (installed here) DEFAULTS to the new
-        # Sigstore-bundle format, stored via the OCI 1.1 referrers API — which
-        # produces NO `sha256-<digest>.sig` tag. Kyverno's keyless verifyImages reads
-        # the legacy `.sig` tag, and GHCR's referrers API is flaky (303), so a
+        # --use-signing-config=false --new-bundle-format=false: force legacy
+        # `sha256-<digest>.sig` tag storage. cosign v3.x (installed above) defaults
+        # to the new Sigstore-bundle format stored via the OCI 1.1 referrers API,
+        # which produces NO `.sig` tag — GHCR serves referrers flakily (303) and
+        # Kyverno's keyless verifyImages reads the legacy `.sig` tag, so a
         # bundle-format signature is undiscoverable → admission fails "no signatures
-        # found" and the in-cluster llz CronJobs are blocked. Pin legacy `.sig`-tag
-        # storage so the signature is where both Kyverno and GHCR expect it.
+        # found" and the in-cluster llz CronJobs are blocked. --use-signing-config
+        # must be false too: v3 defaults it true and then REJECTS --new-bundle-format
+        # =false. Verified: this pair yields the same simplesigning `.sig` manifest
+        # cosign v2 produced. See the verify-llz-image-signature policy.
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/ci-terraform
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes --new-bundle-format=false "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-kubernetes:
     name: Build ci-kubernetes
@@ -198,7 +201,7 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/ci-kubernetes
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes --new-bundle-format=false "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-devcontainer:
     name: Build devcontainer
@@ -274,7 +277,7 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/devcontainer
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes --new-bundle-format=false "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
 
   build-llz:
     name: Build llz (slim in-cluster image)
@@ -351,4 +354,4 @@ jobs:
         env:
           IMAGE: ${{ steps.ns.outputs.repo }}/llz
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes --new-bundle-format=false "${IMAGE}@${DIGEST}"
+        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
