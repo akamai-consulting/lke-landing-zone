@@ -202,9 +202,11 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	}
 
 	// ── Optional secrets ─────────────────────────────────────────────────────
+	// (CLOUD_FIREWALL_TOKEN was retired: the firewall-controller token is now
+	// ESO-synced from OpenBao's secret/linode/api-token via the cidrFirewall
+	// component, so there is no GH-secret consumer left.)
 	for _, s := range []struct{ name, desc string }{
 		{"LINODE_DNS_TOKEN", "Linode token, Domains: Read/Write (cert-manager DNS-01)"},
-		{"CLOUD_FIREWALL_TOKEN", "Linode token scoped to Cloud Firewalls"},
 	} {
 		if have(s.name, true) {
 			continue

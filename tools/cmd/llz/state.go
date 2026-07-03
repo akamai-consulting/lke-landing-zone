@@ -34,7 +34,6 @@ func e2eRequirements(admin bool) []requirement {
 		{"TF_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-terraform:<tag> (computed)"},
 		{"KUBE_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-kubernetes:<tag> (computed)"},
 		{"LINODE_DNS_TOKEN", true, true, false, false, "Linode Domains:RW (cert DNS-01)"},
-		{"CLOUD_FIREWALL_TOKEN", true, true, false, false, "Linode Cloud Firewalls token"},
 		{"HARBOR_URL", false, false, false, false, "Harbor base URL"},
 	}
 	if admin {

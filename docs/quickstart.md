@@ -441,7 +441,7 @@ For what's missing it:
 | **State key** | **creates** a bucket-scoped `read_write` OBJ key → `TF_STATE_ACCESS_KEY`, `TF_STATE_SECRET_KEY` |
 | **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (classic PAT, **`repo` + `workflow`** scopes — the build writes the remaining infra secrets with it), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted) |
 | **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE` (`ghcr.io/<org>/ci-{terraform,kubernetes}:<tag>`) |
-| **Optional** | offers `LINODE_DNS_TOKEN`, `CLOUD_FIREWALL_TOKEN` (Enter to skip — the cluster still bootstraps) |
+| **Optional** | offers `LINODE_DNS_TOKEN` (Enter to skip — the cluster still bootstraps) |
 
 It writes everything to `my-instance/.llz/` (mode `0600`, **gitignored**), then
 pushes: secrets into the `infra-lab` GitHub Environment, variables at repo level.

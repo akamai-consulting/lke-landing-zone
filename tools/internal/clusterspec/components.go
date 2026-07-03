@@ -190,6 +190,20 @@ var Components = []Component{
 		AplCoreApps:     []string{"gitea"},
 		DefaultDisabled: true,
 	},
+	{
+		// Support glue for the Akamai-internal llz-linode-cidr-firewall
+		// controller (docs/consume-lke-landing-zone-internal.md): the ESO-synced
+		// kube-system/linode token Secret + the self-discovery CronJob that
+		// reconciles the controller's ConfigMap (firewall ID / LKE cluster ID /
+		// VPC CIDR) from the pod's own node — replacing the per-apply
+		// `llz ci bootstrap-cloud-firewall` workflow seed. Default-disabled:
+		// the controller chart itself is private; consumers who add it enable
+		// this alongside. Needs ESO for the token Secret.
+		Name:              "cidrFirewall",
+		DependsOn:         []string{"externalSecrets"},
+		ManifestResources: []string{"llz-cidr-firewall"},
+		DefaultDisabled:   true,
+	},
 }
 
 // componentByName indexes Components for lookup.

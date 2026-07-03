@@ -434,6 +434,18 @@ func checkStorageClasses(r *health.Report) {
 
 func checkFirewallBootstrap(r *health.Report) {
 	hdr("cloud-firewall bootstrap (kube-system)")
+	// The firewall controller is optional (the private llz-linode-cidr-firewall
+	// chart + the cidrFirewall component that feeds it). When neither the
+	// controller Deployment nor its ConfigMap exists the component is simply not
+	// enabled on this instance — skip instead of failing every public adopter.
+	// (Before the cidrFirewall component, `llz ci bootstrap-cloud-firewall`
+	// seeded the ConfigMap unconditionally on every apply, so its absence WAS a
+	// bootstrap failure; now the ConfigMap only exists where the component runs.)
+	if !kExists("-n", "kube-system", "get", "deployment", firewallDeploymentName) &&
+		!kExists("-n", "kube-system", "get", "configmap", firewallConfigMapName) {
+		record(r, health.CatOK, "firewall-controller not installed (cidrFirewall component disabled) — skipped")
+		return
+	}
 	exists := kExists("-n", "kube-system", "get", "secret", "linode")
 	token := ""
 	if exists {

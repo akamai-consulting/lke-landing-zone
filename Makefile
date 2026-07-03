@@ -26,6 +26,7 @@ COVERAGE_MINS := \
 	internal/cli=95 \
 	internal/clusterspec=95 \
 	internal/health=95 \
+	internal/kube=78 \
 	internal/linode=80 \
 	internal/openbao=88 \
 	internal/preflight=95 \

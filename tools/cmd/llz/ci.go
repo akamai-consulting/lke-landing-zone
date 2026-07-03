@@ -64,7 +64,9 @@ func ciCmd() *cobra.Command {
 	// Bootstrap seeding (bootstrap-cloud-firewall.sh / provision-harbor-robots.sh).
 	// (gen-bootstrap-tls was retired: the OTel collector serving cert is now issued
 	// by the otel-bootstrap-ca cert-manager chain in the observability component.)
-	c.AddCommand(ciBootstrapCloudFirewallCmd())
+	// bootstrap-cloud-firewall is the manual/recovery fallback; the cidrFirewall
+	// component's CronJob (discover-firewall-config) is the steady-state owner.
+	c.AddCommand(ciBootstrapCloudFirewallCmd(), ciDiscoverFirewallConfigCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
