@@ -19,13 +19,13 @@ apl-values/
     values.yaml               # apl-core values base (identity/secrets tokenized)
   components/                 # one kustomize Component per toggleable component
     externalSecrets/  certManager/  openbao/  harbor/  observability/
-    argoWorkflows/  argoEvents/  volumeLabeler/
+    argoWorkflows/  argoEvents/  volumeTagReconciler/  linodeCredRotator/
   <env>/                      # GENERATED per env by `llz render` — a THIN overlay
     manifest/
       kustomization.yaml      #   resources: ../../_shared/manifest
                               #   components: ../../components/<enabled>...
       env-revision-configmap.yaml          # per-env git revision marker
-      linode-volume-labeler-region-patch.yaml  # the ONE genuine per-env delta
+      <component>-env-patch.yaml           # per-env patch(es) for enabled components
     values.yaml               #   _shared/values.yaml + apps.<key>.enabled toggles
 ```
 
@@ -47,8 +47,10 @@ llz env add <env>            # scaffolds environments/<env>.yaml, then renders
    resources themselves live ONCE under `_shared/` + `components/`, never copied.
 2. `manifest/env-revision-configmap.yaml` — the git revision this env's in-repo
    Argo CD content tracks (read by `cluster-bootstrap` as a plan-time precondition).
-3. `manifest/linode-volume-labeler-region-patch.yaml` — the volume-labeler
-   `REGION_SHORT`, the one genuinely per-env manifest value (only when enabled).
+3. `manifest/<component>-env-patch.yaml` — a strategic-merge patch carrying the
+   genuinely per-env value(s) an enabled component needs (e.g. the Linode
+   credential rotator's `REGION` + `OBJ_CLUSTER`); emitted only when that
+   component is enabled.
 4. `values.yaml` — the `_shared/values.yaml` base with `apps.<key>.enabled` set
    from the component toggles and the spec-owned identity/platform keys patched in.
 

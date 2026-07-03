@@ -1,6 +1,10 @@
 package health
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
+)
 
 // foundations.go ports check-cluster-health.sh sections 0a–0e: node Ready/pressure,
 // unexpected taints, stuck-Terminating namespaces, APIService availability, the
@@ -155,12 +159,165 @@ func RequiredStorageClasses() []string { return []string{"block-storage-retain"}
 const defaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-class"
 
 // StorageClass is the subset of `kubectl get storageclass -o json` we read.
+// provisioner + parameters are TOP-LEVEL on a StorageClass (not under spec).
 type StorageClass struct {
 	Metadata struct {
 		Name        string            `json:"name"`
 		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
+	Provisioner string            `json:"provisioner"`
+	Parameters  map[string]string `json:"parameters"`
 }
+
+// Linode block-storage CSI parameter keys the driver actually HONORS. The driver
+// silently ignores unknown keys — no error, no warning — so a misspelling leaves
+// Volumes unencrypted and/or untagged while the StorageClass still looks correct.
+// That exact regression shipped once (keys were `encryption`/`volume-tags`). This
+// audit pins the live class to the honored spelling and flags the known-ignored
+// misspellings by name so a future typo can't silently regress the fleet.
+const (
+	blockStorageProvisioner = "linodebs.csi.linode.com"
+	csiEncryptedKey         = "linodebs.csi.linode.com/encrypted"
+	csiVolumeTagsKey        = "linodebs.csi.linode.com/volumeTags"
+	csiEncryptedKeyIgnored  = "linodebs.csi.linode.com/encryption"  // silently ignored
+	csiVolumeTagsKeyIgnored = "linodebs.csi.linode.com/volume-tags" // silently ignored
+	blockStorageSweepTag    = "block-storage"                       // destroy-time sweep filters on this
+	reapOwnershipTagPrefix  = "lke"                                 // `lke<id>` — reap's liveness gate keys on this
+
+	// canonicalBlockStorageClass is the platform's encrypting + tagging default class
+	// (manifests/block-storage-class.yaml, applied by ci bootstrap-cluster with the
+	// lke<id> volumeTag rendered in) — the one every PVC should land on.
+	canonicalBlockStorageClass = "block-storage-retain"
+)
+
+// lkeStockStorageClasses are the LKE-shipped classes: present but not for platform
+// use (demoted from default, and PVCs redirected off them by the
+// kyverno-pvc-redirect-untagged-storage-class policy). They carry no platform
+// volumeTags by design, so the audit acknowledges them rather than flagging them.
+var lkeStockStorageClasses = map[string]bool{
+	"linode-block-storage":        true,
+	"linode-block-storage-retain": true,
+}
+
+// StorageClassParamFinding is one assertion about block-storage-retain's params.
+type StorageClassParamFinding struct {
+	Cat Category
+	Msg string
+}
+
+// ClassifyBlockStorageParams audits block-storage-retain's provisioner + params for
+// the honored CSI keys: encryption on, volumeTags carrying the sweep tag and an
+// `lke<id>` ownership tag, and NONE of the silently-ignored misspellings. Returns
+// one finding per assertion (CatOK included so the caller can print passes).
+func ClassifyBlockStorageParams(sc StorageClass) []StorageClassParamFinding {
+	var f []StorageClassParamFinding
+	add := func(c Category, m string) { f = append(f, StorageClassParamFinding{c, m}) }
+
+	if sc.Provisioner != blockStorageProvisioner {
+		add(CatFail, "provisioner "+q(sc.Provisioner)+" — expected "+q(blockStorageProvisioner))
+	} else {
+		add(CatOK, "provisioner "+blockStorageProvisioner)
+	}
+
+	// Encryption. Flag the ignored misspelling first — its presence means someone
+	// intended encryption but the driver dropped it.
+	if _, ok := sc.Parameters[csiEncryptedKeyIgnored]; ok {
+		add(CatFail, "parameter "+csiEncryptedKeyIgnored+" is SILENTLY IGNORED (use "+csiEncryptedKey+") — Volumes provisioned UNENCRYPTED")
+	}
+	switch sc.Parameters[csiEncryptedKey] {
+	case "true":
+		add(CatOK, csiEncryptedKey+"=true")
+	case "":
+		add(CatFail, csiEncryptedKey+" unset — Volumes provisioned unencrypted")
+	default:
+		add(CatFail, csiEncryptedKey+"="+q(sc.Parameters[csiEncryptedKey])+` — driver only honors "true"`)
+	}
+
+	// volumeTags. Same ignored-misspelling guard, then the tag-content assertions.
+	if _, ok := sc.Parameters[csiVolumeTagsKeyIgnored]; ok {
+		add(CatFail, "parameter "+csiVolumeTagsKeyIgnored+" is SILENTLY IGNORED (use "+csiVolumeTagsKey+") — Volumes provisioned UNTAGGED")
+	}
+	tags := splitTags(sc.Parameters[csiVolumeTagsKey])
+	if len(tags) == 0 {
+		add(CatFail, csiVolumeTagsKey+" unset — Volumes untagged; reap can neither attribute nor sweep them")
+		return f
+	}
+	if containsTag(tags, blockStorageSweepTag) {
+		add(CatOK, csiVolumeTagsKey+" carries "+blockStorageSweepTag)
+	} else {
+		add(CatFail, csiVolumeTagsKey+" missing "+q(blockStorageSweepTag)+" — the destroy-time Volume sweep filters on it")
+	}
+	// Reuse reap's OWN attribution parser (linode.LKEIDFromTags, `^lke-?[0-9]+$`)
+	// rather than a loose "lke" prefix match, so the audit green-lights a tag iff
+	// reap can actually attribute it — a malformed `lke-foo`/`lkexyz` must FAIL here
+	// exactly as it would be unattributable there.
+	if linode.LKEIDFromTags(tags) != "" {
+		add(CatOK, csiVolumeTagsKey+" carries an "+reapOwnershipTagPrefix+"<id> ownership tag")
+	} else {
+		add(CatFail, csiVolumeTagsKey+" has no "+reapOwnershipTagPrefix+"<id> ownership tag — reap can't attribute these Volumes; the cluster_id likely rendered empty (params are immutable — recreate the class)")
+	}
+	return f
+}
+
+// AuditLinodeStorageClasses inspects EVERY StorageClass using the Linode block-storage
+// CSI provisioner, so a PVC can't be born on a linodebs class that lacks the `lke<id>`
+// ownership tag without the check noticing:
+//   - the canonical block-storage-retain class gets the full param audit
+//     (ClassifyBlockStorageParams: encryption + sweep tag + lke<id> tag, misspelling traps);
+//   - the LKE stock classes are acknowledged (untagged by design; Kyverno redirects
+//     PVCs off them, so they never back a Volume);
+//   - any OTHER linodebs class is a coverage risk — Volumes provisioned on it carry no
+//     `lke<id>` tag, so reap can't attribute them (bleed #4). Warned, not failed: a
+//     custom class may be intentional, but it must be seen.
+//
+// Findings are prefixed with the class name. Non-linodebs classes are ignored.
+func AuditLinodeStorageClasses(classes []StorageClass) []StorageClassParamFinding {
+	var out []StorageClassParamFinding
+	for _, sc := range classes {
+		if sc.Provisioner != blockStorageProvisioner {
+			continue
+		}
+		name := sc.Metadata.Name
+		switch {
+		case name == canonicalBlockStorageClass:
+			for _, f := range ClassifyBlockStorageParams(sc) {
+				out = append(out, StorageClassParamFinding{f.Cat, name + ": " + f.Msg})
+			}
+		case lkeStockStorageClasses[name]:
+			out = append(out, StorageClassParamFinding{CatOK,
+				name + ": LKE stock class present (untagged by design; PVCs redirected off it by kyverno-pvc-redirect-untagged-storage-class)"})
+		case linode.LKEIDFromTags(splitTags(sc.Parameters[csiVolumeTagsKey])) != "":
+			out = append(out, StorageClassParamFinding{CatOK,
+				name + ": non-default linodebs class carries an " + reapOwnershipTagPrefix + "<id> ownership tag"})
+		default:
+			out = append(out, StorageClassParamFinding{CatWarn,
+				name + ": non-default linodebs class has no " + reapOwnershipTagPrefix + "<id> volumeTags — PVCs on it get Volumes reap can't attribute; add the tag or ensure nothing uses it"})
+		}
+	}
+	return out
+}
+
+// splitTags parses a Linode volumeTags CSV, trimming spaces and dropping empties.
+func splitTags(csv string) []string {
+	var out []string
+	for _, t := range strings.Split(csv, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func containsTag(tags []string, want string) bool {
+	for _, t := range tags {
+		if t == want {
+			return true
+		}
+	}
+	return false
+}
+
+func q(s string) string { return `"` + s + `"` }
 
 // DefaultStorageClasses returns the names of the classes annotated as the
 // cluster default. Exactly one is healthy; zero (PVCs without a class stay

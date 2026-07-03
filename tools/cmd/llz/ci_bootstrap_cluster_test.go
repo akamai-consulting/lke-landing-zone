@@ -372,6 +372,7 @@ func bootstrapTestOpts(t *testing.T, revision string) bootstrapClusterOpts {
 	}
 	return bootstrapClusterOpts{
 		env:                "primary",
+		clusterID:          "393244",
 		aplChartVersion:    "6.1.2",
 		appsRepoRevision:   revision,
 		instanceRepo:       "acme/inst",
@@ -945,7 +946,7 @@ func TestBootstrapCluster_GHCRSecretsGatedOnToken(t *testing.T) {
 			},
 			helm:        func(_ ...string) (string, bool) { return "", true },
 			git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
-		now:         time.Now,
+			now:         time.Now,
 			sleep:       func(time.Duration) {},
 			genPassword: func() string { return "pw" },
 		}
@@ -964,5 +965,54 @@ func TestBootstrapCluster_GHCRSecretsGatedOnToken(t *testing.T) {
 	withToken.ghcrUsername = "bot"
 	if got := countApplies(withToken); got != 2 {
 		t.Errorf("with GHCR token: want 2 ghcr applies (repo + pull secret), got %d", got)
+	}
+}
+
+// ── renderBlockStorageClass (rebase adaptation: TF templatefile → Go render) ──
+
+// The lke<id> ownership tag must be rendered into the class's volumeTags from the
+// explicit cluster id (--cluster-id / $LKE_CLUSTER_ID, threaded from the cluster
+// workspace's cluster_id output); the CSI CreateVolume call then carries it, which
+// is the whole basis for reap's cluster-liveness attribution.
+func TestRenderBlockStorageClass_InjectsLKETag(t *testing.T) {
+	got, err := renderBlockStorageClass("393244")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `linodebs.csi.linode.com/volumeTags: "block-storage,platform-support-services,lke393244"`
+	if !strings.Contains(got, want) {
+		t.Errorf("rendered class missing %q\n---\n%s", want, got)
+	}
+	if strings.Contains(got, "${") {
+		t.Errorf("rendered class still has an unrendered ${...} placeholder:\n%s", got)
+	}
+}
+
+// An already-prefixed id is normalized (not doubled): lke393244 -> lke393244, not
+// lkelke393244.
+func TestRenderBlockStorageClass_StripsOptionalLKEPrefix(t *testing.T) {
+	got, err := renderBlockStorageClass("lke393244")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `,lke393244"`) || strings.Contains(got, "lkelke") {
+		t.Errorf("prefixed id not normalized:\n%s", got)
+	}
+}
+
+// HARD-FAIL on an empty id: a StorageClass without the lke<id> tag provisions
+// un-reapable Volumes, and its params are immutable — so the bootstrap must refuse
+// rather than ship a silently-untagged class.
+func TestRenderBlockStorageClass_EmptyIDHardFails(t *testing.T) {
+	if _, err := renderBlockStorageClass("   "); err == nil {
+		t.Fatal("expected an error for an empty cluster id, got nil")
+	}
+}
+
+// A non-numeric id would render a malformed lke<id> tag that reap's parser
+// (`^lke-?[0-9]+$`) can't attribute — reject it up front.
+func TestRenderBlockStorageClass_MalformedIDHardFails(t *testing.T) {
+	if _, err := renderBlockStorageClass("us-ord-1"); err == nil {
+		t.Fatal("expected an error for a non-numeric cluster id, got nil")
 	}
 }

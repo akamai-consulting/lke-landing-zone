@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ── pure orphan-identity heuristics ──────────────────────────────────────────
@@ -103,10 +104,84 @@ func VPCIsOrphan(label string, live map[string]bool) bool {
 	return cid != "" && !live[cid]
 }
 
+// VolDecision is the result of classifying a Volume's cluster-ownership.
+type VolDecision int
+
+const (
+	VolKeep     VolDecision = iota // carries an `lke<id>` tag for a LIVE cluster — never an orphan
+	VolOrphan                      // carries an `lke<id>` tag for a GONE cluster — a definitive orphan
+	VolUntagged                    // no `lke<id>` cluster tag — no ownership signal; caller falls back to the scope filter
+)
+
+// ClassifyVolume decides a Volume's orphan status from its cluster-ownership tag —
+// the `lke<id>` tag the block-storage-retain StorageClass stamps on every PVC's
+// Volume at provision time (CSI volumeTags; same convention the CCM uses for
+// NodeBalancers, so LKEIDFromTags parses both). This is the cluster-liveness gate
+// that makes a broad (region-wide) Volume sweep safe: a *detached* `pvc-*` Volume
+// whose owning cluster is still live is NOT an orphan — it is a Retain-policy Volume
+// of a running cluster (a pod rescheduling, a node replaced, a chart mid-upgrade)
+// and must be kept. Without a cluster tag we cannot attribute the Volume, so the
+// caller keeps it by default (see the fail-safe VolUntagged handling in cmd/llz) —
+// a Volume born on a class without the tag, or by other tooling, is never assumed
+// to be an orphan.
+//
+// TRADE-OFF (VolKeep is deliberately broad): this gate cannot tell a Volume that
+// is detached because of live-cluster churn (pod reschedule, node replace) from
+// one that is detached because its PVC was permanently deleted while the cluster
+// lives on under `reclaimPolicy: Retain`. Both are VolKeep, so a genuinely
+// abandoned Retain Volume of a LIVE cluster is never auto-reaped by the
+// account-level sweep and will accumulate cost until reclaimed out-of-band (the
+// `--volume-ids` allowlist, or the Linode UI). That is the intended bias — never
+// risk deleting an in-use Volume. Closing it safely needs an in-cluster reconciler
+// that enumerates live PVs (a Volume tagged to the cluster yet absent from its PV
+// set is a provably abandoned Retain Volume); account-level reap cannot make the call.
+func ClassifyVolume(tags []string, live map[string]bool) VolDecision {
+	cid := LKEIDFromTags(tags)
+	if cid == "" {
+		return VolUntagged
+	}
+	if live[cid] {
+		return VolKeep
+	}
+	return VolOrphan
+}
+
+// UntaggedVolumeReapGrace is how long an UNTAGGED detached `pvc-*` Volume is spared
+// from reaping even under --reap-untagged. CSI stamps the `lke<id>` tag in the
+// CreateVolume call, so a Volume should never be observed untagged; this grace only
+// covers a brief window where the Linode API might list a just-created Volume before
+// its tags settle — reaping there would be the exact data loss the liveness gate
+// exists to prevent. The default (keep all untagged) already covers this; the grace
+// is a second belt for the --reap-untagged path.
+const UntaggedVolumeReapGrace = 30 * time.Minute
+
+// VolumeYoungerThan reports whether a Volume's `created` timestamp is within d of
+// now — the age guard applied ONLY to VolUntagged Volumes (VolKeep is already kept,
+// VolOrphan is a definitive gone-cluster orphan regardless of age). Linode returns
+// `created` as RFC3339, historically without a zone (implicitly UTC); both parse.
+// A missing/unparseable timestamp yields false — i.e. fall back to the existing
+// scope-filter behaviour (reap-eligible) rather than protecting a Volume forever
+// on a signal we can't read.
+func VolumeYoungerThan(created string, now time.Time, d time.Duration) bool {
+	if created == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, created)
+	if err != nil {
+		// Zone-less form parses as UTC, which is what the Linode API means.
+		if t, err = time.Parse("2006-01-02T15:04:05", created); err != nil {
+			return false
+		}
+	}
+	return now.Sub(t) < d
+}
+
 // VolumeIsCandidate mirrors cleanup-orphan-volumes.sh's safe filter: an
 // unattached `pvc-*` Volume, optionally constrained by region, an id allowlist,
 // and a required tag. An empty regionFilter / idAllow / tagMustInclude means
-// "no constraint".
+// "no constraint". It is the SCOPE filter only — the cluster-liveness gate that
+// distinguishes a live cluster's detached Volume from a true orphan is
+// ClassifyVolume, which the caller applies on top of this.
 func VolumeIsCandidate(linodeIDNull bool, label, region string, tags []string,
 	regionFilter string, idAllow map[string]bool, id, tagMustInclude string) bool {
 	if !linodeIDNull || !strings.HasPrefix(label, "pvc-") {

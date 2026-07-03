@@ -460,6 +460,15 @@ func checkStorageClasses(r *health.Report) {
 		// reconcile_sc_demote.go + the leader-election re-fire in reconcile.go.
 		record(r, health.CatPending, fmt.Sprintf("%d default StorageClasses (%s) — non-deterministic; awaiting sc-demote reconciler", len(def), strings.Join(def, ",")))
 	}
+
+	// Audit EVERY linodebs StorageClass's CSI parameters. The driver silently
+	// ignores misspelled keys, so a class that LOOKS encrypted+tagged can be
+	// neither; and a PVC born on any linodebs class lacking the lke<id> tag yields
+	// a Volume reap can't attribute. Full audit on block-storage-retain, plus a
+	// coverage check on every other linodebs class.
+	for _, f := range health.AuditLinodeStorageClasses(classes) {
+		record(r, f.Cat, "  "+f.Msg)
+	}
 }
 
 func checkFirewallBootstrap(r *health.Report) {

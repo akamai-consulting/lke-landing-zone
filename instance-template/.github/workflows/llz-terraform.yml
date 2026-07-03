@@ -426,6 +426,12 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 30
+    # cluster_id (the cluster workspace's numeric LKE id output) is threaded to
+    # bootstrap-cluster's --cluster-id so it renders the block-storage-retain
+    # StorageClass's lke<id> ownership tag deterministically (the former
+    # cluster-bootstrap TF read the same output from remote state). Empty on plan.
+    outputs:
+      cluster_id: ${{ steps.cluster_id.outputs.cluster_id }}
     env:
       REGION:                          ${{ inputs.region }}
       ACTION:                          ${{ inputs.action }}
@@ -452,17 +458,19 @@ jobs:
       # cluster-create hang / PVCs-Pending-on-[400] / provider-ReadResource
       # hang. Orphaned volumes, CCM NodeBalancers and LKE VPCs left by a
       # failed/partial destroy accrete across rebuild cycles and eat the
-      # account's active-services limit. NodeBalancers + VPCs are scanned
-      # account-wide (they carry a cluster-id tag/label, so a gone-cluster
-      # orphan is unambiguous in any region). pvc-* Volumes are scoped to THIS
-      # deployment's region via --volume-region: a detached Volume carries no
-      # cluster id, so an account-wide count flags other regions'/teams'
-      # detached Volumes that `llz reap` (region-scoped, refuses unscoped Volume
-      # sweeps) will never clean — the gate would then disagree with reap and
-      # block the apply on Volumes no one can attribute. Block-storage quota is
-      # per-region anyway, so only same-region Volumes compete with this apply.
-      # Tune via repo vars: PREFLIGHT_ORPHAN_THRESHOLD (default 5), or
-      # PREFLIGHT_FAIL_ON_ORPHANS=false for report-only.
+      # account's active-services limit. The gate FAILS only on DEFINITIVE
+      # orphans — resources whose owning cluster is GONE (a gone-cluster
+      # `lke<id>` tag/label): gone-cluster-tagged pvc-* Volumes, CCM
+      # NodeBalancers, and LKE VPCs. NodeBalancers + VPCs are scanned
+      # account-wide (their cluster-id tag/label makes a gone-cluster orphan
+      # unambiguous in any region). pvc-* Volumes are scoped to THIS deployment's
+      # region via --volume-region: an UNtagged detached Volume can't be
+      # attributed, so an account-wide count would flag other regions'/teams'
+      # Volumes that `llz reap` (region-scoped) will never clean.
+      # UNtagged detached Volumes are reported but NEVER fail the gate — with no
+      # `lke<id>` tag they can't be proven a gone-cluster leak and may be an
+      # intentionally-detached PVC. Tune via repo vars:
+      # PREFLIGHT_ORPHAN_THRESHOLD (default 5), or PREFLIGHT_FAIL_ON_ORPHANS=false.
       - name: Pre-flight — Linode account capacity / orphan check
         env:
           FAIL_ON_ORPHANS:  ${{ vars.PREFLIGHT_FAIL_ON_ORPHANS || 'true' }}
@@ -501,6 +509,15 @@ jobs:
           echo "Cluster API endpoints:"
           terraform output -json api_endpoints
 
+      # Export the numeric LKE cluster id for bootstrap-cluster's --cluster-id
+      # (renders block-storage-retain's lke<id> volumeTag). Read from the just-
+      # applied cluster workspace's state — authoritative and always present here.
+      - name: Export cluster_id for bootstrap
+        id: cluster_id
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/cluster
+        run: echo "cluster_id=$(terraform output -raw cluster_id)" >> "$GITHUB_OUTPUT"
+
   # ── Bootstrap the cluster (apl-core + Argo bridge) — native, no Terraform ────
   # Runs after apply-cluster. `llz ci bootstrap-cluster` (the native port of the
   # former cluster-bootstrap Terraform workspace) installs apl-core, the
@@ -536,6 +553,10 @@ jobs:
     timeout-minutes: 50
     env:
       REGION:                ${{ inputs.region }}
+      # Numeric LKE cluster id from apply-cluster's TF output — rendered into the
+      # block-storage-retain StorageClass's lke<id> ownership tag (bootstrap-cluster
+      # hard-fails if empty, so an un-reapable untagged class can never ship).
+      LKE_CLUSTER_ID:        ${{ needs.apply-cluster.outputs.cluster_id }}
       # Rendered into apl-core's otomi.git.password (apl-core self-registers the
       # Argo CD repo-creds ExternalSecret from it); empty => apl-operator can't
       # push its values tree and Argo's repo-server can't clone over HTTPS.
@@ -686,6 +707,7 @@ jobs:
         run: |
           llz ci bootstrap-cluster \
             --env "${REGION}" \
+            --cluster-id "${LKE_CLUSTER_ID}" \
             --apps-repo-revision "${APPS_REPO_REVISION}" \
             --instance-repo "${{ inputs.instance_repo }}" \
             --template-ref "${{ inputs.template-ref }}"
@@ -1053,6 +1075,29 @@ jobs:
           # the next apply's preflight on the account quota.
           llz --yes ci reap-volumes --volume-ids "$CLUSTER_PVC_VOLUME_IDS" --wait-detach 600 \
             --require-empty --attempts 4 --retry-delay 30
+
+      # ── Cluster-tag Volume backstop (catches detached-at-snapshot Volumes) ──
+      # The --volume-ids sweep above only covers pvc-* Volumes that were ATTACHED
+      # to this cluster's nodes at capture time. A Retain Volume whose PVC was
+      # deleted earlier in the cluster's life — or any bound-but-pod-less PVC — is
+      # already DETACHED at capture, so teardown-capture never snapshots its id and
+      # it slips the sweep, dangling as an orphan forever under reap's fail-safe
+      # keep-untagged default. This second pass closes that gap using the tag CSI
+      # now stamps on every Volume at provision (block-storage-retain volumeTags):
+      # scoped by --region + --tag-must-include lke<id>, it reaps ONLY this
+      # cluster's Volumes, and reapVolumes' cluster-liveness gate makes it
+      # peer-safe (a live co-located peer carries a different lke<id>, and a
+      # still-live cluster's tag is VolKeep — never deleted even if the delete
+      # above failed). Best-effort straggler net; the next apply's preflight is the
+      # final backstop. Skipped when the cluster id is unknown (already gone): the
+      # guard rides the step `if:` — with an empty id, `--tag-must-include` would
+      # render a bare "lke" and match EVERY cluster's Volumes. LKE_CLUSTER_ID is
+      # exported to the env by the teardown-capture step above, so it is readable in
+      # the `if:` context; keeping the guard there leaves the reap a single-line glue
+      # invocation (no decision logic in shell).
+      - name: Backstop-sweep this cluster's tagged Volumes
+        if: always() && steps.confirm.outcome == 'success' && env.LKE_CLUSTER_ID != ''
+        run: llz --yes ci reap-volumes --region "$REGION" --tag-must-include "lke${LKE_CLUSTER_ID}"
 
       # ── Authoritative orphan-NodeBalancer sweep ────────────────────────────
       # NodeBalancers are created by the in-cluster CCM for every LoadBalancer

@@ -22,3 +22,5 @@ resources:
   - kyverno-dns-rotating-token.yaml
   - kyverno-dns-rotating-token-rbac.yaml
   - kyverno-alertmanager-slack-webhook.yaml
+  - kyverno-pvc-redirect-untagged-storage-class.yaml
+  - kyverno-pvc-deny-untaggable-clone.yaml

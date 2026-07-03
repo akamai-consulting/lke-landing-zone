@@ -38,10 +38,13 @@ rotator-minted token with the stale GitHub copy.
 > first granted bucket is the intended check.
 **Item:** kube-native cred-hardening #4 (generalized) — move the rotation of every
 long-lived **Linode-issued** credential out of CI and into the cluster.
-**Relates to:** [secrets.md](../secrets.md), the `linode-volume-labeler` CronJob
-(`platform-apl/components/volumeLabeler/`), `internal/linode` (rotation primitives),
-`credentials_pat.go` / `credentials_objkey.go` (existing orchestration), the
-`secret-propagator` OpenBao policy (`tools/cmd/llz/ci_openbao_configure.go`).
+**Relates to:** [secrets.md](../secrets.md), `internal/linode` (rotation
+primitives), `credentials_pat.go` / `credentials_objkey.go` (existing
+orchestration), the `secret-propagator` OpenBao policy
+(`tools/cmd/llz/ci_openbao_configure.go`). NOTE: this doc predates the removal of
+the `linode-volume-labeler` CronJob (Volume tagging moved to the block-storage-retain
+StorageClass's CSI `volumeTags`); references to it below describe the structural
+pattern the rotator was modeled on, not a component that still exists.
 
 ## Problem
 
@@ -51,7 +54,7 @@ and rotated **from CI** (`secret-rotation.yml` → `llz credentials …` →
 
 | Credential | GitHub secret | OpenBao path | Consumed by | Trust domain |
 |---|---|---|---|---|
-| Linode PAT | `LINODE_API_TOKEN` | `secret/linode/api-token` | `linode-volume-labeler` (in-cluster) **+ Terraform/CI** | **dual** |
+| Linode PAT | `LINODE_API_TOKEN` | `secret/linode/api-token` | in-cluster ESO consumers **+ Terraform/CI** | **dual** |
 | Loki S3 key | `LOKI_S3_*` | `secret/loki/object-store` | Loki (in-cluster, ESO) | **in-cluster only** |
 | Harbor registry S3 key | `HARBOR_REGISTRY_S3_*` | `secret/harbor/registry-s3` | Harbor registry (in-cluster, ESO) | **in-cluster only** |
 | ~~Gitea backup S3 key~~ | ~~`GITEA_BACKUP_S3_*`~~ | — | **REMOVED** — the off-cluster gitea-backup bucket/key/outputs were dropped in the apl-core anti-pattern cleanup (see `terraform-modules/llz-object-storage/main.tf`); nothing for the rotator to manage | — |

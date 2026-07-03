@@ -253,8 +253,8 @@ the `owned` (never-touched) escape hatches:
 Use `llz env add` instead of hand-copying overlays. It declares the env in the
 LandingZone spec and `llz render`s a thin overlay over the shared apl-values base
 (`_shared/` + `components/`) — no per-env clone to keep in sync — swapping its
-identity tokens (env name, `cluster.name`, domain suffix, `REGION_SHORT`, Linode
-region, OBJ cluster). The scaffolding is built into the binary, so it works in an
+identity tokens (env name, `cluster.name`, domain suffix, Linode region, OBJ
+cluster). The scaffolding is built into the binary, so it works in an
 instance with no scripts/ tree:
 
 ```bash

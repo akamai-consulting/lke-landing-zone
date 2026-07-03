@@ -297,10 +297,11 @@ jobs:
 
   build-llz:
     name: Build llz (slim in-cluster image)
-    # Slim distroless image carrying ONLY the static llz binary, for workloads
-    # that run llz IN the cluster (the Linode credential rotator CronJob, and the
-    # volume-labeler once it moves off the alpine/k8s shell script). Bakes llz from
-    # the tools/ module via `--build-context tools-src=tools`, like the CI images.
+    # Slim distroless image carrying the static llz binary + kubectl, for workloads
+    # that run llz IN the cluster (the Linode credential rotator, harbor-robot, and
+    # volume-tag-reconciler CronJobs). kubectl is there for the reconciler's
+    # `kubectl get pv/storageclass`. Bakes llz from the tools/ module via
+    # `--build-context tools-src=tools`, like the CI images.
     if: >-
       github.event_name != 'workflow_dispatch' ||
       inputs.image == 'llz' ||

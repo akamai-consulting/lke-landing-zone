@@ -20,9 +20,14 @@ package main
 //   tf-provisioner-bash   non-blank, non-comment lines of bash inside
 //                         `command = <<EOT … EOT` heredocs of Terraform
 //                         local-exec / remote-exec provisioners
+//   embedded-shell        non-blank, non-comment lines of shell embedded in a
+//                         YAML block scalar — a ConfigMap `data` entry like
+//                         `relabel.sh: |` or an Argo `script.source: |`. These
+//                         hide from the *.sh glob (the file is YAML), so they
+//                         get their own counter that extracts the block body.
 // The counters are pure functions (countRunBlockLines / countScriptLines /
-// countTerraformProvisionerLines) with table-driven tests; the walk + budget
-// comparison is the only I/O.
+// countTerraformProvisionerLines / countEmbeddedShellLines) with table-driven
+// tests; the walk + budget comparison is the only I/O.
 
 import (
 	"fmt"
@@ -203,8 +208,10 @@ func scanUntestable(root string, cfg untestableBudget) ([]categoryResult, error)
 				n = countScriptLines(string(b))
 			case "terraform-provisioner":
 				n = countTerraformProvisionerLines(string(b))
+			case "embedded-shell":
+				n = countEmbeddedShellLines(string(b))
 			default:
-				return nil, fmt.Errorf("category %q has unknown kind %q (want workflow-run|script|terraform-provisioner)", name, cat.Kind)
+				return nil, fmt.Errorf("category %q has unknown kind %q (want workflow-run|script|terraform-provisioner|embedded-shell)", name, cat.Kind)
 			}
 			if n > 0 {
 				r.files = append(r.files, fileCount{path: rel, count: n})
@@ -328,6 +335,72 @@ func countTerraformProvisionerLines(content string) int {
 				total++
 			}
 			prevContinues = !isComment && strings.HasSuffix(s, `\`)
+		}
+	}
+	return total
+}
+
+// embeddedShellKeyRE matches a YAML key that opens a block scalar (`key: |`,
+// `key: |-`, `key: >`, `key: |2`, …) — the carrier for a script embedded in
+// YAML. Group 1 is the key's indent, group 2 the key itself.
+var embeddedShellKeyRE = regexp.MustCompile(`^(\s*)([^\s#][^:]*):\s*[|>][0-9]*[+-]?\s*$`)
+
+// shellShebangRE recognises a shell shebang as a block's first body line — the
+// language-agnostic signal that the block holds a shell script (vs config data,
+// prose, or another language). Covers sh/bash/dash/ash, plain or via env.
+var shellShebangRE = regexp.MustCompile(`^#!.*\b(?:ba|da|a)?sh\b`)
+
+// countEmbeddedShellLines counts non-blank, non-comment logic lines of shell
+// embedded in a YAML block scalar — a ConfigMap `data` entry (`relabel.sh: |`)
+// or an Argo `script.source: |`. A block counts as shell when its key ends in
+// `.sh`/`.bash` OR its first body line is a shell shebang, so YAML/config block
+// scalars and other languages are left out. Counting mirrors countScriptLines
+// (the shebang, being a `#` comment, is not counted), scoped to the block body —
+// delimited by indentation like countRunBlockLines.
+func countEmbeddedShellLines(content string) int {
+	lines := strings.Split(content, "\n")
+	total := 0
+	for i := 0; i < len(lines); i++ {
+		m := embeddedShellKeyRE.FindStringSubmatch(lines[i])
+		if m == nil {
+			continue
+		}
+		indent := len(m[1])
+		key := strings.TrimSpace(m[2])
+		keyIsShell := strings.HasSuffix(key, ".sh") || strings.HasSuffix(key, ".bash")
+
+		// Confirm shell via the first non-blank body line (unless the key already
+		// settles it). A body line at/under the key's indent => empty block.
+		isShell := keyIsShell
+		if !isShell {
+			for j := i + 1; j < len(lines); j++ {
+				if strings.TrimSpace(lines[j]) == "" {
+					continue
+				}
+				if lineIndent(lines[j]) <= indent {
+					break
+				}
+				isShell = shellShebangRE.MatchString(strings.TrimSpace(lines[j]))
+				break
+			}
+		}
+		if !isShell {
+			continue
+		}
+
+		for i++; i < len(lines); i++ {
+			l := lines[i]
+			if strings.TrimSpace(l) == "" {
+				continue
+			}
+			if lineIndent(l) <= indent {
+				i-- // re-examine in the outer loop (could open another block)
+				break
+			}
+			if strings.HasPrefix(strings.TrimSpace(l), "#") {
+				continue
+			}
+			total++
 		}
 	}
 	return total

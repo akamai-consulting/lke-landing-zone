@@ -108,7 +108,7 @@ func TestCheckRequiredCRDsAndStorageClasses(t *testing.T) {
 		case a == "get storageclass block-storage-retain":
 			return nil, nil
 		case a == "get storageclass -o json":
-			return items(`{"metadata":{"name":"block-storage-retain","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}`), nil
+			return items(`{"metadata":{"name":"block-storage-retain","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}},"provisioner":"linodebs.csi.linode.com","parameters":{"linodebs.csi.linode.com/encrypted":"true","linodebs.csi.linode.com/volumeTags":"block-storage,platform-support-services,lke12345"}}`), nil
 		}
 		return nil, errors.New("nope")
 	})

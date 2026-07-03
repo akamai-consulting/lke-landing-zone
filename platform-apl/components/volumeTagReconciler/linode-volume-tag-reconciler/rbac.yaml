@@ -1,0 +1,42 @@
+# RBAC for the Linode Volume tag reconciler (CronJob).
+#
+# llz reads PersistentVolume objects to map each Volume to its Linode id (via
+# spec.csi.volumeHandle) and reads the block-storage-retain StorageClass to
+# learn the DESIRED tag set (its volumeTags parameter — the single source of
+# truth). It then PUTs missing tags to the Linode API. It never needs PVCs,
+# nodes, or write access to any Kubernetes object.
+#
+# Verbs (least privilege): persistentvolumes get+list (one-shot sweep, no
+# watch — the watch-controller Deployment retired with the old labeler);
+# storageclasses get only.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: linode-volume-tag-reconciler
+  namespace: llz-volume-tag-reconciler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: linode-volume-tag-reconciler
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: linode-volume-tag-reconciler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: linode-volume-tag-reconciler
+subjects:
+  - kind: ServiceAccount
+    name: linode-volume-tag-reconciler
+    namespace: llz-volume-tag-reconciler

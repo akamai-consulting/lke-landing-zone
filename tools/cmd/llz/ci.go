@@ -75,6 +75,8 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciBootstrapCloudFirewallCmd(), ciDiscoverFirewallConfigCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
+	// In-cluster Volume tag-heal backstop (volumeTagReconciler CronJob).
+	c.AddCommand(ciReconcileVolumeTagsCmd())
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd())
 	// Credential single-pane-of-glass writer: measure CI-token expiry and emit the
@@ -690,7 +692,7 @@ func runTeed(name string, args ...string) (string, int, error) {
 func ciReapVolumesCmd() *cobra.Command {
 	var region, volumeIDs, tagMustInclude string
 	var waitDetach, attempts, retryDelay int
-	var requireEmpty bool
+	var requireEmpty, reapUntagged bool
 	c := &cobra.Command{
 		Use:   "reap-volumes",
 		Short: "delete orphaned pvc-* Block Storage Volumes (--yes to delete)",
@@ -709,7 +711,7 @@ func ciReapVolumesCmd() *cobra.Command {
 			"Reads LINODE_TOKEN; dry-run by default, deletes only with --yes.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIReapVolumes(gopts, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty)
+			return runCIReapVolumes(gopts, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty, reapUntagged)
 		},
 	}
 	f := c.Flags()
@@ -720,6 +722,7 @@ func ciReapVolumesCmd() *cobra.Command {
 	f.BoolVar(&requireEmpty, "require-empty", false, "verify every --volume-ids Volume is gone; retry then fail if orphans remain")
 	f.IntVar(&attempts, "attempts", 1, "sweep+verify attempts before failing (only with --require-empty)")
 	f.IntVar(&retryDelay, "retry-delay", 30, "seconds between --require-empty retries")
+	f.BoolVar(&reapUntagged, "reap-untagged", false, "on the region path, also reap untagged pvc-* Volumes past the grace window (default: keep them — an untagged Volume has no ownership signal; --volume-ids ignores this, it bypasses the gate)")
 	return c
 }
 
@@ -837,7 +840,7 @@ func ciDeleter(ctx context.Context, g globalOpts, client *linode.Client) (func(p
 	return del, fin
 }
 
-func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, waitDetach, attempts, retryDelay int, requireEmpty bool) error {
+func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, waitDetach, attempts, retryDelay int, requireEmpty, reapUntagged bool) error {
 	if region == "" && volumeIDs == "" {
 		return fmt.Errorf("--region and/or --volume-ids is required (refusing an unscoped Volume sweep)")
 	}
@@ -864,7 +867,7 @@ func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, wa
 		del, fin := ciDeleter(ctx, g, client)
 		fmt.Printf("=== orphan Volumes (region=%q volume-ids=%q tag=%q, label prefix pvc-, unattached) [attempt %d/%d] ===\n",
 			region, volumeIDs, tagMustInclude, attempt, attempts)
-		if err := reapVolumes(ctx, client, reapOpts{region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del); err != nil {
+		if err := reapVolumes(ctx, client, reapOpts{region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude, reapUntagged: reapUntagged}, del); err != nil {
 			return err
 		}
 		lastErr = fin()

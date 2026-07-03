@@ -218,7 +218,7 @@ unmentioned components default on. `enabled` is tri-state: omitting it (a tune-o
 toggle, see below) inherits the default rather than reading as a disable. The set:
 `argocd` (mandatory), `clusterFoundation` (mandatory), `externalSecrets`,
 `certManager`, `openbao` (requires `externalSecrets` + `certManager`),
-`argoWorkflows`, `argoEvents`, `volumeLabeler`, `observability`, `harbor`,
+`argoWorkflows`, `argoEvents`, `volumeTagReconciler`, `observability`, `harbor`,
 `policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`.
 
 **Per-component sizing (config in the spec, mechanism in the base).** A few
