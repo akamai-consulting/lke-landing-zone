@@ -226,22 +226,75 @@ func runCIDiscoverFirewallConfig(ctx context.Context) error {
 	// ── Roll the controller so configMapKeyRef env re-reads the new values ───
 	// A 404 is benign: the consumer has not installed the controller (or Argo
 	// has not synced it yet) — it will start fresh from the patched ConfigMap.
-	if _, status, err := k.GetJSON(ctx, firewallDeploymentPath); err != nil {
+	dep, status, err := k.GetJSON(ctx, firewallDeploymentPath)
+	if err != nil {
 		return err
-	} else if status == 404 {
+	}
+	if status == 404 {
 		fmt.Printf("Deployment %s not present — skipping restart (it will start from the patched ConfigMap)\n", firewallDeploymentName)
 		return nil
 	}
+
+	// FLAP GUARD. The controller ConfigMap is owned by the (private) chart's Argo
+	// Application; this command merge-patches real values over the chart's empty
+	// placeholders and rolls the Deployment so its configMapKeyRef env re-reads
+	// them. That only stays put if the Application's ignoreDifferences covers
+	// these data keys. If it does NOT, Argo's selfHeal reverts the ConfigMap
+	// between our 10-minute ticks, and a naive "roll whenever data changed" would
+	// restart the controller every tick forever.
+	//
+	// So we record the fingerprint of the values we last rolled for on the
+	// Deployment, and roll ONLY when the target actually changed. When the
+	// ConfigMap drifts back to a target we already rolled for, we re-patch the
+	// data (best effort) but SKIP the restart and warn loudly — re-rolling can't
+	// win against a reverting Argo, and the warning surfaces the real fix
+	// (add ignoreDifferences). A genuine change (e.g. a TF-recreated firewall →
+	// new ID) is a new fingerprint and still rolls.
+	desiredFP := firewallFingerprint(firewallID, clusterID, vpcCIDR)
+	if lastFP := deploymentAnnotation(dep, discoverFingerprintAnnotation); lastFP == desiredFP {
+		fmt.Fprintf(os.Stderr, "::warning::%s data drifted again after a restart for the same target "+
+			"(%s). The firewall-controller chart's Argo Application is likely reverting "+
+			"data.LINODE_FIREWALL_ID/LKE_CLUSTER_ID/VPC_CIDR (missing ignoreDifferences on those keys). "+
+			"Re-patched the values but skipping the restart to avoid a roll loop — fix the Application's "+
+			"ignoreDifferences.\n", firewallConfigMapName, desiredFP)
+		return nil
+	}
+
+	// New target (or first roll): roll AND stamp the fingerprint, so a later
+	// revert to this same target is detected as a flap instead of re-rolling.
+	// The fingerprint lives on the Deployment's own metadata (not the pod
+	// template) so recording it does not itself trigger a rollout.
 	restartedAt := time.Now().UTC().Format(time.RFC3339)
 	if err := k.MergePatch(ctx, firewallDeploymentPath, map[string]any{
+		"metadata": map[string]any{"annotations": map[string]string{discoverFingerprintAnnotation: desiredFP}},
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{"kubectl.kubernetes.io/restartedAt": restartedAt},
 		}}},
 	}); err != nil {
 		return fmt.Errorf("restart %s after config change: %w", firewallDeploymentName, err)
 	}
-	fmt.Printf("Rolled deployment %s (config changed)\n", firewallDeploymentName)
+	fmt.Printf("Rolled deployment %s (config changed to %s)\n", firewallDeploymentName, desiredFP)
 	return nil
+}
+
+// discoverFingerprintAnnotation records, on the controller Deployment, the
+// (firewallID|clusterID|vpcCIDR) target the CronJob last rolled it for — the
+// state the flap guard reads to avoid re-rolling under an Argo revert loop.
+const discoverFingerprintAnnotation = "lke-landing-zone.akamai.io/discover-rolled-fingerprint"
+
+// firewallFingerprint is a stable, human-readable identity of the three
+// discovered values — the roll target the flap guard compares against.
+func firewallFingerprint(firewallID, clusterID, vpcCIDR string) string {
+	return firewallID + "|" + clusterID + "|" + vpcCIDR
+}
+
+// deploymentAnnotation reads one .metadata.annotations value off a fetched
+// Deployment object ("" when absent).
+func deploymentAnnotation(dep map[string]any, key string) string {
+	meta, _ := dep["metadata"].(map[string]any)
+	ann, _ := meta["annotations"].(map[string]any)
+	s, _ := ann[key].(string)
+	return s
 }
 
 // firewallConfigChanges returns the ConfigMap data keys that must be patched:

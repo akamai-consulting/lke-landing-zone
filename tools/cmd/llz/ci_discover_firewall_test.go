@@ -161,10 +161,45 @@ func TestDiscoverFirewallConfigRollsDeploymentOnChange(t *testing.T) {
 	if len(k.patches[firewallDeploymentPath]) != 1 {
 		t.Fatalf("deployment restart patches = %v", k.patches[firewallDeploymentPath])
 	}
-	// The restart patch carries the kubectl restartedAt annotation.
+	// The restart patch carries the kubectl restartedAt annotation AND stamps the
+	// roll fingerprint on the Deployment's own metadata (so a later revert flaps).
 	b := fmt.Sprintf("%v", k.patches[firewallDeploymentPath][0])
 	if !strings.Contains(b, "kubectl.kubernetes.io/restartedAt") {
 		t.Errorf("restart patch = %s", b)
+	}
+	if !strings.Contains(b, discoverFingerprintAnnotation) {
+		t.Errorf("restart patch missing fingerprint annotation: %s", b)
+	}
+}
+
+// A ConfigMap that keeps drifting back to a target we already rolled for is the
+// Argo-ignoreDifferences-missing signature: re-patch the data, but do NOT
+// re-roll the controller (that would hot-loop it every tick).
+func TestDiscoverFirewallConfigFlapSkipsReRoll(t *testing.T) {
+	k := newFakeKube()
+	k.objects["/api/v1/nodes/lke393244-59879-0a1b"] = nodeObj("linode://42")
+	// ConfigMap reverted to empty placeholders (Argo selfHeal), so a data patch
+	// is still needed this tick...
+	k.objects[firewallConfigMapPath] = map[string]any{"data": map[string]any{
+		"LINODE_FIREWALL_ID": "", "LKE_CLUSTER_ID": "", "VPC_CIDR": "",
+	}}
+	// ...but the Deployment already carries the fingerprint for this exact target
+	// (we rolled for it on a previous tick).
+	k.objects[firewallDeploymentPath] = map[string]any{"metadata": map[string]any{
+		"annotations": map[string]any{discoverFingerprintAnnotation: "7|393244|10.0.0.0/24"},
+	}}
+	seamDiscover(t, k, fullDiscoverer())
+
+	if err := runCIDiscoverFirewallConfig(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Data re-patched (best effort)...
+	if len(k.patches[firewallConfigMapPath]) != 1 {
+		t.Errorf("expected the ConfigMap data to be re-patched: %v", k.patches[firewallConfigMapPath])
+	}
+	// ...but the controller is NOT re-rolled.
+	if len(k.patches[firewallDeploymentPath]) != 0 {
+		t.Errorf("flap must not re-roll the controller: %v", k.patches[firewallDeploymentPath])
 	}
 }
 
