@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -183,15 +184,31 @@ func (c *Client) CreateObjectStorageKey(ctx context.Context, label, cluster, buc
 	return c.CreateObjectStorageKeyBuckets(ctx, label, cluster, []string{bucket}, permissions)
 }
 
+// objOrdinalRe strips a Linode OBJ cluster id's trailing -N ordinal.
+var objOrdinalRe = regexp.MustCompile(`-[0-9]+$`)
+
+// objRegion maps a Linode Object Storage cluster id to its region: us-ord-1 →
+// us-ord. Linode DEPRECATED the `cluster` argument on both bucket creation AND
+// key bucket_access ([400] "cluster is not valid") in favour of `region`, which
+// is the cluster id with the trailing `-N` ordinal stripped — mirroring the
+// llz-object-storage TF module's `replace(obj_cluster, "/-[0-9]+$/", "")`.
+// Idempotent: a value that is already a region (us-ord) is returned unchanged.
+func objRegion(cluster string) string { return objOrdinalRe.ReplaceAllString(cluster, "") }
+
 // CreateObjectStorageKeyBuckets mints a key scoped to SEVERAL buckets in one
-// cluster (one bucket_access entry per bucket, same permissions). Needed for
-// the Loki key, which spans the chunks/ruler/admin buckets — the same shape
-// the llz-object-storage module's bucket_access blocks grant.
+// region (one bucket_access entry per bucket, same permissions). Needed for the
+// Loki key, which spans the chunks/ruler/admin buckets — the same shape the
+// llz-object-storage module's bucket_access blocks grant. `cluster` is the
+// canonical Linode OBJ cluster id (var.obj_cluster, e.g. us-ord-1); the derived
+// region is what the API now requires (see objRegion).
 func (c *Client) CreateObjectStorageKeyBuckets(ctx context.Context, label, cluster string, buckets []string, permissions string) (map[string]any, error) {
+	region := objRegion(cluster)
 	access := make([]any, 0, len(buckets))
 	for _, b := range buckets {
 		access = append(access, map[string]any{
-			"cluster":     cluster,
+			// `region`, NOT the deprecated `cluster` (rejected 400 "cluster is not
+			// valid") — same migration as bucket creation in the TF module.
+			"region":      region,
 			"bucket_name": b,
 			"permissions": permissions,
 		})
