@@ -357,3 +357,89 @@ func mustDecodeValues(t *testing.T, b []byte) map[string]bool {
 	}
 	return out
 }
+
+// TestRenderValuesAlerting proves spec.alerting rewrites the base alerts:
+// block (receivers list + slack channels) and that an unset spec keeps the
+// base's safe default (receivers: [none]).
+func TestRenderValuesAlerting(t *testing.T) {
+	base := `apps:
+  alertmanager: { enabled: true }
+alerts:
+  receivers: ["none"]
+  slack:
+    channel: mon-apl
+    channelCrit: mon-apl-crit
+`
+	out, err := RenderValues([]byte(base), nil, ValuesIdentity{
+		AlertReceivers:        []string{"slack"},
+		AlertSlackChannel:     "plat-alerts",
+		AlertSlackChannelCrit: "plat-alerts-crit",
+	})
+	if err != nil {
+		t.Fatalf("RenderValues: %v", err)
+	}
+	s := string(out)
+	for _, w := range []string{"- slack", "channel: plat-alerts", "channelCrit: plat-alerts-crit"} {
+		if !strings.Contains(s, w) {
+			t.Errorf("alerting not rendered: missing %q:\n%s", w, s)
+		}
+	}
+	if strings.Contains(s, "none") {
+		t.Errorf("receivers must be replaced, none still present:\n%s", s)
+	}
+
+	// Unset spec → the base default survives untouched.
+	out, err = RenderValues([]byte(base), nil, ValuesIdentity{})
+	if err != nil {
+		t.Fatalf("RenderValues (defaults): %v", err)
+	}
+	s = string(out)
+	if !strings.Contains(s, "none") {
+		t.Errorf("unset spec must keep receivers [none]:\n%s", s)
+	}
+	if !strings.Contains(s, "channel: mon-apl") {
+		t.Errorf("unset spec must keep the base slack channel:\n%s", s)
+	}
+}
+
+// TestValidateAlerting pins the spec surface: slack|none only, no mixing
+// none with a real channel, and channel overrides require the slack receiver.
+func TestValidateAlerting(t *testing.T) {
+	cases := []struct {
+		name    string
+		a       Alerting
+		wantErr string // "" = valid
+	}{
+		{"unset is valid", Alerting{}, ""},
+		{"none is valid", Alerting{Receivers: []string{"none"}}, ""},
+		{"slack with channels is valid", Alerting{
+			Receivers: []string{"slack"},
+			Slack:     AlertingSlack{Channel: "a", ChannelCrit: "b"},
+		}, ""},
+		{"msteams rejected", Alerting{Receivers: []string{"msteams"}}, "not supported"},
+		{"none plus slack rejected", Alerting{Receivers: []string{"none", "slack"}}, "cannot be combined"},
+		{"channels without slack receiver rejected", Alerting{
+			Slack: AlertingSlack{Channel: "a"},
+		}, "does not include slack"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := validateAlerting(tc.a)
+			if tc.wantErr == "" {
+				if len(errs) != 0 {
+					t.Fatalf("want valid, got %v", errs)
+				}
+				return
+			}
+			found := false
+			for _, e := range errs {
+				if strings.Contains(e.Error(), tc.wantErr) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, errs)
+			}
+		})
+	}
+}

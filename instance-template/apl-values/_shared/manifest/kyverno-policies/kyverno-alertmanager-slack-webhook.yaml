@@ -1,0 +1,100 @@
+# Kyverno ClusterPolicy: source the Alertmanager Slack webhook from OpenBao.
+#
+# When `alerts.receivers` includes slack, apl-core mounts the webhook URL into
+# Alertmanager from the `alertmanager-credentials` Secret
+# (global.slack_api_url_file), materialized by an apl-core-managed
+# ExternalSecret (values/prometheus-operator/prometheus-operator-raw.gotmpl)
+# reading `alerts-secrets/slack_url` from apl-core's `core-secrets-store` —
+# i.e. from the values-side x-secret `alerts.slack.url`. A webhook URL is
+# secret material, and the landing zone deliberately keeps secrets OUT of the
+# committed values flow (the same reasoning as the DNS token).
+#
+# THE MUTATION — the pattern kyverno-dns-rotating-token.yaml established:
+# rewrite the ExternalSecret's source at admission — secretStoreRef → the
+# landing zone's `openbao` ClusterSecretStore, remoteRef → `alerts/webhooks`
+# property `slack_url`. The operator seeds and rotates the URL with
+#   llz openbao set alerts/webhooks slack_url=https://hooks.slack.com/...
+# (dual-write on HA pairs) — no GitHub secret, no TF variable, no values
+# churn; ESO refreshes within 5m. Deterministic and idempotent on every
+# apl-operator re-apply → no ownership flap.
+#
+# The ExternalSecret only exists when the rendered values select the slack
+# receiver (spec.alerting.receivers), and its data has exactly one element
+# (slackUrl) in that shape — the json6902 index-0 paths below rely on the
+# landing zone never enabling apl-core's email/opsgenie receivers alongside
+# slack (spec validation enforces slack|none only).
+#
+# Unseeded OpenBao path → the ExternalSecret sits NotReady and the
+# eso-alerts/ExternalSecretNotReady rule (observability component) surfaces
+# it — a loud, named failure instead of silently-dead notifications.
+#
+# Removal is coupled to apl-core accepting an existingSecret/secretStoreRef
+# for alerts webhooks — point the values there and delete this.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: alertmanager-slack-webhook
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+    policies.kyverno.io/title: Source the Alertmanager Slack webhook from OpenBao
+    policies.kyverno.io/category: Secrets
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/subject: ExternalSecret
+    policies.kyverno.io/description: >-
+      Repoints apl-core's alertmanager-credentials ExternalSecret from the
+      values-side x-secret (core-secrets-store/alerts-secrets) to the openbao
+      ClusterSecretStore at alerts/webhooks — so the Slack webhook URL is
+      operator-seeded in OpenBao (llz openbao set) instead of living in the
+      committed values flow. Target template untouched; only the source moves.
+spec:
+  # Catch-up: patch an already-applied ExternalSecret when this policy lands
+  # (background controller — the aggregated RBAC in
+  # kyverno-dns-rotating-token-rbac.yaml already grants externalsecrets
+  # update/patch, shared with the DNS policy).
+  mutateExistingOnPolicyUpdate: true
+  # Best-effort: never block an apl-operator apply on a webhook hiccup — the
+  # next reconcile re-mutates.
+  failurePolicy: Ignore
+  rules:
+    - name: rewrite-slack-webhook-source
+      match:
+        any:
+          - resources:
+              kinds: [ExternalSecret]
+              names: [alertmanager-credentials]
+              namespaces: [monitoring]
+              operations: [CREATE, UPDATE]
+      mutate:
+        patchesJson6902: |-
+          - op: replace
+            path: /spec/secretStoreRef/name
+            value: openbao
+          - op: replace
+            path: /spec/data/0/remoteRef/key
+            value: alerts/webhooks
+          - op: replace
+            path: /spec/data/0/remoteRef/property
+            value: slack_url
+    - name: rewrite-slack-webhook-source-existing
+      match:
+        any:
+          - resources:
+              kinds: [ExternalSecret]
+              names: [alertmanager-credentials]
+              namespaces: [monitoring]
+      mutate:
+        targets:
+          - apiVersion: external-secrets.io/v1
+            kind: ExternalSecret
+            name: alertmanager-credentials
+            namespace: monitoring
+        patchesJson6902: |-
+          - op: replace
+            path: /spec/secretStoreRef/name
+            value: openbao
+          - op: replace
+            path: /spec/data/0/remoteRef/key
+            value: alerts/webhooks
+          - op: replace
+            path: /spec/data/0/remoteRef/property
+            value: slack_url

@@ -17,14 +17,64 @@ Loki) is itself broken.
 | Prometheus rules (defaults) | `kube-prometheus-stack.defaultRules.create: true` — node, kubelet, kube-state, and Prometheus self-monitoring | Prometheus UI / Grafana |
 | Scheduled CI checks | [.github/workflows/scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) | GitHub Actions `::warning::`/`::error::` annotations + job failure |
 
-> **Caveat — no paging yet.** `kube-prometheus-stack.alertmanager.enabled` is
-> `false` in [apl-values/_shared/values.yaml](../instance-template/apl-values/_shared/values.yaml).
-> Prometheus evaluates every rule and shows firing alerts in its own UI and via
-> Grafana, but there is **no Alertmanager routing / paging** for them today. The
-> only alerts that actively reach a human right now are the GitHub Actions
-> annotations and any Grafana-configured alerts (e.g. a TLS cert-expiry
-> alert). Wire up Alertmanager (or Grafana
-> notification policies) before production.
+> **Alertmanager runs; notification needs a one-time opt-in.** Alertmanager is
+> enabled (`apps.alertmanager.enabled: true` in
+> [apl-values/_shared/values.yaml](../instance-template/apl-values/_shared/values.yaml))
+> and every firing rule reaches it — but the default receiver set is `[none]`
+> (a null route), so until an instance wires a receiver the only alerts that
+> actively reach a human are the GitHub Actions annotations. See **Wiring a
+> notification receiver** below; do it before production.
+
+## Wiring a notification receiver (Slack)
+
+The receiver config is spec-driven and the webhook secret lives in OpenBao —
+no GitHub secret, no values churn:
+
+1. **Spec** — in `landingzone.yaml`:
+
+   ```yaml
+   spec:
+     alerting:
+       receivers: [slack]
+       slack:                      # optional; defaults mon-apl / mon-apl-crit
+         channel: platform-alerts
+         channelCrit: platform-alerts-crit
+   ```
+
+   then `llz render`: the receivers + channels land in every env's committed
+   values.yaml `alerts:` block, and apl-core renders the full Alertmanager
+   route/receiver config from it (critical-severity alerts go to
+   `channelCrit`, the rest to `channel`).
+
+2. **Webhook secret** — seed the Slack webhook URL into each env's OpenBao
+   (dual-write on HA pairs):
+
+   ```bash
+   llz openbao set alerts/webhooks slack_url=https://hooks.slack.com/services/…
+   ```
+
+   apl-core mounts the URL from the `alertmanager-credentials` Secret; the
+   `kyverno-alertmanager-slack-webhook` policy
+   ([kyverno-policies/](../instance-template/apl-values/_shared/manifest/kyverno-policies/))
+   repoints that Secret's ExternalSecret at the `openbao` store, so ESO picks
+   the seed up within its 5m refresh. Rotation is the same `llz openbao set`
+   again. An unseeded path leaves the ExternalSecret NotReady — a loud, named
+   failure, not silently-dead notifications.
+
+3. **Verify** — fire a test alert (e.g. `amtool alert add …` against the
+   Alertmanager API, or temporarily scale a watched Deployment to 0) and
+   confirm the Slack message.
+
+`msteams` is deliberately not surfaced: apl-core renders its webhook URLs
+inline from values (x-secret), which would put secret material into the
+committed values flow the OpenBao path exists to avoid.
+
+> **Scheduled CI checks stay until receivers are wired.** The daily
+> `health-openbao` / `health-loki-objkey-rotation` / `health-certmanager` jobs
+> overlap with the Prometheus rules by design (belt-and-suspenders that fire
+> even when the observability stack itself is broken). Once an instance has a
+> receiver configured and has seen a real alert arrive, those checks are
+> candidates to shrink — not before.
 
 ## Items that require alerts
 

@@ -46,6 +46,19 @@ spec:
   # dns:
   #   acmeEmail: ops@example.com
 
+  # ── Alert notifications (optional) ─────────────────────────────────────────
+  # Instance-wide Alertmanager receivers. Left out (the default), Alertmanager
+  # runs with a null route — alerts aggregate in its UI but notify nobody, and
+  # the scheduled CI checks are the only alerting that reaches a human. To
+  # notify Slack: uncomment, `llz render`, then seed the webhook into each
+  # env's OpenBao (`llz openbao set alerts/webhooks slack_url=…`) — see
+  # docs/alerting.md § "Wiring a notification receiver".
+  # alerting:
+  #   receivers: [slack]
+  #   slack:
+  #     channel: platform-alerts          # non-critical (default mon-apl)
+  #     channelCrit: platform-alerts-crit # critical (default mon-apl-crit)
+
   # ── Shared VPCs (optional — most instances leave this out) ──────────────────
   # By default every env gets its OWN DEDICATED VPC (own state, fully isolated) —
   # the safest posture, and what you get by leaving `networks` out entirely.

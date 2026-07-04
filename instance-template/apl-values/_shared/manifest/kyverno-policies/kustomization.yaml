@@ -21,3 +21,4 @@ resources:
   - kyverno-verify-llz-image-signature.yaml
   - kyverno-dns-rotating-token.yaml
   - kyverno-dns-rotating-token-rbac.yaml
+  - kyverno-alertmanager-slack-webhook.yaml
