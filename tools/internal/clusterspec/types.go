@@ -54,6 +54,12 @@ type Spec struct {
 	// overlay (the cert-manager DNS-01 issuer). Optional — unset leaves the
 	// overlay's REPLACE_PER_ENV placeholder for the operator to fill by hand.
 	DNS DNS `json:"dns,omitempty"`
+	// Alerting holds the instance-wide Alertmanager receiver config rendered
+	// into every env's values.yaml `alerts:` block. Optional — unset keeps the
+	// base default (receivers: [none]): Alertmanager runs with a null route and
+	// notifies nobody, and the scheduled CI checks remain the only alerting
+	// that reaches a human.
+	Alerting Alerting `json:"alerting,omitempty"`
 	// Environments is keyed by deployment name (== TF workspace key ==
 	// apl-values/<env> dir == infra-<env> GitHub Environment). It is the ASSEMBLED
 	// model: the loader populates it from the environments/<env>.yaml files (one
@@ -69,6 +75,31 @@ type DNS struct {
 	// on both the production + staging ClusterIssuers) — not per env. Unset leaves
 	// the REPLACE_PER_ENV placeholder, which `llz doctor` flags as a deferrable item.
 	AcmeEmail string `json:"acmeEmail,omitempty"`
+}
+
+// Alerting is the instance-wide alert-notification config, rendered into every
+// env's values.yaml `alerts:` block (apl-core's Alertmanager route/receiver
+// source). Receivers supports "slack" and "none" (the default). The Slack
+// webhook URL is deliberately NOT spec/values material: apl-core mounts it from
+// the `alertmanager-credentials` Secret, whose ExternalSecret the
+// kyverno-alertmanager-slack-webhook policy repoints at the landing zone's
+// OpenBao (`secret/alerts/webhooks`, property slack_url) — the operator seeds
+// and rotates it with `llz openbao set`, no GitHub secret, no values churn.
+// "msteams" is not surfaced: apl-core renders its webhook URLs inline from
+// values (x-secret), which would put secret material in the committed values
+// flow this spec deliberately avoids.
+type Alerting struct {
+	// Receivers selects notification channels: "slack", "none". Unset → [none].
+	Receivers []string `json:"receivers,omitempty"`
+	// Slack channel overrides; both fall back to the base defaults
+	// (mon-apl / mon-apl-crit) when unset.
+	Slack AlertingSlack `json:"slack,omitempty"`
+}
+
+// AlertingSlack is the non-secret half of the Slack receiver config.
+type AlertingSlack struct {
+	Channel     string `json:"channel,omitempty"`     // non-critical notifications
+	ChannelCrit string `json:"channelCrit,omitempty"` // critical notifications
 }
 
 // Defaults is the shared baseline merged into every environment before the

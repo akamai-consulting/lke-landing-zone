@@ -284,6 +284,26 @@ dns:
       # rotating narrow in-cluster PAT (secret/linode/api-token) once synced.
       apiToken: ${linode_dns_token}   # rendered from var.linode_dns_token via templatefile()
 
+# ── Alertmanager receivers ──────────────────────────────────────────────────────
+# apl-core renders the FULL Alertmanager route/receiver config from this block
+# (helmfile.d/snippets/alertmanager.gotmpl). Default [none]: Alertmanager runs
+# with a null route — alerts aggregate in its UI but notify nobody, and the
+# scheduled CI checks remain the only alerting that reaches a human.
+#
+# To wire Slack, `llz render` writes this block from spec.alerting (receivers +
+# channels), and the webhook URL — the only secret — deliberately does NOT live
+# here: apl-core mounts it from the `alertmanager-credentials` Secret, whose
+# ExternalSecret the kyverno-alertmanager-slack-webhook policy repoints at
+# OpenBao `secret/alerts/webhooks` (property slack_url). Seed + rotate it with
+#   llz openbao set alerts/webhooks slack_url=https://hooks.slack.com/...
+# — no GitHub secret, no values churn, ESO refreshes within 5m. See
+# docs/alerting.md § "Wiring a notification receiver".
+alerts:
+  receivers: ["none"]     # spec.alerting.receivers — ["slack"] to notify
+  slack:
+    channel: mon-apl      # spec.alerting.slack.channel (non-critical)
+    channelCrit: mon-apl-crit  # spec.alerting.slack.channelCrit (critical)
+
 # ── Instance workloads ──────────────────────────────────────────────────────────
 # Application Argo CD Applications and any non-apl-core manifests for THIS
 # environment live in ./manifest/ (see ./manifest/README.md). The landing-zone

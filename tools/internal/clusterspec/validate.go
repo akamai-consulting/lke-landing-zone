@@ -45,6 +45,34 @@ func (lz *LandingZone) Validate() []error {
 	errs = append(errs, validateHAGroups(lz)...)
 	errs = append(errs, validateNetworks(lz)...)
 	errs = append(errs, validateHAVPCCIDRs(lz)...)
+	errs = append(errs, validateAlerting(lz.Spec.Alerting)...)
+	return errs
+}
+
+// validateAlerting checks spec.alerting: receivers may only name channels the
+// landing zone wires ("slack", "none" — msteams et al. put secret webhook URLs
+// in committed values, which the OpenBao-backed slack path deliberately
+// avoids), "none" cannot be combined with a real channel, and slack channel
+// overrides only make sense when the slack receiver is selected.
+func validateAlerting(a Alerting) []error {
+	var errs []error
+	hasSlack, hasNone := false, false
+	for _, r := range a.Receivers {
+		switch r {
+		case "slack":
+			hasSlack = true
+		case "none":
+			hasNone = true
+		default:
+			errs = append(errs, fmt.Errorf("alerting.receivers: %q is not supported (use slack or none; msteams would put its secret webhook URLs in committed values)", r))
+		}
+	}
+	if hasNone && hasSlack {
+		errs = append(errs, fmt.Errorf("alerting.receivers: none cannot be combined with slack"))
+	}
+	if (a.Slack.Channel != "" || a.Slack.ChannelCrit != "") && !hasSlack {
+		errs = append(errs, fmt.Errorf("alerting.slack.* is set but receivers does not include slack"))
+	}
 	return errs
 }
 

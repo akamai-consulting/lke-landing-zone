@@ -233,6 +233,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `secret/harbor/docker-config` | buildah `dockerconfigjson` | **Derived** — rendered in-cluster by ESO from `harbor/robot`; follows the robot creds (not seeded/stored) |
 | `secret/cert-automation/github-token` | cert-automation Argo Workflow token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
 | `secret/infra/github-dispatch-token` | harbor-ready PostSync dispatch token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
+| `secret/alerts/webhooks` | Alertmanager Slack webhook URL (`slack_url`) — mounted via the Kyverno-repointed `alertmanager-credentials` ExternalSecret | **Manual** — operator seeds/rotates via `llz openbao set alerts/webhooks slack_url=…` (only needed when `spec.alerting.receivers` includes slack; see [alerting.md](alerting.md)) |
 
 **OpenBao runtime auth & seal/recovery material:**
 

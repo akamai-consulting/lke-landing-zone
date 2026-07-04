@@ -61,6 +61,14 @@ type ValuesIdentity struct {
 	RepoURL      string // otomi.git.repoUrl  (was ${apl_values_repo_url})
 	RepoUsername string // otomi.git.username (was ${apl_values_repo_username})
 	RepoBranch   string // otomi.git.branch   (was ${apl_values_repo_ref})
+
+	// Alertmanager receiver wiring (spec.alerting, instance-wide). Receivers
+	// replaces the base `alerts.receivers` list when non-empty; the channels
+	// overwrite the base defaults only when set. The Slack webhook URL is NOT
+	// values material — see the Alerting type.
+	AlertReceivers        []string // alerts.receivers
+	AlertSlackChannel     string   // alerts.slack.channel
+	AlertSlackChannelCrit string   // alerts.slack.channelCrit
 }
 
 // objectStoreWiring returns the Loki/Harbor bucket names + S3 endpoint/region for
@@ -134,6 +142,10 @@ func (lz *LandingZone) ValuesIdentity(env string) ValuesIdentity {
 		RepoURL:      repoURL,
 		RepoUsername: username,
 		RepoBranch:   branch,
+
+		AlertReceivers:        lz.Spec.Alerting.Receivers,
+		AlertSlackChannel:     lz.Spec.Alerting.Slack.Channel,
+		AlertSlackChannelCrit: lz.Spec.Alerting.Slack.ChannelCrit,
 	}
 }
 
@@ -226,6 +238,16 @@ func RenderValues(base []byte, components map[string]ComponentToggle, id ValuesI
 		setStr(dig(apps, "harbor", "_rawValues", "persistence", "persistentVolumeClaim", "registry", "size"), h.RegistryStorage)
 	}
 
+	// Alertmanager receiver wiring (spec.alerting). Same never-invent rule: the
+	// receivers list and slack channels are set only when the base carries the
+	// alerts: block. An empty spec list keeps the base default (receivers:
+	// [none] — Alertmanager runs with a null route until an operator opts in).
+	if alerts := mapValue(root, "alerts"); alerts != nil {
+		setStrSeq(mapValue(alerts, "receivers"), id.AlertReceivers)
+		setStr(dig(alerts, "slack", "channel"), id.AlertSlackChannel)
+		setStr(dig(alerts, "slack", "channelCrit"), id.AlertSlackChannelCrit)
+	}
+
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2) // match the hand-authored values.yaml
@@ -246,6 +268,22 @@ func setStr(n *yaml.Node, val string) {
 	n.Tag = "!!str"
 	n.Style = 0 // plain — drop any ${...}-placeholder quoting
 	n.Value = val
+}
+
+// setStrSeq replaces a sequence node's items with plain string literals. No-op
+// when the node is absent (key not in base) or vals is empty (keep the base
+// default) — the sequence twin of setStr.
+func setStrSeq(n *yaml.Node, vals []string) {
+	if n == nil || len(vals) == 0 {
+		return
+	}
+	n.Kind = yaml.SequenceNode
+	n.Tag = "!!seq"
+	n.Style = 0
+	n.Content = n.Content[:0]
+	for _, v := range vals {
+		n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v})
+	}
 }
 
 // setBool overwrites a scalar node with a bool literal. No-op when absent.
