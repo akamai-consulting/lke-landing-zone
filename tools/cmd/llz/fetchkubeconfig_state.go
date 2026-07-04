@@ -115,14 +115,21 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	_ = cmd.Run()
 
-	if stdout.Len() == 0 {
+	// Empty OR malformed are handled the same way: an unparseable value written
+	// to disk makes every downstream `kubectl`/helm fail with a cryptic "yaml:
+	// control characters are not allowed", which MASKS the real failure the diag
+	// step (e.g. `llz ci diagnose-argocd`) exists to surface — observed multiple
+	// times in early e2e. Validate the value looks like a kubeconfig before
+	// writing garbage. `allow-missing` (the on-failure diagnostics path) then
+	// reports available=false with a clear reason instead of poisoning the probe.
+	if reason := kubeconfigRawProblem(stdout.Bytes()); reason != "" {
 		fetchKubeconfigStateDiagnostics(region, stateKey, bucket, stderr.String())
 		if allowMissing {
-			fmt.Fprintf(os.Stderr, "::warning::kubeconfig_raw for %s is absent or empty (allow-missing=true) — see diagnostics above.\n", region)
+			fmt.Fprintf(os.Stderr, "::warning::kubeconfig_raw for %s %s (allow-missing=true) — see diagnostics above.\n", region, reason)
 			setGHAOutput("available", "false")
 			return nil
 		}
-		return fmt.Errorf("kubeconfig_raw for %s is empty. cluster-bootstrap reads the SAME state output via terraform_remote_state; if that job passed in this build the state HAS this output — the diagnostics above show why 'terraform output -raw' did not", region)
+		return fmt.Errorf("kubeconfig_raw for %s %s. cluster-bootstrap reads the SAME state output via terraform_remote_state; if that job passed in this build the state HAS a valid output — the diagnostics above show why 'terraform output -raw' did not", region, reason)
 	}
 
 	if err := os.WriteFile(output, stdout.Bytes(), 0o600); err != nil {
@@ -130,6 +137,29 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 	}
 	setGHAOutput("available", "true")
 	return nil
+}
+
+// kubeconfigRawProblem returns "" when b is a plausible kubeconfig, else a
+// human-readable reason it should NOT be written to disk. It catches the two
+// failure modes seen in e2e: an empty/whitespace value, and a present-but-
+// corrupt value carrying disallowed control characters (a partial/garbage
+// output that YAML parsers reject — the exact "yaml: control characters are not
+// allowed" that masked the real failure). `apiVersion` is the minimal marker of
+// a real kubeconfig, so a value lacking it is rejected as not-a-kubeconfig.
+func kubeconfigRawProblem(b []byte) string {
+	if len(bytes.TrimSpace(b)) == 0 {
+		return "is absent or empty"
+	}
+	for _, c := range b {
+		// Allow tab (9), LF (10), CR (13); reject other C0 controls + DEL.
+		if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') || c == 0x7f {
+			return "contains control characters (a partial/corrupt output, not a kubeconfig)"
+		}
+	}
+	if !bytes.Contains(b, []byte("apiVersion")) {
+		return "does not look like a kubeconfig (no apiVersion)"
+	}
+	return ""
 }
 
 // fetchKubeconfigStateDiagnostics dumps why kubeconfig_raw read empty —

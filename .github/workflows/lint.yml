@@ -77,6 +77,11 @@ env:
   # kube-prometheus-stack CRDs (PrometheusRule, ServiceMonitor, PodMonitor)
   # used by the rendered OpenBao ServiceMonitor.
   KUBE_PROMETHEUS_STACK_VERSION: "61.7.2"
+  # Full Kyverno install (controller + webhooks, not just CRDs) for the
+  # policy-admission gate in the dry-run job. Version approximates apl-core's
+  # bundle; the check this guards — Kyverno's validate-policy webhook rejecting
+  # a malformed ClusterPolicy — is stable across recent versions.
+  KYVERNO_HELM_VERSION: "3.4.4"
   # Terraform jobs.
   TF_IN_AUTOMATION: 'true'
 
@@ -191,6 +196,8 @@ jobs:
           # Istio chart repo isn't in the shared helm-repos target — it's only
           # needed here for Gateway/VirtualService CRD installs in dry-run.
           helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
+          # Kyverno: full install (not just CRDs) for the policy-admission gate below.
+          helm repo add kyverno https://kyverno.github.io/kyverno/ --force-update
           helm repo update
 
       - name: Install CRDs
@@ -297,7 +304,99 @@ jobs:
       - name: Server-side dry-run of the rendered charts
         run: kubectl apply --dry-run=server -f rendered/
 
+      # ── Kyverno policy-admission gate ────────────────────────────────────────
+      # A CRD-schema dry-run does NOT catch what Kyverno's validate-policy
+      # webhook rejects: the 2026-07-04 bootstrap wedge #2 was ClusterPolicies
+      # mixing spec.mutateExistingOnPolicyUpdate with target-less admission
+      # rules — schema-valid, webhook-denied — which wedged the platform-
+      # bootstrap sync at wave -15 on a real cluster (PR #142). Install the
+      # REAL Kyverno controller and apply (not dry-run — webhook execution
+      # must be unconditional) the shipped ClusterPolicies against it.
+      # Deliberately LAST: a live admission controller must not perturb the
+      # dry-run steps above (e.g. verifyImages intercepting rendered CronJobs).
+      - name: Kyverno policy-admission gate (shipped ClusterPolicies)
+        run: |
+          set -euo pipefail
+          helm install kyverno kyverno/kyverno \
+            --namespace kyverno --create-namespace \
+            --version "$KYVERNO_HELM_VERSION" \
+            --wait --timeout 5m
+          echo "Applying _shared/manifest/kyverno-policies against the validate-policy webhook..."
+          kubectl kustomize instance-template/apl-values/_shared/manifest/kyverno-policies \
+            | kubectl apply --server-side=true -f -
 
+
+
+  # ── Scaffold + validate apl-values ───────────────────────────────────────────
+  # Reproduces the real per-env scaffold path (`llz env add`) and runs
+  # `llz ci validate-apl-values` on the rendered values — two checks that were
+  # previously Release-E2E-ONLY, each catchable in seconds with no cloud (both
+  # classes burned multiple ~50-min e2e runs in the week of 2026-07-02):
+  #   • templatefile var-contract — a values.yaml ${...} not in cluster-bootstrap/
+  #     main.tf's templatefile() map fails terraform apply (the
+  #     ${apl_values_repo_url} class that failed a 2026-07-02 tf-plan).
+  #   • apl-core chart schema via `helm template apl/apl` — the same JSON-Schema
+  #     validation helm_release.apl runs at apply time; catches required/renamed/
+  #     mistyped keys (the apl-core v6 `apps.loki: adminPassword is required` class).
+  # Needs Go (build a FRESH llz — a tools/ PR predates the image rebuild) and Helm
+  # (the schema check); the var-contract check is pure Go, no terraform.
+  scaffold:
+    name: Scaffold + validate apl-values
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Go (build llz — the scaffolder)
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+      - name: Install Helm (apl-core schema validation)
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v${{ env.HELM_VERSION }}
+      - name: Scaffold a throwaway env and validate its apl-values
+        run: make scaffold-check
+
+  # ── Instantiate (copier render) ──────────────────────────────────────────────
+  # Renders instance-template/ into a throwaway instance with the REAL copier and
+  # asserts no unrendered `<@ … @>` tokens survived, the required per-instance
+  # structure is present, and the rendered workflows pass actionlint. Copier-
+  # templating bugs — an unrendered `<@ forge_flavor @>` (Jun 17) or a copier
+  # EXPRESSION `<@ instance_repo.split('/')[-1] @>` the raw-cp/sed render can't do
+  # (Jun 24) — burned e2e runs across the early history; release-e2e's Instantiate
+  # only catches them AFTER dispatching a provision. This catches them in seconds,
+  # no cloud. Distinct from `scaffold` (that renders apl-values via `llz render` +
+  # validates the apl-core schema; this renders the whole instance via copier).
+  # SKIP_TF=1: the rendered TF roots' `terraform validate` is already covered by
+  # the `terraform` job (tf-validate-roots).
+  instantiate:
+    name: Instantiate (copier render)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # git describe --tags (llz_version) + copier's `--vcs-ref HEAD` need the
+          # full history + tags, not the default shallow clone.
+          fetch-depth: 0
+      - name: Set up Go (build llz + actionlint)
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+      - name: Build llz onto PATH
+        run: cd tools && go build -buildvcs=false -o /usr/local/bin/llz ./cmd/llz
+      - name: Install copier + actionlint
+        run: |
+          set -euo pipefail
+          pipx install copier
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Instantiate the template + assert render + structure + actionlint
+        run: SKIP_TF=1 template-scripts/ci/instance-test.sh
 
   # ── Terraform ────────────────────────────────────────────────────────────────
   # Single source of truth via `make lint-tf` (= $(LINT_TF) in the Makefile):

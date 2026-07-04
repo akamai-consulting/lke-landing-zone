@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .PHONY: help \
         build build-tools llz \
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -68,6 +68,7 @@ help:
 	@echo "  helm-dep-lock-check  verify committed Chart.lock files match Chart.yaml dependency declarations"
 	@echo "  argocd-rendered-apps-check  render overlays and reject duplicate ArgoCD Helm parameters"
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
+	@echo "  wave-health-guard           negative-sync-wave kinds must be health-safe (PR #142 wedge class)"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow and composite-action linting"
 	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
@@ -78,14 +79,16 @@ help:
 	@echo "Instance test:"
 	@echo "  instance-test   Local, no-cloud smoke test: copier-instantiate the template"
 	@echo "                  and run the offline validators (token residue, structure,"
-	@echo "                  terraform validate) against the rendered instance. The fast"
-	@echo "                  counterpart to the release-e2e workflow (which stands up a"
-	@echo "                  real cluster). Set SKIP_TF=1 to skip terraform validate."
-	@echo "                  Runs scaffold-check first."
+	@echo "                  terraform validate, actionlint) against the rendered instance."
+	@echo "                  The fast counterpart to release-e2e (which stands up a real"
+	@echo "                  cluster); also the CI 'instantiate' job. Runs scaffold-check"
+	@echo "                  first. Self-skips without copier; SKIP_TF=1 skips tf validate."
 	@echo "  scaffold-check  Scaffold a throwaway env (llz env add) and assert the"
 	@echo "                  per-env scaffold renders: no leftover 'your-env', required"
-	@echo "                  per-env files present, values.yaml renders via templatefile()."
-	@echo "                  No cloud; artifacts removed on exit. SKIP_TF=1 skips render."
+	@echo "                  per-env files present, values.yaml renders via templatefile()"
+	@echo "                  (vars derived from main.tf), and passes apl-core's helm schema."
+	@echo "                  No cloud; artifacts removed on exit. SKIP_TF=1 skips render;"
+	@echo "                  the schema step self-skips without helm."
 	@echo "  reap-orphans    Manual sweep of leaked Linode resources from failed/cancelled"
 	@echo "                  cycles: orphan clusters (if CLUSTER_LABEL) + their firewall/VPC,"
 	@echo "                  then NodeBalancers + VPCs + Volumes whose cluster is gone."
@@ -293,6 +296,19 @@ externalsecret-paths-check: render-charts
 		cd $(GO_DIR) && RENDER_DIR=$(RENDER_DIR) go run ./cmd/llz ci externalsecret-paths --root ..; \
 	fi
 
+# wave-health-guard: `llz ci wave-health-guard` — the PR #142 wedge-class gate.
+# Argo sync waves gate on per-resource health; a health-checked kind at a
+# negative wave that can be not-Ready on a fresh cluster wedges the
+# platform-bootstrap sync before OpenBao (wave 0). Every negative-wave kind in
+# apl-values/_shared/manifest/ + apl-values/components/ must be health-inert or
+# backed by a resource.customizations.health override in _shared/values.yaml.
+wave-health-guard:
+	@if command -v llz >/dev/null 2>&1; then \
+		llz ci wave-health-guard; \
+	else \
+		cd $(GO_DIR) && go run ./cmd/llz ci wave-health-guard --root ..; \
+	fi
+
 # untestable-loc-check: the design-principle gate. Fails when inline workflow
 # bash / shell / python logic exceeds the budget in .untestable-budget.yaml —
 # the signal to convert logic into the unit-tested llz CLI rather than pile more
@@ -390,7 +406,7 @@ sync-wave-lint: render-charts
 # targets share a render-charts prerequisite, so one $(MAKE) invocation renders
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
-LINT_K8S := k8s-lint k8s-validate sync-wave-lint placeholder-lint \
+LINT_K8S := k8s-lint k8s-validate sync-wave-lint wave-health-guard placeholder-lint \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
             helm-lint-charts helm-lint-real-values helm-lint-argocd \
             helm-dep-lock-check
@@ -408,7 +424,7 @@ template-manifest-check:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
@@ -428,6 +444,12 @@ lint:
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^(terraform-modules|instance-template/terraform-iac-bootstrap)/.*\.tf$$|\.tflintrc\.hcl$$|\.checkov\.yaml$$'; then \
 		$(MAKE) --no-print-directory tf-fmt-check $(LINT_TF); \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^instance-template/terraform-iac-bootstrap/cluster-bootstrap/main\.tf$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
+		$(MAKE) --no-print-directory wave-health-guard scaffold-check; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '^copier\.yml$$|^instance-template/\.github/|^template-scripts/ci/instance-test\.sh$$'; then \
+		$(MAKE) --no-print-directory instance-test; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^kubernetes-charts/|\.kube-linter\.yaml$$'; then \
 		$(MAKE) --no-print-directory $(LINT_K8S); \

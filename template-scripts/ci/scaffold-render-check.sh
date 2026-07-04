@@ -18,9 +18,12 @@
 #   1. Scaffold a throwaway env via llz env add (the real path).
 #   2. Assert no `your-env` placeholder survived in the generated tfvars/overlay.
 #   3. Assert the per-env files cluster-bootstrap reads at plan time exist.
-#   4. Render every apl-values/<env>/values.yaml through templatefile() with the
-#      same variable set cluster-bootstrap passes — catching ${...} parse errors
-#      and references to variables the root does not provide.
+#   4+5. `llz ci validate-apl-values` on the rendered values.yaml: the
+#      templatefile var-contract (every unescaped ${...} is a key in
+#      cluster-bootstrap/main.tf's templatefile() map — the ${apl_values_repo_url}
+#      class) AND apl-core's chart schema via `helm template apl/apl` (the
+#      required/renamed/mistyped-key class, e.g. v6's `apps.loki: adminPassword
+#      is required`). Both were previously Release-E2E-only.
 #
 # It does NOT stand up a cluster or run `terraform plan` (remote_state.cluster
 # and the kubeconfig provider still need a real cluster — that stays Release-E2E
@@ -31,8 +34,7 @@
 #   SCAFFOLD_CHECK_ENV          throwaway env name   (default: scaffoldcheck)
 #   SCAFFOLD_CHECK_REGION       Linode region        (default: us-ord)
 #   SCAFFOLD_CHECK_OBJ_CLUSTER  OBJ cluster id       (default: us-ord-1)
-#   TF                          terraform binary     (default: terraform, then tofu)
-#   SKIP_TF                     set to 1 to skip the templatefile render step
+#   (the schema half of step 4+5 self-skips when `helm` is absent)
 set -euo pipefail
 
 # shellcheck source=template-scripts/lib-common.sh
@@ -42,9 +44,6 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ENV_NAME="${SCAFFOLD_CHECK_ENV:-scaffoldcheck}"
 REGION="${SCAFFOLD_CHECK_REGION:-us-ord}"
 OBJ_CLUSTER="${SCAFFOLD_CHECK_OBJ_CLUSTER:-us-ord-1}"
-
-# Empty when neither terraform nor tofu is present — the render step below skips.
-TF="$(detect_tf)"
 
 # `llz env add` is the scaffolder now (the bash new-deployment.sh was folded into
 # the binary). Prefer a prebuilt bin/llz, an llz on PATH, else build one.
@@ -129,31 +128,22 @@ for f in "${REQUIRED[@]}"; do
   if [[ -f "$f" ]]; then echo "ok   ${f#"$ROOT"/}"; else fail "missing required per-env file: ${f#"$ROOT"/}"; fi
 done
 
-# ── 4. templatefile() render (mirrors cluster-bootstrap locals.apl_rendered_values) ─
-step "Render apl-values/$ENV_NAME/values.yaml via templatefile()"
-if [[ -z "$TF" || "${SKIP_TF:-0}" == "1" ]]; then
-  echo "(no terraform/tofu binary or SKIP_TF=1 — skipping render)"
-elif [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
-  # Same variable set cluster-bootstrap/main.tf feeds to templatefile(); a
-  # values.yaml that references anything outside this set fails here (correctly).
-  # MUST mirror the templatefile(...) call in cluster-bootstrap/main.tf EXACTLY —
-  # the secrets-only set (llz render resolves everything else from the spec into
-  # the committed values.yaml). A stale SUPERSET here masks unresolved
-  # placeholders: the old 17-key map happily rendered ${apl_values_repo_url}
-  # after the spec render missed it, and the gap only surfaced as a Release-E2E
-  # plan failure — the exact 20-minute round-trip this check exists to prevent.
-  vars='{apl_values_repo_password="x",linode_dns_token="x",coredns_cluster_ip="x",loki_admin_password="x"}'
-  tmp="$(mktemp -d)"
-  printf 'terraform {}\n' > "$tmp/main.tf"
-  ( cd "$tmp" && "$TF" init -backend=false >/dev/null 2>&1 ) || true
-  if echo "length(templatefile(\"$GEN_OVERLAY/values.yaml\", $vars))" \
-       | ( cd "$tmp" && "$TF" console ) >/dev/null 2>"$tmp/err"; then
-    echo "rendered ok"
-  else
-    sed 's/^/    /' "$tmp/err" || true
-    fail "templatefile() failed to render apl-values/$ENV_NAME/values.yaml (see above)"
-  fi
-  rm -rf "$tmp"
+# ── 4+5. templatefile var-contract + apl-core schema (unit-tested Go) ──────────
+# `llz ci validate-apl-values` owns both checks (the logic lives in tested Go —
+# ci_apl_schema.go — so this stays thin glue): (4) every unescaped ${...} left
+# in the rendered values is a key in cluster-bootstrap/main.tf's templatefile()
+# map, derived from main.tf so it can't drift (the ${apl_values_repo_url} class
+# that failed a 2026-07-02 plan); (5) the values pass apl-core's chart schema
+# via `helm template apl/apl`, pinned to the scaffolded tfvars' apl_chart_version
+# (the v6 `apps.loki: adminPassword is required` class). The schema half
+# self-skips without helm; the var-contract half always runs (no terraform).
+step "Validate apl-values (templatefile var-contract + apl-core schema)"
+if [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
+  "$LLZ" ci validate-apl-values \
+    --values  "$GEN_OVERLAY/values.yaml" \
+    --tfvars  "$ROOT/instance-template/terraform-iac-bootstrap/cluster-bootstrap/$ENV_NAME.tfvars" \
+    --main-tf "$ROOT/instance-template/terraform-iac-bootstrap/cluster-bootstrap/main.tf" \
+    || fail "apl-values validation failed (see above) — fix before it fails at terraform apply / helm_release.apl in Release-E2E"
 fi
 
 # ── result ───────────────────────────────────────────────────────────────────

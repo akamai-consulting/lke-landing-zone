@@ -48,6 +48,10 @@ func ciCmd() *cobra.Command {
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
 	c.AddCommand(ciWaitPodsCmd(), ciWaitClusterReadyCmd())
+	// Fail-fast gate ahead of wait-pods: a missing Argo Application means the
+	// platform-bootstrap sync is wedged waves earlier — fail in ~4 min WITH the
+	// operationState message instead of burning the 600s pod wait blind (PR #142).
+	c.AddCommand(ciAssertArgoAppCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
 	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in
@@ -100,6 +104,12 @@ func ciCmd() *cobra.Command {
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())
+	// Static guard for the PR #142 wedge class: negative-sync-wave kinds that
+	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
+	c.AddCommand(ciWaveHealthGuardCmd())
+	// Offline apl-core schema validation (helm template) — the check
+	// helm_release.apl runs at apply time, shifted left into scaffold-check.
+	c.AddCommand(ciAplSchemaValidateCmd())
 	// PrometheusRule promtool gate (former template-scripts python:
 	// check-prometheus-rule-crds.py via the Makefile's prom-rules-check) — the
 	// last first-party Python script in the repo.

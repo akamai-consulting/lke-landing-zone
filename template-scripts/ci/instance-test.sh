@@ -64,9 +64,13 @@ FAILED=0
 
 # ── 1. Instantiate via copier ─────────────────────────────────────────────────
 step "Instantiate (copier copy → ${INSTANCE#"$ROOT"/})"
+# Self-skip when copier is absent so this can sit in `make lint` (LINT_ALL /
+# change-scoped) without breaking a dev who hasn't installed it — the CI
+# `instantiate` job installs copier, so the gate still runs there. Same
+# graceful-degradation pattern as the helm/tofu-optional steps elsewhere.
 command -v copier >/dev/null 2>&1 || {
-  echo "copier not found — install with: pipx install copier (or pip install --user copier)" >&2
-  exit 1
+  echo "::warning::copier not found — SKIPPING instance-test (install: pipx install copier). CI runs it regardless." >&2
+  exit 0
 }
 rm -rf "$BUILD"
 mkdir -p "$BUILD"

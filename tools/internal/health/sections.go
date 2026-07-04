@@ -1,6 +1,9 @@
 package health
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // sections.go ports the remaining count/phase/condition checks (sections 3a–3i):
 // PV hygiene, NetworkPolicy presence, Jobs, CronWorkflows, Service endpoints,
@@ -60,6 +63,46 @@ func ClassifyJob(key string, complete, failed bool, active, succeeded, failedCou
 		return CatWarn, "Job " + key + " no active/succeeded/failed pods (stuck pre-admission?)"
 	}
 	return CatOK, fmt.Sprintf("Job %s active=%d succeeded=%d failed=%d (in progress)", key, active, succeeded, failedCount)
+}
+
+// JobRun is the subset of a Job the supersession analysis needs.
+type JobRun struct {
+	Key       string    // namespace/name
+	CronOwner string    // owning CronJob name ("" if not CronJob-spawned)
+	Created   time.Time // metadata.creationTimestamp
+	Complete  bool
+	Failed    bool
+}
+
+// SupersededFailedJobs returns the keys of Failed Jobs that a NEWER (or
+// same-time) Completed sibling under the same CronJob owner has superseded —
+// an early CronJob tick that failed before its backing service was up (e.g.
+// harbor-robot-provisioner firing before harbor-core serves, or argo-resync-
+// nudger before argocd is ready), later made moot by a successful tick.
+//
+// The gate would otherwise hard-fail on such a historical Failed Job even
+// though the CronJob is healthy — a recurring false red (2026-07-02 e2e). The
+// rule is deliberately narrow: a Failed Job is superseded ONLY by a success
+// created at-or-after it, so a CURRENT regression (latest tick failing after an
+// earlier success) still fails. Jobs with no CronJob owner are never masked.
+func SupersededFailedJobs(jobs []JobRun) map[string]bool {
+	latestOK := map[string]time.Time{}
+	for _, j := range jobs {
+		if j.Complete && j.CronOwner != "" {
+			if t, ok := latestOK[j.CronOwner]; !ok || j.Created.After(t) {
+				latestOK[j.CronOwner] = j.Created
+			}
+		}
+	}
+	out := map[string]bool{}
+	for _, j := range jobs {
+		if j.Failed && !j.Complete && j.CronOwner != "" {
+			if t, ok := latestOK[j.CronOwner]; ok && !j.Created.After(t) {
+				out[j.Key] = true
+			}
+		}
+	}
+	return out
 }
 
 // ClassifyCronWorkflow classifies a CronWorkflow: a SubmissionError fails; a

@@ -76,6 +76,44 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 	}
 }
 
+// TestBaoConfigureJWTBoundClaimsIsMap is an explicit regression guard for the
+// 2026-06-25 kube-native failure where the JWT role write emitted bound_claims
+// as an empty STRING (key=value CLI args) and OpenBao's auth/jwt rejected it:
+//
+//	Code: 400 … error converting input for field "bound_claims":
+//	'' expected type 'map[string]interface {}', got unconvertible type 'string'
+//
+// The fix writes the role body as JSON over stdin so bound_claims is a typed
+// object. Assert that against the RAW JSON (not a typed struct that would only
+// fail incidentally) so a regression to key=value args trips a clear message.
+func TestBaoConfigureJWTBoundClaimsIsMap(t *testing.T) {
+	roles := 0
+	for _, s := range baoConfigureSteps("acme/platform") {
+		if !(len(s.args) >= 2 && s.args[0] == "write" && strings.HasPrefix(s.args[1], "auth/jwt/role/")) {
+			continue
+		}
+		roles++
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(s.stdin), &raw); err != nil {
+			t.Fatalf("%s: stdin is not a JSON object: %v", s.args[1], err)
+		}
+		bc, ok := raw["bound_claims"]
+		if !ok {
+			t.Errorf("%s: bound_claims missing (role would bind to ANY repo)", s.args[1])
+			continue
+		}
+		var asMap map[string]any
+		if err := json.Unmarshal(bc, &asMap); err != nil {
+			t.Errorf("%s: bound_claims must be a JSON object/map, got %s — the 2026-06-25 '\\'\\' expected map, got string' regression", s.args[1], bc)
+		} else if asMap["repository"] != "acme/platform" {
+			t.Errorf("%s: bound_claims.repository = %v, want acme/platform", s.args[1], asMap["repository"])
+		}
+	}
+	if roles != 2 {
+		t.Fatalf("expected 2 jwt roles (platform-ci, secret-propagator), saw %d", roles)
+	}
+}
+
 func TestPolicyDocuments(t *testing.T) {
 	// Spot-check load-bearing paths so an accidental edit trips a test.
 	for _, p := range []string{
