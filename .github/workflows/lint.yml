@@ -62,7 +62,12 @@ env:
   # the dry-run validates against the same CRD schemas the cluster will use.
   ARGOCD_HELM_VERSION: "7.8.0"
   CERT_MANAGER_VERSION: "v1.16.3"
-  ESO_HELM_VERSION: "0.12.1"
+  # apl-core 6.x bundles external-secrets 2.4.1, whose CRDs serve
+  # external-secrets.io/v1 (the old 0.12.1 chart served only v1beta1/v1alpha1).
+  # Our manifests moved to v1 for apl-core 6.x, so the dry-run must install a v1-
+  # serving CRD or every ExternalSecret/ClusterSecretStore fails "no matches for
+  # kind … in version external-secrets.io/v1". Keep this matched to apl-core's bundle.
+  ESO_HELM_VERSION: "2.4.1"
   # Match the chart versions referenced from
   # apl-values/_shared/manifest/argo-{events,workflows}/argocd/applications/.
   ARGO_WORKFLOWS_HELM_VERSION: "0.42.3"
@@ -209,10 +214,15 @@ jobs:
           echo "External Secrets Operator CRDs (${ESO_HELM_VERSION})..."
           # ESO puts CRDs in templates/ (not crds/) — helm show crds returns nothing.
           # Render with --set crds.create=true to ensure the conditional fires.
+          # The 2.4.x clustersecretstores/secretstores CRDs exceed kubectl's
+          # 262144-byte limit on the last-applied-configuration annotation, so a
+          # client-side apply errors "metadata.annotations: Too long". Server-side
+          # apply doesn't use that annotation — required here (same as kube-prometheus
+          # below).
           helm template eso external-secrets/external-secrets --version "$ESO_HELM_VERSION" \
             --set crds.create=true \
             | yq 'select(.kind == "CustomResourceDefinition")' \
-            | kubectl apply -f -
+            | kubectl apply --server-side=true --force-conflicts -f -
 
           echo "Istio base CRDs (istio/base ${ISTIO_VERSION})..."
           helm template istio-base istio/base --version "$ISTIO_VERSION" --include-crds \

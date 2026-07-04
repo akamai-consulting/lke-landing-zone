@@ -668,11 +668,10 @@ jobs:
     environment: infra-${{ inputs.region }}
     permissions:
       contents: read
-    # 40, not 30: converge's own --budget is 30m (1800s); with checkout +
-    # cluster-access eating into a 30m job timeout the job could be KILLED before
-    # the budget elapsed — an opaque "timed out" instead of converge's verdict.
-    # 40m leaves ~10m headroom around the 30m budget.
-    timeout-minutes: 40
+    # converge's own --budget is 10m (600s); the job timeout sits ABOVE it so a
+    # killed job never masks converge's verdict with an opaque "timed out".
+    # 15m = the 10m budget + ~5m for checkout / cluster-access / failure diagnostics.
+    timeout-minutes: 15
     env:
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -784,10 +783,10 @@ jobs:
       - name: Wait for cluster to converge
         env:
           KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-        # Explicit --budget so the converge poll window is visibly bounded BELOW
-        # the job's timeout-minutes (40); 1800s is the command default, pinned to
-        # make the budget-vs-timeout relationship intentional.
-        run: llz ci converge --budget 1800
+        # Explicit --budget bounds the convergence poll to 10m, well below the job's
+        # timeout-minutes (15). A healthy fresh bootstrap converges in a few minutes;
+        # 10m is a generous ceiling — anything longer is a real stall, not slow rollout.
+        run: llz ci converge --budget 600
 
       # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx logs
       # WHILE the cluster is still up — before teardown and before the revoke below
