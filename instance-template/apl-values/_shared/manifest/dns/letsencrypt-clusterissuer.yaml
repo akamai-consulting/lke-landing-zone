@@ -21,16 +21,19 @@ metadata:
   annotations:
     # Wave -5: after ESO (-15) and external-secrets NPs (-10), before any
     # Certificate/Gateway annotation that references the issuer by name.
-    argocd.argoproj.io/sync-wave: "-5"
+    #
     # A deferred-ACME issuer is a SUPPORTED state (`llz doctor` calls the
     # unrendered REPLACE_PER_ENV email / missing LINODE_DNS_TOKEN "deferrable"),
-    # but Argo's built-in ClusterIssuer health check grades Ready=False as
-    # Degraded — and sync waves gate on health, so a not-yet-registered issuer
-    # at wave -5 wedges the whole platform-bootstrap sync BEFORE OpenBao
-    # (wave 0) is ever applied. Opt out of the health check: cert-manager
-    # retries ACME registration on its own, and `llz ci health` (which defers
-    # llz-letsencrypt-* via ExternalDepIssuers) owns the visibility.
-    argocd.argoproj.io/ignore-healthcheck: "true"
+    # and Argo's built-in ClusterIssuer health check would grade its
+    # Ready=False as Degraded, failing this sync wave and wedging the whole
+    # platform-bootstrap sync BEFORE OpenBao (wave 0) is ever applied. The
+    # cert-manager.io_ClusterIssuer health override in _shared/values.yaml
+    # (apps.argocd._rawValues) neutralizes that; `llz ci health` (which defers
+    # llz-letsencrypt-* via ExternalDepIssuers) owns readiness visibility.
+    # (An argocd.argoproj.io/ignore-healthcheck annotation is NOT sufficient —
+    # it only excludes the resource from the app health rollup, not from
+    # operation-level wave gating; verified the hard way on 2026-07-04.)
+    argocd.argoproj.io/sync-wave: "-5"
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
@@ -48,10 +51,10 @@ kind: ClusterIssuer
 metadata:
   name: llz-letsencrypt-staging
   annotations:
-    argocd.argoproj.io/sync-wave: "-5"
     # See llz-letsencrypt-production above: deferred ACME must not health-gate
-    # the platform-bootstrap waves.
-    argocd.argoproj.io/ignore-healthcheck: "true"
+    # the platform-bootstrap waves (handled by the ClusterIssuer health
+    # override in _shared/values.yaml).
+    argocd.argoproj.io/sync-wave: "-5"
 spec:
   acme:
     server: https://acme-staging-v02.api.letsencrypt.org/directory

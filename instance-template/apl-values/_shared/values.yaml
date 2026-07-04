@@ -73,6 +73,32 @@ apps:
             hs.status = "Healthy"
             hs.message = "NetworkPolicy applied (no status on this CNI; health forced — see _shared values.yaml)"
             return hs
+          # The llz-letsencrypt-* ClusterIssuers ship with a deferrable ACME
+          # email (REPLACE_PER_ENV until spec.dns.acmeEmail is set — a documented
+          # supported state). Let's Encrypt then rejects registration
+          # ("invalidContact: unable to parse email address"), cert-manager sets
+          # Ready=False, and Argo's built-in check grades that Degraded — which
+          # FAILS the wave -5 sync task of platform-bootstrap on every retry, so
+          # OpenBao (wave 0) never applies (2026-07-04 e2e wedge #3; the
+          # argocd.argoproj.io/ignore-healthcheck annotation demonstrably does
+          # NOT exempt a resource from operation-level wave gating, only from
+          # the app health rollup). Force Healthy: cert-manager keeps retrying
+          # registration on its own, a deferred issuer is expected NotReady
+          # indefinitely, and `llz ci health` reports issuer readiness
+          # independently (llz-letsencrypt-* deferred via ExternalDepIssuers,
+          # anything else hard-fails).
+          resource.customizations.health.cert-manager.io_ClusterIssuer: |
+            local hs = {}
+            hs.status = "Healthy"
+            hs.message = "ClusterIssuer applied (readiness not sync-gating; llz ci health reports it — see _shared values.yaml)"
+            if obj.status ~= nil and obj.status.conditions ~= nil then
+              for _, c in ipairs(obj.status.conditions) do
+                if c.type == "Ready" then
+                  hs.message = "Ready=" .. c.status .. ": " .. (c.message or "")
+                end
+              end
+            end
+            return hs
           resource.customizations.health.external-secrets.io_ClusterSecretStore: |
             local hs = {}
             if obj.status ~= nil and obj.status.conditions ~= nil then
