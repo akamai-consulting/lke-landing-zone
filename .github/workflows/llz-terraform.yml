@@ -395,7 +395,7 @@ jobs:
           llz ci require-secret APL_VALUES_REPO_TOKEN \
             --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys and by bootstrap-openbao." || FAIL=1
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
           [ "$FAIL" -eq 0 ]
 
       # Which shared VPC (if any) this deployment attaches to is resolved from the
@@ -624,15 +624,19 @@ jobs:
 
       # ── Pre-flight: env secrets the cluster-bootstrap apply needs ──────────────
       # APL_VALUES_REPO_TOKEN (passed as TF_VAR_apl_values_repo_token) is
-      # rendered into apl-core's otomi.git.password and the
-      # platform-apps-repo Secret; empty value produces an unauthenticated repo
-      # config — apl-operator can't push its values tree and Argo's repo-server
-      # can't clone over HTTPS. Surfaces 5-10 min in as Argo Application Unknown.
+      # rendered into apl-core's otomi.git.password, from which apl-core's own
+      # argocd-repo-creds ExternalSecret credentials Argo CD (the TF-seeded
+      # platform-apps-repo Secret is retired); empty value produces an
+      # unauthenticated repo config — apl-operator can't push its values tree
+      # and Argo's repo-server can't clone over HTTPS. Surfaces 5-10 min in as
+      # Argo Application Unknown.
       #
-      # OPENBAO_SECRETS_WRITE_TOKEN is used downstream by apply-object-storage
-      # (parallel job) to `gh secret set` the S3 secrets, by bootstrap-openbao,
-      # by the loki-admin-password stash below, and by the destroy-time
-      # GH-secret cleanup; an empty value 401s those. Front-load the check so the
+      # OPENBAO_SECRETS_WRITE_TOKEN is used downstream by bootstrap-openbao
+      # (the bao-seed-all GitHub-token seeds + recovery-key/root-token
+      # persistence) and by the destroy-time GH-secret cleanup; an empty value
+      # 401s those. (The S3-secret stashes and the loki-admin-password stash it
+      # once also served are retired — the keys are minted at bootstrap, the
+      # Loki password is a TF random_password.) Front-load the check so the
       # operator gets one consolidated error.
       - name: Pre-flight — verify infra-${{ env.REGION }} env secrets
         env:
@@ -644,7 +648,7 @@ jobs:
           llz ci require-secret APL_VALUES_REPO_TOKEN \
             --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys and by bootstrap-openbao." || FAIL=1
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
           [ "$FAIL" -eq 0 ]
 
       # A pinned first-party chart (llz-*) whose bumped version isn't published to
@@ -780,12 +784,14 @@ jobs:
   # terraform.yml first, then bootstrap-openbao.yml within a 60-min window.
   # With bootstrap-openbao.yml's `workflow_call:` trigger we can chain it here
   # so a single `module=all` apply walks the whole bootstrap path end-to-end:
-  #   1. apply-object-storage         (buckets + auto-stash 6 S3 secrets)
+  #   1. apply-object-storage         (S3 buckets only — the scoped keys are
+  #                                    minted later by bootstrap-openbao's
+  #                                    mint-bootstrap-objkeys, no GitHub stash)
   #   2. apply-cluster                (Linode LKE-E cluster)
-  #   3. apply-cluster-bootstrap      (apl-core + foundation + Kyverno policy +
-  #                                    firewall-controller config — the latter
-  #                                    folded in from the former bootstrap-cluster
-  #                                    job to drop a whole job's overhead)
+  #   3. apply-cluster-bootstrap      (apl-core + foundation + Kyverno policy;
+  #                                    the firewall-controller config seed it
+  #                                    once carried is retired — the cidrFirewall
+  #                                    component self-discovers in-cluster)
   #   4. bootstrap-openbao            (OpenBao init/unseal/seed + ESO sync, then
   #                                    its own `harbor` + `converge` jobs run in
   #                                    parallel — the final health gate moved INTO
@@ -802,13 +808,12 @@ jobs:
   bootstrap-openbao:
     name: Bootstrap OpenBao (${{ inputs.region }})
     # The `if:` mixes a default-skip-on-needs-failure guard with explicit
-    # `needs.*.result` checks so we can require apply-cluster-bootstrap (which
-    # now also seeds the firewall-controller config, formerly its own
-    # bootstrap-cluster job) to have SUCCEEDED while accepting apply-object-storage
-    # as either success OR skipped. apply-object-storage now runs on
-    # module=cluster too (its buckets/keys are always needed), so on a normal
-    # cluster bootstrap it SUCCEEDS and stashes the S3 secrets before this job
-    # seeds them. The `|| skipped` arm is kept as a backstop for forward-compat
+    # `needs.*.result` checks so we can require apply-cluster-bootstrap to have
+    # SUCCEEDED while accepting apply-object-storage as either success OR
+    # skipped. apply-object-storage now runs on module=cluster too (its buckets
+    # are always needed), so on a normal cluster bootstrap it SUCCEEDS and the
+    # buckets exist before this job's mint-bootstrap-objkeys mints their scoped
+    # keys. The `|| skipped` arm is kept as a backstop for forward-compat
     # (e.g. a future module value that legitimately skips object-storage) — a
     # FAILED object-storage apply still (correctly) blocks this job. Without
     # `always()` the default `success()` would skip this job whenever
@@ -821,14 +826,13 @@ jobs:
       needs.apply-cluster-bootstrap.result == 'success' &&
       (needs.apply-object-storage.result == 'success' || needs.apply-object-storage.result == 'skipped')
     # needs:
-    #   apply-cluster-bootstrap    cluster + apl-core ready + firewall-controller
-    #                              config seeded (folded in from bootstrap-cluster)
-    #   apply-object-storage       6 S3 secrets auto-stashed in infra-<region>
-    #                              env (bootstrap-openbao's preflight asserts the
-    #                              object-storage state is populated before any
-    #                              seed step runs; without this dep the preflight
-    #                              races the stash step's gh-secret-set on
-    #                              slow-Linode-OBJ days). Now runs on
+    #   apply-cluster-bootstrap    cluster + apl-core ready (the firewall-config
+    #                              seed it once carried is retired — the
+    #                              cidrFirewall component self-discovers)
+    #   apply-object-storage       the S3 buckets exist (bootstrap-openbao's
+    #                              preflight asserts the object-storage state is
+    #                              populated before mint-bootstrap-objkeys mints
+    #                              the scoped keys against them). Now runs on
     #                              module=cluster too; the `|| skipped` arm in
     #                              the `if:` above is a forward-compat backstop.
     needs: [apply-cluster-bootstrap, apply-object-storage]
@@ -1379,8 +1383,8 @@ jobs:
     # making it always-run does NOT couple bucket lifecycle to the cluster — a
     # cluster destroy still never touches the buckets (destroy is module-scoped
     # via destroy:<region>:object-storage), preserving log/image durability
-    # across rebuilds. bootstrap-openbao already `needs:` this job and seeds
-    # OpenBao from the keys it auto-stashes.
+    # across rebuilds. bootstrap-openbao already `needs:` this job and mints
+    # the scoped keys against the buckets it creates.
     if: >
       github.event_name == 'workflow_dispatch' &&
       (inputs.action == 'apply' || inputs.action == 'plan') &&
