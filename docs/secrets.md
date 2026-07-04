@@ -100,7 +100,7 @@ useful context for emergency recovery and understanding the secret layout.
    - the read-only `platform-ci` policy, bound to the `eso` Kubernetes-auth role, which every in-cluster consumer reads through;
    - the write-scoped `eso-pusher` policy, bound to the `eso-pusher` Kubernetes-auth role (same ESO controller SA as `eso`), for the in-cluster-sourced PushSecret paths (`grafana/admin`, `otel/ingress`, `harbor/admin`);
    - the `linode-rotator` policy, bound to the `linode-rotator` Kubernetes-auth role, for the in-cluster credential rotator's paths (`loki/object-store`, `harbor/registry-s3`);
-   - the `secret-propagator` GitHub-OIDC role + policy used by `llz ci propagate-pat`.
+   - the `secret-propagator` GitHub-OIDC role + policy used by `llz ci rotate-incluster-pat`.
 
    Enables the file audit device.
 
@@ -167,11 +167,17 @@ on its first run and owns it thereafter. `secret/harbor/registry-s3` is **not** 
 at bootstrap — the rotator creates it on first run.
 
 > **DNS-01 note.** cert-manager DNS-01 challenges are solved by apl-core's
-> `cert-manager-webhook-linode` (API group `acme.slicen.me`), which holds its own
-> static Linode API token supplied via `TF_VAR_linode_dns_token` (from the
-> `LINODE_DNS_TOKEN` GitHub secret) as `apps.cert-manager.dns.provider.linode.apiToken`.
-> The landing zone no longer seeds a separate `secret/certmanager/dns01` OpenBao path;
-> the `llz-letsencrypt-*` ClusterIssuers target that webhook.
+> `cert-manager-webhook-linode` (API group `acme.slicen.me`); the
+> `llz-letsencrypt-*` ClusterIssuers target that webhook. In steady state its
+> token — and ExternalDNS's — is the **rotating narrow in-cluster PAT** from
+> `secret/linode/api-token`: the `dns-rotating-token` Kyverno policy repoints
+> apl-core's two DNS ExternalSecrets at the `openbao` ClusterSecretStore (see
+> [designs/linode-pat-dns-consolidation.md](designs/linode-pat-dns-consolidation.md)).
+> The static token supplied via `TF_VAR_linode_dns_token` (from the
+> `LINODE_DNS_TOKEN` GitHub secret) as `apps.cert-manager.dns.provider.linode.apiToken`
+> remains only as the schema-required first-boot fallback, used until the policy
+> syncs. The landing zone no longer seeds a separate `secret/certmanager/dns01`
+> OpenBao path.
 
 Separately, three secrets are **sourced in-cluster** by ESO PushSecrets (not minted
 by the rotator) and pushed up to OpenBao through the `eso-pusher` Kubernetes-auth
@@ -204,8 +210,8 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 
 | Secret | What it is | Rotation method |
 |--------|------------|-----------------|
-| `LINODE_API_TOKEN` | Linode provisioning PAT (read/write) | **Automated** — `secret-rotation.yml` mints + propagates monthly (`0 4 1 * *`), revokes old daily (`30 3 * * *`); ≤90-day policy with daily expiry audit |
-| `LINODE_DNS_TOKEN` | Linode API token for apl-core's `cert-manager-webhook-linode` DNS-01 solver (`TF_VAR_linode_dns_token` → `apps.cert-manager.dns.provider.linode.apiToken`) | **Manual** — **static** operator input; ≤90-day policy |
+| `LINODE_API_TOKEN` | Linode provisioning PAT (read/write) — **CI/Terraform-only** (never enters a cluster; also mints the narrow in-cluster PAT) | **Automated** — `secret-rotation.yml` mints monthly (`0 4 1 * *`), revokes old daily (`30 3 * * *`); ≤90-day policy with daily expiry audit |
+| `LINODE_DNS_TOKEN` | Linode API token for the DNS **first-boot fallback** (`TF_VAR_linode_dns_token` → `apps.cert-manager.dns.provider.linode.apiToken`); steady-state DNS auth is the rotating in-cluster PAT via the `dns-rotating-token` Kyverno policy | **Manual** — **static** operator input; ≤90-day policy |
 | `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` | Object Storage key for the TF-state backend bucket | **On-demand** via `secret-rotation.yml` (`tf-state-key` / `tf-state-key-revoke` scopes); no scheduled rotation (bootstrap dependency) |
 | `OPENBAO_SECRETS_WRITE_TOKEN` | GitHub classic PAT (Actions + Secrets: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
 | `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
@@ -216,7 +222,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 
 | Path | What it holds | Rotation method |
 |------|---------------|-----------------|
-| `secret/linode/api-token` | Linode provisioning PAT | **Automated** — `secret-rotation.yml` → `propagate-pat` (GitHub-OIDC `secret-propagator` role) |
+| `secret/linode/api-token` | **Narrow in-cluster PAT** (`llz-incluster-<region>`: domains/object_storage/volumes rw, linodes/vpcs ro, firewall rw) — read by volume-labeler, the cred-rotator (minting cred), cidr-firewall, and the DNS consumers via the `dns-rotating-token` policy | **Automated** — first minted by `mint-bootstrap-pat` at bootstrap; re-minted monthly per region by `secret-rotation.yml` → `rotate-incluster-pat` (GitHub-OIDC `secret-propagator` role), 7-day-grace drain |
 | `secret/loki/object-store` | Loki Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/harbor/registry-s3` | Harbor registry Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |

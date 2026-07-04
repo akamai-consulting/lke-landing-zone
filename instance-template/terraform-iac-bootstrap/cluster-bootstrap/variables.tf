@@ -38,7 +38,7 @@ variable "apl_values_repo_token" {
 }
 
 variable "linode_dns_token" {
-  description = "Linode API token scoped to DNS zone write only. Injected as dns.provider.linode.apiToken so ExternalDNS + cert-manager DNS-01 can manage records under cluster.domainSuffix. Supply via TF_VAR_linode_dns_token. In CI, sourced from secrets.LINODE_DNS_TOKEN with a non-blocking placeholder fallback when the secret isn't provisioned on the env — the placeholder satisfies apl-core's string-type schema requirement so the cluster bootstraps, but ExternalDNS and cert-manager DNS-01 fail to authenticate at runtime until a real token is provisioned."
+  description = "Linode API token scoped to DNS zone write only — the FIRST-BOOT FALLBACK for DNS auth. Injected as dns.provider.linode.apiToken (apl-core's schema requires the string), it authenticates ExternalDNS + cert-manager DNS-01 only until the kyverno dns-rotating-token policy syncs and repoints both consumers' ExternalSecrets at the rotating narrow in-cluster PAT (secret/linode/api-token — see docs/designs/linode-pat-dns-consolidation.md), the steady-state DNS credential this static value can never be. Supply via TF_VAR_linode_dns_token. In CI, sourced from secrets.LINODE_DNS_TOKEN with a non-blocking placeholder fallback when the secret isn't provisioned on the env — the placeholder satisfies the schema so the cluster bootstraps, but first-boot DNS auth then only works once the mutation lands."
   type        = string
   sensitive   = true
 }
