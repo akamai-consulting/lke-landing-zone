@@ -81,7 +81,7 @@ variable "node_type" {
 }
 
 variable "node_count" {
-  description = "Number of nodes in the default node pool when autoscaling is disabled. Default 5: apl-core + the full support-plane (OpenBao HA ×3, ESO, Argo, cert-automation, firewall) does not fit on 3× g8-dedicated-8-4 — OpenBao followers go Pending on Insufficient memory / max Block Storage volume count, stalling Bootstrap OpenBao. node_count is NOT ForceNew (scales the pool live)."
+  description = "Number of nodes in the default node pool when autoscaling is disabled. Default 5: apl-core + the full support-plane (OpenBao HA ×3, ESO, Argo, cert-automation, firewall) does not fit on 3× g8-dedicated-8-4 — OpenBao followers go Pending on Insufficient memory / max Block Storage volume count, stalling Bootstrap OpenBao. node_count is NOT ForceNew (scales the pool live). That sizing was measured against apl-core 5.0.0; apl-core 6.x reduced platform requests (0.8 CPU / 1 GB RAM / 6 PVs less, gitea gone) — retest 4 (or 3) nodes on a v6 lab bootstrap before relaxing this default."
   type        = number
   default     = 5
 }

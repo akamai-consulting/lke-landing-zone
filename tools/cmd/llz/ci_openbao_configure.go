@@ -147,12 +147,18 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
-		// a GitHub secret and rotated in-cluster via `gh secret set`. ESO's
-		// controller SA is the chart's release name (llz-external-secrets).
+		// a GitHub secret and rotated in-cluster via `gh secret set`.
+		//
+		// apl-core 6.x: ESO is now a CORE, always-on app shipped by apl-core in the
+		// `external-secrets` namespace; the landing zone no longer runs its own ESO
+		// (the former llz-external-secrets controller). The controller SA is the
+		// chart's release name `external-secrets` in namespace `external-secrets`,
+		// so the role binds that identity. ESO mints the SA token via TokenRequest
+		// (the apl-core ESO ClusterRole carries serviceaccounts/token create).
 		{desc: "write kubernetes auth role eso", fatal: true,
 			args: []string{"write", "auth/kubernetes/role/eso",
-				"bound_service_account_names=llz-external-secrets",
-				"bound_service_account_namespaces=llz-external-secrets",
+				"bound_service_account_names=external-secrets",
+				"bound_service_account_namespaces=external-secrets",
 				"policies=platform-ci", "ttl=15m"}},
 		// Second Kubernetes-auth role for the SAME ESO controller SA, mapped to the
 		// write-scoped eso-pusher policy. The `openbao-push` ClusterSecretStore
@@ -160,8 +166,8 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		// generated paths while the read `openbao` store stays read-only via `eso`.
 		{desc: "write kubernetes auth role eso-pusher", fatal: true,
 			args: []string{"write", "auth/kubernetes/role/eso-pusher",
-				"bound_service_account_names=llz-external-secrets",
-				"bound_service_account_namespaces=llz-external-secrets",
+				"bound_service_account_names=external-secrets",
+				"bound_service_account_namespaces=external-secrets",
 				"policies=eso-pusher", "ttl=15m"}},
 		// Kubernetes auth role for the in-cluster Linode credential rotator — binds
 		// the linode-cred-rotator ServiceAccount to the write-scoped linode-rotator

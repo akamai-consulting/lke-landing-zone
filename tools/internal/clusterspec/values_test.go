@@ -114,6 +114,32 @@ dns:
 	}
 }
 
+// Regression: gitea is DefaultDisabled on v6, so a default render (no explicit
+// gitea toggle) must NOT re-enable it — even if the base template somehow carries
+// enabled: true. Guards the bug where the gitea component lacked DefaultDisabled
+// and RenderValues flipped the committed `gitea: { enabled: false }` back to true.
+func TestRenderValues_GiteaDisabledByDefault(t *testing.T) {
+	const base = `apps:
+  gitea:
+    enabled: true
+  harbor:
+    enabled: false
+`
+	// No gitea toggle → its DefaultDisabled default (off) must win.
+	out, err := RenderValues([]byte(base), map[string]ComponentToggle{}, ValuesIdentity{})
+	if err != nil {
+		t.Fatalf("RenderValues: %v", err)
+	}
+	got := mustDecodeValues(t, out)
+	if got["gitea"] {
+		t.Errorf("gitea re-enabled by default render; want disabled:\n%s", out)
+	}
+	// harbor (default-enabled) still flips on — proves the render did run.
+	if !got["harbor"] {
+		t.Errorf("harbor should be enabled by default:\n%s", out)
+	}
+}
+
 func TestRenderValues_Sizing(t *testing.T) {
 	const base = `apps:
   prometheus:

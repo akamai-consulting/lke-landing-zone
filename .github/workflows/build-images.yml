@@ -24,12 +24,22 @@ on:
         default: all
         type: choice
         options: [terraform, kubernetes, devcontainer, llz, all]
+      sha:
+        description: 'Full commit SHA to build (default: the dispatched ref HEAD). release-e2e passes the exact commit under test so the sha-<> tag it waits on matches even if the branch HEAD has since moved — `gh workflow run --ref` can only name a branch, so without this a build races HEAD.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
 
 env:
   REGISTRY: ghcr.io
+  # The commit to build: a caller-supplied sha (release-e2e) pins the exact commit
+  # so its sha-<> tag matches even when the branch HEAD moved after dispatch; else
+  # the dispatched ref HEAD / pushed commit. (For a push event `inputs` is empty →
+  # falls back to github.sha.)
+  SHA: ${{ inputs.sha || github.sha }}
 
 jobs:
   build-terraform:
@@ -54,6 +64,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.SHA }} # build the requested commit, not just the ref HEAD
 
       - name: Resolve GHCR namespace
         id: ns
@@ -101,10 +113,10 @@ jobs:
             --sbom=true \
             --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
+            --build-arg LLZ_VERSION=dev-${{ env.SHA }} \
             --tag ${{ steps.ns.outputs.repo }}/ci-terraform:1.9.8 \
             --tag ${{ steps.ns.outputs.repo }}/ci-terraform:latest \
-            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:sha-${{ github.sha }} \
+            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:sha-${{ env.SHA }} \
             --cache-from type=gha,scope=ci-terraform \
             --cache-to   type=gha,scope=ci-terraform,mode=max \
             dockerfiles/terraform
@@ -149,6 +161,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.SHA }} # build the requested commit, not just the ref HEAD
 
       - name: Resolve GHCR namespace
         id: ns
@@ -187,10 +201,10 @@ jobs:
             --sbom=true \
             --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
+            --build-arg LLZ_VERSION=dev-${{ env.SHA }} \
             --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:1.31.0 \
             --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:latest \
-            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:sha-${{ github.sha }} \
+            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:sha-${{ env.SHA }} \
             --cache-from type=gha,scope=ci-kubernetes \
             --cache-to   type=gha,scope=ci-kubernetes,mode=max \
             dockerfiles/kubernetes
@@ -225,6 +239,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.SHA }} # build the requested commit, not just the ref HEAD
 
       - name: Resolve GHCR namespace
         id: ns
@@ -264,9 +280,9 @@ jobs:
             --sbom=true \
             --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
+            --build-arg LLZ_VERSION=dev-${{ env.SHA }} \
             --tag ${{ steps.ns.outputs.repo }}/devcontainer:latest \
-            --tag ${{ steps.ns.outputs.repo }}/devcontainer:sha-${{ github.sha }} \
+            --tag ${{ steps.ns.outputs.repo }}/devcontainer:sha-${{ env.SHA }} \
             --cache-from type=gha,scope=devcontainer \
             --cache-to   type=gha,scope=devcontainer,mode=max \
             dockerfiles/devcontainer
@@ -301,6 +317,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.SHA }} # build the requested commit, not just the ref HEAD
 
       - name: Resolve GHCR namespace
         id: ns
@@ -341,9 +359,9 @@ jobs:
             --sbom=true \
             --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ github.sha }} \
+            --build-arg LLZ_VERSION=dev-${{ env.SHA }} \
             --tag ${{ steps.ns.outputs.repo }}/llz:latest \
-            --tag ${{ steps.ns.outputs.repo }}/llz:sha-${{ github.sha }} \
+            --tag ${{ steps.ns.outputs.repo }}/llz:sha-${{ env.SHA }} \
             --cache-from type=gha,scope=llz \
             --cache-to   type=gha,scope=llz,mode=max \
             dockerfiles/llz

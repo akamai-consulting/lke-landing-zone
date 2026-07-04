@@ -19,7 +19,8 @@ func AplCoreChain() []string {
 	return []string{
 		"helm_release.apl",
 		"kubectl_manifest.apl_operator_namespace",
-		"kubectl_manifest.apl_sops_secrets_placeholder",
+		// (apl-core ≤5.x also had kubectl_manifest.apl_sops_secrets_placeholder here;
+		// the resource was removed on v6 — restore this entry if you ever pin back.)
 		"kubectl_manifest.platform_app_storage_class",
 	}
 }

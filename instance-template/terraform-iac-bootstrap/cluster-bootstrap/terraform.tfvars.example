@@ -19,7 +19,7 @@ deployment = "your-env"
 
 # apl-core Helm chart — pin a version and bump deliberately.
 # Verify with: helm search repo apl/apl --versions
-apl_chart_version = "5.0.0"
+apl_chart_version = "6.0.0"
 
 # Subdirectory under apl-values/ for this cluster's overlay.
 apl_values_env = "your-env"
@@ -51,4 +51,3 @@ apps_repo_revision = "main"
 #   TF_VAR_tf_state_bucket             S3 bucket holding the cluster workspace state
 #   TF_VAR_linode_dns_token            Linode token scoped to DNS zone write
 #   TF_VAR_apl_values_repo_token       GitHub fine-grained PAT (Contents: write) for the values + apps repo
-#   TF_VAR_loki_admin_password         Loki gateway basic-auth admin password (optional — generated + persisted if empty)

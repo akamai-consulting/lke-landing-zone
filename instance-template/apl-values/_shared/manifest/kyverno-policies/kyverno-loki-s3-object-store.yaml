@@ -16,13 +16,17 @@
 # fails ("mkdir … read-only file system"), so zero logs are persisted.
 #
 # The obvious fix — set `_rawValues.loki.schemaConfig` in apl-values — does NOT
-# work through apl-core's value pipeline. apl-core round-trips values through a
-# MIX of YAML libraries: the `yaml` lib dumps the schema `from` date unquoted
-# (`from: 2020-09-07`), then `js-yaml` re-parses that plain scalar as a YAML 1.1
-# !!timestamp and serializes it as `2020-09-07T00:00:00.000Z`. Loki's
-# schema_config `from` parser wants date-only `2006-01-02` and rejects the
-# timestamp ("extra text") → CrashLoopBackOff. No quoting in the values
-# survives the round-trip (verified against apl-operator's js-yaml + yaml libs).
+# flip it on apl-core v6: `object_store: s3` is emitted only when the native
+# `obj.provider.type: linode` is set in values, which the landing zone
+# deliberately does NOT use (it wires Loki S3 via `_rawValues` + in-cluster key
+# rotation, not apl-core's static-cred `obj` model — see the obj-storage decision
+# in docs/designs/apl-core-v6-migration.md). Through `_rawValues` alone the schema
+# `object_store` stays the chart default `filesystem`.
+#
+# (Historical note: on apl-core ≤5.x this fix ALSO couldn't be a schemaConfig
+# override because the values pipeline reserialized the schema `from` date into an
+# ISO timestamp Loki rejected. v6 quotes/truncates the date correctly, so that
+# specific round-trip is gone — but the object_store gap above remains.)
 #
 # So we DON'T override schemaConfig at all — the chart's own default schema has
 # a valid date-only `from: "2020-09-07"` (it never goes through the pipeline) —
@@ -37,8 +41,10 @@
 # keycloak-trust.yaml and cluster-bootstrap's kyverno-pvc-encrypted-storage-
 # class.yaml).
 #
-# If/when apl-core (or the loki chart) lets `object_store` be set safely via
-# values, this policy can be removed.
+# Removal is coupled to the obj-storage decision: this policy goes away only if
+# the landing zone adopts apl-core's native `obj.provider.linode` path (which
+# emits `object_store: s3` itself), or apl-core lets `object_store` be set safely
+# via `_rawValues`/schemaConfig.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:

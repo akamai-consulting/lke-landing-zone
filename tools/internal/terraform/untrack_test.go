@@ -2,6 +2,7 @@ package terraform
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -70,7 +71,15 @@ func TestClassifyKubeHost(t *testing.T) {
 }
 
 func TestAplCoreChain(t *testing.T) {
-	if got := AplCoreChain(); len(got) != 4 || got[0] != "helm_release.apl" {
+	got := AplCoreChain()
+	if len(got) != 3 || got[0] != "helm_release.apl" {
 		t.Errorf("AplCoreChain = %v", got)
+	}
+	// The apl_sops_secrets_placeholder resource was removed on v6 — it must not
+	// linger in the drop set (harmless at runtime, but stale).
+	for _, a := range got {
+		if strings.Contains(a, "sops") {
+			t.Errorf("AplCoreChain still lists a removed sops resource: %s", a)
+		}
 	}
 }

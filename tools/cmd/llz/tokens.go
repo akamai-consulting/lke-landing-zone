@@ -204,7 +204,6 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// ── Optional secrets ─────────────────────────────────────────────────────
 	for _, s := range []struct{ name, desc string }{
 		{"LINODE_DNS_TOKEN", "Linode token, Domains: Read/Write (cert-manager DNS-01)"},
-		{"LOKI_ADMIN_PASSWORD", "Loki gateway basic-auth password"},
 		{"CLOUD_FIREWALL_TOKEN", "Linode token scoped to Cloud Firewalls"},
 	} {
 		if have(s.name, true) {

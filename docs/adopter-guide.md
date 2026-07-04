@@ -82,7 +82,7 @@ add a one-line annotation above it so the annotation manager bumps it too:
 
 ```hcl
 # renovate: datasource=helm depName=apl registryUrl=https://<your-apl-helm-repo>
-apl_chart_version = "5.0.0"
+apl_chart_version = "6.0.0"
 ```
 
 Renovate keeps the *published artifacts* current. For the **copied** scaffolding
@@ -144,7 +144,7 @@ are never committed. Everything else is a Linode/apl-core default you usually ke
 | `cluster.bootstrap.aplChartVersion` | MUST-SET | Pin deliberately |
 | `cluster.bootstrap.aplValues.revision` / `.username`, `appsRepoRevision` | default | `revision`/`username` → `otomi.git.branch`/`username` in values.yaml (default `main` / `x-access-token`); the values-repo `revision` is **no longer a tfvar** |
 | The Loki/Harbor S3 bucket names + endpoint | derived | `llz render` derives them from the env name + `cluster.objectStorage.cluster` and writes them into values.yaml — **not a cluster-bootstrap tfvar** |
-| `tf_state_bucket`, `linode_dns_token`, `apl_values_repo_token`, `loki_admin_password`, `linode_token`, `openbao_secrets_write_token` | SECRET | All via `TF_VAR_*` in CI. `apl_values_repo_token` = fine-grained PAT (Contents: write). `loki_admin_password` optional — generated + stashed if empty |
+| `tf_state_bucket`, `linode_dns_token`, `apl_values_repo_token`, `linode_token`, `openbao_secrets_write_token` | SECRET | All via `TF_VAR_*` in CI. `apl_values_repo_token` = fine-grained PAT (Contents: write). (apl-core 6.x auto-generates the Loki admin password — no `loki_admin_password` input.) |
 
 ### `object-storage/` — registry + logs OBJ buckets
 

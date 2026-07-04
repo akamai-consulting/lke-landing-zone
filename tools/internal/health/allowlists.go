@@ -26,6 +26,7 @@ func ExternalDepApps() []DepEntry {
 		{"istio-system-oauth2-proxy", "Keycloak OIDC issuer (keycloak.<domain>) not resolvable until DNS is wired — run bootstrap-dns.yml; deferred alongside external-dns"},
 		{"gitops-global", "apl-core's global-values Argo app is hardwired to clone the in-cluster gitea (gitea-http.gitea.svc), which this landing zone obsoletes — otomi.git points at the external GitHub repo. Bound deep in apl-core, not our config; deferred until apl-core sources gitops-global from otomi.git"},
 		{"team-[a-z0-9-]+-values-gitops", "apl-core/otomi generates a per-team values-gitops Application pointing at env/teams/<team>/sealedsecrets — a path that does not exist in this landing zone (we use ESO + OpenBao, not otomi per-team sealed-secrets), so it sits Unknown with a ComparisonError ('app path does not exist'). Same class as gitops-global: an apl-core-internal app this LZ obsoletes, not our config; deferred so it can't pin the convergence gate."},
+		{"gitops-ns-apl-[a-z0-9-]+", "apl-core's v6 operator creates one gitops Application per env/manifests/namespaces/<ns> dir (apply-as-apps.ts addGitOpsApps); the apl-*-prefixed namespaces (apl-secrets, apl-users) are operator-owned SealedSecret stores. This landing zone never populates that path (it uses ESO + OpenBao, not otomi SealedSecrets), so the apps sit Unknown with a ComparisonError ('env/manifests/namespaces/apl-... app path does not exist'). Same class as gitops-global / team-*-values-gitops — an apl-core-internal app this LZ obsoletes, deferred so it can't pin the convergence gate."},
 	}
 }
 
@@ -43,7 +44,9 @@ func ExternalDepWorkloads() []DepEntry {
 // ExternalDepExternalSecrets are ExternalSecrets expected Ready=False until an
 // operator-supplied input arrives.
 func ExternalDepExternalSecrets() []DepEntry {
-	return []DepEntry{}
+	return []DepEntry{
+		{"llz-cert-automation/harbor-docker-config", "reads the Harbor robot creds at secret/harbor/robot, which are seeded by the harbor-robot-provisioner CronJob (schedule */5) only AFTER Harbor's registry is up — so on a fresh bootstrap it sits Ready=False (SecretSyncedError: could not get secret data from provider) for the first few minutes until the CronJob's first tick writes the path and the ExternalSecret re-syncs (refreshInterval 1m). It feeds ONLY the cert-automation HAProxy-rebuild workflow, which runs on cert rotation (~80 days out), so it is off the bootstrap critical path and must not pin the convergence gate. Deferred; it converges shortly after Harbor without operator action."},
+	}
 }
 
 // NPExternalDepNamespaces are namespaces whose default-deny NetworkPolicies

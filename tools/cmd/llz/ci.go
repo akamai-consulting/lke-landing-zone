@@ -111,6 +111,13 @@ func ciCmd() *cobra.Command {
 	// Chart.yaml version, or Argo pulls a tag the registry never received and the
 	// support-plane app silently never syncs (llz-openbao namespace never created).
 	c.AddCommand(ciChartPinGuardCmd())
+	// Runtime companion: a pinned first-party chart version must actually EXIST in
+	// the OCI registry, or Argo 404s the pull on a feature-branch e2e (bumped-but-
+	// unpublished chart) and the OpenBao bootstrap dies on the missing llz-openbao ns.
+	c.AddCommand(ciChartPublishCheckCmd())
+	// Package + push + keyless-sign first-party charts to GHCR (immutable; re-signs a
+	// pushed-but-unsigned version). Replaces publish-charts.yml's inline bash.
+	c.AddCommand(ciPublishChartsCmd())
 	// Cluster-bootstrap local-exec bodies (instance-template cluster-bootstrap/
 	// main.tf): the apl_pipeline_ready readiness gate, the kyverno_* policy apply
 	// (readiness poll + apply + webhook-race soft-fail + retrofit kick), and the

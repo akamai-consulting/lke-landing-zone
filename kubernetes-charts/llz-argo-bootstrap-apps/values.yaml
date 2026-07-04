@@ -106,13 +106,12 @@ appProject:
   extraSourceRepos:
     - https://openbao.github.io/openbao-helm
     - https://argoproj.github.io/argo-helm
-    - https://charts.external-secrets.io
   # Namespaces the project's Applications may deploy into. Bootstrap-shaped
   # default list; trim/extend per sibling stack.
   destinationNamespaces:
     - kube-system
     - llz-openbao
-    - llz-external-secrets
+    - external-secrets   # apl-core 6.x: bundled ESO controller's namespace
     - cert-manager
     - llz-cert-automation
     - harbor
@@ -161,7 +160,7 @@ appProject:
 # ---------------------------------------------------------------------------
 components:
   # Wave -20: cluster-foundation. Creates the namespaces apl-core does NOT manage
-  # (llz-openbao, llz-external-secrets, llz-observability, llz-argo-workflows/events,
+  # (llz-openbao, llz-observability, llz-argo-workflows/events,
   # grafana, monitoring), the default-deny + component NetworkPolicies,
   # the CoreDNS *.internal rewrite + restart Job, and the storage-class default
   # patcher. MUST be -20 (same tier as the AppProject) so the namespaces exist
@@ -179,7 +178,7 @@ components:
       type: oci
       # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
       chart: llz-cluster-foundation
-      version: 0.1.5
+      version: 0.1.6
       releaseName: llz-cluster-foundation
     syncPolicy:
       automated:
@@ -189,28 +188,15 @@ components:
         - CreateNamespace=false
         - ServerSideApply=true
 
-  # Wave -15: External Secrets Operator. apl-core 5.0.0 does NOT ship ESO, so
-  # the cluster has zero external-secrets.io CRDs out of the box. -15 places it
-  # AFTER the AppProject (-20) so `project:` resolves, and BEFORE consumers
-  # (default wave 0) so the CRDs + webhook exist before any ClusterSecretStore /
-  # ExternalSecret is reconciled.
-  - name: llz-external-secrets-operator
-    enabled: true
-    syncWave: "-15"
-    destinationNamespace: llz-external-secrets
-    source:
-      type: oci
-      # Upstream ESO chart (not the first-party GHCR registry).
-      repoURL: https://charts.external-secrets.io
-      chart: external-secrets
-      version: 0.10.7
-      releaseName: llz-external-secrets
-      valuesObject:
-        installCRDs: true
-        webhook:
-          create: true
-        certController:
-          create: true
+  # External Secrets Operator: NOT a bootstrap Application on apl-core 6.x. ESO is
+  # now a CORE, always-on app shipped by apl-core itself in the `external-secrets`
+  # namespace (its helmfile installs the external-secrets.io CRDs + webhook before
+  # the support-plane consumers run), gated on apps.sealed-secrets.enabled (keep it
+  # on). The former llz-external-secrets-operator Application (upstream ESO chart at
+  # wave -15) was removed in the v6 migration — a second cluster-scoped ESO
+  # controller would fight apl-core's over the same CRs. The ESO-namespace
+  # NetworkPolicies that apl-core does not ship now come from the externalSecrets
+  # component (apl-values/components/externalSecrets/).
 
   # Wave -15: Argo Workflows. apl-core doesn't ship it; needed for the
   # Workflow/CronWorkflow CRDs the cert-automation WorkflowTemplate
@@ -268,7 +254,7 @@ components:
       type: oci
       # repoURL omitted -> defaults to global.chartsRegistry (GHCR).
       chart: llz-cert-automation
-      version: 0.1.5
+      version: 0.1.6
       releaseName: llz-cert-automation
       valuesObject:
         namespace: llz-cert-automation

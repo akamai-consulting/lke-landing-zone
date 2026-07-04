@@ -2,8 +2,10 @@
 # hardcode `storageClass: linode-block-storage` on the linode provider and
 # can't be overridden via `cluster.defaultStorageClass`:
 #
-#   - gitea-valkey            → namespace `gitea`             (PVC: valkey-data-gitea-valkey-primary-0)
 #   - oauth2-proxy redis-HA   → namespace `istio-system`      (PVC: data-oauth2-proxy-redis-ha-server-0)
+#
+# (apl-core ≤5.x also hit gitea-valkey in namespace `gitea`; gitea is disabled on
+# v6, so that PVC never appears and `gitea` was dropped from the namespace scope.)
 #
 # The hardcoded line lives in apl-core's value templates:
 #   values/gitea/gitea-valkey.gotmpl
@@ -52,7 +54,7 @@ spec:
           - resources:
               kinds: [PersistentVolumeClaim]
               operations: [CREATE]
-              namespaces: [gitea, istio-system]
+              namespaces: [istio-system]
       preconditions:
         all:
           # Match the LKE-shipped classes and the empty-string fallthrough.

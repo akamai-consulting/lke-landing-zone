@@ -89,8 +89,6 @@ on:
         required: false
       APPS_REPO_REVISION:
         required: false
-      LOKI_ADMIN_PASSWORD:
-        required: false
       OPENBAO_ADDRESS:
         required: false
       OPENBAO_ROOT_TOKEN:
@@ -399,7 +397,7 @@ jobs:
           llz ci require-secret APL_VALUES_REPO_TOKEN \
             --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys + LOKI_ADMIN_PASSWORD and by bootstrap-openbao." || FAIL=1
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys and by bootstrap-openbao." || FAIL=1
           [ "$FAIL" -eq 0 ]
 
       # Which shared VPC (if any) this deployment attaches to is resolved from the
@@ -535,11 +533,13 @@ jobs:
           echo "Cluster API endpoints:"
           terraform output -json api_endpoints
 
-  # ── Apply / plan in-cluster bootstrap (apl-core + apl-values-repo Secret) ───
+  # ── Apply / plan in-cluster bootstrap (apl-core + platform-apps-repo Secret) ─
   # Runs after apply-cluster. Reads kubeconfig from the cluster workspace's
   # remote state output and applies all Kubernetes-side resources: apl-core
-  # Helm release, the apl-values-repo Argo CD repo Secret, and the
-  # argocd-cm config-patch Job.
+  # Helm release, the platform-apps-repo Argo CD repo Secret, and the
+  # argocd-cm config-patch Job. (The former apl-values-repo Secret is gone —
+  # on apl-core 6.x the values-repo credential is self-registered by apl-core's
+  # helmfile as an argocd-repo-creds-* ExternalSecret.)
   #
   # apply ONLY — NOT plan. Unlike apply-vpc / apply-cluster (linode-provider roots
   # that plan fine before anything exists), cluster-bootstrap CONSUMES a live
@@ -592,10 +592,9 @@ jobs:
       # the GHCR repo Secret is skipped (only works if the charts are public).
       TF_VAR_ghcr_token:              ${{ secrets.GHCR_READ_TOKEN }}
       TF_VAR_ghcr_username:           ${{ vars.GHCR_USERNAME }}
-      # TF_VAR_loki_admin_password is intentionally NOT set here: the "Ensure Loki
-      # admin password" step below exports it to $GITHUB_ENV (generating + stashing
-      # the infra-<region> secret on first run). A job/step-level env: would shadow
-      # that $GITHUB_ENV value, so the variable lives only there.
+      # (Loki gateway admin password: apl-core v6's schema REQUIRES it, so
+      # cluster-bootstrap renders it from a self-contained random_password — no
+      # TF_VAR_loki_admin_password / GitHub secret is wired here.)
       # Branch of the instance repo that the bootstrap ArgoCD Application targets.
       # Defaults to 'main'; override by setting APPS_REPO_REVISION as a
       # repository or environment **variable** (preferred, matches the existing
@@ -627,8 +626,8 @@ jobs:
 
       # ── Pre-flight: env secrets the cluster-bootstrap apply needs ──────────────
       # APL_VALUES_REPO_TOKEN (passed as TF_VAR_apl_values_repo_token) is
-      # rendered into apl-core's otomi.git.password and the apl-values-repo /
-      # platform-apps-repo Secrets; empty value produces an unauthenticated repo
+      # rendered into apl-core's otomi.git.password and the
+      # platform-apps-repo Secret; empty value produces an unauthenticated repo
       # config — apl-operator can't push its values tree and Argo's repo-server
       # can't clone over HTTPS. Surfaces 5-10 min in as Argo Application Unknown.
       #
@@ -647,8 +646,22 @@ jobs:
           llz ci require-secret APL_VALUES_REPO_TOKEN \
             --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys + LOKI_ADMIN_PASSWORD and by bootstrap-openbao." || FAIL=1
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used to gh-secret-set S3 keys and by bootstrap-openbao." || FAIL=1
           [ "$FAIL" -eq 0 ]
+
+      # A pinned first-party chart (llz-*) whose bumped version isn't published to
+      # GHCR yet fails ONLY at Argo sync time — publish-charts runs on merge to main,
+      # but chart-version-guard forces a bump the moment a chart changes on a branch.
+      # ArgoCD then 404s the OCI pull, the support-plane app never syncs, llz-openbao
+      # is never created, and the OpenBao bootstrap dies ~15m in on "namespaces
+      # llz-openbao not found". Fail fast here (static apl-values scan + GHCR HEAD)
+      # with an explicit "run publish-charts on this branch" instead.
+      - name: Pre-flight — first-party chart pins are published to GHCR
+        env:
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USERNAME:   ${{ vars.GHCR_USERNAME }}
+          GH_TOKEN:        ${{ github.token }}
+        run: llz ci chart-publish-check --root .
 
       - name: Terraform init — cluster-bootstrap
         uses: ./_llz-template/instance-template/.github/actions/terraform-init
@@ -692,22 +705,6 @@ jobs:
             echo "Persisting failure = control plane still provisioning (re-run later), OR the node pool never reached the expected Ready count (Linode capacity/quota for the node type, or a node_pool_label ≥ 16 chars wedging node join), OR the 'Open control-plane ACL for this runner' step did not add this runner's egress IP to the LKE-E control-plane ACL (check that step's log + LINODE_API_TOKEN scope). Static github_runner_ipv4_cidrs / acl inventory are no longer required for hosted-runner access — the runner IP is opened at runtime by the lke-runner-acl action."
             exit 1
           }
-
-      # Ensure the Loki gateway admin password exists BEFORE plan/apply and export
-      # it as TF_VAR_loki_admin_password. On the first run (secret unset) this
-      # GENERATES one and stashes it to the infra-<region> environment as
-      # LOKI_ADMIN_PASSWORD; later runs reuse the stored value. Replaces
-      # cluster-bootstrap's random_password.loki_admin + the post-apply
-      # `terraform output → stash` round-trip — the password is no longer held in
-      # TF state. Same OPENBAO_SECRETS_WRITE_TOKEN PAT as the other env-secret stashes.
-      - name: Ensure Loki admin password
-        if: env.ACTION == 'apply'
-        env:
-          GH_TOKEN:            ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-          LOKI_ADMIN_PASSWORD: ${{ secrets.LOKI_ADMIN_PASSWORD }}
-        run: |
-          llz ci ensure-env-secret --env "infra-${REGION}" \
-            --name LOKI_ADMIN_PASSWORD --export-tf-var loki_admin_password
 
       - name: Terraform plan — cluster-bootstrap
         working-directory: terraform-iac-bootstrap/cluster-bootstrap
@@ -919,7 +916,6 @@ jobs:
       # because the resources consuming it are being torn down. Wire the same
       # secret for consistency; if it's missing on this env, "" is fine.
       TF_VAR_apl_values_repo_token:   ${{ secrets.APL_VALUES_REPO_TOKEN }}
-      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
       # Required (no default), unused at destroy — mirror the apply placeholder
       # fallback so `terraform plan -destroy` doesn't prompt and fail with
       # "No value for required variable" (observed on a primary cluster destroy).
@@ -1007,7 +1003,6 @@ jobs:
       # because the resources consuming it are being torn down. Wire the same
       # secret for consistency; if it's missing on this env, "" is fine.
       TF_VAR_apl_values_repo_token:   ${{ secrets.APL_VALUES_REPO_TOKEN }}
-      TF_VAR_loki_admin_password:     ${{ secrets.LOKI_ADMIN_PASSWORD }}
       # Required (no default), unused at destroy — mirror the apply placeholder
       # fallback so `terraform plan -destroy` doesn't prompt and fail with
       # "No value for required variable" (observed on a primary cluster destroy).

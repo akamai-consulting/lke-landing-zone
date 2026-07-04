@@ -74,13 +74,20 @@ data "terraform_remote_state" "cluster" {
 # templated field, the rendered file is the first artifact to look at — it
 # tells you what apl-operator actually saw, not what you intended.
 #
-# Loki gateway HTTP basic-auth admin password (apl-core's apps.loki schema
-# REQUIRES adminPassword when loki is enabled). var.loki_admin_password is now
-# always supplied — the llz-terraform workflow runs `llz ci ensure-env-secret`
-# BEFORE this apply, which generates+persists the infra-<region> LOKI_ADMIN_PASSWORD
-# secret on first run and exports it as TF_VAR_loki_admin_password. cluster-bootstrap
-# no longer generates it (the former random_password.loki_admin) or outputs it for a
-# post-apply stash; it is a plain consumed input, kept out of TF state's secret set.
+# apps.loki.adminPassword is REQUIRED by apl-core's values schema when loki is
+# enabled. On v6 it is an x-secret with a generator, but that generator only runs
+# inside otomi's OWN bootstrap — our raw `helm install apl/apl` validates the
+# schema FIRST (before apl-operator can install and generate it), so we must
+# supply a value or the install fails "apps.loki: adminPassword is required".
+# Generate it here; random_password is stable in TF state, so it does not churn
+# across reconciles. Nothing on the landing-zone side consumes it — it is loki's
+# internal gateway<->grafana basic-auth credential, owned by apl-core.
+# (v6-GA correction: an earlier migration commit dropped this on the assumption
+# apl-core self-generates it; the e2e helm install proved the schema requires it.)
+resource "random_password" "loki_admin" {
+  length  = 20
+  special = false # match apl-core's `randAlphaNum 20` generator (nginx-safe charset)
+}
 
 # Cluster DNS Service ClusterIP, for the loki-gateway nginx `resolver`. The
 # grafana/loki gateway templates `resolver <dnsService>.kube-system.svc...;` as a
@@ -129,8 +136,8 @@ locals {
     {
       apl_values_repo_password = var.apl_values_repo_token
       linode_dns_token         = var.linode_dns_token
-      loki_admin_password      = var.loki_admin_password
       coredns_cluster_ip       = try(data.kubernetes_service.coredns[0].spec[0].cluster_ip, "")
+      loki_admin_password      = random_password.loki_admin.result
     }
   )
 
@@ -232,63 +239,16 @@ resource "kubectl_manifest" "apl_operator_namespace" {
   force_conflicts   = true
 }
 
-# ── apl-sops-secrets — empty placeholder ─────────────────────────────────────
-# apl-core 5.0.0's apl-operator chart unconditionally references
-# `apl-sops-secrets` Secret via envFrom in templates/deployment.yaml:49-51,
-# but `templates/secrets.yaml` only CREATES that Secret when `kms.sops` is
-# set in chart values (it isn't — we don't use SOPS). The mismatch leaves
-# apl-operator pods stuck in CreateContainerConfigError on every rollout.
-#
-# Observed during bootstrap: the first apl-operator pod
-# (created by Helm install with no envFrom) ran fine. Argo CD's
-# `apl-operator-apl-operator` Application then reconciled the Deployment
-# from apl-core source, which DOES set envFrom, and the new ReplicaSet
-# stalled because `apl-sops-secrets` doesn't exist. The old pod kept service
-# alive but the cluster was in a permanent half-rollout state — and on a
-# fresh bootstrap there's no old pod to fall back to.
-#
-# Workaround: TF creates an EMPTY `apl-sops-secrets` Secret so the
-# Deployment's envFrom resolves (kubelet treats envFrom of an empty Secret
-# as a no-op rather than CreateContainerConfigError). The apl-operator
-# binary calls `getK8sSecret('apl-sops-secrets')` at runtime
-# (src/operator/installer.ts:149) and only USES the SOPS_AGE_KEY value if
-# SOPS-encrypted secrets are configured in apl-values; we're not, so the
-# empty Secret is sufficient.
-#
-# If/when apl-core upstream fixes the chart (conditional envFrom on
-# `hasKey $kms "sops"`), this resource can be deleted.
-resource "kubectl_manifest" "apl_sops_secrets_placeholder" {
-  yaml_body = yamlencode({
-    apiVersion = "v1"
-    kind       = "Secret"
-    metadata = {
-      name      = "apl-sops-secrets"
-      namespace = "apl-operator"
-      labels = {
-        "lke-landing-zone.akamai.io/managed-by-bootstrap" = "true"
-      }
-      annotations = {
-        "lke-landing-zone.akamai.io/note" = "Empty placeholder; apl-operator may populate at runtime if SOPS is configured"
-      }
-    }
-    type = "Opaque"
-    # Empty data — kubelet accepts envFrom of an empty Secret. The operator
-    # binary defensively handles missing keys (treats SOPS_AGE_KEY as
-    # optional), so no key here means no SOPS decryption attempted — which
-    # matches our configuration (no `kms.sops` in apl-values/<env>/values.yaml).
-    data = {}
-  })
-  server_side_apply = true
-  # Don't fight apl-operator's own writes to this Secret. apl-core's
-  # bootstrap.ts (src/cmd/bootstrap.ts:95) may add SOPS_AGE_KEY at runtime
-  # if SOPS gets configured later; that's fine, TF stays out of its way.
-  lifecycle {
-    ignore_changes = [yaml_body]
-  }
-  depends_on = [
-    kubectl_manifest.apl_operator_namespace,
-  ]
-}
+# NOTE (apl-core 6.x): the former `apl_sops_secrets_placeholder` resource was
+# removed here. On apl-core 5.0.0 the apl-operator chart referenced the
+# `apl-sops-secrets` Secret via an UNCONDITIONAL envFrom while only creating it
+# when `kms.sops` was set, so a no-SOPS install (ours) wedged apl-operator pods
+# in CreateContainerConfigError; TF supplied an empty placeholder Secret to
+# satisfy the reference. apl-core 6.x fixes the chart — the envFrom is now
+# `optional: true` (charts/apl-operator/templates/deployment.yaml), so kubelet
+# tolerates the missing Secret and no placeholder is needed. Removing the TF
+# resource makes `terraform apply` delete the now-orphaned Secret on upgrade,
+# which is safe on 6.x. (If you ever pin back to 5.x, restore this resource.)
 
 # ── block-storage StorageClass — must exist before apl-operator's helmfile ─────
 # apl-operator (installed by helm_release.apl below) drives a helmfile pipeline
@@ -360,47 +320,18 @@ resource "helm_release" "apl" {
   }
 }
 
-# ── Values-repo Git credentials (HTTPS PAT) ──────────────────────────────────
-# Argo CD reads this Secret to authenticate against the values repo. apl-core
-# normally creates this from `otomi.git.*` at install time; we seed it via TF
-# as well so the in-cluster Argo can pull immediately even before the
-# apl-operator's reconcile loop has applied the otomi-derived Secret.
-#
-# Server-side apply via kubectl_manifest is idempotent; if apl-core later
-# overwrites this Secret with its own version, the credential payload is the
-# same (Terraform variable → apl-core values → in-cluster Secret), so no fight.
-#
-# N4-M1 — apl-core MAY create its own values-repo Secret under a different
-# name (otomi-values-repo, argocd-otomi-values-repo, etc.). Verify in lab
-# with `kubectl -n argocd get secret -l argocd.argoproj.io/secret-type=repository`.
-# If a second Secret points at the same URL it's harmless (Argo CD picks
-# whichever matches); delete this TF-managed one if you prefer apl-core to
-# be sole owner.
-resource "kubectl_manifest" "apl_values_repo_creds" {
-  yaml_body = yamlencode({
-    apiVersion = "v1"
-    kind       = "Secret"
-    metadata = {
-      name      = "apl-values-repo"
-      namespace = "argocd"
-      labels = {
-        "argocd.argoproj.io/secret-type" = "repository"
-      }
-    }
-    type = "Opaque"
-    stringData = {
-      type     = "git"
-      url      = var.apl_values_repo_url
-      username = var.apl_values_repo_username
-      password = var.apl_values_repo_token
-    }
-  })
-  server_side_apply = true
-  force_conflicts   = true
-  depends_on = [
-    kubectl_manifest.argocd_namespace,
-  ]
-}
+# NOTE (apl-core 6.x): the former `apl_values_repo_creds` resource (Secret
+# `apl-values-repo` in ns argocd, secret-type=repository, seeded with
+# var.apl_values_repo_url + the PAT) was removed here — its N4-M1 open question
+# is resolved: on v6, apl-core self-registers the values-repo credential at
+# helmfile time (values/argocd/argocd-raw.gotmpl renders an `argocd-repo-creds-*`
+# ExternalSecret, secret-type repo-creds, url=otomi.git.repoUrl, password synced
+# from the centralized `apl-git-config` Secret via apl-core's own
+# `core-secrets-store` ClusterSecretStore, refreshInterval 1m), so the TF seed
+# was redundant. The remaining pre-helmfile window is covered by
+# kubectl_manifest.argocd_apps_repo below — same repo URL and same fine-grained
+# PAT. Removing the TF resource makes `terraform apply` delete the orphaned
+# Secret on upgrade, which is safe: Argo CD picks any matching credential.
 
 # ── Argo CD namespace ────────────────────────────────────────────────────────
 # helm_release.apl wait=true only blocks until the apl-operator Deployment is
@@ -419,19 +350,20 @@ resource "kubectl_manifest" "argocd_namespace" {
     metadata = {
       name = "argocd"
       labels = {
-        # apl-core's auto-generated NetworkPolicies (notably
-        # gitea/gitea-platform-policy from the apl-network-policies chart)
-        # use namespaceSelector `matchLabels: { name: argocd }` to authorize
-        # argocd-repo-server ingress to gitea-http. Without this label the
-        # selector doesn't match → `gitops-global` Argo Application times
-        # out cloning the in-cluster gitea repo with `context deadline
-        # exceeded`. EVERY OTHER apl-core-managed namespace (istio-system,
-        # monitoring, apl-operator, apl-gitea-operator, otomi, cnpg-system,
-        # harbor, cert-manager, grafana, keycloak) ships with the `name=<ns>`
-        # label from apl-core's helmfile; argocd's namespace is set here in
-        # TF so it was missing the convention. Observed: applying the label
-        # flipped `gitops-global` from
-        # Unknown/Healthy (timed out) to Synced/Healthy within 30s.
+        # apl-core convention: every apl-core-managed namespace (istio-system,
+        # monitoring, apl-operator, otomi, cnpg-system, harbor, cert-manager,
+        # grafana, keycloak, …) carries a `name=<ns>` label from apl-core's
+        # helmfile, and apl-core's auto-generated NetworkPolicies select on it.
+        # argocd's namespace is created here in TF (before apl-core's helmfile),
+        # so we stamp the same label to stay consistent with the convention and
+        # satisfy any apl-network-policies rule that authorizes argocd-* ingress
+        # via namespaceSelector `matchLabels: { name: argocd }`.
+        #
+        # (On 5.0.0 this label was load-bearing for a specific reason: the
+        # gitea-platform-policy NP used it to allow argocd-repo-server → gitea-http
+        # so `gitops-global` could clone the in-cluster gitea. apl-core 6.x runs
+        # gitops against the external BYO-Git repo with gitea disabled, so that
+        # path is gone — but the label stays for the general convention above.)
         name                                              = "argocd"
         "lke-landing-zone.akamai.io/managed-by-bootstrap" = "true"
       }
@@ -507,10 +439,10 @@ resource "null_resource" "apl_pipeline_ready" {
 #
 # TIMING IS THE WHOLE POINT. The policy is admission-only (background: false)
 # and PVC storageClassName is immutable, so it MUST be enforcing BEFORE
-# apl-operator's helmfile creates the gitea-valkey / oauth2-proxy PVCs — those
-# two charts ignore cluster.defaultStorageClass and hardcode
-# linode-block-storage, so this mutation is their only path onto the
-# encrypted + block-storage-tagged SC.
+# apl-operator's helmfile creates the oauth2-proxy redis PVC (and, on apl-core
+# ≤5.x, the gitea-valkey PVC — gitea is disabled on 6.x): those charts ignore
+# cluster.defaultStorageClass and hardcode linode-block-storage, so this
+# mutation is their only path onto the encrypted + block-storage-tagged SC.
 #
 # It deliberately does NOT depend on null_resource.apl_pipeline_ready: that
 # gate also waits for argocd + cert-manager, and that extra ~minute is exactly
@@ -553,10 +485,10 @@ resource "null_resource" "kyverno_pvc_encrypted_policy" {
       POLICY_MANIFEST = "${path.module}/manifests/kyverno-pvc-encrypted-storage-class.yaml"
       # Poll then apply IMMEDIATELY — do NOT wait on the rest of
       # apl_pipeline_ready (argocd/cert-manager); every second here is a second
-      # in which apl-operator's helmfile may create the gitea-valkey /
-      # oauth2-proxy PVCs before this mutation enforces.
+      # in which apl-operator's helmfile may create the oauth2-proxy redis PVC
+      # before this mutation enforces.
       WAIT_FOR_KYVERNO     = "true"
-      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping PVC policy apply. gitea-valkey + oauth2-proxy redis PVCs may land on linode-block-storage; re-run terraform apply once Kyverno is up."
+      TIMEOUT_WARNING      = "Kyverno admission controller not Ready within 15m — skipping PVC policy apply. The oauth2-proxy redis PVC may land on linode-block-storage; re-run terraform apply once Kyverno is up."
       WEBHOOK_RACE_WARNING = "Kyverno admission webhook not yet reachable — policy apply skipped. Re-run terraform apply once kyverno-svc has Ready endpoints."
     }
   }
@@ -624,8 +556,12 @@ resource "null_resource" "kyverno_sc_default_policy" {
 # Repo Secret — ArgoCD reads this to authenticate against the platform-apps
 # repo (the instance repo) over HTTPS. Labeled
 # argocd.argoproj.io/secret-type=repository so ArgoCD's repo-server discovers
-# it automatically. Same instance repo and same fine-grained PAT as the
-# apl-values-repo Secret above (apl-core's otomi.git points at the same repo).
+# it automatically. This is now the SOLE TF-managed ArgoCD repo credential
+# (the former apl_values_repo_creds Secret was retired — see the apl-core 6.x
+# note above): it covers the cold-bootstrap window before apl-core's helmfile
+# lands the argocd-repo-creds-* ExternalSecret, and both point at the same
+# instance repo with the same fine-grained PAT (apl-core's otomi.git targets
+# that same repo).
 # HTTPS basic-auth with a PAT needs no SSH host-key handling, so the former
 # argocd-ssh-known-hosts-cm ConfigMap and the ssh-keyscan data source are gone.
 resource "kubectl_manifest" "argocd_apps_repo" {

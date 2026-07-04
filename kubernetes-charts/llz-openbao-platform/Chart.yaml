@@ -33,7 +33,12 @@ type: application
 #         (+ a downward-API HOSTNAME env) so the `pod: ${HOSTNAME}` label resolves
 #         to the pod name instead of shipping the literal string `${HOSTNAME}` to
 #         Loki on every OpenBao audit line.
-version: 0.1.12
+# 0.1.12: allow the in-cluster harbor + cred-rotator CronJobs through OpenBao's
+#         ingress NetworkPolicy (they authenticate at :8200 to seed/read secrets).
+# 0.1.13: v6 migration — swap the retired `llz-external-secrets` client namespace
+#         for apl-core 6.x's core ESO namespace `external-secrets` in the OpenBao
+#         :8200 allow list (the self-managed ESO controller is gone).
+version: 0.1.13
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

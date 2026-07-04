@@ -127,7 +127,12 @@ func RequiredCRDs() []string {
 		"clusterissuers.cert-manager.io",
 		"issuers.cert-manager.io",
 		"externalsecrets.external-secrets.io",
-		"clusterexternalsecrets.external-secrets.io",
+		// NOTE (apl-core 6.x): clusterexternalsecrets.external-secrets.io is NOT
+		// required. On 5.0.0 the landing zone ran its own ESO (installCRDs) which
+		// shipped every ESO CRD; on 6.x apl-core's bundled ESO installs only the
+		// kinds it uses (ExternalSecret / ClusterSecretStore / SecretStore / PushSecret),
+		// not ClusterExternalSecret — and this repo does not use ClusterExternalSecret
+		// anywhere. Requiring it hard-failed convergence for a CRD nothing needs.
 		"clustersecretstores.external-secrets.io",
 		"secretstores.external-secrets.io",
 		"workflows.argoproj.io",

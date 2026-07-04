@@ -21,12 +21,12 @@ variable "apl_values_env" {
 }
 
 variable "apl_values_repo_url" {
-  description = "HTTPS URL of the GitOps repo that holds apl-values/ and manifest/ subtrees. **HTTPS is required** by apl-core's values schema (otomi.git.repoUrl pattern `^https?://.+`). A host that requires per-cluster node-IP allowlisting for HTTPS cannot satisfy LKE-E, so the values tree must be mirrored to a public-CA HTTPS-reachable host (GitHub.com, GitLab.com, or an internal HTTPS mirror). `llz render` writes otomi.git.repoUrl into values.yaml from spec.cluster.bootstrap.aplValues.repoURL; this var feeds only the Argo CD values-repo credential Secret (kubectl_manifest.apl_values_repo_creds). Example: https://github.com/<org>/platform-apl-values.git"
+  description = "HTTPS URL of the GitOps repo that holds apl-values/ and manifest/ subtrees. **HTTPS is required** by apl-core's values schema (otomi.git.repoUrl pattern `^https?://.+`). A host that requires per-cluster node-IP allowlisting for HTTPS cannot satisfy LKE-E, so the values tree must be mirrored to a public-CA HTTPS-reachable host (GitHub.com, GitLab.com, or an internal HTTPS mirror). `llz render` writes otomi.git.repoUrl into values.yaml from spec.cluster.bootstrap.aplValues.repoURL, and apl-core 6.x self-registers the Argo CD values-repo credential from that value (its argocd-repo-creds ExternalSecret, sourced from the centralized apl-git-config Secret) — so cluster-bootstrap no longer consumes this var in any resource; it is retained as the spec→tfvar carrier + HTTPS-contract documentation. Example: https://github.com/<org>/platform-apl-values.git"
   type        = string
 }
 
 variable "apl_values_repo_username" {
-  description = "Username for HTTPS Git basic-auth against the values repo. With a GitHub fine-grained PAT the username is ignored by the server, so the conventional 'x-access-token' is used (any non-empty string works). `llz render` writes otomi.git.username into values.yaml; this var feeds only the Argo CD values-repo credential Secret. Supply via TF_VAR_apl_values_repo_username to override."
+  description = "Username for HTTPS Git basic-auth against the values repo. With a GitHub fine-grained PAT the username is ignored by the server, so the conventional 'x-access-token' is used (any non-empty string works). `llz render` writes otomi.git.username into values.yaml; this var also feeds the TF-seeded platform-apps-repo Argo CD repository Secret (kubectl_manifest.argocd_apps_repo). Supply via TF_VAR_apl_values_repo_username to override."
   type        = string
   default     = "x-access-token"
 }
@@ -49,12 +49,11 @@ variable "apps_repo_revision" {
   default     = "main"
 }
 
-variable "loki_admin_password" {
-  description = "Admin password for the Loki gateway's HTTP basic auth. Required by apl-core's apps.loki schema when loki.enabled=true; rendered into apl-values/<env>/values.yaml as apps.loki.adminPassword. Always supplied via TF_VAR_loki_admin_password: the llz-terraform workflow runs `llz ci ensure-env-secret` BEFORE this apply, which generates+persists the infra-<region> LOKI_ADMIN_PASSWORD secret on first run and exports it as TF_VAR_loki_admin_password (idempotent — no per-run rotation). cluster-bootstrap no longer generates this (the former random_password.loki_admin) nor outputs it for a post-apply stash, so it is not held in TF state's secret set. NOTE: not yet on the ESO+OpenBao rotation lifecycle the other support-plane creds use — see docs/secrets.md (Known limitation — Loki admin password); moving it there is a tracked follow-up."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
+# NOTE (apl-core 6.x): the former `loki_admin_password` variable was removed. On
+# 6.x apl-core's apps.loki.adminPassword is an x-secret with a generator, so
+# apl-core auto-generates and self-wires the Loki gateway password in-cluster —
+# the landing zone no longer supplies it (no TF_VAR, no infra-<env> GitHub secret,
+# no ensure-env-secret step). See docs/designs/apl-core-v6-migration.md.
 
 variable "destroying" {
   description = "Set true (TF_VAR_destroying=true) only on the teardown path. Gates data.kubernetes_service.coredns off so `terraform destroy` doesn't refresh that cluster-API read while the LKE cluster is being reaped in the same run — the read would time out (dial :6443 i/o timeout) and fail the destroy. The data source is apply-only (it just feeds the rendered Loki gateway resolver), so skipping it on destroy is safe (a destroy never needs the resolver). Defaults false so the apply path is unaffected and no apply job needs to set it."

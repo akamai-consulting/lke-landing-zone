@@ -142,7 +142,7 @@ elif [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
   # placeholders: the old 17-key map happily rendered ${apl_values_repo_url}
   # after the spec render missed it, and the gap only surfaced as a Release-E2E
   # plan failure — the exact 20-minute round-trip this check exists to prevent.
-  vars='{apl_values_repo_password="x",linode_dns_token="x",loki_admin_password="x",coredns_cluster_ip="x"}'
+  vars='{apl_values_repo_password="x",linode_dns_token="x",coredns_cluster_ip="x",loki_admin_password="x"}'
   tmp="$(mktemp -d)"
   printf 'terraform {}\n' > "$tmp/main.tf"
   ( cd "$tmp" && "$TF" init -backend=false >/dev/null 2>&1 ) || true

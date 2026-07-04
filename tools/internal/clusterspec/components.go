@@ -179,10 +179,17 @@ var Components = []Component{
 		AplCoreApps: []string{"trivy"},
 	},
 	{
-		// In-cluster Gitea — apl-core-only, currently required by apl-core's global
-		// gitops app (see apl-values values.yaml note). Kept enabled by default.
-		Name:        "gitea",
-		AplCoreApps: []string{"gitea"},
+		// In-cluster Gitea — apl-core-only. Disabled by default on apl-core v6:
+		// the landing zone runs GitOps against an external HTTPS repo (BYO Git),
+		// v6 ships git-server as the default values-repo backend, and _shared
+		// values.yaml pins `gitea: { enabled: false }`. Modeling it enabled-by-
+		// default here would make `llz render` flip that committed `false` back to
+		// `true` (RenderValues forces every default-enabled component's app on),
+		// silently re-enabling Gitea. Kept in the registry (not deleted) so an
+		// operator can still opt in via the spec, but DefaultDisabled.
+		Name:            "gitea",
+		AplCoreApps:     []string{"gitea"},
+		DefaultDisabled: true,
 	},
 	{
 		// Applied separately by .github/workflows/bootstrap-dns.yml once the
