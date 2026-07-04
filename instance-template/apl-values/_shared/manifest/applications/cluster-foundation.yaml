@@ -62,12 +62,15 @@ spec:
     retry:
       # First-boot ordering races (OpenBao unseal / secret seed) can outlast the
       # old ~5-retry (~5 min) budget; a failed automated sync then terminally pins
-      # the revision and Argo will not re-attempt it. ~20 retries @ 3m cap (~1h)
-      # rides out the bootstrap window instead.
-      limit: 20
+      # the revision and Argo will not re-attempt it. ~40 retries @ 90s cap (~1h)
+      # rides out the bootstrap window instead — the 90s cap (was 3m) shrinks
+      # the idle tail after the last transient clears, same rationale as the
+      # platform-bootstrap app's retry (cluster-bootstrap/main.tf, PR #142
+      # follow-up).
+      limit: 40
       backoff:
         duration: 5s
-        maxDuration: 3m
+        maxDuration: 90s
         factor: 2
     syncOptions:
       - CreateNamespace=false

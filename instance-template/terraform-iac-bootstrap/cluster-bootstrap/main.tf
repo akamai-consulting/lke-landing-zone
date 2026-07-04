@@ -733,17 +733,21 @@ resource "kubectl_manifest" "app_bootstrap_application" {
         # retry block a single failed automated sync becomes terminal and Argo
         # will NOT re-attempt the same revision (selfHeal only corrects drift
         # after a *successful* sync), wedging the cluster until a manual
-        # `argocd app sync` or a new commit. ~20 retries @ 3m cap (~1h) rides out
+        # `argocd app sync` or a new commit. ~40 retries @ 90s cap (~1h) rides out
         # the first-boot convergence window. Pairs with the lenient
         # ClusterSecretStore/ExternalSecret health customizations in
         # apl-values/_shared/values.yaml (apps.argocd._rawValues.configs.cm) so a
         # not-yet-ready store reports Progressing (wait), not Degraded (fail).
+        # 90s cap (was 5m): first boot leans on failed-sync-then-retry BY
+        # DESIGN, so the LAST transient blocker before convergence used to cost
+        # up to 5 idle minutes; the higher limit keeps the same ~1h total
+        # budget while shrinking the converge tail (PR #142 follow-up).
         retry = {
-          limit = 20
+          limit = 40
           backoff = {
             duration    = "15s"
             factor      = 2
-            maxDuration = "5m"
+            maxDuration = "90s"
           }
         }
         # SkipDryRunOnMissingResource=true is critical here. The kustomize
@@ -816,12 +820,13 @@ resource "kubectl_manifest" "app_secret_store_application" {
           prune    = false
           selfHeal = true
         }
+        # Same 90s-cap rationale as the platform-bootstrap app above.
         retry = {
-          limit = 20
+          limit = 40
           backoff = {
             duration    = "15s"
             factor      = 2
-            maxDuration = "5m"
+            maxDuration = "90s"
           }
         }
         syncOptions = [

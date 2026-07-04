@@ -26,7 +26,12 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-18"
 spec:
-  schedule: "*/10 * * * *"
+  # */3 (was */10): this is the ONLY recovery path for a terminally-failed
+  # sync, and it is load-bearing precisely during bootstrap — at */10 a
+  # terminal failure added 0-10 min of dead time to the converge window.
+  # The job is idempotent and a steady-state no-op, so the only cost of the
+  # tighter cadence is a few extra API calls (PR #142 follow-up).
+  schedule: "*/3 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 2

@@ -340,6 +340,17 @@ jobs:
       # a time; pod 0 reaching Running has to clear its Volume create before
       # pod 1 starts. 300s was borderline on slow-Linode days and produced
       # spurious failures we then had to retry.
+      # Fail-fast gate: on every wedge of the 2026-07-04 outage (PR #142) the
+      # platform-openbao Application was never created — the platform-bootstrap
+      # sync was stuck waves earlier — and the 600s pod wait below burned its
+      # full budget with nothing to say. Assert the Application exists first
+      # (a healthy sync creates it within ~2 min); when it doesn't, this fails
+      # in ≤4 min WITH the parent sync's operationState message. Terminal
+      # parent failures short-circuit immediately; a Running-but-retrying sync
+      # (by-design first-boot transients) gets the full window.
+      - name: Assert the OpenBao Application reached the cluster
+        run: llz ci assert-argo-app --app platform-openbao --within 240
+
       - name: Wait for OpenBao pods to be running
         run: |
           llz ci wait-pods --namespace llz-openbao --timeout 600 \

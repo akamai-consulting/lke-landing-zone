@@ -77,6 +77,11 @@ env:
   # kube-prometheus-stack CRDs (PrometheusRule, ServiceMonitor, PodMonitor)
   # used by the rendered OpenBao ServiceMonitor.
   KUBE_PROMETHEUS_STACK_VERSION: "61.7.2"
+  # Full Kyverno install (controller + webhooks, not just CRDs) for the
+  # policy-admission gate in the dry-run job. Version approximates apl-core's
+  # bundle; the check this guards — Kyverno's validate-policy webhook rejecting
+  # a malformed ClusterPolicy — is stable across recent versions.
+  KYVERNO_HELM_VERSION: "3.4.4"
   # Terraform jobs.
   TF_IN_AUTOMATION: 'true'
 
@@ -191,6 +196,8 @@ jobs:
           # Istio chart repo isn't in the shared helm-repos target — it's only
           # needed here for Gateway/VirtualService CRD installs in dry-run.
           helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
+          # Kyverno: full install (not just CRDs) for the policy-admission gate below.
+          helm repo add kyverno https://kyverno.github.io/kyverno/ --force-update
           helm repo update
 
       - name: Install CRDs
@@ -296,6 +303,27 @@ jobs:
 
       - name: Server-side dry-run of the rendered charts
         run: kubectl apply --dry-run=server -f rendered/
+
+      # ── Kyverno policy-admission gate ────────────────────────────────────────
+      # A CRD-schema dry-run does NOT catch what Kyverno's validate-policy
+      # webhook rejects: the 2026-07-04 bootstrap wedge #2 was ClusterPolicies
+      # mixing spec.mutateExistingOnPolicyUpdate with target-less admission
+      # rules — schema-valid, webhook-denied — which wedged the platform-
+      # bootstrap sync at wave -15 on a real cluster (PR #142). Install the
+      # REAL Kyverno controller and apply (not dry-run — webhook execution
+      # must be unconditional) the shipped ClusterPolicies against it.
+      # Deliberately LAST: a live admission controller must not perturb the
+      # dry-run steps above (e.g. verifyImages intercepting rendered CronJobs).
+      - name: Kyverno policy-admission gate (shipped ClusterPolicies)
+        run: |
+          set -euo pipefail
+          helm install kyverno kyverno/kyverno \
+            --namespace kyverno --create-namespace \
+            --version "$KYVERNO_HELM_VERSION" \
+            --wait --timeout 5m
+          echo "Applying _shared/manifest/kyverno-policies against the validate-policy webhook..."
+          kubectl kustomize instance-template/apl-values/_shared/manifest/kyverno-policies \
+            | kubectl apply --server-side=true -f -
 
 
 
