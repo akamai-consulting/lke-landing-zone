@@ -85,8 +85,10 @@ help:
 	@echo "                  Runs scaffold-check first."
 	@echo "  scaffold-check  Scaffold a throwaway env (llz env add) and assert the"
 	@echo "                  per-env scaffold renders: no leftover 'your-env', required"
-	@echo "                  per-env files present, values.yaml renders via templatefile()."
-	@echo "                  No cloud; artifacts removed on exit. SKIP_TF=1 skips render."
+	@echo "                  per-env files present, values.yaml renders via templatefile()"
+	@echo "                  (vars derived from main.tf), and passes apl-core's helm schema."
+	@echo "                  No cloud; artifacts removed on exit. SKIP_TF=1 skips render;"
+	@echo "                  the schema step self-skips without helm."
 	@echo "  reap-orphans    Manual sweep of leaked Linode resources from failed/cancelled"
 	@echo "                  cycles: orphan clusters (if CLUSTER_LABEL) + their firewall/VPC,"
 	@echo "                  then NodeBalancers + VPCs + Volumes whose cluster is gone."
@@ -422,7 +424,7 @@ template-manifest-check:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard scaffold-check; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
@@ -442,6 +444,9 @@ lint:
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^(terraform-modules|instance-template/terraform-iac-bootstrap)/.*\.tf$$|\.tflintrc\.hcl$$|\.checkov\.yaml$$'; then \
 		$(MAKE) --no-print-directory tf-fmt-check $(LINT_TF); \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^instance-template/terraform-iac-bootstrap/cluster-bootstrap/main\.tf$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
+		$(MAKE) --no-print-directory scaffold-check; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^kubernetes-charts/|\.kube-linter\.yaml$$'; then \
 		$(MAKE) --no-print-directory $(LINT_K8S); \

@@ -327,6 +327,45 @@ jobs:
 
 
 
+  # ── Scaffold + render + apl-core schema ──────────────────────────────────────
+  # Reproduces the real per-env scaffold path (`llz env add`) and runs the two
+  # checks that were previously Release-E2E-ONLY — each catchable in seconds with
+  # no cloud (both classes burned multiple ~50-min e2e runs in the week of
+  # 2026-07-02):
+  #   • templatefile() render with the var set DERIVED from cluster-bootstrap/
+  #     main.tf — a values.yaml ${...} the root does not provide fails here (the
+  #     ${apl_values_repo_url} class that failed a 2026-07-02 tf-plan).
+  #   • `helm template apl/apl` — the same JSON-Schema validation helm_release.apl
+  #     runs at apply time; catches required/renamed/mistyped keys (the apl-core
+  #     v6 `apps.loki: adminPassword is required` class).
+  # Needs three tools, so it runs on the plain runner (no single CI image carries
+  # all three): Go to build a FRESH llz (a tools/ PR predates the image rebuild),
+  # Helm for the schema check, and OpenTofu for the templatefile render.
+  scaffold:
+    name: Scaffold + render + apl schema
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Go (build llz — the scaffolder)
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+      - name: Install Helm (apl-core schema validation)
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v${{ env.HELM_VERSION }}
+      - name: Install OpenTofu (templatefile render)
+        uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1.0.8
+        with:
+          # Real `tofu` binary, not the stdout-wrapping wrapper — the check pipes
+          # `tofu console` and parses its output.
+          tofu_wrapper: false
+      - name: Scaffold a throwaway env, render, and schema-validate
+        run: make scaffold-check
+
   # ── Terraform ────────────────────────────────────────────────────────────────
   # Single source of truth via `make lint-tf` (= $(LINT_TF) in the Makefile):
   # tflint + checkov over the reusable modules, then instantiate + validate the
