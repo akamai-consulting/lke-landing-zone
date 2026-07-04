@@ -58,6 +58,21 @@ apps:
     _rawValues:
       configs:
         cm:
+          # NetworkPolicy has no meaningful health: LKE's CNI does not populate
+          # status.conditions (KEP-2943), and Argo's built-in NetworkPolicy check
+          # then reports Progressing forever. Progressing WEDGES sync-wave
+          # progression: the 2026-07-04 e2e failures were the platform-bootstrap
+          # operation stuck Running at wave -18 on "waiting for healthy state of
+          # NetworkPolicy/argo-resync-nudger-allow-egress" — so ESO NPs (-10), the
+          # dns ClusterIssuers (-5) and the OpenBao Application (0) were never
+          # applied and bootstrap-openbao timed out on a namespace that stayed
+          # empty. Force Healthy: an applied NetworkPolicy is as healthy as it
+          # gets on this platform.
+          resource.customizations.health.networking.k8s.io_NetworkPolicy: |
+            local hs = {}
+            hs.status = "Healthy"
+            hs.message = "NetworkPolicy applied (no status on this CNI; health forced — see _shared values.yaml)"
+            return hs
           resource.customizations.health.external-secrets.io_ClusterSecretStore: |
             local hs = {}
             if obj.status ~= nil and obj.status.conditions ~= nil then
