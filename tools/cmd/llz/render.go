@@ -280,10 +280,10 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 // sharedDNSEmailTarget returns the instance-wide letsencrypt ClusterIssuer path and
 // its email-substituted content when spec.dns.acmeEmail is set (and the shared dns
 // tree is present). The ACME email is instance-wide, so it renders ONCE into
-// apl-values/_shared/manifest/dns/ — not per env (the whole dns tree is applied from
-// _shared by `llz bootstrap dns`). ok=false (no target) when the email is unset: the
-// file keeps its REPLACE_PER_ENV placeholder, which `llz doctor` flags as a deferrable
-// cert/DNS item and `llz bootstrap dns` finishes after the first build.
+// apl-values/_shared/manifest/dns/ — not per env (the whole dns tree is Argo-synced
+// from _shared). ok=false (no target) when the email is unset: the file keeps its
+// REPLACE_PER_ENV placeholder, which `llz doctor` flags as a deferrable cert/DNS
+// item (the letsencrypt ClusterIssuers issue certs once it + the DNS token are set).
 func sharedDNSEmailTarget(lz *clusterspec.LandingZone, aplDir string) (string, string, bool) {
 	email := lz.Spec.DNS.AcmeEmail
 	if email == "" {

@@ -48,8 +48,8 @@ on:
 permissions:
   contents: read
 
-# Same group as bootstrap-dns so a DNS seed cannot race a concurrent
-# re-bootstrap that's touching the same KV mount or the same root token.
+# Serialize re-bootstraps of the same region so two runs cannot race on the
+# same KV mount or the same root token.
 concurrency:
   group: openbao-bootstrap-${{ inputs.region }}
   cancel-in-progress: false

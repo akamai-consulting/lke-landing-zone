@@ -78,16 +78,6 @@ func buildArgv(env string) []string {
 		"--field", "region=" + env, "--field", "action=apply", "--field", "module=all"}
 }
 
-func bootstrapArgv(kind, env string) ([]string, error) {
-	wf := map[string]string{
-		"dns": "bootstrap-dns.yml",
-	}[kind]
-	if wf == "" {
-		return nil, fmt.Errorf("unknown bootstrap kind %q (want dns)", kind)
-	}
-	return []string{"gh", "workflow", "run", wf, "--field", "region=" + env}, nil
-}
-
 func secretSetArgv(env, name string) []string {
 	return []string{"gh", "secret", "set", name, "--env", "infra-" + env}
 }
@@ -387,8 +377,8 @@ func printManualActions(env string) {
 	fmt.Println(b("After OpenBao bootstrap, from the job summary (shown once):"))
 	fmt.Println(dim("      – escrow unseal keys 4 & 5 + the root token to secure offline storage"))
 	fmt.Println(dim("      – delete OPENBAO_ROOT_TOKEN from infra-"+env) + dim("   (`llz status` flags it if left)"))
-	fmt.Println(b("Once LINODE_DNS_TOKEN exists, finish cert DNS-01:"))
-	fmt.Println("      " + cyan("llz bootstrap dns "+env+" --yes"))
+	fmt.Println(b("DNS-01 certs wire automatically once TF_VAR_linode_dns_token is set at apply"))
+	fmt.Println(dim("      (the letsencrypt ClusterIssuers sync via Argo; re-apply TF if the token came later)"))
 }
 
 func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
@@ -435,15 +425,4 @@ func warnIfRootTokenPresent(env string) {
 			return
 		}
 	}
-}
-
-func cmdBootstrap(args []string, g globalOpts) error {
-	if len(args) != 2 {
-		return fmt.Errorf("usage: llz bootstrap <dns> <env>")
-	}
-	argv, err := bootstrapArgv(args[0], args[1])
-	if err != nil {
-		return err
-	}
-	return runGated(g, argv...)
 }

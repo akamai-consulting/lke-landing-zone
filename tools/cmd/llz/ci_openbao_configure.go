@@ -17,7 +17,6 @@ import (
 // platform-ci: read-only KV v2 — used by the ESO ClusterSecretStore. Paths
 // are enumerated explicitly; wildcard read is intentionally avoided.
 const policyPlatformCI = `path "secret/data/cert-automation/github-token" { capabilities = ["read"] }
-path "secret/data/certmanager/dns01"            { capabilities = ["read"] }
 path "secret/data/grafana/admin"                { capabilities = ["read"] }
 path "secret/data/harbor/admin"                 { capabilities = ["read"] }
 path "secret/data/harbor/pull-robot"            { capabilities = ["read"] }
@@ -29,7 +28,6 @@ path "secret/data/loki/object-store"            { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
 path "secret/metadata/cert-automation/github-token" { capabilities = ["read", "list"] }
-path "secret/metadata/certmanager/dns01"            { capabilities = ["read", "list"] }
 path "secret/metadata/grafana/admin"                { capabilities = ["read", "list"] }
 path "secret/metadata/harbor/admin"                 { capabilities = ["read", "list"] }
 path "secret/metadata/harbor/docker-config"         { capabilities = ["read", "list"] }
@@ -76,15 +74,13 @@ path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read
 // linode-rotator: write access to the in-cluster-only Linode credentials the
 // in-cluster rotator owns (the linodeCredRotator CronJob, `llz ci
 // rotate-linode-creds`). Scoped to exactly the rotated paths — the object-storage
-// keys (Loki, Harbor registry) and the DNS-scoped token — never the provisioning
+// keys (Loki, Harbor registry) — never the provisioning
 // PAT or any read-only consumer path. Mapped to the `linode-rotator`
 // Kubernetes-auth role below. See docs/designs/linode-credential-rotator.md.
 const policyLinodeRotator = `path "secret/data/loki/object-store"  { capabilities = ["create", "update", "read"] }
 path "secret/data/harbor/registry-s3" { capabilities = ["create", "update", "read"] }
-path "secret/data/certmanager/dns01"  { capabilities = ["create", "update", "read"] }
 path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
 path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
-path "secret/metadata/certmanager/dns01"  { capabilities = ["read"] }
 `
 
 // harbor-provisioner: read/write on exactly the two robot-credential paths the
@@ -136,7 +132,7 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		{desc: "write policy eso-pusher", fatal: true, stdin: policyESOPusher,
 			args: []string{"policy", "write", "eso-pusher", "-"}},
 		// linode-rotator policy: scoped write for the in-cluster Linode credential
-		// rotator (OBJ keys + DNS token). Mapped to the linode-rotator k8s-auth role.
+		// rotator (OBJ keys). Mapped to the linode-rotator k8s-auth role.
 		{desc: "write policy linode-rotator", fatal: true, stdin: policyLinodeRotator,
 			args: []string{"policy", "write", "linode-rotator", "-"}},
 		// harbor-provisioner policy: scoped read/write on the two robot-credential

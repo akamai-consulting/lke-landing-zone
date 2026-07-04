@@ -10,8 +10,8 @@
 //	--open      open creation links in a browser (open / xdg-open)
 //	--yes, -y   actually execute cloud-mutating commands
 //
-// Cloud-mutating commands (tokens, secrets push, build, bootstrap) execute only
-// with --yes. See docs/quickstart.md for the end-to-end flow.
+// Cloud-mutating commands (tokens, secrets push, build) execute only with --yes.
+// See docs/quickstart.md for the end-to-end flow.
 package main
 
 import (
@@ -60,11 +60,11 @@ func newRootCmd() *cobra.Command {
 	pf := root.PersistentFlags()
 	pf.BoolVar(&gopts.dryRun, "dry-run", false, "print commands; change nothing")
 	pf.BoolVar(&gopts.open, "open", false, "open token-creation links in a browser")
-	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build / bootstrap)")
+	pf.BoolVarP(&gopts.yes, "yes", "y", false, "execute cloud-mutating commands (tokens / secrets push / build)")
 
 	root.AddCommand(
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), specCmd(), networkCmd(), componentsCmd(),
-		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(), bootstrapCmd(),
+		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), versionCmd(), selfUpdateCmd(),
 	)
@@ -80,7 +80,7 @@ func newRootCmd() *cobra.Command {
 	groupOf := map[string]string{
 		"new": "spec", "env": "spec", "spec": "spec", "network": "spec", "components": "spec", "render": "spec", "import": "spec",
 		"tokens": "build", "secrets": "build", "doctor": "build", "validate": "build",
-		"build": "build", "up": "build", "status": "build", "bootstrap": "build",
+		"build": "build", "up": "build", "status": "build",
 		"upgrade": "day2", "drift": "day2", "credentials": "day2", "openbao": "day2",
 		"verify": "day2", "reap": "day2", "self-update": "day2",
 	}
@@ -250,8 +250,8 @@ func upCmd() *cobra.Command {
 			"(`llz tokens`), confirm the readiness gate (`llz doctor`), then dispatch the\n" +
 			"apply (`llz build`). Stops at the first failure, and ends by printing the\n" +
 			"steps the tooling cannot do for you (escrow the OpenBao unseal keys + root\n" +
-			"token, delete OPENBAO_ROOT_TOKEN, run `llz bootstrap dns` once its token\n" +
-			"exists). Cloud-mutating steps need --yes; --dry-run previews the whole chain.",
+			"token, delete OPENBAO_ROOT_TOKEN). Cloud-mutating steps need --yes; --dry-run\n" +
+			"previews the whole chain.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error { return cmdUp(args[0], gopts, admin, skipTokens) },
 	}
@@ -271,14 +271,6 @@ func statusCmd() *cobra.Command {
 	c.Flags().BoolVar(&wait, "wait", false, "poll until the required support-plane Applications are Synced+Healthy")
 	c.Flags().IntVar(&timeout, "timeout", 300, "seconds to wait when --wait is set")
 	return c
-}
-
-func bootstrapCmd() *cobra.Command {
-	return &cobra.Command{
-		Use: "bootstrap <dns> <env>", Short: "dispatch a bootstrap workflow (--yes)",
-		Args: cobra.ExactArgs(2),
-		RunE: func(_ *cobra.Command, args []string) error { return cmdBootstrap(args, gopts) },
-	}
 }
 
 // ── maintain ─────────────────────────────────────────────────────────────────

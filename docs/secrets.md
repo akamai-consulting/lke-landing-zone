@@ -99,7 +99,7 @@ useful context for emergency recovery and understanding the secret layout.
 3. **Configure** — enables KV v2 at `secret/`, Kubernetes auth, and GitHub-OIDC (`jwt`) auth. Creates four least-privilege policies (paths enumerated explicitly — no wildcard):
    - the read-only `platform-ci` policy, bound to the `eso` Kubernetes-auth role, which every in-cluster consumer reads through;
    - the write-scoped `eso-pusher` policy, bound to the `eso-pusher` Kubernetes-auth role (same ESO controller SA as `eso`), for the in-cluster-sourced PushSecret paths (`grafana/admin`, `otel/ingress`, `harbor/admin`);
-   - the `linode-rotator` policy, bound to the `linode-rotator` Kubernetes-auth role, for the in-cluster credential rotator's paths (`loki/object-store`, `harbor/registry-s3`, `certmanager/dns01`);
+   - the `linode-rotator` policy, bound to the `linode-rotator` Kubernetes-auth role, for the in-cluster credential rotator's paths (`loki/object-store`, `harbor/registry-s3`);
    - the `secret-propagator` GitHub-OIDC role + policy used by `llz ci propagate-pat`.
 
    Enables the file audit device.
@@ -112,7 +112,6 @@ useful context for emergency recovery and understanding the secret layout.
    - `secret/loki/object-store` (Linode Object Storage keys minted at bootstrap by `llz ci mint-bootstrap-objkeys`, rotated by the in-cluster linodeCredRotator)
    - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are NO LONGER seeded here — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`), through the write-scoped `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
    - Note: `secret/harbor/docker-config` is NO LONGER seeded — the buildah `config.json` is derived in-cluster by the `llz-cert-automation` chart's `harborDockerConfig` ExternalSecret, which renders the dockerconfigjson from the robot creds (`username`/`password`/`registry_host`) in `secret/harbor/robot` via an ESO template.
-   - Note: `secret/certmanager/dns01` (Linode DNS token from `LINODE_DNS_TOKEN`) is seeded by the separate `bootstrap-dns.yml` workflow once a DNS-scoped token has been provisioned.
 
 5. **Revoke root token** — runs unconditionally even on failure.
 
@@ -151,23 +150,28 @@ if primary and secondary drift, requests routed to the drifted region fail.
 
 ### In-cluster rotation lifecycle
 
-Three Linode-minted support-plane credentials are rotated **in-cluster** — no CI
+Two Linode-minted support-plane credentials are rotated **in-cluster** — no CI
 step, no GitHub secret — by the `linodeCredRotator` CronJob (`llz ci
 rotate-linode-creds`; see [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md)
 and [docs/designs/linode-credential-rotator.md](designs/linode-credential-rotator.md)):
 
 - `secret/loki/object-store` — Loki's Object Storage keys
 - `secret/harbor/registry-s3` — Harbor registry's Object Storage keys
-- `secret/certmanager/dns01` — the DNS-scoped Linode token
 
 For each, when the OpenBao `rotated_at` stamp is older than the threshold (or absent
 on a fresh seed), the rotator mints a replacement via the Linode API, **verifies it
 before touching the old one**, writes it to OpenBao through the `linode-rotator`
 Kubernetes-auth role, then drains older same-labeled resources (keep-newest-N).
-`bootstrap-openbao.yml` seeds `secret/loki/object-store` once and `bootstrap-dns.yml`
-seeds `secret/certmanager/dns01`; the rotator adopts each seeded secret on its first
-run and owns it thereafter. `secret/harbor/registry-s3` is **not** seeded at
-bootstrap — the rotator creates it on first run.
+`bootstrap-openbao.yml` seeds `secret/loki/object-store` once; the rotator adopts it
+on its first run and owns it thereafter. `secret/harbor/registry-s3` is **not** seeded
+at bootstrap — the rotator creates it on first run.
+
+> **DNS-01 note.** cert-manager DNS-01 challenges are solved by apl-core's
+> `cert-manager-webhook-linode` (API group `acme.slicen.me`), which holds its own
+> static Linode API token supplied via `TF_VAR_linode_dns_token` (from the
+> `LINODE_DNS_TOKEN` GitHub secret) as `apps.cert-manager.dns.provider.linode.apiToken`.
+> The landing zone no longer seeds a separate `secret/certmanager/dns01` OpenBao path;
+> the `llz-letsencrypt-*` ClusterIssuers target that webhook.
 
 Separately, three secrets are **sourced in-cluster** by ESO PushSecrets (not minted
 by the rotator) and pushed up to OpenBao through the `eso-pusher` Kubernetes-auth
@@ -201,7 +205,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | Secret | What it is | Rotation method |
 |--------|------------|-----------------|
 | `LINODE_API_TOKEN` | Linode provisioning PAT (read/write) | **Automated** — `secret-rotation.yml` mints + propagates monthly (`0 4 1 * *`), revokes old daily (`30 3 * * *`); ≤90-day policy with daily expiry audit |
-| `LINODE_DNS_TOKEN` | DNS-scoped PAT — seed input for `secret/certmanager/dns01` | **Manual** provision; the live DNS token is then **automated** in-cluster (see `certmanager/dns01` below) |
+| `LINODE_DNS_TOKEN` | Linode API token for apl-core's `cert-manager-webhook-linode` DNS-01 solver (`TF_VAR_linode_dns_token` → `apps.cert-manager.dns.provider.linode.apiToken`) | **Manual** — **static** operator input; ≤90-day policy |
 | `CLOUD_FIREWALL_TOKEN` | Firewall-scoped PAT (optional) | **Manual** (Cloud Manager); ≤90-day policy |
 | `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` | Object Storage key for the TF-state backend bucket | **On-demand** via `secret-rotation.yml` (`tf-state-key` / `tf-state-key-revoke` scopes); no scheduled rotation (bootstrap dependency) |
 | `OPENBAO_SECRETS_WRITE_TOKEN` | GitHub classic PAT (Actions + Secrets: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
@@ -216,7 +220,6 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `secret/linode/api-token` | Linode provisioning PAT | **Automated** — `secret-rotation.yml` → `propagate-pat` (GitHub-OIDC `secret-propagator` role) |
 | `secret/loki/object-store` | Loki Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/harbor/registry-s3` | Harbor registry Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
-| `secret/certmanager/dns01` | DNS-scoped Linode token | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold); seeded by `bootstrap-dns.yml` |
 | `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |
 | `secret/otel/ingress` | OTel ingress bearer token | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |
 | `secret/harbor/admin` | Harbor admin password | **Tracks Harbor** — ESO PushSecret mirrors Harbor's Helm-generated Secret (`Replace`) via `eso-pusher` role |

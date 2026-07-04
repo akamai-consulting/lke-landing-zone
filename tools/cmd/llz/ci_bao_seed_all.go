@@ -4,8 +4,8 @@ package main
 // that runs the bootstrap's generic OpenBao KV seeds from one declarative table
 // instead of one hand-written workflow step per secret. It REPLACES the
 // scattered `llz ci bao-seed …` steps in llz-bootstrap-openbao.yml
-// (github-dispatch-token, cert-automation token, linode api-token, certmanager
-// dns01) with a single step; the per-seed flag wiring those steps carried
+// (github-dispatch-token, cert-automation token, linode api-token) with a
+// single step; the per-seed flag wiring those steps carried
 // now lives in bootstrapSeeds() below. (harbor admin, grafana admin + otel bearer
 // used to seed here too; they are now written in-cluster via ESO PushSecrets.
 // loki object-store + harbor registry-s3 moved to `llz ci
@@ -92,29 +92,6 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 		// the Linode API and seeds the path directly (rotated_at-stamped), and the
 		// in-cluster rotator owns it after first boot — the credential never
 		// transits GitHub.
-		//
-		// cert-manager DNS-01 token (Linode PAT scoped to DNS zone write). Seeding
-		// it here folds the common case of bootstrap-dns.yml into this bootstrap:
-		// when LINODE_DNS_TOKEN is provisioned up front, the KV path is ready
-		// before the dns tree is ever applied. on-missing skip: DNS is optional at
-		// bootstrap (cluster-bootstrap uses a placeholder for apl-core's schema),
-		// and bootstrap-dns.yml remains the late-provisioning/recovery path that
-		// seeds this same path once the token exists. skip-if-present: on a
-		// linodeCredRotator env the in-cluster rotator OWNS this path after first
-		// boot (it mints fresh DNS-scoped PATs and drains old ones) — a re-run
-		// re-seeding the stale GitHub copy would clobber a live rotator-minted
-		// token with a possibly-drained one. Deliberate updates go through
-		// bootstrap-dns.yml, whose kv put is unconditional.
-		{
-			path:          "secret/certmanager/dns01",
-			fieldSpecs:    []string{"token=env:LINODE_DNS_TOKEN"},
-			skipIfPresent: "token",
-			onMissing:     "skip",
-			missingNotes: []string{
-				"LINODE_DNS_TOKEN not set — skipping secret/certmanager/dns01.",
-				fmt.Sprintf("Provision it as an infra-%s environment secret, then run bootstrap-dns.yml (the late-provisioning path).", region),
-			},
-		},
 	}
 }
 
@@ -124,8 +101,8 @@ func ciBaoSeedAllCmd() *cobra.Command {
 		Use:   "bao-seed-all",
 		Short: "seed every generic OpenBao KV bootstrap path from one declarative table",
 		Long: "Data-driven driver that runs the bootstrap's generic `bao-seed` paths\n" +
-			"(github-dispatch-token, cert-automation token, linode api-token,\n" +
-			"certmanager dns01) from the bootstrapSeeds() table — replacing\n" +
+			"(github-dispatch-token, cert-automation token, linode api-token)\n" +
+			"from the bootstrapSeeds() table — replacing\n" +
 			"near-identical inline steps in llz-bootstrap-openbao.yml with one. (harbor\n" +
 			"admin, grafana admin + otel bearer are written in-cluster via ESO\n" +
 			"PushSecrets; loki object-store + harbor registry-s3 are minted + seeded by\n" +
@@ -135,7 +112,7 @@ func ciBaoSeedAllCmd() *cobra.Command {
 			"that seed's on-missing mode (exit 0, deferring via BOOTSTRAP_ERRORS where\n" +
 			"the inline step did); a genuine kv-put failure aborts before the remaining\n" +
 			"seeds. Reads OPENBAO_ROOT_TOKEN, OPENBAO_SECRETS_WRITE_TOKEN,\n" +
-			"LINODE_API_TOKEN, LINODE_DNS_TOKEN, and HA_ROLE.",
+			"LINODE_API_TOKEN, and HA_ROLE.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIBaoSeedAll(region) },
 	}

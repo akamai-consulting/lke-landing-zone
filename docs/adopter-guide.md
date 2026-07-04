@@ -315,12 +315,13 @@ new env, in order:
    the env: seed the static seal key, `bao operator init` (recovery keys; the pods
    auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
    engine, auth methods, and policies.
-6. **DNS** — if `LINODE_DNS_TOKEN` was provisioned before step 5, the OpenBao
-   bootstrap's `bao-seed-all` already seeded `secret/certmanager/dns01` and no
-   dispatch is needed; dispatch `bootstrap-dns.yml` only when the token arrives
-   later (it also applies the dns kustomize tree + waits for the synced Secret).
-   (The Argo CD / apl-core values-repo credential is the `APL_VALUES_REPO_TOKEN`
-   PAT, provisioned by `llz tokens`, not a per-run bootstrap workflow.)
+6. **DNS** — no dedicated step. The `llz-letsencrypt-*` ClusterIssuers sync
+   automatically via Argo CD (they live in the mandatory `_shared/manifest/dns`
+   base). DNS-01 challenges are solved by apl-core's `cert-manager-webhook-linode`,
+   which holds its own Linode token (`TF_VAR_linode_dns_token` from the
+   `LINODE_DNS_TOKEN` secret, applied at the `cluster-bootstrap` TF apply) — no
+   OpenBao seed or ExternalSecret is involved. (The Argo CD / apl-core values-repo
+   credential is the `APL_VALUES_REPO_TOKEN` PAT, provisioned by `llz tokens`.)
 
 See [docs/runbooks/](runbooks/) for per-step detail (`bootstrap-openbao.md`,
 `apl-values-propagation.md`) and [docs/playbooks/operator-onboarding.md](playbooks/operator-onboarding.md)

@@ -235,14 +235,12 @@ func esFixtureRepo(t *testing.T) string {
 		`          llz openbao exec -- kv put secret/otel/ingress token="$T"`,
 		`          llz openbao exec -- kv put secret/infra/github-dispatch-token token="$D"`,
 	}, "\n"))
-	fixWrite(t, root, ".github/workflows/llz-bootstrap-dns.yml",
-		`          llz openbao exec -- kv put secret/certmanager/dns01 token="$LINODE_DNS_TOKEN"`+"\n")
 	fixWrite(t, root, "tools/cmd/llz/ci_harbor.go",
 		"package main\nvar _ = baoKVPutFn(\"secret/harbor/admin\", map[string]string{\"password\": p})\n")
 
 	var policy strings.Builder
 	policy.WriteString("package main\nconst policyPlatformCI = `\n")
-	for _, p := range []string{"grafana/admin", "otel/ingress", "infra/github-dispatch-token", "certmanager/dns01", "harbor/admin"} {
+	for _, p := range []string{"grafana/admin", "otel/ingress", "infra/github-dispatch-token", "harbor/admin"} {
 		policy.WriteString(`path "secret/data/` + p + `" { capabilities = ["read"] }` + "\n")
 		policy.WriteString(`path "secret/metadata/` + p + `" { capabilities = ["read", "list"] }` + "\n")
 	}
@@ -262,7 +260,6 @@ func TestRunCIExternalSecretPathsHappyPath(t *testing.T) {
 		"  ok: grafana/admin.password",
 		"  ok: grafana/admin.user",
 		"  ok: otel/ingress",
-		"  ok (seeded policy): certmanager/dns01",
 		"  ok (seeded policy): harbor/admin",
 		"  ok (seeded policy): infra/github-dispatch-token",
 		"",
@@ -286,8 +283,12 @@ func TestRunCIExternalSecretPathsFailures(t *testing.T) {
 		"    key: grafana/admin",
 		"    property: missing_field",
 	}, "\n"))
-	fixWrite(t, root, ".github/workflows/llz-bootstrap-dns.yml",
-		`          bao kv put secret/uncovered/path field="x"`+"\n")
+	fixWrite(t, root, ".github/workflows/llz-bootstrap-openbao.yml", strings.Join([]string{
+		`          llz openbao exec -- kv put secret/grafana/admin user="$U" password="$P"`,
+		`          llz openbao exec -- kv put secret/otel/ingress token="$T"`,
+		`          llz openbao exec -- kv put secret/infra/github-dispatch-token token="$D"`,
+		`          bao kv put secret/uncovered/path field="x"`,
+	}, "\n")+"\n")
 
 	var buf bytes.Buffer
 	err := runCIExternalSecretPaths(root, &buf)
@@ -302,8 +303,8 @@ func TestRunCIExternalSecretPathsFailures(t *testing.T) {
 	}
 	out := buf.String()
 	for _, want := range []string{
-		"::error file=apl-values/env/more.yaml::ExternalSecret remoteRef.key 'grafana/admin' property 'missing_field' is not written by any 'bao kv put secret/grafana/admin' step in bootstrap-openbao.yml or bootstrap-dns.yml\n",
-		"::error file=apl-values/env/more.yaml::ExternalSecret remoteRef.key 'never/seeded' is not seeded by any bootstrap workflow — add a 'bao kv put secret/never/seeded' step to bootstrap-openbao.yml or bootstrap-dns.yml, or add to MANUAL_PATHS if intentionally manual\n",
+		"::error file=apl-values/env/more.yaml::ExternalSecret remoteRef.key 'grafana/admin' property 'missing_field' is not written by any 'bao kv put secret/grafana/admin' step in bootstrap-openbao.yml\n",
+		"::error file=apl-values/env/more.yaml::ExternalSecret remoteRef.key 'never/seeded' is not seeded by any bootstrap workflow — add a 'bao kv put secret/never/seeded' step to bootstrap-openbao.yml, or add to MANUAL_PATHS if intentionally manual\n",
 		"::error file=tools/cmd/llz/ci_openbao_configure.go::KV path 'uncovered/path' is not covered by llz ci bao-configure (ci_openbao_configure.go): expected path 'secret/data/uncovered/path' with read capability\n",
 		"::error file=tools/cmd/llz/ci_openbao_configure.go::KV path 'uncovered/path' is not covered by llz ci bao-configure (ci_openbao_configure.go): expected path 'secret/metadata/uncovered/path' with read and list capabilities\n",
 		"\n4 ExternalSecret ref(s) failed seed or policy validation.\n",
@@ -311,11 +312,6 @@ func TestRunCIExternalSecretPathsFailures(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
-	}
-	// certmanager/dns01 was replaced in the dns workflow, so it is no longer
-	// seeded — but it is also no longer referenced, so it simply drops out.
-	if strings.Contains(out, "ok (seeded policy): certmanager/dns01") {
-		t.Errorf("dns01 should no longer be reported seeded:\n%s", out)
 	}
 }
 
@@ -326,7 +322,6 @@ func TestRunCIExternalSecretPathsInstanceTemplateLayout(t *testing.T) {
 	root := t.TempDir()
 	for _, rel := range []string{
 		".github/workflows/llz-bootstrap-openbao.yml",
-		".github/workflows/llz-bootstrap-dns.yml",
 	} {
 		b, err := os.ReadFile(filepath.Join(flat, filepath.FromSlash(rel)))
 		if err != nil {

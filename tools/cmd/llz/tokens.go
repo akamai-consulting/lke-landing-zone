@@ -258,7 +258,7 @@ func printTokensNextSteps(env string) {
 	cmd("llz build "+env+" --yes", "dispatch the apply  (or `llz up "+env+" --yes` chains doctor → build)")
 	cmd("llz status "+env, "watch OpenBao / ArgoCD / ESO converge")
 	fmt.Println(dim("  after the first build: escrow OpenBao unseal keys 4 & 5 + the root token offline,"))
-	fmt.Println(dim("  delete OPENBAO_ROOT_TOKEN from infra-" + env + ", then `llz bootstrap dns " + env + " --yes`."))
+	fmt.Println(dim("  and delete OPENBAO_ROOT_TOKEN from infra-" + env + " (DNS-01 certs wire automatically via TF_VAR_linode_dns_token)."))
 }
 
 // cmdDoctorE2E reports e2e readiness of the env files + live repo (the wizard's

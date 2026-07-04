@@ -147,8 +147,8 @@ poll/stop/fail decision is the three-exit-code contract — never a human eyebal
 `kubectl get pods`.
 
 - **Drives it:** the Terraform workflow dispatched per module (`cluster`,
-  `object-storage`, `cluster-bootstrap`), then `bootstrap-openbao.yml` and
-  `bootstrap-dns.yml`; the polling `llz ci converge` (wrapping `llz ci health`).
+  `object-storage`, `cluster-bootstrap`), then `bootstrap-openbao.yml`; the
+  polling `llz ci converge` (wrapping `llz ci health`).
 - **Ordering caveat:** the **first** cluster bootstrapped writes Harbor robot
   credentials later clusters read — bootstrap one fully before the next
   ([bootstrap-openbao](runbooks/bootstrap-openbao.md)).

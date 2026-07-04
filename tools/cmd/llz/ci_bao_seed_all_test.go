@@ -16,7 +16,6 @@ func TestBootstrapSeedsTable(t *testing.T) {
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
-		"secret/certmanager/dns01",
 	}
 	if len(seeds) != len(wantPaths) {
 		t.Fatalf("bootstrapSeeds returned %d entries, want %d", len(seeds), len(wantPaths))
@@ -37,25 +36,20 @@ func TestBootstrapSeedsTable(t *testing.T) {
 			}
 		}
 	}
-	// Region interpolation reached the dispatch-token annotation and the dns01 notes.
+	// Region interpolation reached the dispatch-token annotation.
 	dispatch := seeds[0]
 	if !strings.Contains(strings.Join(dispatch.missingAnnotations, " "), "infra-primary") {
 		t.Errorf("dispatch-token annotations missing infra-primary: %v", dispatch.missingAnnotations)
 	}
-	dns := seeds[3]
-	if !strings.Contains(strings.Join(dns.missingNotes, " "), "infra-primary") {
-		t.Errorf("dns01 notes missing infra-primary: %v", dns.missingNotes)
-	}
 }
 
 // TestRunCIBaoSeedAllSeedsEvery drives the whole table with every source
-// present (env secrets set, nothing pre-seeded) and asserts all four paths are
+// present (env secrets set, nothing pre-seeded) and asserts all three paths are
 // kv-put, in table order.
 func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
 	t.Setenv("LINODE_API_TOKEN", "linode-tok")
-	t.Setenv("LINODE_DNS_TOKEN", "dns-tok")
 	t.Setenv("HA_ROLE", "")
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent → skip-if-present never skips
 	if err := runCIBaoSeedAll("primary"); err != nil {
@@ -69,30 +63,9 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
 		"secret/linode/api-token",
-		"secret/certmanager/dns01",
 	}
 	if strings.Join(gotPaths, " ") != strings.Join(want, " ") {
 		t.Errorf("seeded paths = %v, want %v", gotPaths, want)
-	}
-}
-
-// TestRunCIBaoSeedAllSkipsDNSWhenUnset proves an unset LINODE_DNS_TOKEN skips
-// the dns01 seed (on-missing skip — DNS is optional at bootstrap; bootstrap-dns.yml
-// is the late-provisioning path) without failing the driver or the later seeds.
-func TestRunCIBaoSeedAllSkipsDNSWhenUnset(t *testing.T) {
-	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
-	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
-	t.Setenv("LINODE_API_TOKEN", "linode-tok")
-	t.Setenv("LINODE_DNS_TOKEN", "")
-	t.Setenv("HA_ROLE", "")
-	puts := stubBaoSeedKV(t, "", "")
-	if err := runCIBaoSeedAll("primary"); err != nil {
-		t.Fatalf("runCIBaoSeedAll with unset dns token: %v", err)
-	}
-	for _, p := range *puts {
-		if p[2] == "secret/certmanager/dns01" {
-			t.Errorf("dns01 was seeded despite LINODE_DNS_TOKEN being unset")
-		}
 	}
 }
 

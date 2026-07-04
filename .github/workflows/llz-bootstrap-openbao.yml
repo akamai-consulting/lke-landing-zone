@@ -130,11 +130,6 @@ on:
         required: false
       OPENBAO_SEAL_KEY:
         required: false
-      # Optional: when provisioned, bao-seed-all seeds secret/certmanager/dns01
-      # during the bootstrap; when absent the seed skips and bootstrap-dns.yml
-      # is the late-provisioning path.
-      LINODE_DNS_TOKEN:
-        required: false
       HARBOR_PASSWORD:
         required: false
       HARBOR_PULL_PASSWORD:
@@ -419,9 +414,6 @@ jobs:
       #   secret/infra/github-dispatch-token   (harbor-ready PostSync hook)
       #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
       #   secret/linode/api-token              (linode-volume-labeler ExternalSecret)
-      #   secret/certmanager/dns01             (LINODE_DNS_TOKEN; skip when unset —
-      #                                         bootstrap-dns.yml is then the
-      #                                         late-provisioning path)
       # (secret/harbor/admin, secret/grafana/admin + secret/otel/ingress are no
       #  longer seeded here — ESO writes them in-cluster via PushSecrets.
       #  secret/loki/object-store + secret/harbor/registry-s3 moved to the
@@ -438,11 +430,6 @@ jobs:
         env:
           OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
-          # Raw secret, deliberately NO placeholder fallback (unlike cluster-
-          # bootstrap's TF_VAR_linode_dns_token): empty must mean "skip the dns01
-          # seed", not "seed a placeholder that cert-manager then presents to the
-          # Linode API".
-          LINODE_DNS_TOKEN: ${{ secrets.LINODE_DNS_TOKEN }}
         run: llz ci bao-seed-all --region "$REGION"
 
       # ── Mint + seed: object-storage keys (Loki + Harbor registry) ──────────────
@@ -532,11 +519,6 @@ jobs:
       # apl-values/primary/values.yaml apps.gitea for the rationale (apl-
       # core extraVolumes list-replace clobbered custom-ca; integration
       # blocked pending a kustomize post-renderer follow-up).
-
-      # cert-manager DNS-01 token (secret/certmanager/dns01) is intentionally
-      # NOT seeded here — split into its own workflow .github/workflows/bootstrap-dns.yml
-      # so a cluster can reach a functional state without a DNS-scoped Linode
-      # token in hand. Run bootstrap-dns.yml once LINODE_DNS_TOKEN is provisioned.
 
       # ── Extract the standby CA cert for cross-cluster rotation ─────────────────
       # When bootstrapping a standby cluster, extract its OpenBao TLS CA cert and

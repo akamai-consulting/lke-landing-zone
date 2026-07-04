@@ -133,7 +133,6 @@ spec:
     objectStorage: { cluster: us-sea-1 }
   components:                                        # partial block: only these change
     harbor: { enabled: false }                    # ← no registry in staging
-    dns:    { enabled: false }                    # applied separately by bootstrap-dns.yml
 ```
 
 ## OpenBao HA pair
@@ -220,8 +219,7 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 `argocd` (mandatory), `clusterFoundation` (mandatory), `externalSecrets`,
 `certManager`, `openbao` (requires `externalSecrets` + `certManager`),
 `argoWorkflows`, `argoEvents`, `volumeLabeler`, `observability`, `harbor`,
-`policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
-`dns` (default off — applied separately by `bootstrap-dns.yml`).
+`policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`.
 
 **Per-component sizing (config in the spec, mechanism in the base).** A few
 components take capacity knobs alongside `enabled`, rendered into the env's

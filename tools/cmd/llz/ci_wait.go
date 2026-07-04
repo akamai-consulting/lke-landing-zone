@@ -1,11 +1,11 @@
 package main
 
-// ci_wait.go implements `llz ci wait-pods`, `llz ci wait-secret` and `llz ci
-// wait-cluster-ready` — native ports of the inline kubectl polling loops the
-// bootstrap/rotation workflows used to carry (llz-bootstrap-openbao.yml's pod
-// wait, llz-bootstrap-dns.yml's Secret wait, llz-secret-rotation.yml's
-// post-rotation health gate). One place owns the deadline/interval mechanics
-// and the timeout diagnostics instead of each workflow re-rolling them in bash.
+// ci_wait.go implements `llz ci wait-pods` and `llz ci wait-cluster-ready` —
+// native ports of the inline kubectl polling loops the bootstrap/rotation
+// workflows used to carry (llz-bootstrap-openbao.yml's pod wait,
+// llz-secret-rotation.yml's post-rotation health gate). One place owns the
+// deadline/interval mechanics and the timeout diagnostics instead of each
+// workflow re-rolling them in bash.
 
 import (
 	"crypto/tls"
@@ -46,34 +46,6 @@ func ciWaitPodsCmd() *cobra.Command {
 	c.Flags().StringVar(&phase, "phase", "Running", "status phase to wait for")
 	c.Flags().IntVar(&timeout, "timeout", 600, "total wait budget in seconds, shared across all pods")
 	c.Flags().IntVar(&interval, "interval", 5, "seconds between polls")
-	return c
-}
-
-func ciWaitSecretCmd() *cobra.Command {
-	var ns, name, es string
-	var timeout, interval, esTimeout int
-	c := &cobra.Command{
-		Use:   "wait-secret",
-		Short: "wait for a K8s Secret to materialize (optionally until its ExternalSecret is Ready)",
-		Long: "Native port of the 'Wait for cert-manager-dns01-solver-token Secret' loop in\n" +
-			"llz-bootstrap-dns.yml. Waits for the Secret with `kubectl wait --for=create`\n" +
-			"(kubectl 1.31+ — a bare --for=condition errors immediately on NotFound, which\n" +
-			"is why this used to be a hand-rolled existence poll) — then, with\n" +
-			"--externalsecret, waits for that ExternalSecret's Ready condition (ESO\n" +
-			"reports Ready=True only after the Secret has the expected keys). On timeout\n" +
-			"it dumps the ExternalSecret's status conditions and exits 1.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIWaitSecret(ns, name, es, timeout, interval, esTimeout))
-			return nil
-		},
-	}
-	c.Flags().StringVar(&ns, "namespace", "", "namespace of the Secret (required)")
-	c.Flags().StringVar(&name, "name", "", "Secret name to wait for (required)")
-	c.Flags().StringVar(&es, "externalsecret", "", "ExternalSecret to require Ready once the Secret exists (empty skips)")
-	c.Flags().IntVar(&timeout, "timeout", 180, "seconds to wait for the Secret to exist")
-	c.Flags().IntVar(&interval, "interval", 5, "seconds between polls")
-	c.Flags().IntVar(&esTimeout, "es-timeout", 60, "seconds to wait for the ExternalSecret Ready condition")
 	return c
 }
 
@@ -209,42 +181,6 @@ func dumpPodDiagnostics(ns, pod string) {
 		fmt.Fprintf(os.Stderr, "\n# kubectl %s\n%s\n",
 			strings.Join(args, " "), tailLines(execCombined("kubectl", args...), 40))
 	}
-}
-
-func runCIWaitSecret(ns, name, es string, timeout, interval, esTimeout int) int {
-	_ = interval // kubectl wait is watch-based; --interval retained for CLI compatibility
-	if ns == "" || name == "" {
-		fmt.Fprintln(os.Stderr, "::error::--namespace and --name are required")
-		return 1
-	}
-	// --for=create (kubectl 1.31+) rides out the Secret not existing yet; a bare
-	// --for=condition errors immediately on NotFound, which is why this used to be
-	// a hand-rolled existence poll.
-	if err := kubectlWaitStream("-n", ns, "wait", "--for=create", "secret/"+name,
-		fmt.Sprintf("--timeout=%ds", timeout)); err != nil {
-		hint := ""
-		if es != "" {
-			hint = fmt.Sprintf(" — check ExternalSecret status: kubectl -n %s describe externalsecret %s", ns, es)
-		}
-		fmt.Fprintf(os.Stderr, "::error::%s/%s did not appear within %ds%s\n", ns, name, timeout, hint)
-		if es != "" {
-			if out, err := execOutput("kubectl", "-n", ns, "get", "externalsecret", es, "-o", "jsonpath={.status.conditions}"); err == nil {
-				os.Stderr.Write(append(out, '\n'))
-			}
-		}
-		return 1
-	}
-	if es != "" {
-		if err := kubectlWaitStream("-n", ns, "wait", "--for=condition=Ready",
-			"externalsecret/"+es, fmt.Sprintf("--timeout=%ds", esTimeout)); err != nil {
-			fmt.Fprintf(os.Stderr, "::error::externalsecret/%s in %s did not become Ready within %ds\n", es, ns, esTimeout)
-			return 1
-		}
-		fmt.Printf("%s/%s is present and ExternalSecret %s Ready.\n", ns, name, es)
-		return 0
-	}
-	fmt.Printf("%s/%s is present.\n", ns, name)
-	return 0
 }
 
 func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) int {

@@ -92,9 +92,9 @@ func TestComponentRegistry_AplCoreMapping(t *testing.T) {
 	if len(h.AplCoreApps) == 0 || len(h.ManifestResources) == 0 {
 		t.Errorf("harbor should use both backends; got aplCore=%v manifest=%v", h.AplCoreApps, h.ManifestResources)
 	}
-	// ComponentEnabled honors DefaultDisabled (dns) and a partial map.
-	if ComponentEnabled(map[string]ComponentToggle{}, "dns") {
-		t.Error("dns is DefaultDisabled → not enabled by default")
+	// ComponentEnabled returns false for an unknown component and honors a partial map.
+	if ComponentEnabled(map[string]ComponentToggle{}, "nonexistent") {
+		t.Error("an unknown component → not enabled")
 	}
 	if !ComponentEnabled(map[string]ComponentToggle{}, "openbao") {
 		t.Error("openbao defaults enabled")
