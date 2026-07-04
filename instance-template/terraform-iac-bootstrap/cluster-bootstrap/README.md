@@ -78,13 +78,17 @@ provider cannot reach the cluster.
   for the values + manifest tree (the instance repo; the in-cluster Gitea is
   obsoleted). apl-operator reads AND writes its rendered values tree here.
 - `apl_values_repo_token` (sensitive) — fine-grained GitHub PAT (Contents:
-  write) used as the HTTPS Git password; seeded into the in-cluster
-  `platform-apps-repo` Secret and rendered into apl-core's
-  values.yaml under `otomi.git.password`.
+  write) used as the HTTPS Git password; rendered into apl-core's values.yaml
+  under `otomi.git.password`, from which apl-core's own argocd-repo-creds
+  ExternalSecret carries it to Argo CD (TF seeds no repo Secret itself).
 - `apl_values_repo_username` — HTTPS Git username (default `x-access-token`;
-  GitHub ignores it when a PAT is the password).
-- (apl-core 6.x removed `loki_admin_password`: apps.loki.adminPassword is an
-  x-secret apl-core auto-generates and self-wires in-cluster, so the landing zone
-  no longer supplies it — no TF_VAR, no infra-`<env>` GitHub secret.)
-- `linode_dns_token` (sensitive) — DNS-scoped Linode token for ExternalDNS
-  and cert-manager DNS-01 solver.
+  GitHub ignores it when a PAT is the password). Spec→tfvar carrier only; no
+  cluster-bootstrap resource consumes it.
+- (`loki_admin_password` has no TF_VAR and no infra-`<env>` GitHub secret:
+  apl-core 6.x's schema still requires the value, so cluster-bootstrap
+  generates it as `random_password.loki_admin` and renders it into
+  `apps.loki.adminPassword` — self-contained in TF state, nothing else
+  consumes it.)
+- `linode_dns_token` (sensitive) — DNS-scoped Linode token, the first-boot
+  fallback for ExternalDNS and cert-manager DNS-01; steady-state DNS auth is
+  the rotating in-cluster PAT via the `dns-rotating-token` Kyverno policy.

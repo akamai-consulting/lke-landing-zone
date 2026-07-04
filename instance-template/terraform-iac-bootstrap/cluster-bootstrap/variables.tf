@@ -26,13 +26,13 @@ variable "apl_values_repo_url" {
 }
 
 variable "apl_values_repo_username" {
-  description = "Username for HTTPS Git basic-auth against the values repo. With a GitHub fine-grained PAT the username is ignored by the server, so the conventional 'x-access-token' is used (any non-empty string works). `llz render` writes otomi.git.username into values.yaml; this var also feeds the TF-seeded platform-apps-repo Argo CD repository Secret (kubectl_manifest.argocd_apps_repo). Supply via TF_VAR_apl_values_repo_username to override."
+  description = "Username for HTTPS Git basic-auth against the values repo. With a GitHub fine-grained PAT the username is ignored by the server, so the conventional 'x-access-token' is used (any non-empty string works). `llz render` writes otomi.git.username into values.yaml, and apl-core's argocd-repo-creds ExternalSecret carries it to Argo CD — so cluster-bootstrap no longer consumes this var in any resource (the TF-seeded platform-apps-repo repository Secret was retired with the apl-core 6.x self-registration); like apl_values_repo_url it is retained as the spec→tfvar carrier. Supply via TF_VAR_apl_values_repo_username to override."
   type        = string
   default     = "x-access-token"
 }
 
 variable "apl_values_repo_token" {
-  description = "Fine-grained GitHub PAT used as the HTTPS Git password for the values repo (apl-core's otomi.git.password) and the platform-apps repo (kubectl_manifest.argocd_apps_repo). Needs `Contents: write` on the instance repo because apl-operator PUSHES its rendered values tree there during bootstrap. Supply via TF_VAR_apl_values_repo_token (sourced from secrets.APL_VALUES_REPO_TOKEN). Replaces the former in-cluster Gitea admin password (random_password.gitops_repo_password) and the platform-apps SSH deploy key (apps_repo_ssh_key), both retired when Gitea was obsoleted."
+  description = "Fine-grained GitHub PAT used as the HTTPS Git password for the values repo (rendered into apl-core's otomi.git.password, which apl-core's argocd-repo-creds ExternalSecret then carries to Argo CD — TF no longer seeds any repo Secret itself). Needs `Contents: write` on the instance repo because apl-operator PUSHES its rendered values tree there during bootstrap. Supply via TF_VAR_apl_values_repo_token (sourced from secrets.APL_VALUES_REPO_TOKEN). Replaces the former in-cluster Gitea admin password (random_password.gitops_repo_password) and the platform-apps SSH deploy key (apps_repo_ssh_key), both retired when Gitea was obsoleted."
   type        = string
   sensitive   = true
 }

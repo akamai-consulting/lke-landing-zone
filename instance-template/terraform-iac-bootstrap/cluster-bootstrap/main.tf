@@ -328,10 +328,11 @@ resource "helm_release" "apl" {
 # ExternalSecret, secret-type repo-creds, url=otomi.git.repoUrl, password synced
 # from the centralized `apl-git-config` Secret via apl-core's own
 # `core-secrets-store` ClusterSecretStore, refreshInterval 1m), so the TF seed
-# was redundant. The remaining pre-helmfile window is covered by
-# kubectl_manifest.argocd_apps_repo below — same repo URL and same fine-grained
-# PAT. Removing the TF resource makes `terraform apply` delete the orphaned
-# Secret on upgrade, which is safe: Argo CD picks any matching credential.
+# was redundant. The `argocd_apps_repo` Secret that briefly covered the
+# remaining pre-helmfile window is gone too — see the removal note further
+# down; apl-core's repo-creds is now the ONLY repo credential, and removing a
+# TF resource makes `terraform apply` delete the orphaned Secret on upgrade,
+# which is safe: Argo CD picks any matching credential.
 
 # ── Argo CD namespace ────────────────────────────────────────────────────────
 # helm_release.apl wait=true only blocks until the apl-operator Deployment is
@@ -553,40 +554,24 @@ resource "null_resource" "kyverno_sc_default_policy" {
 # Validated by a full e2e off main. (`llz ci apply-kyverno-policy`'s RETROFIT_*
 # capability is retained for reuse but no longer driven by any policy here.)
 
-# Repo Secret — ArgoCD reads this to authenticate against the platform-apps
-# repo (the instance repo) over HTTPS. Labeled
-# argocd.argoproj.io/secret-type=repository so ArgoCD's repo-server discovers
-# it automatically. This is now the SOLE TF-managed ArgoCD repo credential
-# (the former apl_values_repo_creds Secret was retired — see the apl-core 6.x
-# note above): it covers the cold-bootstrap window before apl-core's helmfile
-# lands the argocd-repo-creds-* ExternalSecret, and both point at the same
-# instance repo with the same fine-grained PAT (apl-core's otomi.git targets
-# that same repo).
-# HTTPS basic-auth with a PAT needs no SSH host-key handling, so the former
-# argocd-ssh-known-hosts-cm ConfigMap and the ssh-keyscan data source are gone.
-resource "kubectl_manifest" "argocd_apps_repo" {
-  yaml_body = yamlencode({
-    apiVersion = "v1"
-    kind       = "Secret"
-    metadata = {
-      name      = "platform-apps-repo"
-      namespace = "argocd"
-      labels = {
-        "argocd.argoproj.io/secret-type" = "repository"
-      }
-    }
-    type = "Opaque"
-    stringData = {
-      type     = "git"
-      url      = "https://github.com/<@ instance_repo @>.git"
-      username = var.apl_values_repo_username
-      password = var.apl_values_repo_token
-    }
-  })
-  server_side_apply = true
-  force_conflicts   = true
-  depends_on        = [kubectl_manifest.argocd_namespace]
-}
+# NOTE — the `argocd_apps_repo` repository Secret (the LAST TF-managed ArgoCD
+# repo credential, kept after the apl_values_repo_creds retirement above to
+# cover the cold-bootstrap window) was REMOVED: apl-core v6's repo-creds
+# ExternalSecret (argocd-raw.gotmpl, external-git branch — url=otomi.git.repoUrl,
+# which llz render defaults to THIS instance repo, same fine-grained PAT via
+# apl-git-config) prefix-matches every Application repoURL here, so the only
+# thing the TF Secret bought was first-sync latency: the repo-creds Secret
+# materializes within its 1m refreshInterval of the argocd release landing,
+# and the bootstrap Application's retry budget (20 retries, 3m cap — see its
+# syncPolicy below) absorbs that window with room to spare. One credential,
+# one owner (apl-core), no TF-held copy in the cluster. `terraform apply`
+# deletes the orphaned Secret on upgrade, which is safe: Argo CD matches any
+# remaining credential by URL. If a future e2e shows first-boot syncs starving
+# on repo auth (ComparisonError beyond the retry budget), restore the Secret
+# from git history rather than extending the budget.
+# (HTTPS basic-auth with a PAT needs no SSH host-key handling, so the former
+# argocd-ssh-known-hosts-cm ConfigMap and the ssh-keyscan data source are
+# likewise long gone.)
 
 # Repo Secret — lets ArgoCD authenticate to GHCR to pull the first-party OCI
 # Helm charts (ghcr.io/<@ upstream_org @>/charts/*: cluster-foundation, openbao-
@@ -788,7 +773,6 @@ resource "kubectl_manifest" "app_bootstrap_application" {
   # now; no conflict to force.
   depends_on = [
     null_resource.apl_pipeline_ready,
-    kubectl_manifest.argocd_apps_repo,
     kubectl_manifest.app_bootstrap_appproject,
   ]
 }
@@ -850,7 +834,6 @@ resource "kubectl_manifest" "app_secret_store_application" {
   server_side_apply = true
   depends_on = [
     null_resource.apl_pipeline_ready,
-    kubectl_manifest.argocd_apps_repo,
     kubectl_manifest.app_bootstrap_appproject,
   ]
 }

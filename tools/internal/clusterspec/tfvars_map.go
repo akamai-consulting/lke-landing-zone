@@ -88,8 +88,10 @@ func BootstrapTFVars(env string, c Cluster) []Assign {
 	if b.AplChartVersion != "" {
 		add("apl_chart_version", hclStr(b.AplChartVersion))
 	}
-	// apl_values_repo_url/username stay in the tfvars: cluster-bootstrap still uses
-	// them to build the Argo CD values-repo credential Secret (not just values.yaml).
+	// apl_values_repo_url/username stay in the tfvars as spec→tfvar carriers
+	// only: no cluster-bootstrap resource consumes them anymore (apl-core 6.x
+	// self-registers the Argo CD repo credential from otomi.git.*, and the
+	// TF-seeded platform-apps-repo Secret was retired with it).
 	if b.AplValues.RepoURL != "" {
 		add("apl_values_repo_url", hclStr(b.AplValues.RepoURL))
 	}
