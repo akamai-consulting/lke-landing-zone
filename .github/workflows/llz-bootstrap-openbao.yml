@@ -621,6 +621,8 @@ jobs:
       # exposed it. Best-effort — diagnostics must never change the outcome.
       - name: Diagnose Argo CD sync state (on failure)
         if: failure() || cancelled()
+        env:
+          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
         run: llz ci diagnose-argocd || true
 
       # ── Fail job if any non-optional secrets were missing ──────────────────────
