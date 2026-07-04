@@ -68,11 +68,14 @@ var (
 			"--jq", `[.workflow_runs[] | select(.name=="Build Container Images") | select(.status=="queued" or .status=="in_progress")] | length`)
 		return err == nil && parseBuildCount(out) > 0
 	}
-	// pinTriggerBuild kicks off the Build Container Images workflow on ref (its
-	// HEAD = the commit under test in the e2e flow). Needs an actions:write token.
-	pinTriggerBuild = func(token, templateRepo, ref string) error {
+	// pinTriggerBuild kicks off the Build Container Images workflow on ref, passing
+	// the exact sha to build via the `sha` input — `gh workflow run --ref` can only
+	// name a branch/tag, so it would otherwise build the ref HEAD, which races a
+	// concurrent push and produces a sha-<HEAD> tag the wait below never matches.
+	// Needs an actions:write token.
+	pinTriggerBuild = func(token, templateRepo, ref, sha string) error {
 		cmd := exec.Command("gh", "workflow", "run", "build-images.yml",
-			"--repo", templateRepo, "--ref", ref, "-f", "image=all")
+			"--repo", templateRepo, "--ref", ref, "-f", "image=all", "-f", "sha="+sha)
 		cmd.Env = append(os.Environ(), "GH_TOKEN="+token)
 		return cmd.Run()
 	}
@@ -108,7 +111,7 @@ func ciPinInstanceImagesCmd() *cobra.Command {
 	c.Flags().StringVar(&templateRepo, "template-repo", "", "this (template) repo owner/name — queried for the build run")
 	c.Flags().StringVar(&sha, "sha", "", "the commit whose images to pin")
 	c.Flags().StringVar(&ref, "ref", "", "branch/tag to (re)trigger Build Container Images on with --build-if-missing (its HEAD must be --sha)")
-	c.Flags().BoolVar(&buildIfMissing, "build-if-missing", false, "if this commit's images should exist but are missing (build failed/incomplete), trigger Build Container Images and wait — instead of pinning a stale image or failing")
+	c.Flags().BoolVar(&buildIfMissing, "build-if-missing", false, "if this commit's sha images are missing (a failed/incomplete build, OR a branch where build-images never auto-ran), trigger Build Container Images on --ref, wait, and pin the sha — instead of pinning a stale :latest or failing")
 	c.Flags().IntVar(&interval, "interval", 20, "seconds between manifest polls while waiting for a sha image")
 	c.Flags().IntVar(&timeout, "timeout", 1200, "max seconds to wait for a just-built sha image to publish")
 	return c
@@ -142,26 +145,31 @@ func runPinInstanceImages(o pinOpts) error {
 		return fmt.Errorf("docker login ghcr.io failed: %w", err)
 	}
 
+	// --build-if-missing intends to (re)build THIS commit's image, so it needs a ref.
+	if o.buildIfMissing && o.ref == "" {
+		return fmt.Errorf("pin-instance-images: --ref is required with --build-if-missing (the branch/tag to build)")
+	}
+
 	built, err := commitBuiltImages(o.templateToken, o.templateRepo, o.sha)
 	if err != nil {
 		return err
 	}
 
-	// This commit changed the image sources (a build ran) but its images aren't
-	// all published — the build failed or is still running. With --build-if-missing
-	// (the workflow_dispatch e2e path), kick a fresh build unless one is already
-	// running, then fall through to the per-image wait below. Without it, the wait
-	// loop alone fails loud if the image never publishes. Either way we never pin a
-	// stale image. One build covers every pinImages entry.
-	if built && o.buildIfMissing && anyShaImageMissing(o.owner, o.sha) {
-		if o.ref == "" {
-			return fmt.Errorf("pin-instance-images: --ref is required with --build-if-missing (the branch/tag to build)")
-		}
+	// Pin THIS commit's sha-tagged images (their baked llz matches the rendered
+	// workflow — assert-image-fresh compares the sha) whenever a build ran for the
+	// commit (release/main) OR we're allowed to build one (--build-if-missing — the
+	// branch/dispatch e2e path, where build-images never auto-ran, so there is NO
+	// sha image and :latest is stale). When we want the sha image but it's absent,
+	// trigger a build unless one is already in flight — covering both a failed/
+	// mid-flight build on main AND a fresh branch build. One build covers every
+	// pinImages entry.
+	wantSha := built || o.buildIfMissing
+	if o.buildIfMissing && anyShaImageMissing(o.owner, o.sha) {
 		if pinBuildInProgress(o.templateToken, o.templateRepo, o.sha) {
 			fmt.Printf("Build Container Images already running for %.8s — waiting for it to publish.\n", o.sha)
 		} else {
 			fmt.Printf("Images for %.8s are missing and no build is in progress — triggering Build Container Images on %s.\n", o.sha, o.ref)
-			if err := pinTriggerBuild(o.templateToken, o.templateRepo, o.ref); err != nil {
+			if err := pinTriggerBuild(o.templateToken, o.templateRepo, o.ref, o.sha); err != nil {
 				return fmt.Errorf("could not trigger Build Container Images on %s — GH_TOKEN_TEMPLATE needs actions:write: %w", o.ref, err)
 			}
 		}
@@ -169,9 +177,9 @@ func runPinInstanceImages(o pinOpts) error {
 
 	for _, im := range pinImages {
 		base := fmt.Sprintf("ghcr.io/%s/%s", o.owner, im.Name)
-		ref := imageRef(base, o.sha, built)
-		if built {
-			fmt.Printf("Build Container Images ran for %.8s — waiting for %s to publish…\n", o.sha, ref)
+		ref := imageRef(base, o.sha, wantSha)
+		if wantSha {
+			fmt.Printf("Waiting for %s to publish…\n", ref)
 			if !waitForManifest(ref, o.retries, o.interval) {
 				return fmt.Errorf("%s not published in time — did Build Container Images succeed for %.8s?", ref, o.sha)
 			}

@@ -72,7 +72,7 @@ func stubPinSeams(t *testing.T, builds int, manifest func(string) bool) *[]strin
 	// Defaults for the build-ensure seams; flow tests that exercise
 	// --build-if-missing override these.
 	pinBuildInProgress = func(string, string, string) bool { return false }
-	pinTriggerBuild = func(string, string, string) error { return nil }
+	pinTriggerBuild = func(string, string, string, string) error { return nil }
 	pinGH = func(_ string, args ...string) ([]byte, error) {
 		a := strings.Join(args, " ")
 		switch {
@@ -147,8 +147,8 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 		// First two checks (anyShaImageMissing + TF wait) miss; then publishes.
 		return calls > publishedAfter
 	})
-	var triggeredRef string
-	pinTriggerBuild = func(_, _, ref string) error { triggeredRef = ref; return nil }
+	var triggeredRef, triggeredSha string
+	pinTriggerBuild = func(_, _, ref, sha string) error { triggeredRef, triggeredSha = ref, sha; return nil }
 	pinBuildInProgress = func(string, string, string) bool { return false }
 
 	o := baseOpts()
@@ -160,6 +160,9 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	if triggeredRef != "main" {
 		t.Errorf("expected a build triggered on ref main, got %q", triggeredRef)
 	}
+	if triggeredSha != "deadbeef" {
+		t.Errorf("build must target the exact sha, got %q", triggeredSha)
+	}
 	if !strings.Contains(strings.Join(*setVars, "\n"), "ci-terraform:sha-deadbeef") {
 		t.Errorf("should pin the sha image after the triggered build, got %v", *setVars)
 	}
@@ -167,7 +170,7 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	// A build already in progress → do NOT trigger a duplicate; just wait.
 	stubPinSeams(t, 1, func(string) bool { return true })
 	triggered := false
-	pinTriggerBuild = func(string, string, string) error { triggered = true; return nil }
+	pinTriggerBuild = func(string, string, string, string) error { triggered = true; return nil }
 	pinBuildInProgress = func(string, string, string) bool { return true }
 	o2 := baseOpts()
 	o2.buildIfMissing = true
@@ -185,5 +188,33 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	o3.buildIfMissing = true
 	if err := runPinInstanceImages(o3); err == nil || !strings.Contains(err.Error(), "--ref is required") {
 		t.Errorf("missing --ref: err=%v, want a --ref required error", err)
+	}
+
+	// Branch case: NO build ran for this commit (build-images doesn't auto-run off
+	// main → commitBuiltImages sees 0) and the sha image is missing. --build-if-missing
+	// must still trigger a build on the branch ref and pin the sha — NOT pin a stale
+	// :latest. This is the gap that let branch e2es trip assert-image-fresh.
+	calls2 := 0
+	setVars2 := stubPinSeams(t, 0 /* no prior build for this commit */, func(string) bool {
+		calls2++
+		return calls2 > 2 // missing on the anyShaImageMissing + first wait check, then publishes
+	})
+	var branchRef string
+	pinTriggerBuild = func(_, _, ref, _ string) error { branchRef = ref; return nil }
+	pinBuildInProgress = func(string, string, string) bool { return false }
+	o4 := baseOpts()
+	o4.buildIfMissing = true
+	o4.ref = "feat/x"
+	if err := runPinInstanceImages(o4); err != nil {
+		t.Fatalf("branch build-if-missing flow: %v", err)
+	}
+	if branchRef != "feat/x" {
+		t.Errorf("branch: expected a build triggered on ref feat/x, got %q", branchRef)
+	}
+	if !strings.Contains(strings.Join(*setVars2, "\n"), "ci-terraform:sha-deadbeef") {
+		t.Errorf("branch: should pin the sha image (not :latest), got %v", *setVars2)
+	}
+	if strings.Contains(strings.Join(*setVars2, "\n"), ":latest") {
+		t.Errorf("branch: must not pin a stale :latest, got %v", *setVars2)
 	}
 }
