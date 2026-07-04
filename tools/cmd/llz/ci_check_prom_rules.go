@@ -13,10 +13,11 @@ package main
 // extractBareGroups) so the CRD-shape handling is unit-tested without promtool.
 //
 // Exit semantics match the Python: exit 0 when every file parses and promtool
-// reports SUCCESS, non-zero when one or more files fail. The landing-zone
-// template ships no PrometheusRules (its charts emit ServiceMonitors only), so
-// the default --rules-dir is usually absent and the check skips cleanly; it
-// does real work in a populated instance overlay.
+// reports SUCCESS, non-zero when one or more files fail. The default
+// --rules-dir is the observability component's prometheus-rules/ tree (the
+// template DOES ship PrometheusRules there — openbao-alerts,
+// support-plane-alerts); an instance overlay that removes the component skips
+// cleanly on the absent directory.
 
 import (
 	"fmt"
@@ -30,9 +31,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// defaultPromRulesDir is the apl-values overlay path where instances ship their
-// PrometheusRule CRDs (matched by kube-prometheus-stack's ruleSelector).
-const defaultPromRulesDir = "apl-values/_shared/manifest/observability/prometheus-rules-crd"
+// defaultPromRulesDir is where the template ships its PrometheusRule CRDs
+// (matched by kube-prometheus-stack's ruleSelector). It was
+// apl-values/_shared/manifest/observability/prometheus-rules-crd until the
+// rules moved into the observability component — the stale default made the
+// gate skip-clean on every run, so nothing promtool-validated the live rules.
+const defaultPromRulesDir = "apl-values/components/observability/prometheus-rules"
 
 // extractBareGroups parses a PrometheusRule CRD and returns the bare-groups
 // YAML document (`groups: …`) promtool expects. Pure and faithful to the Python
@@ -121,9 +125,14 @@ func walkPromRuleFiles(dir string) []string {
 
 // runCICheckPromRules validates the explicit file args, or — when none are
 // given — every *.yaml under rulesDir, skipping cleanly if that directory is
-// absent (the template ships no PrometheusRules).
+// absent (an instance overlay that removed the observability component).
+// rulesDir tolerates both repo layouts via esRepoPath: apl-values/ at the root
+// (an instance) or under instance-template/ (this template repo).
 func runCICheckPromRules(rulesDir string, files []string, w io.Writer) error {
 	if len(files) == 0 {
+		if !filepath.IsAbs(rulesDir) {
+			rulesDir = esRepoPath(".", rulesDir)
+		}
 		if info, err := os.Stat(rulesDir); err != nil || !info.IsDir() {
 			fmt.Fprintf(w, "check-prom-rules: no PrometheusRule manifests (%s absent) — skipping\n", rulesDir)
 			return nil
@@ -158,8 +167,9 @@ func ciCheckPromRulesCmd() *cobra.Command {
 			"check-prometheus-rule-crds.py (the Makefile's prom-rules-check). For each\n" +
 			"PrometheusRule CRD it extracts spec.groups into the bare-groups document\n" +
 			"`promtool check rules` understands, then runs promtool against it. With no\n" +
-			"file args it validates every *.yaml under --rules-dir, skipping cleanly when\n" +
-			"that directory is absent (the landing-zone template ships none).",
+			"file args it validates every *.yaml under --rules-dir (tolerating both the\n" +
+			"instance layout and the template's instance-template/ nesting), skipping\n" +
+			"cleanly when that directory is absent.",
 		RunE: func(_ *cobra.Command, args []string) error {
 			return runCICheckPromRules(rulesDir, args, os.Stdout)
 		},

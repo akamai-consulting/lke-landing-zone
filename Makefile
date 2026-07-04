@@ -226,16 +226,18 @@ k8s-validate: render-charts
 # CRs. Apl-core's kube-prometheus-stack picks them up via its ruleSelector
 # matching the labels on each CRD. promtool only accepts the bare-groups form,
 # so `llz ci check-prom-rules` extracts spec.groups from each CRD before invoking
-# it. The landing-zone template ships no PrometheusRules — its charts emit
-# ServiceMonitors only — so this skips cleanly here and runs in a populated
-# instance. `llz ci check-prom-rules` is the native port of the former
-# template-scripts/linting-and-validation/check-prometheus-rule-crds.py; uses the
-# PATH llz when present (the CI images bake it), else builds from source.
+# it. The rules live in the observability component's prometheus-rules/ tree
+# (openbao-alerts, support-plane-alerts, …) — the previous default pointed at
+# the retired prometheus-rules-crd path, so the gate skip-cleaned on every run
+# and nothing promtool-validated the live rules. `llz ci check-prom-rules` is
+# the native port of the former template-scripts/linting-and-validation/
+# check-prometheus-rule-crds.py; uses the PATH llz when present (the CI images
+# bake it), else builds from source.
 prom-rules-check:
 	@if command -v llz >/dev/null 2>&1; then \
 		llz ci check-prom-rules; \
 	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci check-prom-rules --rules-dir ../apl-values/_shared/manifest/observability/prometheus-rules-crd; \
+		cd $(GO_DIR) && go run ./cmd/llz ci check-prom-rules --rules-dir ../instance-template/apl-values/components/observability/prometheus-rules; \
 	fi
 
 helm-repos:
