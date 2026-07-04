@@ -79,10 +79,10 @@ help:
 	@echo "Instance test:"
 	@echo "  instance-test   Local, no-cloud smoke test: copier-instantiate the template"
 	@echo "                  and run the offline validators (token residue, structure,"
-	@echo "                  terraform validate) against the rendered instance. The fast"
-	@echo "                  counterpart to the release-e2e workflow (which stands up a"
-	@echo "                  real cluster). Set SKIP_TF=1 to skip terraform validate."
-	@echo "                  Runs scaffold-check first."
+	@echo "                  terraform validate, actionlint) against the rendered instance."
+	@echo "                  The fast counterpart to release-e2e (which stands up a real"
+	@echo "                  cluster); also the CI 'instantiate' job. Runs scaffold-check"
+	@echo "                  first. Self-skips without copier; SKIP_TF=1 skips tf validate."
 	@echo "  scaffold-check  Scaffold a throwaway env (llz env add) and assert the"
 	@echo "                  per-env scaffold renders: no leftover 'your-env', required"
 	@echo "                  per-env files present, values.yaml renders via templatefile()"
@@ -424,7 +424,7 @@ template-manifest-check:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard scaffold-check; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
@@ -446,7 +446,10 @@ lint:
 		$(MAKE) --no-print-directory tf-fmt-check $(LINT_TF); \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^instance-template/terraform-iac-bootstrap/cluster-bootstrap/main\.tf$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
-		$(MAKE) --no-print-directory scaffold-check; \
+		$(MAKE) --no-print-directory wave-health-guard scaffold-check; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '^copier\.yml$$|^instance-template/\.github/|^template-scripts/ci/instance-test\.sh$$'; then \
+		$(MAKE) --no-print-directory instance-test; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^kubernetes-charts/|\.kube-linter\.yaml$$'; then \
 		$(MAKE) --no-print-directory $(LINT_K8S); \

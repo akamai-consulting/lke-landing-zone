@@ -1,6 +1,42 @@
 package health
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestSupersededFailedJobs(t *testing.T) {
+	base := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
+	at := func(min int) time.Time { return base.Add(time.Duration(min) * time.Minute) }
+
+	jobs := []JobRun{
+		// harbor-robot-provisioner: two early failures, then a later success →
+		// the early failures are superseded (the recurring false-red pattern).
+		{Key: "harbor/hrp-1", CronOwner: "hrp", Created: at(0), Failed: true},
+		{Key: "harbor/hrp-2", CronOwner: "hrp", Created: at(5), Failed: true},
+		{Key: "harbor/hrp-3", CronOwner: "hrp", Created: at(10), Complete: true},
+		// nudger: earlier SUCCESS then a LATER failure → a current regression,
+		// must NOT be masked.
+		{Key: "argocd/nudge-1", CronOwner: "nudge", Created: at(0), Complete: true},
+		{Key: "argocd/nudge-2", CronOwner: "nudge", Created: at(5), Failed: true},
+		// a non-CronJob Job that failed → never masked (no owner).
+		{Key: "kube-system/oneoff", CronOwner: "", Created: at(0), Failed: true},
+	}
+	got := SupersededFailedJobs(jobs)
+	for _, want := range []string{"harbor/hrp-1", "harbor/hrp-2"} {
+		if !got[want] {
+			t.Errorf("%s should be superseded by the later successful sibling", want)
+		}
+	}
+	for _, notWant := range []string{"argocd/nudge-2", "kube-system/oneoff"} {
+		if got[notWant] {
+			t.Errorf("%s must NOT be masked (current regression / no CronJob owner)", notWant)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("expected exactly 2 superseded jobs, got %v", got)
+	}
+}
 
 func TestClassifyPVPhase(t *testing.T) {
 	for _, p := range []string{"Failed", "Pending"} {

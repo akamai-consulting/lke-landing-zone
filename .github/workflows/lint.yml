@@ -359,6 +359,45 @@ jobs:
       - name: Scaffold a throwaway env and validate its apl-values
         run: make scaffold-check
 
+  # ── Instantiate (copier render) ──────────────────────────────────────────────
+  # Renders instance-template/ into a throwaway instance with the REAL copier and
+  # asserts no unrendered `<@ … @>` tokens survived, the required per-instance
+  # structure is present, and the rendered workflows pass actionlint. Copier-
+  # templating bugs — an unrendered `<@ forge_flavor @>` (Jun 17) or a copier
+  # EXPRESSION `<@ instance_repo.split('/')[-1] @>` the raw-cp/sed render can't do
+  # (Jun 24) — burned e2e runs across the early history; release-e2e's Instantiate
+  # only catches them AFTER dispatching a provision. This catches them in seconds,
+  # no cloud. Distinct from `scaffold` (that renders apl-values via `llz render` +
+  # validates the apl-core schema; this renders the whole instance via copier).
+  # SKIP_TF=1: the rendered TF roots' `terraform validate` is already covered by
+  # the `terraform` job (tf-validate-roots).
+  instantiate:
+    name: Instantiate (copier render)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # git describe --tags (llz_version) + copier's `--vcs-ref HEAD` need the
+          # full history + tags, not the default shallow clone.
+          fetch-depth: 0
+      - name: Set up Go (build llz + actionlint)
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+      - name: Build llz onto PATH
+        run: cd tools && go build -buildvcs=false -o /usr/local/bin/llz ./cmd/llz
+      - name: Install copier + actionlint
+        run: |
+          set -euo pipefail
+          pipx install copier
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Instantiate the template + assert render + structure + actionlint
+        run: SKIP_TF=1 template-scripts/ci/instance-test.sh
+
   # ── Terraform ────────────────────────────────────────────────────────────────
   # Single source of truth via `make lint-tf` (= $(LINT_TF) in the Makefile):
   # tflint + checkov over the reusable modules, then instantiate + validate the

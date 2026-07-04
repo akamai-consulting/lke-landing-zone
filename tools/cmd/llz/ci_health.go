@@ -798,19 +798,28 @@ func checkNetworkPolicies(r *health.Report) {
 
 func checkJobs(r *health.Report, phase1 bool) {
 	hdr("Jobs (failed or stuck)")
+	type jobItem struct {
+		Metadata struct {
+			Namespace         string            `json:"namespace"`
+			Name              string            `json:"name"`
+			CreationTimestamp string            `json:"creationTimestamp"`
+			OwnerReferences   []health.OwnerRef `json:"ownerReferences"`
+		} `json:"metadata"`
+		Status struct {
+			Succeeded  int                `json:"succeeded"`
+			Failed     int                `json:"failed"`
+			Active     int                `json:"active"`
+			Conditions []health.Condition `json:"conditions"`
+		} `json:"status"`
+	}
+	var items []jobItem
+	var runs []health.JobRun
 	for _, raw := range kItems("get", "jobs", "-A") {
-		var j struct {
-			meta
-			Status struct {
-				Succeeded  int                `json:"succeeded"`
-				Failed     int                `json:"failed"`
-				Active     int                `json:"active"`
-				Conditions []health.Condition `json:"conditions"`
-			} `json:"status"`
-		}
+		var j jobItem
 		if json.Unmarshal(raw, &j) != nil {
 			continue
 		}
+		items = append(items, j)
 		key := j.Metadata.Namespace + "/" + j.Metadata.Name
 		complete, failed := false, false
 		for _, c := range j.Status.Conditions {
@@ -821,8 +830,27 @@ func checkJobs(r *health.Report, phase1 bool) {
 				failed = true
 			}
 		}
-		p1 := phase1 && health.MatchPrefix(key, health.Phase1PendingWorkloads())
-		cat, msg := health.ClassifyJob(key, complete, failed, j.Status.Active, j.Status.Succeeded, j.Status.Failed, p1)
+		var cronOwner string
+		for _, o := range j.Metadata.OwnerReferences {
+			if o.Kind == "CronJob" {
+				cronOwner = o.Name
+			}
+		}
+		created, _ := time.Parse(time.RFC3339, j.Metadata.CreationTimestamp)
+		runs = append(runs, health.JobRun{Key: key, CronOwner: cronOwner, Created: created, Complete: complete, Failed: failed})
+	}
+	// An early CronJob tick that failed before its backing service was up, then
+	// superseded by a later successful tick, must not fail the gate (see
+	// health.SupersededFailedJobs).
+	superseded := health.SupersededFailedJobs(runs)
+	for i, j := range items {
+		run := runs[i]
+		if run.Failed && !run.Complete && superseded[run.Key] {
+			record(r, health.CatOK, "Job "+run.Key+" Failed but superseded by a newer successful "+run.CronOwner+" CronJob run")
+			continue
+		}
+		p1 := phase1 && health.MatchPrefix(run.Key, health.Phase1PendingWorkloads())
+		cat, msg := health.ClassifyJob(run.Key, run.Complete, run.Failed, j.Status.Active, j.Status.Succeeded, j.Status.Failed, p1)
 		record(r, cat, msg)
 	}
 }

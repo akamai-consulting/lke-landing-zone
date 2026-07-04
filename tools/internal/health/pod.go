@@ -40,6 +40,7 @@ type PodStatus struct {
 // OwnerRef is the subset of metadata.ownerReferences the health checks read.
 type OwnerRef struct {
 	Kind string `json:"kind"`
+	Name string `json:"name"`
 }
 
 // IsJobControlled reports whether a pod is owned by a Job — i.e. an ephemeral
