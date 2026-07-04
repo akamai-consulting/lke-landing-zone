@@ -190,7 +190,7 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 	// with a short-lived, per-run OIDC token instead of a long-lived AppRole
 	// secret_id stashed in GitHub Actions secrets (and the in-cluster PAT that
 	// rotates it via `gh secret set`). The `secret-propagator` role is the live
-	// GitHub-CI auth path (llz ci propagate-pat); `platform-ci` is read-only,
+	// GitHub-CI auth path (llz ci rotate-incluster-pat); `platform-ci` is read-only,
 	// reserved for any future GitHub workflow that reads OpenBao directly (ESO
 	// reads in-cluster via Kubernetes auth, not GitHub OIDC). Appended only when the
 	// instance repo is known; a repo-less configure (local/dry-run without
@@ -277,7 +277,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	// configure) omits the JWT steps.
 	ghRepo := os.Getenv("GITHUB_REPOSITORY")
 	if ghRepo == "" {
-		fmt.Fprintln(os.Stderr, "::warning::GITHUB_REPOSITORY unset — skipping GitHub-OIDC (jwt) auth setup; CI propagation (llz ci propagate-pat) stays unavailable until re-run with GITHUB_REPOSITORY set.")
+		fmt.Fprintln(os.Stderr, "::warning::GITHUB_REPOSITORY unset — skipping GitHub-OIDC (jwt) auth setup; the CI in-cluster-PAT rotation (llz ci rotate-incluster-pat) stays unavailable until re-run with GITHUB_REPOSITORY set.")
 	}
 	if g.dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would preflight the root token and apply the configure sequence:")

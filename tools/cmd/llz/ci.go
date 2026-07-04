@@ -50,8 +50,10 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciWaitPodsCmd(), ciWaitClusterReadyCmd())
 	// Destroy-path teardown sweeps (formerly inline curl+jq in llz-terraform.yml).
 	c.AddCommand(ciTeardownCaptureCmd(), ciTeardownForceDeleteCmd(), ciTeardownDeleteVPCCmd(), ciAssertNoOrphansCmd())
-	// Rotation routing + PAT propagation (formerly inline in llz-secret-rotation.yml).
-	c.AddCommand(ciRotationPlanCmd(), ciPropagatePATCmd())
+	// Rotation routing + the in-cluster narrow-PAT rotation (formerly inline in
+	// llz-secret-rotation.yml; rotate-incluster-pat replaced propagate-pat —
+	// the broad PAT is CI/Terraform-only and no longer pushed into clusters).
+	c.AddCommand(ciRotationPlanCmd(), ciRotateInclusterPATCmd())
 	// Harbor API steps (formerly inline curl in llz-bootstrap-openbao.yml).
 	// Harbor: the active-path provisioning (project + robots + OpenBao seed +
 	// repo-secret publication + smoke) runs IN-CLUSTER via harbor-provisioner
@@ -91,6 +93,10 @@ func ciCmd() *cobra.Command {
 	// seed-harbor-registry-s3); the in-cluster rotator (linodeCredRotator
 	// CronJob, slim llz image) owns rotation after first boot.
 	c.AddCommand(ciMintBootstrapObjkeysCmd(), ciRotateLinodeCredsCmd(), ciTempObjkeyCmd())
+	// The narrow in-cluster PAT, same one-owner shape: mint-bootstrap-pat seeds
+	// the first token at bootstrap; rotate-incluster-pat (registered with the
+	// rotation commands above) re-mints it monthly.
+	c.AddCommand(ciMintBootstrapPATCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())

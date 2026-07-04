@@ -113,7 +113,7 @@ gh workflow run bootstrap-openbao.yml \
    - `secret/loki/object-store` + `secret/harbor/registry-s3` (minted + seeded by `llz ci mint-bootstrap-objkeys` — no GitHub secrets involved; skip-if-present so a rotator-minted key is never clobbered)
    - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
 11. Configures the `secret-propagator` GitHub-OIDC (`jwt`) role + policy. This
-    lets `llz ci propagate-pat` authenticate to OpenBao via the workflow's
+    lets `llz ci rotate-incluster-pat` authenticate to OpenBao via the workflow's
     GitHub OIDC token and write `secret/linode/api-token` without root (the
     propagator policy grants write only on that single path). No long-lived
     credential is seeded into the environment — the OIDC token is minted
