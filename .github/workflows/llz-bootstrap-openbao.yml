@@ -621,9 +621,10 @@ jobs:
       # exposed it. Best-effort — diagnostics must never change the outcome.
       - name: Diagnose Argo CD sync state (on failure)
         if: failure() || cancelled()
-        env:
-          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-        run: llz ci diagnose-argocd || true
+        # THIS job's cluster-access writes the kubeconfig to $HOME/.kube/config
+        # (the $RUNNER_TEMP/platform-<region>.yaml path belongs to the converge
+        # job) — expand at shell time, env: values are not shell-expanded.
+        run: KUBECONFIG="$HOME/.kube/config" llz ci diagnose-argocd || true
 
       # ── Fail job if any non-optional secrets were missing ──────────────────────
       # Runs after token revocation so cleanup always happens first. Exits 1 to
