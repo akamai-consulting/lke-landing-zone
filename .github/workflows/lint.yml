@@ -327,22 +327,21 @@ jobs:
 
 
 
-  # ── Scaffold + render + apl-core schema ──────────────────────────────────────
-  # Reproduces the real per-env scaffold path (`llz env add`) and runs the two
-  # checks that were previously Release-E2E-ONLY — each catchable in seconds with
-  # no cloud (both classes burned multiple ~50-min e2e runs in the week of
-  # 2026-07-02):
-  #   • templatefile() render with the var set DERIVED from cluster-bootstrap/
-  #     main.tf — a values.yaml ${...} the root does not provide fails here (the
+  # ── Scaffold + validate apl-values ───────────────────────────────────────────
+  # Reproduces the real per-env scaffold path (`llz env add`) and runs
+  # `llz ci validate-apl-values` on the rendered values — two checks that were
+  # previously Release-E2E-ONLY, each catchable in seconds with no cloud (both
+  # classes burned multiple ~50-min e2e runs in the week of 2026-07-02):
+  #   • templatefile var-contract — a values.yaml ${...} not in cluster-bootstrap/
+  #     main.tf's templatefile() map fails terraform apply (the
   #     ${apl_values_repo_url} class that failed a 2026-07-02 tf-plan).
-  #   • `helm template apl/apl` — the same JSON-Schema validation helm_release.apl
-  #     runs at apply time; catches required/renamed/mistyped keys (the apl-core
-  #     v6 `apps.loki: adminPassword is required` class).
-  # Needs three tools, so it runs on the plain runner (no single CI image carries
-  # all three): Go to build a FRESH llz (a tools/ PR predates the image rebuild),
-  # Helm for the schema check, and OpenTofu for the templatefile render.
+  #   • apl-core chart schema via `helm template apl/apl` — the same JSON-Schema
+  #     validation helm_release.apl runs at apply time; catches required/renamed/
+  #     mistyped keys (the apl-core v6 `apps.loki: adminPassword is required` class).
+  # Needs Go (build a FRESH llz — a tools/ PR predates the image rebuild) and Helm
+  # (the schema check); the var-contract check is pure Go, no terraform.
   scaffold:
-    name: Scaffold + render + apl schema
+    name: Scaffold + validate apl-values
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -357,13 +356,7 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v${{ env.HELM_VERSION }}
-      - name: Install OpenTofu (templatefile render)
-        uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1.0.8
-        with:
-          # Real `tofu` binary, not the stdout-wrapping wrapper — the check pipes
-          # `tofu console` and parses its output.
-          tofu_wrapper: false
-      - name: Scaffold a throwaway env, render, and schema-validate
+      - name: Scaffold a throwaway env and validate its apl-values
         run: make scaffold-check
 
   # ── Terraform ────────────────────────────────────────────────────────────────

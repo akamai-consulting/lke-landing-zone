@@ -107,6 +107,9 @@ func ciCmd() *cobra.Command {
 	// Static guard for the PR #142 wedge class: negative-sync-wave kinds that
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
 	c.AddCommand(ciWaveHealthGuardCmd())
+	// Offline apl-core schema validation (helm template) — the check
+	// helm_release.apl runs at apply time, shifted left into scaffold-check.
+	c.AddCommand(ciAplSchemaValidateCmd())
 	// PrometheusRule promtool gate (former template-scripts python:
 	// check-prometheus-rule-crds.py via the Makefile's prom-rules-check) — the
 	// last first-party Python script in the repo.
