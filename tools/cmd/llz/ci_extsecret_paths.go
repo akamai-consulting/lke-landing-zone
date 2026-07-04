@@ -430,6 +430,7 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		"tools/cmd/llz/ci_seed_special.go",
 		"tools/cmd/llz/ci_bao_seed_all.go",
 		"tools/cmd/llz/ci_rotate_linode_creds.go",
+		"tools/cmd/llz/ci_incluster_pat.go",
 	} {
 		goPaths, goFields, err := collectSeededGo(esRepoPath(root, goSrc))
 		if err != nil {

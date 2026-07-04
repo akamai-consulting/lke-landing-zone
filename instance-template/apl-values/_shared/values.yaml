@@ -278,6 +278,10 @@ dns:
     - ${cluster_domain}        # the cluster domainSuffix (spec: cluster.bootstrap.domainSuffix)
   provider:
     linode:
+      # First-boot fallback only: apl-core's schema requires this string, but
+      # the kyverno dns-rotating-token policy repoints both of its consumers
+      # (cert-manager-webhook-linode + ExternalDNS ExternalSecrets) at the
+      # rotating narrow in-cluster PAT (secret/linode/api-token) once synced.
       apiToken: ${linode_dns_token}   # rendered from var.linode_dns_token via templatefile()
 
 # ── Instance workloads ──────────────────────────────────────────────────────────

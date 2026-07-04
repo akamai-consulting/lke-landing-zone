@@ -73,14 +73,19 @@ with `scope=linode-pat`, `pat-apply=true`. The pipeline:
 
 1. **create-linode-pat** — the `linode-pat-rotator` tool mints a new PAT
    (label `gha-<org>-<instance>_LINODE_API_TOKEN`, 90-day expiry) and
-   `gh secret set` writes it to the repo-level `LINODE_API_TOKEN` secret.
-2. **propagate-linode-pat** (matrix: each environment) — reads
-   `secrets.LINODE_API_TOKEN`, verifies its sha256 matches the freshly-minted
-   token (guards against stale GHA secret cache), then writes
-   `secret/linode/api-token` in each environment's OpenBao using the
-   **`secret-propagator` GitHub-OIDC role** (not root — see below).
+   `gh secret set` writes it to the `LINODE_API_TOKEN` env secrets. This broad
+   PAT is **CI/Terraform-only** — it is never written into a cluster.
+2. **propagate-linode-pat** (matrix: each environment) — `llz ci
+   rotate-incluster-pat`: mints that environment's **narrow in-cluster PAT**
+   (label `llz-incluster-<region>`; domains/object_storage/volumes rw,
+   linodes/vpcs ro, firewall rw) using the fresh broad token as the minting
+   credential, verifies the new token against the Linode API, writes
+   `secret/linode/api-token` in the environment's OpenBao using the
+   **`secret-propagator` GitHub-OIDC role** (not root — see below), then
+   drains older `llz-incluster-<region>` siblings past a 7-day grace window.
+   The narrow token never crosses a job boundary and has no GitHub-secret copy.
 3. **revoke-linode-pat** (daily, 03:30 UTC) — `linode-pat-rotator revoke-old`
-   drains any same-labeled sibling PATs older than 7 days.
+   drains any same-labeled sibling **broad** PATs older than 7 days.
 
 #### Why GitHub-OIDC, not root
 
@@ -99,12 +104,12 @@ rotate, or re-seed.
 
 #### Recovery / propagate-only
 
-If the create step succeeds but propagate fails (e.g. OpenBao temporarily
-unreachable), dispatch `secret-rotation.yml` with
+If the create step succeeds but the per-region job fails (e.g. OpenBao
+temporarily unreachable), dispatch `secret-rotation.yml` with
 `scope=linode-pat-propagate-only`,
 `confirm=rotate:linode-pat-propagate-only`. This skips create and re-runs the
-propagate matrix using whatever value is currently in
-`secrets.LINODE_API_TOKEN`.
+per-region matrix, minting a fresh narrow in-cluster PAT with whatever broad
+token is currently in `secrets.LINODE_API_TOKEN`.
 
 #### Regenerating the root token (prerequisite for re-running bootstrap)
 

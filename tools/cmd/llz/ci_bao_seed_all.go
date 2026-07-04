@@ -66,18 +66,13 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 			onMissing:    "skip",
 			missingNotes: []string{"OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/cert-automation/github-token."},
 		},
-		// Linode API token for the linode-volume-labeler ExternalSecret (and any
-		// other in-cluster Linode API consumer). Seeds the SAME path the daily
-		// rotation pipeline (secret-rotation.yml → propagate-linode-pat) keeps
-		// fresh, so the consumer reads one canonical, rotating credential via ESO
-		// instead of a static TF-injected Secret. on-missing skip: the labeler is
-		// non-critical (cosmetic PV labels) and rotation will seed it later anyway.
-		{
-			path:         "secret/linode/api-token",
-			fieldSpecs:   []string{"token=env:LINODE_API_TOKEN"},
-			onMissing:    "skip",
-			missingNotes: []string{"LINODE_API_TOKEN not set — skipping secret/linode/api-token (rotation will seed it)."},
-		},
+		// secret/linode/api-token is NO LONGER seeded here (and no longer holds
+		// the broad provisioning PAT): `llz ci mint-bootstrap-pat` mints the
+		// NARROW in-cluster PAT via the Linode API and seeds the path directly
+		// (rotated_at-stamped, skip-if-present), and the monthly rotation
+		// (`llz ci rotate-incluster-pat`) re-mints it per region — the broad
+		// PAT is CI/Terraform-only and never enters a cluster. See
+		// ci_incluster_pat.go / docs/designs/linode-pat-dns-consolidation.md.
 		// secret/grafana/admin and secret/otel/ingress are NO LONGER seeded here.
 		// Both are self-generated, in-cluster-only secrets, so they moved to a
 		// kube-native ESO flow: a Password generator mints the value and a

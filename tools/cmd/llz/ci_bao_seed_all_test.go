@@ -12,10 +12,11 @@ import (
 // infra-<region> references the inline steps built from ${REGION}.
 func TestBootstrapSeedsTable(t *testing.T) {
 	seeds := bootstrapSeeds("primary")
+	// secret/linode/api-token left the table: mint-bootstrap-pat seeds the
+	// narrow in-cluster PAT there (ci_incluster_pat.go).
 	wantPaths := []string{
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
-		"secret/linode/api-token",
 	}
 	if len(seeds) != len(wantPaths) {
 		t.Fatalf("bootstrapSeeds returned %d entries, want %d", len(seeds), len(wantPaths))
@@ -44,12 +45,11 @@ func TestBootstrapSeedsTable(t *testing.T) {
 }
 
 // TestRunCIBaoSeedAllSeedsEvery drives the whole table with every source
-// present (env secrets set, nothing pre-seeded) and asserts all three paths are
+// present (env secrets set, nothing pre-seeded) and asserts every path is
 // kv-put, in table order.
 func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "root")
 	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp_dispatch")
-	t.Setenv("LINODE_API_TOKEN", "linode-tok")
 	t.Setenv("HA_ROLE", "")
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent → skip-if-present never skips
 	if err := runCIBaoSeedAll("primary"); err != nil {
@@ -62,7 +62,6 @@ func TestRunCIBaoSeedAllSeedsEvery(t *testing.T) {
 	want := []string{
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
-		"secret/linode/api-token",
 	}
 	if strings.Join(gotPaths, " ") != strings.Join(want, " ") {
 		t.Errorf("seeded paths = %v, want %v", gotPaths, want)

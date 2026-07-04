@@ -413,11 +413,13 @@ jobs:
       # table in `llz ci bao-seed-all` (tools/cmd/llz/ci_bao_seed_all.go):
       #   secret/infra/github-dispatch-token   (harbor-ready PostSync hook)
       #   secret/cert-automation/github-token  (cert-automation ExternalSecret)
-      #   secret/linode/api-token              (linode-volume-labeler ExternalSecret)
       # (secret/harbor/admin, secret/grafana/admin + secret/otel/ingress are no
       #  longer seeded here — ESO writes them in-cluster via PushSecrets.
       #  secret/loki/object-store + secret/harbor/registry-s3 moved to the
-      #  mint-bootstrap-objkeys step below: the keys are minted, not relayed.)
+      #  mint-bootstrap-objkeys step below: the keys are minted, not relayed.
+      #  secret/linode/api-token moved to the mint-bootstrap-pat step below: it
+      #  now holds the NARROW in-cluster PAT, minted — the broad provisioning
+      #  PAT never enters the cluster.)
       # Per-seed on-missing modes, idempotency guards, and summary notes are
       # UNCHANGED — they moved from these flags into the table. A missing env:/k8s:
       # source defers per its mode (BOOTSTRAP_ERRORS for github-dispatch-token on
@@ -454,6 +456,26 @@ jobs:
         env:
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
         run: llz ci mint-bootstrap-objkeys --region "$REGION"
+
+      # ── Mint + seed: the narrow in-cluster Linode PAT ───────────────────────────
+      # Same one-owner shape as the object-storage keys: `llz ci mint-bootstrap-pat`
+      # mints the NARROW in-cluster PAT (domains/object_storage/volumes rw +
+      # linodes/vpcs ro + firewall rw — label llz-incluster-<region>) with the
+      # broad provisioning PAT and seeds secret/linode/api-token directly,
+      # rotated_at-stamped. Every in-cluster Linode consumer (volume-labeler,
+      # the cred-rotator's minting credential, cidr-firewall, and apl-core's
+      # DNS-01 webhook + ExternalDNS via the kyverno-dns-rotating-token
+      # mutation) reads this one rotating token; the broad PAT is CI/Terraform-
+      # only and never enters the cluster. Monthly rotation:
+      # llz-secret-rotation.yml → `llz ci rotate-incluster-pat`. Idempotent —
+      # an already-seeded path is skipped (a rotation-minted token, or the
+      # legacy broad-PAT seed on a pre-split cluster, is never clobbered; the
+      # next rotation converges the path to a narrow token).
+      - name: Mint + seed the in-cluster Linode PAT
+        if: steps.ensure.outputs.available == 'true'
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci mint-bootstrap-pat --region "$REGION"
 
       # ── Standby: replicate the active's Harbor robot credentials ───────────────
       # A standby peer has no in-cluster Harbor (the active/standalone path is the

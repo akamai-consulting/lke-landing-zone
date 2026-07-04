@@ -1,6 +1,39 @@
 # Design: narrow in-cluster Linode PAT + DNS-token consolidation (rotator tier-2)
 
-**Status:** Design / proposal — not yet implemented.
+**Status:** IMPLEMENTED (Phase A landed with the #136 stack; Phase B landed on
+top of it — see the implementation notes below). Gated on a green Release-E2E
+per §7 before promotion past lab.
+
+> **Implementation notes (Phase B, as landed).** The open questions resolved:
+>
+> - **§4 (apl-core existingSecret) — spike result: NOT supported on v6.0.0**
+>   (`dns.provider.linode` requires an inline `apiToken` string;
+>   `additionalProperties: false`). But the spike found a cleaner seam than
+>   option (c)'s Secret fight: apl-core v6 feeds BOTH DNS consumers through
+>   **ExternalSecrets** it manages (`external-dns` in ns cert-manager for the
+>   webhook, `linode-dns-api-token` in ns external-dns for ExternalDNS; source
+>   `core-secrets-store`/`dns-secrets`, property `provider_linode_apiToken`).
+>   The landed shape mutates those two **ExternalSecrets at admission**
+>   (`kyverno-dns-rotating-token.yaml` + a mutate-existing catch-up), pointing
+>   `secretStoreRef`/`remoteRef` at the `openbao` store's
+>   `linode/api-token`/`token`. Deterministic per apply → no ownership flap;
+>   target templates untouched. `TF_VAR_linode_dns_token` stays as the
+>   schema-required first-boot fallback (used only until the policy syncs).
+> - **§5 (scoped-PAT self-mint) — sidestepped: outcome B.** Rotation stays in
+>   CI; the broad PAT mints the narrow one. Better still, each region's job
+>   mints its OWN token (`llz ci rotate-incluster-pat`, label
+>   `llz-incluster-<region>`) — no GitHub-secret hop, no cross-job value.
+> - **§3.1 path — repurposed `secret/linode/api-token`** (not a new
+>   `incluster-pat` path): every existing consumer (volume-labeler ES, the
+>   rotator's minting cred, #137's cidr-firewall ES) and the
+>   `secret-propagator`/`platform-ci` policies keep working unchanged.
+> - **Scopes grew for #137** (cidr-firewall self-discovery): the narrow PAT is
+>   `domains:rw object_storage:rw volumes:rw` **+ `linodes:ro vpcs:ro
+>   firewall:rw`** — still nothing Terraform-shaped (no lke/vpc:rw/
+>   nodebalancers/account).
+> - `llz ci mint-bootstrap-pat` seeds the first token at bootstrap
+>   (skip-if-present, rotated_at-stamped); `llz ci bao-seed-all` no longer
+>   seeds the path; `llz ci propagate-pat` is retired.
 **Item:** resolves **tier-2** of
 [in-cluster Linode credential rotator](linode-credential-rotator.md) (the
 dual-domain `LINODE_API_TOKEN`), using the "cert-manager reads the narrow PAT's
