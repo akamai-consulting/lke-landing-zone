@@ -2,17 +2,30 @@ package health
 
 import "testing"
 
-// The Issuer/Cert operator-deferred allowlists ship empty; pin that so a future
+// The Cert operator-deferred allowlist ships empty; pin that so a future
 // non-empty entry is a deliberate edit, and cover the otherwise-unreferenced
-// accessors.
-func TestExternalDepAllowlistsEmpty(t *testing.T) {
-	for name, got := range map[string][]DepEntry{
-		"issuers": ExternalDepIssuers(),
-		"certs":   ExternalDepCerts(),
-	} {
-		if len(got) != 0 {
-			t.Errorf("ExternalDep%s expected empty, got %v", name, got)
+// accessor.
+func TestExternalDepCertsEmpty(t *testing.T) {
+	if got := ExternalDepCerts(); len(got) != 0 {
+		t.Errorf("ExternalDepCerts expected empty, got %v", got)
+	}
+}
+
+// The Argo-synced llz-letsencrypt-* ClusterIssuers sit Ready=False until the
+// operator provisions dns.acmeEmail + LINODE_DNS_TOKEN — a supported deferred
+// state that must classify Deferred, not Fail. Any other ClusterIssuer still
+// hard-fails, so the deferral stays narrow.
+func TestLetsencryptIssuersDeferred(t *testing.T) {
+	extDep := ExternalDepIssuers()
+	for _, name := range []string{"llz-letsencrypt-production", "llz-letsencrypt-staging"} {
+		cat, _ := ClassifyReady("ClusterIssuer", name,
+			"False", "ErrRegisterACMEAccount", "invalid contact domain", false, extDep)
+		if cat != CatDeferred {
+			t.Errorf("%s Ready=False = %v, want CatDeferred", name, cat)
 		}
+	}
+	if _, ok := MatchExternalDep("platform-app-ca", extDep); ok {
+		t.Error("an unrelated ClusterIssuer must NOT be deferred by the letsencrypt entry")
 	}
 }
 

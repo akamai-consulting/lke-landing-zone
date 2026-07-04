@@ -76,7 +76,11 @@ func Phase1PendingIssuers() []string { return []string{"platform-app-ca"} }
 func Phase1PendingCerts() []string { return []string{"openbao/openbao-tls"} }
 
 // ExternalDepIssuers / ExternalDepCerts are operator-deferred allowlists for
-// cert-manager resources (currently empty — apl-core owns its own Certs; only
+// cert-manager resources (Certs stay empty — apl-core owns its own Certs; only
 // repo-shipped ones carry forward here).
-func ExternalDepIssuers() []DepEntry { return nil }
-func ExternalDepCerts() []DepEntry   { return nil }
+func ExternalDepIssuers() []DepEntry {
+	return []DepEntry{
+		{"llz-letsencrypt-(production|staging)", "ACME registration is deferred until the operator provisions dns.acmeEmail (spec) + LINODE_DNS_TOKEN — the ClusterIssuers ship Argo-synced with a REPLACE_PER_ENV email and sit Ready=False until then (same deferral class as external-dns). cert-manager retries registration on its own once the email is rendered."},
+	}
+}
+func ExternalDepCerts() []DepEntry { return nil }
