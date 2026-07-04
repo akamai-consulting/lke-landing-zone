@@ -123,7 +123,7 @@ func TestMintBootstrapPATHappyPath(t *testing.T) {
 	}
 	// The narrow scope set: in-cluster consumers only — and none of the
 	// broad provisioning scopes.
-	for _, want := range []string{"domains:read_write", "object_storage:read_write", "volumes:read_write", "linodes:read_only", "vpcs:read_only", "firewall:read_write"} {
+	for _, want := range []string{"domains:read_write", "object_storage:read_write", "volumes:read_write", "linodes:read_only", "vpc:read_only", "firewall:read_write"} {
 		if !strings.Contains(s.scopes, want) {
 			t.Errorf("scopes missing %s: %q", want, s.scopes)
 		}

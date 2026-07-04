@@ -222,7 +222,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 
 | Path | What it holds | Rotation method |
 |------|---------------|-----------------|
-| `secret/linode/api-token` | **Narrow in-cluster PAT** (`llz-incluster-<region>`: domains/object_storage/volumes rw, linodes/vpcs ro, firewall rw) — read by volume-labeler, the cred-rotator (minting cred), cidr-firewall, and the DNS consumers via the `dns-rotating-token` policy | **Automated** — first minted by `mint-bootstrap-pat` at bootstrap; re-minted monthly per region by `secret-rotation.yml` → `rotate-incluster-pat` (GitHub-OIDC `secret-propagator` role), 7-day-grace drain |
+| `secret/linode/api-token` | **Narrow in-cluster PAT** (`llz-incluster-<region>`: domains/object_storage/volumes rw, linodes/vpc ro, firewall rw) — read by volume-labeler, the cred-rotator (minting cred), cidr-firewall, and the DNS consumers via the `dns-rotating-token` policy | **Automated** — first minted by `mint-bootstrap-pat` at bootstrap; re-minted monthly per region by `secret-rotation.yml` → `rotate-incluster-pat` (GitHub-OIDC `secret-propagator` role), 7-day-grace drain |
 | `secret/loki/object-store` | Loki Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/harbor/registry-s3` | Harbor registry Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |

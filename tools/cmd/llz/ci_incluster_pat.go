@@ -65,9 +65,9 @@ const (
 	//                              the Loki/Harbor S3 keys with this token
 	//   volumes:read_write       — linode-volume-labeler
 	//   linodes:read_only        — cidr-firewall discover (instance lookup)
-	//   vpcs:read_only           — cidr-firewall discover (subnet CIDR)
+	//   vpc:read_only           — cidr-firewall discover (subnet CIDR)
 	//   firewall:read_write      — cidr-firewall controller reconciles rules
-	inclusterPATScopes       = "domains:read_write object_storage:read_write volumes:read_write linodes:read_only vpcs:read_only firewall:read_write"
+	inclusterPATScopes       = "domains:read_write object_storage:read_write volumes:read_write linodes:read_only vpc:read_only firewall:read_write"
 	inclusterPATValidityDays = 90 // same ceiling the broad PAT's 90-day policy enforces
 	inclusterPATGraceDays    = 7  // ESO refresh is 1-5m; a week covers any straggling consumer
 )
@@ -108,7 +108,7 @@ func ciMintBootstrapPATCmd() *cobra.Command {
 		Use:   "mint-bootstrap-pat",
 		Short: "mint the first narrow in-cluster Linode PAT and seed secret/linode/api-token",
 		Long: "Bootstrap-time twin of rotate-incluster-pat: mints the narrow in-cluster PAT\n" +
-			"(domains/object_storage/volumes rw + linodes/vpcs ro + firewall rw) with the\n" +
+			"(domains/object_storage/volumes rw + linodes/vpc ro + firewall rw) with the\n" +
 			"broad provisioning PAT and seeds secret/linode/api-token — the single rotating\n" +
 			"token every in-cluster Linode consumer reads. Idempotent: an already-seeded\n" +
 			"path is skipped, so a re-bootstrap never clobbers a rotation-minted token.\n" +
