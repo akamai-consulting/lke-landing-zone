@@ -40,7 +40,7 @@ output "vpc_subnet_id" {
 }
 
 output "vpc_subnet_cidr" {
-  description = "The IPv4 CIDR of the VPC subnet. bootstrap-cloud-firewall reads this and patches the controller's VPC_CIDR so its firewall + control-plane-ACL rules match the VPC (single source of truth; not a hand-maintained per-env override)."
+  description = "The IPv4 CIDR of the VPC subnet. Reference/diagnostic output: the firewall-controller's VPC_CIDR is self-discovered in-cluster by the cidrFirewall component's discover CronJob (from the node's VPC interface, the same subnet this reports); the manual-fallback `llz ci bootstrap-cloud-firewall --region` reads the CIDR from tfvars."
   value       = module.cluster.vpc_subnet_cidr
 }
 

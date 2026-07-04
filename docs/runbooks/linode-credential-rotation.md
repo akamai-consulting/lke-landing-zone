@@ -17,7 +17,6 @@ separate, LKE-Enterprise-specific case — see
 | Credential | Type | Policy | Automation | Failure alert |
 |------------|------|--------|------------|---------------|
 | `LINODE_API_TOKEN` | Linode PAT (broad — LKE/VPC/NB/OBJ) | ≤90-day expiry | Manual create in Cloud Manager; **verified** daily by `linode-pat-expiry-health` | Job red |
-| `CLOUD_FIREWALL_TOKEN` | Linode PAT (firewall scope) | ≤90-day expiry | Same as above | Job red |
 | `LINODE_DNS_TOKEN` | Linode PAT (DNS scope) | ≤90-day expiry | Same as above | Job red |
 | TF-state OBJ key (`TF_STATE_ACCESS_KEY` / `_SECRET_KEY`) | Linode OBJ key | Revoke ≤120 days | **Manual** (bootstrapping paradox — see below) | — (manual SLA) |
 | Loki OBJ key (`linode_object_storage_key.loki`) | Linode OBJ key | Revoke ≤120 days | Declarative `time_rotating` in `instance-template/terraform-iac-bootstrap/object-storage`; age verified daily by `loki-objkey-rotation-health` | Job red |
@@ -135,8 +134,10 @@ preflight).
 
 ### Rotating the narrow-scope PATs (manual — Cloud Manager)
 
-`CLOUD_FIREWALL_TOKEN` / `LINODE_DNS_TOKEN` are not yet wired into
-`secret-rotation.yml` and remain manual:
+`LINODE_DNS_TOKEN` is not yet wired into `secret-rotation.yml` and remains
+manual. (`CLOUD_FIREWALL_TOKEN` was retired: the firewall-controller now reads
+the ESO-synced `secret/linode/api-token` — which the rotation pipeline already
+keeps fresh — via the cidrFirewall component.)
 
 1. Cloud Manager → **API Tokens** → **Create a Personal Access Token**.
 2. Set **Expiry = 90 days** (or shorter). Grant **only** the scopes the old

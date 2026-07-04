@@ -85,8 +85,6 @@ on:
         required: false
       GHCR_READ_TOKEN:
         required: false
-      CLOUD_FIREWALL_TOKEN:
-        required: false
       APPS_REPO_REVISION:
         required: false
       OPENBAO_ADDRESS:
@@ -723,53 +721,17 @@ jobs:
         # failure passes through unchanged.
         run: llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
 
-      # ── Firewall-controller config (folded from the former bootstrap-cluster
-      #    job) ────────────────────────────────────────────────────────────────
-      # Seeds the runtime firewall-controller Secret + ConfigMap so the in-cluster
-      # controller reconciles the SAME node firewall the TF cluster module created.
-      # This used to be a standalone job, but it did only ~38s of real work while
-      # paying a whole job's overhead (container init + checkouts + a fresh
-      # cluster-access / runner-ACL add+revoke, ~60-70s). Folded here it reuses the
-      # readiness kubeconfig + the open control-plane ACL already held by this job;
-      # only an extra `terraform init` of the cluster module (for its outputs) is
-      # added. Apply-only — the job-level `if:` already restricts to apply, but the
-      # guard keeps these steps inert under any future plan-through path.
-      - name: Pre-flight — resolve cloud-firewall token
-        if: env.ACTION == 'apply'
-        env:
-          CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
-          LINODE_TOKEN:         ${{ secrets.LINODE_API_TOKEN }}
-        run: |
-          set -u
-          if [ -z "${CLOUD_FIREWALL_TOKEN:-}" ] && [ -z "${LINODE_TOKEN:-}" ]; then
-            echo "::error::Neither CLOUD_FIREWALL_TOKEN nor LINODE_TOKEN is set for infra-${REGION}. The firewall-controller cannot authenticate to the Linode API and firewall rules will not sync."
-            exit 1
-          fi
-          if [ -z "${CLOUD_FIREWALL_TOKEN:-}" ]; then
-            echo "::warning::CLOUD_FIREWALL_TOKEN not set — falling back to LINODE_TOKEN for the firewall-controller. Set a least-privilege CLOUD_FIREWALL_TOKEN (cloud-firewall-scoped) in infra-${REGION} when possible."
-          fi
-
-      # `llz ci bootstrap-cloud-firewall --region` resolves all three inputs the
-      # runtime controller needs — the node firewall ID, the LKE cluster ID, and
-      # the VPC subnet CIDR — so the controller reconciles the SAME firewall the TF
-      # cluster module created. The firewall + cluster are looked up by their
-      # account-unique labels via the Linode API; the subnet CIDR comes straight
-      # from cluster/<region>.tfvars. This replaces the former `terraform init`
-      # (cluster module, just to wire its S3 backend) + three `terraform output`
-      # reads of remote state — no second workspace init, no state read.
-      - name: Bootstrap — seed firewall-controller Secret + ConfigMap
-        if: env.ACTION == 'apply'
-        working-directory: terraform-iac-bootstrap/cluster
-        env:
-          # Reuse the readiness kubeconfig fetched by "Cluster access" above (same
-          # cluster, same open control-plane ACL); no second fetch / ACL lease.
-          KUBECONFIG:           ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
-          CLOUD_FIREWALL_TOKEN: ${{ secrets.CLOUD_FIREWALL_TOKEN }}
-          # Account-read PAT used to resolve the firewall + cluster IDs by label
-          # (also the warned-about fallback token seeded into the controller Secret
-          # when CLOUD_FIREWALL_TOKEN is unset).
-          LINODE_TOKEN:         ${{ secrets.LINODE_API_TOKEN }}
-        run: llz ci bootstrap-cloud-firewall --region "$REGION"
+      # NOTE — the former "Firewall-controller config" steps (pre-flight token
+      # resolve + `llz ci bootstrap-cloud-firewall --region`, folded here from
+      # the former bootstrap-cluster job) were RETIRED in favor of the
+      # cidrFirewall component: the kube-system/linode token Secret is synced by
+      # ESO from secret/linode/api-token (rotating, instead of a per-apply seed
+      # that went stale at the first PAT rotation), and the controller's
+      # ConfigMap (firewall ID / LKE cluster ID / VPC CIDR) is reconciled
+      # in-cluster by the llz-cidr-firewall-discover CronJob, which derives all
+      # three from its own node via the Linode API. No tfvars read, no TF
+      # outputs, no CLOUD_FIREWALL_TOKEN secret, no per-apply kubectl. `llz ci
+      # bootstrap-cloud-firewall` remains available as a manual recovery path.
 
       # ── Diagnostics ─────────────────────────────────────────────────────────
       # Runs only when a previous step failed (typically the helm_release.argocd

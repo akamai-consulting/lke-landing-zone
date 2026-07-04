@@ -1,0 +1,72 @@
+# ServiceAccount + RBAC for the firewall-config discover CronJob.
+#
+# The pod resolves its own node (cluster-scoped read) and reconciles exactly
+# two kube-system objects: the controller's ConfigMap and — when a value
+# changed — a restart-annotation patch on the controller Deployment. Everything
+# name-scoped where the API allows it (create cannot be, so it stands alone).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llz-cidr-firewall-discover
+  namespace: kube-system
+---
+# Node read: NODE_NAME (downward API) → Node.spec.providerID → the instance the
+# Linode-API walk starts from.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: llz-cidr-firewall-discover-nodes
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: llz-cidr-firewall-discover-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: llz-cidr-firewall-discover-nodes
+subjects:
+  - kind: ServiceAccount
+    name: llz-cidr-firewall-discover
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-cidr-firewall-discover
+  namespace: kube-system
+rules:
+  # create-if-missing of the controller ConfigMap (the chart renders it with
+  # empty placeholders, but the component may sync before the consumer installs
+  # the controller Application). create is not name-scopable in RBAC.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [llz-linode-cidr-firewall-config]
+    verbs: [get, patch]
+  # Restart-annotation patch, only when a discovered value changed
+  # (configMapKeyRef env is read once at pod creation).
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [llz-linode-cidr-firewall]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-cidr-firewall-discover
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-cidr-firewall-discover
+subjects:
+  - kind: ServiceAccount
+    name: llz-cidr-firewall-discover
+    namespace: kube-system

@@ -206,7 +206,6 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 |--------|------------|-----------------|
 | `LINODE_API_TOKEN` | Linode provisioning PAT (read/write) | **Automated** — `secret-rotation.yml` mints + propagates monthly (`0 4 1 * *`), revokes old daily (`30 3 * * *`); ≤90-day policy with daily expiry audit |
 | `LINODE_DNS_TOKEN` | Linode API token for apl-core's `cert-manager-webhook-linode` DNS-01 solver (`TF_VAR_linode_dns_token` → `apps.cert-manager.dns.provider.linode.apiToken`) | **Manual** — **static** operator input; ≤90-day policy |
-| `CLOUD_FIREWALL_TOKEN` | Firewall-scoped PAT (optional) | **Manual** (Cloud Manager); ≤90-day policy |
 | `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` | Object Storage key for the TF-state backend bucket | **On-demand** via `secret-rotation.yml` (`tf-state-key` / `tf-state-key-revoke` scopes); no scheduled rotation (bootstrap dependency) |
 | `OPENBAO_SECRETS_WRITE_TOKEN` | GitHub classic PAT (Actions + Secrets: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
 | `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |

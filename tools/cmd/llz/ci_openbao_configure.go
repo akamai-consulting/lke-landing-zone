@@ -24,6 +24,7 @@ path "secret/data/harbor/registry-s3"           { capabilities = ["read"] }
 path "secret/data/harbor/robot"                 { capabilities = ["read"] }
 path "secret/data/infra/github-dispatch-token"  { capabilities = ["read"] }
 path "secret/data/linode/api-token"             { capabilities = ["read"] }
+path "secret/data/linode/cloud-firewall"        { capabilities = ["read"] }
 path "secret/data/loki/object-store"            { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
@@ -36,6 +37,7 @@ path "secret/metadata/harbor/registry-s3"           { capabilities = ["read", "l
 path "secret/metadata/harbor/robot"                 { capabilities = ["read", "list"] }
 path "secret/metadata/infra/github-dispatch-token"  { capabilities = ["read", "list"] }
 path "secret/metadata/linode/api-token"             { capabilities = ["read", "list"] }
+path "secret/metadata/linode/cloud-firewall"        { capabilities = ["read", "list"] }
 path "secret/metadata/loki/object-store"            { capabilities = ["read", "list"] }
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
 `
@@ -190,7 +192,7 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 	// rotates it via `gh secret set`). The `secret-propagator` role is the live
 	// GitHub-CI auth path (llz ci propagate-pat); `platform-ci` is read-only,
 	// reserved for any future GitHub workflow that reads OpenBao directly (ESO
-	// reads in-cluster via AppRole, not GitHub OIDC). Appended only when the
+	// reads in-cluster via Kubernetes auth, not GitHub OIDC). Appended only when the
 	// instance repo is known; a repo-less configure (local/dry-run without
 	// GITHUB_REPOSITORY) omits them rather than create an unbindable role.
 	if ghRepo != "" {
