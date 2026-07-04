@@ -165,6 +165,22 @@ jobs:
           fi
           exit 0   # Report-only: the summary is the deliverable.
 
+      # Best-effort Argo CD sync diagnostics — the operationState / failed-resource
+      # data `llz ci health` doesn't surface. Never alters the outcome.
+      - name: Argo CD sync diagnostics (best-effort)
+        if: always()
+        run: |
+          export KUBECONFIG="$HOME/.kube/config"
+          llz ci diagnose-argocd || true
+          for app in platform-bootstrap llz-cluster-foundation; do
+            echo "== ${app} operationState =="
+            kubectl -n argocd get application "${app}" -o jsonpath='{.status.operationState}' 2>/dev/null | head -c 6000 || true
+            echo
+            echo "== ${app} conditions =="
+            kubectl -n argocd get application "${app}" -o jsonpath='{.status.conditions}' 2>/dev/null || true
+            echo
+          done
+
       - name: Assert Loki is bootstrapped
         if: ${{ inputs.assert-loki }}
         run: |

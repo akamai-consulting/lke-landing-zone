@@ -78,7 +78,7 @@ with `scope=linode-pat`, `pat-apply=true`. The pipeline:
 2. **propagate-linode-pat** (matrix: each environment) — `llz ci
    rotate-incluster-pat`: mints that environment's **narrow in-cluster PAT**
    (label `llz-incluster-<region>`; domains/object_storage/volumes rw,
-   linodes/vpcs ro, firewall rw) using the fresh broad token as the minting
+   linodes/vpc ro, firewall rw) using the fresh broad token as the minting
    credential, verifies the new token against the Linode API, writes
    `secret/linode/api-token` in the environment's OpenBao using the
    **`secret-propagator` GitHub-OIDC role** (not root — see below), then

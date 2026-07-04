@@ -613,6 +613,19 @@ jobs:
           && echo "Root token revoked." \
           || echo "::warning::Root token revocation failed — delete OPENBAO_ROOT_TOKEN from the infra-${REGION} environment secrets manually to prevent credential reuse"
 
+      # On failure, snapshot Argo CD Application sync state BEFORE the ACL revoke
+      # cuts apiserver access. The converge job's identical step never runs when
+      # THIS job fails (a failed `needs` skips it), which left the 2026-07-04
+      # platform-bootstrap wave wedge ("waiting for healthy state of
+      # NetworkPolicy/…") invisible: three e2e runs burned before a kept cluster
+      # exposed it. Best-effort — diagnostics must never change the outcome.
+      - name: Diagnose Argo CD sync state (on failure)
+        if: failure() || cancelled()
+        # THIS job's cluster-access writes the kubeconfig to $HOME/.kube/config
+        # (the $RUNNER_TEMP/platform-<region>.yaml path belongs to the converge
+        # job) — expand at shell time, env: values are not shell-expanded.
+        run: KUBECONFIG="$HOME/.kube/config" llz ci diagnose-argocd || true
+
       # ── Fail job if any non-optional secrets were missing ──────────────────────
       # Runs after token revocation so cleanup always happens first. Exits 1 to
       # surface the error in the GitHub Actions UI when BOOTSTRAP_ERRORS was set
