@@ -39,8 +39,9 @@ package main
 //     SkipDryRunOnMissingResource handles operator-before-consumers instead.
 //   - gitea/otomi-values self-heal: otomi.git points at the external GitHub
 //     repo, so apl-operator's values tree comes over HTTPS, not gitea-http — the
-//     old DNS race is gone. (Gitea stays ENABLED for apl-core's gitops-global
-//     clone, but that is off apl-operator's values path.)
+//     old DNS race is gone. (Gitea is DISABLED on v6; apl-core's gitops-global
+//     app still hardwires a gitea clone and fails "no such host", which the
+//     convergence health allowlist defers so it can't pin the gate.)
 //
 // The poll/wait state machine is driven through injected seams (kubectl runner,
 // clock, sleep) so it is unit-tested without a cluster.

@@ -2,11 +2,11 @@
 # Replaces the `secret/grafana/admin` entry in bootstrapSeeds (ci_bao_seed_all.go).
 # apl-core's grafana-admin-credentials ExternalSecret reads this OpenBao path
 # (username + password) through the read-only `openbao` store, unchanged.
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: grafana-admin-generated
-  namespace: llz-external-secrets
+  namespace: external-secrets
 spec:
   # 0 = generate exactly once and never refresh: ESO mints the password on first
   # reconcile and leaves the intermediate Secret stable, so the value can't churn
@@ -32,7 +32,7 @@ apiVersion: external-secrets.io/v1alpha1
 kind: PushSecret
 metadata:
   name: grafana-admin-push
-  namespace: llz-external-secrets
+  namespace: external-secrets
 spec:
   # Retry roughly every minute until OpenBao is unsealed + the eso-pusher role
   # exists; once written, IfNotExists makes every subsequent reconcile a no-op.

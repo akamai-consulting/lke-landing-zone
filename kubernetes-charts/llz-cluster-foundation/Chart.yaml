@@ -25,7 +25,14 @@ type: application
 #        re-promotion of linode-block-storage-retain that slips past the Kyverno
 #        admission policy is re-demoted even after Flux goes quiet — the PostSync
 #        Job + admission-only policy could leave 2 defaults wedging `llz ci converge`.
-version: 0.1.5
+# 0.1.6: v6 migration — drop the llz-external-secrets namespace (apl-core 6.x runs
+#        ESO as a core app in `external-secrets`; the gap-fill NPs now ship from the
+#        externalSecrets apl-values component) and refresh the apl-network-policies
+#        coverage note for 6.x; also document in coredns-custom.yaml that the
+#        *.internal rewrite stays required on 6.x (the oauth2-proxy init container
+#        still resolves keycloak.<domainSuffix>) and that narrowing to a per-host
+#        allowlist is lab-gated — comment-only, no rendered resource change.
+version: 0.1.6
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"

@@ -17,10 +17,18 @@ on:
   workflow_dispatch:
     inputs:
       region:
-        description: 'Deployment (primary | secondary | staging | lab)'
+        # NOTE: input name kept as `region` for backwards compatibility with
+        # existing state-key paths and GitHub Environment names (infra-<deployment>).
+        # The value is really a *deployment*.
+        #
+        # Free-form string, NOT a fixed `choice` list — mirrors terraform.yml.
+        # Deployments are created dynamically by `llz env add` (there is no
+        # hardcoded env list), so a choice input would reject any env an adopter
+        # adds (e.g. `e2e`, `myteam-dev`). Must match a deployment you scaffolded
+        # (^[a-z][a-z0-9-]{1,30}$) with a tfvars set + infra-<deployment> Environment.
+        description: 'Deployment to act on, e.g. primary | secondary | staging | lab | e2e (must have a tfvars set + infra-<deployment> Environment)'
         required: true
-        type: choice
-        options: [primary, secondary, staging, lab]
+        type: string
       reprovision_ca_only:
         description: 'Re-provision secondary CA in primary cluster only (skips full bootstrap)'
         required: false

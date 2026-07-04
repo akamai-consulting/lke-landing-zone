@@ -1,5 +1,14 @@
-# Default-deny + allow rules for the llz-external-secrets namespace.
+# Default-deny + allow rules for apl-core's `external-secrets` namespace.
+# apl-core 6.x ships ESO as a core app there but supplies NO NetworkPolicies for
+# it (its apl-network-policies chart only covers gitea/git-server/otomi-api), so
+# the landing zone gap-fills them here — the same pattern cluster-foundation uses
+# for the other apl-managed namespaces (cert-manager/harbor/istio-system/…).
 # ESO controller pods need egress to OpenBao (8200) and the Kubernetes API.
+#
+# ORDERING: this namespace is created by apl-core's helmfile (not pre-created at
+# wave -20 like the llz-* namespaces), so on first boot these -10 NPs can't apply
+# until apl-core creates `external-secrets`. Argo CD retries with backoff and they
+# self-heal once the namespace exists — expect transient "namespace not found".
 #
 # LKE-Enterprise note: the in-cluster `kubernetes` Service maps port 443 to
 # targetPort 6443 (the real apiserver port). Cilium evaluates NetworkPolicy
@@ -11,7 +20,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: external-secrets-default-deny
-  namespace: llz-external-secrets
+  namespace: external-secrets
   annotations:
     # Apply before any external-secrets workload — see project-np-sync-wave-race.
     argocd.argoproj.io/sync-wave: "-10"
@@ -26,7 +35,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: external-secrets-allow-dns
-  namespace: llz-external-secrets
+  namespace: external-secrets
   annotations:
     argocd.argoproj.io/sync-wave: "-10"
 spec:
@@ -48,7 +57,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: external-secrets-allow-egress
-  namespace: llz-external-secrets
+  namespace: external-secrets
   annotations:
     argocd.argoproj.io/sync-wave: "-10"
 spec:
@@ -81,7 +90,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: external-secrets-allow-ingress-webhook
-  namespace: llz-external-secrets
+  namespace: external-secrets
   annotations:
     argocd.argoproj.io/sync-wave: "-10"
 spec:

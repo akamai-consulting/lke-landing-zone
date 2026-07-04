@@ -13,7 +13,8 @@ gate, and no `otomi/values` Gitea repo to seed.
 1. **`helm_release.apl`** (cluster-bootstrap) — the file is rendered through
    `templatefile()` and passed as the apl-core chart values on every
    `terraform apply`. This sets `otomi.git.*` (the external repo + PAT),
-   `apps.*`, `cluster.*`, `dns.*`, and `apps.loki.adminPassword`.
+   `apps.*`, `cluster.*`, and `dns.*`. (apl-core 6.x auto-generates
+   `apps.loki.adminPassword` as an x-secret, so it is no longer rendered here.)
 
 2. **apl-operator** — on bootstrap it materialises its values tree in the
    external repo (the `env/`, `apps/`, … layout apl-core owns) using the same

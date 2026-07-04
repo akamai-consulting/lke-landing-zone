@@ -40,7 +40,6 @@ spec:
   # Only repos Argo CD pulls at RUNTIME are listed:
   #   - GHCR: first-party charts (cluster-foundation, cert-automation,
   #     openbao-platform, firewall).
-  #   - charts.external-secrets.io: ESO (apl-core 5.0.0 doesn't ship it).
   #   - argoproj.github.io/argo-helm: Argo WORKFLOWS + EVENTS (NOT Argo CD —
   #     apl-core owns that). apl-core doesn't ship workflows/events; cert-automation
   #     needs their CRDs, so we install them as direct upstream sources.
@@ -50,7 +49,6 @@ spec:
   sourceRepos:
     - 'ghcr.io/<@ upstream_org @>/charts'
     - 'ghcr.io/<@ upstream_org @>/charts/*'
-    - 'https://charts.external-secrets.io'
     - 'https://argoproj.github.io/argo-helm'
   destinations:
     # Namespaces cluster-foundation creates (wave -20) + the apl-core-managed
@@ -64,7 +62,7 @@ spec:
     - { namespace: monitoring,                 server: https://kubernetes.default.svc }
     - { namespace: grafana,                    server: https://kubernetes.default.svc }
     - { namespace: llz-openbao,                server: https://kubernetes.default.svc }
-    - { namespace: llz-external-secrets,       server: https://kubernetes.default.svc }
+    - { namespace: external-secrets,           server: https://kubernetes.default.svc }
     - { namespace: llz-cert-automation,        server: https://kubernetes.default.svc }
     - { namespace: llz-argo-workflows,         server: https://kubernetes.default.svc }
     - { namespace: llz-argo-events,            server: https://kubernetes.default.svc }

@@ -57,7 +57,9 @@ platform:
     # Namespaces permitted to connect to OpenBao's API port (8200). Whole-namespace
     # grants — use only for dedicated llz infra namespaces.
     allowedClientNamespaces:
-      - llz-external-secrets
+      # apl-core 6.x runs the (now core) ESO controller in `external-secrets`;
+      # its pods reach OpenBao :8200 to resolve every ExternalSecret.
+      - external-secrets
       - llz-cert-automation
       - llz-observability
     # Pod-scoped clients: a single workload in a SHARED namespace that needs :8200,

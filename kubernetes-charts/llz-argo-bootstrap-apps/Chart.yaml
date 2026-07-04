@@ -29,7 +29,14 @@ type: application
 #         default StorageClasses wedging `llz ci converge`).
 # 0.1.13: bump the llz-cert-automation pin to 0.1.5 (fix the unparseable
 #         harborDockerConfig configTemplate so its ExternalSecret renders).
-version: 0.1.13
+# 0.1.14: v6 migration — remove the llz-external-secrets-operator bootstrap
+#         Application (apl-core 6.x ships ESO as a core app in `external-secrets`;
+#         a second cluster-scoped controller would fight it), retarget the
+#         AppProject destination namespace to `external-secrets`, bump the
+#         llz-cluster-foundation pin to 0.1.6, and drop the now-dead
+#         charts.external-secrets.io sourceRepos allowlist entry (the ESO App
+#         that consumed it is gone).
+version: 0.1.14
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

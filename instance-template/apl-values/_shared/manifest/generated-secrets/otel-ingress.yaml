@@ -2,11 +2,11 @@
 # Replaces the `secret/otel/ingress` entry in bootstrapSeeds (ci_bao_seed_all.go).
 # The collector (and any OTLP client config) reads this OpenBao path through the
 # read-only `openbao` store, unchanged.
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: otel-ingress-generated
-  namespace: llz-external-secrets
+  namespace: external-secrets
 spec:
   # 0 = generate exactly once and never refresh, so reruns don't invalidate
   # in-flight client config bound to the current bearer (the PushSecret's
@@ -31,7 +31,7 @@ apiVersion: external-secrets.io/v1alpha1
 kind: PushSecret
 metadata:
   name: otel-ingress-push
-  namespace: llz-external-secrets
+  namespace: external-secrets
 spec:
   refreshInterval: 1m
   updatePolicy: IfNotExists

@@ -175,20 +175,17 @@ role: `secret/grafana/admin` and `secret/otel/ingress` (generated once via a Pas
 generator, `updatePolicy: IfNotExists`) and `secret/harbor/admin` (mirrored from
 Harbor's Helm-generated Secret).
 
-> **Known limitation — Loki admin password.** The Loki gateway's HTTP basic-auth
-> admin password (`LOKI_ADMIN_PASSWORD`) is **not yet** on the in-cluster rotation
-> lifecycle above. The `llz-terraform` workflow's `llz ci ensure-env-secret` step
-> generates it once and persists it to the `infra-<region>` GitHub environment secret
-> on the first apply, then exports it as `TF_VAR_loki_admin_password`; later runs
-> reuse the stored value — but it is never rotated, and `cluster-bootstrap` keeps no
-> copy in TF state. This is a constraint of the pinned **apl-core 5.0.0**: it consumes
-> `apps.loki.adminPassword` as an inline values field, rendering it (together with
-> every team password) into the k8spin multi-tenant-proxy's `reverse-proxy-auth-config`
-> Secret, so ESO cannot own just the admin slice. **apl-core 6 fixes this** — it drops
-> the inline field and builds that auth-config Secret from an ExternalSecret sourced
-> from a `loki-secrets` backend (5-minute refresh), which makes in-cluster rotation
-> viable. Putting the Loki admin password on the rotation lifecycle is therefore gated
-> on the **apl-core 6 upgrade**.
+> **Loki admin password — apl-core-managed (6.x).** The Loki gateway admin
+> password is no longer a landing-zone secret. On apl-core 6.x the
+> `apps.loki.adminPassword` values field is an x-secret with a generator
+> (`x-secret: '{{ randAlphaNum 20 }}'`), and the loki reverse-proxy auth Secret is
+> an ExternalSecret sourced from apl-core's own `core-secrets-store` — so apl-core
+> generates, persists, and self-wires the password in-cluster when it is omitted.
+> The landing zone no longer supplies it: there is no `LOKI_ADMIN_PASSWORD` GitHub
+> environment secret, no `TF_VAR_loki_admin_password`, and no `ensure-env-secret`
+> step. (On 5.0.0 the x-secret had no generator, so it had to be supplied via
+> Terraform — see [docs/designs/apl-core-v6-migration.md](designs/apl-core-v6-migration.md).
+> Nothing on the landing-zone side consumes this password — only apl-core's loki.)
 
 ### Secret & token inventory
 
@@ -209,7 +206,6 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` | Object Storage key for the TF-state backend bucket | **On-demand** via `secret-rotation.yml` (`tf-state-key` / `tf-state-key-revoke` scopes); no scheduled rotation (bootstrap dependency) |
 | `OPENBAO_SECRETS_WRITE_TOKEN` | GitHub classic PAT (Actions + Secrets: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
 | `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
-| `LOKI_ADMIN_PASSWORD` | Loki gateway HTTP basic-auth password | **Generate-once** (`llz ci ensure-env-secret`); **not rotated** — gated on the apl-core 6 upgrade (see limitation above) |
 | LKE admin kubeconfig | Cluster-admin credential | **Automated** — `secret-rotation.yml` (`lke-admin` scope), monthly; see [lke-admin-rotation.md](runbooks/lke-admin-rotation.md) |
 | `E2E_DISPATCH_TOKEN` | GitHub classic PAT for the e2e harness (template-repo scope) | **Manual** (template-repo admin) |
 

@@ -1,40 +1,64 @@
 # Kyverno ClusterPolicy: make oauth2-proxy's wait-for-keycloak init container
-# trust the Otomi-issued *.primary.internal wildcard cert.
+# tolerate the apl-core custom-CA-signed wildcard cert on keycloak.<domainSuffix>.
 #
 # Applied by the platform-bootstrap Argo CD Application (sync-wave -15) so the
 # policy is enforcing before apl-core creates the oauth2-proxy Deployment; the
 # admission CREATE rule then patches the init container on first write (and
 # re-asserts on every apl-operator reconcile UPDATE).
 #
-# apl-core 5.0.0 templates this init container as:
+# apl-core 6.0.0 templates this init container via extraInitContainers in
+# values/oauth2-proxy/oauth2-proxy.gotmpl:
 #
-#   initContainers:
-#   - name: wait-for-keycloak
-#     image: curlimages/curl:latest
-#     command: ["/bin/sh", "-c"]
-#     args:
-#       - |
-#         while [ $(curl -sw '%{http_code}' https://keycloak.primary.internal/realms/otomi -o /dev/null) -ne 200 ]; do
-#           sleep 2; echo 'Waiting for Keycloak OIDC Issuer URL'
-#         done
+#   extraInitContainers:
+#     - name: wait-for-keycloak
+#       {{- if $v.otomi.linodeLkeImageRepository }}
+#       image: "{{- $v.otomi.linodeLkeImageRepository }}/docker/curlimages/curl:latest"
+#       {{- else }}
+#       image: curlimages/curl:latest
+#       {{- end }}
+#       command: ["/bin/sh","-c"]
+#       args: ["while [ $(curl -sw '%{http_code}' {{ $v._derived.oidcBaseUrl }} -o /dev/null) -ne 200 ]; do sleep 2; echo 'Waiting for Keycloak OIDC Issuer URL'; done"]
 #
-# The image has only Mozilla's CA bundle — it does NOT trust the Otomi root CA
-# that signs the Gateway-served *.primary.internal cert, so curl exits 60
-# ("self-signed certificate in certificate chain") on every iteration and the
-# init container loops forever. The main oauth2-proxy container has its own
-# properly-configured TLS trust for the OIDC flow (via PROVIDER_CA_FILES), so
-# this is strictly a bootstrap-time readiness issue.
+# where _derived.oidcBaseUrl resolves to
+# https://keycloak.<cluster.domainSuffix>/realms/otomi — a per-instance URL,
+# not a fixed hostname.
 #
-# Mutation adds `-k` to the curl invocation. Safe because:
+# Why the mutation is needed: apl-core's apps.cert-manager.issuer defaults to
+# custom-ca (and our apl-values never override it), so the Gateway-served
+# wildcard cert for keycloak.<domainSuffix> is signed by apl-core's
+# auto-generated custom root CA. The curl image ships only Mozilla's CA
+# bundle, which does NOT trust that CA, so curl exits 60 ("self-signed
+# certificate in certificate chain") on every iteration and the init
+# container loops forever. The main oauth2-proxy container has its own
+# properly-configured TLS trust for the OIDC flow (via PROVIDER_CA_FILES),
+# so this is strictly a bootstrap-time readiness issue.
+#
+# How the mutation works: a targeted string substitution that turns
+# `curl -sw` into `curl -skw` inside whatever args string apl-core templated,
+# preserving the per-instance poll URL. A previous revision of this policy
+# instead replaced args[0] wholesale with a hardcoded string containing
+# https://keycloak.primary.internal/realms/otomi — a fingerprint of the
+# pre-LLZ prototype cluster — which clobbered the correct URL on any instance
+# with a different domainSuffix and wedged oauth2-proxy forever. Do not go
+# back to wholesale replacement.
+#
+# The rule iterates with mutate.foreach and matches on element.name rather
+# than patching a fixed index: on LKE mirror-registry clusters (i.e. when
+# otomi.linodeLkeImageRepository is set) apl-core also injects a waitForRedis
+# init container, so initContainers[0] is NOT guaranteed to be
+# wait-for-keycloak.
+#
+# Adding `-k` is safe because:
 #   1. The check only verifies HTTP 200 — no data is read.
 #   2. Resolution goes Pod → in-cluster SVC ClusterIP for platform-istio →
 #      Gateway pod IPs, all on the pod network. MITM would require existing
 #      pod-network compromise.
 #   3. The actual OIDC handshake happens in the main container, which still
-#      enforces full chain verification.
+#      enforces full chain verification via PROVIDER_CA_FILES.
 #
-# If/when apl-core templates this init container with a CA volume mount or
-# exposes a chart knob to override the curl args, this policy can be deleted.
+# Delete this policy if apps.cert-manager.issuer is set to letsencrypt (the
+# chain becomes publicly trusted and curl succeeds unpatched) or if apl-core
+# ever mounts its CA into the init container.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -46,11 +70,12 @@ metadata:
     policies.kyverno.io/severity: low
     policies.kyverno.io/subject: Deployment
     policies.kyverno.io/description: >-
-      Adds -k to oauth2-proxy's wait-for-keycloak init container so its
-      readiness probe doesn't fail trust validation against the Otomi-issued
-      wildcard cert on https://keycloak.primary.internal. The main oauth2-
-      proxy container still enforces full chain verification for the OIDC
-      flow via PROVIDER_CA_FILES.
+      Rewrites `curl -sw` to `curl -skw` in oauth2-proxy's wait-for-keycloak
+      init container so its readiness poll of the per-instance Keycloak OIDC
+      issuer URL (https://keycloak.<domainSuffix>/realms/otomi) doesn't fail
+      trust validation against apl-core's custom-CA-signed wildcard cert.
+      The main oauth2-proxy container still enforces full chain verification
+      for the OIDC flow via PROVIDER_CA_FILES.
 spec:
   background: false
   failurePolicy: Ignore
@@ -63,19 +88,22 @@ spec:
               names: [oauth2-proxy]
               namespaces: [istio-system]
               operations: [CREATE, UPDATE]
-      preconditions:
-        all:
-          # Defend against apl-core reordering initContainers in a future
-          # release — only patch if index 0 is in fact wait-for-keycloak.
-          - key: "{{ request.object.spec.template.spec.initContainers[0].name || '' }}"
-            operator: Equals
-            value: wait-for-keycloak
-          # Idempotency: skip if the flag is already present.
-          - key: "{{ contains(request.object.spec.template.spec.initContainers[0].args[0], '-sk') }}"
-            operator: Equals
-            value: false
       mutate:
-        patchesJson6902: |
-          - op: replace
-            path: "/spec/template/spec/initContainers/0/args/0"
-            value: "while [ $(curl -sk --connect-timeout 5 -w '%{http_code}' https://keycloak.primary.internal/realms/otomi -o /dev/null) -ne 200 ]; do sleep 2; echo 'Waiting for Keycloak OIDC Issuer URL'; done"
+        foreach:
+          - list: request.object.spec.template.spec.initContainers
+            preconditions:
+              all:
+                # Match by name, not index — on LKE mirror-registry clusters
+                # apl-core also injects a waitForRedis init container, so
+                # wait-for-keycloak is not guaranteed to be at index 0.
+                - key: "{{ element.name }}"
+                  operator: Equals
+                  value: wait-for-keycloak
+                # Idempotency: skip if the substitution already happened.
+                - key: "{{ contains(element.args[0], '-skw') }}"
+                  operator: Equals
+                  value: false
+            patchesJson6902: |
+              - op: replace
+                path: /spec/template/spec/initContainers/{{elementIndex}}/args/0
+                value: "{{ replace_all(element.args[0], 'curl -sw', 'curl -skw') }}"
