@@ -48,6 +48,7 @@ spec:
           #   --reconcile-argo-nudge     (Applications RBAC already granted; no extra env)
           #   --reconcile-cidr-firewall  (needs NODE_NAME via downward API + LINODE_TOKEN)
           #   --reconcile-volume-labels  (needs REGION_SHORT + LINODE_TOKEN)
+          #   --reconcile-sc-demote      (no extra env; StorageClass RBAC already granted)
           #   --reconcile-linode-creds   (needs REGION, OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)
           #   --reconcile-harbor
           #   --reconcile-openbao-gauges (read-only seal + credential-age)

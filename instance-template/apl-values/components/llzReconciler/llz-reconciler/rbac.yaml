@@ -14,6 +14,8 @@
 #                    controller's); tightening to a namespaced Role is a follow-up.
 #   volume-labels  — persistentvolumes get/list/watch (read-only in-cluster; the
 #                    Volume renames go to the Linode API, not Kubernetes).
+#   sc-demote      — storageclasses get/list/watch/patch (keep LKE's Flux-promoted
+#                    retain class non-default).
 #
 # Leader election holds a single coordination.k8s.io Lease in THIS namespace, so
 # that lives in a namespaced Role (below), not the ClusterRole.
@@ -58,6 +60,11 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "patch"]
+  # sc-demote: watch StorageClasses and rewrite is-default-class→false on the
+  # Flux-promoted retain class.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

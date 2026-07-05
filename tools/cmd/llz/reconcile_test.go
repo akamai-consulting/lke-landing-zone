@@ -163,10 +163,11 @@ func TestBuildReconcilers(t *testing.T) {
 		reconcileArgoNudge: true, argoNudgeResync: 5 * time.Minute,
 		reconcileCidrFW: true, cidrFWResync: 10 * time.Minute,
 		reconcileVolLabels: true, volLabelsResync: time.Hour,
+		reconcileSCDemote: true, scDemoteResync: 2 * time.Minute,
 		reconcileLinodeCred: true, linodeCredInterval: time.Hour,
 		reconcileHarbor: true, harborInterval: 5 * time.Minute,
 	}, identity)
-	want := []string{"observe", "argo-nudge", "cidr-firewall", "volume-labels", "linode-creds", "harbor"}
+	want := []string{"observe", "argo-nudge", "cidr-firewall", "volume-labels", "sc-demote", "linode-creds", "harbor"}
 	if got := names(recs); len(got) != len(want) {
 		t.Fatalf("enabled set = %v, want %v", got, want)
 	} else {
@@ -181,7 +182,7 @@ func TestBuildReconcilers(t *testing.T) {
 	for _, r := range recs {
 		byName[r.name] = r
 	}
-	for _, n := range []string{"argo-nudge", "cidr-firewall", "volume-labels"} {
+	for _, n := range []string{"argo-nudge", "cidr-firewall", "volume-labels", "sc-demote"} {
 		if byName[n].watch == nil {
 			t.Errorf("%s should carry a watch closure", n)
 		}
