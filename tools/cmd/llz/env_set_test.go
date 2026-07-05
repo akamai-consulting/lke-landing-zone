@@ -138,7 +138,7 @@ func TestCommittedTargets(t *testing.T) {
 	for _, p := range []string{
 		filepath.Join("apl-values", "lab", "manifest", "kustomization.yaml"),
 		filepath.Join("apl-values", "lab", "manifest", "env-revision-configmap.yaml"),
-		filepath.Join("apl-values", "lab", "manifest", "linode-volume-labeler-region-patch.yaml"), // volumeLabeler default-on
+		filepath.Join("apl-values", "lab", "manifest", "llz-reconciler-env-patch.yaml"), // llzReconciler default-on
 		filepath.Join("apl-values", "lab", "values.yaml"),
 	} {
 		if _, ok := targets[p]; !ok {
@@ -149,11 +149,11 @@ func TestCommittedTargets(t *testing.T) {
 	if !strings.Contains(overlay, "../../_shared/manifest") {
 		t.Errorf("overlay is not thin (no shared base ref):\n%s", overlay)
 	}
-	// volumeLabeler disabled → no region patch target.
-	off := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{"volumeLabeler": {Enabled: boolPtrLocal(false)}}}
+	// llzReconciler disabled → no reconciler env patch target.
+	off := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{"llzReconciler": {Enabled: boolPtrLocal(false)}}}
 	t2, _ := committedTargets("lab", off, clusterspec.ValuesIdentity{}, "apl-values")
-	if _, ok := t2[filepath.Join("apl-values", "lab", "manifest", "linode-volume-labeler-region-patch.yaml")]; ok {
-		t.Error("disabled volumeLabeler should not emit a region patch")
+	if _, ok := t2[filepath.Join("apl-values", "lab", "manifest", "llz-reconciler-env-patch.yaml")]; ok {
+		t.Error("disabled llzReconciler should not emit a reconciler env patch")
 	}
 }
 

@@ -10,7 +10,12 @@ k8s-auth role that already ships), and `--reconcile-volume-labels` (batch 3: the
 ESO-synced `LINODE_TOKEN` Secret + the per-env `REGION_SHORT` **render-patch**
 [`RenderReconcilerEnvPatch`, emitted by `llz render` like the volume-labeler's] +
 Linode-API egress, already covered by the bare `:443` rule). All are
-idempotent/read-only alongside their still-present CronJobs. The `LINODE_TOKEN`
+idempotent alongside their CronJobs — **three of which are now retired** (the
+`argo-resync-nudger` [`_shared/manifest`], `linode-volume-labeler` [the
+`volumeLabeler` component, deleted], and the `sc-default-patcher` **CronJob** [the
+durable backstop in `llz-cluster-foundation` 0.1.7 — the PostSync Job + Kyverno
+admission policy remain]); their reconcilers proved out in #161/#163. The
+`LINODE_TOKEN`
 ExternalSecret + the render-patch are the **shared wiring** the remaining
 Linode reconcilers reuse: `linode-creds` (due-based, no-op on e2e), `harbor`
 (needs `HARBOR_HOST`), and `cidr-firewall` (targets the private, e2e-absent

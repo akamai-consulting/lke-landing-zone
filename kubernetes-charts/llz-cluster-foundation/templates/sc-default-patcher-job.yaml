@@ -24,10 +24,11 @@
 #      30-min `llz ci converge` budget.)
 #   2. PostSync Job (below) — demotes once after each Argo sync. But cluster-foundation
 #      stays Synced, so it does NOT re-fire on its own; it only covers the initial demote.
-#   3. CronJob (below) — the DURABLE backstop: re-runs the same idempotent demote on a
-#      fixed cadence ({{ $sc.cron.schedule }}), independent of admission events and Argo
-#      syncs, so a slipped-through Flux re-promotion is corrected within one cron period
-#      regardless of whether Flux ever writes again. This is what guarantees convergence.
+#   3. sc-demote reconciler (llz reconcile --reconcile-sc-demote, default-on) — the
+#      DURABLE backstop that replaced this chart's former CronJob: it re-demotes on a
+#      StorageClass watch + resync floor, so a slipped-through Flux re-promotion is
+#      corrected even after Flux goes quiet (no more admission events), independent of
+#      admission events and Argo syncs. This is what guarantees convergence.
 #
 #   The SC itself is rendered by Terraform (cluster-bootstrap module), NOT by Argo —
 #   it must land before apl-operator's helmfile starts creating PVCs.
@@ -99,8 +100,8 @@ subjects:
     namespace: kube-system
 ---
 # Initial demote — PostSync hook. Runs after every successful sync; gives the fast
-# first demote on bootstrap. Durable re-assertion is the CronJob below (this Job
-# does not re-fire while cluster-foundation stays Synced).
+# first demote on bootstrap. Durable re-assertion is now the sc-demote reconciler
+# (this Job does not re-fire while cluster-foundation stays Synced).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -117,32 +118,9 @@ spec:
   activeDeadlineSeconds: 1500
   template:
     {{- include "scPatcher.podTemplate" . | nindent 4 }}
-{{- if $sc.cron.enabled }}
----
-# Durable backstop — re-demotes {{ $sc.demote }} every {{ $sc.cron.schedule }} so a
-# Flux re-promotion that slipped past the Kyverno admission policy is corrected even
-# after Flux goes quiet (live==desired → no more admission events to mutate). The
-# script is idempotent, so a steady-state run is a no-op that just re-verifies one
-# default. concurrencyPolicy Forbid + tight history limits keep at most one run around.
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: sc-default-patcher
-  namespace: kube-system
-spec:
-  schedule: {{ $sc.cron.schedule | quote }}
-  concurrencyPolicy: Forbid
-  startingDeadlineSeconds: 120
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 1
-  jobTemplate:
-    spec:
-      backoffLimit: 2
-      # No ttlSecondsAfterFinished here — for a CronJob, finished-Job cleanup is
-      # owned by successfulJobsHistoryLimit/failedJobsHistoryLimit above; setting
-      # both conflicts (kube-linter job-ttl-seconds-after-finished).
-      activeDeadlineSeconds: 300
-      template:
-        {{- include "scPatcher.podTemplate" . | nindent 8 }}
-{{- end }}
+# (The durable-backstop CronJob that re-demotes {{ $sc.demote }} on a fixed cadence
+# was retired: the sc-demote reconciler [llz reconcile --reconcile-sc-demote,
+# default-on] re-demotes on a StorageClass watch + resync floor — the same
+# starvation-proof durability the CronJob provided — proven in the #161 e2e. The
+# PostSync Job above (fast initial demote) + the Kyverno admission policy remain.)
 {{- end }}
