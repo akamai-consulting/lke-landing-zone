@@ -359,15 +359,22 @@ jobs:
       # pod 1 starts. 300s was borderline on slow-Linode days and produced
       # spurious failures we then had to retry.
       # Fail-fast gate: on every wedge of the 2026-07-04 outage (PR #142) the
-      # platform-openbao Application was never created — the platform-bootstrap
-      # sync was stuck waves earlier — and the 600s pod wait below burned its
-      # full budget with nothing to say. Assert the Application exists first
-      # (a healthy sync creates it within ~2 min); when it doesn't, this fails
-      # in ≤4 min WITH the parent sync's operationState message. Terminal
-      # parent failures short-circuit immediately; a Running-but-retrying sync
-      # (by-design first-boot transients) gets the full window.
+      # OpenBao Application was never created — the platform-bootstrap sync was
+      # stuck waves earlier — and the 600s pod wait below burned its full budget
+      # with nothing to say. Assert the Application exists first (a healthy sync
+      # creates it within ~2 min); when it doesn't, this fails in ≤4 min WITH the
+      # parent sync's operationState message. Terminal parent failures
+      # short-circuit immediately; a Running-but-retrying sync (by-design
+      # first-boot transients) gets the full window.
+      #
+      # The Argo Application is `llz-openbao` (its name in llz-cluster-foundation /
+      # llz-argo-bootstrap-apps values). NOT `platform-openbao` — that is only the
+      # Helm RELEASE / StatefulSet identity (pods platform-openbao-0..2 in the
+      # llz-openbao namespace, below). The gate polled the release name for its
+      # first three releases (added PR #143), so it never matched an Application
+      # and timed out on every full e2e — the last green run predated the gate.
       - name: Assert the OpenBao Application reached the cluster
-        run: llz ci assert-argo-app --app platform-openbao --within 240
+        run: llz ci assert-argo-app --app llz-openbao --within 240
 
       - name: Wait for OpenBao pods to be running
         run: |
