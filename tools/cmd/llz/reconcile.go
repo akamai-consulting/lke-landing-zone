@@ -4,14 +4,13 @@
 // interval CronJob reaching in, one leader-elected Deployment watches cluster
 // state and exposes a Prometheus metrics surface so the cluster self-reports.
 //
-// PHASE 0 (this file) is OBSERVE-ONLY — it drives nothing. It samples a small
-// set of cluster signals on an interval and publishes them at :8080/metrics, so
-// the metrics + Alertmanager path can be validated (and the CIDR-fragile daily
-// hosted-runner health port-forwards demoted to belt-and-suspenders) BEFORE any
-// reconciler that mutates state is migrated off its CronJob in Phase 1. It uses
-// internal/kube (the hand-rolled REST client — no client-go) and internal/metrics
-// (hand-rolled text exposition — no prometheus/client_golang), staying inside the
-// module's deliberately-lean dependency stance.
+// The always-on `observe` reconciler drives nothing (it samples cluster signals
+// and publishes them at :8080/metrics). The optional reconcilers each replace a
+// CronJob and stay OFF by default — the watch-driven argo-nudge (Phase 1) and the
+// timed linode-creds / harbor (Phase 2). It uses internal/kube (the hand-rolled
+// REST client — no client-go) and internal/metrics (hand-rolled text exposition —
+// no prometheus/client_golang), staying inside the module's deliberately-lean
+// dependency stance.
 package main
 
 import (
@@ -38,6 +37,8 @@ func reconcileCmd() *cobra.Command {
 			"timed reconcilers are folded off their CronJobs and stay OFF by default — enable\n" +
 			"one with its flag once it is ready to own the work per-env (it needs the same\n" +
 			"env/secrets its CronJob had):\n" +
+			"  --reconcile-argo-nudge     re-trigger terminally-failed Argo Applications, watch-\n" +
+			"                             driven (was the argo-resync-nudger CronJob)\n" +
 			"  --reconcile-linode-creds   rotate in-cluster Linode object-storage keys (was\n" +
 			"                             the linodeCredRotator CronJob; needs REGION,\n" +
 			"                             OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)\n" +
@@ -54,6 +55,8 @@ func reconcileCmd() *cobra.Command {
 			return runReconcile(cmd.Context(), client, reconcileOpts{
 				metricsAddr:         o.metricsAddr,
 				sampleInterval:      time.Duration(o.sampleInterval) * time.Second,
+				reconcileArgoNudge:  o.reconcileArgoNudge,
+				argoNudgeResync:     time.Duration(o.argoNudgeResync) * time.Second,
 				reconcileLinodeCred: o.reconcileLinodeCred,
 				linodeCredInterval:  time.Duration(o.linodeCredInterval) * time.Second,
 				reconcileHarbor:     o.reconcileHarbor,
@@ -64,6 +67,8 @@ func reconcileCmd() *cobra.Command {
 	f := c.Flags()
 	f.StringVar(&o.metricsAddr, "metrics-addr", ":8080", "address to serve the Prometheus /metrics endpoint on")
 	f.IntVar(&o.sampleInterval, "sample-interval", 30, "seconds between observe-reconciler cluster samples")
+	f.BoolVar(&o.reconcileArgoNudge, "reconcile-argo-nudge", false, "enable the argo-resync-nudger watch reconciler (default off: the CronJob owns it)")
+	f.IntVar(&o.argoNudgeResync, "argo-nudge-resync", 300, "resync-floor seconds for the argo-nudge reconciler (watch drives the immediacy)")
 	f.BoolVar(&o.reconcileLinodeCred, "reconcile-linode-creds", false, "enable the Linode credential-rotation reconciler (default off: the CronJob owns it)")
 	f.IntVar(&o.linodeCredInterval, "linode-creds-interval", 3600, "seconds between Linode credential-rotation resync passes")
 	f.BoolVar(&o.reconcileHarbor, "reconcile-harbor", false, "enable the Harbor-provisioner reconciler (default off: the CronJob owns it)")
@@ -76,6 +81,8 @@ func reconcileCmd() *cobra.Command {
 type reconcileFlags struct {
 	metricsAddr         string
 	sampleInterval      int
+	reconcileArgoNudge  bool
+	argoNudgeResync     int
 	reconcileLinodeCred bool
 	linodeCredInterval  int
 	reconcileHarbor     bool
@@ -85,21 +92,31 @@ type reconcileFlags struct {
 type reconcileOpts struct {
 	metricsAddr         string
 	sampleInterval      time.Duration
+	reconcileArgoNudge  bool
+	argoNudgeResync     time.Duration
 	reconcileLinodeCred bool
 	linodeCredInterval  time.Duration
 	reconcileHarbor     bool
 	harborInterval      time.Duration
 }
 
-// nodeGetter is the slice of *kube.Client the sampler needs — narrowed to an
-// interface so tests can drive it with a fake or an httptest-backed real client.
+// nodeGetter is the slice of the kube client the observe sampler needs.
 type nodeGetter interface {
 	GetJSON(ctx context.Context, path string) (map[string]any, int, error)
 }
 
+// reconcileClient is the full kube-client surface the reconcilers use (the observe
+// sampler reads, the watch reconcilers also patch + watch). *kube.Client
+// satisfies it; tests drive it with an httptest-backed real *kube.Client.
+type reconcileClient interface {
+	GetJSON(ctx context.Context, path string) (map[string]any, int, error)
+	MergePatch(ctx context.Context, path string, patch any) error
+	Watch(ctx context.Context, path, resourceVersion string, fn func(kube.WatchEvent) error) error
+}
+
 // runReconcile serves the metrics endpoint and runs the reconciler manager until
 // the context is cancelled (SIGTERM in a pod), then shuts the server down cleanly.
-func runReconcile(ctx context.Context, client nodeGetter, o reconcileOpts) error {
+func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -146,7 +163,7 @@ func runReconcile(ctx context.Context, client nodeGetter, o reconcileOpts) error
 
 // buildReconcilers assembles the enabled reconciler set: the always-on observe
 // sampler plus each Phase 2 timed reconciler its flag turns on.
-func buildReconcilers(reg *metrics.Registry, client nodeGetter, o reconcileOpts) []reconciler {
+func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcileOpts) []reconciler {
 	if o.sampleInterval <= 0 {
 		o.sampleInterval = 30 * time.Second
 	}
@@ -155,6 +172,19 @@ func buildReconcilers(reg *metrics.Registry, client nodeGetter, o reconcileOpts)
 		interval: o.sampleInterval,
 		run:      func(ctx context.Context) error { return sampleNodes(ctx, client, reg) },
 	}}
+	if o.reconcileArgoNudge {
+		recs = append(recs, reconciler{
+			name:     "argo-nudge",
+			interval: o.argoNudgeResync, // resync floor; the watch drives immediacy
+			run:      func(ctx context.Context) error { return reconcileArgoNudge(ctx, client) },
+			watch: func(ctx context.Context, onEvent func()) error {
+				return client.Watch(ctx, argoAppsPath, "", func(kube.WatchEvent) error {
+					onEvent()
+					return nil
+				})
+			},
+		})
+	}
 	if o.reconcileLinodeCred {
 		recs = append(recs, reconciler{
 			name:     "linode-creds",

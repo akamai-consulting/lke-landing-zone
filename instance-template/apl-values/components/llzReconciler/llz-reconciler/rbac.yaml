@@ -1,12 +1,11 @@
 # RBAC for the in-cluster reconciler.
 #
-# PHASE 0 is observe-only and reads exactly one cluster-scoped resource — Nodes
-# (`llz reconcile` samples /api/v1/nodes for the readiness gauges) — so the
-# ClusterRole grants nothing beyond get/list/watch on nodes. `watch` is included
-# now because it is harmless read-only and is the exact verb the Phase 1
-# cidrFirewall reconciler (Node watch) will need; the Application/PVC/StorageClass
-# grants the other Phase 1 reconcilers require are added with those reconcilers,
-# not pre-provisioned here.
+# The observe reconciler reads Nodes (get/list/watch — /api/v1/nodes for the
+# readiness gauges). The argo-nudge reconciler (Phase 1, off by default) watches
+# Argo CD Applications and patches the terminally-failed ones to re-trigger their
+# sync, so it needs get/list/watch + patch on argoproj.io/applications. Grants for
+# the remaining reconcilers (cidrFirewall Nodes, volumeTagReconciler PVs) are
+# added with those reconcilers, not pre-provisioned here.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -21,6 +20,10 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  # argo-nudge reconciler: watch Applications and re-trigger the failed ones.
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
