@@ -81,12 +81,24 @@
   `openbao-health` (seal) + `loki-objkey-rotation-health` checks. Off by default;
   enabling it per-env needs OpenBao egress + adding the pod to the chart's
   `allowedClientPods` (documented on the Deployment) — the auth role already ships.
+- **sc-demote (this branch).** The sixth CronJob conversion, and a **correction**:
+  `sc-default-patcher` is **not** a deletion candidate. The Kyverno
+  `sc-default-demote` policy is admission-only (`background: false`,
+  `failurePolicy: Ignore`) — once a Flux `is-default-class=true` write slips past a
+  briefly-unready webhook and Flux goes quiet (live == desired → no more admission
+  events), the policy is **starved** and never re-demotes, leaving two default
+  StorageClasses that hard-fail `llz ci converge`. The CronJob is the durable
+  backstop. This reconciler
+  ([`reconcile_sc_demote.go`](../../tools/cmd/llz/reconcile_sc_demote.go)) preserves
+  that guarantee: it **watches** StorageClasses (fast demote) **and** carries a
+  resync floor, so a slipped-through re-promotion is re-demoted on the next resync
+  tick even with no events — exactly the starvation case the CronJob's `*/2`
+  cadence covers. Off by default (`--reconcile-sc-demote`, leader-gated); the
+  CronJob stays until it proves out.
 
-Still to land: **sc-default-patcher is a deletion candidate**, not a conversion
-(the Kyverno `sc-default-demote` mutate-on-write policy already does it durably);
-and `lke-admin-rotation-health` stays in CI (it reads a kube Secret's age, and
-lke-admin rotation is a sanctioned-external LKE-E concern). This doc remains the
-design gate; it touches the
+Still to land: `lke-admin-rotation-health` stays in CI (it reads a kube Secret's
+age, and lke-admin rotation is a sanctioned-external LKE-E concern). This doc
+remains the design gate; it touches the
 [convergence contract](../architecture/convergence-contract.md) and gets the same
 rigor the [linode-credential-rotator](linode-credential-rotator.md) and
 [apl-core-v6-migration](apl-core-v6-migration.md) designs got.
@@ -214,7 +226,7 @@ fire-and-forget).
 | Current CronJob | Real trigger | Watch source | Resync floor | Verdict |
 |---|---|---|---|---|
 | `argo-resync-nudger` | Application enters `operationState.phase=Failed` | **watch `Application`** | none needed | poll→watch; reacts in seconds, not up to 3 min of dead converge time. Scope unchanged (terminal failures only). **Keep, convert.** |
-| `sc-default-patcher` | `is-default-class` flipped on the SC | **watch `StorageClass`** | none needed | poll→watch. But the Kyverno `sc-default-demote` *mutate-on-write* policy is the durable form — the controller is a backstop; **candidate for deletion** once the policy is trusted, not just conversion. |
+| `sc-default-patcher` | `is-default-class` flipped on the SC | **watch `StorageClass`** | resync floor (~2m) | poll→watch **+ resync floor**. The Kyverno `sc-default-demote` policy is admission-only (`background: false`, `failurePolicy: Ignore`) and gets **starved** once a slipped-through write makes live==desired and Flux stops writing — so it is NOT the durable form. The resync floor is what re-demotes without events, exactly as the CronJob's `*/2` cadence did. **Convert, keep the CronJob until proven.** |
 | `cidrFirewall` discover | Node added/removed / `providerID` change | **watch `Node`** | Linode Firewall drift → small resync (~10 min) | poll→watch on Node events; resync covers out-of-band firewall edits. |
 | `volumeTagReconciler` | PVC bound → PV gets a Linode Volume | **watch `PV`/`PVC`** | Linode Volume drift → hourly resync | reconcile on bind event; resync covers out-of-band tag drift. |
 | `harbor-robot-provisioner` | Harbor project/robot drift (external API) | secret-consumer watch, mostly resync | Harbor API → ~5 min resync | mostly resync — external state, no k8s events. Still consolidated + backoff. |
@@ -350,8 +362,9 @@ and aren't cluster state.
   `certmanager-health`, `prometheusrule-health`, `lke-admin-rotation-health`,
   `loki-objkey-rotation-health`) → in-cluster metrics + PrometheusRules (demoted
   to belt-and-suspenders, not deleted, per the alerting-doc layering).
-- Possibly `sc-default-patcher` entirely, if the Kyverno mutate-on-write policy
-  is confirmed durable on its own.
+- `sc-default-patcher` → the `sc-demote` reconciler (watch + resync floor). NOT a
+  deletion in favour of Kyverno: that policy is admission-only and gets starved
+  (see the sc-demote entry above), so the resync floor is load-bearing.
 
 Discipline (from the cred-rotator doc): **keep every CronJob manifest until its
 watch replacement passes one green e2e cycle**, then delete in the same PR that

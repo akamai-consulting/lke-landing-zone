@@ -47,6 +47,8 @@ func reconcileCmd() *cobra.Command {
 			"  --reconcile-volume-labels  rename Linode Volumes for bound PVs, watch-driven (was\n" +
 			"                             the linode-volume-labeler CronJob; needs REGION_SHORT,\n" +
 			"                             LINODE_TOKEN)\n" +
+			"  --reconcile-sc-demote      keep LKE's Flux-promoted retain StorageClass non-default,\n" +
+			"                             watch + resync floor (was the sc-default-patcher CronJob)\n" +
 			"  --reconcile-linode-creds   rotate in-cluster Linode object-storage keys (was\n" +
 			"                             the linodeCredRotator CronJob; needs REGION,\n" +
 			"                             OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)\n" +
@@ -78,6 +80,9 @@ func reconcileCmd() *cobra.Command {
 				harborInterval:      time.Duration(o.harborInterval) * time.Second,
 				reconcileOpenBao:    o.reconcileOpenBao,
 				openbaoInterval:     time.Duration(o.openbaoInterval) * time.Second,
+				reconcileSCDemote:   o.reconcileSCDemote,
+				scDemoteResync:      time.Duration(o.scDemoteResync) * time.Second,
+				scDemoteName:        o.scDemoteName,
 			})
 		},
 	}
@@ -97,6 +102,9 @@ func reconcileCmd() *cobra.Command {
 	f.IntVar(&o.harborInterval, "harbor-interval", 300, "seconds between Harbor-provisioner resync passes")
 	f.BoolVar(&o.reconcileOpenBao, "reconcile-openbao-gauges", false, "enable the OpenBao seal + credential-age gauges (read-only; needs OpenBao egress + the reconciler k8s-auth role)")
 	f.IntVar(&o.openbaoInterval, "openbao-gauges-interval", 60, "seconds between OpenBao gauge samples")
+	f.BoolVar(&o.reconcileSCDemote, "reconcile-sc-demote", false, "enable the StorageClass default-demote watch reconciler (default off: the CronJob owns it)")
+	f.IntVar(&o.scDemoteResync, "sc-demote-resync", 120, "resync-floor seconds for the sc-demote reconciler (defeats the admission-policy starvation case)")
+	f.StringVar(&o.scDemoteName, "sc-demote-name", defaultDemoteSC, "the StorageClass to keep non-default (LKE's Flux-promoted retain class)")
 	return c
 }
 
@@ -118,6 +126,9 @@ type reconcileFlags struct {
 	harborInterval      int
 	reconcileOpenBao    bool
 	openbaoInterval     int
+	reconcileSCDemote   bool
+	scDemoteResync      int
+	scDemoteName        string
 }
 
 type reconcileOpts struct {
@@ -130,6 +141,9 @@ type reconcileOpts struct {
 	cidrFWResync        time.Duration
 	reconcileVolLabels  bool
 	volLabelsResync     time.Duration
+	reconcileSCDemote   bool
+	scDemoteResync      time.Duration
+	scDemoteName        string
 	reconcileLinodeCred bool
 	linodeCredInterval  time.Duration
 	reconcileHarbor     bool
@@ -142,7 +156,7 @@ type reconcileOpts struct {
 // that needs a single writer, hence leader election.
 func (o reconcileOpts) drivingEnabled() bool {
 	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolLabels ||
-		o.reconcileLinodeCred || o.reconcileHarbor
+		o.reconcileSCDemote || o.reconcileLinodeCred || o.reconcileHarbor
 }
 
 // nodeGetter is the slice of the kube client the observe sampler needs.
@@ -288,6 +302,23 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			run: gate(func(ctx context.Context) error { return runRelabelVolumes(ctx) }),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, "/api/v1/persistentvolumes", "", func(kube.WatchEvent) error {
+					onEvent()
+					return nil
+				})
+			},
+		})
+	}
+	if o.reconcileSCDemote {
+		name := o.scDemoteName
+		if name == "" {
+			name = defaultDemoteSC
+		}
+		recs = append(recs, reconciler{
+			name:     "sc-demote",
+			interval: o.scDemoteResync, // resync floor — defeats the admission-policy starvation
+			run:      gate(func(ctx context.Context) error { return reconcileSCDemote(ctx, client, name) }),
+			watch: func(ctx context.Context, onEvent func()) error {
+				return client.Watch(ctx, scStorageClassesPath, "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})
