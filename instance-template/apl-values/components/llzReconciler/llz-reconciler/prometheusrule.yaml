@@ -1,0 +1,55 @@
+# Alert rules that make the reconciler's metrics surface actionable. Picked up by
+# kube-prometheus-stack's ruleSelector (set permissively in the env values.yaml),
+# so the llz-reconciler namespace is fine. These three distinguish the failure
+# modes the design calls out:
+#
+#   LLZReconcilerScrapeDown  — Prometheus can't reach the pod (target down /
+#                              NetworkPolicy / pod gone). The metrics are blind.
+#   LLZReconcilerReportingDown — the pod is up and scraped, but its own samples
+#                              are failing (llz_reconcile_up 0 — e.g. lost API
+#                              access). It is reporting, and reporting failure.
+#   LLZReconcilerStale       — scraped and up, but the sample loop has not advanced
+#                              (wedged goroutine). Timestamp staleness catches what
+#                              up=1 alone would miss.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llz-reconciler-alerts
+  namespace: llz-reconciler
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    # Organizational only; pickup is via the kube-prometheus-stack ruleSelector.
+    app.kubernetes.io/part-of: platform
+spec:
+  groups:
+    - name: llz-reconciler
+      interval: 30s
+      rules:
+        - alert: LLZReconcilerScrapeDown
+          expr: up{namespace="llz-reconciler"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler metrics target is down
+            description: Prometheus cannot scrape the llz-reconciler /metrics endpoint; the in-cluster convergence signals are blind.
+        - alert: LLZReconcilerReportingDown
+          expr: llz_reconcile_up{namespace="llz-reconciler"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler samples are failing
+            description: The reconciler is scraped but its last cluster sample failed (e.g. lost Kubernetes API access).
+        - alert: LLZReconcilerStale
+          expr: time() - llz_reconcile_last_sample_timestamp_seconds{namespace="llz-reconciler"} > 300
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler sample loop is stale
+            description: The reconciler has not completed a sample in over 5 minutes; its sample loop may be wedged.

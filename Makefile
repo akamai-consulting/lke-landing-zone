@@ -28,6 +28,7 @@ COVERAGE_MINS := \
 	internal/health=95 \
 	internal/kube=78 \
 	internal/linode=80 \
+	internal/metrics=95 \
 	internal/openbao=88 \
 	internal/preflight=95 \
 	internal/terraform=95

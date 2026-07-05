@@ -1,0 +1,47 @@
+# NetworkPolicy for the reconciler pod. The llz-reconciler namespace inherits the
+# platform's default-deny posture, so both directions are stated explicitly:
+#
+#   Ingress — ONLY the Prometheus scrape, from the `monitoring` namespace (where
+#     kube-prometheus-stack runs) to the metrics port. Same source the foundation
+#     uses to scrape CNPG :9187 (llz-cluster-foundation network-policies). Without
+#     this the ServiceMonitor is discovered but every scrape is silently dropped.
+#
+#   Egress — DNS + the LKE-E apiserver (dual-port 443 + 6443 DNAT; a bare `ports`
+#     rule with no `to:` — there is no in-cluster kube-apiserver pod to select on
+#     managed LKE-E). Phase 0 talks to nothing else (no Linode API, no OpenBao);
+#     those egress allows are added with the Phase 1 reconcilers that need them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llz-reconciler
+  namespace: llz-reconciler
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llz-reconciler
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Prometheus (monitoring namespace) scrapes :8080/metrics.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    # DNS resolution against kube-dns.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # LKE-E apiserver (dual-port DNAT). Bare ports rule: no in-cluster
+    # kube-apiserver pod exists to selector-match on managed LKE-E.
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }

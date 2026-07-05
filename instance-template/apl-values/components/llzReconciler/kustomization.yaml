@@ -1,0 +1,15 @@
+# spec.components.llzReconciler → this kustomize Component. An env's overlay lists
+# it under components: when enabled (default-disabled). Template-managed — edit
+# upstream. See docs/designs/kube-native-reconciler.md.
+#
+# PHASE 0: deploys the observe-only `llz reconcile` process (metrics surface only,
+# drives nothing) + the wiring that closes the Prometheus scrape path: a Service,
+# a ServiceMonitor, the default-deny-compatible NetworkPolicy (ingress from the
+# monitoring namespace on the metrics port), minimal read-only RBAC, and the
+# alerting rules. Phase 1 adds the watch-based reconcilers under the same
+# Deployment; enabling this component is what lets Phase 3 demote the CI health
+# port-forwards to belt-and-suspenders.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - llz-reconciler

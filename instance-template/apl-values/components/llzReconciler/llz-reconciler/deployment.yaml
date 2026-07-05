@@ -1,0 +1,75 @@
+# llz-reconciler Deployment — the long-lived `llz reconcile` process.
+#
+# PHASE 0 is OBSERVE-ONLY: it samples cluster signals over the in-cluster
+# ServiceAccount (KUBERNETES_SERVICE_HOST + the auto-mounted SA token/CA that
+# kube.NewInCluster reads) and serves them at :8080/metrics for Prometheus. It
+# drives nothing. Single replica: Phase 0 has no writer to serialise, so no leader
+# election yet — that lands in Phase 1 with the first state-mutating reconciler.
+#
+# Image is the slim distroless llz (dockerfiles/llz), the same artifact the
+# CronJobs run; rendered by copier and pinned to the signed sha image for the
+# commit under test by release-e2e. No new deps over that image (the reconciler is
+# stdlib net/http + internal/kube + internal/metrics — no client-go).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llz-reconciler
+  namespace: llz-reconciler
+spec:
+  replicas: 1
+  # Never run two pods at once: the old pod terminates before the new starts.
+  # Phase 0 is observe-only so overlap would be harmless, but this keeps the
+  # single-writer invariant the Phase 1 reconcilers need without depending on
+  # leader election during a rollout — at the cost of a few seconds' metrics gap
+  # on redeploy, immaterial for a 30s sampler.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llz-reconciler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llz-reconciler
+    spec:
+      serviceAccountName: llz-reconciler
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: reconcile
+          image: <@ llz_image_ref @>
+          args: ["reconcile", "--metrics-addr=:8080", "--sample-interval=30"]
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            limits: { cpu: 200m, memory: 128Mi }
+            requests: { cpu: 25m, memory: 48Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
