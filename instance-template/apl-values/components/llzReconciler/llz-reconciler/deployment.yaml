@@ -62,15 +62,23 @@ spec:
           # by the chart's allowedClientPods entry; the `reconciler` k8s-auth role
           # ships from bao-configure). Idempotent/read-only alongside the CronJobs,
           # which stay until each proves out.
-          # volume-labels (this batch): renames bound Linode-CSI Volumes to
+          # volume-labels: renames bound Linode-CSI Volumes to
           # <REGION_SHORT>-<ns>-<pvc>. Needs LINODE_TOKEN (ESO Secret) + REGION_SHORT
           # (per-env, filled by the render-patch). Leader-gated + idempotent
           # alongside the linode-volume-labeler CronJob.
-          # STILL OFF — need more per-env env (a later batch):
-          #   --reconcile-cidr-firewall  (NODE_NAME via downward API; targets the
-          #                               private cidr-firewall controller, absent on e2e)
-          #   --reconcile-linode-creds   (REGION, OBJ_CLUSTER, OPENBAO_*; due-based no-op)
-          #   --reconcile-harbor         (HARBOR_HOST + Harbor admin creds)
+          # cidr-firewall (this batch): the discover-firewall-config logic — reads
+          # NODE_NAME (downward API) → the node's Linode instance → its firewall/VPC,
+          # plus LINODE_TOKEN. Leader-gated + idempotent alongside the cidrFirewall
+          # CronJob. NOTE: the private firewall controller is absent on e2e, so this
+          # is exercised but not end-to-end proven there (harmless no-op).
+          # linode-creds (this batch): the rotate-linode-creds logic — rotates the
+          # in-cluster object-storage keys and writes them to OpenBao (Kubernetes-auth
+          # `reconciler` role, now granted the linode-rotator policy in bao-configure).
+          # Needs REGION + OBJ_CLUSTER (per-env, render-patch) + OPENBAO_* + LINODE_TOKEN.
+          # Due-based: a no-op until a key is within its rotation window. Leader-gated +
+          # idempotent alongside the linodeCredRotator CronJob.
+          # STILL OFF — needs a mounted post-Harbor secret (a later batch, #166):
+          #   --reconcile-harbor         (HARBOR_HOST + GH_TOKEN + Harbor admin creds)
           args:
             - reconcile
             - --metrics-addr=:8080
@@ -79,6 +87,8 @@ spec:
             - --reconcile-sc-demote
             - --reconcile-openbao-gauges
             - --reconcile-volume-labels
+            - --reconcile-cidr-firewall
+            - --reconcile-linode-creds
           env:
             # Leader-election identity + Lease namespace (downward API). Only used
             # when a driving reconciler is enabled; harmless otherwise.
@@ -103,6 +113,30 @@ spec:
                   key: token
             - name: REGION_SHORT
               value: "REPLACE_ME"
+            # cidr-firewall reconciler: the node this pod lands on identifies the
+            # Linode instance (→ providerID → firewall/VPC) to discover. Downward
+            # API, so no per-env render needed.
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            # linode-creds reconciler: REGION (= env name) + OBJ_CLUSTER (= spec
+            # object-storage cluster) are per-env placeholders overwritten by
+            # llz-reconciler-env-patch.yaml (llz render), same as REGION_SHORT.
+            - name: REGION
+              value: "REPLACE_ME"
+            - name: OBJ_CLUSTER
+              value: "REPLACE_ME"
+            # OpenBao serving cert is signed by its private CA; in-cluster writers
+            # connect insecure (traffic stays on the pod network), matching the
+            # linodeCredRotator CronJob's posture.
+            - name: OPENBAO_SKIP_VERIFY
+              value: "true"
+            # linode-creds logs into OpenBao via Kubernetes auth. rotate-linode-creds
+            # defaults the role to `linode-rotator` (the CronJob's SA-bound role), but
+            # THIS pod runs as the llz-reconciler SA, which is bound to the `reconciler`
+            # role (now carrying the linode-rotator policy). Override so the login
+            # resolves to a role this SA is actually bound to — otherwise it 403s.
+            - name: OPENBAO_KUBERNETES_ROLE
+              value: "reconciler"
           ports:
             - name: metrics
               containerPort: 8080
