@@ -49,12 +49,20 @@
     each bound Linode-CSI Volume to `<region>-<ns>-<pvc>` (lists account Volumes
     once vs the script's per-volume GET). Retires the 103-line embedded-shell blob
     from the `untestable-budget` once the CronJob switches to the new verb.
+- **Convergence gauge (this branch).** The observe reconciler now also publishes
+  `llz_convergence_state` ([`reconcile_convergence.go`](../../tools/cmd/llz/reconcile_convergence.go)):
+  it lists Argo CD Applications and classifies each through the **same tested
+  predicate `llz ci health` uses** (`internal/health.ParseArgoApp` +
+  `ClassifyArgoApp`), publishing the 0/1/2 verdict (+ failed/pending app counts).
+  The exit-code CLI stays the source of truth for the Terraform gate; this is the
+  day-2, continuously-observable, Alertmanager-routable form of the same
+  classification (a `LLZClusterNotConverged` alert fires on a sustained hard-fail).
+  It **observes** — drives nothing (contract-clean).
 
-Still to land: the full convergence gauge (port the `internal/health` classifiers
-to feed `llz_convergence_state`) and the credential-age / seal / ESO gauges that
-retire the daily port-forward checks; **sc-default-patcher is a deletion
-candidate**, not a conversion (the Kyverno `sc-default-demote` mutate-on-write
-policy already does it durably). This doc remains the design gate; it touches the
+Still to land: the credential-age / seal / ESO gauges that retire the daily
+port-forward checks; **sc-default-patcher is a deletion candidate**, not a
+conversion (the Kyverno `sc-default-demote` mutate-on-write policy already does it
+durably). This doc remains the design gate; it touches the
 [convergence contract](../architecture/convergence-contract.md) and gets the same
 rigor the [linode-credential-rotator](linode-credential-rotator.md) and
 [apl-core-v6-migration](apl-core-v6-migration.md) designs got.

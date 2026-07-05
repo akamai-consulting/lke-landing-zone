@@ -226,7 +226,15 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 	recs := []reconciler{{
 		name:     "observe",
 		interval: o.sampleInterval,
-		run:      func(ctx context.Context) error { return sampleNodes(ctx, client, reg) },
+		// Read-only: node readiness + the convergence gauge (Argo app health via
+		// the shared internal/health predicate). A convergence read failure zeroes
+		// observe's up; a hard-failed cluster does not (that's a valid observation).
+		run: func(ctx context.Context) error {
+			if err := sampleNodes(ctx, client, reg); err != nil {
+				return err
+			}
+			return sampleConvergence(ctx, client, reg)
+		},
 	}}
 	if o.reconcileArgoNudge {
 		recs = append(recs, reconciler{

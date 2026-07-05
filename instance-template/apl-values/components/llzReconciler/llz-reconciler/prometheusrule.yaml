@@ -71,6 +71,20 @@ spec:
           annotations:
             summary: llz reconciler {{ $labels.reconciler }} is erroring repeatedly
             description: The {{ $labels.reconciler }} reconciler has failed more than 3 times in the last hour.
+        - alert: LLZClusterNotConverged
+          # The observe reconciler's day-2 convergence read (Argo app health via
+          # the same predicate llz ci health uses): 1 = hard-failed (a required
+          # component the reconciler can't fix on its own). A sustained hard-fail
+          # is operator-actionable. State 2 (in-progress) is intentionally NOT
+          # alerted — reconciles are expected to be in flight.
+          expr: max(llz_convergence_state{namespace="llz-reconciler"}) == 1
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: cluster is not converged (hard-failed)
+            description: The reconciler classifies the cluster as hard-failed (an Argo Application the reconciler can't resolve on its own). See llz_convergence_apps_failed.
         - alert: LLZReconcilerNoLeader
           # The llz_reconcile_leader gauge is published only when a driving
           # reconciler is enabled (leader election is running). If it exists and no
