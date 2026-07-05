@@ -80,11 +80,14 @@ func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Dur
 		}
 		phase, msg := argoOperationState(d, namespace, parent)
 		if phase == "Failed" || phase == "Error" {
-			fmt.Fprintf(os.Stderr, "::error::Application %s does not exist and %s's sync is terminally %s — nothing will create it without intervention. operationState: %s\n", app, parent, phase, msg)
+			fmt.Fprintf(os.Stderr, "::error::Application %s does not exist and %s's sync is terminally %s — nothing will create it without intervention. operationState: %s | %s\n", app, parent, phase, msg, argoParentDiag(d, namespace, parent))
 			return fmt.Errorf("%s sync terminally %s before %s was created", parent, phase, app)
 		}
 		if !d.now().Before(deadline) {
-			fmt.Fprintf(os.Stderr, "::error::Application %s still does not exist after %s — the %s sync has not reached its wave. phase=%s operationState: %s\n", app, within, parent, phase, msg)
+			// operationState is empty when the app-of-apps never started a sync
+			// (e.g. a child ComparisonError leaves it OutOfSync with no operation),
+			// so the real stall reason lives in sync/health/conditions — surface it.
+			fmt.Fprintf(os.Stderr, "::error::Application %s still does not exist after %s — the %s sync has not reached its wave. phase=%s operationState: %s | %s\n", app, within, parent, phase, msg, argoParentDiag(d, namespace, parent))
 			return fmt.Errorf("%s not created within %s (parent phase %s)", app, within, phase)
 		}
 		d.sleep(10 * time.Second)
@@ -106,4 +109,19 @@ func argoOperationState(d aplGateDeps, namespace, parent string) (phase, message
 		message = strings.TrimSpace(parts[1])
 	}
 	return phase, message
+}
+
+// argoParentDiag returns a one-line sync/health/condition summary of the parent
+// app-of-apps for the failure annotation. operationState (what
+// argoOperationState reports) is empty until a sync OPERATION runs, so a parent
+// wedged OutOfSync/Missing on a child ComparisonError shows nothing there — but
+// its sync.status, health.status and condition messages carry the real reason.
+// Best-effort: returns a hint string when the parent is unreadable.
+func argoParentDiag(d aplGateDeps, namespace, parent string) string {
+	out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", parent,
+		"-o", "jsonpath={.status.sync.status}/{.status.health.status}{range .status.conditions[*]} [{.type}: {.message}]{end}")
+	if out = strings.TrimSpace(out); !ok || out == "" {
+		return fmt.Sprintf("%s state unavailable (missing, or cluster unreachable)", parent)
+	}
+	return fmt.Sprintf("%s sync/health: %s", parent, out)
 }

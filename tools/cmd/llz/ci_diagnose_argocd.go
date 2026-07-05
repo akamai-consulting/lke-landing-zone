@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
@@ -51,6 +52,34 @@ func ciDiagnoseArgoCDCmd() *cobra.Command {
 	return c
 }
 
+// effectiveKubeconfig resolves the kubeconfig kubectl will actually read: the
+// $KUBECONFIG env var when it points at a non-empty file, else the default
+// ~/.kube/config. Returns "" only when NEITHER exists / is non-empty — the
+// genuine "no cluster, nothing to diagnose" signal.
+//
+// Gating solely on $KUBECONFIG (the previous behavior) silently skipped these
+// diagnostics on exactly the failures they exist for: the bootstrap-openbao job
+// — like most of our steps — writes ~/.kube/config and relies on kubectl's
+// default path, never exporting $KUBECONFIG. So the v0.0.19 (2026-07-05) e2e
+// convergence wedge tripped the assert-argo-app gate and then this step
+// no-op'd with "No kubeconfig available", losing the platform-bootstrap
+// Application state that would have explained the stall.
+func effectiveKubeconfig() string {
+	candidates := []string{os.Getenv("KUBECONFIG")}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".kube", "config"))
+	}
+	for _, p := range candidates {
+		if p == "" {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && st.Size() > 0 {
+			return p
+		}
+	}
+	return ""
+}
+
 // diagStream runs a command with output streamed to stdout, best-effort. A
 // package var so tests can record the probe sequence without real binaries.
 var diagStream = func(name string, args ...string) {
@@ -60,8 +89,7 @@ var diagStream = func(name string, args ...string) {
 }
 
 func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
-	kc := os.Getenv("KUBECONFIG")
-	if st, err := os.Stat(kc); kc == "" || err != nil || st.Size() == 0 {
+	if effectiveKubeconfig() == "" {
 		fmt.Fprintln(os.Stderr, "::warning::No kubeconfig available — cluster may not exist; nothing to diagnose")
 		return nil
 	}
