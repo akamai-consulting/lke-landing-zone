@@ -724,11 +724,18 @@ jobs:
             echo "::warning::skipping the re-sync nudge — llz CronJob admission not confirmed; converge will report the verdict"
           fi
 
-      # Explicit --budget bounds the convergence poll to 10m, well below the job's
-      # timeout-minutes. A healthy fresh bootstrap converges in a few minutes; 10m
-      # is a generous ceiling — anything longer is a real stall, not slow rollout.
+      # Explicit --budget bounds the convergence poll, well below the job's
+      # timeout-minutes (45). NOT "anything longer is a real stall": the tail of a
+      # fresh bootstrap is llz-cert-automation legitimately rolling out. It chains
+      # on the harbor-robot-provisioner CronJob (schedule */5) seeding
+      # secret/harbor/robot → the harbor-docker-config ExternalSecret syncing
+      # (refreshInterval 1m) → the cert-automation rollout. In the worst case (the
+      # CronJob's first tick up to 5m out) that tail runs ~10-15m after the primary
+      # converge, so a 10m ceiling was marginal and flaked the poll on a legit slow
+      # rollout (Progressing, not stalled). 20m absorbs the worst-case tail while
+      # still catching a genuine stall well inside the 45m job timeout.
       - name: Wait for cluster to converge
-        run: llz ci converge --budget 600
+        run: llz ci converge --budget 1200
 
       # E2E validation gate, folded in from release-e2e.yml's former `validate`
       # job: that job dispatched cluster-health.yml only to run `llz ci converge`
