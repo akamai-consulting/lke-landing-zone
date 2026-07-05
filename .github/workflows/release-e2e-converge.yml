@@ -1,0 +1,277 @@
+name: Release E2E — converge-only (reuse a warm cluster) [PROTOTYPE]
+
+# PROTOTYPE fast path for iterating on CONVERGENCE without re-paying the ~14m
+# LKE-Enterprise cluster create every run. release-e2e.yml stands a cluster up
+# from scratch (~30m); most of that is the Linode-side cluster create (~14m) +
+# node provisioning, which is pure overhead when you are debugging app/values or
+# bootstrap-convergence behaviour and the cluster from the last run is still up.
+#
+# ── The loop ─────────────────────────────────────────────────────────────────
+#   1. Seed once: run release-e2e.yml with keep_cluster=true (full ~30m). The
+#      cluster + its Terraform state (S3, keyed by region=e2e) survive teardown.
+#   2. Iterate: run THIS workflow. It re-renders the template onto the warm E2E
+#      instance and re-drives terraform.yml action=apply module=cluster. Because
+#      the cluster already exists in state, `terraform apply` REFRESHES it instead
+#      of recreating it (the 14m create is skipped), then cluster-bootstrap
+#      re-applies and bootstrap-openbao's converge gate re-nudges Argo CD +
+#      re-runs `llz ci converge`. Typical warm run: ~8-12m instead of ~30m.
+#   3. It NEVER tears down — the cluster stays warm for the next iteration.
+#   4. When done, destroy manually:
+#        gh workflow run terraform.yml -R <instance> -f action=destroy \
+#          -f module=cluster -f region=e2e -f confirm_destroy=destroy:e2e:cluster
+#      (or run release-e2e.yml once with keep_cluster=false).
+#
+# ── Scope / caveats (it's a prototype) ───────────────────────────────────────
+#   • Assumes a warm cluster from a prior keep_cluster=true run. If the state is
+#     empty (never seeded, or already destroyed), the module=cluster apply will
+#     create a cluster from scratch — i.e. no faster than release-e2e, just
+#     without the teardown. There is no cheap precondition for "is the cluster
+#     warm?", so this is documented, not enforced.
+#   • It shares release-e2e.yml's `concurrency: release-e2e` group, so it can
+#     never race a full release-e2e run (or another converge run) against the
+#     same cluster/state.
+#   • The instantiate render/push steps are duplicated from release-e2e.yml's
+#     `instantiate` job. Productionizing this should extract that logic into a
+#     shared composite action (.github/actions/e2e-instantiate) used by both,
+#     so the safety-critical copier-token render can't drift. Kept inline here to
+#     keep the prototype self-contained and off the release gate's critical path.
+#   • Not a release gate: `on:` is workflow_dispatch only. It never runs on a
+#     prereleased tag, so it cannot gate (or block) a promotion.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_health:
+        description: 'After converge, also run the instance cluster-health.yml gate (fail-on-unhealthy + assert-loki), like release-e2e validate.'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Same group as release-e2e.yml: one E2E cluster/state at a time, never racing a
+# full run against the warm one this reuses.
+concurrency:
+  group: release-e2e
+  cancel-in-progress: false
+
+env:
+  E2E_ENV: e2e
+  INSTANCE_REPO: ${{ vars.E2E_INSTANCE_REPO }}
+  E2E_APPS_BRANCH: e2e-apps
+  E2E_LINODE_REGION: ${{ vars.E2E_LINODE_REGION || 'us-ord' }}
+  E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── 1. Re-instantiate the template onto the warm E2E instance ────────────────
+  # Mirrors release-e2e.yml's `instantiate` render/push (minus the from-scratch-
+  # only concerns): scaffold the e2e env, lay the template out as an instance,
+  # render the copier tokens + pin LLZ refs to THIS commit, force-push main + the
+  # e2e-apps branch. The CI-image pin + chart-publish steps are KEPT (they are
+  # fast when this commit's artifacts already exist, and skipping them would let a
+  # stale baked llz drift from the rendered workflow — the recurring stale-binary
+  # failure class).
+  instantiate:
+    name: Re-instantiate → ${{ vars.E2E_INSTANCE_REPO }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+    outputs:
+      head_sha: ${{ steps.push.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Preconditions
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=0
+          require() {
+            if [[ -z "$2" ]]; then
+              local cmd="variable"; [[ "$3" == "secrets" ]] && cmd="secret"
+              echo "::error::Missing ${3}.${1} — ${4}. Set it on this repo: gh ${cmd} set ${1}."
+              missing=1
+            fi
+          }
+          require E2E_INSTANCE_REPO  "${INSTANCE_REPO}"       vars    "owner/name of the throwaway E2E instance repo"
+          require E2E_DISPATCH_TOKEN "${E2E_DISPATCH_TOKEN}"  secrets "PAT/app token with contents:write + actions:read/write + Variables:read/write on the instance repo"
+          if [[ "${missing}" -ne 0 ]]; then
+            echo "::error::E2E config is incomplete on ${GITHUB_REPOSITORY}. See the header of .github/workflows/release-e2e.yml."
+            exit 1
+          fi
+          echo "E2E config OK — instance=${INSTANCE_REPO} region=${E2E_LINODE_REGION} obj=${E2E_OBJ_CLUSTER}"
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+
+      - name: Build llz (the env-add scaffolder)
+        run: cd tools && go build -o ../bin/llz ./cmd/llz
+
+      - name: Scaffold the e2e environment
+        run: |
+          set -euo pipefail
+          rm -rf "instance-template/apl-values/${E2E_ENV}" 2>/dev/null || true
+          rm -f instance-template/terraform-iac-bootstrap/*/"${E2E_ENV}.tfvars" 2>/dev/null || true
+          rm -f "instance-template/environments/${E2E_ENV}.yaml" instance-template/landingzone.yaml 2>/dev/null || true
+          bin/llz env add "${E2E_ENV}" \
+            --region "${E2E_LINODE_REGION}" \
+            --obj-cluster "${E2E_OBJ_CLUSTER}"
+          bin/llz env set "${E2E_ENV}" \
+            cluster.bootstrap.aplValues.repoURL="https://github.com/${INSTANCE_REPO}.git"
+          bin/llz env set "${E2E_ENV}" \
+            cluster.bootstrap.appsRepoRevision="${E2E_APPS_BRANCH}"
+
+      - name: Lay the template out as an instance
+        run: |
+          set -euo pipefail
+          rm -rf .e2e-instance && mkdir -p .e2e-instance
+          cp -a instance-template/. .e2e-instance/
+          mkdir -p .e2e-instance/docs && cp -a docs/. .e2e-instance/docs/
+          rm -f .e2e-instance/docs/templatization-plan.md .e2e-instance/docs/agents.md
+          rm -rf .e2e-instance/.github/actions
+          rm -f .e2e-instance/.copier-answers.yml
+
+      - name: Render copier tokens + pin LLZ refs to the commit under test
+        run: |
+          set -euo pipefail
+          cd .e2e-instance
+          OWNER="${GITHUB_REPOSITORY%/*}"
+          REPO_NAME="${INSTANCE_REPO##*/}"
+          LLZ_IMAGE_REF="ghcr.io/${OWNER}/llz:sha-${GITHUB_SHA}"
+          grep -rlZ -e '<@ upstream_org @>' -e '<@ instance_repo @>' -e '<@ llz_version @>' \
+                    -e '<@ llz_image_ref @>' \
+                    -e '<@ instance_repo\.split' . \
+            | xargs -0 -r sed -i \
+                -e "s#<@ instance_repo\.split('/')\[-1\] @>#${REPO_NAME}#g" \
+                -e "s#<@ upstream_org @>#${OWNER}#g" \
+                -e "s#<@ instance_repo @>#${INSTANCE_REPO}#g" \
+                -e "s#<@ llz_version @>#${GITHUB_SHA}#g" \
+                -e "s#<@ llz_image_ref @>#${LLZ_IMAGE_REF}#g"
+          grep -rlZ 'lke-landing-zone' . \
+            | xargs -0 -r sed -i -E \
+                -e "s#(/lke-landing-zone/\.github/workflows/llz-[A-Za-z0-9_-]+\.yml)@[^[:space:]]+#\1@${GITHUB_SHA}#g" \
+                -e "s#(//terraform-modules/llz-[A-Za-z0-9_-]+\?ref=)[^\"]+#\1${GITHUB_SHA}#g"
+          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]*).*/\1${GITHUB_SHA}/" .github/workflows/*.yml
+          if grep -rnE '<@|@>' . ; then
+            echo "::error::unrendered copier token(s) survived the e2e render pass"
+            exit 1
+          fi
+
+      - name: Stamp provenance + force-push instantiation
+        id: push
+        env:
+          E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd .e2e-instance
+          git init -q
+          git checkout -q -b main
+          git config user.name  "llz-release-e2e[bot]"
+          git config user.email "llz-release-e2e@users.noreply.github.com"
+          "${GITHUB_WORKSPACE}/template-scripts/stamp-template-version.sh" \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" \
+            --ref "${GITHUB_REF_NAME}" --env "${E2E_ENV}"
+          git add -A
+          git commit -q -m "e2e(converge): re-instantiate ${GITHUB_REPOSITORY}@${GITHUB_SHA::8} (${GITHUB_REF_NAME})"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+          git remote add origin "https://x-access-token:${E2E_DISPATCH_TOKEN}@github.com/${INSTANCE_REPO}.git"
+          git push -f origin main
+          git push -f origin "main:refs/heads/${E2E_APPS_BRANCH}"
+          GH_TOKEN="${E2E_DISPATCH_TOKEN}" gh variable set APPS_REPO_REVISION \
+            --repo "${INSTANCE_REPO}" --body "${E2E_APPS_BRANCH}"
+
+      - name: Pin instance CI images to this commit (build them first if missing)
+        env:
+          GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN_INSTANCE: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: bin/llz ci pin-instance-images --instance "${INSTANCE_REPO}" --owner "${GITHUB_REPOSITORY_OWNER}" --template-repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF_NAME}" --build-if-missing
+
+      - name: Ensure first-party charts are published (publish + wait if missing)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          bin/llz ci chart-publish-check
+          --root .e2e-instance
+          --publish-if-missing
+          --ref "${GITHUB_REF_NAME}"
+          --template-repo "${GITHUB_REPOSITORY}"
+
+  # ── 2. Converge against the warm cluster (fast; the 14m create is skipped) ────
+  # action=apply module=cluster: on a warm cluster this refreshes the existing
+  # linode_lke_cluster (no recreate), re-applies cluster-bootstrap, and runs
+  # bootstrap-openbao's converge gate (nudge Argo + `llz ci converge`). Never
+  # tears down.
+  converge:
+    name: Converge (reuse warm cluster)
+    needs: instantiate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Dispatch terraform.yml (apply, module=cluster) and watch
+        env:
+          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          .github/scripts/dispatch-and-watch.sh \
+            --repo "${INSTANCE_REPO}" --workflow terraform.yml \
+            --field action=apply --field module=cluster --field region="${E2E_ENV}"
+
+  # ── 3. (Optional) health gate — same assertions as release-e2e validate ──────
+  validate:
+    name: Validate health + Loki
+    needs: converge
+    if: ${{ needs.converge.result == 'success' && inputs.run_health }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Dispatch cluster-health.yml (E2E gate mode) and watch
+        env:
+          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          .github/scripts/dispatch-and-watch.sh \
+            --repo "${INSTANCE_REPO}" --workflow cluster-health.yml \
+            --field region="${E2E_ENV}" \
+            --field fail-on-unhealthy=true \
+            --field assert-loki=true
+
+  # ── 4. Gate + reminder that the cluster is intentionally left running ─────────
+  gate:
+    name: Converge-only gate
+    needs: [instantiate, converge, validate]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require instantiate + converge (+ validate if requested) to have succeeded
+        env:
+          I: ${{ needs.instantiate.result }}
+          C: ${{ needs.converge.result }}
+          V: ${{ needs.validate.result }}
+        run: |
+          set -euo pipefail
+          echo "instantiate=$I converge=$C validate=$V (run_health=${{ inputs.run_health }})"
+          echo "::warning::converge-only leaves the E2E cluster RUNNING (it is billing). Destroy it when done — see this workflow's header."
+          fail=0
+          [[ "$I" == "success" ]] || { echo "::error::instantiate $I"; fail=1; }
+          [[ "$C" == "success" ]] || { echo "::error::converge $C"; fail=1; }
+          # validate only gates when it was requested AND actually ran.
+          if [[ "${{ inputs.run_health }}" == "true" ]]; then
+            [[ "$V" == "success" ]] || { echo "::error::validate $V"; fail=1; }
+          fi
+          exit $fail
