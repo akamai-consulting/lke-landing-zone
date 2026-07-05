@@ -48,8 +48,28 @@ func TestAssertArgoAppTerminalParentFailsFast(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "terminally Failed") {
 		t.Fatalf("want terminal-failure error, got %v", err)
 	}
-	if *calls > 2 {
+	// One cycle = existence probe + operationState probe + the failure-diag probe.
+	// More than that means it looped instead of short-circuiting on the terminal phase.
+	if *calls > 3 {
 		t.Fatalf("terminal parent must short-circuit on the first cycle, made %d kubectl calls", *calls)
+	}
+}
+
+// argoParentDiag surfaces the parent's sync/health/conditions (where a child
+// ComparisonError shows) — the signal operationState misses when no sync ran.
+func TestArgoParentDiag(t *testing.T) {
+	d, _ := assertArgoAppDeps(t, func(_ int, _ []string) (string, bool) {
+		return "OutOfSync/Missing [ComparisonError: app path does not exist]", true
+	})
+	got := argoParentDiag(d, "argocd", "platform-bootstrap")
+	if !strings.Contains(got, "ComparisonError") || !strings.Contains(got, "platform-bootstrap") {
+		t.Fatalf("diag should carry the parent name + condition, got %q", got)
+	}
+
+	// Unreadable parent (kubectl fails) yields a hint, not an empty string.
+	d2, _ := assertArgoAppDeps(t, func(_ int, _ []string) (string, bool) { return "", false })
+	if got := argoParentDiag(d2, "argocd", "platform-bootstrap"); !strings.Contains(got, "unavailable") {
+		t.Fatalf("unreadable parent should hint 'unavailable', got %q", got)
 	}
 }
 
