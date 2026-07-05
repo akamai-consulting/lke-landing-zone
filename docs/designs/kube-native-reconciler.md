@@ -7,11 +7,17 @@ dependency-free Prometheus text-exposition registry, 100% covered) and the
 `:8080/metrics` + `/healthz`, samples the cluster over `internal/kube` on an
 interval, SIGTERM-graceful). It publishes `llz_reconcile_{up,build_info,
 nodes_ready,nodes_total,last_sample_timestamp_seconds}` and **drives nothing**.
+The deployable [`apl-values/components/llzReconciler/`](../../instance-template/apl-values/components/llzReconciler/)
+manifest set has also landed — a default-disabled component (registered in
+`internal/clusterspec/components.go`, `DependsOn: observability`) shipping the
+Deployment + read-only RBAC (nodes get/list/watch) + a default-deny-compatible
+NetworkPolicy (ingress from the `monitoring` namespace to `:8080` — the piece that
+actually closes the scrape path) + Service + ServiceMonitor + PrometheusRule
+(three alerts: scrape-down, reporting-down, sample-stale). Verified: kustomize
+renders 9 objects, `promtool` accepts the rules, kube-linter passes.
 Still to land in Phase 0: the full convergence gauge (port the `internal/health`
-classifiers to feed `llz_convergence_state`), the credential-age / seal / ESO
-gauges that retire the daily port-forward checks, and the
-`apl-values/components/llzReconciler/` manifest set (Deployment + SA + RBAC +
-NetworkPolicy + ServiceMonitor + PrometheusRule). Phase 1 adds the
+classifiers to feed `llz_convergence_state`) and the credential-age / seal / ESO
+gauges that retire the daily port-forward checks. Phase 1 adds the
 `internal/kube` watch primitive + the reconcilers. This doc remains the design
 gate; it touches the [convergence contract](../architecture/convergence-contract.md)
 and gets the same rigor the [linode-credential-rotator](linode-credential-rotator.md)

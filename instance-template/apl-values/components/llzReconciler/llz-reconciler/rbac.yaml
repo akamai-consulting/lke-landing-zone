@@ -1,0 +1,36 @@
+# RBAC for the in-cluster reconciler.
+#
+# PHASE 0 is observe-only and reads exactly one cluster-scoped resource — Nodes
+# (`llz reconcile` samples /api/v1/nodes for the readiness gauges) — so the
+# ClusterRole grants nothing beyond get/list/watch on nodes. `watch` is included
+# now because it is harmless read-only and is the exact verb the Phase 1
+# cidrFirewall reconciler (Node watch) will need; the Application/PVC/StorageClass
+# grants the other Phase 1 reconcilers require are added with those reconcilers,
+# not pre-provisioned here.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llz-reconciler
+  namespace: llz-reconciler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: llz-reconciler
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: llz-reconciler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: llz-reconciler
+subjects:
+  - kind: ServiceAccount
+    name: llz-reconciler
+    namespace: llz-reconciler

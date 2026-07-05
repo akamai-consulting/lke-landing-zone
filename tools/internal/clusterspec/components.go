@@ -204,6 +204,23 @@ var Components = []Component{
 		ManifestResources: []string{"llz-cidr-firewall"},
 		DefaultDisabled:   true,
 	},
+	{
+		// In-cluster reconciler + convergence metrics surface (Phase 0:
+		// observe-only). Deploys the long-lived `llz reconcile` process that
+		// samples cluster signals and serves them at :8080/metrics, plus the
+		// wiring that closes the Prometheus scrape path (Service, ServiceMonitor,
+		// default-deny-compatible NetworkPolicy, read-only RBAC, alert rules).
+		// DependsOn observability: the ServiceMonitor + PrometheusRule CRDs come
+		// from kube-prometheus-stack, and there is no point publishing metrics no
+		// Prometheus scrapes. Default-disabled — enabling it is what lets Phase 3
+		// demote the CI health port-forwards to belt-and-suspenders. Phase 1 adds
+		// the watch-based reconcilers under the same Deployment. See
+		// docs/designs/kube-native-reconciler.md.
+		Name:              "llzReconciler",
+		DependsOn:         []string{"observability"},
+		ManifestResources: []string{"llz-reconciler"},
+		DefaultDisabled:   true,
+	},
 }
 
 // componentByName indexes Components for lookup.

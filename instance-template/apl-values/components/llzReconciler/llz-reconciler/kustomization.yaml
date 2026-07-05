@@ -1,0 +1,15 @@
+# llz-reconciler — fully Argo-owned manifest tree: the namespace, read-only RBAC,
+# the default-deny-compatible NetworkPolicy, the Deployment running `llz reconcile`,
+# its Service + ServiceMonitor (the scrape path), and the alerting rules.
+# See docs/designs/kube-native-reconciler.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - network-policy.yaml
+  - deployment.yaml
+  - service.yaml
+  - servicemonitor.yaml
+  - prometheusrule.yaml
