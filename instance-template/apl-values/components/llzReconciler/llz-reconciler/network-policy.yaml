@@ -45,3 +45,12 @@ spec:
     - ports:
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 6443 }
+    # OpenBao API (:8200) for the --reconcile-openbao-gauges sampler (seal-status +
+    # credential-age). The OpenBao ingress side is opened by the chart's
+    # allowedClientPods entry for this pod (llz-openbao-platform 0.1.14).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llz-openbao
+      ports:
+        - { protocol: TCP, port: 8200 }

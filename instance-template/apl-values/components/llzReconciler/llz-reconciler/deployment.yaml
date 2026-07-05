@@ -43,25 +43,26 @@ spec:
       containers:
         - name: reconcile
           image: <@ llz_image_ref @>
-          # ROLLOUT BATCH 1: observe-only gauges + the two zero-wiring driving
-          # reconcilers (leader-gated, idempotent alongside their CronJobs, which
-          # stay until these prove out):
-          #   --reconcile-argo-nudge  (Applications RBAC already granted; no extra env)
-          #   --reconcile-sc-demote   (StorageClass RBAC already granted; no extra env)
-          # STILL OFF here — they need per-env env/secrets/NetworkPolicy (batch 2):
+          # ENABLED: observe-only gauges + the leader-gated driving reconcilers that
+          # need no per-env secrets — argo-nudge, sc-demote (batch 1) — plus the
+          # read-only openbao-gauges (batch 2: seal-status + credential-age; its
+          # OpenBao :8200 egress is in the NetworkPolicy and its ingress is opened
+          # by the chart's allowedClientPods entry; the `reconciler` k8s-auth role
+          # ships from bao-configure). Idempotent/read-only alongside the CronJobs,
+          # which stay until each proves out.
+          # STILL OFF — need per-env env + the ESO-synced LINODE_TOKEN Secret +
+          # Linode-API NetworkPolicy egress (a later batch):
           #   --reconcile-cidr-firewall  (NODE_NAME via downward API + LINODE_TOKEN)
           #   --reconcile-volume-labels  (REGION_SHORT + LINODE_TOKEN)
           #   --reconcile-linode-creds   (REGION, OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)
           #   --reconcile-harbor
-          #   --reconcile-openbao-gauges (OpenBao :8200 egress + allowedClientPods)
-          # Enabling a Linode-touching one also needs the ESO-synced LINODE_TOKEN
-          # Secret + NetworkPolicy egress to the Linode API (TCP/443).
           args:
             - reconcile
             - --metrics-addr=:8080
             - --sample-interval=30
             - --reconcile-argo-nudge
             - --reconcile-sc-demote
+            - --reconcile-openbao-gauges
           env:
             # Leader-election identity + Lease namespace (downward API). Only used
             # when a driving reconciler is enabled; harmless otherwise.
@@ -69,6 +70,13 @@ spec:
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            # OpenBao endpoint for the openbao-gauges sampler. VAULT_SKIP_VERIFY-style
+            # posture: OpenBao's serving cert is signed by its private CA, so the
+            # in-cluster consumers connect insecure (the code's HTTPClientInsecure);
+            # traffic stays on the pod network. OPENBAO_ADDR has a code default but
+            # is set explicitly for legibility.
+            - name: OPENBAO_ADDR
+              value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
           ports:
             - name: metrics
               containerPort: 8080

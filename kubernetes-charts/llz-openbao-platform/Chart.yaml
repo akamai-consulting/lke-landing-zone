@@ -38,7 +38,10 @@ type: application
 # 0.1.13: v6 migration — swap the retired `llz-external-secrets` client namespace
 #         for apl-core 6.x's core ESO namespace `external-secrets` in the OpenBao
 #         :8200 allow list (the self-managed ESO controller is gone).
-version: 0.1.13
+# 0.1.14: allow the in-cluster reconciler pod (llz-reconciler/llz-reconciler)
+#         through the OpenBao :8200 ingress NetworkPolicy for its
+#         --reconcile-openbao-gauges sampler (seal-status + credential-age).
+version: 0.1.14
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

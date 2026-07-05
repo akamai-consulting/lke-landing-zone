@@ -75,6 +75,12 @@ platform:
         name: harbor-robot-provisioner
       - namespace: llz-linode-cred-rotator
         name: linode-cred-rotator
+      # The in-cluster reconciler's --reconcile-openbao-gauges sampler logs into
+      # OpenBao (Kubernetes-auth `reconciler` role) to read seal-status +
+      # credential-rotation metadata for its gauges. Harmless when that flag is
+      # off (the pod simply never opens the :8200 connection).
+      - namespace: llz-reconciler
+        name: llz-reconciler
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
     observabilityNamespace: llz-observability
 
