@@ -41,6 +41,12 @@ func reconcileCmd() *cobra.Command {
 			"env/secrets its CronJob had):\n" +
 			"  --reconcile-argo-nudge     re-trigger terminally-failed Argo Applications, watch-\n" +
 			"                             driven (was the argo-resync-nudger CronJob)\n" +
+			"  --reconcile-cidr-firewall  reconcile the CIDR-firewall ConfigMap on Node change\n" +
+			"                             (was the cidrFirewall CronJob; needs NODE_NAME,\n" +
+			"                             LINODE_TOKEN)\n" +
+			"  --reconcile-volume-labels  rename Linode Volumes for bound PVs, watch-driven (was\n" +
+			"                             the linode-volume-labeler CronJob; needs REGION_SHORT,\n" +
+			"                             LINODE_TOKEN)\n" +
 			"  --reconcile-linode-creds   rotate in-cluster Linode object-storage keys (was\n" +
 			"                             the linodeCredRotator CronJob; needs REGION,\n" +
 			"                             OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)\n" +
@@ -60,6 +66,10 @@ func reconcileCmd() *cobra.Command {
 				leaderElection:      o.leaderElection,
 				reconcileArgoNudge:  o.reconcileArgoNudge,
 				argoNudgeResync:     time.Duration(o.argoNudgeResync) * time.Second,
+				reconcileCidrFW:     o.reconcileCidrFW,
+				cidrFWResync:        time.Duration(o.cidrFWResync) * time.Second,
+				reconcileVolLabels:  o.reconcileVolLabels,
+				volLabelsResync:     time.Duration(o.volLabelsResync) * time.Second,
 				reconcileLinodeCred: o.reconcileLinodeCred,
 				linodeCredInterval:  time.Duration(o.linodeCredInterval) * time.Second,
 				reconcileHarbor:     o.reconcileHarbor,
@@ -73,6 +83,10 @@ func reconcileCmd() *cobra.Command {
 	f.BoolVar(&o.leaderElection, "leader-election", true, "gate the driving reconcilers on a coordination.k8s.io Lease (single writer)")
 	f.BoolVar(&o.reconcileArgoNudge, "reconcile-argo-nudge", false, "enable the argo-resync-nudger watch reconciler (default off: the CronJob owns it)")
 	f.IntVar(&o.argoNudgeResync, "argo-nudge-resync", 300, "resync-floor seconds for the argo-nudge reconciler (watch drives the immediacy)")
+	f.BoolVar(&o.reconcileCidrFW, "reconcile-cidr-firewall", false, "enable the CIDR-firewall discovery watch reconciler (default off: the CronJob owns it)")
+	f.IntVar(&o.cidrFWResync, "cidr-firewall-resync", 600, "resync-floor seconds for the cidr-firewall reconciler (Node watch drives immediacy)")
+	f.BoolVar(&o.reconcileVolLabels, "reconcile-volume-labels", false, "enable the Linode Volume relabeler watch reconciler (default off: the CronJob owns it)")
+	f.IntVar(&o.volLabelsResync, "volume-labels-resync", 3600, "resync-floor seconds for the volume-labels reconciler (PV watch drives immediacy)")
 	f.BoolVar(&o.reconcileLinodeCred, "reconcile-linode-creds", false, "enable the Linode credential-rotation reconciler (default off: the CronJob owns it)")
 	f.IntVar(&o.linodeCredInterval, "linode-creds-interval", 3600, "seconds between Linode credential-rotation resync passes")
 	f.BoolVar(&o.reconcileHarbor, "reconcile-harbor", false, "enable the Harbor-provisioner reconciler (default off: the CronJob owns it)")
@@ -88,6 +102,10 @@ type reconcileFlags struct {
 	leaderElection      bool
 	reconcileArgoNudge  bool
 	argoNudgeResync     int
+	reconcileCidrFW     bool
+	cidrFWResync        int
+	reconcileVolLabels  bool
+	volLabelsResync     int
 	reconcileLinodeCred bool
 	linodeCredInterval  int
 	reconcileHarbor     bool
@@ -100,6 +118,10 @@ type reconcileOpts struct {
 	leaderElection      bool
 	reconcileArgoNudge  bool
 	argoNudgeResync     time.Duration
+	reconcileCidrFW     bool
+	cidrFWResync        time.Duration
+	reconcileVolLabels  bool
+	volLabelsResync     time.Duration
 	reconcileLinodeCred bool
 	linodeCredInterval  time.Duration
 	reconcileHarbor     bool
@@ -109,7 +131,8 @@ type reconcileOpts struct {
 // drivingEnabled reports whether any state-mutating reconciler is on — the case
 // that needs a single writer, hence leader election.
 func (o reconcileOpts) drivingEnabled() bool {
-	return o.reconcileArgoNudge || o.reconcileLinodeCred || o.reconcileHarbor
+	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolLabels ||
+		o.reconcileLinodeCred || o.reconcileHarbor
 }
 
 // nodeGetter is the slice of the kube client the observe sampler needs.
@@ -212,6 +235,38 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			run:      gate(func(ctx context.Context) error { return reconcileArgoNudge(ctx, client) }),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, argoAppsPath, "", func(kube.WatchEvent) error {
+					onEvent()
+					return nil
+				})
+			},
+		})
+	}
+	if o.reconcileCidrFW {
+		recs = append(recs, reconciler{
+			name:     "cidr-firewall",
+			interval: o.cidrFWResync,
+			// Same logic the cidrFirewall CronJob runs (`ci discover-firewall-config`);
+			// reads NODE_NAME/LINODE_TOKEN from env. Node changes shift which instance
+			// (and thus which firewall/VPC) backs this pod, so watch Nodes.
+			run: gate(func(ctx context.Context) error { return runCIDiscoverFirewallConfig(ctx) }),
+			watch: func(ctx context.Context, onEvent func()) error {
+				return client.Watch(ctx, "/api/v1/nodes", "", func(kube.WatchEvent) error {
+					onEvent()
+					return nil
+				})
+			},
+		})
+	}
+	if o.reconcileVolLabels {
+		recs = append(recs, reconciler{
+			name:     "volume-labels",
+			interval: o.volLabelsResync,
+			// Go port of the linode-volume-labeler relabel.sh (`ci relabel-volumes`);
+			// reads REGION_SHORT/LINODE_TOKEN from env. A new PV means a new Linode
+			// Volume to relabel, so watch PersistentVolumes.
+			run: gate(func(ctx context.Context) error { return runRelabelVolumes(ctx) }),
+			watch: func(ctx context.Context, onEvent func()) error {
+				return client.Watch(ctx, "/api/v1/persistentvolumes", "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})

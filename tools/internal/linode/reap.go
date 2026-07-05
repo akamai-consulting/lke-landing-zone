@@ -208,6 +208,25 @@ func (c *Client) ListFirewalls(ctx context.Context) ([]map[string]any, error) {
 	return c.listAllPages(ctx, "/v4/networking/firewalls")
 }
 
+// UpdateVolumeLabel PUTs a new UI label onto a Linode Volume. A 404 — the volume
+// was deleted out-of-band while a PV still references it — is treated as success
+// (nothing to relabel), matching relabel.sh's skip-404 behavior.
+func (c *Client) UpdateVolumeLabel(ctx context.Context, id uint64, label string) error {
+	url := fmt.Sprintf("%s/v4/volumes/%d", c.base, id)
+	resp, err := c.put(ctx, url, map[string]string{"label": label})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("PUT /v4/volumes/%d returned %d: %s", id, resp.StatusCode, readBody(resp))
+	}
+	return nil
+}
+
 // DeleteResourcePath DELETEs an absolute API path (e.g. "/v4/nodebalancers/123").
 // A 2xx or 404 (already gone) is success — matching lib-linode.sh's linode_delete.
 func (c *Client) DeleteResourcePath(ctx context.Context, path string) error {

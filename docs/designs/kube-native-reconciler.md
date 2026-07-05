@@ -31,25 +31,30 @@
   watches Argo CD Applications and re-triggers the terminally-failed ones (pure
   Go, `MergePatch`; off by default behind `--reconcile-argo-nudge`; the CronJob
   stays until it proves out). Reacts in seconds vs. the CronJob's up-to-3-min poll.
-- **Leader election (this branch).** A minimal `coordination.k8s.io` Lease elector
+- **Leader election (#154).** A minimal `coordination.k8s.io` Lease elector
   ([`reconcile_leader.go`](../../tools/cmd/llz/reconcile_leader.go)) over the
   hand-rolled kube client — acquire/renew/take-over/step-down, no client-go
   leaderelection. The observe sampler (read-only) runs on every replica; the
-  **driving** reconcilers (argo-nudge, linode-creds, harbor) are gated to no-op
-  unless this replica holds the lease, so a rollout window or a scaled-up
-  Deployment can't double-drive. `--leader-election` (default on) only engages when
-  a driving reconciler is enabled; a `llz_reconcile_leader` gauge + a no-leader
-  alert surface which replica is driving. **This makes #152's timed reconcilers +
-  #153's nudger safe to actually turn on.**
+  **driving** reconcilers are gated to no-op unless this replica holds the lease,
+  so a rollout window or a scaled-up Deployment can't double-drive. `--leader-election`
+  (default on) only engages when a driving reconciler is enabled; a
+  `llz_reconcile_leader` gauge + a no-leader alert surface which replica is driving.
+- **Node/PV watch reconcilers (this branch).** Two more watch reconcilers, both
+  off by default:
+  - **cidr-firewall** — watches Nodes and runs the existing `ci discover-firewall-config`
+    (already pure Go — the CronJob's only "kubectl" was an annotation-key string)
+    to reconcile the CIDR-firewall ConfigMap.
+  - **volume-labels** — the Go **port of `relabel.sh`** (new `ci relabel-volumes`
+    + `internal/linode.UpdateVolumeLabel`): watches PersistentVolumes and renames
+    each bound Linode-CSI Volume to `<region>-<ns>-<pvc>` (lists account Volumes
+    once vs the script's per-volume GET). Retires the 103-line embedded-shell blob
+    from the `untestable-budget` once the CronJob switches to the new verb.
 
 Still to land: the full convergence gauge (port the `internal/health` classifiers
 to feed `llz_convergence_state`) and the credential-age / seal / ESO gauges that
-retire the daily port-forward checks; the remaining watch reconcilers —
-cidrFirewall (Node watch) and volumeTagReconciler (PV watch), each a mechanical
-wrap of its existing `ci` verb once its stray `kubectl` call is ported to
-`kube.Client`; sc-default-patcher is a **deletion candidate**, not a conversion
-(the Kyverno `sc-default-demote` mutate-on-write policy already does it durably).
-This doc remains the design gate; it touches the
+retire the daily port-forward checks; **sc-default-patcher is a deletion
+candidate**, not a conversion (the Kyverno `sc-default-demote` mutate-on-write
+policy already does it durably). This doc remains the design gate; it touches the
 [convergence contract](../architecture/convergence-contract.md) and gets the same
 rigor the [linode-credential-rotator](linode-credential-rotator.md) and
 [apl-core-v6-migration](apl-core-v6-migration.md) designs got.

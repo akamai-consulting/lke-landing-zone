@@ -97,6 +97,9 @@ func ciCmd() *cobra.Command {
 	// seed-harbor-registry-s3); the in-cluster rotator (linodeCredRotator
 	// CronJob, slim llz image) owns rotation after first boot.
 	c.AddCommand(ciMintBootstrapObjkeysCmd(), ciRotateLinodeCredsCmd(), ciTempObjkeyCmd())
+	// Linode Volume relabeler — the Go port of the linode-volume-labeler
+	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
+	c.AddCommand(ciRelabelVolumesCmd())
 	// The narrow in-cluster PAT, same one-owner shape: mint-bootstrap-pat seeds
 	// the first token at bootstrap; rotate-incluster-pat (registered with the
 	// rotation commands above) re-mints it monthly.
