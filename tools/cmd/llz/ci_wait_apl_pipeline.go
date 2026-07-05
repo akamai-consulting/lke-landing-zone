@@ -178,8 +178,17 @@ func waitForAplResource(d aplGateDeps, s aplWaitStage) error {
 	return nil
 }
 
-// pollAplExist calls cond immediately, then every 10s until it returns true or
-// the budget elapses (mirrors the bash `until kubectl get … sleep 10` loop).
+// aplExistPollInterval is the gap between existence checks. On a green run each
+// stage's resource appears mid-interval, so this interval is the per-stage
+// overshoot added to the real readiness time; across the 6 stages a 10s interval
+// cost up to ~60s of pure polling latency on the bootstrap critical path. 5s
+// halves that while keeping the kube-apiserver GET load trivial (it was ported
+// from the bash `sleep 10`, whose value was arbitrary, not load-driven).
+const aplExistPollInterval = 5 * time.Second
+
+// pollAplExist calls cond immediately, then every aplExistPollInterval until it
+// returns true or the budget elapses (ports the bash `until kubectl get … sleep`
+// loop).
 func pollAplExist(d aplGateDeps, budget time.Duration, cond func() bool) bool {
 	deadline := d.now().Add(budget)
 	for {
@@ -189,7 +198,7 @@ func pollAplExist(d aplGateDeps, budget time.Duration, cond func() bool) bool {
 		if !d.now().Before(deadline) {
 			return false
 		}
-		d.sleep(10 * time.Second)
+		d.sleep(aplExistPollInterval)
 	}
 }
 
