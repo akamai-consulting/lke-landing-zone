@@ -793,10 +793,11 @@ jobs:
   #                                    once carried is retired — the cidrFirewall
   #                                    component self-discovers in-cluster)
   #   4. bootstrap-openbao            (OpenBao init/unseal/seed + ESO sync, then
-  #                                    its own `harbor` + `converge` jobs run in
-  #                                    parallel — the final health gate moved INTO
-  #                                    the reusable workflow so converge no longer
-  #                                    serializes behind Harbor robot provisioning)
+  #                                    the final `llz ci converge` health gate runs
+  #                                    inline at the tail of the same `bootstrap`
+  #                                    job — folded in from its former standalone
+  #                                    `converge` job to drop a redundant
+  #                                    container-init + checkout + kubeconfig fetch)
   #
   # Step 4 also gates the PreSync timeout window concern — by running it
   # immediately as part of the same workflow, there's no chance the operator
