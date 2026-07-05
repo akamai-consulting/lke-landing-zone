@@ -58,11 +58,24 @@
   day-2, continuously-observable, Alertmanager-routable form of the same
   classification (a `LLZClusterNotConverged` alert fires on a sustained hard-fail).
   It **observes** — drives nothing (contract-clean).
+- **Health gauges (this branch).** The observe reconciler also publishes the
+  readiness signals the daily `scheduled-checks` jobs port-forward for
+  ([`reconcile_health.go`](../../tools/cmd/llz/reconcile_health.go)), all over the
+  Kubernetes API (no OpenBao wiring): `llz_eso_store_ready` (the openbao
+  ClusterSecretStore, via the shared `ClassifyReady` predicate),
+  `llz_certificates_{total,not_ready}` (cert-manager Certificates, same predicate),
+  and `llz_openbao_pods_{ready,total}` (a sealed OpenBao pod reads NotReady — the
+  seal proxy). Alerts: `LLZESOStoreNotReady`, `LLZCertificatesNotReady`,
+  `LLZOpenBaoNotAvailable`. This is what lets **Phase 3** demote the CIDR-fragile
+  `openbao-health` (ESO) + `certmanager-health` external checks to belt-and-suspenders.
 
-Still to land: the credential-age / seal / ESO gauges that retire the daily
-port-forward checks; **sc-default-patcher is a deletion candidate**, not a
-conversion (the Kyverno `sc-default-demote` mutate-on-write policy already does it
-durably). This doc remains the design gate; it touches the
+Still to land: the **credential-age** rotation-SLA gauges
+(`llz_credential_age_days`, retiring `lke-admin-rotation-health` /
+`loki-objkey-rotation-health`) and the **precise OpenBao seal** gauge — both need
+the OpenBao egress/auth wiring (a chart allowed-client + `bao-configure` role), a
+scoped follow-up. **sc-default-patcher is a deletion candidate**, not a conversion
+(the Kyverno `sc-default-demote` mutate-on-write policy already does it durably).
+This doc remains the design gate; it touches the
 [convergence contract](../architecture/convergence-contract.md) and gets the same
 rigor the [linode-credential-rotator](linode-credential-rotator.md) and
 [apl-core-v6-migration](apl-core-v6-migration.md) designs got.

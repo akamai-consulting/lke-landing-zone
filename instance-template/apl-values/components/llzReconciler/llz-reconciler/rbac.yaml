@@ -2,7 +2,9 @@
 #
 # All grants below back reconcilers that are OFF by default — the ClusterRole is
 # the union, but no verb is exercised until its reconciler's flag is set.
-#   observe        — Nodes get/list/watch (/api/v1/nodes readiness gauges).
+#   observe        — Nodes get/list/watch (readiness); argoproj.io/applications
+#                    (convergence gauge, shared with argo-nudge); and, for the
+#                    health gauges, ClusterSecretStores + Certificates + pods (read).
 #   argo-nudge     — argoproj.io/applications get/list/watch/patch (re-trigger the
 #                    terminally-failed ones).
 #   cidr-firewall  — Nodes (shared) + configmaps get/create/patch + deployments
@@ -38,6 +40,17 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch"]
+  # observe health gauges (read-only): ESO store readiness, cert-manager
+  # Certificate readiness, and OpenBao pod readiness (the seal proxy).
+  - apiGroups: ["external-secrets.io"]
+    resources: ["clustersecretstores"]
+    verbs: ["get"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
   # cidr-firewall: write the firewall-config ConfigMap + restart the controller.
   - apiGroups: [""]
     resources: ["configmaps"]
