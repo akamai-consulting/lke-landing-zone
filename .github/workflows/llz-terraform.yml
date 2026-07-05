@@ -57,6 +57,11 @@ on:
         required: false
         type: string
         default: ''
+      assert_loki:
+        description: 'Forwarded to bootstrap-openbao: after converge, assert Loki is S3-backed (`llz ci assert-loki`). Default false; the release-e2e gate sets it true.'
+        required: false
+        type: boolean
+        default: false
     secrets:
       # required: false even though a green run genuinely needs these. Instances
       # keep TF_STATE_* / LINODE_API_TOKEN as *environment*-scoped secrets (one
@@ -842,6 +847,7 @@ jobs:
       region: ${{ inputs.region }}
       instance_repo: ${{ inputs.instance_repo }}
       template-ref: ${{ inputs.template-ref }}
+      assert_loki: ${{ inputs.assert_loki }}
     # secrets: inherit forwards ALL repository + environment-scoped secrets
     # from the caller. bootstrap-openbao.yml's job declares
     # `environment: infra-${{ inputs.region }}` so env-scoped secrets resolve

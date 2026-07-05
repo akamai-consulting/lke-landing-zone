@@ -98,6 +98,11 @@ on:
         required: false
         type: string
         default: main
+      assert_loki:
+        description: 'After converge, also assert Loki is bootstrapped + S3-backed (`llz ci assert-loki`) in the bootstrap job. Default false (normal instances); the release-e2e gate sets it true so the check runs inside the converge that already holds cluster access, instead of a separate validate pass dispatching cluster-health.yml.'
+        required: false
+        type: boolean
+        default: false
     secrets:
       # required: false even though a green bootstrap genuinely needs these.
       # This workflow is reached via a nested `workflow_call` under
@@ -717,6 +722,18 @@ jobs:
       # is a generous ceiling — anything longer is a real stall, not slow rollout.
       - name: Wait for cluster to converge
         run: llz ci converge --budget 600
+
+      # E2E validation gate, folded in from release-e2e.yml's former `validate`
+      # job: that job dispatched cluster-health.yml only to run `llz ci converge`
+      # (redundant with the poll above) + `llz ci assert-loki`. Running assert-loki
+      # HERE — inside the converge that already holds cluster access — drops that
+      # whole extra job (its container-init + checkout + kubeconfig/ACL cycle) from
+      # the e2e critical path. Default-off, so normal instance bootstraps are
+      # unchanged; only the release-e2e provision dispatch passes assert_loki=true.
+      # Uses the job's default kubeconfig ($HOME/.kube/config), same as the poll.
+      - name: Assert Loki is bootstrapped and S3-backed
+        if: ${{ inputs.assert_loki }}
+        run: llz ci assert-loki
 
       # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx logs
       # WHILE the cluster is still up — before the ACL revoke below cuts apiserver

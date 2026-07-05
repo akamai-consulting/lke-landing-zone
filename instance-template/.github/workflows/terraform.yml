@@ -60,6 +60,11 @@ on:
         description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:object-storage'
         required: false
         type: string
+      assert_loki:
+        description: 'After converge, assert Loki is S3-backed (llz ci assert-loki). Default false; the release-e2e gate dispatches with this true so the check runs inside the bootstrap converge instead of a separate health pass.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -80,4 +85,7 @@ jobs:
       module: ${{ inputs.module }}
       region: ${{ inputs.region }}
       confirm_destroy: ${{ inputs.confirm_destroy }}
+      # Default false via the reusable's input; release-e2e's provision dispatch
+      # passes assert_loki=true so the E2E Loki assertion runs in the converge job.
+      assert_loki: ${{ inputs.assert_loki || false }}
     secrets: inherit
