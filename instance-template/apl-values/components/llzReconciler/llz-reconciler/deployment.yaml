@@ -16,6 +16,15 @@ metadata:
   name: llz-reconciler
   namespace: llz-reconciler
   annotations:
+    # Wave 6: apply AFTER the wave-5 linode-api-token ExternalSecret
+    # (externalsecret.yaml). The container has a hard secretKeyRef on that Secret,
+    # so this Deployment must not apply until the Secret exists. If it applies
+    # first (the default wave 0), Argo's wave-gating blocks the ENTIRE manifest
+    # sync waiting for this Deployment to go Healthy — which it never can without
+    # the wave-5 secret — starving every other wave-5 ExternalSecret in the sync
+    # (harbor-registry-s3, loki-object-store) and wedging harbor + loki too.
+    # Ordering the workload after its secret breaks that inversion.
+    argocd.argoproj.io/sync-wave: "6"
     ignore-check.kube-linter.io/env-value-from: "linode-api-token Secret is created at runtime by ESO (externalsecret.yaml); not a static manifest the linter can resolve"
     ignore-check.kube-linter.io/read-secret-from-env-var: "the volume-labels reconciler reads LINODE_TOKEN via env to authenticate to the Linode API; no file-mount path without a binary rewrite"
 spec:
