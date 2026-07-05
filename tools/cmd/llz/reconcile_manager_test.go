@@ -146,3 +146,110 @@ func TestRunManagerConcurrentReconcilers(t *testing.T) {
 		t.Error("reconciler b metrics missing")
 	}
 }
+
+func TestWatchReconcilerEventTriggersRun(t *testing.T) {
+	defer swapBackoff(5 * time.Millisecond)()
+	reg := metrics.NewRegistry()
+	var runs atomic.Int64
+	events := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	rec := reconciler{
+		name:     "w",
+		interval: 0, // no resync floor — isolate the event path
+		run:      func(context.Context) error { runs.Add(1); return nil },
+		watch: func(ctx context.Context, onEvent func()) error {
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-events:
+					onEvent()
+				}
+			}
+		},
+	}
+	done := make(chan struct{})
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}); close(done) }()
+
+	waitFor(t, &runs, 1) // initial pass
+	events <- struct{}{}
+	events <- struct{}{}
+	waitFor(t, &runs, 2) // at least one event-triggered pass (bursts may coalesce)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("watch reconciler did not stop on cancel")
+	}
+}
+
+func TestWatchReconcilerResyncFloor(t *testing.T) {
+	defer swapBackoff(5 * time.Millisecond)()
+	reg := metrics.NewRegistry()
+	var runs atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// A watch that never fires an event and never returns until ctx: only the
+	// resync floor should drive reconciles.
+	rec := reconciler{
+		name:     "w",
+		interval: 15 * time.Millisecond,
+		run:      func(context.Context) error { runs.Add(1); return nil },
+		watch:    func(ctx context.Context, _ func()) error { <-ctx.Done(); return ctx.Err() },
+	}
+	done := make(chan struct{})
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}); close(done) }()
+
+	waitFor(t, &runs, 3) // 1 initial + resync ticks
+	cancel()
+	<-done
+}
+
+func TestWatchReconcilerReconnectsAndCatchesUp(t *testing.T) {
+	defer swapBackoff(5 * time.Millisecond)()
+	reg := metrics.NewRegistry()
+	var runs, watchCalls atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// A watch that returns immediately (stream "closed") each time; the loop must
+	// re-establish it and fire a catch-up reconcile between attempts.
+	rec := reconciler{
+		name:     "w",
+		interval: 0,
+		run:      func(context.Context) error { runs.Add(1); return nil },
+		watch: func(ctx context.Context, _ func()) error {
+			watchCalls.Add(1)
+			return nil // simulate a clean stream close
+		},
+	}
+	done := make(chan struct{})
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}); close(done) }()
+
+	waitFor(t, &watchCalls, 2) // proves re-establishment after a close
+	waitFor(t, &runs, 2)       // initial + at least one reconnect catch-up
+	cancel()
+	<-done
+}
+
+// swapBackoff sets watchReconnectBackoff for a test and returns a restorer.
+func swapBackoff(d time.Duration) func() {
+	old := watchReconnectBackoff
+	watchReconnectBackoff = d
+	return func() { watchReconnectBackoff = old }
+}
+
+// waitFor blocks until counter reaches want (or fails after 2s).
+func waitFor(t *testing.T, counter *atomic.Int64, want int64) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for counter.Load() < want {
+		select {
+		case <-deadline:
+			t.Fatalf("counter reached %d, want >= %d", counter.Load(), want)
+		default:
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+}

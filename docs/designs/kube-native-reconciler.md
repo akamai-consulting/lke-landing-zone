@@ -14,20 +14,32 @@
   ([`Client.Watch`](../../tools/internal/kube/kube.go) — the Kubernetes watch API
   over raw HTTP, no client-go; borrows only the transport so a long-lived stream
   isn't guillotined by the client's 30s timeout, ctx governs its lifetime).
-- **Phase 2 (this branch).** The reconciler **manager**
+- **Phase 2 (merged, #152).** The reconciler **manager**
   ([`reconcile_manager.go`](../../tools/cmd/llz/reconcile_manager.go)) — runs N
-  named reconcilers as concurrent resync loops with a uniform per-reconciler
-  metric set (`llz_reconcile_{runs_total,errors_total,up,last_success_timestamp_seconds,last_duration_seconds}{reconciler}`).
+  named reconcilers with a uniform per-reconciler metric set
+  (`llz_reconcile_{runs_total,errors_total,up,last_success_timestamp_seconds,last_duration_seconds}{reconciler}`).
   The observe sampler is now one such reconciler; the two **timed reconcilers** —
   Linode credential rotation and Harbor provisioning — are folded off their
   CronJobs as bounded-resync loops calling the same `ci`-verb logic, **off by
-  default** (each behind a flag; the CronJobs stay until it proves out per-env).
+  default**.
+- **Watch reconcilers (this branch).** The manager gains an **event-triggered**
+  loop ([`runWatchReconcilerLoop`](../../tools/cmd/llz/reconcile_manager.go)): a
+  reconciler with a `watch` closure runs level-based on each watch event (via
+  `Client.Watch`), plus a resync floor, re-establishing the stream on close. The
+  first watch reconciler — **argo-resync-nudger**
+  ([`reconcile_argo_nudge.go`](../../tools/cmd/llz/reconcile_argo_nudge.go)) —
+  watches Argo CD Applications and re-triggers the terminally-failed ones (pure
+  Go, `MergePatch`; off by default behind `--reconcile-argo-nudge`; the CronJob
+  stays until it proves out). Reacts in seconds vs. the CronJob's up-to-3-min poll.
 
 Still to land: the full convergence gauge (port the `internal/health` classifiers
 to feed `llz_convergence_state`) and the credential-age / seal / ESO gauges that
-retire the daily port-forward checks; the pure-watch reconcilers (argo-resync-nudger,
-sc-default-patcher, cidrFirewall, volumeTagReconciler) that consume `Client.Watch`;
-and leader election before any timed reconciler is enabled fleet-wide. This doc
+retire the daily port-forward checks; the remaining watch reconcilers —
+cidrFirewall (Node watch) and volumeTagReconciler (PV watch), each a mechanical
+wrap of its existing `ci` verb once its stray `kubectl` call is ported to
+`kube.Client`; sc-default-patcher is a **deletion candidate**, not a conversion
+(the Kyverno `sc-default-demote` mutate-on-write policy already does it durably);
+and leader election before any driving reconciler is enabled fleet-wide. This doc
 remains the design gate; it touches the
 [convergence contract](../architecture/convergence-contract.md) and gets the same
 rigor the [linode-credential-rotator](linode-credential-rotator.md) and

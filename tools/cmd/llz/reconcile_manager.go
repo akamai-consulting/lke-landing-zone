@@ -29,15 +29,27 @@ import (
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 )
 
-// reconciler is one named resync loop.
+// reconciler is one named reconcile loop. If watch is nil it runs purely on its
+// interval (the timed reconcilers); if watch is set it is event-triggered (the
+// Phase 1 watch reconcilers), with interval serving as a resync floor.
 type reconciler struct {
 	name     string
 	interval time.Duration
 	// run performs one reconcile pass. It must be idempotent and safe to call
-	// repeatedly (the timed reconcilers are due-based: a pass with nothing due is
-	// a no-op). A non-nil error marks the pass failed (up=0, errors_total++).
+	// repeatedly (level-based: it re-reads state and acts, so a pass with nothing
+	// to do is a no-op). A non-nil error marks the pass failed (up=0, errors_total++).
 	run func(ctx context.Context) error
+	// watch, if set, makes this reconciler event-triggered: the manager keeps the
+	// stream open (re-establishing on close) and calls onEvent per frame; each
+	// event (plus every interval as a resync floor, plus a reconnect catch-up)
+	// runs one `run` pass. watch must honour ctx (return when it is cancelled).
+	watch func(ctx context.Context, onEvent func()) error
 }
+
+// watchReconnectBackoff is the pause before re-establishing a dropped watch
+// stream, so a persistently-failing watch does not hot-loop. A package var so
+// tests can shrink it.
+var watchReconnectBackoff = time.Second
 
 // runManager runs every reconciler concurrently until ctx is cancelled, then
 // waits for their loops to exit. now is injected so tests drive time; production
@@ -48,10 +60,69 @@ func runManager(ctx context.Context, reg *metrics.Registry, now func() time.Time
 		wg.Add(1)
 		go func(r reconciler) {
 			defer wg.Done()
-			runReconcilerLoop(ctx, reg, now, r)
+			if r.watch != nil {
+				runWatchReconcilerLoop(ctx, reg, now, r)
+			} else {
+				runReconcilerLoop(ctx, reg, now, r)
+			}
 		}(r)
 	}
 	wg.Wait()
+}
+
+// runWatchReconcilerLoop runs r level-based: an initial pass, then one pass per
+// trigger — a watch event, a resync-floor tick, or a reconnect catch-up. The
+// watch is a notification channel only (missed events are covered by the resync
+// floor and the re-list every pass does), so bursts coalesce into a single
+// pending reconcile via the size-1 trigger channel.
+func runWatchReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func() time.Time, r reconciler) {
+	trigger := make(chan struct{}, 1)
+	fire := func() {
+		select {
+		case trigger <- struct{}{}:
+		default: // a reconcile is already pending — coalesce
+		}
+	}
+
+	// Watcher goroutine: keep a stream open, firing per event; on any close (clean
+	// or error) fire a catch-up pass and re-establish after a backoff.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for ctx.Err() == nil {
+			_ = r.watch(ctx, fire)
+			if ctx.Err() != nil {
+				return
+			}
+			fire() // stream dropped mid-run — reconcile to catch anything missed
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(watchReconnectBackoff):
+			}
+		}
+	}()
+
+	reconcileOnce(ctx, reg, now, r) // initial pass
+
+	var tick <-chan time.Time
+	if r.interval > 0 {
+		t := time.NewTicker(r.interval)
+		defer t.Stop()
+		tick = t.C
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return
+		case <-trigger:
+			reconcileOnce(ctx, reg, now, r)
+		case <-tick:
+			reconcileOnce(ctx, reg, now, r)
+		}
+	}
 }
 
 // runReconcilerLoop runs r once immediately (so metrics populate before the first
