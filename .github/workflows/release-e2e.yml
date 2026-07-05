@@ -20,15 +20,17 @@ name: Release E2E — provision, validate, destroy a real cluster
 #      an instance (instance-template/* → root; the scaffold already names its TF
 #      roots terraform-iac-bootstrap/), and force-push it to the E2E instance repo.
 #   2. provision  — `gh workflow run terraform.yml` (apply, module=all,
-#      region=e2e) in that repo + `gh run watch --exit-status`. terraform.yml's
-#      own chain (apply-cluster → cluster-bootstrap → bootstrap-openbao →
-#      converge) IS the wait-for-deploy + health gate.
-#   3. validate   — dispatch the instance's cluster-health.yml in gate mode
-#      (fail-on-unhealthy + assert-loki) and watch it. Runs IN the instance so it
-#      sees the real layout + infra-e2e secrets.
+#      region=e2e, assert_loki=true) in that repo + `gh run watch --exit-status`.
+#      terraform.yml's own chain (apply-cluster → cluster-bootstrap →
+#      bootstrap-openbao → converge) IS the wait-for-deploy + health gate; the
+#      converge job also runs `llz ci assert-loki` (Loki bootstrapped + S3-backed),
+#      so a green provision means "converged AND Loki is S3-backed".
+#   3. (health + Loki validation is FOLDED INTO provision via assert_loki — the
+#      former separate `validate` job that dispatched cluster-health.yml is gone;
+#      its only net-new check, assert-loki, now runs inside the converge above.)
 #   4. teardown   — `gh workflow run terraform.yml` (destroy) + watch. ALWAYS
 #      runs once provisioning started, so a paid cluster is never leaked.
-#   5. gate       — pass only if provision + validate + teardown all succeeded.
+#   5. gate       — pass only if provision + teardown all succeeded.
 #
 # ── Prerequisites (org-specific; this workflow cannot create them) ────────────
 # A dedicated throwaway E2E instance repo (its default branch is overwritten
@@ -415,40 +417,32 @@ jobs:
         run: |
           set -euo pipefail
           ACTION=apply; [[ "${DRY_RUN}" == "true" ]] && ACTION=plan
+          # assert_loki=true folds the former `validate` job in: bootstrap-openbao's
+          # converge job runs `llz ci assert-loki` (Loki bootstrapped + S3-backed)
+          # inside the cluster access it already holds. Harmless on a plan (the
+          # apply-gated bootstrap chain doesn't run).
           .github/scripts/dispatch-and-watch.sh \
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
-            --field action="${ACTION}" --field module=all --field region="${E2E_ENV}"
+            --field action="${ACTION}" --field module=all --field region="${E2E_ENV}" \
+            --field assert_loki=true
 
-  # ── 3. Validate health + Loki (runs inside the instance) ─────────────────────
-  validate:
-    name: Validate health + Loki
-    needs: provision
-    if: ${{ needs.provision.result == 'success' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Dispatch cluster-health.yml (E2E gate mode) and watch
-        env:
-          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
-        run: |
-          set -euo pipefail
-          # cluster-health.yml defaults to report-only; the E2E gate must opt
-          # into the failing assertions explicitly (fail-on-unhealthy +
-          # assert-loki), or an unhealthy cluster / non-S3 Loki would pass green.
-          .github/scripts/dispatch-and-watch.sh \
-            --repo "${INSTANCE_REPO}" --workflow cluster-health.yml \
-            --field region="${E2E_ENV}" \
-            --field fail-on-unhealthy=true \
-            --field assert-loki=true
+  # ── 3. Health + Loki validation — FOLDED INTO provision ──────────────────────
+  # The former `validate` job dispatched the instance's cluster-health.yml in gate
+  # mode (fail-on-unhealthy + assert-loki). But `fail-on-unhealthy` just re-ran
+  # `llz ci converge`, which the provision chain (bootstrap-openbao's converge job)
+  # already ran — so the only net-new check was `llz ci assert-loki`. That now runs
+  # inside the converge job (release-e2e dispatches terraform.yml with
+  # assert_loki=true → llz-terraform.yml → llz-bootstrap-openbao.yml), reusing the
+  # cluster access it already holds. Dropping the separate job removes its
+  # container-init + checkout + fresh kubeconfig/ACL cycle (~1-2m) from the gate.
+  # The provision job's success now means "converged AND Loki is S3-backed".
 
   # ── 4. Teardown — ALWAYS, so a paid cluster is never leaked ───────────────────
   teardown:
     name: Teardown (destroy + sweep)
-    needs: [instantiate, provision, validate]
-    # Run whenever provisioning actually started, regardless of validate; skip
-    # only for a dry run (plan only — nothing was created).
+    needs: [instantiate, provision]
+    # Run whenever provisioning actually started; skip only for a dry run (plan
+    # only — nothing was created).
     if: ${{ always() && needs.provision.result != 'skipped' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -456,9 +450,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # keep_cluster debug escape hatch: leave the cluster running so a human can
-      # kubectl into it (the `validate` job's instance run already holds the full
-      # `llz ci health` dump; what teardown otherwise destroys is the live cluster
-      # to poke at). Mutually exclusive with the destroy step below.
+      # kubectl into it (provision's converge job already dumped the full
+      # `llz ci health`/converge state; what teardown otherwise destroys is the live
+      # cluster to poke at). Mutually exclusive with the destroy step below.
       - name: Keep cluster for debugging (SKIP destroy)
         if: ${{ env.KEEP_CLUSTER == 'true' }}
         run: |
@@ -485,25 +479,26 @@ jobs:
   # ── 5. Gate — the release passes only if every stage above was green ─────────
   gate:
     name: E2E gate
-    needs: [llz-functional, provision, validate, teardown]
+    needs: [llz-functional, provision, teardown]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Require llz-functional + provision + validate + teardown to have succeeded
+      - name: Require llz-functional + provision + teardown to have succeeded
         env:
           F: ${{ needs.llz-functional.result }}
           P: ${{ needs.provision.result }}
-          V: ${{ needs.validate.result }}
           T: ${{ needs.teardown.result }}
         run: |
           set -euo pipefail
-          echo "llz-functional=$F provision=$P validate=$V teardown=$T (dry_run=${DRY_RUN})"
+          echo "llz-functional=$F provision=$P teardown=$T (dry_run=${DRY_RUN})"
           fail=0
-          # F + P gate both modes (F is no-cloud); V + T only when a cluster was built.
+          # F + P gate both modes (F is no-cloud). provision now also asserts Loki
+          # is S3-backed (assert_loki=true → bootstrap-openbao converge), so the
+          # former separate `validate` result folds into P. T only when a cluster
+          # was built.
           [[ "$F" == "success" ]] || { echo "::error::llz-functional $F"; fail=1; }
           [[ "$P" == "success" ]] || { echo "::error::provision $P"; fail=1; }
           if [[ "${DRY_RUN}" != "true" ]]; then
-            [[ "$V" == "success" ]] || { echo "::error::validate $V"; fail=1; }
             [[ "$T" == "success" ]] || { echo "::error::teardown $T — a cluster may have leaked; check ${INSTANCE_REPO} state"; fail=1; }
           fi
           exit $fail
