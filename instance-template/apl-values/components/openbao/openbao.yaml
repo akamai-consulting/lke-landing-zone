@@ -30,7 +30,7 @@ spec:
   source:
     repoURL: ghcr.io/<@ upstream_org @>/charts
     chart: llz-openbao-platform
-    targetRevision: 0.1.13
+    targetRevision: 0.1.14
     helm:
       # LOAD-BEARING: the upstream subchart derives the StatefulSet name
       # (platform-openbao → pod platform-openbao-0, which the bootstrap workflow

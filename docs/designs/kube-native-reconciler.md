@@ -1,12 +1,17 @@
 # Design: in-cluster reconciler + convergence metrics surface (watch-based)
 
-**Status:** Phases 0–2 landed incrementally; **rollout batch 1 in progress** —
-the `llzReconciler` component is now **default-on** (fleet-wide) running observe-only
-gauges + the two zero-wiring driving reconcilers (`--reconcile-argo-nudge`,
-`--reconcile-sc-demote`), leader-gated and idempotent alongside their still-present
-CronJobs. Batch 2 wires + enables the Linode/OpenBao reconcilers (they need per-env
-env/secrets/NetworkPolicy); CronJob deletions follow once each proves out per the
-"keep the CronJob until a green e2e" discipline.
+**Status:** Phases 0–2 landed; **rollout underway**. The `llzReconciler` component
+is **default-on** (fleet-wide, e2e-proven in #161) running observe-only gauges +
+the leader-gated driving reconcilers that need no per-env secrets —
+`--reconcile-argo-nudge`, `--reconcile-sc-demote` (batch 1) — plus the read-only
+`--reconcile-openbao-gauges` (batch 2: OpenBao `:8200` egress in the reconciler
+NetworkPolicy + the pod added to `llz-openbao-platform`'s `allowedClientPods`
+[chart 0.1.14] + the `reconciler` k8s-auth role that already ships). All are
+idempotent/read-only alongside their still-present CronJobs. Remaining to enable:
+the Linode-touching reconcilers (`cidr-firewall`, `volume-labels`, `linode-creds`,
+`harbor`) — they need the ESO-synced `LINODE_TOKEN` Secret + per-env env (a
+render-patch) + Linode-API NetworkPolicy egress. CronJob deletions follow once each
+reconciler proves out per the "keep the CronJob until a green e2e" discipline.
 
 - **Phase 0 (merged, #150).** The observe-only foundation:
   [`internal/metrics`](../../tools/internal/metrics/metrics.go) (a dependency-free
