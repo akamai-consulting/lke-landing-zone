@@ -85,6 +85,38 @@ spec:
           annotations:
             summary: cluster is not converged (hard-failed)
             description: The reconciler classifies the cluster as hard-failed (an Argo Application the reconciler can't resolve on its own). See llz_convergence_apps_failed.
+        - alert: LLZESOStoreNotReady
+          # The openbao ClusterSecretStore is not Ready — every platform
+          # ExternalSecret binds to it, so a sustained not-Ready stalls secret sync.
+          expr: max(llz_eso_store_ready{namespace="llz-reconciler"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: openbao ClusterSecretStore is not Ready
+            description: The ESO ClusterSecretStore the platform ExternalSecrets bind to has been not-Ready for 15m.
+        - alert: LLZCertificatesNotReady
+          # One or more cert-manager Certificates stuck not-Ready.
+          expr: max(llz_certificates_not_ready{namespace="llz-reconciler"}) > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: cert-manager Certificates are not Ready
+            description: '{{ $value }} cert-manager Certificate(s) have been not-Ready for 30m.'
+        - alert: LLZOpenBaoNotAvailable
+          # Fewer OpenBao pods Ready than exist — a sealed pod reads NotReady, so a
+          # sustained shortfall usually means OpenBao is sealed (or crashed).
+          expr: (min(llz_openbao_pods_ready{namespace="llz-reconciler"}) < min(llz_openbao_pods_total{namespace="llz-reconciler"})) and (min(llz_openbao_pods_total{namespace="llz-reconciler"}) > 0)
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: an OpenBao pod is not Ready (possibly sealed)
+            description: Not all OpenBao pods pass their readiness probe; a sealed pod reads NotReady.
         - alert: LLZReconcilerNoLeader
           # The llz_reconcile_leader gauge is published only when a driving
           # reconciler is enabled (leader election is running). If it exists and no

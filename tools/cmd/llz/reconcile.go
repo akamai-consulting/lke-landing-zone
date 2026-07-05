@@ -233,7 +233,10 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			if err := sampleNodes(ctx, client, reg); err != nil {
 				return err
 			}
-			return sampleConvergence(ctx, client, reg)
+			if err := sampleConvergence(ctx, client, reg); err != nil {
+				return err
+			}
+			return sampleHealth(ctx, client, reg)
 		},
 	}}
 	if o.reconcileArgoNudge {
