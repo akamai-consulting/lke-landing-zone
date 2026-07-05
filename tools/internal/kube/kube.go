@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -156,6 +157,78 @@ func (c *Client) MergePatch(ctx context.Context, path string, patch any) error {
 		return fmt.Errorf("PATCH %s returned %d: %s", path, status, truncate(out))
 	}
 	return nil
+}
+
+// WatchEvent is one frame of a Kubernetes watch stream: an event type plus the
+// object it concerns. Type is ADDED | MODIFIED | DELETED | BOOKMARK | ERROR (an
+// ERROR frame's Object is a metav1.Status — e.g. a 410 Gone when the requested
+// resourceVersion has aged out and the caller must relist).
+type WatchEvent struct {
+	Type   string         `json:"type"`
+	Object map[string]any `json:"object"`
+}
+
+// Watch opens a single watch stream on a list path (e.g.
+// /apis/argoproj.io/v1alpha1/applications) and calls fn for every frame until the
+// server closes the stream (returns nil), fn returns an error (returned as-is),
+// or ctx is cancelled (returns ctx.Err()). resourceVersion may be "" to begin
+// from the current state.
+//
+// This is the low-level primitive: it does NOT resume across a server-side close
+// or relist on a 410 — a server may end a watch at any time, so the caller owns
+// the outer loop (list → Watch from the list's resourceVersion → on clean return,
+// relist + watch again; on a 410 ERROR frame, relist from scratch).
+//
+// It deliberately does not use the Client's shared *http.Client: that carries a
+// 30s Timeout (NewInCluster / the NewClient default) which would guillotine a
+// long-lived watch. Watch borrows only the transport (so the in-cluster CA / test
+// TLS still apply) and lets ctx govern the stream's lifetime instead.
+func (c *Client) Watch(ctx context.Context, path, resourceVersion string, fn func(WatchEvent) error) error {
+	q := url.Values{}
+	q.Set("watch", "true")
+	if resourceVersion != "" {
+		q.Set("resourceVersion", resourceVersion)
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path+sep+q.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	watchClient := &http.Client{Transport: c.http.Transport} // no Timeout; ctx is the deadline
+	resp, err := watchClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("watch %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("watch %s returned %d: %s", path, resp.StatusCode, truncate(body))
+	}
+
+	// The watch body is a stream of concatenated JSON WatchEvent objects; a
+	// json.Decoder reads them one at a time, blocking for more until the server
+	// closes (EOF) or ctx cancellation unblocks the read with an error.
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var ev WatchEvent
+		if err := dec.Decode(&ev); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("watch %s: decoding stream: %w", path, err)
+		}
+		if err := fn(ev); err != nil {
+			return err
+		}
+	}
 }
 
 // truncate bounds an error-payload echo to keep messages readable.
