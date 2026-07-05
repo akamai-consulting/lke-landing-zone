@@ -201,7 +201,11 @@ jobs:
     permissions:
       contents: read
     environment: infra-${{ inputs.region }}
-    timeout-minutes: 30
+    # 45m = the old bootstrap 30m + the converge gate's 15m: the final
+    # convergence poll (formerly its own `converge` job) now runs at the tail of
+    # THIS job, reusing the one cluster-access/ACL cycle instead of paying a fresh
+    # container-init + checkout + kubeconfig fetch. See "Final convergence gate".
+    timeout-minutes: 45
     env:
       # github.com is the default host, so GH_TOKEN alone authenticates.
       # GH_REPO lets gh target the repo directly instead of shelling out to git
@@ -215,6 +219,10 @@ jobs:
       # github-dispatch-token standby skip, and the cross-region CA extract gate below.
       HA_ROLE: ${{ needs.resolve.outputs.role }}
       HA_PEER: ${{ needs.resolve.outputs.peer }}
+      # S3 backend creds for the merged convergence gate's cluster-access
+      # terraform-init (the former `converge` job set these at job level).
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     outputs:
       ca_available: ${{ steps.secondary_ca.outputs.ca_available }}
       ca_b64: ${{ steps.secondary_ca.outputs.ca_b64 }}
@@ -265,6 +273,10 @@ jobs:
       # ── Kubeconfig + control-plane ACL ─────────────────────────────────────────
       # github.com hosted runners have a dynamic egress IP not pre-included in
       # the LKE-E control-plane ACL; open it before any kubectl, revoke at end.
+      # register-runner-lease leases the IP in the firewall-runner-acl ConfigMap so
+      # the EAA controller doesn't evict it mid-run — required because the merged
+      # convergence gate at the tail of this job polls for up to 10m (formerly the
+      # separate `converge` job set this lease on its own cluster-access).
       - name: Cluster access (kubeconfig + runner ACL)
         uses: ./_llz-template/instance-template/.github/actions/cluster-access
         with:
@@ -274,6 +286,7 @@ jobs:
           kubeconfig-path:       $HOME/.kube/config
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ env.REGION }}
+          register-runner-lease: 'true'
 
       # ── OpenBao serving TLS — issued by cert-manager, no bootstrap seed ─────────
       # The out-of-band self-signed openbao-tls seed that used to live here has
@@ -624,149 +637,40 @@ jobs:
           && echo "Root token revoked." \
           || echo "::warning::Root token revocation failed — delete OPENBAO_ROOT_TOKEN from the infra-${REGION} environment secrets manually to prevent credential reuse"
 
-      # On failure, snapshot Argo CD Application sync state BEFORE the ACL revoke
-      # cuts apiserver access. The converge job's identical step never runs when
-      # THIS job fails (a failed `needs` skips it), which left the 2026-07-04
-      # platform-bootstrap wave wedge ("waiting for healthy state of
-      # NetworkPolicy/…") invisible: three e2e runs burned before a kept cluster
-      # exposed it. Best-effort — diagnostics must never change the outcome.
-      - name: Diagnose Argo CD sync state (on failure)
-        if: failure() || cancelled()
-        # THIS job's cluster-access writes the kubeconfig to $HOME/.kube/config
-        # (the $RUNNER_TEMP/platform-<region>.yaml path belongs to the converge
-        # job) — expand at shell time, env: values are not shell-expanded.
-        run: KUBECONFIG="$HOME/.kube/config" llz ci diagnose-argocd || true
-
-      # ── Fail job if any non-optional secrets were missing ──────────────────────
-      # Runs after token revocation so cleanup always happens first. Exits 1 to
-      # surface the error in the GitHub Actions UI when BOOTSTRAP_ERRORS was set
-      # by a seed step above.
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ env.REGION }}
-
-      - name: Fail on bootstrap errors
-        if: always()
-        run: |
-          if [ "${BOOTSTRAP_ERRORS:-}" = "true" ]; then
-            echo "::error::Bootstrap completed with errors — one or more required secrets are missing. See annotations above."
-            exit 1
-          fi
-
-  # ── Harbor provisioning — MOVED IN-CLUSTER ──────────────────────────────────
-  # The `harbor` job that ran here (its own cluster-access + ACL cycle, a
-  # root-token re-acquire via the recovery-key quorum, a kubectl port-forward to
-  # harbor-core, ensure-project, provision-harbor-robots, smoke) has been
-  # REMOVED. The active/standalone path is now the harbor-robot-provisioner
-  # CronJob (apl-values/components/harbor/, `llz ci harbor-provisioner` on the
-  # slim llz image): it talks to harbor-core.harbor.svc directly (the
-  # port-forward existed only because HARBOR_URL is internal DNS the runner
-  # cannot resolve), writes OpenBao through the scoped harbor-provisioner
-  # Kubernetes-auth role (no root token), publishes the repo-level HARBOR_*
-  # secrets natively over the GitHub API, and smoke-tests every tick. Robot
-  # rotation is now "delete the robot in Harbor UI" — the next tick recreates
-  # and re-publishes it. The STANDBY half (replicating the active's published
-  # credentials) is the "Seed standby Harbor robot credentials" step in the
-  # `bootstrap` job above.
-
-  # ── Final convergence gate ───────────────────────────────────────────────────
-  # MOVED here from llz-terraform.yml's `converge` job; depends ONLY on the core
-  # `bootstrap`. Cluster health does not depend on the Harbor robot credentials
-  # (platform pods pull from ghcr.io on a fresh bootstrap; the registry-S3 seed +
-  # post-seed registry rollout that DO gate health stayed in `bootstrap` — and
-  # the in-cluster harbor-robot-provisioner converges the robots on its own
-  # cadence), so there is no reason to serialize
-  # convergence behind Harbor provisioning. `llz ci converge` exits 0 (converged)
-  # or 1 (budget exhausted / check error); per
-  # docs/architecture/convergence-contract.md this gate is what makes "the
-  # workflow passed" mean "the cluster works". Gated on bootstrap success only
-  # (NOT outputs.available) so an OpenBao that never came up still surfaces as a
-  # convergence failure rather than a silently-skipped gate.
-  converge:
-    name: Verify cluster convergence (${{ inputs.region }})
-    needs: [resolve, bootstrap]
-    if: needs.bootstrap.result == 'success'
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    environment: infra-${{ inputs.region }}
-    permissions:
-      contents: read
-    # converge's own --budget is 10m (600s); the job timeout sits ABOVE it so a
-    # killed job never masks converge's verdict with an opaque "timed out".
-    # 15m = the 10m budget + ~5m for checkout / cluster-access / failure diagnostics.
-    timeout-minutes: 15
-    env:
-      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
-      # fetch-kubeconfig (inside cluster-access) self-inits the cluster module's
-      # S3 backend and reads kubeconfig_raw — no separate terraform-init needed.
-      # Opens this runner's egress IP in the control-plane ACL before the converge
-      # kubectl loop (revoked at job end). register-runner-lease leases the IP in
-      # the firewall-runner-acl ConfigMap so the EAA controller doesn't evict it
-      # mid-poll (this gate polls for up to 30m).
-      - name: Cluster access (kubeconfig + runner ACL + llz)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          kubeconfig-path:       $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ env.REGION }}
-          register-runner-lease: 'true'
+      # ── Final convergence gate (formerly the separate `converge` job) ──────────
+      # MERGED here from its own job: convergence runs serially after this
+      # bootstrap on the same cluster with the same infra-<region> environment, so
+      # a standalone job only bought a second container-init + checkout + kubeconfig
+      # fetch (~1.5m of pure overhead on the e2e critical path). Running it inline
+      # reuses THIS job's cluster-access/ACL/lease. `llz ci converge` exits 0
+      # (converged) or 1 (budget exhausted / check error); per
+      # docs/architecture/convergence-contract.md this gate is what makes "the
+      # workflow passed" mean "the cluster works". All steps use the container's
+      # default kubeconfig ($HOME/.kube/config, written by cluster-access above) —
+      # the same one the bootstrap kubectl steps use.
+      #
+      # NOTE (behavior change vs. the old split): a convergence failure now fails
+      # THIS job, so the standby-only provision-peer-ca (which `needs: bootstrap`)
+      # is skipped on a converge failure instead of still running. That HA path is
+      # not exercised by release-e2e (standalone); deferring peer-CA provisioning
+      # until a clean bootstrap is the intended trade.
 
       # PREFLIGHT — clear the verify-llz-image-signature race before the gate.
-      #
       # verify-llz-image-signature (Enforce, sync-wave -15) blocks the in-cluster
-      # llz CronJobs (linode-cred-rotator, harbor-robot-provisioner) until Kyverno
-      # can verify the keyless cosign signature on the llz image. On a freshly-built
-      # main sha the Sigstore/Rekor + GHCR signature can lag the cluster's FIRST
-      # admission attempt during cluster-bootstrap; that denial fails the
-      # platform-bootstrap sync, and because Argo backs off to 5m retries (and does
-      # not auto-retry a failed sync to the same revision), the cascade
-      # (harbor-docker-config ExternalSecret; harbor-registry / loki object-store
-      # CreateContainerConfigError) is STILL stuck when this gate starts — even
-      # though the signature is verifiable by now. So confirm the cluster can admit
-      # the CronJob, then force platform-bootstrap to re-attempt admission (nudge-argo).
-      #
-      # The check is a server-side dry-run of the ACTUAL rendered CronJob: it runs
-      # Kyverno's autogen-cronjob-verify-llz-keyless rule — the exact admission path
-      # that failed — against the cluster's own verify path (registry creds, egress,
-      # Rekor), with the workload's real namespace / serviceAccount / securityContext,
-      # so an unrelated pod-hardening policy can't false-fail it the way a bare Pod
-      # probe could. The retry loop absorbs signature-propagation lag (a not-yet-
-      # visible signature simply keeps denying until it lands). We deliberately do
-      # NOT also run a runner-side `cosign verify`: it needs a cosign binary the slim
-      # CI image lacks, and it only proves the signature is published — not that the
-      # CLUSTER can verify it, which this dry-run tests directly. Only nudge once the
-      # dry-run admits; best-effort — the converge poll below is the verdict.
-      #
-      # The CronJob manifest is read from the RENDERED instance checkout (source of
-      # truth), NOT reconstructed from template-ref: template-ref is a release tag
-      # (vX.Y.Z) for normal instances and llz_image_ref defaults to :latest, so the
-      # CronJobs use ghcr.io/<org>/llz:latest there and ghcr.io/<org>/llz:sha-<sha>
-      # only under release-e2e. A released :latest is long-signed, so this passes
-      # first try.
+      # llz CronJobs until Kyverno can verify the keyless cosign signature on the
+      # llz image; on a freshly-built main sha the Sigstore/Rekor + GHCR signature
+      # can lag the cluster's first admission attempt, failing the platform-bootstrap
+      # sync (Argo backs off to 5m retries and does not auto-retry a failed sync to
+      # the same revision), so confirm the cluster can admit the CronJob, then force
+      # platform-bootstrap to re-attempt admission (nudge-argo). The CronJob manifest
+      # is read from the RENDERED instance checkout (source of truth). Only nudge once
+      # the dry-run admits; best-effort — the converge poll below is the verdict.
+      # No `available` gate (unlike the seed/configure steps above): the old
+      # standalone converge job ran on bootstrap success REGARDLESS of OpenBao
+      # availability, so an OpenBao that never came up still surfaces as a
+      # convergence FAILURE here rather than a silently-skipped gate. Default
+      # success() gating preserves that — it runs unless an earlier step failed.
       - name: Preflight — confirm the cluster admits the llz CronJob, then re-sync
-        env:
-          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
         run: |
           set -uo pipefail
           # The rendered CronJob manifests that run the in-cluster llz image — the
@@ -808,35 +712,35 @@ jobs:
             echo "::warning::skipping the re-sync nudge — llz CronJob admission not confirmed; converge will report the verdict"
           fi
 
+      # Explicit --budget bounds the convergence poll to 10m, well below the job's
+      # timeout-minutes. A healthy fresh bootstrap converges in a few minutes; 10m
+      # is a generous ceiling — anything longer is a real stall, not slow rollout.
       - name: Wait for cluster to converge
-        env:
-          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-        # Explicit --budget bounds the convergence poll to 10m, well below the job's
-        # timeout-minutes (15). A healthy fresh bootstrap converges in a few minutes;
-        # 10m is a generous ceiling — anything longer is a real stall, not slow rollout.
         run: llz ci converge --budget 600
 
       # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx logs
-      # WHILE the cluster is still up — before teardown and before the revoke below
-      # cuts apiserver access. Every command is `|| true` so it never alters the
-      # outcome (kubectl is already in the image).
+      # WHILE the cluster is still up — before the ACL revoke below cuts apiserver
+      # access. Every command is `|| true` so it never alters the outcome.
       - name: Capture loki-gateway diagnostics (on convergence failure)
         if: failure()
-        env:
-          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
         run: 'echo "== loki-gateway nginx.conf resolver =="; kubectl -n monitoring get cm loki-gateway -o "jsonpath={.data.nginx\.conf}" 2>/dev/null | grep -i resolver || true; for p in $(kubectl -n monitoring get pods -o name 2>/dev/null | grep loki-gateway); do echo "== $p =="; kubectl -n monitoring logs "$p" -c nginx --tail=50 2>/dev/null || true; kubectl -n monitoring logs "$p" -c nginx --tail=50 --previous 2>/dev/null || true; kubectl -n monitoring describe "$p" 2>/dev/null | tail -30 || true; done'
 
-      # On a convergence stall, snapshot the Argo CD Application states + the phase1
-      # platform-app-ca CA chain before teardown. `|| cancelled()` so a cancelled
-      # run still captures; all probes are best-effort inside the llz command.
+      # Snapshot the Argo CD Application states + the phase1 platform-app-ca CA chain
+      # before teardown. `|| cancelled()` so a cancelled run still captures; all
+      # probes are best-effort inside the llz command. Also covers a bootstrap-step
+      # failure (this is now one job) — the reason the old standalone Argo-diagnostics
+      # step existed in this job at all.
       - name: Diagnose convergence failure (Argo apps + cert-manager CA chain)
         if: failure() || cancelled()
-        env:
-          KUBECONFIG: ${{ runner.temp }}/platform-${{ env.REGION }}.yaml
-        run: llz ci diagnose-argocd
+        run: llz ci diagnose-argocd || true
 
-      # Revoke BEFORE deleting the kubeconfig: revoke releases the ConfigMap lease
-      # via kubectl (needs the kubeconfig) before the Linode-API call cuts access.
+      # ── Fail job if any non-optional secrets were missing ──────────────────────
+      # Runs after token revocation so cleanup always happens first. Exits 1 to
+      # surface the error in the GitHub Actions UI when BOOTSTRAP_ERRORS was set
+      # by a seed step above.
+      # Revoke BEFORE the job ends: passes the kubeconfig so the runner-lease in the
+      # firewall-runner-acl ConfigMap is released via kubectl before the Linode-API
+      # call cuts apiserver access (we register-runner-lease on cluster-access above).
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
@@ -844,11 +748,31 @@ jobs:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ env.REGION }}
-          kubeconfig:   $RUNNER_TEMP/platform-${{ env.REGION }}.yaml
+          kubeconfig:   $HOME/.kube/config
 
-      - name: Cleanup kubeconfig
+      - name: Fail on bootstrap errors
         if: always()
-        run: rm -f "$RUNNER_TEMP/platform-${REGION}.yaml"
+        run: |
+          if [ "${BOOTSTRAP_ERRORS:-}" = "true" ]; then
+            echo "::error::Bootstrap completed with errors — one or more required secrets are missing. See annotations above."
+            exit 1
+          fi
+
+  # ── Harbor provisioning — MOVED IN-CLUSTER ──────────────────────────────────
+  # The `harbor` job that ran here (its own cluster-access + ACL cycle, a
+  # root-token re-acquire via the recovery-key quorum, a kubectl port-forward to
+  # harbor-core, ensure-project, provision-harbor-robots, smoke) has been
+  # REMOVED. The active/standalone path is now the harbor-robot-provisioner
+  # CronJob (apl-values/components/harbor/, `llz ci harbor-provisioner` on the
+  # slim llz image): it talks to harbor-core.harbor.svc directly (the
+  # port-forward existed only because HARBOR_URL is internal DNS the runner
+  # cannot resolve), writes OpenBao through the scoped harbor-provisioner
+  # Kubernetes-auth role (no root token), publishes the repo-level HARBOR_*
+  # secrets natively over the GitHub API, and smoke-tests every tick. Robot
+  # rotation is now "delete the robot in Harbor UI" — the next tick recreates
+  # and re-publishes it. The STANDBY half (replicating the active's published
+  # credentials) is the "Seed standby Harbor robot credentials" step in the
+  # `bootstrap` job above.
 
   # ── Provision the standby CA cert in its active peer's cluster ───────────────
   # Runs only after a standby bootstrap that successfully extracted the CA cert.
