@@ -110,6 +110,10 @@ func ciCmd() *cobra.Command {
 	// Static guard for the PR #142 wedge class: negative-sync-wave kinds that
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
 	c.AddCommand(ciWaveHealthGuardCmd())
+	// Static guard for the #163 wedge class: a workload that hard-depends on a
+	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
+	// wedges the sync (Makefile wave-dependency-guard).
+	c.AddCommand(ciWaveDependencyGuardCmd())
 	// Offline apl-core schema validation (helm template) — the check
 	// helm_release.apl runs at apply time, shifted left into scaffold-check.
 	c.AddCommand(ciAplSchemaValidateCmd())
