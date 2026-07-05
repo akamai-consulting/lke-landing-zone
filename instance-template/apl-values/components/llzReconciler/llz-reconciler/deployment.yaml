@@ -43,22 +43,25 @@ spec:
       containers:
         - name: reconcile
           image: <@ llz_image_ref @>
-          # Observe-only by default. Every optional reconciler stays OFF here and
-          # its CronJob remains the owner until it proves out per-env:
-          #   --reconcile-argo-nudge     (Applications RBAC already granted; no extra env)
-          #   --reconcile-cidr-firewall  (needs NODE_NAME via downward API + LINODE_TOKEN)
-          #   --reconcile-volume-labels  (needs REGION_SHORT + LINODE_TOKEN)
-          #   --reconcile-sc-demote      (no extra env; StorageClass RBAC already granted)
-          #   --reconcile-linode-creds   (needs REGION, OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)
+          # ROLLOUT BATCH 1: observe-only gauges + the two zero-wiring driving
+          # reconcilers (leader-gated, idempotent alongside their CronJobs, which
+          # stay until these prove out):
+          #   --reconcile-argo-nudge  (Applications RBAC already granted; no extra env)
+          #   --reconcile-sc-demote   (StorageClass RBAC already granted; no extra env)
+          # STILL OFF here — they need per-env env/secrets/NetworkPolicy (batch 2):
+          #   --reconcile-cidr-firewall  (NODE_NAME via downward API + LINODE_TOKEN)
+          #   --reconcile-volume-labels  (REGION_SHORT + LINODE_TOKEN)
+          #   --reconcile-linode-creds   (REGION, OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)
           #   --reconcile-harbor
-          #   --reconcile-openbao-gauges (read-only seal + credential-age)
+          #   --reconcile-openbao-gauges (OpenBao :8200 egress + allowedClientPods)
           # Enabling a Linode-touching one also needs the ESO-synced LINODE_TOKEN
-          # Secret + NetworkPolicy egress to the Linode API (TCP/443). Enabling
-          # --reconcile-openbao-gauges needs NetworkPolicy egress to llz-openbao
-          # :8200 + adding this pod to the OpenBao chart's
-          # platform.networkPolicy.allowedClientPods; the OpenBao `reconciler`
-          # k8s-auth role is already provisioned by `llz ci bao-configure`.
-          args: ["reconcile", "--metrics-addr=:8080", "--sample-interval=30"]
+          # Secret + NetworkPolicy egress to the Linode API (TCP/443).
+          args:
+            - reconcile
+            - --metrics-addr=:8080
+            - --sample-interval=30
+            - --reconcile-argo-nudge
+            - --reconcile-sc-demote
           env:
             # Leader-election identity + Lease namespace (downward API). Only used
             # when a driving reconciler is enabled; harmless otherwise.

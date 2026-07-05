@@ -212,14 +212,16 @@ var Components = []Component{
 		// default-deny-compatible NetworkPolicy, read-only RBAC, alert rules).
 		// DependsOn observability: the ServiceMonitor + PrometheusRule CRDs come
 		// from kube-prometheus-stack, and there is no point publishing metrics no
-		// Prometheus scrapes. Default-disabled — enabling it is what lets Phase 3
-		// demote the CI health port-forwards to belt-and-suspenders. Phase 1 adds
-		// the watch-based reconcilers under the same Deployment. See
-		// docs/designs/kube-native-reconciler.md.
+		// Prometheus scrapes. See docs/designs/kube-native-reconciler.md.
+		//
+		// DEFAULT-ON (rollout batch 1): the Deployment runs observe-only + the two
+		// zero-wiring driving reconcilers (argo-nudge, sc-demote — flags in the
+		// component deployment.yaml). Both are RBAC-ready and idempotent alongside
+		// the CronJobs they will eventually replace, so this is safe fleet-wide; the
+		// Linode/OpenBao reconcilers stay off (their flags need per-env env/secrets).
 		Name:              "llzReconciler",
 		DependsOn:         []string{"observability"},
 		ManifestResources: []string{"llz-reconciler"},
-		DefaultDisabled:   true,
 	},
 }
 

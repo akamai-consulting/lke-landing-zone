@@ -1,6 +1,12 @@
 # Design: in-cluster reconciler + convergence metrics surface (watch-based)
 
-**Status:** Phases 0–2 landed incrementally.
+**Status:** Phases 0–2 landed incrementally; **rollout batch 1 in progress** —
+the `llzReconciler` component is now **default-on** (fleet-wide) running observe-only
+gauges + the two zero-wiring driving reconcilers (`--reconcile-argo-nudge`,
+`--reconcile-sc-demote`), leader-gated and idempotent alongside their still-present
+CronJobs. Batch 2 wires + enables the Linode/OpenBao reconcilers (they need per-env
+env/secrets/NetworkPolicy); CronJob deletions follow once each proves out per the
+"keep the CronJob until a green e2e" discipline.
 
 - **Phase 0 (merged, #150).** The observe-only foundation:
   [`internal/metrics`](../../tools/internal/metrics/metrics.go) (a dependency-free
