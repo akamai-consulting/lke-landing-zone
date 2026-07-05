@@ -17,8 +17,13 @@ actually closes the scrape path) + Service + ServiceMonitor + PrometheusRule
 renders 9 objects, `promtool` accepts the rules, kube-linter passes.
 Still to land in Phase 0: the full convergence gauge (port the `internal/health`
 classifiers to feed `llz_convergence_state`) and the credential-age / seal / ESO
-gauges that retire the daily port-forward checks. Phase 1 adds the
-`internal/kube` watch primitive + the reconcilers. This doc remains the design
+gauges that retire the daily port-forward checks. Phase 1 has begun on
+`feat/kube-native-reconciler-phase1`: the `internal/kube` watch primitive
+([`Client.Watch`](../../tools/internal/kube/kube.go) — the Kubernetes watch API
+over raw HTTP, no client-go; borrows only the transport so a long-lived stream
+isn't guillotined by the client's 30s timeout, ctx governs its lifetime) has
+landed with tests; the reconcilers that consume it are next. This doc remains the
+design
 gate; it touches the [convergence contract](../architecture/convergence-contract.md)
 and gets the same rigor the [linode-credential-rotator](linode-credential-rotator.md)
 and [apl-core-v6-migration](apl-core-v6-migration.md) designs got.
