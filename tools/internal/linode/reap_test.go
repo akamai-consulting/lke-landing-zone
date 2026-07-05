@@ -1,7 +1,9 @@
 package linode
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 )
 
@@ -124,5 +126,41 @@ func TestVolumeIsCandidate(t *testing.T) {
 	}
 	if !VolumeIsCandidate(true, "pvc-abc", "us-ord", []string{"block-storage"}, "", nil, "8", "block-storage") {
 		t.Error("present required tag should match")
+	}
+}
+
+func TestUpdateVolumeLabel(t *testing.T) {
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/v4/volumes/42" {
+			t.Errorf("%s %s, want PUT /v4/volumes/42", r.Method, r.URL.Path)
+		}
+		var got map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		if got["label"] != "pri-team-data" {
+			t.Errorf("label = %v, want pri-team-data", got["label"])
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	if err := c.UpdateVolumeLabel(context.Background(), 42, "pri-team-data"); err != nil {
+		t.Errorf("UpdateVolumeLabel = %v, want nil", err)
+	}
+}
+
+func TestUpdateVolumeLabel404IsSuccess(t *testing.T) {
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	// A volume deleted out-of-band while a PV still references it — not an error.
+	if err := c.UpdateVolumeLabel(context.Background(), 7, "whatever"); err != nil {
+		t.Errorf("404 should be treated as success, got %v", err)
+	}
+}
+
+func TestUpdateVolumeLabelErrorSurfaces(t *testing.T) {
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	if err := c.UpdateVolumeLabel(context.Background(), 7, "x"); err == nil {
+		t.Error("500 should surface an error")
 	}
 }

@@ -161,15 +161,35 @@ func TestBuildReconcilers(t *testing.T) {
 	// All optional reconcilers enabled.
 	recs = buildReconcilers(reg, client, reconcileOpts{
 		reconcileArgoNudge: true, argoNudgeResync: 5 * time.Minute,
+		reconcileCidrFW: true, cidrFWResync: 10 * time.Minute,
+		reconcileVolLabels: true, volLabelsResync: time.Hour,
 		reconcileLinodeCred: true, linodeCredInterval: time.Hour,
 		reconcileHarbor: true, harborInterval: 5 * time.Minute,
 	}, identity)
-	if got := names(recs); len(got) != 4 || got[1] != "argo-nudge" || got[2] != "linode-creds" || got[3] != "harbor" {
-		t.Fatalf("enabled set = %v, want [observe argo-nudge linode-creds harbor]", got)
+	want := []string{"observe", "argo-nudge", "cidr-firewall", "volume-labels", "linode-creds", "harbor"}
+	if got := names(recs); len(got) != len(want) {
+		t.Fatalf("enabled set = %v, want %v", got, want)
+	} else {
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("reconciler %d = %q, want %q (%v)", i, got[i], want[i], got)
+			}
+		}
 	}
-	// The argo-nudge reconciler is watch-driven.
-	if recs[1].watch == nil {
-		t.Error("argo-nudge should carry a watch closure")
+	// The three watch reconcilers carry a watch closure; the timed ones do not.
+	byName := map[string]reconciler{}
+	for _, r := range recs {
+		byName[r.name] = r
+	}
+	for _, n := range []string{"argo-nudge", "cidr-firewall", "volume-labels"} {
+		if byName[n].watch == nil {
+			t.Errorf("%s should carry a watch closure", n)
+		}
+	}
+	for _, n := range []string{"linode-creds", "harbor"} {
+		if byName[n].watch != nil {
+			t.Errorf("%s should be timed (no watch)", n)
+		}
 	}
 }
 

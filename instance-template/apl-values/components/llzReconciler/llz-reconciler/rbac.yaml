@@ -1,11 +1,17 @@
 # RBAC for the in-cluster reconciler.
 #
-# The observe reconciler reads Nodes (get/list/watch — /api/v1/nodes for the
-# readiness gauges). The argo-nudge reconciler (Phase 1, off by default) watches
-# Argo CD Applications and patches the terminally-failed ones to re-trigger their
-# sync, so it needs get/list/watch + patch on argoproj.io/applications. Grants for
-# the remaining reconcilers (cidrFirewall Nodes, volumeTagReconciler PVs) are
-# added with those reconcilers, not pre-provisioned here.
+# All grants below back reconcilers that are OFF by default — the ClusterRole is
+# the union, but no verb is exercised until its reconciler's flag is set.
+#   observe        — Nodes get/list/watch (/api/v1/nodes readiness gauges).
+#   argo-nudge     — argoproj.io/applications get/list/watch/patch (re-trigger the
+#                    terminally-failed ones).
+#   cidr-firewall  — Nodes (shared) + configmaps get/create/patch + deployments
+#                    get/patch: it writes the firewall-config ConfigMap and
+#                    rollout-restarts the cidr-firewall controller Deployment.
+#                    Cluster-scoped for now (the target namespace is the private
+#                    controller's); tightening to a namespaced Role is a follow-up.
+#   volume-labels  — persistentvolumes get/list/watch (read-only in-cluster; the
+#                    Volume renames go to the Linode API, not Kubernetes).
 #
 # Leader election holds a single coordination.k8s.io Lease in THIS namespace, so
 # that lives in a namespaced Role (below), not the ClusterRole.
@@ -20,13 +26,25 @@ kind: ClusterRole
 metadata:
   name: llz-reconciler
 rules:
+  # observe (readiness) + cidr-firewall (node → instance → firewall) read Nodes.
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  # argo-nudge reconciler: watch Applications and re-trigger the failed ones.
+  # argo-nudge: watch Applications and re-trigger the failed ones.
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
     verbs: ["get", "list", "watch", "patch"]
+  # volume-labels: read PVs to map bound Linode-CSI volumes (renames go to Linode).
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  # cidr-firewall: write the firewall-config ConfigMap + restart the controller.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
