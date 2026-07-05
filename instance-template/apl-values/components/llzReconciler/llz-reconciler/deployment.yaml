@@ -43,6 +43,12 @@ spec:
       containers:
         - name: reconcile
           image: <@ llz_image_ref @>
+          # Observe-only by default. The Phase 2 timed reconcilers
+          # (--reconcile-linode-creds / --reconcile-harbor) stay OFF here: the
+          # linodeCredRotator / harbor-robot-provisioner CronJobs remain the owners
+          # until a reconciler proves out per-env. Enabling one means adding its
+          # flag AND the same env/secrets its CronJob had (REGION, OBJ_CLUSTER,
+          # LINODE_TOKEN, OPENBAO_*, etc.) plus the matching NetworkPolicy egress.
           args: ["reconcile", "--metrics-addr=:8080", "--sample-interval=30"]
           ports:
             - name: metrics

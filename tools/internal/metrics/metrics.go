@@ -6,9 +6,9 @@
 // prometheus/client_golang: the text-exposition format is a handful of lines
 // (# HELP / # TYPE / name{labels} value), so we hand-roll it and keep it
 // unit-testable rather than pull the client library's transitive tree onto the
-// image. Only the gauge type is implemented — the reconciler's surface is a set
-// of point-in-time levels (convergence state, node counts, credential age, last-
-// success timestamps), which are all gauges.
+// image. Two metric types are implemented: gauges (point-in-time levels —
+// convergence state, node counts, credential age, last-success timestamps) and
+// counters (monotonic _total series — per-reconciler run/error counts).
 package metrics
 
 import (
@@ -27,9 +27,12 @@ type Registry struct {
 	families map[string]*family // by metric name
 }
 
-// family is one metric name: its HELP text plus the current value per label set.
+// family is one metric name: its HELP text, its type, plus the current value per
+// label set. A name is registered as exactly one type (the first writer wins on
+// the # TYPE line); SetGauge and AddCounter are the two writers.
 type family struct {
 	help    string
+	typ     string            // "gauge" | "counter"
 	samples map[string]sample // keyed by the rendered label string (e.g. `{a="1"}`)
 }
 
@@ -50,16 +53,39 @@ func NewRegistry() *Registry {
 func (r *Registry) SetGauge(name, help string, labels map[string]string, value float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	f := r.family(name, help, "gauge")
+	rendered := renderLabels(labels)
+	f.samples[rendered] = sample{labels: rendered, value: value}
+}
+
+// AddCounter adds delta to the monotonic counter `name` for the given label set,
+// registering it at 0 first if absent. Use for _total series (runs, errors) so a
+// scrape reports the accumulated count and rate() works. Safe to call
+// concurrently with WriteTo.
+func (r *Registry) AddCounter(name, help string, labels map[string]string, delta float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	f := r.family(name, help, "counter")
+	rendered := renderLabels(labels)
+	s := f.samples[rendered]
+	s.labels = rendered
+	s.value += delta
+	f.samples[rendered] = s
+}
+
+// family returns the metric family for name, creating it with the given type on
+// first use. help updates last-write-wins when non-empty; typ is set once at
+// creation (a name keeps its original type).
+func (r *Registry) family(name, help, typ string) *family {
 	f := r.families[name]
 	if f == nil {
-		f = &family{samples: map[string]sample{}}
+		f = &family{typ: typ, samples: map[string]sample{}}
 		r.families[name] = f
 	}
 	if help != "" {
 		f.help = help
 	}
-	rendered := renderLabels(labels)
-	f.samples[rendered] = sample{labels: rendered, value: value}
+	return f
 }
 
 // WriteTo renders the registry in Prometheus text-exposition format v0.0.4.
@@ -81,7 +107,7 @@ func (r *Registry) WriteTo(w io.Writer) (int64, error) {
 		if f.help != "" {
 			fmt.Fprintf(&b, "# HELP %s %s\n", name, escapeHelp(f.help))
 		}
-		fmt.Fprintf(&b, "# TYPE %s gauge\n", name)
+		fmt.Fprintf(&b, "# TYPE %s %s\n", name, f.typ)
 
 		keys := make([]string, 0, len(f.samples))
 		for k := range f.samples {
