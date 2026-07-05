@@ -22,7 +22,7 @@
   Linode credential rotation and Harbor provisioning — are folded off their
   CronJobs as bounded-resync loops calling the same `ci`-verb logic, **off by
   default**.
-- **Watch reconcilers (this branch).** The manager gains an **event-triggered**
+- **Watch reconcilers (#153).** The manager gains an **event-triggered**
   loop ([`runWatchReconcilerLoop`](../../tools/cmd/llz/reconcile_manager.go)): a
   reconciler with a `watch` closure runs level-based on each watch event (via
   `Client.Watch`), plus a resync floor, re-establishing the stream on close. The
@@ -31,6 +31,16 @@
   watches Argo CD Applications and re-triggers the terminally-failed ones (pure
   Go, `MergePatch`; off by default behind `--reconcile-argo-nudge`; the CronJob
   stays until it proves out). Reacts in seconds vs. the CronJob's up-to-3-min poll.
+- **Leader election (this branch).** A minimal `coordination.k8s.io` Lease elector
+  ([`reconcile_leader.go`](../../tools/cmd/llz/reconcile_leader.go)) over the
+  hand-rolled kube client — acquire/renew/take-over/step-down, no client-go
+  leaderelection. The observe sampler (read-only) runs on every replica; the
+  **driving** reconcilers (argo-nudge, linode-creds, harbor) are gated to no-op
+  unless this replica holds the lease, so a rollout window or a scaled-up
+  Deployment can't double-drive. `--leader-election` (default on) only engages when
+  a driving reconciler is enabled; a `llz_reconcile_leader` gauge + a no-leader
+  alert surface which replica is driving. **This makes #152's timed reconcilers +
+  #153's nudger safe to actually turn on.**
 
 Still to land: the full convergence gauge (port the `internal/health` classifiers
 to feed `llz_convergence_state`) and the credential-age / seal / ESO gauges that
@@ -38,9 +48,8 @@ retire the daily port-forward checks; the remaining watch reconcilers —
 cidrFirewall (Node watch) and volumeTagReconciler (PV watch), each a mechanical
 wrap of its existing `ci` verb once its stray `kubectl` call is ported to
 `kube.Client`; sc-default-patcher is a **deletion candidate**, not a conversion
-(the Kyverno `sc-default-demote` mutate-on-write policy already does it durably);
-and leader election before any driving reconciler is enabled fleet-wide. This doc
-remains the design gate; it touches the
+(the Kyverno `sc-default-demote` mutate-on-write policy already does it durably).
+This doc remains the design gate; it touches the
 [convergence contract](../architecture/convergence-contract.md) and gets the same
 rigor the [linode-credential-rotator](linode-credential-rotator.md) and
 [apl-core-v6-migration](apl-core-v6-migration.md) designs got.

@@ -52,6 +52,13 @@ spec:
           # env/secrets its CronJob had (REGION, OBJ_CLUSTER, LINODE_TOKEN,
           # OPENBAO_*) plus the matching NetworkPolicy egress.
           args: ["reconcile", "--metrics-addr=:8080", "--sample-interval=30"]
+          env:
+            # Leader-election identity + Lease namespace (downward API). Only used
+            # when a driving reconciler is enabled; harmless otherwise.
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
           ports:
             - name: metrics
               containerPort: 8080

@@ -6,6 +6,9 @@
 # sync, so it needs get/list/watch + patch on argoproj.io/applications. Grants for
 # the remaining reconcilers (cidrFirewall Nodes, volumeTagReconciler PVs) are
 # added with those reconcilers, not pre-provisioned here.
+#
+# Leader election holds a single coordination.k8s.io Lease in THIS namespace, so
+# that lives in a namespaced Role (below), not the ClusterRole.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -33,6 +36,31 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: llz-reconciler
+subjects:
+  - kind: ServiceAccount
+    name: llz-reconciler
+    namespace: llz-reconciler
+---
+# Leader-election Lease — namespaced, so a Role (not the ClusterRole).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-reconciler-leader-election
+  namespace: llz-reconciler
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-reconciler-leader-election
+  namespace: llz-reconciler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-reconciler-leader-election
 subjects:
   - kind: ServiceAccount
     name: llz-reconciler

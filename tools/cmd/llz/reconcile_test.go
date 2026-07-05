@@ -147,8 +147,10 @@ func TestBuildReconcilers(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(nodeList())
 	})
 
+	identity := func(r func(context.Context) error) func(context.Context) error { return r }
+
 	// Defaults: only the observe reconciler.
-	recs := buildReconcilers(reg, client, reconcileOpts{})
+	recs := buildReconcilers(reg, client, reconcileOpts{}, identity)
 	if len(recs) != 1 || recs[0].name != "observe" {
 		t.Fatalf("default set = %v, want [observe]", names(recs))
 	}
@@ -156,13 +158,41 @@ func TestBuildReconcilers(t *testing.T) {
 		t.Errorf("observe interval defaulted to %v, want 30s", recs[0].interval)
 	}
 
-	// Both timed reconcilers enabled.
+	// All optional reconcilers enabled.
 	recs = buildReconcilers(reg, client, reconcileOpts{
+		reconcileArgoNudge: true, argoNudgeResync: 5 * time.Minute,
 		reconcileLinodeCred: true, linodeCredInterval: time.Hour,
 		reconcileHarbor: true, harborInterval: 5 * time.Minute,
+	}, identity)
+	if got := names(recs); len(got) != 4 || got[1] != "argo-nudge" || got[2] != "linode-creds" || got[3] != "harbor" {
+		t.Fatalf("enabled set = %v, want [observe argo-nudge linode-creds harbor]", got)
+	}
+	// The argo-nudge reconciler is watch-driven.
+	if recs[1].watch == nil {
+		t.Error("argo-nudge should carry a watch closure")
+	}
+}
+
+func TestBuildReconcilersGatesDrivingOnly(t *testing.T) {
+	reg := metrics.NewRegistry()
+	client := srvClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(nodeList())
 	})
-	if got := names(recs); len(got) != 3 || got[1] != "linode-creds" || got[2] != "harbor" {
-		t.Fatalf("enabled set = %v, want [observe linode-creds harbor]", got)
+	// A gate that always blocks: driving reconcilers must no-op, observe must not.
+	var driveCalls, observeCalls int
+	block := func(func(context.Context) error) func(context.Context) error {
+		return func(context.Context) error { driveCalls++; return nil }
+	}
+	recs := buildReconcilers(reg, client, reconcileOpts{reconcileArgoNudge: true}, block)
+	// recs[0] observe (ungated), recs[1] argo-nudge (gated to the blocking stub).
+	_ = recs[0].run(context.Background())
+	observeCalls++ // observe ran for real (hit the httptest server)
+	_ = recs[1].run(context.Background())
+	if driveCalls != 1 {
+		t.Errorf("driving reconciler should route through the gate, got %d gate calls", driveCalls)
+	}
+	if observeCalls != 1 {
+		t.Errorf("observe should not be gated")
 	}
 }
 
