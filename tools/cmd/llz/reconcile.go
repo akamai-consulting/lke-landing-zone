@@ -52,6 +52,8 @@ func reconcileCmd() *cobra.Command {
 			"                             OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)\n" +
 			"  --reconcile-harbor         ensure Harbor project + robots (was the\n" +
 			"                             harbor-robot-provisioner CronJob)\n" +
+			"  --reconcile-openbao-gauges seal + credential-age gauges (read-only; needs\n" +
+			"                             OpenBao egress + the reconciler k8s-auth role)\n" +
 			"Runs from the slim distroless image with an in-pod ServiceAccount. Terminates\n" +
 			"gracefully on SIGTERM.",
 		Args: cobra.NoArgs,
@@ -74,6 +76,8 @@ func reconcileCmd() *cobra.Command {
 				linodeCredInterval:  time.Duration(o.linodeCredInterval) * time.Second,
 				reconcileHarbor:     o.reconcileHarbor,
 				harborInterval:      time.Duration(o.harborInterval) * time.Second,
+				reconcileOpenBao:    o.reconcileOpenBao,
+				openbaoInterval:     time.Duration(o.openbaoInterval) * time.Second,
 			})
 		},
 	}
@@ -91,6 +95,8 @@ func reconcileCmd() *cobra.Command {
 	f.IntVar(&o.linodeCredInterval, "linode-creds-interval", 3600, "seconds between Linode credential-rotation resync passes")
 	f.BoolVar(&o.reconcileHarbor, "reconcile-harbor", false, "enable the Harbor-provisioner reconciler (default off: the CronJob owns it)")
 	f.IntVar(&o.harborInterval, "harbor-interval", 300, "seconds between Harbor-provisioner resync passes")
+	f.BoolVar(&o.reconcileOpenBao, "reconcile-openbao-gauges", false, "enable the OpenBao seal + credential-age gauges (read-only; needs OpenBao egress + the reconciler k8s-auth role)")
+	f.IntVar(&o.openbaoInterval, "openbao-gauges-interval", 60, "seconds between OpenBao gauge samples")
 	return c
 }
 
@@ -110,6 +116,8 @@ type reconcileFlags struct {
 	linodeCredInterval  int
 	reconcileHarbor     bool
 	harborInterval      int
+	reconcileOpenBao    bool
+	openbaoInterval     int
 }
 
 type reconcileOpts struct {
@@ -126,6 +134,8 @@ type reconcileOpts struct {
 	linodeCredInterval  time.Duration
 	reconcileHarbor     bool
 	harborInterval      time.Duration
+	reconcileOpenBao    bool
+	openbaoInterval     time.Duration
 }
 
 // drivingEnabled reports whether any state-mutating reconciler is on — the case
@@ -299,6 +309,15 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			interval: o.harborInterval,
 			// Same logic the harbor-robot-provisioner CronJob runs.
 			run: gate(func(context.Context) error { return runCIHarborProvisioner() }),
+		})
+	}
+	if o.reconcileOpenBao {
+		recs = append(recs, reconciler{
+			name:     "openbao-gauges",
+			interval: o.openbaoInterval,
+			// Read-only (seal + credential-age gauges), so NOT gated on leadership
+			// — every replica may read OpenBao harmlessly.
+			run: func(ctx context.Context) error { return sampleOpenBao(ctx, reg, time.Now()) },
 		})
 	}
 	return recs

@@ -11,8 +11,8 @@ import (
 
 func TestBaoConfigureStepsShape(t *testing.T) {
 	steps := baoConfigureSteps("acme/platform")
-	if len(steps) != 16 {
-		t.Fatalf("got %d steps, want 16 (12 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
+	if len(steps) != 18 {
+		t.Fatalf("got %d steps, want 18 (14 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
 	// `enable` steps are the only non-fatal ones (the bash `|| true`) — check by
 	// shape, not index, so adding a new enable (jwt) can't silently violate it.
@@ -23,8 +23,8 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		}
 	}
 	// A repo-less configure omits the GitHub-OIDC steps entirely.
-	if n := len(baoConfigureSteps("")); n != 12 {
-		t.Errorf("no-repo configure should omit JWT steps: got %d, want 12", n)
+	if n := len(baoConfigureSteps("")); n != 14 {
+		t.Errorf("no-repo configure should omit JWT steps: got %d, want 14", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
 	// Two roles expected: platform-ci (read) and secret-propagator (write). The
@@ -71,7 +71,7 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 			policies = append(policies, s.args[2])
 		}
 	}
-	if strings.Join(policies, ",") != "platform-ci,secret-propagator,eso-pusher,linode-rotator,harbor-provisioner" {
+	if strings.Join(policies, ",") != "platform-ci,secret-propagator,eso-pusher,linode-rotator,harbor-provisioner,reconciler-read" {
 		t.Errorf("policies = %v", policies)
 	}
 }
@@ -209,12 +209,12 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
 		t.Fatal(err)
 	}
-	// lookup + 16 steps (12 base + 4 GitHub-OIDC) + audit list.
-	if len(calls) != 18 {
-		t.Fatalf("got %d bao calls, want 18: %v", len(calls), calls)
+	// lookup + 18 steps (14 base + 4 GitHub-OIDC) + audit list.
+	if len(calls) != 20 {
+		t.Fatalf("got %d bao calls, want 20: %v", len(calls), calls)
 	}
-	if calls[0] != "token lookup -format=json" || calls[17] != "audit list" {
-		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[17])
+	if calls[0] != "token lookup -format=json" || calls[19] != "audit list" {
+		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[19])
 	}
 	// The jwt role must actually be written during the run (body is JSON over
 	// stdin; repo/audience binding is asserted in TestBaoConfigureStepsShape).

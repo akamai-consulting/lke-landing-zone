@@ -99,6 +99,15 @@ path "secret/metadata/harbor/robot"      { capabilities = ["read"] }
 path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 `
 
+// reconciler-read: metadata-ONLY read on the two in-cluster-rotated object-storage
+// key paths, for the in-cluster llz reconciler's credential-age gauges
+// (--reconcile-openbao-gauges). It reads updated_time to compute rotation age; it
+// never needs the secret data, so this grants no secret/data access — strictly
+// less than linode-rotator. Mapped to the `reconciler` k8s-auth role below.
+const policyReconcilerRead = `path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
+path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
+`
+
 // baoConfigStep is one in-pod bao invocation of the configure sequence.
 // Non-fatal steps are the `|| true` enables of the bash — re-runs hit
 // "path is already in use" and must not abort the re-configure.
@@ -144,6 +153,10 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		// harbor-provisioner k8s-auth role.
 		{desc: "write policy harbor-provisioner", fatal: true, stdin: policyHarborProvisioner,
 			args: []string{"policy", "write", "harbor-provisioner", "-"}},
+		// reconciler-read policy: metadata-only read for the in-cluster reconciler's
+		// credential-age gauges. Mapped to the reconciler k8s-auth role.
+		{desc: "write policy reconciler-read", fatal: true, stdin: policyReconcilerRead,
+			args: []string{"policy", "write", "reconciler-read", "-"}},
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
@@ -186,6 +199,15 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=harbor-robot-provisioner",
 				"bound_service_account_namespaces=harbor",
 				"policies=harbor-provisioner", "ttl=15m"}},
+		// Kubernetes auth role for the in-cluster reconciler — binds the
+		// llz-reconciler ServiceAccount to the metadata-read-only reconciler-read
+		// policy for the credential-age gauges. Harmless when the llzReconciler
+		// component is disabled (the SA/namespace simply never match).
+		{desc: "write kubernetes auth role reconciler", fatal: true,
+			args: []string{"write", "auth/kubernetes/role/reconciler",
+				"bound_service_account_names=llz-reconciler",
+				"bound_service_account_namespaces=llz-reconciler",
+				"policies=reconciler-read", "ttl=15m"}},
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in
