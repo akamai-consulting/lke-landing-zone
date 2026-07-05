@@ -50,8 +50,13 @@ spec:
           #   --reconcile-volume-labels  (needs REGION_SHORT + LINODE_TOKEN)
           #   --reconcile-linode-creds   (needs REGION, OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)
           #   --reconcile-harbor
+          #   --reconcile-openbao-gauges (read-only seal + credential-age)
           # Enabling a Linode-touching one also needs the ESO-synced LINODE_TOKEN
-          # Secret + NetworkPolicy egress to the Linode API (TCP/443).
+          # Secret + NetworkPolicy egress to the Linode API (TCP/443). Enabling
+          # --reconcile-openbao-gauges needs NetworkPolicy egress to llz-openbao
+          # :8200 + adding this pod to the OpenBao chart's
+          # platform.networkPolicy.allowedClientPods; the OpenBao `reconciler`
+          # k8s-auth role is already provisioned by `llz ci bao-configure`.
           args: ["reconcile", "--metrics-addr=:8080", "--sample-interval=30"]
           env:
             # Leader-election identity + Lease namespace (downward API). Only used

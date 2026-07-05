@@ -117,6 +117,29 @@ spec:
           annotations:
             summary: an OpenBao pod is not Ready (possibly sealed)
             description: Not all OpenBao pods pass their readiness probe; a sealed pod reads NotReady.
+        - alert: LLZOpenBaoSealed
+          # The precise seal signal from --reconcile-openbao-gauges (vs the
+          # LLZOpenBaoNotAvailable pod-readiness proxy). Published only when that
+          # reconciler is enabled, so silent otherwise.
+          expr: max(llz_openbao_sealed{namespace="llz-reconciler"}) == 1
+          for: 5m
+          labels:
+            severity: critical
+            service: llz-reconciler
+          annotations:
+            summary: OpenBao is sealed
+            description: OpenBao reports sealed for 5m; ESO reads are blocked until it is unsealed.
+        - alert: LLZCredentialRotationOverdue
+          # A credential in OpenBao has not rotated within its SLA. 90d matches the
+          # rotation-SLA the daily loki-objkey-rotation-health check enforced.
+          expr: max by (cred) (llz_credential_age_days{namespace="llz-reconciler"}) > 90
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'credential {{ $labels.cred }} rotation is overdue'
+            description: '{{ $labels.cred }} was last rotated {{ $value }} days ago (SLA 90d).'
         - alert: LLZReconcilerNoLeader
           # The llz_reconcile_leader gauge is published only when a driving
           # reconciler is enabled (leader election is running). If it exists and no

@@ -68,14 +68,25 @@
   seal proxy). Alerts: `LLZESOStoreNotReady`, `LLZCertificatesNotReady`,
   `LLZOpenBaoNotAvailable`. This is what lets **Phase 3** demote the CIDR-fragile
   `openbao-health` (ESO) + `certmanager-health` external checks to belt-and-suspenders.
+- **OpenBao-auth gauges (this branch).** An **opt-in, read-only** reconciler
+  (`--reconcile-openbao-gauges`, [`reconcile_openbao.go`](../../tools/cmd/llz/reconcile_openbao.go))
+  that adds the two signals needing OpenBao access: `llz_openbao_sealed` /
+  `llz_openbao_initialized` (the precise `/v1/sys/seal-status`, unauthenticated)
+  and `llz_credential_age_days{cred}` (the rotation age of the in-cluster object-
+  storage keys, from KV-v2 **metadata** `updated_time` — new
+  `internal/openbao.SealStatus` + `MetadataUpdatedTime`; classified with the same
+  `internal/health.DaysSince` the SLA checks use). Reads metadata only, via a
+  metadata-read-only `reconciler` k8s-auth role provisioned by `bao-configure`.
+  Alerts: `LLZOpenBaoSealed`, `LLZCredentialRotationOverdue`. Retires the daily
+  `openbao-health` (seal) + `loki-objkey-rotation-health` checks. Off by default;
+  enabling it per-env needs OpenBao egress + adding the pod to the chart's
+  `allowedClientPods` (documented on the Deployment) — the auth role already ships.
 
-Still to land: the **credential-age** rotation-SLA gauges
-(`llz_credential_age_days`, retiring `lke-admin-rotation-health` /
-`loki-objkey-rotation-health`) and the **precise OpenBao seal** gauge — both need
-the OpenBao egress/auth wiring (a chart allowed-client + `bao-configure` role), a
-scoped follow-up. **sc-default-patcher is a deletion candidate**, not a conversion
-(the Kyverno `sc-default-demote` mutate-on-write policy already does it durably).
-This doc remains the design gate; it touches the
+Still to land: **sc-default-patcher is a deletion candidate**, not a conversion
+(the Kyverno `sc-default-demote` mutate-on-write policy already does it durably);
+and `lke-admin-rotation-health` stays in CI (it reads a kube Secret's age, and
+lke-admin rotation is a sanctioned-external LKE-E concern). This doc remains the
+design gate; it touches the
 [convergence contract](../architecture/convergence-contract.md) and gets the same
 rigor the [linode-credential-rotator](linode-credential-rotator.md) and
 [apl-core-v6-migration](apl-core-v6-migration.md) designs got.

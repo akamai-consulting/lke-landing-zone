@@ -193,6 +193,64 @@ func (c *Client) CurrentVersion(ctx context.Context, path string) (int, error) {
 	return kv.Data.Metadata.Version, nil
 }
 
+// SealInfo is the subset of /v1/sys/seal-status the reconciler reads.
+type SealInfo struct {
+	Sealed      bool `json:"sealed"`
+	Initialized bool `json:"initialized"`
+}
+
+// SealStatus reports OpenBao's seal state. /v1/sys/seal-status is an
+// unauthenticated endpoint, so this works with a tokenless client too.
+func (c *Client) SealStatus(ctx context.Context) (SealInfo, error) {
+	resp, err := c.do(ctx, http.MethodGet, "sys/seal-status", nil)
+	if err != nil {
+		return SealInfo{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return SealInfo{}, fmt.Errorf("seal-status: HTTP %d: %s", resp.StatusCode, respBody(resp))
+	}
+	var si SealInfo
+	if err := json.NewDecoder(resp.Body).Decode(&si); err != nil {
+		return SealInfo{}, fmt.Errorf("parse seal-status: %w", err)
+	}
+	return si, nil
+}
+
+// MetadataUpdatedTime returns when the KV v2 secret at path was last written
+// (its metadata `updated_time`) — the rotation-age source the SLA checks use.
+// ok=false if the secret does not exist (404). Reading metadata needs only a
+// metadata-read capability, not access to the secret data.
+func (c *Client) MetadataUpdatedTime(ctx context.Context, path string) (time.Time, bool, error) {
+	resp, err := c.do(ctx, http.MethodGet, MetadataPath(path), nil)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return time.Time{}, false, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return time.Time{}, false, fmt.Errorf("metadata %s: HTTP %d: %s", path, resp.StatusCode, respBody(resp))
+	}
+	var out struct {
+		Data struct {
+			UpdatedTime string `json:"updated_time"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return time.Time{}, false, fmt.Errorf("parse metadata %s: %w", path, err)
+	}
+	if out.Data.UpdatedTime == "" {
+		return time.Time{}, false, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, out.Data.UpdatedTime)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("parse updated_time %q: %w", out.Data.UpdatedTime, err)
+	}
+	return t, true, nil
+}
+
 // Write POSTs {data: <pairs>} to secret/data/<path>, creating a new version.
 func (c *Client) Write(ctx context.Context, path string, data map[string]string) error {
 	body, err := json.Marshal(map[string]any{"data": data})
