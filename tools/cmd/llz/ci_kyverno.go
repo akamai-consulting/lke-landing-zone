@@ -169,14 +169,6 @@ var kyvernoWebhookRaceRE = regexp.MustCompile(`failed calling webhook|connect: o
 
 func isKyvernoWebhookRace(out string) bool { return kyvernoWebhookRaceRE.MatchString(out) }
 
-// kyvernoPolicyReadyTimeout bounds the best-effort post-apply ClusterPolicy Ready
-// check. Short by design: it is only an informational signal (the PVC-storageclass
-// audit backstops enforcement), yet it sits on the bootstrap critical path, so a
-// long timeout is paid in full whenever the policy isn't Ready yet — which it
-// usually isn't this soon after Kyverno starts. A wired policy reports Ready in
-// seconds; anything longer falls through to the same warning either way.
-const kyvernoPolicyReadyTimeout = "15s"
-
 // applyKyvernoPolicy runs the poll/apply/retrofit state machine. It returns a
 // non-nil error ONLY on a hard apply failure (a non-race kubectl-apply error);
 // every readiness timeout, missing-CRD guard, and webhook race is a soft-fail
@@ -221,20 +213,11 @@ func applyKyvernoPolicy(o kyvernoPolicyOpts, d kyvernoDeps) error {
 	// nothing. Best-effort: surface a non-Ready policy as a ::warning:: (the
 	// PVC-storageclass audit still backstops any escapees) rather than failing the
 	// apply, since the cluster is otherwise functional.
-	//
-	// This wait sits on the cluster-bootstrap apply's critical path (the two policy
-	// null_resources are its longest resources), and in practice the freshly-applied
-	// policy does NOT report Ready within a minute of Kyverno first coming up — so a
-	// 60s timeout burned ~45s of pure wall-clock every green run before falling
-	// through to the same warning. Keep a short grace window (a policy that IS wired
-	// reports Ready in a couple seconds) but stop paying for the miss: on the
-	// not-Ready path the outcome is identical (informational warning + audit
-	// backstop), just ~45s sooner.
 	if name := policyName(o.policyManifest); name != "" {
-		if _, ok := d.kubectl("wait", "--for=condition=Ready", "clusterpolicy/"+name, "--timeout="+kyvernoPolicyReadyTimeout); ok {
+		if _, ok := d.kubectl("wait", "--for=condition=Ready", "clusterpolicy/"+name, "--timeout=60s"); ok {
 			notice(fmt.Sprintf("clusterpolicy/%s is Ready (enforcing).", name))
 		} else {
-			warn(fmt.Sprintf("clusterpolicy/%s applied but did not report Ready within %s — it may not be enforcing yet; the PVC-storageclass audit will flag any escapees.", name, kyvernoPolicyReadyTimeout))
+			warn(fmt.Sprintf("clusterpolicy/%s applied but did not report Ready within 60s — it may not be enforcing yet; the PVC-storageclass audit will flag any escapees.", name))
 		}
 	}
 
