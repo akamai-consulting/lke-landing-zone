@@ -17,7 +17,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,6 +57,7 @@ func reconcileCmd() *cobra.Command {
 			return runReconcile(cmd.Context(), client, reconcileOpts{
 				metricsAddr:         o.metricsAddr,
 				sampleInterval:      time.Duration(o.sampleInterval) * time.Second,
+				leaderElection:      o.leaderElection,
 				reconcileArgoNudge:  o.reconcileArgoNudge,
 				argoNudgeResync:     time.Duration(o.argoNudgeResync) * time.Second,
 				reconcileLinodeCred: o.reconcileLinodeCred,
@@ -67,6 +70,7 @@ func reconcileCmd() *cobra.Command {
 	f := c.Flags()
 	f.StringVar(&o.metricsAddr, "metrics-addr", ":8080", "address to serve the Prometheus /metrics endpoint on")
 	f.IntVar(&o.sampleInterval, "sample-interval", 30, "seconds between observe-reconciler cluster samples")
+	f.BoolVar(&o.leaderElection, "leader-election", true, "gate the driving reconcilers on a coordination.k8s.io Lease (single writer)")
 	f.BoolVar(&o.reconcileArgoNudge, "reconcile-argo-nudge", false, "enable the argo-resync-nudger watch reconciler (default off: the CronJob owns it)")
 	f.IntVar(&o.argoNudgeResync, "argo-nudge-resync", 300, "resync-floor seconds for the argo-nudge reconciler (watch drives the immediacy)")
 	f.BoolVar(&o.reconcileLinodeCred, "reconcile-linode-creds", false, "enable the Linode credential-rotation reconciler (default off: the CronJob owns it)")
@@ -81,6 +85,7 @@ func reconcileCmd() *cobra.Command {
 type reconcileFlags struct {
 	metricsAddr         string
 	sampleInterval      int
+	leaderElection      bool
 	reconcileArgoNudge  bool
 	argoNudgeResync     int
 	reconcileLinodeCred bool
@@ -92,12 +97,19 @@ type reconcileFlags struct {
 type reconcileOpts struct {
 	metricsAddr         string
 	sampleInterval      time.Duration
+	leaderElection      bool
 	reconcileArgoNudge  bool
 	argoNudgeResync     time.Duration
 	reconcileLinodeCred bool
 	linodeCredInterval  time.Duration
 	reconcileHarbor     bool
 	harborInterval      time.Duration
+}
+
+// drivingEnabled reports whether any state-mutating reconciler is on — the case
+// that needs a single writer, hence leader election.
+func (o reconcileOpts) drivingEnabled() bool {
+	return o.reconcileArgoNudge || o.reconcileLinodeCred || o.reconcileHarbor
 }
 
 // nodeGetter is the slice of the kube client the observe sampler needs.
@@ -110,6 +122,7 @@ type nodeGetter interface {
 // satisfies it; tests drive it with an httptest-backed real *kube.Client.
 type reconcileClient interface {
 	GetJSON(ctx context.Context, path string) (map[string]any, int, error)
+	CreateJSON(ctx context.Context, path string, obj any) (int, error)
 	MergePatch(ctx context.Context, path string, patch any) error
 	Watch(ctx context.Context, path, resourceVersion string, fn func(kube.WatchEvent) error) error
 }
@@ -142,11 +155,30 @@ func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) 
 		}
 	}()
 
+	// Leader election: the observe reconciler is read-only and runs on every
+	// replica, but the driving reconcilers need a single writer. gate wraps a
+	// driving reconciler's run so it no-ops on a non-leader; without leader
+	// election (or with none enabled) it is the identity.
+	gate := func(run func(context.Context) error) func(context.Context) error { return run }
+	if o.leaderElection && o.drivingEnabled() {
+		elector := newLeaderElector(client, podNamespace(), "llz-reconciler-leader", podIdentity(), time.Now)
+		gate = func(run func(context.Context) error) func(context.Context) error {
+			return func(rctx context.Context) error {
+				if !elector.IsLeader() {
+					return nil // a peer holds the lease — do not drive
+				}
+				return run(rctx)
+			}
+		}
+		go elector.run(ctx)
+		go publishLeaderGauge(ctx, reg, elector)
+	}
+
 	// The manager blocks until ctx is cancelled; run it in the background so we
 	// can also watch for a server error.
 	done := make(chan struct{})
 	go func() {
-		runManager(ctx, reg, time.Now, buildReconcilers(reg, client, o))
+		runManager(ctx, reg, time.Now, buildReconcilers(reg, client, o, gate))
 		close(done)
 	}()
 
@@ -162,8 +194,9 @@ func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) 
 }
 
 // buildReconcilers assembles the enabled reconciler set: the always-on observe
-// sampler plus each Phase 2 timed reconciler its flag turns on.
-func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcileOpts) []reconciler {
+// sampler (read-only, never gated) plus each optional reconciler its flag turns
+// on. gate wraps a driving reconciler so it no-ops on a non-leader.
+func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcileOpts, gate func(func(context.Context) error) func(context.Context) error) []reconciler {
 	if o.sampleInterval <= 0 {
 		o.sampleInterval = 30 * time.Second
 	}
@@ -176,7 +209,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		recs = append(recs, reconciler{
 			name:     "argo-nudge",
 			interval: o.argoNudgeResync, // resync floor; the watch drives immediacy
-			run:      func(ctx context.Context) error { return reconcileArgoNudge(ctx, client) },
+			run:      gate(func(ctx context.Context) error { return reconcileArgoNudge(ctx, client) }),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, argoAppsPath, "", func(kube.WatchEvent) error {
 					onEvent()
@@ -191,7 +224,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			interval: o.linodeCredInterval,
 			// Same logic the linodeCredRotator CronJob runs (`ci rotate-linode-creds
 			// --apply`); reads REGION/OBJ_CLUSTER/LINODE_TOKEN/OPENBAO_* from env.
-			run: func(ctx context.Context) error { return runRotateLinodeCreds(ctx, true) },
+			run: gate(func(ctx context.Context) error { return runRotateLinodeCreds(ctx, true) }),
 		})
 	}
 	if o.reconcileHarbor {
@@ -199,7 +232,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			name:     "harbor",
 			interval: o.harborInterval,
 			// Same logic the harbor-robot-provisioner CronJob runs.
-			run: func(context.Context) error { return runCIHarborProvisioner() },
+			run: gate(func(context.Context) error { return runCIHarborProvisioner() }),
 		})
 	}
 	return recs
@@ -221,6 +254,54 @@ func sampleNodes(ctx context.Context, client nodeGetter, reg *metrics.Registry) 
 	reg.SetGauge("llz_reconcile_nodes_ready", "count of Nodes with Ready=True", nil, float64(ready))
 	reg.SetGauge("llz_reconcile_nodes_total", "count of Nodes", nil, float64(total))
 	return nil
+}
+
+// publishLeaderGauge mirrors the elector's leadership into a metric (1 on the
+// leader, 0 on standbys) so a scrape shows which replica is driving. Updates on a
+// short interval until ctx is cancelled.
+func publishLeaderGauge(ctx context.Context, reg *metrics.Registry, e *leaderElector) {
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	set := func() {
+		v := 0.0
+		if e.IsLeader() {
+			v = 1
+		}
+		reg.SetGauge("llz_reconcile_leader", "1 if this replica currently holds the reconciler lease", nil, v)
+	}
+	set()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			set()
+		}
+	}
+}
+
+// podIdentity is the leader-election holder identity: the pod name (unique per
+// replica) from the downward-API POD_NAME, falling back to the hostname.
+func podIdentity() string {
+	if n := os.Getenv("POD_NAME"); n != "" {
+		return n
+	}
+	h, _ := os.Hostname()
+	return h
+}
+
+// podNamespace is the namespace the Lease lives in: the downward-API
+// POD_NAMESPACE, then the mounted ServiceAccount namespace, then a sane default.
+func podNamespace() string {
+	if n := os.Getenv("POD_NAMESPACE"); n != "" {
+		return n
+	}
+	if b, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		if ns := strings.TrimSpace(string(b)); ns != "" {
+			return ns
+		}
+	}
+	return "llz-reconciler"
 }
 
 // tallyNodeReadiness counts Nodes and those whose Ready condition is True, reading

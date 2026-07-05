@@ -71,3 +71,17 @@ spec:
           annotations:
             summary: llz reconciler {{ $labels.reconciler }} is erroring repeatedly
             description: The {{ $labels.reconciler }} reconciler has failed more than 3 times in the last hour.
+        - alert: LLZReconcilerNoLeader
+          # The llz_reconcile_leader gauge is published only when a driving
+          # reconciler is enabled (leader election is running). If it exists and no
+          # replica holds the lease, the driving reconcilers are all no-op'ing.
+          # max() of an absent series is no data, so this stays silent when leader
+          # election is off.
+          expr: max(llz_reconcile_leader{namespace="llz-reconciler"}) == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler has no leader
+            description: A driving reconciler is enabled but no replica holds the lease; nothing is being driven.
