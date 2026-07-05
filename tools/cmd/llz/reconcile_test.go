@@ -84,20 +84,18 @@ func renderReg(t *testing.T, reg *metrics.Registry) string {
 	return b.String()
 }
 
-func TestSampleSuccess(t *testing.T) {
+func TestSampleNodesSuccess(t *testing.T) {
 	client := srvClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(nodeList(node("True"), node("True"), node("False")))
 	})
 	reg := metrics.NewRegistry()
-	now := time.Unix(1751644800, 0)
-	sample(context.Background(), client, reg, now)
-
+	if err := sampleNodes(context.Background(), client, reg); err != nil {
+		t.Fatalf("sampleNodes: %v", err)
+	}
 	out := renderReg(t, reg)
 	for _, want := range []string{
-		"llz_reconcile_up 1",
 		"llz_reconcile_nodes_ready 2",
 		"llz_reconcile_nodes_total 3",
-		"llz_reconcile_last_sample_timestamp_seconds 1.7516448e+09",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics missing %q:\n%s", want, out)
@@ -105,30 +103,23 @@ func TestSampleSuccess(t *testing.T) {
 	}
 }
 
-func TestSampleAPIErrorSetsDown(t *testing.T) {
+func TestSampleNodesAPIError(t *testing.T) {
 	client := srvClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	reg := metrics.NewRegistry()
-	sample(context.Background(), client, reg, time.Unix(1751644800, 0))
-
-	out := renderReg(t, reg)
-	if !strings.Contains(out, "llz_reconcile_up 0") {
-		t.Errorf("expected up=0 on API error:\n%s", out)
-	}
-	// Timestamp still advances so a staleness alert can tell "wedged" from "failing".
-	if !strings.Contains(out, "llz_reconcile_last_sample_timestamp_seconds ") {
-		t.Errorf("timestamp should advance even on failure:\n%s", out)
+	if err := sampleNodes(context.Background(), client, reg); err == nil {
+		t.Fatal("expected error on API failure")
 	}
 	// No node gauges published when the sample failed.
-	if strings.Contains(out, "llz_reconcile_nodes_total") {
-		t.Errorf("node gauges should not be set on failure:\n%s", out)
+	if strings.Contains(renderReg(t, reg), "llz_reconcile_nodes_total") {
+		t.Errorf("node gauges should not be set on failure")
 	}
 }
 
-func TestSampleKeepsLastGoodOnBlip(t *testing.T) {
-	// First a good sample, then a failing one: the level gauges from the good
-	// sample must survive (we don't erase last-known-good on a transient blip).
+func TestSampleNodesKeepsLastGoodOnBlip(t *testing.T) {
+	// A failing pass returns an error and leaves the prior node gauges untouched,
+	// so a transient blip does not blank the last-known-good surface.
 	var fail bool
 	client := srvClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		if fail {
@@ -138,17 +129,49 @@ func TestSampleKeepsLastGoodOnBlip(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(nodeList(node("True")))
 	})
 	reg := metrics.NewRegistry()
-	sample(context.Background(), client, reg, time.Unix(1, 0))
+	if err := sampleNodes(context.Background(), client, reg); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
 	fail = true
-	sample(context.Background(), client, reg, time.Unix(2, 0))
+	if err := sampleNodes(context.Background(), client, reg); err == nil {
+		t.Fatal("second pass should error")
+	}
+	if !strings.Contains(renderReg(t, reg), "llz_reconcile_nodes_ready 1") {
+		t.Errorf("last-known-good node gauge should survive a blip")
+	}
+}
 
-	out := renderReg(t, reg)
-	if !strings.Contains(out, "llz_reconcile_up 0") {
-		t.Errorf("up should be 0 after the failing sample:\n%s", out)
+func TestBuildReconcilers(t *testing.T) {
+	reg := metrics.NewRegistry()
+	client := srvClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(nodeList())
+	})
+
+	// Defaults: only the observe reconciler.
+	recs := buildReconcilers(reg, client, reconcileOpts{})
+	if len(recs) != 1 || recs[0].name != "observe" {
+		t.Fatalf("default set = %v, want [observe]", names(recs))
 	}
-	if !strings.Contains(out, "llz_reconcile_nodes_ready 1") {
-		t.Errorf("last-known-good node gauge should survive a blip:\n%s", out)
+	if recs[0].interval != 30*time.Second {
+		t.Errorf("observe interval defaulted to %v, want 30s", recs[0].interval)
 	}
+
+	// Both timed reconcilers enabled.
+	recs = buildReconcilers(reg, client, reconcileOpts{
+		reconcileLinodeCred: true, linodeCredInterval: time.Hour,
+		reconcileHarbor: true, harborInterval: 5 * time.Minute,
+	})
+	if got := names(recs); len(got) != 3 || got[1] != "linode-creds" || got[2] != "harbor" {
+		t.Fatalf("enabled set = %v, want [observe linode-creds harbor]", got)
+	}
+}
+
+func names(recs []reconciler) []string {
+	out := make([]string, len(recs))
+	for i, r := range recs {
+		out[i] = r.name
+	}
+	return out
 }
 
 func TestRunReconcileShutsDownOnCancel(t *testing.T) {

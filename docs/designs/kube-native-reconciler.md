@@ -1,32 +1,37 @@
 # Design: in-cluster reconciler + convergence metrics surface (watch-based)
 
-**Status:** Phase 0 — IN PROGRESS. The observe-only foundation has landed in the
-`tools/` module: [`internal/metrics`](../../tools/internal/metrics/metrics.go) (a
-dependency-free Prometheus text-exposition registry, 100% covered) and the
-[`llz reconcile`](../../tools/cmd/llz/reconcile.go) command (serves
-`:8080/metrics` + `/healthz`, samples the cluster over `internal/kube` on an
-interval, SIGTERM-graceful). It publishes `llz_reconcile_{up,build_info,
-nodes_ready,nodes_total,last_sample_timestamp_seconds}` and **drives nothing**.
-The deployable [`apl-values/components/llzReconciler/`](../../instance-template/apl-values/components/llzReconciler/)
-manifest set has also landed — a default-disabled component (registered in
-`internal/clusterspec/components.go`, `DependsOn: observability`) shipping the
-Deployment + read-only RBAC (nodes get/list/watch) + a default-deny-compatible
-NetworkPolicy (ingress from the `monitoring` namespace to `:8080` — the piece that
-actually closes the scrape path) + Service + ServiceMonitor + PrometheusRule
-(three alerts: scrape-down, reporting-down, sample-stale). Verified: kustomize
-renders 9 objects, `promtool` accepts the rules, kube-linter passes.
-Still to land in Phase 0: the full convergence gauge (port the `internal/health`
-classifiers to feed `llz_convergence_state`) and the credential-age / seal / ESO
-gauges that retire the daily port-forward checks. Phase 1 has begun on
-`feat/kube-native-reconciler-phase1`: the `internal/kube` watch primitive
-([`Client.Watch`](../../tools/internal/kube/kube.go) — the Kubernetes watch API
-over raw HTTP, no client-go; borrows only the transport so a long-lived stream
-isn't guillotined by the client's 30s timeout, ctx governs its lifetime) has
-landed with tests; the reconcilers that consume it are next. This doc remains the
-design
-gate; it touches the [convergence contract](../architecture/convergence-contract.md)
-and gets the same rigor the [linode-credential-rotator](linode-credential-rotator.md)
-and [apl-core-v6-migration](apl-core-v6-migration.md) designs got.
+**Status:** Phases 0–2 landed incrementally.
+
+- **Phase 0 (merged, #150).** The observe-only foundation:
+  [`internal/metrics`](../../tools/internal/metrics/metrics.go) (a dependency-free
+  Prometheus text-exposition registry — gauges + counters) and the
+  [`llz reconcile`](../../tools/cmd/llz/reconcile.go) command (serves
+  `:8080/metrics` + `/healthz`, SIGTERM-graceful), plus the deployable
+  default-disabled [`apl-values/components/llzReconciler/`](../../instance-template/apl-values/components/llzReconciler/)
+  component (Deployment + read-only RBAC + a default-deny-compatible NetworkPolicy
+  that closes the scrape path + Service + ServiceMonitor + PrometheusRule).
+- **Phase 1 (merged, #151).** The `internal/kube` watch primitive
+  ([`Client.Watch`](../../tools/internal/kube/kube.go) — the Kubernetes watch API
+  over raw HTTP, no client-go; borrows only the transport so a long-lived stream
+  isn't guillotined by the client's 30s timeout, ctx governs its lifetime).
+- **Phase 2 (this branch).** The reconciler **manager**
+  ([`reconcile_manager.go`](../../tools/cmd/llz/reconcile_manager.go)) — runs N
+  named reconcilers as concurrent resync loops with a uniform per-reconciler
+  metric set (`llz_reconcile_{runs_total,errors_total,up,last_success_timestamp_seconds,last_duration_seconds}{reconciler}`).
+  The observe sampler is now one such reconciler; the two **timed reconcilers** —
+  Linode credential rotation and Harbor provisioning — are folded off their
+  CronJobs as bounded-resync loops calling the same `ci`-verb logic, **off by
+  default** (each behind a flag; the CronJobs stay until it proves out per-env).
+
+Still to land: the full convergence gauge (port the `internal/health` classifiers
+to feed `llz_convergence_state`) and the credential-age / seal / ESO gauges that
+retire the daily port-forward checks; the pure-watch reconcilers (argo-resync-nudger,
+sc-default-patcher, cidrFirewall, volumeTagReconciler) that consume `Client.Watch`;
+and leader election before any timed reconciler is enabled fleet-wide. This doc
+remains the design gate; it touches the
+[convergence contract](../architecture/convergence-contract.md) and gets the same
+rigor the [linode-credential-rotator](linode-credential-rotator.md) and
+[apl-core-v6-migration](apl-core-v6-migration.md) designs got.
 
 **Item:** kube-native next-wave (A) — collapse the fixed-interval polling
 CronJob menagerie into one watch-based, leader-elected reconciler, and give the

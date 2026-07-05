@@ -36,20 +36,38 @@ spec:
             summary: llz reconciler metrics target is down
             description: Prometheus cannot scrape the llz-reconciler /metrics endpoint; the in-cluster convergence signals are blind.
         - alert: LLZReconcilerReportingDown
+          # Fires per reconciler (the `reconciler` label rides through): any
+          # reconciler whose last pass failed — the observe sampler losing API
+          # access, or a Phase 2 timed reconciler erroring.
           expr: llz_reconcile_up{namespace="llz-reconciler"} == 0
           for: 10m
           labels:
             severity: warning
             service: llz-reconciler
           annotations:
-            summary: llz reconciler samples are failing
-            description: The reconciler is scraped but its last cluster sample failed (e.g. lost Kubernetes API access).
+            summary: llz reconciler {{ $labels.reconciler }} pass is failing
+            description: The {{ $labels.reconciler }} reconciler is scraped but its last pass failed (e.g. lost Kubernetes API access, or a rotation/provisioning error).
         - alert: LLZReconcilerStale
-          expr: time() - llz_reconcile_last_sample_timestamp_seconds{namespace="llz-reconciler"} > 300
+          # Scoped to the observe reconciler: it samples every 30s, so a >5m gap
+          # in its success timestamp means the loop is wedged. The timed
+          # reconcilers run hourly/daily, so staleness is not a signal for them —
+          # LLZReconcilerErroring covers their failures instead.
+          expr: time() - max(llz_reconcile_last_success_timestamp_seconds{namespace="llz-reconciler", reconciler="observe"}) > 300
           for: 10m
           labels:
             severity: warning
             service: llz-reconciler
           annotations:
-            summary: llz reconciler sample loop is stale
-            description: The reconciler has not completed a sample in over 5 minutes; its sample loop may be wedged.
+            summary: llz observe reconciler loop is stale
+            description: The observe reconciler has not completed a successful pass in over 5 minutes; its sample loop may be wedged.
+        - alert: LLZReconcilerErroring
+          # A folded timed reconciler (Linode cred rotation / Harbor provisioning)
+          # failing repeatedly — distinct from a single transient blip.
+          expr: increase(llz_reconcile_errors_total{namespace="llz-reconciler"}[1h]) > 3
+          for: 5m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz reconciler {{ $labels.reconciler }} is erroring repeatedly
+            description: The {{ $labels.reconciler }} reconciler has failed more than 3 times in the last hour.

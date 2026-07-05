@@ -131,3 +131,40 @@ func TestEmptyRegistry(t *testing.T) {
 		t.Fatalf("empty registry should render nothing, got %q", got)
 	}
 }
+
+func TestAddCounterAccumulates(t *testing.T) {
+	r := NewRegistry()
+	r.AddCounter("llz_reconcile_runs_total", "runs", map[string]string{"reconciler": "observe"}, 1)
+	r.AddCounter("llz_reconcile_runs_total", "runs", map[string]string{"reconciler": "observe"}, 1)
+	r.AddCounter("llz_reconcile_runs_total", "runs", map[string]string{"reconciler": "harbor"}, 1)
+	got := render(t, r)
+	want := "# HELP llz_reconcile_runs_total runs\n" +
+		"# TYPE llz_reconcile_runs_total counter\n" +
+		`llz_reconcile_runs_total{reconciler="harbor"} 1` + "\n" +
+		`llz_reconcile_runs_total{reconciler="observe"} 2` + "\n"
+	if got != want {
+		t.Fatalf("counter accumulation wrong.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestCounterAndGaugeCoexistWithCorrectTypes(t *testing.T) {
+	r := NewRegistry()
+	r.AddCounter("a_total", "c", nil, 3)
+	r.SetGauge("b_gauge", "g", nil, 7)
+	got := render(t, r)
+	if !strings.Contains(got, "# TYPE a_total counter\na_total 3\n") {
+		t.Errorf("counter type/line wrong:\n%s", got)
+	}
+	if !strings.Contains(got, "# TYPE b_gauge gauge\nb_gauge 7\n") {
+		t.Errorf("gauge type/line wrong:\n%s", got)
+	}
+}
+
+func TestCounterKeepsTypeAcrossZeroDelta(t *testing.T) {
+	r := NewRegistry()
+	r.AddCounter("errs_total", "e", nil, 0) // register at 0, no error yet
+	got := render(t, r)
+	if !strings.Contains(got, "# TYPE errs_total counter\nerrs_total 0\n") {
+		t.Fatalf("counter registered at 0 not rendered as counter:\n%s", got)
+	}
+}
