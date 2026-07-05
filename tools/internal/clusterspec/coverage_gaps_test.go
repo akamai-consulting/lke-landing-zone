@@ -212,3 +212,12 @@ func errsString(errs []error) string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+func TestRenderReconcilerEnvPatch(t *testing.T) {
+	out := RenderReconcilerEnvPatch("exa")
+	for _, want := range []string{"kind: Deployment", "name: llz-reconciler", "name: reconcile", "REGION_SHORT", `value: "exa"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("RenderReconcilerEnvPatch missing %q:\n%s", want, out)
+		}
+	}
+}

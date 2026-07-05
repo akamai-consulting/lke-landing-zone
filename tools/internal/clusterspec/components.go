@@ -222,6 +222,15 @@ var Components = []Component{
 		Name:              "llzReconciler",
 		DependsOn:         []string{"observability"},
 		ManifestResources: []string{"llz-reconciler"},
+		// Per-env REGION_SHORT for the volume-labels reconciler (the one genuine
+		// per-env delta; `llz render` emits llz-reconciler-env-patch.yaml).
+		Patches: []Patch{{
+			Path:    "llz-reconciler-env-patch.yaml",
+			Group:   "apps",
+			Version: "v1",
+			Kind:    "Deployment",
+			Name:    "llz-reconciler",
+		}},
 	},
 }
 

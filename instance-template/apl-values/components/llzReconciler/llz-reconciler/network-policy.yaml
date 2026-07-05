@@ -41,7 +41,10 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
     # LKE-E apiserver (dual-port DNAT). Bare ports rule: no in-cluster
-    # kube-apiserver pod exists to selector-match on managed LKE-E.
+    # kube-apiserver pod exists to selector-match on managed LKE-E. Being a bare
+    # :443 egress it ALSO covers the Linode API (api.linode.com) the Linode-touching
+    # reconcilers (volume-labels; later cidr-firewall/linode-creds) call over HTTPS
+    # — so no separate Linode egress rule is needed.
     - ports:
         - { protocol: TCP, port: 443 }
         - { protocol: TCP, port: 6443 }

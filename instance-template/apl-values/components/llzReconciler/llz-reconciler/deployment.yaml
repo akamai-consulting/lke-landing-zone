@@ -1,10 +1,10 @@
 # llz-reconciler Deployment — the long-lived `llz reconcile` process.
 #
-# PHASE 0 is OBSERVE-ONLY: it samples cluster signals over the in-cluster
-# ServiceAccount (KUBERNETES_SERVICE_HOST + the auto-mounted SA token/CA that
-# kube.NewInCluster reads) and serves them at :8080/metrics for Prometheus. It
-# drives nothing. Single replica: Phase 0 has no writer to serialise, so no leader
-# election yet — that lands in Phase 1 with the first state-mutating reconciler.
+# Runs the observe-only gauges + the enabled reconcilers (see the args below). It
+# samples/serves over the in-cluster ServiceAccount (KUBERNETES_SERVICE_HOST + the
+# auto-mounted SA token/CA that kube.NewInCluster reads), publishes :8080/metrics,
+# and — for the enabled driving reconcilers — holds a coordination.k8s.io Lease so
+# only one replica writes. Single replica + never-two-pods rollout (below).
 #
 # Image is the slim distroless llz (dockerfiles/llz), the same artifact the
 # CronJobs run; rendered by copier and pinned to the signed sha image for the
@@ -15,6 +15,18 @@ kind: Deployment
 metadata:
   name: llz-reconciler
   namespace: llz-reconciler
+  annotations:
+    # Wave 6: apply AFTER the wave-5 linode-api-token ExternalSecret
+    # (externalsecret.yaml). The container has a hard secretKeyRef on that Secret,
+    # so this Deployment must not apply until the Secret exists. If it applies
+    # first (the default wave 0), Argo's wave-gating blocks the ENTIRE manifest
+    # sync waiting for this Deployment to go Healthy — which it never can without
+    # the wave-5 secret — starving every other wave-5 ExternalSecret in the sync
+    # (harbor-registry-s3, loki-object-store) and wedging harbor + loki too.
+    # Ordering the workload after its secret breaks that inversion.
+    argocd.argoproj.io/sync-wave: "6"
+    ignore-check.kube-linter.io/env-value-from: "linode-api-token Secret is created at runtime by ESO (externalsecret.yaml); not a static manifest the linter can resolve"
+    ignore-check.kube-linter.io/read-secret-from-env-var: "the volume-labels reconciler reads LINODE_TOKEN via env to authenticate to the Linode API; no file-mount path without a binary rewrite"
 spec:
   replicas: 1
   # Never run two pods at once: the old pod terminates before the new starts.
@@ -50,12 +62,15 @@ spec:
           # by the chart's allowedClientPods entry; the `reconciler` k8s-auth role
           # ships from bao-configure). Idempotent/read-only alongside the CronJobs,
           # which stay until each proves out.
-          # STILL OFF — need per-env env + the ESO-synced LINODE_TOKEN Secret +
-          # Linode-API NetworkPolicy egress (a later batch):
-          #   --reconcile-cidr-firewall  (NODE_NAME via downward API + LINODE_TOKEN)
-          #   --reconcile-volume-labels  (REGION_SHORT + LINODE_TOKEN)
-          #   --reconcile-linode-creds   (REGION, OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)
-          #   --reconcile-harbor
+          # volume-labels (this batch): renames bound Linode-CSI Volumes to
+          # <REGION_SHORT>-<ns>-<pvc>. Needs LINODE_TOKEN (ESO Secret) + REGION_SHORT
+          # (per-env, filled by the render-patch). Leader-gated + idempotent
+          # alongside the linode-volume-labeler CronJob.
+          # STILL OFF — need more per-env env (a later batch):
+          #   --reconcile-cidr-firewall  (NODE_NAME via downward API; targets the
+          #                               private cidr-firewall controller, absent on e2e)
+          #   --reconcile-linode-creds   (REGION, OBJ_CLUSTER, OPENBAO_*; due-based no-op)
+          #   --reconcile-harbor         (HARBOR_HOST + Harbor admin creds)
           args:
             - reconcile
             - --metrics-addr=:8080
@@ -63,6 +78,7 @@ spec:
             - --reconcile-argo-nudge
             - --reconcile-sc-demote
             - --reconcile-openbao-gauges
+            - --reconcile-volume-labels
           env:
             # Leader-election identity + Lease namespace (downward API). Only used
             # when a driving reconciler is enabled; harmless otherwise.
@@ -77,6 +93,16 @@ spec:
             # is set explicitly for legibility.
             - name: OPENBAO_ADDR
               value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
+            # volume-labels reconciler: the ESO-synced in-cluster Linode token +
+            # the per-env label prefix. REGION_SHORT is a placeholder overwritten
+            # per-env by llz-reconciler-env-patch.yaml (llz render).
+            - name: LINODE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: linode-api-token
+                  key: token
+            - name: REGION_SHORT
+              value: "REPLACE_ME"
           ports:
             - name: metrics
               containerPort: 8080

@@ -4,14 +4,18 @@
 is **default-on** (fleet-wide, e2e-proven in #161) running observe-only gauges +
 the leader-gated driving reconcilers that need no per-env secrets —
 `--reconcile-argo-nudge`, `--reconcile-sc-demote` (batch 1) — plus the read-only
-`--reconcile-openbao-gauges` (batch 2: OpenBao `:8200` egress in the reconciler
-NetworkPolicy + the pod added to `llz-openbao-platform`'s `allowedClientPods`
-[chart 0.1.14] + the `reconciler` k8s-auth role that already ships). All are
-idempotent/read-only alongside their still-present CronJobs. Remaining to enable:
-the Linode-touching reconcilers (`cidr-firewall`, `volume-labels`, `linode-creds`,
-`harbor`) — they need the ESO-synced `LINODE_TOKEN` Secret + per-env env (a
-render-patch) + Linode-API NetworkPolicy egress. CronJob deletions follow once each
-reconciler proves out per the "keep the CronJob until a green e2e" discipline.
+`--reconcile-openbao-gauges` (batch 2: OpenBao `:8200` egress + the pod added to
+`llz-openbao-platform`'s `allowedClientPods` [chart 0.1.14] + the `reconciler`
+k8s-auth role that already ships), and `--reconcile-volume-labels` (batch 3: the
+ESO-synced `LINODE_TOKEN` Secret + the per-env `REGION_SHORT` **render-patch**
+[`RenderReconcilerEnvPatch`, emitted by `llz render` like the volume-labeler's] +
+Linode-API egress, already covered by the bare `:443` rule). All are
+idempotent/read-only alongside their still-present CronJobs. The `LINODE_TOKEN`
+ExternalSecret + the render-patch are the **shared wiring** the remaining
+Linode reconcilers reuse: `linode-creds` (due-based, no-op on e2e), `harbor`
+(needs `HARBOR_HOST`), and `cidr-firewall` (targets the private, e2e-absent
+controller). CronJob deletions follow once each reconciler proves out per the
+"keep the CronJob until a green e2e" discipline.
 
 - **Phase 0 (merged, #150).** The observe-only foundation:
   [`internal/metrics`](../../tools/internal/metrics/metrics.go) (a dependency-free

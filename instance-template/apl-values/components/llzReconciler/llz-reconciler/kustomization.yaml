@@ -9,6 +9,7 @@ resources:
   - namespace.yaml
   - rbac.yaml
   - network-policy.yaml
+  - externalsecret.yaml
   - deployment.yaml
   - service.yaml
   - servicemonitor.yaml

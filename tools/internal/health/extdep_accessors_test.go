@@ -49,6 +49,24 @@ func TestHarborDockerConfigDeferred(t *testing.T) {
 	}
 }
 
+// The llz-reconciler pod is deferred (not hard-failed) on a fresh bootstrap: its
+// main container reads LINODE_TOKEN from the ESO-synced linode-api-token Secret,
+// so it sits in CreateContainerConfigError for the first ~1-2 min after the
+// openbao ClusterSecretStore goes Ready — until ESO first-syncs the Secret. The
+// reconciler is a day-2 signal (health on its own metrics surface), not the
+// bootstrap critical path, so it must not pin the convergence gate. The generated
+// ReplicaSet/Pod suffix must still match; a pod that is not the reconciler (a
+// different name, even in the same namespace) must not be swept in by the entry.
+func TestLLZReconcilerPodDeferred(t *testing.T) {
+	extDep := ExternalDepWorkloads()
+	if _, ok := MatchExternalDep("llz-reconciler/llz-reconciler-5df46cbf66-64259", extDep); !ok {
+		t.Error("the llz-reconciler pod (with a generated suffix) should be an operator-deferred workload")
+	}
+	if _, ok := MatchExternalDep("llz-reconciler/openbao-agent-injector-abc123", extDep); ok {
+		t.Error("an unrelated pod in the llz-reconciler namespace must NOT be deferred by the reconciler entry")
+	}
+}
+
 func TestNodeName(t *testing.T) {
 	var n Node
 	n.Metadata.Name = "lke-pool-abc"

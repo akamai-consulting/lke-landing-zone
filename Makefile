@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .PHONY: help \
         build build-tools llz \
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -70,6 +70,7 @@ help:
 	@echo "  argocd-rendered-apps-check  render overlays and reject duplicate ArgoCD Helm parameters"
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
 	@echo "  wave-health-guard           negative-sync-wave kinds must be health-safe (PR #142 wedge class)"
+	@echo "  wave-dependency-guard       a workload must sync AFTER the ExternalSecret it hard-depends on (#163 wedge class)"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow and composite-action linting"
 	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
@@ -310,6 +311,20 @@ wave-health-guard:
 		cd $(GO_DIR) && go run ./cmd/llz ci wave-health-guard --root ..; \
 	fi
 
+# wave-dependency-guard: `llz ci wave-dependency-guard` — the #163 wedge-class gate.
+# Argo sync waves gate on per-resource health, so a Deployment/StatefulSet/DaemonSet
+# that hard-references a Secret produced by a LATER-wave ExternalSecret can never go
+# Healthy — it wedges the platform-bootstrap sync and starves every later-wave
+# ExternalSecret in it (in #163 the wave-0 reconciler Deployment took harbor +
+# loki's wave-5 object-store secrets down). A workload's wave must exceed the wave
+# of every ExternalSecret whose Secret it hard-depends on (optional refs exempt).
+wave-dependency-guard:
+	@if command -v llz >/dev/null 2>&1; then \
+		llz ci wave-dependency-guard; \
+	else \
+		cd $(GO_DIR) && go run ./cmd/llz ci wave-dependency-guard --root ..; \
+	fi
+
 # untestable-loc-check: the design-principle gate. Fails when inline workflow
 # bash / shell / python logic exceeds the budget in .untestable-budget.yaml —
 # the signal to convert logic into the unit-tested llz CLI rather than pile more
@@ -407,7 +422,7 @@ sync-wave-lint: render-charts
 # targets share a render-charts prerequisite, so one $(MAKE) invocation renders
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
-LINT_K8S := k8s-lint k8s-validate sync-wave-lint wave-health-guard placeholder-lint \
+LINT_K8S := k8s-lint k8s-validate sync-wave-lint wave-health-guard wave-dependency-guard placeholder-lint \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
             helm-lint-charts helm-lint-real-values helm-lint-argocd \
             helm-dep-lock-check

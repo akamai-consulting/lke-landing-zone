@@ -259,6 +259,11 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	if clusterspec.ComponentEnabled(e.Components, "observability") {
 		targets[filepath.Join(manifest, "otel-collector-tls-san-patch.yaml")] = clusterspec.RenderOtelSANPatch(env)
 	}
+	// The llz reconciler's per-env REGION_SHORT patch (volume-labels reconciler) —
+	// emitted whenever the default-on llzReconciler component is enabled.
+	if clusterspec.ComponentEnabled(e.Components, "llzReconciler") {
+		targets[filepath.Join(manifest, "llz-reconciler-env-patch.yaml")] = clusterspec.RenderReconcilerEnvPatch(first3(env))
+	}
 	// The harbor robot provisioner's per-env HARBOR_HOST patch — emitted only
 	// when harbor is enabled (which ships the CronJob).
 	if clusterspec.ComponentEnabled(e.Components, "harbor") {
