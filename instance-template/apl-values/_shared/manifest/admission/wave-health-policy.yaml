@@ -33,9 +33,9 @@ spec:
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
         resources: ["*"]
-    # High-churn kinds that never carry a sync-wave — skip them so the API server
-    # doesn't evaluate matchConditions on every pod/event/lease write.
     excludeResourceRules:
+      # High-churn kinds that never carry a sync-wave — skip them so the API server
+      # doesn't evaluate matchConditions on every pod/event/lease write.
       - apiGroups: [""]
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
@@ -48,6 +48,23 @@ spec:
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
         resources: ["leases"]
+      # The whole argoproj.io group. Unlike the CI wave-health-guard — which scans
+      # ONLY the platform-bootstrap kustomize tree (_shared/manifest + components) —
+      # this policy sees EVERY admission cluster-wide. Argo Events CRs
+      # (Sensor/EventSource/EventBus, e.g. llz-cert-automation's at wave -14) and
+      # Workflows are managed by CHILD Apps that health-gate their own content; they
+      # are health-checked kinds at negative waves that this policy is NOT meant to
+      # police, and denying them would wedge those Apps. Argo's own CRs (Application,
+      # AppProject) are health-inert. Every historical wedge class this guard exists
+      # for is non-argoproj (#142 NetworkPolicy/ClusterIssuer, #163 Deployment). So
+      # exclude the group wholesale. (Application/AppProject stay in the allowlist
+      # below for lockstep with the CI guard, which DOES scan them in _shared.)
+      # Found by a live negative-wave census on an e2e cluster — see
+      # docs/designs/blast-radius-decomposition.md.
+      - apiGroups: ["argoproj.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["*"]
   matchConditions:
     # Only judge objects that declare a sync-wave — the GitOps platform tree.
     - name: has-sync-wave

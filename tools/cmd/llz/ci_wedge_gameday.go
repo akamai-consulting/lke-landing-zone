@@ -169,8 +169,20 @@ func runWedgeGameday(d aplGateDeps, o wedgeOpts) error {
 		return fmt.Errorf("no Argo Applications readable (cluster unreachable?)")
 	}
 
-	// 2. Capture the current secretStoreRef.name, then break it. Restore on EVERY
-	//    exit path (defer) — a game-day must never leave the cluster wedged.
+	// 2a. Suspend the target App's self-heal for the window. The carved Apps run
+	//     selfHeal: true, which would revert our ExternalSecret patch (drift) within
+	//     seconds — often before the fault surfaces in App health, making the game-day
+	//     flaky/inconclusive. Turning selfHeal off lets the injected fault persist;
+	//     auto-sync of NEW git commits is unaffected. Restored in the defer (LIFO:
+	//     registered first so it runs LAST — after the ExternalSecret is put back, so
+	//     re-enabled self-heal sees an already-correct spec).
+	selfHealWasOn := setSelfHeal(d, o.namespace, o.targetApp, false)
+	if selfHealWasOn {
+		defer setSelfHeal(d, o.namespace, o.targetApp, true)
+	}
+
+	// 2b. Capture the current secretStoreRef.name, then break it. Restore on EVERY
+	//     exit path (defer) — a game-day must never leave the cluster wedged.
 	origStore, ok := esStoreRef(d, esNS, esName)
 	if !ok {
 		return fmt.Errorf("read ExternalSecret %s: not found (adjust --externalsecret)", o.esRef)
@@ -263,13 +275,33 @@ func esStoreRef(d aplGateDeps, ns, name string) (string, bool) {
 	return strings.TrimSpace(out), true
 }
 
-// patchESStore repoints the ExternalSecret's secretStoreRef.name (the fault) and
-// suspends Argo self-heal fighting the patch back for the window by pausing via a
-// merge patch — best-effort.
+// patchESStore repoints the ExternalSecret's secretStoreRef.name — the injected
+// fault (a store that does not exist forces the ExternalSecret not-Ready).
 func patchESStore(d aplGateDeps, ns, name, store string) bool {
 	patch := fmt.Sprintf(`{"spec":{"secretStoreRef":{"name":%q}}}`, store)
 	_, ok := d.kubectl("-n", ns, "patch", "externalsecret.external-secrets.io", name, "--type=merge", "-p", patch)
 	return ok
+}
+
+// setSelfHeal flips the target Application's syncPolicy.automated.selfHeal and
+// reports whether it was previously ON (so the caller only bothers restoring it when
+// it actually changed something). Best-effort: an unreadable/unpatchable App returns
+// false and the game-day proceeds (it may just be flakier against self-heal).
+func setSelfHeal(d aplGateDeps, namespace, app string, on bool) bool {
+	was, _ := d.kubectl("-n", namespace, "get", "application.argoproj.io", app,
+		"-o", "jsonpath={.spec.syncPolicy.automated.selfHeal}")
+	patch := fmt.Sprintf(`{"spec":{"syncPolicy":{"automated":{"selfHeal":%t}}}}`, on)
+	if _, ok := d.kubectl("-n", namespace, "patch", "application.argoproj.io", app, "--type=merge", "-p", patch); !ok {
+		return false
+	}
+	if on {
+		fmt.Printf("wedge-gameday: re-enabled selfHeal on %s.\n", app)
+	} else {
+		fmt.Printf("wedge-gameday: suspended selfHeal on %s for the fault window.\n", app)
+	}
+	// "was ON" iff the prior value wasn't explicitly false (Argo defaults selfHeal
+	// off only when automated is set without it; the carved Apps set it true).
+	return strings.TrimSpace(was) == "true"
 }
 
 // restoreES puts the original secretStoreRef.name back. Best-effort but logged: a

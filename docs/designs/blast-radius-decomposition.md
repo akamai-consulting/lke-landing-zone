@@ -98,6 +98,18 @@ and stays CI-only — a VAP cannot see sibling resources. The policy is scoped v
 allowlist is pinned to the Go guard's `waveHealthAllowedKinds` / `waveHealthAllowedNames`
 by `TestWaveHealthVAPMatchesGuard` — add a vetted kind in both places or the build fails.
 
+**Scope caveat (found by a live negative-wave census).** The CI guard scans only the
+platform-bootstrap kustomize tree; the VAP sees every admission cluster-wide. A census
+of a converged cluster found `argoproj.io` CRs at negative waves that are NOT in that
+tree — `Sensor`/`EventSource`/`EventBus` (wave -14, managed by the `llz-cert-automation`
+child App, which health-gates its own content) — plus `Workflow`s. Denying those would
+wedge their Apps. Every historical wedge class is non-argoproj (#142 NetworkPolicy /
+ClusterIssuer, #163 Deployment), and Argo's own `Application`/`AppProject` are
+health-inert, so the VAP excludes the whole `argoproj.io` group. This keeps the VAP's
+effective coverage equal to the CI guard's (non-argoproj platform-tree kinds) without
+false-denying child-App CRs. `Application`/`AppProject` stay in the allowlist for
+lockstep with the CI guard, which does scan them in `_shared/manifest`.
+
 ## #4 — Wedge game-day
 
 The containment claim is proven by fault injection (`llz ci wedge-gameday`): force one
