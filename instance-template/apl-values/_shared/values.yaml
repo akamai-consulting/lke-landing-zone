@@ -328,8 +328,16 @@ dns:
 # ── Alertmanager receivers ──────────────────────────────────────────────────────
 # apl-core renders the FULL Alertmanager route/receiver config from this block
 # (helmfile.d/snippets/alertmanager.gotmpl). Default [none]: Alertmanager runs
-# with a null route — alerts aggregate in its UI but notify nobody, and the
-# scheduled CI checks remain the only alerting that reaches a human.
+# with a null route — alerts aggregate in its UI but notify nobody.
+#
+# The in-cluster llz-reconciler is now the PRIMARY day-2 signal: it samples
+# convergence, OpenBao seal, ESO-store + cert-manager readiness, and credential
+# age continuously and raises Prometheus alerts (llz-reconciler PrometheusRule +
+# observability openbao-alerts). Those alerts land in Alertmanager — so wiring a
+# receiver here is what turns the whole surface into something that reaches a
+# human in real time. Until then the (now weekly, belt-and-suspenders) scheduled
+# CI health probes are the only cluster-health alerting that reaches a human, so
+# wiring Slack is strongly recommended for any environment run unattended.
 #
 # To wire Slack, `llz render` writes this block from spec.alerting (receivers +
 # channels), and the webhook URL — the only secret — deliberately does NOT live

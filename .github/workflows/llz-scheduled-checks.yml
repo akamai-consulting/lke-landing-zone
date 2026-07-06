@@ -68,12 +68,22 @@ jobs:
     uses: ./.github/workflows/llz-discover-deployments.yml
 
   # ── OpenBao + ESO health checks ──────────────────────────────────────────────
-  # Runs daily (06:00 UTC) and on demand. Checks each cluster for:
+  # Checks each cluster for:
   #   • OpenBao pod seal state (all 3 Raft pods)
   #   • ESO ClusterSecretStore readiness
   #   • Any unhealthy ExternalSecrets across all namespaces
   # Warning-only (continue-on-error) — a sealed pod pages the operator via the
   # job summary warning annotations but does not block other scheduled work.
+  #
+  # DEMOTED to WEEKLY (was daily): the in-cluster llz-reconciler now samples these
+  # continuously and fires them as Prometheus alerts — OpenBaoSealed /
+  # OpenBaoNoActiveLeader (observability openbao-alerts) and LLZESOStoreNotReady
+  # (llz-reconciler PrometheusRule) — so a daily hosted-runner probe (fetch-
+  # kubeconfig + runner-ACL, the CIDR-fragile port-forward path this migration set
+  # out to retire) is redundant. This weekly run stays as belt-and-suspenders: it
+  # catches a cluster whose operator has not wired an Alertmanager receiver
+  # (spec.alerting.receivers: [none]) and re-proves the probe path itself. Still
+  # on-demand via workflow_dispatch.
   openbao-health:
     name: OpenBao Health (${{ matrix.region }})
     needs: discover
@@ -85,7 +95,8 @@ jobs:
     environment: infra-${{ matrix.region }}
     timeout-minutes: 15
     continue-on-error: true
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Weekly Sunday 02:00 UTC (or on demand) — see the DEMOTED note above.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
     strategy:
       fail-fast: false
       matrix:
@@ -517,10 +528,17 @@ jobs:
         run: make -C _llz-template audit
 
   # ── cert-manager Certificate health ─────────────────────────────────────────
-  # Runs daily (06:00 UTC). Checks every cert-manager Certificate across all
-  # namespaces for Ready=True. A stuck ACME renewal (e.g. DNS-01 challenge
-  # failure for otel.<env>.internal) leaves the Certificate in Ready=False
-  # indefinitely — this surfaces it before pods start rejecting connections.
+  # Checks every cert-manager Certificate across all namespaces for Ready=True. A
+  # stuck ACME renewal (e.g. DNS-01 challenge failure for otel.<env>.internal)
+  # leaves the Certificate in Ready=False indefinitely — this surfaces it before
+  # pods start rejecting connections.
+  #
+  # DEMOTED to WEEKLY (was daily): the in-cluster llz-reconciler now samples
+  # cert-manager Certificate readiness continuously (llz_certificates_not_ready)
+  # and fires the LLZCertificatesNotReady Prometheus alert, so the daily hosted-
+  # runner probe is redundant. Weekly stays as belt-and-suspenders (covers a
+  # receiver-less cluster + re-proves the probe path). Still on-demand via
+  # workflow_dispatch.
   certmanager-health:
     name: cert-manager Certificate Health (${{ matrix.region }})
     needs: discover
@@ -532,7 +550,8 @@ jobs:
     environment: infra-${{ matrix.region }}
     timeout-minutes: 15
     continue-on-error: true
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Weekly Sunday 02:00 UTC (or on demand) — see the DEMOTED note above.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
     strategy:
       fail-fast: false
       matrix:
