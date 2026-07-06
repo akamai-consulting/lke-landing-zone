@@ -83,3 +83,4 @@ exclude:
   - "template-scripts/ci/install-syft.sh"    # pinned-release installer, no logic
   - "template-scripts/ci/install-gitleaks.sh" # pinned-release installer, no logic
   - "template-scripts/ci/llz-functional.sh"  # functional test harness for the built llz binary — its assertions ARE the test (exercised every CI run), not decision logic to push into Go
+  - "template-scripts/ci/vap-admission-check.sh" # functional harness for the llz-wave-health-guard VAP — applies the policy to the kind apiserver and asserts admission decisions (deny/allow); the assertions ARE the test, and apiserver CEL enforcement cannot be unit-tested in Go

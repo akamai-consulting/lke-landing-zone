@@ -119,7 +119,11 @@ func ciWedgeGamedayCmd() *cobra.Command {
 					var buf strings.Builder
 					c.Stdout, c.Stderr = &buf, &buf
 					c.Env = os.Environ()
-					return buf.String(), c.Run() == nil
+					// Run BEFORE reading buf — `return buf.String(), c.Run()==nil`
+					// evaluates buf.String() first (empty, pre-run) per Go's
+					// left-to-right operand order, so every read would come back blank.
+					ok := c.Run() == nil
+					return buf.String(), ok
 				},
 				now:   time.Now,
 				sleep: time.Sleep,
