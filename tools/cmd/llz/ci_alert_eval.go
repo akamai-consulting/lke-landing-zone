@@ -33,7 +33,7 @@ import (
 )
 
 func ciAlertEvalCmd() *cobra.Command {
-	var match, prom string
+	var match, prom, summary string
 	var strict bool
 	cmd := &cobra.Command{
 		Use:   "alert-eval",
@@ -44,12 +44,14 @@ func ciAlertEvalCmd() *cobra.Command {
 			"reference a non-existent metric (promtool passes, but they never fire) or that\n" +
 			"trip on a healthy cluster. Read-only.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIAlertEval(match, prom, strict) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runCIAlertEval(match, prom, summary, strict) },
 	}
 	cmd.Flags().StringVar(&match, "match", "^(LLZ|OTel|Loki|Grafana|Harbor|SupportPlane|OpenBao)",
 		"RE2 regex the alert name must match (default: the landing-zone alert families)")
 	cmd.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
 		"the Prometheus Service as <namespace>/<name>:<port> to port-forward to")
+	cmd.Flags().StringVar(&summary, "summary", "",
+		"when set, append a fenced verdict block under this title to $GITHUB_STEP_SUMMARY")
 	cmd.Flags().BoolVar(&strict, "strict", false, "exit 1 if any alert is DEAD? or BROKEN")
 	return cmd
 }
@@ -68,7 +70,7 @@ type evalVerdict struct {
 	detail  string // error text for BROKEN
 }
 
-func runCIAlertEval(match, prom string, strict bool) error {
+func runCIAlertEval(match, prom, summary string, strict bool) error {
 	re, err := regexp.Compile(match)
 	if err != nil {
 		return fmt.Errorf("invalid --match regex: %w", err)
@@ -108,7 +110,7 @@ func runCIAlertEval(match, prom string, strict bool) error {
 		fmt.Fprintf(os.Stderr, "alert-eval: could not reach Prometheus at %s (%v)\n", prom, ferr)
 		return nil
 	}
-	return printAlertEval(out, strict)
+	return printAlertEval(out, summary, strict)
 }
 
 // parseAlertRules extracts alert rules (not recording rules) from a
@@ -212,8 +214,9 @@ func classifyAlertEval(r evalRule, raw []byte, qerr error, known map[string]bool
 	return evalVerdict{rule: r, verdict: "DEAD?"}
 }
 
-func printAlertEval(out []evalVerdict, strict bool) error {
+func printAlertEval(out []evalVerdict, summary string, strict bool) error {
 	counts := map[string]int{}
+	lines := make([]string, 0, len(out))
 	for _, v := range out {
 		counts[v.verdict]++
 		line := fmt.Sprintf("%-7s %s/%s", v.verdict, v.rule.Namespace, v.rule.Alert)
@@ -223,14 +226,29 @@ func printAlertEval(out []evalVerdict, strict bool) error {
 		case "BROKEN":
 			line += fmt.Sprintf("  (%s)", v.detail)
 		}
+		lines = append(lines, line)
 		fmt.Println(line)
 	}
-	fmt.Fprintf(os.Stderr, "\nalert-eval: %d alerts — FIRING=%d ARMED=%d DEAD?=%d BROKEN=%d\n",
+	tally := fmt.Sprintf("alert-eval: %d alerts — FIRING=%d ARMED=%d DEAD?=%d BROKEN=%d",
 		len(out), counts["FIRING"], counts["ARMED"], counts["DEAD?"], counts["BROKEN"])
+	fmt.Fprintf(os.Stderr, "\n%s\n", tally)
 	if counts["DEAD?"] > 0 || counts["FIRING"] > 0 {
 		fmt.Fprintln(os.Stderr, "alert-eval: DEAD? = named metrics all absent (silent never-fire); FIRING on a healthy cluster = check the threshold.")
 	}
-	if strict && (counts["DEAD?"] > 0 || counts["BROKEN"] > 0) {
+	failed := strict && (counts["DEAD?"] > 0 || counts["BROKEN"] > 0)
+
+	// When a title is given, mirror the verdict table into $GITHUB_STEP_SUMMARY so
+	// the step reads as single-line glue (`llz ci alert-eval … --summary "…"`)
+	// instead of a bash block that tee's stdout and re-fences it.
+	if summary != "" {
+		block := append([]string{fmt.Sprintf("## %s", summary), "", "```"}, lines...)
+		block = append(block, tally, "```")
+		if err := appendGHAFile("GITHUB_STEP_SUMMARY", block...); err != nil {
+			return err
+		}
+	}
+
+	if failed {
 		return fmt.Errorf("alert-eval: %d DEAD? + %d BROKEN alert(s)", counts["DEAD?"], counts["BROKEN"])
 	}
 	return nil

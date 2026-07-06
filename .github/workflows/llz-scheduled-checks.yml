@@ -289,29 +289,19 @@ jobs:
           region:                ${{ matrix.region }}
           allow-missing:         'true'
 
-      # WRITER: measure token expiry and push the inventory ConfigMap the reconciler reads.
+      # WRITER: measure token expiry and push the inventory ConfigMap the reconciler
+      # reads. kubectl defaults to the $HOME/.kube/config the cluster-access step wrote,
+      # and the default GitHub shell (-eo pipefail) fails the step if either side does.
       - name: Write token inventory to the cluster
         if: steps.kubeconfig.outputs.available == 'true'
-        run: |
-          set -euo pipefail
-          export KUBECONFIG="$HOME/.kube/config"
-          llz ci token-inventory | kubectl apply -f -
+        run: llz ci token-inventory | kubectl apply -f -
 
       # READER: the cluster is the single pane — evaluate the credential alerts against
-      # live Prometheus. --strict fails on a BROKEN alert (missing metric / dead funnel).
+      # live Prometheus. --strict fails on a BROKEN alert (missing metric / dead funnel);
+      # --summary writes the verdict table to the job summary (see `llz ci alert-eval`).
       - name: Read cluster credential alert status
         if: steps.kubeconfig.outputs.available == 'true'
-        run: |
-          set +e
-          export KUBECONFIG="$HOME/.kube/config"
-          llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)' --strict | tee /tmp/creds.txt
-          EC=${PIPESTATUS[0]}
-          {
-            printf '## Credential single pane (%s) — exit %s\n\n```\n' "$REGION" "$EC"
-            cat /tmp/creds.txt
-            printf '\n```\n'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$EC"
+        run: llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)' --strict --summary "Credential single pane (${REGION})"
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f "$HOME/.kube/config"
