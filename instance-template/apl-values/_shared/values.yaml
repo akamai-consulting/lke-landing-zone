@@ -277,6 +277,25 @@ apps:
               valueFrom: { secretKeyRef: { name: harbor-registry-s3, key: REGISTRY_STORAGE_S3_SECRETKEY } }
             - name:  REGISTRY_STORAGE_S3_FORCEPATHSTYLE
               value: "true"
+      # Prometheus metrics. Off by default in the goharbor chart, so harbor-core/
+      # registry/jobservice expose no :8001 /metrics and no harbor-exporter is
+      # deployed — Harbor was the one support-plane service with zero metrics
+      # coverage (issue #183). Enabling it deploys the harbor-exporter (aggregate
+      # harbor_* gauges: project/repo/quota/task-queue/harbor_up) and adds the
+      # :8001 metrics endpoints on core/registry/jobservice. The chart emits its
+      # OWN ServiceMonitor (it knows its service labels/ports); we only add the
+      # `prometheus: system` label apl-core's Prometheus selectors match on (the
+      # empty serviceMonitorSelector LLZ requests is ineffective on apl-core v6 —
+      # same reason as the otel/openbao/reconciler ServiceMonitors). The scrape
+      # path (Prometheus in `monitoring` → harbor :8001) is opened by the
+      # llz-cluster-foundation harbor-allow-metrics NetworkPolicy; the mesh is
+      # PERMISSIVE so the plaintext scrape needs no PeerAuthentication exception.
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+          additionalLabels:
+            prometheus: system
   kyverno:       { enabled: true }
   policy-reporter: { enabled: true }
   trivy:         { enabled: true }

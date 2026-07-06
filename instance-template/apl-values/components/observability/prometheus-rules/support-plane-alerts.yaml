@@ -53,7 +53,14 @@ spec:
             runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape the Grafana metrics endpoint.
         - alert: HarborMetricsTargetDown
-          expr: up{namespace="harbor", service=~".*harbor.*"} == 0
+          # Scoped to Harbor's OWN metrics targets (core/registry/jobservice/exporter,
+          # all `harbor-*`) and EXCLUDES the CloudNativePG database (`harbor-otomi-db-*`,
+          # which also lives in the harbor namespace and matched the old `.*harbor.*`).
+          # Before Harbor metrics were enabled (issue #183) the only `harbor` target was
+          # that DB, so this alert was misleadingly green — it could never see Harbor
+          # core/registry go unscraped. The DB has its own coverage via cnpg_* / the
+          # kube-state availability alert below.
+          expr: up{namespace="harbor", service=~"harbor-.*", service!~"harbor-otomi-db.*"} == 0
           for: 5m
           labels:
             severity: warning
@@ -61,7 +68,7 @@ spec:
           annotations:
             summary: Harbor metrics target is down
             runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
-            description: Prometheus cannot scrape one or more Harbor metrics endpoints.
+            description: Prometheus cannot scrape one or more Harbor core/registry/jobservice/exporter metrics endpoints.
         # ── Workload availability (distinct from the scrape-health alerts above) ──
         # The `...MetricsTargetDown` alerts fire when Prometheus can't SCRAPE a pod
         # (which can also mean a broken metrics endpoint on a healthy pod). These
@@ -195,3 +202,52 @@ spec:
             summary: OTel Collector is failing to export telemetry
             runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'The OTel Collector exporter has failed sends for 15m — telemetry is being dropped downstream; check the exporter endpoint and credentials.'
+        # ── Harbor error-rate / saturation ────────────────────────────────────────
+        # PROVISIONAL (issue #183). harbor_* only exists once metrics are enabled
+        # (this branch: _shared/values.yaml harbor._rawValues.metrics + the
+        # harbor-allow-metrics NetworkPolicy) AND the scrape converges — until then
+        # `alert-eval` reports these DEAD?. Names are the goharbor v2.15 exporter/core
+        # metrics; verify live once deployed with `llz ci prom-metrics --match '^harbor_'`
+        # and tune thresholds. (Registry-disk saturation is intentionally omitted —
+        # the registry stores to Linode Object Storage (S3), not a PVC. DB health is
+        # covered by the CNPG cnpg_* metrics + the availability alert above.)
+        - alert: HarborComponentDown
+          # The harbor-exporter publishes harbor_up{component=...} (core, database,
+          # redis, registry, jobservice, …) — 0 when it cannot reach that component.
+          expr: harbor_up{namespace="harbor"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: harbor
+          annotations:
+            summary: 'Harbor component {{ $labels.component }} is unhealthy'
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'harbor-exporter reports {{ $labels.component }} unreachable for 10m — that Harbor subsystem is down or unreachable from core.'
+        - alert: HarborCoreHighErrorRate
+          # Error-rate: 5xx ratio on Harbor core's HTTP surface (API + registry auth).
+          expr: |
+            sum(rate(harbor_core_http_request_total{namespace="harbor", code=~"5.."}[5m]))
+            /
+            sum(rate(harbor_core_http_request_total{namespace="harbor"}[5m]))
+            > 0.05
+          for: 15m
+          labels:
+            severity: warning
+            service: harbor
+          annotations:
+            summary: Harbor core is serving a high 5xx error rate
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'More than 5% of Harbor core HTTP requests have returned 5xx for 15m — pushes/pulls and the API are erroring.'
+        - alert: HarborJobQueueBacklog
+          # Saturation: the jobservice work queue (Trivy image scans, GC, replication)
+          # is backing up. harbor_task_queue_size is per job `type`; any single type
+          # sustained high means workers aren't draining it.
+          expr: max(harbor_task_queue_size{namespace="harbor"}) > 100
+          for: 30m
+          labels:
+            severity: warning
+            service: harbor
+          annotations:
+            summary: 'Harbor job queue is backing up ({{ $labels.type }})'
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'A Harbor jobservice queue has exceeded 100 pending tasks for 30m ({{ $value | humanize }}) — Trivy scans / GC / replication are not draining; jobservice is saturated or stuck.'

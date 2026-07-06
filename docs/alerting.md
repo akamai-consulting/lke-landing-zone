@@ -131,14 +131,16 @@ promtool can't verify exist, so each was checked against a live `/metrics` with
 | OTel Collector | `OTelCollectorMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | 🟡 `OTelCollectorRefusingData` (memory_limiter/backpressure) + `OTelCollectorExportFailures` — **provisional**: `otelcol_*` only scrapes after the 0.1.8 NP fix below, and the pipeline is still a placeholder (debug exporter), so these read `DEAD?`/quiet until a real exporter + the fix land |
 | Loki | `LokiMetricsTargetDown` ✅ | `LokiStatefulSetUnavailable` ✅ | ✅ `LokiRequestErrors` (5xx ratio) + `LokiObjectStoreErrors` (S3 Put/Get 5xx, List excluded) + `LokiIngestionDiscarding` — **verified live** against 271 real `loki_*` series (armed, not false-firing) |
 | Grafana | `GrafanaMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | — (availability is the main concern) |
-| Harbor | `HarborMetricsTargetDown` ⚠️ | `SupportPlaneDeploymentUnavailable` ✅ (core + registry) | ⚠️ **gap — no exporter**: apl-core deploys Harbor with its metrics exporter OFF, so `harbor-core`/`harbor-registry` expose no `:8001` and `harbor_*` never exists. `HarborMetricsTargetDown` currently matches only the CNPG DB target (`harbor-otomi-db`, which is up), so it is misleadingly green. Closing this needs apl-core Harbor `metrics.enabled` + a ServiceMonitor + a `monitoring`→`:8001` NP — a separate follow-up. |
+| Harbor | `HarborMetricsTargetDown` ✅ (retargeted) | `SupportPlaneDeploymentUnavailable` ✅ (core + registry) | 🟡 `HarborComponentDown` (`harbor_up`) + `HarborCoreHighErrorRate` (core 5xx ratio) + `HarborJobQueueBacklog` (`harbor_task_queue_size`) — **provisional** (issue #183): this branch enables the exporter (`harbor._rawValues.metrics`) + its ServiceMonitor + the `monitoring`→`:8001` NP, but `harbor_*` only appears once that converges, so `alert-eval` reads these `DEAD?` until then. `HarborMetricsTargetDown` was retargeted off the CNPG DB (`harbor-otomi-db`) onto the real `harbor-*` targets. Registry-disk saturation is N/A (registry → S3, not a PVC). |
 | Prometheus | (self — via `defaultRules`) | (via `defaultRules`) | ⚠️ confirm TSDB compaction failures + scrape-duration are covered by defaults |
 
 The desired end-state coverage bar is one availability + one error-rate + one
 resource-saturation alert per service. Availability is covered fleet-wide; Loki is
-now fully covered (verified) and OpenBao gained lease/audit coverage; OTel is
-provisional (pending a real pipeline) and **Harbor remains the open gap** (its
-exporter is not deployed).
+fully covered (verified); OpenBao gained lease/audit coverage; OTel and Harbor are
+provisional (Harbor's exporter is enabled by this branch but `harbor_*` and the
+alert thresholds still want a live spot-check once the first e2e converges —
+`llz ci prom-metrics --match '^harbor_'` + `alert-eval`, then add the Harbor
+ServiceMonitor to `defaultScrapeMonitors` in `ci_assert_scrape.go` to gate it).
 
 > **The OTel `:8888` scrape depends on a NetworkPolicy, like OpenBao's.** The
 > `otel-collector-monitoring` ServiceMonitor selects the target, but until the
