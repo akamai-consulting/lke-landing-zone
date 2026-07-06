@@ -1,0 +1,35 @@
+# Scrape cert-manager's controller metrics (:9402) so Prometheus sees
+# certmanager_certificate_expiration_timestamp_seconds — the signal the credential
+# single-pane uses to alert BEFORE a cert expires (LLZCertificateExpiringSoon in
+# prometheus-rules/credential-alerts.yaml). The reconciler's llz_certificates_not_ready
+# only fires once a cert is ALREADY broken; this adds the lead-time.
+#
+# REQUIRED label `prometheus: system`: apl-core's Prometheus serviceMonitorSelector
+# matches it (same as the reconciler/otel ServiceMonitors). The port is jetstack
+# cert-manager's metrics port `tcp-prometheus-servicemonitor` (9402) on the
+# `cert-manager` controller Service; the allow-netpol (cert-manager-allow-metrics.yaml)
+# opens the default-deny cert-manager namespace for the scrape.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cert-manager
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    prometheus: system
+    app.kubernetes.io/part-of: platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - cert-manager
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+  endpoints:
+    - port: tcp-prometheus-servicemonitor
+      scheme: http
+      path: /metrics
+      interval: 60s
+      scrapeTimeout: 10s

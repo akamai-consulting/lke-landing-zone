@@ -8,5 +8,12 @@ resources:
   - otel-collector.yaml
   - otel-collector-servicemonitor.yaml
   - llz-day2-dashboard.yaml
+  # Credential single-pane-of-glass: scrape cert-manager expiry, re-expose CI-token
+  # expiry (via the reconciler + token-inventory ConfigMap), alert before either
+  # expires, plus a unified Grafana dashboard.
+  - cert-manager-servicemonitor.yaml
+  - cert-manager-allow-metrics.yaml
+  - credential-inventory-dashboard.yaml
   - prometheus-rules/openbao-alerts.yaml
   - prometheus-rules/support-plane-alerts.yaml
+  - prometheus-rules/credential-alerts.yaml

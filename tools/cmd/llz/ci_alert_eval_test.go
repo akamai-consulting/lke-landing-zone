@@ -2,7 +2,10 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -78,8 +81,43 @@ func TestClassifyAlertEval(t *testing.T) {
 }
 
 func TestAlertEvalBadRegex(t *testing.T) {
-	if err := runCIAlertEval("(", "monitoring/prometheus-operated:9090", false); err == nil {
+	if err := runCIAlertEval("(", "monitoring/prometheus-operated:9090", "", false); err == nil {
 		t.Error("invalid --match must error")
+	}
+}
+
+func TestPrintAlertEvalSummary(t *testing.T) {
+	sumFile := filepath.Join(t.TempDir(), "summary.md")
+	t.Setenv("GITHUB_STEP_SUMMARY", sumFile)
+
+	out := []evalVerdict{
+		{rule: evalRule{Namespace: "llz-reconciler", Alert: "LLZTokenExpiringSoon"}, verdict: "ARMED"},
+		{rule: evalRule{Namespace: "llz-reconciler", Alert: "LLZCredentialFunnelStale"}, verdict: "BROKEN", detail: "no such metric"},
+	}
+	// --strict + a BROKEN alert must fail, and the summary must still be written.
+	if err := printAlertEval(out, "Credential single pane (us-ord)", true); err == nil {
+		t.Error("strict + BROKEN must return an error")
+	}
+	got, err := os.ReadFile(sumFile)
+	if err != nil {
+		t.Fatalf("summary file not written: %v", err)
+	}
+	body := string(got)
+	for _, want := range []string{"## Credential single pane (us-ord)", "```", "LLZTokenExpiringSoon", "BROKEN", "FIRING=0 ARMED=1 DEAD?=0 BROKEN=1"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("summary missing %q\n---\n%s", want, body)
+		}
+	}
+}
+
+func TestPrintAlertEvalNoSummaryWhenTitleEmpty(t *testing.T) {
+	sumFile := filepath.Join(t.TempDir(), "summary.md")
+	t.Setenv("GITHUB_STEP_SUMMARY", sumFile)
+	if err := printAlertEval([]evalVerdict{{rule: evalRule{Alert: "LLZTokenExpiringSoon"}, verdict: "ARMED"}}, "", false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(sumFile); !os.IsNotExist(err) {
+		t.Errorf("no title → must not touch $GITHUB_STEP_SUMMARY (stat err=%v)", err)
 	}
 }
 
@@ -87,7 +125,7 @@ func TestAlertEvalUnreachableNonFatal(t *testing.T) {
 	orig := execOutput
 	t.Cleanup(func() { execOutput = orig })
 	execOutput = func(_ string, _ ...string) ([]byte, error) { return nil, errors.New("no cluster") }
-	if err := runCIAlertEval(".", "monitoring/prometheus-operated:9090", false); err != nil {
+	if err := runCIAlertEval(".", "monitoring/prometheus-operated:9090", "", false); err != nil {
 		t.Errorf("unreachable cluster must be non-fatal, got %v", err)
 	}
 }

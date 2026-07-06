@@ -77,6 +77,9 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
 	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd())
+	// Credential single-pane-of-glass writer: measure CI-token expiry and emit the
+	// ConfigMap the in-cluster reconciler re-exposes as metrics (llz-scheduled-checks.yml).
+	c.AddCommand(ciTokenInventoryCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())

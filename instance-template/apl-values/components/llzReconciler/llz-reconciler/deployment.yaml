@@ -88,6 +88,7 @@ spec:
             - --reconcile-argo-nudge
             - --reconcile-sc-demote
             - --reconcile-openbao-gauges
+            - --reconcile-token-inventory
             - --reconcile-volume-labels
             - --reconcile-cidr-firewall
             - --reconcile-linode-creds
