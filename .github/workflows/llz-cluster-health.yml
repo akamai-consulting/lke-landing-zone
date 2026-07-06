@@ -180,6 +180,11 @@ jobs:
             kubectl -n argocd get application "${app}" -o jsonpath='{.status.conditions}' 2>/dev/null || true
             echo
           done
+          # Live alert + metric-surface snapshot: which deployed alerts are
+          # FIRING/ARMED/DEAD?/BROKEN right now, and the exporter metric surface.
+          # Surfaces silent never-fire rules on prod day-2, not just in the e2e.
+          llz ci alert-eval || true
+          llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_|vault_|llz_)' || true
 
       - name: Assert Loki is bootstrapped
         if: ${{ inputs.assert-loki }}
