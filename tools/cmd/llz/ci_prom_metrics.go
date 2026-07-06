@@ -34,7 +34,7 @@ func ciPromMetricsCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIPromMetrics(match, prom) },
 	}
 	cmd.Flags().StringVar(&match, "match", ".", "RE2 regex the metric name must match")
-	cmd.Flags().StringVar(&prom, "prom", "monitoring/po-prometheus:9090",
+	cmd.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
 		"the Prometheus Service as <namespace>/<name>:<port> to port-forward to")
 	return cmd
 }
@@ -44,7 +44,15 @@ func runCIPromMetrics(match, prom string) error {
 	if err != nil {
 		return fmt.Errorf("invalid --match regex: %w", err)
 	}
-	out, err := promGet(prom, "/api/v1/label/__name__/values")
+	var names []string
+	err = withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+		out, gerr := get("/api/v1/label/__name__/values")
+		if gerr != nil {
+			return gerr
+		}
+		names = filterPromMetricNames(out, re)
+		return nil
+	})
 	if err != nil {
 		// Non-fatal: a wrong Service / Prometheus not up yet shouldn't fail a
 		// keep_cluster diagnostic. Report where it looked so the operator can retry
@@ -52,7 +60,6 @@ func runCIPromMetrics(match, prom string) error {
 		fmt.Fprintf(os.Stderr, "prom-metrics: could not reach Prometheus at %s (%v) — retry with --prom <ns>/<svc>:<port>\n", prom, err)
 		return nil
 	}
-	names := filterPromMetricNames(out, re)
 	for _, n := range names {
 		fmt.Println(n)
 	}

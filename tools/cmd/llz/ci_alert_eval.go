@@ -48,7 +48,7 @@ func ciAlertEvalCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&match, "match", "^(LLZ|OTel|Loki|Grafana|Harbor|SupportPlane|OpenBao)",
 		"RE2 regex the alert name must match (default: the landing-zone alert families)")
-	cmd.Flags().StringVar(&prom, "prom", "monitoring/po-prometheus:9090",
+	cmd.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
 		"the Prometheus Service as <namespace>/<name>:<port> to port-forward to")
 	cmd.Flags().BoolVar(&strict, "strict", false, "exit 1 if any alert is DEAD? or BROKEN")
 	return cmd
@@ -85,20 +85,28 @@ func runCIAlertEval(match, prom string, strict bool) error {
 		return nil
 	}
 
-	// One fetch of the full metric-name set powers DEAD? detection (an expr whose
-	// named metrics are all absent can never fire). Best-effort: if it fails, we
-	// skip the DEAD? distinction rather than mislabel.
-	known := map[string]bool{}
-	if nameJSON, nerr := promGet(prom, "/api/v1/label/__name__/values"); nerr == nil {
-		for _, n := range parsePromLabelValues(nameJSON) {
-			known[n] = true
-		}
-	}
-
+	// One port-forward session serves the metric-name fetch AND every per-expr
+	// query (20+), instead of a fresh kubectl per query.
 	var out []evalVerdict
-	for _, r := range rules {
-		raw, qerr := promGet(prom, "/api/v1/query?query="+url.QueryEscape(r.Expr))
-		out = append(out, classifyAlertEval(r, raw, qerr, known))
+	ferr := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+		// The full metric-name set powers DEAD? detection (an expr whose named
+		// metrics are all absent can never fire). Best-effort: if it fails, we skip
+		// the DEAD? distinction rather than mislabel.
+		known := map[string]bool{}
+		if nameJSON, nerr := get("/api/v1/label/__name__/values"); nerr == nil {
+			for _, n := range parsePromLabelValues(nameJSON) {
+				known[n] = true
+			}
+		}
+		for _, r := range rules {
+			raw, qerr := get("/api/v1/query?query=" + url.QueryEscape(r.Expr))
+			out = append(out, classifyAlertEval(r, raw, qerr, known))
+		}
+		return nil
+	})
+	if ferr != nil {
+		fmt.Fprintf(os.Stderr, "alert-eval: could not reach Prometheus at %s (%v)\n", prom, ferr)
+		return nil
 	}
 	return printAlertEval(out, strict)
 }

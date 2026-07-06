@@ -8,7 +8,7 @@ metadata:
     # Labels the Prometheus Operator's serviceMonitorSelector matches. apl-core's
     # kube-prometheus-stack selects on `prometheus: system` (NOT a release label),
     # so a ServiceMonitor without it is silently ignored and vault_* never scrapes.
-    {{- toYaml .Values.platform.serviceMonitor.selectorLabels | nindent 4 }}
+    {{- toYaml (.Values.platform.serviceMonitor.selectorLabels | default (dict "prometheus" "system")) | nindent 4 }}
 spec:
   namespaceSelector:
     matchNames:

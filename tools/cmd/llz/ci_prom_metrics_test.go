@@ -25,23 +25,27 @@ func TestFilterPromMetricNamesBadJSON(t *testing.T) {
 // runCIPromMetrics must not fail when Prometheus is unreachable — it's a best-effort
 // keep_cluster diagnostic; a wrong --prom should report and exit 0, not abort.
 func TestPromMetricsUnreachableIsNonFatal(t *testing.T) {
-	orig := promGet
-	t.Cleanup(func() { promGet = orig })
-	promGet = func(_, _ string) ([]byte, error) { return nil, errors.New("no cluster") }
+	orig := withPrometheus
+	t.Cleanup(func() { withPrometheus = orig })
+	withPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
+		return errors.New("no cluster")
+	}
 	if err := runCIPromMetrics(".", "monitoring/bogus:9090"); err != nil {
 		t.Errorf("unreachable Prometheus must be non-fatal, got %v", err)
 	}
 }
 
-// The happy path reads names from promGet (the port-forward seam), filters, sorts.
+// The happy path reads names from the port-forward session, filters, sorts.
 func TestPromMetricsHappyPath(t *testing.T) {
-	orig := promGet
-	t.Cleanup(func() { promGet = orig })
-	promGet = func(_, path string) ([]byte, error) {
-		if path != "/api/v1/label/__name__/values" {
-			t.Errorf("unexpected path %q", path)
-		}
-		return []byte(`{"status":"success","data":["loki_x","up","vault_y"]}`), nil
+	orig := withPrometheus
+	t.Cleanup(func() { withPrometheus = orig })
+	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+		return fn(func(path string) ([]byte, error) {
+			if path != "/api/v1/label/__name__/values" {
+				t.Errorf("unexpected path %q", path)
+			}
+			return []byte(`{"status":"success","data":["loki_x","up","vault_y"]}`), nil
+		})
 	}
 	if err := runCIPromMetrics("^loki_", "monitoring/po-prometheus:9090"); err != nil {
 		t.Errorf("happy path should succeed, got %v", err)
