@@ -39,11 +39,38 @@ func ghSetRepoSecretNative(name, value string) error {
 	if token == "" || repo == "" {
 		return fmt.Errorf("GH_TOKEN and GH_REPO must be set to write repo secret %s", name)
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	// Repo-level secrets key off owner/name.
+	base := fmt.Sprintf("%s/repos/%s/actions/secrets", ghAPIBase, repo)
+	return ghSealAndPut(&http.Client{Timeout: 15 * time.Second}, token, base, name, value)
+}
 
-	keyID, pubKey, err := ghRepoPublicKey(client, token, repo)
+// ghSetEnvSecretNative writes one ENVIRONMENT-scoped Actions secret (the
+// infra-<deployment> copies the workflows actually read — see credentials.go
+// writeRotatedSecret). Environment-secret endpoints key off the NUMERIC repository
+// id (not owner/name), so it resolves the id first. Same sealed-box + PUT idempotency
+// as the repo-level path. The in-cluster broad-PAT rotator uses this to write the
+// rotated LINODE_API_TOKEN back to each deployment's environment.
+func ghSetEnvSecretNative(name, env, value string) error {
+	token, repo := os.Getenv("GH_TOKEN"), os.Getenv("GH_REPO")
+	if token == "" || repo == "" {
+		return fmt.Errorf("GH_TOKEN and GH_REPO must be set to write env secret %s", name)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	id, err := ghRepoID(client, token, repo)
 	if err != nil {
-		return fmt.Errorf("fetch %s actions public key: %w", repo, err)
+		return fmt.Errorf("resolve repo id for %s: %w", repo, err)
+	}
+	base := fmt.Sprintf("%s/repositories/%d/environments/%s/secrets", ghAPIBase, id, env)
+	return ghSealAndPut(client, token, base, name, value)
+}
+
+// ghSealAndPut fetches the Actions public key at secretsBase/public-key, seals value
+// against it (anonymous NaCl box), and PUTs it to secretsBase/name. Shared by the
+// repo-level and environment-level writers — the only difference is secretsBase.
+func ghSealAndPut(client *http.Client, token, secretsBase, name, value string) error {
+	keyID, pubKey, err := ghActionsPublicKey(client, token, secretsBase)
+	if err != nil {
+		return fmt.Errorf("fetch actions public key: %w", err)
 	}
 	sealed, err := box.SealAnonymous(nil, []byte(value), pubKey, rand.Reader)
 	if err != nil {
@@ -56,8 +83,7 @@ func ghSetRepoSecretNative(name, value string) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPut,
-		fmt.Sprintf("%s/repos/%s/actions/secrets/%s", ghAPIBase, repo, name), bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPut, secretsBase+"/"+name, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -65,21 +91,50 @@ func ghSetRepoSecretNative(name, value string) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("put repo secret %s: %w", name, err)
+		return fmt.Errorf("put secret %s: %w", name, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("put repo secret %s: HTTP %d: %s", name, resp.StatusCode, strings.TrimSpace(string(b)))
+		return fmt.Errorf("put secret %s: HTTP %d: %s", name, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return nil
 }
 
-// ghRepoPublicKey fetches the repo's Actions public key (key_id + the 32-byte
-// X25519 key GitHub base64-encodes).
-func ghRepoPublicKey(client *http.Client, token, repo string) (keyID string, key *[32]byte, err error) {
-	req, err := http.NewRequest(http.MethodGet,
-		fmt.Sprintf("%s/repos/%s/actions/secrets/public-key", ghAPIBase, repo), nil)
+// ghRepoID resolves owner/name → the numeric repository id GitHub's
+// environment-secret endpoints require.
+func ghRepoID(client *http.Client, token, repo string) (int64, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/repos/%s", ghAPIBase, repo), nil)
+	if err != nil {
+		return 0, err
+	}
+	ghAuthHeaders(req, token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var r struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return 0, err
+	}
+	if r.ID == 0 {
+		return 0, fmt.Errorf("repo %s: response missing .id", repo)
+	}
+	return r.ID, nil
+}
+
+// ghActionsPublicKey fetches an Actions public key from secretsBase/public-key
+// (repo-level or environment-level), returning key_id + the 32-byte X25519 key
+// GitHub base64-encodes.
+func ghActionsPublicKey(client *http.Client, token, secretsBase string) (keyID string, key *[32]byte, err error) {
+	req, err := http.NewRequest(http.MethodGet, secretsBase+"/public-key", nil)
 	if err != nil {
 		return "", nil, err
 	}

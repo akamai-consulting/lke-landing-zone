@@ -1,0 +1,7 @@
+# spec.components.broadPatRotator → this kustomize Component. Enable on EXACTLY ONE
+# deployment (the broad PAT is account-wide). Template-managed. See
+# docs/designs/credential-single-pane.md.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - broad-pat-rotator

@@ -1,0 +1,52 @@
+# Default-deny for the new namespace + the rotator's minimal egress. It holds an
+# account:read_write Linode token and a GitHub secrets-write token — unconstrained
+# egress would let a compromised image exfiltrate them. Allow only DNS + OpenBao
+# (8200) + outbound HTTPS (443) for the Linode + GitHub APIs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llz-pat-rotator-default-deny
+  namespace: llz-pat-rotator
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: broad-pat-rotator-egress
+  namespace: llz-pat-rotator
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: broad-pat-rotator
+  policyTypes: [Egress, Ingress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # OpenBao (Kubernetes-auth login + KV read/write of secret/linode/broad-pat).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llz-openbao
+      ports:
+        - { protocol: TCP, port: 8200 }
+    # api.linode.com + api.github.com (HTTPS). Port-restricted 0.0.0.0/0 — same
+    # posture as the linode-cred-rotator + harbor-provisioner API egress.
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443 }

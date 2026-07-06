@@ -216,6 +216,20 @@ var Components = []Component{
 		DefaultDisabled:   true,
 	},
 	{
+		// In-cluster rotator for the BROAD account:read_write Linode PAT
+		// (LINODE_API_TOKEN) — a dedicated CronJob that mints its successor, seeds
+		// OpenBao, publishes it to each deployment's GitHub environment secret, and
+		// revokes the old one (docs/designs/credential-single-pane.md). Reverses the
+		// "broad PAT is CI/TF-only, never in-cluster" boundary, so it is
+		// DEFAULT-DISABLED and — because the broad PAT is ACCOUNT-wide — must be
+		// enabled on EXACTLY ONE deployment. DependsOn externalSecrets: it reads the
+		// current broad PAT + the GitHub secrets-write token via ESO.
+		Name:              "broadPatRotator",
+		DependsOn:         []string{"externalSecrets"},
+		ManifestResources: []string{"broad-pat-rotator"},
+		DefaultDisabled:   true,
+	},
+	{
 		// In-cluster reconciler + convergence metrics surface (Phase 0:
 		// observe-only). Deploys the long-lived `llz reconcile` process that
 		// samples cluster signals and serves them at :8080/metrics, plus the

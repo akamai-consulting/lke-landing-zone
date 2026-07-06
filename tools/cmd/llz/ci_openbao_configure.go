@@ -25,6 +25,7 @@ path "secret/data/harbor/registry-s3"           { capabilities = ["read"] }
 path "secret/data/harbor/robot"                 { capabilities = ["read"] }
 path "secret/data/infra/github-dispatch-token"  { capabilities = ["read"] }
 path "secret/data/linode/api-token"             { capabilities = ["read"] }
+path "secret/data/linode/broad-pat"             { capabilities = ["read"] }
 path "secret/data/linode/cloud-firewall"        { capabilities = ["read"] }
 path "secret/data/loki/object-store"            { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
@@ -39,6 +40,7 @@ path "secret/metadata/harbor/registry-s3"           { capabilities = ["read", "l
 path "secret/metadata/harbor/robot"                 { capabilities = ["read", "list"] }
 path "secret/metadata/infra/github-dispatch-token"  { capabilities = ["read", "list"] }
 path "secret/metadata/linode/api-token"             { capabilities = ["read", "list"] }
+path "secret/metadata/linode/broad-pat"             { capabilities = ["read", "list"] }
 path "secret/metadata/linode/cloud-firewall"        { capabilities = ["read", "list"] }
 path "secret/metadata/loki/object-store"            { capabilities = ["read", "list"] }
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
@@ -108,6 +110,16 @@ const policyReconcilerRead = `path "secret/metadata/loki/object-store"  { capabi
 path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
 `
 
+// broad-pat-rotator: read/write on EXACTLY the broad-PAT path the in-cluster
+// broad-PAT rotator owns (the broadPatRotator CronJob, `llz ci rotate-broad-pat`).
+// It reads rotated_at (due-check) + re-writes {token, rotated_at} after each mint.
+// Never any consumer path, never the narrow PAT (secret/linode/api-token). The GitHub
+// token + the current broad PAT reach the CronJob via ESO (the read `platform-ci`
+// policy), NOT this role. Mapped to the `broad-pat-rotator` Kubernetes-auth role.
+const policyBroadPATRotator = `path "secret/data/linode/broad-pat"     { capabilities = ["create", "update", "read"] }
+path "secret/metadata/linode/broad-pat" { capabilities = ["read"] }
+`
+
 // baoConfigStep is one in-pod bao invocation of the configure sequence.
 // Non-fatal steps are the `|| true` enables of the bash — re-runs hit
 // "path is already in use" and must not abort the re-configure.
@@ -157,6 +169,10 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 		// credential-age gauges. Mapped to the reconciler k8s-auth role.
 		{desc: "write policy reconciler-read", fatal: true, stdin: policyReconcilerRead,
 			args: []string{"policy", "write", "reconciler-read", "-"}},
+		// broad-pat-rotator policy: scoped read/write on secret/linode/broad-pat for the
+		// in-cluster broad-PAT rotator CronJob. Mapped to the broad-pat-rotator role.
+		{desc: "write policy broad-pat-rotator", fatal: true, stdin: policyBroadPATRotator,
+			args: []string{"policy", "write", "broad-pat-rotator", "-"}},
 		// Kubernetes auth role for the External Secrets Operator — lets the ESO
 		// ClusterSecretStore authenticate with its in-cluster ServiceAccount token
 		// (read-only platform-ci policy) instead of an AppRole secret_id seeded from
@@ -211,6 +227,17 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=llz-reconciler",
 				"bound_service_account_namespaces=llz-reconciler",
 				"policies=reconciler-read,linode-rotator", "ttl=15m"}},
+		// Kubernetes auth role for the in-cluster broad-PAT rotator — binds the
+		// broad-pat-rotator ServiceAccount (llz-pat-rotator namespace) to the
+		// broad-pat-rotator write policy so it can re-write secret/linode/broad-pat.
+		// Isolated from the reconciler on purpose (this workload holds the
+		// account:read_write token). Harmless when the component is disabled (the
+		// SA/namespace never exist, so nothing can assume the role).
+		{desc: "write kubernetes auth role broad-pat-rotator", fatal: true,
+			args: []string{"write", "auth/kubernetes/role/broad-pat-rotator",
+				"bound_service_account_names=broad-pat-rotator",
+				"bound_service_account_namespaces=llz-pat-rotator",
+				"policies=broad-pat-rotator", "ttl=15m"}},
 		// NOTE: an OpenBao kubernetes-auth role for a day-2 Argo Workflows SA will be
 		// added HERE when the first rotation-style day-2 Argo job lands — bound to
 		// THAT job's own SA + namespace with a scoped write policy (the same shape as
