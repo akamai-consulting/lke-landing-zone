@@ -36,7 +36,9 @@ type: application
 #         llz-cluster-foundation pin to 0.1.6, and drop the now-dead
 #         charts.external-secrets.io sourceRepos allowlist entry (the ESO App
 #         that consumed it is gone).
-version: 0.1.14
+# 0.1.15: bump the llz-cluster-foundation pin to 0.1.7 (that chart retired its
+#         sc-default-patcher CronJob; the PostSync Job + Kyverno policy remain).
+version: 0.1.15
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"
