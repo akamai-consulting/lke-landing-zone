@@ -130,6 +130,32 @@ The desired end-state coverage bar is one availability + one error-rate + one
 resource-saturation alert per service — availability is now covered; error-rate/
 saturation is the remaining gap.
 
+**E2E wiring gate.** The scrape-health alerts above are only as good as the
+scrape wiring they sit on: a ServiceMonitor/PrometheusRule that loses its
+`prometheus: system` label (or a renamed Service port / wrong namespaceSelector)
+leaves the CR present but silently un-scraped/un-loaded, and `converge` /
+`health` / `assert-loki` all stay green. The release-e2e converge now gates on
+`llz ci assert-scrape-targets` (every landing-zone ServiceMonitor has a live `up`
+target and every PrometheusRule group is loaded), so that class of regression
+fails the e2e instead of shipping a metrics surface that quietly stopped flowing.
+The companion `llz ci alert-eval` runs report-only (its FIRING/ARMED/`DEAD?`/`BROKEN`
+report is surfaced in the job summary) and is intended to harden to `--strict`
+once the last opt-in-reconciler `DEAD?` alerts are resolved.
+
+Two further gates run in the same converge:
+
+- **`llz ci assert-reconciler`** — the reconciler's *functional* health, which
+  pod phase can't see: `llz_reconcile_up == 1` (the reconcile loop is up AND its
+  samples succeed — a pod Running yet failing on a permission dropped by the
+  least-privilege RBAC, or lost OpenBao/Linode access, reports 0) and
+  `llz_reconcile_leader == 1` (a replica holds the driving Lease). `alert-eval
+  --strict` can't cover this — the matching `LLZReconcilerReportingDown` /
+  `LLZReconcilerNoLeader` alerts would be *firing*, and `--strict` ignores FIRING.
+- **`llz ci wave-health-audit --fail-on-unvetted`** — the runtime counterpart to
+  the static wave-health-guard + VAP: it enumerates every live negative-sync-wave
+  resource and fails on any kind the VAP would DENY (a coverage gap or a latent
+  false-positive), instead of waiting for the weekly scheduled audit.
+
 ### Visualizing the in-cluster signal
 
 The reconciler's day-2 gauges (convergence, ESO/cert readiness, OpenBao seal,
@@ -172,5 +198,9 @@ template.
    `kustomization.yaml`.
 2. If you add a new rule group, also add it to the `EXPECTED_RULES` list in the
    rule-drift check in [scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml)
-   so its absence is detected.
+   AND to `defaultScrapeRuleGroups` in
+   [tools/cmd/llz/ci_assert_scrape.go](../tools/cmd/llz/ci_assert_scrape.go) — the
+   e2e `assert-scrape-targets` gate fails if an expected group isn't loaded into
+   Prometheus. Likewise, a new landing-zone ServiceMonitor goes in that file's
+   `defaultScrapeMonitors` so the e2e asserts it actually produces an `up` target.
 3. Argo CD syncs the rule into Prometheus on the next reconcile.
