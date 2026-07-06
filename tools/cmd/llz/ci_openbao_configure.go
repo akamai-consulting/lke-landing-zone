@@ -200,19 +200,19 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_namespaces=harbor",
 				"policies=harbor-provisioner", "ttl=15m"}},
 		// Kubernetes auth role for the in-cluster reconciler — binds the
-		// llz-reconciler ServiceAccount to its policies. reconciler-read is the
-		// metadata-only gauge read (--reconcile-openbao-gauges); linode-rotator adds
-		// the read_write on the two in-cluster-rotated object-storage key paths that
-		// --reconcile-linode-creds needs (it now runs the linodeCredRotator CronJob's
-		// work, so it gets that CronJob's exact policy). Harmless when the
-		// llzReconciler component / those flags are disabled (the SA/namespace simply
-		// never match, and an unused policy grants nothing). harbor-provisioner is
-		// added with --reconcile-harbor in a later batch.
+		// llz-reconciler ServiceAccount to its policies. The reconciler now runs the
+		// full driving suite, so it carries every policy the CronJobs it replaces
+		// used: reconciler-read (metadata-only gauge read, --reconcile-openbao-gauges),
+		// linode-rotator (read_write on the two object-storage key paths,
+		// --reconcile-linode-creds), and harbor-provisioner (read_write on
+		// secret/harbor/{robot,pull-robot}, --reconcile-harbor). Harmless when a flag
+		// is disabled (the SA/namespace simply never match, and an unused policy
+		// grants nothing). Never the harbor admin path — that stays ESO-only.
 		{desc: "write kubernetes auth role reconciler", fatal: true,
 			args: []string{"write", "auth/kubernetes/role/reconciler",
 				"bound_service_account_names=llz-reconciler",
 				"bound_service_account_namespaces=llz-reconciler",
-				"policies=reconciler-read,linode-rotator", "ttl=15m"}},
+				"policies=reconciler-read,linode-rotator,harbor-provisioner", "ttl=15m"}},
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in
