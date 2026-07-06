@@ -16,10 +16,10 @@ package main
 //            live metric set — the silent-never-fires signature. Investigate.
 //   BROKEN   Prometheus rejected the expr (bad PromQL / label that errors).
 //
-// Reaches Prometheus through the apiserver Service proxy (kubectl get --raw), same
-// as `llz ci prom-metrics`, so it needs only the health-check kubeconfig. The
-// `for:` duration is not part of the expr, so this reports whether the CONDITION
-// is currently true (would-fire ignoring `for`) — exactly the signal we want.
+// Reaches Prometheus via an ephemeral kubectl port-forward (see prom_query.go —
+// the apiserver Service proxy is webhook-denied on LKE-Enterprise), same as
+// `llz ci prom-metrics`. The `for:` duration is not part of the expr, so this
+// reports whether the CONDITION is currently true (would-fire ignoring `for`).
 
 import (
 	"encoding/json"
@@ -28,7 +28,6 @@ import (
 	"os"
 	"regexp"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -40,17 +39,17 @@ func ciAlertEvalCmd() *cobra.Command {
 		Use:   "alert-eval",
 		Short: "evaluate deployed PrometheusRule alert exprs against the live Prometheus (find never-fire / false-positive rules)",
 		Long: "Reads the PrometheusRule CRs off the cluster and runs each alert expr through\n" +
-			"the in-cluster Prometheus /api/v1/query (via the apiserver Service proxy, no\n" +
-			"port-forward). Classifies each as FIRING / ARMED / DEAD? / BROKEN so you can\n" +
-			"catch alerts that reference a non-existent metric (promtool passes, but they\n" +
-			"never fire) or that trip on a healthy cluster. Read-only.",
+			"the in-cluster Prometheus /api/v1/query (via an ephemeral kubectl port-forward).\n" +
+			"Classifies each as FIRING / ARMED / DEAD? / BROKEN so you can catch alerts that\n" +
+			"reference a non-existent metric (promtool passes, but they never fire) or that\n" +
+			"trip on a healthy cluster. Read-only.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIAlertEval(match, prom, strict) },
 	}
 	cmd.Flags().StringVar(&match, "match", "^(LLZ|OTel|Loki|Grafana|Harbor|SupportPlane|OpenBao)",
 		"RE2 regex the alert name must match (default: the landing-zone alert families)")
-	cmd.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
-		"the Prometheus Service as <namespace>/<name>:<port> to proxy through the apiserver")
+	cmd.Flags().StringVar(&prom, "prom", "monitoring/po-prometheus:9090",
+		"the Prometheus Service as <namespace>/<name>:<port> to port-forward to")
 	cmd.Flags().BoolVar(&strict, "strict", false, "exit 1 if any alert is DEAD? or BROKEN")
 	return cmd
 }
@@ -74,10 +73,6 @@ func runCIAlertEval(match, prom string, strict bool) error {
 	if err != nil {
 		return fmt.Errorf("invalid --match regex: %w", err)
 	}
-	ns, svcPort, ok := strings.Cut(prom, "/")
-	if !ok {
-		return fmt.Errorf("--prom must be <namespace>/<name>:<port>, got %q", prom)
-	}
 
 	rulesJSON, err := execOutput("kubectl", "get", "prometheusrules.monitoring.coreos.com", "-A", "-o", "json")
 	if err != nil {
@@ -94,17 +89,15 @@ func runCIAlertEval(match, prom string, strict bool) error {
 	// named metrics are all absent can never fire). Best-effort: if it fails, we
 	// skip the DEAD? distinction rather than mislabel.
 	known := map[string]bool{}
-	if nameJSON, nerr := execOutput("kubectl", "get", "--raw",
-		fmt.Sprintf("/api/v1/namespaces/%s/services/%s/proxy/api/v1/label/__name__/values", ns, svcPort)); nerr == nil {
+	if nameJSON, nerr := promGet(prom, "/api/v1/label/__name__/values"); nerr == nil {
 		for _, n := range parsePromLabelValues(nameJSON) {
 			known[n] = true
 		}
 	}
 
-	proxy := fmt.Sprintf("/api/v1/namespaces/%s/services/%s/proxy/api/v1/query", ns, svcPort)
 	var out []evalVerdict
 	for _, r := range rules {
-		raw, qerr := execOutput("kubectl", "get", "--raw", proxy+"?query="+url.QueryEscape(r.Expr))
+		raw, qerr := promGet(prom, "/api/v1/query?query="+url.QueryEscape(r.Expr))
 		out = append(out, classifyAlertEval(r, raw, qerr, known))
 	}
 	return printAlertEval(out, strict)

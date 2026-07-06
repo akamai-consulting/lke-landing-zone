@@ -6,9 +6,9 @@ package main
 // blind risks a silent non-firing rule (promtool checks syntax, not existence),
 // so this dumps the real exporter metric names (loki_*, otelcol_*, harbor_*,
 // vault_*, …) off a live cluster so the alert exprs can be written against names
-// that actually exist. Best-effort + read-only: reaches Prometheus through the
-// apiserver Service proxy (`kubectl get --raw`), so it needs only the kubeconfig
-// the health checks already use — no port-forward.
+// that actually exist. Best-effort + read-only: reaches Prometheus via an
+// ephemeral kubectl port-forward (see prom_query.go — the apiserver Service proxy
+// is webhook-denied on LKE-Enterprise), so it needs only the health-check kubeconfig.
 
 import (
 	"encoding/json"
@@ -16,7 +16,6 @@ import (
 	"os"
 	"regexp"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -26,17 +25,17 @@ func ciPromMetricsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prom-metrics",
 		Short: "list in-cluster Prometheus metric names matching a regex (metric-name discovery)",
-		Long: "Queries the in-cluster Prometheus (via the apiserver Service proxy, no\n" +
-			"port-forward) for every scraped metric name and prints those matching --match.\n" +
-			"Use it to discover the real exporter metric names (loki_*, otelcol_*, harbor_*)\n" +
-			"before writing an error-rate/saturation alert — promtool validates syntax, not\n" +
-			"that a metric exists. Read-only; best-effort (exit 0 even on no matches).",
+		Long: "Queries the in-cluster Prometheus (via an ephemeral kubectl port-forward)\n" +
+			"for every scraped metric name and prints those matching --match. Use it to\n" +
+			"discover the real exporter metric names (loki_*, otelcol_*, harbor_*) before\n" +
+			"writing an error-rate/saturation alert — promtool validates syntax, not that\n" +
+			"a metric exists. Read-only; best-effort (exit 0 even on no matches).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIPromMetrics(match, prom) },
 	}
 	cmd.Flags().StringVar(&match, "match", ".", "RE2 regex the metric name must match")
-	cmd.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
-		"the Prometheus Service as <namespace>/<name>:<port> to proxy through the apiserver")
+	cmd.Flags().StringVar(&prom, "prom", "monitoring/po-prometheus:9090",
+		"the Prometheus Service as <namespace>/<name>:<port> to port-forward to")
 	return cmd
 }
 
@@ -45,14 +44,9 @@ func runCIPromMetrics(match, prom string) error {
 	if err != nil {
 		return fmt.Errorf("invalid --match regex: %w", err)
 	}
-	ns, svcPort, ok := strings.Cut(prom, "/")
-	if !ok {
-		return fmt.Errorf("--prom must be <namespace>/<name>:<port>, got %q", prom)
-	}
-	path := fmt.Sprintf("/api/v1/namespaces/%s/services/%s/proxy/api/v1/label/__name__/values", ns, svcPort)
-	out, err := execOutput("kubectl", "get", "--raw", path)
+	out, err := promGet(prom, "/api/v1/label/__name__/values")
 	if err != nil {
-		// Non-fatal: a wrong Service path / Prometheus not up yet shouldn't fail a
+		// Non-fatal: a wrong Service / Prometheus not up yet shouldn't fail a
 		// keep_cluster diagnostic. Report where it looked so the operator can retry
 		// with a different --prom against the (kept) cluster.
 		fmt.Fprintf(os.Stderr, "prom-metrics: could not reach Prometheus at %s (%v) — retry with --prom <ns>/<svc>:<port>\n", prom, err)

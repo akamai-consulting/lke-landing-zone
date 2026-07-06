@@ -1,0 +1,34 @@
+# ServiceMonitor for OUR OpenTelemetry Collector's own telemetry (otelcol_*),
+# exposed by the operator-created `otel-collector-monitoring` Service on :8888.
+# Without it the collector's internal metrics never reach Prometheus, and the
+# OTelCollectorMetricsTargetDown alert (support-plane-alerts.yaml) has no `up`
+# series to evaluate — a silent never-fire. (The otel-operator only creates this
+# monitoring Service, not a ServiceMonitor for it.)
+#
+# REQUIRED label `prometheus: system`: apl-core's Prometheus serviceMonitorSelector
+# matches it (same reason as the reconciler/openbao ServiceMonitors — the empty
+# serviceMonitorSelector LLZ requests in _shared/values.yaml is ineffective on
+# apl-core v6). Selector targets the monitoring Service specifically (the collector
+# also has an OTLP-data Service on :4318 that serves no metrics).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: otel-collector-monitoring
+  namespace: llz-observability
+  labels:
+    prometheus: system
+    app.kubernetes.io/part-of: platform
+spec:
+  namespaceSelector:
+    matchNames:
+      - llz-observability
+  selector:
+    matchLabels:
+      operator.opentelemetry.io/collector-service-type: monitoring
+      app.kubernetes.io/instance: llz-observability.otel
+  endpoints:
+    - port: monitoring
+      scheme: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
