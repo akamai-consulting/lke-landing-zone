@@ -45,3 +45,17 @@ spec:
           annotations:
             summary: OpenBao has no active leader
             description: No OpenBao pod is reporting active leadership.
+        # Raft quorum: the HA cluster runs 3 peers (llz-openbao-platform
+        # server.ha.replicas), tolerating one loss. Fewer than 3 UNSEALED pods means
+        # the quorum has lost redundancy — one more loss forfeits write availability.
+        # vault_core_unsealed is the per-pod metric OpenBaoSealed already reads (1 =
+        # unsealed); counting it catches a down OR sealed peer as a quorum signal.
+        - alert: OpenBaoRaftQuorumDegraded
+          expr: count(vault_core_unsealed{namespace="llz-openbao"} == 1) < 3
+          for: 5m
+          labels:
+            severity: warning
+            service: openbao
+          annotations:
+            summary: OpenBao Raft quorum is degraded
+            description: 'Fewer than 3 OpenBao pods are unsealed and reachable — the 3-node Raft quorum has lost redundancy. One more peer loss forfeits write availability.'

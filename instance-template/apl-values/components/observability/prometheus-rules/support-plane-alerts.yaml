@@ -54,3 +54,30 @@ spec:
           annotations:
             summary: Harbor metrics target is down
             description: Prometheus cannot scrape one or more Harbor metrics endpoints.
+        # ── Workload availability (distinct from the scrape-health alerts above) ──
+        # The `...MetricsTargetDown` alerts fire when Prometheus can't SCRAPE a pod
+        # (which can also mean a broken metrics endpoint on a healthy pod). These
+        # fire when the workload actually has ZERO available/ready replicas — a
+        # pod that is Running-but-NotReady scrapes fine yet serves nothing. Uses
+        # kube-state-metrics (shipped by kube-prometheus-stack): a broader default
+        # rule (KubeDeploymentReplicasMismatch, 15m) exists, but these are scoped to
+        # the load-bearing support Deployments with a tighter window + service label
+        # for receiver routing. Deployment/StatefulSet names per the converge topology.
+        - alert: SupportPlaneDeploymentUnavailable
+          expr: kube_deployment_status_replicas_available{namespace=~"harbor|grafana|llz-observability", deployment=~"harbor-core|harbor-registry|grafana|platform-otel-collector"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: support-plane
+          annotations:
+            summary: 'support-plane Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has no available replicas'
+            description: '{{ $labels.namespace }}/{{ $labels.deployment }} has 0 available replicas for 10m — the workload is down or wedged, not merely unscrapable.'
+        - alert: LokiStatefulSetUnavailable
+          expr: kube_statefulset_status_replicas_ready{namespace="monitoring", statefulset="loki"} == 0
+          for: 10m
+          labels:
+            severity: warning
+            service: loki
+          annotations:
+            summary: Loki has no ready replicas
+            description: The Loki StatefulSet has 0 ready replicas for 10m — log ingestion and queries are down.
