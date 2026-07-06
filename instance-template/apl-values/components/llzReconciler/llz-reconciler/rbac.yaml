@@ -1,24 +1,32 @@
-# RBAC for the in-cluster reconciler.
+# RBAC for the in-cluster reconciler — least-privilege.
 #
-# All grants below back reconcilers that are OFF by default — the ClusterRole is
-# the union, but no verb is exercised until its reconciler's flag is set.
-#   observe        — Nodes get/list/watch (readiness); argoproj.io/applications
-#                    (convergence gauge, shared with argo-nudge); and, for the
-#                    health gauges, ClusterSecretStores + Certificates + pods (read).
-#   argo-nudge     — argoproj.io/applications get/list/watch/patch (re-trigger the
-#                    terminally-failed ones).
-#   cidr-firewall  — Nodes (shared) + configmaps get/create/patch + deployments
-#                    get/patch: it writes the firewall-config ConfigMap and
-#                    rollout-restarts the cidr-firewall controller Deployment.
-#                    Cluster-scoped for now (the target namespace is the private
-#                    controller's); tightening to a namespaced Role is a follow-up.
-#   volume-labels  — persistentvolumes get/list/watch (read-only in-cluster; the
-#                    Volume renames go to the Linode API, not Kubernetes).
-#   sc-demote      — storageclasses get/list/watch/patch (keep LKE's Flux-promoted
-#                    retain class non-default).
-#
-# Leader election holds a single coordination.k8s.io Lease in THIS namespace, so
-# that lives in a namespaced Role (below), not the ClusterRole.
+# All grants back reconcilers that are OFF by default; no verb is exercised until
+# its reconciler's flag is set. The grants are split by SCOPE so the ClusterRole
+# holds ONLY reads on genuinely cluster-scoped resources — every namespaced
+# access (and every WRITE) lives in a namespaced Role bound to this SA, scoped by
+# resourceName where the verb allows:
+#   ClusterRole (cluster-scoped reads + the one cluster-scoped write):
+#     observe        — nodes (readiness), clustersecretstores/openbao (ESO gauge),
+#                      cert-manager Certificates across all namespaces (cert gauge).
+#     cidr-firewall  — nodes (node → instance → firewall).
+#     volume-labels  — persistentvolumes (map bound Linode-CSI Volumes; renames go
+#                      to the Linode API, not Kubernetes — read-only here).
+#     sc-demote      — storageclasses get/list/watch/patch (StorageClass is a
+#                      cluster-scoped resource; keep LKE's Flux-promoted retain
+#                      class non-default).
+#   Role in argocd:       argo-nudge + convergence gauge read/patch Applications —
+#                         the reconciler only ever touches namespaces/argocd/applications
+#                         (reconcile_argo_nudge.go argoAppsPath), so this is a
+#                         namespaced Role, NOT a cluster-wide applications grant.
+#   Role in llz-openbao:  the health gauge reads only the OpenBao pods
+#                         (reconcile_health.go openbaoPods = namespaces/llz-openbao/pods),
+#                         so pods read is namespaced, not cluster-wide.
+#   Role in kube-system:  cidr-firewall writes exactly ONE ConfigMap
+#                         (llz-linode-cidr-firewall-config) and rollout-restarts ONE
+#                         Deployment (llz-linode-cidr-firewall) — get/patch are
+#                         resourceName-scoped; create alone can't be name-scoped in
+#                         RBAC. Mirrors the retired cidrFirewall CronJob's Role.
+#   Role in llz-reconciler: leader-election Lease.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -34,34 +42,25 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  # argo-nudge: watch Applications and re-trigger the failed ones.
-  - apiGroups: ["argoproj.io"]
-    resources: ["applications"]
-    verbs: ["get", "list", "watch", "patch"]
   # volume-labels: read PVs to map bound Linode-CSI volumes (renames go to Linode).
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch"]
-  # observe health gauges (read-only): ESO store readiness, cert-manager
-  # Certificate readiness, and OpenBao pod readiness (the seal proxy).
+  # observe ESO gauge: GET the single `openbao` ClusterSecretStore (resourceName-
+  # scoped — the gauge reads only that store, esoStorePath).
   - apiGroups: ["external-secrets.io"]
     resources: ["clustersecretstores"]
+    resourceNames: ["openbao"]
     verbs: ["get"]
+  # observe cert gauge: read cert-manager Certificates across ALL namespaces
+  # (certsPath is cluster-wide — it counts not-Ready certs platform-wide), so this
+  # genuinely needs a cluster-scoped read.
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  # cidr-firewall: write the firewall-config ConfigMap + restart the controller.
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "create", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "patch"]
-  # sc-demote: watch StorageClasses and rewrite is-default-class→false on the
-  # Flux-promoted retain class.
+  # sc-demote: watch StorageClasses (cluster-scoped resource) and rewrite
+  # is-default-class→false on the Flux-promoted retain class. patch can't be
+  # resourceName-scoped alongside the list/watch it shares the rule with.
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch", "patch"]
@@ -79,7 +78,96 @@ subjects:
     name: llz-reconciler
     namespace: llz-reconciler
 ---
-# Leader-election Lease — namespaced, so a Role (not the ClusterRole).
+# argo-nudge + convergence gauge: Applications live in argocd — namespaced, not a
+# cluster-wide applications grant. patch re-triggers the terminally-failed apps.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-reconciler-argo
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-reconciler-argo
+  namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-reconciler-argo
+subjects:
+  - kind: ServiceAccount
+    name: llz-reconciler
+    namespace: llz-reconciler
+---
+# observe seal-proxy gauge: read only the OpenBao pods in llz-openbao — namespaced,
+# not a cluster-wide pods read.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-reconciler-openbao-pods
+  namespace: llz-openbao
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-reconciler-openbao-pods
+  namespace: llz-openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-reconciler-openbao-pods
+subjects:
+  - kind: ServiceAccount
+    name: llz-reconciler
+    namespace: llz-reconciler
+---
+# cidr-firewall: create-if-missing + patch the ONE controller ConfigMap and
+# rollout-restart the ONE controller Deployment, all in kube-system. get/patch are
+# resourceName-scoped; create is not name-scopable in RBAC (it stands alone).
+# Bound-but-inert unless --reconcile-cidr-firewall AND the private controller are
+# present. Mirrors the retired cidrFirewall CronJob's kube-system Role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-reconciler-cidr-firewall
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["llz-linode-cidr-firewall-config"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["llz-linode-cidr-firewall"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-reconciler-cidr-firewall
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-reconciler-cidr-firewall
+subjects:
+  - kind: ServiceAccount
+    name: llz-reconciler
+    namespace: llz-reconciler
+---
+# Leader-election Lease — namespaced to this ns.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
