@@ -114,6 +114,10 @@ func ciCmd() *cobra.Command {
 	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
 	// wedges the sync (Makefile wave-dependency-guard).
 	c.AddCommand(ciWaveDependencyGuardCmd())
+	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
+	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
+	// silently drops (Makefile mesh-egress-guard).
+	c.AddCommand(ciMeshEgressGuardCmd())
 	// Offline apl-core schema validation (helm template) — the check
 	// helm_release.apl runs at apply time, shifted left into scaffold-check.
 	c.AddCommand(ciAplSchemaValidateCmd())

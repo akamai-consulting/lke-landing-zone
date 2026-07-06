@@ -1,0 +1,107 @@
+# Grafana dashboard for the in-cluster llz-reconciler day-2 signal — the "visible"
+# half of "the reconciler is the primary day-2 signal". The reconciler publishes
+# rich gauges (convergence, ESO/cert readiness, OpenBao seal, credential age,
+# per-reconciler status) but nothing visualized them; this is that view. It
+# matters most for a receiver-less operator (alerts aggregate in Alertmanager but
+# notify nobody) — the dashboard is their window.
+#
+# DELIVERY: a ConfigMap labeled `grafana_dashboard: "1"` — the kube-prometheus-stack
+# Grafana dashboard SIDECAR (which apl-core's Grafana runs) watches for that label
+# cluster-wide and auto-imports the JSON. If an instance's Grafana disables the
+# sidecar, import grafana-day2.json manually (Dashboards → Import). Datasource is
+# the default Prometheus (the stack's), referenced by the ${DS_PROMETHEUS} var.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llz-day2-dashboard
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: platform
+data:
+  llz-day2.json: |
+    {
+      "title": "LLZ Day-2 — reconciler & convergence",
+      "uid": "llz-day2",
+      "tags": ["llz", "platform", "day-2"],
+      "schemaVersion": 39,
+      "editable": true,
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "30s",
+      "templating": {
+        "list": [
+          {
+            "name": "DS_PROMETHEUS",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1, "title": "Convergence state", "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "targets": [ { "expr": "max(llz_convergence_state{namespace=\"llz-reconciler\"})", "legendFormat": "state" } ],
+          "fieldConfig": { "defaults": { "mappings": [
+            { "type": "value", "options": { "0": { "text": "Converged", "color": "green" }, "1": { "text": "Hard-failed", "color": "red" }, "2": { "text": "In-progress", "color": "yellow" } } }
+          ], "thresholds": { "mode": "absolute", "steps": [ { "value": null, "color": "green" }, { "value": 1, "color": "red" }, { "value": 2, "color": "yellow" } ] } } }
+        },
+        {
+          "id": 2, "title": "Argo apps failed / pending", "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "targets": [
+            { "expr": "max(llz_convergence_apps_failed{namespace=\"llz-reconciler\"})", "legendFormat": "failed" },
+            { "expr": "max(llz_convergence_apps_pending{namespace=\"llz-reconciler\"})", "legendFormat": "pending" }
+          ]
+        },
+        {
+          "id": 3, "title": "OpenBao unsealed pods", "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "targets": [ { "expr": "count(vault_core_unsealed{namespace=\"llz-openbao\"} == 1) or vector(0)", "legendFormat": "unsealed" } ],
+          "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "value": null, "color": "red" }, { "value": 3, "color": "green" } ] } } }
+        },
+        {
+          "id": 4, "title": "ESO store ready / certs not ready", "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "targets": [
+            { "expr": "max(llz_eso_store_ready{namespace=\"llz-reconciler\"})", "legendFormat": "eso store ready" },
+            { "expr": "max(llz_certificates_not_ready{namespace=\"llz-reconciler\"})", "legendFormat": "certs not ready" }
+          ]
+        },
+        {
+          "id": 5, "title": "Reconciler up (per reconciler)", "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "targets": [ { "expr": "llz_reconcile_up{namespace=\"llz-reconciler\"}", "legendFormat": "{{ reconciler }}" } ],
+          "fieldConfig": { "defaults": { "min": 0, "max": 1 } }
+        },
+        {
+          "id": 6, "title": "Reconcile error rate (per reconciler)", "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "targets": [ { "expr": "sum by (reconciler) (rate(llz_reconcile_errors_total{namespace=\"llz-reconciler\"}[5m]))", "legendFormat": "{{ reconciler }}" } ]
+        },
+        {
+          "id": 7, "title": "Time since last successful reconcile (s)", "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 11 },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "targets": [ { "expr": "time() - llz_reconcile_last_success_timestamp_seconds{namespace=\"llz-reconciler\"}", "legendFormat": "{{ reconciler }}" } ],
+          "fieldConfig": { "defaults": { "unit": "s" } }
+        },
+        {
+          "id": 8, "title": "Credential age (days)", "type": "timeseries",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 11 },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "targets": [ { "expr": "llz_credential_age_days{namespace=\"llz-reconciler\"}", "legendFormat": "{{ cred }}" } ],
+          "fieldConfig": { "defaults": { "unit": "d", "thresholds": { "mode": "absolute", "steps": [ { "value": null, "color": "green" }, { "value": 90, "color": "red" } ] } } }
+        }
+      ]
+    }

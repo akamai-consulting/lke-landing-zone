@@ -99,30 +99,45 @@ Covered by `openbao-alerts` (under
 | Scrape target down for 5m | `OpenBaoMetricsTargetDown` | critical | ✅ covered |
 | Pod sealed for 2m | `OpenBaoSealed` | critical | ✅ covered |
 | No active leader for 2m | `OpenBaoNoActiveLeader` | critical | ✅ covered |
+| Raft quorum degraded (< 3 unsealed pods) | `OpenBaoRaftQuorumDegraded` | warning | ✅ covered |
 | Uninitialized | — | — | ⚠️ gap |
-| Raft peer count < 3 | — | — | ⚠️ gap |
-| Login error rate high | — | — | ⚠️ gap |
-| Token lease exhaustion | — | — | ⚠️ gap |
-| Audit log device down | — | — | ⚠️ gap |
+| Login error rate high | — | — | ⚠️ gap (needs metric verification: `vault_audit_*` / `vault_core_handle_login_request`) |
+| Token lease exhaustion | — | — | ⚠️ gap (needs metric verification: `vault_token_*` / `vault_expire_num_leases`) |
+| Audit log device down | — | — | ⚠️ gap (needs metric verification: `vault_audit_log_request_failure`) |
 
 ### Observability / support plane
 
 Covered by `support-plane-alerts` (under
 [apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/)).
-Today this is **scrape-health only** — each service has a single
-`...MetricsTargetDown` alert (`up == 0` for 5m, warning). Deeper per-service
-coverage is a known gap.
+Two layers now: the original **scrape-health** alerts (`...MetricsTargetDown`,
+`up == 0`) plus **workload-availability** alerts (`SupportPlaneDeploymentUnavailable`,
+`LokiStatefulSetUnavailable`) that fire on zero available/ready replicas via
+kube-state-metrics — a pod that is Running-but-NotReady scrapes fine yet serves
+nothing. Deeper per-service *error-rate/saturation* coverage remains a gap: those
+need service-internal exporter metric names (`otelcol_*`, `loki_*`, `harbor_*`)
+that promtool can't verify exist, so they want a one-time spot-check against a live
+`/metrics` before shipping.
 
-| Service | Scrape-health alert | Deeper coverage (gap) |
-|---------|---------------------|-----------------------|
-| OTel Collector | `OTelCollectorMetricsTargetDown` ✅ | ⚠️ dropped/refused spans & metrics, exporter send failures, queue length, `memory_limiter` near limit, no data > 15m |
-| Loki | `LokiMetricsTargetDown` ✅ | ⚠️ ingestion-rate errors, query failures, object-store write errors, WAL replay errors, compactor not running |
-| Grafana | `GrafanaMetricsTargetDown` ✅ | ⚠️ pod availability (relies on `defaultRules` — confirm or add explicit alert) |
-| Harbor | `HarborMetricsTargetDown` ✅ | ⚠️ core/registry pod unavailable, DB connection failures, Trivy scan queue depth, registry disk > 80% |
-| Prometheus | (self — via `defaultRules`) | ⚠️ confirm TSDB compaction failures and scrape-duration > 30s are covered by defaults |
+| Service | Scrape-health | Availability | Error-rate / saturation (gap) |
+|---------|---------------|--------------|-------------------------------|
+| OTel Collector | `OTelCollectorMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | ⚠️ dropped/refused spans, exporter send failures, queue length, `memory_limiter` near limit |
+| Loki | `LokiMetricsTargetDown` ✅ | `LokiStatefulSetUnavailable` ✅ | ⚠️ ingestion/query 5xx, object-store write errors, WAL replay, compactor stalled |
+| Grafana | `GrafanaMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | — (availability is the main concern) |
+| Harbor | `HarborMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ (core + registry) | ⚠️ DB connection failures, Trivy scan queue depth, registry disk > 80% |
+| Prometheus | (self — via `defaultRules`) | (via `defaultRules`) | ⚠️ confirm TSDB compaction failures + scrape-duration are covered by defaults |
 
 The desired end-state coverage bar is one availability + one error-rate + one
-resource-saturation alert per service.
+resource-saturation alert per service — availability is now covered; error-rate/
+saturation is the remaining gap.
+
+### Visualizing the in-cluster signal
+
+The reconciler's day-2 gauges (convergence, ESO/cert readiness, OpenBao seal,
+credential age, per-reconciler status) are surfaced in the **LLZ Day-2** Grafana
+dashboard ([llz-day2-dashboard.yaml](../instance-template/apl-values/components/observability/llz-day2-dashboard.yaml),
+a ConfigMap the Grafana dashboard sidecar auto-imports). This is the at-a-glance
+view for a receiver-less operator — alerts aggregate in Alertmanager but notify
+nobody until a receiver is wired, so the dashboard is their window.
 
 ### TLS certificates
 
