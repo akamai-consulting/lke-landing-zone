@@ -64,3 +64,39 @@ spec:
             summary: OpenBao Raft quorum is degraded
             runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: 'Fewer than 3 OpenBao pods are unsealed and reachable — the 3-node Raft quorum has lost redundancy. One more peer loss forfeits write availability.'
+        # ── Saturation / audit-plane (the error-rate + saturation layer) ──────────
+        # These read OpenBao's own `vault_*` telemetry (OpenBao keeps the upstream
+        # Vault metric namespace). Like every vault_* alert here, they depend on the
+        # :8200 metrics scrape — which this branch's llz-openbao-platform 0.1.18
+        # NetworkPolicy fix restores (the `monitoring`-namespace Prometheus was
+        # L4-blocked, so vault_* was absent and these read DEAD? in `alert-eval`
+        # until the fix converges). vault_expire_num_leases / vault_audit_* are the
+        # canonical Vault names; verify live post-fix with `llz ci prom-metrics
+        # --match '^vault_'`.
+        - alert: OpenBaoLeaseExhaustion
+          # Saturation: the number of unexpired leases the expiration manager tracks.
+          # Unbounded lease growth (a client not renewing/revoking, or a too-long TTL)
+          # bloats OpenBao memory + the expiration queue until it degrades. The
+          # threshold is a fleet default — tune per real steady-state lease counts.
+          expr: sum(vault_expire_num_leases{namespace="llz-openbao"}) > 100000
+          for: 30m
+          labels:
+            severity: warning
+            service: openbao
+          annotations:
+            summary: OpenBao active-lease count is very high
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: 'OpenBao is tracking {{ $value | humanize }} unexpired leases for 30m — a client is likely not revoking/renewing, or a mount TTL is too long; the expiration manager and memory grow until they degrade.'
+        - alert: OpenBaoAuditLogFailure
+          # Audit-device health. OpenBao BLOCKS every request if all audit devices
+          # fail to log (audit is not best-effort) — so a rising failure count is a
+          # precursor to a full outage, not a cosmetic logging issue.
+          expr: sum(rate(vault_audit_log_request_failure{namespace="llz-openbao"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: openbao
+          annotations:
+            summary: OpenBao audit log device is failing
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: 'OpenBao audit-log writes are failing for 5m — if all audit devices fail, OpenBao SEALS itself to requests (audit is mandatory). Investigate the audit sink (the promtail sidecar / file device) immediately.'

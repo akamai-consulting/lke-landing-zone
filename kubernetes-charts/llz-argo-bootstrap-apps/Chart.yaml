@@ -38,7 +38,9 @@ type: application
 #         that consumed it is gone).
 # 0.1.15: bump the llz-cluster-foundation pin to 0.1.7 (that chart retired its
 #         sc-default-patcher CronJob; the PostSync Job + Kyverno policy remain).
-version: 0.1.15
+# 0.1.16: bump the llz-cluster-foundation pin to 0.1.8 (adds a monitoring→:8888
+#         ingress rule so apl-core's Prometheus can scrape the OTel Collector).
+version: 0.1.16
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

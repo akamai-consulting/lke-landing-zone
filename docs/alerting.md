@@ -100,10 +100,18 @@ Covered by `openbao-alerts` (under
 | Pod sealed for 2m | `OpenBaoSealed` | critical | ✅ covered |
 | No active leader for 2m | `OpenBaoNoActiveLeader` | critical | ✅ covered |
 | Raft quorum degraded (< 3 unsealed pods) | `OpenBaoRaftQuorumDegraded` | warning | ✅ covered |
-| Uninitialized | — | — | ⚠️ gap |
-| Login error rate high | — | — | ⚠️ gap (needs metric verification: `vault_audit_*` / `vault_core_handle_login_request`) |
-| Token lease exhaustion | — | — | ⚠️ gap (needs metric verification: `vault_token_*` / `vault_expire_num_leases`) |
-| Audit log device down | — | — | ⚠️ gap (needs metric verification: `vault_audit_log_request_failure`) |
+| Token lease exhaustion | `OpenBaoLeaseExhaustion` | warning | ✅ covered (`vault_expire_num_leases > 100k`, tune per steady-state) |
+| Audit log device failing | `OpenBaoAuditLogFailure` | critical | ✅ covered (`vault_audit_log_request_failure` — a full audit failure self-seals OpenBao) |
+| Uninitialized | — | — | ⚠️ gap (no reliable native `vault_` gauge; an uninitialized cluster has no leader → `OpenBaoNoActiveLeader` covers it in practice) |
+| Login error rate high | — | — | ⚠️ gap (no clean core error-rate metric; `vault_core_handle_login_request` is latency/count only) |
+
+> **All `vault_*` alerts depend on the :8200 metrics scrape.** Before the
+> `llz-openbao-platform` 0.1.18 NetworkPolicy fix in this branch, apl-core's
+> Prometheus (in the `monitoring` namespace) was L4-blocked from OpenBao :8200, so
+> **every** `vault_*` series was absent and all six OpenBao alerts read `DEAD?` in
+> `llz ci alert-eval` on a converged cluster — silently never-firing. The fix adds
+> a pod-scoped `allowedClientPods` grant for the Prometheus pod. Verify post-fix:
+> `llz ci prom-metrics --match '^vault_'` should return a non-empty set.
 
 ### Observability / support plane
 
@@ -113,22 +121,59 @@ Two layers now: the original **scrape-health** alerts (`...MetricsTargetDown`,
 `up == 0`) plus **workload-availability** alerts (`SupportPlaneDeploymentUnavailable`,
 `LokiStatefulSetUnavailable`) that fire on zero available/ready replicas via
 kube-state-metrics — a pod that is Running-but-NotReady scrapes fine yet serves
-nothing. Deeper per-service *error-rate/saturation* coverage remains a gap: those
-need service-internal exporter metric names (`otelcol_*`, `loki_*`, `harbor_*`)
-that promtool can't verify exist, so they want a one-time spot-check against a live
-`/metrics` before shipping.
+nothing. The third + fourth layers — **error-rate** and **saturation** — need
+service-internal exporter metric names (`otelcol_*`, `loki_*`, `harbor_*`) that
+promtool can't verify exist, so each was checked against a live `/metrics` with
+`llz ci prom-metrics` before shipping (see the per-service status below).
 
-| Service | Scrape-health | Availability | Error-rate / saturation (gap) |
-|---------|---------------|--------------|-------------------------------|
-| OTel Collector | `OTelCollectorMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | ⚠️ dropped/refused spans, exporter send failures, queue length, `memory_limiter` near limit |
-| Loki | `LokiMetricsTargetDown` ✅ | `LokiStatefulSetUnavailable` ✅ | ⚠️ ingestion/query 5xx, object-store write errors, WAL replay, compactor stalled |
+| Service | Scrape-health | Availability | Error-rate / saturation |
+|---------|---------------|--------------|-------------------------|
+| OTel Collector | `OTelCollectorMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | 🟡 `OTelCollectorRefusingData` (memory_limiter/backpressure) + `OTelCollectorExportFailures` — **provisional**: `otelcol_*` only scrapes after the 0.1.8 NP fix below, and the pipeline is still a placeholder (debug exporter), so these read `DEAD?`/quiet until a real exporter + the fix land |
+| Loki | `LokiMetricsTargetDown` ✅ | `LokiStatefulSetUnavailable` ✅ | ✅ `LokiRequestErrors` (5xx ratio) + `LokiObjectStoreErrors` (S3 Put/Get 5xx, List excluded) + `LokiIngestionDiscarding` — **verified live** against 271 real `loki_*` series (armed, not false-firing) |
 | Grafana | `GrafanaMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ | — (availability is the main concern) |
-| Harbor | `HarborMetricsTargetDown` ✅ | `SupportPlaneDeploymentUnavailable` ✅ (core + registry) | ⚠️ DB connection failures, Trivy scan queue depth, registry disk > 80% |
+| Harbor | `HarborMetricsTargetDown` ⚠️ | `SupportPlaneDeploymentUnavailable` ✅ (core + registry) | ⚠️ **gap — no exporter**: apl-core deploys Harbor with its metrics exporter OFF, so `harbor-core`/`harbor-registry` expose no `:8001` and `harbor_*` never exists. `HarborMetricsTargetDown` currently matches only the CNPG DB target (`harbor-otomi-db`, which is up), so it is misleadingly green. Closing this needs apl-core Harbor `metrics.enabled` + a ServiceMonitor + a `monitoring`→`:8001` NP — a separate follow-up. |
 | Prometheus | (self — via `defaultRules`) | (via `defaultRules`) | ⚠️ confirm TSDB compaction failures + scrape-duration are covered by defaults |
 
 The desired end-state coverage bar is one availability + one error-rate + one
-resource-saturation alert per service — availability is now covered; error-rate/
-saturation is the remaining gap.
+resource-saturation alert per service. Availability is covered fleet-wide; Loki is
+now fully covered (verified) and OpenBao gained lease/audit coverage; OTel is
+provisional (pending a real pipeline) and **Harbor remains the open gap** (its
+exporter is not deployed).
+
+> **The OTel `:8888` scrape depends on a NetworkPolicy, like OpenBao's.** The
+> `otel-collector-monitoring` ServiceMonitor selects the target, but until the
+> `llz-cluster-foundation` 0.1.8 fix in this branch, `observability-allow-ingress`
+> had no rule for apl-core's Prometheus (`monitoring` namespace), so every scrape
+> of the collector's `:8888` telemetry port timed out and `otelcol_*` was absent
+> cluster-wide (confirmed live). The fix adds a `monitoring`→`:8888` ingress rule
+> scoped to the metrics port. Verify post-fix: `llz ci prom-metrics --match
+> '^otelcol_'` should return a non-empty set.
+
+**E2E wiring gate.** The scrape-health alerts above are only as good as the
+scrape wiring they sit on: a ServiceMonitor/PrometheusRule that loses its
+`prometheus: system` label (or a renamed Service port / wrong namespaceSelector)
+leaves the CR present but silently un-scraped/un-loaded, and `converge` /
+`health` / `assert-loki` all stay green. The release-e2e converge now gates on
+`llz ci assert-scrape-targets` (every landing-zone ServiceMonitor has a live `up`
+target and every PrometheusRule group is loaded), so that class of regression
+fails the e2e instead of shipping a metrics surface that quietly stopped flowing.
+The companion `llz ci alert-eval` runs report-only (its FIRING/ARMED/`DEAD?`/`BROKEN`
+report is surfaced in the job summary) and is intended to harden to `--strict`
+once the last opt-in-reconciler `DEAD?` alerts are resolved.
+
+Two further gates run in the same converge:
+
+- **`llz ci assert-reconciler`** — the reconciler's *functional* health, which
+  pod phase can't see: `llz_reconcile_up == 1` (the reconcile loop is up AND its
+  samples succeed — a pod Running yet failing on a permission dropped by the
+  least-privilege RBAC, or lost OpenBao/Linode access, reports 0) and
+  `llz_reconcile_leader == 1` (a replica holds the driving Lease). `alert-eval
+  --strict` can't cover this — the matching `LLZReconcilerReportingDown` /
+  `LLZReconcilerNoLeader` alerts would be *firing*, and `--strict` ignores FIRING.
+- **`llz ci wave-health-audit --fail-on-unvetted`** — the runtime counterpart to
+  the static wave-health-guard + VAP: it enumerates every live negative-sync-wave
+  resource and fails on any kind the VAP would DENY (a coverage gap or a latent
+  false-positive), instead of waiting for the weekly scheduled audit.
 
 ### Visualizing the in-cluster signal
 
@@ -172,5 +217,9 @@ template.
    `kustomization.yaml`.
 2. If you add a new rule group, also add it to the `EXPECTED_RULES` list in the
    rule-drift check in [scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml)
-   so its absence is detected.
+   AND to `defaultScrapeRuleGroups` in
+   [tools/cmd/llz/ci_assert_scrape.go](../tools/cmd/llz/ci_assert_scrape.go) — the
+   e2e `assert-scrape-targets` gate fails if an expected group isn't loaded into
+   Prometheus. Likewise, a new landing-zone ServiceMonitor goes in that file's
+   `defaultScrapeMonitors` so the e2e asserts it actually produces an `up` target.
 3. Argo CD syncs the rule into Prometheus on the next reconcile.

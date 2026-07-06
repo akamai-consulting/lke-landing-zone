@@ -35,7 +35,7 @@ spec:
   source:
     repoURL: ghcr.io/<@ upstream_org @>/charts
     chart: llz-cluster-foundation
-    targetRevision: 0.1.7
+    targetRevision: 0.1.8
     helm:
       releaseName: llz-cluster-foundation
       valuesObject:

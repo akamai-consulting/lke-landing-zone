@@ -221,6 +221,17 @@ networkPolicies:
   # name is a platform assumption.
   grafanaNamespace: grafana
 
+  # apl-core's Prometheus (monitoring ns) scrapes the OTel Collector's monitoring
+  # port :8888 (otelcol_* internal telemetry) via the otel-collector-monitoring
+  # ServiceMonitor. Without this ingress rule the observability-default-deny blocks
+  # the scrape (context-deadline-exceeded) so otelcol_* is absent cluster-wide and
+  # the OTelCollector alerts silently never fire. Mirrors the CNPG metrics allow.
+  otelMetrics:
+    scrapeNamespace: monitoring
+    ports:
+      - port: 8888   # OTel Collector internal telemetry (otelcol_*)
+        protocol: TCP
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CoreDNS *.internal rewrite. apl-core publishes Istio ServiceEntries for
 # *.internal hostnames (harbor.internal, keycloak.internal, …) but ServiceEntries

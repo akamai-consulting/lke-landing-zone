@@ -127,6 +127,16 @@ func ciCmd() *cobra.Command {
 	// Cluster diagnostic: evaluate deployed PrometheusRule alert exprs against the
 	// live Prometheus (catch never-fire / false-positive rules promtool can't).
 	c.AddCommand(ciAlertEvalCmd())
+	// E2E gate: assert every landing-zone ServiceMonitor has an `up` scrape target
+	// and every PrometheusRule group is loaded — the observability-pipeline wiring
+	// converge/health/assert-loki all stay green on when a label/port/selector
+	// regression silently un-scrapes/un-loads it.
+	c.AddCommand(ciAssertScrapeTargetsCmd())
+	// E2E gate: assert the reconciler is FUNCTIONALLY healthy (llz_reconcile_up=1 +
+	// llz_reconcile_leader=1) — the silently-broken-loop class (pod Running yet
+	// failing on dropped RBAC/OpenBao access) that converge and alert-eval --strict
+	// both miss.
+	c.AddCommand(ciAssertReconcilerCmd())
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).

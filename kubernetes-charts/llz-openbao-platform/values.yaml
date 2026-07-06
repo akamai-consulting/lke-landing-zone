@@ -81,6 +81,15 @@ platform:
       # opens the :8200 connection).
       - namespace: llz-reconciler
         name: llz-reconciler
+      # apl-core's Prometheus (pod app.kubernetes.io/name=prometheus, in the shared
+      # `monitoring` namespace) scrapes OpenBao's /v1/sys/metrics on :8200 via the
+      # platform-openbao ServiceMonitor. Without this the default-deny NetworkPolicy
+      # L4-blocks the scrape (TCP reset / timeout), so every vault_* series is absent
+      # and the openbao-alerts (OpenBaoSealed/NoActiveLeader/RaftQuorumDegraded) are
+      # silently never-fire (DEAD?). Pod-scoped, not a whole-namespace grant, since
+      # `monitoring` is apl-core's shared namespace.
+      - namespace: monitoring
+        name: prometheus
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
     observabilityNamespace: llz-observability
 

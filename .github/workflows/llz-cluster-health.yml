@@ -193,6 +193,22 @@ jobs:
           export KUBECONFIG="$HOME/.kube/config"
           llz ci assert-loki
 
+      # E2E validation gate (same assert-loki input): assert the observability
+      # pipeline is WIRED — every landing-zone ServiceMonitor has a live `up`
+      # target and every PrometheusRule group is loaded — and that no deployed
+      # alert is DEAD?/BROKEN (--strict). The best-effort alert-eval above (in the
+      # always() diagnostics block) stays report-only for recovery dispatches;
+      # these two are gating and run only under the E2E validation input.
+      - name: Assert observability + reconciler + wave-health (E2E gate)
+        if: ${{ inputs.assert-loki }}
+        run: |
+          set -euo pipefail
+          export KUBECONFIG="$HOME/.kube/config"
+          llz ci assert-scrape-targets
+          llz ci assert-reconciler
+          llz ci alert-eval --strict
+          llz ci wave-health-audit --fail-on-unvetted
+
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl

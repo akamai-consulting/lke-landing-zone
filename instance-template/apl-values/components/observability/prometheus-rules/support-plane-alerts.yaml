@@ -91,3 +91,107 @@ spec:
             summary: Loki has no ready replicas
             runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The Loki StatefulSet has 0 ready replicas for 10m — log ingestion and queries are down.
+        # ── Error-rate / saturation (the third + fourth layer) ────────────────────
+        # Availability (above) answers "is it up"; these answer "is it healthy while
+        # up". The Loki exprs are VERIFIED against the live metric surface (`llz ci
+        # prom-metrics --match '^loki_'` on a converged cluster — 271 series): the
+        # names, the `namespace="monitoring"` topology, and the `status_code` label
+        # convention (numeric for HTTP routes, `success`/`error` for gRPC) are real,
+        # not guessed. See docs/alerting.md.
+        - alert: LokiRequestErrors
+          # HTTP 5xx ratio across all Loki routes. status_code is numeric on HTTP
+          # routes; gRPC routes report `success`/`error` and are excluded by `5..`.
+          expr: |
+            sum(rate(loki_request_duration_seconds_count{namespace="monitoring", status_code=~"5.."}[5m]))
+            /
+            sum(rate(loki_request_duration_seconds_count{namespace="monitoring"}[5m]))
+            > 0.05
+          for: 15m
+          labels:
+            severity: warning
+            service: loki
+          annotations:
+            summary: Loki is serving a high 5xx error rate
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'More than 5% of Loki requests have returned 5xx for 15m — ingestion and/or query paths are erroring, not merely slow.'
+        - alert: LokiObjectStoreErrors
+          # Loki's S3-compatible backend (Linode Object Storage). loki_s3_* carries
+          # `operation` + `status_code` labels. Error RATIO (not raw count) on the
+          # data-durability operations only — S3.List is DELIBERATELY excluded: it
+          # backs compaction/retention discovery (not the chunk/index write path)
+          # and 500s benignly on Linode OBJ (e.g. List on an empty prefix), which a
+          # raw-count alert would false-page on for every idle/fresh cluster
+          # (verified live: a converged cluster showed 100% of S3 traffic was
+          # S3.List 500s at ~0.017/s with zero Put/Get). A sustained >5% failure on
+          # Put/Get/Delete is a genuine durability problem.
+          expr: |
+            sum(rate(loki_s3_request_duration_seconds_count{namespace="monitoring", operation!~"S3.List", status_code=~"5.."}[10m]))
+            /
+            sum(rate(loki_s3_request_duration_seconds_count{namespace="monitoring", operation!~"S3.List"}[10m]))
+            > 0.05
+          for: 15m
+          labels:
+            severity: warning
+            service: loki
+          annotations:
+            summary: Loki object-store (S3) writes/reads are failing
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'More than 5% of Loki object-store Put/Get/Delete ops are returning 5xx for 15m — chunk/index flushes are failing; the WAL backs up and risks data loss if it fills. (S3.List is excluded — it 500s benignly on an idle bucket.)'
+        - alert: LokiIngestionDiscarding
+          # Saturation: Loki is DROPPING incoming samples (rate limits, per-stream
+          # limits, or parse errors). Distinct from a 5xx — the write "succeeds" but
+          # data is silently discarded. A sustained nonzero rate = the tenant is over
+          # a limit or malformed logs are being shed.
+          expr: sum(rate(loki_discarded_samples_total{namespace="monitoring"}[10m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            service: loki
+          annotations:
+            summary: Loki is discarding ingested samples
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'Loki has discarded samples for 15m ({{ $value | humanize }}/s) — ingestion is hitting a rate/stream limit or rejecting malformed logs; some logs are not being stored.'
+        # ── OTel Collector error-rate / saturation ────────────────────────────────
+        # PROVISIONAL. Unlike the Loki exprs above, these are NOT yet verified live:
+        # until the observability-allow-ingress NetworkPolicy fix in this branch
+        # (llz-cluster-foundation 0.1.8) reaches a cluster, otelcol_* is absent (the
+        # :8888 scrape times out), so `alert-eval` reports these DEAD? — expected
+        # until the fix converges. The names are the canonical OTel Collector
+        # internal-telemetry counters (registered per receiver/exporter at startup,
+        # so present at 0 once scraped). The collector is currently a placeholder
+        # pipeline (OTLP → memory_limiter/batch → debug exporter); these become
+        # meaningful once a real downstream exporter (loki/otlp) is wired in.
+        - alert: OTelCollectorRefusingData
+          # Saturation / backpressure: the memory_limiter (or a full queue) is
+          # refusing accepted-but-not-processed data. Summed across signal types
+          # (the pipeline handles traces+metrics+logs); absent per-signal series are
+          # simply not added.
+          expr: |
+            sum(rate(otelcol_receiver_refused_spans_total{namespace="llz-observability"}[10m]))
+            + sum(rate(otelcol_receiver_refused_metric_points_total{namespace="llz-observability"}[10m]))
+            + sum(rate(otelcol_receiver_refused_log_records_total{namespace="llz-observability"}[10m]))
+            > 0
+          for: 15m
+          labels:
+            severity: warning
+            service: otel-collector
+          annotations:
+            summary: OTel Collector is refusing incoming telemetry
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'The OTel Collector has refused incoming telemetry for 15m — the memory_limiter is shedding load or a downstream queue is full; senders are being throttled.'
+        - alert: OTelCollectorExportFailures
+          # Error-rate: the exporter is failing to send downstream. Meaningful once a
+          # real exporter replaces the placeholder `debug` exporter.
+          expr: |
+            sum(rate(otelcol_exporter_send_failed_spans_total{namespace="llz-observability"}[10m]))
+            + sum(rate(otelcol_exporter_send_failed_metric_points_total{namespace="llz-observability"}[10m]))
+            + sum(rate(otelcol_exporter_send_failed_log_records_total{namespace="llz-observability"}[10m]))
+            > 0
+          for: 15m
+          labels:
+            severity: warning
+            service: otel-collector
+          annotations:
+            summary: OTel Collector is failing to export telemetry
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: 'The OTel Collector exporter has failed sends for 15m — telemetry is being dropped downstream; check the exporter endpoint and credentials.'
