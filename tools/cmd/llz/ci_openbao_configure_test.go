@@ -76,6 +76,30 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 	}
 }
 
+// The in-cluster reconciler's Kubernetes-auth role must bind reconciler-read (the
+// gauge metadata read) AND linode-rotator (the object-storage-key read_write that
+// --reconcile-linode-creds performs, taking over the linodeCredRotator CronJob's
+// work). harbor-provisioner is deliberately NOT yet bound — --reconcile-harbor
+// lands in a later batch (#166) with its mounted post-Harbor admin secret.
+func TestReconcilerRoleBindsLinodeRotator(t *testing.T) {
+	var found bool
+	for _, s := range baoConfigureSteps("acme/platform") {
+		if len(s.args) >= 2 && s.args[0] == "write" && s.args[1] == "auth/kubernetes/role/reconciler" {
+			found = true
+			joined := strings.Join(s.args, " ")
+			if !strings.Contains(joined, "policies=reconciler-read,linode-rotator") {
+				t.Errorf("reconciler role must bind reconciler-read + linode-rotator; got %v", s.args)
+			}
+			if strings.Contains(joined, "harbor-provisioner") {
+				t.Error("harbor-provisioner must NOT be bound until --reconcile-harbor (#166)")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no auth/kubernetes/role/reconciler step found")
+	}
+}
+
 // TestBaoConfigureJWTBoundClaimsIsMap is an explicit regression guard for the
 // 2026-06-25 kube-native failure where the JWT role write emitted bound_claims
 // as an empty STRING (key=value CLI args) and OpenBao's auth/jwt rejected it:
