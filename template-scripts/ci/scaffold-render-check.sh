@@ -146,6 +146,35 @@ if [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
     || fail "apl-values validation failed (see above) — fix before it fails at terraform apply / helm_release.apl in Release-E2E"
 fi
 
+# ── 6. kustomize-build every rendered overlay (Argo's load-restrictor) ────────
+# The blast-radius decomposition renders per-env apps/<name>/ source roots that pull
+# in the shared kustomize Component three levels up + env patches. The render-golden
+# Go tests assert STRINGS; only an actual kustomize build proves Argo can materialize
+# the result — catching a broken Component ref, a missing/renamed patch file, or a
+# load-restrictor escape BEFORE a ~40-min e2e. Build the manifest overlay + every
+# apps/<name>/ with the SAME load restrictor Argo runs (LoadRestrictionsNone), which
+# is why the ../ cross-dir refs resolve. kubectl ships kustomize; skip when absent
+# (CI's scaffold job installs it).
+step "kustomize-build the rendered overlays (LoadRestrictionsNone)"
+if command -v kubectl >/dev/null 2>&1; then
+  BUILD_DIRS=("$GEN_OVERLAY/manifest")
+  if [[ -d "$GEN_OVERLAY/apps" ]]; then
+    while IFS= read -r d; do BUILD_DIRS+=("$d"); done \
+      < <(find "$GEN_OVERLAY/apps" -mindepth 1 -maxdepth 1 -type d | sort)
+  fi
+  for d in "${BUILD_DIRS[@]}"; do
+    [[ -f "$d/kustomization.yaml" ]] || continue
+    if err="$(kubectl kustomize "$d" --load-restrictor LoadRestrictionsNone 2>&1 >/dev/null)"; then
+      echo "ok   build ${d#"$ROOT"/}"
+    else
+      printf '%s\n' "$err"
+      fail "kustomize build failed: ${d#"$ROOT"/}"
+    fi
+  done
+else
+  echo "kubectl absent — skipping kustomize-build (CI's scaffold job enforces it)."
+fi
+
 # ── result ───────────────────────────────────────────────────────────────────
 echo
 if [[ "$FAILED" -ne 0 ]]; then
