@@ -52,7 +52,10 @@ type: application
 #         a converged cluster; either alone left OpenBao's metrics unscraped and
 #         every OpenBao alert silently never-firing. serviceMonitor.releaseLabel →
 #         serviceMonitor.selectorLabels {prometheus: system}; port http → https.
-version: 0.1.16
+# 0.1.17: harden serviceMonitor.selectorLabels with `| default (dict "prometheus"
+#         "system")` so an adopter who nulls the map can't render an invalid
+#         `labels: null`. No change to the default rendered output.
+version: 0.1.17
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

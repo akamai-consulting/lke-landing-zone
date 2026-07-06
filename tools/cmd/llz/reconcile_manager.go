@@ -23,6 +23,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -161,6 +162,12 @@ func reconcileOnce(ctx context.Context, reg *metrics.Registry, now func() time.T
 		lbl, end.Sub(start).Seconds())
 
 	if err != nil {
+		// Log the failure to stderr (captured by `kubectl logs`). Without this the
+		// only trace of a failing pass is up=0 / errors_total++ in the metrics —
+		// undebuggable when the metric itself isn't reaching Prometheus, and a dead
+		// end even when it is (the counter says THAT it failed, never WHY). e.g. the
+		// openbao-gauges k8s-auth failure was invisible until this line existed.
+		log.Printf("reconcile %q failed: %v", r.name, err)
 		reg.AddCounter("llz_reconcile_errors_total", "total failed reconcile passes per reconciler", lbl, 1)
 		reg.SetGauge("llz_reconcile_up", "1 if the reconciler's last pass succeeded", lbl, 0)
 		return

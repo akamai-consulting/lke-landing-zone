@@ -175,13 +175,22 @@ apps:
     _rawValues:
       prometheus:
         prometheusSpec:
-          # Empty selectors → scrape ServiceMonitors / PrometheusRules across
-          # ALL namespaces (platform components live in many namespaces).
+          # NAMESPACE selectors: empty → discover ServiceMonitors / PrometheusRules
+          # across ALL namespaces (platform components live in many namespaces).
           serviceMonitorNamespaceSelector: {}
-          serviceMonitorSelector: {}
           ruleNamespaceSelector: {}
-          ruleSelector: {}
           podMonitorNamespaceSelector: {}
+          # ⚠️ LABEL selectors below are INEFFECTIVE on apl-core v6: apl-core sets
+          # its Prometheus serviceMonitorSelector / ruleSelector / podMonitorSelector
+          # to {matchLabels: {prometheus: system}} at a layer that overrides this
+          # _rawValues merge (confirmed live — the empty selectors do NOT win). So
+          # EVERY LLZ ServiceMonitor, PrometheusRule, and PodMonitor MUST carry the
+          # label `prometheus: system` or it is silently ignored (metrics unscraped /
+          # rules unloaded / alerts never firing). These lines are kept only to
+          # document the intent; do not rely on them. Removing the per-CR label is
+          # a footgun until apl-core exposes an override that actually takes effect.
+          serviceMonitorSelector: {}
+          ruleSelector: {}
           podMonitorSelector: {}
   alertmanager:  { enabled: true }
   grafana:       { enabled: true }

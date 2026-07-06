@@ -749,6 +749,29 @@ jobs:
         if: ${{ inputs.assert_loki }}
         run: llz ci assert-loki
 
+      # E2E-only support-plane metric-surface diagnostic. Gated on the same
+      # assert_loki input as the check above, so it runs on the release-e2e
+      # provision (which holds cluster access) and never on a normal instance
+      # bootstrap. Dumps the loki/cortex/otelcol/harbor exporter metric NAMES so
+      # error-rate/saturation alerts are written against series that actually
+      # exist (promtool checks syntax, not existence). Read-only + best-effort
+      # (|| true); a single-line glue invocation of the unit-tested `llz ci
+      # prom-metrics` command, so no logic lives in the workflow.
+      - name: (e2e) support-plane exporter metric surface
+        if: ${{ inputs.assert_loki }}
+        run: llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_)' || true
+
+      # E2E-only live alert evaluation. Every PrometheusRule ships promtool-valid
+      # (syntax), but promtool can't tell a rule that references a non-existent
+      # metric (silent never-fire) from one that's simply not tripping. This runs
+      # each deployed alert expr through the live Prometheus and classifies it
+      # FIRING/ARMED/DEAD?/BROKEN — so a DEAD? rule surfaces in the converge log
+      # instead of failing silent in prod. Read-only, best-effort glue over the
+      # unit-tested `llz ci alert-eval`. Same assert_loki gate + cluster access.
+      - name: (e2e) live alert evaluation
+        if: ${{ inputs.assert_loki }}
+        run: llz ci alert-eval || true
+
       # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx logs
       # WHILE the cluster is still up — before the ACL revoke below cuts apiserver
       # access. Every command is `|| true` so it never alters the outcome.

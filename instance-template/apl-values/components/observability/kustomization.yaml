@@ -6,6 +6,7 @@ resources:
   - loki-object-store-externalsecret.yaml
   - otel-bootstrap-ca.yaml
   - otel-collector.yaml
+  - otel-collector-servicemonitor.yaml
   - llz-day2-dashboard.yaml
   - prometheus-rules/openbao-alerts.yaml
   - prometheus-rules/support-plane-alerts.yaml
