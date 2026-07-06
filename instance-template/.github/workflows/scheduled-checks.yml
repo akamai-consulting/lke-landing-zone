@@ -13,13 +13,12 @@ name: Scheduled Checks
 on:
   schedule:
     # Weekly Sunday 02:00 UTC — Go CVE audit + the belt-and-suspenders cluster
-    # health probes (OpenBao/ESO + cert-manager) that the in-cluster llz-reconciler
-    # now covers continuously via Prometheus alerts, so their hosted-runner probe
-    # was demoted here from daily.
+    # health probes (OpenBao/ESO, cert-manager, Loki OBJ-key rotation) that the
+    # in-cluster llz-reconciler now covers continuously via Prometheus alerts, so
+    # their hosted-runner probe was demoted here from daily.
     - cron: "0 2 * * 0"
-    # Daily 06:00 UTC — external credential-SLA + rotation checks the reconciler
-    # cannot see in-cluster (lke-admin token age, Linode + GitHub PAT expiry, Loki
-    # OBJ-key age).
+    # Daily 06:00 UTC — external credential-SLA checks the reconciler cannot see
+    # in-cluster (lke-admin token age, Linode + GitHub PAT expiry).
     - cron: "0 6 * * *"
     # Monthly 1st @ 07:00 UTC — template drift report
     - cron: "0 7 1 * *"

@@ -272,13 +272,19 @@ jobs:
         run: llz ci cred-audit
 
   # ── Loki OBJ key 120-day rotation SLA ────────────────────────────────────────
-  # Runs daily (06:00 UTC). Linode Object Storage keys have no native expiry;
-  # the Guidelines mandate revoking bucket access keys after 120 days. The
-  # object-storage Terraform module force-rotates the key declaratively
-  # (time_rotating), but the OpenBao reseed hop is manual — this check reads the
-  # age of the current secret/loki/object-store version and alerts if the live
-  # credential has fallen behind the 120-day clock. Same surface as the other
-  # rotation-health checks.
+  # Linode Object Storage keys have no native expiry; the Guidelines mandate
+  # revoking bucket access keys after 120 days. The object-storage Terraform
+  # module force-rotates the key declaratively (time_rotating), but the OpenBao
+  # reseed hop is manual — this check reads the age of the current
+  # secret/loki/object-store version and alerts if the live credential has fallen
+  # behind the 120-day clock.
+  #
+  # DEMOTED to WEEKLY (was daily): the in-cluster llz-reconciler samples the same
+  # OpenBao rotation age continuously (llz_credential_age_days{cred=...}) and fires
+  # the LLZCredentialRotationOverdue alert (>90d) for both the Loki and Harbor
+  # object-storage keys — so the daily hosted-runner probe is redundant. Weekly
+  # stays as belt-and-suspenders (covers a receiver-less cluster + re-proves the
+  # probe path). Still on-demand via workflow_dispatch.
   loki-objkey-rotation-health:
     name: Loki OBJ Key SLA (${{ matrix.region }})
     needs: discover
@@ -289,7 +295,8 @@ jobs:
       contents: read
     environment: infra-${{ matrix.region }}
     timeout-minutes: 15
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Weekly Sunday 02:00 UTC (or on demand) — see the DEMOTED note above.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
     strategy:
       fail-fast: false
       matrix:

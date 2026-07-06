@@ -63,22 +63,22 @@ platform:
       - llz-cert-automation
       - llz-observability
     # Pod-scoped clients: a single workload in a SHARED namespace that needs :8200,
-    # where a whole-namespace grant would over-expose OpenBao. The in-cluster llz
-    # CronJobs (harbor robot provisioner + Linode credential rotator) log into
-    # OpenBao via Kubernetes-auth; without this their kubernetes-auth login is
-    # L4-blocked (TCP timeout → the harbor-docker-config ExternalSecret can never
-    # sync, pinning the convergence gate). OpenBao's k8s-auth roles still gate what
-    # each SA can actually read/write; this is just the L4 door. Match on the pod's
-    # app.kubernetes.io/name.
+    # where a whole-namespace grant would over-expose OpenBao. The in-cluster
+    # harbor robot provisioner CronJob logs into OpenBao via Kubernetes-auth;
+    # without this its kubernetes-auth login is L4-blocked (TCP timeout → the
+    # harbor-docker-config ExternalSecret can never sync, pinning the convergence
+    # gate). OpenBao's k8s-auth roles still gate what each SA can actually
+    # read/write; this is just the L4 door. Match on the pod's
+    # app.kubernetes.io/name. (The linode-cred-rotator CronJob was retired — its
+    # work moved to the in-cluster reconciler, which has its own entry below.)
     allowedClientPods:
       - namespace: harbor
         name: harbor-robot-provisioner
-      - namespace: llz-linode-cred-rotator
-        name: linode-cred-rotator
-      # The in-cluster reconciler's --reconcile-openbao-gauges sampler logs into
-      # OpenBao (Kubernetes-auth `reconciler` role) to read seal-status +
-      # credential-rotation metadata for its gauges. Harmless when that flag is
-      # off (the pod simply never opens the :8200 connection).
+      # The in-cluster reconciler logs into OpenBao (Kubernetes-auth `reconciler`
+      # role) for --reconcile-openbao-gauges (seal-status + credential-rotation
+      # metadata) and --reconcile-linode-creds (rotates the object-storage keys and
+      # writes them back). Harmless when those flags are off (the pod simply never
+      # opens the :8200 connection).
       - namespace: llz-reconciler
         name: llz-reconciler
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
