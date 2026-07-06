@@ -22,6 +22,26 @@ package main
 // produces, the workload's sync-wave MUST be strictly greater than that
 // ExternalSecret's. Optional references (optional: true) don't block pod start,
 // so they're ignored.
+//
+// CROSS-APPLICATION AWARENESS (blast-radius decomposition). A component carved into
+// its own Argo CD Application (clusterspec CarvedApp) no longer shares
+// platform-bootstrap's single wave sequence: Argo cannot sync a carved App's content
+// before the app-of-apps CREATES that App at its App-level wave, and sibling Apps
+// sync independently (no cross-App health gate). So a workload in one App whose Secret
+// is produced by an ExternalSecret in a LATER-created App is the same wedge in a new
+// dress — the ES may not exist yet when the workload's App starts.
+//
+// The guard therefore judges ordering by TOPOLOGY, keying off the SAME registry
+// `llz render` emits the Apps from (so the two can't drift):
+//   - workload and ExternalSecret in the SAME Application → compare RESOURCE
+//     sync-waves (Argo orders one App's resources by them); the existing rule.
+//   - in DIFFERENT Applications → compare APP-LEVEL waves; the workload's App must be
+//     created strictly after the ExternalSecret's App.
+// Note it is NOT a single max()-of-the-two "effective wave": flooring both a
+// workload and its ExternalSecret at a common App wave would MASK a genuine
+// intra-App inversion (a wave-0 workload + wave-5 ES in the same App is still a
+// wedge). The platform-bootstrap root tree ranks earliest (wdRootAppWave), since
+// Terraform creates it before any carved child App.
 
 import (
 	"fmt"
@@ -32,6 +52,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -96,10 +117,14 @@ type wdDoc struct {
 // CronJob is excluded (Argo assesses no CronJob health; see wave-health-guard).
 var wdWorkloadKinds = map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true}
 
-// wdInversion is one workload → ExternalSecret ordering violation.
+// wdInversion is one workload → ExternalSecret ordering violation. workloadWave/esWave
+// are the waves that were actually COMPARED: resource sync-waves when both live in the
+// same Application, App-level waves when they live in different ones. workloadApp/esApp
+// name the owning Applications for the diagnostic.
 type wdInversion struct {
 	file, workload, secret, esFile string
 	workloadWave, esWave           int
+	workloadApp, esApp             string
 }
 
 func ciWaveDependencyGuardCmd() *cobra.Command {
@@ -133,26 +158,36 @@ func runCIWaveDependencyGuard(root string) error {
 		return nil
 	}
 	for _, v := range inversions {
-		fmt.Printf("::error file=%s::workload %q at sync-wave %d hard-references Secret %q, but the ExternalSecret that produces it (%s) is at sync-wave %d. A workload that gates a wave before its Secret's ExternalSecret can never go Healthy — it wedges the platform-bootstrap sync and starves every later-wave ExternalSecret (the #163 failure class). Give the workload a sync-wave > %d, or mark the reference optional: true.\n",
-			v.file, v.workload, v.workloadWave, v.secret, v.esFile, v.esWave, v.esWave)
+		cross := ""
+		if v.workloadApp != v.esApp {
+			cross = fmt.Sprintf(" The workload syncs under Application %q and the ExternalSecret under %q — a carved App cannot sync before the app-of-apps creates it, so give %q a strictly higher App-level sync-wave than %q (clusterspec CarvedApp.AppWave), or move them into the same App.", v.workloadApp, v.esApp, v.workloadApp, v.esApp)
+		}
+		fmt.Printf("::error file=%s::workload %q at effective sync-wave %d hard-references Secret %q, but the ExternalSecret that produces it (%s) is at effective sync-wave %d. A workload that gates a wave before its Secret's ExternalSecret can never go Healthy — it wedges the sync and starves every later-wave ExternalSecret (the #163 failure class). Give the workload a sync-wave > %d, or mark the reference optional: true.%s\n",
+			v.file, v.workload, v.workloadWave, v.secret, v.esFile, v.esWave, v.esWave, cross)
 	}
 	return fmt.Errorf("wave-dependency-guard: %d workload/ExternalSecret wave inversion(s)", len(inversions))
 }
 
 // collectWaveDependencyInversions walks the dirs, indexes ExternalSecrets by the
-// Secret they produce (namespace/name → wave), then flags each workload whose
-// non-optional Secret reference resolves to an ExternalSecret at an equal-or-later
-// wave.
+// Secret they produce (namespace/name → waves), then flags each workload whose
+// non-optional Secret reference resolves to an ExternalSecret that syncs equal-or-later.
+// "Later" is judged per the app-of-apps topology: within one Application by RESOURCE
+// sync-wave (Argo orders a single App's resources by it); across Applications by the
+// App-LEVEL wave (a carved App's content cannot sync before the app-of-apps creates
+// the App, and sibling Apps sync with no cross-App health gate). See the file header.
 func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
+	type res struct {
+		file, app        string
+		resWave, appWave int
+	}
 	type esInfo struct {
-		wave int
-		file string
+		res
 	}
 	esBySecret := map[string]esInfo{} // "namespace/secretName" → info
 	type workload struct {
-		file, name, namespace string
-		wave                  int
-		refs                  []wdSecretRef
+		res
+		name, namespace string
+		refs            []wdSecretRef
 	}
 	var workloads []workload
 
@@ -168,8 +203,9 @@ func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
 			if err != nil {
 				return err
 			}
+			app, appWave := wdOwningApp(path) // same for every doc in a file
 			for _, doc := range splitWaveDependencyDocs(string(raw)) {
-				wave := wdSyncWave(doc.Metadata.Annotations)
+				r := res{file: path, app: app, resWave: wdSyncWave(doc.Metadata.Annotations), appWave: appWave}
 				ns := doc.Metadata.Namespace
 				switch {
 				case doc.Kind == "ExternalSecret":
@@ -177,12 +213,13 @@ func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
 					if doc.Spec.Target != nil && doc.Spec.Target.Name != "" {
 						name = doc.Spec.Target.Name
 					}
-					esBySecret[ns+"/"+name] = esInfo{wave: wave, file: path}
+					esBySecret[ns+"/"+name] = esInfo{res: r}
 				case wdWorkloadKinds[doc.Kind] && doc.Spec.Template != nil:
 					refs := wdWorkloadSecretRefs(doc.Spec.Template.Spec.Containers,
 						doc.Spec.Template.Spec.InitContainers, doc.Spec.Template.Spec.Volumes)
+					r.file = path
 					workloads = append(workloads, workload{
-						file: path, name: doc.Kind + "/" + doc.Metadata.Name, namespace: ns, wave: wave, refs: refs,
+						res: r, name: doc.Kind + "/" + doc.Metadata.Name, namespace: ns, refs: refs,
 					})
 				}
 			}
@@ -200,12 +237,28 @@ func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
 				continue
 			}
 			es, ok := esBySecret[w.namespace+"/"+ref.name]
-			if !ok || es.wave <= w.wave {
+			if !ok {
+				continue
+			}
+			// Same Application: Argo orders its resources by RESOURCE wave, so the
+			// workload must sync strictly after (equal is fine — same wave applies
+			// together). Different Applications: compare APP-level waves — the
+			// workload's App must be created strictly after the ES's App so the ES
+			// App gets a head start (equal App waves race, which is a wedge risk).
+			var inverted bool
+			var wWave, eWave int
+			if w.app == es.app {
+				inverted, wWave, eWave = es.resWave > w.resWave, w.resWave, es.resWave
+			} else {
+				inverted, wWave, eWave = es.appWave >= w.appWave, w.appWave, es.appWave
+			}
+			if !inverted {
 				continue
 			}
 			inversions = append(inversions, wdInversion{
 				file: w.file, workload: w.name, secret: ref.name,
-				esFile: es.file, workloadWave: w.wave, esWave: es.wave,
+				esFile: es.file, workloadWave: wWave, esWave: eWave,
+				workloadApp: w.app, esApp: es.app,
 			})
 		}
 	}
@@ -240,6 +293,42 @@ func wdWorkloadSecretRefs(containers, initContainers []wdContainer, volumes []wd
 		}
 	}
 	return refs
+}
+
+// wdRootAppWave is the App-level wave assigned to the platform-bootstrap root tree
+// (the shared base + every non-carved component). platform-bootstrap and its
+// llz-secret-store sibling are created by Terraform BEFORE the app-of-apps spawns
+// any carved child App, so the root ranks earliest — a sentinel below any real
+// sync-wave — for cross-App comparisons: a root workload depending on a carved App's
+// ExternalSecret is correctly flagged (root came up first), while a carved workload
+// depending on a root ExternalSecret is fine.
+const wdRootAppWave = -1 << 30
+
+// wdOwningApp returns the Argo CD Application a manifest path syncs under and that
+// App's App-level wave: a carved component's App (clusterspec CarvedApp) when the
+// path lives under that component's dir, else the platform-bootstrap root tree.
+func wdOwningApp(path string) (string, int) {
+	if c, ok := wdComponentOf(path); ok && c.CarvedApp != nil {
+		return c.CarvedApp.AppName, c.CarvedApp.AppWave
+	}
+	return "platform-bootstrap", wdRootAppWave
+}
+
+// wdComponentOf resolves the clusterspec component a manifest path belongs to by its
+// apl-values/components/<name>/ segment. ok=false for the shared base / any path not
+// under a component dir.
+func wdComponentOf(path string) (clusterspec.Component, bool) {
+	const marker = "/components/"
+	i := strings.LastIndex(path, marker)
+	if i < 0 {
+		return clusterspec.Component{}, false
+	}
+	rest := path[i+len(marker):]
+	name := rest
+	if j := strings.IndexByte(rest, '/'); j >= 0 {
+		name = rest[:j]
+	}
+	return clusterspec.LookupComponent(name)
 }
 
 // wdSyncWave reads the argocd sync-wave annotation, defaulting to 0 (Argo's

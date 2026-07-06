@@ -1,0 +1,44 @@
+name: Wedge game-day (blast-radius containment proof)
+
+# Thin caller for the reusable LLZ workflow. Breaks one platform ExternalSecret on
+# this instance's cluster and asserts the wedge is contained to the carved
+# Application that owns it (docs/designs/blast-radius-decomposition.md). The command
+# always restores the ExternalSecret. Manual-dispatch only — run it against a warm
+# cluster (e.g. after an e2e provision with keep_cluster=true, or the converge-only
+# fast-path's reused cluster).
+#
+# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to a
+# template release tag (Renovate keeps both current — instance-template/renovate.json).
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Deployment to run the game-day against, e.g. e2e | lab | primary'
+        required: true
+        type: string
+        default: e2e
+      target-app:
+        description: 'Carved Application expected to degrade (owns the ExternalSecret below)'
+        required: false
+        type: string
+        default: llz-observability
+      externalsecret:
+        description: 'ExternalSecret to break, as <namespace>/<name>'
+        required: false
+        type: string
+        default: monitoring/loki-object-store
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-wedge-gameday.yml@<@ llz_version @>
+    with:
+      region: ${{ inputs.region }}
+      target-app: ${{ inputs.target-app }}
+      externalsecret: ${{ inputs.externalsecret }}
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref: <@ llz_version @>
+    secrets: inherit

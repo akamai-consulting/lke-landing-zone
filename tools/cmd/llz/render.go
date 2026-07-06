@@ -229,9 +229,10 @@ func untrackRenderedTfvars(relPrefix string) {
 
 // committedTargets returns every committed apl-values/<env>/ file a deployment
 // renders to, as {path → content}: the THIN manifest overlay (resources: the shared
-// _shared/manifest base + components: the enabled component dirs), the per-env
-// env-revision marker, the volume-labeler REGION_SHORT patch (when enabled), and —
-// when an apl-values/_shared/values.yaml base is present — the values.yaml with
+// _shared/manifest base + the carved Application CRs; components: the enabled plain
+// component dirs), the per-env env-revision marker, each enabled carved component's
+// App CR + apps/<name>/ source root (kustomization + per-env patches), and — when an
+// apl-values/_shared/values.yaml base is present — the values.yaml with
 // apps.<key>.enabled + identity patched (the apl-core backend).
 func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
 	manifest := filepath.Join(aplDir, env, "manifest")
@@ -243,24 +244,23 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		// per-env local-config marker the cluster-bootstrap precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
 	}
-	// The OTel Collector serving cert's per-env otel.<env>.internal SAN patch —
-	// emitted only when observability is enabled (which ships the Certificate).
-	if clusterspec.ComponentEnabled(e.Components, "observability") {
-		targets[filepath.Join(manifest, "otel-collector-tls-san-patch.yaml")] = clusterspec.RenderOtelSANPatch(env)
-	}
-	// The llz reconciler's per-env env patch — REGION_SHORT (volume-labels) +
-	// REGION/OBJ_CLUSTER (linode-creds). Emitted whenever the default-on
-	// llzReconciler component is enabled. REGION is the env name and OBJ_CLUSTER the
-	// object-storage cluster. (Harbor provisioning stays on the in-namespace
-	// harbor-robot-provisioner CronJob — the reconciler can't reach mesh-protected
-	// harbor-core from llz-reconciler — so HARBOR_HOST rides that CronJob's own patch.)
-	if clusterspec.ComponentEnabled(e.Components, "llzReconciler") {
-		targets[filepath.Join(manifest, "llz-reconciler-env-patch.yaml")] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster)
-	}
-	// The harbor robot provisioner's per-env HARBOR_HOST patch — emitted only
-	// when harbor is enabled (which ships the CronJob).
-	if clusterspec.ComponentEnabled(e.Components, "harbor") {
-		targets[filepath.Join(manifest, "harbor-provisioner-env-patch.yaml")] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix)
+	// Carved components (blast-radius decomposition): each enabled one renders its
+	// own health-inert Application CR into the manifest tree PLUS a self-contained
+	// per-env source root under apps/<name>/ (the shared Component + this env's
+	// patches). A Degraded resource then fails only its own App, never
+	// platform-bootstrap. The App CR pins the same repo + apps_repo_revision the
+	// platform-bootstrap Application uses. See docs/designs/blast-radius-decomposition.md.
+	revision := orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")
+	for _, c := range clusterspec.Components {
+		if c.CarvedApp == nil || !clusterspec.ComponentEnabled(e.Components, c.Name) {
+			continue
+		}
+		appsDir := filepath.Join(aplDir, env, "apps", c.Name)
+		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
+		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c)
+		for path, content := range carvedPatchTargets(c, appsDir, env, e) {
+			targets[path] = content
+		}
 	}
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances
@@ -273,6 +273,33 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		targets[filepath.Join(aplDir, env, "values.yaml")] = string(rendered)
 	}
 	return targets, nil
+}
+
+// carvedPatchTargets returns the per-env patch file(s) a carved component writes
+// into its apps/<name>/ source root, keyed by absolute path. The content is
+// component-specific (the same env-shaped values the patches carried when they
+// lived in manifest/); the filename is taken from the registry Patch.Path so it
+// stays in lockstep with the reference RenderCarvedAppKustomization emits. Returns
+// empty for a carved component with no per-env patch (externalSecrets).
+func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusterspec.Environment) map[string]string {
+	out := make(map[string]string, len(c.Patches))
+	content := map[string]string{}
+	switch c.Name {
+	case "observability":
+		content["otel-collector-tls-san-patch.yaml"] = clusterspec.RenderOtelSANPatch(env)
+	case "harbor":
+		content["harbor-provisioner-env-patch.yaml"] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix)
+	case "llzReconciler":
+		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds); REGION is
+		// the env name and OBJ_CLUSTER the object-storage cluster.
+		content["llz-reconciler-env-patch.yaml"] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster)
+	}
+	for _, p := range c.Patches {
+		if body, ok := content[p.Path]; ok {
+			out[filepath.Join(appsDir, p.Path)] = body
+		}
+	}
+	return out
 }
 
 // sharedDNSEmailTarget returns the instance-wide letsencrypt ClusterIssuer path and

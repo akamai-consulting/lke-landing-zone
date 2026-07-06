@@ -138,7 +138,11 @@ func TestCommittedTargets(t *testing.T) {
 	for _, p := range []string{
 		filepath.Join("apl-values", "lab", "manifest", "kustomization.yaml"),
 		filepath.Join("apl-values", "lab", "manifest", "env-revision-configmap.yaml"),
-		filepath.Join("apl-values", "lab", "manifest", "llz-reconciler-env-patch.yaml"), // llzReconciler default-on
+		// llzReconciler is carved + default-on: its App CR lands in manifest/, its
+		// per-env patch moves into the App's own apps/<name>/ source root.
+		filepath.Join("apl-values", "lab", "manifest", "llz-reconciler.yaml"),
+		filepath.Join("apl-values", "lab", "apps", "llzReconciler", "kustomization.yaml"),
+		filepath.Join("apl-values", "lab", "apps", "llzReconciler", "llz-reconciler-env-patch.yaml"),
 		filepath.Join("apl-values", "lab", "values.yaml"),
 	} {
 		if _, ok := targets[p]; !ok {
@@ -149,11 +153,16 @@ func TestCommittedTargets(t *testing.T) {
 	if !strings.Contains(overlay, "../../_shared/manifest") {
 		t.Errorf("overlay is not thin (no shared base ref):\n%s", overlay)
 	}
-	// llzReconciler disabled → no reconciler env patch target.
+	// llzReconciler disabled → no reconciler App CR or source root at all.
 	off := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{"llzReconciler": {Enabled: boolPtrLocal(false)}}}
 	t2, _ := committedTargets("lab", off, clusterspec.ValuesIdentity{}, "apl-values")
-	if _, ok := t2[filepath.Join("apl-values", "lab", "manifest", "llz-reconciler-env-patch.yaml")]; ok {
-		t.Error("disabled llzReconciler should not emit a reconciler env patch")
+	for _, p := range []string{
+		filepath.Join("apl-values", "lab", "manifest", "llz-reconciler.yaml"),
+		filepath.Join("apl-values", "lab", "apps", "llzReconciler", "llz-reconciler-env-patch.yaml"),
+	} {
+		if _, ok := t2[p]; ok {
+			t.Errorf("disabled llzReconciler should not emit %s", p)
+		}
 	}
 }
 

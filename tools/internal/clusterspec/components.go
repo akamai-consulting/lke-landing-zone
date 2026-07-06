@@ -34,9 +34,18 @@ type Component struct {
 	// component's shared kustomize Component lists — the per-env overlay pulls them
 	// in via components: (mandatory components list them in the _shared base instead).
 	ArgoApps []string
-	// Patches are kustomize patches this component contributes to the parent
-	// manifest/kustomization.yaml patches: list.
+	// Patches are kustomize patches this component contributes. For a plain
+	// (in-bundle) component they land in the parent manifest/kustomization.yaml
+	// patches: list; for a CarvedApp component they land in that App's own per-env
+	// apps/<name>/kustomization.yaml instead (the patched resource moves with it).
 	Patches []Patch
+	// CarvedApp, when non-nil, makes `llz render` emit a standalone git-path Argo CD
+	// Application (health-inert in the platform-bootstrap tree) that health-gates
+	// this component's OWN content — instead of merging its resources as a raw
+	// components: entry that shares platform-bootstrap's sync/health fate. A Degraded
+	// resource then fails only its own App (the #142/#163 blast-radius class). See
+	// docs/designs/blast-radius-decomposition.md.
+	CarvedApp *CarvedApp
 	// DefaultDisabled components default to enabled:false.
 	DefaultDisabled bool
 }
@@ -45,6 +54,27 @@ type Component struct {
 type Patch struct {
 	Path                       string
 	Group, Version, Kind, Name string
+}
+
+// CarvedApp describes the standalone Argo CD Application a decomposed component
+// renders into. It is the single source of truth both `llz render` (which emits
+// the App CR + its per-env source root) and the wave-dependency-guard (which
+// treats AppWave as the cross-Application ordering floor) read.
+type CarvedApp struct {
+	// AppName is the Application metadata.name (llz-<x>) — also the App CR filename
+	// (<AppName>.yaml) rendered into the per-env manifest tree.
+	AppName string
+	// AppWave is the App-level argocd.argoproj.io/sync-wave on the Application CR.
+	// It is the FLOOR for every resource the App carries (Argo cannot sync a carved
+	// App's content before the app-of-apps creates the App at this wave) and the key
+	// the wave-dependency-guard uses to order one carved App's resources against
+	// another's. externalSecrets — the dependency root every consumer's Secret
+	// resolution waits on — gets the lowest wave so its content goes up first.
+	AppWave int
+	// Namespace is the Application spec.destination.namespace fallback for
+	// unnamespaced resources; namespaced resources carry their own metadata.namespace
+	// (the bundles span several), so this is only a default, not a scope.
+	Namespace string
 }
 
 // Components is the ordered registry. Order is the rendering order for the
@@ -71,6 +101,11 @@ var Components = []Component{
 			"external-secrets/network-policies.yaml",
 		},
 		ArgoApps: []string{"applications/external-secrets-operator.yaml"},
+		// The dependency ROOT: its default-deny + ESO-egress NetworkPolicies gate
+		// whether ANY ExternalSecret can reach OpenBao, so its App carries the
+		// lowest wave — it goes Healthy before every consumer App. Carving it last
+		// (PR-C in the original plan) is why its negative test is the containment proof.
+		CarvedApp: &CarvedApp{AppName: "llz-externalsecrets", AppWave: -10, Namespace: "external-secrets"},
 	},
 	{
 		Name:              "argoWorkflows",
@@ -116,6 +151,10 @@ var Components = []Component{
 			Kind:    "Certificate",
 			Name:    "platform-otel-collector-tls",
 		}},
+		// A leaf — nothing depends on observability's health — so it was the cheap
+		// first carve (PR-A). Its content spans waves -16..10; the App wave floors
+		// them and lands after externalSecrets.
+		CarvedApp: &CarvedApp{AppName: "llz-observability", AppWave: -5, Namespace: "llz-observability"},
 	},
 	{
 		Name:        "harbor",
@@ -134,6 +173,10 @@ var Components = []Component{
 			Kind:    "CronJob",
 			Name:    "harbor-robot-provisioner",
 		}},
+		// All harbor content sits at wave 5 (after the openbao ClusterSecretStore);
+		// its own App wave keeps the robot-provisioner CronJob + mesh NetworkPolicy
+		// off platform-bootstrap's fate.
+		CarvedApp: &CarvedApp{AppName: "llz-harbor", AppWave: 5, Namespace: "harbor"},
 	},
 	{
 		// apl-core policy engine (Kyverno + policy-reporter). apl-core-only.
@@ -199,6 +242,10 @@ var Components = []Component{
 			Kind:    "Deployment",
 			Name:    "llz-reconciler",
 		}},
+		// The reconciler Deployment (wave 6) consumes its own ExternalSecret (wave 5)
+		// — the same in-bundle pair the #163 wedge was born from — so its App wave
+		// (5) lands after externalSecrets/observability and floors both.
+		CarvedApp: &CarvedApp{AppName: "llz-reconciler", AppWave: 5, Namespace: "llz-reconciler"},
 	},
 }
 

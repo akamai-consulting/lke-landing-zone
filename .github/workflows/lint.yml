@@ -304,6 +304,16 @@ jobs:
       - name: Server-side dry-run of the rendered charts
         run: kubectl apply --dry-run=server -f rendered/
 
+      # ── VAP admission gate (llz-wave-health-guard) ───────────────────────────
+      # Apply the wave-health ValidatingAdmissionPolicy (the kind apiserver COMPILES
+      # its CEL — a syntax error fails here, which kubeconform + the Go allowlist test
+      # can't catch) and assert enforcement with a label-scoped Deny binding: an
+      # unvetted negative-wave kind is denied; allowlisted + argoproj.io (child-App)
+      # kinds pass. Needs the Argo Events CRDs installed above (EventBus probe).
+      # Before the Kyverno gate so no live controller perturbs it.
+      - name: Wave-health VAP admission gate
+        run: template-scripts/ci/vap-admission-check.sh
+
       # ── Kyverno policy-admission gate ────────────────────────────────────────
       # A CRD-schema dry-run does NOT catch what Kyverno's validate-policy
       # webhook rejects: the 2026-07-04 bootstrap wedge #2 was ClusterPolicies
@@ -356,6 +366,10 @@ jobs:
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v${{ env.HELM_VERSION }}
+      - name: Install kubectl (kustomize-build the rendered overlays)
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
+        with:
+          version: v${{ env.KUBECTL_VERSION }}
       - name: Scaffold a throwaway env and validate its apl-values
         run: make scaffold-check
 
