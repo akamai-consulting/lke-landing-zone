@@ -243,12 +243,6 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		// per-env local-config marker the cluster-bootstrap precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
 	}
-	// The Linode credential rotator's per-env REGION + OBJ_CLUSTER patch — emitted
-	// only when linodeCredRotator is enabled (region = deployment name, obj_cluster
-	// = the spec's object-storage cluster).
-	if clusterspec.ComponentEnabled(e.Components, "linodeCredRotator") {
-		targets[filepath.Join(manifest, "linode-cred-rotator-env-patch.yaml")] = clusterspec.RenderRotatorEnvPatch(env, e.Cluster.ObjectStorage.Cluster)
-	}
 	// The OTel Collector serving cert's per-env otel.<env>.internal SAN patch —
 	// emitted only when observability is enabled (which ships the Certificate).
 	if clusterspec.ComponentEnabled(e.Components, "observability") {
@@ -257,15 +251,11 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// The llz reconciler's per-env env patch — REGION_SHORT (volume-labels),
 	// REGION/OBJ_CLUSTER (linode-creds), HARBOR_HOST (harbor). Emitted whenever the
 	// default-on llzReconciler component is enabled. REGION is the env name,
-	// OBJ_CLUSTER the object-storage cluster (mirroring RenderRotatorEnvPatch), and
-	// HARBOR_HOST is harbor.<domainSuffix> (mirroring RenderHarborHostPatch).
+	// OBJ_CLUSTER the object-storage cluster, and HARBOR_HOST is harbor.<domainSuffix>.
+	// The reconciler now owns all three reconcilers whose CronJobs (linodeCredRotator,
+	// harbor-robot-provisioner) were retired, so this is the sole per-env env patch.
 	if clusterspec.ComponentEnabled(e.Components, "llzReconciler") {
 		targets[filepath.Join(manifest, "llz-reconciler-env-patch.yaml")] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster, "harbor."+e.Cluster.Bootstrap.DomainSuffix)
-	}
-	// The harbor robot provisioner's per-env HARBOR_HOST patch — emitted only
-	// when harbor is enabled (which ships the CronJob).
-	if clusterspec.ComponentEnabled(e.Components, "harbor") {
-		targets[filepath.Join(manifest, "harbor-provisioner-env-patch.yaml")] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix)
 	}
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances

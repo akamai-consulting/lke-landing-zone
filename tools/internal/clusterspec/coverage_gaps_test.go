@@ -117,20 +117,6 @@ func TestRenderEnvRevision(t *testing.T) {
 	}
 }
 
-func TestRenderHarborHostPatch(t *testing.T) {
-	out := RenderHarborHostPatch("web.prod.example.com")
-	for _, want := range []string{
-		"name: harbor-robot-provisioner",
-		"namespace: harbor",
-		"name: HARBOR_HOST",
-		`value: "harbor.web.prod.example.com"`,
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("RenderHarborHostPatch missing %q:\n%s", want, out)
-		}
-	}
-}
-
 func TestRenderOtelSANPatch(t *testing.T) {
 	out := RenderOtelSANPatch("primary")
 	for _, want := range []string{

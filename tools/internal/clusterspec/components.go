@@ -96,27 +96,6 @@ var Components = []Component{
 		},
 	},
 	{
-		// In-cluster Linode credential rotator (OBJ keys + DNS token). Default-ON:
-		// with the TF-minted keys and their time_rotating clock removed from
-		// llz-object-storage (buckets-only module), this CronJob is the ONLY
-		// rotation mechanism for the Loki/Harbor object-storage keys — an env
-		// that disables it while observability/harbor are enabled runs on
-		// never-rotating credentials. The bootstrap mint
-		// (`llz ci mint-bootstrap-objkeys`) stamps rotated_at so the rotator
-		// adopts on its own cadence. The per-env REGION + OBJ_CLUSTER ride the
-		// patch below (rendered by `llz render`). See
-		// docs/designs/linode-credential-rotator.md.
-		Name:              "linodeCredRotator",
-		ManifestResources: []string{"linode-cred-rotator"},
-		Patches: []Patch{{
-			Path:    "linode-cred-rotator-env-patch.yaml",
-			Group:   "batch",
-			Version: "v1",
-			Kind:    "CronJob",
-			Name:    "linode-cred-rotator",
-		}},
-	},
-	{
 		// apl-core's monitoring stack + the llz glue (loki S3 ExternalSecret, alert
 		// rules, the OTel collector serving-TLS CA chain) that rides with it.
 		Name:        "observability",
@@ -144,17 +123,10 @@ var Components = []Component{
 		ManifestResources: []string{
 			"harbor/harbor-registry-s3-externalsecret.yaml",
 			"harbor/harbor-admin-push.yaml",
-			"harbor/harbor-robot-provisioner",
 		},
-		// The env-shaped HARBOR_HOST (registry host) on the robot-provisioner
-		// CronJob — rendered per env by RenderHarborHostPatch.
-		Patches: []Patch{{
-			Path:    "harbor-provisioner-env-patch.yaml",
-			Group:   "batch",
-			Version: "v1",
-			Kind:    "CronJob",
-			Name:    "harbor-robot-provisioner",
-		}},
+		// The robot-provisioner CronJob (and its per-env HARBOR_HOST patch) was
+		// retired — the llzReconciler's harbor reconciler owns that work now, and
+		// HARBOR_HOST rides the reconciler's own env patch (RenderReconcilerEnvPatch).
 	},
 	{
 		// apl-core policy engine (Kyverno + policy-reporter). apl-core-only.

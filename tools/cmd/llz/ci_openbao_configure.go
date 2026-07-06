@@ -182,23 +182,13 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=external-secrets",
 				"bound_service_account_namespaces=external-secrets",
 				"policies=eso-pusher", "ttl=15m"}},
-		// Kubernetes auth role for the in-cluster Linode credential rotator — binds
-		// the linode-cred-rotator ServiceAccount to the write-scoped linode-rotator
-		// policy so the CronJob can write the rotated creds straight to OpenBao.
-		{desc: "write kubernetes auth role linode-rotator", fatal: true,
-			args: []string{"write", "auth/kubernetes/role/linode-rotator",
-				"bound_service_account_names=linode-cred-rotator",
-				"bound_service_account_namespaces=llz-linode-cred-rotator",
-				"policies=linode-rotator", "ttl=15m"}},
-		// Kubernetes auth role for the in-cluster Harbor robot provisioner — binds
-		// the harbor-robot-provisioner ServiceAccount (harbor namespace, where the
-		// CronJob mounts harbor-admin-password) to the harbor-provisioner policy so
-		// it can seed secret/harbor/{robot,pull-robot} without a root token.
-		{desc: "write kubernetes auth role harbor-provisioner", fatal: true,
-			args: []string{"write", "auth/kubernetes/role/harbor-provisioner",
-				"bound_service_account_names=harbor-robot-provisioner",
-				"bound_service_account_namespaces=harbor",
-				"policies=harbor-provisioner", "ttl=15m"}},
+		// NOTE: the standalone linode-rotator + harbor-provisioner Kubernetes-auth
+		// roles (bound to the linode-cred-rotator / harbor-robot-provisioner CronJob
+		// ServiceAccounts) were removed when those CronJobs were retired — the
+		// in-cluster reconciler now performs that work under the `reconciler` role
+		// (via OPENBAO_KUBERNETES_ROLE=reconciler), which already carries the
+		// linode-rotator + harbor-provisioner POLICIES (see the reconciler role
+		// below). The policies themselves stay; only the now-unbound roles are gone.
 		// Kubernetes auth role for the in-cluster reconciler — binds the
 		// llz-reconciler ServiceAccount to its policies. The reconciler now runs the
 		// full driving suite, so it carries every policy the CronJobs it replaces

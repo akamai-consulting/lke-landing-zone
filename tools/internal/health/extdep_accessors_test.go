@@ -30,7 +30,7 @@ func TestLetsencryptIssuersDeferred(t *testing.T) {
 }
 
 // harbor-docker-config is deferred (not hard-failed) on a fresh bootstrap: it
-// reads secret/harbor/robot, seeded by the harbor-robot-provisioner CronJob only
+// reads secret/harbor/robot, seeded by the in-cluster harbor reconciler only
 // after Harbor is up, so it sits Ready=False for the first few minutes. Any other
 // ExternalSecret still hard-fails, so the deferral stays narrow.
 func TestHarborDockerConfigDeferred(t *testing.T) {
