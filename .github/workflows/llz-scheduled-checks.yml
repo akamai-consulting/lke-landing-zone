@@ -613,6 +613,77 @@ jobs:
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ matrix.region }}
 
+  # ── Wave-health runtime audit ────────────────────────────────────────────────
+  # Runtime counterpart to the static `wave-health-guard` (PR-time, git tree) and the
+  # llz-wave-health-guard ValidatingAdmissionPolicy (admission). Enumerates every LIVE
+  # resource at a negative sync-wave and flags any kind the VAP would deny — a coverage
+  # gap to vet, or a latent false-positive the VAP would reject. Catches negative-wave
+  # kinds that only exist at runtime (child-App-rendered content, apl-core resources,
+  # operator writebacks) which neither the git-tree guard nor kubeconform can see. The
+  # argoproj.io Events kinds (Sensor/EventSource/EventBus) were found this way manually;
+  # this makes that census a standing check. Warning-only (continue-on-error): a finding
+  # annotates the job summary but does not block other scheduled work.
+  wave-health-audit:
+    name: Wave-health Runtime Audit (${{ matrix.region }})
+    needs: discover
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    permissions:
+      contents: read
+    environment: infra-${{ matrix.region }}
+    timeout-minutes: 15
+    continue-on-error: true
+    # Weekly Sunday 02:00 UTC (or on demand) — a full api-resources sweep, so not daily.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
+    strategy:
+      fail-fast: false
+      matrix:
+        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
+    env:
+      TF_VERSION:          '1.9.8'
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      REGION:              ${{ matrix.region }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout LLZ template (scripts + actions + tools)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
+          ref: ${{ inputs.template-ref }}
+          token: ${{ github.token }}
+          path: _llz-template
+
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        id: kubeconfig
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ matrix.region }}
+          allow-missing:         'true'
+
+      - name: Audit negative-wave kinds against the wave-health guard/VAP
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci wave-health-audit | tee "$GITHUB_STEP_SUMMARY"
+      - name: Cleanup kubeconfig
+        if: always()
+        run: rm -f "$HOME/.kube/config"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ matrix.region }}
+
   # ── Template drift report ────────────────────────────────────────────────────
   # Runs monthly (1st @ 07:00 UTC) and on demand. Reports how far this instance
   # has fallen behind the LLZ template it was generated from: `llz drift` reads

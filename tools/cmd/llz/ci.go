@@ -118,6 +118,9 @@ func ciCmd() *cobra.Command {
 	// the wedge is contained to its own carved Application (blast-radius
 	// decomposition proof). Run on a warm e2e cluster.
 	c.AddCommand(ciWedgeGamedayCmd())
+	// Runtime counterpart to wave-health-guard + the VAP: audit a live cluster for
+	// negative-sync-wave kinds the VAP would deny (coverage gap / false-positive).
+	c.AddCommand(ciWaveHealthAuditCmd())
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).
