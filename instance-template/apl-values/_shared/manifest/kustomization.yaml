@@ -34,3 +34,8 @@ resources:
   # apl-core's cert-manager-webhook-linode / groupName acme.slicen.me). Sync-wave
   # -5; cert-manager CRDs land earlier from apl-core. See dns/.
   - dns
+  # Native admission guard: the llz-wave-health-guard ValidatingAdmissionPolicy —
+  # the admission-time twin of `llz ci wave-health-guard`, rejecting a negative-wave
+  # health-checked kind before it can wedge the sync, regardless of write path
+  # (closes the apl-operator out-of-band writeback). Sync-wave -19. See admission/.
+  - admission

@@ -1,0 +1,107 @@
+# llz-wave-health-guard — the admission-time twin of `llz ci wave-health-guard`.
+#
+# WHY (blast-radius decomposition, PR #? / docs/designs/blast-radius-decomposition.md):
+# the CI guard runs on the RENDERED tree at PR time, but the apl-operator force-pushes
+# values out-of-band — a non-CI change (an operator writeback, a direct kubectl/SSA)
+# can still land a health-checked kind at a NEGATIVE sync-wave and wedge the
+# platform-bootstrap sync before OpenBao (wave 0), the PR #142 failure class. A native
+# ValidatingAdmissionPolicy rejects it at admission regardless of the write path — zero
+# new controllers.
+#
+# SCOPE / SAFETY: matchConditions gates the policy to objects that actually carry the
+# argocd.argoproj.io/sync-wave annotation (the GitOps-managed platform resources), so
+# even with failurePolicy: Fail a CEL fault cannot block unrelated cluster admissions.
+# Every field access is has()-guarded so the expressions cannot error.
+#
+# ALLOWLIST LOCKSTEP: the group/Kind + per-name allowlists below MUST equal
+# waveHealthAllowedKinds + waveHealthAllowedNames in tools/cmd/llz/ci_wave_health_guard.go.
+# TestWaveHealthVAPMatchesGuard fails the build if they drift. When you vet a new kind
+# at a negative wave, add it in BOTH places.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: llz-wave-health-guard
+  annotations:
+    # Land before most platform content so it guards the applies that follow;
+    # cluster-foundation (wave -20) precedes it, and every -20 kind is allowlisted.
+    argocd.argoproj.io/sync-wave: "-19"
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["*"]
+    # High-churn kinds that never carry a sync-wave — skip them so the API server
+    # doesn't evaluate matchConditions on every pod/event/lease write.
+    excludeResourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "events", "endpoints"]
+      - apiGroups: ["events.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["events"]
+      - apiGroups: ["coordination.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["leases"]
+  matchConditions:
+    # Only judge objects that declare a sync-wave — the GitOps platform tree.
+    - name: has-sync-wave
+      expression: >-
+        has(object.metadata) && has(object.metadata.annotations) &&
+        'argocd.argoproj.io/sync-wave' in object.metadata.annotations
+  variables:
+    - name: waveStr
+      expression: object.metadata.annotations['argocd.argoproj.io/sync-wave']
+    - name: wave
+      expression: "variables.waveStr.matches('^-?[0-9]+$') ? int(variables.waveStr) : 0"
+    - name: group
+      expression: 'object.apiVersion.contains("/") ? object.apiVersion.split("/")[0] : ""'
+    - name: groupKind
+      expression: 'variables.group + "/" + object.kind'
+    - name: nameKey
+      expression: 'variables.groupKind + "/" + (has(object.metadata.name) ? object.metadata.name : "")'
+    # Kinds that are health-inert OR neutralized by a resource.customizations.health
+    # override in _shared/values.yaml (the CI guard cross-checks the override's
+    # presence; admission can only assert the kind is vetted). == waveHealthAllowedKinds.
+    - name: allowedKinds
+      expression: >-
+        [
+          "/Namespace", "/ServiceAccount", "/ConfigMap", "/Secret",
+          "rbac.authorization.k8s.io/Role", "rbac.authorization.k8s.io/RoleBinding",
+          "rbac.authorization.k8s.io/ClusterRole", "rbac.authorization.k8s.io/ClusterRoleBinding",
+          "batch/CronJob",
+          "argoproj.io/AppProject", "argoproj.io/Application",
+          "kyverno.io/ClusterPolicy",
+          "admissionregistration.k8s.io/ValidatingAdmissionPolicy",
+          "admissionregistration.k8s.io/ValidatingAdmissionPolicyBinding",
+          "networking.k8s.io/NetworkPolicy",
+          "cert-manager.io/ClusterIssuer",
+          "external-secrets.io/ClusterSecretStore", "external-secrets.io/ExternalSecret",
+          "external-secrets.io/PushSecret"
+        ]
+    # Per-resource exceptions for kinds NOT kind-level safe. == waveHealthAllowedNames.
+    - name: allowedNames
+      expression: >-
+        [
+          "cert-manager.io/Certificate/openbao-ca",
+          "cert-manager.io/Certificate/otel-bootstrap-ca",
+          "cert-manager.io/Certificate/platform-otel-collector-tls"
+        ]
+  validations:
+    - expression: >-
+        variables.wave >= 0 ||
+        variables.groupKind in variables.allowedKinds ||
+        variables.nameKey in variables.allowedNames
+      messageExpression: >-
+        "wave-health-guard (admission): " + variables.groupKind + " at sync-wave " +
+        variables.waveStr + " is not a vetted health-safe kind. Argo gates waves on " +
+        "per-resource health, so a health-checked kind at a negative wave can wedge the " +
+        "platform-bootstrap sync before OpenBao (wave 0) — the PR #142 class. Add a " +
+        "resource.customizations.health override + register it in waveHealthAllowedKinds " +
+        "(and the llz-wave-health-guard allowlist), or give it a non-negative wave."
+      reason: Invalid

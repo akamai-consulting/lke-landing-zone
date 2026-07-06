@@ -1,0 +1,13 @@
+# Binding for llz-wave-health-guard (see wave-health-policy.yaml). Deny mode: a
+# violating write is REJECTED at admission (not merely audited). matchResources is
+# unset, so the binding inherits the policy's matchConstraints + matchConditions.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: llz-wave-health-guard
+  annotations:
+    argocd.argoproj.io/sync-wave: "-19"
+spec:
+  policyName: llz-wave-health-guard
+  validationActions:
+    - Deny

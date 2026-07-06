@@ -1,0 +1,132 @@
+name: llz-wedge-gameday (reusable)
+
+# Reusable (`workflow_call`) blast-radius game-day. Breaks ONE platform
+# ExternalSecret on a live (warm) cluster and asserts the wedge is contained to the
+# carved Application that owns it — platform-bootstrap and every sibling carved App
+# stay Healthy (docs/designs/blast-radius-decomposition.md). The concrete before/after
+# proof of the #163 containment claim; `llz ci wedge-gameday` always restores the
+# ExternalSecret (and Argo self-heal reverts it too), so the cluster is left as found.
+#
+# Same surface-reduction + dual-checkout + cluster-access pattern as
+# llz-cluster-health.yml (which see): the instance ships a ~20-line caller stub. Run
+# it against a warm cluster the converge-only fast-path (#146) keeps up, or after an
+# e2e provision with keep_cluster=true.
+
+on:
+  workflow_call:
+    inputs:
+      region:
+        description: 'Deployment (matches an infra-<region> Environment in the caller repo)'
+        required: true
+        type: string
+      target-app:
+        description: 'Carved Application to prove containment for (owns --externalsecret)'
+        required: false
+        type: string
+        default: llz-observability
+      externalsecret:
+        description: 'ExternalSecret to break, as <namespace>/<name>'
+        required: false
+        type: string
+        default: monitoring/loki-object-store
+      timeout:
+        description: 'Seconds to watch for the fault to surface'
+        required: false
+        type: number
+        default: 300
+      template-ref:
+        description: 'LLZ template ref to source the actions + llz from. Pin to the same tag as this workflow''s @<ref>.'
+        required: false
+        type: string
+        default: main
+    secrets:
+      TF_STATE_ACCESS_KEY:
+        required: true
+      TF_STATE_SECRET_KEY:
+        required: true
+      LINODE_API_TOKEN:
+        description: 'Linode API token used to open/revoke this runner''s egress IP in the LKE-E control-plane ACL for the kubectl steps.'
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gameday:
+    name: wedge-gameday (${{ inputs.region }})
+    runs-on: ubuntu-latest
+    environment: infra-${{ inputs.region }}
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    timeout-minutes: 20
+    env:
+      REGION:              ${{ inputs.region }}
+      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
+      TF_IN_AUTOMATION:    'true'
+    steps:
+      # Dual checkout (Option A) — see llz-cluster-health.yml for the rationale.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout LLZ template (actions + llz)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: akamai-consulting/lke-landing-zone
+          github-server-url: https://github.com
+          ref: ${{ inputs.template-ref }}
+          token: ${{ github.token }}
+          path: _llz-template
+
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        with:
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+          kubeconfig-path:       $HOME/.kube/config
+          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
+          region:                ${{ inputs.region }}
+
+      - name: Wedge game-day (fault-injection containment proof)
+        env:
+          # Pass dispatch inputs via env (never interpolate ${{ }} into the script body).
+          GAMEDAY_ES:      ${{ inputs.externalsecret }}
+          GAMEDAY_TARGET:  ${{ inputs.target-app }}
+          GAMEDAY_TIMEOUT: ${{ inputs.timeout }}
+        run: |
+          set +e
+          export KUBECONFIG="$HOME/.kube/config"
+          # Let the control-plane ACL propagate before we hit the apiserver (same
+          # transient llz-cluster-health absorbs).
+          deadline=$(( SECONDS + 180 ))
+          until kubectl version --request-timeout=10s >/dev/null 2>&1; do
+            if (( SECONDS >= deadline )); then
+              echo "::warning::apiserver still unreachable after ~180s — running anyway to capture the failure."
+              break
+            fi
+            echo "apiserver not reachable yet — waiting for the control-plane ACL to propagate…"
+            sleep 5
+          done
+          llz ci wedge-gameday \
+            --externalsecret "$GAMEDAY_ES" \
+            --target-app "$GAMEDAY_TARGET" \
+            --timeout "$GAMEDAY_TIMEOUT" | tee /tmp/gameday.txt
+          EC=${PIPESTATUS[0]}
+          {
+            printf '## wedge-gameday (%s) — exit %s\n\n' "$REGION" "$EC"
+            printf 'Broke %s, expected only %s to degrade.\n\n' "$GAMEDAY_ES" "$GAMEDAY_TARGET"
+            printf '```\n'; cat /tmp/gameday.txt; printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$EC"
+
+      - name: Revoke control-plane ACL for this runner
+        if: always()
+        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        with:
+          mode:         revoke
+          linode-token: ${{ secrets.LINODE_API_TOKEN }}
+          region:       ${{ inputs.region }}

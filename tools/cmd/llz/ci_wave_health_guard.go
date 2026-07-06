@@ -71,6 +71,12 @@ var waveHealthAllowedKinds = map[string]waveHealthKindRule{
 	// webhook validation (the webhook-REJECTION class is caught earlier by the
 	// lint dry-run job's Kyverno policy-admission gate).
 	"kyverno.io/ClusterPolicy": {reason: "Kyverno sets Ready promptly post-admission"},
+	// Native admission policy — the wave-health guard's own admission-time twin
+	// (llz-wave-health-guard, blast-radius decomposition). Config resources: applied
+	// == done, Argo assesses no health. The CEL allowlist inside the policy is kept
+	// in lockstep with THIS map by TestWaveHealthVAPMatchesGuard.
+	"admissionregistration.k8s.io/ValidatingAdmissionPolicy":        {reason: "no Argo health check (admission config)"},
+	"admissionregistration.k8s.io/ValidatingAdmissionPolicyBinding": {reason: "no Argo health check (admission config)"},
 	// Health-checked kinds neutralized by _shared/values.yaml overrides — the
 	// two wedges of PR #142. The override key is cross-checked below.
 	"networking.k8s.io/NetworkPolicy": {

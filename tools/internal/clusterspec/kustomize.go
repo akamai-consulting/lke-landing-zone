@@ -2,6 +2,7 @@ package clusterspec
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -34,15 +35,24 @@ func (c Component) hasManifestDir() bool {
 }
 
 // RenderManifestKustomization returns a deployment's manifest/kustomization.yaml: a
-// thin overlay listing the shared base under resources: and each ENABLED toggleable
-// component's shared Component dir under components: (registry order), plus the
-// per-env patches enabled components bring. Mandatory components live in the base,
-// so they are not listed here.
+// thin overlay over the shared base. It lists, in registry order:
+//   - resources: the shared _shared/manifest base + one health-inert Application CR
+//     per ENABLED carved component (blast-radius isolation — see CarvedApp);
+//   - components: each ENABLED plain (non-carved) component's shared Component dir;
+//   - patches: the per-env patches plain components bring (a carved component's
+//     patches move into its own apps/<name>/ source root, not here).
+//
+// Mandatory components live in the base, so they are not listed here.
 func RenderManifestKustomization(components map[string]ComponentToggle) string {
-	var dirs []string
-	var patches []Patch
+	var dirs []string       // plain component dirs, referenced under components:
+	var carvedApps []string // carved App CR filenames, referenced under resources:
+	var patches []Patch     // patches from plain components only
 	for _, c := range Components {
 		if c.Mandatory || !ComponentEnabled(components, c.Name) {
+			continue
+		}
+		if c.CarvedApp != nil {
+			carvedApps = append(carvedApps, c.CarvedApp.AppName+".yaml")
 			continue
 		}
 		if c.hasManifestDir() {
@@ -54,6 +64,9 @@ func RenderManifestKustomization(components map[string]ComponentToggle) string {
 	var b strings.Builder
 	b.WriteString(kustomizePreamble)
 	b.WriteString("\nresources:\n  - ../../_shared/manifest\n")
+	for _, a := range carvedApps {
+		b.WriteString("  - " + a + "\n")
+	}
 	if len(dirs) > 0 {
 		b.WriteString("components:\n")
 		for _, d := range dirs {
@@ -63,6 +76,87 @@ func RenderManifestKustomization(components map[string]ComponentToggle) string {
 	if len(patches) > 0 {
 		b.WriteString("\npatches:\n")
 		for _, p := range patches {
+			b.WriteString("  - path: " + p.Path + "\n")
+			b.WriteString("    target:\n")
+			b.WriteString("      group: " + p.Group + "\n")
+			b.WriteString("      version: " + p.Version + "\n")
+			b.WriteString("      kind: " + p.Kind + "\n")
+			b.WriteString("      name: " + p.Name + "\n")
+		}
+	}
+	return b.String()
+}
+
+// RenderCarvedApp returns the Argo CD Application CR for a carved component in env
+// — a git-path App (project platform-bootstrap, same as llz-secret-store) pointing
+// at the self-contained per-env source root apps/<name>/ (RenderCarvedAppKustomization).
+// The App CR itself is health-inert (Argo assesses no Application health without an
+// explicit customization, which apl-core does not configure — see the wave-health
+// guard), so platform-bootstrap stays Synced/Healthy while the App health-gates its
+// OWN content: a Degraded resource fails only this App. repoURL + revision pin the
+// same instance repo + apps_repo_revision the platform-bootstrap Application uses.
+func RenderCarvedApp(c Component, env, repoURL, revision string) string {
+	ca := c.CarvedApp
+	return genHeader + `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ` + ca.AppName + `
+  namespace: argocd
+  annotations:
+    # App-level wave: the floor for this App's content, ordered against the other
+    # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
+    argocd.argoproj.io/sync-wave: "` + strconv.Itoa(ca.AppWave) + `"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  revisionHistoryLimit: 3
+  project: platform-bootstrap
+  source:
+    repoURL: ` + repoURL + `
+    targetRevision: ` + revision + `
+    path: apl-values/` + env + `/apps/` + c.Name + `
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ` + ca.Namespace + `
+  syncPolicy:
+    automated:
+      # prune + selfHeal mirror platform-bootstrap: the carved content stays in
+      # lockstep with git, but a transient empty render can't cascade (SSA below).
+      prune: true
+      selfHeal: true
+    retry:
+      # Same ~1h first-boot budget as platform-bootstrap: wave-5 ExternalSecrets
+      # wait on the out-of-band OpenBao unseal -> eso role -> store Ready chain.
+      limit: 40
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 90s
+    syncOptions:
+      - ServerSideApply=true
+      # The bundle may carry a CR whose CRD another App installs (ExternalSecret,
+      # ServiceMonitor); don't abort the sync dry-running a not-yet-registered kind.
+      - SkipDryRunOnMissingResource=true
+      # cluster-foundation (wave -20) owns the namespaces; don't create/own them here.
+      - CreateNamespace=false
+`
+}
+
+// RenderCarvedAppKustomization returns the apps/<name>/kustomization.yaml a carved
+// App syncs: it pulls in the shared kustomize Component (which lives ONCE under
+// apl-values/components/<name>/, three levels up) and applies this env's patches —
+// a complete, env-correct source root for the App. The patch files sit alongside
+// this kustomization (RenderReconcilerEnvPatch et al., written by `llz render`).
+func RenderCarvedAppKustomization(c Component) string {
+	var b strings.Builder
+	b.WriteString(genHeader)
+	b.WriteString(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+components:
+  - ../../../components/` + c.Name + "\n")
+	if len(c.Patches) > 0 {
+		b.WriteString("patches:\n")
+		for _, p := range c.Patches {
 			b.WriteString("  - path: " + p.Path + "\n")
 			b.WriteString("    target:\n")
 			b.WriteString("      group: " + p.Group + "\n")

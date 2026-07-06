@@ -159,9 +159,22 @@ spec:
 	if err != nil {
 		t.Fatalf("read kustomization: %v", err)
 	}
-	// Thin overlay over the shared base; harbor disabled → its component dir dropped.
-	if !strings.Contains(string(kust), "../../_shared/manifest") || strings.Contains(string(kust), "../../components/harbor") {
+	// Thin overlay over the shared base; harbor disabled → no harbor App CR, but the
+	// other carved Apps (observability, reconciler, externalsecrets) are referenced.
+	if !strings.Contains(string(kust), "../../_shared/manifest") || strings.Contains(string(kust), "llz-harbor.yaml") {
 		t.Errorf("kustomization wrong (thin overlay, harbor dropped):\n%s", kust)
+	}
+	if !strings.Contains(string(kust), "llz-observability.yaml") {
+		t.Errorf("kustomization missing enabled carved App CR:\n%s", kust)
+	}
+	// The carved observability App CR + its self-contained source root were written.
+	obsApp, err := os.ReadFile(filepath.Join(aplDir, "prod", "manifest", "llz-observability.yaml"))
+	if err != nil || !strings.Contains(string(obsApp), "path: apl-values/prod/apps/observability") {
+		t.Errorf("carved observability App CR missing/wrong (err=%v):\n%s", err, obsApp)
+	}
+	obsKust, err := os.ReadFile(filepath.Join(aplDir, "prod", "apps", "observability", "kustomization.yaml"))
+	if err != nil || !strings.Contains(string(obsKust), "../../../components/observability") {
+		t.Errorf("carved observability source root missing/wrong (err=%v):\n%s", err, obsKust)
 	}
 
 	// The apl-core backend rendered the spec identity into values.yaml (the

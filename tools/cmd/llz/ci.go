@@ -114,6 +114,10 @@ func ciCmd() *cobra.Command {
 	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
 	// wedges the sync (Makefile wave-dependency-guard).
 	c.AddCommand(ciWaveDependencyGuardCmd())
+	// Live fault-injection game-day: break one platform ExternalSecret and assert
+	// the wedge is contained to its own carved Application (blast-radius
+	// decomposition proof). Run on a warm e2e cluster.
+	c.AddCommand(ciWedgeGamedayCmd())
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).
