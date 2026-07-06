@@ -57,13 +57,3 @@ spec:
               kubernetes.io/metadata.name: llz-openbao
       ports:
         - { protocol: TCP, port: 8200 }
-    # Harbor core API (:80) for the --reconcile-harbor provisioner, which drives
-    # Harbor over its in-cluster Service (HARBOR_API_URL default
-    # http://harbor-core.harbor.svc.cluster.local). GitHub API for the repo-secret
-    # publication rides the bare :443 egress above.
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: harbor
-      ports:
-        - { protocol: TCP, port: 80 }

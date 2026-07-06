@@ -30,7 +30,7 @@ func TestLetsencryptIssuersDeferred(t *testing.T) {
 }
 
 // harbor-docker-config is deferred (not hard-failed) on a fresh bootstrap: it
-// reads secret/harbor/robot, seeded by the harbor-robot-provisioner CronJob only
+// reads secret/harbor/robot, seeded by the in-cluster harbor reconciler only
 // after Harbor is up, so it sits Ready=False for the first few minutes. Any other
 // ExternalSecret still hard-fails, so the deferral stays narrow.
 func TestHarborDockerConfigDeferred(t *testing.T) {
@@ -64,26 +64,6 @@ func TestLLZReconcilerPodDeferred(t *testing.T) {
 	}
 	if _, ok := MatchExternalDep("llz-reconciler/openbao-agent-injector-abc123", extDep); ok {
 		t.Error("an unrelated pod in the llz-reconciler namespace must NOT be deferred by the reconciler entry")
-	}
-}
-
-// harbor-admin-password (the reconciler's harbor-provisioner mount) is deferred on
-// a fresh bootstrap: it reads secret/harbor/admin, which apl-core's Harbor Helm
-// chart only populates after Harbor deploys, so it sits Ready=False for the first
-// several minutes. The reconciler mounts it OPTIONAL and no-ops until it appears,
-// so it must classify Deferred, not Fail. Any other ExternalSecret still hard-fails.
-func TestHarborAdminPasswordDeferred(t *testing.T) {
-	extDep := ExternalDepExternalSecrets()
-	if _, ok := MatchExternalDep("llz-reconciler/harbor-admin-password", extDep); !ok {
-		t.Error("harbor-admin-password should be an operator-deferred ExternalSecret")
-	}
-	if _, ok := MatchExternalDep("llz-reconciler/linode-api-token", extDep); ok {
-		t.Error("an unrelated reconciler ExternalSecret must NOT be deferred by this entry")
-	}
-	cat, _ := ClassifyReady("ExternalSecret", "llz-reconciler/harbor-admin-password",
-		"False", "SecretSyncedError", "could not get secret data from provider", false, extDep)
-	if cat != CatDeferred {
-		t.Errorf("harbor-admin-password Ready=False = %v, want CatDeferred", cat)
 	}
 }
 

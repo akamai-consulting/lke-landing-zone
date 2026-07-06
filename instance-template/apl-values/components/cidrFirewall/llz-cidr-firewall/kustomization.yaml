@@ -1,14 +1,13 @@
 # Firewall-controller support glue — fully Argo-owned (no CI→kube crossing).
-# Everything lands in kube-system alongside the controller itself: the
-# ESO-synced Linode token Secret the controller (and the discover CronJob)
-# reads, and the self-discovery CronJob that reconciles the controller's
-# ConfigMap from the cluster's own vantage point. Replaces the former
-# `llz ci bootstrap-cloud-firewall` workflow seed (kept as a manual fallback).
+# The ESO-synced Linode token Secret the private llz-linode-cidr-firewall
+# controller reads, landing in kube-system alongside it. The self-discovery
+# CronJob that formerly reconciled the controller's ConfigMap from the cluster's
+# own vantage point has been RETIRED — the in-cluster llz-reconciler's
+# cidr-firewall reconciler (ci discover-firewall-config; llz-reconciler ns, its
+# ClusterRole carries the kube-system configmap/deployment patch grants) now owns
+# that reconciliation cluster-wide.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
   - externalsecret.yaml
-  - rbac.yaml
-  - network-policy.yaml
-  - cronjob.yaml
