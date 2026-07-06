@@ -11,8 +11,8 @@ import (
 
 func TestBaoConfigureStepsShape(t *testing.T) {
 	steps := baoConfigureSteps("acme/platform")
-	if len(steps) != 16 {
-		t.Fatalf("got %d steps, want 16 (12 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
+	if len(steps) != 17 {
+		t.Fatalf("got %d steps, want 17 (13 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
 	// `enable` steps are the only non-fatal ones (the bash `|| true`) — check by
 	// shape, not index, so adding a new enable (jwt) can't silently violate it.
@@ -23,8 +23,8 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		}
 	}
 	// A repo-less configure omits the GitHub-OIDC steps entirely.
-	if n := len(baoConfigureSteps("")); n != 12 {
-		t.Errorf("no-repo configure should omit JWT steps: got %d, want 12", n)
+	if n := len(baoConfigureSteps("")); n != 13 {
+		t.Errorf("no-repo configure should omit JWT steps: got %d, want 13", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
 	// Two roles expected: platform-ci (read) and secret-propagator (write). The
@@ -76,24 +76,40 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 	}
 }
 
-// The in-cluster reconciler's Kubernetes-auth role must bind every policy the
-// CronJobs it replaces used: reconciler-read (gauge metadata read), linode-rotator
-// (object-storage-key read_write, --reconcile-linode-creds), and harbor-provisioner
-// (secret/harbor/{robot,pull-robot} read_write, --reconcile-harbor). It must NOT
-// bind the harbor admin path (that stays ESO-only via harbor-admin-push).
+// The in-cluster reconciler's Kubernetes-auth role binds reconciler-read (gauge
+// metadata read, --reconcile-openbao-gauges) + linode-rotator (object-storage-key
+// read_write, --reconcile-linode-creds; it took over the linodeCredRotator CronJob).
+// It must NOT bind harbor-provisioner: harbor provisioning stays on the in-namespace
+// harbor-robot-provisioner CronJob (its own SA-bound harbor-provisioner role), because
+// the reconciler can't reach mesh-protected harbor-core from the llz-reconciler namespace.
 func TestReconcilerRoleBindsDrivingPolicies(t *testing.T) {
-	var found bool
+	var reconcilerFound, harborRoleFound bool
 	for _, s := range baoConfigureSteps("acme/platform") {
-		if len(s.args) >= 2 && s.args[0] == "write" && s.args[1] == "auth/kubernetes/role/reconciler" {
-			found = true
-			joined := strings.Join(s.args, " ")
-			if !strings.Contains(joined, "policies=reconciler-read,linode-rotator,harbor-provisioner") {
-				t.Errorf("reconciler role must bind reconciler-read + linode-rotator + harbor-provisioner; got %v", s.args)
+		if len(s.args) < 2 || s.args[0] != "write" {
+			continue
+		}
+		joined := strings.Join(s.args, " ")
+		switch s.args[1] {
+		case "auth/kubernetes/role/reconciler":
+			reconcilerFound = true
+			if !strings.Contains(joined, "policies=reconciler-read,linode-rotator ") {
+				t.Errorf("reconciler role must bind exactly reconciler-read + linode-rotator; got %v", s.args)
+			}
+			if strings.Contains(joined, "harbor-provisioner") {
+				t.Error("reconciler role must NOT bind harbor-provisioner — harbor stays a CronJob")
+			}
+		case "auth/kubernetes/role/harbor-provisioner":
+			harborRoleFound = true
+			if !strings.Contains(joined, "bound_service_account_names=harbor-robot-provisioner") {
+				t.Errorf("harbor-provisioner role must bind the harbor-robot-provisioner SA; got %v", s.args)
 			}
 		}
 	}
-	if !found {
+	if !reconcilerFound {
 		t.Fatal("no auth/kubernetes/role/reconciler step found")
+	}
+	if !harborRoleFound {
+		t.Fatal("no auth/kubernetes/role/harbor-provisioner step found (harbor CronJob needs it)")
 	}
 }
 
@@ -230,12 +246,12 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
 		t.Fatal(err)
 	}
-	// lookup + 16 steps (12 base + 4 GitHub-OIDC) + audit list.
-	if len(calls) != 18 {
-		t.Fatalf("got %d bao calls, want 18: %v", len(calls), calls)
+	// lookup + 17 steps (13 base + 4 GitHub-OIDC) + audit list.
+	if len(calls) != 19 {
+		t.Fatalf("got %d bao calls, want 19: %v", len(calls), calls)
 	}
-	if calls[0] != "token lookup -format=json" || calls[17] != "audit list" {
-		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[17])
+	if calls[0] != "token lookup -format=json" || calls[18] != "audit list" {
+		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[18])
 	}
 	// The jwt role must actually be written during the run (body is JSON over
 	// stdin; repo/audience binding is asserted in TestBaoConfigureStepsShape).

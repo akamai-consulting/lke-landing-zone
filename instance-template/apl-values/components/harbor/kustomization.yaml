@@ -7,7 +7,9 @@ resources:
   # Mirrors Harbor's Helm-generated admin password into OpenBao (replaces the
   # imperative secret/harbor/admin bao-seed). See harbor-admin-push.yaml.
   - harbor-admin-push.yaml
-  # The in-cluster robot provisioner CronJob has been RETIRED — the llz-reconciler's
-  # harbor reconciler (ci harbor-provisioner; --reconcile-harbor) now provisions the
-  # project + robots, seeds secret/harbor/{robot,pull-robot}, and publishes the
-  # repo-level HARBOR_* secrets, on its own timer + leader lease.
+  # In-cluster robot provisioner (CronJob + SA + NP + gh-token ExternalSecret) —
+  # replaces the bootstrap workflow's harbor job. See harbor-robot-provisioner/.
+  - harbor-robot-provisioner/serviceaccount.yaml
+  - harbor-robot-provisioner/externalsecret.yaml
+  - harbor-robot-provisioner/cronjob.yaml
+  - harbor-robot-provisioner/network-policy.yaml

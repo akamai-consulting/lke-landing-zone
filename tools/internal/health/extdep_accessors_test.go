@@ -67,26 +67,6 @@ func TestLLZReconcilerPodDeferred(t *testing.T) {
 	}
 }
 
-// harbor-admin-password (the reconciler's harbor-provisioner mount) is deferred on
-// a fresh bootstrap: it reads secret/harbor/admin, which apl-core's Harbor Helm
-// chart only populates after Harbor deploys, so it sits Ready=False for the first
-// several minutes. The reconciler mounts it OPTIONAL and no-ops until it appears,
-// so it must classify Deferred, not Fail. Any other ExternalSecret still hard-fails.
-func TestHarborAdminPasswordDeferred(t *testing.T) {
-	extDep := ExternalDepExternalSecrets()
-	if _, ok := MatchExternalDep("llz-reconciler/harbor-admin-password", extDep); !ok {
-		t.Error("harbor-admin-password should be an operator-deferred ExternalSecret")
-	}
-	if _, ok := MatchExternalDep("llz-reconciler/linode-api-token", extDep); ok {
-		t.Error("an unrelated reconciler ExternalSecret must NOT be deferred by this entry")
-	}
-	cat, _ := ClassifyReady("ExternalSecret", "llz-reconciler/harbor-admin-password",
-		"False", "SecretSyncedError", "could not get secret data from provider", false, extDep)
-	if cat != CatDeferred {
-		t.Errorf("harbor-admin-password Ready=False = %v, want CatDeferred", cat)
-	}
-}
-
 func TestNodeName(t *testing.T) {
 	var n Node
 	n.Metadata.Name = "lke-pool-abc"

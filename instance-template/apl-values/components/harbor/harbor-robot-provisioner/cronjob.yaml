@@ -1,0 +1,102 @@
+# Harbor robot provisioner CronJob — the IN-CLUSTER replacement for the
+# bootstrap workflow's retired `harbor` job (port-forward + root-token
+# re-acquire + ensure-project + provision-harbor-robots + smoke).
+#
+# Every 5 minutes, runs `llz ci harbor-provisioner` on the slim llz image:
+#   - steady state (robots seeded + smoke passes + repo secrets published) is a
+#     cheap no-op — the same standing-safety-net shape as sc-default-patcher
+#     and argo-resync-nudger;
+#   - before Harbor is up, a clean no-op (the admin-password mount is optional;
+#     a missing file means "not deployed yet");
+#   - rotation: delete a robot in Harbor UI and the next tick recreates it and
+#     re-publishes its credentials — no workflow re-dispatch.
+#
+# Talks to harbor-core.harbor.svc directly (the CI port-forward existed only
+# because HARBOR_URL is internal DNS the GitHub runner cannot resolve), writes
+# OpenBao through the harbor-provisioner Kubernetes-auth role (no root token),
+# and publishes the repo-level HARBOR_* secrets natively over the GitHub API.
+#
+# HARBOR_HOST is per-env: this base ships a placeholder that `llz render`
+# strategic-merge-patches via the manifest-root harbor-provisioner-env-patch.yaml
+# (harbor.<cluster.bootstrap.domainSuffix>). Instances that override the
+# HARBOR_URL repo var must patch HARBOR_HOST to match.
+#
+# OPENBAO_SKIP_VERIFY=true matches the established in-cluster OpenBao posture
+# (every `baoExec` uses VAULT_SKIP_VERIFY); mount the openbao CA + set
+# OPENBAO_CA_FILE instead once a CA-distribution path exists.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: harbor-robot-provisioner
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    ignore-check.kube-linter.io/env-value-from: "harbor-provisioner-gh-token Secret is created at runtime by ESO (externalsecret.yaml); not a static manifest the linter can resolve"
+    ignore-check.kube-linter.io/read-secret-from-env-var: "GH_TOKEN authenticates the GitHub API for repo-secret publication; the admin password IS file-mounted"
+spec:
+  schedule: "*/5 * * * *"
+  startingDeadlineSeconds: 120
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 240
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          # Static label so the NetworkPolicy can podSelector-match it.
+          labels:
+            app.kubernetes.io/name: harbor-robot-provisioner
+        spec:
+          restartPolicy: Never
+          serviceAccountName: harbor-robot-provisioner
+          containers:
+            # Slim distroless llz image (dockerfiles/llz). Rendered by copier;
+            # release-e2e pins it to the signed sha image for the commit under test.
+            - name: provision
+              image: <@ llz_image_ref @>
+              args: ["ci", "harbor-provisioner"]
+              env:
+                # Per-env registry host; patched by `llz render` (see header).
+                - name: HARBOR_HOST
+                  value: "REPLACE_ME"
+                - name: OPENBAO_ADDR
+                  value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
+                - name: OPENBAO_SKIP_VERIFY
+                  value: "true"
+                # Repo-secret publication target — the instance repo. Rendered
+                # at instantiation; the standby's bootstrap reads these secrets.
+                - name: GH_REPO
+                  value: "<@ instance_repo @>"
+                - name: GH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: harbor-provisioner-gh-token
+                      key: token
+              resources:
+                limits: { cpu: 200m, memory: 128Mi }
+                requests: { cpu: 50m, memory: 64Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                seccompProfile: { type: RuntimeDefault }
+              volumeMounts:
+                - { name: harbor-admin, mountPath: /etc/harbor-admin, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            # optional: before apl-core's helmfile installs Harbor the Secret
+            # doesn't exist — the pod still starts and llz no-ops cleanly on the
+            # missing file instead of wedging in ContainerCreating.
+            - name: harbor-admin
+              secret:
+                secretName: harbor-admin-password
+                optional: true
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Mi

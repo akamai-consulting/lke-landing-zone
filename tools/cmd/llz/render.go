@@ -248,14 +248,19 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	if clusterspec.ComponentEnabled(e.Components, "observability") {
 		targets[filepath.Join(manifest, "otel-collector-tls-san-patch.yaml")] = clusterspec.RenderOtelSANPatch(env)
 	}
-	// The llz reconciler's per-env env patch — REGION_SHORT (volume-labels),
-	// REGION/OBJ_CLUSTER (linode-creds), HARBOR_HOST (harbor). Emitted whenever the
-	// default-on llzReconciler component is enabled. REGION is the env name,
-	// OBJ_CLUSTER the object-storage cluster, and HARBOR_HOST is harbor.<domainSuffix>.
-	// The reconciler now owns all three reconcilers whose CronJobs (linodeCredRotator,
-	// harbor-robot-provisioner) were retired, so this is the sole per-env env patch.
+	// The llz reconciler's per-env env patch — REGION_SHORT (volume-labels) +
+	// REGION/OBJ_CLUSTER (linode-creds). Emitted whenever the default-on
+	// llzReconciler component is enabled. REGION is the env name and OBJ_CLUSTER the
+	// object-storage cluster. (Harbor provisioning stays on the in-namespace
+	// harbor-robot-provisioner CronJob — the reconciler can't reach mesh-protected
+	// harbor-core from llz-reconciler — so HARBOR_HOST rides that CronJob's own patch.)
 	if clusterspec.ComponentEnabled(e.Components, "llzReconciler") {
-		targets[filepath.Join(manifest, "llz-reconciler-env-patch.yaml")] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster, "harbor."+e.Cluster.Bootstrap.DomainSuffix)
+		targets[filepath.Join(manifest, "llz-reconciler-env-patch.yaml")] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster)
+	}
+	// The harbor robot provisioner's per-env HARBOR_HOST patch — emitted only
+	// when harbor is enabled (which ships the CronJob).
+	if clusterspec.ComponentEnabled(e.Components, "harbor") {
+		targets[filepath.Join(manifest, "harbor-provisioner-env-patch.yaml")] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix)
 	}
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances

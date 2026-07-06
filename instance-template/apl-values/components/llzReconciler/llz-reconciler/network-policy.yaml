@@ -57,18 +57,3 @@ spec:
               kubernetes.io/metadata.name: llz-openbao
       ports:
         - { protocol: TCP, port: 8200 }
-    # Harbor core API for the --reconcile-harbor provisioner, which drives Harbor
-    # over its in-cluster Service (HARBOR_API_URL default
-    # http://harbor-core.harbor.svc.cluster.local). GitHub API for the repo-secret
-    # publication rides the bare :443 egress above.
-    # BOTH ports: on LKE's Cilium CNI, NetworkPolicy is evaluated POST-DNAT, so the
-    # harbor-core POD targetPort (8080) must be allowed alongside the Service port
-    # (80) — otherwise the connection is dropped and the provisioner can never reach
-    # Harbor (the apiserver 6443-vs-443 scar; matches the retired CronJob's netpol).
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: harbor
-      ports:
-        - { protocol: TCP, port: 8080 }
-        - { protocol: TCP, port: 80 }

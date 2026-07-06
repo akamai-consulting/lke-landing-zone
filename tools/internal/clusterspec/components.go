@@ -123,10 +123,17 @@ var Components = []Component{
 		ManifestResources: []string{
 			"harbor/harbor-registry-s3-externalsecret.yaml",
 			"harbor/harbor-admin-push.yaml",
+			"harbor/harbor-robot-provisioner",
 		},
-		// The robot-provisioner CronJob (and its per-env HARBOR_HOST patch) was
-		// retired — the llzReconciler's harbor reconciler owns that work now, and
-		// HARBOR_HOST rides the reconciler's own env patch (RenderReconcilerEnvPatch).
+		// The env-shaped HARBOR_HOST (registry host) on the robot-provisioner
+		// CronJob — rendered per env by RenderHarborHostPatch.
+		Patches: []Patch{{
+			Path:    "harbor-provisioner-env-patch.yaml",
+			Group:   "batch",
+			Version: "v1",
+			Kind:    "CronJob",
+			Name:    "harbor-robot-provisioner",
+		}},
 	},
 	{
 		// apl-core policy engine (Kyverno + policy-reporter). apl-core-only.

@@ -72,19 +72,15 @@ spec:
           # CronJob. NOTE: the private firewall controller is absent on e2e, so this
           # is exercised but not end-to-end proven there (harmless no-op).
           # linode-creds: the rotate-linode-creds logic — rotates the in-cluster
-          # object-storage keys and writes them to OpenBao (Kubernetes-auth
-          # `reconciler` role, granted the linode-rotator policy in bao-configure).
-          # Needs REGION + OBJ_CLUSTER (per-env, render-patch) + OPENBAO_* + LINODE_TOKEN.
-          # Due-based: a no-op until a key is within its rotation window. Leader-gated +
-          # idempotent alongside the linodeCredRotator CronJob.
-          # harbor (this batch): the harbor-provisioner logic — provisions Harbor
-          # project + robots, seeds secret/harbor/{robot,pull-robot} in OpenBao, and
-          # publishes the repo-level HARBOR_* secrets. Needs HARBOR_HOST (render-patch)
-          # + GH_REPO + GH_TOKEN (ESO Secret) + the mounted harbor-admin-password. The
-          # admin secret only exists post-Harbor, so it is mounted OPTIONAL (the
-          # provisioner cleanly no-ops until it appears) and its ExternalSecret sits at
-          # a high sync-wave so its post-Harbor Ready=False gates nothing. Leader-gated
-          # + idempotent alongside the harbor-robot-provisioner CronJob.
+          # object-storage keys and writes them to OpenBao (Kubernetes-auth `reconciler`
+          # role, granted the linode-rotator policy in bao-configure). Needs REGION +
+          # OBJ_CLUSTER (per-env, render-patch) + OPENBAO_* + LINODE_TOKEN. Due-based: a
+          # no-op until a key is within its rotation window. Leader-gated; the sole owner
+          # now that the linodeCredRotator CronJob is retired.
+          # NOT a reconciler: --reconcile-harbor. Harbor provisioning talks to the
+          # mesh-protected harbor-core Service, which a pod in llz-reconciler (outside
+          # the harbor Istio mesh) cannot reach — so it stays the in-namespace
+          # harbor-robot-provisioner CronJob (components/harbor/).
           args:
             - reconcile
             - --metrics-addr=:8080
@@ -95,7 +91,6 @@ spec:
             - --reconcile-volume-labels
             - --reconcile-cidr-firewall
             - --reconcile-linode-creds
-            - --reconcile-harbor
           env:
             # Leader-election identity + Lease namespace (downward API). Only used
             # when a driving reconciler is enabled; harmless otherwise.
@@ -144,22 +139,6 @@ spec:
             # resolves to a role this SA is actually bound to — otherwise it 403s.
             - name: OPENBAO_KUBERNETES_ROLE
               value: "reconciler"
-            # harbor reconciler: the per-env registry host (overwritten by
-            # llz-reconciler-env-patch.yaml, = harbor.<domainSuffix>) + the instance
-            # repo the HARBOR_* repo-secrets publish to (rendered at instantiation).
-            - name: HARBOR_HOST
-              value: "REPLACE_ME"
-            - name: GH_REPO
-              value: "<@ instance_repo @>"
-            # GitHub token for the repo-secret publication — the ESO-synced dispatch
-            # token, same path the harbor-robot-provisioner CronJob reads. Available
-            # early (infra/github-dispatch-token is seeded before Harbor), so a hard
-            # ref at wave 5 < this Deployment's wave 6 is safe (wave-dependency-guard).
-            - name: GH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: harbor-provisioner-gh-token
-                  key: token
           ports:
             - name: metrics
               containerPort: 8080
@@ -184,18 +163,8 @@ spec:
             seccompProfile: { type: RuntimeDefault }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
-            # harbor reconciler: the admin password file (ci harbor-provisioner reads
-            # /etc/harbor-admin/HARBOR_ADMIN_PASSWORD). OPTIONAL — the backing Secret
-            # (harbor-admin-password) only exists after Harbor deploys, so the pod must
-            # start without it; the provisioner no-ops until it appears and kubelet
-            # refreshes the mount once the ExternalSecret syncs post-Harbor.
-            - { name: harbor-admin, mountPath: /etc/harbor-admin, readOnly: true }
       volumes:
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
-        - name: harbor-admin
-          secret:
-            secretName: harbor-admin-password
-            optional: true
