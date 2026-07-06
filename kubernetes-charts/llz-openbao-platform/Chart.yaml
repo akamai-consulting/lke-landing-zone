@@ -41,7 +41,11 @@ type: application
 # 0.1.14: allow the in-cluster reconciler pod (llz-reconciler/llz-reconciler)
 #         through the OpenBao :8200 ingress NetworkPolicy for its
 #         --reconcile-openbao-gauges sampler (seal-status + credential-age).
-version: 0.1.14
+# 0.1.15: drop the linode-cred-rotator allowedClientPods entry — that CronJob was
+#         retired (its work moved to the in-cluster reconciler, which already has
+#         its own entry). Inert cleanup: the entry matched a pod that no longer
+#         exists. The harbor-robot-provisioner entry stays (still a CronJob).
+version: 0.1.15
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:
