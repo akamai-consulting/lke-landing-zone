@@ -45,7 +45,14 @@ type: application
 #         retired (its work moved to the in-cluster reconciler, which already has
 #         its own entry). Inert cleanup: the entry matched a pod that no longer
 #         exists. The harbor-robot-provisioner entry stays (still a CronJob).
-version: 0.1.15
+# 0.1.16: FIX vault_* never scraped. The ServiceMonitor selected on a `release:`
+#         label apl-core's Prometheus ignores (it selects `prometheus: system`)
+#         AND its endpoint used a `http` port name the OpenBao Service doesn't
+#         expose (the TLS listener port is named `https`). Both confirmed live on
+#         a converged cluster; either alone left OpenBao's metrics unscraped and
+#         every OpenBao alert silently never-firing. serviceMonitor.releaseLabel →
+#         serviceMonitor.selectorLabels {prometheus: system}; port http → https.
+version: 0.1.16
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

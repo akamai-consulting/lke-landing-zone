@@ -87,14 +87,17 @@ platform:
   # Prometheus ServiceMonitor for OpenBao's /v1/sys/metrics endpoint. In the
   # source chart this rendered only when the release was named `platform-prom`
   # (a magic-release-name gate); decoupled here into an explicit flag plus the
-  # Prometheus-operator release label the operator selects on. A sibling cluster
-  # whose kube-prometheus-stack release is not `platform-prom` overrides
-  # releaseLabel; set enabled:false if Prometheus isn't installed.
+  # label set the Prometheus Operator selects on. Set enabled:false if Prometheus
+  # isn't installed.
   serviceMonitor:
     enabled: true
-    # Value of the `release:` label the Prometheus Operator's serviceMonitorSelector
-    # matches. Must equal the kube-prometheus-stack Helm release name.
-    releaseLabel: platform-prom
+    # Labels the Prometheus Operator's serviceMonitorSelector matches. apl-core's
+    # kube-prometheus-stack selects on `prometheus: system` (its serviceMonitorSelector
+    # is {matchLabels: {prometheus: system}}, NOT a release label — the old
+    # `release: platform-prom` matched nothing). A sibling cluster whose Prometheus
+    # selects differently overrides this map.
+    selectorLabels:
+      prometheus: system
 
 # ── OpenBao subchart values (passed through to openbao/openbao-helm 0.13.0) ──
 #
