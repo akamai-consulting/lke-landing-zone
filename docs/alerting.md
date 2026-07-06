@@ -69,12 +69,18 @@ no GitHub secret, no values churn:
 inline from values (x-secret), which would put secret material into the
 committed values flow the OpenBao path exists to avoid.
 
-> **Scheduled CI checks stay until receivers are wired.** The daily
-> `health-openbao` / `health-loki-objkey-rotation` / `health-certmanager` jobs
-> overlap with the Prometheus rules by design (belt-and-suspenders that fire
-> even when the observability stack itself is broken). Once an instance has a
-> receiver configured and has seen a real alert arrive, those checks are
-> candidates to shrink — not before.
+> **Scheduled CI checks are belt-and-suspenders, not the primary signal.** The
+> in-cluster llz-reconciler samples OpenBao seal, ESO-store + cert-manager
+> readiness, convergence, and credential age continuously and raises Prometheus
+> alerts — so the CIDR-fragile hosted-runner probes that duplicated that
+> coverage (`health-openbao` (ESO) + `health-certmanager`) were **demoted from
+> daily to weekly** (they still fire even when the observability stack itself is
+> broken, and cover a cluster whose operator has not wired a receiver).
+> `health-loki-objkey-rotation` stays daily for now — the reconciler exposes the
+> credential-age gauge but not yet an alert on it; add that alert to demote this
+> one too. The remaining daily jobs (`lke-admin-rotation`, Linode/GitHub PAT
+> expiry) check external credentials the reconciler cannot see in-cluster and
+> stay daily.
 
 ## Items that require alerts
 
@@ -122,7 +128,7 @@ resource-saturation alert per service.
 
 | Item | Trigger | Mechanism | Status |
 |------|---------|-----------|--------|
-| cert-manager Certificates | `Ready=False` | `certmanager-health` job in [scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) (daily) | ✅ covered |
+| cert-manager Certificates | `Ready=False` | in-cluster `LLZCertificatesNotReady` alert (continuous) + `certmanager-health` job in [scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) (weekly, belt-and-suspenders) | ✅ covered |
 
 ### Credential rotation
 
