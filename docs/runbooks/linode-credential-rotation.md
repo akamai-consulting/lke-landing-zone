@@ -158,58 +158,50 @@ Rotate same-day on operator exit, on InfoSec direction, or on suspected leak.
 
 ---
 
-## 2. Loki Object Storage key (revoke ≤120 days)
+## 2. Object Storage keys — Loki + Harbor registry (revoke ≤120 days)
 
 Linode OBJ keys have **no native expiry** — "revoke after 120 days" means
-destroy + recreate. This is declarative in
-[`instance-template/terraform-iac-bootstrap/object-storage`](../../instance-template/terraform-iac-bootstrap/object-storage):
-`time_rotating.loki_key` (`rotation_days = var.obj_key_rotation_days`, default
-120) drives `replace_triggered_by` on `linode_object_storage_key.loki`. Once
-the window elapses, the next `terraform apply` of that module **replaces** the
-key (old key id destroyed = revoked).
+destroy + recreate. This is now **automated in-cluster** by the llz-reconciler's
+`--reconcile-linode-creds` reconciler (the sole rotation mechanism — the
+object-storage Terraform module is buckets-only; the TF-managed keys and their
+`obj_key_rotation_days`/`time_rotating` clock were removed). **No operator action
+in steady state.**
 
-**Rotation is not zero-touch.** Replacement mints new credentials, but the
-`terraform output → GitHub env secret → bootstrap-openbao reseed` hop is
-manual. The `loki-objkey-rotation-health` check reads the age of the current
-`secret/loki/object-store` version and alerts (job red at 120d, warns at 105d)
-if the live credential has fallen behind the clock.
+When the current OpenBao secret's `rotated_at` is older than the rotation window,
+the reconciler:
 
-### Procedure
+1. Mints a **fresh** Linode OBJ key (scoped like the existing one) via the Linode
+   API, verifies it works, **then** writes the complete field set straight to
+   OpenBao — `secret/loki/object-store` and `secret/harbor/registry-s3` — and
+   revokes the oldest, keeping the newest N. Verify-before-write + keep-newest
+   means a bad mint or failed write never strands the live credential.
+2. ESO syncs the K8s Secret; the consuming pod (Loki / the Harbor registry) reads
+   the rotated key on its next start / secret refresh.
 
-```bash
-cd instance-template/terraform-iac-bootstrap/object-storage
+**Alerting (a rotation that has fallen behind = the reconciler is down/erroring):**
+- In-cluster: `LLZCredentialRotationOverdue` (`llz_credential_age_days > 90`, both
+  keys) — the continuous signal.
+- Belt-and-suspenders: the `loki-objkey-rotation-health` scheduled check (weekly)
+  reads `secret/loki/object-store` age and warns at 105d / fails at 120d.
 
-# 1. Apply the module for the environment. After 120 days the plan will show
-#    linode_object_storage_key.loki must be replaced.
-terraform plan  -var-file=<env>.tfvars      # confirm the replace
-terraform apply -var-file=<env>.tfvars
+### If it's overdue
 
-# 2. Pull the new credentials.
-terraform output -raw loki_access_key
-terraform output -raw loki_secret_key
-```
-
-3. Update `LOKI_S3_ACCESS_KEY` / `LOKI_S3_SECRET_KEY` in the `infra-<env>`
-   GitHub Environment.
-4. Run `bootstrap-openbao.yml` for the environment — reseeds
-   `secret/loki/object-store`; ESO syncs the `<release>-loki-object-store` K8s
-   Secret.
-5. Restart Loki so it picks up the rotated key:
-
-   ```bash
-   kubectl -n observability rollout restart statefulset -l app.kubernetes.io/name=loki
-   ```
-
-6. Confirm `loki-objkey-rotation-health` is green on the next daily run (age
-   resets to ~0).
-
-To rotate early (suspected leak), force replacement without waiting for the
-clock:
+The rotation loop is wedged, not the key. Diagnose the reconciler, not Terraform:
 
 ```bash
-terraform apply -replace='linode_object_storage_key.loki' -var-file=<env>.tfvars
-# then steps 2–6 above.
+kubectl -n llz-reconciler logs deploy/llz-reconciler --tail=200 | grep -i linode-creds
 ```
+
+The log names the failure (Linode API error, OpenBao Kubernetes-auth login, a
+non-due `rotated_at`). See [reconciler-alerts.md](reconciler-alerts.md)
+(`LLZReconcilerErroring`). Once the underlying fault clears, the reconciler
+rotates on its next due-check with no manual reseed.
+
+**Break-glass / suspected leak (rotate NOW, ahead of the clock):** revoke the
+leaked key in the Linode Cloud Manager — the reconciler's verify-before-write
+then mints + seeds a fresh one on its next pass (or restart the reconciler pod to
+trigger a pass immediately). Do **not** reach for Terraform: these keys are no
+longer TF-managed.
 
 ---
 
