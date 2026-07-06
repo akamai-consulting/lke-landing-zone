@@ -251,6 +251,34 @@ spec:
         {{- range $np.cnpg.metricsPorts }}
         - { port: {{ .port }}, protocol: {{ .protocol }} }
         {{- end }}
+---
+# apl-core's Prometheus (monitoring ns) scrapes Harbor's :8001 metrics endpoints
+# (harbor-exporter + core/registry/jobservice) once metrics are enabled (see
+# _shared/values.yaml harbor._rawValues.metrics, issue #183). harbor-default-deny
+# blocks it otherwise. Scoped to harbor app pods on the metrics port; the mesh is
+# PERMISSIVE, so the plaintext scrape from the (non-mesh) Prometheus needs no
+# PeerAuthentication exception — same shape as the CNPG :9187 rule above.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-allow-metrics
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $np.harborMetrics.podLabel | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.harborMetrics.scrapeNamespace }}
+      ports:
+        {{- range $np.harborMetrics.ports }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
 
 # ── istio-system ─────────────────────────────────────────────────────────────
 ---

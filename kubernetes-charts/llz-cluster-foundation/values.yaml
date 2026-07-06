@@ -216,6 +216,19 @@ networkPolicies:
       - port: 9187   # CNPG Prometheus metrics
         protocol: TCP
 
+  # apl-core's Prometheus (monitoring ns) scrapes Harbor's :8001 metrics endpoints
+  # (harbor-exporter + core/registry/jobservice) once metrics are enabled — see
+  # _shared/values.yaml harbor._rawValues.metrics (issue #183). harbor-default-deny
+  # blocks it otherwise. Scoped to harbor app pods (app: harbor, which covers the
+  # exporter + every component). Mesh is PERMISSIVE, so no PeerAuthentication needed.
+  harborMetrics:
+    podLabel:
+      app: harbor
+    scrapeNamespace: monitoring
+    ports:
+      - port: 8001   # Harbor Prometheus metrics (exporter + core/registry/jobservice)
+        protocol: TCP
+
   # The grafana namespace is allowed ingress into observability (Grafana → OTel
   # Collector / dashboards). Kept as a value since apl-core's Grafana namespace
   # name is a platform assumption.

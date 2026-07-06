@@ -42,7 +42,11 @@ type: application
 #        apl-core's Prometheus (monitoring ns), so every scrape of the OTel
 #        Collector's :8888 telemetry port timed out (context-deadline-exceeded,
 #        confirmed live) and otelcol_* was absent. Scoped to :8888, not all ingress.
-version: 0.1.8
+# 0.1.9: add harbor-allow-metrics — a monitoring→harbor:8001 ingress rule so
+#        Prometheus can scrape Harbor's metrics endpoints once metrics are enabled
+#        (issue #183). Scoped to harbor app pods on :8001; mesh is PERMISSIVE so the
+#        plaintext scrape needs no PeerAuthentication exception.
+version: 0.1.9
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"
