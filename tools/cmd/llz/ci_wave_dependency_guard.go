@@ -27,13 +27,21 @@ package main
 // its own Argo CD Application (clusterspec CarvedApp) no longer shares
 // platform-bootstrap's single wave sequence: Argo cannot sync a carved App's content
 // before the app-of-apps CREATES that App at its App-level wave, and sibling Apps
-// sync independently (no cross-App health gate). So the App wave is the FLOOR for
-// every resource the App carries, and a workload in one App whose Secret is produced
-// by an ExternalSecret in a LATER-created App is the same wedge in a new dress — the
-// ES may not exist yet when the workload's App starts. The guard reads each
-// resource's effective wave as max(its own sync-wave, its owning carved App's wave),
-// keying off the SAME registry `llz render` emits the Apps from, so the two can't
-// drift. Resources in the platform-bootstrap root tree keep their own wave.
+// sync independently (no cross-App health gate). So a workload in one App whose Secret
+// is produced by an ExternalSecret in a LATER-created App is the same wedge in a new
+// dress — the ES may not exist yet when the workload's App starts.
+//
+// The guard therefore judges ordering by TOPOLOGY, keying off the SAME registry
+// `llz render` emits the Apps from (so the two can't drift):
+//   - workload and ExternalSecret in the SAME Application → compare RESOURCE
+//     sync-waves (Argo orders one App's resources by them); the existing rule.
+//   - in DIFFERENT Applications → compare APP-LEVEL waves; the workload's App must be
+//     created strictly after the ExternalSecret's App.
+// Note it is NOT a single max()-of-the-two "effective wave": flooring both a
+// workload and its ExternalSecret at a common App wave would MASK a genuine
+// intra-App inversion (a wave-0 workload + wave-5 ES in the same App is still a
+// wedge). The platform-bootstrap root tree ranks earliest (wdRootAppWave), since
+// Terraform creates it before any carved child App.
 
 import (
 	"fmt"
@@ -109,9 +117,10 @@ type wdDoc struct {
 // CronJob is excluded (Argo assesses no CronJob health; see wave-health-guard).
 var wdWorkloadKinds = map[string]bool{"Deployment": true, "StatefulSet": true, "DaemonSet": true}
 
-// wdInversion is one workload → ExternalSecret ordering violation. The waves are
-// EFFECTIVE waves (max of the resource's own sync-wave and its owning carved App's
-// wave); workloadApp/esApp name the owning Applications for the diagnostic.
+// wdInversion is one workload → ExternalSecret ordering violation. workloadWave/esWave
+// are the waves that were actually COMPARED: resource sync-waves when both live in the
+// same Application, App-level waves when they live in different ones. workloadApp/esApp
+// name the owning Applications for the diagnostic.
 type wdInversion struct {
 	file, workload, secret, esFile string
 	workloadWave, esWave           int
