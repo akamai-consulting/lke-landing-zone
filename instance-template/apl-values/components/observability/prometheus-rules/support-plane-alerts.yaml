@@ -12,6 +12,10 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "10"
   labels:
+    # REQUIRED for pickup: apl-core's Prometheus ruleSelector matches
+    # {prometheus: system} (NOT permissive/empty — confirmed live on apl-core v6).
+    # Without it this PrometheusRule is never loaded and its alerts never fire.
+    prometheus: system
     app.kubernetes.io/part-of: platform
 spec:
   groups:

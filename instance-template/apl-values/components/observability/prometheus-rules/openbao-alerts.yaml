@@ -1,7 +1,6 @@
 # Platform alert rules for OpenBao. Deployed as a PrometheusRule CR; apl-core's
-# kube-prometheus-stack picks it up via its ruleSelector (set permissively in
-# the env values.yaml). Namespace selectors target the llz-openbao namespace
-# the llz-openbao-platform chart deploys into.
+# kube-prometheus-stack picks it up via its ruleSelector. Namespace selectors
+# target the llz-openbao namespace the llz-openbao-platform chart deploys into.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -10,8 +9,10 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "10"
   labels:
-    # Organizational label only; pickup is via the kube-prometheus-stack
-    # ruleSelector, not this label.
+    # REQUIRED for pickup: apl-core's Prometheus ruleSelector matches
+    # {prometheus: system} (NOT permissive/empty — confirmed live on apl-core v6).
+    # Without it this PrometheusRule is never loaded and its alerts never fire.
+    prometheus: system
     app.kubernetes.io/part-of: platform
 spec:
   groups:

@@ -59,7 +59,7 @@ knobs live under `platform` and `openbaoPromtail`:
 | `platform.networkPolicy.allowedClientNamespaces` | `[external-secrets, llz-cert-automation, llz-observability]` | Namespaces allowed to reach `:8200`. `external-secrets` is apl-core 6.x's namespace for the bundled ESO controller. |
 | `platform.networkPolicy.observabilityNamespace` | `observability` | Audit egress target on `:80`. |
 | `platform.serviceMonitor.enabled` | `true` | Decoupled from the old `Release.Name == "platform-prom"` magic gate. |
-| `platform.serviceMonitor.releaseLabel` | `platform-prom` | The `release:` label the Prometheus Operator selects on. |
+| `platform.serviceMonitor.selectorLabels` | `{prometheus: system}` | Labels the Prometheus Operator's `serviceMonitorSelector` matches (apl-core selects on `prometheus: system`, not a release label). |
 | `openbao.server.ha.replicas` | `3` | Raft replica count (passed through to the subchart). |
 | `openbaoPromtail.lokiPushUrl` | `http://loki-gateway.observability.svc.cluster.local/loki/api/v1/push` | |
 | `openbaoPromtail.region` / `cluster` | `primary` / `platform-openbao` | Audit log labels. |

@@ -1,18 +1,22 @@
 # ServiceMonitor for the reconciler's /metrics endpoint.
 #
-# kube-prometheus-stack here runs with serviceMonitorSelector: {} +
-# serviceMonitorNamespaceSelector: {} (apl-values/_shared/values.yaml), i.e. it
-# discovers every ServiceMonitor in every namespace — so the `release` label below
-# is not strictly required for pickup. It is set to the same value the
-# llz-openbao-platform ServiceMonitor uses as belt-and-suspenders, so discovery
-# still works if an adopter later tightens the selector to release-scoped.
+# REQUIRED label: `prometheus: system`. apl-core's kube-prometheus-stack runs its
+# Prometheus with `serviceMonitorSelector: {matchLabels: {prometheus: system}}`
+# (confirmed live on apl-core v6), NOT an empty/discover-all selector — so a
+# ServiceMonitor without this label is silently ignored and the pod's llz_*
+# metrics never reach Prometheus, leaving every reconciler alert a promtool-valid
+# but never-firing rule. (LLZ's `_shared/values.yaml` asks for an empty
+# serviceMonitorSelector via `_rawValues`, but apl-core overrides it — the empty
+# selector does not take effect, so the label is mandatory, not belt-and-braces.)
+# The old `release: platform-prom` label matched nothing (apl-core does not select
+# on a release label).
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: llz-reconciler
   namespace: llz-reconciler
   labels:
-    release: platform-prom
+    prometheus: system
     app.kubernetes.io/name: llz-reconciler
 spec:
   namespaceSelector:

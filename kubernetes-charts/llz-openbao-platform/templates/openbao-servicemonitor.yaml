@@ -5,8 +5,10 @@ metadata:
   name: platform-openbao
   namespace: {{ .Release.Namespace }}
   labels:
-    # The Prometheus Operator selects ServiceMonitors by this release label.
-    release: {{ .Values.platform.serviceMonitor.releaseLabel }}
+    # Labels the Prometheus Operator's serviceMonitorSelector matches. apl-core's
+    # kube-prometheus-stack selects on `prometheus: system` (NOT a release label),
+    # so a ServiceMonitor without it is silently ignored and vault_* never scrapes.
+    {{- toYaml .Values.platform.serviceMonitor.selectorLabels | nindent 4 }}
 spec:
   namespaceSelector:
     matchNames:
@@ -15,7 +17,9 @@ spec:
     matchLabels:
       app.kubernetes.io/name: openbao
   endpoints:
-    - port: http
+    # The OpenBao Service exposes 8200 as a port named `https` (TLS listener); the
+    # old `http` name matched no Service port, so the operator generated no target.
+    - port: https
       scheme: https
       path: /v1/sys/metrics
       params:

@@ -1,7 +1,7 @@
 # Alert rules that make the reconciler's metrics surface actionable. Picked up by
-# kube-prometheus-stack's ruleSelector (set permissively in the env values.yaml),
-# so the llz-reconciler namespace is fine. These three distinguish the failure
-# modes the design calls out:
+# apl-core's kube-prometheus-stack ruleSelector, which matches {prometheus: system}
+# (see the metadata label below — REQUIRED, not organizational). These three
+# distinguish the failure modes the design calls out:
 #
 #   LLZReconcilerScrapeDown  — Prometheus can't reach the pod (target down /
 #                              NetworkPolicy / pod gone). The metrics are blind.
@@ -19,7 +19,10 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "10"
   labels:
-    # Organizational only; pickup is via the kube-prometheus-stack ruleSelector.
+    # REQUIRED for pickup: apl-core's Prometheus ruleSelector matches
+    # {prometheus: system} (NOT permissive/empty — confirmed live on apl-core v6).
+    # Without it this PrometheusRule is never loaded and its alerts never fire.
+    prometheus: system
     app.kubernetes.io/part-of: platform
 spec:
   groups:
