@@ -36,6 +36,20 @@ func ClassifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 		return CatDeferred, label + " — " + reason
 	}
 	if a.SpecErr != "" {
+		// A ComparisonError carrying a Redis auth code (WRONGPASS/NOAUTH) is not an
+		// app-config fault: it is the ArgoCD repo-server failing to authenticate to
+		// its argocd-redis manifest cache, so *every* Application ComparisonErrors
+		// at once. That happens when the argocd-redis password rotates under a
+		// never-restarted redis pod (a reused-cluster e2e can leave redis holding a
+		// stale --requirepass while freshly-rolled repo-servers read the new secret).
+		// A `rollout restart deploy/argocd-redis` realigns them, so this is a
+		// transient infra condition to POLL on — same treatment as a Progressing
+		// rollout — not a hard strike. A genuine per-app spec error never carries a
+		// Redis auth code, so the reclassification cannot mask a real failure; worst
+		// case (no restart) the gate simply exhausts its budget and still exits 1.
+		if isRepoServerCacheAuthError(a.SpecErr) {
+			return CatPending, label + " — argocd-redis cache auth (repo-server↔redis password split); transient, polling"
+		}
 		return CatFail, label + " — " + a.SpecErr
 	}
 	if a.Sync == "Synced" && a.Health == "Healthy" {
@@ -60,6 +74,19 @@ func ClassifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 		return CatPending, label + " — rolling out (Progressing)"
 	}
 	return CatFail, label
+}
+
+// isRepoServerCacheAuthError reports whether a ComparisonError message carries a
+// Redis authentication code. The ArgoCD repo-server caches git refs/manifests in
+// argocd-redis; when its AUTH fails (e.g. the redis password rotates under a
+// never-restarted redis pod), ListRefs returns "failed to list refs: WRONGPASS
+// ..." and the Application goes Unknown/ComparisonError. WRONGPASS ("invalid
+// username-password pair") and NOAUTH ("authentication required") originate only
+// in the redis cache path, never in an Application's own source, so they mark a
+// transient infra blip the convergence gate should poll on rather than a real
+// spec fault.
+func isRepoServerCacheAuthError(specErr string) bool {
+	return strings.Contains(specErr, "WRONGPASS") || strings.Contains(specErr, "NOAUTH")
 }
 
 // argoAppJSON is the subset of an ArgoCD Application object we parse.

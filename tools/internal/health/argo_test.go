@@ -60,6 +60,10 @@ func TestClassifyArgoApp(t *testing.T) {
 		{"synced+progressing -> pending", ArgoApp{Name: "monitoring-loki", Sync: "Synced", Health: "Progressing", Automated: true}, false, CatPending},
 		{"outofsync+progressing -> pending", ArgoApp{Name: "platform-rollout", Sync: "OutOfSync", Health: "Progressing", Automated: true}, false, CatPending},
 		{"unhealthy -> fail", ArgoApp{Name: "platform-bad", Sync: "OutOfSync", Health: "Degraded", Automated: true}, false, CatFail},
+		{"redis WRONGPASS cache auth -> pending (transient, poll)", ArgoApp{Name: "llz-harbor", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = failed to list refs: WRONGPASS invalid username-password pair or user is disabled.", Automated: true}, false, CatPending},
+		{"redis NOAUTH cache auth -> pending (transient, poll)", ArgoApp{Name: "monitoring-loki", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: failed to list refs: NOAUTH Authentication required.", Automated: true}, false, CatPending},
+		{"deferred still wins over redis cache auth", ArgoApp{Name: "external-dns-external-dns", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: failed to list refs: WRONGPASS", Automated: true}, false, CatDeferred},
+		{"real comparison error still fails (no redis code)", ArgoApp{Name: "platform-foo", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: rpc error: repository not found", Automated: true}, false, CatFail},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
