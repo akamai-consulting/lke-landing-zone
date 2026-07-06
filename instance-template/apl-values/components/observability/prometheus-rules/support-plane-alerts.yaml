@@ -26,6 +26,7 @@ spec:
             service: otel-collector
           annotations:
             summary: OTel Collector metrics target is down
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape one or more OTel Collector metrics endpoints.
         - alert: LokiMetricsTargetDown
           expr: up{namespace="monitoring", service=~".*loki.*"} == 0
@@ -35,6 +36,7 @@ spec:
             service: loki
           annotations:
             summary: Loki metrics target is down
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape one or more Loki metrics endpoints.
         - alert: GrafanaMetricsTargetDown
           expr: up{namespace="grafana", service=~".*grafana.*"} == 0
@@ -44,6 +46,7 @@ spec:
             service: grafana
           annotations:
             summary: Grafana metrics target is down
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape the Grafana metrics endpoint.
         - alert: HarborMetricsTargetDown
           expr: up{namespace="harbor", service=~".*harbor.*"} == 0
@@ -53,6 +56,7 @@ spec:
             service: harbor
           annotations:
             summary: Harbor metrics target is down
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape one or more Harbor metrics endpoints.
         # ── Workload availability (distinct from the scrape-health alerts above) ──
         # The `...MetricsTargetDown` alerts fire when Prometheus can't SCRAPE a pod
@@ -71,6 +75,7 @@ spec:
             service: support-plane
           annotations:
             summary: 'support-plane Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has no available replicas'
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: '{{ $labels.namespace }}/{{ $labels.deployment }} has 0 available replicas for 10m — the workload is down or wedged, not merely unscrapable.'
         - alert: LokiStatefulSetUnavailable
           expr: kube_statefulset_status_replicas_ready{namespace="monitoring", statefulset="loki"} == 0
@@ -80,4 +85,5 @@ spec:
             service: loki
           annotations:
             summary: Loki has no ready replicas
+            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The Loki StatefulSet has 0 ready replicas for 10m — log ingestion and queries are down.
