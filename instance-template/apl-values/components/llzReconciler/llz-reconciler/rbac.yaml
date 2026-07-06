@@ -191,3 +191,33 @@ subjects:
   - kind: ServiceAccount
     name: llz-reconciler
     namespace: llz-reconciler
+---
+# token-inventory gauge: GET the ONE llz-token-inventory ConfigMap the scheduled
+# token-inventory job writes (reconcile_tokens.go re-exposes its expiry metadata as
+# llz_token_expiry_timestamp_seconds). resourceName-scoped read — the reconciler
+# only ever reads that single ConfigMap. Bound-but-inert unless
+# --reconcile-token-inventory. The ConfigMap holds NO token values (metadata only).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-reconciler-token-inventory
+  namespace: llz-reconciler
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["llz-token-inventory"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-reconciler-token-inventory
+  namespace: llz-reconciler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-reconciler-token-inventory
+subjects:
+  - kind: ServiceAccount
+    name: llz-reconciler
+    namespace: llz-reconciler

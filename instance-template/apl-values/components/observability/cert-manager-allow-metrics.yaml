@@ -1,0 +1,33 @@
+# The cert-manager namespace is default-deny (cluster-foundation ships
+# cert-manager-default-deny). Without an explicit allow, Prometheus' scrape of the
+# controller's :9402 metrics is silently dropped and cert-manager-servicemonitor.yaml
+# produces no `up` series — the cert expiry alerts would never fire. This opens
+# ingress to :9402 from the monitoring namespace (apl-core's Prometheus) only.
+#
+# Lives in the cert-manager namespace (a NetworkPolicy is namespaced). Wave 5:
+# after cluster-foundation lays the default-deny (-10) and apl-core installs
+# cert-manager, before the scrape needs to succeed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cert-manager-allow-metrics-ingress
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9402

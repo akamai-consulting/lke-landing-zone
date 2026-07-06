@@ -80,6 +80,8 @@ func reconcileCmd() *cobra.Command {
 				harborInterval:      time.Duration(o.harborInterval) * time.Second,
 				reconcileOpenBao:    o.reconcileOpenBao,
 				openbaoInterval:     time.Duration(o.openbaoInterval) * time.Second,
+				reconcileTokens:     o.reconcileTokens,
+				tokensInterval:      time.Duration(o.tokensInterval) * time.Second,
 				reconcileSCDemote:   o.reconcileSCDemote,
 				scDemoteResync:      time.Duration(o.scDemoteResync) * time.Second,
 				scDemoteName:        o.scDemoteName,
@@ -102,6 +104,8 @@ func reconcileCmd() *cobra.Command {
 	f.IntVar(&o.harborInterval, "harbor-interval", 300, "seconds between Harbor-provisioner resync passes")
 	f.BoolVar(&o.reconcileOpenBao, "reconcile-openbao-gauges", false, "enable the OpenBao seal + credential-age gauges (read-only; needs OpenBao egress + the reconciler k8s-auth role)")
 	f.IntVar(&o.openbaoInterval, "openbao-gauges-interval", 60, "seconds between OpenBao gauge samples")
+	f.BoolVar(&o.reconcileTokens, "reconcile-token-inventory", false, "enable the CI-token expiry gauges (read-only; re-exposes the llz-token-inventory ConfigMap the token-inventory job writes)")
+	f.IntVar(&o.tokensInterval, "token-inventory-interval", 60, "seconds between token-inventory ConfigMap samples")
 	f.BoolVar(&o.reconcileSCDemote, "reconcile-sc-demote", false, "enable the StorageClass default-demote watch reconciler (default off: the CronJob owns it)")
 	f.IntVar(&o.scDemoteResync, "sc-demote-resync", 120, "resync-floor seconds for the sc-demote reconciler (defeats the admission-policy starvation case)")
 	f.StringVar(&o.scDemoteName, "sc-demote-name", defaultDemoteSC, "the StorageClass to keep non-default (LKE's Flux-promoted retain class)")
@@ -126,6 +130,8 @@ type reconcileFlags struct {
 	harborInterval      int
 	reconcileOpenBao    bool
 	openbaoInterval     int
+	reconcileTokens     bool
+	tokensInterval      int
 	reconcileSCDemote   bool
 	scDemoteResync      int
 	scDemoteName        string
@@ -150,6 +156,8 @@ type reconcileOpts struct {
 	harborInterval      time.Duration
 	reconcileOpenBao    bool
 	openbaoInterval     time.Duration
+	reconcileTokens     bool
+	tokensInterval      time.Duration
 }
 
 // drivingEnabled reports whether any state-mutating reconciler is on — the case
@@ -349,6 +357,15 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// Read-only (seal + credential-age gauges), so NOT gated on leadership
 			// — every replica may read OpenBao harmlessly.
 			run: func(ctx context.Context) error { return sampleOpenBao(ctx, reg, time.Now()) },
+		})
+	}
+	if o.reconcileTokens {
+		recs = append(recs, reconciler{
+			name:     "token-inventory",
+			interval: o.tokensInterval,
+			// Read-only (re-exposes the token-inventory ConfigMap), so NOT gated —
+			// every replica may read the ConfigMap harmlessly.
+			run: func(ctx context.Context) error { return sampleTokenInventory(ctx, client, reg) },
 		})
 	}
 	return recs
