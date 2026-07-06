@@ -114,6 +114,9 @@ func ciCmd() *cobra.Command {
 	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
 	// wedges the sync (Makefile wave-dependency-guard).
 	c.AddCommand(ciWaveDependencyGuardCmd())
+	// Cluster diagnostic: list in-cluster Prometheus metric names matching a regex
+	// (metric-name discovery for writing error-rate/saturation alerts).
+	c.AddCommand(ciPromMetricsCmd())
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).
