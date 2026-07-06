@@ -10,6 +10,8 @@ resources:
   - rbac.yaml
   - network-policy.yaml
   - externalsecret.yaml
+  - harbor-gh-token-externalsecret.yaml
+  - harbor-admin-externalsecret.yaml
   - deployment.yaml
   - service.yaml
   - servicemonitor.yaml

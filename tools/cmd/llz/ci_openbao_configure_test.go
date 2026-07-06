@@ -76,22 +76,19 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 	}
 }
 
-// The in-cluster reconciler's Kubernetes-auth role must bind reconciler-read (the
-// gauge metadata read) AND linode-rotator (the object-storage-key read_write that
-// --reconcile-linode-creds performs, taking over the linodeCredRotator CronJob's
-// work). harbor-provisioner is deliberately NOT yet bound — --reconcile-harbor
-// lands in a later batch (#166) with its mounted post-Harbor admin secret.
-func TestReconcilerRoleBindsLinodeRotator(t *testing.T) {
+// The in-cluster reconciler's Kubernetes-auth role must bind every policy the
+// CronJobs it replaces used: reconciler-read (gauge metadata read), linode-rotator
+// (object-storage-key read_write, --reconcile-linode-creds), and harbor-provisioner
+// (secret/harbor/{robot,pull-robot} read_write, --reconcile-harbor). It must NOT
+// bind the harbor admin path (that stays ESO-only via harbor-admin-push).
+func TestReconcilerRoleBindsDrivingPolicies(t *testing.T) {
 	var found bool
 	for _, s := range baoConfigureSteps("acme/platform") {
 		if len(s.args) >= 2 && s.args[0] == "write" && s.args[1] == "auth/kubernetes/role/reconciler" {
 			found = true
 			joined := strings.Join(s.args, " ")
-			if !strings.Contains(joined, "policies=reconciler-read,linode-rotator") {
-				t.Errorf("reconciler role must bind reconciler-read + linode-rotator; got %v", s.args)
-			}
-			if strings.Contains(joined, "harbor-provisioner") {
-				t.Error("harbor-provisioner must NOT be bound until --reconcile-harbor (#166)")
+			if !strings.Contains(joined, "policies=reconciler-read,linode-rotator,harbor-provisioner") {
+				t.Errorf("reconciler role must bind reconciler-read + linode-rotator + harbor-provisioner; got %v", s.args)
 			}
 		}
 	}

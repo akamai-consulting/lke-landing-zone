@@ -47,6 +47,7 @@ func ExternalDepWorkloads() []DepEntry {
 func ExternalDepExternalSecrets() []DepEntry {
 	return []DepEntry{
 		{"llz-cert-automation/harbor-docker-config", "reads the Harbor robot creds at secret/harbor/robot, which are seeded by the harbor-robot-provisioner CronJob (schedule */5) only AFTER Harbor's registry is up — so on a fresh bootstrap it sits Ready=False (SecretSyncedError: could not get secret data from provider) for the first few minutes until the CronJob's first tick writes the path and the ExternalSecret re-syncs (refreshInterval 1m). It feeds ONLY the cert-automation HAProxy-rebuild workflow, which runs on cert rotation (~80 days out), so it is off the bootstrap critical path and must not pin the convergence gate. Deferred; it converges shortly after Harbor without operator action."},
+		{"llz-reconciler/harbor-admin-password", "reads secret/harbor/admin, which apl-core's Harbor Helm chart only generates AFTER Harbor deploys (the harbor-admin-push PushSecret then mirrors it into OpenBao) — so on a fresh bootstrap it sits Ready=False (SecretSyncedError) until Harbor is up. The harbor reconciler mounts the resulting Secret OPTIONAL and no-ops until it appears, and the ExternalSecret sits at a high sync-wave so it gates nothing; it is entirely off the bootstrap critical path. Same class as harbor-docker-config — deferred; it converges shortly after Harbor without operator action."},
 	}
 }
 
