@@ -761,16 +761,23 @@ jobs:
         if: ${{ inputs.assert_loki }}
         run: llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_)' || true
 
-      # E2E-only live alert evaluation. Every PrometheusRule ships promtool-valid
-      # (syntax), but promtool can't tell a rule that references a non-existent
-      # metric (silent never-fire) from one that's simply not tripping. This runs
-      # each deployed alert expr through the live Prometheus and classifies it
-      # FIRING/ARMED/DEAD?/BROKEN — so a DEAD? rule surfaces in the converge log
-      # instead of failing silent in prod. Read-only, best-effort glue over the
-      # unit-tested `llz ci alert-eval`. Same assert_loki gate + cluster access.
+      # E2E live alert evaluation, surfaced in the job summary. Every PrometheusRule
+      # ships promtool-valid (syntax), but promtool can't tell a rule that
+      # references a non-existent metric (silent never-fire, DEAD?) from one simply
+      # not tripping (ARMED). This runs each deployed alert expr through the live
+      # Prometheus and writes the FIRING/ARMED/DEAD?/BROKEN report to the step
+      # summary, so DEAD?/BROKEN are visible on the run instead of failing silent in
+      # prod. Report-only for now (|| true); the intent is to harden to
+      # `alert-eval --strict` (fail on DEAD?/BROKEN) once today's known-DEAD? alerts
+      # — real cluster bugs, not rule bugs — are resolved. Glue over the unit-tested
+      # `llz ci alert-eval`. Same assert_loki gate + cluster access.
       - name: (e2e) live alert evaluation
         if: ${{ inputs.assert_loki }}
-        run: llz ci alert-eval || true
+        run: |
+          echo '### alert-eval — live rule evaluation' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          llz ci alert-eval 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx logs
       # WHILE the cluster is still up — before the ACL revoke below cuts apiserver
