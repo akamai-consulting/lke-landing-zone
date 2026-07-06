@@ -243,11 +243,6 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		// per-env local-config marker the cluster-bootstrap precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
 	}
-	// The one genuine per-env manifest delta: the volume-labeler REGION_SHORT patch
-	// the thin overlay references — emitted only when volumeLabeler is enabled.
-	if clusterspec.ComponentEnabled(e.Components, "volumeLabeler") {
-		targets[filepath.Join(manifest, "linode-volume-labeler-region-patch.yaml")] = clusterspec.RenderRegionPatch(first3(env))
-	}
 	// The Linode credential rotator's per-env REGION + OBJ_CLUSTER patch — emitted
 	// only when linodeCredRotator is enabled (region = deployment name, obj_cluster
 	// = the spec's object-storage cluster).

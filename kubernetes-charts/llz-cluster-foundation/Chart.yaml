@@ -32,7 +32,11 @@ type: application
 #        *.internal rewrite stays required on 6.x (the oauth2-proxy init container
 #        still resolves keycloak.<domainSuffix>) and that narrowing to a per-host
 #        allowlist is lab-gated — comment-only, no rendered resource change.
-version: 0.1.6
+# 0.1.7: retire the durable sc-default-patcher CronJob backstop (added in 0.1.5) —
+#        the sc-demote reconciler (llz reconcile --reconcile-sc-demote, default-on)
+#        provides the same starvation-proof re-demote via a StorageClass watch +
+#        resync floor. The PostSync Job + Kyverno admission policy remain.
+version: 0.1.7
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"

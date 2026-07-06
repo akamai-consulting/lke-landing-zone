@@ -117,15 +117,6 @@ func TestRenderEnvRevision(t *testing.T) {
 	}
 }
 
-func TestRenderRegionPatch(t *testing.T) {
-	out := RenderRegionPatch("ord")
-	for _, want := range []string{"name: linode-volume-labeler", "REGION_SHORT", `value: "ord"`} {
-		if !strings.Contains(out, want) {
-			t.Errorf("RenderRegionPatch missing %q:\n%s", want, out)
-		}
-	}
-}
-
 func TestRenderHarborHostPatch(t *testing.T) {
 	out := RenderHarborHostPatch("web.prod.example.com")
 	for _, want := range []string{

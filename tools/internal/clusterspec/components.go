@@ -96,17 +96,6 @@ var Components = []Component{
 		},
 	},
 	{
-		Name:              "volumeLabeler",
-		ManifestResources: []string{"linode-volume-labeler"},
-		Patches: []Patch{{
-			Path:    "linode-volume-labeler-region-patch.yaml",
-			Group:   "batch",
-			Version: "v1",
-			Kind:    "CronJob",
-			Name:    "linode-volume-labeler",
-		}},
-	},
-	{
 		// In-cluster Linode credential rotator (OBJ keys + DNS token). Default-ON:
 		// with the TF-minted keys and their time_rotating clock removed from
 		// llz-object-storage (buckets-only module), this CronJob is the ONLY
