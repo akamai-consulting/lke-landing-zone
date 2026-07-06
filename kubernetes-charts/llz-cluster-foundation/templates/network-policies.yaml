@@ -418,4 +418,15 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ $np.grafanaNamespace }}
+    # apl-core's Prometheus (monitoring ns) scrapes the OTel Collector's :8888
+    # monitoring port (otelcol_*) — otherwise the scrape times out and every
+    # otelcol_* series is absent. Scoped to the metrics port, not all ingress.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.otelMetrics.scrapeNamespace }}
+      ports:
+        {{- range $np.otelMetrics.ports }}
+        - { port: {{ .port }}, protocol: {{ .protocol }} }
+        {{- end }}
 {{- end }}

@@ -55,7 +55,15 @@ type: application
 # 0.1.17: harden serviceMonitor.selectorLabels with `| default (dict "prometheus"
 #         "system")` so an adopter who nulls the map can't render an invalid
 #         `labels: null`. No change to the default rendered output.
-version: 0.1.17
+# 0.1.18: FIX vault_* STILL never scraped — the L4 complement to 0.1.16. 0.1.16
+#         fixed the ServiceMonitor's label+port so Prometheus DISCOVERS the target,
+#         but the default-deny NetworkPolicy has no ingress rule for apl-core's
+#         Prometheus (pod app.kubernetes.io/name=prometheus in the `monitoring`
+#         namespace), so every scrape of :8200 resets/times out at L4 — confirmed
+#         live (connection reset by peer) on a converged cluster, with the OpenBao
+#         alerts DEAD? in `llz ci alert-eval`. Adds a pod-scoped allowedClientPods
+#         entry {namespace: monitoring, name: prometheus}.
+version: 0.1.18
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:
