@@ -94,6 +94,14 @@ func stubExecCombined(t *testing.T, reply string) *[][]string {
 	return &calls
 }
 
+// stubReconcilerLease overrides the authoritative Lease read so the gauge→Lease
+// fallback can be exercised without a cluster.
+func stubReconcilerLease(t *testing.T, holder string, live bool) {
+	orig := reconcilerLeaseLive
+	t.Cleanup(func() { reconcilerLeaseLive = orig })
+	reconcilerLeaseLive = func(string, time.Time) (string, bool) { return holder, live }
+}
+
 func TestRunAssertReconcilerReportingDown(t *testing.T) {
 	up0 := []byte(`{"status":"success","data":{"result":[{"value":[1,"0"]}]}}`)
 	leader1 := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
@@ -110,14 +118,91 @@ func TestRunAssertReconcilerReportingDown(t *testing.T) {
 func TestRunAssertReconcilerNoLeaderOrAbsent(t *testing.T) {
 	up1 := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
 	absent := []byte(`{"status":"success","data":{"result":[]}}`)
-	// up=1 but leader series absent → fail.
+	// up=1 but leader series absent, and the Lease has no live holder → real stall.
 	seamReconcilerProm(t, up1, absent)
+	stubReconcilerLease(t, "", false)
 	calls := stubExecCombined(t, "")
 	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
 		t.Errorf("expected exit 1 when leader gauge is absent, got %d", code)
 	}
 	if len(*calls) == 0 {
 		t.Error("a failed assertion must dump reconciler diagnostics")
+	}
+}
+
+// The gauge is derived (process → 30s scrape → PromQL); the Lease is ground truth.
+// leader=0 with a genuinely-held, fresh Lease is a scrape-lag false-negative — the
+// gate must pass on the authoritative Lease and NOT dump diagnostics.
+func TestRunAssertReconcilerLeaderGaugeLagsButLeaseLive(t *testing.T) {
+	up1 := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
+	leader0 := []byte(`{"status":"success","data":{"result":[{"value":[1,"0"]}]}}`)
+	seamReconcilerProm(t, up1, leader0)
+	stubReconcilerLease(t, "llz-reconciler-abc123", true)
+	calls := stubExecCombined(t, "")
+	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 0 {
+		t.Fatalf("expected exit 0 when the gauge lags but the Lease is live, got %d", code)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("a Lease-confirmed leader must NOT dump diagnostics, got %d calls", len(*calls))
+	}
+}
+
+// leader=0 AND no live Lease holder is a real election stall — still fails + dumps.
+func TestRunAssertReconcilerLeaderDownAndLeaseDead(t *testing.T) {
+	up1 := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
+	leader0 := []byte(`{"status":"success","data":{"result":[{"value":[1,"0"]}]}}`)
+	seamReconcilerProm(t, up1, leader0)
+	stubReconcilerLease(t, "", false)
+	calls := stubExecCombined(t, "")
+	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
+		t.Fatalf("expected exit 1 when leader=0 and the Lease has no live holder, got %d", code)
+	}
+	if len(*calls) == 0 {
+		t.Error("a real no-leader stall must still dump diagnostics")
+	}
+}
+
+// up=0 has no authoritative fallback: a failing sample loop fails even if a leader
+// holds the Lease. The Lease must not be consulted to rescue an up failure.
+func TestRunAssertReconcilerUpFailHasNoLeaseFallback(t *testing.T) {
+	up0 := []byte(`{"status":"success","data":{"result":[{"value":[1,"0"]}]}}`)
+	leader0 := []byte(`{"status":"success","data":{"result":[{"value":[1,"0"]}]}}`)
+	seamReconcilerProm(t, up0, leader0)
+	leaseConsulted := false
+	orig := reconcilerLeaseLive
+	t.Cleanup(func() { reconcilerLeaseLive = orig })
+	reconcilerLeaseLive = func(string, time.Time) (string, bool) { leaseConsulted = true; return "holder", true }
+	stubExecCombined(t, "")
+	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
+		t.Fatalf("expected exit 1 when up=0 regardless of the Lease, got %d", code)
+	}
+	if leaseConsulted {
+		t.Error("the Lease fallback must not run when up is failing")
+	}
+}
+
+func TestLeaseLeaderFresh(t *testing.T) {
+	now := time.Unix(2000, 0)
+	at := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339Nano) }
+
+	fresh := []byte(`{"spec":{"holderIdentity":"pod-a","renewTime":"` + at(-5*time.Second) + `"}}`)
+	if h, ok := leaseLeaderFresh(fresh, now, 30*time.Second); !ok || h != "pod-a" {
+		t.Errorf("fresh held lease: got (%q,%v), want (pod-a,true)", h, ok)
+	}
+	stale := []byte(`{"spec":{"holderIdentity":"pod-a","renewTime":"` + at(-31*time.Second) + `"}}`)
+	if _, ok := leaseLeaderFresh(stale, now, 30*time.Second); ok {
+		t.Error("a stale renewTime must not be live")
+	}
+	released := []byte(`{"spec":{"holderIdentity":"","renewTime":"` + at(-1*time.Second) + `"}}`)
+	if _, ok := leaseLeaderFresh(released, now, 30*time.Second); ok {
+		t.Error("an empty holderIdentity (released) must not be live")
+	}
+	noRenew := []byte(`{"spec":{"holderIdentity":"pod-a"}}`)
+	if _, ok := leaseLeaderFresh(noRenew, now, 30*time.Second); ok {
+		t.Error("a missing renewTime must not be live")
+	}
+	if _, ok := leaseLeaderFresh([]byte(`not json`), now, 30*time.Second); ok {
+		t.Error("an unparseable lease must not be live")
 	}
 }
 
