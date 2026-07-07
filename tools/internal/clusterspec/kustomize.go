@@ -198,8 +198,21 @@ var acmeEmailLine = regexp.MustCompile(`(?m)^(\s*email:).*$`)
 // rendered address when spec.dns.acmeEmail changes — so the rendered output is a
 // pure function of (current file structure, email). The email is instance-wide
 // (spec.dns.acmeEmail), so this is rendered ONCE into apl-values/_shared, not per env.
+//
+// An UNSET email renders `email: ""`, NOT a placeholder: the ACME contact is
+// optional (Let's Encrypt accepts registration with no contact), and cert-manager
+// omits the contact for an empty string. Shipping the literal REPLACE_PER_ENV to
+// the cluster made cert-manager send it as the account contact, which LE rejects
+// with `invalidContact: unable to parse email address` — leaving both ClusterIssuers
+// permanently Ready=False and unable to issue any certificate even when the DNS-01
+// token is present. Rendering "" keeps the issuers valid and Ready by default;
+// setting spec.dns.acmeEmail just adds the expiry-notice contact.
 func SetACMEEmail(content, email string) string {
-	return acmeEmailLine.ReplaceAllString(content, "${1} "+email)
+	val := email
+	if val == "" {
+		val = `""` // optional contact — empty registers with no contact (valid); never ship an unparseable placeholder
+	}
+	return acmeEmailLine.ReplaceAllString(content, "${1} "+val)
 }
 
 // RenderReconcilerEnvPatch returns the per-env strategic-merge patch that fills

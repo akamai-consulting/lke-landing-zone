@@ -147,6 +147,20 @@ spec:
 	if strings.Count(changed, "email: sre@example.com") != 2 || strings.Contains(changed, "ops@example.com") {
 		t.Errorf("email change not applied:\n%s", changed)
 	}
+	// Unset (empty) email renders a valid `email: ""`, NOT the unparseable
+	// placeholder — the ACME contact is optional, and shipping REPLACE_PER_ENV made
+	// Let's Encrypt reject account registration (invalidContact).
+	empty := SetACMEEmail(base, "")
+	if strings.Contains(empty, "REPLACE_PER_ENV") {
+		t.Errorf("empty email must strip the placeholder:\n%s", empty)
+	}
+	if n := strings.Count(empty, `email: ""`); n != 2 {
+		t.Errorf("empty email should render `email: \"\"` on both issuers, got %d:\n%s", n, empty)
+	}
+	// Idempotent on the empty rendering too.
+	if again := SetACMEEmail(empty, ""); again != empty {
+		t.Errorf("SetACMEEmail(empty) not idempotent:\n%s", again)
+	}
 }
 
 func TestComponentRegistry_AplCoreMapping(t *testing.T) {
