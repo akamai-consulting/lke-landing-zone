@@ -62,22 +62,45 @@ done
 [[ -n "$RUN_ID" ]] || { log "could not locate the dispatched run within 90s"; exit 1; }
 log "watching run ${RUN_ID}: $(gh run view "$RUN_ID" --repo "$REPO" --json url --jq .url 2>/dev/null || echo "")"
 
-# Block until done. Guard the whole wait with an overall timeout so a hung run
-# can't pin this job.
-set +e
-timeout "$TIMEOUT" gh run watch "$RUN_ID" --repo "$REPO" --interval 30 --exit-status >&2
-watch_rc=$?
-set -e
-if [[ $watch_rc -eq 124 ]]; then
-  log "::error::run ${RUN_ID} exceeded ${TIMEOUT}s — cancelling"
-  gh run cancel "$RUN_ID" --repo "$REPO" >&2 || true
-  exit 124
-fi
+# Block until the run is genuinely COMPLETED. `gh run watch --exit-status` can exit
+# non-zero WITHOUT the run having finished — most commonly an HTTP 404 on the run's
+# jobs endpoint in the seconds after dispatch, before GitHub lists the jobs (observed:
+# watch attached ~4s post-create, 404'd, exited rc=1 while the destroy ran on fine —
+# failing teardown on a healthy run). A single watch exit is therefore NOT proof the
+# run ended, so re-attach until the run's status is actually 'completed'. Bound the
+# whole wait by TIMEOUT so a hung run still can't pin this job.
+deadline=$(( $(date -u +%s) + TIMEOUT ))
+watch_rc=0
+run_status=""
+while :; do
+  remaining=$(( deadline - $(date -u +%s) ))
+  if [[ $remaining -le 0 ]]; then
+    log "::error::run ${RUN_ID} exceeded ${TIMEOUT}s — cancelling"
+    gh run cancel "$RUN_ID" --repo "$REPO" >&2 || true
+    exit 124
+  fi
+  set +e
+  timeout "$remaining" gh run watch "$RUN_ID" --repo "$REPO" --interval 30 --exit-status >&2
+  watch_rc=$?
+  set -e
+  if [[ $watch_rc -eq 124 ]]; then
+    log "::error::run ${RUN_ID} exceeded ${TIMEOUT}s — cancelling"
+    gh run cancel "$RUN_ID" --repo "$REPO" >&2 || true
+    exit 124
+  fi
+  run_status="$(gh run view "$RUN_ID" --repo "$REPO" --json status --jq '.status // ""' 2>/dev/null || echo "")"
+  [[ "$run_status" == "completed" ]] && break
+  # Watch returned but the run is still going: a transient API hiccup (e.g. the
+  # jobs-endpoint 404 right after dispatch) detached it early. Wait a beat and
+  # re-attach rather than mistaking it for a run failure.
+  log "watch detached before completion (rc=${watch_rc}, run status='${run_status:-unknown}') — re-attaching in 10s"
+  sleep 10
+done
 
-# Do NOT trust `gh run watch --exit-status` alone: it has been observed to return
-# 0 for a run that had ALREADY finished (e.g. failed within seconds, before the
-# watch attached) — which silently turned a failing dispatched run into a green
-# caller job. Authoritatively re-read the run's conclusion and require success.
+# Even once the run is completed, do NOT trust the watch exit code alone: it has been
+# observed to return 0 for a run that had ALREADY finished (e.g. failed within seconds,
+# before the watch attached) — which silently turned a failing dispatched run into a
+# green caller job. Authoritatively re-read the run's conclusion and require success.
 # (A run whose jobs were all skipped concludes 'success' too; that's intended —
 # skip-only no-ops are prevented upstream by forwarding the dispatch inputs.)
 CONCLUSION="$(gh run view "$RUN_ID" --repo "$REPO" --json conclusion --jq '.conclusion // "unknown"' 2>/dev/null || echo unknown)"
