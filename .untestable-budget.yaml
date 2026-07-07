@@ -48,7 +48,11 @@ categories:
 
   shell-scripts:
     kind: script
-    budget: 595
+    # Ratcheted 595 → 545 when .github/scripts/dispatch-and-watch.sh (72 counted
+    # lines) moved to `exclude:` (live GitHub-Actions orchestration — see below):
+    # the remaining shell is 529, so keep ~3% headroom rather than leaving the
+    # freed budget as slack a future PR could fill with untested bash.
+    budget: 545
     include:
       - "template-scripts/**/*.sh"
       - ".github/scripts/**/*.sh"
@@ -84,3 +88,4 @@ exclude:
   - "template-scripts/ci/install-gitleaks.sh" # pinned-release installer, no logic
   - "template-scripts/ci/llz-functional.sh"  # functional test harness for the built llz binary — its assertions ARE the test (exercised every CI run), not decision logic to push into Go
   - "template-scripts/ci/vap-admission-check.sh" # functional harness for the llz-wave-health-guard VAP — applies the policy to the kind apiserver and asserts admission decisions (deny/allow); the assertions ARE the test, and apiserver CEL enforcement cannot be unit-tested in Go
+  - ".github/scripts/dispatch-and-watch.sh" # live GitHub-Actions orchestration: dispatch a workflow_dispatch in the instance repo and block on its conclusion. Entirely `gh` CLI driving + compensation for GitHub-API flakiness (fresh-dispatch 404s, early watch-detach, premature watch-success) — the behavior IS the live interaction, exercised every release-e2e, and cannot be unit-tested in Go. Same class as vap-admission-check.sh.
