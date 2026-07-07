@@ -32,6 +32,11 @@ import (
 type liveResource struct {
 	group, kind, name, namespace string
 	wave                         int
+	// hook is true when the resource carries an argocd.argoproj.io/hook annotation.
+	// Argo hooks (PreSync/Sync/PostSync/SyncFail) are NOT part of the application's
+	// tracked resource tree, so Argo never wave-gates on their health — a hook at a
+	// negative sync-wave cannot cause the health-wedge this guard exists to prevent.
+	hook bool
 }
 
 func (r liveResource) groupKind() string { return r.group + "/" + r.kind }
@@ -59,6 +64,9 @@ func auditNegativeWave(resources []liveResource) []liveResource {
 	for _, r := range resources {
 		if r.wave >= 0 {
 			continue // only negative waves gate a fresh-cluster bootstrap
+		}
+		if r.hook {
+			continue // Argo hook — not a wave-gated tree resource, cannot health-wedge
 		}
 		if waveHealthAuditExcludedGroups[r.group] {
 			continue // VAP excludes the group — not this guard's concern
@@ -207,9 +215,11 @@ func parseNegativeWaveItems(raw string) []liveResource {
 		if gv := strings.SplitN(it.APIVersion, "/", 2); len(gv) == 2 {
 			group = gv[0]
 		}
+		_, isHook := it.Metadata.Annotations["argocd.argoproj.io/hook"]
 		out = append(out, liveResource{
 			group: group, kind: it.Kind,
 			name: it.Metadata.Name, namespace: it.Metadata.Namespace, wave: wave,
+			hook: isHook,
 		})
 	}
 	return out

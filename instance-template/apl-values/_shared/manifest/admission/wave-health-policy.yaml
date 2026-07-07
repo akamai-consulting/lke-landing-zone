@@ -71,6 +71,15 @@ spec:
       expression: >-
         has(object.metadata) && has(object.metadata.annotations) &&
         'argocd.argoproj.io/sync-wave' in object.metadata.annotations
+    # Skip Argo hooks (PreSync/Sync/PostSync/SyncFail). A hook is not part of the
+    # app's tracked resource tree, so Argo never wave-gates on its health — a hook
+    # at a negative sync-wave cannot health-wedge the bootstrap, so denying it is a
+    # false positive (e.g. cluster-foundation's coredns-restart PostSync Job). ANDed
+    # AFTER has-sync-wave, which already guarantees annotations exists (matchConditions
+    # short-circuit in order). Kept in lockstep with the CI guard + runtime audit.
+    - name: not-argo-hook
+      expression: >-
+        !('argocd.argoproj.io/hook' in object.metadata.annotations)
   variables:
     - name: waveStr
       expression: object.metadata.annotations['argocd.argoproj.io/sync-wave']

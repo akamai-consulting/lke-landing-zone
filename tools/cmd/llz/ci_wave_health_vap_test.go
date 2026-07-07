@@ -53,6 +53,42 @@ func TestWaveHealthVAPMatchesGuard(t *testing.T) {
 	assertSameSet(t, "allowedNames", keySet(waveHealthAllowedNamesSet()), celSet("allowedNames"))
 }
 
+// TestWaveHealthVAPSkipsHooks pins the VAP's hook exclusion in lockstep with the CI
+// guard (classifyWaveHealthDoc) + the runtime audit (auditNegativeWave), which both
+// skip resources carrying argocd.argoproj.io/hook. If the VAP's matchCondition is
+// dropped, the admission twin would deny a hook the other two allow (the release-e2e
+// v0.0.23 coredns-restart PostSync Job false positive) — so fail the build.
+func TestWaveHealthVAPSkipsHooks(t *testing.T) {
+	path := esRepoPath("../../..", "apl-values/_shared/manifest/admission/wave-health-policy.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read VAP: %v", err)
+	}
+	var vap struct {
+		Spec struct {
+			MatchConditions []struct {
+				Name       string `yaml:"name"`
+				Expression string `yaml:"expression"`
+			} `yaml:"matchConditions"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(raw, &vap); err != nil {
+		t.Fatalf("parse VAP: %v", err)
+	}
+	found := false
+	for _, mc := range vap.Spec.MatchConditions {
+		e := strings.ReplaceAll(mc.Expression, " ", "")
+		if strings.Contains(e, "!('argocd.argoproj.io/hook'inobject.metadata.annotations)") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("VAP must carry a matchCondition excluding Argo hooks " +
+			"(!('argocd.argoproj.io/hook' in object.metadata.annotations)) — in lockstep " +
+			"with the CI guard + runtime audit hook-skip")
+	}
+}
+
 // waveHealthAllowedKindsSet / waveHealthAllowedNamesSet expose the guard maps' keys
 // (the maps themselves are unexported values in ci_wave_health_guard.go).
 func waveHealthAllowedKindsSet() map[string]waveHealthKindRule { return waveHealthAllowedKinds }
