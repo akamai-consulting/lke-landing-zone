@@ -224,10 +224,22 @@ func (e *leaderElector) patchHeld(ctx context.Context, takeover bool) {
 	e.setLeader(true)
 }
 
+// leaseTimeFormat matches Kubernetes' metav1.MicroTime — the type of a Lease's
+// renewTime/acquireTime — which is RFC3339 with EXACTLY six fractional
+// (microsecond) digits. The apiserver parses those fields against this precise
+// layout and rejects the write with HTTP 400 ("cannot be handled as a Lease:
+// parsing time …") when the timestamp carries more precision. time.RFC3339Nano
+// prints up to nine (nanosecond) digits, so on any node whose clock yields a
+// sub-second value with >6 significant digits every Lease create/patch 400s and
+// the elector can never acquire — a node-clock-dependent flake that reads as the
+// reconciler silently stuck at llz_reconcile_leader=0. The fixed-width ".000000"
+// verb always emits six digits, so the write is accepted on every node.
+const leaseTimeFormat = "2006-01-02T15:04:05.000000Z07:00"
+
 // spec builds a Lease spec claiming the lease for this identity as of now.
 // acquireTime is set only when taking the lease fresh (create/takeover).
 func (e *leaderElector) spec(setAcquire bool) map[string]any {
-	now := e.now().UTC().Format(time.RFC3339Nano)
+	now := e.now().UTC().Format(leaseTimeFormat)
 	s := map[string]any{
 		"holderIdentity":       e.identity,
 		"leaseDurationSeconds": int(e.leaseDuration.Seconds()),

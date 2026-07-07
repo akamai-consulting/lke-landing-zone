@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -244,5 +245,38 @@ func TestReconcilerHealthz(t *testing.T) {
 	clk = t0.Add(e.staleAfter + time.Second)
 	if code := get(e); code != http.StatusServiceUnavailable {
 		t.Fatalf("wedged elector: want 503, got %d", code)
+	}
+}
+
+// A Lease's renewTime/acquireTime are metav1.MicroTime: the apiserver parses them
+// with a strict 6-digit (microsecond) layout and 400s the write otherwise. spec()
+// must therefore emit exactly six fractional digits even from a nanosecond-
+// precision clock, or the elector can never create/renew the Lease.
+func TestElectorLeaseTimestampIsMicroPrecision(t *testing.T) {
+	// A time with full nanosecond precision (.236757129 — 9 sub-second digits).
+	ns := time.Unix(1751852351, 236757129).UTC()
+	e := newElectorAt(&fakeLeaseStore{}, "me", ns)
+
+	for _, setAcquire := range []bool{false, true} {
+		spec := e.spec(setAcquire)
+		keys := []string{"renewTime"}
+		if setAcquire {
+			keys = append(keys, "acquireTime")
+		}
+		for _, k := range keys {
+			ts, ok := spec[k].(string)
+			if !ok {
+				t.Fatalf("spec[%q] missing or not a string", k)
+			}
+			// Must parse against the exact layout the apiserver uses (would 400 otherwise).
+			if _, err := time.Parse(leaseTimeFormat, ts); err != nil {
+				t.Errorf("%s=%q not MicroTime-parseable (apiserver would reject 400): %v", k, ts, err)
+			}
+			// Exactly six fractional digits — no nanosecond overflow.
+			dot, z := strings.IndexByte(ts, '.'), strings.IndexByte(ts, 'Z')
+			if dot < 0 || z < 0 || z-dot-1 != 6 {
+				t.Errorf("%s=%q must carry exactly 6 fractional digits", k, ts)
+			}
+		}
 	}
 }
