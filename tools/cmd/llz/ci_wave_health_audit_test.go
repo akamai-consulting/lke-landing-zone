@@ -47,17 +47,36 @@ func TestAuditNegativeWaveClean(t *testing.T) {
 	}
 }
 
-// parseNegativeWaveItems extracts only negative-wave items and derives group from apiVersion.
+// An Argo hook at a negative wave is NOT flagged: hooks are not tracked-tree
+// resources, so Argo never wave-gates on their health — the coredns-restart
+// PostSync Job that a live census surfaced (release e2e v0.0.23) is the case.
+func TestAuditNegativeWaveSkipsHooks(t *testing.T) {
+	res := []liveResource{
+		// an otherwise-UNVETTED health-checked kind (batch/Job), but it is a hook.
+		{group: "batch", kind: "Job", namespace: "kube-system", name: "coredns-restart-on-custom-cm", wave: -9, hook: true},
+		// the same kind WITHOUT the hook flag → still flagged, proving the skip is
+		// hook-scoped and didn't blanket-allow batch/Job.
+		{group: "batch", kind: "Job", namespace: "x", name: "not-a-hook", wave: -9},
+	}
+	got := auditNegativeWave(res)
+	if len(got) != 1 || got[0].name != "not-a-hook" {
+		t.Fatalf("only the non-hook Job should flag, got %+v", got)
+	}
+}
+
+// parseNegativeWaveItems extracts only negative-wave items, derives group from
+// apiVersion, and records whether the item is an Argo hook.
 func TestParseNegativeWaveItems(t *testing.T) {
 	raw := `{"items":[
 	  {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"a","namespace":"x","annotations":{"argocd.argoproj.io/sync-wave":"-5"}}},
 	  {"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"b","namespace":"y","annotations":{"argocd.argoproj.io/sync-wave":"3"}}},
 	  {"apiVersion":"v1","kind":"Namespace","metadata":{"name":"c","annotations":{"argocd.argoproj.io/sync-wave":"-20"}}},
+	  {"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"e","namespace":"kube-system","annotations":{"argocd.argoproj.io/sync-wave":"-9","argocd.argoproj.io/hook":"PostSync"}}},
 	  {"apiVersion":"v1","kind":"Secret","metadata":{"name":"d","namespace":"z"}}
 	]}`
 	got := parseNegativeWaveItems(raw)
-	if len(got) != 2 {
-		t.Fatalf("want 2 negative-wave items (Deployment, Namespace), got %d: %+v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("want 3 negative-wave items (Deployment, Namespace, hook Job), got %d: %+v", len(got), got)
 	}
 	byName := map[string]liveResource{}
 	for _, r := range got {
@@ -68,6 +87,12 @@ func TestParseNegativeWaveItems(t *testing.T) {
 	}
 	if n := byName["c"]; n.group != "" || n.kind != "Namespace" || n.wave != -20 {
 		t.Errorf("core Namespace should have empty group: %+v", n)
+	}
+	if e := byName["e"]; !e.hook || e.group != "batch" || e.kind != "Job" {
+		t.Errorf("hook Job should parse with hook=true: %+v", e)
+	}
+	if d := byName["a"]; d.hook {
+		t.Errorf("non-hook Deployment must not be marked as a hook: %+v", d)
 	}
 }
 

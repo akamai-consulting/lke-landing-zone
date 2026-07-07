@@ -253,6 +253,13 @@ func classifyWaveHealthDoc(path string, d waveHealthDoc, values string) (waveHea
 	if err != nil || wave >= 0 {
 		return waveHealthFinding{}, false
 	}
+	// Argo hooks (PreSync/Sync/PostSync/SyncFail) are not part of the app's tracked
+	// resource tree, so Argo never wave-gates on their health — a hook at a negative
+	// sync-wave cannot health-wedge the bootstrap. Kept in lockstep with the VAP
+	// matchConditions and the runtime audit, which skip the same annotation.
+	if _, isHook := d.Metadata.Annotations["argocd.argoproj.io/hook"]; isHook {
+		return waveHealthFinding{}, false
+	}
 	group := ""
 	if gv := strings.SplitN(d.APIVersion, "/", 2); len(gv) == 2 {
 		group = gv[0]

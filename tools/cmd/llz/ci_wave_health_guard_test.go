@@ -109,6 +109,48 @@ metadata:
 	}
 }
 
+// An Argo hook at a negative wave is not a tracked-tree resource, so it cannot
+// health-wedge the bootstrap — the guard must not flag it, even for an otherwise
+// unvetted health-checked kind (cluster-foundation's coredns-restart PostSync Job).
+func TestWaveGuardSkipsHooks(t *testing.T) {
+	hookJob := `
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: coredns-restart-on-custom-cm
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+    argocd.argoproj.io/hook: PostSync
+`
+	dir := writeWaveGuardFixture(t, "job.yaml", hookJob)
+	got, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a PostSync-hook Job must not be flagged, got %+v", got)
+	}
+
+	// The SAME Job without the hook annotation IS flagged — proving the skip is
+	// hook-scoped, not a blanket batch/Job allow.
+	plainJob := `
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: coredns-restart-on-custom-cm
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+`
+	dir = writeWaveGuardFixture(t, "job.yaml", plainJob)
+	got, err = collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].allowed {
+		t.Fatalf("a non-hook batch/Job at wave -9 must be flagged, got %+v", got)
+	}
+}
+
 // Multi-doc files classify every doc; health-inert kinds pass on reason alone.
 func TestWaveGuardMultiDocAndInertKinds(t *testing.T) {
 	dir := writeWaveGuardFixture(t, "rbac.yaml", `
