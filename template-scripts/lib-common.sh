@@ -58,8 +58,13 @@ install_release_tarball() {
   trap 'rm -rf "${_libcommon_tmp:-}"' EXIT
 
   echo "Downloading ${tarball_file} ..."
-  curl -fsSL "$tarball_url"   -o "${_libcommon_tmp}/pkg.tar.gz"
-  curl -fsSL "$checksums_url" -o "${_libcommon_tmp}/checksums.txt"
+  # --retry rides out transient GitHub release-CDN blips (429/503/timeouts/conn
+  # refused) that would otherwise fail a healthy install on a one-off hiccup. NOT
+  # --retry-all-errors: a real 4xx (e.g. 404 wrong URL) should fail fast, not retry.
+  # The sha256 check below still guards integrity, so a retried download cannot mask
+  # corruption.
+  curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused "$tarball_url"   -o "${_libcommon_tmp}/pkg.tar.gz"
+  curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused "$checksums_url" -o "${_libcommon_tmp}/checksums.txt"
 
   local expected
   expected=$(awk -v t="${tarball_file}" '$2 == t {print $1}' "${_libcommon_tmp}/checksums.txt")

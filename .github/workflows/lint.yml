@@ -192,28 +192,34 @@ jobs:
       - name: Add Helm repos
         run: |
           set -euo pipefail
-          make helm-repos
+          # Retry transient upstream index-fetch blips (helm has no native --retry).
+          R=template-scripts/ci/with-retry.sh
+          make helm-repos   # already retries its adds/update internally
           # Istio chart repo isn't in the shared helm-repos target — it's only
           # needed here for Gateway/VirtualService CRD installs in dry-run.
-          helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
+          $R helm repo add istio https://istio-release.storage.googleapis.com/charts --force-update
           # Kyverno: full install (not just CRDs) for the policy-admission gate below.
-          helm repo add kyverno https://kyverno.github.io/kyverno/ --force-update
-          helm repo update
+          $R helm repo add kyverno https://kyverno.github.io/kyverno/ --force-update
+          $R helm repo update
 
       - name: Install CRDs
         run: |
           set -euo pipefail
+          # Retry transient chart-pull blips. with-retry.sh is pipe-safe as a source:
+          # it buffers helm's stdout and emits it only on the successful attempt, so a
+          # failed attempt's partial render never reaches `yq | kubectl`.
+          R=template-scripts/ci/with-retry.sh
 
           echo "ArgoCD CRDs (argo-cd ${ARGOCD_HELM_VERSION})..."
           # argo-cd places CRDs in templates/ not crds/, so helm show crds returns
           # nothing. Use helm template --include-crds and filter with yq.
-          helm template argocd argo/argo-cd --version "$ARGOCD_HELM_VERSION" \
+          $R helm template argocd argo/argo-cd --version "$ARGOCD_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
 
           echo "cert-manager CRDs (${CERT_MANAGER_VERSION})..."
-          helm template cert-manager jetstack/cert-manager --version "${CERT_MANAGER_VERSION#v}" \
+          $R helm template cert-manager jetstack/cert-manager --version "${CERT_MANAGER_VERSION#v}" \
             --include-crds --set crds.enabled=true \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
@@ -226,13 +232,13 @@ jobs:
           # client-side apply errors "metadata.annotations: Too long". Server-side
           # apply doesn't use that annotation — required here (same as kube-prometheus
           # below).
-          helm template eso external-secrets/external-secrets --version "$ESO_HELM_VERSION" \
+          $R helm template eso external-secrets/external-secrets --version "$ESO_HELM_VERSION" \
             --set crds.create=true \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply --server-side=true --force-conflicts -f -
 
           echo "Istio base CRDs (istio/base ${ISTIO_VERSION})..."
-          helm template istio-base istio/base --version "$ISTIO_VERSION" --include-crds \
+          $R helm template istio-base istio/base --version "$ISTIO_VERSION" --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
 
@@ -244,7 +250,7 @@ jobs:
           # workflowtaskresults, workflowtasksets, workflowartifactgctasks, workfloweventbindings.
           # Referenced from apl-values/_shared/manifest/cert-automation/
           # haproxy-rebuild-workflowtemplate.yaml.
-          helm template argo-workflows argo/argo-workflows --version "$ARGO_WORKFLOWS_HELM_VERSION" \
+          $R helm template argo-workflows argo/argo-workflows --version "$ARGO_WORKFLOWS_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -
@@ -255,7 +261,7 @@ jobs:
           # same pattern as argocd/eso above.
           # Installs: eventbus, eventsources, sensors. Referenced from
           # apl-values/_shared/manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
-          helm template argo-events argo/argo-events --version "$ARGO_EVENTS_HELM_VERSION" \
+          $R helm template argo-events argo/argo-events --version "$ARGO_EVENTS_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
             | kubectl apply -f -

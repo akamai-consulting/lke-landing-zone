@@ -1601,7 +1601,12 @@ jobs:
           S5CMD_TAR_SHA256=a15f83d2a6dc091e43b2a120f29f8f6c86d146c381766c0197ec75d7985af2b6
           if [ ! -x "$S5CMD" ]; then
             echo "downloading s5cmd v${S5CMD_VER}..."
-            curl -fsSL "https://github.com/peak/s5cmd/releases/download/v${S5CMD_VER}/s5cmd_${S5CMD_VER}_Linux-64bit.tar.gz" \
+            # --retry rides out transient GitHub release-CDN blips (429/503/timeouts)
+            # so a one-off hiccup can't fail teardown and leave paid S3 buckets
+            # undrained. Not --retry-all-errors (a real 404 should fail fast); the
+            # sha256 check below still guards integrity.
+            curl -fsSL --retry 5 --retry-delay 5 --retry-connrefused \
+              "https://github.com/peak/s5cmd/releases/download/v${S5CMD_VER}/s5cmd_${S5CMD_VER}_Linux-64bit.tar.gz" \
               -o /tmp/s5cmd.tar.gz
             echo "${S5CMD_TAR_SHA256}  /tmp/s5cmd.tar.gz" | sha256sum -c - || {
               echo "::error::s5cmd tarball sha256 mismatch — refusing to execute. Either the pinned hash is stale (bump after re-verifying upstream) or the artifact is tampered with."

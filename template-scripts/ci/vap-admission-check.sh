@@ -49,8 +49,35 @@ spec:
         llz-vap-test: "true"
 YAML
 
-echo "Waiting for the policy/binding to register…"
-sleep 8
+# The binding does NOT enforce the instant `kubectl apply` returns — the apiserver
+# compiles the CEL and propagates the binding to the admission plane, and that lag is
+# variable under CI load. A fixed sleep raced it: if enforcement wasn't live yet, the
+# first deny-probe was ADMITTED → false failure on a correct policy. Poll for actual
+# enforcement (a known-bad object is DENIED *by our policy*) instead, bounded so a
+# genuinely broken/non-enforcing policy still fails the step.
+read -r -d '' READY_PROBE <<'YAML' || true
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vaptest-ready
+  namespace: default
+  labels: { llz-vap-test: "true" }
+  annotations: { argocd.argoproj.io/sync-wave: "-5" }
+spec:
+  selector: { matchLabels: { app: vaptest } }
+  template:
+    metadata: { labels: { app: vaptest } }
+    spec:
+      containers: [{ name: c, image: registry.k8s.io/pause:3.9 }]
+YAML
+echo "Waiting for the binding to begin enforcing…"
+enforcing=0
+for _ in $(seq 1 30); do   # ~60s cap (30 × 2s)
+  out="$(printf '%s' "$READY_PROBE" | kubectl apply --dry-run=server -f - 2>&1)" && rc=0 || rc=1
+  if [[ $rc -ne 0 && "$out" == *"llz-wave-health-guard"* ]]; then enforcing=1; break; fi
+  sleep 2
+done
+[[ "$enforcing" -eq 1 ]] || { echo "::error::llz-wave-health-guard binding did not begin enforcing within 60s — CEL/binding may be broken"; exit 1; }
 
 # probe <name> <expect: deny|allow> <<manifest — dry-run apply and assert the outcome.
 probe() {
