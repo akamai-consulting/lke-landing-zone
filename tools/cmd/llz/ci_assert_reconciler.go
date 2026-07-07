@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -191,9 +192,50 @@ func runCIAssertReconciler(prom, namespace string, settle, interval time.Duratio
 		}
 	}
 	if fail {
+		dumpReconcilerDiagnostics(namespace)
 		fmt.Fprintln(os.Stderr, "::error::reconciler is not functionally healthy")
 		return 1
 	}
 	fmt.Println("Reconciler is reporting healthy and has a leader.")
 	return 0
+}
+
+// dumpReconcilerDiagnostics prints best-effort reconciler state to stderr when the
+// assertion fails. Without it the gate says only WHAT is wrong ("leader=0") and
+// never WHY — and the e2e cluster is torn down seconds later, so the evidence is
+// gone. Each dump maps to a concrete failure mode of a persistent leader=0 with
+// up=1 (the observed flake): RESTARTS>0 in `get pods` is a crashloop inside the
+// settle window; the Lease's holderIdentity/renewTime say whether a replica
+// actually holds+renews it (the gauge lagging a live Lease is a scrape race, an
+// empty/stale Lease is a real election stall); the logs surface an OpenBao/Linode
+// dependency error or a 403 on the leases Role; describe's Events show OOMKilled /
+// scheduling. Read-only and error-tolerant — execCombined swallows exit status and
+// surfaces the tool's own "NotFound"/"No resources found" text, so a missing
+// object degrades to a one-line note instead of aborting the dump.
+func dumpReconcilerDiagnostics(namespace string) {
+	fmt.Fprintln(os.Stderr, "::group::reconciler diagnostics (assertion failed)")
+	defer fmt.Fprintln(os.Stderr, "::endgroup::")
+
+	dumps := []struct {
+		label string
+		args  []string
+	}{
+		{"pods — RESTARTS>0 = crashloop inside the settle window",
+			[]string{"-n", namespace, "get", "pods", "-l", "app.kubernetes.io/name=llz-reconciler", "-o", "wide"}},
+		{"leader Lease — holderIdentity + renewTime = who drives + how fresh (empty/stale = real stall; fresh = gauge scrape-lag)",
+			[]string{"-n", namespace, "get", "lease", "llz-reconciler-leader", "-o", "yaml"}},
+		{"logs (current) — an OpenBao/Linode sample error or a leases-Role 403 shows here",
+			[]string{"-n", namespace, "logs", "deploy/llz-reconciler", "--tail=100", "--all-containers", "--timestamps"}},
+		{"logs (previous container — present only if it restarted)",
+			[]string{"-n", namespace, "logs", "deploy/llz-reconciler", "--tail=50", "--all-containers", "--previous", "--timestamps"}},
+		{"pod events — OOMKilled / scheduling / image pull",
+			[]string{"-n", namespace, "describe", "pods", "-l", "app.kubernetes.io/name=llz-reconciler"}},
+	}
+	for _, d := range dumps {
+		out := strings.TrimRight(execCombined("kubectl", d.args...), "\n")
+		if out == "" {
+			out = "(no output)"
+		}
+		fmt.Fprintf(os.Stderr, "== %s ==\n%s\n", d.label, out)
+	}
 }
