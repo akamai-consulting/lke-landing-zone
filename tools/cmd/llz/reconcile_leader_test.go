@@ -97,6 +97,28 @@ func TestElectorAcquiresWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestElectorOnAcquireFiresOnceOnTransition(t *testing.T) {
+	f := &fakeLeaseStore{}
+	e := newElectorAt(f, "me", time.Unix(1000, 0))
+	fires := 0
+	e.onAcquire = func() { fires++ } // tryAcquire is synchronous here — no atomic needed
+
+	e.tryAcquire(context.Background()) // absent → create → become leader
+	if !e.IsLeader() {
+		t.Fatal("should become leader when the lease is absent")
+	}
+	if fires != 1 {
+		t.Fatalf("onAcquire should fire exactly once on the false->true transition, got %d", fires)
+	}
+	// The create left the lease held by "me"; a second evaluation is a renew
+	// (true->true), NOT a transition — onAcquire must not re-fire, or every renew
+	// tick would re-kick the reconcilers.
+	e.tryAcquire(context.Background())
+	if fires != 1 {
+		t.Fatalf("onAcquire must not fire on a renew, got %d total", fires)
+	}
+}
+
 func TestElectorRenewsWhenHeldBySelf(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	f := &fakeLeaseStore{exists: true, obj: leaseObj("me", t0)}

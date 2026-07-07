@@ -215,9 +215,15 @@ func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) 
 	// runs on every replica; the driving reconcilers need a single writer, so gate
 	// wraps them to no-op on a non-leader (the identity when election is off).
 	var elector *leaderElector
+	// kick lets the elector re-run every manager loop the instant it acquires the
+	// Lease, so the gated reconcilers don't sit no-op'd until their next resync floor
+	// after a cold start (the sc-demote two-defaults-for-~120s race). Harmless when
+	// election is off: onAcquire is never wired, so Kick is never called.
+	kick := &kicker{}
 	gate := func(run func(context.Context) error) func(context.Context) error { return run }
 	if o.leaderElection && o.drivingEnabled() {
 		elector = newLeaderElector(client, podNamespace(), "llz-reconciler-leader", podIdentity(), time.Now)
+		elector.onAcquire = kick.Kick
 		gate = func(run func(context.Context) error) func(context.Context) error {
 			return func(rctx context.Context) error {
 				if !elector.IsLeader() {
@@ -255,7 +261,7 @@ func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) 
 	// can also watch for a server error.
 	done := make(chan struct{})
 	go func() {
-		runManager(ctx, reg, time.Now, buildReconcilers(reg, client, o, gate))
+		runManager(ctx, reg, time.Now, buildReconcilers(reg, client, o, gate), kick)
 		close(done)
 	}()
 

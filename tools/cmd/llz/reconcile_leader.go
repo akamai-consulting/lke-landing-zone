@@ -48,6 +48,16 @@ type leaderElector struct {
 	// genuinely stuck goroutine trips it — never a legitimate non-leader standby.
 	staleAfter time.Duration
 	now        func() time.Time
+	// onAcquire, if set, fires once on each false->true leadership transition. It
+	// closes the cold-start race: the manager's driving reconcilers run an initial
+	// pass (and take their first watch events) at process start, BEFORE this elector
+	// has acquired the Lease, so gate() no-ops them; nothing re-triggers them when
+	// leadership lands ~immediately after, so the first effective pass otherwise
+	// waits a full resync floor (observed: the sc-demote reconciler leaving two
+	// default StorageClasses for ~120s — long enough to lose the converge gate's
+	// hard-fail window). Wiring this to the manager's kicker re-runs every loop the
+	// instant we become leader. Must not block (called from the run() goroutine).
+	onAcquire func()
 
 	mu       sync.RWMutex
 	isLeader bool
@@ -101,6 +111,9 @@ func (e *leaderElector) setLeader(v bool) {
 	}
 	if v {
 		log.Printf("leader-election: ACQUIRED lease %s/%s as %s", e.namespace, e.name, e.identity)
+		if e.onAcquire != nil {
+			e.onAcquire() // re-run the gated reconcilers now instead of at the next resync floor
+		}
 	} else {
 		log.Printf("leader-election: lost leadership of lease %s/%s (%s)", e.namespace, e.name, e.identity)
 	}
