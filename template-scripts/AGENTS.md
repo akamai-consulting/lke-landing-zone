@@ -13,11 +13,6 @@ the template-level scaffold + CI/lint helpers, and never leave the template repo
 ## Layout
 
 ### top-level
-- `stamp-template-version.sh` — write the committed `.template-version` provenance
-  stamp. Still used by release-e2e (which passes explicit --repo/--sha/--ref for
-  the throwaway instance); the operator path stamps natively via `llz`.
-- `check-template-manifest.sh` — validate `.template-manifest` covers every
-  scaffold file (CI gate) + classify a path on demand.
 - `lib-common.sh` — shared helpers (`die`/`step`/`fail` logging, `usage`
   header-comment help printer, `detect_tf` terraform/tofu discovery,
   `install_release_tarball`); sourced via a relative path from the bucket
@@ -36,9 +31,12 @@ GitHub Actions-side helpers + tooling install. Don't run these from a workstatio
 ### `linting-and-validation/` — CI lint inputs
 - `cleanup-workflow-runs.sh` — deletes old GitHub Actions runs (maintenance utility)
 
-> Rendered-app and Chart.lock validation moved into the unit-tested `llz` CLI:
+> Rendered-app, Chart.lock, template-manifest validation, and template-version
+> stamping moved into the unit-tested `llz` CLI:
 > `llz ci argocd-rendered-apps` (duplicate Helm parameter names) and
-> `llz ci chart-lock-drift` (Chart.lock vs Chart.yaml dependencies). The Go
+> `llz ci chart-lock-drift` (Chart.lock vs Chart.yaml dependencies), and
+> `llz ci template-manifest` (`.template-manifest` coverage + classification), and
+> `llz ci stamp-template-version` (`.template-version` provenance). The Go
 > per-package coverage floor (`llz ci check-coverage`) likewise replaced
 > `ci/check-go-coverage.sh`. The PrometheusRule promtool gate moved too:
 > `llz ci check-prom-rules` replaced `check-prometheus-rule-crds.py`, retiring

@@ -327,7 +327,7 @@ jobs:
           git config user.email "llz-release-e2e@users.noreply.github.com"
           # Record which template commit this instance was generated from (drift
           # provenance). cwd is now a git repo, so the stamp lands here.
-          "${GITHUB_WORKSPACE}/template-scripts/stamp-template-version.sh" \
+          "${GITHUB_WORKSPACE}/bin/llz" ci stamp-template-version \
             --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" \
             --ref "${GITHUB_REF_NAME}" --env "${E2E_ENV}"
           git add -A

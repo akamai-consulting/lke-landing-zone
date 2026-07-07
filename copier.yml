@@ -14,7 +14,7 @@
 #   merge   → carries <@ token @> substitutions; 3-way-merged (conflicts only on
 #             lines the instance changed beyond the token)
 #   owned   → seeded once via _skip_if_exists, never touched again
-# template-scripts/check-template-manifest.sh keeps that manifest complete in CI.
+# `llz ci template-manifest` keeps that manifest complete in CI.
 
 # Only instance-template/ is the scaffold; the rest of the repo (modules, charts,
 # reusable workflows, this file) is template machinery, not copied into instances.

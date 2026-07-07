@@ -190,10 +190,11 @@ jobs:
           wait: 60s
 
       - name: Add Helm repos
+        env:
+          R: template-scripts/ci/with-retry.sh
         run: |
           set -euo pipefail
           # Retry transient upstream index-fetch blips (helm has no native --retry).
-          R=template-scripts/ci/with-retry.sh
           make helm-repos   # already retries its adds/update internally
           # Istio chart repo isn't in the shared helm-repos target — it's only
           # needed here for Gateway/VirtualService CRD installs in dry-run.
@@ -203,12 +204,13 @@ jobs:
           $R helm repo update
 
       - name: Install CRDs
+        env:
+          R: template-scripts/ci/with-retry.sh
         run: |
           set -euo pipefail
           # Retry transient chart-pull blips. with-retry.sh is pipe-safe as a source:
           # it buffers helm's stdout and emits it only on the successful attempt, so a
           # failed attempt's partial render never reaches `yq | kubectl`.
-          R=template-scripts/ci/with-retry.sh
 
           echo "ArgoCD CRDs (argo-cd ${ARGOCD_HELM_VERSION})..."
           # argo-cd places CRDs in templates/ not crds/, so helm show crds returns
@@ -440,6 +442,12 @@ jobs:
       image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-terraform:1.9.8', github.repository_owner) }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go (source llz for template-manifest gate)
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
 
       - name: tflint + checkov + validate instance roots
         run: make lint-tf

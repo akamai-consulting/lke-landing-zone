@@ -99,9 +99,9 @@ Idempotent, so re-running is safe; review + commit the resulting removals.
 The
 Scheduled Checks workflow's `template-drift` job (monthly) reports how far behind
 the template your instance has fallen (run `llz drift` for the same check locally). After you pull upstream template
-changes, re-run `template-scripts/stamp-template-version.sh` and commit the refreshed stamp so
-the baseline advances. Point it at the upstream template with an `upstream` git remote
-(or `TEMPLATE_REPO=<owner/repo>`); `git remote add upstream <template-repo-url>`.
+changes, re-run `llz ci stamp-template-version` and commit the refreshed stamp so
+the baseline advances. Point it at the upstream template with an `upstream` git
+remote or pass `--repo <owner/repo>`; `git remote add upstream <template-repo-url>`.
 
 ## 3. The values contract (what you must set)
 
