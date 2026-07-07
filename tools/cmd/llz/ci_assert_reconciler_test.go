@@ -81,12 +81,29 @@ func TestRunAssertReconcilerHealthy(t *testing.T) {
 	}
 }
 
+// stubExecCombined records every execCombined call and returns reply, so a failed
+// assertion's diagnostic dump can be exercised without shelling real kubectl.
+func stubExecCombined(t *testing.T, reply string) *[][]string {
+	orig := execCombined
+	t.Cleanup(func() { execCombined = orig })
+	var calls [][]string
+	execCombined = func(name string, args ...string) string {
+		calls = append(calls, append([]string{name}, args...))
+		return reply
+	}
+	return &calls
+}
+
 func TestRunAssertReconcilerReportingDown(t *testing.T) {
 	up0 := []byte(`{"status":"success","data":{"result":[{"value":[1,"0"]}]}}`)
 	leader1 := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
 	seamReconcilerProm(t, up0, leader1)
+	calls := stubExecCombined(t, "")
 	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
 		t.Errorf("expected exit 1 when llz_reconcile_up=0, got %d", code)
+	}
+	if len(*calls) == 0 {
+		t.Error("a failed assertion must dump reconciler diagnostics")
 	}
 }
 
@@ -95,9 +112,65 @@ func TestRunAssertReconcilerNoLeaderOrAbsent(t *testing.T) {
 	absent := []byte(`{"status":"success","data":{"result":[]}}`)
 	// up=1 but leader series absent → fail.
 	seamReconcilerProm(t, up1, absent)
+	calls := stubExecCombined(t, "")
 	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
 		t.Errorf("expected exit 1 when leader gauge is absent, got %d", code)
 	}
+	if len(*calls) == 0 {
+		t.Error("a failed assertion must dump reconciler diagnostics")
+	}
+}
+
+func TestRunAssertReconcilerHealthyDoesNotDump(t *testing.T) {
+	one := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
+	seamReconcilerProm(t, one, one)
+	calls := stubExecCombined(t, "")
+	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 30*time.Second, time.Second); code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("a healthy assertion must NOT dump diagnostics, got %d calls", len(*calls))
+	}
+}
+
+func TestDumpReconcilerDiagnostics(t *testing.T) {
+	calls := stubExecCombined(t, "") // every object "missing" → still one dump per probe
+	dumpReconcilerDiagnostics("my-ns")
+
+	if len(*calls) != 5 {
+		t.Fatalf("expected 5 kubectl diagnostic probes, got %d: %v", len(*calls), *calls)
+	}
+	joined := make([]string, len(*calls))
+	for i, c := range *calls {
+		if c[0] != "kubectl" {
+			t.Errorf("probe %d shelled %q, not kubectl", i, c[0])
+		}
+		if !containsArg(c, "-n") || !containsArg(c, "my-ns") {
+			t.Errorf("probe %d not scoped to the reconciler namespace: %v", i, c)
+		}
+		joined[i] = strings.Join(c, " ")
+	}
+	all := strings.Join(joined, "\n")
+	for _, want := range []string{
+		"get pods",                         // restart counts
+		"get lease llz-reconciler-leader",  // authoritative holder/renew
+		"deploy/llz-reconciler --tail=100", // current logs
+		"--previous",                       // crash logs
+		"describe pods",                    // events
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("diagnostics missing a probe for %q\n%s", want, all)
+		}
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunAssertReconcilerUnreachable(t *testing.T) {
