@@ -22,6 +22,7 @@ import (
 
 func ciAssertLokiCmd() *cobra.Command {
 	var nameMatch string
+	var settle, interval int
 	c := &cobra.Command{
 		Use:   "assert-loki",
 		Short: "fail unless Loki is bootstrapped (workloads Ready + S3-backed) on the current cluster",
@@ -29,14 +30,19 @@ func ciAssertLokiCmd() *cobra.Command {
 			"AND its config references S3 object storage (the kyverno loki-s3-object-store\n" +
 			"policy mutates object_store filesystem→s3 — \"s3-backed\" is the real signal log\n" +
 			"persistence works). Best-effort reports the Loki Argo Application status\n" +
-			"(non-gating). Exit 0 bootstrapped, 1 otherwise.",
+			"(non-gating). Polls for a short settle budget so a transient kubectl/apiserver\n" +
+			"blip (or a brief readiness / kyverno-mutation lag) doesn't flake the gate — the\n" +
+			"same treatment assert-scrape-targets/assert-reconciler already carry. Exit 0\n" +
+			"bootstrapped, 1 otherwise.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIAssertLoki(nameMatch))
+			os.Exit(runCIAssertLoki(nameMatch, time.Duration(settle)*time.Second, time.Duration(interval)*time.Second))
 			return nil
 		},
 	}
 	c.Flags().StringVar(&nameMatch, "name-match", "loki", "substring/regex identifying Loki workloads/objects")
+	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling for Loki to bootstrap before failing (rides out a transient kubectl blip / readiness lag)")
+	c.Flags().IntVar(&interval, "interval", 10, "seconds between poll attempts")
 	return c
 }
 
@@ -72,42 +78,33 @@ type lokiPod struct {
 	status   health.PodStatus
 }
 
-func runCIAssertLoki(nameMatch string) int {
-	fail := false
+func runCIAssertLoki(nameMatch string, settle, interval time.Duration) int {
 	fmt.Println("## Loki bootstrap assertion")
 
-	// 1. Loki workloads exist and are Ready.
-	pods := lokiPods(nameMatch)
-	if len(pods) == 0 {
-		fmt.Printf("FAIL: no Loki pods found (matched name~=%q)\n", nameMatch)
-		fail = true
-	} else {
-		var notReady []string
-		for _, p := range pods {
-			if !health.LokiPodReady(p.status) {
-				notReady = append(notReady, fmt.Sprintf("%s/%s phase=%s", p.ns, p.name, p.status.Phase))
-			}
+	// Poll the two gating conditions for a settle budget. lokiBootstrapped reads the
+	// cluster via kItems, which collapses a kubectl/apiserver error to "no items" —
+	// indistinguishable from a genuine absence. A single one-shot read therefore
+	// turned a transient blip (an apiserver 5xx/429, an LKE-E HA control-plane replica
+	// dropping seconds after wait-cluster-ready — a documented transient) into
+	// "no Loki pods → exit 1". Re-evaluating until it passes (or the budget elapses)
+	// rides out that blip and any brief readiness / kyverno-mutation lag, the same as
+	// assert-scrape-targets. settle<=0 → a single evaluation (used by tests).
+	var ok bool
+	var msgs []string
+	deadline := time.Now().Add(settle)
+	for attempt := 1; ; attempt++ {
+		ok, msgs = lokiBootstrapped(nameMatch)
+		if ok || !time.Now().Before(deadline) {
+			break
 		}
-		if len(notReady) > 0 {
-			fmt.Println("FAIL: Loki pods not Ready:")
-			for _, n := range notReady {
-				fmt.Println("  " + n)
-			}
-			fail = true
-		} else {
-			fmt.Printf("OK: %d Loki pod(s) Ready\n", len(pods))
-		}
+		fmt.Printf("attempt %d: Loki not bootstrapped yet — retrying in %s\n", attempt, interval)
+		time.Sleep(interval)
+	}
+	for _, m := range msgs {
+		fmt.Println(m)
 	}
 
-	// 2. Loki is configured for S3 object storage (not the filesystem default).
-	if health.LokiConfigUsesS3(lokiConfigText(nameMatch)) {
-		fmt.Println("OK: Loki config references S3 object storage")
-	} else {
-		fmt.Println("FAIL: Loki config does not reference S3 — still on the filesystem default? (kyverno loki-s3-object-store may not have applied)")
-		fail = true
-	}
-
-	// 3. Best-effort Argo CD Application status (non-gating).
+	// Best-effort Argo CD Application status (non-gating).
 	if kExists("get", "crd", "applications.argoproj.io") {
 		re := regexp.MustCompile(nameMatch)
 		for _, raw := range kItems("get", "applications.argoproj.io", "-A") {
@@ -124,12 +121,55 @@ func runCIAssertLoki(nameMatch string) int {
 		}
 	}
 
-	if fail {
+	if !ok {
 		fmt.Fprintln(os.Stderr, "::error::Loki is not bootstrapped")
 		return 1
 	}
 	fmt.Println("Loki is bootstrapped.")
 	return 0
+}
+
+// lokiBootstrapped evaluates the two gating conditions — Loki workloads exist and
+// are Ready, and the config is S3-backed — returning whether both hold plus the
+// OK/FAIL lines to print. It is a pure read (no side effects), so the caller can
+// re-run it across a settle budget: a transient kubectl failure surfaces here as
+// "not bootstrapped" (kItems → empty) and is ridden out by the poll rather than
+// hard-failing the gate on one blip.
+func lokiBootstrapped(nameMatch string) (bool, []string) {
+	ok := true
+	var msgs []string
+
+	// 1. Loki workloads exist and are Ready.
+	pods := lokiPods(nameMatch)
+	if len(pods) == 0 {
+		msgs = append(msgs, fmt.Sprintf("FAIL: no Loki pods found (matched name~=%q)", nameMatch))
+		ok = false
+	} else {
+		var notReady []string
+		for _, p := range pods {
+			if !health.LokiPodReady(p.status) {
+				notReady = append(notReady, fmt.Sprintf("%s/%s phase=%s", p.ns, p.name, p.status.Phase))
+			}
+		}
+		if len(notReady) > 0 {
+			msgs = append(msgs, "FAIL: Loki pods not Ready:")
+			for _, n := range notReady {
+				msgs = append(msgs, "  "+n)
+			}
+			ok = false
+		} else {
+			msgs = append(msgs, fmt.Sprintf("OK: %d Loki pod(s) Ready", len(pods)))
+		}
+	}
+
+	// 2. Loki is configured for S3 object storage (not the filesystem default).
+	if health.LokiConfigUsesS3(lokiConfigText(nameMatch)) {
+		msgs = append(msgs, "OK: Loki config references S3 object storage")
+	} else {
+		msgs = append(msgs, "FAIL: Loki config does not reference S3 — still on the filesystem default? (kyverno loki-s3-object-store may not have applied)")
+		ok = false
+	}
+	return ok, msgs
 }
 
 // lokiPods returns the Loki pods, preferring the app.kubernetes.io/name label and

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestHarborPingOK(t *testing.T) {
@@ -45,7 +46,8 @@ func TestRunCIAssertLoki(t *testing.T) {
 		}
 		return nil, errors.New("nope")
 	})
-	if ec := runCIAssertLoki("loki"); ec != 0 {
+	// settle=0 → single evaluation (no polling/sleep in the unit test).
+	if ec := runCIAssertLoki("loki", 0, 0); ec != 0 {
 		t.Errorf("bootstrapped Loki => exit %d, want 0", ec)
 	}
 
@@ -59,8 +61,32 @@ func TestRunCIAssertLoki(t *testing.T) {
 		}
 		return nil, errors.New("nope")
 	})
-	if ec := runCIAssertLoki("loki"); ec != 1 {
+	if ec := runCIAssertLoki("loki", 0, 0); ec != 1 {
 		t.Errorf("unbootstrapped Loki => exit %d, want 1", ec)
+	}
+}
+
+// A transient kubectl/apiserver blip on the first attempt must NOT fail the gate:
+// the settle poll re-evaluates and passes once the blip clears. Regression test for
+// the one-shot-gate flake (kItems collapses a kubectl error to "no items").
+func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
+	var n int
+	withKubectl(t, func(a string) ([]byte, error) {
+		n++
+		if n <= 3 { // attempt 1's reads (pods label, pods fallback, config) all error
+			return nil, errors.New("transient: apiserver 503")
+		}
+		switch a { // attempt 2 onward: healthy + S3-backed
+		case "get pods -A -l app.kubernetes.io/name=loki -o json":
+			return items(`{"metadata":{"namespace":"observability","name":"loki-0"},"status":{"phase":"Running","containerStatuses":[{"name":"loki","ready":true}]}}`), nil
+		case "get configmap -A -o json":
+			return items(`{"metadata":{"name":"loki-config"},"data":{"config.yaml":"object_store: s3\n"}}`), nil
+		}
+		return nil, nil // Argo CRD absent → non-gating block skipped
+	})
+	// Tiny interval so the retry is instant; settle large enough for attempt 2.
+	if ec := runCIAssertLoki("loki", 2*time.Second, time.Millisecond); ec != 0 {
+		t.Errorf("a first-attempt transient should be ridden out => exit %d, want 0 (calls=%d)", ec, n)
 	}
 }
 
