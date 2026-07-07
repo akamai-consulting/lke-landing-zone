@@ -468,7 +468,7 @@ lint-tf: $(LINT_TF) template-manifest-check
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
 # so the template-update tooling never has to guess about a new file.
 template-manifest-check:
-	template-scripts/check-template-manifest.sh
+	cd $(GO_DIR) && go run ./cmd/llz ci template-manifest --root ../instance-template
 
 lint:
 	@set -e; \

@@ -25,8 +25,8 @@ and driven by the **`llz`** CLI. Pinned to template release **`<@ llz_version @>
 - **`.template-manifest` is the ownership map.** `managed` files are template-owned
   and overwritten on `llz upgrade` — do not hand-edit them; fixes belong upstream.
   `owned` files are yours. `merge` files carry fork-local tokens 3-way-merged on
-  update. Classify a path with
-  `template-scripts/check-template-manifest.sh --classify <path>` if unsure.
+  update. Classify a path with `llz ci template-manifest --classify <path>` if
+  unsure.
 - **Never commit real secrets, API tokens, or kubeconfig files.** All credentials
   flow via GitHub Actions secrets/variables and `llz tokens` at CI time; the
   `.llz/` credential cache and Terraform state are gitignored — keep them so.

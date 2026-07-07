@@ -34,8 +34,9 @@
 #
 # Ratcheted down (openbao-bootstrap conversion: bao-ensure-ready, bao-seed-all,
 # extract-openbao-ca, nudge-argo, provision-peer-ca, and `llz env resolve` moved
-# ~82 lines of inline bash into the unit-tested llz CLI): inline-bash now 587,
-# budget 605.
+# ~82 lines of inline bash into the unit-tested llz CLI), then kept tight after
+# moving the retry-helper path assignment out of counted dry-run shell: workflow
+# inline-bash is now 604, budget 605.
 
 categories:
   workflow-inline-bash:
@@ -52,7 +53,13 @@ categories:
     # lines) moved to `exclude:` (live GitHub-Actions orchestration — see below):
     # the remaining shell is 529, so keep ~3% headroom rather than leaving the
     # freed budget as slack a future PR could fill with untested bash.
-    budget: 545
+    #
+    # Ratcheted 545 → 471 when template-scripts/check-template-manifest.sh moved
+    # into `llz ci template-manifest`, then 471 → 420 when
+    # template-scripts/stamp-template-version.sh moved into
+    # `llz ci stamp-template-version`: remaining shell is 408, so keep ~3%
+    # headroom and do not let the retired checkers creep back as shell.
+    budget: 420
     include:
       - "template-scripts/**/*.sh"
       - ".github/scripts/**/*.sh"

@@ -1,9 +1,8 @@
 package main
 
 // stamp.go ports template-scripts/stamp-template-version.sh into llz so the
-// operator path (`llz env add`, `llz upgrade`) can record `.template-version`
-// inside a rendered instance, which carries no scripts/ tree. The bash version
-// still ships for template-repo CI (release-e2e) that runs from a checkout.
+// operator path (`llz env add`, `llz upgrade`) and template-repo CI can record
+// `.template-version` without carrying a scripts/ tree.
 //
 // `.template-version` is the provenance `llz drift` (and the Scheduled Checks
 // template-drift job, which runs it) reads to report how far behind the template
@@ -17,6 +16,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 const defaultTemplateRepo = "akamai-consulting/lke-landing-zone"
@@ -31,16 +32,66 @@ type templateVersion struct {
 	Env          string `json:"env"`
 }
 
+type stampTemplateVersionOptions struct {
+	Repo string
+	Ref  string
+	SHA  string
+	Env  string
+	Now  string
+}
+
+func ciStampTemplateVersionCmd() *cobra.Command {
+	var opts stampTemplateVersionOptions
+	c := &cobra.Command{
+		Use:   "stamp-template-version",
+		Short: "write .template-version provenance for an instance checkout",
+		Long: "Writes .template-version in the current repository, recording the template\n" +
+			"repo/ref/commit an instance was generated from. With no explicit flags it\n" +
+			"uses the same inference path as llz env add / llz upgrade; CI callers can\n" +
+			"pass --repo/--ref/--sha for a throwaway instance render.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return stampTemplateVersionWithOptions(opts) },
+	}
+	c.Flags().StringVar(&opts.Repo, "repo", "", "template repo owner/name or URL (default: copier answers, upstream/origin remote, or akamai-consulting/lke-landing-zone)")
+	c.Flags().StringVar(&opts.Ref, "ref", "", "template ref to record (default: git describe --tags --always, else current branch)")
+	c.Flags().StringVar(&opts.SHA, "sha", "", "template commit SHA to record (default: git rev-parse HEAD)")
+	c.Flags().StringVar(&opts.Env, "env", "", "deployment name to record informationally")
+	c.Flags().StringVar(&opts.Now, "now", "", "timestamp override for reproducible tests (default: current UTC RFC3339 without fractional seconds)")
+	return c
+}
+
 // stampTemplateVersion writes .template-version at the repo root, recording which
 // template repo/ref/commit this instance was generated from. env is recorded
 // informationally; if empty, the env from an existing stamp is preserved.
 func stampTemplateVersion(env string) error {
-	tv := templateVersion{Schema: 1, Generator: "llz", Env: env}
+	return stampTemplateVersionWithOptions(stampTemplateVersionOptions{Env: env})
+}
 
-	if a, _ := readAnswers("."); a != nil {
-		tv.TemplateRepo = normalizeTemplateRepo(a.SrcPath)
-		tv.TemplateSHA = a.Commit
-		tv.TemplateRef = a.Commit
+func stampTemplateVersionWithOptions(opts stampTemplateVersionOptions) error {
+	tv := templateVersion{Schema: 1, Generator: "llz", Env: opts.Env}
+
+	if opts.Repo != "" {
+		tv.TemplateRepo = normalizeTemplateRepo(opts.Repo)
+	}
+	if opts.SHA != "" {
+		tv.TemplateSHA = opts.SHA
+	}
+	if opts.Ref != "" {
+		tv.TemplateRef = opts.Ref
+	}
+
+	if tv.TemplateRepo == "" || tv.TemplateSHA == "" || tv.TemplateRef == "" {
+		if a, _ := readAnswers("."); a != nil {
+			if tv.TemplateRepo == "" {
+				tv.TemplateRepo = normalizeTemplateRepo(a.SrcPath)
+			}
+			if tv.TemplateSHA == "" {
+				tv.TemplateSHA = a.Commit
+			}
+			if tv.TemplateRef == "" {
+				tv.TemplateRef = a.Commit
+			}
+		}
 	}
 	if tv.TemplateRepo == "" {
 		tv.TemplateRepo = normalizeTemplateRepo(gitOut("remote", "get-url", "upstream"))
@@ -70,7 +121,11 @@ func stampTemplateVersion(env string) error {
 			}
 		}
 	}
-	tv.StampedAt = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	if opts.Now != "" {
+		tv.StampedAt = opts.Now
+	} else {
+		tv.StampedAt = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	}
 
 	b, err := json.MarshalIndent(tv, "", "  ")
 	if err != nil {

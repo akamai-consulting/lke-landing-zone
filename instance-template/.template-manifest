@@ -3,9 +3,9 @@
 # Classifies every file an instance carries so an update tool can apply template
 # changes WITHOUT clobbering instance-local edits. It is the contract behind
 # "pull template updates cleanly":
-#   - template-scripts/check-template-manifest.sh validates this file covers the whole
-#     scaffold (CI fails if a scaffold file matches no rule), and classifies a
-#     given path on demand.
+#   - `llz ci template-manifest` validates this file covers the whole scaffold
+#     (CI fails if a scaffold file matches no rule), and classifies a given path
+#     on demand.
 #   - a future template-sync tool reads it to decide, per file, whether to
 #     overwrite / 3-way-merge / skip.
 #
@@ -146,7 +146,7 @@ owned    terraform-iac-bootstrap/**/[a-z]*.tfvars
 # `copier update` never touches them.
 owned    .llz/commands.yaml
 owned    .githooks/pre-commit.local
-# Template provenance stamp (written by template-scripts/stamp-template-version.sh).
+# Template provenance stamp (written by llz env add / llz upgrade / llz ci stamp-template-version).
 owned    .template-version
 # Copier answer tracker (rendered + maintained by `copier copy`/`copier update`).
 owned    .copier-answers.yml

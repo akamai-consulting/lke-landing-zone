@@ -190,6 +190,10 @@ func ciCmd() *cobra.Command {
 	// CI guard: a container job whose run-steps lack a bash default falls back to
 	// dash and breaks `set -o pipefail` (the discover-workflow regression).
 	c.AddCommand(ciCheckWorkflowShellsCmd())
+	// Scaffold update-class manifest gate (former template-scripts/check-template-manifest.sh).
+	c.AddCommand(ciTemplateManifestCmd())
+	// Template provenance stamp (former template-scripts/stamp-template-version.sh).
+	c.AddCommand(ciStampTemplateVersionCmd())
 	return c
 }
 

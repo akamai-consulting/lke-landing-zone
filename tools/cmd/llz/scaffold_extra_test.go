@@ -163,6 +163,52 @@ func TestStampTemplateVersion(t *testing.T) {
 	}
 }
 
+func TestStampTemplateVersionWithOptions(t *testing.T) {
+	chdirTemp(t)
+	withExecOutput(t, func(_ string, _ ...string) ([]byte, error) {
+		return []byte("unexpected-git-call\n"), nil
+	})
+
+	captureStdout(t, func() {
+		if err := stampTemplateVersionWithOptions(stampTemplateVersionOptions{
+			Repo: "https://github.com/akamai-consulting/lke-landing-zone.git",
+			Ref:  "feature/ref",
+			SHA:  "1234567890abcdef",
+			Env:  "e2e",
+			Now:  "2026-07-07T12:00:00Z",
+		}); err != nil {
+			t.Fatalf("stampTemplateVersionWithOptions: %v", err)
+		}
+	})
+
+	b, err := os.ReadFile(".template-version")
+	if err != nil {
+		t.Fatalf("read .template-version: %v", err)
+	}
+	var tv templateVersion
+	if err := json.Unmarshal(b, &tv); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if tv.TemplateRepo != defaultTemplateRepo {
+		t.Errorf("TemplateRepo = %q, want %q", tv.TemplateRepo, defaultTemplateRepo)
+	}
+	if tv.TemplateRef != "feature/ref" || tv.TemplateSHA != "1234567890abcdef" || tv.Env != "e2e" || tv.StampedAt != "2026-07-07T12:00:00Z" {
+		t.Errorf("stamped options not honored: %+v", tv)
+	}
+}
+
+func TestStampTemplateVersionCommandWiring(t *testing.T) {
+	c := ciStampTemplateVersionCmd()
+	for _, flag := range []string{"repo", "ref", "sha", "env", "now"} {
+		if c.Flags().Lookup(flag) == nil {
+			t.Fatalf("missing --%s flag", flag)
+		}
+	}
+	if err := c.Args(c, []string{"extra"}); err == nil {
+		t.Fatal("stamp-template-version accepted positional args")
+	}
+}
+
 func TestLoadEnvFiles(t *testing.T) {
 	chdirTemp(t)
 	if err := os.Mkdir(".llz", 0o755); err != nil {
