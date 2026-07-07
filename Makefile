@@ -14,6 +14,9 @@ KUBECTL_VERSION  := 1.31.0
 # firewall-cidrs / firewall-controller commands moved to the private
 # lke-landing-zone-internal repo.
 GO_DIR := tools
+# Bounded retry wrapper for flaky network fetches (helm index refreshes / chart
+# pulls) — a transient upstream 5xx/DNS blip shouldn't fail a build. See the script.
+RETRY := template-scripts/ci/with-retry.sh
 
 # Per-package minimum statement coverage, as <pkg-suffix>=<percent> entries.
 # pkg-suffix matches the END of a Go import path (cmd/llz -> .../tools/cmd/llz).
@@ -248,15 +251,15 @@ prom-rules-check:
 	fi
 
 helm-repos:
-	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
-	helm repo add grafana https://grafana.github.io/helm-charts --force-update
-	helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts --force-update
-	helm repo add harbor https://helm.goharbor.io --force-update
-	helm repo add openbao          https://openbao.github.io/openbao-helm                  --force-update
-	helm repo add argo             https://argoproj.github.io/argo-helm                   --force-update
-	helm repo add jetstack         https://charts.jetstack.io                             --force-update
-	helm repo add external-secrets https://charts.external-secrets.io                    --force-update
-	helm repo update
+	$(RETRY) helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+	$(RETRY) helm repo add grafana https://grafana.github.io/helm-charts --force-update
+	$(RETRY) helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts --force-update
+	$(RETRY) helm repo add harbor https://helm.goharbor.io --force-update
+	$(RETRY) helm repo add openbao          https://openbao.github.io/openbao-helm                  --force-update
+	$(RETRY) helm repo add argo             https://argoproj.github.io/argo-helm                   --force-update
+	$(RETRY) helm repo add jetstack         https://charts.jetstack.io                             --force-update
+	$(RETRY) helm repo add external-secrets https://charts.external-secrets.io                    --force-update
+	$(RETRY) helm repo update
 
 # The OpenBao chart was extracted/decoupled into kubernetes-charts/llz-openbao-platform (the
 # first-party chart library, published to GHCR). These targets keep the dedicated
