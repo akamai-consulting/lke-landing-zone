@@ -71,7 +71,7 @@ func TestRunManagerRunsThenStopsOnCancel(t *testing.T) {
 		return nil
 	}}
 	done := make(chan struct{})
-	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}); close(done) }()
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}, nil); close(done) }()
 
 	// Give the single pass a moment, then cancel.
 	deadline := time.After(2 * time.Second)
@@ -94,6 +94,44 @@ func TestRunManagerRunsThenStopsOnCancel(t *testing.T) {
 	}
 }
 
+func TestRunManagerKickTriggersExtraPass(t *testing.T) {
+	reg := metrics.NewRegistry()
+	var calls atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// interval 0 → without a kick this reconciler runs exactly once then holds.
+	// This is the sc-demote cold-start shape: a gated pass that would otherwise
+	// wait a resync floor. A kick (leader acquisition) must re-run it immediately.
+	rec := reconciler{name: "kicked", interval: 0, run: func(context.Context) error {
+		calls.Add(1)
+		return nil
+	}}
+	k := &kicker{}
+	done := make(chan struct{})
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}, k); close(done) }()
+
+	waitCount := func(want int64, what string) {
+		t.Helper()
+		deadline := time.After(2 * time.Second)
+		for calls.Load() < want {
+			select {
+			case <-deadline:
+				t.Fatalf("%s: got %d passes, want %d", what, calls.Load(), want)
+			default:
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+	}
+	waitCount(1, "initial pass")
+	k.Kick()
+	waitCount(2, "pass after first kick")
+	k.Kick()
+	waitCount(3, "pass after second kick")
+	cancel()
+	<-done
+}
+
 func TestRunManagerTicks(t *testing.T) {
 	reg := metrics.NewRegistry()
 	var calls atomic.Int64
@@ -104,7 +142,7 @@ func TestRunManagerTicks(t *testing.T) {
 		return nil
 	}}
 	done := make(chan struct{})
-	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}); close(done) }()
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}, nil); close(done) }()
 
 	// Wait for at least a few ticks (1 initial + ticker), then stop.
 	deadline := time.After(2 * time.Second)
@@ -129,7 +167,7 @@ func TestRunManagerConcurrentReconcilers(t *testing.T) {
 		{name: "b", interval: 0, run: func(context.Context) error { b.Add(1); return nil }},
 	}
 	done := make(chan struct{})
-	go func() { runManager(ctx, reg, fixedClock(0), recs); close(done) }()
+	go func() { runManager(ctx, reg, fixedClock(0), recs, nil); close(done) }()
 
 	deadline := time.After(2 * time.Second)
 	for a.Load() == 0 || b.Load() == 0 {
@@ -170,7 +208,7 @@ func TestWatchReconcilerEventTriggersRun(t *testing.T) {
 		},
 	}
 	done := make(chan struct{})
-	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}); close(done) }()
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}, nil); close(done) }()
 
 	waitFor(t, &runs, 1) // initial pass
 	events <- struct{}{}
@@ -200,7 +238,7 @@ func TestWatchReconcilerResyncFloor(t *testing.T) {
 		watch:    func(ctx context.Context, _ func()) error { <-ctx.Done(); return ctx.Err() },
 	}
 	done := make(chan struct{})
-	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}); close(done) }()
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}, nil); close(done) }()
 
 	waitFor(t, &runs, 3) // 1 initial + resync ticks
 	cancel()
@@ -225,7 +263,7 @@ func TestWatchReconcilerReconnectsAndCatchesUp(t *testing.T) {
 		},
 	}
 	done := make(chan struct{})
-	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}); close(done) }()
+	go func() { runManager(ctx, reg, fixedClock(0), []reconciler{rec}, nil); close(done) }()
 
 	waitFor(t, &watchCalls, 2) // proves re-establishment after a close
 	waitFor(t, &runs, 2)       // initial + at least one reconnect catch-up

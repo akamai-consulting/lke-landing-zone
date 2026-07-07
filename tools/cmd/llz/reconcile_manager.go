@@ -52,21 +52,64 @@ type reconciler struct {
 // tests can shrink it.
 var watchReconnectBackoff = time.Second
 
+// kicker fans a one-shot "reconcile now" signal out to every manager loop. It lets
+// leader-election acquisition (leaderElector.onAcquire) re-run the gated reconcilers
+// immediately rather than leaving them no-op'd until their next resync floor — the
+// cold-start race that left two default StorageClasses standing for ~120s. Each loop
+// gets its own size-1 coalescing subscription; Kick does a non-blocking send to all,
+// so a burst collapses to one pending pass and Kick never blocks its caller.
+type kicker struct {
+	mu   sync.Mutex
+	subs []chan struct{}
+}
+
+// subscribe registers a new loop and returns its kick channel. Called synchronously
+// from runManager as it spawns loops, so every loop is subscribed before the elector
+// can fire its first Kick.
+func (k *kicker) subscribe() <-chan struct{} {
+	ch := make(chan struct{}, 1)
+	k.mu.Lock()
+	k.subs = append(k.subs, ch)
+	k.mu.Unlock()
+	return ch
+}
+
+// Kick requests one extra reconcile pass on every subscribed loop. Non-blocking,
+// safe for concurrent use, and a no-op on a nil *kicker.
+func (k *kicker) Kick() {
+	if k == nil {
+		return
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, ch := range k.subs {
+		select {
+		case ch <- struct{}{}:
+		default: // a kick is already pending on this loop — coalesce
+		}
+	}
+}
+
 // runManager runs every reconciler concurrently until ctx is cancelled, then
 // waits for their loops to exit. now is injected so tests drive time; production
-// passes time.Now.
-func runManager(ctx context.Context, reg *metrics.Registry, now func() time.Time, recs []reconciler) {
+// passes time.Now. k, when non-nil, lets an external signal (leader acquisition)
+// re-trigger every loop immediately; pass nil to disable.
+func runManager(ctx context.Context, reg *metrics.Registry, now func() time.Time, recs []reconciler, k *kicker) {
 	var wg sync.WaitGroup
 	for _, r := range recs {
 		wg.Add(1)
-		go func(r reconciler) {
+		var kick <-chan struct{}
+		if k != nil {
+			kick = k.subscribe()
+		}
+		go func(r reconciler, kick <-chan struct{}) {
 			defer wg.Done()
 			if r.watch != nil {
-				runWatchReconcilerLoop(ctx, reg, now, r)
+				runWatchReconcilerLoop(ctx, reg, now, r, kick)
 			} else {
-				runReconcilerLoop(ctx, reg, now, r)
+				runReconcilerLoop(ctx, reg, now, r, kick)
 			}
-		}(r)
+		}(r, kick)
 	}
 	wg.Wait()
 }
@@ -76,7 +119,7 @@ func runManager(ctx context.Context, reg *metrics.Registry, now func() time.Time
 // watch is a notification channel only (missed events are covered by the resync
 // floor and the re-list every pass does), so bursts coalesce into a single
 // pending reconcile via the size-1 trigger channel.
-func runWatchReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func() time.Time, r reconciler) {
+func runWatchReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func() time.Time, r reconciler, kick <-chan struct{}) {
 	trigger := make(chan struct{}, 1)
 	fire := func() {
 		select {
@@ -122,26 +165,32 @@ func runWatchReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func
 			reconcileOnce(ctx, reg, now, r)
 		case <-tick:
 			reconcileOnce(ctx, reg, now, r)
+		case <-kick:
+			reconcileOnce(ctx, reg, now, r) // leader just acquired — re-run now, not at the next resync floor
 		}
 	}
 }
 
 // runReconcilerLoop runs r once immediately (so metrics populate before the first
-// scrape) then on every interval tick until ctx is cancelled.
-func runReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func() time.Time, r reconciler) {
+// scrape) then on every interval tick — or on a kick (leader acquisition) — until
+// ctx is cancelled. A nil tick (interval<=0) and/or nil kick simply never fire, so
+// a cadence-less reconciler just holds until shutdown.
+func runReconcilerLoop(ctx context.Context, reg *metrics.Registry, now func() time.Time, r reconciler, kick <-chan struct{}) {
 	reconcileOnce(ctx, reg, now, r)
-	if r.interval <= 0 {
-		<-ctx.Done() // no cadence (e.g. a test) — just hold until shutdown
-		return
+	var tick <-chan time.Time
+	if r.interval > 0 {
+		t := time.NewTicker(r.interval)
+		defer t.Stop()
+		tick = t.C
 	}
-	t := time.NewTicker(r.interval)
-	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-tick:
 			reconcileOnce(ctx, reg, now, r)
+		case <-kick:
+			reconcileOnce(ctx, reg, now, r) // leader just acquired — re-run now, not at the next resync floor
 		}
 	}
 }

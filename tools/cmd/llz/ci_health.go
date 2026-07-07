@@ -428,7 +428,17 @@ func checkStorageClasses(r *health.Report) {
 	case 0:
 		record(r, health.CatFail, "no default StorageClass — PVCs without an explicit storageClassName will stay Pending")
 	default:
-		record(r, health.CatFail, fmt.Sprintf("%d default StorageClasses (%s) — non-deterministic selection", len(def), strings.Join(def, ",")))
+		// Two defaults is the transient cold-start state, NOT a terminal failure:
+		// LKE's Flux-managed workload HelmRelease ships linode-block-storage-retain
+		// as a default, and the sc-demote reconciler (leader-gated, watch + resync
+		// floor) demotes it so block-storage-retain is the sole default. On a fresh
+		// cluster that demote lands within the reconciler's resync floor (~120s),
+		// which can exceed a single converge poll's hard-fail tolerance — so classify
+		// it as in-progress (poll against the budget) rather than CatFail. A genuinely
+		// stuck duplicate (reconciler down/never-leader) still fails, but on budget
+		// exhaustion instead of a fast hard-fail that races the self-heal. See
+		// reconcile_sc_demote.go + the leader-election re-fire in reconcile.go.
+		record(r, health.CatPending, fmt.Sprintf("%d default StorageClasses (%s) — non-deterministic; awaiting sc-demote reconciler", len(def), strings.Join(def, ",")))
 	}
 }
 
