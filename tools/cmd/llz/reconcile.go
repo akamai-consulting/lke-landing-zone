@@ -182,6 +182,23 @@ type reconcileClient interface {
 	Watch(ctx context.Context, path, resourceVersion string, fn func(kube.WatchEvent) error) error
 }
 
+// reconcilerHealthz is the /healthz handler and the liveness probe's target. With
+// leader election active it returns 503 once the elector loop has wedged (no
+// evaluation within staleAfter), so kubelet restarts a pod whose leader election
+// has silently died — the failure mode where the pod stays Running+Ready while
+// llz_reconcile_leader is stuck at 0 and every driving reconciler no-ops. It does
+// NOT fail merely because this replica is a non-leader: a legitimate standby is
+// healthy, and a nil elector (election disabled) always reports ok.
+func reconcilerHealthz(e *leaderElector) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if e != nil && !e.Healthy() {
+			http.Error(w, "leader-election loop wedged (no progress within staleAfter)", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = fmt.Fprintln(w, "ok")
+	}
+}
+
 // runReconcile serves the metrics endpoint and runs the reconciler manager until
 // the context is cancelled (SIGTERM in a pod), then shuts the server down cleanly.
 func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) error {
@@ -193,14 +210,33 @@ func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) 
 	reg.SetGauge("llz_reconcile_build_info", "llz reconciler build info (constant 1)",
 		map[string]string{"version": version}, 1)
 
+	// Leader election: create the elector up-front (nil when disabled) so /healthz
+	// can gate liveness on its progress. The observe reconciler is read-only and
+	// runs on every replica; the driving reconcilers need a single writer, so gate
+	// wraps them to no-op on a non-leader (the identity when election is off).
+	var elector *leaderElector
+	gate := func(run func(context.Context) error) func(context.Context) error { return run }
+	if o.leaderElection && o.drivingEnabled() {
+		elector = newLeaderElector(client, podNamespace(), "llz-reconciler-leader", podIdentity(), time.Now)
+		gate = func(run func(context.Context) error) func(context.Context) error {
+			return func(rctx context.Context) error {
+				if !elector.IsLeader() {
+					return nil // a peer holds the lease — do not drive
+				}
+				return run(rctx)
+			}
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = reg.WriteTo(w)
 	})
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprintln(w, "ok")
-	})
+	// /healthz doubles as the liveness probe: with leader election active it fails
+	// once the elector loop wedges, so a silently-stuck reconciler is restarted
+	// instead of sitting leaderless forever (see reconcilerHealthz).
+	mux.HandleFunc("/healthz", reconcilerHealthz(elector))
 	srv := &http.Server{Addr: o.metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 
 	errc := make(chan error, 1)
@@ -210,21 +246,7 @@ func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) 
 		}
 	}()
 
-	// Leader election: the observe reconciler is read-only and runs on every
-	// replica, but the driving reconcilers need a single writer. gate wraps a
-	// driving reconciler's run so it no-ops on a non-leader; without leader
-	// election (or with none enabled) it is the identity.
-	gate := func(run func(context.Context) error) func(context.Context) error { return run }
-	if o.leaderElection && o.drivingEnabled() {
-		elector := newLeaderElector(client, podNamespace(), "llz-reconciler-leader", podIdentity(), time.Now)
-		gate = func(run func(context.Context) error) func(context.Context) error {
-			return func(rctx context.Context) error {
-				if !elector.IsLeader() {
-					return nil // a peer holds the lease — do not drive
-				}
-				return run(rctx)
-			}
-		}
+	if elector != nil {
 		go elector.run(ctx)
 		go publishLeaderGauge(ctx, reg, elector)
 	}

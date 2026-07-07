@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -178,5 +180,69 @@ func TestElectorReleaseClearsHolder(t *testing.T) {
 	}
 	if f.holder() != "" {
 		t.Fatalf("release should clear the holder, got %q", f.holder())
+	}
+}
+
+func TestElectorHealthyStaleness(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	clk := t0
+	e := newLeaderElector(&fakeLeaseStore{}, "ns", "l", "me", func() time.Time { return clk })
+
+	if !e.Healthy() {
+		t.Fatal("a just-constructed elector must be healthy (lastEval seeded to now)")
+	}
+	clk = t0.Add(e.staleAfter - time.Second)
+	if !e.Healthy() {
+		t.Fatal("must stay healthy within staleAfter of the last evaluation")
+	}
+	clk = t0.Add(e.staleAfter + time.Second)
+	if e.Healthy() {
+		t.Fatal("must report unhealthy once the loop hasn't evaluated within staleAfter")
+	}
+	// A completed evaluation (even this one, which acquires) restores health.
+	e.tryAcquire(context.Background())
+	if !e.Healthy() {
+		t.Fatal("a fresh evaluation must restore health")
+	}
+}
+
+// A live loop that keeps ERRORING is still making progress and must stay Healthy
+// (so a legit transient/standby is never restarted); only a wedged loop trips.
+func TestElectorMarksEvalEvenOnError(t *testing.T) {
+	t0 := time.Unix(2000, 0)
+	clk := t0
+	e := newLeaderElector(&fakeLeaseStore{getErr: errors.New("boom")}, "ns", "l", "me", func() time.Time { return clk })
+
+	clk = t0.Add(time.Hour) // make the seeded lastEval very stale
+	if e.Healthy() {
+		t.Fatal("precondition: should be stale before the next evaluation")
+	}
+	e.tryAcquire(context.Background()) // GET errors → logErr + setLeader(false), but still markEval
+	if !e.Healthy() {
+		t.Fatal("a loop that erred but returned is alive — it must be healthy, not restarted")
+	}
+}
+
+func TestReconcilerHealthz(t *testing.T) {
+	get := func(e *leaderElector) int {
+		rec := httptest.NewRecorder()
+		reconcilerHealthz(e)(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		return rec.Code
+	}
+	// Election disabled (nil elector) → always ok.
+	if code := get(nil); code != http.StatusOK {
+		t.Fatalf("nil elector: want 200, got %d", code)
+	}
+
+	t0 := time.Unix(3000, 0)
+	clk := t0
+	e := newLeaderElector(&fakeLeaseStore{}, "ns", "l", "me", func() time.Time { return clk })
+
+	if code := get(e); code != http.StatusOK {
+		t.Fatalf("healthy elector: want 200, got %d", code)
+	}
+	clk = t0.Add(e.staleAfter + time.Second)
+	if code := get(e); code != http.StatusServiceUnavailable {
+		t.Fatalf("wedged elector: want 503, got %d", code)
 	}
 }
