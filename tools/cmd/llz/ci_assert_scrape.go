@@ -42,10 +42,11 @@ import (
 )
 
 // defaultScrapeMonitors are the landing-zone ServiceMonitors apl-core's
-// Prometheus must scrape (namespace/name). Kept in sync with the ServiceMonitor
-// manifests under instance-template/apl-values (otel collector, reconciler,
-// openbao). Each must yield at least one `up` target.
+// Prometheus must scrape (namespace/name). Kept in sync with the first-party
+// ServiceMonitor manifests under instance-template/apl-values plus the rendered
+// OpenBao chart output. Each must yield at least one `up` target.
 var defaultScrapeMonitors = []string{
+	"llz-observability/cert-manager",
 	"llz-observability/otel-collector-monitoring",
 	"llz-reconciler/llz-reconciler",
 	"llz-openbao/platform-openbao",
@@ -55,6 +56,8 @@ var defaultScrapeMonitors = []string{
 // not the CR name) apl-core's Prometheus must load. A group absent from
 // /api/v1/rules means its PrometheusRule was never picked up (ruleSelector miss).
 var defaultScrapeRuleGroups = []string{
+	"credential-certs",
+	"credential-tokens",
 	"support-plane-alerts",
 	"openbao-alerts",
 	"llz-reconciler",

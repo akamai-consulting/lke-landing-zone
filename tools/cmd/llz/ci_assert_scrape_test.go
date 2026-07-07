@@ -2,9 +2,15 @@ package main
 
 import (
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseActiveTargets(t *testing.T) {
@@ -78,6 +84,111 @@ func TestMissingRuleGroups(t *testing.T) {
 	if len(missingRuleGroups(expected, []string{"support-plane-alerts", "openbao-alerts", "llz-reconciler"})) != 0 {
 		t.Error("all-loaded should yield no missing")
 	}
+}
+
+func TestDefaultScrapeSetsCoverTrackedTemplateMonitoringSurface(t *testing.T) {
+	surface := collectTemplateMonitoringSurface(t, filepath.Join("..", "..", "..", "instance-template", "apl-values"))
+	monitorDefaults := stringSet(defaultScrapeMonitors)
+	ruleDefaults := stringSet(defaultScrapeRuleGroups)
+
+	for _, monitor := range surface.monitors {
+		if !monitorDefaults[monitor] {
+			t.Errorf("tracked ServiceMonitor %q is missing from defaultScrapeMonitors", monitor)
+		}
+	}
+	for _, group := range surface.ruleGroups {
+		if !ruleDefaults[group] {
+			t.Errorf("tracked PrometheusRule group %q is missing from defaultScrapeRuleGroups", group)
+		}
+	}
+
+	// OpenBao is chart-rendered, not a raw instance-template ServiceMonitor; keep it
+	// explicit so a typo in the defaults does not look like an intentional extra.
+	knownChartMonitors := map[string]bool{"llz-openbao/platform-openbao": true}
+	for _, monitor := range defaultScrapeMonitors {
+		if !surface.monitorSet[monitor] && !knownChartMonitors[monitor] {
+			t.Errorf("defaultScrapeMonitors contains %q, but no tracked template or known chart ServiceMonitor backs it", monitor)
+		}
+	}
+	for _, group := range defaultScrapeRuleGroups {
+		if !surface.ruleGroupSet[group] {
+			t.Errorf("defaultScrapeRuleGroups contains %q, but no tracked PrometheusRule group backs it", group)
+		}
+	}
+}
+
+type templateMonitoringSurface struct {
+	monitors     []string
+	ruleGroups   []string
+	monitorSet   map[string]bool
+	ruleGroupSet map[string]bool
+}
+
+func collectTemplateMonitoringSurface(t *testing.T, root string) templateMonitoringSurface {
+	t.Helper()
+	surface := templateMonitoringSurface{monitorSet: map[string]bool{}, ruleGroupSet: map[string]bool{}}
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || (!strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml")) {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+		for {
+			var doc struct {
+				Kind     string `yaml:"kind"`
+				Metadata struct {
+					Name      string `yaml:"name"`
+					Namespace string `yaml:"namespace"`
+				} `yaml:"metadata"`
+				Spec struct {
+					Groups []struct {
+						Name string `yaml:"name"`
+					} `yaml:"groups"`
+				} `yaml:"spec"`
+			}
+			if err := dec.Decode(&doc); err != nil {
+				break
+			}
+			switch doc.Kind {
+			case "ServiceMonitor":
+				if doc.Metadata.Namespace != "" && doc.Metadata.Name != "" {
+					surface.monitorSet[doc.Metadata.Namespace+"/"+doc.Metadata.Name] = true
+				}
+			case "PrometheusRule":
+				for _, group := range doc.Spec.Groups {
+					if group.Name != "" {
+						surface.ruleGroupSet[group.Name] = true
+					}
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for monitor := range surface.monitorSet {
+		surface.monitors = append(surface.monitors, monitor)
+	}
+	for group := range surface.ruleGroupSet {
+		surface.ruleGroups = append(surface.ruleGroups, group)
+	}
+	sort.Strings(surface.monitors)
+	sort.Strings(surface.ruleGroups)
+	return surface
+}
+
+func stringSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		out[value] = true
+	}
+	return out
 }
 
 func TestScrapeProbeAllWired(t *testing.T) {
