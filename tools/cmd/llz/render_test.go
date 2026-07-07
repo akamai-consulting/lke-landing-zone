@@ -204,7 +204,8 @@ spec:
 }
 
 // The ACME email is instance-wide: render fills it ONCE into the shared dns tree
-// when spec.dns.acmeEmail is set, and leaves the placeholder (no target) when unset.
+// when spec.dns.acmeEmail is set, and renders a valid `email: ""` (never the
+// unparseable REPLACE_PER_ENV placeholder) when unset — the contact is optional.
 func TestSharedDNSEmailTarget(t *testing.T) {
 	root := t.TempDir()
 	aplDir := filepath.Join(root, "apl-values")
@@ -223,10 +224,15 @@ func TestSharedDNSEmailTarget(t *testing.T) {
 		t.Errorf("email not substituted:\n%s", content)
 	}
 
-	// Unset email → no target (placeholder stays, flagged later by `llz doctor`).
+	// Unset email → still a target, rendering a valid empty contact and stripping
+	// the unparseable placeholder (so LE never rejects the account registration).
 	noEmail, _ := clusterspec.Decode([]byte("apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata: { name: i }\nspec:\n  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }\n"))
-	if _, _, ok := sharedDNSEmailTarget(noEmail, aplDir); ok {
-		t.Error("unset acmeEmail should yield no shared-dns target")
+	_, emptyContent, ok := sharedDNSEmailTarget(noEmail, aplDir)
+	if !ok {
+		t.Fatal("unset acmeEmail should still yield a shared-dns target (renders email: \"\")")
+	}
+	if strings.Contains(emptyContent, "REPLACE_PER_ENV") || !strings.Contains(emptyContent, `email: ""`) {
+		t.Errorf("unset email should render email: \"\" and drop the placeholder:\n%s", emptyContent)
 	}
 }
 

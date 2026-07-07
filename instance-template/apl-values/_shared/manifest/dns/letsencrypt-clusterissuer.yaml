@@ -12,8 +12,14 @@
 # solvers below target `groupName: acme.slicen.me` + `solverName: linode`. The
 # landing zone does NOT ship its own webhook Application — apl-core's is canonical.
 #
-# REPLACE_PER_ENV: set `spec.acme.email` to your operations contact before use
-# (Let's Encrypt requires a valid registration email).
+# ACME contact email is OPTIONAL: Let's Encrypt accepts registration with no
+# contact, and cert-manager omits the contact for an empty string — so the default
+# `email: ""` below registers a valid, contact-less account and the issuers work out
+# of the box (and can issue certs once the DNS-01 token is present). Set an ops
+# contact — `llz spec set dns.acmeEmail=ops@example.com` — to receive Let's Encrypt
+# expiry notices; `llz render` fills it in here. NEVER hand-edit a bare placeholder
+# into `email:`: an unparseable value makes LE reject registration (`invalidContact:
+# unable to parse email address`), leaving both issuers permanently Ready=False.
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -22,11 +28,12 @@ metadata:
     # Wave -5: after ESO (-15) and external-secrets NPs (-10), before any
     # Certificate/Gateway annotation that references the issuer by name.
     #
-    # A deferred-ACME issuer is a SUPPORTED state (`llz doctor` calls the
-    # unrendered REPLACE_PER_ENV email / missing LINODE_DNS_TOKEN "deferrable"),
-    # and Argo's built-in ClusterIssuer health check would grade its
-    # Ready=False as Degraded, failing this sync wave and wedging the whole
-    # platform-bootstrap sync BEFORE OpenBao (wave 0) is ever applied. The
+    # The account now registers by default (email is optional — see the header),
+    # so this issuer normally reaches Ready=True on its own. But until ACME
+    # registration completes (or if LE is briefly unreachable) Argo's built-in
+    # ClusterIssuer health check grades a transient Ready=False as Degraded, which
+    # would fail this sync wave and wedge the whole platform-bootstrap sync BEFORE
+    # OpenBao (wave 0) is ever applied. The
     # cert-manager.io_ClusterIssuer health override in _shared/values.yaml
     # (apps.argocd._rawValues) neutralizes that; `llz ci health` (which defers
     # llz-letsencrypt-* via ExternalDepIssuers) owns readiness visibility.
@@ -37,7 +44,7 @@ metadata:
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: REPLACE_PER_ENV   # e.g. ops@example.com
+    email: ""   # optional — `llz spec set dns.acmeEmail=ops@example.com` for LE expiry notices
     privateKeySecretRef:
       name: llz-letsencrypt-production-account-key
     solvers:
@@ -58,7 +65,7 @@ metadata:
 spec:
   acme:
     server: https://acme-staging-v02.api.letsencrypt.org/directory
-    email: REPLACE_PER_ENV   # e.g. ops@example.com
+    email: ""   # optional — `llz spec set dns.acmeEmail=ops@example.com` for LE expiry notices
     privateKeySecretRef:
       name: llz-letsencrypt-staging-account-key
     solvers:

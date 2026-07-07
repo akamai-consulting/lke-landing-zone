@@ -303,23 +303,22 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 }
 
 // sharedDNSEmailTarget returns the instance-wide letsencrypt ClusterIssuer path and
-// its email-substituted content when spec.dns.acmeEmail is set (and the shared dns
-// tree is present). The ACME email is instance-wide, so it renders ONCE into
-// apl-values/_shared/manifest/dns/ — not per env (the whole dns tree is Argo-synced
-// from _shared). ok=false (no target) when the email is unset: the file keeps its
-// REPLACE_PER_ENV placeholder, which `llz doctor` flags as a deferrable cert/DNS
-// item (the letsencrypt ClusterIssuers issue certs once it + the DNS token are set).
+// its email-substituted content. The ACME email is instance-wide, so it renders ONCE
+// into apl-values/_shared/manifest/dns/ — not per env (the whole dns tree is
+// Argo-synced from _shared). It renders whenever the shared dns tree is present,
+// regardless of whether spec.dns.acmeEmail is set: an unset email renders `email: ""`
+// (a valid, contact-less ACME registration), so the issuers are never shipped the
+// unparseable REPLACE_PER_ENV placeholder that Let's Encrypt rejects with
+// `invalidContact`. Rendering unconditionally also normalizes any stale placeholder
+// left in an existing instance on its next `llz render`. ok=false only when the
+// shared dns tree is absent (older layout without it).
 func sharedDNSEmailTarget(lz *clusterspec.LandingZone, aplDir string) (string, string, bool) {
-	email := lz.Spec.DNS.AcmeEmail
-	if email == "" {
-		return "", "", false
-	}
 	p := filepath.Join(aplDir, "_shared", "manifest", "dns", "letsencrypt-clusterissuer.yaml")
 	base, err := os.ReadFile(p)
 	if err != nil {
 		return "", "", false // older layout without the shared dns tree — skip silently
 	}
-	return p, clusterspec.SetACMEEmail(string(base), email), true
+	return p, clusterspec.SetACMEEmail(string(base), lz.Spec.DNS.AcmeEmail), true
 }
 
 // renderManifest writes a deployment's committed apl-values/<env>/ artifacts (the
