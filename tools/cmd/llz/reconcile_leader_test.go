@@ -120,6 +120,21 @@ func TestElectorStandsBackWhenHeldByLivePeer(t *testing.T) {
 	}
 }
 
+func TestElectorTakesOverReleasedLease(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	// A peer's release() clears holderIdentity but leaves a still-fresh renewTime.
+	// Must be taken over immediately, NOT mistaken for a live peer and waited out.
+	f := &fakeLeaseStore{exists: true, obj: leaseObj("", t0)}
+	e := newElectorAt(f, "me", t0.Add(5*time.Second)) // well within the 30s duration
+	e.tryAcquire(context.Background())
+	if !e.IsLeader() {
+		t.Fatal("should take over a released (empty-holder) lease immediately")
+	}
+	if f.holder() != "me" {
+		t.Fatalf("takeover should rewrite holder to me, got %q", f.holder())
+	}
+}
+
 func TestElectorTakesOverExpiredLease(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	f := &fakeLeaseStore{exists: true, obj: leaseObj("peer", t0)}

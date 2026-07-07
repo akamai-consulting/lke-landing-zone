@@ -107,10 +107,16 @@ func (e *leaderElector) tryAcquire(ctx context.Context) {
 	switch {
 	case holder == e.identity:
 		e.patchHeld(ctx, false) // still ours — renew
-	case renew.IsZero() || e.now().Sub(renew) > e.leaseDuration:
-		e.patchHeld(ctx, true) // holder's lease expired — take over
+	case holder == "" || renew.IsZero() || e.now().Sub(renew) > e.leaseDuration:
+		// Released (a peer's graceful step-down clears holderIdentity but leaves a
+		// fresh renewTime), never-held, or expired — all takeable NOW. Without the
+		// holder=="" case a released lease falls to the default branch and is
+		// mistaken for a live peer, so a successor waits out the full leaseDuration
+		// (up to 30s of no leader) after every rollout even though release() cleared
+		// the holder precisely to hand off immediately.
+		e.patchHeld(ctx, true)
 	default:
-		e.setLeader(false) // held by a live peer
+		e.setLeader(false) // held by a live peer still renewing
 	}
 }
 
