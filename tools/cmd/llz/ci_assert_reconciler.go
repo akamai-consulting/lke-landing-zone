@@ -182,22 +182,83 @@ func runCIAssertReconciler(prom, namespace string, settle, interval time.Duratio
 		return 1
 	}
 
-	fail := false
-	for _, g := range []gaugeCheck{last.up, last.leader} {
-		if g.failWhy == "" {
-			fmt.Printf("OK: %s=%g\n", g.name, g.value)
-		} else {
-			fmt.Printf("FAIL: %s\n", g.failWhy)
-			fail = true
-		}
+	// up has no authoritative fallback — a failing sample loop is a real fault.
+	upFail := last.up.failWhy != ""
+	if upFail {
+		fmt.Printf("FAIL: %s\n", last.up.failWhy)
+	} else {
+		fmt.Printf("OK: %s=%g\n", last.up.name, last.up.value)
 	}
-	if fail {
+
+	// leader is a DERIVED signal (process gauge → 30s scrape → PromQL) and can lag
+	// a real handoff. When it reads unhealthy but up is fine, cross-check the
+	// AUTHORITATIVE Lease before failing: a held, fresh Lease means a leader
+	// genuinely exists and the gauge merely lagged (pass); an absent, holderless,
+	// or stale Lease is a real election stall (fail). This never masks a broken
+	// reconciler — leaseLeaderFresh only reports live for a Lease the elector
+	// itself would still consider held.
+	leaderFail := last.leader.failWhy != ""
+	switch {
+	case !leaderFail:
+		fmt.Printf("OK: %s=%g\n", last.leader.name, last.leader.value)
+	case !upFail:
+		if holder, live := reconcilerLeaseLive(namespace, time.Now()); live {
+			fmt.Printf("OK (via Lease): %s — but the %s Lease is held by %q with a fresh renewTime, so a leader exists and the gauge lagged\n",
+				last.leader.failWhy, reconcilerLeaseName, holder)
+			leaderFail = false
+		} else {
+			fmt.Printf("FAIL: %s (and the %s Lease has no live holder)\n", last.leader.failWhy, reconcilerLeaseName)
+		}
+	default:
+		fmt.Printf("FAIL: %s\n", last.leader.failWhy)
+	}
+
+	if upFail || leaderFail {
 		dumpReconcilerDiagnostics(namespace)
 		fmt.Fprintln(os.Stderr, "::error::reconciler is not functionally healthy")
 		return 1
 	}
 	fmt.Println("Reconciler is reporting healthy and has a leader.")
 	return 0
+}
+
+// reconcilerLeaseName is the leader-election Lease the elector maintains
+// (newLeaderElector(…, "llz-reconciler-leader", …) in reconcile.go).
+const reconcilerLeaseName = "llz-reconciler-leader"
+
+// reconcilerLeaseMaxAge mirrors the elector's leaseDuration: a Lease whose
+// renewTime is older than this is one the elector itself treats as expired, so it
+// cannot be a live leader. Keep in step with newLeaderElector's leaseDuration.
+const reconcilerLeaseMaxAge = 30 * time.Second
+
+// leaseLeaderFresh parses a coordination.k8s.io/v1 Lease (kubectl -o json) and
+// reports its holder and whether a live leader holds it — a non-empty
+// holderIdentity whose renewTime is within maxAge of now. An unparseable,
+// holderless, or stale Lease is NOT live, so this can only confirm a real leader,
+// never invent one: it turns a gauge-lag false-negative into a pass but leaves a
+// genuine no-leader stall failing.
+func leaseLeaderFresh(raw []byte, now time.Time, maxAge time.Duration) (holder string, fresh bool) {
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil {
+		return "", false
+	}
+	holder, renew := leaseHolderRenew(obj)
+	if holder == "" || renew.IsZero() {
+		return holder, false
+	}
+	return holder, now.Sub(renew) <= maxAge
+}
+
+// reconcilerLeaseLive reads the leader-election Lease straight from the API — the
+// authoritative source, unlike the scraped gauge — and reports whether a live
+// leader holds it. A kubectl error (NotFound / no access) is treated as not-live,
+// so a missing Lease fails closed. Swappable for tests.
+var reconcilerLeaseLive = func(namespace string, now time.Time) (holder string, live bool) {
+	out, err := execOutput("kubectl", "-n", namespace, "get", "lease", reconcilerLeaseName, "-o", "json")
+	if err != nil {
+		return "", false
+	}
+	return leaseLeaderFresh(out, now, reconcilerLeaseMaxAge)
 }
 
 // dumpReconcilerDiagnostics prints best-effort reconciler state to stderr when the
@@ -223,7 +284,7 @@ func dumpReconcilerDiagnostics(namespace string) {
 		{"pods — RESTARTS>0 = crashloop inside the settle window",
 			[]string{"-n", namespace, "get", "pods", "-l", "app.kubernetes.io/name=llz-reconciler", "-o", "wide"}},
 		{"leader Lease — holderIdentity + renewTime = who drives + how fresh (empty/stale = real stall; fresh = gauge scrape-lag)",
-			[]string{"-n", namespace, "get", "lease", "llz-reconciler-leader", "-o", "yaml"}},
+			[]string{"-n", namespace, "get", "lease", reconcilerLeaseName, "-o", "yaml"}},
 		{"logs (current) — an OpenBao/Linode sample error or a leases-Role 403 shows here",
 			[]string{"-n", namespace, "logs", "deploy/llz-reconciler", "--tail=100", "--all-containers", "--timestamps"}},
 		{"logs (previous container — present only if it restarted)",
