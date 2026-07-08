@@ -71,15 +71,38 @@ reconciler already proved.
 
 ## Remaining work (the PR)
 
-- [ ] The kubectl-free health verb (option 1) + unit tests on `internal/kube`.
-- [ ] Point the WorkflowTemplate at it; drop the WIP marker.
-- [ ] Right-size the EventBus (1 replica if it's dedicated to this trigger).
+- [x] **The kubectl-free health verb (option 1)** — `llz ci health-incluster`
+      ([ci_health_incluster.go](../../tools/cmd/llz/ci_health_incluster.go)):
+      builds the in-cluster client, classifies Argo Application convergence via
+      the shared `convergenceReport` (factored out of `reconcile_convergence.go`,
+      same `health.ClassifyArgoApp` predicate), and exits 0/1/2/3. `--fail-on-
+      unhealthy=false` is report-only. Unit-tested (`convergenceReport` +
+      `convergenceExit`, and the reconciler gauge still passes on the shared core).
+- [x] **Point the WorkflowTemplate at it** (`ci health-incluster`); WIP marker
+      downgraded to "needs live validation".
+- [ ] **Fold in the supplementary signals** — ESO store / cert-manager / OpenBao
+      seal (already kubectl-free in `reconcile_health.go`) if the convergence
+      verdict alone isn't enough for the day-2 report.
+- [ ] Right-size the EventBus (see the NATS note below) — or drop the webhook path.
 - [ ] Add sync-wave ordering (EventBus before Sensor) if the merge-into-
       platform-bootstrap ordering needs it.
 - [ ] **Live-cluster validation** — stand it up on an e2e cluster and confirm the
-      CronWorkflow runs the health job green AND the webhook Sensor fires a run.
+      CronWorkflow runs the health job green AND (if kept) the webhook Sensor fires.
       This is the gate the round-2 review shows structural/lint checks cannot
       substitute for.
+
+## Do we even need the webhook trigger (and its NATS EventBus)?
+
+The **CronWorkflow** (self-driving schedule) needs **no** Argo Events and **no**
+NATS — it's a plain Argo Workflows cron. NATS/the EventBus exists ONLY to carry a
+webhook event from the `EventSource` to the `Sensor` (the "triggerable by
+GitHub/GitLab/curl" adapter). That's a 3-pod NATS StatefulSet purely for an
+optional on-demand trigger. Given the CronWorkflow covers self-driving and the
+`llz-reconciler` is the continuous signal, the webhook path may not be worth it —
+an operator can also `argo submit --from workflowtemplate/llz-cluster-health` on
+demand. Decision for the PR: **default to CronWorkflow-only (drop Sensor +
+EventSource + EventBus + NATS)** unless a concrete external-webhook use-case
+exists; if kept, run NATS at 1 replica.
 
 ## Non-goals
 

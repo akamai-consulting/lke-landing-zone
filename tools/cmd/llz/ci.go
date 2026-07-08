@@ -39,7 +39,7 @@ func ciCmd() *cobra.Command {
 			"the thin orchestration over it.",
 	}
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFUntrackCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(),
-		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciConvergeCmd(),
+		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd())

@@ -2,18 +2,13 @@
 # reference, authenticated ONLY by the llz-cluster-health ServiceAccount
 # (in-cluster kube config). No secrets, kube-only.
 #
-# ┌─ WIP / DO-NOT-MERGE — the substrate is not resolved ─────────────────────────┐
-# │ `llz ci health` is a KUBECTL ORCHESTRATOR (it shells out to `kubectl`), but   │
-# │ <@ llz_image_ref @> is distroless/static — NO kubectl. So this cannot run as  │
-# │ written. The follow-up must pick ONE (see docs/designs/day2-incluster-health.md): │
-# │   1. run in a kube-capable image (KUBE_IMAGE/TF_IMAGE — but no such image is   │
-# │      published for in-cluster use today), OR                                   │
-# │   2. add a kubectl-FREE exit-code health verb built on internal/kube (reuse    │
-# │      the reconciler's reconcile_convergence.go / reconcile_health.go), which   │
-# │      runs in the slim image as-is. This is the intended direction.             │
-# │ The args below are left pointing at `llz ci health` as the placeholder until   │
-# │ that verb exists; do not ship until it does + a live-cluster run proves it.    │
-# └──────────────────────────────────────────────────────────────────────────────┘
+# Runs `llz ci health-incluster` — the KUBECTL-FREE convergence check
+# (internal/kube, no kubectl, no shell) so it works on the slim distroless llz
+# image, unlike `llz ci health` (a kubectl orchestrator). See
+# docs/designs/day2-incluster-health.md.
+#
+# WIP: still needs a LIVE-CLUSTER run (CronWorkflow green + Sensor fires) before
+# merge — structure/lint checks can't substitute for it (the round-2 review lesson).
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
@@ -49,11 +44,11 @@ spec:
       container:
         image: <@ llz_image_ref @>
         # Run llz DIRECTLY — the distroless image has no /bin/sh, so report-vs-gate
-        # is a value flag (llz ci health --fail-on-unhealthy=<bool>), not a shell
-        # conditional. Matches the reconciler / harbor-provisioner invocation shape.
+        # is a value flag (--fail-on-unhealthy=<bool>), not a shell conditional.
+        # Matches the reconciler / harbor-provisioner invocation shape.
         args:
           - ci
-          - health
+          - health-incluster
           - --fail-on-unhealthy={{inputs.parameters.fail-on-unhealthy}}
         resources:
           limits:   { cpu: 200m, memory: 128Mi }
