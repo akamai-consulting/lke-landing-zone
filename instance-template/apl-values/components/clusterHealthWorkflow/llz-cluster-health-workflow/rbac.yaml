@@ -85,3 +85,32 @@ subjects:
   - kind: ServiceAccount
     name: llz-cluster-health-sensor
     namespace: llz-argo-events
+---
+# The sensor pod also reads its own Sensor + the EventBus it subscribes to, in
+# its own namespace. (Argo Events installs may provide a broader default
+# `operate-workflow-sa`; this is the least-privilege equivalent for THIS sensor.
+# If the webhook trigger doesn't fire, check the argo-events controller RBAC +
+# that the EventBus is Ready — the CronWorkflow path needs none of this.)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-cluster-health-sensor-events
+  namespace: llz-argo-events
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["sensors", "eventbus", "eventsources"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-cluster-health-sensor-events
+  namespace: llz-argo-events
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-cluster-health-sensor-events
+subjects:
+  - kind: ServiceAccount
+    name: llz-cluster-health-sensor
+    namespace: llz-argo-events

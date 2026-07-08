@@ -681,9 +681,8 @@ jobs:
           set -uo pipefail
           # The rendered CronJob manifests that run the in-cluster llz image — the
           # exact workloads Kyverno's autogen-cronjob-verify-llz-keyless rule gates.
-          # (Exclude _llz-template, whose manifests still carry <@ llz_image_ref @>.)
           FILES="$(grep -rlE 'ghcr\.io/[A-Za-z0-9._-]+/llz:[A-Za-z0-9._-]+' . \
-            --include='*.yaml' --include='*.yml' --exclude-dir='_llz-template' 2>/dev/null \
+            --include='*.yaml' --include='*.yml' 2>/dev/null \
             | xargs -r grep -lE '^kind:[[:space:]]*CronJob' 2>/dev/null | sort -u || true)"
           if [ -z "${FILES}" ]; then
             echo "no in-cluster llz CronJob in the instance manifests — nothing to gate; skipping"

@@ -17,6 +17,13 @@ spec:
     secondsAfterCompletion: 3600
   podGC:
     strategy: OnWorkflowSuccess
+  # tmp scratch for the read-only-rootfs container (the llz image is distroless
+  # with readOnlyRootFilesystem; give it a writable /tmp, like the reconciler).
+  volumes:
+    - name: tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Mi
   arguments:
     parameters:
       - name: fail-on-unhealthy
@@ -31,18 +38,18 @@ spec:
           app.kubernetes.io/name: llz-cluster-health
       container:
         image: <@ llz_image_ref @>
-        command: ["/bin/sh", "-c"]
+        # Run llz DIRECTLY — the distroless image has no /bin/sh, so report-vs-gate
+        # is a value flag (llz ci health --fail-on-unhealthy=<bool>), not a shell
+        # conditional. Matches the reconciler / harbor-provisioner invocation shape.
         args:
-          - |
-            set -o pipefail
-            if [ "{{inputs.parameters.fail-on-unhealthy}}" = "true" ]; then
-              llz ci health
-            else
-              llz ci health || true
-            fi
+          - ci
+          - health
+          - --fail-on-unhealthy={{inputs.parameters.fail-on-unhealthy}}
         resources:
           limits:   { cpu: 200m, memory: 128Mi }
           requests: { cpu: 25m,  memory: 48Mi }
+        volumeMounts:
+          - { name: tmp, mountPath: /tmp }
         securityContext:
           allowPrivilegeEscalation: false
           capabilities: { drop: ["ALL"] }
