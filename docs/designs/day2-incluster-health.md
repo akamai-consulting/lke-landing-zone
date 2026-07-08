@@ -85,9 +85,16 @@ reconciler already proved.
       verdict alone isn't enough for the day-2 report.
 - [x] **Webhook trigger dropped** (see below) — no EventBus/NATS to right-size or
       sync-wave-order anymore.
-- [ ] **Live-cluster validation** — stand it up on an e2e cluster and confirm the
-      CronWorkflow runs the health job green. This is the gate the round-2 review
-      shows structural/lint checks cannot substitute for.
+- [x] **Live validation (kind)** — stood the component up on a local kind cluster
+      and drove it end-to-end: the verb (5 exit-code cases + a negative RBAC test →
+      403→3), the real distroless image as a pod (auto-mounted SA → Succeeded), and
+      the actual WorkflowTemplate via `argo submit` (Succeeded green on a converged
+      cluster, Failed exit-1 in gate mode on a degraded one). It caught two bugs
+      lint/kustomize can't see — a missing `command:` (Argo emissary) and missing
+      `workflowtaskresults` executor RBAC — both fixed + re-validated.
+- [ ] **Real-instance e2e** — confirm in an actual apl-core instance (the component
+      enabled in a real cluster's spec). The mechanics are proven on kind; this is
+      the environment-integration confirmation.
 
 ## Webhook trigger + its NATS EventBus — dropped
 

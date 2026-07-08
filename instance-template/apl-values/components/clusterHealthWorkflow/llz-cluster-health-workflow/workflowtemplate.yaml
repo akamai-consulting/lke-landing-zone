@@ -7,8 +7,10 @@
 # image, unlike `llz ci health` (a kubectl orchestrator). See
 # docs/designs/day2-incluster-health.md.
 #
-# WIP: still needs a LIVE-CLUSTER run (CronWorkflow runs the health job green)
-# before merge — structure/lint checks can't substitute for it (round-2 lesson).
+# Validated end-to-end on a local kind cluster (real image + `argo submit`):
+# Succeeded green on a converged cluster, Failed in gate mode on a degraded one.
+# Remaining before merge: run it in a real apl-core instance e2e (the mechanics
+# are proven; this confirms it in the actual llz-argo-workflows environment).
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
