@@ -4,9 +4,13 @@
 #   - llz-cluster-health (llz-argo-workflows): the health WORKLOAD's identity.
 #     `llz ci health` reads Argo Applications, the openbao ClusterSecretStore,
 #     cert-manager Certificates, OpenBao pods, nodes and namespaces — all reads.
-#     This SA IS the auth: kube via its projected token, and (for jobs that need
-#     it) OpenBao via `llz ci openbao-login --method kubernetes` against this SA.
-#     No GitHub secret anywhere.
+#     This SA IS the auth: kube via its projected token, and (for a day-2 job that
+#     needs OpenBao) via `llz ci openbao-login --method kubernetes --role
+#     cluster-health` — `llz ci bao-configure` binds THIS SA to the read-only
+#     `cluster-health` OpenBao kubernetes-auth role, so the login returns a token
+#     with no GitHub secret. (Such a job also needs the OpenBao :8200 egress rule +
+#     the chart's allowedClientPods entry; health itself is kube-only.) No GitHub
+#     secret anywhere.
 #   - llz-cluster-health-sensor (llz-argo-events): the Argo Events Sensor's
 #     identity — it only SUBMITS the WorkflowTemplate into llz-argo-workflows, so
 #     it gets workflow create/get, nothing else.
