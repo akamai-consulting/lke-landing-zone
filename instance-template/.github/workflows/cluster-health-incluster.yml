@@ -1,0 +1,107 @@
+name: Cluster health (in-cluster · OIDC · secretless — prototype)
+
+# PROTOTYPE of the secretless day-2 thin-caller pattern
+# (docs/designs/cross-org-reuse-pattern.md § "Day-2: the secretless in-cluster
+# thin caller"). It is the direction for abstracting the CI/CD pipeline: day-2
+# checks run WHERE THE DATA IS (in the cluster) with WORKLOAD IDENTITY (GitHub
+# OIDC + the pod ServiceAccount), so there are NO GitHub secrets and NO
+# `secrets: inherit` — which is exactly what makes it work across org boundaries
+# (#200/#201). GitHub OIDC tokens are minted per-job and are not subject to the
+# cross-org inheritance limitation, so an adopter in a different org from the
+# template runs this unchanged.
+#
+# CONTRAST with cluster-health.yml (the hosted-runner path, kept as the default):
+# that one runs on a GitHub-hosted runner and therefore needs the ENTRY
+# credentials — TF_STATE_* (read state → kubeconfig) and LINODE_API_TOKEN (open
+# the LKE-E control-plane ACL for the runner's egress IP). Those are irreducible
+# for a hosted runner: Linode / S3 have no OIDC federation, and OpenBao is
+# ClusterIP-only so a hosted runner cannot reach it to bootstrap from. An
+# IN-CLUSTER runner sidesteps all of it — it reaches the kube API via its pod
+# ServiceAccount and OpenBao via its ClusterIP, no entry credential at all.
+#
+# PREREQUISITES (why this is a prototype, not yet the default):
+#   1. A self-hosted runner INSIDE this instance's cluster — e.g. Actions Runner
+#      Controller (ARC) in kubernetes mode — advertising the labels below.
+#   2. That runner's pod ServiceAccount bound to the read-only RBAC `llz ci health`
+#      needs (the same shape the llz-reconciler already carries), and added to the
+#      OpenBao chart's allowedClientPods so it may reach :8200.
+#   3. The `platform-ci` OpenBao jwt role (llz ci bao-configure) — already shipped;
+#      its bound_claims pin it to THIS instance repo, so a leaked OIDC token from
+#      another repo cannot use it.
+# When ARC is standard for an instance, this replaces cluster-health.yml and the
+# in-cluster llz-reconciler becomes the continuous form of the same signal.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Deployment to check, e.g. primary | secondary | staging | lab'
+        required: true
+        type: string
+        default: primary
+      verbose:
+        description: 'VERBOSE=1 — dump describe/logs even when nothing is failing'
+        required: false
+        type: boolean
+        default: false
+      fail-on-unhealthy:
+        description: 'Fail the run on an unhealthy cluster (gate mode; default report-only)'
+        required: false
+        type: boolean
+        default: false
+
+# id-token: write is the whole point — it mints the GitHub OIDC token this job
+# exchanges at OpenBao. No `secrets:` block anywhere in this workflow.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  health:
+    name: Cluster health (in-cluster)
+    # Self-hosted runner inside this instance's cluster (ARC). Narrow this to your
+    # in-cluster scale-set's own label(s) — e.g. `[self-hosted, llz-incluster,
+    # "region-${{ inputs.region }}"]` — and declare those custom labels in a
+    # .github/actionlint.yaml so the lint gate accepts them.
+    runs-on: [self-hosted]
+    container:
+      # The slim llz image — same artifact the in-cluster CronJobs / reconciler
+      # run; carries the llz CLI. Renovate-pinned via instance-template/renovate.json.
+      image: <@ llz_image_ref @>
+    env:
+      REGION:            ${{ inputs.region }}
+      # OpenBao ClusterIP — reachable from an in-cluster runner (no port-forward).
+      OPENBAO_ADDR:      https://platform-openbao.llz-openbao.svc.cluster.local:8200
+      VERBOSE:           ${{ inputs.verbose && '1' || '' }}
+      FAIL_ON_UNHEALTHY: ${{ inputs.fail-on-unhealthy }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Secretless auth: mint a GitHub OIDC token (id-token: write) and exchange
+      # it for a short-lived OpenBao token via the jwt method. Exports
+      # OPENBAO_TOKEN to $GITHUB_ENV for the steps below — no GitHub secret, no
+      # `secrets: inherit`, works cross-org.
+      - name: OpenBao token via GitHub OIDC
+        run: llz ci openbao-login --role platform-ci
+
+      # Kube access is the runner pod's ServiceAccount (in-cluster config) — no
+      # kubeconfig-from-state and no LKE ACL punch. OpenBao-authenticated reads
+      # (seal state, credential age) use $OPENBAO_TOKEN from the step above.
+      - name: Cluster health
+        run: |
+          set -o pipefail
+          if [ "$FAIL_ON_UNHEALTHY" = "true" ]; then
+            llz ci health | tee /tmp/health.txt
+          else
+            llz ci health | tee /tmp/health.txt || true
+          fi
+
+      - name: Health report → job summary
+        if: always()
+        run: |
+          {
+            echo "## Cluster health — ${REGION} (in-cluster, secretless)"
+            echo '```'
+            cat /tmp/health.txt 2>/dev/null || echo "(no health output captured)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
