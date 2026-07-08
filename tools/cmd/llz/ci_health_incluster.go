@@ -41,7 +41,9 @@ func ciHealthInClusterCmd() *cobra.Command {
 		Long: "The internal/kube (no kubectl) sibling of `llz ci health`, for a day-2 Argo\n" +
 			"Workflow on the slim distroless llz image. Classifies Argo CD Application\n" +
 			"convergence via the pod ServiceAccount and exits per the convergence\n" +
-			"contract. --fail-on-unhealthy=false → report-only (always exit 0).",
+			"contract. --fail-on-unhealthy=false → report-only: exit 0 on an unhealthy\n" +
+			"cluster VERDICT (1/2), but still exit 3 if the apiserver is unreachable —\n" +
+			"the check couldn't run, which is worth failing the job on.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			os.Exit(healthInClusterExitCode(cmd.Context(), failOnUnhealthy))
@@ -49,7 +51,7 @@ func ciHealthInClusterCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&failOnUnhealthy, "fail-on-unhealthy", true,
-		"exit non-zero per the convergence contract on an unhealthy cluster; =false is report-only (always exit 0)")
+		"exit non-zero per the convergence contract on an unhealthy cluster; =false is report-only (exit 0 on a 1/2 verdict; still exits 3 if the apiserver is unreachable)")
 	return c
 }
 
