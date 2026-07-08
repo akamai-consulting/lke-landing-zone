@@ -66,9 +66,22 @@ _answers_file: .copier-answers.yml
 # control-plane ACL allow-list. Per-env tfvars and apl-values/<env> overlays are
 # created by `llz env add` and never exist in the template, so Copier
 # leaves them alone without needing a rule here.
+#
+# EVERY `owned` file the template actually SHIPS must appear here (or under
+# `_exclude`), or `copier update` re-renders + 3-way-merges it onto the instance's
+# own content and can leave conflict markers behind — the failure that shipped
+# invalid YAML in the gsap-apl v0.0.24 upgrade. `llz ci template-manifest`
+# asserts this manifest↔copier consistency in CI (see
+# docs/designs/cross-org-reuse-pattern.md Phase 0), so an owned file added to
+# .template-manifest without a rule here fails the build.
 _skip_if_exists:
   - "terraform-iac-bootstrap/*/.terraform.lock.hcl"
   - "terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt"
+  # The operator-owned custom/ escape hatch (shipped once as an empty starter) and
+  # the one shared file `llz render` fills in place with the operator's ACME email:
+  # both are `owned`, so an update must never re-render + merge them.
+  - "apl-values/_shared/custom/**"
+  - "apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml"
 
 # ── Content delivered from OUTSIDE the scaffold ──────────────────────────────
 # docs/ lives at the repo root — NOT under instance-template/ — so the scaffold a

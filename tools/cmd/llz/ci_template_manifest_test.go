@@ -78,6 +78,48 @@ func TestTemplateManifestCommandWiring(t *testing.T) {
 	}
 }
 
+func TestTemplateManifestCopierConsistency(t *testing.T) {
+	root := t.TempDir()
+	scaffold := filepath.Join(root, "instance-template")
+	writeTestFile(t, scaffold, ".template-manifest", ""+
+		"managed **\n"+
+		"owned keep.txt\n"+
+		"owned .copier-answers.yml\n")
+	writeTestFile(t, scaffold, "keep.txt", "instance content\n")
+	writeTestFile(t, scaffold, ".copier-answers.yml", "_commit: v1\n")
+
+	// copier.yml protecting NEITHER owned file: keep.txt is a violation, but
+	// .copier-answers.yml is exempt (it is the _answers_file copier regenerates).
+	writeTestFile(t, root, "copier.yml", "_answers_file: .copier-answers.yml\n_skip_if_exists: []\n_exclude: []\n")
+
+	var out, errOut bytes.Buffer
+	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err == nil {
+		t.Fatalf("expected failure: keep.txt is owned but unprotected by copier\nstdout: %s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "keep.txt") {
+		t.Errorf("error should name the unprotected owned file: %s", errOut.String())
+	}
+	if strings.Contains(errOut.String(), ".copier-answers.yml") {
+		t.Errorf("_answers_file must be exempt from the check: %s", errOut.String())
+	}
+
+	// Protect keep.txt via _skip_if_exists → now consistent.
+	writeTestFile(t, root, "copier.yml", "_answers_file: .copier-answers.yml\n_skip_if_exists:\n  - \"keep.txt\"\n")
+	out.Reset()
+	errOut.Reset()
+	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err != nil {
+		t.Fatalf("should pass once keep.txt is protected: %v\nstderr: %s", err, errOut.String())
+	}
+
+	// _exclude also counts as protection.
+	writeTestFile(t, root, "copier.yml", "_answers_file: .copier-answers.yml\n_exclude:\n  - \"keep.txt\"\n")
+	out.Reset()
+	errOut.Reset()
+	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err != nil {
+		t.Fatalf("_exclude should also satisfy the check: %v\nstderr: %s", err, errOut.String())
+	}
+}
+
 func writeTestFile(t *testing.T, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(rel))

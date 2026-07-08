@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 type templateManifestRule struct {
@@ -103,8 +104,86 @@ func runTemplateManifest(root, classifyPath, listClass string, out, errOut io.Wr
 		fmt.Fprintf(errOut, "Add a rule for each (managed | merge | owned) — see the header in %s.\n", m.path)
 		return fmt.Errorf("template-manifest: %d unclassified scaffold file(s)", len(unclassified))
 	}
+	if err := m.checkCopierProtectsOwned(files, errOut); err != nil {
+		return err
+	}
 	fmt.Fprintf(out, "template-manifest: OK — managed=%d merge=%d owned=%d (%d files, all classified)\n",
 		counts["managed"], counts["merge"], counts["owned"], len(files))
+	return nil
+}
+
+// copierProtect holds the copier.yml keys that decide whether `copier update`
+// leaves an already-existing file alone. `_skip_if_exists` files are re-copied
+// only when absent (so an existing one is never re-rendered / merged);
+// `_exclude` files are not part of the template at all; `_answers_file` is the
+// tracker copier regenerates itself (never a content merge).
+type copierProtect struct {
+	SkipIfExists []string `yaml:"_skip_if_exists"`
+	Exclude      []string `yaml:"_exclude"`
+	AnswersFile  string   `yaml:"_answers_file"`
+}
+
+// checkCopierProtectsOwned enforces the invariant behind the manifest's `owned`
+// class: an `owned` file carries instance-authored content, so `copier update`
+// must NOT re-render + 3-way-merge it — every `owned` scaffold file that the
+// template actually ships must be covered by copier's `_skip_if_exists` (or
+// `_exclude`). When it isn't, copier merges the template's version onto the
+// instance's divergent content and can leave conflict markers behind — the class
+// that shipped invalid YAML in the gsap-apl v0.0.24 upgrade
+// (docs/designs/cross-org-reuse-pattern.md Phase 0). The manifest declares intent;
+// this makes copier.yml honor it, closing the gap where the two silently disagree.
+//
+// Only runs when copier.yml is found next to the scaffold root (the template
+// repo); in an instance (no copier.yml) it is a no-op, since there is nothing to
+// keep consistent there.
+func (m templateManifest) checkCopierProtectsOwned(files []string, errOut io.Writer) error {
+	copierPath := filepath.Join(filepath.Dir(m.root), "copier.yml")
+	if !fileExists(copierPath) {
+		if alt := filepath.Join(filepath.Dir(m.root), "copier.yaml"); fileExists(alt) {
+			copierPath = alt
+		} else {
+			return nil // instance context (or no copier config) — nothing to check
+		}
+	}
+	data, err := os.ReadFile(copierPath)
+	if err != nil {
+		return fmt.Errorf("template-manifest: read %s: %w", copierPath, err)
+	}
+	var p copierProtect
+	if err := yaml.Unmarshal(data, &p); err != nil {
+		return fmt.Errorf("template-manifest: parse %s: %w", copierPath, err)
+	}
+	protect := append(append([]string{}, p.SkipIfExists...), p.Exclude...)
+
+	var viol []string
+	for _, rel := range files {
+		if m.classify(rel) != "owned" {
+			continue
+		}
+		if p.AnswersFile != "" && rel == p.AnswersFile {
+			continue // copier regenerates the answers tracker itself
+		}
+		covered := false
+		for _, g := range protect {
+			if matchGlob(g, rel) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			viol = append(viol, rel)
+		}
+	}
+	if len(viol) > 0 {
+		fmt.Fprintf(errOut, "::error::%d `owned` scaffold file(s) are not protected by copier's _skip_if_exists/_exclude in %s:\n", len(viol), copierPath)
+		for _, rel := range viol {
+			fmt.Fprintf(errOut, "  - %s\n", rel)
+		}
+		fmt.Fprintf(errOut, "`copier update` would re-render + 3-way-merge these onto the instance's own\n"+
+			"content (risking committed conflict markers). Add each to copier.yml `_skip_if_exists`,\n"+
+			"or reclassify it in %s if the template should in fact own it.\n", m.path)
+		return fmt.Errorf("template-manifest: %d `owned` file(s) not protected by copier", len(viol))
+	}
 	return nil
 }
 
