@@ -857,6 +857,21 @@ jobs:
         if: ${{ inputs.assert_loki }}
         run: llz ci assert-health-workflow
 
+      # E2E gate that EXERCISES the in-cluster broad-PAT rotator (not just asserts it
+      # deployed). converge sees its carved App green once the CronJob + ESO Secrets
+      # exist, but the CronJob is weekly — so the mint → verify → OpenBao write →
+      # GitHub env-secret publish → revoke path against real OpenBao k8s-auth / Linode
+      # / GitHub is unproven until it runs. This forces one Job from the CronJob (--apply,
+      # rotated_at=0 seeded by seed-broad-pat makes it due) and asserts action=rotated;
+      # an in-cluster failure (bad role, missing scope, GitHub write denied) fails e2e.
+      # SAFE: e2e enabled it with an e2e-unique label + broadPATDeployments=e2e, so the
+      # mint/revoke touch only the e2e PAT family and only infra-e2e is rewritten.
+      # Self-gates on the component being enabled; logic lives in the unit-tested
+      # `llz ci assert-broad-pat-rotation`.
+      - name: (e2e) exercise the broad-PAT rotator end-to-end
+        if: ${{ inputs.assert_loki }}
+        run: llz ci assert-broad-pat-rotation --region "$REGION"
+
       # E2E-only support-plane metric-surface diagnostic. Gated on the same
       # assert_loki input as the check above, so it runs on the release-e2e
       # provision (which holds cluster access) and never on a normal instance

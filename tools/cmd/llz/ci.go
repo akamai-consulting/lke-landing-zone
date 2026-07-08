@@ -107,6 +107,8 @@ func ciCmd() *cobra.Command {
 	// Bootstrap seed for the broad-PAT rotator's minting credential — gated on the
 	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
 	c.AddCommand(ciSeedBroadPATCmd())
+	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
+	c.AddCommand(ciAssertBroadPATRotationCmd())
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
 	c.AddCommand(ciRelabelVolumesCmd())
