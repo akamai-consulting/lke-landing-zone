@@ -402,6 +402,11 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 		// two per-instance env values, patched locally so components/harbor stays a
 		// token-free remote base.
 		content["harbor-provisioner-env-patch.yaml"] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix, ghRepo)
+	case "broadPatRotator":
+		// The account-wide label + deployment list live on the component toggle
+		// (Validate guarantees both are set when it's enabled).
+		tog := e.Components[c.Name]
+		content["broad-pat-rotator-env-patch.yaml"] = clusterspec.RenderBroadPATEnvPatch(tog.BroadPATLabel, tog.BroadPATDeployments)
 	case "llzReconciler":
 		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds); REGION is
 		// the env name and OBJ_CLUSTER the object-storage cluster.

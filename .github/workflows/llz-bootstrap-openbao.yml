@@ -522,6 +522,24 @@ jobs:
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
         run: llz ci mint-bootstrap-pat --region "$REGION"
 
+      # ── Broad-PAT rotator seed (ONLY when the broadPatRotator component is enabled) ─
+      # The in-cluster broad-PAT rotator (platform-apl/components/broadPatRotator) mints
+      # its successor with the CURRENT broad PAT, which it reads from
+      # secret/linode/broad-pat via ESO. Seed that path here from LINODE_API_TOKEN — the
+      # account:read_write CI token, i.e. the minting privilege the rotator needs —
+      # rotated_at=0 so the first tick is due; --skip-if-present keeps re-runs from
+      # clobbering a value the rotator has since rotated. Gated on the rendered carved
+      # App file so ONLY the one deployment that enables the component (the broad PAT is
+      # account-wide) ever holds the token: every other instance renders no such file
+      # and skips, so no cluster carries the broad PAT unless it owns the rotation. This
+      # also unwedges convergence — without the seed the rotator's ExternalSecret sits
+      # in SecretSyncError and its carved App (llz-broad-pat-rotator) stays Degraded.
+      - name: Seed broad-PAT rotator token (when enabled)
+        if: steps.ensure.outputs.available == 'true'
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci seed-broad-pat --region "$REGION"
+
       # ── Standby: replicate the active's Harbor robot credentials ───────────────
       # A standby peer has no in-cluster Harbor (the active/standalone path is the
       # in-cluster harbor-robot-provisioner CronJob — see the MOVED note where the

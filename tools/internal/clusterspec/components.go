@@ -228,6 +228,22 @@ var Components = []Component{
 		DependsOn:         []string{"externalSecrets"},
 		ManifestResources: []string{"broad-pat-rotator"},
 		DefaultDisabled:   true,
+		// The account-wide BROAD_PAT_LABEL + BROAD_PAT_DEPLOYMENTS on the rotator
+		// CronJob — rendered per env by RenderBroadPATEnvPatch from the spec toggle
+		// (the base cronjob.yaml ships REPLACE_ME placeholders the patch fills).
+		Patches: []Patch{{
+			Path:    "broad-pat-rotator-env-patch.yaml",
+			Group:   "batch",
+			Version: "v1",
+			Kind:    "CronJob",
+			Name:    "broad-pat-rotator",
+		}},
+		// Carve it into its own health-inert Application: the rotator lives in its
+		// own isolated namespace (llz-pat-rotator) and holds the account:read_write
+		// PAT — a Degraded rotator must fail only its own App, never platform-
+		// bootstrap. Wave 5 (after the openbao ClusterSecretStore its ExternalSecrets
+		// resolve against), floored above externalSecrets like harbor/reconciler.
+		CarvedApp: &CarvedApp{AppName: "llz-broad-pat-rotator", AppWave: 5, Namespace: "llz-pat-rotator"},
 	},
 	{
 		// In-cluster reconciler + convergence metrics surface (Phase 0:

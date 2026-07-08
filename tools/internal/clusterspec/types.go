@@ -170,6 +170,17 @@ type ComponentToggle struct {
 	Replicas  *int   `json:"replicas,omitempty"`  // prometheus.replicas
 	// harbor → registry image-store PVC
 	RegistryStorage string `json:"registryStorage,omitempty"` // harbor registry PVC size (e.g. 20Gi)
+	// broadPatRotator → the broad-PAT rotator CronJob env, rendered by
+	// RenderBroadPATEnvPatch (the "config in the spec, mechanism in the base"
+	// surface — the base cronjob.yaml ships REPLACE_ME, the patch fills these).
+	// Required when the component is enabled (Validate enforces it). Because the
+	// broad PAT is ACCOUNT-wide, the component runs on EXACTLY ONE deployment.
+	BroadPATLabel string `json:"broadPATLabel,omitempty"` // BROAD_PAT_LABEL (Linode label of the broad PAT family)
+	// BroadPATDeployments is a SPACE-separated list of deployment names whose
+	// infra-<d> LINODE_API_TOKEN environment secret gets the rotated value —
+	// matches the CronJob's `strings.Fields(BROAD_PAT_DEPLOYMENTS)` parse (a
+	// scalar so `llz env set` can write it).
+	BroadPATDeployments string `json:"broadPATDeployments,omitempty"` // BROAD_PAT_DEPLOYMENTS (space-separated infra-<d> envs)
 }
 
 // Cluster maps to the three per-env tfvars (cluster, cluster-bootstrap,

@@ -162,6 +162,8 @@ func TestValidate_Errors(t *testing.T) {
 		{"vpc cidr bad prefix", "        network: { subnetCIDR: 10.0.0.0/24 }\n", "/13 or /14"},
 		{"vpc cidr not a cidr", "        network: { subnetCIDR: nope }\n", "not a valid CIDR"},
 		{"sizing knob wrong component", "      components:\n        harbor: { retention: 30d }\n", "retention is not a valid setting"},
+		{"broadPAT knob wrong component", "      components:\n        harbor: { broadPATLabel: x }\n", "broadPATLabel is not a valid setting"},
+		{"broadPatRotator enabled without config", "      components:\n        broadPatRotator: { enabled: true }\n", "requires broadPATLabel and broadPATDeployments"},
 		{"bad retention format", "      components:\n        observability: { retention: 30days }\n", "is not a duration"},
 		{"bad storage quantity", "      components:\n        observability: { storage: 50GB }\n", "is not a storage quantity"},
 		{"replicas below one", "      components:\n        observability: { replicas: 0 }\n", "replicas must be >= 1"},

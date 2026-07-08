@@ -104,6 +104,9 @@ func ciCmd() *cobra.Command {
 	// mint -> seed OpenBao -> publish to each deployment's GitHub env secret (sealed box)
 	// -> revoke old. Runs in a dedicated CronJob, not the reconciler.
 	c.AddCommand(ciRotateBroadPATCmd())
+	// Bootstrap seed for the broad-PAT rotator's minting credential — gated on the
+	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
+	c.AddCommand(ciSeedBroadPATCmd())
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
 	c.AddCommand(ciRelabelVolumesCmd())

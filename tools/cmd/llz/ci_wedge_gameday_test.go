@@ -86,7 +86,7 @@ func TestEvalWedgeMissingGuardedIsBreach(t *testing.T) {
 func TestSiblingsOf(t *testing.T) {
 	sibs := siblingsOf("llz-observability")
 	sort.Strings(sibs)
-	want := []string{"llz-externalsecrets", "llz-harbor", "llz-reconciler"}
+	want := []string{"llz-broad-pat-rotator", "llz-externalsecrets", "llz-harbor", "llz-reconciler"}
 	if strings.Join(sibs, ",") != strings.Join(want, ",") {
 		t.Errorf("siblingsOf(llz-observability) = %v, want %v", sibs, want)
 	}
