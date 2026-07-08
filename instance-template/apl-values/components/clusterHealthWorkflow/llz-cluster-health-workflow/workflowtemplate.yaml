@@ -1,0 +1,52 @@
+# The health job itself — a WorkflowTemplate the CronWorkflow and the Sensor both
+# reference. Runs `llz ci health` on the slim llz image (same artifact the
+# reconciler / CronJobs run), authenticated ONLY by the llz-cluster-health
+# ServiceAccount (in-cluster kube config). No secrets, no OpenBao needed for the
+# read-only health surface; a day-2 job that DID need OpenBao would add a
+# `llz ci openbao-login --method kubernetes` step against this same SA.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: llz-cluster-health
+  namespace: llz-argo-workflows
+spec:
+  serviceAccountName: llz-cluster-health
+  entrypoint: health
+  # Reap finished runs; keep a few for triage.
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+  podGC:
+    strategy: OnWorkflowSuccess
+  arguments:
+    parameters:
+      - name: fail-on-unhealthy
+        value: "false"
+  templates:
+    - name: health
+      inputs:
+        parameters:
+          - name: fail-on-unhealthy
+      metadata:
+        labels:
+          app.kubernetes.io/name: llz-cluster-health
+      container:
+        image: <@ llz_image_ref @>
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -o pipefail
+            if [ "{{inputs.parameters.fail-on-unhealthy}}" = "true" ]; then
+              llz ci health
+            else
+              llz ci health || true
+            fi
+        resources:
+          limits:   { cpu: 200m, memory: 128Mi }
+          requests: { cpu: 25m,  memory: 48Mi }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          seccompProfile: { type: RuntimeDefault }

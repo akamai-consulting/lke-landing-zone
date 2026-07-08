@@ -1,0 +1,20 @@
+# llz-cluster-health-workflow — the CI-agnostic day-2 health job, fully Argo-owned.
+#
+#   rbac.yaml           the workflow + sensor ServiceAccounts and their read-only RBAC
+#   workflowtemplate.yaml  `llz ci health` on the slim llz image, SA-authenticated
+#   cronworkflow.yaml   the self-driving schedule (no external trigger at all)
+#   network-policy.yaml egress lockdown for the health workflow pods
+#   trigger.yaml        EventSource + Sensor — the OPTIONAL webhook trigger adapter
+#
+# The CronWorkflow makes this self-driving; the Sensor makes it triggerable by any
+# webhook (GitHub/GitLab/cron/curl) — GitHub is one trigger source, not the
+# substrate. See docs/designs/cross-org-reuse-pattern.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rbac.yaml
+  - workflowtemplate.yaml
+  - cronworkflow.yaml
+  - network-policy.yaml
+  - trigger.yaml

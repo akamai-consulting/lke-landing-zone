@@ -105,37 +105,50 @@ Convert the one workflow to a full instance-local graph consuming cross-org acti
 
 The local-job-graph pattern above keeps GitHub Environment gating but fattens the
 instance. For **day-2** flows (health, rotation, audits) there is a strictly
-better shape that is cross-org, GitHub-Actions-native, AND slim — because day-2
-work runs against a cluster that already exists and already runs the
-`llz-reconciler`.
+better shape — and the right move is to stop running them on *any* CI vendor's
+runner and run them **inside the cluster** as Kubernetes-native jobs, so nothing
+CI-vendor-specific lives in the cluster at all. This is the pipeline-abstraction
+endpoint.
 
-**Pattern:** run the check on a self-hosted runner *inside* the cluster (Actions
-Runner Controller) and authenticate with **workload identity** — the runner pod's
-ServiceAccount for the kube API, and **GitHub OIDC → OpenBao** (`auth/jwt`, the
-`platform-ci` role `llz ci bao-configure` already ships) for any stored secret.
-GitHub OIDC tokens are minted per-job under `permissions: id-token: write` and are
-**not** subject to the cross-org `secrets: inherit` limitation, so this is
-identical for an adopter in a different org. The instance carries a true thin
-caller with **no `secrets:` block at all**.
+**Pattern:** the day-2 job is an **Argo WorkflowTemplate** running `llz ci …` on
+the slim `llz` image, authenticated by the workflow pod's **ServiceAccount**
+(kube via the projected token; OpenBao — when a job needs it — via
+`llz ci openbao-login --method kubernetes` against that same SA). It is driven by:
 
-- Primitive: `llz ci openbao-login --role platform-ci` (mint OIDC token →
-  `auth/jwt/login` over the ClusterIP → export `OPENBAO_TOKEN`). It is the
-  reusable, central building block — logic in the binary (tier 3).
-- Prototype: [instance-template/.github/workflows/cluster-health-incluster.yml](../../instance-template/.github/workflows/cluster-health-incluster.yml).
+- a **CronWorkflow** — self-driving, zero external CI in the loop; and/or
+- an **Argo Events Sensor + webhook EventSource** — a plain HTTP trigger that
+  *any* system can POST (GitHub webhook, GitLab, a cron, a human `curl`). GitHub
+  becomes one optional trigger source, not the execution substrate.
 
-**The honest floor (why this is day-2 only).** A *hosted* runner cannot use this
+There are **no GitHub secrets, no `secrets: inherit`, and nothing GitHub-specific
+in the cluster** — which is exactly what makes it work across org boundaries. The
+continuous form of the same signal is the `llz-reconciler`; this is the
+synchronous, on-demand variant.
+
+- Auth primitive: `llz ci openbao-login` — `--method kubernetes` (default, the
+  pod ServiceAccount → OpenBao `kubernetes` auth; CI-agnostic) or `--method oidc`
+  (a GitHub Actions OIDC token → OpenBao `jwt` auth; the fallback only for a
+  genuinely external GitHub-hosted caller). Logic in the binary (tier 3).
+- Prototype component: [instance-template/apl-values/components/clusterHealthWorkflow/](../../instance-template/apl-values/components/clusterHealthWorkflow/)
+  — WorkflowTemplate + CronWorkflow + Sensor/EventSource + read-only RBAC. Enable
+  via `spec.components.clusterHealthWorkflow` (needs `argoWorkflows` + `argoEvents`).
+
+**Why not ARC / in-cluster GitHub runners?** Actions Runner Controller would also
+put the job in-cluster, but it embeds a GitHub-Actions-specific runner controller
+in every cluster — the opposite of abstracting the pipeline. The Argo-native form
+keeps the cluster CI-agnostic: the portability seam is `llz ci <verb>` in a
+container, invoked by whatever orchestrator (Argo, a CI runner, a human), and the
+endpoint is *pipeline-as-data* — one definition `llz` can render into GitHub
+Actions YAML, GitLab CI, or an Argo Workflow.
+
+**The honest floor.** This is day-2 only. A hosted CI runner cannot go secretless
 for the terraform/bootstrap flow: its entry credentials (`TF_STATE_*` for
 kubeconfig, `LINODE_API_TOKEN` for the LKE-E ACL) are static — Linode and S3 have
-no OIDC federation — and OpenBao is ClusterIP-only, so a hosted runner cannot
-reach it to bootstrap from (chicken-and-egg). The entry credential is irreducible
-for a hosted runner; only an in-cluster runner removes it. So: **bootstrap flow →
-local job graph (tier 3, `llz ci tf-module`); day-2 flow → in-cluster OIDC thin
-caller.** Both eliminate cross-org `secrets: inherit`; the second also eliminates
-the secrets.
-
-This is the pipeline-abstraction endpoint: day-2 signal is the in-cluster
-reconciler (continuous) plus thin OIDC-authenticated triggers (synchronous
-gates), and GitHub secrets leave the day-2 surface entirely.
+no OIDC federation — and OpenBao is ClusterIP-only, so an external runner cannot
+reach it to bootstrap from (chicken-and-egg). So: **bootstrap flow → local job
+graph (tier 3, `llz ci tf-module`); day-2 flow → in-cluster Kubernetes-native
+job.** Both eliminate cross-org `secrets: inherit`; the second also eliminates the
+secrets and the CI-vendor coupling.
 
 ## Non-goals
 

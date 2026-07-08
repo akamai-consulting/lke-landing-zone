@@ -1,0 +1,57 @@
+# OPTIONAL webhook trigger adapter — the "triggerable by anything" half.
+#
+# This is the ONLY externally-facing piece, and it is deliberately vendor-neutral:
+# a plain HTTP webhook. GitHub can POST to it (a repository/workflow webhook), but
+# so can GitLab, a cron, a monitoring system, or a human with curl. GitHub is one
+# trigger source, not the execution substrate — nothing GitHub-specific runs in
+# the cluster. Exposing the EventSource externally (an ingress/Gateway) is left to
+# the operator; in-cluster callers can POST it directly. The CronWorkflow already
+# covers the self-driving case with no webhook at all.
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: llz-cluster-health
+  namespace: llz-argo-events
+spec:
+  service:
+    ports:
+      - port: 12000
+        targetPort: 12000
+  webhook:
+    health-check:
+      port: "12000"
+      endpoint: /cluster-health
+      method: POST
+---
+# On a webhook event, submit the health WorkflowTemplate into llz-argo-workflows.
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: llz-cluster-health
+  namespace: llz-argo-events
+spec:
+  template:
+    serviceAccountName: llz-cluster-health-sensor
+  dependencies:
+    - name: health-webhook
+      eventSourceName: llz-cluster-health
+      eventName: health-check
+  triggers:
+    - template:
+        name: submit-health-workflow
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: llz-cluster-health-
+                namespace: llz-argo-workflows
+              spec:
+                workflowTemplateRef:
+                  name: llz-cluster-health
+                arguments:
+                  parameters:
+                    - name: fail-on-unhealthy
+                      value: "false"
