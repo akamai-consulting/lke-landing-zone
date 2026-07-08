@@ -73,24 +73,29 @@ func healthInClusterExitCode(ctx context.Context, failOnUnhealthy bool) int {
 		fmt.Fprintf(os.Stderr, "::error::apiserver unreachable or Applications query failed: %v\n", err)
 		return 3
 	}
-	code := convergenceExit(r, crdPresent, failOnUnhealthy)
-	return code
-}
-
-// convergenceExit is the pure exit-code decision (unit-tested): the report's
-// verdict when the CRD is present, in-progress (2) pre-bootstrap, and report-only
-// suppression to 0. It also prints the report as a side effect so the CronWorkflow
-// / job log carries the verdict.
-func convergenceExit(r health.Report, crdPresent, failOnUnhealthy bool) int {
-	code := health.InProgress.ExitCode() // pre-bootstrap: Application CRD not registered
+	// Print the verdict to the job log, then decide the exit code.
 	if crdPresent {
 		printConvergenceReport(r)
-		code = r.ExitCode()
 	} else {
 		fmt.Fprintln(os.Stderr, "convergence: Application CRD not present — pre-bootstrap (in-progress).")
 	}
+	code := convergenceExit(r, crdPresent, failOnUnhealthy)
 	if !failOnUnhealthy && code != 0 {
 		fmt.Fprintf(os.Stderr, "::notice::health-incluster exit %d suppressed (--fail-on-unhealthy=false, report-only)\n", code)
+	}
+	return code
+}
+
+// convergenceExit is the PURE exit-code decision (unit-tested, no I/O): the
+// report's verdict when the Application CRD is present, in-progress (2)
+// pre-bootstrap, and report-only suppression to 0. Exit 3 (apiserver unreachable)
+// is handled by the caller before this — report-only does NOT suppress it.
+func convergenceExit(r health.Report, crdPresent, failOnUnhealthy bool) int {
+	code := health.InProgress.ExitCode() // pre-bootstrap: Application CRD not registered
+	if crdPresent {
+		code = r.ExitCode()
+	}
+	if !failOnUnhealthy && code != 0 {
 		return 0
 	}
 	return code

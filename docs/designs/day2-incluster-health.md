@@ -94,7 +94,18 @@ reconciler already proved.
       `workflowtaskresults` executor RBAC — both fixed + re-validated.
 - [ ] **Real-instance e2e** — confirm in an actual apl-core instance (the component
       enabled in a real cluster's spec). The mechanics are proven on kind; this is
-      the environment-integration confirmation.
+      the environment-integration confirmation. Two things kind specifically CANNOT
+      verify (checked by reasoning + the kind label/RBAC probes instead):
+      - **NetworkPolicy enforcement** — kindnet doesn't enforce NPs. The workflow
+        pod carries `app.kubernetes.io/name: llz-cluster-health` (verified on kind),
+        so the NP selects it; its egress (DNS + apiserver 443/6443) covers both the
+        verb's Application read AND the emissary's `workflowtaskresults` write — but
+        enforcement is unproven until a Cilium/default-deny cluster runs it.
+      - **Kyverno image-signature policy** — the pod runs `ghcr.io/<upstream_org>/llz`,
+        so kyverno-verify-llz-image-signature gates it like every llz workload
+        (verify keyless sig + mutate to digest). The signed image passes and the
+        reconciler already runs the same image under the same policy, so this should
+        be a non-event — but kind has no Kyverno to prove it.
 
 ## Webhook trigger + its NATS EventBus — dropped
 

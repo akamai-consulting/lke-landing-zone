@@ -1,7 +1,8 @@
 # Self-driving trigger — the cluster checks its own health on a schedule with NO
 # external CI in the loop. This is the fully-decoupled default: nothing outside
 # the cluster is required for day-2 health. (The continuous, finer-grained form is
-# the llz-reconciler; this is the periodic full `llz ci health` pass, report-only.)
+# the llz-reconciler; this is a periodic `llz ci health-incluster` convergence
+# pass, report-only.)
 apiVersion: argoproj.io/v1alpha1
 kind: CronWorkflow
 metadata:
