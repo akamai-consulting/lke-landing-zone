@@ -101,54 +101,44 @@ Convert the one workflow to a full instance-local graph consuming cross-org acti
 - **Same-enterprise linkage.** Works cross-org, but is an org-admin dependency outside the template's control; no help for external adopters.
 - **Collapse into one container job (no matrix/env jobs).** Loses GitHub-native environment gating/approvals and per-deployment parallelism; only partial.
 
-## Day-2: the secretless in-cluster thin caller (OIDC)
+## Day-2: run it in-cluster, not on any CI runner (direction — deferred)
 
 The local-job-graph pattern above keeps GitHub Environment gating but fattens the
-instance. For **day-2** flows (health, rotation, audits) there is a strictly
-better shape — and the right move is to stop running them on *any* CI vendor's
-runner and run them **inside the cluster** as Kubernetes-native jobs, so nothing
-CI-vendor-specific lives in the cluster at all. This is the pipeline-abstraction
-endpoint.
+instance. For **day-2** flows (health, rotation, audits) the better shape is to
+stop running them on *any* CI vendor's runner and run them **inside the cluster**
+as Kubernetes-native jobs (an Argo WorkflowTemplate driven by a CronWorkflow
+and/or an Argo Events webhook), authenticated by the workload's **ServiceAccount**
+(kube via the projected token; OpenBao via the pod SA → `kubernetes` auth). Then
+there are no GitHub secrets, no `secrets: inherit`, and nothing CI-vendor-specific
+in the cluster — which is exactly what makes it cross-org. The continuous form of
+the same signal is already the `llz-reconciler`; this would be the synchronous,
+on-demand variant. The portability seam stays `llz ci <verb>` in a container,
+invoked by whatever orchestrator — the *pipeline-as-data* endpoint.
 
-**Pattern:** the day-2 job is an **Argo WorkflowTemplate** running `llz ci …` on
-the slim `llz` image, authenticated by the workflow pod's **ServiceAccount**
-(kube via the projected token; OpenBao — when a job needs it — via
-`llz ci openbao-login --method kubernetes` against that same SA). It is driven by:
+**Why not ARC / in-cluster GitHub runners?** Actions Runner Controller also puts
+the job in-cluster, but embeds a GitHub-Actions-specific runner controller in
+every cluster — the opposite of abstracting the pipeline. The Argo-native form
+keeps the cluster CI-agnostic.
 
-- a **CronWorkflow** — self-driving, zero external CI in the loop; and/or
-- an **Argo Events Sensor + webhook EventSource** — a plain HTTP trigger that
-  *any* system can POST (GitHub webhook, GitLab, a cron, a human `curl`). GitHub
-  becomes one optional trigger source, not the execution substrate.
+**Status: deferred — a prototype was built and pulled.** It is not as simple as it
+looks, and the blocker is concrete: **`llz ci health` is a `kubectl` orchestrator**
+(it shells out to `kubectl` throughout), while the slim `llz` image is
+`distroless/static` — no kubectl, no shell. So an in-cluster `llz ci health`
+Workflow won't run on the slim image. The follow-up has to decide the substrate
+first — best options: (1) run day-2 workflows in the existing kube-capable image
+(`KUBE_IMAGE`/`TF_IMAGE`), or (2) make `llz ci health` kubectl-free by reusing the
+reconciler's `internal/kube` health path (`reconcile_health.go`) as an exit-code
+verb so it runs in the slim image. The prototype also needs an Argo Events
+**EventBus** (not shipped) for the webhook path and RBAC that matches what health
+actually queries (`batch/jobs`), plus a live-cluster validation. Tracked as its
+own design PR; the `llz ci openbao-login` SA/OIDC auth primitive lands there too.
 
-There are **no GitHub secrets, no `secrets: inherit`, and nothing GitHub-specific
-in the cluster** — which is exactly what makes it work across org boundaries. The
-continuous form of the same signal is the `llz-reconciler`; this is the
-synchronous, on-demand variant.
-
-- Auth primitive: `llz ci openbao-login` — `--method kubernetes` (default, the
-  pod ServiceAccount → OpenBao `kubernetes` auth; CI-agnostic) or `--method oidc`
-  (a GitHub Actions OIDC token → OpenBao `jwt` auth; the fallback only for a
-  genuinely external GitHub-hosted caller). Logic in the binary (tier 3).
-- Prototype component: [instance-template/apl-values/components/clusterHealthWorkflow/](../../instance-template/apl-values/components/clusterHealthWorkflow/)
-  — WorkflowTemplate + CronWorkflow + Sensor/EventSource + read-only RBAC. Enable
-  via `spec.components.clusterHealthWorkflow` (needs `argoWorkflows` + `argoEvents`).
-
-**Why not ARC / in-cluster GitHub runners?** Actions Runner Controller would also
-put the job in-cluster, but it embeds a GitHub-Actions-specific runner controller
-in every cluster — the opposite of abstracting the pipeline. The Argo-native form
-keeps the cluster CI-agnostic: the portability seam is `llz ci <verb>` in a
-container, invoked by whatever orchestrator (Argo, a CI runner, a human), and the
-endpoint is *pipeline-as-data* — one definition `llz` can render into GitHub
-Actions YAML, GitLab CI, or an Argo Workflow.
-
-**The honest floor.** This is day-2 only. A hosted CI runner cannot go secretless
-for the terraform/bootstrap flow: its entry credentials (`TF_STATE_*` for
-kubeconfig, `LINODE_API_TOKEN` for the LKE-E ACL) are static — Linode and S3 have
-no OIDC federation — and OpenBao is ClusterIP-only, so an external runner cannot
-reach it to bootstrap from (chicken-and-egg). So: **bootstrap flow → local job
-graph (tier 3, `llz ci tf-module`); day-2 flow → in-cluster Kubernetes-native
-job.** Both eliminate cross-org `secrets: inherit`; the second also eliminates the
-secrets and the CI-vendor coupling.
+**The honest floor.** This stays day-2 only. A hosted CI runner cannot go
+secretless for the terraform/bootstrap flow: its entry credentials (`TF_STATE_*`
+for kubeconfig, `LINODE_API_TOKEN` for the LKE-E ACL) are static — Linode and S3
+have no OIDC federation — and OpenBao is ClusterIP-only, so an external runner
+cannot reach it to bootstrap from (chicken-and-egg). So: **bootstrap flow → local
+job graph; day-2 flow → in-cluster Kubernetes-native job** (deferred).
 
 ## Non-goals
 

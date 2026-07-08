@@ -211,20 +211,6 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=llz-reconciler",
 				"bound_service_account_namespaces=llz-reconciler",
 				"policies=reconciler-read,linode-rotator", "ttl=15m"}},
-		// Kubernetes auth role for CI-agnostic day-2 Argo Workflows — binds the
-		// llz-cluster-health ServiceAccount (llz-argo-workflows namespace, the
-		// clusterHealthWorkflow component) to the read-only platform-ci policy, so
-		// `llz ci openbao-login --method kubernetes --role cluster-health` returns a
-		// token from an Argo workflow with NO GitHub secret (the SA-auth primitive,
-		// end to end). Read-only is the safe default; a genuine rotation-style day-2
-		// Argo job binds its OWN SA to a scoped write policy the same way the
-		// reconciler binds linode-rotator. Harmless when the component is disabled —
-		// the SA/namespace never match. See docs/designs/cross-org-reuse-pattern.md.
-		{desc: "write kubernetes auth role cluster-health", fatal: true,
-			args: []string{"write", "auth/kubernetes/role/cluster-health",
-				"bound_service_account_names=llz-cluster-health",
-				"bound_service_account_namespaces=llz-argo-workflows",
-				"policies=platform-ci", "ttl=15m"}},
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in

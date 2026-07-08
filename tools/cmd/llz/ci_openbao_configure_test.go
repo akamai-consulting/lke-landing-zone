@@ -11,8 +11,8 @@ import (
 
 func TestBaoConfigureStepsShape(t *testing.T) {
 	steps := baoConfigureSteps("acme/platform")
-	if len(steps) != 18 {
-		t.Fatalf("got %d steps, want 18 (14 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
+	if len(steps) != 17 {
+		t.Fatalf("got %d steps, want 17 (13 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
 	// `enable` steps are the only non-fatal ones (the bash `|| true`) — check by
 	// shape, not index, so adding a new enable (jwt) can't silently violate it.
@@ -23,8 +23,8 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		}
 	}
 	// A repo-less configure omits the GitHub-OIDC steps entirely.
-	if n := len(baoConfigureSteps("")); n != 14 {
-		t.Errorf("no-repo configure should omit JWT steps: got %d, want 14", n)
+	if n := len(baoConfigureSteps("")); n != 13 {
+		t.Errorf("no-repo configure should omit JWT steps: got %d, want 13", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
 	// Two roles expected: platform-ci (read) and secret-propagator (write). The
@@ -110,32 +110,6 @@ func TestReconcilerRoleBindsDrivingPolicies(t *testing.T) {
 	}
 	if !harborRoleFound {
 		t.Fatal("no auth/kubernetes/role/harbor-provisioner step found (harbor CronJob needs it)")
-	}
-}
-
-// The CI-agnostic day-2 Argo role binds the clusterHealthWorkflow SA to the
-// read-only platform-ci policy, so `llz ci openbao-login --method kubernetes
-// --role cluster-health` works from an Argo workflow with no GitHub secret.
-func TestClusterHealthRoleBindsArgoSA(t *testing.T) {
-	var found bool
-	for _, s := range baoConfigureSteps("acme/platform") {
-		if len(s.args) < 2 || s.args[0] != "write" || s.args[1] != "auth/kubernetes/role/cluster-health" {
-			continue
-		}
-		found = true
-		joined := strings.Join(s.args, " ")
-		for _, want := range []string{
-			"bound_service_account_names=llz-cluster-health",
-			"bound_service_account_namespaces=llz-argo-workflows",
-			"policies=platform-ci",
-		} {
-			if !strings.Contains(joined, want) {
-				t.Errorf("cluster-health role missing %q; got %v", want, s.args)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("no auth/kubernetes/role/cluster-health step found")
 	}
 }
 
@@ -272,12 +246,12 @@ func TestRunCIBaoConfigureHappyPath(t *testing.T) {
 	if err := runCIBaoConfigure(globalOpts{}, "primary"); err != nil {
 		t.Fatal(err)
 	}
-	// lookup + 18 steps (14 base + 4 GitHub-OIDC) + audit list.
-	if len(calls) != 20 {
-		t.Fatalf("got %d bao calls, want 20: %v", len(calls), calls)
+	// lookup + 17 steps (13 base + 4 GitHub-OIDC) + audit list.
+	if len(calls) != 19 {
+		t.Fatalf("got %d bao calls, want 19: %v", len(calls), calls)
 	}
-	if calls[0] != "token lookup -format=json" || calls[19] != "audit list" {
-		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[19])
+	if calls[0] != "token lookup -format=json" || calls[18] != "audit list" {
+		t.Errorf("unexpected first/last calls: %q / %q", calls[0], calls[18])
 	}
 	// The jwt role must actually be written during the run (body is JSON over
 	// stdin; repo/audience binding is asserted in TestBaoConfigureStepsShape).
