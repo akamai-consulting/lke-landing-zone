@@ -2,14 +2,13 @@
 # overlay lists it under components: when enabled (default-disabled). Template-
 # managed — edit upstream.
 #
-# Kubernetes-NATIVE cluster health: an Argo WorkflowTemplate running `llz ci health`
-# on the slim llz image, triggered by a CronWorkflow (self-driving, no external CI)
-# and/or an Argo Events Sensor+EventSource (a webhook any system can POST — GitHub,
-# GitLab, a cron, a human). It authenticates with the workflow pod's ServiceAccount
-# (read-only RBAC) — NO GitHub secrets, no `secrets: inherit`, nothing GitHub-
-# specific in the cluster. The pipeline-abstraction endpoint of
-# docs/designs/cross-org-reuse-pattern.md § "Day-2". Needs argoWorkflows (the
-# controller) + argoEvents (the webhook trigger).
+# Kubernetes-NATIVE cluster health: an Argo WorkflowTemplate running
+# `llz ci health-incluster` (kubectl-free) on the slim llz image, driven by a
+# self-driving CronWorkflow. It authenticates with the workflow pod's
+# ServiceAccount (read-only RBAC) — NO GitHub secrets, no `secrets: inherit`,
+# nothing GitHub-specific in the cluster. The pipeline-abstraction endpoint of
+# docs/designs/day2-incluster-health.md. Needs argoWorkflows (the CronWorkflow
+# controller) only.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:

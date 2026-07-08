@@ -1,16 +1,12 @@
 # RBAC for the CI-agnostic cluster-health job — least-privilege, read-only.
 #
-# Two ServiceAccounts:
-#   - llz-cluster-health (llz-argo-workflows): the health WORKLOAD's identity.
-#     `llz ci health` reads Argo Applications, ESO stores, cert-manager
-#     Certificates, OpenBao pods, nodes, and JOBS — all reads. Kube-ONLY: it is
-#     authenticated purely by this SA's projected token (in-cluster kube config).
-#     It needs NO OpenBao and NO GitHub secret. (A future rotation-style day-2 job
-#     that DOES need OpenBao gets its own SA + a scoped bao-configure role + an
-#     OpenBao :8200 egress rule, and uses `llz ci openbao-login`.)
-#   - llz-cluster-health-sensor (llz-argo-events): the Argo Events Sensor's
-#     identity — it only SUBMITS the WorkflowTemplate into llz-argo-workflows, so
-#     it gets workflow create/get, nothing else.
+# The llz-cluster-health ServiceAccount (llz-argo-workflows) is the health
+# WORKLOAD's identity. `llz ci health-incluster` reads Argo Applications, ESO
+# stores, cert-manager Certificates, OpenBao pods, nodes, and JOBS — all reads.
+# Kube-ONLY: authenticated purely by this SA's projected token (in-cluster kube
+# config). No OpenBao, no GitHub secret. (A future rotation-style day-2 job that
+# DOES need OpenBao gets its own SA + a scoped bao-configure role + an OpenBao
+# :8200 egress rule, and uses `llz ci openbao-login`.)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -56,63 +52,3 @@ subjects:
   - kind: ServiceAccount
     name: llz-cluster-health
     namespace: llz-argo-workflows
----
-# The Sensor's SA: submit the health WorkflowTemplate into llz-argo-workflows.
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: llz-cluster-health-sensor
-  namespace: llz-argo-events
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: llz-cluster-health-sensor
-  namespace: llz-argo-workflows
-rules:
-  - apiGroups: ["argoproj.io"]
-    resources: ["workflows"]
-    verbs: ["create", "get", "list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: llz-cluster-health-sensor
-  namespace: llz-argo-workflows
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: llz-cluster-health-sensor
-subjects:
-  - kind: ServiceAccount
-    name: llz-cluster-health-sensor
-    namespace: llz-argo-events
----
-# The sensor pod also reads its own Sensor + the EventBus it subscribes to, in
-# its own namespace. (Argo Events installs may provide a broader default
-# `operate-workflow-sa`; this is the least-privilege equivalent for THIS sensor.
-# If the webhook trigger doesn't fire, check the argo-events controller RBAC +
-# that the EventBus is Ready — the CronWorkflow path needs none of this.)
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: llz-cluster-health-sensor-events
-  namespace: llz-argo-events
-rules:
-  - apiGroups: ["argoproj.io"]
-    resources: ["sensors", "eventbus", "eventsources"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: llz-cluster-health-sensor-events
-  namespace: llz-argo-events
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: llz-cluster-health-sensor-events
-subjects:
-  - kind: ServiceAccount
-    name: llz-cluster-health-sensor
-    namespace: llz-argo-events

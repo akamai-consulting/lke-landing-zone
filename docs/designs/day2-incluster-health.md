@@ -83,26 +83,25 @@ reconciler already proved.
 - [ ] **Fold in the supplementary signals** — ESO store / cert-manager / OpenBao
       seal (already kubectl-free in `reconcile_health.go`) if the convergence
       verdict alone isn't enough for the day-2 report.
-- [ ] Right-size the EventBus (see the NATS note below) — or drop the webhook path.
-- [ ] Add sync-wave ordering (EventBus before Sensor) if the merge-into-
-      platform-bootstrap ordering needs it.
+- [x] **Webhook trigger dropped** (see below) — no EventBus/NATS to right-size or
+      sync-wave-order anymore.
 - [ ] **Live-cluster validation** — stand it up on an e2e cluster and confirm the
-      CronWorkflow runs the health job green AND (if kept) the webhook Sensor fires.
-      This is the gate the round-2 review shows structural/lint checks cannot
-      substitute for.
+      CronWorkflow runs the health job green. This is the gate the round-2 review
+      shows structural/lint checks cannot substitute for.
 
-## Do we even need the webhook trigger (and its NATS EventBus)?
+## Webhook trigger + its NATS EventBus — dropped
 
 The **CronWorkflow** (self-driving schedule) needs **no** Argo Events and **no**
-NATS — it's a plain Argo Workflows cron. NATS/the EventBus exists ONLY to carry a
+NATS — it's a plain Argo Workflows cron. NATS/the EventBus existed ONLY to carry a
 webhook event from the `EventSource` to the `Sensor` (the "triggerable by
 GitHub/GitLab/curl" adapter). That's a 3-pod NATS StatefulSet purely for an
-optional on-demand trigger. Given the CronWorkflow covers self-driving and the
-`llz-reconciler` is the continuous signal, the webhook path may not be worth it —
-an operator can also `argo submit --from workflowtemplate/llz-cluster-health` on
-demand. Decision for the PR: **default to CronWorkflow-only (drop Sensor +
-EventSource + EventBus + NATS)** unless a concrete external-webhook use-case
-exists; if kept, run NATS at 1 replica.
+optional on-demand trigger. Since the CronWorkflow covers self-driving and the
+`llz-reconciler` is the continuous signal (and an operator can `argo submit --from
+workflowtemplate/llz-cluster-health` on demand), the webhook path wasn't worth its
+weight. **Dropped:** the Sensor, EventSource, EventBus (NATS), and the sensor
+ServiceAccount/RBAC are gone; the component is CronWorkflow-only and now depends on
+`argoWorkflows` alone (not `argoEvents`). Re-add it only if a concrete
+external-webhook use-case appears (then run NATS at 1 replica).
 
 ## Non-goals
 

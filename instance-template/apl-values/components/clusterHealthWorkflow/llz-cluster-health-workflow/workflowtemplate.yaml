@@ -1,14 +1,14 @@
-# The health job itself — a WorkflowTemplate the CronWorkflow and the Sensor both
-# reference, authenticated ONLY by the llz-cluster-health ServiceAccount
-# (in-cluster kube config). No secrets, kube-only.
+# The health job itself — a WorkflowTemplate the CronWorkflow references,
+# authenticated ONLY by the llz-cluster-health ServiceAccount (in-cluster kube
+# config). No secrets, kube-only.
 #
 # Runs `llz ci health-incluster` — the KUBECTL-FREE convergence check
 # (internal/kube, no kubectl, no shell) so it works on the slim distroless llz
 # image, unlike `llz ci health` (a kubectl orchestrator). See
 # docs/designs/day2-incluster-health.md.
 #
-# WIP: still needs a LIVE-CLUSTER run (CronWorkflow green + Sensor fires) before
-# merge — structure/lint checks can't substitute for it (the round-2 review lesson).
+# WIP: still needs a LIVE-CLUSTER run (CronWorkflow runs the health job green)
+# before merge — structure/lint checks can't substitute for it (round-2 lesson).
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:

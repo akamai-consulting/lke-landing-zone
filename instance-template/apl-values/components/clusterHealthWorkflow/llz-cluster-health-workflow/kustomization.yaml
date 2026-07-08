@@ -1,15 +1,16 @@
 # llz-cluster-health-workflow — the CI-agnostic day-2 health job, fully Argo-owned.
 #
-#   rbac.yaml           the workflow + sensor ServiceAccounts and their read-only RBAC
-#   workflowtemplate.yaml  the health job, SA-authenticated (WIP: needs a kubectl-free command)
-#   cronworkflow.yaml   the self-driving schedule (no external trigger at all)
+#   rbac.yaml           the workflow ServiceAccount + its read-only RBAC
+#   workflowtemplate.yaml  the health job (`llz ci health-incluster`), SA-authenticated
+#   cronworkflow.yaml   the self-driving schedule — the ONLY trigger
 #   network-policy.yaml egress lockdown for the health workflow pods
-#   eventbus.yaml       the Argo Events EventBus the Sensor/EventSource bind to
-#   trigger.yaml        EventSource + Sensor — the OPTIONAL webhook trigger adapter
 #
-# The CronWorkflow makes this self-driving; the Sensor makes it triggerable by any
-# webhook (GitHub/GitLab/cron/curl) — GitHub is one trigger source, not the
-# substrate. See docs/designs/day2-incluster-health.md.
+# Self-driving via the CronWorkflow, kube-only, no Argo Events / no NATS. The
+# webhook trigger adapter (Sensor + EventSource + EventBus) was dropped — the
+# CronWorkflow covers the schedule and the llz-reconciler is the continuous signal,
+# so a NATS StatefulSet for an optional on-demand trigger wasn't worth it (an
+# operator can `argo submit --from workflowtemplate/llz-cluster-health` on demand).
+# See docs/designs/day2-incluster-health.md.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -18,5 +19,3 @@ resources:
   - workflowtemplate.yaml
   - cronworkflow.yaml
   - network-policy.yaml
-  - eventbus.yaml
-  - trigger.yaml
