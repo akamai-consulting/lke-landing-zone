@@ -72,17 +72,8 @@ jobs:
       # Dual checkout (Option A) — see llz-cluster-health.yml for the rationale.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + llz)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Cluster access (kubeconfig + runner ACL + llz)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -125,7 +116,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
