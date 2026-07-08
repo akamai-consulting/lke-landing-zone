@@ -28,7 +28,15 @@ var healthNamespaces = []string{
 const openbaoNamespace = "llz-openbao"
 
 func ciHealthCmd() *cobra.Command {
-	return &cobra.Command{
+	// failOnUnhealthy defaults true so a bare `llz ci health` keeps its
+	// convergence-contract exit semantics (existing callers unchanged). Passing
+	// --fail-on-unhealthy=false is REPORT-ONLY: it still runs every check and
+	// prints the report, but always exits 0. That lets a shell-less caller (the
+	// distroless llz image — no /bin/sh, so no `… || true`) choose report vs gate
+	// with a plain value flag instead of a shell conditional. See the
+	// clusterHealthWorkflow component's WorkflowTemplate.
+	failOnUnhealthy := true
+	c := &cobra.Command{
 		Use:   "health",
 		Short: "cluster convergence health check (exit 0 converged / 2 in-progress / 1 hard-failed / 3 unreachable)",
 		Long: "Native port of check-cluster-health.sh — the single source of truth for \"is\n" +
@@ -37,13 +45,25 @@ func ciHealthCmd() *cobra.Command {
 			"$KUBECONFIG points at, classifying each via the unit-tested internal/health\n" +
 			"predicates, and exits per the convergence contract: 1 hard-failed, 2 in-\n" +
 			"progress (poll), 0 converged, 3 apiserver unreachable (an infrastructure\n" +
-			"transient, retried against the budget — never a hard strike).",
+			"transient, retried against the budget — never a hard strike).\n\n" +
+			"--fail-on-unhealthy=false → report-only: run the checks + print the report but\n" +
+			"always exit 0 (for a report-only scheduled run on a shell-less image).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(healthExitCode())
+			code := healthExitCode()
+			if !failOnUnhealthy {
+				if code != 0 {
+					fmt.Fprintf(os.Stderr, "::notice::health exit %d suppressed (--fail-on-unhealthy=false, report-only)\n", code)
+				}
+				return nil // exit 0
+			}
+			os.Exit(code)
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&failOnUnhealthy, "fail-on-unhealthy", true,
+		"exit non-zero per the convergence contract on an unhealthy cluster; =false is report-only (always exit 0)")
+	return c
 }
 
 func ciConvergeCmd() *cobra.Command {

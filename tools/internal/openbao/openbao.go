@@ -109,6 +109,45 @@ func KubernetesLogin(ctx context.Context, httpClient *http.Client, addr, mount, 
 	return out.Auth.ClientToken, nil
 }
 
+// JWTLogin exchanges a GitHub Actions OIDC JWT for an OpenBao client token via
+// the `jwt` auth method's `auth/jwt/login` (role configured by
+// `llz ci bao-configure`). It is the direct-HTTP counterpart to KubernetesLogin
+// for a workload that can reach OpenBao's API over the network — an in-cluster
+// runner hitting the ClusterIP — and is the auth primitive behind the secretless
+// day-2 thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
+func JWTLogin(ctx context.Context, httpClient *http.Client, addr, role, jwt string) (string, error) {
+	body, err := json.Marshal(map[string]string{"role": role, "jwt": jwt})
+	if err != nil {
+		return "", err
+	}
+	url := strings.TrimRight(addr, "/") + "/v1/auth/jwt/login"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("jwt auth login (role %s): %w", role, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("jwt auth login (role %s): HTTP %d: %s", role, resp.StatusCode, respBody(resp))
+	}
+	var out struct {
+		Auth struct {
+			ClientToken string `json:"client_token"`
+		} `json:"auth"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("parse jwt auth login response: %w", err)
+	}
+	if out.Auth.ClientToken == "" {
+		return "", fmt.Errorf("jwt auth login (role %s) returned no client_token — check the role's bound_claims/bound_audiences match this repo (llz ci bao-configure)", role)
+	}
+	return out.Auth.ClientToken, nil
+}
+
 // DataPath turns an operator KV path (secret/app/keys) into the KV v2 data API
 // path (secret/data/app/keys). MetadataPath does the metadata equivalent.
 func DataPath(p string) string     { return strings.Replace(p, "secret/", "secret/data/", 1) }

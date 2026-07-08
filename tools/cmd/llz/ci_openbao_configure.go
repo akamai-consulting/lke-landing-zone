@@ -211,6 +211,13 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 				"bound_service_account_names=llz-reconciler",
 				"bound_service_account_namespaces=llz-reconciler",
 				"policies=reconciler-read,linode-rotator", "ttl=15m"}},
+		// NOTE: an OpenBao kubernetes-auth role for a day-2 Argo Workflows SA will be
+		// added HERE when the first rotation-style day-2 Argo job lands — bound to
+		// THAT job's own SA + namespace with a scoped write policy (the same shape as
+		// `reconciler` above), alongside its OpenBao :8200 egress NetworkPolicy. The
+		// cluster-health workflow itself is kube-only (its SA needs no OpenBao), so no
+		// role is wired for it. `llz ci openbao-login` is the auth primitive those
+		// jobs will use. See docs/designs/day2-incluster-health.md.
 	}
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in
