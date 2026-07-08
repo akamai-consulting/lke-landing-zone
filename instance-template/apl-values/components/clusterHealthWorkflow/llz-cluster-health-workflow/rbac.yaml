@@ -42,3 +42,33 @@ subjects:
   - kind: ServiceAccount
     name: llz-cluster-health
     namespace: llz-argo-workflows
+---
+# Argo Workflows executor RBAC — REQUIRED for any workflow pod running under a
+# non-default SA: the emissary executor reports each node's result by creating +
+# patching a workflowtaskresults CR in the workflow's namespace. Without this the
+# pod runs (the health check itself succeeds) but the WORKFLOW errors with exit 64
+# ("cannot create workflowtaskresults"). Found by a live Argo run — kustomize/
+# actionlint can't see it. Scoped to this SA + namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-cluster-health-executor
+  namespace: llz-argo-workflows
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-cluster-health-executor
+  namespace: llz-argo-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-cluster-health-executor
+subjects:
+  - kind: ServiceAccount
+    name: llz-cluster-health
+    namespace: llz-argo-workflows

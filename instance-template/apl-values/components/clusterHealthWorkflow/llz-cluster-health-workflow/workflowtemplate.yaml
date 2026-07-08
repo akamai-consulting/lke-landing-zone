@@ -43,9 +43,15 @@ spec:
           app.kubernetes.io/name: llz-cluster-health
       container:
         image: <@ llz_image_ref @>
-        # Run llz DIRECTLY — the distroless image has no /bin/sh, so report-vs-gate
-        # is a value flag (--fail-on-unhealthy=<bool>), not a shell conditional.
-        # Matches the reconciler / harbor-provisioner invocation shape.
+        # `command` is set EXPLICITLY (the image ENTRYPOINT path), not left implicit.
+        # Argo's emissary executor resolves the entrypoint for an args-only container
+        # by querying the image's registry manifest at runtime — an extra network
+        # dependency that fails for a non-pullable image and is fragile even for a
+        # public one. Specifying command avoids the lookup entirely (Argo's
+        # recommended practice). This is WHY it differs from the reconciler/harbor
+        # CronJobs, which are plain kubelet-run (ENTRYPOINT used directly, no emissary).
+        # No shell: the distroless image has none; report-vs-gate is a value flag.
+        command: ["/usr/local/bin/llz"]
         args:
           - ci
           - health-incluster
