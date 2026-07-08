@@ -1,17 +1,23 @@
 name: Terraform Infrastructure
 
-# Thin caller for the reusable LLZ workflow — the full pipeline body (plan /
-# apply / destroy across cluster, cluster-bootstrap,
-# object-storage + OpenBao bootstrap + converge gate), the terraform-init +
-# fetch-kubeconfig composite actions, and the llz CLI all live in the
-# template and are sourced there (see docs/templatization-plan.md §"Keeping
-# instances in sync"). The reusable workflow checks THIS instance back out (its
-# terraform-iac-bootstrap/ TF roots + state), so the instance copies only this
-# stub. The dispatch inputs below are FORWARDED to the reusable as explicit
+# Thin caller for the LOCAL reusable workflow llz-terraform.yml — the full
+# pipeline body (plan / apply / destroy across cluster, cluster-bootstrap,
+# object-storage + OpenBao bootstrap + converge gate) lives in
+# .github/workflows/llz-terraform.yml, which copier delivers into THIS repo
+# alongside this stub. Because that reusable is same-repo, `secrets: inherit`
+# actually delivers this instance's repo + environment secrets — unlike the old
+# cross-org `uses:` form, where inheritance silently arrived empty for any adopter
+# whose org differs from the template's (#200/#201). The STEP logic stays central:
+# the reusable runs in the `llz` container image and calls the terraform-init /
+# fetch-kubeconfig composite actions from <upstream_org>/lke-landing-zone at a
+# pinned tag (public, no secrets crossing the boundary).
+# The dispatch inputs below are FORWARDED to the reusable as explicit
 # workflow_call inputs (`with:`) — a reusable workflow's github.event.inputs is
 # empty across the workflow_call boundary, so it reads them via `inputs`.
-# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
-# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+# ADOPTERS: no fork needed for secrets — the job graph is local. `upstream_org` /
+# `llz_version` (the composite-action + image source, Renovate-pinned via
+# instance-template/renovate.json) point at the template; fork only if you want to
+# own those artifacts too.
 
 on:
   push:
@@ -71,9 +77,9 @@ permissions:
 
 jobs:
   call:
-    # Pinned to an immutable LLZ template release tag (not @main) so updates
-    # arrive as reviewable Renovate PRs. ADOPTERS: repoint the org to your fork.
-    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
+    # LOCAL reusable (copier-delivered into this repo), so `secrets: inherit` is
+    # same-repo and resolves this instance's repo + environment secrets (#201).
+    uses: ./.github/workflows/llz-terraform.yml
     with:
       instance_repo: <@ instance_repo @>
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone

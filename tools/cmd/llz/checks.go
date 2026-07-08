@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -198,6 +199,70 @@ func stepGitleaks(g globalOpts) error {
 	return run(g, gitleaksArgv(gitleaks)...)
 }
 
+// conflictMarkerLines scans text for git/copier merge-conflict markers and
+// returns the 1-based line numbers of any it finds. It flags ONLY the
+// unambiguous 7-character start (`<<<<<<<`) and end (`>>>>>>>`) markers — a bare
+// line, or one followed by a space + label (git's `<<<<<<< HEAD`, copier's
+// `<<<<<<< before updating` / `>>>>>>> after updating`). It deliberately does
+// NOT flag the `=======` middle marker on its own: seven equals signs appear
+// legitimately (Markdown setext underlines, horizontal rules), so treating them
+// as a conflict would false-positive on docs. A real conflict always carries a
+// start + end marker, so nothing is missed. A run of 8+ `<`/`>` (e.g. ASCII art)
+// is not a marker and is not flagged.
+func conflictMarkerLines(content string) []int {
+	var lines []int
+	for i, ln := range strings.Split(content, "\n") {
+		ln = strings.TrimRight(ln, "\r")
+		for _, m := range []string{"<<<<<<<", ">>>>>>>"} {
+			if ln == m || strings.HasPrefix(ln, m+" ") {
+				lines = append(lines, i+1)
+			}
+		}
+	}
+	return lines
+}
+
+// stepConflictMarkers fails the lint gate if any git-tracked text file carries a
+// committed merge-conflict marker. A botched `copier update` / `llz upgrade`
+// 3-way merge can leave these in place (e.g. an instance's kustomization.yaml),
+// producing invalid YAML that only surfaces when Argo/kustomize chokes far
+// downstream — the exact silent-breakage class Phase 0 of the cross-org reuse
+// pattern closes (docs/designs/cross-org-reuse-pattern.md). Native (no external
+// tool), so it can never skip; outside a git repo it no-ops like the others.
+func stepConflictMarkers(_ globalOpts) error {
+	out, err := gitOutput("", "ls-files")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "  skip: not a git repo (conflict-marker scan)")
+		return nil
+	}
+	var hits []string
+	for _, f := range strings.Split(out, "\n") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue // race with a delete / unreadable — not this check's concern
+		}
+		if bytes.IndexByte(data, 0) >= 0 {
+			continue // binary file — skip
+		}
+		for _, ln := range conflictMarkerLines(string(data)) {
+			hits = append(hits, fmt.Sprintf("%s:%d", f, ln))
+		}
+	}
+	if len(hits) > 0 {
+		fmt.Fprintf(os.Stderr, "conflict markers found in %d location(s):\n", len(hits))
+		for _, h := range hits {
+			fmt.Fprintf(os.Stderr, "  • %s\n", h)
+		}
+		return fmt.Errorf("committed merge-conflict markers — resolve them before committing " +
+			"(a 3-way `copier update`/`llz upgrade` merge likely left them; see " +
+			"docs/designs/cross-org-reuse-pattern.md Phase 0)")
+	}
+	return nil
+}
+
 func stepTFValidate(g globalOpts) error {
 	terraform := tool("terraform", "LLZ_TERRAFORM")
 	if !haveTool(terraform) {
@@ -230,7 +295,7 @@ func stepCheckov(g globalOpts) error {
 // runLint is the fast pre-commit gate (also called by `llz precommit`).
 func runLint(g globalOpts) error {
 	for _, step := range []func(globalOpts) error{
-		stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
+		stepConflictMarkers, stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
 	} {
 		if err := step(g); err != nil {
 			return err
@@ -328,6 +393,7 @@ func checkCmd() *cobra.Command {
 		use, short string
 		fn         func(globalOpts) error
 	}{
+		{"conflict-markers", "fail on committed merge-conflict markers", stepConflictMarkers},
 		{"fmt-check", "tofu fmt -check (no writes)", stepFmtCheck},
 		{"tf-lint", "tflint each terraform/ root", stepTFLint},
 		{"actions-lint", "actionlint the instance workflows", stepActionsLint},

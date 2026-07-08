@@ -66,9 +66,22 @@ _answers_file: .copier-answers.yml
 # control-plane ACL allow-list. Per-env tfvars and apl-values/<env> overlays are
 # created by `llz env add` and never exist in the template, so Copier
 # leaves them alone without needing a rule here.
+#
+# EVERY `owned` file the template actually SHIPS must appear here (or under
+# `_exclude`), or `copier update` re-renders + 3-way-merges it onto the instance's
+# own content and can leave conflict markers behind — the failure that shipped
+# invalid YAML in the gsap-apl v0.0.24 upgrade. `llz ci template-manifest`
+# asserts this manifest↔copier consistency in CI (see
+# docs/designs/cross-org-reuse-pattern.md Phase 0), so an owned file added to
+# .template-manifest without a rule here fails the build.
 _skip_if_exists:
   - "terraform-iac-bootstrap/*/.terraform.lock.hcl"
   - "terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt"
+  # The operator-owned custom/ escape hatch (shipped once as an empty starter) and
+  # the one shared file `llz render` fills in place with the operator's ACME email:
+  # both are `owned`, so an update must never re-render + merge them.
+  - "apl-values/_shared/custom/**"
+  - "apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml"
 
 # ── Content delivered from OUTSIDE the scaffold ──────────────────────────────
 # docs/ lives at the repo root — NOT under instance-template/ — so the scaffold a
@@ -76,9 +89,12 @@ _skip_if_exists:
 # template's own CI/README AND every instance:
 #   * docs/ — the operator-facing runbooks/playbooks/architecture the README
 #             calls "knowledge an adopter inherits", landed at the instance's
-#             docs/. The two pure template-build docs (templatization-plan.md =
-#             extraction design, agents.md = contributor convention) are dropped —
-#             they describe building the template, not operating an instance.
+#             docs/. The pure template-build docs (templatization-plan.md =
+#             extraction design, agents.md = contributor convention,
+#             designs/cross-org-reuse-pattern.md = the reuse-pattern extraction
+#             design) are dropped — they describe building the template, not
+#             operating an instance (and the last carries literal <@ … @> delimiter
+#             examples that must never reach the instance's rendered docs/).
 # `_subdirectory` would otherwise never copy docs/, so this task pulls it in from
 # the cloned template (`_copier_conf.src_path`). Tasks run on BOTH `copier copy`
 # and `copier update`, so docs/ refreshes on update exactly like a `managed` file
@@ -92,7 +108,7 @@ _skip_if_exists:
 # ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable `llz-*`
 # workflows run in, so an instance never carries its own copy.
 _tasks:
-  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md"
+  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md docs/designs/cross-org-reuse-pattern.md"
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not

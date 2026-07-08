@@ -15,7 +15,8 @@ name: Cluster health (diagnostic + E2E validate)
 #     The template repo's release-e2e gate dispatches THIS caller by filename and
 #     watches it, passing those flags explicitly (see release-e2e.yml §validate).
 #
-# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
+# ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
+# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201). Pin template-ref to
 # a template release tag (Renovate keeps both current — instance-template/renovate.json).
 
 on:
@@ -53,8 +54,8 @@ jobs:
     # Pinned to an immutable LLZ template release tag (not @main) so updates
     # arrive as reviewable Renovate PRs — see terraform-modules/RELEASING.md
     # §"Template-repo releases". Keep the @<tag> and template-ref in lockstep
-    # (Renovate bumps both). ADOPTERS: repoint the org to your fork.
-    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-cluster-health.yml@<@ llz_version @>
+    # (Renovate bumps both). ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).
+    uses: ./.github/workflows/llz-cluster-health.yml
     with:
       region: ${{ inputs.region }}
       verbose: ${{ inputs.verbose }}

@@ -411,6 +411,14 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 
 	var errs []error
 
+	// Cross-org reuse guardrail (#200): a thin-caller workflow whose reusable
+	// `uses:` org differs from this instance's org while passing `secrets: inherit`
+	// runs with EMPTY secrets — a silent setup-time trap. Fail loudly here.
+	fmt.Println("\n" + bold("Workflow reuse:"))
+	if err := checkCrossOrgReuse(); err != nil {
+		errs = append(errs, err)
+	}
+
 	// Opt-in SSH host reachability + known_hosts freshness (an SSH-based GitOps
 	// source path). Runs only when --ssh-host is given so it adds no noise.
 	if sshHost != "" {
