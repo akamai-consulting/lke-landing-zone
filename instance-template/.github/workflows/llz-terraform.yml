@@ -1,21 +1,30 @@
 # Reusable (`workflow_call`) version of the Terraform infra pipeline (plan /
-# apply / destroy across cluster, cluster-bootstrap,
-# object-storage + the OpenBao bootstrap + converge gate). Surface-reduction
-# pattern (docs/templatization-plan.md §"Keeping instances in sync"): the
-# instance ships a thin caller stub (owning the push / pull_request /
-# workflow_dispatch triggers) instead of this body, the terraform-init +
-# fetch-kubeconfig composite actions, and the llz CLI. Dual checkout
-# (Option A): the caller instance is at the workspace root (its
-# terraform-iac-bootstrap/ TF roots + state), the LLZ template into
-# _llz-template/. github.event_name / github.ref / github.event.pull_request.*
-# ARE inherited from the caller, so the push/PR trigger gates work unchanged. The
-# dispatch SELECTORS (action / module / region / confirm_destroy) are NOT — a
-# reusable workflow's github.event.inputs is empty across the workflow_call
-# boundary — so the caller forwards them as explicit `with:` inputs and the jobs
-# below gate on the `inputs` context. On push/PR the caller forwards empty
-# strings, leaving the action-gated jobs skipped.
-# The bootstrap-openbao job calls llz-bootstrap-openbao directly (template-local
-# nested reusable).
+# apply / destroy across cluster, cluster-bootstrap, object-storage + the OpenBao
+# bootstrap + converge gate). LOCAL to the instance: copier delivers this file
+# into each instance's .github/workflows/, and the thin caller (terraform.yml)
+# invokes it as `uses: ./.github/workflows/llz-terraform.yml` + `secrets: inherit`.
+# Same-repo inheritance actually delivers the instance's repo + environment
+# secrets — the cross-org reuse pattern (docs/designs/cross-org-reuse-pattern.md,
+# #201) that replaced the old `<org>/…@ref` call whose inheritance arrived empty
+# for any adopter in a different org (#200).
+#
+# STEP LOGIC STAYS CENTRAL: every job runs in the `llz` container image
+# (vars.TF_IMAGE) and calls the terraform-init / cluster-access / fetch-kubeconfig
+# / lke-runner-acl composite actions from
+# <upstream_org>/lke-landing-zone/instance-template/.github/actions/<name> at the
+# pinned template tag (public repo → cross-org action fetch needs no secrets). The
+# single `actions/checkout` per job brings in THIS instance's terraform-iac-bootstrap/
+# TF roots + apl-values/; there is no separate template checkout.
+#
+# github.event_name / github.ref / github.event.pull_request.* ARE inherited from
+# the caller, so the push/PR trigger gates work unchanged. The dispatch SELECTORS
+# (action / module / region / confirm_destroy) are NOT — a reusable workflow's
+# github.event.inputs is empty across the workflow_call boundary — so the caller
+# forwards them as explicit `with:` inputs and the jobs below gate on the `inputs`
+# context. On push/PR the caller forwards empty strings, leaving the action-gated
+# jobs skipped. The bootstrap-openbao job calls the sibling local reusable
+# llz-bootstrap-openbao.yml directly; the PR discover job calls the shared,
+# secret-free llz-discover-deployments.yml cross-org (no inheritance needed).
 on:
   workflow_call:
     inputs:
@@ -159,7 +168,7 @@ jobs:
   # do.
   discover:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    uses: ./.github/workflows/llz-discover-deployments.yml
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-discover-deployments.yml@<@ llz_version @>
 
   # ── Plan on PRs ─────────────────────────────────────────────────────────────
   # Runs for every PR that touches a Terraform path. Posts a plan summary;
@@ -187,21 +196,12 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       # The per-env tfvars are gitignored build artifacts rendered from the spec;
       # the terraform-init composite below regenerates them before init, so no
       # separate render step is needed here (the first TF step after init is the
       # plan). No-op for instances without a spec.
       - name: Terraform init — cluster
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -251,15 +251,6 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: tflint
         run: make tf-lint
 
@@ -279,15 +270,6 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Checkov
         run: make checkov
 
@@ -365,15 +347,6 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       # ── Front-loaded preflights ────────────────────────────────────────────────
       # apply-vpc is the first job apply-cluster depends on, so failing here aborts
       # BEFORE the ~15-min cluster apply. Two cheap fail-fast checks:
@@ -422,7 +395,7 @@ jobs:
 
       - name: Terraform init — shared VPC
         if: steps.net.outputs.net != ''
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           module:                vpc
           state-key:             vpc/${{ steps.net.outputs.net }}/terraform.tfstate
@@ -463,15 +436,6 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       # Render the per-env tfvars (gitignored build artifacts) from the spec
       # EXPLICITLY here, because the Pre-flight step below reads <region>.tfvars
       # (cluster_label / node_type / node_count for the capacity guard) and runs
@@ -505,7 +469,7 @@ jobs:
         run: llz ci preflight --fail-on-orphans "$FAIL_ON_ORPHANS" --orphan-threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION"
 
       - name: Terraform init — cluster
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -618,15 +582,6 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       # ── Pre-flight: env secrets the cluster-bootstrap apply needs ──────────────
       # APL_VALUES_REPO_TOKEN (passed as TF_VAR_apl_values_repo_token) is
       # rendered into apl-core's otomi.git.password, from which apl-core's own
@@ -671,7 +626,7 @@ jobs:
         run: llz ci chart-publish-check --root .
 
       - name: Terraform init — cluster-bootstrap
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -687,7 +642,7 @@ jobs:
       # readiness probe below would be refused); the paired revoke
       # (if: always(), end of job) closes it.
       - name: Cluster access (kubeconfig readiness probe + runner ACL)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -749,7 +704,7 @@ jobs:
       # Job / ArgoCD pods are not becoming ready.
       - name: Fetch kubeconfig for diagnostics
         if: failure()
-        uses: ./_llz-template/instance-template/.github/actions/fetch-kubeconfig
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/fetch-kubeconfig@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -778,7 +733,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -911,23 +866,14 @@ jobs:
       AWS_ACCESS_KEY_ID:      ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:  ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
-      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      # Checkout the instance BEFORE the destroy-confirm gate (llz runs from the container image; this brings in the TF roots + confirm token).
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
       - name: Terraform init — cluster-bootstrap
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1003,20 +949,11 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
       - name: Terraform init — cluster-bootstrap
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1060,7 +997,7 @@ jobs:
       # is false so CASE B (cluster already gone) is a clean no-op. Revoked at
       # job end (if: always()).
       - name: Open control-plane ACL for this runner
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:            open
           linode-token:    ${{ secrets.LINODE_API_TOKEN }}
@@ -1111,7 +1048,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1139,23 +1076,14 @@ jobs:
       AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY:           ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
-      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      # Checkout the instance BEFORE the destroy-confirm gate (llz runs from the container image; this brings in the TF roots + confirm token).
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
       - name: Terraform init — cluster
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1200,21 +1128,12 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Validate destroy confirmation
         id: confirm
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
       - name: Terraform init — cluster
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1412,17 +1331,8 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Terraform init — object-storage
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1484,23 +1394,14 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
-      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      # Checkout the instance BEFORE the destroy-confirm gate (llz runs from the container image; this brings in the TF roots + confirm token).
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
 
       - name: Terraform init — object-storage
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1535,23 +1436,14 @@ jobs:
       REGION:          ${{ inputs.region }}
       CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
     steps:
-      # Checkout BEFORE validate — llz (the assert-destroy-confirm gate) builds from _llz-template.
+      # Checkout the instance BEFORE the destroy-confirm gate (llz runs from the container image; this brings in the TF roots + confirm token).
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (actions + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
 
       - name: Terraform init — object-storage
-        uses: ./_llz-template/instance-template/.github/actions/terraform-init
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}

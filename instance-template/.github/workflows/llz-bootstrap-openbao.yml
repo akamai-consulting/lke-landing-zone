@@ -1,13 +1,16 @@
 name: llz-bootstrap-openbao (reusable)
 
-# Reusable (`workflow_call`) version of the OpenBao bootstrap. Surface-reduction
-# pattern (docs/templatization-plan.md §"Keeping instances in sync"): the instance
-# ships a thin caller stub + a local terraform.yml caller calls
-# llz-bootstrap-openbao directly; the body, the fetch-kubeconfig action, and the
-# llz CLI live in the template. Dual checkout (Option A): instance at the
-# workspace root (fetch-kubeconfig's terraform-iac-bootstrap/cluster working-dir),
-# template into _llz-template/. `inputs.*` are workflow_call inputs forwarded by
-# the caller.
+# Reusable (`workflow_call`) version of the OpenBao bootstrap. LOCAL to the
+# instance (docs/designs/cross-org-reuse-pattern.md, #201): copier delivers this
+# file into each instance's .github/workflows/; both the standalone
+# bootstrap-openbao.yml caller and llz-terraform.yml's bootstrap-openbao job invoke
+# it as `uses: ./.github/workflows/llz-bootstrap-openbao.yml` + `secrets: inherit`
+# — same-repo, so the instance's environment secrets actually resolve. The body
+# runs in the `llz` container image and calls the cluster-access / fetch-kubeconfig
+# / lke-runner-acl composite actions from <upstream_org>/lke-landing-zone at the
+# pinned tag; the single instance checkout brings in terraform-iac-bootstrap/cluster
+# (fetch-kubeconfig's working-dir). `inputs.*` are workflow_call inputs forwarded
+# by the caller.
 
 # Initializes, unseals, and configures an OpenBao cluster for a given region.
 #
@@ -238,15 +241,6 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       # ── Pre-flight: required infra-<region> env secrets ────────────────────────
       # Surface missing GHA env secrets in seconds rather than 30+ min into the
       # workflow when a seed step exits 0 with an `::error::` and
@@ -283,7 +277,7 @@ jobs:
       # convergence gate at the tail of this job polls for up to 10m (formerly the
       # separate `converge` job set this lease on its own cluster-access).
       - name: Cluster access (kubeconfig + runner ACL)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -888,7 +882,7 @@ jobs:
       # call cuts apiserver access (we register-runner-lease on cluster-access above).
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -942,19 +936,10 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
       # that cluster's control-plane ACL (revoked at job end). No llz needed here.
       - name: Cluster access (peer kubeconfig + runner ACL)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -974,7 +959,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (peer)
         if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1004,19 +989,10 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       # Fetch the standby cluster's (self) kubeconfig and open this runner's
       # egress IP in its control-plane ACL (revoked at job end). No llz needed.
       - name: Cluster access (standby kubeconfig + runner ACL)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
           region:                ${{ inputs.region }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1037,7 +1013,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (standby)
         if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1062,19 +1038,10 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout LLZ template (action + scripts)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          github-server-url: https://github.com
-          ref: ${{ inputs.template-ref }}
-          token: ${{ github.token }}
-          path: _llz-template
-
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
       # that cluster's control-plane ACL (revoked at job end). No llz needed here.
       - name: Cluster access (peer kubeconfig + runner ACL)
-        uses: ./_llz-template/instance-template/.github/actions/cluster-access
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1094,7 +1061,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (peer)
         if: always()
-        uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

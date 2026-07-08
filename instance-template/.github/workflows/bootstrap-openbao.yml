@@ -56,9 +56,11 @@ concurrency:
 
 jobs:
   call:
-    # Pinned to an immutable LLZ template release tag (not @main) so updates
-    # arrive as reviewable Renovate PRs. ADOPTERS: repoint the org to your fork.
-    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-bootstrap-openbao.yml@<@ llz_version @>
+    # Calls the LOCAL reusable ./.github/workflows/llz-bootstrap-openbao.yml (copier-delivered
+    # into this repo) so `secrets: inherit` is same-repo and actually resolves
+    # (#201). No fork needed for secrets; upstream_org/llz_version only source the
+    # composite actions + image.
+    uses: ./.github/workflows/llz-bootstrap-openbao.yml
     with:
       region:                   ${{ inputs.region }}
       reprovision_ca_only:      ${{ inputs.reprovision_ca_only || false }}
