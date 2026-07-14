@@ -125,7 +125,7 @@ _tasks:
   # EXCLUDES apl-values/**/values.yaml and _shared/custom/ (operator-tuned config
   # whose comments explain what to change). Idempotent; no-op if llz is absent.
   # See docs/designs/instance-slimming.md.
-  - "command -v llz >/dev/null 2>&1 && llz ci strip-comments .github/workflows/llz-*.yml $(find apl-values/components apl-values/_shared/manifest -type f \\( -name '*.yaml' -o -name '*.yml' \\) 2>/dev/null) $(find terraform-iac-bootstrap/cluster terraform-iac-bootstrap/object-storage -type f -name '*.tf' 2>/dev/null) || echo \"(llz not on PATH — skipping comment-strip; run 'llz ci strip-comments .github/workflows/llz-*.yml ...')\""
+  - "command -v llz >/dev/null 2>&1 && llz ci strip-comments .github/workflows/llz-*.yml $(find apl-values/components apl-values/_shared/manifest -type f \\( -name '*.yaml' -o -name '*.yml' \\) 2>/dev/null) $(find terraform-iac-bootstrap -type f -name '*.tf' 2>/dev/null) || echo \"(llz not on PATH — skipping comment-strip; run 'llz ci strip-comments .github/workflows/llz-*.yml ...')\""
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not
