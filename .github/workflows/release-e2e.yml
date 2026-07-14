@@ -264,9 +264,16 @@ jobs:
           # build it from a template checkout. A real instance has no scripts/, so
           # the e2e instance must not either — don't hoist anything here.
           # docs/ are delivered the same way (copier _tasks); mirror that too, minus
-          # the two template-build docs the _tasks drops, so the e2e instance matches.
+          # the template-build docs the _tasks drops, so the e2e instance matches a
+          # real instance. KEEP THIS LIST IN SYNC WITH copier.yml `_tasks` — a
+          # template-build design doc left here leaks into the instance, and the ones
+          # carrying literal `<@ … @>` delimiter examples (cross-org-reuse-pattern.md)
+          # then trip the unrendered-token guard below.
           mkdir -p .e2e-instance/docs && cp -a docs/. .e2e-instance/docs/
-          rm -f .e2e-instance/docs/templatization-plan.md .e2e-instance/docs/agents.md
+          rm -f .e2e-instance/docs/templatization-plan.md .e2e-instance/docs/agents.md \
+                .e2e-instance/docs/designs/cross-org-reuse-pattern.md \
+                .e2e-instance/docs/designs/day2-incluster-health.md \
+                .e2e-instance/docs/designs/instance-slimming.md
           # Composite actions are template-internal — the reusable llz-* workflows
           # source them from a template checkout, so instances don't carry them
           # (copier.yml `_exclude`s `.github/actions`). Mirror that here.
