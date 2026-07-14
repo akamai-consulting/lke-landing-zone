@@ -809,6 +809,21 @@ jobs:
         if: ${{ inputs.assert_loki }}
         run: llz ci assert-reconciler
 
+      # E2E gate for the day-2 clusterHealthWorkflow component's RUN path. The
+      # release-e2e provision enables the component, so converge already validated
+      # it DEPLOYS (kyverno admits the WorkflowTemplate/CronWorkflow/RBAC, Argo
+      # syncs them). This submits a one-shot Workflow from the llz-cluster-health
+      # WorkflowTemplate and asserts it Succeeds — proving the RUN path a scheduled
+      # CronWorkflow would take: the signed llz image passes the kyverno signature
+      # policy on the pod, the SA + executor RBAC authorize it, and
+      # `llz ci health-incluster` exits clean on the converged cluster. Same
+      # assert_loki gate; the verb SKIPS (exit 0) if the WorkflowTemplate is absent,
+      # so it stays inert on a normal instance where the component is disabled.
+      # Logic lives in the unit-tested `llz ci assert-health-workflow`.
+      - name: (e2e) assert day-2 health WorkflowTemplate runs green
+        if: ${{ inputs.assert_loki }}
+        run: llz ci assert-health-workflow
+
       # E2E-only support-plane metric-surface diagnostic. Gated on the same
       # assert_loki input as the check above, so it runs on the release-e2e
       # provision (which holds cluster access) and never on a normal instance

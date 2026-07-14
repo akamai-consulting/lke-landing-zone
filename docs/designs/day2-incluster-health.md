@@ -92,10 +92,21 @@ reconciler already proved.
       cluster, Failed exit-1 in gate mode on a degraded one). It caught two bugs
       lint/kustomize can't see — a missing `command:` (Argo emissary) and missing
       `workflowtaskresults` executor RBAC — both fixed + re-validated.
-- [ ] **Real-instance e2e** — confirm in an actual apl-core instance (the component
-      enabled in a real cluster's spec). The mechanics are proven on kind; this is
-      the environment-integration confirmation. Two things kind specifically CANNOT
-      verify (checked by reasoning + the kind label/RBAC probes instead):
+- [x] **Real-instance e2e wiring** — `release-e2e.yml` now enables the component in
+      the `e2e` env (`llz env set e2e components.argoWorkflows.enabled=true
+      components.clusterHealthWorkflow.enabled=true`), so converge validates the
+      DEPLOY path (kyverno admits the WorkflowTemplate/CronWorkflow/RBAC CRs, Argo
+      reconciles them), and a new **`llz ci assert-health-workflow`** step in
+      bootstrap-openbao's converge (same `assert_loki` e2e gate) submits a one-shot
+      Workflow from the template and asserts it Succeeds — validating the RUN path.
+      The verb SKIPS (exit 0) when the WorkflowTemplate is absent, so it stays inert
+      on a normal instance. Confirmed locally: `env set` + `llz render` wire the
+      component into the values kustomization and `kubectl kustomize` builds it; the
+      pure verb helpers are unit-tested. Awaiting a green release-e2e run to close
+      the environment-integration loop.
+- [ ] **Green release-e2e run** — the two things kind specifically CANNOT verify
+      (checked by reasoning + the kind label/RBAC probes instead) that the real
+      run will exercise:
       - **NetworkPolicy enforcement** — kindnet doesn't enforce NPs. The workflow
         pod carries `app.kubernetes.io/name: llz-cluster-health` (verified on kind),
         so the NP selects it; its egress (DNS + apiserver 443/6443) covers both the

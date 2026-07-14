@@ -44,7 +44,7 @@ func ciCmd() *cobra.Command {
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd())
+	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciAssertHealthWorkflowCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
 	c.AddCommand(ciWaitPodsCmd(), ciWaitClusterReadyCmd())
