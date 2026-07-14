@@ -1,0 +1,33 @@
+# Egress lockdown for the health workflow pods (llz-argo-workflows is default-deny
+# via cluster-foundation). `llz ci health` needs only DNS + the kube apiserver;
+# it reads cluster state, calls nothing off-cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llz-cluster-health-egress
+  namespace: llz-argo-workflows
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: llz-cluster-health
+  policyTypes: [Egress]
+  egress:
+    # DNS resolution against kube-dns.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # LKE-E apiserver: dual-port (443 + 6443) because Cilium evaluates policy
+    # post-DNAT (the kubernetes Service DNATs 443→6443). Bare ports rule — there is
+    # no in-cluster apiserver pod to select on managed LKE-E. This bare :443 also
+    # covers OpenBao's :8200? No — OpenBao is a separate rule a day-2 job that logs
+    # in would add; health does not need it.
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }

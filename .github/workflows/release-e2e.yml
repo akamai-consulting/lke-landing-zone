@@ -236,6 +236,19 @@ jobs:
           # block and the force-push step that mirrors main onto this branch.
           bin/llz env set "${E2E_ENV}" \
             cluster.bootstrap.appsRepoRevision="${E2E_APPS_BRANCH}"
+          # Enable the day-2 clusterHealthWorkflow component (+ its argoWorkflows
+          # dependency) for this run — both are DefaultDisabled, so without this the
+          # e2e would never DEPLOY the in-cluster health WorkflowTemplate and its
+          # green would prove nothing about the feature. Enabling it makes the
+          # converge gate validate the DEPLOY path (kyverno admits the WorkflowTemplate/
+          # CronWorkflow/RBAC CRs, Argo reconciles them); the assert-health-workflow
+          # step in bootstrap-openbao's converge (same assert_loki e2e gate) then
+          # submits a Workflow from the template and asserts it Succeeds — validating
+          # the RUN path (image-signature policy on the pod, SA + executor RBAC, the
+          # health-incluster verb). See docs/designs/day2-incluster-health.md.
+          bin/llz env set "${E2E_ENV}" \
+            components.argoWorkflows.enabled=true \
+            components.clusterHealthWorkflow.enabled=true
 
       - name: Lay the template out as an instance
         run: |

@@ -1,0 +1,72 @@
+# The health job itself — a WorkflowTemplate the CronWorkflow references,
+# authenticated ONLY by the llz-cluster-health ServiceAccount (in-cluster kube
+# config). No secrets, kube-only.
+#
+# Runs `llz ci health-incluster` — the KUBECTL-FREE convergence check
+# (internal/kube, no kubectl, no shell) so it works on the slim distroless llz
+# image, unlike `llz ci health` (a kubectl orchestrator). See
+# docs/designs/day2-incluster-health.md.
+#
+# Validated end-to-end on a local kind cluster (real image + `argo submit`):
+# Succeeded green on a converged cluster, Failed in gate mode on a degraded one.
+# Remaining before merge: run it in a real apl-core instance e2e (the mechanics
+# are proven; this confirms it in the actual llz-argo-workflows environment).
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: llz-cluster-health
+  namespace: llz-argo-workflows
+spec:
+  serviceAccountName: llz-cluster-health
+  entrypoint: health
+  # Reap finished runs; keep a few for triage.
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+  podGC:
+    strategy: OnWorkflowSuccess
+  # tmp scratch for the read-only-rootfs container (the llz image is distroless
+  # with readOnlyRootFilesystem; give it a writable /tmp, like the reconciler).
+  volumes:
+    - name: tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Mi
+  arguments:
+    parameters:
+      - name: fail-on-unhealthy
+        value: "false"
+  templates:
+    - name: health
+      inputs:
+        parameters:
+          - name: fail-on-unhealthy
+      metadata:
+        labels:
+          app.kubernetes.io/name: llz-cluster-health
+      container:
+        image: <@ llz_image_ref @>
+        # `command` is set EXPLICITLY (the image ENTRYPOINT path), not left implicit.
+        # Argo's emissary executor resolves the entrypoint for an args-only container
+        # by querying the image's registry manifest at runtime — an extra network
+        # dependency that fails for a non-pullable image and is fragile even for a
+        # public one. Specifying command avoids the lookup entirely (Argo's
+        # recommended practice). This is WHY it differs from the reconciler/harbor
+        # CronJobs, which are plain kubelet-run (ENTRYPOINT used directly, no emissary).
+        # No shell: the distroless image has none; report-vs-gate is a value flag.
+        command: ["/usr/local/bin/llz"]
+        args:
+          - ci
+          - health-incluster
+          - --fail-on-unhealthy={{inputs.parameters.fail-on-unhealthy}}
+        resources:
+          limits:   { cpu: 200m, memory: 128Mi }
+          requests: { cpu: 25m,  memory: 48Mi }
+        volumeMounts:
+          - { name: tmp, mountPath: /tmp }
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: { drop: ["ALL"] }
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          seccompProfile: { type: RuntimeDefault }

@@ -1,0 +1,74 @@
+# RBAC for the CI-agnostic cluster-health job — least-privilege, read-only.
+#
+# The llz-cluster-health ServiceAccount (llz-argo-workflows) is the health
+# WORKLOAD's identity. `llz ci health-incluster` makes exactly ONE kube read — LIST
+# Argo CD Applications in the `argocd` namespace (the convergence signal) — so it
+# needs only a NAMESPACED Role there (get/list applications), NOT a cluster-scoped
+# grant. This mirrors the reconciler's llz-reconciler-argo Role. Kube-ONLY:
+# authenticated purely by this SA's projected token (in-cluster kube config). No
+# OpenBao, no GitHub secret. (A future rotation-style day-2 job that DOES need
+# OpenBao gets its own SA + a scoped bao-configure role + an OpenBao :8200 egress
+# rule, and uses `llz ci openbao-login`. If health-incluster later folds in the
+# ESO/cert/OpenBao-seal signals — reconcile_health.go — add THOSE specific grants
+# then, cluster-scoped where the resource is.)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llz-cluster-health
+  namespace: llz-argo-workflows
+---
+# Applications are namespaced (argocd), so this is a Role in argocd — not a
+# ClusterRole — bound to the SA that lives in llz-argo-workflows.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-cluster-health
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-cluster-health
+  namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-cluster-health
+subjects:
+  - kind: ServiceAccount
+    name: llz-cluster-health
+    namespace: llz-argo-workflows
+---
+# Argo Workflows executor RBAC — REQUIRED for any workflow pod running under a
+# non-default SA: the emissary executor reports each node's result by creating +
+# patching a workflowtaskresults CR in the workflow's namespace. Without this the
+# pod runs (the health check itself succeeds) but the WORKFLOW errors with exit 64
+# ("cannot create workflowtaskresults"). Found by a live Argo run — kustomize/
+# actionlint can't see it. Scoped to this SA + namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llz-cluster-health-executor
+  namespace: llz-argo-workflows
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llz-cluster-health-executor
+  namespace: llz-argo-workflows
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llz-cluster-health-executor
+subjects:
+  - kind: ServiceAccount
+    name: llz-cluster-health
+    namespace: llz-argo-workflows

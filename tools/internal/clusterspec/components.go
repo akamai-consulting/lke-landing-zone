@@ -247,6 +247,22 @@ var Components = []Component{
 		// (5) lands after externalSecrets/observability and floors both.
 		CarvedApp: &CarvedApp{AppName: "llz-reconciler", AppWave: 5, Namespace: "llz-reconciler"},
 	},
+	{
+		// Scheduled cluster-health as a KUBERNETES-NATIVE job — an Argo WorkflowTemplate
+		// running `llz ci health-incluster` (kubectl-free) on the slim llz image,
+		// driven by a self-driving CronWorkflow. It authenticates with the workflow
+		// pod's ServiceAccount (read-only RBAC), so it needs NO GitHub secrets, no
+		// `secrets: inherit`, and nothing GitHub-specific in the cluster — the
+		// pipeline-abstraction endpoint (docs/designs/day2-incluster-health.md). The
+		// continuous form of the same signal is the llz-reconciler; this is the
+		// synchronous, scheduled variant. Default-disabled; needs argoWorkflows (the
+		// CronWorkflow controller) only — the optional Argo Events webhook trigger
+		// (and its NATS EventBus) was dropped as not worth the weight.
+		Name:              "clusterHealthWorkflow",
+		DependsOn:         []string{"argoWorkflows"},
+		ManifestResources: []string{"llz-cluster-health-workflow"},
+		DefaultDisabled:   true,
+	},
 }
 
 // componentByName indexes Components for lookup.

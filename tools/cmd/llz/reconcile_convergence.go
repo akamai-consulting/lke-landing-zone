@@ -27,20 +27,42 @@ import (
 // failure. A 404 on the collection means the Applications CRD is not installed
 // yet (pre-bootstrap) — reported as in-progress, not an error.
 func sampleConvergence(ctx context.Context, client nodeGetter, reg *metrics.Registry) error {
-	obj, status, err := client.GetJSON(ctx, argoAppsPath)
+	r, crdPresent, err := convergenceReport(ctx, client)
 	if err != nil {
 		return err
 	}
-	if status == 404 {
+	if !crdPresent {
 		reg.SetGauge("llz_convergence_state", convergenceStateHelp, nil, float64(health.InProgress.ExitCode()))
 		return nil
 	}
-	if status < 200 || status >= 300 || obj == nil {
-		return fmt.Errorf("GET applications: status %d", status)
-	}
+	reg.SetGauge("llz_convergence_state", convergenceStateHelp, nil, float64(r.ExitCode()))
+	reg.SetGauge("llz_convergence_apps_failed",
+		"count of Argo Applications classified hard-failed", nil, float64(len(r.Failed)))
+	reg.SetGauge("llz_convergence_apps_pending",
+		"count of Argo Applications still reconciling (in-progress)", nil, float64(len(r.Pending)))
+	return nil
+}
 
+// convergenceReport classifies Argo CD Application health into the convergence
+// verdict over internal/kube (no kubectl) — the SHARED core of the observe
+// reconciler's gauge (sampleConvergence) and the `llz ci health-incluster`
+// exit-code verb. Argo Application status is the canonical convergence signal (the
+// convergence contract's readiness gate waits on it), classified through the same
+// unit-tested health.ClassifyArgoApp predicate `llz ci health` uses. crdPresent is
+// false when the Application CRD is not yet registered — pre-bootstrap, which is
+// in-progress (not converged).
+func convergenceReport(ctx context.Context, client nodeGetter) (r health.Report, crdPresent bool, err error) {
+	obj, status, err := client.GetJSON(ctx, argoAppsPath)
+	if err != nil {
+		return health.Report{}, false, err
+	}
+	if status == 404 {
+		return health.Report{}, false, nil
+	}
+	if status < 200 || status >= 300 || obj == nil {
+		return health.Report{}, false, fmt.Errorf("GET applications: status %d", status)
+	}
 	items, _ := obj["items"].([]any)
-	var r health.Report
 	for _, it := range items {
 		raw, err := json.Marshal(it)
 		if err != nil {
@@ -53,13 +75,7 @@ func sampleConvergence(ctx context.Context, client nodeGetter, reg *metrics.Regi
 		cat, msg := health.ClassifyArgoApp(app, false) // day-2: not phase-1 bootstrap
 		r.Add(cat, msg)
 	}
-
-	reg.SetGauge("llz_convergence_state", convergenceStateHelp, nil, float64(r.ExitCode()))
-	reg.SetGauge("llz_convergence_apps_failed",
-		"count of Argo Applications classified hard-failed", nil, float64(len(r.Failed)))
-	reg.SetGauge("llz_convergence_apps_pending",
-		"count of Argo Applications still reconciling (in-progress)", nil, float64(len(r.Pending)))
-	return nil
+	return r, true, nil
 }
 
 const convergenceStateHelp = "cluster convergence per llz ci health: 0 converged, 1 hard-failed, 2 in-progress"

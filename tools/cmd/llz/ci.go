@@ -39,12 +39,12 @@ func ciCmd() *cobra.Command {
 			"the thin orchestration over it.",
 	}
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFUntrackCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(),
-		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciConvergeCmd(),
+		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd())
+	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciAssertHealthWorkflowCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
 	c.AddCommand(ciWaitPodsCmd(), ciWaitClusterReadyCmd())
@@ -107,6 +107,10 @@ func ciCmd() *cobra.Command {
 	// the first token at bootstrap; rotate-incluster-pat (registered with the
 	// rotation commands above) re-mints it monthly.
 	c.AddCommand(ciMintBootstrapPATCmd())
+	// Secretless day-2 auth: exchange a GitHub OIDC token for an OpenBao token
+	// (jwt auth) over a direct API call, for in-cluster runners — the primitive
+	// behind the cross-org thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
+	c.AddCommand(ciOpenBaoLoginCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())
