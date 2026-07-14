@@ -108,7 +108,24 @@ _skip_if_exists:
 # ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable `llz-*`
 # workflows run in, so an instance never carries its own copy.
 _tasks:
-  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md docs/designs/cross-org-reuse-pattern.md docs/designs/day2-incluster-health.md"
+  # Deliver docs/: copy the template's full set in, then `llz ci deliver-docs`
+  # prunes to the day-to-day operator set (quickstart + runbooks + playbooks) and
+  # writes docs/README.md pointing at the rest in the (public) template repo,
+  # version-pinned to <@ llz_version @>. The keep-set lives ONCE in the verb, so
+  # this and release-e2e can't drift (the drift that leaked a template-build doc
+  # into the e2e instance). No-op fallback if llz isn't on PATH (full docs kept).
+  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
+  # Slim the copied-in workflow surface: strip YAML-level comments from the big
+  # reusable bodies (llz-*.yml) AND the apl-values PLATFORM manifests
+  # (components/ + _shared/manifest/ — RBAC, Deployments, Kyverno, PrometheusRules)
+  # so an instance carries the machinery, not the maintainer rationale it never
+  # reads (the template SOURCE keeps its comments; rationale lives in docs/designs).
+  # SAFE — only true YAML comments outside `run:`/`|`/`>` block scalars are removed
+  # (bash/markdown/heredoc content preserved), each file's header kept. Deliberately
+  # EXCLUDES apl-values/**/values.yaml and _shared/custom/ (operator-tuned config
+  # whose comments explain what to change). Idempotent; no-op if llz is absent.
+  # See docs/designs/instance-slimming.md.
+  - "command -v llz >/dev/null 2>&1 && llz ci strip-comments .github/workflows/llz-*.yml $(find apl-values/components apl-values/_shared/manifest -type f \\( -name '*.yaml' -o -name '*.yml' \\) 2>/dev/null) $(find terraform-iac-bootstrap -type f -name '*.tf' 2>/dev/null) || echo \"(llz not on PATH — skipping comment-strip; run 'llz ci strip-comments .github/workflows/llz-*.yml ...')\""
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not

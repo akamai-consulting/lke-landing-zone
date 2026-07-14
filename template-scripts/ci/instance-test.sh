@@ -109,14 +109,24 @@ if [[ -d "$INSTANCE/scripts" ]] && [[ -n "$(ls -A "$INSTANCE/scripts" 2>/dev/nul
 else
   echo "  ok   no scripts/ delivered (llz tooling sourced from template checkout)"
 fi
-# _tasks should also deliver the operator-facing docs/ subset (and drop the two
-# template-build docs). Spot-check both: a representative operational doc present,
-# and the excluded ones absent.
+# _tasks delivers the day-to-day operator docs subset (quickstart + runbooks +
+# playbooks) via `llz ci deliver-docs`, and REFERENCES the rest at the template
+# repo via a generated docs/README.md pointer. Spot-check the kept set is present,
+# the pointer is version-pinned, and referenced/template-build docs are absent.
+require "docs/quickstart.md"
 require "docs/runbooks/bootstrap-openbao.md"
-require "docs/adopter-guide.md"
-absent() { if [[ -e "$INSTANCE/$1" ]]; then fail "should NOT be in instance (template-build doc): $1"; else echo "  ok   absent: $1"; fi; }
-absent "docs/templatization-plan.md"
-absent "docs/agents.md"
+require "docs/playbooks"
+require "docs/README.md"
+if grep -q "lke-landing-zone/tree/.*/docs" "$INSTANCE/docs/README.md"; then
+  echo "  ok   docs/README.md points at the versioned template docs"
+else
+  fail "docs/README.md is missing the version-pinned reference URL"
+fi
+absent() { if [[ -e "$INSTANCE/$1" ]]; then fail "should NOT be in instance (referenced/template-build doc): $1"; else echo "  ok   absent: $1"; fi; }
+absent "docs/templatization-plan.md"   # template-build
+absent "docs/agents.md"                # template-build
+absent "docs/adopter-guide.md"         # referenced (in the template repo)
+absent "docs/designs"                  # referenced (internal design docs)
 
 # ── 3b. `llz env add` works INSIDE the rendered instance ──────────────────────
 # This is the documented `cd my-instance; llz env add <env>` path. It must work

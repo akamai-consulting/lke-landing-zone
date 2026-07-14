@@ -263,10 +263,15 @@ jobs:
           # template-INTERNAL (like .github/actions): the reusable llz-* workflows
           # build it from a template checkout. A real instance has no scripts/, so
           # the e2e instance must not either — don't hoist anything here.
-          # docs/ are delivered the same way (copier _tasks); mirror that too, minus
-          # the two template-build docs the _tasks drops, so the e2e instance matches.
+          # docs/ are delivered the same way (copier _tasks): copy the full set in,
+          # then `llz ci deliver-docs` prunes to the operator set + writes the
+          # version-pinned pointer. The keep-set lives ONCE in the verb, so this and
+          # the copier _tasks can't drift — which is what previously leaked
+          # cross-org-reuse-pattern.md (literal `<@ … @>` examples) into the instance
+          # and tripped the unrendered-token guard below.
           mkdir -p .e2e-instance/docs && cp -a docs/. .e2e-instance/docs/
-          rm -f .e2e-instance/docs/templatization-plan.md .e2e-instance/docs/agents.md
+          bin/llz ci deliver-docs --docs .e2e-instance/docs \
+            --org "${GITHUB_REPOSITORY_OWNER}" --ref "${GITHUB_SHA}"
           # Composite actions are template-internal — the reusable llz-* workflows
           # source them from a template checkout, so instances don't carry them
           # (copier.yml `_exclude`s `.github/actions`). Mirror that here.
@@ -320,7 +325,14 @@ jobs:
             | xargs -0 -r sed -i -E \
                 -e "s#(/lke-landing-zone/\.github/workflows/llz-[A-Za-z0-9_-]+\.yml)@[^[:space:]]+#\1@${GITHUB_SHA}#g" \
                 -e "s#(//terraform-modules/llz-[A-Za-z0-9_-]+\?ref=)[^\"]+#\1${GITHUB_SHA}#g"
-          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]*).*/\1${GITHUB_SHA}/" .github/workflows/*.yml
+          # Repoint the caller stubs' `template-ref: <value>` to the SHA under test.
+          # REQUIRE a value ([[:space:]]+ then a non-space) so this matches only the
+          # value form — NOT the bare `template-ref:` INPUT-DEFINITION key in the
+          # reusables (whose value is the nested description/required/type/default on
+          # the following lines). The old `[[:space:]]*.*` matched the bare key too,
+          # collapsing it to `template-ref:<sha>` and orphaning its children →
+          # "invalid workflow file … line N" (the reusables' template-ref input).
+          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]+)[^[:space:]].*/\1${GITHUB_SHA}/" .github/workflows/*.yml
           # Fail loudly if any token survived — a silent miss = a broken instance push.
           if grep -rnE '<@|@>' . ; then
             echo "::error::unrendered copier token(s) survived the e2e render pass"

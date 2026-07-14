@@ -7,9 +7,16 @@ description: >
   `llz` itself is baked into the TF_IMAGE these jobs run in
   (dockerfiles/terraform/Dockerfile) — already on PATH, no install step.
 
-  Assumes the standard dual checkout: the caller instance at the workspace root
-  and the LLZ template at _llz-template/ (relative `uses:` paths inside a
-  composite resolve against the workspace, not this action's own checkout).
+  Sibling actions (fetch-kubeconfig, lke-runner-acl) live in THIS repo, but a
+  composite action's `uses: ./<path>` resolves against $GITHUB_WORKSPACE — the
+  CALLER's checkout — NOT this action's repo (a long-standing GitHub Actions
+  limitation). The caller is an instance repo that excludes .github/actions, so a
+  bare `./instance-template/.github/actions/<name>` is not present there and fails
+  with "Can't find action.yml". So this action checks out its OWN repo at the caller-
+  supplied `template-ref` input (the same `<@ llz_version @>` the caller pinned the
+  `uses:@<ref>` to) into ./_llz-template and references the siblings from there. This
+  keeps the #201-Phase-2 cross-org model (the caller still needs nothing checked out —
+  this action is self-sufficient), just with the sibling deps fetched by this action.
 
   A composite action has no post-job hook, so the caller MUST pair this with a
   trailing lke-runner-acl step (mode: revoke, if: always()) passing the same
@@ -20,6 +27,17 @@ description: >
   to load.)
 
 inputs:
+  template-ref:
+    description: >
+      The template ref this action's sibling composite actions are fetched at — the
+      SAME `<@ llz_version @>` the caller pinned this action's `uses:@<ref>` to. A
+      composite `uses: ./<path>` resolves against the caller's workspace (not this
+      action's repo), and the caller is an instance repo that excludes .github/actions,
+      so this action checks out its own repo at this ref to reach the siblings. Pass the
+      caller's llz_version verbatim; a mismatch fetches sibling actions from the wrong
+      commit. (An explicit input, not github.action_ref, which is unreliable in composite
+      actions.)
+    required: true
   aws-access-key-id:
     description: AWS access key for the S3 state backend (kubeconfig is read from Terraform state).
     required: true
@@ -70,6 +88,23 @@ outputs:
 runs:
   using: composite
   steps:
+    # Bring the sibling composite actions into the caller's workspace: this action
+    # is invoked cross-org from an instance repo (which excludes .github/actions), and
+    # a composite `uses: ./<path>` resolves against $GITHUB_WORKSPACE, not this action's
+    # repo — so the siblings must physically exist under the workspace. Check out this
+    # action's own repo at inputs.template-ref (= the `@<ref>` the caller pinned) into
+    # ./_llz-template; the steps below reference the siblings from there. The org is
+    # hardcoded (no forks — like every other upstream ref; and this file is never
+    # copier-rendered, so a token wouldn't resolve). Isolated subdir (path:) so the
+    # caller's own checkout is untouched; persist-credentials:false — the siblings take
+    # any git token they need as an input.
+    - name: Check out the template for the sibling composite actions
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      with:
+        repository: akamai-consulting/lke-landing-zone
+        ref: ${{ inputs.template-ref }}
+        path: _llz-template
+        persist-credentials: false
     - name: Fetch kubeconfig from Terraform state
       id: kubeconfig
       uses: ./_llz-template/instance-template/.github/actions/fetch-kubeconfig
