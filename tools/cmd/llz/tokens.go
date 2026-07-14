@@ -72,12 +72,13 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if n := prepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
 		fmt.Printf("%s\n", dim(fmt.Sprintf("Prepopulated %d variable value(s) from existing repo config.", n)))
 	}
-	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt)
 	// Presence isn't validity: actively probe every gathered/cached credential so
-	// an expired/revoked/mistyped token surfaces here (with "rotate it") instead of
-	// 401/403-ing deep in a CI run. Report-only in the wizard — the operator acts on it.
+	// an expired/revoked/mistyped token surfaces in the VALID column (with "rotate
+	// it") instead of 401/403-ing deep in a CI run. Report-only in the wizard.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.value("GHCR_USERNAME"))
-	if n := validateTokenValues(reqs, secrets, vars, instSt, ghcrUser); n > 0 {
+	validity, invalidN := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
+	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	if invalidN > 0 {
 		fmt.Println(dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
 	}
 	if len(missing) == 0 {
@@ -312,11 +313,11 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 		tmplSt = fetchLiveState(templateRepo(), "")
 	}
 	fmt.Printf("\n%s\n", bold(fmt.Sprintf("e2e readiness — %s (infra-%s)%s", instanceRepo, env, adminBanner(admin))))
-	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt)
 	// Actively probe validity, not just presence — a set-but-dead token is the
 	// failure that otherwise only shows up as a 401/403 mid-CI-run.
 	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.value("GHCR_USERNAME"))
-	invalid := validateTokenValues(reqs, secrets, vars, instSt, ghcrUser)
+	validity, invalid := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
+	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
 	if len(missing) > 0 {
 		fmt.Printf("\n%s %d required item(s) missing: %s\n", red("✗"), len(missing), strings.Join(missing, ", "))
 		fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")

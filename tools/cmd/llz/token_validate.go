@@ -192,13 +192,14 @@ func probeToken(name, value, ghcrUser string, now time.Time) tokenValidity {
 	}
 }
 
-// validateTokenValues probes every requirement whose VALUE is available locally
-// and prints a validity report, returning the count of INVALID credentials so the
-// caller can surface a hard problem. Secrets present only on GitHub (name known,
-// value not readable) are noted as un-probeable here.
-func validateTokenValues(reqs []requirement, secrets, vars map[string]string, instance liveState, ghcrUser string) int {
+// probeTokenValidities probes every probeable requirement and returns a verdict
+// keyed by credential NAME, plus the count of INVALID ones. It does NOT print —
+// reportReadiness renders the results as the table's VALID column. A probeable
+// token with no locally-readable value gets a vSkipped verdict (probe it in CI);
+// non-credential requirements (plain vars, image refs) get no entry.
+func probeTokenValidities(reqs []requirement, secrets, vars map[string]string, instance liveState, ghcrUser string) (map[string]tokenValidity, int) {
 	now := time.Now()
-	var rows []tokenValidity
+	out := map[string]tokenValidity{}
 	invalid := 0
 	for _, r := range reqs {
 		if kindFor(r.Name) == kindNone {
@@ -208,7 +209,7 @@ func validateTokenValues(reqs []requirement, secrets, vars map[string]string, in
 		if !haveLocal {
 			// Known probeable token but no local value: can only report presence.
 			if instance.has(r.Name, r.Secret) {
-				rows = append(rows, tokenValidity{r.Name, vSkipped, "set on GitHub — value not readable locally, so not probed here (in CI: `llz ci gh-pat-expiry`)"})
+				out[r.Name] = tokenValidity{r.Name, vSkipped, "set on GitHub — value not readable locally; probe it in CI (`llz ci validate-tokens`)"}
 			}
 			continue
 		}
@@ -216,19 +217,9 @@ func validateTokenValues(reqs []requirement, secrets, vars map[string]string, in
 		if tv.status == vInvalid {
 			invalid++
 		}
-		rows = append(rows, tv)
+		out[r.Name] = tv
 	}
-	if len(rows) == 0 {
-		return 0
-	}
-	fmt.Printf("\n%s\n", bold("Token validity — active probe of locally-available credentials"))
-	for _, tv := range rows {
-		fmt.Printf("  %-30s %s\n", tv.name, validityCell(tv))
-	}
-	if invalid > 0 {
-		fmt.Printf("\n%s %d credential(s) are INVALID — rotate them before the next run.\n", red("✗"), invalid)
-	}
-	return invalid
+	return out, invalid
 }
 
 // localValue returns a requirement's value from the local .llz cache (secrets or

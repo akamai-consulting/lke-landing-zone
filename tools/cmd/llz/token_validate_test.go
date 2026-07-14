@@ -99,7 +99,7 @@ func TestProbeToken_DispatchesByKind(t *testing.T) {
 	}
 }
 
-func TestValidateTokenValues_CountsInvalidAndProbesLocalOnly(t *testing.T) {
+func TestProbeTokenValidities_CountsInvalidAndProbesLocalOnly(t *testing.T) {
 	origLinode, origGH := linodeProbe, ghPATProbe
 	t.Cleanup(func() { linodeProbe, ghPATProbe = origLinode, origGH })
 	linodeProbe = func(string) (int, error) { return 401, nil } // invalid
@@ -115,8 +115,19 @@ func TestValidateTokenValues_CountsInvalidAndProbesLocalOnly(t *testing.T) {
 	// APL_VALUES_REPO_TOKEN is set on GitHub but has no local value.
 	inst := liveState{repoSecrets: map[string]bool{"APL_VALUES_REPO_TOKEN": true}}
 
-	invalid := validateTokenValues(reqs, secrets, vars, inst, "")
+	validity, invalid := probeTokenValidities(reqs, secrets, vars, inst, "")
 	if invalid != 1 {
 		t.Errorf("invalid count = %d, want 1 (the dead Linode token)", invalid)
+	}
+	if validity["LINODE_API_TOKEN"].status != vInvalid {
+		t.Errorf("LINODE_API_TOKEN verdict = %v, want vInvalid", validity["LINODE_API_TOKEN"].status)
+	}
+	// APL_VALUES_REPO_TOKEN is set on GitHub but has no local value → CI-only skip.
+	if validity["APL_VALUES_REPO_TOKEN"].status != vSkipped {
+		t.Errorf("APL_VALUES_REPO_TOKEN verdict = %v, want vSkipped (no local value)", validity["APL_VALUES_REPO_TOKEN"].status)
+	}
+	// TF_STATE_BUCKET isn't a probeable credential → no entry.
+	if _, ok := validity["TF_STATE_BUCKET"]; ok {
+		t.Errorf("TF_STATE_BUCKET should not be probed")
 	}
 }
