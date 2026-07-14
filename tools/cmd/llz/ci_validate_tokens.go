@@ -97,6 +97,18 @@ func runCIValidateTokens(failOnInvalid bool) int {
 		fmt.Printf("  %-30s %s%s\n", name, validityCell(tv), suffix)
 	}
 
+	// OBJ state-bucket key pair (REQUIRED) — validated together via SigV4.
+	if ak, sk := os.Getenv("TF_STATE_ACCESS_KEY"), os.Getenv("TF_STATE_SECRET_KEY"); ak != "" && sk != "" {
+		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", ak)
+		fmt.Fprintf(os.Stderr, "::add-mask::%s\n", sk)
+		tv := probeS3Pair(ak, sk, os.Getenv("TF_STATE_ENDPOINT"), os.Getenv("TF_STATE_BUCKET"))
+		probed++
+		if tv.status == vInvalid {
+			blockingInvalid++
+		}
+		fmt.Printf("  %-30s %s\n", "TF_STATE_ACCESS_KEY/SECRET", validityCell(tv))
+	}
+
 	fmt.Printf("\nprobed %d credential(s): %d blocking-invalid, %d optional-invalid.\n", probed, blockingInvalid, optionalInvalid)
 	if blockingInvalid > 0 && failOnInvalid {
 		fmt.Fprintf(os.Stderr, "::error::%d REQUIRED pipeline credential(s) are invalid — rotate them before this run proceeds.\n", blockingInvalid)

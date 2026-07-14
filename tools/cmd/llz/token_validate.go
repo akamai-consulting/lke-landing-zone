@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
@@ -200,16 +201,41 @@ func probeToken(name, value, ghcrUser string, now time.Time) tokenValidity {
 func probeTokenValidities(reqs []requirement, secrets, vars map[string]string, instance liveState, ghcrUser string) (map[string]tokenValidity, int) {
 	now := time.Now()
 	out := map[string]tokenValidity{}
+
+	// The OBJ state-bucket key PAIR is validated together (both keys + endpoint +
+	// bucket, via SigV4); the one verdict is mirrored onto both rows so neither
+	// shows a bare N/A. Values come from the local .llz cache.
+	endpoint := firstNonEmpty(vars["TF_STATE_ENDPOINT"], instance.value("TF_STATE_ENDPOINT"))
+	bucket := firstNonEmpty(vars["TF_STATE_BUCKET"], instance.value("TF_STATE_BUCKET"))
+	s3v := probeS3Pair(secrets["TF_STATE_ACCESS_KEY"], secrets["TF_STATE_SECRET_KEY"], endpoint, bucket)
+
 	invalid := 0
 	for _, r := range reqs {
-		if kindFor(r.Name) == kindNone {
+		k := kindFor(r.Name)
+		if k == kindNone {
 			continue // not a probeable credential (plain vars, image refs, …)
+		}
+		if k == kindS3 {
+			tv := s3v
+			tv.name = r.Name
+			// No local value but set on GitHub → clarify it's a cache miss, not absent.
+			if tv.status == vSkipped && strings.HasPrefix(tv.detail, "not cached") && instance.has(r.Name, true) {
+				tv.detail = "set on GitHub — not in .llz cache; gather locally or use `llz ci validate-tokens`"
+			}
+			out[r.Name] = tv
+			if r.Name == "TF_STATE_ACCESS_KEY" && tv.status == vInvalid {
+				invalid++ // count the pair once
+			}
+			continue
 		}
 		val, haveLocal := localValue(r, secrets, vars)
 		if !haveLocal {
-			// Known probeable token but no local value: can only report presence.
+			// No local value: distinguish "set on GitHub, just not cached" from
+			// "not configured anywhere" — neither is a bare N/A.
 			if instance.has(r.Name, r.Secret) {
-				out[r.Name] = tokenValidity{r.Name, vSkipped, "set on GitHub — value not readable locally; probe it in CI (`llz ci validate-tokens`)"}
+				out[r.Name] = tokenValidity{r.Name, vSkipped, "set on GitHub — not in .llz cache; gather locally or use `llz ci validate-tokens`"}
+			} else {
+				out[r.Name] = tokenValidity{r.Name, vSkipped, "not set"}
 			}
 			continue
 		}

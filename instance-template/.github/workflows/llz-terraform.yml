@@ -614,6 +614,11 @@ jobs:
           OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
           GHCR_READ_TOKEN:             ${{ secrets.GHCR_READ_TOKEN }}
           GHCR_USERNAME:               ${{ vars.GHCR_USERNAME }}
+          # OBJ state-bucket key pair — probed together via SigV4 against the bucket.
+          TF_STATE_ACCESS_KEY:         ${{ secrets.TF_STATE_ACCESS_KEY }}
+          TF_STATE_SECRET_KEY:         ${{ secrets.TF_STATE_SECRET_KEY }}
+          TF_STATE_ENDPOINT:           ${{ vars.TF_STATE_ENDPOINT }}
+          TF_STATE_BUCKET:             ${{ vars.TF_STATE_BUCKET }}
         run: llz ci validate-tokens
 
       - name: Pre-flight — verify infra-${{ env.REGION }} env secrets

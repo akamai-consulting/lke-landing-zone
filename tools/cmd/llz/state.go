@@ -225,7 +225,7 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 		if r.Required {
 			req = "REQUIRED"
 		}
-		validPlain, validColor := validCell(r, validity)
+		validPlain, validColor := validCell(r, onGitHub, validity)
 		fmt.Printf("%-30s %-7s %-9s %s %s\n", r.Name, kind, req, padColor(statusPlain, statusColor, 24), validColor(validPlain))
 		if r.Required && !onGitHub {
 			missing = append(missing, r.Name)
@@ -244,8 +244,9 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 }
 
 // validCell renders a requirement's VALID column: a short colored verdict. Long
-// detail goes in the per-problem notes printed after the table.
-func validCell(r requirement, validity map[string]tokenValidity) (string, func(string) string) {
+// detail goes in the per-problem notes printed after the table. Every credential
+// (kind != none) gets a verdict — never a bare "n/a".
+func validCell(r requirement, onGitHub bool, validity map[string]tokenValidity) (string, func(string) string) {
 	if kindFor(r.Name) == kindNone {
 		return "", dim // not a credential — blank column
 	}
@@ -262,11 +263,11 @@ func validCell(r requirement, validity map[string]tokenValidity) (string, func(s
 		return "✗ INVALID", red
 	case vUnreachable:
 		return "⚠ unreachable", yellow
-	default: // vSkipped
-		if kindFor(r.Name) == kindS3 {
-			return "· n/a", dim
+	default: // vSkipped — not probed because the value isn't available locally
+		if onGitHub {
+			return "· not cached", dim // set on GitHub, value not in .llz cache
 		}
-		return "· CI-only", dim
+		return "· not set", dim
 	}
 }
 
