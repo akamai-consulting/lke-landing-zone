@@ -27,7 +27,7 @@ spec:
             service: openbao
           annotations:
             summary: OpenBao metrics target is down
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: Prometheus cannot scrape one or more OpenBao pods.
         - alert: OpenBaoSealed
           expr: vault_core_unsealed{namespace="llz-openbao"} == 0
@@ -37,7 +37,7 @@ spec:
             service: openbao
           annotations:
             summary: OpenBao pod is sealed
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: An OpenBao pod is sealed and cannot serve secret requests until unsealed.
         - alert: OpenBaoNoActiveLeader
           expr: sum(vault_core_active{namespace="llz-openbao"}) < 1
@@ -47,7 +47,7 @@ spec:
             service: openbao
           annotations:
             summary: OpenBao has no active leader
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: No OpenBao pod is reporting active leadership.
         # Raft quorum: the HA cluster runs 3 peers (llz-openbao-platform
         # server.ha.replicas), tolerating one loss. Fewer than 3 UNSEALED pods means
@@ -62,7 +62,7 @@ spec:
             service: openbao
           annotations:
             summary: OpenBao Raft quorum is degraded
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: 'Fewer than 3 OpenBao pods are unsealed and reachable — the 3-node Raft quorum has lost redundancy. One more peer loss forfeits write availability.'
         # ── Saturation / audit-plane (the error-rate + saturation layer) ──────────
         # These read OpenBao's own `vault_*` telemetry (OpenBao keeps the upstream
@@ -85,7 +85,7 @@ spec:
             service: openbao
           annotations:
             summary: OpenBao active-lease count is very high
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: 'OpenBao is tracking {{ $value | humanize }} unexpired leases for 30m — a client is likely not revoking/renewing, or a mount TTL is too long; the expiration manager and memory grow until they degrade.'
         - alert: OpenBaoAuditLogFailure
           # Audit-device health. OpenBao BLOCKS every request if all audit devices
@@ -98,5 +98,5 @@ spec:
             service: openbao
           annotations:
             summary: OpenBao audit log device is failing
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: 'OpenBao audit-log writes are failing for 5m — if all audit devices fail, OpenBao SEALS itself to requests (audit is mandatory). Investigate the audit sink (the promtail sidecar / file device) immediately.'
