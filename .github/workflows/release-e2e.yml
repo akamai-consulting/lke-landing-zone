@@ -325,7 +325,14 @@ jobs:
             | xargs -0 -r sed -i -E \
                 -e "s#(/lke-landing-zone/\.github/workflows/llz-[A-Za-z0-9_-]+\.yml)@[^[:space:]]+#\1@${GITHUB_SHA}#g" \
                 -e "s#(//terraform-modules/llz-[A-Za-z0-9_-]+\?ref=)[^\"]+#\1${GITHUB_SHA}#g"
-          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]*).*/\1${GITHUB_SHA}/" .github/workflows/*.yml
+          # Repoint the caller stubs' `template-ref: <value>` to the SHA under test.
+          # REQUIRE a value ([[:space:]]+ then a non-space) so this matches only the
+          # value form — NOT the bare `template-ref:` INPUT-DEFINITION key in the
+          # reusables (whose value is the nested description/required/type/default on
+          # the following lines). The old `[[:space:]]*.*` matched the bare key too,
+          # collapsing it to `template-ref:<sha>` and orphaning its children →
+          # "invalid workflow file … line N" (the reusables' template-ref input).
+          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]+)[^[:space:]].*/\1${GITHUB_SHA}/" .github/workflows/*.yml
           # Fail loudly if any token survived — a silent miss = a broken instance push.
           if grep -rnE '<@|@>' . ; then
             echo "::error::unrendered copier token(s) survived the e2e render pass"
