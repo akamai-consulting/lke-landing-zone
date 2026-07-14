@@ -7,9 +7,11 @@ description: >
   `llz` itself is baked into the TF_IMAGE these jobs run in
   (dockerfiles/terraform/Dockerfile) — already on PATH, no install step.
 
-  Assumes the standard dual checkout: the caller instance at the workspace root
-  and the LLZ template at _llz-template/ (relative `uses:` paths inside a
-  composite resolve against the workspace, not this action's own checkout).
+  Sibling actions (fetch-kubeconfig, lke-runner-acl) are referenced with
+  `uses: ./instance-template/.github/actions/<name>`, which GitHub resolves
+  against THIS action's own repository checkout — so no template checkout into
+  the caller workspace is needed (the #201-Phase-2 cross-org model: the caller
+  references this action cross-org and needs nothing local).
 
   A composite action has no post-job hook, so the caller MUST pair this with a
   trailing lke-runner-acl step (mode: revoke, if: always()) passing the same
@@ -72,7 +74,7 @@ runs:
   steps:
     - name: Fetch kubeconfig from Terraform state
       id: kubeconfig
-      uses: ./_llz-template/instance-template/.github/actions/fetch-kubeconfig
+      uses: ./instance-template/.github/actions/fetch-kubeconfig
       with:
         aws-access-key-id:     ${{ inputs.aws-access-key-id }}
         aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
@@ -87,7 +89,7 @@ runs:
     # cluster — there is nothing to ACL.
     - name: Open control-plane ACL for this runner
       if: steps.kubeconfig.outputs.available == 'true'
-      uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+      uses: ./instance-template/.github/actions/lke-runner-acl
       with:
         mode:         open
         linode-token: ${{ inputs.linode-token }}
