@@ -63,8 +63,8 @@ spec:
         # Tag and digest forms of the first-party in-cluster image. Both globs so
         # :latest, :sha-<...>, and @sha256:<...> references all match.
         - imageReferences:
-            - "ghcr.io/<@ upstream_org @>/llz:*"
-            - "ghcr.io/<@ upstream_org @>/llz@*"
+            - "ghcr.io/akamai-consulting/llz:*"
+            - "ghcr.io/akamai-consulting/llz@*"
           # Rewrite the matched ref to the verified digest so what runs is exactly
           # what was verified (defeats a tag re-point between verify and pull).
           mutateDigest: true
@@ -77,7 +77,7 @@ spec:
                     # build-images.yml workflow. Narrow to a single repo/branch
                     # (…/lke-landing-zone/.github/workflows/build-images.yml@refs/heads/main)
                     # for a tighter trust anchor.
-                    subject: "https://github.com/<@ upstream_org @>/*/.github/workflows/build-images.yml@*"
+                    subject: "https://github.com/akamai-consulting/*/.github/workflows/build-images.yml@*"
                     issuer: "https://token.actions.githubusercontent.com"
                     rekor:
                       url: https://rekor.sigstore.dev
