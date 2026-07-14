@@ -194,6 +194,14 @@ jobs:
         run: cd tools && go build -o ../bin/llz ./cmd/llz
 
       - name: Scaffold the e2e environment
+        # The shared, token-free apl-values manifests are fetched from the template
+        # repo at a pinned ref (RenderManifestKustomization's remote refs), not vendored.
+        # A throwaway e2e instance has no .copier-answers.yml for `llz render` to read a
+        # version from, so hand it the SHA under test — ArgoCD then fetches the shared
+        # components from THIS commit (which carries the changes being validated), not a
+        # published tag. See docs/designs/apl-values-remote-refs.md + resolveTemplateRef.
+        env:
+          LLZ_TEMPLATE_REF: ${{ github.sha }}
         run: |
           set -euo pipefail
           # Re-create the e2e env from scratch each run (idempotent). env add is

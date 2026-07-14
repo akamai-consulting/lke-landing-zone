@@ -234,13 +234,42 @@ func untrackRenderedTfvars(relPrefix string) {
 // App CR + apps/<name>/ source root (kustomization + per-env patches), and — when an
 // apl-values/_shared/values.yaml base is present — the values.yaml with
 // apps.<key>.enabled + identity patched (the apl-core backend).
+// resolveTemplateRef returns the ref the shared apl-values tree is fetched at
+// (the remote refs RenderManifestKustomization emits). Priority:
+//  1. $LLZ_TEMPLATE_REF — set by automation that renders OUTSIDE an instance:
+//     release-e2e exports the SHA under test so ArgoCD fetches the shared manifests
+//     from that exact commit (the .copier-answers.yml the instance would read is
+//     stripped in the throwaway e2e instance);
+//  2. .copier-answers.yml llz_version — the release tag a real instance pins to;
+//  3. .copier-answers.yml _commit — the exact scaffold SHA, as a fallback;
+//  4. "" — no instance context (the template's own render tests / an un-scaffolded
+//     tree): keep every reference LOCAL, so behaviour is unchanged and `llz render
+//     --check` stays deterministic without reaching for a version.
+func resolveTemplateRef() string {
+	if r := strings.TrimSpace(os.Getenv("LLZ_TEMPLATE_REF")); r != "" {
+		return r
+	}
+	a, _ := readAnswers(".")
+	if a == nil {
+		return ""
+	}
+	if v := strings.TrimSpace(a.Version); v != "" {
+		return v
+	}
+	return strings.TrimSpace(a.Commit)
+}
+
 func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
 	manifest := filepath.Join(aplDir, env, "manifest")
+	// Template ref the shared apl-values tree is fetched at (see RenderManifestKustomization):
+	// the version this instance tracks, so an instance references the byte-identical manifest
+	// layer from the template repo instead of vendoring it. Empty ref → all-local references.
+	ref := resolveTemplateRef()
 	targets := map[string]string{
 		// THIN overlay over the shared base + per-component kustomize Components —
-		// the resources live ONCE in apl-values/_shared/ + apl-values/components/,
-		// never copied per env.
-		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components),
+		// the shared, token-free resources are fetched from the template repo at `ref`;
+		// only per-env + per-instance pieces are carried locally.
+		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref),
 		// per-env local-config marker the cluster-bootstrap precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
 	}
@@ -257,7 +286,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		}
 		appsDir := filepath.Join(aplDir, env, "apps", c.Name)
 		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
-		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c)
+		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref)
 		for path, content := range carvedPatchTargets(c, appsDir, env, e) {
 			targets[path] = content
 		}

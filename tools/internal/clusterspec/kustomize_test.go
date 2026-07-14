@@ -15,7 +15,7 @@ func allOn() map[string]ComponentToggle {
 }
 
 func TestRenderManifestKustomization(t *testing.T) {
-	out := RenderManifestKustomization(allOn())
+	out := RenderManifestKustomization(allOn(), "")
 	// Thin overlay: the shared base + a health-inert Application CR under resources:
 	// for each enabled CARVED component (blast-radius decomposition) + a components:
 	// list of the remaining plain component dirs.
@@ -57,12 +57,63 @@ func TestRenderManifestKustomization(t *testing.T) {
 	// Disabling harbor drops its carved App CR (and only it).
 	off := allOn()
 	off["harbor"] = ComponentToggle{Enabled: boolPtr(false)}
-	dropped := RenderManifestKustomization(off)
+	dropped := RenderManifestKustomization(off, "")
 	if strings.Contains(dropped, "llz-harbor.yaml") {
 		t.Error("disabled harbor should drop its carved App CR")
 	}
 	if !strings.Contains(dropped, "llz-observability.yaml") {
 		t.Error("disabling harbor must not drop sibling carved Apps")
+	}
+}
+
+func TestRenderManifestKustomization_RemoteRefs(t *testing.T) {
+	const ref = "v9.9.9"
+	out := RenderManifestKustomization(allOn(), ref)
+	// Token-free plain components are fetched from the template repo at the pinned ref.
+	for _, want := range []string{
+		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/openbao?ref=v9.9.9",
+		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/certManager?ref=v9.9.9",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("remote ref missing %q:\n%s", want, out)
+		}
+	}
+	// The plain components that STILL carry a per-instance token stay LOCAL (a remote
+	// fetch would pull the unrendered token) — none of the plain set does today, but the
+	// shared base is not remote-ready yet, so it must remain a local reference.
+	if !strings.Contains(out, "- ../../_shared/manifest") {
+		t.Errorf("shared base must stay a local reference until it is split:\n%s", out)
+	}
+	if strings.Contains(out, "_shared/manifest?ref=") {
+		t.Errorf("shared base must NOT be remote yet (it holds the instance_repo Argo App):\n%s", out)
+	}
+	// An empty ref keeps everything local (drift-check default / no instance context).
+	local := RenderManifestKustomization(allOn(), "")
+	if strings.Contains(local, "github.com/akamai-consulting") {
+		t.Errorf("empty ref must stay fully local:\n%s", local)
+	}
+	if !strings.Contains(local, "- ../../components/openbao") {
+		t.Errorf("empty ref should reference components locally:\n%s", local)
+	}
+}
+
+func TestRenderCarvedAppKustomization_RemoteRefs(t *testing.T) {
+	const ref = "v9.9.9"
+	// A token-free carved component (observability) is fetched remotely at the ref.
+	obs, _ := LookupComponent("observability")
+	if got := RenderCarvedAppKustomization(obs, ref); !strings.Contains(got,
+		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/observability?ref=v9.9.9") {
+		t.Errorf("observability carved kustomization should reference the remote ref:\n%s", got)
+	}
+	// A carved component that still carries a per-instance token (llzReconciler →
+	// llz_image_ref) stays LOCAL until Phase 0 moves that image to a render-emitted overlay.
+	rec, _ := LookupComponent("llzReconciler")
+	got := RenderCarvedAppKustomization(rec, ref)
+	if !strings.Contains(got, "- ../../../components/llzReconciler") {
+		t.Errorf("token-carrying llzReconciler must stay a local reference:\n%s", got)
+	}
+	if strings.Contains(got, "github.com/akamai-consulting") {
+		t.Errorf("token-carrying llzReconciler must NOT be fetched remotely:\n%s", got)
 	}
 }
 
@@ -102,7 +153,7 @@ func TestRenderCarvedAppKustomization(t *testing.T) {
 	// A carved component WITH a patch (observability) references the shared Component
 	// three levels up + its env patch.
 	obs, _ := LookupComponent("observability")
-	k := RenderCarvedAppKustomization(obs)
+	k := RenderCarvedAppKustomization(obs, "")
 	for _, want := range []string{
 		"kind: Kustomization",
 		"- ../../../components/observability",
@@ -116,7 +167,7 @@ func TestRenderCarvedAppKustomization(t *testing.T) {
 	}
 	// A carved component WITHOUT a patch (externalSecrets) omits the patches: section.
 	es, _ := LookupComponent("externalSecrets")
-	if got := RenderCarvedAppKustomization(es); strings.Contains(got, "patches:") {
+	if got := RenderCarvedAppKustomization(es, ""); strings.Contains(got, "patches:") {
 		t.Errorf("patch-less carved component should omit patches::\n%s", got)
 	}
 }
