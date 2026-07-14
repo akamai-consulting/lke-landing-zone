@@ -1,15 +1,20 @@
 # llz-cluster-health-workflow — the CI-agnostic day-2 health job, fully Argo-owned.
 #
-#   rbac.yaml           the workflow ServiceAccount + its read-only RBAC
+#   rbac.yaml              the workflow ServiceAccount + its read-only RBAC
 #   workflowtemplate.yaml  the health job (`llz ci health-incluster`), SA-authenticated
-#   cronworkflow.yaml   the self-driving schedule — the ONLY trigger
-#   network-policy.yaml egress lockdown for the health workflow pods
+#   network-policy.yaml    egress lockdown for the health workflow pods
 #
-# Self-driving via the CronWorkflow, kube-only, no Argo Events / no NATS. The
-# webhook trigger adapter (Sensor + EventSource + EventBus) was dropped — the
-# CronWorkflow covers the schedule and the llz-reconciler is the continuous signal,
-# so a NATS StatefulSet for an optional on-demand trigger wasn't worth it (an
-# operator can `argo submit --from workflowtemplate/llz-cluster-health` on demand).
+# ON-DEMAND only: a WorkflowTemplate an operator/CI runs via
+# `argo submit --from workflowtemplate/llz-cluster-health` (or the unit-tested
+# `llz ci assert-health-workflow` gate). There is deliberately NO CronWorkflow —
+# the continuous convergence signal is the llz-reconciler, which samples the SAME
+# convergenceReport every ~30s and emits it as an ALERTABLE Prometheus gauge
+# (llz_convergence_state); a 6-hourly report-only log line duplicated that without
+# adding a signal. This template is the on-demand/synchronous check the gauge
+# isn't, and the Argo-native substrate future day-2 jobs (rotation, audits) reuse.
+# (Re-add a CronWorkflow ONLY for a deployment that runs NEITHER the reconciler nor
+# Prometheus, and make it fail-on-unhealthy=true so a bad run is a visible Failed
+# Workflow, not an unread log.) kube-only, no Argo Events / no NATS.
 # See docs/designs/day2-incluster-health.md.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -17,5 +22,4 @@ kind: Kustomization
 resources:
   - rbac.yaml
   - workflowtemplate.yaml
-  - cronworkflow.yaml
   - network-policy.yaml
