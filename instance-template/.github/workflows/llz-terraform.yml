@@ -667,6 +667,7 @@ jobs:
       - name: Cluster access (kubeconfig readiness probe + runner ACL)
         uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
+          template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}

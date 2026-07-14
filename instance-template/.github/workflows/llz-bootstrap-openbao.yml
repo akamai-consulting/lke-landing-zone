@@ -279,6 +279,7 @@ jobs:
       - name: Cluster access (kubeconfig + runner ACL)
         uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
+          template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -955,6 +956,7 @@ jobs:
       - name: Cluster access (peer kubeconfig + runner ACL)
         uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
+          template-ref:          <@ llz_version @>
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1008,6 +1010,7 @@ jobs:
       - name: Cluster access (standby kubeconfig + runner ACL)
         uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
+          template-ref:          <@ llz_version @>
           region:                ${{ inputs.region }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1057,6 +1060,7 @@ jobs:
       - name: Cluster access (peer kubeconfig + runner ACL)
         uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
         with:
+          template-ref:          <@ llz_version @>
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
