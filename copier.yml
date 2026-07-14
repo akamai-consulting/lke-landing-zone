@@ -116,13 +116,16 @@ _tasks:
   # into the e2e instance). No-op fallback if llz isn't on PATH (full docs kept).
   - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
   # Slim the copied-in workflow surface: strip YAML-level comments from the big
-  # reusable bodies (llz-*.yml) so an instance carries the machinery, not the ~38%
-  # of maintainer rationale it never reads (the template SOURCE keeps its comments;
-  # rationale lives in docs/designs). SAFE — only true YAML comments outside `run:`
-  # block scalars are removed (bash/markdown/heredoc content is preserved), and each
-  # file's header block is kept. Idempotent on `copier update`. No-op if llz is
-  # absent (the workflows still work, just verbose). See docs/designs/instance-slimming.md.
-  - "command -v llz >/dev/null 2>&1 && llz ci strip-comments .github/workflows/llz-*.yml || echo \"(llz not on PATH — skipping workflow comment-strip; run 'llz ci strip-comments .github/workflows/llz-*.yml')\""
+  # reusable bodies (llz-*.yml) AND the apl-values PLATFORM manifests
+  # (components/ + _shared/manifest/ — RBAC, Deployments, Kyverno, PrometheusRules)
+  # so an instance carries the machinery, not the maintainer rationale it never
+  # reads (the template SOURCE keeps its comments; rationale lives in docs/designs).
+  # SAFE — only true YAML comments outside `run:`/`|`/`>` block scalars are removed
+  # (bash/markdown/heredoc content preserved), each file's header kept. Deliberately
+  # EXCLUDES apl-values/**/values.yaml and _shared/custom/ (operator-tuned config
+  # whose comments explain what to change). Idempotent; no-op if llz is absent.
+  # See docs/designs/instance-slimming.md.
+  - "command -v llz >/dev/null 2>&1 && llz ci strip-comments .github/workflows/llz-*.yml $(find apl-values/components apl-values/_shared/manifest -type f \\( -name '*.yaml' -o -name '*.yml' \\) 2>/dev/null) || echo \"(llz not on PATH — skipping comment-strip; run 'llz ci strip-comments .github/workflows/llz-*.yml ...')\""
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not
