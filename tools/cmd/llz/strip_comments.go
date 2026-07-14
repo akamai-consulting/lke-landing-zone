@@ -57,21 +57,38 @@ func ciStripCommentsCmd() *cobra.Command {
 // comment): the body that follows is literal text, indented deeper than the key.
 var blockScalarOpen = regexp.MustCompile(`^(\s*)(?:-\s+)?(?:[^\s#][^:]*:\s*|-\s*)[|>][+-]?\d*\s*(?:#.*)?$`)
 
-// stripYAMLComments removes YAML comment-only lines that sit OUTSIDE any block
-// scalar. Block-scalar bodies (literal text) are preserved verbatim. When
-// keepHeader is set, the leading contiguous comment block is preserved.
+// heredocOpen matches a line that OPENS a heredoc (Terraform `= <<-EOF` / `<<EOT`,
+// also shell), capturing the terminator tag; its body is literal until a line
+// whose trimmed content is exactly the tag. This makes the strip safe on .tf too
+// (a `#` line inside a heredoc is literal, not a comment).
+var heredocOpen = regexp.MustCompile(`<<[-~]?\s*["']?(\w+)["']?\s*$`)
+
+// stripYAMLComments removes full-line `#` comments that sit OUTSIDE any block
+// scalar (YAML `|`/`>`) or heredoc (`<<TAG`) — their bodies are literal text and
+// preserved verbatim. When keepHeader is set, the leading comment block is kept.
+// Safe for YAML and Terraform/HCL (comments are inert; heredoc bodies untouched).
 func stripYAMLComments(content string, keepHeader bool) string {
 	lines := strings.Split(content, "\n")
 	var out []string
 
 	inScalar := false
 	scalarIndent := 0 // indent of the block-scalar KEY; body must be deeper
+	inHeredoc := false
+	heredocTag := ""
 	inHeader := keepHeader
 
 	for _, ln := range lines {
 		trimmed := strings.TrimLeft(ln, " \t")
 		indent := len(ln) - len(trimmed)
 		blank := strings.TrimSpace(ln) == ""
+
+		if inHeredoc {
+			out = append(out, ln) // literal heredoc body — never stripped
+			if strings.TrimSpace(ln) == heredocTag {
+				inHeredoc = false
+			}
+			continue
+		}
 
 		if inScalar {
 			// The block scalar continues through blank lines and any line indented
@@ -93,13 +110,19 @@ func stripYAMLComments(content string, keepHeader bool) string {
 			inHeader = false
 		}
 
-		// A YAML comment-only line outside a scalar → drop it.
+		// A comment-only line outside a scalar/heredoc → drop it.
 		if !blank && strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
 		out = append(out, ln)
 
+		// Does THIS line open a heredoc? Then its body is literal until the tag.
+		if m := heredocOpen.FindStringSubmatch(ln); m != nil {
+			inHeredoc = true
+			heredocTag = m[1]
+			continue
+		}
 		// Does THIS line open a block scalar? Then its body is literal.
 		if m := blockScalarOpen.FindStringSubmatch(ln); m != nil {
 			inScalar = true
