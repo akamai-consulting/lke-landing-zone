@@ -277,12 +277,19 @@ func statusCmd() *cobra.Command {
 
 func upgradeCmd() *cobra.Command {
 	var ref string
+	var commit bool
 	c := &cobra.Command{
-		Use: "upgrade", Short: "copier update + re-stamp the template version",
+		Use: "upgrade", Short: "copier update + re-stamp the template version (conflict-gated, summarized, optionally committed)",
+		Long: "Updates the instance from its pinned template: `copier update` + apply the\n" +
+			"template's declared file removals + re-stamp .template-version. Then gates on\n" +
+			"leftover merge-conflict markers (fails loudly instead of shipping them), prints\n" +
+			"a one-view summary of the churn, and — with --commit — records it as a single\n" +
+			"labeled `chore(template): upgrade vX -> vY` commit so you review one diff.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runUpgrade(gopts, ref) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runUpgrade(gopts, ref, commit) },
 	}
 	c.Flags().StringVar(&ref, "ref", "", "template release tag to update + re-pin to (default: this llz binary's version)")
+	c.Flags().BoolVar(&commit, "commit", false, "stage + record the upgrade as one labeled git commit")
 	return c
 }
 

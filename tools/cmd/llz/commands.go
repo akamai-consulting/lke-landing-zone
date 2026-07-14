@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -289,7 +291,9 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 		"--private", "--source", dir, "--remote", "origin", "--push")
 }
 
-func runUpgrade(g globalOpts, ref string) error {
+func runUpgrade(g globalOpts, ref string, commit bool) error {
+	oldRef := currentTemplateRef() // "" if the instance has no .template-version yet
+
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
 	// to the latest tag but leave the recorded llz_version stale). updateRepo()
@@ -315,6 +319,119 @@ func runUpgrade(g globalOpts, ref string) error {
 	if err := stampTemplateVersion(""); err != nil {
 		return fmt.Errorf("stamp template version: %w", err)
 	}
+	newRef := currentTemplateRef()
+
+	// ── Lever 1: make the upgrade reviewable + safe ──────────────────────────
+	// A botched copier 3-way merge can leave <<<<<<< markers that otherwise ship
+	// invalid YAML far downstream (the gsap-apl incident). Fail loudly here BEFORE
+	// the operator commits, instead of relying on `llz lint` to catch it later.
+	if bad := upgradeConflictFiles(); len(bad) > 0 {
+		fmt.Fprintf(os.Stderr, "\n%s copier update left merge-conflict markers in %d file(s):\n", red("✗"), len(bad))
+		for _, f := range bad {
+			fmt.Fprintf(os.Stderr, "    %s\n", f)
+		}
+		return fmt.Errorf("resolve the conflict marker(s) above, then commit — the upgrade is NOT complete")
+	}
+
+	// One place to see what the upgrade touched, so a big managed-file churn is a
+	// single reviewable summary rather than a scattered surprise at commit time.
+	printUpgradeSummary(oldRef, newRef)
+
+	// A single labeled commit so the operator reviews ONE diff and history reads
+	// "template vX → vY", not N unrelated file changes. Opt-in (--commit) — we
+	// never silently commit someone's working tree.
+	if commit {
+		return commitUpgrade(g, oldRef, newRef)
+	}
+	fmt.Fprintln(os.Stderr, dim("  (re-run with --commit to stage + commit this upgrade as one labeled commit)"))
+	return nil
+}
+
+// currentTemplateRef reads the recorded template ref from .template-version
+// (falling back to the short SHA), "" when absent/unreadable.
+func currentTemplateRef() string {
+	b, err := os.ReadFile(".template-version")
+	if err != nil {
+		return ""
+	}
+	var tv templateVersion
+	if json.Unmarshal(b, &tv) != nil {
+		return ""
+	}
+	if tv.TemplateRef != "" {
+		return tv.TemplateRef
+	}
+	if len(tv.TemplateSHA) >= 8 {
+		return tv.TemplateSHA[:8]
+	}
+	return tv.TemplateSHA
+}
+
+// upgradeConflictFiles returns the working-tree files copier update just changed
+// (or added) that carry a merge-conflict marker — reusing the Phase 0
+// conflictMarkerLines predicate so this gate and `llz lint` agree.
+func upgradeConflictFiles() []string {
+	changed := map[string]bool{}
+	for _, f := range strings.Split(gitOut("diff", "--name-only"), "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			changed[f] = true
+		}
+	}
+	for _, f := range strings.Split(gitOut("ls-files", "--others", "--exclude-standard"), "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			changed[f] = true
+		}
+	}
+	var bad []string
+	for f := range changed {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if len(conflictMarkerLines(string(data))) > 0 {
+			bad = append(bad, f)
+		}
+	}
+	sort.Strings(bad)
+	return bad
+}
+
+// printUpgradeSummary shows the version delta + a diffstat of the churn.
+func printUpgradeSummary(oldRef, newRef string) {
+	from := oldRef
+	if from == "" {
+		from = "(unknown)"
+	}
+	fmt.Printf("\n%s template %s → %s\n", bold("upgrade"), from, newRef)
+	if stat := gitOut("diff", "--stat"); stat != "" {
+		fmt.Println(stat)
+	} else if untracked := gitOut("ls-files", "--others", "--exclude-standard"); untracked != "" {
+		fmt.Printf("new files:\n%s\n", untracked)
+	} else {
+		fmt.Println(dim("  no file changes — already up to date."))
+	}
+}
+
+// commitUpgrade stages the whole tree and records the upgrade as one labeled
+// commit, so history reads "template vX → vY". No-op (not an error) when the
+// update produced no changes.
+func commitUpgrade(g globalOpts, oldRef, newRef string) error {
+	if strings.TrimSpace(gitOut("status", "--porcelain")) == "" {
+		fmt.Fprintln(os.Stderr, green("✓")+" already up to date — nothing to commit.")
+		return nil
+	}
+	from := oldRef
+	if from == "" {
+		from = "(initial)"
+	}
+	msg := fmt.Sprintf("chore(template): upgrade %s → %s\n\nApplied via `llz upgrade`.", from, newRef)
+	if err := run(g, "git", "add", "-A"); err != nil {
+		return fmt.Errorf("git add: %w", err)
+	}
+	if err := run(g, "git", "commit", "-m", msg); err != nil {
+		return fmt.Errorf("git commit: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "%s committed template upgrade %s → %s\n", green("✓"), from, newRef)
 	return nil
 }
 
