@@ -248,16 +248,18 @@ var Components = []Component{
 		CarvedApp: &CarvedApp{AppName: "llz-reconciler", AppWave: 5, Namespace: "llz-reconciler"},
 	},
 	{
-		// Scheduled cluster-health as a KUBERNETES-NATIVE job — an Argo WorkflowTemplate
-		// running `llz ci health-incluster` (kubectl-free) on the slim llz image,
-		// driven by a self-driving CronWorkflow. It authenticates with the workflow
-		// pod's ServiceAccount (read-only RBAC), so it needs NO GitHub secrets, no
-		// `secrets: inherit`, and nothing GitHub-specific in the cluster — the
-		// pipeline-abstraction endpoint (docs/designs/day2-incluster-health.md). The
-		// continuous form of the same signal is the llz-reconciler; this is the
-		// synchronous, scheduled variant. Default-disabled; needs argoWorkflows (the
-		// CronWorkflow controller) only — the optional Argo Events webhook trigger
-		// (and its NATS EventBus) was dropped as not worth the weight.
+		// ON-DEMAND cluster-health as a KUBERNETES-NATIVE job — an Argo WorkflowTemplate
+		// running `llz ci health-incluster` (kubectl-free) on the slim llz image. It
+		// authenticates with the workflow pod's ServiceAccount (read-only RBAC), so it
+		// needs NO GitHub secrets, no `secrets: inherit`, and nothing GitHub-specific in
+		// the cluster — the pipeline-abstraction endpoint (docs/designs/day2-incluster-
+		// health.md). Deliberately NO CronWorkflow: the CONTINUOUS form of the same
+		// signal is the llz-reconciler, which samples the identical convergenceReport
+		// every ~30s and emits an ALERTABLE Prometheus gauge — a scheduled report-only
+		// run would just duplicate it. This is the synchronous, on-demand check the
+		// gauge isn't (run via `argo submit --from workflowtemplate/llz-cluster-health`
+		// or the `llz ci assert-health-workflow` gate) AND the Argo-native substrate the
+		// rotation/audit day-2 jobs reuse. Default-disabled; needs argoWorkflows only.
 		Name:              "clusterHealthWorkflow",
 		DependsOn:         []string{"argoWorkflows"},
 		ManifestResources: []string{"llz-cluster-health-workflow"},

@@ -12,11 +12,12 @@ doc is the roadmap to make it real.
 Run day-2 checks (health, later rotation/audits) **inside the cluster** as
 Kubernetes-native jobs, so nothing CI-vendor-specific runs in the cluster and
 there are no GitHub secrets / no `secrets: inherit` — which is exactly what makes
-it work across org boundaries. An Argo `WorkflowTemplate` runs `llz` on a
-schedule (`CronWorkflow`) and/or on a webhook (`Sensor` + `EventSource`),
-authenticated by the workload's **ServiceAccount**. The continuous form of the
-same signal is already the `llz-reconciler`; this is the synchronous, triggerable
-variant. The portability seam stays `llz ci <verb>` in a container.
+it work across org boundaries. An Argo `WorkflowTemplate` runs `llz`
+**on demand** — `argo submit --from workflowtemplate/llz-cluster-health`, or the
+unit-tested `llz ci assert-health-workflow` gate — authenticated by the workload's
+**ServiceAccount**. The continuous form of the same signal is already the
+`llz-reconciler`; this is the synchronous, triggerable variant. The portability
+seam stays `llz ci <verb>` in a container.
 
 **Why not ARC (in-cluster GitHub runners):** it embeds a GitHub-Actions-specific
 runner controller in every cluster — the opposite of abstracting the pipeline.
@@ -95,7 +96,7 @@ reconciler already proved.
 - [x] **Real-instance e2e wiring** — `release-e2e.yml` now enables the component in
       the `e2e` env (`llz env set e2e components.argoWorkflows.enabled=true
       components.clusterHealthWorkflow.enabled=true`), so converge validates the
-      DEPLOY path (kyverno admits the WorkflowTemplate/CronWorkflow/RBAC CRs, Argo
+      DEPLOY path (kyverno admits the WorkflowTemplate/RBAC CRs, Argo
       reconciles them), and a new **`llz ci assert-health-workflow`** step in
       bootstrap-openbao's converge (same `assert_loki` e2e gate) submits a one-shot
       Workflow from the template and asserts it Succeeds — validating the RUN path.
@@ -118,18 +119,34 @@ reconciler already proved.
         reconciler already runs the same image under the same policy, so this should
         be a non-event — but kind has no Kyverno to prove it.
 
-## Webhook trigger + its NATS EventBus — dropped
+## Triggers — on-demand only (scheduled cron dropped, webhook dropped)
 
-The **CronWorkflow** (self-driving schedule) needs **no** Argo Events and **no**
-NATS — it's a plain Argo Workflows cron. NATS/the EventBus existed ONLY to carry a
-webhook event from the `EventSource` to the `Sensor` (the "triggerable by
-GitHub/GitLab/curl" adapter). That's a 3-pod NATS StatefulSet purely for an
-optional on-demand trigger. Since the CronWorkflow covers self-driving and the
-`llz-reconciler` is the continuous signal (and an operator can `argo submit --from
-workflowtemplate/llz-cluster-health` on demand), the webhook path wasn't worth its
-weight. **Dropped:** the Sensor, EventSource, EventBus (NATS), and the sensor
-ServiceAccount/RBAC are gone; the component is CronWorkflow-only and now depends on
-`argoWorkflows` alone (not `argoEvents`). Re-add it only if a concrete
+The component is now **on-demand only**: a `WorkflowTemplate` run via
+`argo submit --from workflowtemplate/llz-cluster-health` or the unit-tested
+`llz ci assert-health-workflow` gate. Neither a scheduled `CronWorkflow` nor a
+webhook adapter ships.
+
+**Scheduled `CronWorkflow` — dropped (does not earn its keep).** It ran
+`llz ci health-incluster` every 6h, report-only. But the `llz-reconciler` already
+samples the **identical** `convergenceReport` (same `health.ClassifyArgoApp`
+predicate) every ~30s and emits it as the **alertable, historized** Prometheus
+gauge `llz_convergence_state` (+ `_apps_failed`/`_pending`), alongside richer
+ESO/cert-manager/OpenBao gauges. A 6-hourly, non-alertable log line of a verdict
+the reconciler already publishes finer-grained is pure redundancy — it even
+invites "which do I trust?" confusion and double maintenance. So the scheduled
+cron is gone; the reconciler owns the continuous signal, and this template owns
+the on-demand/synchronous check the gauge isn't (plus the substrate the day-2
+rotation/audit jobs reuse). **Re-add a CronWorkflow ONLY** for a deployment that
+runs **neither** the reconciler nor Prometheus — and then set
+`fail-on-unhealthy=true` so a bad run is a visible **Failed Workflow**, not an
+unread log.
+
+**Webhook trigger + its NATS EventBus — dropped** (earlier). NATS/the EventBus
+existed ONLY to carry a webhook event from an `EventSource` to a `Sensor` (the
+"triggerable by GitHub/GitLab/curl" adapter) — a 3-pod StatefulSet for an optional
+trigger `argo submit` already covers. The Sensor, EventSource, EventBus (NATS),
+and the sensor ServiceAccount/RBAC are gone; the component depends on
+`argoWorkflows` alone (not `argoEvents`). Re-add only if a concrete
 external-webhook use-case appears (then run NATS at 1 replica).
 
 ## Non-goals
