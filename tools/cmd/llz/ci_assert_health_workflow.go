@@ -157,10 +157,13 @@ func runCIAssertHealthWorkflow(namespace, template string, timeout, interval tim
 
 	deadline := time.Now().Add(timeout)
 	for {
-		items := kItems("-n", namespace, "get", "workflow", name)
+		// `kubectl get workflow <name> -o json` returns the BARE object, not a
+		// List — so parse it directly. (kItems parses `.items`, which a single-named
+		// get never has, so it always yielded nothing → phase stuck at "<none yet>"
+		// and the poll timed out even on a workflow that had already Succeeded.)
 		var phase string
-		if len(items) == 1 {
-			phase = workflowPhase(items[0])
+		if out, err := execOutput("kubectl", "-n", namespace, "get", "workflow", name, "-o", "json"); err == nil {
+			phase = workflowPhase(out)
 		}
 		terminal, succeeded := classifyWorkflowPhase(phase)
 		if terminal {
