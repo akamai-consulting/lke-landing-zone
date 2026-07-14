@@ -112,8 +112,9 @@ func ciCmd() *cobra.Command {
 	// behind the cross-org thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
 	c.AddCommand(ciOpenBaoLoginCmd())
 	// Copier render-time slimming: strip YAML-level comments from the workflow
-	// bodies delivered into an instance (the template source keeps them).
-	c.AddCommand(ciStripCommentsCmd())
+	// bodies delivered into an instance (the template source keeps them), and
+	// prune docs/ to the operator set + reference the rest at the template repo.
+	c.AddCommand(ciStripCommentsCmd(), ciDeliverDocsCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())
