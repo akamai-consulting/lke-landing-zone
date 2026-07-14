@@ -35,6 +35,13 @@ func e2eRequirements(admin bool) []requirement {
 		{"KUBE_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-kubernetes:<tag> (computed)"},
 		{"LINODE_DNS_TOKEN", true, true, false, false, "Linode Domains:RW (cert DNS-01)"},
 		{"HARBOR_URL", false, false, false, false, "Harbor base URL"},
+		// GHCR read credential — OPTIONAL: the first-party charts are public, so
+		// leave EMPTY for a stock instance. Only a PRIVATE fork / private image
+		// needs it. Tracked here (not hand-set) so `llz doctor` shows it and, when
+		// present, actively validates it — a stale GHCR PAT otherwise 403s the chart
+		// pre-flight. Env-scoped, paired: read:packages secret + its owner (var).
+		{"GHCR_READ_TOKEN", true, true, false, false, "GitHub read:packages PAT (ONLY for a private fork/image; empty for public charts)"},
+		{"GHCR_USERNAME", false, true, false, false, "owner of GHCR_READ_TOKEN (only with it)"},
 	}
 	if admin {
 		reqs = append(reqs,

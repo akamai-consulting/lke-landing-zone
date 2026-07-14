@@ -339,37 +339,14 @@ func parseOCIRef(repoURL, chart string) (host, repoPath string, err error) {
 func ghcrChartPublished(host, repoPath, version string) (bool, error) {
 	client := &http.Client{Timeout: 20 * time.Second}
 
-	tokURL := fmt.Sprintf("https://%s/token?service=%s&scope=repository:%s:pull", host, host, repoPath)
-	treq, _ := http.NewRequest(http.MethodGet, tokURL, nil)
-	// The first-party charts may be a PRIVATE GHCR repo (ArgoCD reads them with a
-	// read:packages PAT). Use the same credential when present; fall back to an
-	// anonymous pull token (works when the charts are public). Username is ignored
-	// by the GHCR token endpoint, so any non-empty value works.
-	if t := firstNonEmptyEnv("GHCR_READ_TOKEN", "GHCR_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"); t != "" {
-		user := firstNonEmptyEnv("GHCR_USERNAME")
-		if user == "" {
-			user = "x"
-		}
-		treq.SetBasicAuth(user, t)
-	}
-	tresp, err := client.Do(treq)
+	tokVal, err := ghcrPullToken(client, host, repoPath)
 	if err != nil {
 		return false, err
-	}
-	defer tresp.Body.Close()
-	if tresp.StatusCode/100 != 2 {
-		return false, fmt.Errorf("token endpoint returned %d", tresp.StatusCode)
-	}
-	var tok struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(tresp.Body).Decode(&tok); err != nil {
-		return false, fmt.Errorf("decoding pull token: %w", err)
 	}
 
 	manURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", host, repoPath, version)
 	mreq, _ := http.NewRequest(http.MethodHead, manURL, nil)
-	mreq.Header.Set("Authorization", "Bearer "+tok.Token)
+	mreq.Header.Set("Authorization", "Bearer "+tokVal)
 	mreq.Header.Set("Accept", "application/vnd.oci.image.index.v1+json, "+
 		"application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json")
 	mresp, err := client.Do(mreq)
@@ -385,6 +362,77 @@ func ghcrChartPublished(host, repoPath, version string) (bool, error) {
 	default:
 		return false, fmt.Errorf("manifest HEAD returned %d", mresp.StatusCode)
 	}
+}
+
+// ghcrShouldRetryAnon reports whether a credentialed GHCR token request that
+// returned `code` should be retried ANONYMOUSLY. The first-party charts are
+// public, so a present-but-invalid GHCR_READ_TOKEN (a 401/403 at the token
+// endpoint — an expired/revoked hand-set PAT) must NOT block the check: anonymous
+// access still works. Only retry when creds were actually sent and were rejected.
+// Pure (unit-tested).
+func ghcrShouldRetryAnon(code int, haveCreds bool) bool {
+	return haveCreds && (code == http.StatusUnauthorized || code == http.StatusForbidden)
+}
+
+// ghcrPullToken fetches a pull-scoped GHCR token for repoPath. It authenticates
+// with GHCR_READ_TOKEN/GHCR_TOKEN/GITHUB_TOKEN/GH_TOKEN when present, but falls
+// back to an ANONYMOUS token if the credentialed request is rejected (see
+// ghcrShouldRetryAnon) — so an expired/optional GHCR credential can no longer
+// 403-block a public-chart check (previously the fallback only fired when NO
+// credential was set, not when a present one was rejected). A genuinely private
+// chart still fails, because the anonymous retry is then denied too.
+func ghcrPullToken(client *http.Client, host, repoPath string) (string, error) {
+	tokURL := fmt.Sprintf("https://%s/token?service=%s&scope=repository:%s:pull", host, host, repoPath)
+	creds := firstNonEmptyEnv("GHCR_READ_TOKEN", "GHCR_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+
+	// do issues the token request, optionally with Basic auth, returning the HTTP
+	// status and (on 2xx) the decoded pull token. Username is ignored by the GHCR
+	// token endpoint but must be non-empty for Basic auth.
+	do := func(withCreds bool) (int, string, error) {
+		req, _ := http.NewRequest(http.MethodGet, tokURL, nil)
+		if withCreds && creds != "" {
+			user := firstNonEmptyEnv("GHCR_USERNAME")
+			if user == "" {
+				user = "x"
+			}
+			req.SetBasicAuth(user, creds)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode/100 != 2 {
+			return resp.StatusCode, "", nil
+		}
+		var tok struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
+			return resp.StatusCode, "", fmt.Errorf("decoding pull token: %w", err)
+		}
+		return resp.StatusCode, tok.Token, nil
+	}
+
+	code, tok, err := do(creds != "")
+	if err != nil {
+		return "", err
+	}
+	if code/100 == 2 {
+		return tok, nil
+	}
+	if ghcrShouldRetryAnon(code, creds != "") {
+		fmt.Fprintf(os.Stderr, "::warning::GHCR credential rejected (HTTP %d) at the token endpoint; retrying anonymously (first-party charts are public). Rotate or unset GHCR_READ_TOKEN/GHCR_USERNAME.\n", code)
+		code2, tok2, err2 := do(false)
+		if err2 != nil {
+			return "", err2
+		}
+		if code2/100 == 2 {
+			return tok2, nil
+		}
+		return "", fmt.Errorf("token endpoint returned %d with credentials, %d anonymously", code, code2)
+	}
+	return "", fmt.Errorf("token endpoint returned %d", code)
 }
 
 func firstNonEmptyEnv(keys ...string) string {
