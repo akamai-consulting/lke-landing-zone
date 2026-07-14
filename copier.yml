@@ -109,6 +109,14 @@ _skip_if_exists:
 # workflows run in, so an instance never carries its own copy.
 _tasks:
   - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md docs/designs/cross-org-reuse-pattern.md docs/designs/day2-incluster-health.md docs/designs/instance-slimming.md"
+  # Slim the copied-in workflow surface: strip YAML-level comments from the big
+  # reusable bodies (llz-*.yml) so an instance carries the machinery, not the ~38%
+  # of maintainer rationale it never reads (the template SOURCE keeps its comments;
+  # rationale lives in docs/designs). SAFE — only true YAML comments outside `run:`
+  # block scalars are removed (bash/markdown/heredoc content is preserved), and each
+  # file's header block is kept. Idempotent on `copier update`. No-op if llz is
+  # absent (the workflows still work, just verbose). See docs/designs/instance-slimming.md.
+  - "command -v llz >/dev/null 2>&1 && llz ci strip-comments .github/workflows/llz-*.yml || echo \"(llz not on PATH — skipping workflow comment-strip; run 'llz ci strip-comments .github/workflows/llz-*.yml')\""
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not
