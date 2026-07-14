@@ -1,8 +1,11 @@
 # Design: in-cluster, CI-agnostic day-2 health (Argo-native)
 
-**Status:** WIP on `feat/day2-argo-health`. Pulled from PR #202 (the cross-org
-reuse pattern) after a second critical review — it could not run as designed. This
-doc is the roadmap to make it real.
+**Status:** MERGED. The kubectl-free verb + on-demand WorkflowTemplate landed in
+#203 (validated end-to-end on a real cluster — the `assert-health-workflow` gate
+went green in release-e2e run 29345530071). #206 trimmed it to on-demand only
+(dropped the scheduled CronWorkflow — see "Triggers" below). Originally pulled
+from PR #202 (the cross-org reuse pattern) after a second critical review found it
+couldn't run as designed; this doc records how it was made real.
 **Relates to:** `instance-template/apl-values/components/clusterHealthWorkflow/`,
 `tools/cmd/llz/ci_health.go`, `docs/designs/kube-native-reconciler.md`,
 `docs/designs/cross-org-reuse-pattern.md` (§ "Day-2", in #202).
@@ -81,9 +84,12 @@ reconciler already proved.
       `convergenceExit`, and the reconciler gauge still passes on the shared core).
 - [x] **Point the WorkflowTemplate at it** (`ci health-incluster`); WIP marker
       downgraded to "needs live validation".
-- [ ] **Fold in the supplementary signals** — ESO store / cert-manager / OpenBao
-      seal (already kubectl-free in `reconcile_health.go`) if the convergence
-      verdict alone isn't enough for the day-2 report.
+- [x] **Fold in the supplementary signals** — DECIDED: won't-do. Convergence
+      (Argo Application) is the right scope for the on-demand check; the
+      reconciler already emits the ESO store / cert-manager / OpenBao-seal gauges
+      continuously (`reconcile_health.go`), so duplicating them in the on-demand
+      verb adds nothing. Revisit only if a concrete day-2 report needs them
+      synchronously.
 - [x] **Webhook trigger dropped** (see below) — no EventBus/NATS to right-size or
       sync-wave-order anymore.
 - [x] **Live validation (kind)** — stood the component up on a local kind cluster
@@ -105,9 +111,10 @@ reconciler already proved.
       component into the values kustomization and `kubectl kustomize` builds it; the
       pure verb helpers are unit-tested. Awaiting a green release-e2e run to close
       the environment-integration loop.
-- [ ] **Green release-e2e run** — the two things kind specifically CANNOT verify
-      (checked by reasoning + the kind label/RBAC probes instead) that the real
-      run will exercise:
+- [x] **Green release-e2e run** — DONE (run 29345530071): the `assert-health-
+      workflow` gate submitted a Workflow from the template on the real apl-core
+      cluster and it reached `Succeeded`, so the two things kind specifically
+      CANNOT verify are now exercised on a real cluster:
       - **NetworkPolicy enforcement** — kindnet doesn't enforce NPs. The workflow
         pod carries `app.kubernetes.io/name: llz-cluster-health` (verified on kind),
         so the NP selects it; its egress (DNS + apiserver 443/6443) covers both the
