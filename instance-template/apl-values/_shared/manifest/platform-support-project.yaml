@@ -47,8 +47,8 @@ spec:
   # llz-openbao-platform (bundled into the OCI artifact at publish), so Argo never
   # pulls it from upstream at runtime.
   sourceRepos:
-    - 'ghcr.io/<@ upstream_org @>/charts'
-    - 'ghcr.io/<@ upstream_org @>/charts/*'
+    - 'ghcr.io/akamai-consulting/charts'
+    - 'ghcr.io/akamai-consulting/charts/*'
     - 'https://argoproj.github.io/argo-helm'
   destinations:
     # Namespaces cluster-foundation creates (wave -20) + the apl-core-managed

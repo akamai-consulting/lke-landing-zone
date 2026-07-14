@@ -37,7 +37,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: llz reconciler metrics target is down
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape the llz-reconciler /metrics endpoint; the in-cluster convergence signals are blind.
         - alert: LLZReconcilerReportingDown
           # Fires per reconciler (the `reconciler` label rides through): any
@@ -50,7 +50,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: llz reconciler {{ $labels.reconciler }} pass is failing
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The {{ $labels.reconciler }} reconciler is scraped but its last pass failed (e.g. lost Kubernetes API access, or a rotation/provisioning error).
         - alert: LLZReconcilerStale
           # Scoped to the observe reconciler: it samples every 30s, so a >5m gap
@@ -64,7 +64,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: llz observe reconciler loop is stale
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The observe reconciler has not completed a successful pass in over 5 minutes; its sample loop may be wedged.
         - alert: LLZReconcilerErroring
           # A folded timed reconciler (Linode cred rotation / Harbor provisioning)
@@ -76,7 +76,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: llz reconciler {{ $labels.reconciler }} is erroring repeatedly
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The {{ $labels.reconciler }} reconciler has failed more than 3 times in the last hour.
         - alert: LLZClusterNotConverged
           # The observe reconciler's day-2 convergence read (Argo app health via
@@ -91,7 +91,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: cluster is not converged (hard-failed)
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The reconciler classifies the cluster as hard-failed (an Argo Application the reconciler can't resolve on its own). See llz_convergence_apps_failed.
         - alert: LLZESOStoreNotReady
           # The openbao ClusterSecretStore is not Ready — every platform
@@ -103,7 +103,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: openbao ClusterSecretStore is not Ready
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The ESO ClusterSecretStore the platform ExternalSecrets bind to has been not-Ready for 15m.
         - alert: LLZCertificatesNotReady
           # One or more cert-manager Certificates stuck not-Ready.
@@ -114,7 +114,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: cert-manager Certificates are not Ready
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: '{{ $value }} cert-manager Certificate(s) have been not-Ready for 30m.'
         - alert: LLZOpenBaoNotAvailable
           # Fewer OpenBao pods Ready than exist — a sealed pod reads NotReady, so a
@@ -126,7 +126,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: an OpenBao pod is not Ready (possibly sealed)
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: Not all OpenBao pods pass their readiness probe; a sealed pod reads NotReady.
         - alert: LLZOpenBaoSealed
           # The precise seal signal from --reconcile-openbao-gauges (vs the
@@ -139,7 +139,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: OpenBao is sealed
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
             description: OpenBao reports sealed for 5m; ESO reads are blocked until it is unsealed.
         - alert: LLZCredentialRotationOverdue
           # A credential in OpenBao has not rotated within its SLA. 90d matches the
@@ -151,7 +151,7 @@ spec:
             service: llz-reconciler
           annotations:
             summary: 'credential {{ $labels.cred }} rotation is overdue'
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
             description: '{{ $labels.cred }} was last rotated {{ $value }} days ago (SLA 90d).'
         - alert: LLZReconcilerNoLeader
           # The llz_reconcile_leader gauge is published only when a driving
@@ -166,5 +166,5 @@ spec:
             service: llz-reconciler
           annotations:
             summary: llz reconciler has no leader
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: A driving reconciler is enabled but no replica holds the lease; nothing is being driven.

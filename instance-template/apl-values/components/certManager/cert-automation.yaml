@@ -17,7 +17,7 @@ spec:
   revisionHistoryLimit: 3
   project: platform-support
   source:
-    repoURL: ghcr.io/<@ upstream_org @>/charts
+    repoURL: ghcr.io/akamai-consulting/charts
     chart: llz-cert-automation
     targetRevision: 0.1.6
     helm:

@@ -30,7 +30,7 @@ spec:
             service: otel-collector
           annotations:
             summary: OTel Collector metrics target is down
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape one or more OTel Collector metrics endpoints.
         - alert: LokiMetricsTargetDown
           expr: up{namespace="monitoring", service=~".*loki.*"} == 0
@@ -40,7 +40,7 @@ spec:
             service: loki
           annotations:
             summary: Loki metrics target is down
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape one or more Loki metrics endpoints.
         - alert: GrafanaMetricsTargetDown
           expr: up{namespace="grafana", service=~".*grafana.*"} == 0
@@ -50,7 +50,7 @@ spec:
             service: grafana
           annotations:
             summary: Grafana metrics target is down
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape the Grafana metrics endpoint.
         - alert: HarborMetricsTargetDown
           # Scoped to Harbor's OWN metrics targets (core/registry/jobservice/exporter,
@@ -67,7 +67,7 @@ spec:
             service: harbor
           annotations:
             summary: Harbor metrics target is down
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: Prometheus cannot scrape one or more Harbor core/registry/jobservice/exporter metrics endpoints.
         # ── Workload availability (distinct from the scrape-health alerts above) ──
         # The `...MetricsTargetDown` alerts fire when Prometheus can't SCRAPE a pod
@@ -86,7 +86,7 @@ spec:
             service: support-plane
           annotations:
             summary: 'support-plane Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has no available replicas'
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: '{{ $labels.namespace }}/{{ $labels.deployment }} has 0 available replicas for 10m — the workload is down or wedged, not merely unscrapable.'
         - alert: LokiStatefulSetUnavailable
           expr: kube_statefulset_status_replicas_ready{namespace="monitoring", statefulset="loki"} == 0
@@ -96,7 +96,7 @@ spec:
             service: loki
           annotations:
             summary: Loki has no ready replicas
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The Loki StatefulSet has 0 ready replicas for 10m — log ingestion and queries are down.
         # ── Error-rate / saturation (the third + fourth layer) ────────────────────
         # Availability (above) answers "is it up"; these answer "is it healthy while
@@ -119,7 +119,7 @@ spec:
             service: loki
           annotations:
             summary: Loki is serving a high 5xx error rate
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'More than 5% of Loki requests have returned 5xx for 15m — ingestion and/or query paths are erroring, not merely slow.'
         - alert: LokiObjectStoreErrors
           # Loki's S3-compatible backend (Linode Object Storage). loki_s3_* carries
@@ -142,7 +142,7 @@ spec:
             service: loki
           annotations:
             summary: Loki object-store (S3) writes/reads are failing
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'More than 5% of Loki object-store Put/Get/Delete ops are returning 5xx for 15m — chunk/index flushes are failing; the WAL backs up and risks data loss if it fills. (S3.List is excluded — it 500s benignly on an idle bucket.)'
         - alert: LokiIngestionDiscarding
           # Saturation: Loki is DROPPING incoming samples (rate limits, per-stream
@@ -156,7 +156,7 @@ spec:
             service: loki
           annotations:
             summary: Loki is discarding ingested samples
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'Loki has discarded samples for 15m ({{ $value | humanize }}/s) — ingestion is hitting a rate/stream limit or rejecting malformed logs; some logs are not being stored.'
         # ── OTel Collector error-rate / saturation ────────────────────────────────
         # PROVISIONAL. Unlike the Loki exprs above, these are NOT yet verified live:
@@ -184,7 +184,7 @@ spec:
             service: otel-collector
           annotations:
             summary: OTel Collector is refusing incoming telemetry
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'The OTel Collector has refused incoming telemetry for 15m — the memory_limiter is shedding load or a downstream queue is full; senders are being throttled.'
         - alert: OTelCollectorExportFailures
           # Error-rate: the exporter is failing to send downstream. Meaningful once a
@@ -200,7 +200,7 @@ spec:
             service: otel-collector
           annotations:
             summary: OTel Collector is failing to export telemetry
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'The OTel Collector exporter has failed sends for 15m — telemetry is being dropped downstream; check the exporter endpoint and credentials.'
         # ── Harbor error-rate / saturation ────────────────────────────────────────
         # PROVISIONAL (issue #183). harbor_* only exists once metrics are enabled
@@ -221,7 +221,7 @@ spec:
             service: harbor
           annotations:
             summary: 'Harbor component {{ $labels.component }} is unhealthy'
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'harbor-exporter reports {{ $labels.component }} unreachable for 10m — that Harbor subsystem is down or unreachable from core.'
         - alert: HarborCoreHighErrorRate
           # Error-rate: 5xx ratio on Harbor core's HTTP surface (API + registry auth).
@@ -236,7 +236,7 @@ spec:
             service: harbor
           annotations:
             summary: Harbor core is serving a high 5xx error rate
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'More than 5% of Harbor core HTTP requests have returned 5xx for 15m — pushes/pulls and the API are erroring.'
         - alert: HarborJobQueueBacklog
           # Saturation: the jobservice work queue (Trivy image scans, GC, replication)
@@ -249,5 +249,5 @@ spec:
             service: harbor
           annotations:
             summary: 'Harbor job queue is backing up ({{ $labels.type }})'
-            runbook_url: "https://github.com/<@ upstream_org @>/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: 'A Harbor jobservice queue has exceeded 100 pending tasks for 30m ({{ $value | humanize }}) — Trivy scans / GC / replication are not draining; jobservice is saturated or stuck.'

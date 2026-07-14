@@ -33,7 +33,7 @@ spec:
   revisionHistoryLimit: 3
   project: platform-support
   source:
-    repoURL: ghcr.io/<@ upstream_org @>/charts
+    repoURL: ghcr.io/akamai-consulting/charts
     chart: llz-cluster-foundation
     targetRevision: 0.1.9
     helm:
