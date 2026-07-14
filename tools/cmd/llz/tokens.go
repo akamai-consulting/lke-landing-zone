@@ -72,7 +72,15 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if n := prepopulateVars(vars, reqs, instSt, tmplSt); n > 0 {
 		fmt.Printf("%s\n", dim(fmt.Sprintf("Prepopulated %d variable value(s) from existing repo config.", n)))
 	}
-	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt)
+	// Presence isn't validity: actively probe every gathered/cached credential so
+	// an expired/revoked/mistyped token surfaces in the VALID column (with "rotate
+	// it") instead of 401/403-ing deep in a CI run. Report-only in the wizard.
+	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.value("GHCR_USERNAME"))
+	validity, invalidN := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
+	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	if invalidN > 0 {
+		fmt.Println(dim("  (fix the invalid credential(s) above, then re-run — a dead token fails the CI run later)"))
+	}
 	if len(missing) == 0 {
 		_ = writeEnvFile(".llz/vars.env", vars)
 		fmt.Printf("\n%s Everything required for e2e is already set — nothing to do.\n", green("✓"))
@@ -189,9 +197,10 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	// (The template repo + its first-party modules are public, so no TEMPLATE_TOKEN
 	// is needed — the reusable workflows check it out anonymously.)
 	// (The first-party OCI Helm charts under ghcr.io/<org>/charts are public, so
-	// ArgoCD pulls them anonymously — no GHCR_READ_TOKEN is provisioned here. A
-	// private fork or the optional Akamai-internal firewall-controller image can
-	// still set GHCR_READ_TOKEN + GHCR_USERNAME by hand; the TF gate honors it.)
+	// ArgoCD pulls them anonymously — GHCR_READ_TOKEN stays EMPTY for a stock
+	// instance. A private fork / private image can set it; it's now a tracked
+	// OPTIONAL pair gathered in the optional-secrets section below, not hand-set,
+	// so `llz doctor` shows + validates it and a stale PAT can't silently rot.)
 
 	// ── Computed vars ────────────────────────────────────────────────────────
 	if !have("TF_IMAGE", false) {
@@ -214,6 +223,25 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		fmt.Printf("\n%s %s — %s\n", bold("[optional]"), s.name, dim(s.desc))
 		if v := prompt(in, s.name+" (Enter to skip)"); v != "" {
 			secrets[s.name] = v
+		}
+	}
+
+	// ── Optional GHCR read credential (private fork / private image only) ──────
+	// The stock first-party charts are PUBLIC, so leave this EMPTY — do NOT set a
+	// token you don't need: a stale GHCR PAT 403s the chart pre-flight (the
+	// ghcrChartPublished anonymous fallback now rides that out, but empty is still
+	// the clean default). Gathered as a pair: the read:packages secret + its owner
+	// variable; the username is only meaningful alongside the token.
+	if !have("GHCR_READ_TOKEN", true) {
+		fmt.Printf("\n%s GHCR_READ_TOKEN — %s\n", bold("[optional]"),
+			dim("GitHub read:packages PAT — ONLY for a private fork or private image; Enter to skip (public charts pull anonymously)"))
+		if v := prompt(in, "GHCR_READ_TOKEN (Enter to skip)"); v != "" {
+			secrets["GHCR_READ_TOKEN"] = v
+			if !have("GHCR_USERNAME", false) {
+				if u := prompt(in, "GHCR_USERNAME (owner of that PAT)"); u != "" {
+					vars["GHCR_USERNAME"] = u
+				}
+			}
 		}
 	}
 
@@ -285,13 +313,21 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 		tmplSt = fetchLiveState(templateRepo(), "")
 	}
 	fmt.Printf("\n%s\n", bold(fmt.Sprintf("e2e readiness — %s (infra-%s)%s", instanceRepo, env, adminBanner(admin))))
-	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt)
-	if len(missing) == 0 {
-		fmt.Println("\n" + green("✓") + " ready — every required value is set.")
-		return nil
+	// Actively probe validity, not just presence — a set-but-dead token is the
+	// failure that otherwise only shows up as a 401/403 mid-CI-run.
+	ghcrUser := firstNonEmpty(vars["GHCR_USERNAME"], instSt.value("GHCR_USERNAME"))
+	validity, invalid := probeTokenValidities(reqs, secrets, vars, instSt, ghcrUser)
+	missing := reportReadiness(reqs, secrets, vars, instSt, tmplSt, validity)
+	if len(missing) > 0 {
+		fmt.Printf("\n%s %d required item(s) missing: %s\n", red("✗"), len(missing), strings.Join(missing, ", "))
+		fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
 	}
-	fmt.Printf("\n%s %d required item(s) missing: %s\n", red("✗"), len(missing), strings.Join(missing, ", "))
-	fmt.Println("  run `llz tokens" + adminFlag(admin) + " --env " + env + " --yes` to provision them.")
+	if invalid > 0 {
+		return fmt.Errorf("%d probeable credential(s) are invalid — rotate them (see the validity report above)", invalid)
+	}
+	if len(missing) == 0 {
+		fmt.Println("\n" + green("✓") + " ready — every required value is set and every probeable token is valid.")
+	}
 	return nil
 }
 

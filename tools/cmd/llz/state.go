@@ -8,6 +8,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 )
 
 // requirement is one var/secret an e2e instance needs.
@@ -35,6 +37,13 @@ func e2eRequirements(admin bool) []requirement {
 		{"KUBE_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-kubernetes:<tag> (computed)"},
 		{"LINODE_DNS_TOKEN", true, true, false, false, "Linode Domains:RW (cert DNS-01)"},
 		{"HARBOR_URL", false, false, false, false, "Harbor base URL"},
+		// GHCR read credential — OPTIONAL: the first-party charts are public, so
+		// leave EMPTY for a stock instance. Only a PRIVATE fork / private image
+		// needs it. Tracked here (not hand-set) so `llz doctor` shows it and, when
+		// present, actively validates it — a stale GHCR PAT otherwise 403s the chart
+		// pre-flight. Env-scoped, paired: read:packages secret + its owner (var).
+		{"GHCR_READ_TOKEN", true, true, false, false, "GitHub read:packages PAT (ONLY for a private fork/image; empty for public charts)"},
+		{"GHCR_USERNAME", false, true, false, false, "owner of GHCR_READ_TOKEN (only with it)"},
 	}
 	if admin {
 		reqs = append(reqs,
@@ -182,9 +191,12 @@ func prepopulateVars(vars map[string]string, reqs []requirement, instance, templ
 // a value present only in the cache shows "cached → will push" and still counts
 // as not-done, so the wizard pushes it instead of declaring "nothing to do".
 // (satisfied()/have() stay cache-aware so we don't re-prompt for cached values.)
-func reportReadiness(reqs []requirement, secrets, vars map[string]string, instance, template liveState) []string {
+// The `validity` map (name → probe verdict, from probeTokenValidities) drives the
+// VALID column; pass nil to omit active probing (the column then reads "unprobed"
+// for every credential).
+func reportReadiness(reqs []requirement, secrets, vars map[string]string, instance, template liveState, validity map[string]tokenValidity) []string {
 	var missing []string
-	fmt.Printf("\n%s\n", bold(fmt.Sprintf("%-30s %-7s %-9s %s", "NAME", "KIND", "REQUIRED", "STATUS")))
+	fmt.Printf("\n%s\n", bold(fmt.Sprintf("%-30s %-7s %-9s %-24s %s", "NAME", "KIND", "REQUIRED", "STATUS", "VALID")))
 	for _, r := range reqs {
 		st := instance
 		if r.Template {
@@ -195,12 +207,15 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 		if r.Secret {
 			_, inCache = secrets[r.Name]
 		}
-		mark := red("✗ missing")
+		statusPlain, statusColor := "✗ missing", red
 		switch {
 		case onGitHub:
-			mark = green("✓ set")
+			statusPlain, statusColor = "✓ set", green
 		case inCache:
-			mark = yellow("⤴ cached → will push")
+			statusPlain, statusColor = "⤴ cached → will push", yellow
+		}
+		if r.Template {
+			statusPlain += " (template)"
 		}
 		kind := "var"
 		if r.Secret {
@@ -210,16 +225,71 @@ func reportReadiness(reqs []requirement, secrets, vars map[string]string, instan
 		if r.Required {
 			req = "REQUIRED"
 		}
-		scope := ""
-		if r.Template {
-			scope = " (template)"
-		}
-		fmt.Printf("%-30s %-7s %-9s %s%s\n", r.Name, kind, req, mark, scope)
+		validPlain, validColor := validCell(r, onGitHub, validity)
+		fmt.Printf("%-30s %-7s %-9s %s %s\n", r.Name, kind, req, padColor(statusPlain, statusColor, 24), validColor(validPlain))
 		if r.Required && !onGitHub {
 			missing = append(missing, r.Name)
 		}
 	}
+	// Detail notes only for the actionable verdicts (INVALID / warnings) — kept out
+	// of the columnar table so it stays aligned.
+	for _, r := range reqs {
+		tv, ok := validity[r.Name]
+		if !ok || (tv.status != vInvalid && tv.status != vWarn && tv.status != vUnreachable) {
+			continue
+		}
+		fmt.Printf("  %s %s: %s\n", validGlyph(tv.status), r.Name, tv.detail)
+	}
 	return missing
+}
+
+// validCell renders a requirement's VALID column: a short colored verdict. Long
+// detail goes in the per-problem notes printed after the table. Every credential
+// (kind != none) gets a verdict — never a bare "n/a".
+func validCell(r requirement, onGitHub bool, validity map[string]tokenValidity) (string, func(string) string) {
+	if kindFor(r.Name) == kindNone {
+		return "", dim // not a credential — blank column
+	}
+	tv, ok := validity[r.Name]
+	if !ok {
+		return "· unprobed", dim
+	}
+	switch tv.status {
+	case vValid:
+		return "✓ valid", green
+	case vWarn:
+		return "⚠ warn", yellow
+	case vInvalid:
+		return "✗ INVALID", red
+	case vUnreachable:
+		return "⚠ unreachable", yellow
+	default: // vSkipped — not probed because the value isn't available locally
+		if onGitHub {
+			return "· not cached", dim // set on GitHub, value not in .llz cache
+		}
+		return "· not set", dim
+	}
+}
+
+func validGlyph(s validityStatus) string {
+	switch s {
+	case vInvalid:
+		return red("✗")
+	case vWarn:
+		return yellow("⚠")
+	default:
+		return yellow("⚠")
+	}
+}
+
+// padColor right-pads a plain string to a display width (rune count — the status
+// glyphs render one cell wide) THEN colors it, so the zero-width ANSI escapes
+// don't throw off column alignment (the same trick record() uses).
+func padColor(plain string, color func(string) string, width int) string {
+	if n := width - utf8.RuneCountInString(plain); n > 0 {
+		plain += strings.Repeat(" ", n)
+	}
+	return color(plain)
 }
 
 // loadEnvFiles reads the gathered .llz/*.env (empty maps if absent).

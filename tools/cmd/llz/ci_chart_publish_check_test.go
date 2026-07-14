@@ -149,3 +149,24 @@ func TestRunChartPublishCheck_PublishIfMissing(t *testing.T) {
 		t.Error("want error when --publish-if-missing lacks --ref/--template-repo")
 	}
 }
+
+func TestGhcrShouldRetryAnon(t *testing.T) {
+	cases := []struct {
+		code      int
+		haveCreds bool
+		want      bool
+	}{
+		{401, true, true},   // creds rejected → retry anon (public charts)
+		{403, true, true},   // the exact failure we hit
+		{401, false, false}, // no creds sent → nothing to fall back from
+		{403, false, false},
+		{500, true, false}, // server error, not an auth problem
+		{200, true, false}, // success, no retry
+		{404, true, false},
+	}
+	for _, tc := range cases {
+		if got := ghcrShouldRetryAnon(tc.code, tc.haveCreds); got != tc.want {
+			t.Errorf("ghcrShouldRetryAnon(%d, %v) = %v, want %v", tc.code, tc.haveCreds, got, tc.want)
+		}
+	}
+}
