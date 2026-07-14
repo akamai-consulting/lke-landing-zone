@@ -108,7 +108,7 @@ _skip_if_exists:
 # ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable `llz-*`
 # workflows run in, so an instance never carries its own copy.
 _tasks:
-  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md docs/designs/cross-org-reuse-pattern.md docs/designs/day2-incluster-health.md"
+  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && rm -f docs/templatization-plan.md docs/agents.md docs/designs/cross-org-reuse-pattern.md docs/designs/day2-incluster-health.md docs/designs/instance-slimming.md"
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not
