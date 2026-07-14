@@ -205,7 +205,7 @@ func TestRenderReconcilerEnvPatch(t *testing.T) {
 }
 
 func TestRenderHarborHostPatch(t *testing.T) {
-	out := RenderHarborHostPatch("web.prod.example.com")
+	out := RenderHarborHostPatch("web.prod.example.com", "acme/inst")
 	for _, want := range []string{
 		"name: harbor-robot-provisioner",
 		"namespace: harbor",

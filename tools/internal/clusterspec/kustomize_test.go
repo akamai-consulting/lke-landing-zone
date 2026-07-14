@@ -101,19 +101,35 @@ func TestRenderCarvedAppKustomization_RemoteRefs(t *testing.T) {
 	const ref = "v9.9.9"
 	// A token-free carved component (observability) is fetched remotely at the ref.
 	obs, _ := LookupComponent("observability")
-	if got := RenderCarvedAppKustomization(obs, ref); !strings.Contains(got,
+	if got := RenderCarvedAppKustomization(obs, ref, ""); !strings.Contains(got,
 		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/observability?ref=v9.9.9") {
 		t.Errorf("observability carved kustomization should reference the remote ref:\n%s", got)
 	}
-	// A carved component that still carries a per-instance token (llzReconciler →
-	// llz_image_ref) stays LOCAL until Phase 0 moves that image to a render-emitted overlay.
+	// llzReconciler is remote (Phase 0 moved its image to an images: transformer), and
+	// with an imageTag set the carved kustomization retags the shared :latest image.
 	rec, _ := LookupComponent("llzReconciler")
-	got := RenderCarvedAppKustomization(rec, ref)
-	if !strings.Contains(got, "- ../../../components/llzReconciler") {
-		t.Errorf("token-carrying llzReconciler must stay a local reference:\n%s", got)
+	got := RenderCarvedAppKustomization(rec, ref, "sha-abc123")
+	if !strings.Contains(got, "components/llzReconciler?ref=v9.9.9") {
+		t.Errorf("llzReconciler should be a remote ref now:\n%s", got)
 	}
-	if strings.Contains(got, "github.com/akamai-consulting") {
-		t.Errorf("token-carrying llzReconciler must NOT be fetched remotely:\n%s", got)
+	for _, want := range []string{"images:", "name: ghcr.io/akamai-consulting/llz", "newTag: sha-abc123"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("llzReconciler carved kustomization missing image retag %q:\n%s", want, got)
+		}
+	}
+	// clusterHealthWorkflow's image is in an Argo WorkflowTemplate (a CRD the images:
+	// transformer can't reach), so it stays a LOCAL component with no images: block.
+	chw, _ := LookupComponent("clusterHealthWorkflow")
+	chwK := RenderCarvedAppKustomization(chw, ref, "sha-abc123")
+	if !strings.Contains(chwK, "- ../../../components/clusterHealthWorkflow") {
+		t.Errorf("clusterHealthWorkflow must stay a local reference:\n%s", chwK)
+	}
+	if strings.Contains(chwK, "github.com/akamai-consulting") || strings.Contains(chwK, "images:") {
+		t.Errorf("clusterHealthWorkflow must be local with no images: transformer:\n%s", chwK)
+	}
+	// A component that doesn't run the llz image (observability) gets no images: block.
+	if strings.Contains(RenderCarvedAppKustomization(obs, ref, "sha-abc123"), "images:") {
+		t.Errorf("observability should not get an llz images: transformer")
 	}
 }
 
@@ -153,7 +169,7 @@ func TestRenderCarvedAppKustomization(t *testing.T) {
 	// A carved component WITH a patch (observability) references the shared Component
 	// three levels up + its env patch.
 	obs, _ := LookupComponent("observability")
-	k := RenderCarvedAppKustomization(obs, "")
+	k := RenderCarvedAppKustomization(obs, "", "")
 	for _, want := range []string{
 		"kind: Kustomization",
 		"- ../../../components/observability",
@@ -167,7 +183,7 @@ func TestRenderCarvedAppKustomization(t *testing.T) {
 	}
 	// A carved component WITHOUT a patch (externalSecrets) omits the patches: section.
 	es, _ := LookupComponent("externalSecrets")
-	if got := RenderCarvedAppKustomization(es, ""); strings.Contains(got, "patches:") {
+	if got := RenderCarvedAppKustomization(es, "", ""); strings.Contains(got, "patches:") {
 		t.Errorf("patch-less carved component should omit patches::\n%s", got)
 	}
 }

@@ -259,6 +259,38 @@ func resolveTemplateRef() string {
 	return strings.TrimSpace(a.Commit)
 }
 
+// resolveLLZImageTag returns the tag for the in-cluster llz image the shared
+// components run (reconciler / harbor-provisioner). The image NAME is a constant
+// (ghcr.io/akamai-consulting/llz — no forks), so only the tag varies; a carved app's
+// kustomize `images:` transformer overrides it. Priority mirrors resolveTemplateRef:
+//   1. $LLZ_IMAGE_REF — release-e2e exports the signed sha image for the commit under
+//      test (ghcr.io/…/llz:sha-<SHA>); take the tag after the last ':';
+//   2. .copier-answers.yml llz_version — a real instance pins to its release tag;
+//   3. "latest".
+func resolveLLZImageTag() string {
+	if r := strings.TrimSpace(os.Getenv("LLZ_IMAGE_REF")); r != "" {
+		if i := strings.LastIndex(r, ":"); i >= 0 && !strings.Contains(r[i+1:], "/") {
+			return r[i+1:]
+		}
+		return r
+	}
+	if a, _ := readAnswers("."); a != nil {
+		if v := strings.TrimSpace(a.Version); v != "" {
+			return v
+		}
+	}
+	return "latest"
+}
+
+// repoOwnerName reduces a values-repo URL (https://github.com/<owner>/<name>.git) to
+// the <owner>/<name> form the harbor provisioner's GH_REPO env wants.
+func repoOwnerName(repoURL string) string {
+	s := strings.TrimSuffix(strings.TrimSpace(repoURL), ".git")
+	s = strings.TrimPrefix(s, "https://github.com/")
+	s = strings.TrimPrefix(s, "git@github.com:")
+	return s
+}
+
 func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
 	manifest := filepath.Join(aplDir, env, "manifest")
 	// Template ref the shared apl-values tree is fetched at (see RenderManifestKustomization):
@@ -280,14 +312,20 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// platform-bootstrap. The App CR pins the same repo + apps_repo_revision the
 	// platform-bootstrap Application uses. See docs/designs/blast-radius-decomposition.md.
 	revision := orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")
+	// The in-cluster llz image tag (reconciler / harbor-provisioner) and this
+	// instance's repo slug (harbor GH_REPO) are the per-instance values a remote,
+	// token-free component can't bake — a carved app's images: transformer + env
+	// patch set them locally. See resolveLLZImageTag / repoSlug.
+	imageTag := resolveLLZImageTag()
+	ghRepo := repoOwnerName(id.RepoURL)
 	for _, c := range clusterspec.Components {
 		if c.CarvedApp == nil || !clusterspec.ComponentEnabled(e.Components, c.Name) {
 			continue
 		}
 		appsDir := filepath.Join(aplDir, env, "apps", c.Name)
 		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
-		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref)
-		for path, content := range carvedPatchTargets(c, appsDir, env, e) {
+		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref, imageTag)
+		for path, content := range carvedPatchTargets(c, appsDir, env, e, ghRepo) {
 			targets[path] = content
 		}
 	}
@@ -310,14 +348,17 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 // lived in manifest/); the filename is taken from the registry Patch.Path so it
 // stays in lockstep with the reference RenderCarvedAppKustomization emits. Returns
 // empty for a carved component with no per-env patch (externalSecrets).
-func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusterspec.Environment) map[string]string {
+func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusterspec.Environment, ghRepo string) map[string]string {
 	out := make(map[string]string, len(c.Patches))
 	content := map[string]string{}
 	switch c.Name {
 	case "observability":
 		content["otel-collector-tls-san-patch.yaml"] = clusterspec.RenderOtelSANPatch(env)
 	case "harbor":
-		content["harbor-provisioner-env-patch.yaml"] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix)
+		// Per-env HARBOR_HOST + the instance-repo GH_REPO — the harbor provisioner's
+		// two per-instance env values, patched locally so components/harbor stays a
+		// token-free remote base.
+		content["harbor-provisioner-env-patch.yaml"] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix, ghRepo)
 	case "llzReconciler":
 		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds); REGION is
 		// the env name and OBJ_CLUSTER the object-storage cluster.
