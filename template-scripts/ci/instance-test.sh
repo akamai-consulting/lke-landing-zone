@@ -117,9 +117,11 @@ require "docs/quickstart.md"
 require "docs/runbooks/bootstrap-openbao.md"
 require "docs/playbooks"
 require "docs/README.md"
-grep -q "lke-landing-zone/tree/.*/docs" "$INSTANCE/docs/README.md" \
-  && echo "  ok   docs/README.md points at the versioned template docs" \
-  || fail "docs/README.md is missing the version-pinned reference URL"
+if grep -q "lke-landing-zone/tree/.*/docs" "$INSTANCE/docs/README.md"; then
+  echo "  ok   docs/README.md points at the versioned template docs"
+else
+  fail "docs/README.md is missing the version-pinned reference URL"
+fi
 absent() { if [[ -e "$INSTANCE/$1" ]]; then fail "should NOT be in instance (referenced/template-build doc): $1"; else echo "  ok   absent: $1"; fi; }
 absent "docs/templatization-plan.md"   # template-build
 absent "docs/agents.md"                # template-build
