@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,45 @@ const sealKeySecretName = "openbao-unseal-key"
 
 // sealKeyBytes is the key length OpenBao's static seal requires (AES-256).
 const sealKeyBytes = 32
+
+// openbaoNSWait bounds how long the seed waits for the llz-openbao namespace to
+// exist before applying the Secret. The namespace is pre-created at an early
+// wave (-20) of the llz-cluster-foundation Argo app, which only starts syncing
+// once apl-operator has brought Argo CD up — a convergence race the seed step
+// (in the separate Bootstrap OpenBao job) otherwise loses when apl-operator is
+// still young (e.g. it rolled and re-ran its helmfile). Bounded + fail-loud per
+// the convergence contract: a namespace that never appears is a real wedge, not
+// something to soft-continue past.
+const (
+	openbaoNSWait     = 300 * time.Second
+	openbaoNSInterval = 5 * time.Second
+)
+
+// seams (overridable in tests):
+var (
+	// seedNamespaceExists reports whether the openbao namespace exists yet.
+	seedNamespaceExists = func(ns string) bool { return kExists("get", "namespace", ns) }
+	// seedSleep paces the namespace poll.
+	seedSleep = time.Sleep
+)
+
+// waitForOpenbaoNamespace polls (immediate first probe, openbaoNSInterval cadence)
+// until the namespace exists or the budget is spent, then fails loud.
+func waitForOpenbaoNamespace(ns string, within time.Duration) error {
+	attempts := int(within/openbaoNSInterval) + 1
+	for i := 0; i < attempts; i++ {
+		if seedNamespaceExists(ns) {
+			return nil
+		}
+		if i < attempts-1 {
+			if i == 0 {
+				fmt.Printf("namespace %q not present yet — waiting up to %s for the llz-cluster-foundation Argo app to create it…\n", ns, within)
+			}
+			seedSleep(openbaoNSInterval)
+		}
+	}
+	return fmt.Errorf("namespace %q not found after %s — the llz-cluster-foundation Argo app that pre-creates it (wave -20) has not synced yet; apl-operator's helmfile pipeline is likely still converging Argo CD", ns, within)
+}
 
 func ciBaoSeedSealKeyCmd() *cobra.Command {
 	var region string
@@ -63,6 +103,16 @@ func runCIBaoSeedSealKey(g globalOpts, region string) error {
 	if g.dryRun {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) would ensure the %s/%s static auto-unseal key Secret exists\n", openbaoNS, sealKeySecretName)
 		return nil
+	}
+
+	// The Secret lands in llz-openbao, which the llz-cluster-foundation Argo app
+	// pre-creates (wave -20) once Argo CD is up. This step runs in a separate job
+	// that can reach `seed` before that sync lands (apl-operator still converging),
+	// so wait for the namespace first — otherwise both the idempotency check below
+	// and the apply race it, and a fresh key would be generated + persisted only to
+	// fail on `kubectl apply`. Fail loud if it never appears.
+	if err := waitForOpenbaoNamespace(openbaoNS, openbaoNSWait); err != nil {
+		return err
 	}
 
 	// An existing Secret is the live unseal key — never overwrite it.

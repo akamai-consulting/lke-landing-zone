@@ -7,10 +7,51 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withKubectlApply (ci_openbao_ca_test.go) records the last applied manifest;
 // withSeedRand (ci_ensure_secret_test.go) makes the generated key deterministic.
+
+// withSeedNamespace makes waitForOpenbaoNamespace resolve immediately (namespace
+// present) with no real sleeping, so the Secret-logic tests below exercise the
+// key handling without the convergence wait. The wait itself is covered by
+// TestWaitForOpenbaoNamespace*.
+func withSeedNamespace(t *testing.T, present bool) {
+	t.Helper()
+	origExists, origSleep := seedNamespaceExists, seedSleep
+	seedNamespaceExists = func(string) bool { return present }
+	seedSleep = func(time.Duration) {}
+	t.Cleanup(func() { seedNamespaceExists, seedSleep = origExists, origSleep })
+}
+
+// namespace appears after a few polls → success, no error.
+func TestWaitForOpenbaoNamespaceAppears(t *testing.T) {
+	origExists, origSleep := seedNamespaceExists, seedSleep
+	t.Cleanup(func() { seedNamespaceExists, seedSleep = origExists, origSleep })
+	calls := 0
+	seedNamespaceExists = func(string) bool { calls++; return calls >= 3 }
+	slept := 0
+	seedSleep = func(time.Duration) { slept++ }
+	if err := waitForOpenbaoNamespace("llz-openbao", openbaoNSWait); err != nil {
+		t.Fatalf("should succeed once the namespace appears: %v", err)
+	}
+	if calls != 3 || slept != 2 {
+		t.Errorf("calls=%d slept=%d, want 3 probes / 2 sleeps", calls, slept)
+	}
+}
+
+// namespace never appears → fail loud at the deadline (no infinite spin).
+func TestWaitForOpenbaoNamespaceTimesOut(t *testing.T) {
+	origExists, origSleep := seedNamespaceExists, seedSleep
+	t.Cleanup(func() { seedNamespaceExists, seedSleep = origExists, origSleep })
+	seedNamespaceExists = func(string) bool { return false }
+	seedSleep = func(time.Duration) {}
+	err := waitForOpenbaoNamespace("llz-openbao", 20*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "not found after") {
+		t.Errorf("err = %v, want a fail-loud timeout", err)
+	}
+}
 
 func TestSealKeySecretManifest(t *testing.T) {
 	key := make([]byte, sealKeyBytes)
@@ -34,6 +75,7 @@ func TestSealKeySecretManifest(t *testing.T) {
 
 // existing Secret → idempotent no-op: nothing applied, no key generated.
 func TestRunCIBaoSeedSealKeyExistingIsNoop(t *testing.T) {
+	withSeedNamespace(t, true)
 	t.Setenv("OPENBAO_SEAL_KEY", "")
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte("openbao-unseal-key"), nil }) // get secret succeeds
 	applied := withKubectlApply(t)
@@ -48,6 +90,7 @@ func TestRunCIBaoSeedSealKeyExistingIsNoop(t *testing.T) {
 
 // absent Secret + OPENBAO_SEAL_KEY present → restore that key, no gh write.
 func TestRunCIBaoSeedSealKeyRestoreFromEnv(t *testing.T) {
+	withSeedNamespace(t, true)
 	key := make([]byte, sealKeyBytes)
 	for i := range key {
 		key[i] = 0x7
@@ -70,6 +113,7 @@ func TestRunCIBaoSeedSealKeyRestoreFromEnv(t *testing.T) {
 
 // reject a malformed restore value rather than seed a wrong-length key.
 func TestRunCIBaoSeedSealKeyRestoreBadLength(t *testing.T) {
+	withSeedNamespace(t, true)
 	t.Setenv("OPENBAO_SEAL_KEY", base64.StdEncoding.EncodeToString([]byte("too-short")))
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("NotFound") })
 	withKubectlApply(t)
@@ -81,6 +125,7 @@ func TestRunCIBaoSeedSealKeyRestoreBadLength(t *testing.T) {
 // absent Secret, nothing to restore, GH_TOKEN present → generate, persist for
 // DR, apply, and write the offline-backup banner.
 func TestRunCIBaoSeedSealKeyGenerate(t *testing.T) {
+	withSeedNamespace(t, true)
 	t.Setenv("OPENBAO_SEAL_KEY", "")
 	t.Setenv("GH_TOKEN", "ghp_write")
 	sum := filepath.Join(t.TempDir(), "summary")
@@ -112,6 +157,7 @@ func TestRunCIBaoSeedSealKeyGenerate(t *testing.T) {
 
 // generate path with no secrets-write PAT is fatal — the DR copy can't be saved.
 func TestRunCIBaoSeedSealKeyGenerateNeedsGHToken(t *testing.T) {
+	withSeedNamespace(t, true)
 	t.Setenv("OPENBAO_SEAL_KEY", "")
 	t.Setenv("GH_TOKEN", "")
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("NotFound") })
