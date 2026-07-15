@@ -277,7 +277,7 @@ func TestBroadPatRotator_CarvedAndPatched(t *testing.T) {
 }
 
 func TestRenderBroadPATEnvPatch(t *testing.T) {
-	p := RenderBroadPATEnvPatch("gha-acme_LINODE_API_TOKEN", "prod e2e")
+	p := RenderBroadPATEnvPatch("gha-acme_LINODE_API_TOKEN", "prod e2e", "akamai-consulting/lke-landing-zone-example")
 	for _, want := range []string{
 		"kind: CronJob",
 		"name: broad-pat-rotator",
@@ -287,6 +287,8 @@ func TestRenderBroadPATEnvPatch(t *testing.T) {
 		`value: "gha-acme_LINODE_API_TOKEN"`,
 		`- name: BROAD_PAT_DEPLOYMENTS`,
 		`value: "prod e2e"`,
+		`- name: GH_REPO`,
+		`value: "akamai-consulting/lke-landing-zone-example"`,
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("broad-PAT env patch missing %q:\n%s", want, p)
