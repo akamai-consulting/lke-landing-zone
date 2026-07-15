@@ -71,12 +71,17 @@ func TestRenderManifestKustomization_RemoteRefs(t *testing.T) {
 	out := RenderManifestKustomization(allOn(), ref, "")
 	// Token-free plain components are fetched from the template repo at the pinned ref.
 	for _, want := range []string{
-		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/openbao?ref=v9.9.9",
-		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/certManager?ref=v9.9.9",
+		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/openbao?ref=v9.9.9&timeout=80",
+		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/certManager?ref=v9.9.9&timeout=80",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("remote ref missing %q:\n%s", want, out)
 		}
+	}
+	// The git-fetch timeout override (kustomize's 27s default is too short for the
+	// ~35MB repo) must ride every remote ref.
+	if strings.Contains(out, "?ref=v9.9.9\n") || !strings.Contains(out, "&timeout=80") {
+		t.Errorf("every remote ref must carry &timeout=80:\n%s", out)
 	}
 	// The shared _shared/manifest base is fetched remotely too (Phase 1); its per-
 	// instance instance-custom Application is split OUT and stays a local resource.
