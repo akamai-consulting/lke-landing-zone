@@ -15,19 +15,28 @@ import (
 // the apl-operator namespace) for zero benefit — the downstream cluster delete
 // reaps them regardless. Dropping just these keeps `terraform destroy` from
 // hanging on the uninstall while everything else is destroyed against the live API.
+// The provisioning resources live in the llz-cluster-bootstrap module the root
+// calls, so their state addresses are prefixed module.cluster_bootstrap.* — keep
+// this in step with the module block name in terraform-iac-bootstrap/cluster-bootstrap.
+const clusterBootstrapModulePrefix = "module.cluster_bootstrap."
+
 func AplCoreChain() []string {
 	return []string{
-		"helm_release.apl",
-		"kubectl_manifest.apl_operator_namespace",
+		clusterBootstrapModulePrefix + "helm_release.apl",
+		clusterBootstrapModulePrefix + "kubectl_manifest.apl_operator_namespace",
 		// (apl-core ≤5.x also had kubectl_manifest.apl_sops_secrets_placeholder here;
 		// the resource was removed on v6 — restore this entry if you ever pin back.)
-		"kubectl_manifest.platform_app_storage_class",
+		clusterBootstrapModulePrefix + "kubectl_manifest.platform_app_storage_class",
 	}
 }
 
 // clusterBackedRe matches resource addresses that need the cluster API to
-// refresh/delete: helm_release.*, kubectl_manifest.*, and any kubernetes_*.
-var clusterBackedRe = regexp.MustCompile(`^(helm_release\.|kubectl_manifest\.|kubernetes_)`)
+// refresh/delete: helm_release.*, kubectl_manifest.*, and any kubernetes_* —
+// whether at the root or nested under a module (module.<name>.helm_release.…),
+// since the apl-core chain now lives in the llz-cluster-bootstrap module. A root
+// `data.kubernetes_service.*` (prefixed `data.`) is deliberately NOT matched: it is
+// count-guarded off on destroy, so it never dials the gone API.
+var clusterBackedRe = regexp.MustCompile(`^(module\.[a-z0-9_-]+\.)?(helm_release\.|kubectl_manifest\.|kubernetes_)`)
 
 // ClusterBackedAddrs returns the cluster-backed resource addresses in a
 // `terraform state list` output — the CASE B drop set (every resource whose
