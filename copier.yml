@@ -39,12 +39,10 @@ _templates_suffix: ""
 
 # Files under the scaffold that instances must NOT receive. Setting _exclude
 # REPLACES Copier's built-in default, so the usual junk patterns are re-listed.
-# `.github/actions` is template-INTERNAL: the reusable `llz-*` workflows source
-# the composite actions from a template checkout (docs/templatization-plan.md
-# §"Keeping instances in sync"), so an instance no longer copies them — every
-# instance workflow is a thin caller now. The actions stay physically under
-# instance-template/.github/actions/ (this scaffold dir) for the reusable
-# workflows to reference; this rule just keeps them out of generated instances.
+# (The composite actions the reusable `llz-*` workflows source used to live under
+# instance-template/.github/actions and were _excluded here; they now live at the
+# repo-root .github/actions/ — OUTSIDE the copier _subdirectory — and are
+# referenced remotely by the workflows, so there is nothing left to exclude.)
 _exclude:
   - "copier.yml"
   - "copier.yaml"
@@ -54,8 +52,6 @@ _exclude:
   - ".git"
   - ".DS_Store"
   - ".svn"
-  - ".github/actions"
-  - ".github/actions/**"
 
 # Answers tracker that `copier update` reads. Shipped (templated) at
 # instance-template/.copier-answers.yml.

@@ -10,7 +10,7 @@ kind: Component
 # namespace (OpenBao egress + webhook ingress); see network-policies.yaml.
 #
 # NOTE: the `openbao` ClusterSecretStore lives in its own Argo CD Application
-# (apl-values/_shared/manifest-secret-store/, applied by the llz-secret-store app
+# (platform-apl/manifest-secret-store/, applied by the llz-secret-store app
 # in cluster-bootstrap/main.tf) for blast-radius isolation — its first-boot
 # not-ready health used to fail the whole platform-bootstrap sync.
 resources:

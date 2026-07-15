@@ -116,7 +116,7 @@ jobs:
       # internally and the check steps gate on the `available` output.
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -139,7 +139,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -183,7 +183,7 @@ jobs:
       # internally and the check steps gate on the `available` output.
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -205,7 +205,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -254,7 +254,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -284,7 +284,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -337,7 +337,7 @@ jobs:
       # the check steps gate on the `available` output.
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -359,7 +359,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -408,7 +408,7 @@ jobs:
       # `available`.
       - name: Cluster access (kubeconfig + runner ACL)
         id: kubeconfig
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -467,7 +467,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -543,7 +543,7 @@ jobs:
       # internally and the check steps gate on the `available` output.
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -564,7 +564,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -607,7 +607,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -627,7 +627,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

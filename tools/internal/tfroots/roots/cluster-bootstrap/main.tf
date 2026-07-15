@@ -204,9 +204,11 @@ module "cluster_bootstrap" {
 
   # Identity tokens the module CANNOT carry itself: it is git-fetched from the
   # template repo, which copier/tfroots never render — so the bootstrap App's
-  # repoURL + the GHCR charts URL take these as inputs from this (rendered) root.
+  # repoURL + the GHCR charts URL + the llz-secret-store template source take these
+  # as inputs from this (rendered) root. template_ref is the copier llz_version.
   instance_repo = "<@ instance_repo @>"
   upstream_org  = "<@ upstream_org @>"
+  template_ref  = "<@ llz_version @>"
 }
 
 # ── Destroy-time cleanup relocated from TF to the CI destroy job ──────────────
