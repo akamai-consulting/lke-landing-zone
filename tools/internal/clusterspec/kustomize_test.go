@@ -246,6 +246,57 @@ func TestRenderCarvedAppKustomization(t *testing.T) {
 	}
 }
 
+func TestBroadPatRotator_CarvedAndPatched(t *testing.T) {
+	c, ok := LookupComponent("broadPatRotator")
+	if !ok {
+		t.Fatal("broadPatRotator component missing")
+	}
+	// It carves into its own health-inert App (blast-radius isolation) and brings a
+	// per-env env patch — the same shape as harbor/reconciler.
+	if c.CarvedApp == nil {
+		t.Fatal("broadPatRotator should be carved (own namespace + account:read_write PAT)")
+	}
+	if c.CarvedApp.Namespace != "llz-pat-rotator" {
+		t.Errorf("carved App namespace = %q, want llz-pat-rotator", c.CarvedApp.Namespace)
+	}
+	if len(c.Patches) != 1 || c.Patches[0].Path != "broad-pat-rotator-env-patch.yaml" || c.Patches[0].Kind != "CronJob" {
+		t.Errorf("broadPatRotator should carry the CronJob env patch; got %+v", c.Patches)
+	}
+	// externalSecrets (dep root) must floor below it, like every other consumer App.
+	es, _ := LookupComponent("externalSecrets")
+	if es.CarvedApp.AppWave >= c.CarvedApp.AppWave {
+		t.Errorf("externalSecrets wave %d must be < broadPatRotator wave %d", es.CarvedApp.AppWave, c.CarvedApp.AppWave)
+	}
+	// The carved App kustomization pulls the shared Component + references the patch.
+	k := RenderCarvedAppKustomization(c, "", "")
+	for _, want := range []string{"../../../../../platform-apl/components/broadPatRotator", "path: broad-pat-rotator-env-patch.yaml", "kind: CronJob"} {
+		if !strings.Contains(k, want) {
+			t.Errorf("carved kustomization missing %q:\n%s", want, k)
+		}
+	}
+}
+
+func TestRenderBroadPATEnvPatch(t *testing.T) {
+	p := RenderBroadPATEnvPatch("gha-acme_LINODE_API_TOKEN", "prod e2e")
+	for _, want := range []string{
+		"kind: CronJob",
+		"name: broad-pat-rotator",
+		"namespace: llz-pat-rotator",
+		"- name: rotate",
+		`- name: BROAD_PAT_LABEL`,
+		`value: "gha-acme_LINODE_API_TOKEN"`,
+		`- name: BROAD_PAT_DEPLOYMENTS`,
+		`value: "prod e2e"`,
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("broad-PAT env patch missing %q:\n%s", want, p)
+		}
+	}
+	// The placeholders the base ships must not survive a real render.
+	if strings.Contains(p, "REPLACE_ME") {
+		t.Errorf("rendered patch still carries REPLACE_ME:\n%s", p)
+	}
+}
 func TestComponentRegistry_AplCoreMapping(t *testing.T) {
 	// The unified model routes some components to the apl-core (values.yaml) backend.
 	obs, ok := LookupComponent("observability")

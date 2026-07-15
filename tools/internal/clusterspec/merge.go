@@ -86,11 +86,13 @@ func mergeComponents(base, over map[string]ComponentToggle) map[string]Component
 // mergeToggle returns over with base filling any field over leaves unset.
 func mergeToggle(base, over ComponentToggle) ComponentToggle {
 	return ComponentToggle{
-		Enabled:         pickBoolPtr(base.Enabled, over.Enabled),
-		Retention:       pickStr(base.Retention, over.Retention),
-		Storage:         pickStr(base.Storage, over.Storage),
-		Replicas:        pickIntPtr(base.Replicas, over.Replicas),
-		RegistryStorage: pickStr(base.RegistryStorage, over.RegistryStorage),
+		Enabled:             pickBoolPtr(base.Enabled, over.Enabled),
+		Retention:           pickStr(base.Retention, over.Retention),
+		Storage:             pickStr(base.Storage, over.Storage),
+		Replicas:            pickIntPtr(base.Replicas, over.Replicas),
+		RegistryStorage:     pickStr(base.RegistryStorage, over.RegistryStorage),
+		BroadPATLabel:       pickStr(base.BroadPATLabel, over.BroadPATLabel),
+		BroadPATDeployments: pickStr(base.BroadPATDeployments, over.BroadPATDeployments),
 	}
 }
 

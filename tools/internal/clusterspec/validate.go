@@ -302,6 +302,15 @@ func validateComponents(env string, components map[string]ComponentToggle) []err
 					errs = append(errs, fmt.Errorf("environments.%s.components.%s requires component %q to be enabled", env, r.Name, dep))
 				}
 			}
+			// The broad-PAT rotator's CronJob errors at runtime without its account-
+			// wide label + deployment list; require them at render time (the env patch
+			// would otherwise fill BROAD_PAT_* with empty strings). See RenderBroadPATEnvPatch.
+			if r.Name == "broadPatRotator" {
+				t := components[r.Name]
+				if t.BroadPATLabel == "" || t.BroadPATDeployments == "" {
+					errs = append(errs, fmt.Errorf("environments.%s.components.broadPatRotator requires broadPATLabel and broadPATDeployments when enabled (the account-wide Linode PAT label + the space-separated infra-<d> environments to publish into)", env))
+				}
+			}
 		}
 	}
 	return errs
@@ -311,8 +320,9 @@ func validateComponents(env string, components map[string]ComponentToggle) []err
 // a knob set on any other component is a likely mistake (it would be silently
 // ignored). Components absent from the map accept no sizing.
 var sizingKnobs = map[string][]string{
-	"observability": {"retention", "storage", "replicas"},
-	"harbor":        {"registryStorage"},
+	"observability":   {"retention", "storage", "replicas"},
+	"harbor":          {"registryStorage"},
+	"broadPatRotator": {"broadPATLabel", "broadPATDeployments"},
 }
 
 // validateComponentSizing rejects sizing knobs set on a component that does not
@@ -332,6 +342,12 @@ func validateComponentSizing(env, name string, t ComponentToggle) []error {
 	}
 	if t.RegistryStorage != "" {
 		set["registryStorage"] = t.RegistryStorage
+	}
+	if t.BroadPATLabel != "" {
+		set["broadPATLabel"] = t.BroadPATLabel
+	}
+	if t.BroadPATDeployments != "" {
+		set["broadPATDeployments"] = t.BroadPATDeployments
 	}
 	if t.Replicas != nil {
 		set["replicas"] = ""

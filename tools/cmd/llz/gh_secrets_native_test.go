@@ -93,18 +93,66 @@ func TestGHSetRepoSecretNativeErrors(t *testing.T) {
 	}
 }
 
-func TestGHRepoPublicKeyValidatesLength(t *testing.T) {
+func TestGHActionsPublicKeyValidatesLength(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"key_id": "k", "key": base64.StdEncoding.EncodeToString([]byte("short")),
 		})
 	}))
 	t.Cleanup(srv.Close)
+	_, _, err := ghActionsPublicKey(&http.Client{}, "tok", srv.URL+"/secrets")
+	if err == nil || !strings.Contains(err.Error(), "32") {
+		t.Errorf("err = %v, want 32-byte validation", err)
+	}
+}
+
+// The environment-secret path resolves the numeric repo id, fetches the env public
+// key, and PUTs to the environment endpoint — the round-trip the in-cluster broad-PAT
+// rotator uses to write LINODE_API_TOKEN back to each infra-<deployment> environment.
+func TestGHSetEnvSecretNativeRoundTrip(t *testing.T) {
+	pub, priv, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotPutPath string
+	var gotPut struct {
+		EncryptedValue string `json:"encrypted_value"`
+		KeyID          string `json:"key_id"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/platform":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 4242})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/secrets/public-key"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"key_id": "env-key", "key": base64.StdEncoding.EncodeToString(pub[:])})
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/environments/"):
+			gotPutPath = r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&gotPut)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
 	prev := ghAPIBase
 	ghAPIBase = srv.URL
 	t.Cleanup(func() { ghAPIBase = prev })
-	_, _, err := ghRepoPublicKey(&http.Client{}, "tok", "a/b")
-	if err == nil || !strings.Contains(err.Error(), "32") {
-		t.Errorf("err = %v, want 32-byte validation", err)
+	t.Setenv("GH_TOKEN", "ghp_test")
+	t.Setenv("GH_REPO", "acme/platform")
+
+	if err := ghSetEnvSecretNative("LINODE_API_TOKEN", "infra-primary", "new-pat-value"); err != nil {
+		t.Fatal(err)
+	}
+	// Environment endpoint keys off the numeric repo id (4242), not owner/name.
+	if gotPutPath != "/repositories/4242/environments/infra-primary/secrets/LINODE_API_TOKEN" {
+		t.Errorf("PUT path = %q", gotPutPath)
+	}
+	if gotPut.KeyID != "env-key" {
+		t.Errorf("key_id = %q", gotPut.KeyID)
+	}
+	sealed, _ := base64.StdEncoding.DecodeString(gotPut.EncryptedValue)
+	plain, ok := box.OpenAnonymous(nil, sealed, pub, priv)
+	if !ok || string(plain) != "new-pat-value" {
+		t.Errorf("sealed box decrypted to %q ok=%v", plain, ok)
 	}
 }

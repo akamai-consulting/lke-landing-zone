@@ -247,8 +247,21 @@ jobs:
           # app-of-apps sync a stale, operator-authored commit (divergent history, no
           # common ancestor with the instantiation) and wedge. See the top-level env
           # block and the force-push step that mirrors main onto this branch.
+          # The same env set also enables the in-cluster broad-PAT rotator on the e2e
+          # deployment so e2e exercises its deploy surface (namespace + carved App +
+          # Kyverno keyless admission + the two ESO-synced credentials). DEFAULT-DISABLED
+          # because the broad PAT is ACCOUNT-wide (exactly one deployment), so e2e opts in
+          # explicitly. The label is e2e-UNIQUE so the rotator's mint/revoke can only ever
+          # touch the e2e PAT family — never a real deployment's — and broadPATDeployments
+          # lists only e2e (its infra-e2e LINODE_API_TOKEN is the sole env secret a
+          # rotation would rewrite). The bootstrap seeds secret/linode/broad-pat from
+          # LINODE_API_TOKEN (llz ci seed-broad-pat), so the rotator's ExternalSecret
+          # resolves and its carved App converges.
           bin/llz env set "${E2E_ENV}" \
-            cluster.bootstrap.appsRepoRevision="${E2E_APPS_BRANCH}"
+            cluster.bootstrap.appsRepoRevision="${E2E_APPS_BRANCH}" \
+            components.broadPatRotator.enabled=true \
+            components.broadPatRotator.broadPATLabel="llz-e2e-broad-pat" \
+            components.broadPatRotator.broadPATDeployments="${E2E_ENV}"
           # Enable the day-2 clusterHealthWorkflow component (+ its argoWorkflows
           # dependency) for this run — both are DefaultDisabled, so without this the
           # e2e would never DEPLOY the in-cluster health WorkflowTemplate and its

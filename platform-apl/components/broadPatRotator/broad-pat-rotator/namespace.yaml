@@ -1,0 +1,13 @@
+# Dedicated namespace for the broad-PAT rotator — ISOLATED from the reconciler so
+# the one account:read_write Linode token + the GitHub env-secrets-write token this
+# workload holds never widen the always-on reconciler's blast radius.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llz-pat-rotator
+  annotations:
+    argocd.argoproj.io/sync-wave: "-20"
+  labels:
+    kubernetes.io/metadata.name: llz-pat-rotator
+    pod-security.kubernetes.io/enforce: restricted
+    app.kubernetes.io/part-of: platform

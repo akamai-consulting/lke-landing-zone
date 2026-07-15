@@ -1,0 +1,89 @@
+# Broad Linode PAT rotator CronJob — the in-cluster owner of the account:read_write
+# LINODE_API_TOKEN rotation (was the CI create/revoke-linode-pat jobs in
+# llz-secret-rotation.yml). Weekly: when the OpenBao rotated_at is older than
+# ROTATE_AFTER_DAYS, mints a fresh broad PAT, verifies it, writes it to OpenBao,
+# publishes it to each deployment's infra-<d> GitHub environment secret (sealed box),
+# then revokes older siblings outside the grace window. A not-due tick is a cheap no-op.
+#
+# RUN THIS ON EXACTLY ONE DEPLOYMENT. The broad PAT is ACCOUNT-wide (one family for all
+# CI), so enabling the component on more than one cluster would race mint/revoke.
+# BROAD_PAT_DEPLOYMENTS lists every deployment whose infra-<d> LINODE_API_TOKEN secret
+# gets the new value.
+#
+# OPENBAO_SKIP_VERIFY=true matches the established in-cluster posture (as harbor/reconciler).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: broad-pat-rotator
+  namespace: llz-pat-rotator
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    ignore-check.kube-linter.io/env-value-from: "broad-pat-rotator-* Secrets are created at runtime by ESO (externalsecret.yaml); not static manifests the linter can resolve"
+    ignore-check.kube-linter.io/read-secret-from-env-var: "LINODE_TOKEN mints the successor PAT and GH_TOKEN publishes it — both are the rotator's purpose"
+spec:
+  schedule: "17 3 * * 1"   # weekly, Monday 03:17 UTC (offset from the 02:00 sweeps)
+  startingDeadlineSeconds: 300
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: broad-pat-rotator
+        spec:
+          restartPolicy: Never
+          serviceAccountName: broad-pat-rotator
+          containers:
+            - name: rotate
+              image: <@ llz_image_ref @>
+              args: ["ci", "rotate-broad-pat", "--apply"]
+              env:
+                - name: LINODE_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: broad-pat-rotator-linode-token
+                      key: token
+                - name: GH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: broad-pat-rotator-gh-token
+                      key: token
+                - name: GH_REPO
+                  value: "<@ instance_repo @>"
+                # The Linode label of the broad PAT family (matches the CI rotation's).
+                - name: BROAD_PAT_LABEL
+                  value: "REPLACE_ME"
+                # Space-separated deployment names whose infra-<d> LINODE_API_TOKEN
+                # env secret gets the new value. MUST list every deployment.
+                - name: BROAD_PAT_DEPLOYMENTS
+                  value: "REPLACE_ME"
+                - name: ROTATE_AFTER_DAYS
+                  value: "60"
+                - name: GRACE_DAYS
+                  value: "7"
+                - name: OPENBAO_ADDR
+                  value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
+                - name: OPENBAO_SKIP_VERIFY
+                  value: "true"
+                - name: OPENBAO_KUBERNETES_ROLE
+                  value: "broad-pat-rotator"
+              resources:
+                limits: { cpu: 200m, memory: 128Mi }
+                requests: { cpu: 50m, memory: 64Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                seccompProfile: { type: RuntimeDefault }
+              volumeMounts:
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - name: tmp
+              emptyDir: { medium: Memory, sizeLimit: 16Mi }

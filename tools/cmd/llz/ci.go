@@ -100,6 +100,15 @@ func ciCmd() *cobra.Command {
 	// seed-harbor-registry-s3); the in-cluster rotator (linodeCredRotator
 	// CronJob, slim llz image) owns rotation after first boot.
 	c.AddCommand(ciMintBootstrapObjkeysCmd(), ciRotateLinodeCredsCmd(), ciTempObjkeyCmd())
+	// In-cluster rotation of the broad account:read_write Linode PAT (LINODE_API_TOKEN):
+	// mint -> seed OpenBao -> publish to each deployment's GitHub env secret (sealed box)
+	// -> revoke old. Runs in a dedicated CronJob, not the reconciler.
+	c.AddCommand(ciRotateBroadPATCmd())
+	// Bootstrap seed for the broad-PAT rotator's minting credential — gated on the
+	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
+	c.AddCommand(ciSeedBroadPATCmd())
+	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
+	c.AddCommand(ciAssertBroadPATRotationCmd())
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
 	c.AddCommand(ciRelabelVolumesCmd())
