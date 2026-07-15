@@ -127,6 +127,17 @@ func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 	// likely fresh-cluster failure, and argocd is empty until the operator's
 	// helmfile pipeline gets that far.
 	diagnoseNamespace(aplNS, "apl")
+	// The operator can sit Running 1/1 yet be wedged BEFORE helmfile installs
+	// anything (observed: a fresh cluster's operator consuming the previous,
+	// destroyed cluster's stale apl-<env> values branch — v0.0.25, run 29446982026,
+	// argocd CRD absent after 15m with zero stage-01 charts). The failing-workload
+	// sweep below only fetches logs from pods that LOOK broken, and the namespace
+	// sweep above captures Job logs + describes but never a healthy-looking
+	// Deployment's container log — which is the only record of which git/helmfile
+	// step the operator actually reached. Dump it explicitly.
+	diagGroup(aplNS+" — apl-operator container logs (git/helmfile progress)", func() {
+		diagStream("kubectl", "-n", aplNS, "logs", "deploy/apl-operator", "--tail=200")
+	})
 	diagnoseNamespace(argoNS, "argocd")
 
 	// The install can REACH argocd yet still never pass the convergence gate —
