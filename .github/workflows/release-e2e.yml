@@ -82,19 +82,14 @@ concurrency:
 env:
   E2E_ENV: e2e
   INSTANCE_REPO: ${{ vars.E2E_INSTANCE_REPO }}
-  # Branch the platform-bootstrap app-of-apps (+ its child Apps + llz-secret-store)
-  # reads. HISTORICAL: apl-core's operator used to write its rendered values tree back
-  # to otomi.git.branch (= main), a divergent, force-pushed history that once wedged
-  # platform-bootstrap on a stale pre-fix commit (v1beta1 ExternalSecrets that apl-core
-  # 6.x's ESO rejects → convergence hard-fail). As of the per-env values-branch
-  # isolation (docs/designs/apl-core-values-branch-isolation.md), `llz render` points
-  # apl-core at a dedicated apl-<env> branch (here apl-e2e), NOT main — so main is no
-  # longer force-pushed by the operator and this e2e-apps mirror is now REDUNDANT. Kept
-  # for now so the branch-isolation change lands without also re-plumbing the e2e's
-  # app-of-apps source; retiring it (point appsRepoRevision back at main) is a tracked
-  # follow-up in the ADR. Instantiate still mirrors each run's rendered tree here and
-  # points appsRepoRevision at it.
-  E2E_APPS_BRANCH: e2e-apps
+  # NOTE: apl-core's operator used to force-push its rendered values tree to
+  # otomi.git.branch (= main), a divergent history that once wedged platform-bootstrap
+  # on a stale operator-authored commit (v1beta1 ExternalSecrets 6.x's ESO rejects) and
+  # forced a dedicated `e2e-apps` snapshot branch for the LZ app-of-apps to read. Per-env
+  # values-branch isolation (docs/designs/apl-core-values-branch-isolation.md) moved
+  # apl-core off main to a per-env apl-<env> branch (here apl-e2e), so the operator no
+  # longer touches main — the snapshot branch was RETIRED and platform-bootstrap reads
+  # `main` (the instantiated tree) directly again.
   # Region + OBJ cluster default to the canonical `lab` tier (terraform-iac-bootstrap/
   # {cluster,object-storage}/lab.tfvars on the instance repo's default branch) — lab is the throwaway
   # tier co-located in us-ord, the right shape for an E2E run. Override via repo vars
@@ -240,20 +235,16 @@ jobs:
           bin/llz env set "${E2E_ENV}" \
             cluster.bootstrap.aplValues.repoURL="https://github.com/${INSTANCE_REPO}.git"
           # Point the TF-managed platform-bootstrap Application (and, via the
-          # env-revision-configmap it renders, every in-repo child Application) at the
-          # dedicated E2E_APPS_BRANCH instead of `main`. appsRepoRevision is the single
-          # knob `llz render` threads into BOTH the bootstrap App's targetRevision
-          # (tfvars apps_repo_revision) and the child Apps' (env-revision-configmap
-          # data.revision), so setting it once keeps cluster-bootstrap's
-          # configmap==apps_repo_revision precondition satisfied. Historically a
-          # separate branch was REQUIRED because apl-core's operator force-pushed its
-          # rendered values tree back to otomi.git.branch (main) every reconcile, so
-          # sharing main let our app-of-apps sync a stale, operator-authored commit
-          # (divergent history, no common ancestor) and wedge. Per-env values-branch
-          # isolation now moves apl-core off main to apl-<env> (apl-e2e), so main is no
-          # longer force-pushed and this snapshot branch is redundant (retire in the
-          # ADR follow-up). See the top-level env block and the force-push step that
-          # mirrors main onto this branch.
+          # env-revision-configmap it renders, every in-repo child Application) at `main`.
+          # appsRepoRevision is the single knob `llz render` threads into BOTH the
+          # bootstrap App's targetRevision (tfvars apps_repo_revision) and the child Apps'
+          # (env-revision-configmap data.revision), so setting it once keeps
+          # cluster-bootstrap's configmap==apps_repo_revision precondition satisfied. A
+          # dedicated snapshot branch is no longer needed: per-env values-branch isolation
+          # (docs/designs/apl-core-values-branch-isolation.md) keeps apl-core on apl-<env>
+          # (apl-e2e), so the operator never force-pushes main and the LZ app-of-apps reads
+          # the instantiated `main` directly. Set explicitly (not defaulted) so it also
+          # overwrites any stale APPS_REPO_REVISION a prior e2e-apps run left on the repo.
           # The same env set also enables the in-cluster broad-PAT rotator on the e2e
           # deployment so e2e exercises its deploy surface (namespace + carved App +
           # Kyverno keyless admission + the two ESO-synced credentials). DEFAULT-DISABLED
@@ -265,7 +256,7 @@ jobs:
           # LINODE_API_TOKEN (llz ci seed-broad-pat), so the rotator's ExternalSecret
           # resolves and its carved App converges.
           bin/llz env set "${E2E_ENV}" \
-            cluster.bootstrap.appsRepoRevision="${E2E_APPS_BRANCH}" \
+            cluster.bootstrap.appsRepoRevision="main" \
             components.broadPatRotator.enabled=true \
             components.broadPatRotator.broadPATLabel="llz-e2e-broad-pat" \
             components.broadPatRotator.broadPATDeployments="${E2E_ENV}"
@@ -407,20 +398,16 @@ jobs:
           git remote add origin "https://x-access-token:${E2E_DISPATCH_TOKEN}@github.com/${INSTANCE_REPO}.git"
           git push -f origin main
           echo "Pushed instantiation ${HEAD_SHA::8} to ${INSTANCE_REPO}@main"
-          # Mirror the SAME instantiation onto the dedicated app-of-apps branch that
-          # platform-bootstrap reads (appsRepoRevision = E2E_APPS_BRANCH). main is left
-          # for apl-core's operator to force-push its rendered values tree onto; this
-          # branch is written ONLY here, so our app-of-apps can never sync an
-          # operator-authored or cross-run commit and wedge. Runs serialize
-          # (concurrency: release-e2e), so a fixed branch name is race-free.
-          git push -f origin "main:refs/heads/${E2E_APPS_BRANCH}"
-          echo "Mirrored instantiation to ${INSTANCE_REPO}@${E2E_APPS_BRANCH}"
-          # Make TF_VAR_apps_repo_revision (llz-terraform.yml sources it from
-          # vars.APPS_REPO_REVISION) resolve to the branch too, so the bootstrap App's
-          # targetRevision matches the env-revision-configmap `llz render` baked from
-          # appsRepoRevision above — cluster-bootstrap's equality precondition needs both.
+          # platform-bootstrap reads `main` directly now: apl-core's operator no longer
+          # force-pushes main (per-env values-branch isolation keeps it on apl-<env>), so
+          # main stays the instantiated tree for the whole run. Make TF_VAR_apps_repo_revision
+          # (llz-terraform.yml sources it from vars.APPS_REPO_REVISION) resolve to `main`
+          # too, so the bootstrap App's targetRevision matches the env-revision-configmap
+          # `llz render` baked from appsRepoRevision above — cluster-bootstrap's equality
+          # precondition needs both. Set explicitly to overwrite any stale e2e-apps value a
+          # prior run left on the fixture repo.
           GH_TOKEN="${E2E_DISPATCH_TOKEN}" gh variable set APPS_REPO_REVISION \
-            --repo "${INSTANCE_REPO}" --body "${E2E_APPS_BRANCH}"
+            --repo "${INSTANCE_REPO}" --body "main"
 
       # ── Pin the instance's CI images to THIS commit ─────────────────────────
       # The reusable workflows run in vars.TF_IMAGE / vars.KUBE_IMAGE, each baking

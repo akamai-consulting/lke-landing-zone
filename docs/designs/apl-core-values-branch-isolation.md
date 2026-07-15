@@ -11,7 +11,7 @@ for this change (see Lab-validation).
 [blast-radius-decomposition.md](blast-radius-decomposition.md),
 `tools/internal/clusterspec/values.go` (the default),
 `instance-template/apl-values/_shared/values.yaml` (the `otomi.git` block),
-`.github/workflows/release-e2e.yml` (the now-redundant `e2e-apps` mirror).
+`.github/workflows/release-e2e.yml` (the retired `e2e-apps` mirror).
 
 ## Context
 
@@ -90,9 +90,10 @@ Different top-level dirs *and* different branches — no cross-read, no contenti
   secret churn.
 - apl-core's history is confined to its per-env branch; a wedge on `apl-<env>` can't
   poison the IaC source or another env.
-- The e2e's `e2e-apps` snapshot branch is now **redundant** (main is no longer
-  force-pushed by the operator). It is left in place for this change and retired in
-  a follow-up (see below) to avoid re-plumbing the e2e's app source in the same PR.
+- The e2e's `e2e-apps` snapshot branch is **retired in this change** (main is no
+  longer force-pushed by the operator, so `platform-bootstrap` reads `main` directly
+  again — `appsRepoRevision` back to `main`, the mirror push and the
+  `APPS_REPO_REVISION=e2e-apps` repo-variable set removed).
 - Downstream instances need a one-time cutover (Migration).
 
 ## Alternatives considered
@@ -145,11 +146,19 @@ Existing instances that intentionally set `aplValues.revision` are unaffected
 
 ## Follow-ups
 
-- Retire the e2e `e2e-apps` snapshot branch: point `appsRepoRevision` back at
-  `main` and drop the mirror/force-push step, now that apl-core no longer shares
-  `main`. Validate with one release-e2e run.
-- Re-confirm the `gitops-ns-apl-*` / `team-*-values-gitops` deferrals across a few
-  runs and drop them from the health allowlist once consistently `Synced/Healthy`
-  (their rationales were corrected in `allowlists.go`; the deferrals remain as
-  conservative no-ops).
+**Done in this change:**
+
+- ✅ Retired the e2e `e2e-apps` snapshot branch — `appsRepoRevision` set back to
+  `main`, the mirror force-push and the `APPS_REPO_REVISION=e2e-apps` repo-variable
+  set removed (`release-e2e.yml`). Validated by this PR's release-e2e run.
+- ✅ Dropped the apl-core-internal gitops deferrals (`gitops-global`,
+  `gitops-ns-apl-*`, `team-*-values-gitops`) from the health allowlist — verified
+  `Synced/Healthy` on v6 e2e, so the name-based deferral was a no-op for the real
+  state (`MatchExternalDep` runs before the Synced+Healthy rule) that only masked a
+  genuine `Unknown/ComparisonError` regression. They now pass on their real state and
+  a regression surfaces on the gate (`argo_test.go` updated to assert the stricter
+  behavior). This PR's release-e2e run confirms they stay `Synced/Healthy` at gate time.
+
+**Open:**
+
 - Evaluate the dedicated-values-repo option if repo-boundary isolation is required.
