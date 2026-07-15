@@ -60,7 +60,11 @@ var remoteLocalComponents = map[string]bool{
 func RemotelyFetchedComponents() []string {
 	var out []string
 	for _, c := range Components {
-		if c.hasManifestDir() && !remoteLocalComponents[c.Name] {
+		// Mandatory components live in the shared base / apl-core, never referenced as a
+		// components/<name> dir (RenderManifestKustomization skips them), so they're not
+		// fetched remotely and must not be pruned. Match that: non-mandatory, ships a
+		// manifest dir, not pinned local.
+		if !c.Mandatory && c.hasManifestDir() && !remoteLocalComponents[c.Name] {
 			out = append(out, c.Name)
 		}
 	}
