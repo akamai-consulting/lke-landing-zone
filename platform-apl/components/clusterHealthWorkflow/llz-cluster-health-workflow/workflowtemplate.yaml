@@ -44,7 +44,10 @@ spec:
         labels:
           app.kubernetes.io/name: llz-cluster-health
       container:
-        image: <@ llz_image_ref @>
+        # Token-free base ref (:latest); llz render retags this per instance/e2e via a
+        # JSON6902 patch in the env manifest kustomization (RenderManifestKustomization),
+        # since the kustomize images: transformer can't reach a WorkflowTemplate CRD field.
+        image: ghcr.io/akamai-consulting/llz:latest
         # `command` is set EXPLICITLY (the image ENTRYPOINT path), not left implicit.
         # Argo's emissary executor resolves the entrypoint for an args-only container
         # by querying the image's registry manifest at runtime — an extra network

@@ -12,7 +12,7 @@ func TestReadTemplateRemovals(t *testing.T) {
 	writeFile(t, p, `# header comment
 untrack  terraform-iac-bootstrap/*/[a-z]*.tfvars
 
-delete   apl-values/_shared/manifest/dns/old-webhook.yaml
+delete   platform-apl/manifest/dns/old-webhook.yaml
 `)
 	rules, err := readTemplateRemovals(p)
 	if err != nil {
@@ -50,13 +50,13 @@ func TestApplyTemplateRemovals(t *testing.T) {
 		"terraform-iac-bootstrap/object-storage/lab.tfvars",        // untrack
 		"terraform-iac-bootstrap/cluster/terraform.tfvars.example", // keep (.example)
 		"terraform-iac-bootstrap/cluster/main.tf",                  // keep
-		"apl-values/_shared/manifest/dns/old-webhook.yaml",         // delete
+		"platform-apl/manifest/dns/old-webhook.yaml",         // delete
 	}
 	for _, p := range tracked {
 		writeFile(t, filepath.Join(dir, p), "x\n")
 	}
 	writeFile(t, filepath.Join(dir, ".template-removals"), `untrack  terraform-iac-bootstrap/*/[a-z]*.tfvars
-delete   apl-values/_shared/manifest/dns/old-webhook.yaml
+delete   platform-apl/manifest/dns/old-webhook.yaml
 `)
 	gitInitRepo(t, dir, append(tracked, ".template-removals")...)
 	chdir(t, dir)
@@ -78,7 +78,7 @@ delete   apl-values/_shared/manifest/dns/old-webhook.yaml
 	if _, err := os.Stat(filepath.Join(dir, "terraform-iac-bootstrap/cluster/lab.tfvars")); err != nil {
 		t.Errorf("untrack must keep the file on disk: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "apl-values/_shared/manifest/dns/old-webhook.yaml")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "platform-apl/manifest/dns/old-webhook.yaml")); !os.IsNotExist(err) {
 		t.Errorf("delete must remove the file from disk; stat err = %v", err)
 	}
 

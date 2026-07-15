@@ -7,8 +7,8 @@ package clusterspec
 //   - apl-core (Helm umbrella): AplCoreApps are the apps.<key>.enabled flags this
 //     component flips in apl-values/<env>/values.yaml.
 //   - llz-first-party (Argo/kustomize): ManifestResources + ArgoApps are the
-//     resources its shared kustomize Component (apl-values/components/<name>/, or the
-//     apl-values/_shared/manifest base for mandatory components) lists — the thin
+//     resources its shared kustomize Component (platform-apl/components/<name>/, or the
+//     platform-apl/manifest base for mandatory components) lists — the thin
 //     per-env manifest/kustomization.yaml pulls them in via components:. Patches are
 //     kustomize patches it brings.
 //

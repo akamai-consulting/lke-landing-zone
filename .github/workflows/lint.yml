@@ -69,7 +69,7 @@ env:
   # kind … in version external-secrets.io/v1". Keep this matched to apl-core's bundle.
   ESO_HELM_VERSION: "2.4.1"
   # Match the chart versions referenced from
-  # apl-values/_shared/manifest/argo-{events,workflows}/argocd/applications/.
+  # platform-apl/manifest/argo-{events,workflows}/argocd/applications/.
   ARGO_WORKFLOWS_HELM_VERSION: "0.42.3"
   ARGO_EVENTS_HELM_VERSION: "2.4.13"
   # Istio Gateway + VirtualService CRDs needed by per-env ingress trees.
@@ -250,7 +250,7 @@ jobs:
           # `helm template --include-crds` and yq filter, same pattern as argocd/eso above.
           # Installs: workflows, workflowtemplates, cronworkflows, clusterworkflowtemplates,
           # workflowtaskresults, workflowtasksets, workflowartifactgctasks, workfloweventbindings.
-          # Referenced from apl-values/_shared/manifest/cert-automation/
+          # Referenced from platform-apl/manifest/cert-automation/
           # haproxy-rebuild-workflowtemplate.yaml.
           $R helm template argo-workflows argo/argo-workflows --version "$ARGO_WORKFLOWS_HELM_VERSION" \
             --include-crds \
@@ -262,7 +262,7 @@ jobs:
           # returns nothing — use `helm template --include-crds` and yq filter,
           # same pattern as argocd/eso above.
           # Installs: eventbus, eventsources, sensors. Referenced from
-          # apl-values/_shared/manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
+          # platform-apl/manifest/cert-automation/{argo-eventbus,argo-eventsource,argo-sensor}.yaml.
           $R helm template argo-events argo/argo-events --version "$ARGO_EVENTS_HELM_VERSION" \
             --include-crds \
             | yq 'select(.kind == "CustomResourceDefinition")' \
@@ -340,7 +340,7 @@ jobs:
             --version "$KYVERNO_HELM_VERSION" \
             --wait --timeout 5m
           echo "Applying _shared/manifest/kyverno-policies against the validate-policy webhook..."
-          kubectl kustomize instance-template/apl-values/_shared/manifest/kyverno-policies \
+          kubectl kustomize platform-apl/manifest/kyverno-policies \
             | kubectl apply --server-side=true -f -
 
 

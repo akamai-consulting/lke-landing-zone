@@ -70,7 +70,7 @@ func ciMonitoringLabelGuardCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runMonitoringLabelGuard(roots) },
 	}
-	cmd.Flags().StringSliceVar(&roots, "root", []string{"instance-template/apl-values", "rendered"},
+	cmd.Flags().StringSliceVar(&roots, "root", []string{"platform-apl", "rendered"},
 		"directories to scan (final YAML only; run render-charts to populate rendered/)")
 	return cmd
 }

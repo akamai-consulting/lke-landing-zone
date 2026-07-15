@@ -150,7 +150,7 @@ func TestCommittedTargets(t *testing.T) {
 		}
 	}
 	overlay := targets[filepath.Join("apl-values", "lab", "manifest", "kustomization.yaml")]
-	if !strings.Contains(overlay, "../../_shared/manifest") {
+	if !strings.Contains(overlay, "../../../../platform-apl/manifest") {
 		t.Errorf("overlay is not thin (no shared base ref):\n%s", overlay)
 	}
 	// llzReconciler disabled → no reconciler App CR or source root at all.

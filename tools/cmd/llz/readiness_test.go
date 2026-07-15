@@ -33,7 +33,7 @@ func TestIsDeferrable(t *testing.T) {
 	// cert/DNS overlay placeholders are deferred (settable post-build; the
 	// Argo-synced letsencrypt ClusterIssuers pick them up), so they must not block the apply…
 	deferred := []string{
-		"apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml",
+		"platform-apl/manifest/dns/letsencrypt-clusterissuer.yaml",
 	}
 	for _, f := range deferred {
 		if !isDeferrable(f) {

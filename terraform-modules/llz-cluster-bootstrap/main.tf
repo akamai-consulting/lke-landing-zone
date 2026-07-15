@@ -369,7 +369,7 @@ resource "null_resource" "kyverno_sc_default_policy" {
 
 # The Loki-S3-object_store and oauth2-proxy-wait-keycloak-trust ClusterPolicies
 # were RELOCATED out of terraform to the GitOps tree at
-# apl-values/_shared/manifest/kyverno-policies/ (applied by the platform-bootstrap
+# platform-apl/manifest/kyverno-policies/ (applied by the platform-bootstrap
 # Argo CD Application at sync-wave -15). Argo's own retry/health +
 # SkipDryRunOnMissingResource replace the poll-then-apply state machine these
 # null_resources ran, and the early wave lands each policy before apl-core's
@@ -697,7 +697,7 @@ resource "kubectl_manifest" "app_secret_store_application" {
 # `block-storage-retain` would be the cluster default.
 # Removed in the convergence-contract cleanup PR; replaced by an Argo
 # CD PostSync hook Job at
-# `apl-values/_shared/manifest/foundation/sc-default-patcher-job.yaml`
+# `platform-apl/manifest/foundation/sc-default-patcher-job.yaml`
 # (anti-pattern #1 — patcher Jobs run from TF). The PostSync hook still
 # does the initial demote, but the assumption that "Argo's selfHeal +
 # the PostSync hook re-running" would undo a later Flux re-promotion

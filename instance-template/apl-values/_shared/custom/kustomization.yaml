@@ -7,7 +7,7 @@
 # bootstrap tree.
 #
 # It is synced by the dedicated `instance-custom` Argo CD Application
-# (apl-values/_shared/manifest/applications/instance-custom.yaml), wave 10 — it
+# (platform-apl/manifest/applications/instance-custom.yaml), wave 10 — it
 # lands AFTER the platform is healthy, and it has its OWN health gate: a broken
 # manifest here degrades only `instance-custom`, it cannot wedge the platform
 # bootstrap. See docs/extending-llz.md → "Custom Kubernetes resources".

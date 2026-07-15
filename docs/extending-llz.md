@@ -121,7 +121,7 @@ spec:
   any namespace, and any resource kind (including `Application`, so you can run
   your own app-of-apps). It's an escape hatch — the trust boundary is the cluster
   edge, not the project. Tighten `sourceRepos` / `destinations` in
-  `apl-values/_shared/manifest/instance-custom-project.yaml` if you want a
+  `platform-apl/manifest/instance-custom-project.yaml` if you want a
   narrower scope (that file is template-managed, so re-apply on update).
 - **`prune: false`.** Your resources are yours to remove deliberately; an
   accidental empty render won't cascade-delete them.

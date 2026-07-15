@@ -335,11 +335,16 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// the version this instance tracks, so an instance references the byte-identical manifest
 	// layer from the template repo instead of vendoring it. Empty ref → all-local references.
 	ref := resolveTemplateRef()
+	// The in-cluster llz image tag (reconciler / harbor-provisioner CronJob AND the
+	// clusterHealthWorkflow WorkflowTemplate) is the per-instance value a remote,
+	// token-free component can't bake — a carved app's images: transformer or the
+	// manifest overlay's JSON6902 patch sets it locally. See resolveLLZImageTag.
+	imageTag := resolveLLZImageTag()
 	targets := map[string]string{
 		// THIN overlay over the shared base + per-component kustomize Components —
 		// the shared, token-free resources are fetched from the template repo at `ref`;
 		// only per-env + per-instance pieces are carried locally.
-		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref, acmeEmail),
+		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref, acmeEmail, imageTag),
 		// per-env local-config marker the cluster-bootstrap precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
 		// The operator escape-hatch Application, render-emitted locally with this
@@ -353,11 +358,8 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// platform-bootstrap. The App CR pins the same repo + apps_repo_revision the
 	// platform-bootstrap Application uses. See docs/designs/blast-radius-decomposition.md.
 	revision := orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")
-	// The in-cluster llz image tag (reconciler / harbor-provisioner) and this
-	// instance's repo slug (harbor GH_REPO) are the per-instance values a remote,
-	// token-free component can't bake — a carved app's images: transformer + env
-	// patch set them locally. See resolveLLZImageTag / repoSlug.
-	imageTag := resolveLLZImageTag()
+	// This instance's repo slug (harbor GH_REPO) is the other per-instance value a
+	// remote token-free component can't bake — the env patch sets it locally.
 	ghRepo := repoOwnerName(id.RepoURL)
 	for _, c := range clusterspec.Components {
 		if c.CarvedApp == nil || !clusterspec.ComponentEnabled(e.Components, c.Name) {

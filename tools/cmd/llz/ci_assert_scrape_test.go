@@ -87,7 +87,7 @@ func TestMissingRuleGroups(t *testing.T) {
 }
 
 func TestDefaultScrapeSetsCoverTrackedTemplateMonitoringSurface(t *testing.T) {
-	surface := collectTemplateMonitoringSurface(t, filepath.Join("..", "..", "..", "instance-template", "apl-values"))
+	surface := collectTemplateMonitoringSurface(t, filepath.Join("..", "..", "..", "platform-apl"))
 	monitorDefaults := stringSet(defaultScrapeMonitors)
 	ruleDefaults := stringSet(defaultScrapeRuleGroups)
 

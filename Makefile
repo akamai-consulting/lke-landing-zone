@@ -247,7 +247,7 @@ prom-rules-check:
 	@if command -v llz >/dev/null 2>&1; then \
 		llz ci check-prom-rules; \
 	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci check-prom-rules --rules-dir ../instance-template/apl-values/components/observability/prometheus-rules; \
+		cd $(GO_DIR) && go run ./cmd/llz ci check-prom-rules --rules-dir ../platform-apl/components/observability/prometheus-rules; \
 	fi
 
 helm-repos:
@@ -307,7 +307,7 @@ externalsecret-paths-check: render-charts
 # Argo sync waves gate on per-resource health; a health-checked kind at a
 # negative wave that can be not-Ready on a fresh cluster wedges the
 # platform-bootstrap sync before OpenBao (wave 0). Every negative-wave kind in
-# apl-values/_shared/manifest/ + apl-values/components/ must be health-inert or
+# platform-apl/manifest/ + platform-apl/components/ must be health-inert or
 # backed by a resource.customizations.health override in _shared/values.yaml.
 wave-health-guard:
 	@if command -v llz >/dev/null 2>&1; then \
@@ -355,7 +355,7 @@ monitoring-label-guard: render-charts
 	@if command -v llz >/dev/null 2>&1; then \
 		llz ci monitoring-label-guard; \
 	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci monitoring-label-guard --root ../instance-template/apl-values --root ../rendered; \
+		cd $(GO_DIR) && go run ./cmd/llz ci monitoring-label-guard --root ../platform-apl --root ../rendered; \
 	fi
 
 # untestable-loc-check: the design-principle gate. Fails when inline workflow
@@ -494,7 +494,7 @@ lint:
 	if echo "$$CHANGED" | grep -qE '^(terraform-modules|instance-template/terraform-iac-bootstrap)/.*\.tf$$|\.tflintrc\.hcl$$|\.checkov\.yaml$$'; then \
 		$(MAKE) --no-print-directory tf-fmt-check $(LINT_TF); \
 	fi; \
-	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^instance-template/terraform-iac-bootstrap/cluster-bootstrap/main\.tf$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
+	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^platform-apl/|^instance-template/terraform-iac-bootstrap/cluster-bootstrap/main\.tf$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
 		$(MAKE) --no-print-directory wave-health-guard scaffold-check; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^copier\.yml$$|^instance-template/\.github/|^template-scripts/ci/instance-test\.sh$$'; then \

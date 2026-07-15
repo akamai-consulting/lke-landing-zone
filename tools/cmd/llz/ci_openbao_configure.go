@@ -54,9 +54,9 @@ path "secret/metadata/linode/api-token" { capabilities = ["read"] }
 
 // eso-pusher: narrow create/update access to the in-cluster-sourced secrets that
 // ESO PushSecrets write into OpenBao — the self-generated grafana admin password
-// and otel ingress bearer (apl-values/_shared/manifest/generated-secrets/), plus
+// and otel ingress bearer (platform-apl/manifest/generated-secrets/), plus
 // the Harbor admin password mirrored from Harbor's Helm Secret
-// (apl-values/components/harbor/harbor-admin-push.yaml). Replaces the imperative
+// (platform-apl/components/harbor/harbor-admin-push.yaml). Replaces the imperative
 // `llz ci bao-seed` of these paths (root-token + kubectl exec) with a
 // least-privilege, in-cluster write. On the data paths `read` covers the
 // IfNotExists existence check. The metadata paths need create/update, not just
@@ -89,7 +89,7 @@ path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
 
 // harbor-provisioner: read/write on exactly the two robot-credential paths the
 // in-cluster harbor-robot-provisioner CronJob owns (`llz ci harbor-provisioner`,
-// apl-values/components/harbor/). Read covers the steady-state "already seeded?"
+// platform-apl/components/harbor/). Read covers the steady-state "already seeded?"
 // check; create/update covers the seed after a robot create. Mapped to the
 // `harbor-provisioner` Kubernetes-auth role below. Never the harbor admin path
 // (ESO's harbor-admin-push owns that) and never any consumer path.

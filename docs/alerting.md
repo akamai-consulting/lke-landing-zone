@@ -13,7 +13,7 @@ Loki) is itself broken.
 
 | Mechanism | Defined in | Notification path |
 |-----------|------------|-------------------|
-| Prometheus rules (custom) | `PrometheusRule` CRs under [apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/) — deployed source of truth, synced by apl-core's Argo CD and picked up by kube-prometheus-stack's `ruleSelector` | Prometheus UI / Grafana (see caveat below) |
+| Prometheus rules (custom) | `PrometheusRule` CRs under [platform-apl/components/observability/prometheus-rules/](../instance-template/platform-apl/components/observability/prometheus-rules/) — deployed source of truth, synced by apl-core's Argo CD and picked up by kube-prometheus-stack's `ruleSelector` | Prometheus UI / Grafana (see caveat below) |
 | Prometheus rules (defaults) | `kube-prometheus-stack.defaultRules.create: true` — node, kubelet, kube-state, and Prometheus self-monitoring | Prometheus UI / Grafana |
 | Scheduled CI checks | [.github/workflows/scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) | GitHub Actions `::warning::`/`::error::` annotations + job failure |
 
@@ -55,7 +55,7 @@ no GitHub secret, no values churn:
 
    apl-core mounts the URL from the `alertmanager-credentials` Secret; the
    `kyverno-alertmanager-slack-webhook` policy
-   ([kyverno-policies/](../instance-template/apl-values/_shared/manifest/kyverno-policies/))
+   ([kyverno-policies/](../instance-template/platform-apl/manifest/kyverno-policies/))
    repoints that Secret's ExternalSecret at the `openbao` store, so ESO picks
    the seed up within its 5m refresh. Rotation is the same `llz openbao set`
    again. An unseeded path leaves the ExternalSecret NotReady — a loud, named
@@ -92,7 +92,7 @@ inventory below covers the alerts the **platform itself** ships.
 ### Secrets plane — OpenBao
 
 Covered by `openbao-alerts` (under
-[apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/)).
+[platform-apl/components/observability/prometheus-rules/](../instance-template/platform-apl/components/observability/prometheus-rules/)).
 
 | Condition | Alert | Severity | Status |
 |-----------|-------|----------|--------|
@@ -116,7 +116,7 @@ Covered by `openbao-alerts` (under
 ### Observability / support plane
 
 Covered by `support-plane-alerts` (under
-[apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/)).
+[platform-apl/components/observability/prometheus-rules/](../instance-template/platform-apl/components/observability/prometheus-rules/)).
 Two layers now: the original **scrape-health** alerts (`...MetricsTargetDown`,
 `up == 0`) plus **workload-availability** alerts (`SupportPlaneDeploymentUnavailable`,
 `LokiStatefulSetUnavailable`) that fire on zero available/ready replicas via
@@ -181,7 +181,7 @@ Two further gates run in the same converge:
 
 The reconciler's day-2 gauges (convergence, ESO/cert readiness, OpenBao seal,
 credential age, per-reconciler status) are surfaced in the **LLZ Day-2** Grafana
-dashboard ([llz-day2-dashboard.yaml](../instance-template/apl-values/components/observability/llz-day2-dashboard.yaml),
+dashboard ([llz-day2-dashboard.yaml](../instance-template/platform-apl/components/observability/llz-day2-dashboard.yaml),
 a ConfigMap the Grafana dashboard sidecar auto-imports). This is the at-a-glance
 view for a receiver-less operator — alerts aggregate in Alertmanager but notify
 nobody until a receiver is wired, so the dashboard is their window.
@@ -214,7 +214,7 @@ template.
 ## Adding or changing an alert
 
 1. Edit (or add) the matching `PrometheusRule` file under
-   [apl-values/components/observability/prometheus-rules/](../instance-template/apl-values/components/observability/prometheus-rules/)
+   [platform-apl/components/observability/prometheus-rules/](../instance-template/platform-apl/components/observability/prometheus-rules/)
    (deployed source of truth) and reference it from that directory's
    `kustomization.yaml`.
 2. If you add a new rule group, also add it to the `EXPECTED_RULES` list in the

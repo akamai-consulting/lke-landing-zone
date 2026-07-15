@@ -6,7 +6,7 @@ package main
 // The ACTIVE-path provisioning (ensure `platform` project, create the
 // ci-firewall-controller / pull-platform robots, seed OpenBao, publish the
 // repo-level HARBOR_* GitHub secrets, smoke) moved IN-CLUSTER: the
-// harbor-robot-provisioner CronJob (apl-values/components/harbor/) runs
+// harbor-robot-provisioner CronJob (platform-apl/components/harbor/) runs
 // `llz ci harbor-provisioner` (ci_harbor_provisioner.go) on the slim llz
 // image. That retired the workflow's port-forward (only needed because
 // HARBOR_URL is internal DNS the runner can't resolve), the root-token

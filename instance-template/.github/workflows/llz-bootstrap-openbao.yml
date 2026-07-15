@@ -292,7 +292,7 @@ jobs:
       # The out-of-band self-signed openbao-tls seed that used to live here has
       # been REMOVED. openbao-tls is now issued by the stable, self-signed
       # cert-manager CA `openbao-ca`
-      # (apl-values/_shared/manifest/cert-manager/raw/openbao-bootstrap-ca.yaml),
+      # (platform-apl/manifest/cert-manager/raw/openbao-bootstrap-ca.yaml),
       # which has no OpenBao dependency. cert-manager issues openbao-tls before
       # OpenBao starts — the StatefulSet pod simply waits in ContainerCreating
       # for the Secret mount — and the serving CA never changes, so there is no
@@ -313,7 +313,7 @@ jobs:
       # replaced in-place by the custom-ca issuer later) has been REMOVED — the
       # same anti-pattern the openbao-tls seed removal above fixed. The cert is
       # now issued from FIRST boot by the stable, self-signed cert-manager CA
-      # `otel-bootstrap-ca` (apl-values/components/observability/
+      # `otel-bootstrap-ca` (platform-apl/components/observability/
       # otel-bootstrap-ca.yaml, synced by the platform-bootstrap Application),
       # with the per-env otel.<env>.internal SAN rendered by `llz render`. No
       # workflow step, no mid-bootstrap CA rotation. If the Secret is missing,
@@ -433,7 +433,7 @@ jobs:
       # The `kubectl apply -k post-apl-bootstrap` step that used to run here
       # (OpenTelemetryCollector, whose CRD apl-core's helmfile registers) has
       # been REMOVED: the CR now rides the observability component
-      # (apl-values/components/observability/otel-collector.yaml) at a late
+      # (platform-apl/components/observability/otel-collector.yaml) at a late
       # sync-wave. The platform-bootstrap App's SkipDryRunOnMissingResource +
       # retry budget absorb the CRD-registration race the imperative step
       # existed to sidestep; the server-side dry-run lint path that motivated
@@ -539,7 +539,7 @@ jobs:
       # Secrets idle until their own refreshInterval (observed: ~14m of
       # CreateContainerConfigError after the store was already Ready). The standing
       # safety net is the in-cluster nudger CronJob
-      # (apl-values/_shared/manifest/argo-resync-nudger); this collapses the latency
+      # (platform-apl/manifest/argo-resync-nudger); this collapses the latency
       # at the exact moment seeding unblocks them. Never fails the bootstrap.
       - name: Nudge Argo CD to converge secrets (post-seed)
         if: steps.ensure.outputs.available == 'true'
@@ -920,7 +920,7 @@ jobs:
   # root-token re-acquire via the recovery-key quorum, a kubectl port-forward to
   # harbor-core, ensure-project, provision-harbor-robots, smoke) has been
   # REMOVED. The active/standalone path is now the harbor-robot-provisioner
-  # CronJob (apl-values/components/harbor/, `llz ci harbor-provisioner` on the
+  # CronJob (platform-apl/components/harbor/, `llz ci harbor-provisioner` on the
   # slim llz image): it talks to harbor-core.harbor.svc directly (the
   # port-forward existed only because HARBOR_URL is internal DNS the runner
   # cannot resolve), writes OpenBao through the scoped harbor-provisioner

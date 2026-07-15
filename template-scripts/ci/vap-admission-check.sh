@@ -21,7 +21,7 @@
 set -euo pipefail
 
 ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
-POLICY="$ROOT/instance-template/apl-values/_shared/manifest/admission/wave-health-policy.yaml"
+POLICY="$ROOT/platform-apl/manifest/admission/wave-health-policy.yaml"
 FAILED=0
 
 cleanup() {

@@ -5,7 +5,7 @@ package main
 // cluster-bootstrap/main.tf runs (it replaced the former
 // scripts/apply-kyverno-policy.sh). The low-race loki-s3 + oauth2-proxy policies
 // it used to also drive now ship via the GitOps tree
-// (apl-values/_shared/manifest/kyverno-policies/); only the PVC-encryption
+// (platform-apl/manifest/kyverno-policies/); only the PVC-encryption
 // policy stays imperative here, because it must beat apl-operator's non-Argo PVC
 // creation — a race Argo sync-waves can't win.
 //
