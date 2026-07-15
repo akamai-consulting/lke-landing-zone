@@ -1,6 +1,0 @@
-# One shared, region-scoped VPC per file. `llz render` writes the real values here
-# as vpc/<name>.tfvars from the spec's spec.networks (landingzone.yaml) — one file
-# per declared network. Instances that use only dedicated per-environment VPCs
-# never render these and never apply this root.
-vpc_label = "REPLACE_PER_NETWORK"
-region    = "REPLACE_PER_NETWORK"

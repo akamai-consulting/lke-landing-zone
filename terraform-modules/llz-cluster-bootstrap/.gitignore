@@ -1,0 +1,5 @@
+# Rendered apl-core values dump (local_file.apl_rendered_values in main.tf).
+# Contains injected secrets (otomi.git.password, dns.provider.linode.apiToken,
+# any sshPrivateKey under apps.argocd._rawValues). Diagnostic only — never
+# commit.
+generated/

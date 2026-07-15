@@ -1,0 +1,94 @@
+# cluster-bootstrap
+
+In-cluster bootstrap state for an platform support-services LKE-E cluster.
+
+This workspace is intentionally separate from `cluster/`. The `cluster/`
+workspace manages only Linode-side resources (VPC, subnet, LKE cluster, node
+pool, firewall). This workspace runs *after* the cluster comes up and installs
+the platform substrate:
+
+- **Akamai App Platform (apl-core)** via `helm install apl/apl`. apl-core
+  bootstraps Argo CD, Istio, Keycloak, cert-manager, ESO, CNPG, Gitea,
+  Sealed Secrets, Harbor, kube-prometheus-stack, Grafana, Loki, OTel Operator,
+  Kyverno, Trivy, and ExternalDNS (apl-core's bundled Tekton chart is
+  disabled in our per-env values.yaml — cert-automation runs on Argo Workflows
+  + Events instead). After this, apl-core's in-cluster Argo CD takes over and
+  reconciles from `apl-values/<env>/manifest/`.
+- A `platform-apps-repo` Secret in the `argocd` namespace seeded with the
+  instance-repo HTTPS PAT so the in-cluster Argo CD can pull the bootstrap
+  manifest tree immediately. (apl-core 6.x self-registers the values-repo
+  credential itself — the `argocd-repo-creds` ExternalSecret sourced from the
+  centralized `apl-git-config` Secret — so the former TF-seeded `apl-values-repo`
+  Secret was retired.) The repo URL is enforced to HTTPS by apl-core's
+  values-schema; SSH is not a supported transport.
+- A one-shot Job that patches `argocd-cm`'s `kustomize.buildOptions`
+  (`--load-restrictor LoadRestrictionsNone`) so Argo CD's repo-server allows
+  multi-directory kustomize bases under the per-env `manifest/` tree.
+
+platform-specific extras (OpenBao, llz-linode-cidr-firewall,
+Argo Workflows + Events cert-automation)
+are **not** installed here — they reach the cluster via the values-repo Argo CD
+reconcile (the first-party `llz-*` charts are wrapped by the
+`llz-argo-bootstrap-apps` app-of-apps chart; the raw platform glue ships under
+the shared [`../../apl-values/_shared/manifest/`](../../apl-values/_shared/manifest/)
+base + the per-component [`../../apl-values/components/`](../../apl-values/components/)).
+
+It reads the kubeconfig from the cluster workspace's remote state output
+(`kubeconfig_raw`), decodes it, and configures the
+`helm` / `kubernetes` / `kubectl` providers directly from the host / token /
+CA — nothing is written to the local filesystem, so there is no
+provider-config vs. resource-ordering chicken-and-egg.
+
+## Why split
+
+Keeping these resources in the cluster workspace meant `terraform destroy`
+needed a working kubeconfig — the same kubeconfig the cluster you're trying
+to destroy provides. That coupling made teardown fragile when the Linode API
+or the cluster itself was in a degraded state. With the split:
+
+- `terraform destroy` in `cluster/` is pure Linode — no provider gymnastics.
+- `terraform destroy` in `cluster-bootstrap/` runs against a live cluster
+  *before* `cluster/` runs, deleting K8s resources cleanly.
+- If `cluster-bootstrap/` destroy fails (cluster unreachable), it doesn't
+  block the cluster destroy — the K8s objects disappear with the cluster
+  anyway, and you can later `terraform state rm` them.
+
+## Order of operations
+
+```
+apply:   cluster → cluster-bootstrap
+destroy: cluster-bootstrap → cluster
+```
+
+The destroy workflow runs `cluster-bootstrap` destroy first with
+`continue-on-error: true` so the cluster destroy proceeds even if the K8s
+provider cannot reach the cluster.
+
+## Inputs
+
+- `deployment` — deployment discriminator (lab | staging | primary | secondary);
+  locates the matching cluster workspace state. Renamed from `region` — it was
+  never a Linode region; CI supplies it as `TF_VAR_deployment`.
+- `tf_state_bucket` — S3 bucket holding cluster state (`TF_VAR_tf_state_bucket`).
+- `apl_chart_version` — pinned apl-core chart version.
+- `apl_values_env` — subdir under `apl-values/` to feed apl-core (lab | staging | primary | secondary).
+- `cluster_name`, `cluster_domain` — populate `cluster.name` and
+  `cluster.domainSuffix` in apl-core's values.
+- `apl_values_repo_url`, `apl_values_repo_revision` — external HTTPS Git source
+  for the values + manifest tree (the instance repo; the in-cluster Gitea is
+  obsoleted). apl-operator reads AND writes its rendered values tree here.
+- `apl_values_repo_token` (sensitive) — fine-grained GitHub PAT (Contents:
+  write) used as the HTTPS Git password; rendered into apl-core's values.yaml
+  under `otomi.git.password`, from which apl-core's own argocd-repo-creds
+  ExternalSecret carries it to Argo CD (TF seeds no repo Secret itself).
+- `apl_values_repo_username` — HTTPS Git username (default `x-access-token`;
+  GitHub ignores it when a PAT is the password). Spec→tfvar carrier only; no
+  cluster-bootstrap resource consumes it.
+- (`loki_admin_password` has no TF_VAR and no infra-`<env>` GitHub secret:
+  apl-core 6.x's schema still requires the value, so cluster-bootstrap
+  generates it as `random_password.loki_admin` and renders it into
+  `apps.loki.adminPassword` — self-contained in TF state, nothing else
+  consumes it.)
+- `linode_dns_token` (sensitive) — DNS-scoped Linode token, the first-boot
+  fallback for ExternalDNS and cert-manager DNS-01; steady-state DNS auth is
+  the rotating in-cluster PAT via the `dns-rotating-token` Kyverno policy.

@@ -86,6 +86,48 @@ func tfInitWithRetry(args ...string) error {
 	return err
 }
 
+// renderRootsFn regenerates the gitignored cluster TF root before init — the
+// instance commits ZERO Terraform, so the *.tf are `llz render` output (like the
+// <env>.tfvars). This composite runs `terraform init` in the cluster root, so the
+// files must exist first; mirrors the terraform-init composite, but that path does
+// not go through this command. A package var so tests neutralize the exec.
+var renderRootsFn = func(region string) error {
+	root, err := instanceRootFrom(".")
+	if err != nil {
+		// No landingzone.yaml up-tree: a pre-generate-roots instance whose roots
+		// are committed. Nothing to render.
+		return nil
+	}
+	self, err := os.Executable()
+	if err != nil || self == "" {
+		self = "llz"
+	}
+	c := exec.Command(self, "render", region, "--tfvars-only")
+	c.Dir = root
+	c.Stdout, c.Stderr = os.Stderr, os.Stderr
+	return c.Run()
+}
+
+// instanceRootFrom walks up from dir to the first ancestor holding
+// landingzone.yaml — the instance root where `llz render` reads the spec +
+// .copier-answers. Returns an error (no root found) at the filesystem root.
+func instanceRootFrom(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(abs, "landingzone.yaml")); err == nil {
+			return abs, nil
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return "", fmt.Errorf("landingzone.yaml not found above %s", dir)
+		}
+		abs = parent
+	}
+}
+
 func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 	if region == "" || output == "" {
 		return fmt.Errorf("--region and --output are required")
@@ -95,6 +137,11 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 		return fmt.Errorf("TF_STATE_BUCKET must be set (the S3 state bucket)")
 	}
 	stateKey := fmt.Sprintf("cluster/%s/terraform.tfstate", region)
+
+	// Generate the cluster root's *.tf before init reads them.
+	if err := renderRootsFn(region); err != nil {
+		return fmt.Errorf("rendering the cluster TF root before init: %w", err)
+	}
 
 	if err := tfInitWithRetry(
 		"-backend-config=bucket="+bucket,

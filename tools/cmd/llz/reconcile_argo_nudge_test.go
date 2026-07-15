@@ -125,3 +125,30 @@ func TestReconcileArgoNudgeListErrorSurfaces(t *testing.T) {
 		t.Fatal("expected error when listing Applications fails")
 	}
 }
+
+// A transient git-fetch ComparisonError (no Failed sync op) is now nudged too.
+func TestTransientComparisonErrorApp(t *testing.T) {
+	transient := map[string]any{
+		"metadata": map[string]any{"name": "platform-bootstrap"},
+		"status": map[string]any{"conditions": []any{
+			map[string]any{"type": "ComparisonError", "message": "failed to list refs: repository not found"},
+		}},
+	}
+	if name, ok := transientComparisonErrorApp(transient); !ok || name != "platform-bootstrap" {
+		t.Fatalf("transient ComparisonError should nudge, got name=%q ok=%v", name, ok)
+	}
+	// A real manifest error must NOT be nudged.
+	real := map[string]any{
+		"metadata": map[string]any{"name": "app"},
+		"status": map[string]any{"conditions": []any{
+			map[string]any{"type": "ComparisonError", "message": "is missing required field kind"},
+		}},
+	}
+	if _, ok := transientComparisonErrorApp(real); ok {
+		t.Error("a real manifest ComparisonError must not be nudged")
+	}
+	// No conditions → not nudged.
+	if _, ok := transientComparisonErrorApp(map[string]any{"metadata": map[string]any{"name": "x"}}); ok {
+		t.Error("an app with no ComparisonError must not be nudged")
+	}
+}

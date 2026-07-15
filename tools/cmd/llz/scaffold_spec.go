@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 )
 
 // shortRepoName returns the <name> half of an <owner>/<name> instance_repo (or
@@ -27,10 +28,13 @@ func shortRepoName(repo string) string {
 	return repo
 }
 
-// tfvarsExampleValue reads <root>/terraform.tfvars.example and returns key's value
-// with surrounding quotes stripped (empty if the file/key is absent).
-func tfvarsExampleValue(tfDir, root, key string) string {
-	b, err := os.ReadFile(filepath.Join(tfDir, root, tplTfvars))
+// tfvarsExampleValue reads a root's terraform.tfvars.example from the embedded
+// tfroots package (it no longer ships in the instance) and returns key's value with
+// surrounding quotes stripped (empty if the root/key is absent). The seeded keys
+// (k8s_version, node_type, node_count) carry no copier token, so reading the raw
+// embed is sufficient.
+func tfvarsExampleValue(root, key string) string {
+	b, err := tfroots.TfvarsExample(root)
 	if err != nil {
 		return ""
 	}
@@ -42,7 +46,7 @@ func tfvarsExampleValue(tfDir, root, key string) string {
 // terraform.tfvars.example, unless it already exists. It returns the instance name
 // (the <name> half of instance_repo, used to derive per-env cluster identity) and
 // whether it created the file.
-func ensureLandingZone(specRoot, tfDir string) (instanceName string, created bool, err error) {
+func ensureLandingZone(specRoot string) (instanceName string, created bool, err error) {
 	a, _ := readAnswers(specRoot)
 	if a == nil {
 		a = &answers{}
@@ -68,9 +72,9 @@ func ensureLandingZone(specRoot, tfDir string) (instanceName string, created boo
 	upstreamOrg := orElse(a.UpstreamOrg, "akamai-consulting")
 	repo := orElse(a.InstanceRepo, instanceName+"/"+instanceName)
 	version := orElse(orElse(a.Version, a.Commit), "main")
-	k8s := orElse(tfvarsExampleValue(tfDir, "cluster", "k8s_version"), "v1.33.6+lke7")
-	nodeType := orElse(tfvarsExampleValue(tfDir, "cluster", "node_type"), "g8-dedicated-8-4")
-	nodeCount := orElse(tfvarsExampleValue(tfDir, "cluster", "node_count"), "5")
+	k8s := orElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.33.6+lke7")
+	nodeType := orElse(tfvarsExampleValue("cluster", "node_type"), "g8-dedicated-8-4")
+	nodeCount := orElse(tfvarsExampleValue("cluster", "node_count"), "5")
 
 	lz := fmt.Sprintf(`# LandingZone spec — created by `+"`llz env add`"+`. The single source for this
 # instance: edit it (+ one environments/<env>.yaml per deployment), then

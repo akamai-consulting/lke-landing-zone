@@ -59,7 +59,9 @@ runs:
 
     # fetch-kubeconfig-state owns the init + output extraction + the
     # empty-output diagnostics (a failed/odd init reading a different state
-    # than cluster-bootstrap is the classic suspect).
+    # than cluster-bootstrap is the classic suspect). It also RENDERS the
+    # gitignored cluster root's *.tf first (the instance commits zero Terraform),
+    # so no inline render step is needed here — the logic is unit-tested Go.
     - name: Fetch kubeconfig
       id: fetch
       shell: bash

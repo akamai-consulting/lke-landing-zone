@@ -71,8 +71,18 @@ func ciAssertArgoAppCmd() *cobra.Command {
 
 // assertArgoApp polls (10s cadence, immediate first probe) until app exists,
 // the parent operation is terminally Failed/Error, or the deadline passes.
+//
+// Transient-fetch recovery: the app-of-apps kustomizes a remote base fetched from the
+// (public, anonymous) template repo, and that git fetch is intermittently flaky
+// ("failed to list refs: repository not found", a git-fetch timeout). A flake leaves
+// the parent OutOfSync with a ComparisonError and NO sync operation — Argo CD only
+// re-fetches on its slow periodic refresh (~3m), which can outlast this gate. When we
+// see such a transient ComparisonError we force an immediate `refresh=hard` (throttled)
+// so the re-fetch happens in seconds; a NON-transient ComparisonError (a real manifest
+// error) is left alone and surfaces at the deadline as before.
 func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Duration) error {
 	deadline := d.now().Add(within)
+	var lastRefresh time.Time
 	for {
 		if _, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", app); ok {
 			fmt.Printf("Application %s exists — proceeding to the pod wait.\n", app)
@@ -82,6 +92,15 @@ func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Dur
 		if phase == "Failed" || phase == "Error" {
 			fmt.Fprintf(os.Stderr, "::error::Application %s does not exist and %s's sync is terminally %s — nothing will create it without intervention. operationState: %s | %s\n", app, parent, phase, msg, argoParentDiag(d, namespace, parent))
 			return fmt.Errorf("%s sync terminally %s before %s was created", parent, phase, app)
+		}
+		// Force a re-fetch when the parent is wedged on a transient git-fetch flake.
+		// Throttled to 20s (a failed fetch returns fast, so a fresh refresh each cycle
+		// is safe, but don't hammer): the previous fetch already failed by the time the
+		// ComparisonError is visible, so we're kicking a new attempt, not interrupting one.
+		if cerr := argoComparisonError(d, namespace, parent); transientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
+			d.kubectl("-n", namespace, "annotate", "application.argoproj.io", parent, "argocd.argoproj.io/refresh=hard", "--overwrite")
+			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh to re-fetch: %s\n", parent, firstLine(cerr))
+			lastRefresh = d.now()
 		}
 		if !d.now().Before(deadline) {
 			// operationState is empty when the app-of-apps never started a sync
@@ -124,4 +143,52 @@ func argoParentDiag(d aplGateDeps, namespace, parent string) string {
 		return fmt.Sprintf("%s state unavailable (missing, or cluster unreachable)", parent)
 	}
 	return fmt.Sprintf("%s sync/health: %s", parent, out)
+}
+
+// argoComparisonError returns the parent Application's ComparisonError condition
+// message (the "failed to generate manifest …" text), or "" when there is none.
+// A ComparisonError means Argo CD could not compute the target state at all —
+// distinct from a sync operation failure (argoOperationState).
+func argoComparisonError(d aplGateDeps, namespace, parent string) string {
+	out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", parent,
+		"-o", `jsonpath={range .status.conditions[?(@.type=="ComparisonError")]}{.message}{end}`)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// transientFetchError reports whether msg is a transient git-fetch failure — the
+// intermittent flakes an anonymous clone of the template repo throws (the kustomize
+// remote-base fetch), which a hard refresh reliably recovers. A real manifest error
+// (bad kind, invalid yaml, missing field) matches none of these and is left to fail
+// the gate, so recovery never masks a genuine break.
+func transientFetchError(msg string) bool {
+	if msg == "" {
+		return false
+	}
+	m := strings.ToLower(msg)
+	for _, p := range []string{
+		"failed to list refs", "repository not found", "could not read",
+		"timed out", "timeout", "connection refused", "connection reset",
+		"tls handshake", "i/o timeout", "dial tcp", "temporary failure",
+		"unexpected eof", "remote error", "rpc error",
+	} {
+		if strings.Contains(m, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// firstLine truncates a multi-line/long condition message to a single readable line
+// for the progress log (the full text still lands in the deadline diagnostics).
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 140 {
+		s = s[:140] + "…"
+	}
+	return strings.TrimSpace(s)
 }

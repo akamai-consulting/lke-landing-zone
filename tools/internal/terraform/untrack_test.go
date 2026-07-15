@@ -7,25 +7,34 @@ import (
 )
 
 func TestClusterBackedAddrs(t *testing.T) {
-	stateList := `helm_release.apl
-kubectl_manifest.apl_operator_namespace
+	// Post-extraction: the apl-core chain lives in the llz-cluster-bootstrap module,
+	// so its addresses are module.cluster_bootstrap.* — those must be matched. Root
+	// forms (kept for a pinned-back layout) still match too. data.kubernetes_service
+	// (count-guarded off on destroy) must NOT be matched.
+	stateList := `module.cluster_bootstrap.helm_release.apl
+module.cluster_bootstrap.kubectl_manifest.apl_operator_namespace
+module.cluster_bootstrap.kubectl_manifest.platform_app_storage_class
+helm_release.legacy_root
 kubernetes_namespace.foo
+data.kubernetes_service.coredns[0]
+data.terraform_remote_state.cluster
 null_resource.cleanup
-random_password.bootstrap
-local_file.kubeconfig
-kubectl_manifest.platform_app_storage_class
+random_password.loki_admin
 `
 	got := ClusterBackedAddrs(stateList)
 	want := []string{
-		"helm_release.apl",
-		"kubectl_manifest.apl_operator_namespace",
+		"module.cluster_bootstrap.helm_release.apl",
+		"module.cluster_bootstrap.kubectl_manifest.apl_operator_namespace",
+		"module.cluster_bootstrap.kubectl_manifest.platform_app_storage_class",
+		"helm_release.legacy_root",
 		"kubernetes_namespace.foo",
-		"kubectl_manifest.platform_app_storage_class",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ClusterBackedAddrs = %v, want %v", got, want)
 	}
-	if a := ClusterBackedAddrs("null_resource.x\nlocal_file.y\n"); len(a) != 0 {
+	// data.kubernetes_service / data.terraform_remote_state / random_password /
+	// null_resource / local_file must never be treated as cluster-backed.
+	if a := ClusterBackedAddrs("data.kubernetes_service.coredns[0]\nnull_resource.x\nlocal_file.y\n"); len(a) != 0 {
 		t.Errorf("no cluster-backed addrs expected, got %v", a)
 	}
 }
@@ -72,8 +81,8 @@ func TestClassifyKubeHost(t *testing.T) {
 
 func TestAplCoreChain(t *testing.T) {
 	got := AplCoreChain()
-	if len(got) != 3 || got[0] != "helm_release.apl" {
-		t.Errorf("AplCoreChain = %v", got)
+	if len(got) != 3 || got[0] != "module.cluster_bootstrap.helm_release.apl" {
+		t.Errorf("AplCoreChain = %v (want module.cluster_bootstrap.-prefixed)", got)
 	}
 	// The apl_sops_secrets_placeholder resource was removed on v6 — it must not
 	// linger in the drop set (harmless at runtime, but stale).

@@ -7,10 +7,111 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withKubectlApply (ci_openbao_ca_test.go) records the last applied manifest;
 // withSeedRand (ci_ensure_secret_test.go) makes the generated key deterministic.
+
+// withSeedNamespace makes waitForOpenbaoNamespace resolve on the first probe
+// (namespace present), so the Secret-logic tests below exercise the key handling
+// without the convergence wait. The wait itself is covered by
+// TestWaitForOpenbaoNamespace*.
+func withSeedNamespace(t *testing.T, present bool) {
+	t.Helper()
+	orig := newSeedGateDeps
+	newSeedGateDeps = func() aplGateDeps {
+		return aplGateDeps{
+			kubectl: func(args ...string) (string, bool) {
+				if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
+					return "", present
+				}
+				return "", true
+			},
+			now:   time.Now,
+			sleep: func(time.Duration) {},
+		}
+	}
+	t.Cleanup(func() { newSeedGateDeps = orig })
+}
+
+// namespace appears after a few polls (no ComparisonError) → success.
+func TestWaitForOpenbaoNamespaceAppears(t *testing.T) {
+	d, _ := assertArgoAppDeps(t, func(call int, args []string) (string, bool) {
+		if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
+			return "", call > 4 // absent on the first probes, then present
+		}
+		return "", true // ComparisonError probe: empty → no refresh
+	})
+	if err := waitForOpenbaoNamespace(d, "llz-openbao", openbaoNSWait); err != nil {
+		t.Fatalf("should succeed once the namespace appears: %v", err)
+	}
+}
+
+// namespace never appears, no ComparisonError → fail loud at the deadline.
+func TestWaitForOpenbaoNamespaceTimesOut(t *testing.T) {
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
+			return "", false // never appears
+		}
+		return "", true
+	})
+	err := waitForOpenbaoNamespace(d, "llz-openbao", 30*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "not found after") {
+		t.Errorf("err = %v, want a fail-loud timeout", err)
+	}
+}
+
+// a transient ComparisonError on the parent app-of-apps → force a hard refresh;
+// the namespace appears once the re-fetch clears it.
+func TestWaitForOpenbaoNamespaceRefreshesWedgedParent(t *testing.T) {
+	refreshed := false
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(j, "get namespace"):
+			return "", refreshed // appears only after the refresh
+		case strings.Contains(j, "annotate") && strings.Contains(j, "refresh=hard"):
+			refreshed = true
+			return "", true
+		default: // ComparisonError probe
+			if refreshed {
+				return "", true // cleared
+			}
+			return "failed to list refs: repository not found", true
+		}
+	})
+	if err := waitForOpenbaoNamespace(d, "llz-openbao", openbaoNSWait); err != nil {
+		t.Fatalf("should recover after a hard refresh: %v", err)
+	}
+	if !refreshed {
+		t.Error("expected a hard refresh on the transient ComparisonError")
+	}
+}
+
+// a NON-transient ComparisonError (a real manifest error) must NOT trigger a
+// refresh — recovery never masks a genuine break; it fails loud at the deadline.
+func TestWaitForOpenbaoNamespaceLeavesRealErrorAlone(t *testing.T) {
+	refreshed := false
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(j, "get namespace"):
+			return "", false
+		case strings.Contains(j, "annotate"):
+			refreshed = true
+			return "", true
+		default:
+			return "error: kind Foo not registered", true // a real, non-transient error
+		}
+	})
+	if err := waitForOpenbaoNamespace(d, "llz-openbao", 30*time.Second); err == nil {
+		t.Error("a real manifest error must still fail loud")
+	}
+	if refreshed {
+		t.Error("must NOT hard-refresh a non-transient ComparisonError")
+	}
+}
 
 func TestSealKeySecretManifest(t *testing.T) {
 	key := make([]byte, sealKeyBytes)
@@ -34,6 +135,7 @@ func TestSealKeySecretManifest(t *testing.T) {
 
 // existing Secret → idempotent no-op: nothing applied, no key generated.
 func TestRunCIBaoSeedSealKeyExistingIsNoop(t *testing.T) {
+	withSeedNamespace(t, true)
 	t.Setenv("OPENBAO_SEAL_KEY", "")
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte("openbao-unseal-key"), nil }) // get secret succeeds
 	applied := withKubectlApply(t)
@@ -48,6 +150,7 @@ func TestRunCIBaoSeedSealKeyExistingIsNoop(t *testing.T) {
 
 // absent Secret + OPENBAO_SEAL_KEY present → restore that key, no gh write.
 func TestRunCIBaoSeedSealKeyRestoreFromEnv(t *testing.T) {
+	withSeedNamespace(t, true)
 	key := make([]byte, sealKeyBytes)
 	for i := range key {
 		key[i] = 0x7
@@ -70,6 +173,7 @@ func TestRunCIBaoSeedSealKeyRestoreFromEnv(t *testing.T) {
 
 // reject a malformed restore value rather than seed a wrong-length key.
 func TestRunCIBaoSeedSealKeyRestoreBadLength(t *testing.T) {
+	withSeedNamespace(t, true)
 	t.Setenv("OPENBAO_SEAL_KEY", base64.StdEncoding.EncodeToString([]byte("too-short")))
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("NotFound") })
 	withKubectlApply(t)
@@ -81,6 +185,7 @@ func TestRunCIBaoSeedSealKeyRestoreBadLength(t *testing.T) {
 // absent Secret, nothing to restore, GH_TOKEN present → generate, persist for
 // DR, apply, and write the offline-backup banner.
 func TestRunCIBaoSeedSealKeyGenerate(t *testing.T) {
+	withSeedNamespace(t, true)
 	t.Setenv("OPENBAO_SEAL_KEY", "")
 	t.Setenv("GH_TOKEN", "ghp_write")
 	sum := filepath.Join(t.TempDir(), "summary")
@@ -112,6 +217,7 @@ func TestRunCIBaoSeedSealKeyGenerate(t *testing.T) {
 
 // generate path with no secrets-write PAT is fatal — the DR copy can't be saved.
 func TestRunCIBaoSeedSealKeyGenerateNeedsGHToken(t *testing.T) {
+	withSeedNamespace(t, true)
 	t.Setenv("OPENBAO_SEAL_KEY", "")
 	t.Setenv("GH_TOKEN", "")
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("NotFound") })

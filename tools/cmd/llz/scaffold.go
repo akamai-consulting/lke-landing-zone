@@ -137,7 +137,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	}
 
 	// ── 1. landingzone.yaml (created on the first env, else left as-is) ───────
-	instanceName, created, err := ensureLandingZone(specRoot, tfDir)
+	instanceName, created, err := ensureLandingZone(specRoot)
 	if err != nil {
 		return fmt.Errorf("write landingzone.yaml: %w", err)
 	}
