@@ -74,7 +74,7 @@ jobs:
   # reviewers so the first stage applies automatically from main.
   dev:
     name: Promote → dev
-    uses: ./.github/workflows/llz-terraform.yml
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
     with:
       instance_repo: <@ instance_repo @>
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
@@ -91,7 +91,7 @@ jobs:
   staging:
     name: Promote → staging
     needs: dev
-    uses: ./.github/workflows/llz-terraform.yml
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
     with:
       instance_repo: <@ instance_repo @>
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
@@ -107,7 +107,7 @@ jobs:
   prod:
     name: Promote → prod
     needs: staging
-    uses: ./.github/workflows/llz-terraform.yml
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
     with:
       instance_repo: <@ instance_repo @>
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
