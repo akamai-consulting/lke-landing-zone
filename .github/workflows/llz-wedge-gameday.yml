@@ -72,10 +72,24 @@ jobs:
       # Dual checkout (Option A) — see llz-cluster-health.yml for the rationale.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Cluster access (kubeconfig + runner ACL + llz)
-        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
+      # The composite actions live in THIS workflow's repo — but a composite
+      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
+      # limitation cluster-access documents), and `uses:` can't take expressions. So
+      # fetch the template's actions once per job: a sparse checkout (only
+      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
+      # pinned this workflow's @<ref> to.
+      - name: Checkout the template composite actions (pinned)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          template-ref:          <@ llz_version @>
+          repository: akamai-consulting/lke-landing-zone
+          ref: ${{ inputs.template-ref }}
+          path: _llz-template
+          sparse-checkout: .github/actions
+          persist-credentials: false
+      - name: Cluster access (kubeconfig + runner ACL + llz)
+        uses: ./_llz-template/.github/actions/cluster-access
+        with:
+          template-ref:          ${{ inputs.template-ref }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -117,7 +131,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: ./_llz-template/.github/actions/lke-runner-acl
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

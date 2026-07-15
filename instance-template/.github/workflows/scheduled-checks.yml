@@ -8,7 +8,7 @@ name: Scheduled Checks
 # §"Keeping instances in sync"). This stub owns only the trigger surface: the
 # weekly + daily + monthly crons.
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
-# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201). Pin template-ref to
+# sourced from the template repo at the pinned @<ref> (same org/enterprise, so `secrets: inherit` still flows; cross-org adopters rely on the environment-scoped secrets the reusable's jobs resolve themselves). Pin template-ref to
 # a template release tag (Renovate keeps both current — instance-template/renovate.json).
 
 on:
@@ -46,7 +46,7 @@ jobs:
   call:
     # Pinned to an immutable LLZ template release tag (not @main) so updates
     # arrive as reviewable Renovate PRs. ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).
-    uses: ./.github/workflows/llz-scheduled-checks.yml
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-scheduled-checks.yml@<@ llz_version @>
     with:
       fuzz_seconds: ${{ inputs.fuzz_seconds || '60' }}
       drift_branch: ${{ inputs.drift_branch || 'main' }}

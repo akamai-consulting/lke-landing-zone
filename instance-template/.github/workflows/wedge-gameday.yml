@@ -8,7 +8,7 @@ name: Wedge game-day (blast-radius containment proof)
 # fast-path's reused cluster).
 #
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
-# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201). Pin template-ref to a
+# sourced from the template repo at the pinned @<ref> (same org/enterprise, so `secrets: inherit` still flows; cross-org adopters rely on the environment-scoped secrets the reusable's jobs resolve themselves). Pin template-ref to a
 # template release tag (Renovate keeps both current — instance-template/renovate.json).
 
 on:
@@ -35,7 +35,7 @@ permissions:
 
 jobs:
   call:
-    uses: ./.github/workflows/llz-wedge-gameday.yml
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-wedge-gameday.yml@<@ llz_version @>
     with:
       region: ${{ inputs.region }}
       target-app: ${{ inputs.target-app }}

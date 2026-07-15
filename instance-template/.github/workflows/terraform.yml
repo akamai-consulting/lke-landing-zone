@@ -79,7 +79,7 @@ jobs:
   call:
     # LOCAL reusable (copier-delivered into this repo), so `secrets: inherit` is
     # same-repo and resolves this instance's repo + environment secrets (#201).
-    uses: ./.github/workflows/llz-terraform.yml
+    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-terraform.yml@<@ llz_version @>
     with:
       instance_repo: <@ instance_repo @>
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
