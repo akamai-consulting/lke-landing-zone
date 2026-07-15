@@ -8,6 +8,7 @@ tools/firewall-controller/firewall-controller
 tools/linode-cred-audit
 tools/llz
 /bin/llz
+tools/bin/
 
 # Tokens gathered by `llz new` / `llz secrets gather` (0600, never committed)
 .llz/
