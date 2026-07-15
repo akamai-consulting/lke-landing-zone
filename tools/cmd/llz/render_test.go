@@ -35,22 +35,6 @@ func TestApplyAssigns(t *testing.T) {
 	}
 }
 
-// stageRoots writes a minimal terraform.tfvars.example under each TF root.
-func stageRoots(t *testing.T, tfDir string) {
-	t.Helper()
-	examples := map[string]string{
-		"cluster":           "cluster_label = \"x\"\nregion = \"x\"\nk8s_version = \"x\"\nnode_type = \"x\"\nnode_count = 1\ntags = []\ncontrol_plane_high_availability = false\ncontrol_plane_audit_logs_enabled = false\nha_role = \"standalone\"\n",
-		"cluster-bootstrap": "deployment = \"your-env\"\napl_values_env = \"your-env\"\n",
-		"object-storage":    "region_suffix = \"your-env\"\nobj_cluster = \"us-ord-1\"\n",
-	}
-	for root, body := range examples {
-		if err := os.MkdirAll(filepath.Join(tfDir, root), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", root, err)
-		}
-		mustWrite(t, filepath.Join(tfDir, root, tplTfvars), body)
-	}
-}
-
 const renderSpec = `
 apiVersion: llz.akamai-consulting.io/v1alpha1
 kind: LandingZone
@@ -69,8 +53,10 @@ spec:
 `
 
 func TestRenderEnvTfvars(t *testing.T) {
+	// The terraform.tfvars.example base now comes from the embedded tfroots package
+	// (it no longer ships in the instance); renderEnvTfvars only writes the per-env
+	// <env>.tfvars into tfDir.
 	tfDir := filepath.Join(t.TempDir(), "terraform-iac-bootstrap")
-	stageRoots(t, tfDir)
 
 	lz, err := clusterspec.Decode([]byte(renderSpec))
 	if err != nil {
@@ -105,8 +91,14 @@ func TestRenderEnvTfvars(t *testing.T) {
 	if strings.Contains(boot, "cluster_domain") {
 		t.Errorf("cluster-bootstrap tfvars should no longer carry cluster_domain:\n%s", boot)
 	}
-	if strings.Contains(boot, "your-env") {
-		t.Errorf("cluster-bootstrap still has your-env sentinel:\n%s", boot)
+	// No your-env sentinel survives on an ASSIGNMENT line (the embedded example's
+	// prose comments legitimately mention <your-env>, so match the value form).
+	if strings.Contains(boot, `= "your-env"`) {
+		t.Errorf("cluster-bootstrap still has a your-env sentinel assignment:\n%s", boot)
+	}
+	// The instance_repo copier token is substituted out of the embedded example.
+	if strings.Contains(boot, "<@") {
+		t.Errorf("cluster-bootstrap tfvars still has an unsubstituted copier token:\n%s", boot)
 	}
 	obj := read("object-storage")
 	for _, want := range []string{`region_suffix = "prod"`, `obj_cluster = "us-ord-7"`} {

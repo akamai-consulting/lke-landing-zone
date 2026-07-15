@@ -13,7 +13,6 @@ import (
 // Validate accept, with the env inheriting the seeded spec.defaults.
 func TestEnvAddSpecAuthoring(t *testing.T) {
 	dir := t.TempDir()
-	tfDir := filepath.Join(dir, "terraform-iac-bootstrap")
 	write := func(rel, body string) {
 		p := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -28,7 +27,7 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 		"cluster_label = \"x\"\nk8s_version = \"v1.33.6+lke7\"\nnode_type  = \"g8-dedicated-8-4\"\nnode_count = 5\n")
 
 	// First env: creates landingzone.yaml from the answers + seeded defaults.
-	name, created, err := ensureLandingZone(dir, tfDir)
+	name, created, err := ensureLandingZone(dir)
 	if err != nil || !created {
 		t.Fatalf("ensureLandingZone created=%v err=%v", created, err)
 	}
@@ -36,7 +35,7 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 		t.Fatalf("instance name = %q, want platform-support", name)
 	}
 	// Idempotent: a second call leaves it as-is.
-	if _, created2, _ := ensureLandingZone(dir, tfDir); created2 {
+	if _, created2, _ := ensureLandingZone(dir); created2 {
 		t.Error("ensureLandingZone recreated an existing landingzone.yaml")
 	}
 

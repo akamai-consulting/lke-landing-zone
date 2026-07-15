@@ -28,8 +28,37 @@ import (
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 	"github.com/spf13/cobra"
 )
+
+// tfrootTokens resolves the three copier tokens the generated TF roots carry:
+// upstream_org is the constant akamai-consulting (no forks — mirrors the kustomize
+// hardcoding); ref is the template version the instance tracks (resolveTemplateRef,
+// "main" when un-scaffolded); instance_repo is the instance's own owner/name from
+// .copier-answers.yml, falling back to the spec's instance repo.
+func tfrootTokens() (upstreamOrg, ref, instanceRepo string) {
+	upstreamOrg = "akamai-consulting"
+	ref = orElse(resolveTemplateRef(), "main")
+	if a, _ := readAnswers("."); a != nil && a.InstanceRepo != "" {
+		instanceRepo = a.InstanceRepo
+	} else if lz, present, err := loadSpec(); present && err == nil {
+		instanceRepo = lz.Spec.Instance.Repo
+	}
+	return
+}
+
+// tfrootExample reads a root's terraform.tfvars.example from the embedded tfroots
+// package (it no longer ships in the instance) and substitutes the copier tokens,
+// so the base each <env>.tfvars renders from is token-free.
+func tfrootExample(root string) (string, error) {
+	b, err := tfroots.TfvarsExample(root)
+	if err != nil {
+		return "", err
+	}
+	org, ref, instRepo := tfrootTokens()
+	return tfroots.Substitute(string(b), org, ref, instRepo), nil
+}
 
 // envVPCCmd prints the shared VPC (spec.networks name) a deployment attaches to,
 // or an empty line for a dedicated VPC, so the apply-vpc workflow step can decide
@@ -157,6 +186,26 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 	}
 
 	dryRun := g.dryRun
+	// Generate the four TF root directories (their *.tf files) from the embedded
+	// tfroots copy — an instance commits ZERO Terraform: the roots are gitignored
+	// build artifacts regenerated here on every render, exactly like the per-env
+	// tfvars. Rendered ONCE per instance (the roots are env-identical; per-env
+	// variation lives entirely in tfvars). dst is the instance root, so the files
+	// land under tfDir (= <specRoot>/terraform-iac-bootstrap).
+	if dryRun {
+		for _, p := range tfroots.Targets(specRoot) {
+			wouldRenderPath(relPrefix, filepathRel(tfDir, p), "")
+		}
+	} else {
+		org, ref, instRepo := tfrootTokens()
+		written, err := tfroots.Render(specRoot, org, ref, instRepo)
+		if err != nil {
+			return fmt.Errorf("generate TF roots: %w", err)
+		}
+		for _, p := range written {
+			renderedPath(relPrefix, filepathRel(tfDir, p))
+		}
+	}
 	// Shared VPCs (spec.networks) render to vpc/<name>.tfvars and must exist before
 	// the clusters that attach to them. No-op when no networks are declared.
 	if err := renderNetworks(lz, tfDir, relPrefix, dryRun); err != nil {
@@ -431,16 +480,18 @@ func renderNetworks(lz *clusterspec.LandingZone, tfDir, relPrefix string, dryRun
 	sort.Strings(names)
 	for _, name := range names {
 		assigns := clusterspec.NetworkTFVars(name, lz.Spec.Networks[name])
-		src := filepath.Join(tfDir, "vpc", tplTfvars)
 		dst := filepath.Join(tfDir, "vpc", name+".tfvars")
-		base, err := os.ReadFile(src)
+		base, err := tfrootExample("vpc")
 		if err != nil {
-			return fmt.Errorf("read %s (spec.networks needs the terraform-iac-bootstrap/vpc root): %w", src, err)
+			return fmt.Errorf("read embedded vpc tfvars.example (spec.networks needs the vpc root): %w", err)
 		}
-		out := renderTfvars(string(base), assigns)
+		out := renderTfvars(base, assigns)
 		if dryRun {
 			wouldRenderPath(relPrefix, filepathRel(tfDir, dst), fmt.Sprintf("(%d assignments)", len(assigns)))
 			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
 		}
 		if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
 			return err
@@ -461,16 +512,18 @@ func renderEnvTfvars(env string, c clusterspec.Cluster, tfDir, relPrefix string,
 		"object-storage":    clusterspec.ObjectStorageTFVars(env, c),
 	}
 	for _, root := range tfRoots {
-		src := filepath.Join(tfDir, root, tplTfvars)
 		dst := filepath.Join(tfDir, root, env+".tfvars")
-		base, err := os.ReadFile(src)
+		base, err := tfrootExample(root)
 		if err != nil {
-			return fmt.Errorf("read %s: %w", src, err)
+			return fmt.Errorf("read embedded %s tfvars.example: %w", root, err)
 		}
-		out := renderTfvars(string(base), roots[root])
+		out := renderTfvars(base, roots[root])
 		if dryRun {
 			wouldRenderPath(relPrefix, filepathRel(tfDir, dst), fmt.Sprintf("(%d assignments)", len(roots[root])))
 			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
 		}
 		if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
 			return err
@@ -548,9 +601,13 @@ func filepathRel(tfDir, dst string) string {
 // committed apl-values artifacts.
 func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir string, tfvarsOnly bool) error {
 	want := map[string]string{} // path -> would-be content
-	readExample := func(root string) (string, error) {
-		b, err := os.ReadFile(filepath.Join(tfDir, root, tplTfvars))
-		return string(b), err
+	readExample := tfrootExample
+
+	// The generated TF roots are part of what a render would write (gitignored build
+	// artifacts, like the tfvars) — preview them too.
+	org, ref, instRepo := tfrootTokens()
+	for p, c := range tfroots.Files(filepath.Dir(tfDir), org, ref, instRepo) {
+		want[p] = c
 	}
 
 	netNames := make([]string, 0, len(lz.Spec.Networks))

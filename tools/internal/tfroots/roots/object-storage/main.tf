@@ -14,6 +14,6 @@ module "object_storage" {
   source = "git::ssh://git@github.com/<@ upstream_org @>/lke-landing-zone.git//terraform-modules/llz-object-storage?ref=<@ llz_version @>"
   # source = "../../terraform-modules/llz-object-storage"
 
-  region_suffix         = var.region_suffix
-  obj_cluster           = var.obj_cluster
+  region_suffix = var.region_suffix
+  obj_cluster   = var.obj_cluster
 }
