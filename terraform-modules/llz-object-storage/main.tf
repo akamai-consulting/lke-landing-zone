@@ -62,8 +62,9 @@ resource "linode_object_storage_bucket" "loki_admin" {
 # extraVolumes (it clobbered the chart-injected custom-ca volume); rather
 # than carry the unused infrastructure pending the kustomize post-renderer
 # follow-up, the bucket + key + outputs + bao policy paths + GH-secret
-# seeding were all dropped. See apl-values/primary/values.yaml apps.gitea
-# for the full rationale.
+# seeding were all dropped. (This is separate from the gitea-valkey PVC
+# encryption the Kyverno pvc-force-encrypted-storage-class policy still covers
+# for an opt-in gitea — that stays; only the off-cluster S3 backup was dropped.)
 
 # ── Access keys — NOT Terraform-managed ───────────────────────────────────────
 # The scoped Loki/Harbor access keys (and their 120-day `time_rotating`

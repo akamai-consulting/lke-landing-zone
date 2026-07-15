@@ -1,11 +1,19 @@
 # Kyverno ClusterPolicy: narrow safety net for the two apl-core charts that
-# hardcode `storageClass: linode-block-storage` on the linode provider and
-# can't be overridden via `cluster.defaultStorageClass`:
+# hardcode `storageClass: linode-block-storage` (the LKE default, UNENCRYPTED) on
+# the linode provider and can't be overridden via `cluster.defaultStorageClass`.
+# It rewrites those PVCs to `block-storage-retain` (encrypted, Retain) so they get
+# encryption-at-rest:
 #
-#   - oauth2-proxy redis-HA   → namespace `istio-system`      (PVC: data-oauth2-proxy-redis-ha-server-0)
+#   - gitea-valkey            → namespace `gitea`         (PVC: valkey-data-gitea-valkey-primary-0)
+#   - oauth2-proxy redis-HA   → namespace `istio-system`  (PVC: data-oauth2-proxy-redis-ha-server-0)
 #
-# (apl-core ≤5.x also hit gitea-valkey in namespace `gitea`; gitea is disabled on
-# v6, so that PVC never appears and `gitea` was dropped from the namespace scope.)
+# gitea is disabled by DEFAULT on v6, so its PVC normally never appears — but gitea
+# stays a supported OPT-IN component (clusterspec/components.go), and apl-core's
+# gitea-valkey chart hardcodes the unencrypted class regardless of that toggle. So
+# the `gitea` namespace MUST stay in scope: dropping it would silently ship an
+# unencrypted gitea-valkey PVC the moment anyone enables gitea. When gitea is off
+# the match simply never fires — zero cost. (This namespace was briefly removed on
+# the assumption gitea was permanently gone; restored to close that latent hole.)
 #
 # The hardcoded line lives in apl-core's value templates:
 #   values/gitea/gitea-valkey.gotmpl
@@ -14,10 +22,9 @@
 #       redis.storageClass:         {{ if eq $v.cluster.provider "linode" }}linode-block-storage{{ ... }}
 #
 # Every other PVC-creating chart respects `cluster.defaultStorageClass`
-# (apl-values/<env>/values.yaml), so this policy used to span all namespaces
-# but no longer needs to. Narrowing reduces the admission-webhook blast
-# radius and the chart-PVC-create vs Kyverno-webhook-ready race surface to
-# just two well-known StatefulSets.
+# (apl-values/<env>/values.yaml), so this policy is scoped to just those two
+# well-known namespaces — bounding the admission-webhook blast radius and the
+# chart-PVC-create vs Kyverno-webhook-ready race surface.
 #
 # If/when apl-core stops hardcoding linode-block-storage for the linode
 # provider in those two templates, this policy can be removed entirely.
@@ -54,7 +61,9 @@ spec:
           - resources:
               kinds: [PersistentVolumeClaim]
               operations: [CREATE]
-              namespaces: [istio-system]
+              # gitea: only creates PVCs when the opt-in gitea component is enabled;
+              # kept in scope so an enabled gitea gets encrypted PVCs (no-op when off).
+              namespaces: [gitea, istio-system]
       preconditions:
         all:
           # Match the LKE-shipped classes and the empty-string fallthrough.

@@ -14,7 +14,7 @@ import (
 // cold bootstrap) — an expected deviation, not a failure.
 func ExpectedLinodeBlockStoragePVCs() []DepEntry {
 	return []DepEntry{
-		{"gitea/valkey-data-gitea-valkey-primary-0", "gitea-valkey hardcodes linode-block-storage; Kyverno mutation lagged the chart-install. Re-roll (STS scale-down + PVC delete + scale-up), or live with the unencrypted ephemeral cache."},
+		{"gitea/valkey-data-gitea-valkey-primary-0", "gitea-valkey (present only when the opt-in gitea component is enabled) hardcodes linode-block-storage; the pvc-force-encrypted-storage-class Kyverno policy rewrites it to the encrypted block-storage-retain class, but on a cold bootstrap the webhook can lag the chart-install and the PVC binds unencrypted first. Re-roll (STS scale-down + PVC delete + scale-up), or live with the unencrypted ephemeral cache."},
 		{"istio-system/data-oauth2-proxy-redis-ha-server-0", "oauth2-proxy redis-HA hardcodes linode-block-storage; same remediation as gitea-valkey."},
 	}
 }
