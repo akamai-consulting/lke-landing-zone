@@ -44,9 +44,15 @@ variable "instance_repo" {
 }
 
 variable "upstream_org" {
-  description = "GitHub org that publishes the first-party OCI Helm charts (ghcr.io/<upstream_org>/charts/*). Passed by the rendered root for the same reason as instance_repo: the git-fetched module cannot carry the <@ upstream_org @> token. Only consumed on the private-fork path (ghcr_token set)."
+  description = "GitHub org that publishes the first-party OCI Helm charts (ghcr.io/<upstream_org>/charts/*) AND hosts the shared platform-apl tree the llz-secret-store Application sources. Passed by the rendered root for the same reason as instance_repo: the git-fetched module cannot carry the <@ upstream_org @> token."
   type        = string
   default     = "akamai-consulting"
+}
+
+variable "template_ref" {
+  description = "The template version this instance tracks (the copier llz_version tag, or the SHA under test in e2e). The llz-secret-store Application sources the shared, byte-identical ClusterSecretStore tree from the TEMPLATE repo (platform-apl/manifest-secret-store) at this ref — the same tree/ref the platform-bootstrap overlay kustomize-fetches. Passed by the rendered root (<@ llz_version @>)."
+  type        = string
+  default     = "main"
 }
 
 variable "ghcr_username" {

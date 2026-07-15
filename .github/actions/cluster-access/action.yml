@@ -10,10 +10,10 @@ description: >
   Sibling actions (fetch-kubeconfig, lke-runner-acl) live in THIS repo, but a
   composite action's `uses: ./<path>` resolves against $GITHUB_WORKSPACE — the
   CALLER's checkout — NOT this action's repo (a long-standing GitHub Actions
-  limitation). The caller is an instance repo that excludes .github/actions, so a
-  bare `./instance-template/.github/actions/<name>` is not present there and fails
+  limitation). The caller is an instance repo that does not carry .github/actions at
+  all, so a bare `./.github/actions/<name>` is not present there and fails
   with "Can't find action.yml". So this action checks out its OWN repo at the caller-
-  supplied `template-ref` input (the same `<@ llz_version @>` the caller pinned the
+  supplied `template-ref` input (the same ref the caller pinned the
   `uses:@<ref>` to) into ./_llz-template and references the siblings from there. This
   keeps the #201-Phase-2 cross-org model (the caller still needs nothing checked out —
   this action is self-sufficient), just with the sibling deps fetched by this action.
@@ -30,7 +30,7 @@ inputs:
   template-ref:
     description: >
       The template ref this action's sibling composite actions are fetched at — the
-      SAME `<@ llz_version @>` the caller pinned this action's `uses:@<ref>` to. A
+      SAME ref the caller pinned this action's `uses:@<ref>` to. A
       composite `uses: ./<path>` resolves against the caller's workspace (not this
       action's repo), and the caller is an instance repo that excludes .github/actions,
       so this action checks out its own repo at this ref to reach the siblings. Pass the
@@ -107,7 +107,7 @@ runs:
         persist-credentials: false
     - name: Fetch kubeconfig from Terraform state
       id: kubeconfig
-      uses: ./_llz-template/instance-template/.github/actions/fetch-kubeconfig
+      uses: ./_llz-template/.github/actions/fetch-kubeconfig
       with:
         aws-access-key-id:     ${{ inputs.aws-access-key-id }}
         aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
@@ -122,7 +122,7 @@ runs:
     # cluster — there is nothing to ACL.
     - name: Open control-plane ACL for this runner
       if: steps.kubeconfig.outputs.available == 'true'
-      uses: ./_llz-template/instance-template/.github/actions/lke-runner-acl
+      uses: ./_llz-template/.github/actions/lke-runner-acl
       with:
         mode:         open
         linode-token: ${{ inputs.linode-token }}

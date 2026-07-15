@@ -8,7 +8,7 @@ import (
 func TestUsesOrg(t *testing.T) {
 	cases := map[string]string{
 		"akamai-consulting/lke-landing-zone/.github/workflows/llz-terraform.yml@v0.0.24": "akamai-consulting",
-		"akamai-consulting/lke-landing-zone/instance-template/.github/actions/x@v1":      "akamai-consulting",
+		"akamai-consulting/lke-landing-zone/.github/actions/x@v1":                        "akamai-consulting",
 		"actions/checkout@v7":           "actions",
 		"./.github/workflows/local.yml": "",
 		"docker://alpine:3":             "",

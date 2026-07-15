@@ -2,7 +2,7 @@
 
 **Status:** In progress — design + Phase 0 landing on branch `feat/cross-org-reuse-pattern`.
 **Tracks:** [#201](https://github.com/akamai-consulting/lke-landing-zone/issues/201) (this design) · [#200](https://github.com/akamai-consulting/lke-landing-zone/issues/200) (the cross-org `secrets: inherit` bug + guardrail).
-**Relates to:** `instance-template/.github/workflows/`, `instance-template/.github/actions/`, `.github/workflows/llz-*.yml` (the reusable workflows), `copier.yml`, `instance-template/.template-manifest`, `tools/cmd/llz/checks.go`.
+**Relates to:** `instance-template/.github/workflows/`, `.github/actions/`, `.github/workflows/llz-*.yml` (the reusable workflows), `copier.yml`, `instance-template/.template-manifest`, `tools/cmd/llz/checks.go`.
 
 ## Problem
 
@@ -34,7 +34,7 @@ apply-vpc:
   container: { image: ${{ vars.TF_IMAGE }} }              # central logic, public image
   steps:
     - uses: actions/checkout@<pin>
-    - uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+    - uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
       with:
         aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}   # in-job → env secret resolves
         aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -46,12 +46,12 @@ apply-vpc:
 The pipeline is already ~80% here (verified against the tree):
 
 - Everything runs in the central container image (`vars.TF_IMAGE`); all real work is `llz ci …` subcommands.
-- The reusables already check out the template into `_llz-template/` and call its composite actions (e.g. `./_llz-template/instance-template/.github/actions/terraform-init`, [.github/workflows/llz-terraform.yml](../../.github/workflows/llz-terraform.yml)).
-- The composite actions already take `with:` inputs, not `secrets:` ([terraform-init/action.yml](../../instance-template/.github/actions/terraform-init/action.yml)).
+- The reusables already check out the template into `_llz-template/` and call its composite actions (e.g. `./_llz-template/.github/actions/terraform-init`, [.github/workflows/llz-terraform.yml](../../.github/workflows/llz-terraform.yml)).
+- The composite actions already take `with:` inputs, not `secrets:` ([terraform-init/action.yml](../../.github/actions/terraform-init/action.yml)).
 - The repo is **public**, so GHCR images + composite actions at a pinned tag are consumable cross-org with no auth.
 - `copier.yml` delimiters (`<@ @>`/`<% %>`) were chosen specifically so `${{ }}` job graphs pass through untouched, and the `upstream_org` / `llz_version` / `llz_image_ref` tokens already exist.
 
-The **only** thing forcing cross-org inheritance is the outer reusable-workflow wrapper. Removing that layer and promoting its job graph into the instance eliminates the boundary while leaving all logic central. The composite-action reference changes from a local `_llz-template` checkout to the cross-org `uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/<name>@<@ llz_version @>` form (GitHub resolves any subpath at a ref — no relocation needed), which also **deletes the `_llz-template` checkout step** from every job.
+The **only** thing forcing cross-org inheritance is the outer reusable-workflow wrapper. Removing that layer and promoting its job graph into the instance eliminates the boundary while leaving all logic central. The composite-action reference changes from a local `_llz-template` checkout to the cross-org `uses: <@ upstream_org @>/lke-landing-zone/.github/actions/<name>@<@ llz_version @>` form (GitHub resolves any subpath at a ref — no relocation needed), which also **deletes the `_llz-template` checkout step** from every job.
 
 ### What moves where
 

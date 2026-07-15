@@ -45,7 +45,7 @@ categories:
     include:
       - ".github/workflows/*.yml"
       - "instance-template/.github/workflows/*.yml"
-      - "instance-template/.github/actions/**/action.yml"
+      - ".github/actions/**/action.yml"
 
   shell-scripts:
     kind: script

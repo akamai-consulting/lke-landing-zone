@@ -277,7 +277,7 @@ jobs:
       # convergence gate at the tail of this job polls for up to 10m (formerly the
       # separate `converge` job set this lease on its own cluster-access).
       - name: Cluster access (kubeconfig + runner ACL)
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -900,7 +900,7 @@ jobs:
       # call cuts apiserver access (we register-runner-lease on cluster-access above).
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -957,7 +957,7 @@ jobs:
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
       # that cluster's control-plane ACL (revoked at job end). No llz needed here.
       - name: Cluster access (peer kubeconfig + runner ACL)
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           region:                ${{ needs.resolve.outputs.peer }}
@@ -978,7 +978,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (peer)
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1011,7 +1011,7 @@ jobs:
       # Fetch the standby cluster's (self) kubeconfig and open this runner's
       # egress IP in its control-plane ACL (revoked at job end). No llz needed.
       - name: Cluster access (standby kubeconfig + runner ACL)
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           region:                ${{ inputs.region }}
@@ -1033,7 +1033,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (standby)
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1061,7 +1061,7 @@ jobs:
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
       # that cluster's control-plane ACL (revoked at job end). No llz needed here.
       - name: Cluster access (peer kubeconfig + runner ACL)
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           region:                ${{ needs.resolve.outputs.peer }}
@@ -1082,7 +1082,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (peer)
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

@@ -496,8 +496,11 @@ resource "kubectl_manifest" "app_bootstrap_appproject" {
       namespace = "argocd"
     }
     spec = {
-      description = "Seed project for the apl-values manifest tree app-of-apps. Source-pinned to the instance repo over HTTPS."
-      sourceRepos = ["https://github.com/${var.instance_repo}.git"]
+      description = "Seed project for the apl-values manifest tree app-of-apps. Source-pinned to the instance repo (the platform-bootstrap overlay) + the template repo (the shared llz-secret-store ClusterSecretStore tree at platform-apl/), both over HTTPS."
+      sourceRepos = [
+        "https://github.com/${var.instance_repo}.git",
+        "https://github.com/${var.upstream_org}/lke-landing-zone.git",
+      ]
       destinations = [
         {
           server    = "https://kubernetes.default.svc"
@@ -642,9 +645,14 @@ resource "kubectl_manifest" "app_secret_store_application" {
     spec = {
       project = "platform-bootstrap"
       source = {
-        repoURL        = "https://github.com/${var.instance_repo}.git"
-        targetRevision = var.apps_repo_revision
-        path           = "apl-values/_shared/manifest-secret-store"
+        # The ClusterSecretStore tree is shared + byte-identical + token-free, so it
+        # lives in the TEMPLATE repo (platform-apl/manifest-secret-store), sourced at
+        # the pinned template ref — the same tree+ref the platform-bootstrap overlay
+        # kustomize-fetches. (It is a fixed, env-agnostic path, so it does NOT go
+        # through the per-env `llz render` overlay.)
+        repoURL        = "https://github.com/${var.upstream_org}/lke-landing-zone.git"
+        targetRevision = var.template_ref
+        path           = "platform-apl/manifest-secret-store"
       }
       destination = {
         server    = "https://kubernetes.default.svc"

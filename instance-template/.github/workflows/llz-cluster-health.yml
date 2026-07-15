@@ -93,7 +93,7 @@ jobs:
       # LKE-E control-plane ACL before the kubectl steps (revoked at job end,
       # if: always()), and install llz.
       - name: Cluster access (kubeconfig + runner ACL + llz)
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -208,7 +208,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

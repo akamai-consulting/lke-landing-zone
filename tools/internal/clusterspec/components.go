@@ -94,7 +94,7 @@ var Components = []Component{
 	{
 		Name: "externalSecrets",
 		// The `openbao` ClusterSecretStore moved to its OWN Argo CD Application
-		// (apl-values/_shared/manifest-secret-store/, applied by the llz-secret-store
+		// (platform-apl/manifest-secret-store/, applied by the llz-secret-store
 		// app in cluster-bootstrap/main.tf) for blast-radius isolation — its
 		// first-boot not-ready health used to fail the whole platform-bootstrap sync.
 		ManifestResources: []string{

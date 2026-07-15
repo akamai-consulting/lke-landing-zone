@@ -11,7 +11,7 @@
 # STEP LOGIC STAYS CENTRAL: every job runs in the `llz` container image
 # (vars.TF_IMAGE) and calls the terraform-init / cluster-access / fetch-kubeconfig
 # / lke-runner-acl composite actions from
-# <upstream_org>/lke-landing-zone/instance-template/.github/actions/<name> at the
+# <upstream_org>/lke-landing-zone/.github/actions/<name> at the
 # pinned template tag (public repo → cross-org action fetch needs no secrets). The
 # single `actions/checkout` per job brings in THIS instance's terraform-iac-bootstrap/
 # TF roots + apl-values/; there is no separate template checkout.
@@ -201,7 +201,7 @@ jobs:
       # separate render step is needed here (the first TF step after init is the
       # plan). No-op for instances without a spec.
       - name: Terraform init — cluster
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -395,7 +395,7 @@ jobs:
 
       - name: Terraform init — shared VPC
         if: steps.net.outputs.net != ''
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           module:                vpc
           state-key:             vpc/${{ steps.net.outputs.net }}/terraform.tfstate
@@ -469,7 +469,7 @@ jobs:
         run: llz ci preflight --fail-on-orphans "$FAIL_ON_ORPHANS" --orphan-threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION"
 
       - name: Terraform init — cluster
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -649,7 +649,7 @@ jobs:
         run: llz ci chart-publish-check --root .
 
       - name: Terraform init — cluster-bootstrap
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -665,7 +665,7 @@ jobs:
       # readiness probe below would be refused); the paired revoke
       # (if: always(), end of job) closes it.
       - name: Cluster access (kubeconfig readiness probe + runner ACL)
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/cluster-access@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/cluster-access@<@ llz_version @>
         with:
           template-ref:          <@ llz_version @>
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -728,7 +728,7 @@ jobs:
       # Job / ArgoCD pods are not becoming ready.
       - name: Fetch kubeconfig for diagnostics
         if: failure()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/fetch-kubeconfig@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/fetch-kubeconfig@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -759,7 +759,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -899,7 +899,7 @@ jobs:
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
       - name: Terraform init — cluster-bootstrap
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -979,7 +979,7 @@ jobs:
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
       - name: Terraform init — cluster-bootstrap
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1023,7 +1023,7 @@ jobs:
       # is false so CASE B (cluster already gone) is a clean no-op. Revoked at
       # job end (if: always()).
       - name: Open control-plane ACL for this runner
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:            open
           linode-token:    ${{ secrets.LINODE_API_TOKEN }}
@@ -1074,7 +1074,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/lke-runner-acl@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/lke-runner-acl@<@ llz_version @>
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1109,7 +1109,7 @@ jobs:
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
       - name: Terraform init — cluster
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1159,7 +1159,7 @@ jobs:
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
       - name: Terraform init — cluster
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1358,7 +1358,7 @@ jobs:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Terraform init — object-storage
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1427,7 +1427,7 @@ jobs:
         run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
 
       - name: Terraform init — object-storage
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1469,7 +1469,7 @@ jobs:
         run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
 
       - name: Terraform init — object-storage
-        uses: <@ upstream_org @>/lke-landing-zone/instance-template/.github/actions/terraform-init@<@ llz_version @>
+        uses: <@ upstream_org @>/lke-landing-zone/.github/actions/terraform-init@<@ llz_version @>
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
