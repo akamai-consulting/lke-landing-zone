@@ -86,16 +86,23 @@ func runAssertBroadPATRotation(region string) error {
 		broadPATRotatorNS, broadPATRotatorE2EJob, broadPATRotatorCronJob, broadPATRotationPollTimeout)
 
 	succeeded, failed := waitBroadPATJob()
-	logs := execCombined("kubectl", "-n", broadPATRotatorNS, "logs", "job/"+broadPATRotatorE2EJob, "--tail=-1")
+	logs := broadPATJobLogs()
 	fmt.Println("── broad-pat-rotator Job logs ──")
 	fmt.Println(logs)
 
 	if !succeeded {
+		// `kubectl logs job/<j>` (and the logs above) block on a RUNNING pod and, once
+		// the pod is gone — killed at the Job's activeDeadlineSeconds, or never started
+		// (ImagePullBackOff / admission-denied / Pending) — print only "timed out
+		// waiting for the condition", masking WHY. Dump the pod state + events so the
+		// real cause is visible in the e2e log (we cannot introspect the e2e cluster
+		// out-of-band — it holds no long-lived kubeconfig).
+		dumpBroadPATRotatorDiag()
 		reason := "timed out"
 		if failed {
 			reason = "the Job failed"
 		}
-		return fmt.Errorf("broad-PAT rotation did not succeed (%s) — see the Job logs above", reason)
+		return fmt.Errorf("broad-PAT rotation did not succeed (%s) — see the diagnostics above", reason)
 	}
 	action, ok := parseRotationAction(logs)
 	if !ok {
@@ -106,6 +113,48 @@ func runAssertBroadPATRotation(region string) error {
 	}
 	fmt.Printf("✓ broad-PAT rotation exercised end-to-end (action=%s)\n", action)
 	return nil
+}
+
+// broadPATJobLogs fetches the exercise pods' logs by POD NAME (current + previous),
+// which — unlike `kubectl logs job/<j>` — does not block waiting for a Running pod,
+// so it still returns a terminated/killed pod's output. On the success path this
+// carries the audit record parseRotationAction reads; on failure it captures
+// whatever the container managed to print before it died.
+func broadPATJobLogs() string {
+	sel := "job-name=" + broadPATRotatorE2EJob
+	names := execCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel,
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	var b strings.Builder
+	for _, p := range strings.Fields(names) {
+		b.WriteString(execCombined("kubectl", "-n", broadPATRotatorNS, "logs", p, "--tail=-1"))
+		b.WriteString("\n")
+	}
+	if strings.TrimSpace(b.String()) == "" {
+		// No pod (or no logs yet) — fall back to the job selector form so a
+		// completed-and-still-present pod's logs are not lost.
+		return execCombined("kubectl", "-n", broadPATRotatorNS, "logs", "job/"+broadPATRotatorE2EJob, "--tail=-1")
+	}
+	return b.String()
+}
+
+// dumpBroadPATRotatorDiag prints the exercise Job's pod state, events, and
+// terminated-container logs so a failed run reports the ACTUAL cause (ImagePullBackOff,
+// admission-denied, Pending-no-node, or a real rotate error) instead of the masking
+// "timed out waiting for the condition". Best-effort and read-only — every call is a
+// plain kubectl get/describe/logs whose output is echoed into the e2e job log.
+func dumpBroadPATRotatorDiag() {
+	sel := "job-name=" + broadPATRotatorE2EJob
+	fmt.Println("── broad-pat-rotator diagnostics (why the Job did not succeed) ──")
+	fmt.Println(execCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel, "-o", "wide"))
+	fmt.Println(execCombined("kubectl", "-n", broadPATRotatorNS, "describe", "job", broadPATRotatorE2EJob))
+	fmt.Println(execCombined("kubectl", "-n", broadPATRotatorNS, "describe", "pods", "-l", sel))
+	fmt.Println(execCombined("kubectl", "-n", broadPATRotatorNS, "get", "events", "--sort-by=.lastTimestamp"))
+	names := execCombined("kubectl", "-n", broadPATRotatorNS, "get", "pods", "-l", sel,
+		"-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	for _, p := range strings.Fields(names) {
+		fmt.Printf("── logs %s (previous) ──\n%s\n", p,
+			execCombined("kubectl", "-n", broadPATRotatorNS, "logs", p, "--previous", "--tail=-1"))
+	}
 }
 
 // waitBroadPATJob polls the exercise Job until it reports success or failure (or
