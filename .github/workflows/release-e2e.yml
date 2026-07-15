@@ -291,9 +291,20 @@ jobs:
           rm -rf .e2e-instance/.github/actions
           # `.copier-answers.yml` carries copier-internal jinja (`<@ _copier_answers
           # … @>`) that only `copier update` renders — which this throwaway instance
-          # never runs. Drop it so a literal token can't reach the pushed repo (and
-          # can't trip the render-pass survivor check below).
-          rm -f .e2e-instance/.copier-answers.yml
+          # never runs, so the copier-written file can't be kept (its jinja would trip
+          # the render-pass survivor check below). But the DISPATCHED terraform.yml's
+          # `llz render` reads this file to resolve the template ref (llz_version) for
+          # the GENERATED TF roots' module `?ref=` — a real instance has its own answers
+          # file; this throwaway one otherwise has none, so the roots would pin to the
+          # default `main` (where a branch-only module like llz-cluster-bootstrap does
+          # not exist → `terraform init` fails). Replace it with a MINIMAL answers file
+          # carrying only the fields llz render reads, in the standard token forms the
+          # render pass below resolves to the commit under test.
+          printf '%s\n' \
+            'llz_version: <@ llz_version @>' \
+            'instance_repo: <@ instance_repo @>' \
+            'upstream_org: <@ upstream_org @>' \
+            > .e2e-instance/.copier-answers.yml
           # NOTE: this manual hoist is a raw `cp`, so the copier `<@ token @>`
           # substitutions are still literal here. The next step renders them — see
           # there for why that's mandatory, not cosmetic.
