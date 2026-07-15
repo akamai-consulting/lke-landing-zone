@@ -9,9 +9,12 @@
 // It DRIVES (patches Applications), same as the CronJob does today — converting
 // poll→watch is not a new driver (convergence-contract anti-pattern #4 is about
 // adding a side-controller to drive what a reconciler should observe; this is the
-// same documented driver, event-triggered). Scope is unchanged: only phase=Failed
-// Applications, which Argo genuinely will not self-heal. Idempotent: patching a
-// sync operation moves the app out of Failed, so the next pass no-ops it.
+// same documented driver, event-triggered). Scope: Applications Argo genuinely will
+// not self-heal quickly — a phase=Failed sync, OR a wedge on a TRANSIENT git-fetch
+// ComparisonError (a flaky anonymous clone of the remote kustomize base, which Argo
+// only re-fetches on its slow periodic refresh). Idempotent: the hard refresh + sync
+// move the app out of the stuck state, so the next pass no-ops it. A NON-transient
+// ComparisonError (a real manifest error) matches no pattern and is left to surface.
 package main
 
 import (
@@ -42,8 +45,15 @@ func reconcileArgoNudge(ctx context.Context, client argoClient) error {
 	items, _ := obj["items"].([]any)
 	var firstErr error
 	for _, it := range items {
-		name, failed := failedAppName(it)
-		if !failed {
+		name, nudge := failedAppName(it)
+		if !nudge {
+			// Also nudge an app wedged on a TRANSIENT git-fetch ComparisonError (a flaky
+			// anonymous clone of the remote kustomize base): Argo only re-fetches on its
+			// slow periodic refresh, so the hard refresh in argoNudgePatch recovers it in
+			// seconds. A real manifest error matches no transient pattern and is left alone.
+			name, nudge = transientComparisonErrorApp(it)
+		}
+		if !nudge {
 			continue
 		}
 		if err := client.MergePatch(ctx, argoAppsPath+"/"+name, argoNudgePatch()); err != nil {
@@ -69,6 +79,34 @@ func failedAppName(item any) (string, bool) {
 	opState, _ := status["operationState"].(map[string]any)
 	phase, _ := opState["phase"].(string)
 	return name, name != "" && phase == "Failed"
+}
+
+// transientComparisonErrorApp returns an Application's name and whether its status
+// carries a ComparisonError condition whose message is a transient git-fetch flake
+// (transientFetchError) — the app can't compute its target state because the remote
+// kustomize-base clone intermittently failed. A hard refresh re-fetches and recovers
+// it. Defensive against missing/oddly-typed fields — anything malformed is "no".
+func transientComparisonErrorApp(item any) (string, bool) {
+	m, ok := item.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	meta, _ := m["metadata"].(map[string]any)
+	name, _ := meta["name"].(string)
+	if name == "" {
+		return "", false
+	}
+	status, _ := m["status"].(map[string]any)
+	conds, _ := status["conditions"].([]any)
+	for _, c := range conds {
+		cm, _ := c.(map[string]any)
+		if t, _ := cm["type"].(string); t == "ComparisonError" {
+			if msg, _ := cm["message"].(string); transientFetchError(msg) {
+				return name, true
+			}
+		}
+	}
+	return name, false
 }
 
 // argoNudgePatch is the merge patch that re-triggers an Application: a hard

@@ -73,6 +73,80 @@ func TestArgoParentDiag(t *testing.T) {
 	}
 }
 
+// A transient git-fetch ComparisonError on the parent app-of-apps must be recovered
+// by a forced hard refresh — the app then appears and the gate passes.
+func TestAssertArgoAppRecoversFromTransientComparisonError(t *testing.T) {
+	refreshed := false
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "annotate") && strings.Contains(joined, "refresh=hard"):
+			refreshed = true
+			return "", true
+		case strings.Contains(joined, "get application.argoproj.io platform-openbao"):
+			return "", refreshed // appears only after the forced re-fetch
+		case strings.Contains(joined, "ComparisonError"):
+			return "failed to generate manifest: rpc error: failed to list refs: repository not found", true
+		default:
+			return "\t", true // operationState probe: no sync operation started
+		}
+	})
+	if err := assertArgoApp(d, "argocd", "platform-openbao", "platform-bootstrap", 2*time.Minute); err != nil {
+		t.Fatalf("transient ComparisonError should recover via hard refresh, got %v", err)
+	}
+	if !refreshed {
+		t.Fatal("expected a hard refresh to be forced on the transient fetch ComparisonError")
+	}
+}
+
+// A NON-transient ComparisonError (a real manifest error) must NOT be refresh-recovered
+// — recovery must never mask a genuine break; the gate fails at the deadline.
+func TestAssertArgoAppNonTransientComparisonErrorNotRefreshed(t *testing.T) {
+	refreshed := false
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "annotate") && strings.Contains(joined, "refresh=hard"):
+			refreshed = true
+			return "", true
+		case strings.Contains(joined, "get application.argoproj.io platform-openbao"):
+			return "", false // never appears
+		case strings.Contains(joined, "ComparisonError"):
+			return "failed to generate manifest: map[apiVersion:v1] is missing required field kind", true
+		default:
+			return "\t", true
+		}
+	})
+	err := assertArgoApp(d, "argocd", "platform-openbao", "platform-bootstrap", 40*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "not created within") {
+		t.Fatalf("want deadline error for a real ComparisonError, got %v", err)
+	}
+	if refreshed {
+		t.Fatal("a non-transient ComparisonError must NOT trigger a hard refresh")
+	}
+}
+
+func TestTransientFetchError(t *testing.T) {
+	for _, m := range []string{
+		"failed to list refs: repository not found",
+		"hit 27s timeout running git fetch",
+		"dial tcp: i/o timeout",
+		"rpc error: code = Unknown",
+	} {
+		if !transientFetchError(m) {
+			t.Errorf("should be transient: %q", m)
+		}
+	}
+	for _, m := range []string{
+		"", "is missing required field kind", "invalid yaml at line 3",
+		"kind ExternalSecret not registered",
+	} {
+		if transientFetchError(m) {
+			t.Errorf("should NOT be transient: %q", m)
+		}
+	}
+}
+
 // A Running-but-retrying sync (by-design first-boot transients) must NOT fail
 // fast — it fails only at the deadline, carrying the parent's message.
 func TestAssertArgoAppRetryingParentWaitsForDeadline(t *testing.T) {
