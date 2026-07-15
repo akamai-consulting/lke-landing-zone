@@ -126,6 +126,14 @@ _tasks:
   # whose comments explain what to change). Idempotent; no-op if llz is absent.
   # See docs/designs/instance-slimming.md.
   - "command -v llz >/dev/null 2>&1 && llz ci strip-comments .github/workflows/llz-*.yml $(find apl-values/components apl-values/_shared/manifest -type f \\( -name '*.yaml' -o -name '*.yml' \\) 2>/dev/null) $(find terraform-iac-bootstrap -type f -name '*.tf' 2>/dev/null) || echo \"(llz not on PATH — skipping comment-strip; run 'llz ci strip-comments .github/workflows/llz-*.yml ...')\""
+  # Prune the apl-values trees an instance fetches REMOTELY from the template repo
+  # instead of vendoring: the token-free platform components (all but the pinned-local
+  # clusterHealthWorkflow) and the whole _shared/manifest base. `llz render` emits each
+  # env overlay with pinned remote refs (github.com/<org>/lke-landing-zone//…?ref=<ver>)
+  # into these trees, so an instance carries them ONCE upstream — the footprint half of
+  # the remote-refs refactor (docs/designs/instance-slimming.md). Registry-driven +
+  # idempotent; never touches _shared/values.yaml, _shared/custom, or the local components.
+  - "command -v llz >/dev/null 2>&1 && llz ci prune-remote-apl-values --apl-values apl-values || echo \"(llz not on PATH — skipping remote-tree prune; run 'llz ci prune-remote-apl-values')\""
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not

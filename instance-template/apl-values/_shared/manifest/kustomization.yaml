@@ -16,7 +16,6 @@ resources:
   # operator-owned apl-values/_shared/custom/ tree (the instance's own resources,
   # no Terraform). Wave 10, isolated blast radius. See docs/extending-llz.md.
   - instance-custom-project.yaml
-  - applications/instance-custom.yaml
   # (The argo-resync-nudger CronJob — standing safety net that re-triggered any
   # Argo CD Application whose sync terminally failed — was retired: the argo-nudge
   # reconciler [llz reconcile --reconcile-argo-nudge, default-on] replaces it,

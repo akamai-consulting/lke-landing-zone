@@ -15,7 +15,7 @@ func allOn() map[string]ComponentToggle {
 }
 
 func TestRenderManifestKustomization(t *testing.T) {
-	out := RenderManifestKustomization(allOn())
+	out := RenderManifestKustomization(allOn(), "", "")
 	// Thin overlay: the shared base + a health-inert Application CR under resources:
 	// for each enabled CARVED component (blast-radius decomposition) + a components:
 	// list of the remaining plain component dirs.
@@ -57,12 +57,140 @@ func TestRenderManifestKustomization(t *testing.T) {
 	// Disabling harbor drops its carved App CR (and only it).
 	off := allOn()
 	off["harbor"] = ComponentToggle{Enabled: boolPtr(false)}
-	dropped := RenderManifestKustomization(off)
+	dropped := RenderManifestKustomization(off, "", "")
 	if strings.Contains(dropped, "llz-harbor.yaml") {
 		t.Error("disabled harbor should drop its carved App CR")
 	}
 	if !strings.Contains(dropped, "llz-observability.yaml") {
 		t.Error("disabling harbor must not drop sibling carved Apps")
+	}
+}
+
+func TestRenderManifestKustomization_RemoteRefs(t *testing.T) {
+	const ref = "v9.9.9"
+	out := RenderManifestKustomization(allOn(), ref, "")
+	// Token-free plain components are fetched from the template repo at the pinned ref.
+	for _, want := range []string{
+		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/openbao?ref=v9.9.9&timeout=80",
+		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/certManager?ref=v9.9.9&timeout=80",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("remote ref missing %q:\n%s", want, out)
+		}
+	}
+	// The git-fetch timeout override (kustomize's 27s default is too short for the
+	// ~35MB repo) must ride every remote ref.
+	if strings.Contains(out, "?ref=v9.9.9\n") || !strings.Contains(out, "&timeout=80") {
+		t.Errorf("every remote ref must carry &timeout=80:\n%s", out)
+	}
+	// The shared _shared/manifest base is fetched remotely too (Phase 1); its per-
+	// instance instance-custom Application is split OUT and stays a local resource.
+	if !strings.Contains(out, "- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/_shared/manifest?ref=v9.9.9") {
+		t.Errorf("shared base should be a remote ref:\n%s", out)
+	}
+	if !strings.Contains(out, "- instance-custom.yaml") {
+		t.Errorf("instance-custom App must stay a local resource:\n%s", out)
+	}
+	// An empty ref keeps everything local (drift-check default / no instance context).
+	local := RenderManifestKustomization(allOn(), "", "")
+	if strings.Contains(local, "github.com/akamai-consulting") {
+		t.Errorf("empty ref must stay fully local:\n%s", local)
+	}
+	if !strings.Contains(local, "- ../../_shared/manifest") || !strings.Contains(local, "- ../../components/openbao") {
+		t.Errorf("empty ref should reference the base + components locally:\n%s", local)
+	}
+	// spec.dns.acmeEmail set → an inline ClusterIssuer patch carries the contact
+	// (the shared dns tree ships email: "" and is now remote, so it can't be rewritten).
+	withEmail := RenderManifestKustomization(allOn(), ref, "ops@example.com")
+	for _, want := range []string{"kind: ClusterIssuer", "path: /spec/acme/email", "value: ops@example.com"} {
+		if !strings.Contains(withEmail, want) {
+			t.Errorf("acmeEmail patch missing %q:\n%s", want, withEmail)
+		}
+	}
+	if strings.Contains(out, "/spec/acme/email") {
+		t.Errorf("unset acmeEmail must emit no ClusterIssuer patch:\n%s", out)
+	}
+}
+
+func TestRenderCarvedAppKustomization_RemoteRefs(t *testing.T) {
+	const ref = "v9.9.9"
+	// A token-free carved component (observability) is fetched remotely at the ref.
+	obs, _ := LookupComponent("observability")
+	if got := RenderCarvedAppKustomization(obs, ref, ""); !strings.Contains(got,
+		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/observability?ref=v9.9.9") {
+		t.Errorf("observability carved kustomization should reference the remote ref:\n%s", got)
+	}
+	// llzReconciler is remote (Phase 0 moved its image to an images: transformer), and
+	// with an imageTag set the carved kustomization retags the shared :latest image.
+	rec, _ := LookupComponent("llzReconciler")
+	got := RenderCarvedAppKustomization(rec, ref, "sha-abc123")
+	if !strings.Contains(got, "components/llzReconciler?ref=v9.9.9") {
+		t.Errorf("llzReconciler should be a remote ref now:\n%s", got)
+	}
+	for _, want := range []string{"images:", "name: ghcr.io/akamai-consulting/llz", "newTag: sha-abc123"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("llzReconciler carved kustomization missing image retag %q:\n%s", want, got)
+		}
+	}
+	// clusterHealthWorkflow's image is in an Argo WorkflowTemplate (a CRD the images:
+	// transformer can't reach), so it stays a LOCAL component with no images: block.
+	chw, _ := LookupComponent("clusterHealthWorkflow")
+	chwK := RenderCarvedAppKustomization(chw, ref, "sha-abc123")
+	if !strings.Contains(chwK, "- ../../../components/clusterHealthWorkflow") {
+		t.Errorf("clusterHealthWorkflow must stay a local reference:\n%s", chwK)
+	}
+	if strings.Contains(chwK, "github.com/akamai-consulting") || strings.Contains(chwK, "images:") {
+		t.Errorf("clusterHealthWorkflow must be local with no images: transformer:\n%s", chwK)
+	}
+	// A component that doesn't run the llz image (observability) gets no images: block.
+	if strings.Contains(RenderCarvedAppKustomization(obs, ref, "sha-abc123"), "images:") {
+		t.Errorf("observability should not get an llz images: transformer")
+	}
+}
+
+func TestRemotelyFetchedComponents(t *testing.T) {
+	got := RemotelyFetchedComponents()
+	set := map[string]bool{}
+	for _, n := range got {
+		set[n] = true
+	}
+	// Every component that ships a manifest dir EXCEPT the pinned-local one.
+	for _, want := range []string{"openbao", "harbor", "llzReconciler", "observability", "certManager"} {
+		if !set[want] {
+			t.Errorf("%s should be remotely fetched (got %v)", want, got)
+		}
+	}
+	if set["clusterHealthWorkflow"] {
+		t.Error("clusterHealthWorkflow is pinned-local (WorkflowTemplate image) — must NOT be remotely fetched")
+	}
+	// Mandatory apl-core components (no manifest dir) aren't in the list.
+	if set["argocd"] {
+		t.Error("argocd ships no manifest dir — must not be listed")
+	}
+	if len(got) == 0 {
+		t.Fatal("expected a non-empty remote set")
+	}
+}
+
+func TestRenderInstanceCustomApp(t *testing.T) {
+	app := RenderInstanceCustomApp("https://github.com/acme/inst.git")
+	for _, want := range []string{
+		"kind: Application",
+		"name: instance-custom",
+		"project: instance-custom",
+		"repoURL: https://github.com/acme/inst.git",
+		"path: apl-values/_shared/custom",
+		`argocd.argoproj.io/sync-wave: "10"`,
+		"prune: false", // operator content is theirs to delete deliberately
+		"GENERATED by",
+	} {
+		if !strings.Contains(app, want) {
+			t.Errorf("instance-custom App missing %q:\n%s", want, app)
+		}
+	}
+	// The repo is the ONLY per-instance value — a different repo flows through verbatim.
+	if !strings.Contains(RenderInstanceCustomApp("https://github.com/other/repo.git"), "repoURL: https://github.com/other/repo.git") {
+		t.Error("repoURL should be substituted verbatim")
 	}
 }
 
@@ -102,7 +230,7 @@ func TestRenderCarvedAppKustomization(t *testing.T) {
 	// A carved component WITH a patch (observability) references the shared Component
 	// three levels up + its env patch.
 	obs, _ := LookupComponent("observability")
-	k := RenderCarvedAppKustomization(obs)
+	k := RenderCarvedAppKustomization(obs, "", "")
 	for _, want := range []string{
 		"kind: Kustomization",
 		"- ../../../components/observability",
@@ -116,7 +244,7 @@ func TestRenderCarvedAppKustomization(t *testing.T) {
 	}
 	// A carved component WITHOUT a patch (externalSecrets) omits the patches: section.
 	es, _ := LookupComponent("externalSecrets")
-	if got := RenderCarvedAppKustomization(es); strings.Contains(got, "patches:") {
+	if got := RenderCarvedAppKustomization(es, "", ""); strings.Contains(got, "patches:") {
 		t.Errorf("patch-less carved component should omit patches::\n%s", got)
 	}
 }

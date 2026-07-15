@@ -168,25 +168,14 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 			return fmt.Errorf("render %s: %w", name, err)
 		}
 		if !tfvarsOnly {
-			if err := renderManifest(name, e, lz.ValuesIdentity(name), aplDir, relPrefix, dryRun); err != nil {
+			if err := renderManifest(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail, relPrefix, dryRun); err != nil {
 				return fmt.Errorf("render %s manifests: %w", name, err)
 			}
 		}
 	}
-	// The shared DNS tree's ACME email is instance-wide — render it ONCE (not per
-	// env) into apl-values/_shared after the per-env loop.
-	if !tfvarsOnly {
-		if p, content, ok := sharedDNSEmailTarget(lz, aplDir); ok {
-			if dryRun {
-				wouldRenderPath(relPrefix, filepathRel(aplDir, p), "")
-			} else {
-				if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-					return fmt.Errorf("render shared dns email: %w", err)
-				}
-				renderedPath(relPrefix, filepathRel(aplDir, p))
-			}
-		}
-	}
+	// The instance-wide ACME contact is no longer written into the (now remotely-
+	// fetched) shared dns tree — it rides as a kustomize patch in each env's manifest
+	// overlay (RenderManifestKustomization), emitted above.
 	if !dryRun {
 		untrackRenderedTfvars(relPrefix)
 	}
@@ -234,15 +223,79 @@ func untrackRenderedTfvars(relPrefix string) {
 // App CR + apps/<name>/ source root (kustomization + per-env patches), and — when an
 // apl-values/_shared/values.yaml base is present — the values.yaml with
 // apps.<key>.enabled + identity patched (the apl-core backend).
-func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
+// resolveTemplateRef returns the ref the shared apl-values tree is fetched at
+// (the remote refs RenderManifestKustomization emits). Priority:
+//  1. $LLZ_TEMPLATE_REF — set by automation that renders OUTSIDE an instance:
+//     release-e2e exports the SHA under test so ArgoCD fetches the shared manifests
+//     from that exact commit (the .copier-answers.yml the instance would read is
+//     stripped in the throwaway e2e instance);
+//  2. .copier-answers.yml llz_version — the release tag a real instance pins to;
+//  3. .copier-answers.yml _commit — the exact scaffold SHA, as a fallback;
+//  4. "" — no instance context (the template's own render tests / an un-scaffolded
+//     tree): keep every reference LOCAL, so behaviour is unchanged and `llz render
+//     --check` stays deterministic without reaching for a version.
+func resolveTemplateRef() string {
+	if r := strings.TrimSpace(os.Getenv("LLZ_TEMPLATE_REF")); r != "" {
+		return r
+	}
+	a, _ := readAnswers(".")
+	if a == nil {
+		return ""
+	}
+	if v := strings.TrimSpace(a.Version); v != "" {
+		return v
+	}
+	return strings.TrimSpace(a.Commit)
+}
+
+// resolveLLZImageTag returns the tag for the in-cluster llz image the shared
+// components run (reconciler / harbor-provisioner). The image NAME is a constant
+// (ghcr.io/akamai-consulting/llz — no forks), so only the tag varies; a carved app's
+// kustomize `images:` transformer overrides it. Priority mirrors resolveTemplateRef:
+//   1. $LLZ_IMAGE_REF — release-e2e exports the signed sha image for the commit under
+//      test (ghcr.io/…/llz:sha-<SHA>); take the tag after the last ':';
+//   2. .copier-answers.yml llz_version — a real instance pins to its release tag;
+//   3. "latest".
+func resolveLLZImageTag() string {
+	if r := strings.TrimSpace(os.Getenv("LLZ_IMAGE_REF")); r != "" {
+		if i := strings.LastIndex(r, ":"); i >= 0 && !strings.Contains(r[i+1:], "/") {
+			return r[i+1:]
+		}
+		return r
+	}
+	if a, _ := readAnswers("."); a != nil {
+		if v := strings.TrimSpace(a.Version); v != "" {
+			return v
+		}
+	}
+	return "latest"
+}
+
+// repoOwnerName reduces a values-repo URL (https://github.com/<owner>/<name>.git) to
+// the <owner>/<name> form the harbor provisioner's GH_REPO env wants.
+func repoOwnerName(repoURL string) string {
+	s := strings.TrimSuffix(strings.TrimSpace(repoURL), ".git")
+	s = strings.TrimPrefix(s, "https://github.com/")
+	s = strings.TrimPrefix(s, "git@github.com:")
+	return s
+}
+
+func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, acmeEmail string) (map[string]string, error) {
 	manifest := filepath.Join(aplDir, env, "manifest")
+	// Template ref the shared apl-values tree is fetched at (see RenderManifestKustomization):
+	// the version this instance tracks, so an instance references the byte-identical manifest
+	// layer from the template repo instead of vendoring it. Empty ref → all-local references.
+	ref := resolveTemplateRef()
 	targets := map[string]string{
 		// THIN overlay over the shared base + per-component kustomize Components —
-		// the resources live ONCE in apl-values/_shared/ + apl-values/components/,
-		// never copied per env.
-		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components),
+		// the shared, token-free resources are fetched from the template repo at `ref`;
+		// only per-env + per-instance pieces are carried locally.
+		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref, acmeEmail),
 		// per-env local-config marker the cluster-bootstrap precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
+		// The operator escape-hatch Application, render-emitted locally with this
+		// instance's repo (its shared base is fetched remotely, so it can't carry it).
+		filepath.Join(manifest, "instance-custom.yaml"): clusterspec.RenderInstanceCustomApp(id.RepoURL),
 	}
 	// Carved components (blast-radius decomposition): each enabled one renders its
 	// own health-inert Application CR into the manifest tree PLUS a self-contained
@@ -251,14 +304,20 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// platform-bootstrap. The App CR pins the same repo + apps_repo_revision the
 	// platform-bootstrap Application uses. See docs/designs/blast-radius-decomposition.md.
 	revision := orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")
+	// The in-cluster llz image tag (reconciler / harbor-provisioner) and this
+	// instance's repo slug (harbor GH_REPO) are the per-instance values a remote,
+	// token-free component can't bake — a carved app's images: transformer + env
+	// patch set them locally. See resolveLLZImageTag / repoSlug.
+	imageTag := resolveLLZImageTag()
+	ghRepo := repoOwnerName(id.RepoURL)
 	for _, c := range clusterspec.Components {
 		if c.CarvedApp == nil || !clusterspec.ComponentEnabled(e.Components, c.Name) {
 			continue
 		}
 		appsDir := filepath.Join(aplDir, env, "apps", c.Name)
 		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
-		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c)
-		for path, content := range carvedPatchTargets(c, appsDir, env, e) {
+		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref, imageTag)
+		for path, content := range carvedPatchTargets(c, appsDir, env, e, ghRepo) {
 			targets[path] = content
 		}
 	}
@@ -281,14 +340,17 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 // lived in manifest/); the filename is taken from the registry Patch.Path so it
 // stays in lockstep with the reference RenderCarvedAppKustomization emits. Returns
 // empty for a carved component with no per-env patch (externalSecrets).
-func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusterspec.Environment) map[string]string {
+func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusterspec.Environment, ghRepo string) map[string]string {
 	out := make(map[string]string, len(c.Patches))
 	content := map[string]string{}
 	switch c.Name {
 	case "observability":
 		content["otel-collector-tls-san-patch.yaml"] = clusterspec.RenderOtelSANPatch(env)
 	case "harbor":
-		content["harbor-provisioner-env-patch.yaml"] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix)
+		// Per-env HARBOR_HOST + the instance-repo GH_REPO — the harbor provisioner's
+		// two per-instance env values, patched locally so components/harbor stays a
+		// token-free remote base.
+		content["harbor-provisioner-env-patch.yaml"] = clusterspec.RenderHarborHostPatch(e.Cluster.Bootstrap.DomainSuffix, ghRepo)
 	case "llzReconciler":
 		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds); REGION is
 		// the env name and OBJ_CLUSTER the object-storage cluster.
@@ -302,29 +364,10 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 	return out
 }
 
-// sharedDNSEmailTarget returns the instance-wide letsencrypt ClusterIssuer path and
-// its email-substituted content. The ACME email is instance-wide, so it renders ONCE
-// into apl-values/_shared/manifest/dns/ — not per env (the whole dns tree is
-// Argo-synced from _shared). It renders whenever the shared dns tree is present,
-// regardless of whether spec.dns.acmeEmail is set: an unset email renders `email: ""`
-// (a valid, contact-less ACME registration), so the issuers are never shipped the
-// unparseable REPLACE_PER_ENV placeholder that Let's Encrypt rejects with
-// `invalidContact`. Rendering unconditionally also normalizes any stale placeholder
-// left in an existing instance on its next `llz render`. ok=false only when the
-// shared dns tree is absent (older layout without it).
-func sharedDNSEmailTarget(lz *clusterspec.LandingZone, aplDir string) (string, string, bool) {
-	p := filepath.Join(aplDir, "_shared", "manifest", "dns", "letsencrypt-clusterissuer.yaml")
-	base, err := os.ReadFile(p)
-	if err != nil {
-		return "", "", false // older layout without the shared dns tree — skip silently
-	}
-	return p, clusterspec.SetACMEEmail(string(base), lz.Spec.DNS.AcmeEmail), true
-}
-
 // renderManifest writes a deployment's committed apl-values/<env>/ artifacts (the
 // manifest kustomizations + the apps-toggled values.yaml) from its components.
-func renderManifest(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, relPrefix string, dryRun bool) error {
-	targets, err := committedTargets(env, e, id, aplDir)
+func renderManifest(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, acmeEmail, relPrefix string, dryRun bool) error {
+	targets, err := committedTargets(env, e, id, aplDir, acmeEmail)
 	if err != nil {
 		return err
 	}
@@ -351,7 +394,7 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 	var drifted []string
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		targets, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
+		targets, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
 		if err != nil {
 			return err
 		}
@@ -364,13 +407,6 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 			if string(got) != want {
 				drifted = append(drifted, dst)
 			}
-		}
-	}
-	// Instance-wide: the shared DNS tree's rendered ACME email (when spec.dns.acmeEmail
-	// is set) must match too, so a spec email edit that wasn't re-rendered is caught.
-	if p, want, ok := sharedDNSEmailTarget(lz, aplDir); ok {
-		if got, err := os.ReadFile(p); err != nil || string(got) != want {
-			drifted = append(drifted, p)
 		}
 	}
 	if len(drifted) > 0 {
@@ -544,18 +580,13 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 			want[filepath.Join(tfDir, root, name+".tfvars")] = renderTfvars(base, assigns)
 		}
 		if !tfvarsOnly {
-			ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
+			ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
 			if err != nil {
 				return err
 			}
 			for p, c := range ct {
 				want[p] = c
 			}
-		}
-	}
-	if !tfvarsOnly {
-		if p, content, ok := sharedDNSEmailTarget(lz, aplDir); ok {
-			want[p] = content
 		}
 	}
 

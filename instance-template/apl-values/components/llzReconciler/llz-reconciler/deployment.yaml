@@ -54,7 +54,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: reconcile
-          image: <@ llz_image_ref @>
+          image: ghcr.io/akamai-consulting/llz:latest
           # ENABLED: observe-only gauges + the leader-gated driving reconcilers that
           # need no per-env secrets — argo-nudge, sc-demote (batch 1) — plus the
           # read-only openbao-gauges (batch 2: seal-status + credential-age; its

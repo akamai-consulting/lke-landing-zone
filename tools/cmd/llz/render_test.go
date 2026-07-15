@@ -151,7 +151,7 @@ spec:
 	}
 
 	prod, _ := lz.Env("prod")
-	if err := renderManifest("prod", prod, lz.ValuesIdentity("prod"), aplDir, "", false); err != nil {
+	if err := renderManifest("prod", prod, lz.ValuesIdentity("prod"), aplDir, "", "", false); err != nil {
 		t.Fatalf("renderManifest: %v", err)
 	}
 
@@ -203,36 +203,33 @@ spec:
 	}
 }
 
-// The ACME email is instance-wide: render fills it ONCE into the shared dns tree
-// when spec.dns.acmeEmail is set, and renders a valid `email: ""` (never the
-// unparseable REPLACE_PER_ENV placeholder) when unset — the contact is optional.
-func TestSharedDNSEmailTarget(t *testing.T) {
-	root := t.TempDir()
-	aplDir := filepath.Join(root, "apl-values")
-	issuer := filepath.Join(aplDir, "_shared", "manifest", "dns", "letsencrypt-clusterissuer.yaml")
-	if err := os.MkdirAll(filepath.Dir(issuer), 0o755); err != nil {
+// The instance-wide ACME contact moved from a shared-dns file-rewrite to a kustomize
+// patch in the manifest overlay (the shared dns tree is now fetched remotely and can't
+// be rewritten). committedTargets threads spec.dns.acmeEmail into RenderManifestKustomization,
+// which emits the ClusterIssuer patch — asserted directly in clusterspec's
+// TestRenderManifestKustomization_RemoteRefs. Here we just confirm the wiring: a set
+// email reaches the committed manifest kustomization; an unset one emits no patch.
+func TestACMEEmailReachesManifestOverlay(t *testing.T) {
+	e := clusterspec.Environment{}
+	id := clusterspec.ValuesIdentity{ClusterName: "x"}
+	with, err := committedTargets("prod", e, id, t.TempDir(), "ops@example.com")
+	if err != nil {
 		t.Fatal(err)
 	}
-	mustWrite(t, issuer, "spec:\n  acme:\n    email: REPLACE_PER_ENV   # e.g. ops@example.com\n")
-
-	withEmail, _ := clusterspec.Decode([]byte("apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata: { name: i }\nspec:\n  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }\n  dns: { acmeEmail: ops@example.com }\n"))
-	p, content, ok := sharedDNSEmailTarget(withEmail, aplDir)
-	if !ok || p != issuer {
-		t.Fatalf("expected a target at %s, got ok=%v p=%s", issuer, ok, p)
+	var kust string
+	for p, c := range with {
+		if strings.HasSuffix(p, "manifest/kustomization.yaml") {
+			kust = c
+		}
 	}
-	if strings.Contains(content, "REPLACE_PER_ENV") || !strings.Contains(content, "email: ops@example.com") {
-		t.Errorf("email not substituted:\n%s", content)
+	if !strings.Contains(kust, "value: ops@example.com") || !strings.Contains(kust, "kind: ClusterIssuer") {
+		t.Errorf("set acmeEmail should reach the manifest overlay as a ClusterIssuer patch:\n%s", kust)
 	}
-
-	// Unset email → still a target, rendering a valid empty contact and stripping
-	// the unparseable placeholder (so LE never rejects the account registration).
-	noEmail, _ := clusterspec.Decode([]byte("apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata: { name: i }\nspec:\n  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }\n"))
-	_, emptyContent, ok := sharedDNSEmailTarget(noEmail, aplDir)
-	if !ok {
-		t.Fatal("unset acmeEmail should still yield a shared-dns target (renders email: \"\")")
-	}
-	if strings.Contains(emptyContent, "REPLACE_PER_ENV") || !strings.Contains(emptyContent, `email: ""`) {
-		t.Errorf("unset email should render email: \"\" and drop the placeholder:\n%s", emptyContent)
+	without, _ := committedTargets("prod", e, id, t.TempDir(), "")
+	for p, c := range without {
+		if strings.HasSuffix(p, "manifest/kustomization.yaml") && strings.Contains(c, "/spec/acme/email") {
+			t.Errorf("unset acmeEmail must emit no ClusterIssuer patch:\n%s", c)
+		}
 	}
 }
 
