@@ -44,7 +44,7 @@ variable "linode_dns_token" {
 }
 
 variable "apps_repo_revision" {
-  description = "Branch, tag, or commit of the instance repo (https://github.com/<org>/<instance-repo>.git) that the TF-managed bootstrap ArgoCD Application (apl-values/<env>/manifest/) targets. Distinct from apl_values_repo_revision (apl-core's own otomi.git values fetch); the manifest tree can run a feature branch while apl-core tracks main. Defaults to 'main'; override via TF_VAR_apps_repo_revision (typically sourced from vars/secrets.APPS_REPO_REVISION, falling back to 'main') when testing feature branches before merge."
+  description = "Branch, tag, or commit of the instance repo (https://github.com/<org>/<instance-repo>.git) that the TF-managed bootstrap ArgoCD Application (apl-values/<env>/manifest/) targets. Distinct from otomi.git.branch — apl-core's OWN per-env values branch `apl-<env>`, which `llz render` sets from spec.cluster.bootstrap.aplValues.revision and which apl-operator continuously pushes to (see docs/designs/apl-core-values-branch-isolation.md). This LZ manifest tree can run a feature branch while apl-core tracks its apl-<env> branch; neither touches the other. Defaults to 'main'; override via TF_VAR_apps_repo_revision (typically sourced from vars/secrets.APPS_REPO_REVISION, falling back to 'main') when testing feature branches before merge."
   type        = string
   default     = "main"
 }

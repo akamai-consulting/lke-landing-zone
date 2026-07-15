@@ -51,7 +51,7 @@ func TestClassifyArgoApp(t *testing.T) {
 	}{
 		{"synced+healthy", ArgoApp{Name: "platform-harbor", Sync: "Synced", Health: "Healthy", Automated: true}, false, CatOK},
 		{"deferred beats spec-err", ArgoApp{Name: "external-dns-external-dns", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: token not seeded", Automated: true}, false, CatDeferred},
-		{"otomi team values-gitops deferred (nonexistent sealedsecrets path)", ArgoApp{Name: "team-admin-values-gitops", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: env/teams/admin/sealedsecrets: app path does not exist", Automated: true}, false, CatDeferred},
+		{"otomi team values-gitops no longer deferred — a genuinely Unknown apl-core gitops app now fails the gate (was CatDeferred; verified Synced/Healthy in reality)", ArgoApp{Name: "team-admin-values-gitops", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: env/teams/admin/sealedsecrets: app path does not exist", Automated: true}, false, CatFail},
 		{"spec error fails", ArgoApp{Name: "platform-foo", Sync: "OutOfSync", Health: "Healthy", SpecErr: "InvalidSpecError: bad path", Automated: true}, false, CatFail},
 		{"no automated -> pending", ArgoApp{Name: "platform-manual", Sync: "OutOfSync", Health: "Missing", Automated: false}, false, CatPending},
 		{"phase1 cascade -> pending", ArgoApp{Name: "platform-openbao", Sync: "OutOfSync", Health: "Missing", Automated: true}, true, CatPending},

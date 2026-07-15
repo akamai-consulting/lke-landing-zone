@@ -24,9 +24,15 @@ func ExternalDepApps() []DepEntry {
 		{"linode-internal-cidr-firewall", "release.yml build job has not run yet — firewall-controller image not at ghcr.io; publish a release tag (or fire harbor-ready) to build+push and pin the App's image.tag"},
 		{"external-dns-external-dns", "LINODE_DNS_TOKEN not provisioned — re-apply TF so apl-values dns.provider.linode.apiToken is populated (from TF_VAR_linode_dns_token)"},
 		{"istio-system-oauth2-proxy", "Keycloak OIDC issuer (keycloak.<domain>) not resolvable until DNS is wired; deferred alongside external-dns"},
-		{"gitops-global", "apl-core's global-values Argo app. Its source.repoURL is otomi.git.repoUrl — the external GitHub repo, NOT the in-cluster gitea (v6 source: apply-as-apps.ts addGitOpsApps → getStoredGitRepoConfig → getArgocdGitopsManifest; gitea-http.gitea.svc is only apl-core's GIT_LEGACY_CONFIG default, overridden by BYO-git, and every gitea code path is gated on repoUrl containing gitea-http). Verified Synced/Healthy on v6 e2e converges (2026-07-15, runs 29374149739/29380924847/29409532035). This deferral is now a conservative no-op guarding only the brief early-bootstrap window before the operator first pushes env/manifests and the app first syncs — safe to drop once confirmed Synced/Healthy at gate time across more runs. (The earlier 'hardwired to clone gitea / fails no such host' rationale was incorrect.)"},
-		{"team-[a-z0-9-]+-values-gitops", "apl-core/otomi generates a per-team values-gitops Application pointing at env/teams/<team>/sealedsecrets — a path that does not exist in this landing zone (we use ESO + OpenBao, not otomi per-team sealed-secrets), so it sits Unknown with a ComparisonError ('app path does not exist'). Same class as gitops-global: an apl-core-internal app this LZ obsoletes, not our config; deferred so it can't pin the convergence gate."},
-		{"gitops-ns-apl-[a-z0-9-]+", "apl-core's v6 operator creates one gitops Application per env/manifests/namespaces/<ns> dir (apply-as-apps.ts addGitOpsApps); the apl-*-prefixed namespaces (apl-secrets, apl-users) are operator-owned SealedSecret stores. This landing zone never populates that path (it uses ESO + OpenBao, not otomi SealedSecrets), so the apps sit Unknown with a ComparisonError ('env/manifests/namespaces/apl-... app path does not exist'). Same class as gitops-global / team-*-values-gitops — an apl-core-internal app this LZ obsoletes, deferred so it can't pin the convergence gate."},
+		// The apl-core-internal gitops Apps (gitops-global, gitops-ns-apl-*,
+		// team-*-values-gitops) were REMOVED from this deferral list. They were verified
+		// Synced/Healthy on v6 e2e (runs 29374149739/29380924847/29409532035) — the
+		// operator DOES push env/manifests/** and env/teams/** to its per-env values
+		// branch, so gitops-global clones the external repo and the per-ns/per-team apps
+		// find their paths. A name-based deferral was therefore a no-op for the real
+		// (Synced/Healthy) state that only masked a genuine Unknown/ComparisonError
+		// regression. They now pass via the normal Synced+Healthy rule, and a real
+		// regression surfaces on the gate. See docs/designs/apl-core-values-branch-isolation.md.
 	}
 }
 

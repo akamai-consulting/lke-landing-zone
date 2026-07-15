@@ -54,7 +54,7 @@ and rotated **from CI** (`secret-rotation.yml` → `llz credentials …` →
 | Linode PAT | `LINODE_API_TOKEN` | `secret/linode/api-token` | `linode-volume-labeler` (in-cluster) **+ Terraform/CI** | **dual** |
 | Loki S3 key | `LOKI_S3_*` | `secret/loki/object-store` | Loki (in-cluster, ESO) | **in-cluster only** |
 | Harbor registry S3 key | `HARBOR_REGISTRY_S3_*` | `secret/harbor/registry-s3` | Harbor registry (in-cluster, ESO) | **in-cluster only** |
-| Gitea backup S3 key | `GITEA_BACKUP_S3_*` | (gitea backup) | Gitea backup job (in-cluster) | **in-cluster only** |
+| ~~Gitea backup S3 key~~ | ~~`GITEA_BACKUP_S3_*`~~ | — | **REMOVED** — the off-cluster gitea-backup bucket/key/outputs were dropped in the apl-core anti-pattern cleanup (see `terraform-modules/llz-object-storage/main.tf`); nothing for the rotator to manage | — |
 | DNS-scoped PAT | `LINODE_DNS_TOKEN` | `secret/certmanager/dns01` | cert-manager DNS-01 (in-cluster, ESO) | **in-cluster only** |
 
 Every one of these is a Linode-minted credential whose in-cluster copy lives in
@@ -239,8 +239,10 @@ CI rotation-health.
 - **PAT: split vs single token + #3.** Phase 1 sidesteps this entirely (OBJ keys
   + DNS token have no dual-domain). The split is only needed to bring the PAT into
   the rotator without depending on #3.
-- **Gitea-backup S3 key** — confirm it's consumed in-cluster (this repo) vs
-  apl-core before adding it to the table.
+- ~~**Gitea-backup S3 key**~~ — RESOLVED: removed. The off-cluster gitea-backup
+  bucket/key/outputs were dropped in the apl-core anti-pattern cleanup
+  (`terraform-modules/llz-object-storage/main.tf`), so there is no such credential
+  to rotate.
 - **Grace / keep-N / rotateAfter** — align with the existing `credentials`
   defaults (PAT 90-day validity; OBJ keys keep-newest, drain past grace).
 - **CronJob vs operator** — CronJob chosen for simplicity.

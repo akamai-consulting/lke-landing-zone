@@ -73,8 +73,8 @@
 # a narrow Kyverno mutation policy scoped to those namespaces.
 #
 # volumeBindingMode: Immediate (NOT WaitForFirstConsumer).
-#   apl-core's helmfile installs gitea-artifacts (creates PVCs:
-#   data-gitea-0, gitea-backup) BEFORE gitea (creates the Deployment
+#   when the opt-in gitea component is enabled, apl-core's helmfile installs
+#   gitea-artifacts (creates PVCs: data-gitea-0, gitea-backup) BEFORE gitea (the Deployment
 #   that consumes them). With `helm --wait --atomic --timeout 1200s` —
 #   the flags apl-operator uses — helm blocks until every resource the
 #   chart created is Ready. WaitForFirstConsumer leaves those PVCs

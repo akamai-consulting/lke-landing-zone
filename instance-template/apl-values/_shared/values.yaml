@@ -333,9 +333,13 @@ otomi:
     # External GitHub repo over HTTPS + a fine-grained PAT (Contents: write —
     # apl-operator PUSHES its rendered values tree here during bootstrap).
     # repoUrl/username/branch are written in by `llz render` from
-    # spec.cluster.bootstrap.aplValues (username/branch default to x-access-token/
-    # main); only password stays a $${...} placeholder filled by cluster-bootstrap
-    # templatefile() from the APL_VALUES_REPO_TOKEN PAT. `path` is intentionally
+    # spec.cluster.bootstrap.aplValues (username defaults to x-access-token; branch
+    # defaults to a per-env apl-core-OWNED branch `apl-<env>`, NOT main — apl-operator
+    # PUSHES its rendered values tree + platform SealedSecrets here on every reconcile,
+    # so it is kept off the human/IaC main branch; see
+    # docs/designs/apl-core-values-branch-isolation.md). Only password stays a $${...}
+    # placeholder filled by cluster-bootstrap templatefile() from the
+    # APL_VALUES_REPO_TOKEN PAT. `path` is intentionally
     # absent — apl-core's otomi.git schema does not permit it.
     repoUrl:  ${apl_values_repo_url}      # https://github.com/<org>/<instance-repo>.git
     username: ${apl_values_repo_username}
