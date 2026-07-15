@@ -255,7 +255,7 @@ func TestValuesIdentity_DerivedAndDefaults(t *testing.T) {
 		id.LokiS3Region:     "us-ord-1",
 		id.RepoURL:          "https://github.com/acme/platform.git",
 		id.RepoUsername:     "x-access-token", // default
-		id.RepoBranch:       "main",           // default
+		id.RepoBranch:       "apl-primary",    // default: per-env apl-core-owned branch, not main
 	} {
 		if got != want {
 			t.Errorf("ValuesIdentity field = %q, want %q", got, want)
@@ -304,7 +304,7 @@ otomi:
 		HarborS3Region:   "us-ord-1",
 		RepoURL:          "https://github.com/acme/platform.git",
 		RepoUsername:     "x-access-token",
-		RepoBranch:       "main",
+		RepoBranch:       "apl-primary",
 	}
 	out, err := RenderValues([]byte(base), nil, id)
 	if err != nil {
@@ -320,7 +320,7 @@ otomi:
 		"regionendpoint: https://us-ord-1.linodeobjects.com",
 		"repoUrl: https://github.com/acme/platform.git",
 		"username: x-access-token",
-		"branch: main",
+		"branch: apl-primary",
 	} {
 		if !strings.Contains(s, w) {
 			t.Errorf("object-store/repo not rendered: missing %q:\n%s", w, s)

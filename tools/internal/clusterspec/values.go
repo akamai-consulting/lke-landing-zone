@@ -101,16 +101,25 @@ func (lz *LandingZone) ValuesIdentity(env string) ValuesIdentity {
 	b := e.Cluster.Bootstrap
 	chunks, ruler, admin, lokiEndpoint, region, harborBucket, harborEndpoint :=
 		objectStoreWiring(env, e.Cluster.ObjectStorage.Cluster)
-	// otomi.git.username/branch mirror the cluster-bootstrap variable defaults
-	// (x-access-token / main) so an omitted spec field renders the same literal
-	// the tfvars example carried.
+	// otomi.git.username defaults to x-access-token (GitHub ignores the HTTPS
+	// basic-auth username with a fine-grained PAT).
 	username := b.AplValues.Username
 	if username == "" {
 		username = "x-access-token"
 	}
+	// otomi.git.branch defaults to a per-env, apl-core-OWNED branch (apl-<env>) —
+	// deliberately NOT main. apl-operator continuously commits (and, per its
+	// EXECUTION_FLOW, force-pushes) its rendered values tree + platform SealedSecrets
+	// to this branch on every reconcile, so it must be isolated from main, which holds
+	// the human-authored IaC + apl-values source and must stay PR-only /
+	// branch-protectable. Each env gets its OWN branch (apl-lab, apl-primary, …) so
+	// parallel envs never share apl-core state on one branch. apl-operator self-creates
+	// the branch on first commit (checkout -B + push -u origin), so it need not
+	// pre-exist. Override via spec.cluster.bootstrap.aplValues.revision. See
+	// docs/designs/apl-core-values-branch-isolation.md.
 	branch := b.AplValues.Revision
 	if branch == "" {
-		branch = "main"
+		branch = "apl-" + env
 	}
 	// otomi.git.repoUrl defaults to the instance repo itself — the same literal
 	// the copier-rendered tfvars example carried
