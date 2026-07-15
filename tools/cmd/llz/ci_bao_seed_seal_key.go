@@ -23,6 +23,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -37,41 +39,72 @@ const sealKeyBytes = 32
 
 // openbaoNSWait bounds how long the seed waits for the llz-openbao namespace to
 // exist before applying the Secret. The namespace is pre-created at an early
-// wave (-20) of the llz-cluster-foundation Argo app, which only starts syncing
-// once apl-operator has brought Argo CD up — a convergence race the seed step
-// (in the separate Bootstrap OpenBao job) otherwise loses when apl-operator is
-// still young (e.g. it rolled and re-ran its helmfile). Bounded + fail-loud per
-// the convergence contract: a namespace that never appears is a real wedge, not
-// something to soft-continue past.
+// wave (-20) of the llz-cluster-foundation Argo app, a child of the
+// platform-bootstrap app-of-apps. Bounded + fail-loud per the convergence
+// contract: a namespace that never appears is a real wedge.
 const (
-	openbaoNSWait     = 300 * time.Second
-	openbaoNSInterval = 5 * time.Second
+	openbaoNSWait     = 420 * time.Second
+	openbaoNSInterval = 10 * time.Second
+	openbaoNSParentNS = "argocd"
+	openbaoNSParent   = "platform-bootstrap"
 )
 
-// seams (overridable in tests):
-var (
-	// seedNamespaceExists reports whether the openbao namespace exists yet.
-	seedNamespaceExists = func(ns string) bool { return kExists("get", "namespace", ns) }
-	// seedSleep paces the namespace poll.
-	seedSleep = time.Sleep
-)
+// newSeedGateDeps builds the real kubectl/clock seam for the namespace wait
+// (overridable in tests) — the same shape assert-argo-app uses.
+var newSeedGateDeps = func() aplGateDeps {
+	return aplGateDeps{
+		kubectl: func(args ...string) (string, bool) {
+			c := exec.Command("kubectl", args...)
+			var buf strings.Builder
+			c.Stdout, c.Stderr = &buf, &buf
+			c.Env = os.Environ()
+			return buf.String(), c.Run() == nil
+		},
+		now:   time.Now,
+		sleep: time.Sleep,
+	}
+}
 
-// waitForOpenbaoNamespace polls (immediate first probe, openbaoNSInterval cadence)
-// until the namespace exists or the budget is spent, then fails loud.
-func waitForOpenbaoNamespace(ns string, within time.Duration) error {
-	attempts := int(within/openbaoNSInterval) + 1
-	for i := 0; i < attempts; i++ {
-		if seedNamespaceExists(ns) {
+// waitForOpenbaoNamespace polls until the llz-openbao namespace exists or the
+// budget is spent. The namespace is pre-created at wave -20 of llz-cluster-
+// foundation, a child of the platform-bootstrap app-of-apps. When
+// platform-bootstrap is wedged on a transient remote-base fetch flake — the
+// anonymous kustomize fetch of the public template repo intermittently throws
+// "failed to list refs: repository not found", and Argo CD CACHES the
+// manifest-generation failure until a hard refresh forces a re-fetch —
+// foundation never syncs and the namespace never appears. So, exactly like
+// assert-argo-app, force a throttled hard refresh on the parent while we wait.
+// A non-transient ComparisonError (a real manifest error) is left alone and
+// surfaces at the deadline; fail loud either way per the convergence contract.
+func waitForOpenbaoNamespace(d aplGateDeps, ns string, within time.Duration) error {
+	deadline := d.now().Add(within)
+	var lastRefresh time.Time
+	announced := false
+	for {
+		if _, ok := d.kubectl("get", "namespace", ns); ok {
 			return nil
 		}
-		if i < attempts-1 {
-			if i == 0 {
-				fmt.Printf("namespace %q not present yet — waiting up to %s for the llz-cluster-foundation Argo app to create it…\n", ns, within)
-			}
-			seedSleep(openbaoNSInterval)
+		if !announced {
+			fmt.Printf("namespace %q not present yet — waiting up to %s for the llz-cluster-foundation Argo app to create it…\n", ns, within)
+			announced = true
 		}
+		// Kick a stuck app-of-apps to re-fetch (throttled 20s); a failed fetch
+		// returns fast, so a fresh refresh each cycle re-attempts rather than
+		// interrupts. The namespace is created downstream once the re-fetch succeeds.
+		if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); transientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
+			d.kubectl("-n", openbaoNSParentNS, "annotate", "application.argoproj.io", openbaoNSParent, "argocd.argoproj.io/refresh=hard", "--overwrite")
+			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh so foundation can create %s: %s\n", openbaoNSParent, ns, firstLine(cerr))
+			lastRefresh = d.now()
+		}
+		if !d.now().Before(deadline) {
+			extra := ""
+			if cerr := argoComparisonError(d, openbaoNSParentNS, openbaoNSParent); cerr != "" {
+				extra = fmt.Sprintf(" (%s ComparisonError: %s)", openbaoNSParent, firstLine(cerr))
+			}
+			return fmt.Errorf("namespace %q not found after %s — the llz-cluster-foundation Argo app that pre-creates it (wave -20) has not synced%s", ns, within, extra)
+		}
+		d.sleep(openbaoNSInterval)
 	}
-	return fmt.Errorf("namespace %q not found after %s — the llz-cluster-foundation Argo app that pre-creates it (wave -20) has not synced yet; apl-operator's helmfile pipeline is likely still converging Argo CD", ns, within)
 }
 
 func ciBaoSeedSealKeyCmd() *cobra.Command {
@@ -111,7 +144,7 @@ func runCIBaoSeedSealKey(g globalOpts, region string) error {
 	// so wait for the namespace first — otherwise both the idempotency check below
 	// and the apply race it, and a fresh key would be generated + persisted only to
 	// fail on `kubectl apply`. Fail loud if it never appears.
-	if err := waitForOpenbaoNamespace(openbaoNS, openbaoNSWait); err != nil {
+	if err := waitForOpenbaoNamespace(newSeedGateDeps(), openbaoNS, openbaoNSWait); err != nil {
 		return err
 	}
 

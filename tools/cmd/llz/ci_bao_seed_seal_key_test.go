@@ -13,43 +13,103 @@ import (
 // withKubectlApply (ci_openbao_ca_test.go) records the last applied manifest;
 // withSeedRand (ci_ensure_secret_test.go) makes the generated key deterministic.
 
-// withSeedNamespace makes waitForOpenbaoNamespace resolve immediately (namespace
-// present) with no real sleeping, so the Secret-logic tests below exercise the
-// key handling without the convergence wait. The wait itself is covered by
+// withSeedNamespace makes waitForOpenbaoNamespace resolve on the first probe
+// (namespace present), so the Secret-logic tests below exercise the key handling
+// without the convergence wait. The wait itself is covered by
 // TestWaitForOpenbaoNamespace*.
 func withSeedNamespace(t *testing.T, present bool) {
 	t.Helper()
-	origExists, origSleep := seedNamespaceExists, seedSleep
-	seedNamespaceExists = func(string) bool { return present }
-	seedSleep = func(time.Duration) {}
-	t.Cleanup(func() { seedNamespaceExists, seedSleep = origExists, origSleep })
+	orig := newSeedGateDeps
+	newSeedGateDeps = func() aplGateDeps {
+		return aplGateDeps{
+			kubectl: func(args ...string) (string, bool) {
+				if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
+					return "", present
+				}
+				return "", true
+			},
+			now:   time.Now,
+			sleep: func(time.Duration) {},
+		}
+	}
+	t.Cleanup(func() { newSeedGateDeps = orig })
 }
 
-// namespace appears after a few polls → success, no error.
+// namespace appears after a few polls (no ComparisonError) → success.
 func TestWaitForOpenbaoNamespaceAppears(t *testing.T) {
-	origExists, origSleep := seedNamespaceExists, seedSleep
-	t.Cleanup(func() { seedNamespaceExists, seedSleep = origExists, origSleep })
-	calls := 0
-	seedNamespaceExists = func(string) bool { calls++; return calls >= 3 }
-	slept := 0
-	seedSleep = func(time.Duration) { slept++ }
-	if err := waitForOpenbaoNamespace("llz-openbao", openbaoNSWait); err != nil {
+	d, _ := assertArgoAppDeps(t, func(call int, args []string) (string, bool) {
+		if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
+			return "", call > 4 // absent on the first probes, then present
+		}
+		return "", true // ComparisonError probe: empty → no refresh
+	})
+	if err := waitForOpenbaoNamespace(d, "llz-openbao", openbaoNSWait); err != nil {
 		t.Fatalf("should succeed once the namespace appears: %v", err)
 	}
-	if calls != 3 || slept != 2 {
-		t.Errorf("calls=%d slept=%d, want 3 probes / 2 sleeps", calls, slept)
+}
+
+// namespace never appears, no ComparisonError → fail loud at the deadline.
+func TestWaitForOpenbaoNamespaceTimesOut(t *testing.T) {
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
+			return "", false // never appears
+		}
+		return "", true
+	})
+	err := waitForOpenbaoNamespace(d, "llz-openbao", 30*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "not found after") {
+		t.Errorf("err = %v, want a fail-loud timeout", err)
 	}
 }
 
-// namespace never appears → fail loud at the deadline (no infinite spin).
-func TestWaitForOpenbaoNamespaceTimesOut(t *testing.T) {
-	origExists, origSleep := seedNamespaceExists, seedSleep
-	t.Cleanup(func() { seedNamespaceExists, seedSleep = origExists, origSleep })
-	seedNamespaceExists = func(string) bool { return false }
-	seedSleep = func(time.Duration) {}
-	err := waitForOpenbaoNamespace("llz-openbao", 20*time.Second)
-	if err == nil || !strings.Contains(err.Error(), "not found after") {
-		t.Errorf("err = %v, want a fail-loud timeout", err)
+// a transient ComparisonError on the parent app-of-apps → force a hard refresh;
+// the namespace appears once the re-fetch clears it.
+func TestWaitForOpenbaoNamespaceRefreshesWedgedParent(t *testing.T) {
+	refreshed := false
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(j, "get namespace"):
+			return "", refreshed // appears only after the refresh
+		case strings.Contains(j, "annotate") && strings.Contains(j, "refresh=hard"):
+			refreshed = true
+			return "", true
+		default: // ComparisonError probe
+			if refreshed {
+				return "", true // cleared
+			}
+			return "failed to list refs: repository not found", true
+		}
+	})
+	if err := waitForOpenbaoNamespace(d, "llz-openbao", openbaoNSWait); err != nil {
+		t.Fatalf("should recover after a hard refresh: %v", err)
+	}
+	if !refreshed {
+		t.Error("expected a hard refresh on the transient ComparisonError")
+	}
+}
+
+// a NON-transient ComparisonError (a real manifest error) must NOT trigger a
+// refresh — recovery never masks a genuine break; it fails loud at the deadline.
+func TestWaitForOpenbaoNamespaceLeavesRealErrorAlone(t *testing.T) {
+	refreshed := false
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(j, "get namespace"):
+			return "", false
+		case strings.Contains(j, "annotate"):
+			refreshed = true
+			return "", true
+		default:
+			return "error: kind Foo not registered", true // a real, non-transient error
+		}
+	})
+	if err := waitForOpenbaoNamespace(d, "llz-openbao", 30*time.Second); err == nil {
+		t.Error("a real manifest error must still fail loud")
+	}
+	if refreshed {
+		t.Error("must NOT hard-refresh a non-transient ComparisonError")
 	}
 }
 
