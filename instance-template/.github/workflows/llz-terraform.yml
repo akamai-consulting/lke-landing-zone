@@ -741,6 +741,8 @@ jobs:
 
       - name: Diagnose ArgoCD install failure
         if: failure()
+        # Belt-and-suspenders cap alongside diagnose-argocd's apiserver-reachability gate.
+        timeout-minutes: 10
         env:
           KUBECONFIG: ${{ runner.temp }}/diag-${{ env.REGION }}.yaml
         # diagnose-argocd is best-effort and always exits 0 — diagnostics must

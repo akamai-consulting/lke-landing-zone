@@ -886,6 +886,9 @@ jobs:
       # step existed in this job at all.
       - name: Diagnose convergence failure (Argo apps + cert-manager CA chain)
         if: failure() || cancelled()
+        # Belt-and-suspenders cap: diagnose-argocd gates on apiserver reachability, but
+        # bound the step regardless so a hung apiserver can't eat the job budget.
+        timeout-minutes: 10
         run: llz ci diagnose-argocd || true
 
       # ── Fail job if any non-optional secrets were missing ──────────────────────

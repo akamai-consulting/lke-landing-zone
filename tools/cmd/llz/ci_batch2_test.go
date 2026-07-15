@@ -181,6 +181,9 @@ func TestDiagnoseArgoCD(t *testing.T) {
 	t.Setenv("KUBECONFIG", kc)
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch {
+		// Reachability gate: apiserver answers, so diagnostics proceed.
+		case a == "version --request-timeout=10s":
+			return nil, nil
 		case a == "-n argocd get pods -o name":
 			return []byte("pod/argocd-server-0\n"), nil
 		case a == "-n argocd get jobs -o name":
@@ -233,6 +236,21 @@ func TestDiagnoseArgoCD(t *testing.T) {
 	// The healthy pod must NOT be probed.
 	if strings.Contains(joined, "describe pod healthy") {
 		t.Error("healthy pod should not be swept")
+	}
+
+	// Kubeconfig present but apiserver unreachable (runner never allowlisted on the
+	// control-plane firewall): the reachability gate must bail after the single
+	// bounded probe, before any of the unbounded sweeps — otherwise each one blocks
+	// on its ~30s dial timeout and the pile-up burns the whole job budget.
+	streamed = nil
+	withKubectl(t, func(a string) ([]byte, error) {
+		return nil, errors.New("dial tcp: i/o timeout") // every call fails, incl. the version probe
+	})
+	if err := runCIDiagnoseArgoCD("apl-operator", "argocd"); err != nil {
+		t.Fatalf("unreachable apiserver: %v, want clean nil", err)
+	}
+	if len(streamed) != 0 {
+		t.Errorf("unreachable apiserver should skip all diagnostic probes, streamed=%v", streamed)
 	}
 }
 

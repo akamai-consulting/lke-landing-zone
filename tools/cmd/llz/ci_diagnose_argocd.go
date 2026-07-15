@@ -42,7 +42,10 @@ func ciDiagnoseArgoCDCmd() *cobra.Command {
 			"the argocd namespace is empty by design until the operator gets that far.\n" +
 			"Then sweeps every failing pod / Job across ALL namespaces and dumps its\n" +
 			"container logs — the crash reason the state-only captures miss.\n" +
-			"Skips cleanly when $KUBECONFIG is absent/empty (cluster may not exist).\n" +
+			"Skips cleanly when $KUBECONFIG is absent/empty (cluster may not exist) or\n" +
+			"when the apiserver is unreachable (e.g. the runner was never allowlisted on\n" +
+			"the control-plane firewall) — otherwise every probe would block on its own\n" +
+			"~30s dial timeout and the dozens of them would burn the whole job budget.\n" +
 			"Always exits 0: diagnostics must never mask the failure that triggered them.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIDiagnoseArgoCD(aplNS, ns) },
@@ -91,6 +94,17 @@ var diagStream = func(name string, args ...string) {
 func runCIDiagnoseArgoCD(aplNS, argoNS string) error {
 	if effectiveKubeconfig() == "" {
 		fmt.Fprintln(os.Stderr, "::warning::No kubeconfig available — cluster may not exist; nothing to diagnose")
+		return nil
+	}
+
+	// Reachability gate. Every probe below is an unbounded kubectl/helm call; on an
+	// unreachable apiserver each one blocks on its default ~30s dial timeout, and
+	// the dozens of them add up to the full 50m job cap (observed: the diagnose step
+	// spun for ~49m after the runner was never allowlisted on the control-plane
+	// firewall, then the job was force-canceled). One bounded probe up front turns
+	// that into a ~10s clean skip so the ORIGINAL failure stays the visible one.
+	if !kubectlReachable() {
+		fmt.Fprintln(os.Stderr, "::warning::apiserver unreachable (control-plane ACL not granted, or cluster gone) — skipping diagnostics to avoid a per-probe timeout pile-up")
 		return nil
 	}
 

@@ -161,6 +161,11 @@ jobs:
       # data `llz ci health` doesn't surface. Never alters the outcome.
       - name: Argo CD sync diagnostics (best-effort)
         if: always()
+        # Cap the diagnostics' own runtime — diagnose-argocd itself gates on apiserver
+        # reachability (~10s clean skip when unreachable), but the follow-up kubectl loop
+        # below is unbounded, so keep a hung apiserver from stacking per-probe dial
+        # timeouts against the job budget.
+        timeout-minutes: 10
         run: |
           export KUBECONFIG="$HOME/.kube/config"
           llz ci diagnose-argocd || true
