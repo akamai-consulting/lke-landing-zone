@@ -4,7 +4,7 @@ package main
 // IN-CLUSTER replacement for the retired `harbor` job in
 // llz-bootstrap-openbao.yml (port-forward + root-token re-acquire +
 // ensure-project + provision-harbor-robots + smoke). Runs as the
-// harbor-robot-provisioner CronJob (apl-values/components/harbor/) on the slim
+// harbor-robot-provisioner CronJob (platform-apl/components/harbor/) on the slim
 // distroless llz image, so every I/O path is native Go:
 //
 //   - Harbor API:   plain HTTP against harbor-core.harbor.svc (no port-forward

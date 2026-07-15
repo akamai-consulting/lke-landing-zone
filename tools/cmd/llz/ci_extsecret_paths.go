@@ -63,6 +63,15 @@ func esRepoPath(root, rel string) string {
 	return direct
 }
 
+// platformTreeDirs returns the two shared platform-bootstrap manifest roots the
+// wave/mesh guards scan: platform-apl/manifest (the always-on base) and
+// platform-apl/components (the per-component kustomize Components). Since the
+// platform-apl move they live at the repo ROOT, outside the instance scaffold.
+func platformTreeDirs(root string) []string {
+	p := esRepoPath(root, "platform-apl")
+	return []string{filepath.Join(p, "manifest"), filepath.Join(p, "components")}
+}
+
 // esRef is one (remoteRef.key, remoteRef.property) pair; hasProp distinguishes
 // "no property line" (whole-secret ref) from an empty property.
 type esRef struct {

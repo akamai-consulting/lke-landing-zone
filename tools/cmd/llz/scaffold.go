@@ -153,7 +153,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 
 	// ── 3. render → tfvars + the THIN apl-values/<env>/ overlay ──────────────
 	// Nothing to clone: the manifests live ONCE in apl-values/_shared/ +
-	// apl-values/components/; render writes only the per-env overlay (a thin
+	// platform-apl/components/; render writes only the per-env overlay (a thin
 	// kustomization referencing the shared base + the enabled component dirs, the
 	// volume-labeler REGION_SHORT patch, env-revision) and values.yaml.
 	// An HA member can't render until BOTH peers exist (the spec requires one

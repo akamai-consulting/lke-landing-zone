@@ -202,7 +202,7 @@ and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 **Components — one toggle, two backends.** `spec.components.<name>` is the single
 "what's deployed" switch. Each component routes to whichever backend(s) deliver it:
 the **llz Argo backend** (its resources/Applications live ONCE in a shared kustomize
-Component, `apl-values/components/<name>/`, which the env's thin
+Component, `platform-apl/components/<name>/`, which the env's thin
 `apl-values/<env>/manifest/kustomization.yaml` lists under `components:` when enabled —
 `llz render` generates that overlay and `llz render --check` drift-guards it) and/or the
 **apl-core backend** (it flips `apps.<key>.enabled` in the committed `values.yaml`, which

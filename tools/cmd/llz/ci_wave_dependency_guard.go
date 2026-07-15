@@ -17,7 +17,7 @@ package main
 // with it — a ~40-minute e2e run to discover on a real cluster).
 //
 // The guard makes that class a PR-time failure: for every workload in the
-// platform-bootstrap tree (apl-values/_shared/manifest/ + apl-values/components/)
+// platform-bootstrap tree (platform-apl/manifest/ + platform-apl/components/)
 // that hard-references a Secret which an ExternalSecret in the same tree+namespace
 // produces, the workload's sync-wave MUST be strictly greater than that
 // ExternalSecret's. Optional references (optional: true) don't block pod start,
@@ -147,8 +147,7 @@ func ciWaveDependencyGuardCmd() *cobra.Command {
 }
 
 func runCIWaveDependencyGuard(root string) error {
-	aplDir := esRepoPath(root, "apl-values")
-	dirs := []string{filepath.Join(aplDir, "_shared", "manifest"), filepath.Join(aplDir, "components")}
+	dirs := platformTreeDirs(root)
 	inversions, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		return err
@@ -315,7 +314,7 @@ func wdOwningApp(path string) (string, int) {
 }
 
 // wdComponentOf resolves the clusterspec component a manifest path belongs to by its
-// apl-values/components/<name>/ segment. ok=false for the shared base / any path not
+// platform-apl/components/<name>/ segment. ok=false for the shared base / any path not
 // under a component dir.
 func wdComponentOf(path string) (clusterspec.Component, bool) {
 	const marker = "/components/"

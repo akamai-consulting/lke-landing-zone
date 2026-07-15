@@ -71,7 +71,7 @@ type Spec struct {
 type DNS struct {
 	// AcmeEmail is the Let's Encrypt registration contact. Because it is instance-
 	// wide, `llz render` writes it ONCE into the shared
-	// apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml (spec.acme.email
+	// platform-apl/manifest/dns/letsencrypt-clusterissuer.yaml (spec.acme.email
 	// on both the production + staging ClusterIssuers) — not per env. Unset leaves
 	// the REPLACE_PER_ENV placeholder, which `llz doctor` flags as a deferrable item.
 	AcmeEmail string `json:"acmeEmail,omitempty"`

@@ -13,7 +13,7 @@ package main
 //
 // The guard makes that class a PR-time failure: every resource kind that
 // appears at a NEGATIVE sync wave anywhere in the platform-bootstrap tree
-// (apl-values/_shared/manifest/ + apl-values/components/) must be listed in
+// (platform-apl/manifest/ + platform-apl/components/) must be listed in
 // waveHealthAllowedKinds — either because Argo assesses no health for it, or
 // because _shared/values.yaml carries a resource.customizations.health
 // override neutralizing its built-in check. Kinds whose safety DEPENDS on such
@@ -144,8 +144,8 @@ func ciWaveHealthGuardCmd() *cobra.Command {
 		Use:   "wave-health-guard",
 		Short: "fail when a negative-sync-wave resource kind could health-wedge the platform-bootstrap sync",
 		Long: "Static guard for the PR #142 wedge class: Argo sync waves gate on per-resource\n" +
-			"health, so any kind at a negative wave in apl-values/_shared/manifest/ or\n" +
-			"apl-values/components/ must be health-inert or neutralized by a\n" +
+			"health, so any kind at a negative wave in platform-apl/manifest/ or\n" +
+			"platform-apl/components/ must be health-inert or neutralized by a\n" +
 			"resource.customizations.health override in _shared/values.yaml. Unknown kinds at\n" +
 			"negative waves fail with remediation guidance; kinds whose safety depends on a\n" +
 			"values override fail if the override key is missing.",
@@ -163,9 +163,7 @@ func runCIWaveHealthGuard(root string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", valuesPath, err)
 	}
-	findings, err := collectWaveHealthFindings(
-		[]string{filepath.Join(aplDir, "_shared", "manifest"), filepath.Join(aplDir, "components")},
-		string(valuesRaw))
+	findings, err := collectWaveHealthFindings(platformTreeDirs(root), string(valuesRaw))
 	if err != nil {
 		return err
 	}

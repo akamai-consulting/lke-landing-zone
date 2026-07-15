@@ -33,10 +33,10 @@ import (
 
 // defaultPromRulesDir is where the template ships its PrometheusRule CRDs
 // (matched by kube-prometheus-stack's ruleSelector). It was
-// apl-values/_shared/manifest/observability/prometheus-rules-crd until the
+// platform-apl/manifest/observability/prometheus-rules-crd until the
 // rules moved into the observability component — the stale default made the
 // gate skip-clean on every run, so nothing promtool-validated the live rules.
-const defaultPromRulesDir = "apl-values/components/observability/prometheus-rules"
+const defaultPromRulesDir = "platform-apl/components/observability/prometheus-rules"
 
 // extractBareGroups parses a PrometheusRule CRD and returns the bare-groups
 // YAML document (`groups: …`) promtool expects. Pure and faithful to the Python

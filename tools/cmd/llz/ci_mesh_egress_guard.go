@@ -13,7 +13,7 @@ package main
 // necessary-but-not-sufficient noise on the way.
 //
 // The guard makes that class a PR-time failure: any NetworkPolicy in the
-// platform-bootstrap tree (apl-values/_shared/manifest/ + apl-values/components/)
+// platform-bootstrap tree (platform-apl/manifest/ + platform-apl/components/)
 // whose egress targets a KNOWN STRICT-mesh namespace — from a DIFFERENT namespace
 // (i.e. a source pod that is not itself in that mesh) — is flagged. A workload
 // that must talk to a mesh-STRICT Service belongs IN that namespace (a
@@ -83,9 +83,7 @@ func ciMeshEgressGuardCmd() *cobra.Command {
 }
 
 func runCIMeshEgressGuard(root string) error {
-	aplDir := esRepoPath(root, "apl-values")
-	findings, err := collectMeshEgressFindings(
-		[]string{filepath.Join(aplDir, "_shared", "manifest"), filepath.Join(aplDir, "components")})
+	findings, err := collectMeshEgressFindings(platformTreeDirs(root))
 	if err != nil {
 		return err
 	}

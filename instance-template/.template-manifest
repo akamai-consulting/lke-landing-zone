@@ -81,12 +81,13 @@ managed  terraform-iac-bootstrap/cluster-bootstrap/.gitignore
 # pure template logic (no fork-local tokens), overwritten on update.
 managed  terraform-iac-bootstrap/cluster-bootstrap/scripts/**
 managed  apl-values/README.md
-# The shared, DRY manifest tree: the always-on base (_shared/manifest), the
-# per-component kustomize Components (components/<name>/), and the apl-core values
-# base (_shared/values.yaml). All template-managed — every env's thin overlay
-# references them; `llz render` writes only the per-env overlay (owned, below).
+# The apl-core values base (_shared/values.yaml) + the secret-store bootstrap tree
+# (_shared/manifest-secret-store). Template-managed — every env's thin overlay
+# references them; `llz render` writes only the per-env overlay (owned, below). The
+# heavy platform manifests (components/<name>/ + the always-on _shared/manifest base)
+# now live at platform-apl/ (repo root, OUTSIDE the scaffold) and are fetched
+# remotely, so they are no longer part of the instance and carry no manifest entry.
 managed  apl-values/_shared/**
-managed  apl-values/components/**
 
 # ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─
 # Workflows: the `uses:`/`template-ref` org + any dispatch defaults you tune.
@@ -114,12 +115,9 @@ owned    terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt
 # apl-values/*/), so re-assert those as managed (precedence is last-match).
 owned    apl-values/*/**
 managed  apl-values/_shared/**
-managed  apl-values/components/**
-# The shared letsencrypt ClusterIssuer is the ONE shared-tree file `llz render`
-# fills in place — it substitutes spec.dns.acmeEmail into spec.acme.email (instance-
-# wide, rendered once). Owned so a template update never clobbers the operator's
-# rendered email; it ships with a REPLACE_PER_ENV placeholder that render replaces.
-owned    apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml
+# (The shared platform manifests moved to platform-apl/ at the repo root; the ACME
+# email is now applied by a JSON6902 patch in the per-env overlay, not a file rewrite
+# of a vendored letsencrypt-clusterissuer.yaml — see RenderManifestKustomization.)
 # Operator escape hatch for custom Kubernetes resources: the template ships the
 # custom/ kustomize root once (an empty starter) and never touches it again, so an
 # instance's own manifests here survive every `copier update`. The instance-custom

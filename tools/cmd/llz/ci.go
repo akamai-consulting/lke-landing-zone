@@ -114,7 +114,7 @@ func ciCmd() *cobra.Command {
 	// Copier render-time slimming: strip YAML-level comments from the workflow
 	// bodies delivered into an instance (the template source keeps them), and
 	// prune docs/ to the operator set + reference the rest at the template repo.
-	c.AddCommand(ciStripCommentsCmd(), ciDeliverDocsCmd(), ciPruneRemoteAplValuesCmd())
+	c.AddCommand(ciStripCommentsCmd(), ciDeliverDocsCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())

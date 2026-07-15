@@ -37,7 +37,7 @@ import (
 func bootstrapSeeds(region string) []baoSeedOpts {
 	return []baoSeedOpts{
 		// secret/harbor/admin is NO LONGER seeded here — an ESO PushSecret
-		// (apl-values/components/harbor/harbor-admin-push.yaml) mirrors Harbor's
+		// (platform-apl/components/harbor/harbor-admin-push.yaml) mirrors Harbor's
 		// Helm-generated harbor-admin-password Secret into OpenBao via the
 		// write-scoped openbao-push store, replacing the kubectl-exec kv put.
 		//
@@ -78,7 +78,7 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 		// kube-native ESO flow: a Password generator mints the value and a
 		// PushSecret writes it into OpenBao with updatePolicy: IfNotExists (the
 		// declarative equivalent of the old generate-once + skip-if-present). See
-		// apl-values/_shared/manifest/generated-secrets/ and the eso-pusher policy/
+		// platform-apl/manifest/generated-secrets/ and the eso-pusher policy/
 		// role in ci_openbao_configure.go. This drops two root-token + kubectl-exec
 		// seed steps from the bootstrap.
 		//

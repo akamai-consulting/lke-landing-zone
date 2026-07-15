@@ -27,7 +27,7 @@ controller). CronJob deletions follow once each reconciler proves out per the
   Prometheus text-exposition registry — gauges + counters) and the
   [`llz reconcile`](../../tools/cmd/llz/reconcile.go) command (serves
   `:8080/metrics` + `/healthz`, SIGTERM-graceful), plus the deployable
-  default-disabled [`apl-values/components/llzReconciler/`](../../instance-template/apl-values/components/llzReconciler/)
+  default-disabled [`platform-apl/components/llzReconciler/`](../../instance-template/platform-apl/components/llzReconciler/)
   component (Deployment + read-only RBAC + a default-deny-compatible NetworkPolicy
   that closes the scrape path + Service + ServiceMonitor + PrometheusRule).
 - **Phase 1 (merged, #151).** The `internal/kube` watch primitive
@@ -296,7 +296,7 @@ streams + bounded resync timers, in the module's existing pure-Go style.
   `Lease` + a deduplicating workqueue. The rotator's existing idempotency
   (verify-before-write, keep-newest-2) remains the belt to that suspenders.
 
-### Components (skeleton — `apl-values/components/llzReconciler/`)
+### Components (skeleton — `platform-apl/components/llzReconciler/`)
 
 Mirrors the `linodeCredRotator` component layout: a Deployment, a ServiceAccount,
 one Role/ClusterRole + binding (union of the six CronJobs' verbs, reviewed down),

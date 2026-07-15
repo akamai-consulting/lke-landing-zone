@@ -23,7 +23,7 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       default) and holding the Linode token from `LINODE_DNS_TOKEN` above. The
       landing zone no longer ships its own webhook Application; the
       `llz-letsencrypt-{production,staging}` ClusterIssuers
-      ([`apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml`](../instance-template/apl-values/_shared/manifest/dns/letsencrypt-clusterissuer.yaml))
+      ([`platform-apl/manifest/dns/letsencrypt-clusterissuer.yaml`](../instance-template/platform-apl/manifest/dns/letsencrypt-clusterissuer.yaml))
       target that group via `groupName: acme.slicen.me` + `solverName: linode`.
       Just confirm apl-core's `cert-manager-webhook-linode` pod reaches Ready
       (its APIService `v1alpha1.acme.slicen.me` shows `Available=True`) — if it

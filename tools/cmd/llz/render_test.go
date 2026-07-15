@@ -153,7 +153,7 @@ spec:
 	}
 	// Thin overlay over the shared base; harbor disabled → no harbor App CR, but the
 	// other carved Apps (observability, reconciler, externalsecrets) are referenced.
-	if !strings.Contains(string(kust), "../../_shared/manifest") || strings.Contains(string(kust), "llz-harbor.yaml") {
+	if !strings.Contains(string(kust), "../../../../platform-apl/manifest") || strings.Contains(string(kust), "llz-harbor.yaml") {
 		t.Errorf("kustomization wrong (thin overlay, harbor dropped):\n%s", kust)
 	}
 	if !strings.Contains(string(kust), "llz-observability.yaml") {
@@ -165,7 +165,7 @@ spec:
 		t.Errorf("carved observability App CR missing/wrong (err=%v):\n%s", err, obsApp)
 	}
 	obsKust, err := os.ReadFile(filepath.Join(aplDir, "prod", "apps", "observability", "kustomization.yaml"))
-	if err != nil || !strings.Contains(string(obsKust), "../../../components/observability") {
+	if err != nil || !strings.Contains(string(obsKust), "../../../../../platform-apl/components/observability") {
 		t.Errorf("carved observability source root missing/wrong (err=%v):\n%s", err, obsKust)
 	}
 

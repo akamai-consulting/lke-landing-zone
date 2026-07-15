@@ -39,7 +39,7 @@ rotator-minted token with the stale GitHub copy.
 **Item:** kube-native cred-hardening #4 (generalized) — move the rotation of every
 long-lived **Linode-issued** credential out of CI and into the cluster.
 **Relates to:** [secrets.md](../secrets.md), the `linode-volume-labeler` CronJob
-(`apl-values/components/volumeLabeler/`), `internal/linode` (rotation primitives),
+(`platform-apl/components/volumeLabeler/`), `internal/linode` (rotation primitives),
 `credentials_pat.go` / `credentials_objkey.go` (existing orchestration), the
 `secret-propagator` OpenBao policy (`tools/cmd/llz/ci_openbao_configure.go`).
 
@@ -148,7 +148,7 @@ create|revoke-old`; the new command reuses that logic, dropping the GitHub-secre
 write (tier-1 creds don't need it) and adding the verify probe + the k8s-auth
 OpenBao write.
 
-### Components (skeleton — `apl-values/components/linodeCredRotator/`)
+### Components (skeleton — `platform-apl/components/linodeCredRotator/`)
 
 Mirror `volumeLabeler/linode-volume-labeler/`:
 

@@ -103,7 +103,7 @@ gh workflow run bootstrap-openbao.yml \
 8. Waits for all 3 pods to auto-unseal from the static seal key (followers join the leader via Raft `retry_join`).
 9. Configures KV v2, Kubernetes auth, GitHub-OIDC (`jwt`) auth, policies, roles, and the audit log.
 10. Seeds the following secrets into OpenBao:
-   - `secret/harbor/robot` + `secret/harbor/pull-robot` — on an **active/standalone** cluster these are NO LONGER seeded by the workflow: the in-cluster `harbor-robot-provisioner` CronJob (`apl-values/components/harbor/`, `llz ci harbor-provisioner`) creates the robots, seeds OpenBao through a scoped Kubernetes-auth role, publishes the repo-level `HARBOR_*` GitHub secrets, and smoke-tests every ~5 minutes. On a **standby** peer the workflow's "Seed standby Harbor robot credentials" step replicates the active's published secrets into OpenBao. Robot rotation: delete the robot in Harbor UI; the next CronJob tick recreates and re-publishes it.
+   - `secret/harbor/robot` + `secret/harbor/pull-robot` — on an **active/standalone** cluster these are NO LONGER seeded by the workflow: the in-cluster `harbor-robot-provisioner` CronJob (`platform-apl/components/harbor/`, `llz ci harbor-provisioner`) creates the robots, seeds OpenBao through a scoped Kubernetes-auth role, publishes the repo-level `HARBOR_*` GitHub secrets, and smoke-tests every ~5 minutes. On a **standby** peer the workflow's "Seed standby Harbor robot credentials" step replicates the active's published secrets into OpenBao. Robot rotation: delete the robot in Harbor UI; the next CronJob tick recreates and re-publishes it.
    - (`secret/harbor/docker-config` is no longer seeded — the buildah `config.json` is derived in-cluster by the cert-automation chart's `harborDockerConfig` ExternalSecret from the robot creds in `secret/harbor/robot`.)
    - `HARBOR_ROBOT_NAME` + `HARBOR_PASSWORD` GitHub secrets (first cluster only)
    - `HARBOR_PULL_ROBOT_NAME` + `HARBOR_PULL_PASSWORD` GitHub secrets (first cluster only)
@@ -111,7 +111,7 @@ gh workflow run bootstrap-openbao.yml \
    - `secret/cert-automation/github-token` (used by cert-automation Argo Workflow)
    - `secret/<release>/mtls-ca` (mTLS CA keypair for the platform's internal mTLS ClusterIssuer)
    - `secret/loki/object-store` + `secret/harbor/registry-s3` (minted + seeded by `llz ci mint-bootstrap-objkeys` — no GitHub secrets involved; skip-if-present so a rotator-minted key is never clobbered)
-   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `apl-values/components/harbor/` and `apl-values/_shared/manifest/generated-secrets/`.
+   - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `platform-apl/components/harbor/` and `platform-apl/manifest/generated-secrets/`.
 11. Configures the `secret-propagator` GitHub-OIDC (`jwt`) role + policy. This
     lets `llz ci rotate-incluster-pat` authenticate to OpenBao via the workflow's
     GitHub OIDC token and write `secret/linode/api-token` without root (the
@@ -142,9 +142,9 @@ for the pods to self-unseal, then exits without re-configuring or re-seeding.
 
 ### Cold bootstrap: the cert-rotation reseal is auto-healed
 
-On a fresh cluster, cert-manager issues `openbao-tls` before OpenBao starts, signed by the stable self-signed `openbao-ca` ClusterIssuer (`apl-values/components/certManager/openbao-bootstrap-ca.yaml`). There is no workflow-side cert seed (the old `llz ci gen-bootstrap-tls` seed was retired), and the serving CA never changes — the only rotation left is the ~80-day *leaf* renewal under that same CA.
+On a fresh cluster, cert-manager issues `openbao-tls` before OpenBao starts, signed by the stable self-signed `openbao-ca` ClusterIssuer (`platform-apl/components/certManager/openbao-bootstrap-ca.yaml`). There is no workflow-side cert seed (the old `llz ci gen-bootstrap-tls` seed was retired), and the serving CA never changes — the only rotation left is the ~80-day *leaf* renewal under that same CA.
 
-The `openbao-cert-watcher` Deployment (`instance-template/apl-values/components/openbao/openbao-cert-watcher.yaml`) detects that leaf renewal and deletes the 3 OpenBao pods so they reload the new cert. The pods restart and **auto-unseal themselves** from the static seal key within seconds — no operator action and no re-dispatch needed.
+The `openbao-cert-watcher` Deployment (`instance-template/platform-apl/components/openbao/openbao-cert-watcher.yaml`) detects that leaf renewal and deletes the 3 OpenBao pods so they reload the new cert. The pods restart and **auto-unseal themselves** from the static seal key within seconds — no operator action and no re-dispatch needed.
 
 If a pod stays sealed after a restart, the static seal key is the problem: check that the `openbao-unseal-key` Secret exists and is readable in the `llz-openbao` namespace, that it matches `OPENBAO_SEAL_KEY` on the `infra-<env>` environment, and inspect `bao status` + the pod logs (a missing/wrong key, or Raft storage that is unhealthy).
 

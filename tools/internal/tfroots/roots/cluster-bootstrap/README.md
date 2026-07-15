@@ -30,8 +30,8 @@ Argo Workflows + Events cert-automation)
 are **not** installed here — they reach the cluster via the values-repo Argo CD
 reconcile (the first-party `llz-*` charts are wrapped by the
 `llz-argo-bootstrap-apps` app-of-apps chart; the raw platform glue ships under
-the shared [`../../apl-values/_shared/manifest/`](../../apl-values/_shared/manifest/)
-base + the per-component [`../../apl-values/components/`](../../apl-values/components/)).
+the shared [`../../platform-apl/manifest/`](../../platform-apl/manifest/)
+base + the per-component [`../../platform-apl/components/`](../../platform-apl/components/)).
 
 It reads the kubeconfig from the cluster workspace's remote state output
 (`kubeconfig_raw`), decodes it, and configures the

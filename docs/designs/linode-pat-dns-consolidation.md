@@ -38,9 +38,9 @@ per §7 before promotion past lab.
 [in-cluster Linode credential rotator](linode-credential-rotator.md) (the
 dual-domain `LINODE_API_TOKEN`), using the "cert-manager reads the narrow PAT's
 domains capability directly; drop the separate DNS sub-token" option.
-**Relates to:** `apl-values/components/linodeCredRotator/` (the rotator),
-`apl-values/components/volumeLabeler/` (the other in-cluster PAT consumer),
-`apl-values/_shared/manifest/dns/` (the DNS-01 wiring),
+**Relates to:** `platform-apl/components/linodeCredRotator/` (the rotator),
+`platform-apl/components/volumeLabeler/` (the other in-cluster PAT consumer),
+`platform-apl/manifest/dns/` (the DNS-01 wiring),
 `llz ci mint-bootstrap-objkeys` / `rotate-linode-creds` / `propagate-pat`,
 `.github/workflows/llz-secret-rotation.yml`.
 

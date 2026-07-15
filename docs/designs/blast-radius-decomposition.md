@@ -87,7 +87,7 @@ negative waves) pass.
 The CI guards run on the rendered tree at PR time, but the apl-operator force-pushes
 values out-of-band — a non-CI change (operator writeback, direct SSA) can still land a
 wave violation. `llz-wave-health-guard`, a native `ValidatingAdmissionPolicy`
-(`apl-values/_shared/manifest/admission/`), rejects the wave-HEALTH class at admission
+(`platform-apl/manifest/admission/`), rejects the wave-HEALTH class at admission
 regardless of write path, with zero new controllers.
 
 The wave-health invariant is per-object (kind + wave), which maps cleanly onto CEL; the
