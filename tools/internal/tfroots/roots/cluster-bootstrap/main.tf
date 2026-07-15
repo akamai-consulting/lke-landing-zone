@@ -201,6 +201,12 @@ module "cluster_bootstrap" {
   apps_repo_revision = var.apps_repo_revision
   ghcr_username      = var.ghcr_username
   ghcr_token         = var.ghcr_token
+
+  # Identity tokens the module CANNOT carry itself: it is git-fetched from the
+  # template repo, which copier/tfroots never render — so the bootstrap App's
+  # repoURL + the GHCR charts URL take these as inputs from this (rendered) root.
+  instance_repo = "<@ instance_repo @>"
+  upstream_org  = "<@ upstream_org @>"
 }
 
 # ── Destroy-time cleanup relocated from TF to the CI destroy job ──────────────

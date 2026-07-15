@@ -38,6 +38,17 @@ variable "apps_repo_revision" {
   type        = string
 }
 
+variable "instance_repo" {
+  description = "This instance's GitHub owner/name (e.g. akamai-consulting/lke-landing-zone-example). The TF-managed bootstrap ArgoCD Application + AppProject source their manifest tree from https://github.com/<instance_repo>.git. Passed by the (copier/tfroots-rendered) root — this module is git-fetched and is NOT rendered, so it cannot carry the <@ instance_repo @> token itself."
+  type        = string
+}
+
+variable "upstream_org" {
+  description = "GitHub org that publishes the first-party OCI Helm charts (ghcr.io/<upstream_org>/charts/*). Passed by the rendered root for the same reason as instance_repo: the git-fetched module cannot carry the <@ upstream_org @> token. Only consumed on the private-fork path (ghcr_token set)."
+  type        = string
+  default     = "akamai-consulting"
+}
+
 variable "ghcr_username" {
   description = "GitHub username that owns the GHCR read token (ghcr_token). GHCR OCI auth needs a real account name (the PAT owner), not a placeholder. Empty default = the ArgoCD GHCR repo Secret + image-pull Secret are skipped (kept optional so plan/destroy work without it)."
   type        = string

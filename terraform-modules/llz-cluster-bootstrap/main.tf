@@ -409,7 +409,7 @@ resource "null_resource" "kyverno_sc_default_policy" {
 # likewise long gone.)
 
 # Repo Secret — lets ArgoCD authenticate to GHCR to pull the first-party OCI
-# Helm charts (ghcr.io/<@ upstream_org @>/charts/*: cluster-foundation, openbao-
+# Helm charts (ghcr.io/<upstream_org>/charts/*: cluster-foundation, openbao-
 # platform, cert-automation, internal-cidr-firewall). These
 # packages are PUBLIC, so ArgoCD pulls them anonymously and this Secret is
 # normally NOT created — it exists only for a private fork that keeps its charts
@@ -431,7 +431,7 @@ resource "kubectl_manifest" "argocd_ghcr_oci_creds" {
     type = "Opaque"
     stringData = {
       type      = "helm"
-      url       = "ghcr.io/<@ upstream_org @>/charts"
+      url       = "ghcr.io/${var.upstream_org}/charts"
       enableOCI = "true"
       username  = var.ghcr_username
       password  = var.ghcr_token
@@ -446,7 +446,7 @@ resource "kubectl_manifest" "argocd_ghcr_oci_creds" {
 # ArgoCD uses for the OCI charts above. The Harbor robot pull secret cannot
 # authenticate to ghcr.io, so a chart's imagePullSecrets points here. Used by the
 # optional Akamai-internal llz-linode-cidr-firewall controller, whose private image
-# is ghcr.io/<@ upstream_org @>/firewall-controller-internal (added back per
+# is ghcr.io/<upstream_org>/firewall-controller-internal (added back per
 # docs/consume-lke-landing-zone-internal.md). Gated on ghcr_token like the repo
 # Secret — without it the image must be public.
 resource "kubectl_manifest" "ghcr_image_pull_secret" {
@@ -497,7 +497,7 @@ resource "kubectl_manifest" "app_bootstrap_appproject" {
     }
     spec = {
       description = "Seed project for the apl-values manifest tree app-of-apps. Source-pinned to the instance repo over HTTPS."
-      sourceRepos = ["https://github.com/<@ instance_repo @>.git"]
+      sourceRepos = ["https://github.com/${var.instance_repo}.git"]
       destinations = [
         {
           server    = "https://kubernetes.default.svc"
@@ -547,7 +547,7 @@ resource "kubectl_manifest" "app_bootstrap_application" {
     spec = {
       project = "platform-bootstrap"
       source = {
-        repoURL        = "https://github.com/<@ instance_repo @>.git"
+        repoURL        = "https://github.com/${var.instance_repo}.git"
         targetRevision = var.apps_repo_revision
         path           = "apl-values/${var.apl_values_env}/manifest"
       }
@@ -642,7 +642,7 @@ resource "kubectl_manifest" "app_secret_store_application" {
     spec = {
       project = "platform-bootstrap"
       source = {
-        repoURL        = "https://github.com/<@ instance_repo @>.git"
+        repoURL        = "https://github.com/${var.instance_repo}.git"
         targetRevision = var.apps_repo_revision
         path           = "apl-values/_shared/manifest-secret-store"
       }
