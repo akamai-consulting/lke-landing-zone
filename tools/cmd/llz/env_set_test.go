@@ -131,7 +131,7 @@ func TestCommittedTargets(t *testing.T) {
 	writeFileMkdir(t, filepath.Join("apl-values", "_shared", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
 	e := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{}} // all default-enabled
 
-	targets, err := committedTargets("lab", e, clusterspec.ValuesIdentity{ClusterName: "x"}, "apl-values")
+	targets, err := committedTargets("lab", e, clusterspec.ValuesIdentity{ClusterName: "x"}, "apl-values", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestCommittedTargets(t *testing.T) {
 	}
 	// llzReconciler disabled → no reconciler App CR or source root at all.
 	off := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{"llzReconciler": {Enabled: boolPtrLocal(false)}}}
-	t2, _ := committedTargets("lab", off, clusterspec.ValuesIdentity{}, "apl-values")
+	t2, _ := committedTargets("lab", off, clusterspec.ValuesIdentity{}, "apl-values", "")
 	for _, p := range []string{
 		filepath.Join("apl-values", "lab", "manifest", "llz-reconciler.yaml"),
 		filepath.Join("apl-values", "lab", "apps", "llzReconciler", "llz-reconciler-env-patch.yaml"),

@@ -15,7 +15,7 @@ func allOn() map[string]ComponentToggle {
 }
 
 func TestRenderManifestKustomization(t *testing.T) {
-	out := RenderManifestKustomization(allOn(), "")
+	out := RenderManifestKustomization(allOn(), "", "")
 	// Thin overlay: the shared base + a health-inert Application CR under resources:
 	// for each enabled CARVED component (blast-radius decomposition) + a components:
 	// list of the remaining plain component dirs.
@@ -57,7 +57,7 @@ func TestRenderManifestKustomization(t *testing.T) {
 	// Disabling harbor drops its carved App CR (and only it).
 	off := allOn()
 	off["harbor"] = ComponentToggle{Enabled: boolPtr(false)}
-	dropped := RenderManifestKustomization(off, "")
+	dropped := RenderManifestKustomization(off, "", "")
 	if strings.Contains(dropped, "llz-harbor.yaml") {
 		t.Error("disabled harbor should drop its carved App CR")
 	}
@@ -68,7 +68,7 @@ func TestRenderManifestKustomization(t *testing.T) {
 
 func TestRenderManifestKustomization_RemoteRefs(t *testing.T) {
 	const ref = "v9.9.9"
-	out := RenderManifestKustomization(allOn(), ref)
+	out := RenderManifestKustomization(allOn(), ref, "")
 	// Token-free plain components are fetched from the template repo at the pinned ref.
 	for _, want := range []string{
 		"- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/components/openbao?ref=v9.9.9",
@@ -78,22 +78,32 @@ func TestRenderManifestKustomization_RemoteRefs(t *testing.T) {
 			t.Errorf("remote ref missing %q:\n%s", want, out)
 		}
 	}
-	// The plain components that STILL carry a per-instance token stay LOCAL (a remote
-	// fetch would pull the unrendered token) — none of the plain set does today, but the
-	// shared base is not remote-ready yet, so it must remain a local reference.
-	if !strings.Contains(out, "- ../../_shared/manifest") {
-		t.Errorf("shared base must stay a local reference until it is split:\n%s", out)
+	// The shared _shared/manifest base is fetched remotely too (Phase 1); its per-
+	// instance instance-custom Application is split OUT and stays a local resource.
+	if !strings.Contains(out, "- github.com/akamai-consulting/lke-landing-zone//instance-template/apl-values/_shared/manifest?ref=v9.9.9") {
+		t.Errorf("shared base should be a remote ref:\n%s", out)
 	}
-	if strings.Contains(out, "_shared/manifest?ref=") {
-		t.Errorf("shared base must NOT be remote yet (it holds the instance_repo Argo App):\n%s", out)
+	if !strings.Contains(out, "- instance-custom.yaml") {
+		t.Errorf("instance-custom App must stay a local resource:\n%s", out)
 	}
 	// An empty ref keeps everything local (drift-check default / no instance context).
-	local := RenderManifestKustomization(allOn(), "")
+	local := RenderManifestKustomization(allOn(), "", "")
 	if strings.Contains(local, "github.com/akamai-consulting") {
 		t.Errorf("empty ref must stay fully local:\n%s", local)
 	}
-	if !strings.Contains(local, "- ../../components/openbao") {
-		t.Errorf("empty ref should reference components locally:\n%s", local)
+	if !strings.Contains(local, "- ../../_shared/manifest") || !strings.Contains(local, "- ../../components/openbao") {
+		t.Errorf("empty ref should reference the base + components locally:\n%s", local)
+	}
+	// spec.dns.acmeEmail set → an inline ClusterIssuer patch carries the contact
+	// (the shared dns tree ships email: "" and is now remote, so it can't be rewritten).
+	withEmail := RenderManifestKustomization(allOn(), ref, "ops@example.com")
+	for _, want := range []string{"kind: ClusterIssuer", "path: /spec/acme/email", "value: ops@example.com"} {
+		if !strings.Contains(withEmail, want) {
+			t.Errorf("acmeEmail patch missing %q:\n%s", want, withEmail)
+		}
+	}
+	if strings.Contains(out, "/spec/acme/email") {
+		t.Errorf("unset acmeEmail must emit no ClusterIssuer patch:\n%s", out)
 	}
 }
 

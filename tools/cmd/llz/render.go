@@ -168,25 +168,14 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 			return fmt.Errorf("render %s: %w", name, err)
 		}
 		if !tfvarsOnly {
-			if err := renderManifest(name, e, lz.ValuesIdentity(name), aplDir, relPrefix, dryRun); err != nil {
+			if err := renderManifest(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail, relPrefix, dryRun); err != nil {
 				return fmt.Errorf("render %s manifests: %w", name, err)
 			}
 		}
 	}
-	// The shared DNS tree's ACME email is instance-wide — render it ONCE (not per
-	// env) into apl-values/_shared after the per-env loop.
-	if !tfvarsOnly {
-		if p, content, ok := sharedDNSEmailTarget(lz, aplDir); ok {
-			if dryRun {
-				wouldRenderPath(relPrefix, filepathRel(aplDir, p), "")
-			} else {
-				if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-					return fmt.Errorf("render shared dns email: %w", err)
-				}
-				renderedPath(relPrefix, filepathRel(aplDir, p))
-			}
-		}
-	}
+	// The instance-wide ACME contact is no longer written into the (now remotely-
+	// fetched) shared dns tree — it rides as a kustomize patch in each env's manifest
+	// overlay (RenderManifestKustomization), emitted above.
 	if !dryRun {
 		untrackRenderedTfvars(relPrefix)
 	}
@@ -291,7 +280,7 @@ func repoOwnerName(repoURL string) string {
 	return s
 }
 
-func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
+func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, acmeEmail string) (map[string]string, error) {
 	manifest := filepath.Join(aplDir, env, "manifest")
 	// Template ref the shared apl-values tree is fetched at (see RenderManifestKustomization):
 	// the version this instance tracks, so an instance references the byte-identical manifest
@@ -301,9 +290,12 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		// THIN overlay over the shared base + per-component kustomize Components —
 		// the shared, token-free resources are fetched from the template repo at `ref`;
 		// only per-env + per-instance pieces are carried locally.
-		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref),
+		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref, acmeEmail),
 		// per-env local-config marker the cluster-bootstrap precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
+		// The operator escape-hatch Application, render-emitted locally with this
+		// instance's repo (its shared base is fetched remotely, so it can't carry it).
+		filepath.Join(manifest, "instance-custom.yaml"): clusterspec.RenderInstanceCustomApp(id.RepoURL),
 	}
 	// Carved components (blast-radius decomposition): each enabled one renders its
 	// own health-inert Application CR into the manifest tree PLUS a self-contained
@@ -372,29 +364,10 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 	return out
 }
 
-// sharedDNSEmailTarget returns the instance-wide letsencrypt ClusterIssuer path and
-// its email-substituted content. The ACME email is instance-wide, so it renders ONCE
-// into apl-values/_shared/manifest/dns/ — not per env (the whole dns tree is
-// Argo-synced from _shared). It renders whenever the shared dns tree is present,
-// regardless of whether spec.dns.acmeEmail is set: an unset email renders `email: ""`
-// (a valid, contact-less ACME registration), so the issuers are never shipped the
-// unparseable REPLACE_PER_ENV placeholder that Let's Encrypt rejects with
-// `invalidContact`. Rendering unconditionally also normalizes any stale placeholder
-// left in an existing instance on its next `llz render`. ok=false only when the
-// shared dns tree is absent (older layout without it).
-func sharedDNSEmailTarget(lz *clusterspec.LandingZone, aplDir string) (string, string, bool) {
-	p := filepath.Join(aplDir, "_shared", "manifest", "dns", "letsencrypt-clusterissuer.yaml")
-	base, err := os.ReadFile(p)
-	if err != nil {
-		return "", "", false // older layout without the shared dns tree — skip silently
-	}
-	return p, clusterspec.SetACMEEmail(string(base), lz.Spec.DNS.AcmeEmail), true
-}
-
 // renderManifest writes a deployment's committed apl-values/<env>/ artifacts (the
 // manifest kustomizations + the apps-toggled values.yaml) from its components.
-func renderManifest(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, relPrefix string, dryRun bool) error {
-	targets, err := committedTargets(env, e, id, aplDir)
+func renderManifest(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, acmeEmail, relPrefix string, dryRun bool) error {
+	targets, err := committedTargets(env, e, id, aplDir, acmeEmail)
 	if err != nil {
 		return err
 	}
@@ -421,7 +394,7 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 	var drifted []string
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		targets, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
+		targets, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
 		if err != nil {
 			return err
 		}
@@ -434,13 +407,6 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 			if string(got) != want {
 				drifted = append(drifted, dst)
 			}
-		}
-	}
-	// Instance-wide: the shared DNS tree's rendered ACME email (when spec.dns.acmeEmail
-	// is set) must match too, so a spec email edit that wasn't re-rendered is caught.
-	if p, want, ok := sharedDNSEmailTarget(lz, aplDir); ok {
-		if got, err := os.ReadFile(p); err != nil || string(got) != want {
-			drifted = append(drifted, p)
 		}
 	}
 	if len(drifted) > 0 {
@@ -614,18 +580,13 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 			want[filepath.Join(tfDir, root, name+".tfvars")] = renderTfvars(base, assigns)
 		}
 		if !tfvarsOnly {
-			ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
+			ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
 			if err != nil {
 				return err
 			}
 			for p, c := range ct {
 				want[p] = c
 			}
-		}
-	}
-	if !tfvarsOnly {
-		if p, content, ok := sharedDNSEmailTarget(lz, aplDir); ok {
-			want[p] = content
 		}
 	}
 

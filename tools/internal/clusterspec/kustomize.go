@@ -52,6 +52,21 @@ var remoteLocalComponents = map[string]bool{
 	"clusterHealthWorkflow": true, // workflowtemplate.yaml: llz_image_ref (WorkflowTemplate CRD — no images: reach)
 }
 
+// RemotelyFetchedComponents returns the component names an instance fetches from the
+// template repo instead of vendoring — every component that ships a manifest dir and is
+// not pinned local (remoteLocalComponents). copier prunes exactly these + _shared/manifest
+// from a scaffolded instance (llz ci prune-remote-apl-values), since the overlays reference
+// them remotely. Deterministic (registry order) so the prune list is stable.
+func RemotelyFetchedComponents() []string {
+	var out []string
+	for _, c := range Components {
+		if c.hasManifestDir() && !remoteLocalComponents[c.Name] {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
 // componentRef returns the kustomize reference for an enabled component's shared dir:
 // a pinned remote-ref URL when the component is token-free, or the LOCAL relative path
 // (localRel, e.g. "../../components/") when it still carries a per-instance token.
@@ -86,7 +101,18 @@ func (c Component) hasManifestDir() bool {
 // each token-free component is referenced from the template repo at that ref instead of
 // vendored locally; an empty ref keeps every reference local (the drift-check default and
 // any context without an instance version). See RemoteBase / componentRef.
-func RenderManifestKustomization(components map[string]ComponentToggle, ref string) string {
+// sharedManifestRef returns the reference for the always-on _shared/manifest base:
+// the pinned remote-ref URL when a template ref is resolved, else the local relative
+// path. The per-instance instance-custom Application is NOT part of this base (it
+// carries the instance repo) — RenderManifestKustomization adds it as a local resource.
+func sharedManifestRef(ref string) string {
+	if ref == "" {
+		return "../../_shared/manifest"
+	}
+	return RemoteBase("_shared/manifest", ref)
+}
+
+func RenderManifestKustomization(components map[string]ComponentToggle, ref, acmeEmail string) string {
 	var dirs []string       // plain component dirs, referenced under components:
 	var carvedApps []string // carved App CR filenames, referenced under resources:
 	var patches []Patch     // patches from plain components only
@@ -106,7 +132,11 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref stri
 
 	var b strings.Builder
 	b.WriteString(kustomizePreamble)
-	b.WriteString("\nresources:\n  - ../../_shared/manifest\n")
+	// The shared base (remote when pinned) + the per-instance instance-custom App
+	// (local, render-emitted with this instance's repo — NOT in the shared base) +
+	// one health-inert App CR per enabled carved component.
+	b.WriteString("\nresources:\n  - " + sharedManifestRef(ref) + "\n")
+	b.WriteString("  - instance-custom.yaml\n")
 	for _, a := range carvedApps {
 		b.WriteString("  - " + a + "\n")
 	}
@@ -116,7 +146,7 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref stri
 			b.WriteString("  - " + componentRef(d, "../../components/", ref) + "\n")
 		}
 	}
-	if len(patches) > 0 {
+	if len(patches) > 0 || acmeEmail != "" {
 		b.WriteString("\npatches:\n")
 		for _, p := range patches {
 			b.WriteString("  - path: " + p.Path + "\n")
@@ -126,8 +156,61 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref stri
 			b.WriteString("      kind: " + p.Kind + "\n")
 			b.WriteString("      name: " + p.Name + "\n")
 		}
+		// Instance-wide ACME contact: the shared letsencrypt ClusterIssuers ship
+		// email: "" (a valid contact-less registration); when spec.dns.acmeEmail is
+		// set, patch it onto BOTH issuers in place (target by kind — no per-name
+		// entry). This replaces the former file-rewrite, which can't reach the now-
+		// remote dns tree. Unset → no patch (email: "" stands).
+		if acmeEmail != "" {
+			b.WriteString("  - target:\n      group: cert-manager.io\n      kind: ClusterIssuer\n")
+			b.WriteString("    patch: |-\n      - op: replace\n        path: /spec/acme/email\n        value: " + acmeEmail + "\n")
+		}
 	}
 	return b.String()
+}
+
+// RenderInstanceCustomApp returns the per-instance instance-custom Argo Application —
+// the operator escape hatch (wave 10, prune:false) that syncs the instance's own
+// apl-values/_shared/custom/ tree. It carries the instance's values-repo URL, so it is
+// render-emitted LOCALLY into the overlay rather than vendored in the shared base (which
+// is fetched remotely and must be byte-identical across instances). Its AppProject
+// (instance-custom-project.yaml, no per-instance data) stays in the shared base.
+func RenderInstanceCustomApp(repoURL string) string {
+	return genHeader + `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: instance-custom
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  revisionHistoryLimit: 3
+  project: instance-custom
+  source:
+    repoURL: ` + repoURL + `
+    path: apl-values/_shared/custom
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+        factor: 2
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - SkipDryRunOnMissingResource=true
+      - ServerSideApply=true
+      - CreateNamespace=false
+`
 }
 
 // RenderCarvedApp returns the Argo CD Application CR for a carved component in env

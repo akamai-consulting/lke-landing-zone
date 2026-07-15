@@ -202,6 +202,11 @@ jobs:
         # published tag. See docs/designs/apl-values-remote-refs.md + resolveTemplateRef.
         env:
           LLZ_TEMPLATE_REF: ${{ github.sha }}
+          # The reconciler + harbor components ship ghcr.io/…/llz:latest and are retagged
+          # by their carved app's kustomize images: transformer; `llz render` reads the
+          # target tag from here, so point it at the signed sha image for the commit under
+          # test (same image release-e2e's sed renders clusterHealthWorkflow's token to).
+          LLZ_IMAGE_REF: ghcr.io/${{ github.repository_owner }}/llz:sha-${{ github.sha }}
         run: |
           set -euo pipefail
           # Re-create the e2e env from scratch each run (idempotent). env add is
