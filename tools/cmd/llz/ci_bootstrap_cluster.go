@@ -127,6 +127,7 @@ type bootstrapDeps struct {
 	kubectl     func(args ...string) (string, bool)
 	apply       func(stdinYAML, fieldManager string, force bool) (string, bool)
 	helm        func(args ...string) (string, bool)
+	git         func(args ...string) (string, bool)
 	now         func() time.Time
 	sleep       func(time.Duration)
 	genPassword func() string
@@ -271,6 +272,10 @@ func runBootstrapCluster(f bootstrapFlags) error {
 				cmd.Env = envWithKubeconfig(kubeconfigPath)
 			}
 			return runCombined(cmd)
+		},
+		git: func(args ...string) (string, bool) {
+			// git talks to the remote values repo, NOT the cluster — no kubeconfig.
+			return runCombined(exec.Command("git", args...))
 		},
 		now:         time.Now,
 		sleep:       time.Sleep,
@@ -486,6 +491,20 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		return err
 	}
 	if err := applyManifest(d, secretStoreApplicationManifest(o), "cluster-bootstrap-tf", true); err != nil {
+		return err
+	}
+
+	// ── 11. Wait for apl-operator to create the apl-<env> values branch ──
+	// The gitops-* Applications (gitops-global, gitops-ns-apl-*, team-*-values-gitops)
+	// read otomi.git.branch = apl-<env>, which apl-operator self-creates on its first
+	// reconcile-commit. Until that push lands the branch does not exist and those Apps
+	// sit in ComparisonError ("unable to resolve apl-<env> to a commit SHA"). Block the
+	// hand-off on the branch appearing so the downstream convergence gate never races
+	// apl-operator's first push (the reused-cluster timeout). A miss here fails LOUD and
+	// EARLY — pointing at apl-operator / the values-repo token — instead of as an opaque
+	// converge timeout 20 minutes later.
+	repoURL, branch := aplValuesGitCoords(rendered)
+	if err := waitAplValuesBranch(d, o, repoURL, branch); err != nil {
 		return err
 	}
 
@@ -844,6 +863,77 @@ func helmInstallApl(d bootstrapDeps, o bootstrapClusterOpts, renderedValues stri
 	}
 	fmt.Printf("apl-core %s installed (apl-operator namespace).\n", o.aplChartVersion)
 	return nil
+}
+
+// aplBranchWait* bound the poll for apl-operator's first values-branch push. The
+// budget covers apl-operator becoming ready + its first reconcile-commit; package
+// vars so tests shrink them. 15m mirrors the helmfile window helm --wait doesn't cover.
+var (
+	aplBranchWaitBudget   = 15 * time.Minute
+	aplBranchWaitInterval = 15 * time.Second
+)
+
+// aplValuesGitCoords pulls otomi.git.repoUrl + otomi.git.branch out of the rendered
+// apl-values. `llz render` resolves both at render time (they are NOT runtime
+// placeholders), so the committed file already carries the concrete coordinates
+// apl-operator itself reads — no need to re-derive the apl-<env> convention here.
+func aplValuesGitCoords(renderedValues string) (repoURL, branch string) {
+	var v struct {
+		Otomi struct {
+			Git struct {
+				RepoURL string `json:"repoUrl"`
+				Branch  string `json:"branch"`
+			} `json:"git"`
+		} `json:"otomi"`
+	}
+	if err := yaml.Unmarshal([]byte(renderedValues), &v); err != nil {
+		return "", ""
+	}
+	return v.Otomi.Git.RepoURL, v.Otomi.Git.Branch
+}
+
+// authedGitURL injects an x-access-token basic-auth credential into an https git
+// URL so ls-remote reaches a PRIVATE instance repo. Non-https URLs (or an empty
+// token) are returned unchanged. The result carries a secret and must never be
+// logged — callers log the credential-free repoURL instead.
+func authedGitURL(rawURL, token string) string {
+	const p = "https://"
+	if token == "" || !strings.HasPrefix(rawURL, p) {
+		return rawURL
+	}
+	return p + "x-access-token:" + token + "@" + strings.TrimPrefix(rawURL, p)
+}
+
+// waitAplValuesBranch polls `git ls-remote` until the apl-<env> values branch
+// exists — the branch apl-operator self-creates on its first reconcile-commit and
+// every gitops-* Application reads. Returns nil the moment it appears; fails loud
+// on the budget so a values-repo the operator can't push to (token missing
+// Contents:write) surfaces HERE, precisely, not as a downstream converge timeout.
+// A no-coords case (values missing otomi.git.*) is a clean skip.
+func waitAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, branch string) error {
+	if repoURL == "" || branch == "" {
+		fmt.Println("otomi.git.repoUrl/branch absent from the rendered values — skipping the apl-values branch-readiness wait.")
+		return nil
+	}
+	authURL := authedGitURL(repoURL, o.aplValuesRepoToken)
+	fmt.Printf("Waiting for apl-operator to create the values branch %q on %s (up to %s)...\n",
+		branch, repoURL, aplBranchWaitBudget)
+	deadline := d.now().Add(aplBranchWaitBudget)
+	for {
+		// `ls-remote <url> refs/heads/<branch>`: exit 0 + a SHA line when the ref
+		// exists, exit 0 + empty when it does not yet, non-zero on auth/network error.
+		// All non-success cases keep polling until the budget — a persistent auth
+		// error simply exhausts it and reports the same actionable message.
+		if out, ok := d.git("ls-remote", authURL, "refs/heads/"+branch); ok && strings.TrimSpace(out) != "" {
+			fmt.Printf("values branch %q is present — apl-operator has pushed; the gitops-* Applications can resolve it.\n", branch)
+			return nil
+		}
+		if !d.now().Before(deadline) {
+			return fmt.Errorf("apl-operator did not create the values branch %q on %s within %s — the gitops-* Applications cannot resolve it and convergence would time out. Check that apl-operator is Running and its values-repo token (otomi.git.password / APL_VALUES_REPO_TOKEN) has Contents:write on the instance repo",
+				branch, repoURL, aplBranchWaitBudget)
+		}
+		d.sleep(aplBranchWaitInterval)
+	}
 }
 
 // deployedAplRelease reports the apl release's chart version + Helm status via

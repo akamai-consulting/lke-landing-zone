@@ -362,7 +362,7 @@ func bootstrapTestOpts(t *testing.T, revision string) bootstrapClusterOpts {
 	valuesPath := filepath.Join(dir, "values.yaml")
 	if err := os.WriteFile(valuesPath, []byte(
 		"apps:\n  loki:\n    adminPassword: ${loki_admin_password}\n    gateway:\n      resolver: \"${coredns_cluster_ip}\"\n"+
-			"otomi:\n  git:\n    password: ${apl_values_repo_password}\n"+
+			"otomi:\n  git:\n    password: ${apl_values_repo_password}\n    repoUrl: https://github.com/acme/inst.git\n    branch: apl-primary\n"+
 			"dns:\n  provider:\n    linode:\n      apiToken: ${linode_dns_token}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -414,6 +414,7 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 			}
 			return "", true
 		},
+		git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
 		now:         time.Now,
 		sleep:       func(time.Duration) {},
 		genPassword: func() string { return "generated-pw-20chars" },
@@ -483,6 +484,7 @@ func TestBootstrapCluster_BridgeAppliesForceConflicts(t *testing.T) {
 			}
 			return "", true
 		},
+		git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
 		now:         time.Now,
 		sleep:       func(time.Duration) {},
 		genPassword: func() string { return "generated-pw-20chars" },
@@ -572,6 +574,70 @@ func TestHelmInstallApl_UpgradesWhenNeeded(t *testing.T) {
 	}
 }
 
+// ── apl-values branch-readiness wait ─────────────────────────────────────────
+
+func TestAplValuesGitCoords(t *testing.T) {
+	rendered := "otomi:\n  git:\n    repoUrl: https://github.com/acme/inst.git\n    branch: apl-e2e\n    password: secret\n"
+	repo, branch := aplValuesGitCoords(rendered)
+	if repo != "https://github.com/acme/inst.git" || branch != "apl-e2e" {
+		t.Fatalf("coords = (%q,%q)", repo, branch)
+	}
+	// Absent otomi.git → empty (caller skips the wait), never a panic.
+	if r, b := aplValuesGitCoords("apps:\n  loki: {}\n"); r != "" || b != "" {
+		t.Errorf("absent coords = (%q,%q), want empty", r, b)
+	}
+	if r, b := aplValuesGitCoords("not: [valid"); r != "" || b != "" {
+		t.Errorf("unparseable coords = (%q,%q), want empty", r, b)
+	}
+}
+
+func TestAuthedGitURL(t *testing.T) {
+	if got := authedGitURL("https://github.com/acme/inst.git", "PAT"); got != "https://x-access-token:PAT@github.com/acme/inst.git" {
+		t.Errorf("authedGitURL = %q", got)
+	}
+	// No token / non-https → unchanged.
+	if got := authedGitURL("https://github.com/acme/inst.git", ""); got != "https://github.com/acme/inst.git" {
+		t.Errorf("no-token URL changed: %q", got)
+	}
+	if got := authedGitURL("git@github.com:acme/inst.git", "PAT"); got != "git@github.com:acme/inst.git" {
+		t.Errorf("non-https URL changed: %q", got)
+	}
+}
+
+func TestWaitAplValuesBranch(t *testing.T) {
+	o := bootstrapClusterOpts{aplValuesRepoToken: "PAT"}
+
+	// No coords → clean skip, never touches git.
+	called := false
+	d := bootstrapDeps{git: func(_ ...string) (string, bool) { called = true; return "", true }, now: time.Now, sleep: func(time.Duration) {}}
+	if err := waitAplValuesBranch(d, o, "", ""); err != nil || called {
+		t.Fatalf("empty coords should skip: err=%v called=%v", err, called)
+	}
+
+	// Branch present immediately (ls-remote returns a SHA) → success, authed URL used.
+	var gotURL, gotRef string
+	d.git = func(args ...string) (string, bool) {
+		gotURL, gotRef = args[1], args[2]
+		return "abc123\trefs/heads/apl-e2e", true
+	}
+	if err := waitAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil {
+		t.Fatalf("branch present should succeed: %v", err)
+	}
+	if gotURL != "https://x-access-token:PAT@github.com/acme/inst.git" || gotRef != "refs/heads/apl-e2e" {
+		t.Errorf("ls-remote called with (%q,%q)", gotURL, gotRef)
+	}
+
+	// Branch never appears (empty ls-remote) → loud error on the budget, naming the token.
+	origB, origI := aplBranchWaitBudget, aplBranchWaitInterval
+	aplBranchWaitBudget, aplBranchWaitInterval = 0, 0
+	t.Cleanup(func() { aplBranchWaitBudget, aplBranchWaitInterval = origB, origI })
+	d.git = func(_ ...string) (string, bool) { return "", true } // exists-check: empty = not yet
+	err := waitAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e")
+	if err == nil || !strings.Contains(err.Error(), "Contents:write") {
+		t.Errorf("expected a loud budget error naming the token, got %v", err)
+	}
+}
+
 // TestBootstrapCluster_KyvernoRacesAheadOfGate is the key regression guard: the
 // Kyverno policy applies must be dispatched CONCURRENTLY with the readiness gate,
 // not serialized after it. The fake blocks the gate's first stage (argo CRD
@@ -612,6 +678,7 @@ func TestBootstrapCluster_KyvernoRacesAheadOfGate(t *testing.T) {
 			}
 			return "", true
 		},
+		git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
 		now:         time.Now,
 		sleep:       func(time.Duration) {},
 		genPassword: func() string { return "pw" },
@@ -654,7 +721,8 @@ func TestBootstrapCluster_GHCRSecretsGatedOnToken(t *testing.T) {
 				return "", true
 			},
 			helm:        func(_ ...string) (string, bool) { return "", true },
-			now:         time.Now,
+			git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
+		now:         time.Now,
 			sleep:       func(time.Duration) {},
 			genPassword: func() string { return "pw" },
 		}
