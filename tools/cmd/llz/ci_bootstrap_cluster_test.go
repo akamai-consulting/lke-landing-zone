@@ -509,6 +509,69 @@ func TestBootstrapCluster_BridgeAppliesForceConflicts(t *testing.T) {
 	}
 }
 
+// TestHelmInstallApl_SkipsWhenAlreadyAtTargetVersion is the reused-cluster safety
+// guard: when apl is already `deployed` at the target chart version, helmInstallApl
+// must NOT run `helm upgrade`. Re-asserting the release rolls apl-operator, resets
+// its 10-15m helmfile clock, and (under branch-isolation) delays the apl-<env>
+// branch push the gitops-* Apps need — timing out the convergence gate on a reused
+// cluster.
+func TestHelmInstallApl_SkipsWhenAlreadyAtTargetVersion(t *testing.T) {
+	o := bootstrapClusterOpts{aplChartVersion: "6.0.0"}
+	upgraded := false
+	d := bootstrapDeps{
+		helm: func(args ...string) (string, bool) {
+			switch args[0] {
+			case "list":
+				return `[{"name":"apl","chart":"apl-6.0.0","status":"deployed"}]`, true
+			case "upgrade":
+				upgraded = true
+			}
+			return "", true
+		},
+	}
+	if err := helmInstallApl(d, o, "rendered-values"); err != nil {
+		t.Fatalf("helmInstallApl: %v", err)
+	}
+	if upgraded {
+		t.Error("must NOT helm upgrade when apl is already deployed at the target version (rolls apl-operator on a reused cluster)")
+	}
+}
+
+// TestHelmInstallApl_UpgradesWhenNeeded covers the cases that MUST still install/
+// upgrade: no release, a different deployed version (the spec-driven upgrade path),
+// and a non-`deployed` status (a half-applied prior run that must self-heal).
+func TestHelmInstallApl_UpgradesWhenNeeded(t *testing.T) {
+	cases := []struct{ name, list string }{
+		{"absent", `[]`},
+		{"version mismatch (spec bump)", `[{"name":"apl","chart":"apl-5.9.0","status":"deployed"}]`},
+		{"pending state self-heals", `[{"name":"apl","chart":"apl-6.0.0","status":"pending-upgrade"}]`},
+		{"unparseable list output", `not json`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := bootstrapClusterOpts{aplChartVersion: "6.0.0"}
+			upgraded := false
+			d := bootstrapDeps{
+				helm: func(args ...string) (string, bool) {
+					switch args[0] {
+					case "list":
+						return tc.list, true
+					case "upgrade":
+						upgraded = true
+					}
+					return "", true
+				},
+			}
+			if err := helmInstallApl(d, o, "rendered-values"); err != nil {
+				t.Fatalf("helmInstallApl: %v", err)
+			}
+			if !upgraded {
+				t.Errorf("%s: expected helm upgrade to run", tc.name)
+			}
+		})
+	}
+}
+
 // TestBootstrapCluster_KyvernoRacesAheadOfGate is the key regression guard: the
 // Kyverno policy applies must be dispatched CONCURRENTLY with the readiness gate,
 // not serialized after it. The fake blocks the gate's first stage (argo CRD

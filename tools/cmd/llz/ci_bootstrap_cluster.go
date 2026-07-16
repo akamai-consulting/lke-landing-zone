@@ -793,12 +793,30 @@ func manifestName(obj map[string]any) string {
 	return ""
 }
 
-// helmInstallApl runs `helm upgrade --install apl` with the rendered values.
-// `--install` + the same version each run makes CI re-apply idempotent; bumping
-// spec.cluster.bootstrap.aplChartVersion + re-dispatching is the deliberate
-// upgrade path (the former lifecycle ignore_changes=[version] is replaced by
-// this explicit spec-driven model).
+// helmInstallApl runs `helm upgrade --install apl` with the rendered values —
+// but SKIPS the upgrade when apl is already `deployed` at the target chart
+// version, so a re-apply on a REUSED cluster does not needlessly roll the
+// apl-operator Deployment.
+//
+// That roll is not cosmetic. apl-operator's helmfile takes 10-15m, and under the
+// per-env branch-isolation model (apl-values/.../otomi.git.branch = apl-<env>) its
+// FIRST post-roll commit is what CREATES the apl-<env> branch the gitops-* Apps
+// read. Re-asserting the release right before the convergence gate rolls
+// apl-operator, resets that 10-15m clock, and the gate can time out with the
+// gitops-* Apps stuck "unable to resolve apl-<env> to a commit SHA" — exactly the
+// reused-cluster e2e failure this guards against. On a fresh cluster there is no
+// release yet, so the install still runs.
+//
+// Bumping spec.cluster.bootstrap.aplChartVersion still upgrades (deployed version
+// != target — the deliberate spec-driven upgrade path), and a release in any
+// non-`deployed` state (absent, pending-*, failed) still runs so a half-applied
+// prior run self-heals.
 func helmInstallApl(d bootstrapDeps, o bootstrapClusterOpts, renderedValues string) error {
+	if ver, status, ok := deployedAplRelease(d); ok && status == "deployed" && ver == o.aplChartVersion {
+		fmt.Printf("apl-core %s already deployed — skipping helm upgrade so a reused-cluster re-apply does not roll apl-operator (bump spec.cluster.bootstrap.aplChartVersion to upgrade).\n", ver)
+		return nil
+	}
+
 	tmp, err := os.CreateTemp("", "llz-apl-values-*.yaml")
 	if err != nil {
 		return fmt.Errorf("create apl-values tempfile: %w", err)
@@ -826,6 +844,37 @@ func helmInstallApl(d bootstrapDeps, o bootstrapClusterOpts, renderedValues stri
 	}
 	fmt.Printf("apl-core %s installed (apl-operator namespace).\n", o.aplChartVersion)
 	return nil
+}
+
+// deployedAplRelease reports the apl release's chart version + Helm status via
+// `helm list -o json`. ok=false when the release is absent or the output is
+// unreadable/unparseable — in which case the caller installs. The chart field is
+// "<name>-<version>" (e.g. "apl-6.0.0"); the version is the segment after the last
+// "-" so it is robust to a hyphenated chart name.
+func deployedAplRelease(d bootstrapDeps) (version, status string, ok bool) {
+	out, run := d.helm("list", "--namespace", "apl-operator", "--filter", "^apl$", "-o", "json")
+	if !run {
+		return "", "", false
+	}
+	var releases []struct {
+		Name   string `json:"name"`
+		Chart  string `json:"chart"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &releases); err != nil {
+		return "", "", false
+	}
+	for _, r := range releases {
+		if r.Name != "apl" {
+			continue
+		}
+		v := r.Chart
+		if i := strings.LastIndex(r.Chart, "-"); i >= 0 {
+			v = r.Chart[i+1:]
+		}
+		return v, r.Status, true
+	}
+	return "", "", false
 }
 
 // lokiAdminPasswordRe matches the sole `adminPassword:` (loki's) in the values
