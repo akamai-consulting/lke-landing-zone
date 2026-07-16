@@ -246,7 +246,9 @@ func runBootstrapCluster(f bootstrapFlags) error {
 	d := bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
 			cmd := exec.Command("kubectl", args...)
-			cmd.Env = envWithKubeconfig(kubeconfigPath)
+			if kubeconfigPath != "" {
+				cmd.Env = envWithKubeconfig(kubeconfigPath)
+			}
 			var buf bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &buf, &buf
 			return buf.String(), cmd.Run() == nil
@@ -258,7 +260,9 @@ func runBootstrapCluster(f bootstrapFlags) error {
 			}
 			args = append(args, "-f", "-")
 			cmd := exec.Command("kubectl", args...)
-			cmd.Env = envWithKubeconfig(kubeconfigPath)
+			if kubeconfigPath != "" {
+				cmd.Env = envWithKubeconfig(kubeconfigPath)
+			}
 			cmd.Stdin = strings.NewReader(stdinYAML)
 			var buf bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &buf, &buf
@@ -266,7 +270,9 @@ func runBootstrapCluster(f bootstrapFlags) error {
 		},
 		helm: func(args ...string) (string, bool) {
 			cmd := exec.Command("helm", args...)
-			cmd.Env = envWithKubeconfig(kubeconfigPath)
+			if kubeconfigPath != "" {
+				cmd.Env = envWithKubeconfig(kubeconfigPath)
+			}
 			var buf bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &buf, &buf
 			return buf.String(), cmd.Run() == nil
@@ -290,29 +296,38 @@ func runBootstrapCluster(f bootstrapFlags) error {
 // empty config and every read returned empty (the e2e bootstrap failure). Only the
 // tempfile path needs cleanup; the rest are no-ops.
 func resolveKubeconfig(path string) (string, func(), error) {
+	noop := func() {}
+	// 1. Explicit --kubeconfig (non-empty file) → override the child env with it.
 	if path != "" {
 		if st, err := os.Stat(path); err == nil && st.Size() > 0 {
-			return path, func() {}, nil
+			return path, noop, nil
 		}
 	}
-	if kc := effectiveKubeconfig(); kc != "" {
-		return kc, func() {}, nil
-	}
-	raw := os.Getenv("KUBECONFIG_RAW")
-	if raw == "" {
-		return "", func() {}, fmt.Errorf("no usable kubeconfig: --kubeconfig / $KUBECONFIG / ~/.kube/config are all absent or empty, and KUBECONFIG_RAW is unset")
-	}
-	tmp, err := os.CreateTemp("", "llz-bootstrap-kubeconfig-*")
-	if err != nil {
-		return "", func() {}, fmt.Errorf("create kubeconfig tempfile: %w", err)
-	}
-	if _, err := tmp.WriteString(raw); err != nil {
+	// 2. KUBECONFIG_RAW → spill to a 0600 tempfile → override.
+	if raw := os.Getenv("KUBECONFIG_RAW"); raw != "" {
+		tmp, err := os.CreateTemp("", "llz-bootstrap-kubeconfig-*")
+		if err != nil {
+			return "", noop, fmt.Errorf("create kubeconfig tempfile: %w", err)
+		}
+		if _, err := tmp.WriteString(raw); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return "", noop, fmt.Errorf("write kubeconfig: %w", err)
+		}
 		tmp.Close()
-		os.Remove(tmp.Name())
-		return "", func() {}, fmt.Errorf("write kubeconfig: %w", err)
+		return tmp.Name(), func() { os.Remove(tmp.Name()) }, nil
 	}
-	tmp.Close()
-	return tmp.Name(), func() { os.Remove(tmp.Name()) }, nil
+	// 3. Otherwise INHERIT the ambient environment — let kubectl/helm resolve
+	//    $KUBECONFIG / ~/.kube/config THEMSELVES, exactly like wait-cluster-ready +
+	//    diagnose-argocd, which read the cluster fine. Re-resolving the path here and
+	//    overriding the child's KUBECONFIG instead made kubectl read an empty config
+	//    on the e2e (a $RUNNER_TEMP-vs-runner.temp / stat-vs-kubectl mismatch). An
+	//    empty return path signals "do not touch the child env". Fail loudly only
+	//    when nothing is resolvable at all.
+	if effectiveKubeconfig() == "" {
+		return "", noop, fmt.Errorf("no usable kubeconfig: pass --kubeconfig, set a non-empty $KUBECONFIG or ~/.kube/config, or set KUBECONFIG_RAW")
+	}
+	return "", noop, nil
 }
 
 // envWithKubeconfig returns the process env with KUBECONFIG set to exactly `path`
