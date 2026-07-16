@@ -414,7 +414,10 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 			}
 			return "", true
 		},
-		git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
+		git: func(args ...string) (string, bool) {
+			rec.add("git " + args[0])
+			return "deadbeefsha\trefs/heads/apl-primary", true
+		},
 		now:         time.Now,
 		sleep:       func(time.Duration) {},
 		genPassword: func() string { return "generated-pw-20chars" },
@@ -432,6 +435,13 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 	}
 	if rec.indexOf("upgrade --install apl") < 0 {
 		t.Errorf("expected a helm upgrade --install; calls:\n%s", strings.Join(calls, "\n"))
+	}
+	// The values-branch ensure MUST run BEFORE the helm install: apl-operator's
+	// installer phase (started by the chart) is the only phase that bootstraps the
+	// full env values into the branch — install-before-branch wedges the cluster
+	// (installation completed, branch empty, every reconcile crashing).
+	if gi, hi := rec.indexOf("git ls-remote"), rec.indexOf("upgrade --install apl"); gi < 0 || gi > hi {
+		t.Errorf("values-branch ensure (git ls-remote, idx %d) must precede the helm install (idx %d); calls:\n%s", gi, hi, strings.Join(calls, "\n"))
 	}
 	// The two inline SSA namespaces + SC come before helm; the 3 bridge applies come after the gate.
 	firstApply := rec.indexOf("apply-inline")

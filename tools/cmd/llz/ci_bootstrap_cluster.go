@@ -424,6 +424,21 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		return fmt.Errorf("apply block-storage StorageClass failed")
 	}
 
+	// ── 6a. Ensure the apl-<env> values branch exists — BEFORE the helm install ──
+	// Ordering is load-bearing. apl-operator's INSTALLER phase starts the moment the
+	// chart deploys, and it is the only phase that bootstraps the full env values
+	// into otomi.git.branch. On the e2e cluster the installer completed while the
+	// branch was absent (it bootstrapped locally, pushed nothing, marked
+	// installation completed) and every later reconcile re-cloned the branch, found
+	// no values, and crashed its derived-values template ("map has no entry for key
+	// customRootCA") — a wedge only un-doable by resetting apl-installation-status.
+	// Seeding the branch FIRST means the installer finds it and pushes its full env
+	// tree as part of installation, on fresh and reused clusters alike.
+	repoURL, branch := aplValuesGitCoords(rendered)
+	if err := ensureAplValuesBranch(d, o, repoURL, branch); err != nil {
+		return err
+	}
+
 	// ── 6. apl-core (helm upgrade --install) ──
 	if err := helmInstallApl(d, o, rendered); err != nil {
 		return err
@@ -491,22 +506,6 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		return err
 	}
 	if err := applyManifest(d, secretStoreApplicationManifest(o), "cluster-bootstrap-tf", true); err != nil {
-		return err
-	}
-
-	// ── 11. Ensure the apl-<env> values branch exists ──
-	// The gitops-* Applications (gitops-global, gitops-ns-apl-*, team-*-values-gitops)
-	// read otomi.git.branch = apl-<env>. apl-core v6's apl-operator does NOT self-create
-	// that branch (despite the branch-isolation design note): it PULLS the branch on
-	// every reconcile and aborts the whole cycle on a missing ref
-	// ("fatal: couldn't find remote ref apl-<env>"), while its commit path reports
-	// "Nothing to commit" — so it never pushes it into existence. Deadlock, verified on
-	// the e2e cluster. So bootstrap-cluster SEEDS the branch off the repo's default
-	// branch when absent; the operator's pull then succeeds and it force-pushes its
-	// rendered env/ tree onto it. Idempotent: a branch that already exists (a reused
-	// cluster, or a future operator that does self-create) is left untouched.
-	repoURL, branch := aplValuesGitCoords(rendered)
-	if err := ensureAplValuesBranch(d, o, repoURL, branch); err != nil {
 		return err
 	}
 
