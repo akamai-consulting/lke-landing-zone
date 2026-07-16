@@ -38,3 +38,25 @@ id           = "shell-token-placeholder-region-env"
 description  = "Bash placeholder <token> followed by REGION env var assignment"
 regexTarget  = "match"
 regexes      = ['''token>\s+REGION=''']
+
+# False-positive: generic-api-key matches the `keyRotationDays: DEPRECATED/ignored`
+# note in the landing-zone spec doc (the `key…` word plus following prose). It is
+# documentation in a spec example, not a credential. Narrow to that exact phrase.
+# (Kept in sync with the repo-root .gitleaks.toml; this copy ships to instances.)
+[[allowlists]]
+id           = "spec-keyrotationdays-doc-note"
+description  = "keyRotationDays deprecation note in docs/landing-zone-spec.md"
+regexTarget  = "match"
+regexes      = ['''keyRotationDays:\s+DEPRECATED''']
+
+# False-positive: `openbaoKey:` in a managed-apps app manifest names an OpenBao
+# path (an ESO remoteRef), NOT a secret value — the credential itself is fetched
+# at runtime and never committed. gitleaks' generic-api-key heuristic sees
+# `…Key: <value>` and guesses. Match only the exact `openbaoKey: <path>` shape
+# (regexTarget=match, NOT path-scoped) so a real secret on any other line/file is
+# still caught — a `paths` glob would OR-allowlist the whole file and hide them.
+[[allowlists]]
+id           = "managed-apps-openbao-key-ref"
+description  = "openbaoKey is a vault path reference, not a secret"
+regexTarget  = "match"
+regexes      = ['''openbaoKey:\s*\S+''']
