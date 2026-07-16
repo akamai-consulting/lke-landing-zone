@@ -83,8 +83,11 @@ func ciCmd() *cobra.Command {
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
-	// Apply-time secret stashes + failure diagnostics (llz-terraform.yml).
-	c.AddCommand(ciStashEnvSecretCmd(), ciEnsureEnvSecretCmd(), ciDiagnoseArgoCDCmd())
+	// Apply-time failure diagnostics (llz-terraform.yml). (The former
+	// stash-env-secret / ensure-env-secret siblings were retired with the S3-stash
+	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
+	// + apl-core-v6-migration.md — so their commands are gone too.)
+	c.AddCommand(ciDiagnoseArgoCDCmd())
 	// Release-e2e instantiate: pin the instance's TF_IMAGE/KUBE_IMAGE to this
 	// commit's ci images so the baked llz can't drift from the rendered workflow.
 	c.AddCommand(ciPinInstanceImagesCmd())

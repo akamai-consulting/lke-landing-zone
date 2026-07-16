@@ -10,8 +10,22 @@ import (
 	"time"
 )
 
-// withKubectlApply (ci_openbao_ca_test.go) records the last applied manifest;
-// withSeedRand (ci_ensure_secret_test.go) makes the generated key deterministic.
+// withKubectlApply (ci_openbao_ca_test.go) records the last applied manifest.
+
+// withSeedRand swaps the seedRandRead seam (ci_bao_seed.go) with a deterministic
+// filler so a generated key is reproducible under test. (Relocated here from the
+// retired ci_ensure_secret_test.go; this is its only remaining user.)
+func withSeedRand(t *testing.T, fill byte) {
+	t.Helper()
+	prev := seedRandRead
+	seedRandRead = func(b []byte) error {
+		for i := range b {
+			b[i] = fill
+		}
+		return nil
+	}
+	t.Cleanup(func() { seedRandRead = prev })
+}
 
 // withSeedNamespace makes waitForOpenbaoNamespace resolve on the first probe
 // (namespace present), so the Secret-logic tests below exercise the key handling
