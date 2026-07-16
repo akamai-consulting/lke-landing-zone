@@ -12,7 +12,7 @@
   "prConcurrentLimit": 5,
   "configMigration": true,
 
-  "description": "Ships into the instance repo (copied from instance-template/) and keeps third-party-shaped pins current: the OCI Helm charts (independently versioned) and external GitHub Action digests. The first-party lke-landing-zone references — the git::-tagged Terraform modules (?ref=vX.Y.Z), the reusable-workflow uses:@ refs, and template-ref: — are NOT Renovate-managed: they are rendered in lockstep from the copier llz_version that `llz new`/`llz upgrade` set to the llz binary's own version, so `llz upgrade` (not Renovate) bumps them as a unit (see the disable rule below). ADOPTERS: after forking, repoint the packageName/registryUrls below from <@ upstream_org @> to your own fork/registry, exactly as you repoint the module sources themselves.",
+  "description": "Ships into the instance repo (copied from instance-template/) and keeps third-party-shaped pins current: the OCI Helm charts (independently versioned) and external GitHub Action digests. The first-party lke-landing-zone references — the git::-tagged Terraform modules (?ref=vX.Y.Z) and the workflow template-ref: pin — are NOT Renovate-managed: they are rendered in lockstep from the copier llz_version that `llz new`/`llz upgrade` set to the llz binary's own version, so `llz upgrade` (not Renovate) bumps them as a unit (see the disable rule below). The reusable-workflow bodies are referenced by repo-local ./ paths now (ADR 0003), so there is no cross-repo uses:@ ref to pin. ADOPTERS: after forking, repoint the packageName/registryUrls below from <@ upstream_org @> to your own fork/registry, exactly as you repoint the module sources themselves.",
 
   "customManagers": [
     {
@@ -40,7 +40,7 @@
 
   "packageRules": [
     {
-      "description": "The first-party lke-landing-zone self-reference (reusable-workflow uses:@ + template-ref:) is rendered from the copier llz_version and re-pinned by `llz upgrade`, not Renovate — disable it so the two never race. Modules pin to a bare ?ref=vX.Y.Z with no custom manager, so they are already unmanaged. Charts (llz-*/charts/llz-*) are independently versioned and stay Renovate-managed below.",
+      "description": "The first-party lke-landing-zone self-reference (the workflow template-ref: pin — the reusable-workflow bodies are repo-local ./ now, ADR 0003, so there is no cross-repo uses:@ ref) is rendered from the copier llz_version and re-pinned by `llz upgrade`, not Renovate — disable it so the two never race. Modules pin to a bare ?ref=vX.Y.Z with no custom manager, so they are already unmanaged. Charts (llz-*/charts/llz-*) are independently versioned and stay Renovate-managed below.",
       "matchPackageNames": ["/lke-landing-zone/"],
       "enabled": false
     },

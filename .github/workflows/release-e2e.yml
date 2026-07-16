@@ -361,13 +361,19 @@ jobs:
                 -e "s#(/lke-landing-zone/\.github/workflows/llz-[A-Za-z0-9_-]+\.yml)@[^[:space:]]+#\1@${GITHUB_SHA}#g" \
                 -e "s#(//terraform-modules/llz-[A-Za-z0-9_-]+\?ref=)[^\"]+#\1${GITHUB_SHA}#g"
           # Repoint the caller stubs' `template-ref: <value>` to the SHA under test.
-          # REQUIRE a value ([[:space:]]+ then a non-space) so this matches only the
-          # value form — NOT the bare `template-ref:` INPUT-DEFINITION key in the
+          # REQUIRE a value ([[:space:]]+ then a non-space, non-`$` char) so this
+          # matches ONLY the concrete-value form the caller stubs carry. It must NOT
+          # touch: (a) the bare `template-ref:` INPUT-DEFINITION key in the vendored
           # reusables (whose value is the nested description/required/type/default on
-          # the following lines). The old `[[:space:]]*.*` matched the bare key too,
-          # collapsing it to `template-ref:<sha>` and orphaning its children →
-          # "invalid workflow file … line N" (the reusables' template-ref input).
-          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]+)[^[:space:]].*/\1${GITHUB_SHA}/" .github/workflows/*.yml
+          # the following lines — the old `[[:space:]]*.*` matched it, collapsing it to
+          # `template-ref:<sha>` and orphaning its children → "invalid workflow file"),
+          # nor (b) llz-terraform.yml's `template-ref:` FORWARD line, which passes the
+          # caller's `inputs.template-ref` GitHub expression through to the nested
+          # bootstrap-openbao call — that value starts with a `$`, so excluding a leading
+          # `$` from the first value char leaves the expression intact. (Now that the
+          # bodies are vendored INTO the instance, this sed runs over them too; rewriting
+          # the forward to a literal SHA would be equivalent in e2e but wrong in general.)
+          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]+)[^[:space:]$].*/\1${GITHUB_SHA}/" .github/workflows/*.yml
           # Fail loudly if any token survived — a silent miss = a broken instance push.
           if grep -rnE '<@|@>' . ; then
             echo "::error::unrendered copier token(s) survived the e2e render pass"

@@ -366,9 +366,12 @@ established before the first components sync. See Open questions.
 The metrics surface *is* the observability deliverable — it's not a side effect.
 Success criterion for Phase 0 is: every signal the daily `scheduled-checks`
 port-forward jobs produce today has an equivalent in-cluster gauge + PrometheusRule,
-so those jobs can be demoted to belt-and-suspenders (Phase 3). `gh-pat-expiry`,
-`go-vuln-audit`, and `template-drift` stay in CI — they need no cluster access
-and aren't cluster state.
+so those jobs can be demoted to belt-and-suspenders (Phase 3). `gh-pat-expiry`
+and `template-drift` stay in CI — they need no cluster access and aren't cluster
+state. (`go-vuln-audit` is no longer an instance scheduled-checks job at all: it
+audits the template's Go module, which a self-contained instance cannot reach, so
+it moved to the template repo's own CI — `.github/workflows/go-vuln-audit.yml`,
+ADR 0003.)
 
 ---
 

@@ -84,12 +84,13 @@ _skip_if_exists:
 # template's own CI/README AND every instance:
 #   * docs/ — the operator-facing runbooks/playbooks/architecture the README
 #             calls "knowledge an adopter inherits", landed at the instance's
-#             docs/. The pure template-build docs (templatization-plan.md =
-#             extraction design, agents.md = contributor convention,
-#             designs/cross-org-reuse-pattern.md = the reuse-pattern extraction
-#             design) are dropped — they describe building the template, not
-#             operating an instance (and the last carries literal <@ … @> delimiter
-#             examples that must never reach the instance's rendered docs/).
+#             docs/. Only the operator set (quickstart + runbooks + playbooks) is
+#             kept locally; the template-build docs (agents.md = contributor
+#             convention, designs/cross-org-reuse-pattern.md = the reuse-pattern
+#             design) and everything else are dropped and referenced at the template
+#             repo instead — they describe building the template, not operating an
+#             instance (and cross-org-reuse-pattern.md carries literal <@ … @>
+#             delimiter examples that must never reach the instance's rendered docs/).
 # `_subdirectory` would otherwise never copy docs/, so this task pulls it in from
 # the cloned template (`_copier_conf.src_path`). Tasks run on BOTH `copier copy`
 # and `copier update`, so docs/ refreshes on update exactly like a `managed` file
