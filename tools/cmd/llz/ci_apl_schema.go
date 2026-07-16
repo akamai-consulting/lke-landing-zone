@@ -54,10 +54,8 @@ var anyPlaceholderRe = regexp.MustCompile(`\$\{[a-zA-Z_][a-zA-Z0-9_]*\}`)
 // A package var so tests substitute a fake without helm or a network.
 var helmRunner = func(args ...string) (string, bool) {
 	cmd := exec.Command("helm", args...)
-	var buf strings.Builder
-	cmd.Stdout, cmd.Stderr = &buf, &buf
 	cmd.Env = os.Environ()
-	return buf.String(), cmd.Run() == nil
+	return runCombined(cmd)
 }
 
 func ciAplSchemaValidateCmd() *cobra.Command {

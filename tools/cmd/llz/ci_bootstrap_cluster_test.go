@@ -2,12 +2,37 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// ── runCapture (the production exec seam) ────────────────────────────────────
+
+// Regression: `return buf.String(), cmd.Run() == nil` evaluates left-to-right,
+// snapshotting the buffer BEFORE the command runs — every kubectl/helm call
+// returned "" on the e2e bootstrap (misread as an empty kubeconfig). runCapture
+// must return the output the run itself produced, on success AND failure.
+func TestRunCombined_OutputAfterRun(t *testing.T) {
+	out, ok := runCombined(exec.Command("sh", "-c", "echo to-stdout; echo to-stderr >&2"))
+	if !ok {
+		t.Fatalf("runCombined(exit 0) reported failure (out=%q)", out)
+	}
+	if !strings.Contains(out, "to-stdout") || !strings.Contains(out, "to-stderr") {
+		t.Fatalf("runCombined returned output snapshotted before the run (eval-order regression): %q", out)
+	}
+
+	out, ok = runCombined(exec.Command("sh", "-c", "echo boom >&2; exit 3"))
+	if ok {
+		t.Fatal("runCombined(exit 3) reported success")
+	}
+	if !strings.Contains(out, "boom") {
+		t.Fatalf("runCombined must capture output of a FAILING run too (diagnostics depend on it): %q", out)
+	}
+}
 
 // ── injectRuntimeValues ──────────────────────────────────────────────────────
 

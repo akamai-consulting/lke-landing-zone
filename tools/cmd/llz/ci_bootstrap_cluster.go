@@ -250,9 +250,7 @@ func runBootstrapCluster(f bootstrapFlags) error {
 			if kubeconfigPath != "" {
 				cmd.Env = envWithKubeconfig(kubeconfigPath)
 			}
-			var buf bytes.Buffer
-			cmd.Stdout, cmd.Stderr = &buf, &buf
-			return buf.String(), cmd.Run() == nil
+			return runCombined(cmd)
 		},
 		apply: func(stdinYAML, fieldManager string, force bool) (string, bool) {
 			args := []string{"apply", "--server-side", "--field-manager=" + fieldManager}
@@ -265,18 +263,14 @@ func runBootstrapCluster(f bootstrapFlags) error {
 				cmd.Env = envWithKubeconfig(kubeconfigPath)
 			}
 			cmd.Stdin = strings.NewReader(stdinYAML)
-			var buf bytes.Buffer
-			cmd.Stdout, cmd.Stderr = &buf, &buf
-			return buf.String(), cmd.Run() == nil
+			return runCombined(cmd)
 		},
 		helm: func(args ...string) (string, bool) {
 			cmd := exec.Command("helm", args...)
 			if kubeconfigPath != "" {
 				cmd.Env = envWithKubeconfig(kubeconfigPath)
 			}
-			var buf bytes.Buffer
-			cmd.Stdout, cmd.Stderr = &buf, &buf
-			return buf.String(), cmd.Run() == nil
+			return runCombined(cmd)
 		},
 		now:         time.Now,
 		sleep:       time.Sleep,
@@ -329,6 +323,19 @@ func resolveKubeconfig(path string) (string, func(), error) {
 		return "", noop, fmt.Errorf("no usable kubeconfig: pass --kubeconfig, set a non-empty $KUBECONFIG or ~/.kube/config, or set KUBECONFIG_RAW")
 	}
 	return "", noop, nil
+}
+
+// runCombined runs cmd with stdout+stderr captured into one buffer and returns
+// (combined output, exit-0). The run MUST happen before the buffer is read:
+// `return buf.String(), cmd.Run() == nil` evaluates its operands left-to-right,
+// snapshotting the buffer EMPTY before the command ever executes. That exact
+// bug made every kubectl/helm call return "" on the e2e bootstrap (the
+// "empty kubeconfig" red herring) — see TestRunCombined_OutputAfterRun.
+func runCombined(cmd *exec.Cmd) (string, bool) {
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	ok := cmd.Run() == nil
+	return buf.String(), ok
 }
 
 // envWithKubeconfig returns the process env with KUBECONFIG set to exactly `path`
