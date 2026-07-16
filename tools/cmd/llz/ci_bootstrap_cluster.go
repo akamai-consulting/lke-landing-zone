@@ -574,19 +574,45 @@ func readCoreDNSClusterIP(d bootstrapDeps) (string, error) {
 				return ip, nil
 			}
 		}
-		if !d.now().Before(deadline) {
-			if out, _ := d.kubectl("-n", "kube-system", "get", "services"); out != "" {
-				fmt.Fprintln(os.Stderr, "kube-system services:")
-				fmt.Fprintln(os.Stderr, strings.TrimRight(out, "\n"))
-			}
-			return "", fmt.Errorf("cluster DNS Service ClusterIP not resolvable within %s (tried the port-53 Service + coredns/kube-dns by name) — see the kube-system services dump above", coreDNSReadBudget)
-		}
 		if first {
+			// First miss: dump what THIS command's kubectl can actually see, up
+			// front, so an empty read (kubectl connects but returns nothing) is
+			// diagnosable immediately rather than only after the whole budget.
+			diagnoseClusterAccess(d)
 			fmt.Println("Waiting for the cluster DNS Service to have a ClusterIP...")
 			first = false
 		}
+		if !d.now().Before(deadline) {
+			return "", fmt.Errorf("cluster DNS Service ClusterIP not resolvable within %s (tried the port-53 Service + coredns/kube-dns by name) — see the cluster-access diagnostics above", coreDNSReadBudget)
+		}
 		d.sleep(coreDNSReadInterval)
 	}
+}
+
+// diagnoseClusterAccess prints what this command's kubectl seam can actually see —
+// identity, API server, and node/namespace/service visibility — so an empty DNS
+// read is distinguishable from a genuinely not-yet-ready cluster. Best-effort, all
+// to stderr.
+func diagnoseClusterAccess(d bootstrapDeps) {
+	probes := []struct {
+		label string
+		args  []string
+	}{
+		{"auth whoami", []string{"auth", "whoami"}},
+		{"api server", []string{"config", "view", "--minify", "-o", "jsonpath={.clusters[0].cluster.server}"}},
+		{"nodes", []string{"get", "nodes", "-o", "name"}},
+		{"namespaces", []string{"get", "namespaces", "-o", "name"}},
+		{"all services (-A)", []string{"get", "services", "-A", "--no-headers"}},
+	}
+	fmt.Fprintln(os.Stderr, "── cluster-access diagnostics (what bootstrap-cluster's kubectl sees) ──")
+	for _, p := range probes {
+		out, ok := d.kubectl(p.args...)
+		fmt.Fprintf(os.Stderr, "  [%s] ok=%v\n", p.label, ok)
+		if s := strings.TrimRight(out, "\n"); s != "" {
+			fmt.Fprintln(os.Stderr, s)
+		}
+	}
+	fmt.Fprintln(os.Stderr, "──────────────────────────────────────────────────────────────────────")
 }
 
 // injectRuntimeValues fills the secrets-only ${...} placeholders and hard-fails
