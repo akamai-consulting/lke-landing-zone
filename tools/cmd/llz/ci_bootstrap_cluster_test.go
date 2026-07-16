@@ -122,6 +122,11 @@ func TestAssertEnvRevision_MissingFile(t *testing.T) {
 // ── readCoreDNSClusterIP ─────────────────────────────────────────────────────
 
 func TestReadCoreDNSClusterIP(t *testing.T) {
+	// Zero the budget so the failure cases try once then deadline (no real waiting).
+	orig := coreDNSReadBudget
+	coreDNSReadBudget = 0
+	t.Cleanup(func() { coreDNSReadBudget = orig })
+
 	cases := []struct {
 		name    string
 		out     string
@@ -136,7 +141,11 @@ func TestReadCoreDNSClusterIP(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := bootstrapDeps{kubectl: func(_ ...string) (string, bool) { return c.out, c.ok }}
+			d := bootstrapDeps{
+				kubectl: func(_ ...string) (string, bool) { return c.out, c.ok },
+				now:     time.Now,
+				sleep:   func(time.Duration) {},
+			}
 			got, err := readCoreDNSClusterIP(d)
 			if c.wantErr && err == nil {
 				t.Fatalf("expected error")
@@ -148,6 +157,38 @@ func TestReadCoreDNSClusterIP(t *testing.T) {
 				t.Errorf("got %q want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// The regression that failed the first e2e: coredns's Service is present but its
+// ClusterIP is not yet allocated, so the first read is empty — the loop must retry
+// until it's assigned rather than failing the whole bootstrap at step 1.
+func TestReadCoreDNSClusterIP_RetriesUntilAssigned(t *testing.T) {
+	orig := coreDNSReadBudget
+	coreDNSReadBudget = time.Minute
+	t.Cleanup(func() { coreDNSReadBudget = orig })
+
+	calls := 0
+	d := bootstrapDeps{
+		kubectl: func(_ ...string) (string, bool) {
+			calls++
+			if calls < 3 {
+				return "", true // Service exists (exit 0) but clusterIP empty
+			}
+			return "10.43.0.10", true
+		},
+		now:   time.Now,
+		sleep: func(time.Duration) {},
+	}
+	got, err := readCoreDNSClusterIP(d)
+	if err != nil {
+		t.Fatalf("expected success after retries, got %v", err)
+	}
+	if got != "10.43.0.10" {
+		t.Errorf("got %q want 10.43.0.10", got)
+	}
+	if calls < 3 {
+		t.Errorf("expected >=3 attempts (retry on empty ClusterIP), got %d", calls)
 	}
 }
 

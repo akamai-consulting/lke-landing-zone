@@ -529,17 +529,44 @@ func kyvernoPolicySpecs() (specs []kyvernoPolicyOpts, cleanup func(), err error)
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
+// coreDNSReadBudget / coreDNSReadInterval bound the coredns ClusterIP poll below.
+// Package vars so tests zero them.
+var (
+	coreDNSReadBudget   = 3 * time.Minute
+	coreDNSReadInterval = 5 * time.Second
+)
+
 // readCoreDNSClusterIP reads the kube-system coredns Service ClusterIP (the loki
 // gateway nginx `resolver`). Apply-only and load-bearing: an empty value ships a
 // crashlooping gateway, so a missing IP is a hard error.
+//
+// It POLLS rather than reading once: on a freshly-ready LKE-E cluster the coredns
+// Service can exist before its ClusterIP is allocated, so the very first read
+// returns "" (observed failing an e2e at step 1 — the Service is present, exit 0,
+// but jsonpath matches an empty clusterIP). Retry until it has an IP or the budget
+// elapses, then fail loud with what we last saw.
 func readCoreDNSClusterIP(d bootstrapDeps) (string, error) {
-	out, ok := d.kubectl("-n", "kube-system", "get", "service", "coredns",
-		"-o", "jsonpath={.spec.clusterIP}")
-	ip := strings.TrimSpace(out)
-	if !ok || ip == "" {
-		return "", fmt.Errorf("read coredns ClusterIP (kube-system/coredns): %s", strings.TrimSpace(out))
+	deadline := d.now().Add(coreDNSReadBudget)
+	first := true
+	for {
+		out, ok := d.kubectl("-n", "kube-system", "get", "service", "coredns",
+			"-o", "jsonpath={.spec.clusterIP}")
+		if ip := strings.TrimSpace(out); ok && ip != "" {
+			if !first {
+				fmt.Printf("coredns ClusterIP resolved: %s\n", ip)
+			}
+			return ip, nil
+		}
+		if !d.now().Before(deadline) {
+			return "", fmt.Errorf("coredns ClusterIP (kube-system/coredns) not resolvable within %s: %s",
+				coreDNSReadBudget, firstNonEmpty(strings.TrimSpace(out), "empty (Service present but no ClusterIP yet?)"))
+		}
+		if first {
+			fmt.Println("Waiting for the coredns Service to have a ClusterIP...")
+			first = false
+		}
+		d.sleep(coreDNSReadInterval)
 	}
-	return ip, nil
 }
 
 // injectRuntimeValues fills the secrets-only ${...} placeholders and hard-fails
