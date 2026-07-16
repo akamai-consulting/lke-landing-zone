@@ -23,6 +23,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -76,6 +77,16 @@ func runAssertBroadPATRotation(region string) error {
 		return nil
 	}
 
+	// Force the tick DUE before exercising. The bootstrap seed writes rotated_at=0,
+	// but it is --skip-if-present on the token: on a REUSED cluster (the token was
+	// already minted by a prior run) the whole seed no-ops, so rotated_at keeps the
+	// LAST rotation's recent timestamp. rotateBroadPAT would then (correctly) read it
+	// as "not due" and skip — failing this gate for a non-bug. Reset rotated_at=0 so
+	// the exercise deterministically rotates on any cluster, fresh or reused.
+	if err := forceBroadPATRotationDue(); err != nil {
+		return err
+	}
+
 	// Fresh Job from the CronJob; drop a prior exercise Job first so re-runs are clean.
 	execCombined("kubectl", "-n", broadPATRotatorNS, "delete", "job", broadPATRotatorE2EJob, "--ignore-not-found")
 	if out, err := execOutput("kubectl", "-n", broadPATRotatorNS, "create", "job", broadPATRotatorE2EJob,
@@ -112,6 +123,28 @@ func runAssertBroadPATRotation(region string) error {
 		return fmt.Errorf("broad-PAT rotation asserted action=rotated, got %q (rotated_at not due, --apply missing, or a partial publish?)", action)
 	}
 	fmt.Printf("✓ broad-PAT rotation exercised end-to-end (action=%s)\n", action)
+	return nil
+}
+
+// forceBroadPATRotationDue resets secret/linode/broad-pat.rotated_at to 0 in
+// OpenBao so the exercise Job reads the tick as DUE regardless of cluster state.
+// Uses `kv patch` (not `kv put`): patch updates ONLY rotated_at and preserves the
+// minting `token` the rotator needs — a full put replaces the secret and would
+// drop it. Requires OPENBAO_ROOT_TOKEN (the same bootstrap-posture root token the
+// seed/configure steps run under; present in the e2e job env). The rotator reads
+// rotated_at straight from OpenBao (not via an ESO-synced Secret), so the reset
+// takes effect for the very next Job with no sync lag. Seamed via baoExecFn.
+func forceBroadPATRotationDue() error {
+	token := os.Getenv("OPENBAO_ROOT_TOKEN")
+	if token == "" {
+		return fmt.Errorf("OPENBAO_ROOT_TOKEN must be set to reset %s rotated_at before the rotation exercise", broadPATBaoPath)
+	}
+	_, errOut, err := baoExecFn(rootOpenbaoPod, token, "", "kv", "patch", broadPATBaoPath, "rotated_at=0")
+	if err != nil {
+		return fmt.Errorf("reset %s rotated_at=0 (force the exercise due): %s",
+			broadPATBaoPath, strings.TrimSpace(firstNonEmpty(errOut, err.Error())))
+	}
+	fmt.Printf("reset %s rotated_at=0 — the exercise tick is now due.\n", broadPATBaoPath)
 	return nil
 }
 
