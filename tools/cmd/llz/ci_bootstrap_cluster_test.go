@@ -604,37 +604,79 @@ func TestAuthedGitURL(t *testing.T) {
 	}
 }
 
-func TestWaitAplValuesBranch(t *testing.T) {
+func TestEnsureAplValuesBranch(t *testing.T) {
 	o := bootstrapClusterOpts{aplValuesRepoToken: "PAT"}
 
 	// No coords → clean skip, never touches git.
 	called := false
-	d := bootstrapDeps{git: func(_ ...string) (string, bool) { called = true; return "", true }, now: time.Now, sleep: func(time.Duration) {}}
-	if err := waitAplValuesBranch(d, o, "", ""); err != nil || called {
+	d := bootstrapDeps{git: func(_ ...string) (string, bool) { called = true; return "", true }}
+	if err := ensureAplValuesBranch(d, o, "", ""); err != nil || called {
 		t.Fatalf("empty coords should skip: err=%v called=%v", err, called)
 	}
 
-	// Branch present immediately (ls-remote returns a SHA) → success, authed URL used.
-	var gotURL, gotRef string
-	d.git = func(args ...string) (string, bool) {
-		gotURL, gotRef = args[1], args[2]
-		return "abc123\trefs/heads/apl-e2e", true
-	}
-	if err := waitAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil {
-		t.Fatalf("branch present should succeed: %v", err)
-	}
-	if gotURL != "https://x-access-token:PAT@github.com/acme/inst.git" || gotRef != "refs/heads/apl-e2e" {
-		t.Errorf("ls-remote called with (%q,%q)", gotURL, gotRef)
+	// git subcommand, accounting for a leading `-C <dir>` (checkout/push use it).
+	gitSub := func(args []string) string {
+		if len(args) >= 3 && args[0] == "-C" {
+			return args[2]
+		}
+		if len(args) > 0 {
+			return args[0]
+		}
+		return ""
 	}
 
-	// Branch never appears (empty ls-remote) → loud error on the budget, naming the token.
-	origB, origI := aplBranchWaitBudget, aplBranchWaitInterval
-	aplBranchWaitBudget, aplBranchWaitInterval = 0, 0
-	t.Cleanup(func() { aplBranchWaitBudget, aplBranchWaitInterval = origB, origI })
-	d.git = func(_ ...string) (string, bool) { return "", true } // exists-check: empty = not yet
-	err := waitAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e")
+	// Branch already exists (ls-remote returns a SHA) → no clone/push, authed URL used.
+	var lsURL, lsRef string
+	created := false
+	d.git = func(args ...string) (string, bool) {
+		switch gitSub(args) {
+		case "ls-remote":
+			lsURL, lsRef = args[1], args[2]
+			return "abc123\trefs/heads/apl-e2e", true // present
+		case "clone", "checkout", "push":
+			created = true
+		}
+		return "", true
+	}
+	if err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil {
+		t.Fatalf("existing branch should be a no-op: %v", err)
+	}
+	if created {
+		t.Error("must NOT create a branch that already exists")
+	}
+	if lsURL != "https://x-access-token:PAT@github.com/acme/inst.git" || lsRef != "refs/heads/apl-e2e" {
+		t.Errorf("ls-remote called with (%q,%q)", lsURL, lsRef)
+	}
+
+	// Branch absent → seed it: clone (depth 1) → checkout -B → push, in that order.
+	var seq []string
+	d.git = func(args ...string) (string, bool) {
+		seq = append(seq, gitSub(args))
+		return "", true // ls-remote empty = absent; rest succeed
+	}
+	if err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil {
+		t.Fatalf("absent branch should be seeded: %v", err)
+	}
+	if strings.Join(seq, ",") != "ls-remote,clone,checkout,push" {
+		t.Errorf("seed sequence = %v, want ls-remote,clone,checkout,push", seq)
+	}
+
+	// A push failure surfaces LOUD, names the token, and does NOT leak the secret.
+	d.git = func(args ...string) (string, bool) {
+		switch gitSub(args) {
+		case "ls-remote":
+			return "", true // absent
+		case "push":
+			return "remote: Permission denied to https://x-access-token:PAT@github.com/acme/inst.git", false
+		}
+		return "", true
+	}
+	err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e")
 	if err == nil || !strings.Contains(err.Error(), "Contents:write") {
-		t.Errorf("expected a loud budget error naming the token, got %v", err)
+		t.Errorf("expected a loud push error naming the token, got %v", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "PAT") {
+		t.Errorf("push error leaked the token: %v", err)
 	}
 }
 
