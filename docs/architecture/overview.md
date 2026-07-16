@@ -41,7 +41,7 @@ flowchart LR
     subgraph INST["🏗️ Instance repo (downstream, per org)"]
         direction TB
         IDENT["org/cluster identity only<br/>tfvars + apl-values overlays"]
-        STUBS["thin caller stubs<br/>(reusable workflows @vX.Y.Z)"]
+        STUBS["thin caller stubs<br/>+ vendored llz-* bodies & actions (local ./ uses)"]
         PINBIN["pinned llz binary"]
     end
 

@@ -7,8 +7,9 @@ name: llz-wedge-gameday (reusable)
 # proof of the #163 containment claim; `llz ci wedge-gameday` always restores the
 # ExternalSecret (and Argo self-heal reverts it too), so the cluster is left as found.
 #
-# Same surface-reduction + dual-checkout + cluster-access pattern as
-# llz-cluster-health.yml (which see): the instance ships a ~20-line caller stub. Run
+# Same surface-reduction + single-checkout + cluster-access pattern as
+# llz-cluster-health.yml (which see): the instance ships a ~20-line caller stub
+# and vendors this body + the composite actions. Run
 # it against a warm cluster the converge-only fast-path (#146) keeps up, or after an
 # e2e provision with keep_cluster=true.
 
@@ -35,7 +36,7 @@ on:
         type: number
         default: 300
       template-ref:
-        description: 'LLZ template ref to source the actions + llz from. Pin to the same tag as this workflow''s @<ref>.'
+        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
         required: false
         type: string
         default: main
@@ -69,27 +70,12 @@ jobs:
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       TF_IN_AUTOMATION:    'true'
     steps:
-      # Dual checkout (Option A) — see llz-cluster-health.yml for the rationale.
+      # Single checkout — see llz-cluster-health.yml for the rationale.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Cluster access (kubeconfig + runner ACL + llz)
-        uses: ./_llz-template/.github/actions/cluster-access
+        uses: ./.github/actions/cluster-access
         with:
-          template-ref:          ${{ inputs.template-ref }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -131,7 +117,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: ./_llz-template/.github/actions/lke-runner-acl
+        uses: ./.github/actions/lke-runner-acl
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

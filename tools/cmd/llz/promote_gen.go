@@ -10,12 +10,15 @@ package main
 // approval/soak gate, and GitHub's "Re-run failed jobs" is the resume. There is
 // no self-dispatch loop to reinvent.
 //
-// The pin (the reusable workflow `uses:@<ref>`, instance_repo, template-ref) is
-// NOT regenerated from the ranks — it is PRESERVED from the file already on disk
-// (or, on a fresh instance, lifted from the sibling terraform.yml caller stub, or
-// finally derived from .copier-answers.yml + .template-version). That keeps this
-// file in lockstep with terraform.yml's pin — Renovate bumps both `uses:` refs in
-// one PR — so a version bump never shows up as pipeline "drift"; only a
+// The reusable body is vendored into the instance (ADR 0003), so the `uses:` is
+// the LOCAL ./.github/workflows/llz-terraform.yml — no org, no @<ref>. The pin
+// that remains (instance_repo, template-ref, and the renovate depName annotated
+// on template-ref) is NOT regenerated from the ranks — it is PRESERVED from the
+// file already on disk (or, on a fresh instance, lifted from the sibling
+// terraform.yml caller stub, or finally derived from .copier-answers.yml +
+// .template-version). A legacy instance whose stubs still carry a cross-repo
+// `uses:@<ref>` keeps that form verbatim (it has no vendored body to point at),
+// so a template-version bump never shows up as pipeline "drift"; only a
 // promotion_rank change does, which is exactly what `llz env pipeline --check`
 // gates in CI.
 
@@ -27,42 +30,64 @@ import (
 	"strings"
 )
 
+// localTerraformUses is the vendored-body reference every instance rendered from
+// ADR 0003 onward carries: same-repo, so `secrets: inherit` resolves and nothing
+// is fetched cross-repo at runtime.
+const localTerraformUses = "./.github/workflows/llz-terraform.yml"
+
 // promoCaller is the caller-stub boilerplate shared by every promote stage: which
-// reusable workflow to call (path@ref), the instance repo, and the template-ref
-// input. Reused verbatim across stages so promote.yml calls exactly what
-// terraform.yml does.
+// reusable workflow to call, the instance repo, the template-ref input, and the
+// renovate depName annotated on it. Reused verbatim across stages so promote.yml
+// calls exactly what terraform.yml does.
 type promoCaller struct {
-	uses         string // <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@<ref>
+	uses         string // ./.github/workflows/llz-terraform.yml (legacy instances: <org>/lke-landing-zone/…@<ref>)
 	instanceRepo string
 	templateRef  string
+	depName      string // <org>/lke-landing-zone — the `# renovate:` depName for the template-ref pin
 }
 
 var (
-	reUses        = regexp.MustCompile(`(?m)^\s*uses:\s*(\S+/lke-landing-zone/\.github/workflows/llz-terraform\.yml@\S+)`)
+	reUsesLocal   = regexp.MustCompile(`(?m)^\s*uses:\s*(\./\.github/workflows/llz-terraform\.yml)\s*$`)
+	reUsesCross   = regexp.MustCompile(`(?m)^\s*uses:\s*(\S+/lke-landing-zone/\.github/workflows/llz-terraform\.yml@\S+)`)
 	reInstanceErr = regexp.MustCompile(`(?m)^\s*instance_repo:\s*(\S+)`)
 	reTemplateRef = regexp.MustCompile(`(?m)^\s*template-ref:\s*(\S+)`)
+	reDepName     = regexp.MustCompile(`(?m)^\s*#\s*renovate:\s*datasource=github-tags\s+depName=(\S+)`)
 )
 
 // callerFromWorkflow extracts the pin from an existing rendered caller stub
-// (promote.yml or terraform.yml). Returns ok=false if the file is absent or does
-// not carry a concrete llz-terraform.yml `uses:` line (e.g. an unrendered
-// copier-token template).
+// (promote.yml or terraform.yml). Returns ok=false if the file is absent, does
+// not carry an llz-terraform.yml `uses:` line, or still carries copier tokens
+// (an unrendered template). The local `./` form is preferred; a legacy cross-repo
+// `uses:@<ref>` is preserved verbatim so old instances keep the pin they run.
 func callerFromWorkflow(path string) (promoCaller, bool) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return promoCaller{}, false
 	}
 	s := string(b)
-	uses := reUses.FindStringSubmatch(s)
-	if uses == nil || strings.Contains(uses[1], "<@") {
-		return promoCaller{}, false // missing or still a copier token
+	var c promoCaller
+	if m := reUsesLocal.FindStringSubmatch(s); m != nil {
+		c.uses = m[1]
+	} else if m := reUsesCross.FindStringSubmatch(s); m != nil && !strings.Contains(m[1], "<@") {
+		c.uses = m[1]
+	} else {
+		return promoCaller{}, false // no concrete uses: line
 	}
-	c := promoCaller{uses: uses[1]}
 	if m := reInstanceErr.FindStringSubmatch(s); m != nil {
 		c.instanceRepo = m[1]
 	}
 	if m := reTemplateRef.FindStringSubmatch(s); m != nil {
 		c.templateRef = m[1]
+	}
+	if m := reDepName.FindStringSubmatch(s); m != nil {
+		c.depName = m[1]
+	} else if c.uses != localTerraformUses {
+		c.depName = depNameFromUses(c.uses) // legacy pin carries the org in uses:
+	}
+	// A local `uses:` is a literal that exists in the un-rendered template too, so
+	// it no longer proves the stub is rendered — reject leftover copier tokens.
+	if strings.Contains(c.instanceRepo, "<@") || strings.Contains(c.templateRef, "<@") || strings.Contains(c.depName, "<@") {
+		return promoCaller{}, false
 	}
 	return c, true
 }
@@ -82,12 +107,13 @@ func resolveCaller(workflowsDir string) (promoCaller, error) {
 	a, _ := readAnswers(".")
 	ref := templateRefFromStamp()
 	if a == nil || a.UpstreamOrg == "" || a.InstanceRepo == "" || ref == "" {
-		return promoCaller{}, fmt.Errorf("cannot determine the reusable-workflow pin: no rendered promote.yml/terraform.yml to copy it from, and .copier-answers.yml/.template-version are incomplete")
+		return promoCaller{}, fmt.Errorf("cannot determine the caller pin: no rendered promote.yml/terraform.yml to copy it from, and .copier-answers.yml/.template-version are incomplete")
 	}
 	return promoCaller{
-		uses:         fmt.Sprintf("%s/lke-landing-zone/.github/workflows/llz-terraform.yml@%s", a.UpstreamOrg, ref),
+		uses:         localTerraformUses, // the vendored body (ADR 0003)
 		instanceRepo: a.InstanceRepo,
 		templateRef:  ref,
+		depName:      a.UpstreamOrg + "/lke-landing-zone",
 	}, nil
 }
 
@@ -164,7 +190,9 @@ jobs:
 		b.WriteString(fmt.Sprintf("    uses: %s\n", c.uses))
 		b.WriteString("    with:\n")
 		b.WriteString(fmt.Sprintf("      instance_repo: %s\n", c.instanceRepo))
-		b.WriteString("      # renovate: datasource=github-tags depName=" + depNameFromUses(c.uses) + "\n")
+		if c.depName != "" {
+			b.WriteString("      # renovate: datasource=github-tags depName=" + c.depName + "\n")
+		}
 		b.WriteString(fmt.Sprintf("      template-ref: %s\n", c.templateRef))
 		b.WriteString("      action: apply\n")
 		b.WriteString("      module: ${{ inputs.module || 'all' }}\n")
@@ -177,8 +205,10 @@ jobs:
 	return b.String()
 }
 
-// depNameFromUses turns the `uses:` value into the <org>/<repo> slug Renovate
-// tracks (mirrors the `# renovate:` comment terraform.yml carries on template-ref).
+// depNameFromUses turns a LEGACY cross-repo `uses:` value into the <org>/<repo>
+// slug Renovate tracks (mirrors the `# renovate:` comment terraform.yml carries on
+// template-ref). Only meaningful for the cross-repo form — a local `./` uses
+// carries no org; its depName comes from the annotation or .copier-answers.yml.
 func depNameFromUses(uses string) string {
 	// <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@<ref>
 	path := uses

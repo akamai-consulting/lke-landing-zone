@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase-3 dogfood cutover (templatization-plan §6/§10, modules/RELEASING.md).
+# Phase-3 dogfood cutover — see terraform-modules/RELEASING.md.
 # node_pool is CUT OVER to its published git:: source (the canary). The remaining
 # modules each keep a commented `git::?ref=` line staged above an active relative
 # `source` — they still resolve locally so `terraform plan` keeps working. To cut

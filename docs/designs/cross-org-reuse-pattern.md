@@ -1,6 +1,17 @@
 # Design: a reuse pattern that doesn't depend on same-org secret inheritance
 
-**Status:** In progress — design + Phase 0 landing on branch `feat/cross-org-reuse-pattern`.
+**Status:** Superseded by [ADR 0003](../adr/0003-vendor-actions-and-bodies-into-instances.md).
+The shipped resolution goes further than this design proposed: instead of keeping the
+composite actions central and referencing them cross-org at a pinned tag (which still
+requires the template repo to be reachable at runtime — impossible on an air-gapped
+GHE), the reusable workflow **bodies and composite actions are both vendored into
+every instance** and referenced with repo-local `./` paths. `secrets: inherit` is then
+same-repo by construction and the instance is fully self-contained. This document is
+kept for the analysis of *why* the cross-org `secrets: inherit` boundary cannot be
+patched inside a cross-repo reusable-workflow model (Problem / Wrinkles below); its
+Phase 0 sync-hardening and Phase 1 doctor guardrail landed and still apply. Example
+snippets below show the cross-org action refs this design proposed — the shipped form
+is `./.github/actions/<name>`.
 **Tracks:** [#201](https://github.com/akamai-consulting/lke-landing-zone/issues/201) (this design) · [#200](https://github.com/akamai-consulting/lke-landing-zone/issues/200) (the cross-org `secrets: inherit` bug + guardrail).
 **Relates to:** `instance-template/.github/workflows/`, `.github/actions/`, `.github/workflows/llz-*.yml` (the reusable workflows), `copier.yml`, `instance-template/.template-manifest`, `tools/cmd/llz/checks.go`.
 

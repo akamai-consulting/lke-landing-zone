@@ -4,12 +4,13 @@ name: Scheduled Checks
 # rotation-SLA checks, PAT-expiry audits, PrometheusRule + cert-manager health,
 # Go CVE audit, template-drift report) lives in the template and is sourced there,
 # along with the fetch-kubeconfig action, the `llz openbao exec` passthrough, and
-# the Go tools/ module the audit jobs build (see docs/templatization-plan.md
-# §"Keeping instances in sync"). This stub owns only the trigger surface: the
+# the Go tools/ module the audit jobs build (see docs/adr/0003-vendor-actions-and-bodies-into-instances.md). This stub owns only the trigger surface: the
 # weekly + daily + monthly crons.
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
-# sourced from the template repo at the pinned @<ref> (same org/enterprise, so `secrets: inherit` still flows; cross-org adopters rely on the environment-scoped secrets the reusable's jobs resolve themselves). Pin template-ref to
-# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201).
+# template-ref records the template release this instance is rendered from —
+# `llz upgrade` re-pins it (renovate.json disables the first-party pin on purpose
+# so the two never race).
 
 on:
   schedule:
@@ -44,9 +45,10 @@ permissions:
 
 jobs:
   call:
-    # Pinned to an immutable LLZ template release tag (not @main) so updates
-    # arrive as reviewable Renovate PRs. ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).
-    uses: <@ upstream_org @>/lke-landing-zone/.github/workflows/llz-scheduled-checks.yml@<@ llz_version @>
+    # Local reusable — the body ships in this repo and is re-rendered by
+    # `llz upgrade`, so updates arrive as reviewable template-version PRs.
+    # ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).
+    uses: ./.github/workflows/llz-scheduled-checks.yml
     with:
       fuzz_seconds: ${{ inputs.fuzz_seconds || '60' }}
       drift_branch: ${{ inputs.drift_branch || 'main' }}

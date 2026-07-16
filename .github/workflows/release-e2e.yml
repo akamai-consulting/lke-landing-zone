@@ -284,8 +284,8 @@ jobs:
           # The scaffold already names its TF roots terraform-iac-bootstrap/ (what
           # terraform.yml and the actions chdir into), so no rename is needed.
           # Operational tooling (the llz CLI, which absorbed instance-scripts/) is
-          # template-INTERNAL (like .github/actions): the reusable llz-* workflows
-          # build it from a template checkout. A real instance has no scripts/, so
+          # template-INTERNAL: it is baked into the TF_IMAGE the reusable llz-*
+          # workflows run in. A real instance has no scripts/, so
           # the e2e instance must not either — don't hoist anything here.
           # docs/ are delivered the same way (copier _tasks): copy the full set in,
           # then `llz ci deliver-docs` prunes to the operator set + writes the
@@ -296,10 +296,10 @@ jobs:
           mkdir -p .e2e-instance/docs && cp -a docs/. .e2e-instance/docs/
           bin/llz ci deliver-docs --docs .e2e-instance/docs \
             --org "${GITHUB_REPOSITORY_OWNER}" --ref "${GITHUB_SHA}"
-          # Composite actions are template-internal — the reusable llz-* workflows
-          # source them from a template checkout, so instances don't carry them
-          # (copier.yml `_exclude`s `.github/actions`). Mirror that here.
-          rm -rf .e2e-instance/.github/actions
+          # Composite actions are VENDORED into every instance (.github/actions/ —
+          # the reusable llz-* bodies reference them as `./.github/actions/<name>`),
+          # so the `cp -a instance-template/.` above already put them where the
+          # dispatched workflows resolve them. Do NOT prune them here.
           # `.copier-answers.yml` carries copier-internal jinja (`<@ _copier_answers
           # … @>`) that only `copier update` renders — which this throwaway instance
           # never runs, so the copier-written file can't be kept (its jinja would trip
@@ -361,13 +361,19 @@ jobs:
                 -e "s#(/lke-landing-zone/\.github/workflows/llz-[A-Za-z0-9_-]+\.yml)@[^[:space:]]+#\1@${GITHUB_SHA}#g" \
                 -e "s#(//terraform-modules/llz-[A-Za-z0-9_-]+\?ref=)[^\"]+#\1${GITHUB_SHA}#g"
           # Repoint the caller stubs' `template-ref: <value>` to the SHA under test.
-          # REQUIRE a value ([[:space:]]+ then a non-space) so this matches only the
-          # value form — NOT the bare `template-ref:` INPUT-DEFINITION key in the
+          # REQUIRE a value ([[:space:]]+ then a non-space, non-`$` char) so this
+          # matches ONLY the concrete-value form the caller stubs carry. It must NOT
+          # touch: (a) the bare `template-ref:` INPUT-DEFINITION key in the vendored
           # reusables (whose value is the nested description/required/type/default on
-          # the following lines). The old `[[:space:]]*.*` matched the bare key too,
-          # collapsing it to `template-ref:<sha>` and orphaning its children →
-          # "invalid workflow file … line N" (the reusables' template-ref input).
-          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]+)[^[:space:]].*/\1${GITHUB_SHA}/" .github/workflows/*.yml
+          # the following lines — the old `[[:space:]]*.*` matched it, collapsing it to
+          # `template-ref:<sha>` and orphaning its children → "invalid workflow file"),
+          # nor (b) llz-terraform.yml's `template-ref:` FORWARD line, which passes the
+          # caller's `inputs.template-ref` GitHub expression through to the nested
+          # bootstrap-openbao call — that value starts with a `$`, so excluding a leading
+          # `$` from the first value char leaves the expression intact. (Now that the
+          # bodies are vendored INTO the instance, this sed runs over them too; rewriting
+          # the forward to a literal SHA would be equivalent in e2e but wrong in general.)
+          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]+)[^[:space:]$].*/\1${GITHUB_SHA}/" .github/workflows/*.yml
           # Fail loudly if any token survived — a silent miss = a broken instance push.
           if grep -rnE '<@|@>' . ; then
             echo "::error::unrendered copier token(s) survived the e2e render pass"

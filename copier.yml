@@ -39,10 +39,10 @@ _templates_suffix: ""
 
 # Files under the scaffold that instances must NOT receive. Setting _exclude
 # REPLACES Copier's built-in default, so the usual junk patterns are re-listed.
-# (The composite actions the reusable `llz-*` workflows source used to live under
-# instance-template/.github/actions and were _excluded here; they now live at the
-# repo-root .github/actions/ — OUTSIDE the copier _subdirectory — and are
-# referenced remotely by the workflows, so there is nothing left to exclude.)
+# (The composite actions live under instance-template/.github/actions and are
+# deliberately NOT excluded: they are vendored into every instance so the
+# reusable llz-* bodies can reference them locally as ./.github/actions/<name> —
+# the self-contained-instance model, ADR 0003.)
 _exclude:
   - "copier.yml"
   - "copier.yaml"
@@ -84,12 +84,13 @@ _skip_if_exists:
 # template's own CI/README AND every instance:
 #   * docs/ — the operator-facing runbooks/playbooks/architecture the README
 #             calls "knowledge an adopter inherits", landed at the instance's
-#             docs/. The pure template-build docs (templatization-plan.md =
-#             extraction design, agents.md = contributor convention,
-#             designs/cross-org-reuse-pattern.md = the reuse-pattern extraction
-#             design) are dropped — they describe building the template, not
-#             operating an instance (and the last carries literal <@ … @> delimiter
-#             examples that must never reach the instance's rendered docs/).
+#             docs/. Only the operator set (quickstart + runbooks + playbooks) is
+#             kept locally; the template-build docs (agents.md = contributor
+#             convention, designs/cross-org-reuse-pattern.md = the reuse-pattern
+#             design) and everything else are dropped and referenced at the template
+#             repo instead — they describe building the template, not operating an
+#             instance (and cross-org-reuse-pattern.md carries literal <@ … @>
+#             delimiter examples that must never reach the instance's rendered docs/).
 # `_subdirectory` would otherwise never copy docs/, so this task pulls it in from
 # the cloned template (`_copier_conf.src_path`). Tasks run on BOTH `copier copy`
 # and `copier update`, so docs/ refreshes on update exactly like a `managed` file
@@ -110,10 +111,16 @@ _tasks:
   # this and release-e2e can't drift (the drift that leaked a template-build doc
   # into the e2e instance). No-op fallback if llz isn't on PATH (full docs kept).
   - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
-  # (The former strip-comments task is gone: the comment-heavy reusable workflow
-  # BODIES (llz-*.yml) moved to the template repo root and are referenced cross-repo
-  # — an instance now vendors only the thin caller stubs, whose comments are
-  # operator-facing. See docs/designs/instance-slimming.md.)
+  # The vendored workflow bodies (llz-*.yml) ship VERBATIM — comments included.
+  # There is deliberately NO comment-strip task here: .github/workflows/** is
+  # `merge`-classified (.template-manifest), and copier's 3-way merge on
+  # `copier update` uses the template render as its base — a render-time strip
+  # would make every instance copy diverge from that base on every comment line,
+  # so any release that touches a comment would land conflict markers in
+  # 1000-line workflow YAML (the invalid-YAML failure mode _skip_if_exists above
+  # documents from the gsap-apl v0.0.24 upgrade). Carrying maintainer comments
+  # is the cheap side of that trade. (The former `llz ci strip-comments` verb
+  # was removed with the task.)
   # Arm the pre-commit hook via `llz hooks` (secrets guard + `llz lint`). git init
   # needs a repo: on `copier update` the instance already is one; on the initial
   # `copier copy` it isn't yet, so init first. Test for `.git` in THIS dir (not

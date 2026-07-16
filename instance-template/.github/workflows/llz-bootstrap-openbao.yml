@@ -7,10 +7,10 @@ name: llz-bootstrap-openbao (reusable)
 # it as `uses: ./.github/workflows/llz-bootstrap-openbao.yml` + `secrets: inherit`
 # — same-repo, so the instance's environment secrets actually resolve. The body
 # runs in the `llz` container image and calls the cluster-access / fetch-kubeconfig
-# / lke-runner-acl composite actions from <upstream_org>/lke-landing-zone at the
-# pinned tag; the single instance checkout brings in terraform-iac-bootstrap/cluster
-# (fetch-kubeconfig's working-dir). `inputs.*` are workflow_call inputs forwarded
-# by the caller.
+# / lke-runner-acl composite actions from the instance's own vendored
+# .github/actions/ tree (./.github/actions/<name>); the single instance checkout
+# brings in terraform-iac-bootstrap/cluster (fetch-kubeconfig's working-dir) AND
+# those actions. `inputs.*` are workflow_call inputs forwarded by the caller.
 
 # Initializes, unseals, and configures an OpenBao cluster for a given region.
 #
@@ -97,7 +97,7 @@ on:
         required: true
         type: string
       template-ref:
-        description: 'LLZ template ref to source the fetch-kubeconfig action + scripts from. Pin to the same tag as this workflow''s @<ref>.'
+        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
         required: false
         type: string
         default: main
@@ -276,24 +276,9 @@ jobs:
       # the EAA controller doesn't evict it mid-run — required because the merged
       # convergence gate at the tail of this job polls for up to 10m (formerly the
       # separate `converge` job set this lease on its own cluster-access).
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Cluster access (kubeconfig + runner ACL)
-        uses: ./_llz-template/.github/actions/cluster-access
+        uses: ./.github/actions/cluster-access
         with:
-          template-ref:          ${{ inputs.template-ref }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -947,7 +932,7 @@ jobs:
       # call cuts apiserver access (we register-runner-lease on cluster-access above).
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: ./_llz-template/.github/actions/lke-runner-acl
+        uses: ./.github/actions/lke-runner-acl
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1003,24 +988,9 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
       # that cluster's control-plane ACL (revoked at job end). No llz needed here.
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Cluster access (peer kubeconfig + runner ACL)
-        uses: ./_llz-template/.github/actions/cluster-access
+        uses: ./.github/actions/cluster-access
         with:
-          template-ref:          ${{ inputs.template-ref }}
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1039,7 +1009,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (peer)
         if: always()
-        uses: ./_llz-template/.github/actions/lke-runner-acl
+        uses: ./.github/actions/lke-runner-acl
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1071,24 +1041,9 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # Fetch the standby cluster's (self) kubeconfig and open this runner's
       # egress IP in its control-plane ACL (revoked at job end). No llz needed.
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Cluster access (standby kubeconfig + runner ACL)
-        uses: ./_llz-template/.github/actions/cluster-access
+        uses: ./.github/actions/cluster-access
         with:
-          template-ref:          ${{ inputs.template-ref }}
           region:                ${{ inputs.region }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1108,7 +1063,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (standby)
         if: always()
-        uses: ./_llz-template/.github/actions/lke-runner-acl
+        uses: ./.github/actions/lke-runner-acl
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1135,24 +1090,9 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # Fetch the active peer's kubeconfig and open this runner's egress IP in
       # that cluster's control-plane ACL (revoked at job end). No llz needed here.
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Cluster access (peer kubeconfig + runner ACL)
-        uses: ./_llz-template/.github/actions/cluster-access
+        uses: ./.github/actions/cluster-access
         with:
-          template-ref:          ${{ inputs.template-ref }}
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1171,7 +1111,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner (peer)
         if: always()
-        uses: ./_llz-template/.github/actions/lke-runner-acl
+        uses: ./.github/actions/lke-runner-acl
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

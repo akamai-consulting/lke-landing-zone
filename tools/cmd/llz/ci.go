@@ -120,10 +120,11 @@ func ciCmd() *cobra.Command {
 	// (jwt auth) over a direct API call, for in-cluster runners — the primitive
 	// behind the cross-org thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
 	c.AddCommand(ciOpenBaoLoginCmd())
-	// Copier render-time slimming: strip YAML-level comments from the workflow
-	// bodies delivered into an instance (the template source keeps them), and
-	// prune docs/ to the operator set + reference the rest at the template repo.
-	c.AddCommand(ciStripCommentsCmd(), ciDeliverDocsCmd())
+	// Copier render-time slimming: prune docs/ to the operator set + reference
+	// the rest at the template repo. (The former strip-comments verb is gone:
+	// the vendored llz-*.yml bodies ship verbatim so an instance copy matches
+	// the copier render — see copier.yml's _tasks note.)
+	c.AddCommand(ciDeliverDocsCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())
