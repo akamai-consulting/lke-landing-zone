@@ -8,8 +8,10 @@ name: Wedge game-day (blast-radius containment proof)
 # fast-path's reused cluster).
 #
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
-# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201). Pin template-ref to a
-# template release tag (Renovate keeps both current — instance-template/renovate.json).
+# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201).
+# template-ref records the template release this instance is rendered from —
+# `llz upgrade` re-pins it (renovate.json disables the first-party pin on purpose
+# so the two never race).
 
 on:
   workflow_dispatch:

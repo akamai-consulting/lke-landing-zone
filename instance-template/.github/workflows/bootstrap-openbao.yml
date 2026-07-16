@@ -1,13 +1,12 @@
 name: Bootstrap OpenBao
 
-# Thin caller for the reusable LLZ workflow — the full body (init, unseal,
-# configure, secondary-CA reprovision, secret seeding), the fetch-kubeconfig
-# action, and the llz CLI all live in the template and are sourced
-# there (see docs/templatization-plan.md §"Keeping instances in sync"). The
-# reusable workflow checks THIS instance back out (its terraform-iac-bootstrap
-# TF state), so the instance copies only this stub.
-# ADOPTERS: repoint the `uses:` org to your fork and pin @<ref> + template-ref to
-# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+# Thin caller for the LOCAL reusable llz-bootstrap-openbao.yml — the full body
+# (init, unseal, configure, secondary-CA reprovision, secret seeding) and the
+# composite actions it calls are copier-delivered into THIS repo (vendored,
+# ADR 0003); the llz CLI is baked into vars.TF_IMAGE. The reusable checks this
+# instance back out (its terraform-iac-bootstrap TF state).
+# ADOPTERS: nothing to repoint — every `uses:` is a repo-local ./ path, and
+# `llz upgrade` re-pins template-ref with each template release.
 #
 # Operators dispatch this directly. The terraform.yml pipeline reaches OpenBao
 # bootstrap through llz-terraform's own bootstrap-openbao job (which calls

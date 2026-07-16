@@ -7,10 +7,10 @@ name: llz-bootstrap-openbao (reusable)
 # it as `uses: ./.github/workflows/llz-bootstrap-openbao.yml` + `secrets: inherit`
 # — same-repo, so the instance's environment secrets actually resolve. The body
 # runs in the `llz` container image and calls the cluster-access / fetch-kubeconfig
-# / lke-runner-acl composite actions from <upstream_org>/lke-landing-zone at the
-# pinned tag; the single instance checkout brings in terraform-iac-bootstrap/cluster
-# (fetch-kubeconfig's working-dir). `inputs.*` are workflow_call inputs forwarded
-# by the caller.
+# / lke-runner-acl composite actions from the instance's own vendored
+# .github/actions/ tree (./.github/actions/<name>); the single instance checkout
+# brings in terraform-iac-bootstrap/cluster (fetch-kubeconfig's working-dir) AND
+# those actions. `inputs.*` are workflow_call inputs forwarded by the caller.
 
 # Initializes, unseals, and configures an OpenBao cluster for a given region.
 #
@@ -97,7 +97,7 @@ on:
         required: true
         type: string
       template-ref:
-        description: 'LLZ template ref to source the fetch-kubeconfig action + scripts from. Pin to the same tag as this workflow''s @<ref>.'
+        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
         required: false
         type: string
         default: main

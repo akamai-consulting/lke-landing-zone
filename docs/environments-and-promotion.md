@@ -144,20 +144,25 @@ single-deployment flow uses — promotion only adds *ordering* (`needs:`) and th
 # .github/workflows/promote.yml  (GENERATED — `llz env pipeline` renders it)
 jobs:
   dev:                                                    # rank 1 — pipeline entry
-    uses: <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@vX.Y.Z
+    uses: ./.github/workflows/llz-terraform.yml           # vendored body — local, same-repo
     with: { action: apply, module: all, region: dev }
     secrets: inherit
   staging:                                                # rank 2
     needs: dev                                            # green gate
-    uses: <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@vX.Y.Z
+    uses: ./.github/workflows/llz-terraform.yml
     with: { action: apply, module: all, region: staging }
     secrets: inherit
   prod:                                                   # rank 3
     needs: staging
-    uses: <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@vX.Y.Z
+    uses: ./.github/workflows/llz-terraform.yml
     with: { action: apply, module: all, region: prod }
     secrets: inherit
 ```
+
+The `uses:` is **repo-local**: the instance vendors the reusable bodies and
+composite actions (ADR 0003), so `secrets: inherit` is same-repo and nothing is
+fetched from the template repo at runtime — the property that makes cross-org
+instances and air-gapped GHE deployments work.
 
 You never edit this file by hand. **`llz env add <env> --promotion-rank N`
 regenerates it**, and for the hand-edit path (you changed a `promotion_rank` in a
@@ -170,9 +175,10 @@ llz env pipeline --check    # CI gate: exit non-zero if promote.yml has drifted 
 
 Wire `llz env pipeline --check` into the instance's CI as the "did you
 regenerate?" guard so a tfvars rank edit can't silently diverge from the workflow.
-The reusable-workflow pin (`uses:@<ref>` + `template-ref`) is **preserved** from
-the file already on disk (or lifted from the sibling `terraform.yml`), so a
-Renovate version bump is *not* treated as drift — only a rank change is.
+The caller pin (`instance_repo` + `template-ref`) is **preserved** from the file
+already on disk (or lifted from the sibling `terraform.yml`), so a template
+version bump (`llz upgrade` re-pins `template-ref`) is *not* treated as drift —
+only a rank change is.
 
 Start a rollout with **Run workflow** on the Promote action (or `gh workflow run
 promote.yml`). It walks `dev → staging → prod`, pausing at each protected

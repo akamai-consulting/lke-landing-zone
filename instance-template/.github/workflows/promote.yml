@@ -35,8 +35,8 @@ name: Promote (dev → staging → prod)
 #     (wait timer) on infra-staging / infra-prod — NOT on infra-dev — so dev flows
 #     automatically and the human gate sits BETWEEN stages. Add a
 #     deployment-branch policy ("Selected branches: main") so only main promotes.
-#   • Repoint the `uses:` org to your fork and pin @<ref> + template-ref to a
-#     template release tag (Renovate keeps both current — instance-template/renovate.json).
+#   • Nothing to repoint: every stage calls the repo-local vendored body
+#     (./.github/workflows/llz-terraform.yml); `llz upgrade` re-pins template-ref.
 
 on:
   workflow_dispatch:

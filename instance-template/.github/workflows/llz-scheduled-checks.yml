@@ -1,8 +1,8 @@
 name: llz-scheduled-checks (reusable)
 
 # Reusable (`workflow_call`) version of the scheduled health/audit checks.
-# Surface-reduction pattern (docs/templatization-plan.md §"Keeping instances in
-# sync"): an instance ships a thin caller stub (which owns the `schedule:` crons)
+# Surface-reduction pattern
+# (docs/adr/0003-vendor-actions-and-bodies-into-instances.md): an instance ships a thin caller stub (which owns the `schedule:` crons)
 # and vendors this body plus the composite actions it calls, so every job runs
 # self-contained with no cross-repo checkout — which is what lets it run on an
 # air-gapped GitHub Enterprise. `github.event_name` / `github.event.schedule` are
@@ -17,7 +17,7 @@ on:
         type: string
         default: "60"
       template-ref:
-        description: 'LLZ template ref to source scripts/actions/tools from. Pin to the same tag as this workflow''s @<ref>.'
+        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
         required: false
         type: string
         default: main

@@ -283,8 +283,11 @@ kubectl kustomize apl-values/<env>/manifest >/dev/null   # must succeed
 hand-edit it.** `copier copy`/`copier update` fill the two scaffold-level tokens
 for you: `upstream_org` (every `akamai-consulting` in the scaffold — module
 `git::` sources, the OCI charts registry at `cluster-bootstrap/main.tf`, every
-Argo CD Application's `repoURL: ghcr.io/<org>/charts`, CI images, reusable-workflow
-refs) and `instance_repo` (the bootstrap Application repo URL + `gh` targeting).
+Argo CD Application's `repoURL: ghcr.io/<org>/charts`, CI images) and
+`instance_repo` (the bootstrap Application repo URL + `gh` targeting). The
+workflows need no repointing at all: the reusable bodies and composite actions
+are vendored into the instance and referenced with repo-local `./` paths
+(ADR 0003), so they carry no org.
 Copier renders every file in-place, so those resolve to your fork on render.
 
 The only first-party references you repoint by hand live **OUTSIDE** the scaffold,

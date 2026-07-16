@@ -3,7 +3,7 @@ name: Cluster health (diagnostic + E2E validate)
 # Thin caller for the reusable LLZ workflow — the body (fetch kubeconfig, cluster
 # health, optional Loki S3-backed assertion), the fetch-kubeconfig action, and
 # `llz ci health` all live in the template and are sourced there (see
-# docs/templatization-plan.md §"Keeping instances in sync"). The reusable
+# docs/adr/0003-vendor-actions-and-bodies-into-instances.md). The reusable
 # workflow checks THIS instance back out (its terraform-iac-bootstrap TF state),
 # so the instance copies only this stub.
 #
@@ -16,8 +16,10 @@ name: Cluster health (diagnostic + E2E validate)
 #     watches it, passing those flags explicitly (see release-e2e.yml §validate).
 #
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
-# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201). Pin template-ref to
-# a template release tag (Renovate keeps both current — instance-template/renovate.json).
+# copier-delivered into this repo, so `secrets: inherit` is same-repo (#201).
+# template-ref records the template release this instance is rendered from —
+# `llz upgrade` re-pins it (renovate.json disables the first-party pin on purpose
+# so the two never race).
 
 on:
   workflow_dispatch:
@@ -51,10 +53,11 @@ permissions:
 
 jobs:
   call:
-    # Pinned to an immutable LLZ template release tag (not @main) so updates
-    # arrive as reviewable Renovate PRs — see terraform-modules/RELEASING.md
-    # §"Template-repo releases". Keep the @<tag> and template-ref in lockstep
-    # (Renovate bumps both). ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).
+    # Local reusable — the body ships in this repo and is re-rendered by
+    # `llz upgrade` (template-ref records the release; llz upgrade re-pins it),
+    # so updates arrive as reviewable template-version PRs — see
+    # terraform-modules/RELEASING.md §"Template-repo releases".
+    # ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).
     uses: ./.github/workflows/llz-cluster-health.yml
     with:
       region: ${{ inputs.region }}

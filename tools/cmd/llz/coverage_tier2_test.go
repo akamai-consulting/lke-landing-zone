@@ -178,7 +178,8 @@ func TestResolveCaller(t *testing.T) {
 		t.Error("expected error when no pin source exists")
 	}
 
-	// A rendered promote.yml carries the pin → copied verbatim.
+	// A rendered promote.yml with a LEGACY cross-repo pin → preserved verbatim
+	// (an old instance has no vendored body to point a local uses: at).
 	promote := "jobs:\n  x:\n    uses: myorg/lke-landing-zone/.github/workflows/llz-terraform.yml@v2.3.4\n" +
 		"    with:\n      instance_repo: myorg/inst\n      template-ref: v2.3.4\n"
 	if err := os.WriteFile(filepath.Join(wfDir, "promote.yml"), []byte(promote), 0o644); err != nil {
@@ -188,7 +189,23 @@ func TestResolveCaller(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveCaller: %v", err)
 	}
-	if !strings.Contains(c.uses, "@v2.3.4") || c.instanceRepo != "myorg/inst" {
+	if !strings.Contains(c.uses, "@v2.3.4") || c.instanceRepo != "myorg/inst" || c.depName != "myorg/lke-landing-zone" {
 		t.Errorf("caller = %+v", c)
+	}
+
+	// An ADR-0003 instance's local uses: wins over the legacy fallback.
+	local := "jobs:\n  x:\n    uses: ./.github/workflows/llz-terraform.yml\n" +
+		"    with:\n      instance_repo: myorg/inst\n" +
+		"      # renovate: datasource=github-tags depName=myorg/lke-landing-zone\n" +
+		"      template-ref: v3.0.0\n"
+	if err := os.WriteFile(filepath.Join(wfDir, "promote.yml"), []byte(local), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err = resolveCaller(wfDir)
+	if err != nil {
+		t.Fatalf("resolveCaller (local): %v", err)
+	}
+	if c.uses != localTerraformUses || c.templateRef != "v3.0.0" || c.depName != "myorg/lke-landing-zone" {
+		t.Errorf("local caller = %+v", c)
 	}
 }

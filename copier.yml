@@ -39,10 +39,10 @@ _templates_suffix: ""
 
 # Files under the scaffold that instances must NOT receive. Setting _exclude
 # REPLACES Copier's built-in default, so the usual junk patterns are re-listed.
-# (The composite actions the reusable `llz-*` workflows source used to live under
-# instance-template/.github/actions and were _excluded here; they now live at the
-# repo-root .github/actions/ — OUTSIDE the copier _subdirectory — and are
-# referenced remotely by the workflows, so there is nothing left to exclude.)
+# (The composite actions live under instance-template/.github/actions and are
+# deliberately NOT excluded: they are vendored into every instance so the
+# reusable llz-* bodies can reference them locally as ./.github/actions/<name> —
+# the self-contained-instance model, ADR 0003.)
 _exclude:
   - "copier.yml"
   - "copier.yaml"

@@ -24,8 +24,8 @@
 # forwards them as explicit `with:` inputs and the jobs below gate on the `inputs`
 # context. On push/PR the caller forwards empty strings, leaving the action-gated
 # jobs skipped. The bootstrap-openbao job calls the sibling local reusable
-# llz-bootstrap-openbao.yml directly; the PR discover job calls the shared,
-# secret-free llz-discover-deployments.yml cross-org (no inheritance needed).
+# llz-bootstrap-openbao.yml directly; the PR discover job calls the sibling
+# local llz-discover-deployments.yml the same way (vendored, secret-free).
 on:
   workflow_call:
     inputs:
@@ -34,7 +34,7 @@ on:
         required: true
         type: string
       template-ref:
-        description: 'LLZ template ref to source the composite actions + scripts from. Pin to the same tag as this workflow''s @<ref>.'
+        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Consumed by the assert-image-fresh preflight (cross-checked against the llz baked into vars.TF_IMAGE — no template-repo fetch) and forwarded to llz-bootstrap-openbao.'
         required: false
         type: string
         default: main

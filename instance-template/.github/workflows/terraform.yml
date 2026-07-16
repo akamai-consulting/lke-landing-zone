@@ -7,17 +7,17 @@ name: Terraform Infrastructure
 # alongside this stub. Because that reusable is same-repo, `secrets: inherit`
 # actually delivers this instance's repo + environment secrets — unlike the old
 # cross-org `uses:` form, where inheritance silently arrived empty for any adopter
-# whose org differs from the template's (#200/#201). The STEP logic stays central:
-# the reusable runs in the `llz` container image and calls the terraform-init /
-# fetch-kubeconfig composite actions from <upstream_org>/lke-landing-zone at a
-# pinned tag (public, no secrets crossing the boundary).
+# whose org differs from the template's (#200/#201). The reusable runs in the
+# `llz` container image and calls the terraform-init / fetch-kubeconfig composite
+# actions from this repo's own vendored .github/actions/ tree — nothing is
+# fetched from the template repo at runtime (ADR 0003).
 # The dispatch inputs below are FORWARDED to the reusable as explicit
 # workflow_call inputs (`with:`) — a reusable workflow's github.event.inputs is
 # empty across the workflow_call boundary, so it reads them via `inputs`.
-# ADOPTERS: no fork needed for secrets — the job graph is local. `upstream_org` /
-# `llz_version` (the composite-action + image source, Renovate-pinned via
-# instance-template/renovate.json) point at the template; fork only if you want to
-# own those artifacts too.
+# ADOPTERS: no fork needed for secrets — the whole job graph is local.
+# `upstream_org` / `llz_version` still name the template's images + Terraform
+# module sources (re-pinned by `llz upgrade`); fork only if you want to own those
+# artifacts too.
 
 on:
   push:

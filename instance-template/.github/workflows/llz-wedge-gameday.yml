@@ -7,8 +7,9 @@ name: llz-wedge-gameday (reusable)
 # proof of the #163 containment claim; `llz ci wedge-gameday` always restores the
 # ExternalSecret (and Argo self-heal reverts it too), so the cluster is left as found.
 #
-# Same surface-reduction + dual-checkout + cluster-access pattern as
-# llz-cluster-health.yml (which see): the instance ships a ~20-line caller stub. Run
+# Same surface-reduction + single-checkout + cluster-access pattern as
+# llz-cluster-health.yml (which see): the instance ships a ~20-line caller stub
+# and vendors this body + the composite actions. Run
 # it against a warm cluster the converge-only fast-path (#146) keeps up, or after an
 # e2e provision with keep_cluster=true.
 
@@ -35,7 +36,7 @@ on:
         type: number
         default: 300
       template-ref:
-        description: 'LLZ template ref to source the actions + llz from. Pin to the same tag as this workflow''s @<ref>.'
+        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
         required: false
         type: string
         default: main
@@ -69,7 +70,7 @@ jobs:
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       TF_IN_AUTOMATION:    'true'
     steps:
-      # Dual checkout (Option A) — see llz-cluster-health.yml for the rationale.
+      # Single checkout — see llz-cluster-health.yml for the rationale.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Cluster access (kubeconfig + runner ACL + llz)

@@ -55,8 +55,8 @@ managed  landingzone.yaml.example
 managed  environments/*.yaml.example
 owned    landingzone.yaml
 owned    environments/*.yaml
-# Operational tooling is NOT classified here: like .github/actions, it's template-
-# INTERNAL and no longer delivered to instances (copier.yml drops the old _task).
+# Operational tooling is NOT classified here: it's template-INTERNAL and not
+# delivered to instances (unlike .github/actions above, which IS vendored now).
 # The former instance-scripts/ were assimilated into the llz CLI, which is baked
 # into the ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable
 # `llz-*` workflows run in, so an instance carries no scripts/ for this manifest to own.
@@ -90,7 +90,11 @@ managed  apl-values/README.md
 managed  apl-values/_shared/**
 
 # ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─
-# Workflows: the `uses:`/`template-ref` org + any dispatch defaults you tune.
+# Workflows: the caller stubs carry instance-local pins (instance_repo,
+# template-ref, the renovate depName) + any dispatch defaults you tune. The
+# vendored llz-*.yml bodies are token-free but ship VERBATIM (no comment-strip —
+# see copier.yml _tasks), so this 3-way merge is clean for them: the instance
+# copy matches the render unless an operator deliberately edited it.
 merge    .github/workflows/**
 # GitLab CI flavor: the parallel pipeline files a GitLab instance `include:`s from
 # the template — same fork-local include/image refs as the GitHub workflows.
