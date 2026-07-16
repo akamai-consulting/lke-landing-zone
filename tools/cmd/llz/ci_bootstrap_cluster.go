@@ -278,19 +278,25 @@ func runBootstrapCluster(f bootstrapFlags) error {
 	return bootstrapCluster(o, d)
 }
 
-// resolveKubeconfig returns a filesystem path the KUBECONFIG env can point at:
-// an existing --kubeconfig file as-is (cleanup is a no-op), else KUBECONFIG_RAW
-// written to a 0600 tempfile (cleanup removes it).
+// resolveKubeconfig returns a filesystem path the KUBECONFIG env can point at,
+// in priority order: an explicit --kubeconfig file; the inherited $KUBECONFIG
+// (the reference CI already sets on the step — the SAME one wait-cluster-ready /
+// diagnose-argocd use, which resolves correctly in the container job where a bare
+// $RUNNER_TEMP path did not); else KUBECONFIG_RAW spilled to a 0600 tempfile. The
+// first two return the path as-is (cleanup is a no-op); the last removes its temp.
 func resolveKubeconfig(path string) (string, func(), error) {
+	if path == "" {
+		path = os.Getenv("KUBECONFIG")
+	}
 	if path != "" {
 		if _, err := os.Stat(path); err != nil {
-			return "", func() {}, fmt.Errorf("--kubeconfig %q: %w", path, err)
+			return "", func() {}, fmt.Errorf("kubeconfig %q: %w", path, err)
 		}
 		return path, func() {}, nil
 	}
 	raw := os.Getenv("KUBECONFIG_RAW")
 	if raw == "" {
-		return "", func() {}, fmt.Errorf("no kubeconfig: pass --kubeconfig or set KUBECONFIG_RAW")
+		return "", func() {}, fmt.Errorf("no kubeconfig: pass --kubeconfig, set KUBECONFIG, or set KUBECONFIG_RAW")
 	}
 	tmp, err := os.CreateTemp("", "llz-bootstrap-kubeconfig-*")
 	if err != nil {
