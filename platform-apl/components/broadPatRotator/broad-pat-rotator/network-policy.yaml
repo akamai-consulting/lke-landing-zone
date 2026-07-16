@@ -27,13 +27,17 @@ spec:
   policyTypes: [Egress, Ingress]
   ingress: []
   egress:
+    # DNS. Match kube-system by NAMESPACE only, NOT a `k8s-app: kube-dns`
+    # podSelector: LKE-Enterprise runs CoreDNS labeled `k8s-app: coredns` (the
+    # `workload-coredns` deployment) — there is no `kube-dns`-labeled pod, so a
+    # kube-dns podSelector silently matches nothing and every lookup times out.
+    # That blocked the rotator's OpenBao Service resolution (login hung "awaiting
+    # headers") plus api.linode.com / api.github.com. Only DNS listens on :53 in
+    # kube-system, so a namespace-scoped :53 grant is both correct and safe.
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
       ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
