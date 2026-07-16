@@ -1401,6 +1401,23 @@ jobs:
         if: always() && steps.confirm.outcome == 'success'
         run: llz --yes ci teardown-delete-vpc --region "$REGION" --require-deleted
 
+      # ── Reap the deployment's minted Linode credentials (account-scoped) ────
+      # The loki + harbor-registry Object Storage keys (platform-loki-<env> /
+      # platform-harbor-registry-<env>) and the narrow in-cluster PAT
+      # (llz-incluster-<env>) carry no cluster tag, so the Volume/NB/VPC sweeps
+      # above — and `llz reap`'s cluster-liveness pass — never touch them. Each
+      # bootstrap/rotation mints fresh ones under a stable per-env label; without
+      # this a destroyed env's keys/PAT leak and accrete toward the account's
+      # 100-key / 100-PAT caps until a future mint 400s ("reached your access key
+      # quota") and bootstrap dies at mint-bootstrap-objkeys. Exact-label match on
+      # THIS env only; never the broad token the job runs under. Best-effort — a
+      # leftover key is a quota nuisance, not a reason to fail a clean destroy.
+      - name: Reap this deployment's minted obj-keys + in-cluster PAT
+        if: always() && steps.confirm.outcome == 'success'
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz --yes ci reap-objkeys --env "$REGION" || echo "::warning::reap-objkeys did not fully complete — check the account for leftover platform-*-${REGION} keys / llz-incluster-${REGION} PATs"
+
       # ── Final orphan gate (fail the destroy if anything is left behind) ─────
       # The scoped Volume + NodeBalancer sweeps above only fire when the cluster
       # still existed at teardown-capture time. When it was ALREADY gone — a

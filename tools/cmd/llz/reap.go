@@ -23,6 +23,7 @@ type reapOpts struct {
 	fwLabel        string
 	volumeIDs      string // space-separated allowlist
 	tagMustInclude string
+	env            string // deployment name; reaps its minted obj-keys + in-cluster PAT
 	force          bool
 }
 
@@ -40,7 +41,8 @@ func runReap(g globalOpts, o reapOpts) error {
 		fmt.Println(yellow("DRY-RUN — nothing will be deleted. Re-run with --yes to delete."))
 	}
 	fmt.Printf("  %s%s\n", dim("region:        "), orAll(o.region))
-	fmt.Printf("  %s%s\n\n", dim("cluster label: "), orNone(o.clusterLabel))
+	fmt.Printf("  %s%s\n", dim("cluster label: "), orNone(o.clusterLabel))
+	fmt.Printf("  %s%s\n\n", dim("env (creds):   "), orNone(o.env))
 
 	deleted, failed := 0, 0
 	// del prints (dry-run) or deletes (confirm), tallying outcomes.
@@ -107,6 +109,25 @@ func runReap(g globalOpts, o reapOpts) error {
 		fmt.Println(dim("  skipped — set --region and/or --volume-ids to scope the sweep (refusing an unscoped Volume delete)"))
 	} else if err := reapVolumes(ctx, client, o, del); err != nil {
 		return err
+	}
+
+	// ── 6. Per-env minted Linode creds: obj-storage keys + in-cluster PAT ──────
+	// These are ACCOUNT-scoped (no cluster tag), so they're keyed off the
+	// deployment NAME, not cluster-liveness — a destroyed env's keys are orphaned.
+	// Each bootstrap/rotation mints fresh ones under a stable per-env label, and a
+	// leaked mint (failed run, failed drain) accretes toward the account's 100-key /
+	// 100-PAT caps until a fresh mint 400s. Needs an explicit --env (never a blind
+	// account-wide token/key delete).
+	fmt.Println("\n" + bold("==== orphan per-env Linode creds (obj-keys + in-cluster PAT) ===="))
+	if o.env == "" {
+		fmt.Println(dim("  skipped — set --env <deployment> to reap its minted keys + PAT"))
+	} else {
+		if err := reapEnvObjKeys(ctx, client, o.env, del); err != nil {
+			return err
+		}
+		if err := reapEnvInclusterPAT(ctx, client, o.env, del); err != nil {
+			return err
+		}
 	}
 
 	summary := fmt.Sprintf("summary: deleted=%d failed=%d", deleted, failed)
@@ -279,6 +300,63 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 }
 
 // ── small helpers ────────────────────────────────────────────────────────────
+
+// envObjKeyLabels are the Object Storage key labels the per-env reap targets —
+// the obj-key entries buildRotationTable mints for a deployment. A test pins this
+// in lockstep with buildRotationTable so a mint-label change can't silently orphan
+// the reaper (the exact failure that let 76 keys pile up to the account cap).
+func envObjKeyLabels(env string) []string {
+	return []string{"platform-loki-" + env, "platform-harbor-registry-" + env}
+}
+
+// reapEnvObjKeys deletes the Object Storage keys minted for env — the loki +
+// harbor-registry keys (labels platform-loki-<env> / platform-harbor-registry-<env>,
+// per buildRotationTable). mint-bootstrap-objkeys and the in-cluster rotator each
+// create a fresh key under the same stable label; a failed teardown or failed
+// grace-window revoke leaks them, and the account caps at 100 keys (a fresh mint
+// then 400s "reached your access key quota"). On a destroy the env is gone, so
+// every key under those two labels is orphaned. Exact-label match — never another
+// env's keys.
+func reapEnvObjKeys(ctx context.Context, client *linode.Client, env string, del func(path, desc string)) error {
+	keys, err := client.ListObjectStorageKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("list object-storage keys: %w", err)
+	}
+	want := map[string]bool{}
+	for _, l := range envObjKeyLabels(env) {
+		want[l] = true
+	}
+	for _, k := range keys {
+		label := linode.MapString(k, "label")
+		if !want[label] {
+			continue
+		}
+		id := linode.MapUint(k, "id")
+		del(fmt.Sprintf("/v4/object-storage/keys/%d", id), fmt.Sprintf("obj-key %d (%s)", id, label))
+	}
+	return nil
+}
+
+// reapEnvInclusterPAT deletes the narrow in-cluster PAT(s) minted for env (label
+// llz-incluster-<env>, per inclusterPATLabel). mint-bootstrap-pat drains older
+// siblings on each mint, but a failed drain / failed run leaks them toward the
+// account's 100-PAT cap. Exact-label match — the broad token this sweep RUNS under
+// carries a different label, so it is never self-revoked.
+func reapEnvInclusterPAT(ctx context.Context, client *linode.Client, env string, del func(path, desc string)) error {
+	toks, err := client.ListProfileTokens(ctx)
+	if err != nil {
+		return fmt.Errorf("list profile tokens: %w", err)
+	}
+	label := inclusterPATLabel(env)
+	for _, t := range toks {
+		if linode.MapString(t, "label") != label {
+			continue
+		}
+		id := linode.MapUint(t, "id")
+		del(fmt.Sprintf("/v4/profile/tokens/%d", id), fmt.Sprintf("in-cluster PAT %d (%s)", id, label))
+	}
+	return nil
+}
 
 func orAll(s string) string {
 	if s == "" {
