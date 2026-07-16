@@ -922,26 +922,33 @@ func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, bra
 		return nil
 	}
 
-	// Seed it off the default branch: shallow clone → checkout -B <branch> → push.
-	// apl-operator force-pushes its own rendered tree onto it on its next reconcile.
-	fmt.Printf("values branch %q absent on %s — seeding it off the default branch so apl-operator can pull it...\n", branch, repoURL)
+	// Seed an EMPTY orphan branch (a single history-less empty commit). Content
+	// matters: an earlier iteration seeded a COPY OF MAIN, and apl-operator then
+	// applied the instance-repo tree as its otomi env repo — its derived-values
+	// template crashed ("map has no entry for key customRootCA") and it still never
+	// pushed env/manifests/**. Empty is the contract the operator's gitea heritage
+	// expects: it clones an empty repo, bootstraps the env structure, commits, and
+	// pushes — exactly what it does with a fresh gitea repo.
+	fmt.Printf("values branch %q absent on %s — seeding it EMPTY (orphan commit) for apl-operator to bootstrap...\n", branch, repoURL)
 	tmp, err := os.MkdirTemp("", "llz-apl-branch-*")
 	if err != nil {
 		return fmt.Errorf("mktemp for values-branch seed: %w", err)
 	}
 	defer os.RemoveAll(tmp)
 
-	if out, ok := d.git("clone", "--depth", "1", authURL, tmp); !ok {
-		return fmt.Errorf("clone %s to seed values branch %q: %s", repoURL, branch, redactSecret(out, tok))
+	if out, ok := d.git("init", "--initial-branch", branch, tmp); !ok {
+		return fmt.Errorf("init values-branch seed repo: %s", redactSecret(out, tok))
 	}
-	if out, ok := d.git("-C", tmp, "checkout", "-B", branch); !ok {
-		return fmt.Errorf("create local branch %q: %s", branch, redactSecret(out, tok))
+	if out, ok := d.git("-C", tmp,
+		"-c", "user.name=llz-bootstrap", "-c", "user.email=llz-bootstrap@noreply.local",
+		"commit", "--allow-empty", "-m", "chore: seed "+branch+" — empty branch for apl-operator to bootstrap (llz ci bootstrap-cluster)"); !ok {
+		return fmt.Errorf("create empty seed commit for %q: %s", branch, redactSecret(out, tok))
 	}
-	if out, ok := d.git("-C", tmp, "push", "origin", branch); !ok {
+	if out, ok := d.git("-C", tmp, "push", authURL, "HEAD:refs/heads/"+branch); !ok {
 		return fmt.Errorf("push values branch %q to %s — does the values-repo token (otomi.git.password / APL_VALUES_REPO_TOKEN) have Contents:write? git: %s",
 			branch, repoURL, redactSecret(out, tok))
 	}
-	fmt.Printf("seeded values branch %q on %s — apl-operator's pull will now succeed and it will take over.\n", branch, repoURL)
+	fmt.Printf("seeded EMPTY values branch %q on %s — apl-operator will bootstrap its env tree onto it.\n", branch, repoURL)
 	return nil
 }
 

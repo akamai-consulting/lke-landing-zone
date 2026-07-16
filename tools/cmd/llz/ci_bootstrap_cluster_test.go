@@ -614,13 +614,15 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		t.Fatalf("empty coords should skip: err=%v called=%v", err, called)
 	}
 
-	// git subcommand, accounting for a leading `-C <dir>` (checkout/push use it).
+	// git subcommand, skipping global flag pairs (`-C <dir>`, `-c <kv>`).
 	gitSub := func(args []string) string {
-		if len(args) >= 3 && args[0] == "-C" {
-			return args[2]
-		}
-		if len(args) > 0 {
-			return args[0]
+		for i := 0; i < len(args); {
+			switch args[i] {
+			case "-C", "-c":
+				i += 2
+			default:
+				return args[i]
+			}
 		}
 		return ""
 	}
@@ -648,17 +650,31 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		t.Errorf("ls-remote called with (%q,%q)", lsURL, lsRef)
 	}
 
-	// Branch absent → seed it: clone (depth 1) → checkout -B → push, in that order.
+	// Branch absent → seed an EMPTY orphan branch: init → empty commit → push.
+	// (NOT a clone of the default branch: apl-operator applies the branch content
+	// as its otomi env repo, and an instance-repo copy crashes its derived-values
+	// template — the customRootCA e2e failure.)
 	var seq []string
+	var pushArgs []string
 	d.git = func(args ...string) (string, bool) {
-		seq = append(seq, gitSub(args))
+		sub := gitSub(args)
+		seq = append(seq, sub)
+		if sub == "push" {
+			pushArgs = args
+		}
+		if sub == "commit" && !strings.Contains(strings.Join(args, " "), "--allow-empty") {
+			t.Errorf("seed commit must be --allow-empty (no content!), got %v", args)
+		}
 		return "", true // ls-remote empty = absent; rest succeed
 	}
 	if err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil {
 		t.Fatalf("absent branch should be seeded: %v", err)
 	}
-	if strings.Join(seq, ",") != "ls-remote,clone,checkout,push" {
-		t.Errorf("seed sequence = %v, want ls-remote,clone,checkout,push", seq)
+	if strings.Join(seq, ",") != "ls-remote,init,commit,push" {
+		t.Errorf("seed sequence = %v, want ls-remote,init,commit,push (EMPTY orphan seed)", seq)
+	}
+	if !strings.Contains(strings.Join(pushArgs, " "), "HEAD:refs/heads/apl-e2e") {
+		t.Errorf("push must target refs/heads/apl-e2e, got %v", pushArgs)
 	}
 
 	// A push failure surfaces LOUD, names the token, and does NOT leak the secret.
