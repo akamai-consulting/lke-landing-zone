@@ -63,6 +63,14 @@ var kyvernoPVCEncryptedYAML []byte
 //go:embed manifests/kyverno-sc-default-demote.yaml
 var kyvernoSCDefaultDemoteYAML []byte
 
+// defaultAplChartVersion is the apl-core chart version an instance deploys when
+// neither --apl-chart-version nor spec.cluster.bootstrap.aplChartVersion (an
+// OPTIONAL field) is set. It mirrors the pinned default the retired
+// cluster-bootstrap terraform.tfvars.example carried (apl_chart_version =
+// "6.0.0"), so removing that workspace did not silently change what deploys.
+// Bump this in lockstep when upgrading the platform's baseline apl-core.
+const defaultAplChartVersion = "6.0.0"
+
 // bootstrapValuePlaceholders is the SECRETS-ONLY set of ${...} tokens the
 // committed apl-values/<env>/values.yaml still carries after `llz render`
 // resolves everything else from the spec. It is the single source of truth for
@@ -214,9 +222,12 @@ func runBootstrapCluster(f bootstrapFlags) error {
 		}
 	}
 	o.appsRepoRevision = firstNonEmpty(o.appsRepoRevision, "main")
-	if o.aplChartVersion == "" {
-		return fmt.Errorf("apl chart version unresolved — pass --apl-chart-version or set spec.cluster.bootstrap.aplChartVersion")
-	}
+	// spec.cluster.bootstrap.aplChartVersion is OPTIONAL (the example marks it so);
+	// fall back to the baked default, mirroring the pinned default the retired
+	// cluster-bootstrap terraform.tfvars.example carried. Without this, any instance
+	// that omits the optional field (including the release-e2e instance) would fail
+	// here instead of deploying the same version it used to.
+	o.aplChartVersion = firstNonEmpty(o.aplChartVersion, defaultAplChartVersion)
 
 	// Resolve the kubeconfig into a file the seams point KUBECONFIG at: an
 	// existing --kubeconfig path (what the fetch-kubeconfig action writes) is used

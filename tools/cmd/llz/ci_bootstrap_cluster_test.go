@@ -175,6 +175,23 @@ func TestExistingLokiPassword(t *testing.T) {
 	}
 }
 
+// TestDefaultAplChartVersion guards the e2e-critical fallback: spec.cluster.
+// bootstrap.aplChartVersion is OPTIONAL, and the release-e2e instance (env add
+// --region --obj-cluster only) never sets it. The retired cluster-bootstrap
+// terraform.tfvars.example pinned apl_chart_version = "6.0.0" as the default, so
+// bootstrap-cluster must fall back to that same value or the whole e2e fails at
+// the helm install with "apl chart version unresolved".
+func TestDefaultAplChartVersion(t *testing.T) {
+	if defaultAplChartVersion != "6.0.0" {
+		t.Errorf("defaultAplChartVersion = %q, want \"6.0.0\" (the retired tfvars.example default) — bump deliberately, in lockstep with the platform baseline", defaultAplChartVersion)
+	}
+	// The final resolution is firstNonEmpty(flag, spec, default): an unset flag +
+	// unset spec must resolve to the baked default, never "".
+	if got := firstNonEmpty("", "", defaultAplChartVersion); got == "" {
+		t.Fatal("chart-version resolution must never be empty when the default is set")
+	}
+}
+
 func TestGenLokiPassword(t *testing.T) {
 	pw := genLokiPassword()
 	if len(pw) != 20 {
