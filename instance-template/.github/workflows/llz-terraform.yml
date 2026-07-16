@@ -10,11 +10,12 @@
 #
 # STEP LOGIC STAYS CENTRAL: every job runs in the `llz` container image
 # (vars.TF_IMAGE) and calls the terraform-init / cluster-access / fetch-kubeconfig
-# / lke-runner-acl composite actions from
-# <upstream_org>/lke-landing-zone/.github/actions/<name> at the
-# pinned template tag (public repo → cross-org action fetch needs no secrets). The
-# single `actions/checkout` per job brings in THIS instance's terraform-iac-bootstrap/
-# TF roots + apl-values/; there is no separate template checkout.
+# / lke-runner-acl composite actions from this instance's OWN vendored
+# .github/actions/ (referenced locally as ./.github/actions/<name> — no cross-repo
+# fetch, so the instance runs self-contained even on an air-gapped GitHub
+# Enterprise). The single `actions/checkout` per job brings in THIS instance's
+# terraform-iac-bootstrap/ TF roots + apl-values/ + the vendored actions; there is
+# no separate template checkout.
 #
 # github.event_name / github.ref / github.event.pull_request.* ARE inherited from
 # the caller, so the push/PR trigger gates work unchanged. The dispatch SELECTORS
@@ -200,22 +201,8 @@ jobs:
       # the terraform-init composite below regenerates them before init, so no
       # separate render step is needed here (the first TF step after init is the
       # plan). No-op for instances without a spec.
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — cluster
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -407,23 +394,9 @@ jobs:
             echo "Deployment '$REGION' uses a dedicated VPC — skipping the shared-VPC root."
           fi
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — shared VPC
         if: steps.net.outputs.net != ''
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           module:                vpc
           state-key:             vpc/${{ steps.net.outputs.net }}/terraform.tfstate
@@ -496,22 +469,8 @@ jobs:
           ORPHAN_THRESHOLD: ${{ vars.PREFLIGHT_ORPHAN_THRESHOLD || '5' }}
         run: llz ci preflight --fail-on-orphans "$FAIL_ON_ORPHANS" --orphan-threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION"
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — cluster
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -690,22 +649,8 @@ jobs:
           GH_TOKEN:        ${{ github.token }}
         run: llz ci chart-publish-check --root .
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — cluster-bootstrap
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -721,9 +666,8 @@ jobs:
       # readiness probe below would be refused); the paired revoke
       # (if: always(), end of job) closes it.
       - name: Cluster access (kubeconfig readiness probe + runner ACL)
-        uses: ./_llz-template/.github/actions/cluster-access
+        uses: ./.github/actions/cluster-access
         with:
-          template-ref:          ${{ inputs.template-ref }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -784,7 +728,7 @@ jobs:
       # Job / ArgoCD pods are not becoming ready.
       - name: Fetch kubeconfig for diagnostics
         if: failure()
-        uses: ./_llz-template/.github/actions/fetch-kubeconfig
+        uses: ./.github/actions/fetch-kubeconfig
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -815,7 +759,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: ./_llz-template/.github/actions/lke-runner-acl
+        uses: ./.github/actions/lke-runner-acl
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -954,22 +898,8 @@ jobs:
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — cluster-bootstrap
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1048,22 +978,8 @@ jobs:
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — cluster-bootstrap
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           module:                cluster-bootstrap
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1107,7 +1023,7 @@ jobs:
       # is false so CASE B (cluster already gone) is a clean no-op. Revoked at
       # job end (if: always()).
       - name: Open control-plane ACL for this runner
-        uses: ./_llz-template/.github/actions/lke-runner-acl
+        uses: ./.github/actions/lke-runner-acl
         with:
           mode:            open
           linode-token:    ${{ secrets.LINODE_API_TOKEN }}
@@ -1158,7 +1074,7 @@ jobs:
 
       - name: Revoke control-plane ACL for this runner
         if: always()
-        uses: ./_llz-template/.github/actions/lke-runner-acl
+        uses: ./.github/actions/lke-runner-acl
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -1192,22 +1108,8 @@ jobs:
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — cluster
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1256,22 +1158,8 @@ jobs:
         id: confirm
         run: llz ci assert-destroy-confirm "$REGION" "cluster" "$CONFIRM_DESTROY"
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — cluster
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -1486,22 +1374,8 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — object-storage
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1569,22 +1443,8 @@ jobs:
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — object-storage
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1625,22 +1485,8 @@ jobs:
       - name: Validate destroy confirmation
         run: llz ci assert-destroy-confirm "$REGION" "object-storage" "$CONFIRM_DESTROY"
 
-      # The composite actions live in THIS workflow's repo — but a composite
-      # `uses: ./<path>` resolves against the CALLER's workspace (probe-proven, same
-      # limitation cluster-access documents), and `uses:` can't take expressions. So
-      # fetch the template's actions once per job: a sparse checkout (only
-      # .github/actions, KBs) pinned to inputs.template-ref — the same ref the caller
-      # pinned this workflow's @<ref> to.
-      - name: Checkout the template composite actions (pinned)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: akamai-consulting/lke-landing-zone
-          ref: ${{ inputs.template-ref }}
-          path: _llz-template
-          sparse-checkout: .github/actions
-          persist-credentials: false
       - name: Terraform init — object-storage
-        uses: ./_llz-template/.github/actions/terraform-init
+        uses: ./.github/actions/terraform-init
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}

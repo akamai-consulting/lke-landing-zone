@@ -25,10 +25,3 @@
 # the switch. `llz render` keeps regenerating them; terraform.tfvars.example stays
 # tracked (it ends in .example, so `[a-z]*.tfvars` does not match it).
 untrack  terraform-iac-bootstrap/*/[a-z]*.tfvars
-
-# The vendored reusable workflow BODIES moved to the template repo root and are
-# now referenced cross-repo (uses: <org>/lke-landing-zone/.github/workflows/…@<ref>,
-# with the template-ref input the callers already pass). copier update rewrites the
-# callers; the old local bodies would otherwise linger as orphans — still runnable
-# via workflow_call and silently drifting from the template.
-delete   .github/workflows/llz-*.yml

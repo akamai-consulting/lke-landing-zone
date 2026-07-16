@@ -29,11 +29,12 @@ managed  .template-manifest
 # Declares paths `llz upgrade` removes after a copier update (copier never deletes
 # files the template drops). Template-owned — overwritten on update.
 managed  .template-removals
-# Composite actions are template-INTERNAL: the reusable `llz-*` workflows source
-# them from a template checkout (docs/templatization-plan.md §"Keeping instances
-# in sync"). They now live at the repo-root .github/actions/ — OUTSIDE this
-# scaffold — so they carry no manifest entry (the completeness check only scans
-# instance-template/).
+# Composite actions are VENDORED into every instance (.github/actions/) so the
+# reusable llz-* workflow bodies reference them locally (./.github/actions/<name>)
+# with no cross-repo fetch — this is what lets an instance run self-contained on an
+# air-gapped GitHub Enterprise. Token-free template logic — overwritten on update so
+# fixes propagate.
+managed  .github/actions/**
 # Instance-local checks live in `llz` itself (llz lint / fmt / validate — tofu fmt
 # / tflint / actionlint / gitleaks / checkov), not in the instance, so fixes ship
 # with the binary. Only the lint CONFIGS stay here — the tools read them. Template
