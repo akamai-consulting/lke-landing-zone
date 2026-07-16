@@ -444,6 +444,71 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 	}
 }
 
+// TestBootstrapCluster_BridgeAppliesForceConflicts guards the reused-/migrated-
+// cluster SSA fix: the Argo bridge (AppProject + platform-bootstrap Application +
+// llz-secret-store Application) MUST apply with --force-conflicts. The old
+// cluster-bootstrap TF applied these with the kubectl provider's default field
+// manager "kubectl"; our manager is "cluster-bootstrap-tf", and llz-secret-store's
+// targetRevision is the template-ref SHA (changes every push) — so a plain SSA
+// conflicts on .spec.source.targetRevision and the bootstrap dies at the last step
+// (observed on e2e cluster 632033). Every bridge apply carrying an argoproj.io
+// object must set force=true.
+func TestBootstrapCluster_BridgeAppliesForceConflicts(t *testing.T) {
+	o := bootstrapTestOpts(t, "main")
+
+	type applyCall struct {
+		yaml  string
+		force bool
+	}
+	var mu sync.Mutex
+	var applies []applyCall
+
+	d := bootstrapDeps{
+		kubectl: func(args ...string) (string, bool) {
+			line := strings.Join(args, " ")
+			if strings.Contains(line, "get services") && strings.Contains(line, "json") {
+				return dnsServicesJSON, true
+			}
+			return "", true
+		},
+		apply: func(yaml, _ string, force bool) (string, bool) {
+			mu.Lock()
+			applies = append(applies, applyCall{yaml, force})
+			mu.Unlock()
+			return "", true
+		},
+		helm: func(args ...string) (string, bool) {
+			if len(args) > 1 && args[0] == "get" {
+				return "", false // first install
+			}
+			return "", true
+		},
+		now:         time.Now,
+		sleep:       func(time.Duration) {},
+		genPassword: func() string { return "generated-pw-20chars" },
+	}
+
+	if err := bootstrapCluster(o, d); err != nil {
+		t.Fatalf("bootstrapCluster: %v", err)
+	}
+
+	// Every apply of an argoproj.io object (the bridge AppProject + Applications)
+	// must have forced conflicts.
+	sawBridge := false
+	for _, c := range applies {
+		if !strings.Contains(c.yaml, "argoproj.io") {
+			continue
+		}
+		sawBridge = true
+		if !c.force {
+			t.Errorf("bridge apply did not force conflicts (would die on a reused/migrated cluster):\n%s", c.yaml)
+		}
+	}
+	if !sawBridge {
+		t.Fatal("no argoproj.io bridge object was applied — the Argo bridge never ran")
+	}
+}
+
 // TestBootstrapCluster_KyvernoRacesAheadOfGate is the key regression guard: the
 // Kyverno policy applies must be dispatched CONCURRENTLY with the readiness gate,
 // not serialized after it. The fake blocks the gate's first stage (argo CRD

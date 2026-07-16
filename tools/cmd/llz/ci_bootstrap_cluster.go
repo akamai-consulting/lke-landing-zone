@@ -462,13 +462,30 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// the bridge directly: the source-pinned AppProject, the platform-bootstrap
 	// Application (instance repo apl-values/<env>/manifest), and the carved
 	// llz-secret-store Application (template repo platform-apl/manifest-secret-store).
-	if err := applyManifest(d, platformBootstrapAppProjectManifest(o), "cluster-bootstrap-tf", false); err != nil {
+	//
+	// force=true (--force-conflicts). The bridge is ours to declare, but two things
+	// make a plain SSA conflict on re-apply/migration:
+	//   1. The OLD cluster-bootstrap TF applied these Applications with the
+	//      gavinbunney kubectl provider's DEFAULT field manager — literally
+	//      "kubectl" — not our "cluster-bootstrap-tf". A cluster that TF once
+	//      bootstrapped therefore has .spec.source.* owned by "kubectl"; our
+	//      differently-named manager can't update it without forcing.
+	//   2. llz-secret-store's targetRevision is the template-ref (a commit SHA that
+	//      changes every push), so that field's VALUE differs on essentially every
+	//      apply — the exact case SSA raises a conflict for. (platform-bootstrap's
+	//      targetRevision is apps-repo-revision, usually a stable branch, so it
+	//      rarely trips — but force it too for symmetry.)
+	// We are the sole intended owner of the bridge spec (apl-core creates none of
+	// it; Argo owns status + the child resources, not these Application specs), so
+	// taking ownership is correct, not a stomp. The namespaces/GHCR secrets above
+	// already force for the same reason.
+	if err := applyManifest(d, platformBootstrapAppProjectManifest(o), "cluster-bootstrap-tf", true); err != nil {
 		return err
 	}
-	if err := applyManifest(d, platformBootstrapApplicationManifest(o), "cluster-bootstrap-tf", false); err != nil {
+	if err := applyManifest(d, platformBootstrapApplicationManifest(o), "cluster-bootstrap-tf", true); err != nil {
 		return err
 	}
-	if err := applyManifest(d, secretStoreApplicationManifest(o), "cluster-bootstrap-tf", false); err != nil {
+	if err := applyManifest(d, secretStoreApplicationManifest(o), "cluster-bootstrap-tf", true); err != nil {
 		return err
 	}
 
