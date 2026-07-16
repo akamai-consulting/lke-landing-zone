@@ -246,7 +246,7 @@ func runBootstrapCluster(f bootstrapFlags) error {
 	d := bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
 			cmd := exec.Command("kubectl", args...)
-			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+			cmd.Env = envWithKubeconfig(kubeconfigPath)
 			var buf bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &buf, &buf
 			return buf.String(), cmd.Run() == nil
@@ -258,7 +258,7 @@ func runBootstrapCluster(f bootstrapFlags) error {
 			}
 			args = append(args, "-f", "-")
 			cmd := exec.Command("kubectl", args...)
-			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+			cmd.Env = envWithKubeconfig(kubeconfigPath)
 			cmd.Stdin = strings.NewReader(stdinYAML)
 			var buf bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &buf, &buf
@@ -266,7 +266,7 @@ func runBootstrapCluster(f bootstrapFlags) error {
 		},
 		helm: func(args ...string) (string, bool) {
 			cmd := exec.Command("helm", args...)
-			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+			cmd.Env = envWithKubeconfig(kubeconfigPath)
 			var buf bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &buf, &buf
 			return buf.String(), cmd.Run() == nil
@@ -279,24 +279,28 @@ func runBootstrapCluster(f bootstrapFlags) error {
 }
 
 // resolveKubeconfig returns a filesystem path the KUBECONFIG env can point at,
-// in priority order: an explicit --kubeconfig file; the inherited $KUBECONFIG
-// (the reference CI already sets on the step — the SAME one wait-cluster-ready /
-// diagnose-argocd use, which resolves correctly in the container job where a bare
-// $RUNNER_TEMP path did not); else KUBECONFIG_RAW spilled to a 0600 tempfile. The
-// first two return the path as-is (cleanup is a no-op); the last removes its temp.
+// in priority order: an explicit --kubeconfig file (if non-empty); the EFFECTIVE
+// kubeconfig — $KUBECONFIG if it points at a NON-EMPTY file, else kubectl's default
+// ~/.kube/config (reusing ci diagnose-argocd's effectiveKubeconfig); else
+// KUBECONFIG_RAW spilled to a 0600 tempfile.
+//
+// The non-empty check is load-bearing: fetch-kubeconfig writes the real kubeconfig
+// to ~/.kube/config and most steps rely on that default, while $KUBECONFIG is
+// often an EMPTY placeholder file. Using $KUBECONFIG blindly made kubectl read an
+// empty config and every read returned empty (the e2e bootstrap failure). Only the
+// tempfile path needs cleanup; the rest are no-ops.
 func resolveKubeconfig(path string) (string, func(), error) {
-	if path == "" {
-		path = os.Getenv("KUBECONFIG")
-	}
 	if path != "" {
-		if _, err := os.Stat(path); err != nil {
-			return "", func() {}, fmt.Errorf("kubeconfig %q: %w", path, err)
+		if st, err := os.Stat(path); err == nil && st.Size() > 0 {
+			return path, func() {}, nil
 		}
-		return path, func() {}, nil
+	}
+	if kc := effectiveKubeconfig(); kc != "" {
+		return kc, func() {}, nil
 	}
 	raw := os.Getenv("KUBECONFIG_RAW")
 	if raw == "" {
-		return "", func() {}, fmt.Errorf("no kubeconfig: pass --kubeconfig, set KUBECONFIG, or set KUBECONFIG_RAW")
+		return "", func() {}, fmt.Errorf("no usable kubeconfig: --kubeconfig / $KUBECONFIG / ~/.kube/config are all absent or empty, and KUBECONFIG_RAW is unset")
 	}
 	tmp, err := os.CreateTemp("", "llz-bootstrap-kubeconfig-*")
 	if err != nil {
@@ -309,6 +313,23 @@ func resolveKubeconfig(path string) (string, func(), error) {
 	}
 	tmp.Close()
 	return tmp.Name(), func() { os.Remove(tmp.Name()) }, nil
+}
+
+// envWithKubeconfig returns the process env with KUBECONFIG set to exactly `path`
+// — dropping any inherited KUBECONFIG first so kubectl/helm can't read a duplicate
+// (often empty) entry instead. Duplicate KUBECONFIG env keys are resolved
+// inconsistently, which is how an empty placeholder $KUBECONFIG shadowed the real
+// resolved path in the e2e.
+func envWithKubeconfig(path string) []string {
+	src := os.Environ()
+	env := make([]string, 0, len(src)+1)
+	for _, e := range src {
+		if strings.HasPrefix(e, "KUBECONFIG=") {
+			continue
+		}
+		env = append(env, e)
+	}
+	return append(env, "KUBECONFIG="+path)
 }
 
 // bootstrapCluster runs the ordered flow (the numbered steps mirror the former
