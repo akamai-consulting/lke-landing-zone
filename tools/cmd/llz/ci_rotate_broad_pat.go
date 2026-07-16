@@ -42,7 +42,13 @@ const (
 	// broadPATScopes MUST include account:read_write (to mint successor PATs) — the
 	// scope the narrow in-cluster PAT deliberately withholds. Mirrors the scope set
 	// the CI create-linode-pat job used.
-	broadPATScopes       = "linodes:read_write object_storage:read_write lke:read_write firewall:read_write vpc:read_write volumes:read_write nodebalancers:read_write events:read_only account:read_write"
+	// MUST remain a superset of inclusterPATScopes: the rotated broad PAT becomes
+	// each deployment's LINODE_API_TOKEN, which mint-bootstrap-pat then uses to mint
+	// the narrow in-cluster PAT — and Linode rejects creating a token with scopes
+	// GREATER than the requesting token's. `domains:read_write` is here for exactly
+	// that reason (the in-cluster PAT carries it); dropping it 400s the next bootstrap
+	// after a rotation. TestBroadPATScopesSupersetInclusterPAT guards the invariant.
+	broadPATScopes       = "domains:read_write linodes:read_write object_storage:read_write lke:read_write firewall:read_write vpc:read_write volumes:read_write nodebalancers:read_write events:read_only account:read_write"
 	broadPATValidityDays = 90
 	// broadPATBaoPath is the cluster's own copy of the broad token; ESO syncs it to
 	// the rotator's LINODE_TOKEN Secret so the NEXT run mints with the freshest token.
