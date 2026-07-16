@@ -196,12 +196,14 @@ func ciCmd() *cobra.Command {
 	// Package + push + keyless-sign first-party charts to GHCR (immutable; re-signs a
 	// pushed-but-unsigned version). Replaces publish-charts.yml's inline bash.
 	c.AddCommand(ciPublishChartsCmd())
-	// Cluster-bootstrap local-exec bodies (instance-template cluster-bootstrap/
-	// main.tf): the apl_pipeline_ready readiness gate, the kyverno_* policy apply
-	// (readiness poll + apply + webhook-race soft-fail + retrofit kick), and the
-	// destroy-time finalizer-deadlock unwedge.
-	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(), ciDestroyUnwedgeCmd(),
-		ciClearClusterSecretsCmd())
+	// Cluster-bootstrap native command + its former local-exec bodies. bootstrap-
+	// cluster is the whole in-cluster bootstrap (apl-core install + Argo bridge +
+	// the race-ahead Kyverno policies) that used to be the cluster-bootstrap
+	// Terraform workspace; wait-apl-pipeline + apply-kyverno-policy remain
+	// separately runnable (bootstrap-cluster calls them in-process), and
+	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
+	c.AddCommand(ciBootstrapClusterCmd(), ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(),
+		ciDestroyUnwedgeCmd(), ciClearClusterSecretsCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(ciAssertImageFreshCmd())

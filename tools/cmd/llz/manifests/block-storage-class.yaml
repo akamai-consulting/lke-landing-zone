@@ -1,0 +1,107 @@
+---
+# Cluster-default StorageClass for platform support-plane PVCs.
+#
+# Wraps the LKE-installed Linode Block Storage CSI driver
+# (linodebs.csi.linode.com) with three things the stock
+# `linode-block-storage-retain` class doesn't apply:
+#
+#   1. Linode native volume encryption — `linodebs.csi.linode.com/encrypted: "true"`
+#      is the EXACT parameter key the Linode CSI driver checks against the
+#      constant `True = "true"`. With this set the driver passes
+#      `encryption=enabled` to the Linode Volume Create API; data-at-rest is
+#      encrypted at the hypervisor before being written to disk. Matches the
+#      node-pool's `disk_encryption = "enabled"` posture so the encryption
+#      story is consistent end-to-end (node disks AND PVCs).
+#
+#      Driver source for the recognized keys (verified against v1.0.11
+#      installed in LKE-E us-ord today):
+#      https://github.com/linode/linode-blockstorage-csi-driver/blob/v1.0.11/internal/driver/controllerserver_helper.go#L68-L86
+#         Name             = "linodebs.csi.linode.com"
+#         VolumeTags       = Name + "/volumeTags"   # camelCase, NOT volume-tags
+#         VolumeEncryption = Name + "/encrypted"    # NOT /encryption
+#         True             = "true"                 # NOT "enabled"
+#
+#      Earlier revisions of this manifest used `linodebs.csi.linode.com/encryption: enabled`
+#      and `linodebs.csi.linode.com/volume-tags: ...` — both keys are silently
+#      ignored by the driver (no validation, no warning), so EVERY volume
+#      provisioned through this class before this fix landed was unencrypted
+#      and untagged despite the class being marked encrypted. See PR splitting
+#      this manifest out of apl-values into TF for the migration rationale.
+#
+#   2. `volumeTags: block-storage,platform-support-services` — every Volume the
+#      driver provisions for this class carries these tags in the Linode
+#      UI/API. The `block-storage` tag is what the TF destroy-time provisioner
+#      in cluster-bootstrap/main.tf filters on to reap orphaned Volumes
+#      account-wide. Without the tag (the silent-ignore bug above), apl-core's
+#      chart Volumes (gitea, keycloak, eventual argo-cd PVCs) are
+#      indistinguishable from any other Linode account's and can't be
+#      cleaned up by tag-sweep.
+#
+# NOTE on UI label prefix: the CSI driver doesn't honor a per-StorageClass
+# `volume-label-prefix` parameter — that's a `--volume-label-prefix` flag on
+# the CSI controller, which is LKE-managed and not safe to patch. Volumes
+# show up as `pvc-<uuid>` in the UI's Label column regardless. Use the
+# `block-storage` tag filter (Linode UI → Volumes → Tags column) to identify them.
+#
+# Reclaim policy is Retain so an accidental in-cluster PVC delete (e.g.
+# during a chart upgrade with renamed templates) does NOT delete the
+# underlying Volume. Deliberate `terraform destroy` cleanup still happens
+# via the cluster-bootstrap destroy-time hook (PVC reap → wait for detach →
+# Linode API DELETE for any remaining block-storage-tagged Volume), so Retain
+# guards against accidents without orphaning on intentional teardown.
+#
+# Why this lives in cluster-bootstrap TF (not apl-values):
+#   apl-core's helmfile is driven by apl-operator, which starts AFTER
+#   helm_release.apl returns. helmfile installs PVC-creating charts (gitea,
+#   harbor, keycloak, prometheus, etc.) without waiting for any external
+#   Argo CD sync. If the SC arrives via Argo's platform-bootstrap App (sync-wave
+#   -20 in the old layout), it races with apl-operator's helmfile — and
+#   helmfile usually wins, producing 20+ PVCs on the LKE default class.
+#   Landing the SC via TF before helm_release.apl guarantees it exists in
+#   the API server before apl-operator is even installed.
+#
+# **Cluster-default.** Marked with `is-default-class: "true"` so workloads
+# installed by apl-operator's downstream helmfile that don't specify a
+# storageClassName pick this class up automatically. Charts that DO specify
+# storageClassName (the majority) get the block-storage-retain
+# value via the `cluster.defaultStorageClass: block-storage-retain`
+# apl-core override in apl-values/<env>/values.yaml — apl-core's gotmpl
+# templates wire that value into every chart that exposes a storageClass knob
+# (gitea, gitea-otomi-db, gitea-raw, harbor, harbor-otomi-db, keycloak-otomi-db,
+# prometheus-operator, trivy-operator). Two charts hardcode linode-block-storage
+# on the linode provider (gitea-valkey, oauth2-proxy redis) and are handled by
+# a narrow Kyverno mutation policy scoped to those namespaces.
+#
+# volumeBindingMode: Immediate (NOT WaitForFirstConsumer).
+#   when the opt-in gitea component is enabled, apl-core's helmfile installs
+#   gitea-artifacts (creates PVCs: data-gitea-0, gitea-backup) BEFORE gitea (the Deployment
+#   that consumes them). With `helm --wait --atomic --timeout 1200s` —
+#   the flags apl-operator uses — helm blocks until every resource the
+#   chart created is Ready. WaitForFirstConsumer leaves those PVCs
+#   Pending until a consumer pod schedules; the consumer is in the
+#   NEXT chart, not this one, so helm waits the full 20m, hits the
+#   timeout, --atomic rolls the chart back, and the helmfile loop
+#   restarts. Observed deadlock on an LKE-E primary rebuild:
+#   gitea-artifacts stuck `pending-install` for 8+ hours, blocking
+#   apl-operator from ever reaching Argo CD or Kyverno (both downstream
+#   of gitea in apl-core's helmfile ordering).
+#
+#   Immediate-binding makes each PVC bind on creation regardless of
+#   consumer presence; helm sees Bound PVCs, the install completes, and
+#   the chain proceeds. Trade-off: loses topology-aware scheduling (the
+#   PV is provisioned in whatever AZ the CSI driver picks first, not
+#   pinned to the eventual consumer pod's node). LKE-E primary runs
+#   single-AZ per cluster so the topology constraint is moot today.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: block-storage-retain
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: linodebs.csi.linode.com
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+parameters:
+  linodebs.csi.linode.com/encrypted: "true"
+  linodebs.csi.linode.com/volumeTags: "block-storage,platform-support-services"
