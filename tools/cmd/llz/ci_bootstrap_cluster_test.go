@@ -121,23 +121,44 @@ func TestAssertEnvRevision_MissingFile(t *testing.T) {
 
 // ── readCoreDNSClusterIP ─────────────────────────────────────────────────────
 
+// dnsServicesJSON mimics `kubectl get services -n kube-system -o json` on LKE-E:
+// the DNS Service (port 53) plus the sibling metrics Service (port 9153).
+const dnsServicesJSON = `{"items":[
+  {"metadata":{"name":"coredns"},"spec":{"clusterIP":"10.3.192.10","ports":[{"port":53},{"port":53}]}},
+  {"metadata":{"name":"workload-coredns-metrics"},"spec":{"clusterIP":"10.3.200.6","ports":[{"port":9153}]}}
+]}`
+
+func TestDnsClusterIPFromServicesJSON(t *testing.T) {
+	if got := dnsClusterIPFromServicesJSON(dnsServicesJSON); got != "10.3.192.10" {
+		t.Errorf("port-53 Service ClusterIP = %q, want 10.3.192.10 (must exclude the :9153 metrics svc)", got)
+	}
+	if got := dnsClusterIPFromServicesJSON(`{"items":[]}`); got != "" {
+		t.Errorf("no services: got %q want empty", got)
+	}
+	if got := dnsClusterIPFromServicesJSON("not json"); got != "" {
+		t.Errorf("garbage: got %q want empty", got)
+	}
+	// Headless DNS (clusterIP None) is not usable.
+	if got := dnsClusterIPFromServicesJSON(`{"items":[{"spec":{"clusterIP":"None","ports":[{"port":53}]}}]}`); got != "" {
+		t.Errorf("headless: got %q want empty", got)
+	}
+}
+
 func TestReadCoreDNSClusterIP(t *testing.T) {
-	// Zero the budget so the failure cases try once then deadline (no real waiting).
+	// Zero the budget so the miss cases try once then give up (no real waiting).
 	orig := coreDNSReadBudget
 	coreDNSReadBudget = 0
 	t.Cleanup(func() { coreDNSReadBudget = orig })
 
 	cases := []struct {
-		name    string
-		out     string
-		ok      bool
-		want    string
-		wantErr bool
+		name string
+		out  string
+		ok   bool
+		want string
 	}{
-		{"ip", "10.128.0.10", true, "10.128.0.10", false},
-		{"trims", "  10.0.0.5\n", true, "10.0.0.5", false},
-		{"empty", "", true, "", true},
-		{"nonzero-exit", "Error from server (NotFound)", false, "", true},
+		{"resolves-from-json", dnsServicesJSON, true, "10.3.192.10"},
+		{"empty-list-non-fatal", `{"items":[]}`, true, ""}, // NON-FATAL: warns + returns ""
+		{"kubectl-fails-non-fatal", "", false, ""},         // NON-FATAL
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -146,52 +167,37 @@ func TestReadCoreDNSClusterIP(t *testing.T) {
 				now:     time.Now,
 				sleep:   func(time.Duration) {},
 			}
-			got, err := readCoreDNSClusterIP(d)
-			if c.wantErr && err == nil {
-				t.Fatalf("expected error")
-			}
-			if !c.wantErr && err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != c.want {
+			if got := readCoreDNSClusterIP(d); got != c.want {
 				t.Errorf("got %q want %q", got, c.want)
 			}
 		})
 	}
 }
 
-// The regression that failed the first e2e: coredns's Service is present but its
-// ClusterIP is not yet allocated, so the first read is empty — the loop must retry
-// until it's assigned rather than failing the whole bootstrap at step 1.
+// The Flux-managed CoreDNS can lag: the first list has no port-53 Service (or no
+// ClusterIP), so the loop must retry until it appears.
 func TestReadCoreDNSClusterIP_RetriesUntilAssigned(t *testing.T) {
 	orig := coreDNSReadBudget
 	coreDNSReadBudget = time.Minute
 	t.Cleanup(func() { coreDNSReadBudget = orig })
 
-	// Each poll round runs len(coreDNSServiceQueries) kubectl calls; return empty
-	// for a full first round (forcing a sleep + retry), then the IP.
 	calls := 0
-	perRound := len(coreDNSServiceQueries)
 	d := bootstrapDeps{
 		kubectl: func(_ ...string) (string, bool) {
 			calls++
-			if calls <= perRound {
-				return "", true // Service present (exit 0) but no ClusterIP yet
+			if calls < 2 {
+				return `{"items":[]}`, true // no DNS Service yet
 			}
-			return "10.43.0.10", true
+			return dnsServicesJSON, true
 		},
 		now:   time.Now,
 		sleep: func(time.Duration) {},
 	}
-	got, err := readCoreDNSClusterIP(d)
-	if err != nil {
-		t.Fatalf("expected success after retries, got %v", err)
+	if got := readCoreDNSClusterIP(d); got != "10.3.192.10" {
+		t.Errorf("got %q want 10.3.192.10", got)
 	}
-	if got != "10.43.0.10" {
-		t.Errorf("got %q want 10.43.0.10", got)
-	}
-	if calls <= perRound {
-		t.Errorf("expected a retry past the first poll round (>%d calls), got %d", perRound, calls)
+	if calls < 2 {
+		t.Errorf("expected a retry (>=2 calls), got %d", calls)
 	}
 }
 
@@ -361,8 +367,8 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
 			rec.add("kubectl " + line)
-			if strings.Contains(line, "port==53") || strings.Contains(line, "service coredns") {
-				return "10.0.0.10", true
+			if strings.Contains(line, "get services") && strings.Contains(line, "json") {
+				return dnsServicesJSON, true
 			}
 			// kyverno policy apply (applyKyvernoPolicy uses kubectl apply -f <path>)
 			if len(args) > 0 && args[0] == "apply" {
@@ -395,7 +401,7 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 	calls := rec.snapshot()
 	// coredns read is first; helm upgrade uses the pinned version; a helm install
 	// happened after the namespace/SC applies; the bridge applies happen last.
-	if rec.indexOf("port==53") != 0 {
+	if rec.indexOf("get services") != 0 {
 		t.Errorf("coredns read should be first, got calls:\n%s", strings.Join(calls, "\n"))
 	}
 	if rec.indexOf("upgrade --install apl") < 0 {
@@ -429,8 +435,8 @@ func TestBootstrapCluster_KyvernoRacesAheadOfGate(t *testing.T) {
 	d := bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
-			if strings.Contains(line, "port==53") || strings.Contains(line, "service coredns") {
-				return "10.0.0.10", true
+			if strings.Contains(line, "get services") && strings.Contains(line, "json") {
+				return dnsServicesJSON, true
 			}
 			if len(args) > 0 && args[0] == "apply" {
 				// kyverno policy apply
@@ -481,8 +487,8 @@ func TestBootstrapCluster_GHCRSecretsGatedOnToken(t *testing.T) {
 		var mu sync.Mutex
 		d := bootstrapDeps{
 			kubectl: func(args ...string) (string, bool) {
-				if strings.Contains(strings.Join(args, " "), "port==53") || strings.Contains(strings.Join(args, " "), "service coredns") {
-					return "10.0.0.10", true
+				if strings.Contains(strings.Join(args, " "), "get services") && strings.Contains(strings.Join(args, " "), "json") {
+					return dnsServicesJSON, true
 				}
 				return "", true
 			},

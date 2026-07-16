@@ -41,6 +41,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -354,12 +355,12 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// ── 1. coredns ClusterIP (was data.kubernetes_service.coredns) ──
 	// nginx in the loki-gateway needs the DNS Service *IP* as its `resolver`; the
 	// chart otherwise templates a hostname nginx can't use and crashloops. Read it
-	// live and render it in. Apply-only — no destroy guard is needed now that this
-	// never runs on teardown.
-	coreDNSIP, err := readCoreDNSClusterIP(d)
-	if err != nil {
-		return err
-	}
+	// live and render it in. BEST-EFFORT / NON-FATAL: if it can't be resolved we
+	// warn and proceed with "" rather than blocking the whole bootstrap on this one
+	// read (the loki gateway is a downstream, separately-fixable concern; the next
+	// step's SSA apply is the real "does kubectl work" signal). Mirrors the old TF
+	// `try(data.kubernetes_service.coredns…, "")`.
+	coreDNSIP := readCoreDNSClusterIP(d)
 
 	// ── 2. Render values (was templatefile + random_password.loki_admin) ──
 	// Fill the four secrets-only placeholders in the committed values.yaml. The
@@ -578,54 +579,66 @@ var (
 	coreDNSReadInterval = 5 * time.Second
 )
 
-// coreDNSServiceQueries resolve the cluster DNS Service's ClusterIP, tried in order
-// until one yields a usable IP. The old TF `data.kubernetes_service.coredns`
-// hardcoded the name `coredns`; on an LKE-E e2e that single by-name jsonpath read
-// returned EMPTY even though the `coredns` Service was present WITH a ClusterIP
-// (confirmed on the live cluster 30m later), and the whole bootstrap failed at
-// step 1. So lead with the most robust selector — the Service that actually serves
-// DNS (a port 53), which is name/label-agnostic AND excludes the sibling
-// `workload-coredns-metrics` Service (port 9153) — then fall back to the two
-// conventional names (LKE-E = `coredns`, stock LKE = `kube-dns`). NB the
-// `k8s-app=coredns` LABEL is NOT usable: it matches BOTH the DNS and the metrics
-// Services on LKE-E.
-var coreDNSServiceQueries = [][]string{
-	{"-n", "kube-system", "get", "service", "-o", "jsonpath={.items[?(@.spec.ports[0].port==53)].spec.clusterIP}"},
-	{"-n", "kube-system", "get", "service", "coredns", "-o", "jsonpath={.spec.clusterIP}"},
-	{"-n", "kube-system", "get", "service", "kube-dns", "-o", "jsonpath={.spec.clusterIP}"},
+// dnsClusterIPFromServicesJSON parses `kubectl get services -o json` and returns
+// the ClusterIP of the Service that serves DNS (has a port 53) — name/label-
+// agnostic, and it EXCLUDES the sibling workload-coredns-metrics Service (port
+// 9153). Empty if none match or the JSON is unparseable. Parsing `-o json` in Go
+// avoids `-o jsonpath` entirely, which was an unreliable variable across kubectl
+// versions in this loop.
+func dnsClusterIPFromServicesJSON(jsonOut string) string {
+	var list struct {
+		Items []struct {
+			Spec struct {
+				ClusterIP string `json:"clusterIP"`
+				Ports     []struct {
+					Port int `json:"port"`
+				} `json:"ports"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal([]byte(jsonOut), &list) != nil {
+		return ""
+	}
+	for _, s := range list.Items {
+		for _, p := range s.Spec.Ports {
+			if p.Port == 53 && s.Spec.ClusterIP != "" && s.Spec.ClusterIP != "None" {
+				return s.Spec.ClusterIP
+			}
+		}
+	}
+	return ""
 }
 
 // readCoreDNSClusterIP resolves the cluster DNS Service's ClusterIP (the loki
-// gateway nginx `resolver`). Apply-only and load-bearing: an empty value ships a
-// crashlooping gateway, so a missing IP is a hard error.
+// gateway nginx `resolver`) by listing kube-system Services as JSON and finding
+// the one that serves DNS (a port 53).
 //
-// It tries each selector in coreDNSServiceQueries and POLLS (a freshly-ready
-// cluster's Flux-managed CoreDNS may briefly lag). On the budget expiring it dumps
-// kube-system Services to stderr so an empty read is diagnosable rather than blind.
-func readCoreDNSClusterIP(d bootstrapDeps) (string, error) {
+// BEST-EFFORT / NON-FATAL: it polls (a freshly-ready cluster's Flux-managed CoreDNS
+// can lag), and on the budget expiring it WARNS and returns "" instead of failing —
+// so this one read never blocks the whole bootstrap (the loki gateway is a
+// downstream, separately-fixable concern; the very next SSA apply is the real
+// "does kubectl work" signal). Prints a one-time cluster-access diagnostic on the
+// first miss so kubectl health is visible independently of DNS resolution.
+func readCoreDNSClusterIP(d bootstrapDeps) string {
 	deadline := d.now().Add(coreDNSReadBudget)
 	first := true
 	for {
-		for _, q := range coreDNSServiceQueries {
-			out, ok := d.kubectl(q...)
-			ip := strings.TrimSpace(out)
-			if ok && ip != "" && ip != "None" {
+		if out, ok := d.kubectl("-n", "kube-system", "get", "services", "-o", "json"); ok {
+			if ip := dnsClusterIPFromServicesJSON(out); ip != "" {
 				if !first {
 					fmt.Printf("cluster DNS ClusterIP resolved: %s\n", ip)
 				}
-				return ip, nil
+				return ip
 			}
 		}
 		if first {
-			// First miss: dump what THIS command's kubectl can actually see, up
-			// front, so an empty read (kubectl connects but returns nothing) is
-			// diagnosable immediately rather than only after the whole budget.
 			diagnoseClusterAccess(d)
 			fmt.Println("Waiting for the cluster DNS Service to have a ClusterIP...")
 			first = false
 		}
 		if !d.now().Before(deadline) {
-			return "", fmt.Errorf("cluster DNS Service ClusterIP not resolvable within %s (tried the port-53 Service + coredns/kube-dns by name) — see the cluster-access diagnostics above", coreDNSReadBudget)
+			warn(fmt.Sprintf("cluster DNS Service ClusterIP not resolved within %s — proceeding with an EMPTY loki resolver (see the cluster-access diagnostics above). This does NOT block the bootstrap; the loki gateway may need a follow-up.", coreDNSReadBudget))
+			return ""
 		}
 		d.sleep(coreDNSReadInterval)
 	}
@@ -636,17 +649,38 @@ func readCoreDNSClusterIP(d bootstrapDeps) (string, error) {
 // read is distinguishable from a genuinely not-yet-ready cluster. Best-effort, all
 // to stderr.
 func diagnoseClusterAccess(d bootstrapDeps) {
+	fmt.Fprintln(os.Stderr, "── cluster-access diagnostics (what bootstrap-cluster's kubectl sees) ──")
+
+	// Go-side kubeconfig introspection FIRST: an empty $KUBECONFIG file (or a
+	// missing ~/.kube/config) is the upstream cause when every kubectl call returns
+	// empty — this shows it without needing kubectl to work at all.
+	statLine := func(label, p string) {
+		if p == "" {
+			fmt.Fprintf(os.Stderr, "  %s: (unset)\n", label)
+			return
+		}
+		if st, err := os.Stat(p); err == nil {
+			fmt.Fprintf(os.Stderr, "  %s: %s (size=%d)\n", label, p, st.Size())
+		} else {
+			fmt.Fprintf(os.Stderr, "  %s: %s (%v)\n", label, p, err)
+		}
+	}
+	statLine("$KUBECONFIG", os.Getenv("KUBECONFIG"))
+	if home, err := os.UserHomeDir(); err == nil {
+		statLine("~/.kube/config", filepath.Join(home, ".kube", "config"))
+	}
+
 	probes := []struct {
 		label string
 		args  []string
 	}{
+		{"config current-context", []string{"config", "current-context"}},
+		{"cluster-info", []string{"cluster-info"}},
 		{"auth whoami", []string{"auth", "whoami"}},
-		{"api server", []string{"config", "view", "--minify", "-o", "jsonpath={.clusters[0].cluster.server}"}},
 		{"nodes", []string{"get", "nodes", "-o", "name"}},
 		{"namespaces", []string{"get", "namespaces", "-o", "name"}},
 		{"all services (-A)", []string{"get", "services", "-A", "--no-headers"}},
 	}
-	fmt.Fprintln(os.Stderr, "── cluster-access diagnostics (what bootstrap-cluster's kubectl sees) ──")
 	for _, p := range probes {
 		out, ok := d.kubectl(p.args...)
 		fmt.Fprintf(os.Stderr, "  [%s] ok=%v\n", p.label, ok)
