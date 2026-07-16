@@ -7,10 +7,24 @@ import (
 	"testing"
 )
 
-const testUses = "akamai-consulting/lke-landing-zone/.github/workflows/llz-terraform.yml@v1.2.3"
+// The vendored-body form every ADR-0003 instance renders (see localTerraformUses)
+// and the legacy cross-repo pin an older instance still carries.
+const (
+	testDepName    = "akamai-consulting/lke-landing-zone"
+	testLegacyUses = "akamai-consulting/lke-landing-zone/.github/workflows/llz-terraform.yml@v1.2.3"
+)
 
 func testCaller() promoCaller {
-	return promoCaller{uses: testUses, instanceRepo: "myorg/my-instance", templateRef: "v1.2.3"}
+	return promoCaller{uses: localTerraformUses, instanceRepo: "myorg/my-instance", templateRef: "v1.2.3", depName: testDepName}
+}
+
+// testStub renders the minimal caller-stub YAML callerFromWorkflow parses, in the
+// same shape the copier-delivered terraform.yml has.
+func testStub(uses string) string {
+	return "jobs:\n  call:\n    uses: " + uses + "\n    with:\n" +
+		"      instance_repo: myorg/my-instance\n" +
+		"      # renovate: datasource=github-tags depName=" + testDepName + "\n" +
+		"      template-ref: v1.2.3\n"
 }
 
 func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {

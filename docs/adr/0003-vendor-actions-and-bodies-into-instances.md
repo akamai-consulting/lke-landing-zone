@@ -90,12 +90,16 @@ local `./` ref (`usesOrg == ""` → skipped), so there is no cross-org boundary 
 
 **Costs / trade-offs**
 - Instances carry more vendored surface (bodies + actions). It is kept current on the
-  same `llz upgrade` / Renovate path as every other `managed` file — real bytes and a
-  real sync contract, but no manual drift. The render-time `strip-comments` task slims
-  the bodies so an instance carries machinery, not maintainer rationale.
+  same `llz upgrade` path as the rest of the scaffold — real bytes and a real sync
+  contract, but no manual drift. The bodies ship **verbatim** (comments included):
+  `.github/workflows/**` is `merge`-classified, and copier's 3-way merge on
+  `copier update` uses the template render as its base — a render-time comment-strip
+  would make every instance copy diverge from that base and turn each release that
+  touches a comment into merge conflicts inside workflow YAML.
 - A job that genuinely needs template **source** (e.g. the former scheduled-checks
   `go-vuln-audit`, which built the template's Go module) can no longer run from an
-  instance; that concern moves to the template repo's own CI.
+  instance; that concern moves to the template repo's own CI
+  (`.github/workflows/go-vuln-audit.yml`, same weekly cron).
 
 ## Alternatives considered
 

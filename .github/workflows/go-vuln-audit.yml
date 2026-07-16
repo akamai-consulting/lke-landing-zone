@@ -1,0 +1,32 @@
+# Weekly govulncheck of the Go tools/ module (`make audit`). This is the
+# TEMPLATE-repo home of the CVE audit that used to run inside every instance's
+# scheduled-checks (the former `go-vuln-audit` job): a self-contained instance
+# cannot reach this repo to audit it — and it audits template code, not instance
+# config — so the audit lives here, next to the code it covers.
+# `go build`/`go test` run on every push/PR, but CVEs are published continuously;
+# the weekly cron catches advisories that land between code changes.
+name: Go vulnerability audit
+
+on:
+  schedule:
+    - cron: '0 2 * * 0' # weekly, Sunday 02:00 UTC (same slot the instance job had)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency CVE audit (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: tools/go.sum
+      - name: Audit the tools module
+        run: make audit
