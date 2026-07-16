@@ -168,12 +168,15 @@ func TestReadCoreDNSClusterIP_RetriesUntilAssigned(t *testing.T) {
 	coreDNSReadBudget = time.Minute
 	t.Cleanup(func() { coreDNSReadBudget = orig })
 
+	// Each poll round runs len(coreDNSServiceQueries) kubectl calls; return empty
+	// for a full first round (forcing a sleep + retry), then the IP.
 	calls := 0
+	perRound := len(coreDNSServiceQueries)
 	d := bootstrapDeps{
 		kubectl: func(_ ...string) (string, bool) {
 			calls++
-			if calls < 3 {
-				return "", true // Service exists (exit 0) but clusterIP empty
+			if calls <= perRound {
+				return "", true // Service present (exit 0) but no ClusterIP yet
 			}
 			return "10.43.0.10", true
 		},
@@ -187,8 +190,8 @@ func TestReadCoreDNSClusterIP_RetriesUntilAssigned(t *testing.T) {
 	if got != "10.43.0.10" {
 		t.Errorf("got %q want 10.43.0.10", got)
 	}
-	if calls < 3 {
-		t.Errorf("expected >=3 attempts (retry on empty ClusterIP), got %d", calls)
+	if calls <= perRound {
+		t.Errorf("expected a retry past the first poll round (>%d calls), got %d", perRound, calls)
 	}
 }
 
@@ -358,7 +361,7 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
 			rec.add("kubectl " + line)
-			if strings.Contains(line, "service coredns") {
+			if strings.Contains(line, "port==53") || strings.Contains(line, "service coredns") {
 				return "10.0.0.10", true
 			}
 			// kyverno policy apply (applyKyvernoPolicy uses kubectl apply -f <path>)
@@ -392,7 +395,7 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 	calls := rec.snapshot()
 	// coredns read is first; helm upgrade uses the pinned version; a helm install
 	// happened after the namespace/SC applies; the bridge applies happen last.
-	if rec.indexOf("service coredns") != 0 {
+	if rec.indexOf("port==53") != 0 {
 		t.Errorf("coredns read should be first, got calls:\n%s", strings.Join(calls, "\n"))
 	}
 	if rec.indexOf("upgrade --install apl") < 0 {
@@ -426,7 +429,7 @@ func TestBootstrapCluster_KyvernoRacesAheadOfGate(t *testing.T) {
 	d := bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
-			if strings.Contains(line, "service coredns") {
+			if strings.Contains(line, "port==53") || strings.Contains(line, "service coredns") {
 				return "10.0.0.10", true
 			}
 			if len(args) > 0 && args[0] == "apply" {
@@ -478,7 +481,7 @@ func TestBootstrapCluster_GHCRSecretsGatedOnToken(t *testing.T) {
 		var mu sync.Mutex
 		d := bootstrapDeps{
 			kubectl: func(args ...string) (string, bool) {
-				if strings.Contains(strings.Join(args, " "), "service coredns") {
+				if strings.Contains(strings.Join(args, " "), "port==53") || strings.Contains(strings.Join(args, " "), "service coredns") {
 					return "10.0.0.10", true
 				}
 				return "", true

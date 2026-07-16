@@ -529,40 +529,60 @@ func kyvernoPolicySpecs() (specs []kyvernoPolicyOpts, cleanup func(), err error)
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
-// coreDNSReadBudget / coreDNSReadInterval bound the coredns ClusterIP poll below.
+// coreDNSReadBudget / coreDNSReadInterval bound the DNS ClusterIP poll below.
 // Package vars so tests zero them.
 var (
-	coreDNSReadBudget   = 3 * time.Minute
+	coreDNSReadBudget   = 5 * time.Minute
 	coreDNSReadInterval = 5 * time.Second
 )
 
-// readCoreDNSClusterIP reads the kube-system coredns Service ClusterIP (the loki
+// coreDNSServiceQueries resolve the cluster DNS Service's ClusterIP, tried in order
+// until one yields a usable IP. The old TF `data.kubernetes_service.coredns`
+// hardcoded the name `coredns`; on an LKE-E e2e that single by-name jsonpath read
+// returned EMPTY even though the `coredns` Service was present WITH a ClusterIP
+// (confirmed on the live cluster 30m later), and the whole bootstrap failed at
+// step 1. So lead with the most robust selector — the Service that actually serves
+// DNS (a port 53), which is name/label-agnostic AND excludes the sibling
+// `workload-coredns-metrics` Service (port 9153) — then fall back to the two
+// conventional names (LKE-E = `coredns`, stock LKE = `kube-dns`). NB the
+// `k8s-app=coredns` LABEL is NOT usable: it matches BOTH the DNS and the metrics
+// Services on LKE-E.
+var coreDNSServiceQueries = [][]string{
+	{"-n", "kube-system", "get", "service", "-o", "jsonpath={.items[?(@.spec.ports[0].port==53)].spec.clusterIP}"},
+	{"-n", "kube-system", "get", "service", "coredns", "-o", "jsonpath={.spec.clusterIP}"},
+	{"-n", "kube-system", "get", "service", "kube-dns", "-o", "jsonpath={.spec.clusterIP}"},
+}
+
+// readCoreDNSClusterIP resolves the cluster DNS Service's ClusterIP (the loki
 // gateway nginx `resolver`). Apply-only and load-bearing: an empty value ships a
 // crashlooping gateway, so a missing IP is a hard error.
 //
-// It POLLS rather than reading once: on a freshly-ready LKE-E cluster the coredns
-// Service can exist before its ClusterIP is allocated, so the very first read
-// returns "" (observed failing an e2e at step 1 — the Service is present, exit 0,
-// but jsonpath matches an empty clusterIP). Retry until it has an IP or the budget
-// elapses, then fail loud with what we last saw.
+// It tries each selector in coreDNSServiceQueries and POLLS (a freshly-ready
+// cluster's Flux-managed CoreDNS may briefly lag). On the budget expiring it dumps
+// kube-system Services to stderr so an empty read is diagnosable rather than blind.
 func readCoreDNSClusterIP(d bootstrapDeps) (string, error) {
 	deadline := d.now().Add(coreDNSReadBudget)
 	first := true
 	for {
-		out, ok := d.kubectl("-n", "kube-system", "get", "service", "coredns",
-			"-o", "jsonpath={.spec.clusterIP}")
-		if ip := strings.TrimSpace(out); ok && ip != "" {
-			if !first {
-				fmt.Printf("coredns ClusterIP resolved: %s\n", ip)
+		for _, q := range coreDNSServiceQueries {
+			out, ok := d.kubectl(q...)
+			ip := strings.TrimSpace(out)
+			if ok && ip != "" && ip != "None" {
+				if !first {
+					fmt.Printf("cluster DNS ClusterIP resolved: %s\n", ip)
+				}
+				return ip, nil
 			}
-			return ip, nil
 		}
 		if !d.now().Before(deadline) {
-			return "", fmt.Errorf("coredns ClusterIP (kube-system/coredns) not resolvable within %s: %s",
-				coreDNSReadBudget, firstNonEmpty(strings.TrimSpace(out), "empty (Service present but no ClusterIP yet?)"))
+			if out, _ := d.kubectl("-n", "kube-system", "get", "services"); out != "" {
+				fmt.Fprintln(os.Stderr, "kube-system services:")
+				fmt.Fprintln(os.Stderr, strings.TrimRight(out, "\n"))
+			}
+			return "", fmt.Errorf("cluster DNS Service ClusterIP not resolvable within %s (tried the port-53 Service + coredns/kube-dns by name) — see the kube-system services dump above", coreDNSReadBudget)
 		}
 		if first {
-			fmt.Println("Waiting for the coredns Service to have a ClusterIP...")
+			fmt.Println("Waiting for the cluster DNS Service to have a ClusterIP...")
 			first = false
 		}
 		d.sleep(coreDNSReadInterval)
