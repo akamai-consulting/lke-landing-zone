@@ -1,7 +1,7 @@
 # Dedicated, env-agnostic kustomize tree for the `openbao` ClusterSecretStore.
 #
 # Applied by its OWN Argo CD Application (`llz-secret-store`, created in
-# terraform-iac-bootstrap/cluster-bootstrap/main.tf), pinned to the same
+# tools/cmd/llz/ci_bootstrap_cluster.go), pinned to the same
 # apps_repo_revision as platform-bootstrap. Deliberately NOT referenced by any
 # env's apl-values/<env>/manifest overlay (that overlay = the platform-bootstrap
 # tree) — keeping the store out of the monolith is the whole point (blast-radius

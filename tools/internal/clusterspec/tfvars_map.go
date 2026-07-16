@@ -69,40 +69,12 @@ func ClusterTFVars(c Cluster) []Assign {
 	return a
 }
 
-// BootstrapTFVars maps spec.cluster.bootstrap onto cluster-bootstrap/<env>.tfvars.
-// deployment / apl_values_env are the deployment discriminator — always the env
-// name (mirrors readiness.go's invariant that they equal the workspace key).
-func BootstrapTFVars(env string, c Cluster) []Assign {
-	var a []Assign
-	add := func(k, v string) { a = append(a, Assign{k, v}) }
-	b := c.Bootstrap
-
-	add("deployment", hclStr(env))
-	add("apl_values_env", hclStr(env))
-	// cluster.name, cluster_domain, obj_cluster and the values-repo revision are
-	// NOT emitted: `llz render` writes cluster identity, the object-store wiring
-	// and otomi.git.branch straight into the committed values.yaml, and
-	// `llz ci resolve-harbor-url` reads domainSuffix straight from the spec — so
-	// cluster-bootstrap needs none of them as tfvars/templatefile inputs (the
-	// tfvars-as-side-channel read for cluster_domain was retired with the var).
-	if b.AplChartVersion != "" {
-		add("apl_chart_version", hclStr(b.AplChartVersion))
-	}
-	// apl_values_repo_url/username stay in the tfvars as spec→tfvar carriers
-	// only: no cluster-bootstrap resource consumes them anymore (apl-core 6.x
-	// self-registers the Argo CD repo credential from otomi.git.*, and the
-	// TF-seeded platform-apps-repo Secret was retired with it).
-	if b.AplValues.RepoURL != "" {
-		add("apl_values_repo_url", hclStr(b.AplValues.RepoURL))
-	}
-	if b.AplValues.Username != "" {
-		add("apl_values_repo_username", hclStr(b.AplValues.Username))
-	}
-	if b.AppsRepoRevision != "" {
-		add("apps_repo_revision", hclStr(b.AppsRepoRevision))
-	}
-	return a
-}
+// NOTE — the former BootstrapTFVars (spec.cluster.bootstrap →
+// cluster-bootstrap/<env>.tfvars) was removed with the cluster-bootstrap TF
+// workspace: the in-cluster bootstrap now runs natively via `llz ci
+// bootstrap-cluster`, which reads the apl-core chart version + apps-repo-revision
+// straight from the spec (no tfvars hop). The spec fields it consumed
+// (spec.cluster.bootstrap.*) remain on the type.
 
 // NetworkTFVars maps one spec.networks entry onto vpc/<name>.tfvars — the shared-VPC
 // root (one apply per network, state key vpc/<name>) that provisions a single

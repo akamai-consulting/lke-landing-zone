@@ -494,7 +494,7 @@ lint:
 	if echo "$$CHANGED" | grep -qE '^(terraform-modules|instance-template/terraform-iac-bootstrap)/.*\.tf$$|\.tflintrc\.hcl$$|\.checkov\.yaml$$'; then \
 		$(MAKE) --no-print-directory tf-fmt-check $(LINT_TF); \
 	fi; \
-	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^platform-apl/|^instance-template/terraform-iac-bootstrap/cluster-bootstrap/main\.tf$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
+	if echo "$$CHANGED" | grep -qE '^instance-template/apl-values/|^platform-apl/|^tools/cmd/llz/ci_bootstrap_cluster\.go$$|^template-scripts/ci/scaffold-render-check\.sh$$'; then \
 		$(MAKE) --no-print-directory wave-health-guard scaffold-check; \
 	fi; \
 	if echo "$$CHANGED" | grep -qE '^copier\.yml$$|^instance-template/\.github/|^template-scripts/ci/instance-test\.sh$$'; then \

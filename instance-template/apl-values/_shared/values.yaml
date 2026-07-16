@@ -50,7 +50,7 @@ apps:
   # configured the `eso` Kubernetes-auth role. A Degraded resource FAILS the platform-bootstrap sync
   # wave (it was the exact hook that wedged the first lab bootstrap). These
   # overrides reclassify "not ready yet" as Progressing, so Argo waits + retries
-  # (see the retry budget in terraform-iac-bootstrap/cluster-bootstrap/main.tf)
+  # (see the retry budget in tools/cmd/llz/ci_bootstrap_cluster_manifests.go)
   # instead of failing. Genuinely-broken stores/secrets still surface via the
   # converge health check (`llz ci health`), which verifies the synced Secret
   # exists independently of Argo's health rollup.

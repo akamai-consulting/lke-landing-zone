@@ -66,7 +66,7 @@ func instanceLayout() (tfDir, aplDir, relPrefix string) {
 
 const tplTfvars = "terraform.tfvars.example"
 
-var tfRoots = []string{"cluster", "cluster-bootstrap", "object-storage"}
+var tfRoots = []string{"cluster", "object-storage"}
 
 // validateOBJCluster catches a value that isn't shaped like a Linode OBJ cluster
 // id. The shape rule lives in internal/validate (OBJClusterID) so the LandingZone

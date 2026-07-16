@@ -345,7 +345,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		// the shared, token-free resources are fetched from the template repo at `ref`;
 		// only per-env + per-instance pieces are carried locally.
 		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref, acmeEmail, imageTag),
-		// per-env local-config marker the cluster-bootstrap precondition reads.
+		// per-env local-config marker the bootstrap-cluster env-revision precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
 		// The operator escape-hatch Application, render-emitted locally with this
 		// instance's repo (its shared base is fetched remotely, so it can't carry it).
@@ -514,9 +514,8 @@ func renderNetworks(lz *clusterspec.LandingZone, tfDir, relPrefix string, dryRun
 // assignments applied.
 func renderEnvTfvars(env string, c clusterspec.Cluster, tfDir, relPrefix string, dryRun bool) error {
 	roots := map[string][]clusterspec.Assign{
-		"cluster":           clusterspec.ClusterTFVars(c),
-		"cluster-bootstrap": clusterspec.BootstrapTFVars(env, c),
-		"object-storage":    clusterspec.ObjectStorageTFVars(env, c),
+		"cluster":        clusterspec.ClusterTFVars(c),
+		"object-storage": clusterspec.ObjectStorageTFVars(env, c),
 	}
 	for _, root := range tfRoots {
 		dst := filepath.Join(tfDir, root, env+".tfvars")
@@ -633,9 +632,8 @@ func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 	for _, name := range envs {
 		e, _ := lz.Env(name)
 		for root, assigns := range map[string][]clusterspec.Assign{
-			"cluster":           clusterspec.ClusterTFVars(e.Cluster),
-			"cluster-bootstrap": clusterspec.BootstrapTFVars(name, e.Cluster),
-			"object-storage":    clusterspec.ObjectStorageTFVars(name, e.Cluster),
+			"cluster":        clusterspec.ClusterTFVars(e.Cluster),
+			"object-storage": clusterspec.ObjectStorageTFVars(name, e.Cluster),
 		} {
 			base, err := readExample(root)
 			if err != nil {

@@ -350,11 +350,11 @@ jobs:
   # `llz ci validate-apl-values` on the rendered values — two checks that were
   # previously Release-E2E-ONLY, each catchable in seconds with no cloud (both
   # classes burned multiple ~50-min e2e runs in the week of 2026-07-02):
-  #   • templatefile var-contract — a values.yaml ${...} not in cluster-bootstrap/
-  #     main.tf's templatefile() map fails terraform apply (the
-  #     ${apl_values_repo_url} class that failed a 2026-07-02 tf-plan).
+  #   • runtime-placeholder var-contract — a values.yaml ${...} not in the
+  #     secrets-only set `llz ci bootstrap-cluster` fills can't be rendered (the
+  #     ${apl_values_repo_url} class that failed a 2026-07-02 apply).
   #   • apl-core chart schema via `helm template apl/apl` — the same JSON-Schema
-  #     validation helm_release.apl runs at apply time; catches required/renamed/
+  #     validation bootstrap-cluster's `helm upgrade` runs at apply time; catches required/renamed/
   #     mistyped keys (the apl-core v6 `apps.loki: adminPassword is required` class).
   # Needs Go (build a FRESH llz — a tools/ PR predates the image rebuild) and Helm
   # (the schema check); the var-contract check is pure Go, no terraform.

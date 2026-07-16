@@ -35,15 +35,16 @@ const (
 	tokInstanceRepo = "<@ instance_repo @>"
 )
 
-// Roots returns the four TF root names in deterministic order (matches the on-disk
-// terraform-iac-bootstrap/<root>/ layout an instance applies).
+// Roots returns the three day-0 TF root names in deterministic order (matches the
+// on-disk terraform-iac-bootstrap/<root>/ layout an instance applies). The former
+// cluster-bootstrap root was retired — its in-cluster bootstrap now runs natively
+// via `llz ci bootstrap-cluster`, not Terraform.
 func Roots() []string {
-	return []string{"cluster", "cluster-bootstrap", "object-storage", "vpc"}
+	return []string{"cluster", "object-storage", "vpc"}
 }
 
 // Substitute fills the three copier tokens in a root file's content. Any token a
-// given file does not contain is a harmless no-op (e.g. instance_repo appears only
-// in cluster-bootstrap's tfvars.example).
+// given file does not contain is a harmless no-op.
 func Substitute(content, upstreamOrg, ref, instanceRepo string) string {
 	r := strings.NewReplacer(
 		tokUpstreamOrg, upstreamOrg,
@@ -56,7 +57,7 @@ func Substitute(content, upstreamOrg, ref, instanceRepo string) string {
 // tfRel is the sorted set of embedded *.tf files (relative to roots/, e.g.
 // "cluster/backend.tf"), enumerated ONCE at package init. Only *.tf files are
 // roots to lay down: terraform.tfvars.example (rendered per-env into <env>.tfvars
-// by the render engine) and cluster-bootstrap's README.md are NOT written as
+// by the render engine) and any root README.md are NOT written as
 // roots. The embed is fixed at compile time, so this walk cannot fail at runtime —
 // a panic here means the binary embedded something unexpected.
 var tfRel = func() []string {
