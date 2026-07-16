@@ -186,7 +186,7 @@ func runPinInstanceImages(o pinOpts) error {
 		} else if !pinManifestExists(ref) {
 			return fmt.Errorf("%s not found in GHCR", ref)
 		}
-		if _, err := pinGH(o.instanceToken, "variable", "set", im.Var, "--repo", o.instance, "--body", ref); err != nil {
+		if _, err := pinGHRetry(o.instanceToken, "variable", "set", im.Var, "--repo", o.instance, "--body", ref); err != nil {
 			return fmt.Errorf("could not set %s on %s — GH_TOKEN_INSTANCE needs 'Variables: read and write': %w", im.Var, o.instance, err)
 		}
 		fmt.Printf("Pinned %s %s=%s\n", o.instance, im.Var, ref)
@@ -217,13 +217,30 @@ func imageRef(base, sha string, built bool) string {
 // commitBuiltImages reports whether a "Build Container Images" run exists for sha
 // (i.e. the commit touched tools/dockerfiles, so a per-commit image is/was built).
 func commitBuiltImages(token, templateRepo, sha string) (bool, error) {
-	out, err := pinGH(token, "api",
+	out, err := pinGHRetry(token, "api",
 		fmt.Sprintf("repos/%s/actions/runs?head_sha=%s&per_page=100", templateRepo, sha),
 		"--jq", `[.workflow_runs[] | select(.name=="Build Container Images")] | length`)
 	if err != nil {
 		return false, fmt.Errorf("querying Build Container Images runs for %.8s: %w", sha, err)
 	}
 	return parseBuildCount(out) > 0, nil
+}
+
+// pinGHRetry wraps pinGH with a short retry (3 attempts, 5s/10s backoff via the
+// seamed pinSleep) for the FATAL gh calls on the pin path. A single transient
+// GitHub API 503 on the very first Instantiate query has killed a whole
+// release-e2e dispatch at minute one (run 29540787054, during a live API
+// incident); a couple of retries ride that out. Persistent failures still
+// surface the final error unchanged.
+func pinGHRetry(token string, args ...string) (out []byte, err error) {
+	for attempt := 1; ; attempt++ {
+		out, err = pinGH(token, args...)
+		if err == nil || attempt >= 3 {
+			return out, err
+		}
+		fmt.Fprintf(os.Stderr, "::warning::gh %s failed (attempt %d/3): %v — retrying\n", args[0], attempt, err)
+		pinSleep(time.Duration(attempt) * 5 * time.Second)
+	}
 }
 
 // parseBuildCount reads the `gh --jq '… | length'` integer. Non-numeric/empty
