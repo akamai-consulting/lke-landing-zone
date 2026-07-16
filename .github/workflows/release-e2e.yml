@@ -284,8 +284,8 @@ jobs:
           # The scaffold already names its TF roots terraform-iac-bootstrap/ (what
           # terraform.yml and the actions chdir into), so no rename is needed.
           # Operational tooling (the llz CLI, which absorbed instance-scripts/) is
-          # template-INTERNAL (like .github/actions): the reusable llz-* workflows
-          # build it from a template checkout. A real instance has no scripts/, so
+          # template-INTERNAL: it is baked into the TF_IMAGE the reusable llz-*
+          # workflows run in. A real instance has no scripts/, so
           # the e2e instance must not either — don't hoist anything here.
           # docs/ are delivered the same way (copier _tasks): copy the full set in,
           # then `llz ci deliver-docs` prunes to the operator set + writes the
@@ -296,10 +296,10 @@ jobs:
           mkdir -p .e2e-instance/docs && cp -a docs/. .e2e-instance/docs/
           bin/llz ci deliver-docs --docs .e2e-instance/docs \
             --org "${GITHUB_REPOSITORY_OWNER}" --ref "${GITHUB_SHA}"
-          # Composite actions are template-internal — the reusable llz-* workflows
-          # source them from a template checkout, so instances don't carry them
-          # (copier.yml `_exclude`s `.github/actions`). Mirror that here.
-          rm -rf .e2e-instance/.github/actions
+          # Composite actions are VENDORED into every instance (.github/actions/ —
+          # the reusable llz-* bodies reference them as `./.github/actions/<name>`),
+          # so the `cp -a instance-template/.` above already put them where the
+          # dispatched workflows resolve them. Do NOT prune them here.
           # `.copier-answers.yml` carries copier-internal jinja (`<@ _copier_answers
           # … @>`) that only `copier update` renders — which this throwaway instance
           # never runs, so the copier-written file can't be kept (its jinja would trip
