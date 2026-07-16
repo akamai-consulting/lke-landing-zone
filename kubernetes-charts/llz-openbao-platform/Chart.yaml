@@ -63,7 +63,13 @@ type: application
 #         live (connection reset by peer) on a converged cluster, with the OpenBao
 #         alerts DEAD? in `llz ci alert-eval`. Adds a pod-scoped allowedClientPods
 #         entry {namespace: monitoring, name: prometheus}.
-version: 0.1.18
+# 0.1.19: allow the in-cluster broad-PAT rotator CronJob
+#         (llz-pat-rotator/broad-pat-rotator) through the :8200 ingress NetworkPolicy.
+#         It authenticates via Kubernetes-auth to read/rotate secret/linode/broad-pat;
+#         without the allowedClientPods entry its login is L4-blocked (TCP timeout),
+#         and the rotator Job fails on its 300s deadline — the broad-pat e2e assertion
+#         never passed. Symmetric with the harbor-robot-provisioner entry (0.1.12).
+version: 0.1.19
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

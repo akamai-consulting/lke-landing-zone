@@ -90,6 +90,14 @@ platform:
       # `monitoring` is apl-core's shared namespace.
       - namespace: monitoring
         name: prometheus
+      # The broad-PAT rotator CronJob (dedicated llz-pat-rotator namespace) logs into
+      # OpenBao via Kubernetes-auth (`broad-pat-rotator` role) to read + rotate the
+      # account-wide broad Linode PAT at secret/linode/broad-pat. Pod-scoped for
+      # symmetry with the other CronJob clients; without it the k8s-auth login at
+      # :8200 is L4-blocked (TCP timeout → `kubernetes auth login … context deadline
+      # exceeded`, the rotator Job then fails on its 300s deadline).
+      - namespace: llz-pat-rotator
+        name: broad-pat-rotator
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
     observabilityNamespace: llz-observability
 

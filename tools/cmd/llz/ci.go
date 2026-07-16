@@ -38,7 +38,7 @@ func ciCmd() *cobra.Command {
 			"in internal/terraform + internal/linode behind unit tests; these commands are\n" +
 			"the thin orchestration over it.",
 	}
-	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFUntrackCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(),
+	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFUntrackCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
 		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
@@ -746,6 +746,48 @@ func ciReapNodeBalancersCmd() *cobra.Command {
 	f.IntVar(&attempts, "attempts", 1, "sweep+verify attempts before failing (only with --require-empty)")
 	f.IntVar(&retryDelay, "retry-delay", 30, "seconds between --require-empty retries")
 	return c
+}
+
+func ciReapObjKeysCmd() *cobra.Command {
+	var env string
+	c := &cobra.Command{
+		Use:   "reap-objkeys",
+		Short: "delete a destroyed deployment's minted Linode obj-storage keys + in-cluster PAT (--yes to delete)",
+		Long: "Teardown hygiene for the ACCOUNT-scoped Linode credentials a deployment mints\n" +
+			"at bootstrap/rotation: the loki + harbor-registry Object Storage keys\n" +
+			"(platform-loki-<env> / platform-harbor-registry-<env>) and the narrow in-cluster\n" +
+			"PAT (llz-incluster-<env>). These carry no cluster tag, so the cluster-liveness\n" +
+			"sweeps (reap-volumes / reap-nodebalancers / `llz reap`) can't see them; a leaked\n" +
+			"mint (failed run, failed grace-window revoke) accretes toward the account's\n" +
+			"100-key / 100-PAT caps until a fresh mint 400s. Run on the destroy path with the\n" +
+			"env being torn down. Exact-label match — never another env's creds, and never the\n" +
+			"broad token this runs under (a different label). Reads LINODE_TOKEN; dry-run by\n" +
+			"default, --yes to delete.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return runCIReapObjKeys(gopts, env) },
+	}
+	c.Flags().StringVar(&env, "env", "", "deployment whose minted keys + PAT to reap (required)")
+	return c
+}
+
+func runCIReapObjKeys(g globalOpts, env string) error {
+	if env == "" {
+		return fmt.Errorf("--env is required")
+	}
+	token, err := ciToken()
+	if err != nil {
+		return err
+	}
+	client := linode.NewClient(token, 60*time.Second)
+	ctx := context.Background()
+	del, fin := ciDeleter(ctx, g, client)
+	if err := reapEnvObjKeys(ctx, client, env, del); err != nil {
+		return err
+	}
+	if err := reapEnvInclusterPAT(ctx, client, env, del); err != nil {
+		return err
+	}
+	return fin()
 }
 
 // ciToken reads the Linode PAT the CI sweeps run under.

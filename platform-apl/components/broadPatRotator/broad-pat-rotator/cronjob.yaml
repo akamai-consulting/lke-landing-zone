@@ -40,7 +40,13 @@ spec:
           serviceAccountName: broad-pat-rotator
           containers:
             - name: rotate
-              image: <@ llz_image_ref @>
+              # Literal :latest, retagged to the signed sha (e2e) / release tag by the
+              # carved app's kustomize images: transformer — same as llz-reconciler and
+              # harbor (broadPatRotator is in carvedLLZImageComponents). Must NOT be a
+              # copier llz_image_ref placeholder: platform-apl is Argo-fetched from the
+              # template, never copier-rendered, so a placeholder ships literally and the
+              # pod can't pull it (the registry-compliance policy rejects it).
+              image: ghcr.io/akamai-consulting/llz:latest
               args: ["ci", "rotate-broad-pat", "--apply"]
               env:
                 - name: LINODE_TOKEN
@@ -53,8 +59,10 @@ spec:
                     secretKeyRef:
                       name: broad-pat-rotator-gh-token
                       key: token
+                # Filled per-env by RenderBroadPATEnvPatch (like BROAD_PAT_* below);
+                # NOT a copier token, for the same platform-apl-is-Argo-fetched reason.
                 - name: GH_REPO
-                  value: "<@ instance_repo @>"
+                  value: "REPLACE_ME"
                 # The Linode label of the broad PAT family (matches the CI rotation's).
                 - name: BROAD_PAT_LABEL
                   value: "REPLACE_ME"

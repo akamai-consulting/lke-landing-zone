@@ -398,6 +398,18 @@ jobs:
           git remote add origin "https://x-access-token:${E2E_DISPATCH_TOKEN}@github.com/${INSTANCE_REPO}.git"
           git push -f origin main
           echo "Pushed instantiation ${HEAD_SHA::8} to ${INSTANCE_REPO}@main"
+          # Drop the operator's per-env values branch from the PREVIOUS run's (now
+          # destroyed) cluster. apl-core's operator self-creates apl-<env> on first
+          # reconcile (values-branch-isolation ADR) but nothing resets it on cluster
+          # recreate: a fresh cluster's operator otherwise consumes the dead cluster's
+          # rendered values + SealedSecrets (sealed by a key that no longer exists) and
+          # wedges before helmfile installs anything — apl_pipeline_ready then times out
+          # at stage 1 (argocd CRD never appears; first seen v0.0.25, run 29446982026).
+          # The branch is machine-owned and force-pushed freely per the ADR, so deleting
+          # it is always safe here; the operator recreates it on first reconcile.
+          git push origin --delete "apl-${E2E_ENV}" 2>/dev/null \
+            && echo "Deleted stale operator branch apl-${E2E_ENV}" \
+            || echo "No stale apl-${E2E_ENV} branch to delete"
           # platform-bootstrap reads `main` directly now: apl-core's operator no longer
           # force-pushes main (per-env values-branch isolation keeps it on apl-<env>), so
           # main stays the instantiated tree for the whole run. Make TF_VAR_apps_repo_revision

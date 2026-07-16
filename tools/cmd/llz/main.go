@@ -474,6 +474,7 @@ func reapCmd() *cobra.Command {
 	f := c.Flags()
 	f.StringVar(&o.region, "region", "", "scope NodeBalancers/VPCs/Volumes to one Linode region (e.g. us-ord)")
 	f.StringVar(&o.clusterLabel, "cluster-label", "", "also reap the orphan cluster + its node firewall + <label>-vpc")
+	f.StringVar(&o.env, "env", "", "also reap the deployment's minted Linode creds (obj-storage keys platform-loki-<env>/platform-harbor-registry-<env> + in-cluster PAT llz-incluster-<env>)")
 	f.StringVar(&o.fwLabel, "fw-label", "", "exact firewall label to search (default: platform-nodes-fw + <label>-nodes)")
 	f.StringVar(&o.volumeIDs, "volume-ids", "", "space-separated Volume id allowlist (scopes the Volume sweep)")
 	f.StringVar(&o.tagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
