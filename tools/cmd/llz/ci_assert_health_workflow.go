@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -125,6 +126,31 @@ func classifyWorkflowPhase(phase string) (terminal, succeeded bool) {
 	}
 }
 
+// healthVerdictRe matches the health run's convergence verdict line, e.g.
+// "convergence: 0 hard-failed, 9 in-progress".
+var healthVerdictRe = regexp.MustCompile(`convergence:\s*(\d+) hard-failed,\s*(\d+) in-progress`)
+
+// healthTransientOnly reports whether a FAILED health run's logs show a purely
+// TRANSIENT state: zero hard failures with work still in progress (e.g. the
+// argocd-redis WRONGPASS auth split flapping apps to Unknown right after
+// converge — observed live: "0 hard-failed, 9 in-progress"). That is a cluster
+// mid-settle, not an unhealthy cluster; the caller retries instead of failing
+// the gate. Anything else (hard failures, no verdict line) is NOT transient.
+func healthTransientOnly(logs string) bool {
+	m := healthVerdictRe.FindStringSubmatch(logs)
+	if m == nil {
+		return false
+	}
+	return m[1] == "0" && m[2] != "0"
+}
+
+// Health-gate retry knobs: a transient-only failure is retried with a fresh
+// Workflow after a pause (package vars so tests shrink them).
+var (
+	healthRetryAttempts = 3
+	healthRetryPause    = 90 * time.Second
+)
+
 // submitHealthWorkflowFn creates the one-shot Workflow (kubectl create -f - -o
 // json, manifest over stdin) and returns the created object's JSON. Seamed for
 // tests. Interactive-style call site (pipes stdin), like firewallKubectlFn.
@@ -143,18 +169,60 @@ func runCIAssertHealthWorkflow(namespace, template string, timeout, interval tim
 		return 0
 	}
 
-	out, err := submitHealthWorkflowFn(namespace, healthWorkflowManifest(template, namespace))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: could not submit Workflow from %s/%s: %v\n", namespace, template, err)
-		return 1
-	}
-	name, ok := createdWorkflowName(out)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: submitted Workflow but could not read its name from the create response\n")
-		return 1
-	}
-	fmt.Printf("assert-health-workflow: submitted Workflow %s/%s from WorkflowTemplate %s; waiting up to %s for it to Succeed…\n", namespace, name, template, timeout)
+	for attempt := 1; ; attempt++ {
+		out, err := submitHealthWorkflowFn(namespace, healthWorkflowManifest(template, namespace))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: could not submit Workflow from %s/%s: %v\n", namespace, template, err)
+			return 1
+		}
+		name, ok := createdWorkflowName(out)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: submitted Workflow but could not read its name from the create response\n")
+			return 1
+		}
+		fmt.Printf("assert-health-workflow: submitted Workflow %s/%s from WorkflowTemplate %s (attempt %d/%d); waiting up to %s for it to Succeed…\n",
+			namespace, name, template, attempt, healthRetryAttempts, timeout)
 
+		switch waitHealthWorkflow(namespace, name, timeout, interval) {
+		case healthOK:
+			fmt.Printf("assert-health-workflow: Workflow %s/%s Succeeded.\n", namespace, name)
+			return 0
+		case healthFailed:
+			// A failed run whose own verdict is "0 hard-failed, N in-progress" is a
+			// cluster MID-SETTLE (e.g. the argocd-redis WRONGPASS flap right after an
+			// operator roll), not an unhealthy cluster — retry with a fresh Workflow.
+			logs := execCombined("kubectl", "-n", namespace, "logs",
+				"-l", "workflows.argoproj.io/workflow="+name, "-c", "main", "--tail=-1")
+			if attempt < healthRetryAttempts && healthTransientOnly(logs) {
+				fmt.Printf("::warning::assert-health-workflow: %s/%s failed with 0 hard-failed (in-progress only — cluster still settling); retrying in %s…\n",
+					namespace, name, healthRetryPause)
+				execCombined("kubectl", "-n", namespace, "delete", "workflow", name, "--ignore-not-found")
+				time.Sleep(healthRetryPause)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: Workflow %s/%s failed (not Succeeded).\n", namespace, name)
+			fmt.Fprintln(os.Stderr, logs)
+			fmt.Fprint(os.Stderr, execCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
+			return 1
+		case healthTimeout:
+			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: Workflow %s/%s did not reach a terminal phase within %s.\n", namespace, name, timeout)
+			fmt.Fprint(os.Stderr, execCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
+			return 1
+		}
+	}
+}
+
+// healthWaitResult is waitHealthWorkflow's terminal classification.
+type healthWaitResult int
+
+const (
+	healthOK healthWaitResult = iota
+	healthFailed
+	healthTimeout
+)
+
+// waitHealthWorkflow polls one submitted Workflow to a terminal phase.
+func waitHealthWorkflow(namespace, name string, timeout, interval time.Duration) healthWaitResult {
 	deadline := time.Now().Add(timeout)
 	for {
 		// `kubectl get workflow <name> -o json` returns the BARE object, not a
@@ -168,21 +236,12 @@ func runCIAssertHealthWorkflow(namespace, template string, timeout, interval tim
 		terminal, succeeded := classifyWorkflowPhase(phase)
 		if terminal {
 			if succeeded {
-				fmt.Printf("assert-health-workflow: Workflow %s/%s Succeeded.\n", namespace, name)
-				return 0
+				return healthOK
 			}
-			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: Workflow %s/%s reached phase %q (not Succeeded).\n", namespace, name, phase)
-			fmt.Fprint(os.Stderr, execCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
-			return 1
+			return healthFailed
 		}
 		if time.Now().After(deadline) {
-			shown := phase
-			if shown == "" {
-				shown = "<none yet>"
-			}
-			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: Workflow %s/%s did not reach a terminal phase within %s (last phase %s).\n", namespace, name, timeout, shown)
-			fmt.Fprint(os.Stderr, execCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
-			return 1
+			return healthTimeout
 		}
 		time.Sleep(interval)
 	}
