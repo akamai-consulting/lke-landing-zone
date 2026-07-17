@@ -435,7 +435,7 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// Seeding the branch FIRST means the installer finds it and pushes its full env
 	// tree as part of installation, on fresh and reused clusters alike.
 	repoURL, branch := aplValuesGitCoords(rendered)
-	seeded, err := ensureAplValuesBranch(d, o, repoURL, branch)
+	seedSHA, err := ensureAplValuesBranch(d, o, repoURL, branch)
 	if err != nil {
 		return err
 	}
@@ -457,7 +457,7 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// The validated recovery (performed manually on e2e cluster 632033): reset the
 	// status to pending + restart the operator, which re-runs the INSTALLER phase —
 	// it re-bootstraps the full values and pushes them to the seeded branch.
-	if seeded && installSkipped {
+	if seedSHA != "" && installSkipped {
 		if err := resetAplInstaller(d); err != nil {
 			return err
 		}
@@ -526,6 +526,21 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	}
 	if err := applyManifest(d, secretStoreApplicationManifest(o), "cluster-bootstrap-tf", true); err != nil {
 		return err
+	}
+
+	// ── 11. When we seeded the branch, block until apl-operator POPULATES it ──
+	// The hand-off contract: bootstrap-cluster returning 0 means the gitops-* apps
+	// can actually resolve their env/ paths. The installer's first push takes ~6m
+	// after the (re-)arm; on a FRESH cluster the pipeline gate above absorbs that,
+	// but on a REUSED cluster the gate is near-instant and the downstream converge
+	// treats the gitops apps' ComparisonError as a HARD failure with only a 60s
+	// re-check — run 29543955173 converge-failed at 00:16:19, 47s before the
+	// installer's push landed at 00:17:06. Waiting here (ref moves past our seed
+	// commit) closes that race deterministically on both cluster shapes.
+	if seedSHA != "" {
+		if err := waitAplValuesBranchPopulated(d, o, repoURL, branch, seedSHA); err != nil {
+			return err
+		}
 	}
 
 	fmt.Print(bootstrapNextSteps(o.env))
@@ -925,10 +940,10 @@ func authedGitURL(rawURL, token string) string {
 // that does self-create). A push failure surfaces LOUD and EARLY here — naming the
 // values-repo token — instead of as an opaque converge timeout downstream.
 // A no-coords case (values missing otomi.git.*) is a clean skip.
-func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, branch string) (seeded bool, err error) {
+func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, branch string) (seedSHA string, err error) {
 	if repoURL == "" || branch == "" {
 		fmt.Println("otomi.git.repoUrl/branch absent from the rendered values — skipping the apl-values branch bootstrap.")
-		return false, nil
+		return "", nil
 	}
 	authURL := authedGitURL(repoURL, o.aplValuesRepoToken)
 	tok := o.aplValuesRepoToken
@@ -937,7 +952,7 @@ func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, bra
 	// Already present (reused cluster / prior run)? Nothing to do.
 	if out, ok := d.git("ls-remote", authURL, ref); ok && strings.TrimSpace(out) != "" {
 		fmt.Printf("values branch %q already exists on %s — apl-operator can pull it.\n", branch, repoURL)
-		return false, nil
+		return "", nil
 	}
 
 	// Seed an EMPTY orphan branch (a single history-less empty commit). Content
@@ -950,24 +965,31 @@ func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, bra
 	fmt.Printf("values branch %q absent on %s — seeding it EMPTY (orphan commit) for apl-operator to bootstrap...\n", branch, repoURL)
 	tmp, err := os.MkdirTemp("", "llz-apl-branch-*")
 	if err != nil {
-		return false, fmt.Errorf("mktemp for values-branch seed: %w", err)
+		return "", fmt.Errorf("mktemp for values-branch seed: %w", err)
 	}
 	defer os.RemoveAll(tmp)
 
 	if out, ok := d.git("init", "--initial-branch", branch, tmp); !ok {
-		return false, fmt.Errorf("init values-branch seed repo: %s", redactSecret(out, tok))
+		return "", fmt.Errorf("init values-branch seed repo: %s", redactSecret(out, tok))
 	}
 	if out, ok := d.git("-C", tmp,
 		"-c", "user.name=llz-bootstrap", "-c", "user.email=llz-bootstrap@noreply.local",
 		"commit", "--allow-empty", "-m", "chore: seed "+branch+" — empty branch for apl-operator to bootstrap (llz ci bootstrap-cluster)"); !ok {
-		return false, fmt.Errorf("create empty seed commit for %q: %s", branch, redactSecret(out, tok))
+		return "", fmt.Errorf("create empty seed commit for %q: %s", branch, redactSecret(out, tok))
 	}
 	if out, ok := d.git("-C", tmp, "push", authURL, "HEAD:refs/heads/"+branch); !ok {
-		return false, fmt.Errorf("push values branch %q to %s — does the values-repo token (otomi.git.password / APL_VALUES_REPO_TOKEN) have Contents:write? git: %s",
+		return "", fmt.Errorf("push values branch %q to %s — does the values-repo token (otomi.git.password / APL_VALUES_REPO_TOKEN) have Contents:write? git: %s",
 			branch, repoURL, redactSecret(out, tok))
 	}
+	sha, ok := d.git("-C", tmp, "rev-parse", "HEAD")
+	if !ok || strings.TrimSpace(sha) == "" {
+		// The push succeeded; a failed rev-parse only degrades the populated-wait
+		// (it will treat any resolvable ref as populated). Use a sentinel.
+		warn("could not read the seed commit sha — the populated-wait will accept the first resolvable ref")
+		return "unknown-seed-sha", nil
+	}
 	fmt.Printf("seeded EMPTY values branch %q on %s — apl-operator will bootstrap its env tree onto it.\n", branch, repoURL)
-	return true, nil
+	return strings.TrimSpace(sha), nil
 }
 
 // resetAplInstaller re-arms apl-operator's INSTALLER phase: patch
@@ -979,6 +1001,45 @@ func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, bra
 // re-ran, bootstrapped values, and pushed them to the branch within ~6 minutes).
 // The rollout wait is bounded; the downstream apl-pipeline gate + converge
 // budgets absorb the installer's run itself.
+// aplBranchPopulateBudget/Interval bound the wait for apl-operator's first real
+// push onto a freshly-seeded values branch (installer completes ~6m after its
+// (re-)arm; 15m covers a cold start). Package vars so tests shrink them.
+var (
+	aplBranchPopulateBudget   = 15 * time.Minute
+	aplBranchPopulateInterval = 15 * time.Second
+)
+
+// waitAplValuesBranchPopulated polls `git ls-remote` until the values branch ref
+// moves PAST the empty seed commit — i.e. apl-operator has pushed its bootstrapped
+// env tree and the gitops-* Applications can resolve env/manifests/**. Only called
+// when this run seeded the branch (an intact pre-existing branch is already
+// populated). Fails loud on the budget: a stuck installer surfaces HERE with the
+// operator named, not as a downstream converge timeout.
+func waitAplValuesBranchPopulated(d bootstrapDeps, o bootstrapClusterOpts, repoURL, branch, seedSHA string) error {
+	authURL := authedGitURL(repoURL, o.aplValuesRepoToken)
+	ref := "refs/heads/" + branch
+	fmt.Printf("Waiting for apl-operator to populate the values branch %q (ref must move past the seed commit; up to %s)...\n",
+		branch, aplBranchPopulateBudget)
+	deadline := d.now().Add(aplBranchPopulateBudget)
+	for {
+		if out, ok := d.git("ls-remote", authURL, ref); ok {
+			sha := strings.TrimSpace(out)
+			if i := strings.IndexAny(sha, " \t"); i > 0 {
+				sha = sha[:i]
+			}
+			if sha != "" && sha != seedSHA {
+				fmt.Printf("values branch %q populated (%.8s) — the gitops-* Applications can resolve their env/ paths.\n", branch, sha)
+				return nil
+			}
+		}
+		if !d.now().Before(deadline) {
+			return fmt.Errorf("apl-operator did not push its env tree to the values branch %q within %s — the gitops-* Applications cannot resolve env/manifests/** and converge would fail. Check the apl-operator logs (kubectl -n apl-operator logs deploy/apl-operator) and its values-repo push credentials",
+				branch, aplBranchPopulateBudget)
+		}
+		d.sleep(aplBranchPopulateInterval)
+	}
+}
+
 func resetAplInstaller(d bootstrapDeps) error {
 	fmt.Println("values branch was re-seeded but apl is already installed — re-arming apl-operator's installer (status→pending + restart) so it re-bootstraps the env values onto the branch.")
 	if out, ok := d.kubectl("-n", "apl-operator", "patch", "configmap", "apl-installation-status",

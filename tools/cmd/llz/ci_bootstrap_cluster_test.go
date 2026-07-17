@@ -620,7 +620,7 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 	// No coords → clean skip, never touches git.
 	called := false
 	d := bootstrapDeps{git: func(_ ...string) (string, bool) { called = true; return "", true }}
-	if seeded, err := ensureAplValuesBranch(d, o, "", ""); err != nil || called || seeded {
+	if seedSHA, err := ensureAplValuesBranch(d, o, "", ""); err != nil || called || seedSHA != "" {
 		t.Fatalf("empty coords should skip: err=%v called=%v", err, called)
 	}
 
@@ -650,8 +650,8 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		}
 		return "", true
 	}
-	if seeded, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seeded {
-		t.Fatalf("existing branch should be a no-op (seeded=%v): %v", seeded, err)
+	if seedSHA, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seedSHA != "" {
+		t.Fatalf("existing branch should be a no-op (seedSHA=%q): %v", seedSHA, err)
 	}
 	if created {
 		t.Error("must NOT create a branch that already exists")
@@ -677,11 +677,11 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		}
 		return "", true // ls-remote empty = absent; rest succeed
 	}
-	if seeded, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || !seeded {
-		t.Fatalf("absent branch should be seeded (seeded=%v): %v", seeded, err)
+	if seedSHA, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seedSHA == "" {
+		t.Fatalf("absent branch should be seeded (seedSHA=%q): %v", seedSHA, err)
 	}
-	if strings.Join(seq, ",") != "ls-remote,init,commit,push" {
-		t.Errorf("seed sequence = %v, want ls-remote,init,commit,push (EMPTY orphan seed)", seq)
+	if strings.Join(seq, ",") != "ls-remote,init,commit,push,rev-parse" {
+		t.Errorf("seed sequence = %v, want ls-remote,init,commit,push,rev-parse (EMPTY orphan seed + sha capture)", seq)
 	}
 	if !strings.Contains(strings.Join(pushArgs, " "), "HEAD:refs/heads/apl-e2e") {
 		t.Errorf("push must target refs/heads/apl-e2e, got %v", pushArgs)
@@ -716,6 +716,7 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
 	run := func(branchExists, deployed bool) (patched, restarted bool) {
 		o := bootstrapTestOpts(t, "main")
+		gitPushed := false
 		d := bootstrapDeps{
 			kubectl: func(args ...string) (string, bool) {
 				line := strings.Join(args, " ")
@@ -744,10 +745,34 @@ func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
 				return "", true
 			},
 			git: func(args ...string) (string, bool) {
-				if args[0] == "ls-remote" && branchExists {
-					return "abc\trefs/heads/apl-primary", true
+				sub := args[0]
+				if sub == "-C" { // git -C <dir> [-c k=v]... <subcmd>
+					for j := 0; j < len(args); {
+						if args[j] == "-C" || args[j] == "-c" {
+							j += 2
+							continue
+						}
+						sub = args[j]
+						break
+					}
 				}
-				return "", true // absent → seed path; init/commit/push succeed
+				switch sub {
+				case "ls-remote":
+					if branchExists {
+						return "abc\trefs/heads/apl-primary", true
+					}
+					if gitPushed {
+						// post-seed: the ref resolves and (fake) moves past the seed sha,
+						// standing in for the operator's env push — the populated-wait exits.
+						return "operatorsha\trefs/heads/apl-primary", true
+					}
+					return "", true // absent → seed path
+				case "push":
+					gitPushed = true
+				case "rev-parse":
+					return "seedsha", true
+				}
+				return "", true
 			},
 			now:         time.Now,
 			sleep:       func(time.Duration) {},
