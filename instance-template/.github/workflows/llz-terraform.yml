@@ -501,238 +501,15 @@ jobs:
           echo "Cluster API endpoints:"
           terraform output -json api_endpoints
 
-  # ── Bootstrap the cluster (apl-core + Argo bridge) — native, no Terraform ────
-  # Runs after apply-cluster. `llz ci bootstrap-cluster` (the native port of the
-  # former cluster-bootstrap Terraform workspace) installs apl-core, the
-  # block-storage StorageClass + apl-operator/argocd namespaces, the two
-  # race-ahead Kyverno policies, waits for the apl-operator pipeline
-  # (argocd/kyverno/cert-manager), and applies the platform-bootstrap AppProject +
-  # Applications. It talks to the cluster directly via the kubeconfig the
-  # cluster-access step writes — no S3 state backend, no tf-plan/tf-apply.
-  #
-  # apply ONLY — NOT plan. Like the former workspace it CONSUMES a live cluster
-  # (reads the live coredns Service, helm-installs, applies manifests), so a
-  # plan-mode dispatch (the release-e2e dry-run) that creates no cluster has
-  # nothing to bootstrap. Gating to apply-only lets `action=plan module=all`
-  # cleanly plan the cluster-CREATING roots and stop there. (PR previews use
-  # plan-cluster-pr.)
-  bootstrap-cluster:
-    name: Bootstrap Cluster (native)
-    if: >
-      github.event_name == 'workflow_dispatch' &&
-      inputs.action == 'apply' &&
-      (inputs.module == 'cluster' || inputs.module == 'all')
-    needs: [apply-cluster]
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    environment: infra-${{ inputs.region }}
-    permissions:
-      contents: read
-    # Worst-case cold bootstrap: the apl-core helm install (10-15m) + the helmfile
-    # bringing argocd/kyverno/cert-manager up (the wait-apl-pipeline gate) running
-    # concurrently with the two race-ahead Kyverno policies. 50m gives headroom
-    # for slower-than-usual chart pulls.
-    timeout-minutes: 50
-    env:
-      REGION:                ${{ inputs.region }}
-      # Rendered into apl-core's otomi.git.password (apl-core self-registers the
-      # Argo CD repo-creds ExternalSecret from it); empty => apl-operator can't
-      # push its values tree and Argo's repo-server can't clone over HTTPS.
-      APL_VALUES_REPO_TOKEN: ${{ secrets.APL_VALUES_REPO_TOKEN }}
-      # Non-blocking placeholder when no Linode DNS token is provisioned on this
-      # env — satisfies apl-core's schema (string required); cert-manager DNS-01 +
-      # ExternalDNS auth then only works once the in-cluster rotating token lands.
-      LINODE_DNS_TOKEN:      ${{ secrets.LINODE_DNS_TOKEN || 'placeholder-set-LINODE_DNS_TOKEN-to-enable-dns' }}
-      # Optional GHCR read token (read:packages) + its owner — only for a private
-      # fork keeping its first-party OCI charts private; empty => the public-charts
-      # path (bootstrap-cluster skips the GHCR secrets).
-      GHCR_TOKEN:            ${{ secrets.GHCR_READ_TOKEN }}
-      GHCR_USERNAME:         ${{ vars.GHCR_USERNAME }}
-      # Branch of the instance repo the bootstrap ArgoCD Application targets.
-      # Defaults to 'main'; override via the APPS_REPO_REVISION variable (preferred,
-      # matches TF_IMAGE/HARBOR_URL) or secret. Variable wins if both are present.
-      APPS_REPO_REVISION:    ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # ── Pre-flight: env secrets the cluster-bootstrap apply needs ──────────────
-      # APL_VALUES_REPO_TOKEN (passed as TF_VAR_apl_values_repo_token) is
-      # rendered into apl-core's otomi.git.password, from which apl-core's own
-      # argocd-repo-creds ExternalSecret credentials Argo CD (the TF-seeded
-      # platform-apps-repo Secret is retired); empty value produces an
-      # unauthenticated repo config — apl-operator can't push its values tree
-      # and Argo's repo-server can't clone over HTTPS. Surfaces 5-10 min in as
-      # Argo Application Unknown.
-      #
-      # OPENBAO_SECRETS_WRITE_TOKEN is used downstream by bootstrap-openbao
-      # (the bao-seed-all GitHub-token seeds + recovery-key/root-token
-      # persistence) and by the destroy-time GH-secret cleanup; an empty value
-      # 401s those. (The S3-secret stashes and the loki-admin-password stash it
-      # once also served are retired — the keys are minted at bootstrap, the
-      # Loki password is a TF random_password.) Front-load the check so the
-      # operator gets one consolidated error.
-      #
-      # Presence isn't validity: require-secret only checks a token is SET. The
-      # step below actively PROBES each credential first (Linode /profile, GitHub
-      # token-expiration, the GHCR token endpoint) so a set-but-expired/revoked PAT
-      # fails HERE in seconds with "rotate it" instead of 401/403-ing ~15m into the
-      # bootstrap (the GHCR_READ_TOKEN 403 class). Invalid REQUIRED tokens fail the
-      # job; invalid OPTIONAL ones (GHCR, DNS) only warn — the charts are public
-      # and DNS-01 is opt-in. Logic is the unit-tested `llz ci validate-tokens`.
-      - name: Pre-flight — probe credential validity (fail fast on a dead token)
-        env:
-          LINODE_API_TOKEN:            ${{ secrets.LINODE_API_TOKEN }}
-          LINODE_DNS_TOKEN:            ${{ secrets.LINODE_DNS_TOKEN }}
-          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
-          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-          GHCR_READ_TOKEN:             ${{ secrets.GHCR_READ_TOKEN }}
-          GHCR_USERNAME:               ${{ vars.GHCR_USERNAME }}
-          # OBJ state-bucket key pair — probed together via SigV4 against the bucket.
-          TF_STATE_ACCESS_KEY:         ${{ secrets.TF_STATE_ACCESS_KEY }}
-          TF_STATE_SECRET_KEY:         ${{ secrets.TF_STATE_SECRET_KEY }}
-          TF_STATE_ENDPOINT:           ${{ vars.TF_STATE_ENDPOINT }}
-          TF_STATE_BUCKET:             ${{ vars.TF_STATE_BUCKET }}
-        run: llz ci validate-tokens
-
-      - name: Pre-flight — verify infra-${{ env.REGION }} env secrets
-        env:
-          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
-          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-        run: |
-          set -u
-          FAIL=0
-          llz ci require-secret APL_VALUES_REPO_TOKEN \
-            --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
-          llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
-          [ "$FAIL" -eq 0 ]
-
-      # A pinned first-party chart (llz-*) whose bumped version isn't published to
-      # GHCR yet fails ONLY at Argo sync time — publish-charts runs on merge to main,
-      # but chart-version-guard forces a bump the moment a chart changes on a branch.
-      # ArgoCD then 404s the OCI pull, the support-plane app never syncs, llz-openbao
-      # is never created, and the OpenBao bootstrap dies ~15m in on "namespaces
-      # llz-openbao not found". Fail fast here (static apl-values scan + GHCR HEAD)
-      # with an explicit "run publish-charts on this branch" instead.
-      - name: Pre-flight — first-party chart pins are published to GHCR
-        env:
-          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
-          GHCR_USERNAME:   ${{ vars.GHCR_USERNAME }}
-          GH_TOKEN:        ${{ github.token }}
-        run: llz ci chart-publish-check --root .
-
-      # Regenerate the gitignored cluster tfvars from the spec so wait-cluster-ready
-      # can read node_count (its pool-Ready target). The committed apl-values/<env>/
-      # artifacts (values.yaml + env-revision-configmap) are already in the checkout;
-      # bootstrap-cluster reads the apl-core chart version from the spec directly.
-      # (Composite actions are vendored into the instance at ./.github/actions, so no
-      # separate sparse-checkout is needed; the former cluster-bootstrap terraform-init
-      # is gone with the TF workspace.)
-      - name: Render tfvars from the spec
-        run: llz render "${REGION}" --tfvars-only
-
-      # Absorb the cluster→cluster-bootstrap handoff race: apply-cluster can
-      # finish (kubeconfig_raw populated) before the LKE-E HA control plane is
-      # actually serving TLS on :6443. Without this gate the helm provider's
-      # first call times out and a manual re-run is needed. Also opens this
-      # hosted runner's dynamic egress IP in the LKE-E control-plane ACL (the
-      # ACL seeded at cluster create cannot pre-include it, so the kubectl
-      # readiness probe below would be refused); the paired revoke
-      # (if: always(), end of job) closes it.
-      - name: Cluster access (kubeconfig readiness probe + runner ACL)
-        uses: ./.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          kubeconfig-path:       $RUNNER_TEMP/cluster-${{ env.REGION }}.yaml
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ env.REGION }}
-
-      # wait-cluster-ready gates on BOTH apiserver reachability AND the node pool
-      # actually coming up: --tfvars reads node_count so it waits for the whole
-      # statically-sized pool to report Ready, not just for the API to answer (an
-      # LKE pool is "created" in seconds but its nodes take minutes to join — and a
-      # ≥16-char node_pool_label has left them never joining at all). On timeout it
-      # probes /version directly, distinguishing "still provisioning" / "ACL blocks
-      # this runner" / "API up but nodes never joined".
-      - name: Wait for cluster API ready
-        env:
-          KUBECONFIG: ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
-        run: |
-          llz ci wait-cluster-ready --timeout 900 --interval 10 \
-            --tfvars "terraform-iac-bootstrap/cluster/${REGION}.tfvars" || {
-            echo "Persisting failure = control plane still provisioning (re-run later), OR the node pool never reached the expected Ready count (Linode capacity/quota for the node type, or a node_pool_label ≥ 16 chars wedging node join), OR the 'Open control-plane ACL for this runner' step did not add this runner's egress IP to the LKE-E control-plane ACL (check that step's log + LINODE_API_TOKEN scope). Static github_runner_ipv4_cidrs / acl inventory are no longer required for hosted-runner access — the runner IP is opened at runtime by the lke-runner-acl action."
-            exit 1
-          }
-
-      # The whole in-cluster bootstrap in one native command (see
-      # tools/cmd/llz/ci_bootstrap_cluster.go): read the live coredns IP, inject the
-      # runtime secrets into the committed apl-values, SSA the StorageClass +
-      # namespaces, `helm upgrade --install` apl-core, race the two Kyverno policies
-      # concurrently with the apl-pipeline readiness gate, then SSA the
-      # platform-bootstrap AppProject + Applications. Idempotent, so a re-run is
-      # safe; the chart version is read from the spec.
-      - name: Bootstrap cluster (apl-core + Kyverno + Argo bridge)
-        # KUBECONFIG via env (not --kubeconfig) so bootstrap-cluster reads the SAME
-        # readiness kubeconfig the wait-cluster-ready / diagnose-argocd steps use —
-        # ${{ runner.temp }} (host path), which those steps prove is populated. The
-        # former `--kubeconfig "$RUNNER_TEMP/..."` pointed at the in-container
-        # /__w/_temp path, which came back empty for kubectl in e2e even though the
-        # readiness probe on the runner.temp path had just succeeded.
-        env:
-          KUBECONFIG: ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
-        run: |
-          llz ci bootstrap-cluster \
-            --env "${REGION}" \
-            --apps-repo-revision "${APPS_REPO_REVISION}" \
-            --instance-repo "${{ inputs.instance_repo }}" \
-            --template-ref "${{ inputs.template-ref }}"
-
-      # NOTE — the former "Firewall-controller config" steps (pre-flight token
-      # resolve + `llz ci bootstrap-cloud-firewall --region`, folded here from
-      # the former bootstrap-cluster job) were RETIRED in favor of the
-      # cidrFirewall component: the kube-system/linode token Secret is synced by
-      # ESO from secret/linode/api-token (rotating, instead of a per-apply seed
-      # that went stale at the first PAT rotation), and the controller's
-      # ConfigMap (firewall ID / LKE cluster ID / VPC CIDR) is reconciled
-      # in-cluster by the llz-cidr-firewall-discover CronJob, which derives all
-      # three from its own node via the Linode API. No tfvars read, no TF
-      # outputs, no CLOUD_FIREWALL_TOKEN secret, no per-apply kubectl. `llz ci
-      # bootstrap-cloud-firewall` remains available as a manual recovery path.
-
-      # ── Diagnostics ─────────────────────────────────────────────────────────
-      # Runs only when a previous step failed (typically the helm_release.argocd
-      # apply timing out on a pre-install hook).  Pulls the kubeconfig from the
-      # cluster workspace state and dumps everything needed to see WHY the hook
-      # Job / ArgoCD pods are not becoming ready.
-      # Diagnostics reuse the readiness kubeconfig (still present until the cleanup
-      # step below) — no separate state-backed fetch needed now that bootstrap talks
-      # to the cluster directly.
-      - name: Diagnose ArgoCD install failure
-        if: failure()
-        # Belt-and-suspenders cap alongside diagnose-argocd's apiserver-reachability gate.
-        timeout-minutes: 10
-        env:
-          KUBECONFIG: ${{ runner.temp }}/cluster-${{ env.REGION }}.yaml
-        # diagnose-argocd is best-effort and always exits 0 — diagnostics must
-        # never mask the original failure.
-        run: llz ci diagnose-argocd
-
-      - name: Cleanup readiness kubeconfig
-        if: always()
-        run: rm -f "$RUNNER_TEMP/cluster-${{ env.REGION }}.yaml"
-
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ env.REGION }}
-
-  # ── Chain: bootstrap-openbao after the cluster is up ──────────────────────────
+  # ── Bootstrap the cluster (apl-core + Argo bridge) — MERGED into the
+  # bootstrap-openbao call below (bootstrap_cluster: true). The standalone job
+  # that ran here paid its own container-init + checkout + cluster-access/ACL
+  # cycle (~1.5-2m of pure overhead) immediately before bootstrap-openbao did the
+  # same on the same cluster; the cluster phase (wait-cluster-ready +
+  # `llz ci bootstrap-cluster`) now runs at the head of llz-bootstrap-openbao.yml's
+  # `bootstrap` job, sharing ONE cycle — the same fold that absorbed the former
+  # standalone `converge` job at that job's tail.
+  # ── Chain: bootstrap (cluster + OpenBao) after the cluster is up ──────────────
   # Tier-1 streamlining: the operator used to trigger two workflows manually —
   # terraform.yml first, then bootstrap-openbao.yml within a 60-min window.
   # With bootstrap-openbao.yml's `workflow_call:` trigger we can chain it here
@@ -741,29 +518,28 @@ jobs:
   #                                    minted later by bootstrap-openbao's
   #                                    mint-bootstrap-objkeys, no GitHub stash)
   #   2. apply-cluster                (Linode LKE-E cluster)
-  #   3. bootstrap-cluster            (native `llz ci bootstrap-cluster`: apl-core
-  #                                    + foundation + Kyverno policy; the
-  #                                    firewall-controller config seed it once
-  #                                    carried is retired — the cidrFirewall
-  #                                    component self-discovers in-cluster)
-  #   4. bootstrap-openbao            (OpenBao init/unseal/seed + ESO sync, then
-  #                                    the final `llz ci converge` health gate runs
-  #                                    inline at the tail of the same `bootstrap`
-  #                                    job — folded in from its former standalone
-  #                                    `converge` job to drop a redundant
-  #                                    container-init + checkout + kubeconfig fetch)
+  #   3. bootstrap-openbao            (with bootstrap_cluster: true — ONE job runs
+  #                                    the in-cluster bootstrap [wait-cluster-ready
+  #                                    + `llz ci bootstrap-cluster`: apl-core +
+  #                                    foundation + Kyverno policy], then the
+  #                                    OpenBao init/unseal/seed + ESO sync, then
+  #                                    the final `llz ci converge` health gate —
+  #                                    the former standalone bootstrap-cluster and
+  #                                    converge jobs are folded into it so the
+  #                                    chain pays ONE container-init + checkout +
+  #                                    cluster-access/ACL cycle instead of three)
   #
-  # Step 4 also gates the PreSync timeout window concern — by running it
+  # Step 3 also gates the PreSync timeout window concern — by running it
   # immediately as part of the same workflow, there's no chance the operator
   # forgets or runs out of the 60-min budget the gate enforces.
   #
   # Operators can still trigger bootstrap-openbao.yml on its own via
-  # workflow_dispatch (the dispatch trigger is preserved) for retries and
-  # post-seed configuration changes.
+  # workflow_dispatch (the dispatch trigger is preserved, bootstrap_cluster
+  # defaults false there) for retries and post-seed configuration changes.
   bootstrap-openbao:
     name: Bootstrap OpenBao (${{ inputs.region }})
     # The `if:` mixes a default-skip-on-needs-failure guard with explicit
-    # `needs.*.result` checks so we can require bootstrap-cluster to have
+    # `needs.*.result` checks so we can require apply-cluster to have
     # SUCCEEDED while accepting apply-object-storage as either success OR
     # skipped. apply-object-storage now runs on module=cluster too (its buckets
     # are always needed), so on a normal cluster bootstrap it SUCCEEDS and the
@@ -773,30 +549,38 @@ jobs:
     # FAILED object-storage apply still (correctly) blocks this job. Without
     # `always()` the default `success()` would skip this job whenever
     # apply-object-storage is skipped.
+    #
+    # apply ONLY — NOT plan. The bootstrap_cluster phase CONSUMES a live cluster
+    # (reads the live coredns Service, helm-installs, applies manifests), so a
+    # plan-mode dispatch (the release-e2e dry-run) that creates no cluster has
+    # nothing to bootstrap; `action=plan module=all` cleanly plans the
+    # cluster-CREATING roots and stops there. (PR previews use plan-cluster-pr.)
     if: >
       always() &&
       github.event_name == 'workflow_dispatch' &&
       inputs.action == 'apply' &&
       (inputs.module == 'cluster' || inputs.module == 'all') &&
-      needs.bootstrap-cluster.result == 'success' &&
+      needs.apply-cluster.result == 'success' &&
       (needs.apply-object-storage.result == 'success' || needs.apply-object-storage.result == 'skipped')
     # needs:
-    #   bootstrap-cluster          cluster + apl-core ready (the firewall-config
-    #                              seed it once carried is retired — the
-    #                              cidrFirewall component self-discovers)
+    #   apply-cluster              the LKE-E cluster exists; the merged bootstrap
+    #                              job's bootstrap_cluster phase brings up
+    #                              apl-core itself (the former standalone
+    #                              bootstrap-cluster job is folded into it)
     #   apply-object-storage       the S3 buckets exist (bootstrap-openbao's
     #                              preflight asserts the object-storage state is
     #                              populated before mint-bootstrap-objkeys mints
     #                              the scoped keys against them). Now runs on
     #                              module=cluster too; the `|| skipped` arm in
     #                              the `if:` above is a forward-compat backstop.
-    needs: [bootstrap-cluster, apply-object-storage]
+    needs: [apply-cluster, apply-object-storage]
     uses: ./.github/workflows/llz-bootstrap-openbao.yml
     with:
       region: ${{ inputs.region }}
       instance_repo: ${{ inputs.instance_repo }}
       template-ref: ${{ inputs.template-ref }}
       assert_loki: ${{ inputs.assert_loki }}
+      bootstrap_cluster: true
     # secrets: inherit forwards ALL repository + environment-scoped secrets
     # from the caller. bootstrap-openbao.yml's job declares
     # `environment: infra-${{ inputs.region }}` so env-scoped secrets resolve

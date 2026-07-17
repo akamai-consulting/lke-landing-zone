@@ -219,6 +219,37 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	}
 }
 
+func TestRunPinInstanceImagesTriggerOnly(t *testing.T) {
+	// trigger-only with a missing image: trigger the build, then return WITHOUT
+	// waiting for the publish and WITHOUT setting any instance variable.
+	setVars := stubPinSeams(t, 1, func(string) bool { return false /* never publishes */})
+	triggered := false
+	pinTriggerBuild = func(string, string, string, string) error { triggered = true; return nil }
+	pinBuildInProgress = func(string, string, string) bool { return false }
+
+	o := baseOpts()
+	o.buildIfMissing = true
+	o.ref = "main"
+	o.triggerOnly = true
+	o.instanceToken = "" // not needed: trigger-only never writes instance variables
+	if err := runPinInstanceImages(o); err != nil {
+		t.Fatalf("trigger-only flow: %v", err)
+	}
+	if !triggered {
+		t.Error("trigger-only must still trigger the missing build")
+	}
+	if len(*setVars) != 0 {
+		t.Errorf("trigger-only must not pin variables, got %v", *setVars)
+	}
+
+	// A full (non-trigger-only) run still requires the instance token.
+	o2 := baseOpts()
+	o2.instanceToken = ""
+	if err := runPinInstanceImages(o2); err == nil || !strings.Contains(err.Error(), "GH_TOKEN_INSTANCE") {
+		t.Errorf("full run without GH_TOKEN_INSTANCE: err=%v, want required error", err)
+	}
+}
+
 // pinGHRetry rides out transient GitHub API failures (a 503 on the first
 // Instantiate query killed release-e2e run 29540787054 at minute one) but still
 // surfaces a persistent error after 3 attempts.

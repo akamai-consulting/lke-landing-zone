@@ -84,7 +84,7 @@ var (
 func ciPinInstanceImagesCmd() *cobra.Command {
 	var instance, owner, templateRepo, sha, ref string
 	var interval, timeout int
-	var buildIfMissing bool
+	var buildIfMissing, triggerOnly bool
 	c := &cobra.Command{
 		Use:   "pin-instance-images",
 		Short: "pin the e2e instance's TF_IMAGE/KUBE_IMAGE to this commit's ci images",
@@ -103,6 +103,7 @@ func ciPinInstanceImagesCmd() *cobra.Command {
 				interval:       time.Duration(interval) * time.Second,
 				retries:        timeout / max1(interval),
 				buildIfMissing: buildIfMissing,
+				triggerOnly:    triggerOnly,
 			})
 		},
 	}
@@ -112,6 +113,7 @@ func ciPinInstanceImagesCmd() *cobra.Command {
 	c.Flags().StringVar(&sha, "sha", "", "the commit whose images to pin")
 	c.Flags().StringVar(&ref, "ref", "", "branch/tag to (re)trigger Build Container Images on with --build-if-missing (its HEAD must be --sha)")
 	c.Flags().BoolVar(&buildIfMissing, "build-if-missing", false, "if this commit's sha images are missing (a failed/incomplete build, OR a branch where build-images never auto-ran), trigger Build Container Images on --ref, wait, and pin the sha — instead of pinning a stale :latest or failing")
+	c.Flags().BoolVar(&triggerOnly, "trigger-only", false, "with --build-if-missing: trigger a missing build and return WITHOUT waiting or pinning, so the publish wait overlaps the caller's other work; a later full invocation finds the build in flight and pins")
 	c.Flags().IntVar(&interval, "interval", 20, "seconds between manifest polls while waiting for a sha image")
 	c.Flags().IntVar(&timeout, "timeout", 1200, "max seconds to wait for a just-built sha image to publish")
 	return c
@@ -130,13 +132,20 @@ type pinOpts struct {
 	interval                                       time.Duration
 	retries                                        int
 	buildIfMissing                                 bool
+	triggerOnly                                    bool
 }
 
 func runPinInstanceImages(o pinOpts) error {
-	for _, v := range []struct{ name, val string }{
+	required := []struct{ name, val string }{
 		{"--instance", o.instance}, {"--owner", o.owner}, {"--template-repo", o.templateRepo},
 		{"--sha", o.sha}, {"GH_TOKEN_TEMPLATE", o.templateToken}, {"GH_TOKEN_INSTANCE", o.instanceToken},
-	} {
+	}
+	if o.triggerOnly {
+		// trigger-only never touches the instance's variables, so the instance
+		// credential is not needed (the later full invocation validates it).
+		required = required[:len(required)-1]
+	}
+	for _, v := range required {
 		if v.val == "" {
 			return fmt.Errorf("pin-instance-images: %s is required", v.name)
 		}
@@ -173,6 +182,14 @@ func runPinInstanceImages(o pinOpts) error {
 				return fmt.Errorf("could not trigger Build Container Images on %s — GH_TOKEN_TEMPLATE needs actions:write: %w", o.ref, err)
 			}
 		}
+	}
+	// trigger-only: the build (if any was needed) is now in flight — return so the
+	// caller's other work (scaffold/render/push in release-e2e's instantiate)
+	// overlaps the publish instead of serializing behind it. The later full
+	// invocation finds the run in progress and does the wait + pin.
+	if o.triggerOnly {
+		fmt.Println("trigger-only: not waiting or pinning — a later full pin-instance-images run completes the pin.")
+		return nil
 	}
 
 	for _, im := range pinImages {
