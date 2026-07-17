@@ -1,55 +1,103 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	"strings"
 	"testing"
 )
 
-// TestForceBroadPATRotationDue guards the reused-cluster fix: the exercise must
-// reset rotated_at=0 via `kv patch` (preserving the minting token) so a cluster
-// whose broad PAT was rotated < threshold ago still reads as DUE. Regression for
-// the e2e "asserted action=rotated, got skip (not due)" failure on a reused cluster.
-func TestForceBroadPATRotationDue(t *testing.T) {
-	// No root token → error, and it must NOT attempt the exec.
-	t.Setenv("OPENBAO_ROOT_TOKEN", "")
-	called := false
-	orig := baoExecFn
-	baoExecFn = func(_, _, _ string, _ ...string) (string, string, error) { called = true; return "", "", nil }
-	t.Cleanup(func() { baoExecFn = orig })
-	if err := forceBroadPATRotationDue(); err == nil {
-		t.Fatal("expected an error when OPENBAO_ROOT_TOKEN is unset")
+// TestE2ERotationJobJSON guards the exercise Job builder: it must derive the Job
+// from the CronJob's own jobTemplate and upsert ROTATE_AFTER_DAYS=0 so the tick is
+// due BY CONSTRUCTION — no OpenBao credential needed. (An earlier iteration reset
+// rotated_at via the root token, which the workflow REVOKES before the e2e asserts
+// run → 403, observed live.)
+func TestE2ERotationJobJSON(t *testing.T) {
+	cron := `{
+	  "spec": {
+	    "schedule": "0 3 * * 1",
+	    "jobTemplate": {
+	      "spec": {
+	        "backoffLimit": 1,
+	        "activeDeadlineSeconds": 300,
+	        "template": {
+	          "spec": {
+	            "serviceAccountName": "broad-pat-rotator",
+	            "containers": [{
+	              "name": "rotate",
+	              "image": "ghcr.io/akamai-consulting/llz:latest",
+	              "args": ["ci", "rotate-broad-pat", "--apply"],
+	              "env": [
+	                {"name": "BROAD_PAT_LABEL", "value": "llz-e2e-broad-pat"},
+	                {"name": "ROTATE_AFTER_DAYS", "value": "60"}
+	              ]
+	            }]
+	          }
+	        }
+	      }
+	    }
+	  }
+	}`
+	out, err := e2eRotationJobJSON([]byte(cron))
+	if err != nil {
+		t.Fatalf("e2eRotationJobJSON: %v", err)
 	}
-	if called {
-		t.Fatal("must not exec into OpenBao without a root token")
+	var job map[string]any
+	if err := json.Unmarshal(out, &job); err != nil {
+		t.Fatalf("unmarshal built job: %v", err)
+	}
+	if job["kind"] != "Job" || job["apiVersion"] != "batch/v1" {
+		t.Errorf("kind/apiVersion = %v/%v", job["kind"], job["apiVersion"])
+	}
+	md := job["metadata"].(map[string]any)
+	if md["name"] != broadPATRotatorE2EJob || md["namespace"] != broadPATRotatorNS {
+		t.Errorf("metadata = %v", md)
+	}
+	spec := job["spec"].(map[string]any)
+	if spec["backoffLimit"] != float64(1) || spec["activeDeadlineSeconds"] != float64(300) {
+		t.Errorf("jobTemplate.spec not carried over: %v", spec)
+	}
+	c := spec["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	if c["image"] != "ghcr.io/akamai-consulting/llz:latest" {
+		t.Errorf("container image not carried over: %v", c["image"])
+	}
+	// ROTATE_AFTER_DAYS must be UPSERTED to 0 (replacing the existing 60).
+	days := ""
+	labels := ""
+	for _, e := range c["env"].([]any) {
+		em := e.(map[string]any)
+		switch em["name"] {
+		case "ROTATE_AFTER_DAYS":
+			if days != "" {
+				t.Error("duplicate ROTATE_AFTER_DAYS env entries")
+			}
+			days = em["value"].(string)
+		case "BROAD_PAT_LABEL":
+			labels = em["value"].(string)
+		}
+	}
+	if days != "0" {
+		t.Errorf("ROTATE_AFTER_DAYS = %q, want 0 (due by construction)", days)
+	}
+	if labels != "llz-e2e-broad-pat" {
+		t.Errorf("other env entries must be preserved, got label %q", labels)
 	}
 
-	// With a token, it patches ONLY rotated_at=0 at the broad-pat path (patch, not
-	// put — a put would drop the minting token).
-	t.Setenv("OPENBAO_ROOT_TOKEN", "roottoken")
-	var gotPod, gotToken string
-	var gotArgs []string
-	baoExecFn = func(pod, token, _ string, args ...string) (string, string, error) {
-		gotPod, gotToken, gotArgs = pod, token, args
-		return "", "", nil
+	// A container with NO env list gets the entry appended.
+	cronNoEnv := `{"spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"rotate"}]}}}}}}`
+	out2, err := e2eRotationJobJSON([]byte(cronNoEnv))
+	if err != nil {
+		t.Fatalf("no-env cronjob: %v", err)
 	}
-	if err := forceBroadPATRotationDue(); err != nil {
-		t.Fatalf("forceBroadPATRotationDue: %v", err)
-	}
-	if gotPod != rootOpenbaoPod || gotToken != "roottoken" {
-		t.Errorf("bao exec pod=%q token=%q, want %q/roottoken", gotPod, gotToken, rootOpenbaoPod)
-	}
-	if want := []string{"kv", "patch", broadPATBaoPath, "rotated_at=0"}; strings.Join(gotArgs, " ") != strings.Join(want, " ") {
-		t.Errorf("bao args = %v, want %v", gotArgs, want)
+	if !strings.Contains(string(out2), `"ROTATE_AFTER_DAYS","value":"0"`) && !strings.Contains(string(out2), `"name":"ROTATE_AFTER_DAYS"`) {
+		t.Errorf("ROTATE_AFTER_DAYS not injected when env absent: %s", out2)
 	}
 
-	// An OpenBao failure surfaces (with stderr) — it must not be swallowed.
-	baoExecFn = func(_, _, _ string, _ ...string) (string, string, error) {
-		return "", "permission denied on secret/data/linode/broad-pat", fmt.Errorf("exit 2")
+	// Malformed input fails loud.
+	if _, err := e2eRotationJobJSON([]byte(`{"spec":{}}`)); err == nil {
+		t.Error("cronjob without jobTemplate must error")
 	}
-	err := forceBroadPATRotationDue()
-	if err == nil || !strings.Contains(err.Error(), "permission denied") {
-		t.Errorf("expected the OpenBao stderr surfaced, got %v", err)
+	if _, err := e2eRotationJobJSON([]byte(`not json`)); err == nil {
+		t.Error("garbage must error")
 	}
 }
 

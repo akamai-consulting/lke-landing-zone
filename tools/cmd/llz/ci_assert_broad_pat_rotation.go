@@ -21,9 +21,10 @@ package main
 // not (it is wired behind the assert_loki e2e gate, which only release-e2e sets).
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -77,21 +78,30 @@ func runAssertBroadPATRotation(region string) error {
 		return nil
 	}
 
-	// Force the tick DUE before exercising. The bootstrap seed writes rotated_at=0,
-	// but it is --skip-if-present on the token: on a REUSED cluster (the token was
-	// already minted by a prior run) the whole seed no-ops, so rotated_at keeps the
-	// LAST rotation's recent timestamp. rotateBroadPAT would then (correctly) read it
-	// as "not due" and skip — failing this gate for a non-bug. Reset rotated_at=0 so
-	// the exercise deterministically rotates on any cluster, fresh or reused.
-	if err := forceBroadPATRotationDue(); err != nil {
-		return err
+	// Build the exercise Job from the CronJob's template with ROTATE_AFTER_DAYS=0
+	// injected, so the tick is DUE by construction — regardless of rotated_at.
+	// The bootstrap seed writes rotated_at=0 but is --skip-if-present on the token,
+	// so a REUSED cluster keeps the last rotation's recent timestamp and a plain
+	// `create job --from=cronjob` run (correctly) skips as "not due". An earlier
+	// iteration reset rotated_at via `bao kv patch` with OPENBAO_ROOT_TOKEN — but
+	// the workflow REVOKES the root token before the e2e asserts run, so that
+	// patch 403s (observed live). Overriding the threshold in the Job itself needs
+	// no credential at all: the rotator runs under its own k8s-auth role, which
+	// legitimately writes secret/linode/broad-pat.
+	cronJSON, err := execOutput("kubectl", "-n", broadPATRotatorNS, "get",
+		"cronjob", broadPATRotatorCronJob, "-o", "json")
+	if err != nil {
+		return fmt.Errorf("read cronjob/%s: %w", broadPATRotatorCronJob, err)
+	}
+	jobJSON, err := e2eRotationJobJSON(cronJSON)
+	if err != nil {
+		return fmt.Errorf("build the exercise Job from cronjob/%s: %w", broadPATRotatorCronJob, err)
 	}
 
-	// Fresh Job from the CronJob; drop a prior exercise Job first so re-runs are clean.
+	// Fresh Job; drop a prior exercise Job first so re-runs are clean.
 	execCombined("kubectl", "-n", broadPATRotatorNS, "delete", "job", broadPATRotatorE2EJob, "--ignore-not-found")
-	if out, err := execOutput("kubectl", "-n", broadPATRotatorNS, "create", "job", broadPATRotatorE2EJob,
-		"--from=cronjob/"+broadPATRotatorCronJob); err != nil {
-		return fmt.Errorf("create rotation Job from cronjob/%s: %w\n%s", broadPATRotatorCronJob, err, out)
+	if out, err := kubectlApplyStdin(jobJSON); err != nil {
+		return fmt.Errorf("create rotation Job (ROTATE_AFTER_DAYS=0): %w\n%s", err, out)
 	}
 	fmt.Printf("created Job %s/%s from cronjob/%s — waiting up to %s for it to finish…\n",
 		broadPATRotatorNS, broadPATRotatorE2EJob, broadPATRotatorCronJob, broadPATRotationPollTimeout)
@@ -126,26 +136,71 @@ func runAssertBroadPATRotation(region string) error {
 	return nil
 }
 
-// forceBroadPATRotationDue resets secret/linode/broad-pat.rotated_at to 0 in
-// OpenBao so the exercise Job reads the tick as DUE regardless of cluster state.
-// Uses `kv patch` (not `kv put`): patch updates ONLY rotated_at and preserves the
-// minting `token` the rotator needs — a full put replaces the secret and would
-// drop it. Requires OPENBAO_ROOT_TOKEN (the same bootstrap-posture root token the
-// seed/configure steps run under; present in the e2e job env). The rotator reads
-// rotated_at straight from OpenBao (not via an ESO-synced Secret), so the reset
-// takes effect for the very next Job with no sync lag. Seamed via baoExecFn.
-func forceBroadPATRotationDue() error {
-	token := os.Getenv("OPENBAO_ROOT_TOKEN")
-	if token == "" {
-		return fmt.Errorf("OPENBAO_ROOT_TOKEN must be set to reset %s rotated_at before the rotation exercise", broadPATBaoPath)
+// e2eRotationJobJSON builds the one-off exercise Job from the CronJob's own
+// jobTemplate, with ROTATE_AFTER_DAYS=0 upserted into the rotate container's env
+// so the tick is due BY CONSTRUCTION (isDue: now - rotated_at >= 0 always). Pure —
+// unit-tested against a real CronJob shape. Everything else (image, k8s-auth SA,
+// secrets, network policy labels) is exactly what the CronJob would run.
+func e2eRotationJobJSON(cronJobJSON []byte) ([]byte, error) {
+	var cj map[string]any
+	if err := json.Unmarshal(cronJobJSON, &cj); err != nil {
+		return nil, fmt.Errorf("parse CronJob JSON: %w", err)
 	}
-	_, errOut, err := baoExecFn(rootOpenbaoPod, token, "", "kv", "patch", broadPATBaoPath, "rotated_at=0")
-	if err != nil {
-		return fmt.Errorf("reset %s rotated_at=0 (force the exercise due): %s",
-			broadPATBaoPath, strings.TrimSpace(firstNonEmpty(errOut, err.Error())))
+	spec, _ := cj["spec"].(map[string]any)
+	jt, _ := spec["jobTemplate"].(map[string]any)
+	jtSpec, _ := jt["spec"].(map[string]any)
+	if jtSpec == nil {
+		return nil, fmt.Errorf("CronJob has no .spec.jobTemplate.spec")
 	}
-	fmt.Printf("reset %s rotated_at=0 — the exercise tick is now due.\n", broadPATBaoPath)
-	return nil
+
+	// Upsert ROTATE_AFTER_DAYS=0 on every container (there is exactly one).
+	tmpl, _ := jtSpec["template"].(map[string]any)
+	tmplSpec, _ := tmpl["spec"].(map[string]any)
+	containers, _ := tmplSpec["containers"].([]any)
+	if len(containers) == 0 {
+		return nil, fmt.Errorf("CronJob jobTemplate has no containers")
+	}
+	for _, c := range containers {
+		cm, _ := c.(map[string]any)
+		env, _ := cm["env"].([]any)
+		replaced := false
+		for _, e := range env {
+			em, _ := e.(map[string]any)
+			if em["name"] == "ROTATE_AFTER_DAYS" {
+				em["value"] = "0"
+				delete(em, "valueFrom")
+				replaced = true
+			}
+		}
+		if !replaced {
+			env = append(env, map[string]any{"name": "ROTATE_AFTER_DAYS", "value": "0"})
+		}
+		cm["env"] = env
+	}
+
+	job := map[string]any{
+		"apiVersion": "batch/v1",
+		"kind":       "Job",
+		"metadata": map[string]any{
+			"name":      broadPATRotatorE2EJob,
+			"namespace": broadPATRotatorNS,
+			"labels":    map[string]any{"app.kubernetes.io/created-by": "llz-e2e"},
+		},
+		"spec": jtSpec,
+	}
+	return json.Marshal(job)
+}
+
+// kubectlApplyStdin applies a manifest via `kubectl apply -f -` (stdin), returning
+// combined output. Local helper — the assert file drives raw exec, not a deps seam.
+var kubectlApplyStdin = func(manifest []byte) (string, error) {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = bytes.NewReader(manifest)
+	out, ok := runCombined(cmd)
+	if !ok {
+		return out, fmt.Errorf("kubectl apply failed")
+	}
+	return out, nil
 }
 
 // broadPATJobLogs fetches the exercise pods' logs by POD NAME (current + previous),
