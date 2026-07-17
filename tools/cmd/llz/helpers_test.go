@@ -49,15 +49,6 @@ func TestAdminFlagAndBanner(t *testing.T) {
 	}
 }
 
-func TestFirst3(t *testing.T) {
-	cases := map[string]string{"abcdef": "abc", "ab": "ab", "": "", "abc": "abc"}
-	for in, want := range cases {
-		if got := first3(in); got != want {
-			t.Errorf("first3(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestFirstNonEmpty(t *testing.T) {
 	if got := firstNonEmpty("", "", "x", "y"); got != "x" {
 		t.Errorf("firstNonEmpty = %q, want x", got)

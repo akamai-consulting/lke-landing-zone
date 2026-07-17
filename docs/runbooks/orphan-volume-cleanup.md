@@ -1,76 +1,91 @@
 # Orphan Linode Volume cleanup
 
-The cluster-bootstrap module's destroy hook
-([`null_resource.cleanup_volumes_on_destroy`](../../instance-template/terraform-iac-bootstrap/cluster-bootstrap/main.tf))
-sweeps Linode Block Storage Volumes tagged with this instance's
-volume-tag (`<volume-tag>` — the StorageClass tag value configured for
-this deployment) after PVC reap. The sweep relies on the StorageClass
-actually applying that tag via its `linodebs.csi.linode.com/volumeTags`
-parameter.
+Every Volume the platform provisions carries two tags, stamped **at provision
+time** by the `block-storage-retain` StorageClass's
+`linodebs.csi.linode.com/volumeTags` parameter (rendered by `llz ci bootstrap-cluster`
+from the cluster's numeric id):
 
-If the SC ever provisions Volumes WITHOUT the tag — historically because
-the SC used the wrong parameter key (`/volume-tags` instead of
-`/volumeTags`, fixed upstream) — the destroy-time sweep finds nothing
-and the Volumes accumulate as orphans against the account quota.
+- `block-storage` — the instance-wide sweep tag,
+- `lke<cluster_id>` — the owning cluster's id, which is what makes a Volume
+  *attributable*: `llz reap` / `llz ci reap-volumes` use it to decide whether a
+  detached `pvc-*` Volume belongs to a live cluster (kept) or a gone one (orphan).
 
-**`llz ci reap-volumes`** is the manual fallback — the same volume-only sweep the
-destroy workflow runs (scoped by `--region` and/or `--volume-ids`, dry-run by
-default, `--yes` to delete). For an operator account-wide sweep (Volumes +
-NodeBalancers + VPCs + orphan clusters, in dependency order) use **`llz reap`**
-(`--region <r>`, `--cluster-label <l>`). Both share the same orphan heuristics
-(`internal/linode`); no scripts checkout needed.
+The destroy workflow already runs two authoritative sweeps
+(`.github/workflows/llz-terraform.yml`, DESTROY Cluster job): the snapshot-scoped
+`--volume-ids` sweep for Volumes attached at capture, then the
+`--tag-must-include lke<id>` backstop for Volumes that were already detached.
+**This runbook is the manual fallback** for when those didn't run or didn't
+finish — a cancelled destroy, a hung teardown, or Volumes from a build that
+predates provision-time tagging.
+
+## How a Volume is classified
+
+A Volume is only ever a *candidate* if it is unattached (`linode_id == null`),
+labeled `pvc-*`, and inside your `--region` / `--volume-ids` scope. Candidates
+then hit the cluster-liveness gate:
+
+| Volume's `lke<id>` tag | Cluster state | Outcome |
+|---|---|---|
+| present | **live** | KEPT — a running cluster's Retain Volume, never an orphan |
+| present | **gone** | reaped — definitive orphan |
+| absent | (unknowable) | **KEPT by default (fail-safe)** — reaped only with `--reap-untagged`, and even then only when older than the 30-min grace window |
+
+An untagged Volume has no ownership signal, so the tools refuse to guess:
+without `--reap-untagged`, a plain sweep reports
+`kept N untagged Volume(s) — fail-safe` and deletes nothing untagged. This is
+deliberate — it protects mis-covered live Volumes at the cost of requiring an
+explicit flag to clear genuinely orphaned untagged ones.
 
 ## When to run
 
-- After a `terraform destroy` of a cluster provisioned by a build that
-  predates the `/volumeTags` fix (Volumes are untagged, the destroy hook
-  is a no-op, the Linode Volumes UI shows ~30 unattached `pvc-*` Volumes
-  for the destroyed cluster's region).
-- After ANY destroy that left orphans behind for any reason — e.g. the
-  cluster was unreachable during destroy so the in-cluster PVC reap step
-  failed before the tag sweep could even try.
+- A destroy was cancelled/failed before its Volume sweeps completed.
+- The preflight orphan census (`llz ci preflight`) warns that orphaned Volumes
+  are pressing the account quota.
+- Cleaning up Volumes from clusters built before provision-time tagging
+  (untagged — these need `--reap-untagged`).
 
-## Safe filter
-
-A Volume is a candidate iff ALL of these are true:
-
-| Filter | Why |
-|---|---|
-| `region == $REGION` | Only touch the region of the cluster you destroyed |
-| `linode_id == null` | Unattached — never touch a Volume in use by ANY running Linode (including LKE clusters) |
-| `label` starts with `pvc-` | CSI-provisioned PVCs; excludes user-created Volumes (test disks, manual provisions) |
-| Optional `tags` includes `$TAG_MUST_INCLUDE` | Once the `/volumeTags` fix is in steady state, narrow to `<volume-tag>` for a tighter blast radius |
+Note: on a LIVE cluster, an untagged PV-backed Volume usually self-heals — the
+in-cluster volumeTagReconciler CronJob (`llz ci reconcile-volume-tags`, hourly)
+stamps the StorageClass's volumeTags onto any Volume missing them, and reports
+(never deletes) the cluster's abandoned Retain Volumes (tagged `lke<id>`,
+referenced by no PV) with a ready-made `--volume-ids` reclaim command.
 
 ## Usage
 
-Always dry-run first, eyeball every label, then re-run with confirm:
+Always dry-run first, eyeball every label, then re-run with `--yes`.
 
 ```bash
-# Dry-run — lists candidates, deletes nothing
-LINODE_TOKEN=<token> llz ci reap-volumes --region <cluster_region>
+# Preferred: cluster-scoped by ownership tag — reaps ONLY that cluster's
+# Volumes, safe even with live co-located clusters in the region:
+LINODE_TOKEN=<token> llz ci reap-volumes --region <region> --tag-must-include lke<cluster_id>
+LINODE_TOKEN=<token> llz --yes ci reap-volumes --region <region> --tag-must-include lke<cluster_id>
 
-# Once you've eyeballed the list and nothing looks like a Volume you
-# still want, confirm:
-LINODE_TOKEN=<token> llz --yes ci reap-volumes --region <cluster_region>
+# Region sweep — tagged Volumes of GONE clusters only (live clusters' Volumes
+# and ALL untagged Volumes are kept):
+LINODE_TOKEN=<token> llz --yes ci reap-volumes --region <region>
 
-# Tighter scope once the /volumeTags fix has been live long enough that
-# all new Volumes carry this instance's volume-tag:
-LINODE_TOKEN=<token> llz --yes ci reap-volumes \
-  --region <cluster_region> --tag-must-include <volume-tag>
+# Untagged legacy Volumes (pre-tagging builds, coverage misses): opt in
+# explicitly. Eyeball the dry-run hard — untagged means unattributable:
+LINODE_TOKEN=<token> llz ci reap-volumes --region <region> --reap-untagged
+LINODE_TOKEN=<token> llz --yes ci reap-volumes --region <region> --reap-untagged
 ```
 
-`LINODE_TOKEN` needs the `volumes:read_write` scope. The same
-`secrets.LINODE_API_TOKEN` the Terraform destroy uses is fine.
+For an operator account-wide sweep in dependency order (clusters → firewall →
+NodeBalancers → VPCs → Volumes) use **`llz reap`** (`--region <r>`,
+`--cluster-label <l>`, same `--reap-untagged` semantics). Both share the same
+heuristics (`internal/linode`).
+
+`LINODE_TOKEN` needs `volumes:read_write` (plus `lke:read_only` for the
+liveness gate). The same `secrets.LINODE_API_TOKEN` Terraform uses is fine.
 
 ## What the dry-run looks like
 
 ```
 DRY-RUN — nothing will be deleted. Re-run with --yes to delete.
-=== orphan Volumes (region="<cluster_region>" volume-ids="" tag="", label prefix pvc-, unattached) ===
+=== orphan Volumes (region="us-ord" volume-ids="" tag="", label prefix pvc-, unattached) ===
   would DELETE volume 12345678 (pvc-aaaaaaaaaaaaaaaa)
-  would DELETE volume 12345681 (pvc-bbbbbbbbbbbbbbbb)
-  ...
-  would DELETE volume 12345692 (pvc-cccccccccccccccc)
+  kept 2 detached Volume(s) tagged to a live cluster (not orphans)
+  kept 3 untagged Volume(s) — no ownership tag (fail-safe; pass --reap-untagged to reap these)
 summary: deleted=0 failed=0
 ```
 
@@ -79,10 +94,13 @@ belong to a cluster you still want.
 
 ## What does NOT get touched
 
+- Any Volume attached to a Linode (`linode_id != null`) — in use, always safe
+- Any Volume tagged `lke<id>` of a still-live cluster — a running cluster's
+  Retain Volume
+- Untagged Volumes, unless you pass `--reap-untagged` (and never inside their
+  30-min creation grace window)
 - Any user-created Volume — label doesn't start with `pvc-`
-- Volumes still attached to a Linode (LKE-managed node, manual instance) — `linode_id != null`
-- Volumes in any region other than `--region`
-- Volumes in any other Linode account — the token is account-scoped
+- Volumes outside `--region` / `--volume-ids`, or in another Linode account
 
 If the filter is somehow too narrow for an unusual case (e.g. cross-region
 orphans), drop into the Linode UI and delete by hand.

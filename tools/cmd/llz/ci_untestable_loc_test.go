@@ -232,6 +232,90 @@ func TestCountTerraformProvisionerLines(t *testing.T) {
 	}
 }
 
+func TestCountEmbeddedShellLines(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{
+			name: "configmap .sh data key counts body, skips shebang/comments/blanks",
+			in: "" +
+				"data:\n" +
+				"  relabel.sh: |\n" +
+				"    #!/bin/sh\n" +
+				"    # a comment\n" +
+				"    set -eu\n" +
+				"\n" +
+				"    echo hi\n",
+			want: 2,
+		},
+		{
+			name: "argo script.source detected by shebang, not key name",
+			in: "" +
+				"      script:\n" +
+				"        command: [\"/bin/sh\"]\n" +
+				"        source: |\n" +
+				"          #!/bin/sh\n" +
+				"          kubectl get pods\n" +
+				"          echo done\n",
+			want: 2,
+		},
+		{
+			name: "block ends when indentation returns to key level",
+			in: "" +
+				"  setup.sh: |\n" +
+				"    echo a\n" +
+				"    echo b\n" +
+				"  other: value\n",
+			want: 2,
+		},
+		{
+			name: "non-shell block scalar ignored (no .sh key, no shebang)",
+			in: "" +
+				"  config.yaml: |\n" +
+				"    server:\n" +
+				"      port: 8080\n" +
+				"      host: 0.0.0.0\n",
+			want: 0,
+		},
+		{
+			name: "folded prose block ignored",
+			in: "" +
+				"  description: >\n" +
+				"    human prose here\n" +
+				"    spanning lines\n",
+			want: 0,
+		},
+		{
+			name: "two embedded shell blocks both counted",
+			in: "" +
+				"  a.sh: |\n" +
+				"    echo a\n" +
+				"  b.sh: |\n" +
+				"    echo b\n" +
+				"    echo c\n",
+			want: 3,
+		},
+		{
+			name: "block indicators |- and |2 handled",
+			in: "" +
+				"  trim.sh: |-\n" +
+				"    echo a\n" +
+				"  keep.sh: |2\n" +
+				"    echo b\n",
+			want: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countEmbeddedShellLines(tt.in); got != tt.want {
+				t.Errorf("countEmbeddedShellLines() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMatchGlob(t *testing.T) {
 	tests := []struct {
 		pattern, path string
@@ -296,13 +380,20 @@ func TestScanUntestable_EndToEnd(t *testing.T) {
 		"    command = \"./glue.sh\"\n"+ // single-line glue → 0
 		"  }\n"+
 		"}\n") // 2
+	write("charts/cm.yaml", ""+ // embedded-shell → 2
+		"data:\n"+
+		"  relabel.sh: |\n"+
+		"    #!/bin/sh\n"+
+		"    set -eu\n"+
+		"    echo hi\n")
 
 	cfg := untestableBudget{
 		Categories: map[string]untestableCategory{
-			"wf": {Kind: "workflow-run", Budget: 1, Include: []string{".github/workflows/*.yml"}},
-			"sh": {Kind: "script", Budget: 10, Include: []string{"scripts/**/*.sh"}},
-			"py": {Kind: "script", Budget: 10, Include: []string{"scripts/**/*.py"}},
-			"tf": {Kind: "terraform-provisioner", Budget: 10, Include: []string{"infra/**/*.tf"}},
+			"wf":  {Kind: "workflow-run", Budget: 1, Include: []string{".github/workflows/*.yml"}},
+			"sh":  {Kind: "script", Budget: 10, Include: []string{"scripts/**/*.sh"}},
+			"py":  {Kind: "script", Budget: 10, Include: []string{"scripts/**/*.py"}},
+			"tf":  {Kind: "terraform-provisioner", Budget: 10, Include: []string{"infra/**/*.tf"}},
+			"emb": {Kind: "embedded-shell", Budget: 10, Include: []string{"charts/**/*.yaml"}},
 		},
 		Exclude: []string{"scripts/install-*.sh"},
 	}
@@ -330,8 +421,11 @@ func TestScanUntestable_EndToEnd(t *testing.T) {
 	if got["tf"].total != 2 {
 		t.Errorf("tf total = %d, want 2 (single-line command glue not counted)", got["tf"].total)
 	}
-	if got["sh"].over() || got["py"].over() || got["tf"].over() {
-		t.Errorf("sh/py/tf should be within budget")
+	if got["emb"].total != 2 {
+		t.Errorf("emb total = %d, want 2 (embedded shell body, shebang excluded)", got["emb"].total)
+	}
+	if got["sh"].over() || got["py"].over() || got["tf"].over() || got["emb"].over() {
+		t.Errorf("sh/py/tf/emb should be within budget")
 	}
 }
 

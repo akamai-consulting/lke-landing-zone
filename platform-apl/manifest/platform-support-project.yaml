@@ -67,7 +67,7 @@ spec:
     - { namespace: llz-argo-workflows,         server: https://kubernetes.default.svc }
     - { namespace: llz-argo-events,            server: https://kubernetes.default.svc }
     - { namespace: llz-observability,          server: https://kubernetes.default.svc }
-    - { namespace: llz-linode-volume-labeler,  server: https://kubernetes.default.svc }
+    - { namespace: llz-volume-tag-reconciler,  server: https://kubernetes.default.svc }
   clusterResourceWhitelist:
     # cluster-foundation creates Namespaces + the storage-class-patcher
     # ClusterRole/Binding; the firewall reconciler needs cluster-scoped reads.

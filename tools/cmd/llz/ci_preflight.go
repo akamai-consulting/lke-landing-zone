@@ -121,7 +121,7 @@ func runCIPreflight(o preflightOpts) error {
 		labelNote = fmt.Sprintf(" — %d matching %q (e2e)", sameLabel, o.clusterLabel)
 	}
 	fmt.Printf("  Live LKE clusters : %d total (shared account)%s\n", scan.liveClusters, labelNote)
-	fmt.Printf("  Volumes           : %3d total, %3d orphaned (unattached pvc-*)%s\n", scan.vol.total, scan.vol.orphan, volNote)
+	fmt.Printf("  Volumes           : %3d total, %3d orphaned (lke<id> cluster gone), %3d untagged detached%s\n", scan.vol.total, scan.vol.orphan, scan.vol.untagged, volNote)
 	fmt.Printf("  NodeBalancers     : %3d total, %3d orphaned (lke<id> gone / ccm 0-backend)\n", scan.nb.total, scan.nb.orphan)
 	fmt.Printf("  VPCs              : %3d total, %3d orphaned (lke<id>, cluster gone)\n", scan.vpc.total, scan.vpc.orphan)
 	orphanCount := fmt.Sprintf("%3d", orphans)
@@ -176,12 +176,22 @@ func runCIPreflight(o preflightOpts) error {
 		fmt.Println(dim("  (set --vcpu-limit to your account's vCPU limit to fail fast when an apply would exceed it)"))
 	}
 
-	// (d) orphans over threshold.
+	// Untagged detached Volumes: ADVISORY only — never gates. They consume account
+	// quota but carry no lke<id> tag, so they can't be attributed to a gone cluster
+	// and may be an intentionally-detached Retain PVC. Surface them for cleanup
+	// awareness; clearing is a deliberate opt-in.
+	if scan.vol.untagged > 0 {
+		fmt.Fprintf(os.Stderr, "::warning::preflight: %d untagged detached pvc-* Volume(s)%s consume quota but carry no lke<id> tag — NOT gated on (could be an intentionally-detached PVC). If leaked, clear deliberately: `llz ci reap-volumes --region <r> --reap-untagged`.\n", scan.vol.untagged, volNote)
+	}
+
+	// (d) DEFINITIVE orphans over threshold — resources attributable to a GONE
+	// cluster (gone-cluster-tagged Volumes + NodeBalancers + VPCs). Untagged Volumes
+	// are advisory only (above) and never contribute to this gate.
 	if preflight.OrphansExceedThreshold(orphans, o.orphanThreshold) {
-		fmt.Fprintf(os.Stderr, "::warning::preflight: %d orphaned Linode resource(s) detected (threshold %d). These count against the account's active-services quota and will stall a fresh apply. Clean up first: llz reap (account-wide) or llz ci reap-volumes / reap-nodebalancers.\n", orphans, o.orphanThreshold)
+		fmt.Fprintf(os.Stderr, "::warning::preflight: %d orphaned Linode resource(s) whose owning cluster is GONE (threshold %d). These count against the account's active-services quota and will stall a fresh apply. Clean up: llz reap (account-wide) or llz ci reap-volumes / reap-nodebalancers.\n", orphans, o.orphanThreshold)
 		if o.failOnOrphans == "true" {
-			fmt.Fprintln(os.Stderr, "::error::preflight failed: clear the orphans above, then re-run.")
-			return fmt.Errorf("preflight failed: %d orphaned resource(s) over threshold %d", orphans, o.orphanThreshold)
+			fmt.Fprintln(os.Stderr, "::error::preflight failed: clear the gone-cluster orphans above, then re-run.")
+			return fmt.Errorf("preflight failed: %d gone-cluster orphan(s) over threshold %d", orphans, o.orphanThreshold)
 		}
 		fmt.Println(yellow("--fail-on-orphans=false — continuing despite orphans (report-only)."))
 		return nil
@@ -211,7 +221,12 @@ type orphanScanner interface {
 }
 
 // resourceTally is per-type total + orphan counts for the census report.
-type resourceTally struct{ total, orphan int }
+// `orphan` is a DEFINITIVE orphan: a resource attributable to a cluster that is
+// GONE (a gone-cluster `lke<id>` tag/label). `untagged` is volume-only — detached
+// pvc-* Volumes carrying no `lke<id>` tag: they consume quota but can't be
+// attributed to a gone cluster (may be an intentionally-detached Retain PVC), so
+// they are reported but NEVER gated on. Only `orphan` feeds orphans().
+type resourceTally struct{ total, orphan, untagged int }
 
 // orphanScan is the account- (or region-) scoped orphan census that both
 // `llz ci preflight` reports and the destroy job's gate asserts on.
@@ -222,15 +237,19 @@ type orphanScan struct {
 
 func (s orphanScan) orphans() int { return s.vol.orphan + s.nb.orphan + s.vpc.orphan }
 
-// scanOrphans counts orphaned Volumes / NodeBalancers / VPCs using the SAME
-// identity heuristics `llz reap` drives — unattached pvc-* Volumes, CCM
-// NodeBalancers whose cluster is gone (or 0-backend), and lke<id> VPCs whose
-// cluster is gone. NodeBalancers and VPCs are scoped to region ("" =
-// account-wide): they carry a cluster-id tag/label, so a gone-cluster orphan is
-// unambiguous and safe to count account-wide. Volumes are scoped SEPARATELY to
-// volumeRegion because a detached pvc-* Volume carries no cluster id and can't
-// be attributed — in a shared account an account-wide count pulls in other
-// regions'/teams' detached Volumes that `llz reap` (which refuses an unscoped
+// scanOrphans counts DEFINITIVE orphans (resources attributable to a GONE cluster)
+// using the SAME identity heuristics `llz reap` drives — gone-cluster-tagged pvc-*
+// Volumes, CCM NodeBalancers whose cluster is gone (or 0-backend), and lke<id> VPCs
+// whose cluster is gone — plus, SEPARATELY, a `vol.untagged` count of detached pvc-*
+// Volumes with no lke<id> tag (advisory: quota-relevant but unattributable, so never
+// gated on). NodeBalancers and VPCs are scoped to region ("" = account-wide): they
+// carry a cluster-id tag/label, so a gone-cluster orphan is unambiguous and safe to
+// count account-wide. Volumes stamped at provision by the block-storage-retain
+// StorageClass carry an lke<id> cluster tag, so a detached Volume of a still-live
+// cluster is excluded (VolKeep) and a gone cluster's is a definitive orphan — but
+// volumeRegion scoping is still applied because UNtagged legacy Volumes carry no
+// cluster id and can't be attributed: in a shared account an account-wide count
+// would pull in other regions'/teams' detached Volumes that `llz reap` (refuses an unscoped
 // Volume sweep and only acts per --region) will never clean, so the gate would
 // disagree with reap. volumeRegion="" preserves the account-wide volume count.
 // Read-only.
@@ -243,6 +262,7 @@ func scanOrphans(ctx context.Context, client orphanScanner, region, volumeRegion
 		return orphanScan{}, fmt.Errorf("list LKE clusters: %w", err)
 	}
 	s := orphanScan{liveClusters: len(live)}
+	now := time.Now()
 
 	vols, err := client.ListVolumes(ctx)
 	if err != nil {
@@ -253,9 +273,30 @@ func scanOrphans(ctx context.Context, client orphanScanner, region, volumeRegion
 			continue
 		}
 		s.vol.total++
+		tags := linode.MapTags(v)
+		// A detached `pvc-*` Volume in scope, classified by the cluster-liveness gate:
+		//   VolKeep     — tagged `lke<id>` for a still-LIVE cluster: a Retain Volume
+		//                 in use, never an orphan (reap keeps it too).
+		//   VolOrphan   — tagged `lke<id>` for a GONE cluster: a DEFINITIVE orphan
+		//                 (its PVC's cluster was deleted). Counted, gated on.
+		//   VolUntagged — no `lke<id>` tag: unattributable. Past the tagging grace
+		//                 it's counted SEPARATELY (untagged, not orphan): it consumes
+		//                 quota, but with no cluster signal it can't be proven a
+		//                 gone-cluster leak — it may be an intentionally-detached PVC,
+		//                 so the gate must NOT fail on it. (Young untagged Volumes are
+		//                 excluded entirely — a live cluster's Volume mid-provision.)
 		if linode.VolumeIsCandidate(linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"),
-			linode.MapString(v, "region"), linode.MapTags(v), volumeRegion, nil, linode.MapIDString(v), "") {
-			s.vol.orphan++
+			linode.MapString(v, "region"), tags, volumeRegion, nil, linode.MapIDString(v), "") {
+			switch linode.ClassifyVolume(tags, live) {
+			case linode.VolKeep:
+				// in use — not an orphan
+			case linode.VolUntagged:
+				if !linode.VolumeYoungerThan(linode.MapString(v, "created"), now, linode.UntaggedVolumeReapGrace) {
+					s.vol.untagged++
+				}
+			default: // VolOrphan — gone cluster, definitive orphan
+				s.vol.orphan++
+			}
 		}
 	}
 

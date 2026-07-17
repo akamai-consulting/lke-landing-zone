@@ -71,8 +71,9 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 		// NARROW in-cluster PAT via the Linode API and seeds the path directly
 		// (rotated_at-stamped, skip-if-present), and the monthly rotation
 		// (`llz ci rotate-incluster-pat`) re-mints it per region — the broad
-		// PAT is CI/Terraform-only and never enters a cluster. See
-		// ci_incluster_pat.go / docs/designs/linode-pat-dns-consolidation.md.
+		// PAT is CI/Terraform-only and never enters a cluster. The
+		// volume-tag-reconciler CronJob reads this same repurposed path via ESO.
+		// See ci_incluster_pat.go / docs/designs/linode-pat-dns-consolidation.md.
 		// secret/grafana/admin and secret/otel/ingress are NO LONGER seeded here.
 		// Both are self-generated, in-cluster-only secrets, so they moved to a
 		// kube-native ESO flow: a Password generator mints the value and a

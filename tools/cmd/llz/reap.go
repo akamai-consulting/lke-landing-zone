@@ -25,6 +25,8 @@ type reapOpts struct {
 	tagMustInclude string
 	env            string // deployment name; reaps its minted obj-keys + in-cluster PAT
 	force          bool
+	reapUntagged   bool     // opt IN to reaping untagged pvc-* Volumes (default: keep — fail-safe)
+	clusterTags    []string // lke<id> tags resolved from --cluster-label (set by runReap; reaps the cluster's Volumes by tag)
 }
 
 func runReap(g globalOpts, o reapOpts) error {
@@ -33,8 +35,34 @@ func runReap(g globalOpts, o reapOpts) error {
 		return fmt.Errorf("set LINODE_API_TOKEN (or LINODE_TOKEN) to a Linode PAT (read_write to delete, read_only for a dry-run)")
 	}
 	confirm := g.yes && !g.dryRun
+	// --reap-untagged is only safe with a precise scope: an untagged Volume can't be
+	// attributed to a cluster, so reaping untagged Volumes account-wide could delete
+	// another region's/team's detached PVC. (Tagged gone-cluster Volumes ARE
+	// attributable — their lke<id> doesn't resolve to a live cluster — so they reap
+	// account-wide safely without this.)
+	if o.reapUntagged && o.region == "" && o.volumeIDs == "" {
+		return fmt.Errorf("--reap-untagged requires --region or --volume-ids (an untagged Volume is unattributable; reaping it account-wide is unsafe)")
+	}
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
+
+	// Resolve --cluster-label to the matching LIVE cluster ids + their `lke<id>`
+	// Volume ownership tags UP FRONT — BEFORE the cluster delete below, which makes
+	// the label unresolvable. These drive the display and the by-tag Volume reap of a
+	// cluster being TORN DOWN (step 5, bypassing the liveness gate). A cluster that is
+	// ALREADY gone resolves to nothing — its Volumes still carry the durable `lke<id>`
+	// tag (mirrored on its surviving `lke<id>` VPC), and reap attributes them as
+	// orphans by seeing that `lke<id>` no longer resolves to a live cluster.
+	var clusterIDs []uint64
+	if o.clusterLabel != "" {
+		var err error
+		if clusterIDs, err = client.ClustersWithLabel(ctx, o.clusterLabel); err != nil {
+			return fmt.Errorf("list clusters: %w", err)
+		}
+		for _, id := range clusterIDs {
+			o.clusterTags = append(o.clusterTags, fmt.Sprintf("lke%d", id))
+		}
+	}
 
 	fmt.Println(bold("################ llz reap — orphaned Linode resources ################"))
 	if !confirm {
@@ -42,7 +70,11 @@ func runReap(g globalOpts, o reapOpts) error {
 	}
 	fmt.Printf("  %s%s\n", dim("region:        "), orAll(o.region))
 	fmt.Printf("  %s%s\n", dim("cluster label: "), orNone(o.clusterLabel))
-	fmt.Printf("  %s%s\n\n", dim("env (creds):   "), orNone(o.env))
+	fmt.Printf("  %s%s\n", dim("env (creds):   "), orNone(o.env))
+	if o.clusterLabel != "" {
+		fmt.Printf("  %s%s\n", dim("cluster tag(s):"), orNoneTags(o.clusterTags))
+	}
+	fmt.Println()
 
 	deleted, failed := 0, 0
 	// del prints (dry-run) or deletes (confirm), tallying outcomes.
@@ -64,15 +96,11 @@ func runReap(g globalOpts, o reapOpts) error {
 	clustersDeleted := false
 	if o.clusterLabel != "" {
 		fmt.Println(bold(fmt.Sprintf("==== orphan clusters (label %q) ====", o.clusterLabel)))
-		ids, err := client.ClustersWithLabel(ctx, o.clusterLabel)
-		if err != nil {
-			return fmt.Errorf("list clusters: %w", err)
-		}
-		for _, id := range ids {
-			del(fmt.Sprintf("/v4beta/lke/clusters/%d", id), fmt.Sprintf("cluster %d", id))
+		for _, id := range clusterIDs {
+			del(fmt.Sprintf("/v4beta/lke/clusters/%d", id), fmt.Sprintf("cluster %d (tag lke%d)", id, id))
 			clustersDeleted = true
 		}
-		if len(ids) == 0 {
+		if len(clusterIDs) == 0 {
 			fmt.Println(dim("  none matched"))
 		}
 		// Cluster delete is async; let it settle so the firewall safety guard
@@ -103,12 +131,23 @@ func runReap(g globalOpts, o reapOpts) error {
 		return err
 	}
 
-	// ── 5. Volumes (needs a scope: --region or --volume-ids) ──────────────────
+	// ── 5. Volumes ────────────────────────────────────────────────────────────
+	// A tagged Volume is ATTRIBUTABLE — its `lke<id>` either resolves to a live
+	// cluster (kept) or does NOT (a gone-cluster orphan, reaped) — so gone-cluster
+	// Volumes reap safely by that durable tag even account-wide; only UNtagged
+	// Volumes need a region (unattributable; --reap-untagged guarded above). Scope
+	// is --region, --volume-ids, or --cluster-label; a fully-unscoped run is refused
+	// (nothing named to act on).
 	fmt.Println("\n" + bold("==== orphan Volumes ===="))
-	if o.region == "" && o.volumeIDs == "" {
-		fmt.Println(dim("  skipped — set --region and/or --volume-ids to scope the sweep (refusing an unscoped Volume delete)"))
-	} else if err := reapVolumes(ctx, client, o, del); err != nil {
-		return err
+	if o.region == "" && o.volumeIDs == "" && o.clusterLabel == "" {
+		fmt.Println(dim("  skipped — set --region, --volume-ids, or --cluster-label to scope the sweep"))
+	} else {
+		if o.clusterLabel != "" && len(o.clusterTags) == 0 {
+			fmt.Println(dim(fmt.Sprintf("  label %q is not a LIVE cluster — reaping gone-cluster-tagged orphan Volumes by their durable lke<id> tag (a deleted cluster can't be isolated by label alone; --tag-must-include lke<id> targets one)", o.clusterLabel)))
+		}
+		if err := reapVolumes(ctx, client, o, del); err != nil {
+			return err
+		}
 	}
 
 	// ── 6. Per-env minted Linode creds: obj-storage keys + in-cluster PAT ──────
@@ -273,25 +312,99 @@ func reapVPCs(ctx context.Context, client *linode.Client, o reapOpts, del func(p
 	return nil
 }
 
-func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del func(path, desc string)) error {
+// volumeReapClient is the slice of the Linode client reapVolumes needs — seamed
+// so the two safety-critical branches (the region-sweep cluster-liveness gate and
+// the --volume-ids allowlist that deliberately BYPASSES it) are unit-testable with
+// a fake. Mirrors ci_preflight's orphanScanner; *linode.Client satisfies it.
+type volumeReapClient interface {
+	LiveClusterIDs(ctx context.Context) (map[string]bool, error)
+	ListVolumes(ctx context.Context) ([]map[string]any, error)
+}
+
+func reapVolumes(ctx context.Context, client volumeReapClient, o reapOpts, del func(path, desc string)) error {
 	idAllow := map[string]bool{}
 	for _, id := range strings.Fields(o.volumeIDs) {
 		idAllow[id] = true
+	}
+	clusterTagSet := map[string]bool{}
+	for _, t := range o.clusterTags {
+		clusterTagSet[t] = true
+	}
+	// Cluster-liveness gate: each PVC's Volume carries an `lke<id>` ownership tag for
+	// its owning cluster — stamped at provision time by the block-storage-retain
+	// StorageClass's volumeTags — so a detached `pvc-*` Volume whose cluster is still
+	// live is a Retain Volume in use, NOT an orphan, and must be kept. We load the
+	// live set only for a broad (region) sweep. A DELIBERATE scope the caller named
+	// bypasses the gate: an explicit --volume-ids allowlist, or --cluster-label (its
+	// lke<id> tag) — both target one specific cluster's Volumes on purpose.
+	deliberate := len(idAllow) > 0 || len(clusterTagSet) > 0
+	var live map[string]bool
+	if !deliberate {
+		var err error
+		if live, err = client.LiveClusterIDs(ctx); err != nil {
+			return fmt.Errorf("load live clusters: %w", err)
+		}
 	}
 	vols, err := client.ListVolumes(ctx)
 	if err != nil {
 		return fmt.Errorf("list Volumes: %w", err)
 	}
-	matched := false
+	if !deliberate && o.region == "" {
+		fmt.Println(dim("  account-wide — reaping ONLY Volumes tagged to a GONE cluster (attributable orphans); live-cluster and untagged Volumes are kept"))
+	}
+	now := time.Now()
+	matched, keptLive, keptYoung, keptUntagged := false, 0, 0, 0
 	for _, v := range vols {
 		id := linode.MapIDString(v)
+		tags := linode.MapTags(v)
 		if !linode.VolumeIsCandidate(
 			linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"), linode.MapString(v, "region"),
-			linode.MapTags(v), o.region, idAllow, id, o.tagMustInclude) {
+			tags, o.region, idAllow, id, o.tagMustInclude) {
 			continue
+		}
+		// --cluster-label scope: reap ONLY Volumes carrying one of the cluster's
+		// lke<id> tags (the by-label target set).
+		if len(clusterTagSet) > 0 && !anyTagIn(tags, clusterTagSet) {
+			continue
+		}
+		// The gate applies only to a broad (region) sweep; a deliberate --volume-ids
+		// or --cluster-label scope the caller named bypasses both checks.
+		if !deliberate {
+			switch linode.ClassifyVolume(tags, live) {
+			case linode.VolKeep:
+				keptLive++
+				continue
+			case linode.VolUntagged:
+				// No ownership tag — no cluster signal at all. With CSI stamping
+				// `lke<id>` at provision time, an untagged pvc-* Volume is either a
+				// coverage gap (a live cluster's Volume born on a class without the
+				// tag) or a legacy/other-tooling orphan — and we cannot tell which.
+				// FAIL-SAFE default: keep it. Reaping an untagged live Volume is the
+				// exact data loss the liveness gate exists to prevent. --reap-untagged
+				// opts INTO reaping these; even then we spare ones inside the grace
+				// window (a just-provisioned Volume awaiting its tag).
+				if !o.reapUntagged {
+					keptUntagged++
+					continue
+				}
+				if linode.VolumeYoungerThan(linode.MapString(v, "created"), now, linode.UntaggedVolumeReapGrace) {
+					keptYoung++
+					continue
+				}
+				// VolOrphan (gone cluster) is a definitive orphan — no age guard.
+			}
 		}
 		del("/v4/volumes/"+id, fmt.Sprintf("volume %s (%s)", id, linode.MapString(v, "label")))
 		matched = true
+	}
+	if keptLive > 0 {
+		fmt.Println(dim(fmt.Sprintf("  kept %d detached Volume(s) tagged to a live cluster (not orphans)", keptLive)))
+	}
+	if keptUntagged > 0 {
+		fmt.Println(dim(fmt.Sprintf("  kept %d untagged Volume(s) — no ownership tag (fail-safe; pass --reap-untagged to reap these)", keptUntagged)))
+	}
+	if keptYoung > 0 {
+		fmt.Println(dim(fmt.Sprintf("  kept %d untagged Volume(s) younger than %s (may be awaiting provision-time tagging)", keptYoung, linode.UntaggedVolumeReapGrace)))
 	}
 	if !matched {
 		fmt.Println(dim("  none matched the filter"))
@@ -369,6 +482,22 @@ func orNone(s string) string {
 		return "(none — skipping cluster/firewall/BYO-VPC steps)"
 	}
 	return s
+}
+func orNoneTags(tags []string) string {
+	if len(tags) == 0 {
+		return "(no LIVE cluster — a gone cluster's Volumes reap by their durable lke<id> orphan tag, below)"
+	}
+	return strings.Join(tags, " ")
+}
+
+// anyTagIn reports whether any of a Volume's tags is in the want set.
+func anyTagIn(tags []string, want map[string]bool) bool {
+	for _, t := range tags {
+		if want[t] {
+			return true
+		}
+	}
+	return false
 }
 func truncate(s string, n int) string {
 	if len(s) > n {

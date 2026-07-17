@@ -131,6 +131,17 @@ var Components = []Component{
 		},
 	},
 	{
+		// In-cluster Volume tag-heal backstop (hourly CronJob running `llz ci
+		// reconcile-volume-tags`). Primary tagging is the block-storage-retain
+		// StorageClass's CSI volumeTags at CreateVolume; this heals Volumes born
+		// untagged (clone/snapshot PVCs admitted while admission control was
+		// degraded — the Linode clone API takes no tags) and reports abandoned
+		// Retain Volumes. No per-env patch: the desired tag set is read from the
+		// live StorageClass at runtime.
+		Name:              "volumeTagReconciler",
+		ManifestResources: []string{"linode-volume-tag-reconciler"},
+	},
+	{
 		// apl-core's monitoring stack + the llz glue (loki S3 ExternalSecret, alert
 		// rules, the OTel collector serving-TLS CA chain) that rides with it.
 		Name:        "observability",

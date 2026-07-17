@@ -65,6 +65,19 @@ var kyvernoPVCEncryptedYAML []byte
 //go:embed manifests/kyverno-sc-default-demote.yaml
 var kyvernoSCDefaultDemoteYAML []byte
 
+// The clone/snapshot-PVC deny ValidatingAdmissionPolicy (+ its binding) — the
+// in-apiserver twin of the Kyverno pvc-deny-untaggable-clone ClusterPolicy.
+// Applied here (not via TF) as part of the native bootstrap port: the former
+// cluster-bootstrap Terraform workspace applied these; that workspace is gone,
+// so the Go bootstrap now owns them. In-tree admissionregistration API (no CRD
+// wait), so it enforces from bootstrap, before apl-core installs Kyverno.
+//
+//go:embed manifests/vap-pvc-deny-untaggable-clone.yaml
+var vapPVCDenyCloneYAML []byte
+
+//go:embed manifests/vap-pvc-deny-untaggable-clone-binding.yaml
+var vapPVCDenyCloneBindingYAML []byte
+
 // defaultAplChartVersion is the apl-core chart version an instance deploys when
 // neither --apl-chart-version nor spec.cluster.bootstrap.aplChartVersion (an
 // OPTIONAL field) is set. It mirrors the pinned default the retired
@@ -92,6 +105,7 @@ var bootstrapValuePlaceholders = []string{
 type bootstrapFlags struct {
 	kubeconfig       string
 	env              string
+	clusterID        string
 	aplChartVersion  string
 	appsRepoRevision string
 	instanceRepo     string
@@ -105,6 +119,7 @@ type bootstrapFlags struct {
 // spec defaults + env secrets), mirroring the former TF_VAR_* set.
 type bootstrapClusterOpts struct {
 	env              string
+	clusterID        string // LKE cluster id (numeric); rendered into the block-storage-retain SC's lke<id> volumeTag
 	aplChartVersion  string
 	appsRepoRevision string
 	instanceRepo     string
@@ -156,6 +171,7 @@ func ciBootstrapClusterCmd() *cobra.Command {
 	fl := c.Flags()
 	fl.StringVar(&f.kubeconfig, "kubeconfig", "", "path to the cluster kubeconfig (from the fetch-kubeconfig action); falls back to $KUBECONFIG_RAW")
 	fl.StringVar(&f.env, "env", "", "apl-values environment subdir, e.g. primary (required)")
+	fl.StringVar(&f.clusterID, "cluster-id", "", "numeric LKE cluster id (the `cluster` workspace's cluster_id output); rendered into block-storage-retain's lke<id> volumeTag. Falls back to $LKE_CLUSTER_ID. Required — a StorageClass without it provisions un-reapable Volumes")
 	fl.StringVar(&f.aplChartVersion, "apl-chart-version", "", "apl-core chart version (default: spec.cluster.bootstrap.aplChartVersion)")
 	fl.StringVar(&f.appsRepoRevision, "apps-repo-revision", "", "bootstrap Application targetRevision (default: spec, then main)")
 	fl.StringVar(&f.instanceRepo, "instance-repo", "", "owner/name of the instance repo (bootstrap App source) (required)")
@@ -185,6 +201,7 @@ func runBootstrapCluster(f bootstrapFlags) error {
 
 	o := bootstrapClusterOpts{
 		env:                f.env,
+		clusterID:          firstNonEmpty(f.clusterID, os.Getenv("LKE_CLUSTER_ID")),
 		aplChartVersion:    f.aplChartVersion,
 		appsRepoRevision:   f.appsRepoRevision,
 		instanceRepo:       f.instanceRepo,
@@ -420,9 +437,36 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// Must exist in the apiserver before apl-operator's helmfile starts the first
 	// PVC-creating chart; landing it here (not via an Argo sync-wave) closes that
 	// race. Field-manager name kept stable for SSA ownership continuity.
-	if out, ok := d.apply(string(blockStorageClassYAML), "cluster-bootstrap-tf", false); !ok {
+	//
+	// The class's volumeTags carry this cluster's `lke<id>` ownership tag AT
+	// CreateVolume time — the tag `llz reap`'s cluster-liveness gate keys on. The
+	// former cluster-bootstrap Terraform rendered `lke${cluster_id}` via
+	// templatefile() from the `cluster` workspace's remote-state output; the Go
+	// bootstrap takes the same id explicitly (--cluster-id / $LKE_CLUSTER_ID, threaded
+	// from that workspace's cluster_id output) and substitutes it into the manifest's
+	// ${volume_tags} slot. Empty/malformed id hard-fails (immutable SC params).
+	scYAML, err := renderBlockStorageClass(o.clusterID)
+	if err != nil {
+		return err
+	}
+	if out, ok := d.apply(scYAML, "cluster-bootstrap-tf", false); !ok {
 		fmt.Fprint(os.Stderr, out)
 		return fmt.Errorf("apply block-storage StorageClass failed")
+	}
+
+	// ── 5b. clone/snapshot-PVC deny ValidatingAdmissionPolicy + binding (SSA) ──
+	// In-apiserver CEL (no webhook, no CRD wait) blocking clone/snapshot PVCs,
+	// whose Linode CloneVolume path cannot carry the lke<id> tag and would mint an
+	// un-reapable Volume. Applied here so it enforces from bootstrap, ahead of the
+	// Kyverno twin apl-core installs later. Formerly applied by cluster-bootstrap TF.
+	for _, m := range []struct{ name, body string }{
+		{"pvc-deny-untaggable-clone VAP", string(vapPVCDenyCloneYAML)},
+		{"pvc-deny-untaggable-clone VAP binding", string(vapPVCDenyCloneBindingYAML)},
+	} {
+		if out, ok := d.apply(m.body, "cluster-bootstrap-tf", false); !ok {
+			fmt.Fprint(os.Stderr, out)
+			return fmt.Errorf("apply %s failed", m.name)
+		}
 	}
 
 	// ── 6a. Ensure the apl-<env> values branch exists — BEFORE the helm install ──
@@ -830,6 +874,52 @@ Fix: set --apps-repo-revision to %q, or edit the configmap's data.revision to %q
 	return nil
 }
 
+// blockStorageBaseVolumeTags are the static tags every platform Volume carries;
+// `lke<id>` is appended when the cluster id resolves. Kept in sync with the
+// manifest header comment in manifests/block-storage-class.yaml.
+const blockStorageBaseVolumeTags = "block-storage,platform-support-services"
+
+// renderBlockStorageClass fills the ${volume_tags} slot in the embedded
+// block-storage-retain StorageClass with the static tags plus this cluster's
+// `lke<id>` ownership tag, from the numeric cluster id passed in (the `cluster`
+// workspace's cluster_id output, threaded through --cluster-id / $LKE_CLUSTER_ID).
+//
+// HARD-FAIL on an empty/malformed id — mirroring the former cluster-bootstrap TF
+// precondition. StorageClass `parameters` are immutable, so a class applied without
+// the lke<id> tag can never be fixed in place, and every Volume it provisions is
+// un-attributable — `llz reap` could then never clean them up. Failing the bootstrap
+// loudly is safer than silently shipping an un-reapable fleet.
+func renderBlockStorageClass(clusterID string) (string, error) {
+	id, err := normalizeLKEClusterID(clusterID)
+	if err != nil {
+		return "", err
+	}
+	volumeTags := blockStorageBaseVolumeTags + ",lke" + id
+	rendered := strings.ReplaceAll(string(blockStorageClassYAML), "${volume_tags}", volumeTags)
+	if strings.Contains(rendered, "${") {
+		return "", fmt.Errorf("block-storage StorageClass still has an unrendered ${...} placeholder after substitution")
+	}
+	return rendered, nil
+}
+
+// normalizeLKEClusterID validates the cluster id renders a reap-attributable
+// `lke<id>` tag: it strips an optional `lke` prefix and requires the remainder be
+// all digits (the shape linode.LKEIDFromTags — `^lke-?[0-9]+$` — parses). Anything
+// else is rejected so a typo can't produce a silently-unattributable tag.
+func normalizeLKEClusterID(raw string) (string, error) {
+	id := strings.TrimSpace(raw)
+	id = strings.TrimPrefix(id, "lke")
+	if id == "" {
+		return "", fmt.Errorf("bootstrap-cluster: --cluster-id (or $LKE_CLUSTER_ID) is empty — the block-storage-retain StorageClass would render WITHOUT its lke<id> ownership tag, so every Volume it provisions would be un-attributable and `llz reap` could never clean them up (StorageClass parameters are immutable — a silently-untagged class can't be fixed in place). Pass the `cluster` workspace's cluster_id output")
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return "", fmt.Errorf("bootstrap-cluster: --cluster-id %q is not a numeric LKE cluster id — it would render a malformed lke<id> tag that `llz reap` cannot attribute; pass the `cluster` workspace's cluster_id output", raw)
+		}
+	}
+	return id, nil
+}
+
 // applyManifest marshals a manifest map to YAML and server-side-applies it,
 // mirroring the module's `kubectl_manifest` (yamlencode + server_side_apply).
 func applyManifest(d bootstrapDeps, obj map[string]any, fieldManager string, force bool) error {
@@ -1204,7 +1294,8 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	fmt.Printf("  2. render %s (fill %d runtime placeholders)\n", o.valuesPath, len(bootstrapValuePlaceholders))
 	fmt.Printf("  3. assert env-revision == %s (%s)\n", o.appsRepoRevision, o.envRevisionPath)
 	fmt.Printf("  4. kubectl apply --server-side apl-operator Namespace\n")
-	fmt.Printf("  5. kubectl apply --server-side block-storage-retain StorageClass\n")
+	fmt.Printf("  5. kubectl apply --server-side block-storage-retain StorageClass (volumeTags lke<id> rendered from --cluster-id)\n")
+	fmt.Printf("  5b. kubectl apply --server-side pvc-deny-untaggable-clone ValidatingAdmissionPolicy + binding\n")
 	fmt.Printf("  6a. ensure the otomi.git values branch exists (seed EMPTY orphan branch when absent)\n")
 	fmt.Printf("  6. helm upgrade --install apl apl/apl --version %s -n apl-operator --wait (skipped when deployed at this version with identical values)\n", o.aplChartVersion)
 	fmt.Printf("  6b. if the branch was seeded and apl-installation-status is 'completed': re-arm the installer (patch status + restart apl-operator)\n")

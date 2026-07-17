@@ -1,0 +1,41 @@
+# Egress lockdown for the reconciler pod. The container has access to a Linode
+# API token with volume read/write scope — any unconstrained egress would let
+# a compromised image exfiltrate the token. Restrict to DNS + api.linode.com
+# (TCP/443) + kube-apiserver (TCP/443 + TCP/6443 — Cilium-on-LKE-E evaluates
+# policy post-DNAT).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: linode-volume-tag-reconciler-egress
+  namespace: llz-volume-tag-reconciler
+spec:
+  # Static-label match on the pod template's app.kubernetes.io/name label
+  # (set on cronjob.yaml's jobTemplate). kube-linter resolves NP→pod linkage
+  # statically, so it can't follow the runtime-stamped batch.kubernetes.io/job-name
+  # label; the static label gives the same isolation with linter-visible linkage.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: linode-volume-tag-reconciler
+  policyTypes: [Egress, Ingress]
+  ingress: []
+  egress:
+    # DNS resolution against kube-dns.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # api.linode.com (TCP/443) and kube-apiserver (443 + 6443 per the LKE-E
+    # Cilium quirk). ipBlock 0.0.0.0/0 is acceptable here because the port
+    # restrictions plus the credential-isolation namespace mean the only thing
+    # reachable is HTTPS to apiserver / Linode API.
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443  }
+        - { protocol: TCP, port: 6443 }

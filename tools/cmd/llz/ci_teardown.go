@@ -206,8 +206,8 @@ func runCIAssertNoOrphans(region, volumeRegion, clusterID string, threshold, att
 		if scan, err = scanOrphans(ctx, client, region, volRegion); err != nil {
 			return err
 		}
-		fmt.Printf("orphan census (NB/VPC region: %s, Volume region: %s) [attempt %d/%d]: %d Volume(s), %d NodeBalancer(s), %d VPC(s) — %d total (threshold %d)\n",
-			orAll(region), orAll(volRegion), attempt, attempts, scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan, scan.orphans(), threshold)
+		fmt.Printf("orphan census (NB/VPC region: %s, Volume region: %s) [attempt %d/%d]: %d Volume(s) [gone-cluster], %d NodeBalancer(s), %d VPC(s) — %d total (threshold %d); %d untagged detached Volume(s) not gated\n",
+			orAll(region), orAll(volRegion), attempt, attempts, scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan, scan.orphans(), threshold, scan.vol.untagged)
 		if !preflight.OrphansExceedThreshold(scan.orphans(), threshold) {
 			fmt.Println("no orphaned resources above threshold — destroy is clean.")
 			return nil

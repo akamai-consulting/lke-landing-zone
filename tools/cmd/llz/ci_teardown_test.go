@@ -272,14 +272,17 @@ func (f *fakeOrphanScanner) ListVPCs(context.Context) ([]map[string]any, error) 
 }
 
 func TestScanOrphans(t *testing.T) {
-	// live cluster 100 is kept; everything tagged/labelled for the gone 999 is
-	// an orphan. One attached pvc Volume and one non-pvc Volume are ignored.
+	// live cluster 100 is kept; everything tagged/labelled for the gone 999 is a
+	// DEFINITIVE orphan. An untagged detached pvc- Volume is counted SEPARATELY
+	// (vol.untagged) — not a gone-cluster orphan, so it never gates. One attached
+	// pvc Volume and one non-pvc Volume are ignored.
 	fake := &fakeOrphanScanner{
 		live: map[string]bool{"100": true},
 		volumes: []map[string]any{
-			{"id": float64(1), "label": "pvc-orphan", "region": "us-ord", "linode_id": nil},          // orphan
-			{"id": float64(2), "label": "pvc-attached", "region": "us-ord", "linode_id": float64(5)}, // attached → keep
-			{"id": float64(3), "label": "data-vol", "region": "us-ord", "linode_id": nil},            // not pvc-* → keep
+			{"id": float64(1), "label": "pvc-gone", "region": "us-ord", "linode_id": nil, "tags": []any{"lke999"}}, // gone cluster → orphan
+			{"id": float64(4), "label": "pvc-untagged", "region": "us-ord", "linode_id": nil},                      // no lke tag → untagged (not gated)
+			{"id": float64(2), "label": "pvc-attached", "region": "us-ord", "linode_id": float64(5)},               // attached → keep
+			{"id": float64(3), "label": "data-vol", "region": "us-ord", "linode_id": nil},                          // not pvc-* → keep
 		},
 		nbs: []map[string]any{
 			{"id": float64(10), "label": "nb-gone", "region": "us-ord", "tags": []any{"lke999"}}, // orphan (cluster gone)
@@ -300,8 +303,12 @@ func TestScanOrphans(t *testing.T) {
 	if scan.vol.orphan != 1 || scan.nb.orphan != 1 || scan.vpc.orphan != 1 {
 		t.Errorf("orphan counts = vol %d / nb %d / vpc %d, want 1/1/1", scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan)
 	}
+	// The untagged detached Volume is counted separately and does NOT gate.
+	if scan.vol.untagged != 1 {
+		t.Errorf("vol.untagged = %d, want 1 (the untagged detached pvc- Volume)", scan.vol.untagged)
+	}
 	if scan.orphans() != 3 {
-		t.Errorf("orphans() = %d, want 3", scan.orphans())
+		t.Errorf("orphans() = %d, want 3 (gone-cluster Volume + NB + VPC; untagged excluded)", scan.orphans())
 	}
 
 	// The Volume orphan lives in us-ord; scoping Volumes to a DIFFERENT region

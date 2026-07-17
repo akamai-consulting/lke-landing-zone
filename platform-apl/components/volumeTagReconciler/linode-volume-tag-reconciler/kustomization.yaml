@@ -1,0 +1,27 @@
+# Linode Volume tag reconciler — fully Argo-owned manifest tree.
+#
+# The tag-heal BACKSTOP behind provision-time tagging. Primary is the
+# block-storage-retain StorageClass's CSI `volumeTags` (stamped in the same
+# CreateVolume call); the one known path that bypasses it is a clone/snapshot
+# PVC admitted while admission control is degraded — the Linode CloneVolume API
+# takes no tags and does not copy the source's, so the clone's Volume is born
+# untagged and `llz reap` could never attribute it (a permanent orphan after
+# teardown under reap's fail-safe keep-untagged default). The hourly CronJob
+# runs `llz ci reconcile-volume-tags`: it reads the DESIRED tag set from the
+# live StorageClass (single source of truth — no per-env config, no REGION_SHORT
+# patch), heals any PV-backed Volume missing tags, and REPORTS (never deletes)
+# this cluster's abandoned Retain Volumes (tagged lke<id>, referenced by no PV).
+#
+# This is a deliberately NARROW resurrection of the retired volume-labeler:
+# tags only (labels stay pvc-<uuid> — renaming breaks reap's pvc- filter), no
+# watch Deployment (an untagged Volume is harmless until reap-time, and reap
+# keeps it — hourly healing is plenty), no node-instance lookup.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - externalsecret.yaml
+  - rbac.yaml
+  - network-policy.yaml
+  - cronjob.yaml

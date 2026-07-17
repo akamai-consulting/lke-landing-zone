@@ -83,8 +83,8 @@ type credEntry struct {
 }
 
 // buildRotationTable is the Phase-1 set of in-cluster-only Linode credentials.
-// region/objCluster come from the CronJob env (rendered per-env, like the
-// volume-labeler's REGION). Labels + bucket grants MIRROR the llz-object-storage
+// region/objCluster come from the CronJob env (rendered per-env via the
+// component's strategic-merge patch). Labels + bucket grants MIRROR the llz-object-storage
 // module's bootstrap-minted keys ("<label_prefix>-<name>-<region_suffix>",
 // label_prefix "platform"): the Loki key spans the chunks/ruler/admin buckets —
 // the actual bucket names, NOT the key label (an earlier revision minted against

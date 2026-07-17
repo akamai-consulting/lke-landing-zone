@@ -328,7 +328,6 @@ func envCmd() *cobra.Command {
 	f := add.Flags()
 	f.StringVar(&o.templateEnv, "template-env", "example", "template env to clone")
 	f.StringVar(&o.region, "region", "", "Linode region for cluster/<env>.tfvars (e.g. us-sea)")
-	f.StringVar(&o.regionShort, "region-short", "", "3-letter REGION_SHORT for volume labels (default: first 3 chars of <env>)")
 	f.StringVar(&o.clusterDomain, "cluster-domain", "", "base domain → cluster.domainSuffix (default: <env>.internal)")
 	f.StringVar(&o.objCluster, "obj-cluster", "", "Linode Object Storage cluster (e.g. us-sea-1)")
 	f.StringVar(&o.k8sVersion, "k8s-version", "", "LKE-E k8s version (a +lke version in your account)")
@@ -467,18 +466,25 @@ func reapCmd() *cobra.Command {
 			"gone — NodeBalancers, VPCs, Volumes (and, with --cluster-label, the orphan\n" +
 			"cluster + its node firewall + BYO VPC), in dependency order. Reads the Linode\n" +
 			"PAT from LINODE_API_TOKEN (or LINODE_TOKEN). Dry-run by default; deletes only\n" +
-			"with --yes. Volumes need a scope (--region or --volume-ids).",
+			"with --yes.\n" +
+			"Volumes: a gone-cluster-tagged (lke<id> not resolving to a live cluster)\n" +
+			"Volume is an attributable orphan and reaps even account-wide; only UNtagged\n" +
+			"Volumes need --region (--reap-untagged). --cluster-label on a LIVE cluster\n" +
+			"resolves its lke<id> tag (shown in the header) and reaps its Volumes by it,\n" +
+			"bypassing the liveness gate — a deliberate teardown; on an ALREADY-gone\n" +
+			"cluster it reaps gone-cluster orphans by their durable tag.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runReap(gopts, o) },
 	}
 	f := c.Flags()
 	f.StringVar(&o.region, "region", "", "scope NodeBalancers/VPCs/Volumes to one Linode region (e.g. us-ord)")
-	f.StringVar(&o.clusterLabel, "cluster-label", "", "also reap the orphan cluster + its node firewall + <label>-vpc")
+	f.StringVar(&o.clusterLabel, "cluster-label", "", "also reap the orphan cluster + its node firewall + <label>-vpc + the cluster's detached pvc-* Volumes (by its resolved lke<id> tag)")
 	f.StringVar(&o.env, "env", "", "also reap the deployment's minted Linode creds (obj-storage keys platform-loki-<env>/platform-harbor-registry-<env> + in-cluster PAT llz-incluster-<env>)")
 	f.StringVar(&o.fwLabel, "fw-label", "", "exact firewall label to search (default: platform-nodes-fw + <label>-nodes)")
 	f.StringVar(&o.volumeIDs, "volume-ids", "", "space-separated Volume id allowlist (scopes the Volume sweep)")
 	f.StringVar(&o.tagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
 	f.BoolVar(&o.force, "force", false, "delete the node firewall even if a live cluster still carries --cluster-label")
+	f.BoolVar(&o.reapUntagged, "reap-untagged", false, "also reap untagged pvc-* Volumes past the grace window (default: keep them — an untagged Volume has no ownership signal, so keeping is fail-safe)")
 	return c
 }
 

@@ -28,14 +28,45 @@
 #      and untagged despite the class being marked encrypted. See PR splitting
 #      this manifest out of apl-values into TF for the migration rationale.
 #
-#   2. `volumeTags: block-storage,platform-support-services` — every Volume the
-#      driver provisions for this class carries these tags in the Linode
-#      UI/API. The `block-storage` tag is what the TF destroy-time provisioner
-#      in cluster-bootstrap/main.tf filters on to reap orphaned Volumes
-#      account-wide. Without the tag (the silent-ignore bug above), apl-core's
-#      chart Volumes (gitea, keycloak, eventual argo-cd PVCs) are
-#      indistinguishable from any other Linode account's and can't be
-#      cleaned up by tag-sweep.
+#   2. `volumeTags` — every Volume the driver provisions for this class carries
+#      these tags in the Linode UI/API. The volumeTags placeholder below is
+#      rendered by `llz ci bootstrap-cluster` (renderBlockStorageClass) before the
+#      server-side apply, from:
+#        - `block-storage,platform-support-services` — static. The
+#          `block-storage` tag is what the destroy-time Volume sweep filters
+#          on to reap orphaned Volumes account-wide. Without it (the
+#          silent-ignore bug above), apl-core's chart Volumes (gitea, keycloak,
+#          argo-cd PVCs) are indistinguishable from any other account's.
+#        - `lke<cluster_id>` — this cluster's ownership tag. `bootstrap-cluster`
+#          takes the numeric cluster id explicitly (--cluster-id / $LKE_CLUSTER_ID,
+#          threaded from the `cluster` workspace's cluster_id output — the same
+#          source the former cluster-bootstrap TF read from remote state) and
+#          renders it here. This is the
+#          same convention the CCM uses for NodeBalancers, and it is what lets
+#          `llz reap` apply a cluster-liveness gate (internal/linode
+#          ClassifyVolume): a detached, Retain-policy PVC whose cluster is still
+#          live is kept, not reaped; only Volumes whose owning cluster is GONE
+#          are orphans. Reaping unattached `pvc-*` Volumes by detach-state alone
+#          is unsafe — detached does not mean orphaned.
+#
+#      Attribution AT PROVISION (here): tagging in the StorageClass stamps
+#      `lke<id>` in the same CreateVolume API call, so a fresh-create Volume is
+#      never observable untagged. This replaces the retired linode-volume-labeler
+#      CronJob (which PUT the tag AFTER creation) as the PRIMARY path. Coverage is
+#      then held in depth: the kyverno-pvc-redirect-untagged-storage-class policy
+#      keeps every PVC on this (tagging) class; the pvc-deny-untaggable-clone VAP
+#      (+ Kyverno twin) blocks clone/snapshot PVCs, whose CloneVolume API path
+#      cannot tag; the volumeTagReconciler CronJob (`llz ci reconcile-volume-tags`)
+#      heals this class's volumeTags onto any Volume that slips everything; and
+#      `reap` treats an UNTAGGED `pvc-*` Volume as keep-by-default (see
+#      --reap-untagged) so even a full coverage miss can never silently delete a
+#      live Volume.
+#
+#      NOTE: StorageClass `parameters` are immutable, so `lke<id>` is baked in at
+#      SC-create time. cluster_id is stable for a cluster's life; a destroy/
+#      recreate makes a new SC with the new id. Empty id (cluster gone/half-
+#      provisioned) renders WITHOUT the `lke<id>` tag — defensive only; a normal
+#      apply always has it since the SC is created after the cluster.
 #
 # NOTE on UI label prefix: the CSI driver doesn't honor a per-StorageClass
 # `volume-label-prefix` parameter — that's a `--volume-label-prefix` flag on
@@ -50,15 +81,15 @@
 # Linode API DELETE for any remaining block-storage-tagged Volume), so Retain
 # guards against accidents without orphaning on intentional teardown.
 #
-# Why this lives in cluster-bootstrap TF (not apl-values):
-#   apl-core's helmfile is driven by apl-operator, which starts AFTER
-#   helm_release.apl returns. helmfile installs PVC-creating charts (gitea,
+# Why bootstrap-cluster applies this (not apl-values):
+#   apl-core's helmfile is driven by apl-operator, which starts AFTER the apl-core
+#   helm install returns. helmfile installs PVC-creating charts (gitea,
 #   harbor, keycloak, prometheus, etc.) without waiting for any external
 #   Argo CD sync. If the SC arrives via Argo's platform-bootstrap App (sync-wave
 #   -20 in the old layout), it races with apl-operator's helmfile — and
 #   helmfile usually wins, producing 20+ PVCs on the LKE default class.
-#   Landing the SC via TF before helm_release.apl guarantees it exists in
-#   the API server before apl-operator is even installed.
+#   bootstrap-cluster SSA-applies the SC before the apl-core install, guaranteeing
+#   it exists in the API server before apl-operator is even installed.
 #
 # **Cluster-default.** Marked with `is-default-class: "true"` so workloads
 # installed by apl-operator's downstream helmfile that don't specify a
@@ -104,4 +135,4 @@ allowVolumeExpansion: true
 volumeBindingMode: Immediate
 parameters:
   linodebs.csi.linode.com/encrypted: "true"
-  linodebs.csi.linode.com/volumeTags: "block-storage,platform-support-services"
+  linodebs.csi.linode.com/volumeTags: "${volume_tags}"
