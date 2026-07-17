@@ -106,6 +106,11 @@ on:
         required: false
         type: boolean
         default: false
+      bootstrap_cluster:
+        description: 'Run the in-cluster bootstrap (wait-cluster-ready + `llz ci bootstrap-cluster`: apl-core, Kyverno policies, Argo bridge) at the head of the bootstrap job, before the OpenBao phase. Set by llz-terraform.yml''s chained call so cluster + OpenBao bootstrap share ONE container-init + checkout + cluster-access/ACL cycle (the former standalone bootstrap-cluster job paid its own, ~1.5-2m of pure overhead on the e2e critical path). Default false: a standalone bootstrap-openbao dispatch (retries, re-configuration) assumes the cluster is already bootstrapped.'
+        required: false
+        type: boolean
+        default: false
     secrets:
       # required: false even though a green bootstrap genuinely needs these.
       # This workflow is reached via a nested `workflow_call` under
@@ -145,6 +150,17 @@ on:
       HARBOR_PULL_ROBOT_NAME:
         required: false
       HARBOR_ROBOT_NAME:
+        required: false
+      # Consumed only by the bootstrap_cluster=true phase (the merged former
+      # bootstrap-cluster job): apl-core's otomi.git.password, the optional DNS
+      # token, and the optional private-GHCR read credential.
+      APL_VALUES_REPO_TOKEN:
+        required: false
+      LINODE_DNS_TOKEN:
+        required: false
+      GHCR_READ_TOKEN:
+        required: false
+      APPS_REPO_REVISION:
         required: false
       # (LOKI_S3_* / HARBOR_REGISTRY_S3_* were RETIRED: the object-storage keys
       # are minted by `llz ci mint-bootstrap-objkeys` below and rotated
@@ -213,7 +229,10 @@ jobs:
     # convergence poll (formerly its own `converge` job) now runs at the tail of
     # THIS job, reusing the one cluster-access/ACL cycle instead of paying a fresh
     # container-init + checkout + kubeconfig fetch. See "Final convergence gate".
-    timeout-minutes: 45
+    # With bootstrap_cluster the in-cluster bootstrap phase (apl-core install +
+    # the wait-apl-pipeline gate, worst-case ~25m — the former standalone job's
+    # 50m budget minus its own overhead) runs at the head of this job too: 70m.
+    timeout-minutes: ${{ inputs.bootstrap_cluster && 70 || 45 }}
     env:
       # github.com is the default host, so GH_TOKEN alone authenticates.
       # GH_REPO lets gh target the repo directly instead of shelling out to git
@@ -241,6 +260,62 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # ── Cluster-bootstrap phase (bootstrap_cluster=true only) ──────────────────
+      # MERGED here from llz-terraform.yml's former standalone `bootstrap-cluster`
+      # job: it ran on the same cluster with the same infra-<region> environment
+      # immediately before this job, so standing it alone only bought a second
+      # container-init + checkout + kubeconfig/ACL cycle (~1.5-2m of pure overhead
+      # on the e2e critical path) — the same rationale that folded the `converge`
+      # job into this one. The steps are verbatim from that job (see its header
+      # comments in git history); only the kubeconfig moved: they now use the
+      # default $HOME/.kube/config the shared cluster-access step below writes,
+      # instead of a job-private $RUNNER_TEMP path.
+      - name: Pre-flight — probe credential validity (fail fast on a dead token)
+        if: inputs.bootstrap_cluster
+        env:
+          LINODE_API_TOKEN:            ${{ secrets.LINODE_API_TOKEN }}
+          LINODE_DNS_TOKEN:            ${{ secrets.LINODE_DNS_TOKEN }}
+          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+          GHCR_READ_TOKEN:             ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USERNAME:               ${{ vars.GHCR_USERNAME }}
+          TF_STATE_ACCESS_KEY:         ${{ secrets.TF_STATE_ACCESS_KEY }}
+          TF_STATE_SECRET_KEY:         ${{ secrets.TF_STATE_SECRET_KEY }}
+          TF_STATE_ENDPOINT:           ${{ vars.TF_STATE_ENDPOINT }}
+          TF_STATE_BUCKET:             ${{ vars.TF_STATE_BUCKET }}
+        run: llz ci validate-tokens
+
+      - name: Pre-flight — verify infra-${{ env.REGION }} env secrets
+        if: inputs.bootstrap_cluster
+        env:
+          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+        run: |
+          set -u
+          FAIL=0
+          llz ci require-secret APL_VALUES_REPO_TOKEN \
+            --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
+          llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
+          [ "$FAIL" -eq 0 ]
+
+      # A pinned first-party chart (llz-*) whose bumped version isn't in GHCR yet
+      # fails ONLY at Argo sync time — fail fast with a static scan + GHCR HEAD.
+      - name: Pre-flight — first-party chart pins are published to GHCR
+        if: inputs.bootstrap_cluster
+        env:
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USERNAME:   ${{ vars.GHCR_USERNAME }}
+          GH_TOKEN:        ${{ github.token }}
+        run: llz ci chart-publish-check --root .
+
+      # Regenerate the gitignored cluster tfvars from the spec so wait-cluster-ready
+      # below can read node_count (its pool-Ready target).
+      - name: Render tfvars from the spec
+        if: inputs.bootstrap_cluster
+        run: llz render "${REGION}" --tfvars-only
+
       # ── Pre-flight: required infra-<region> env secrets ────────────────────────
       # Surface missing GHA env secrets in seconds rather than 30+ min into the
       # workflow when a seed step exits 0 with an `::error::` and
@@ -286,6 +361,49 @@ jobs:
           linode-token:          ${{ secrets.LINODE_API_TOKEN }}
           region:                ${{ env.REGION }}
           register-runner-lease: 'true'
+
+      # ── Cluster-bootstrap phase, part 2 (bootstrap_cluster=true only) ──────────
+      # wait-cluster-ready gates on BOTH apiserver reachability AND the node pool
+      # actually coming up: --tfvars reads node_count so it waits for the whole
+      # statically-sized pool to report Ready, not just for the API to answer.
+      - name: Wait for cluster API ready
+        if: inputs.bootstrap_cluster
+        run: |
+          llz ci wait-cluster-ready --timeout 900 --interval 10 \
+            --tfvars "terraform-iac-bootstrap/cluster/${REGION}.tfvars" || {
+            echo "Persisting failure = control plane still provisioning (re-run later), OR the node pool never reached the expected Ready count (Linode capacity/quota for the node type, or a node_pool_label ≥ 16 chars wedging node join), OR the cluster-access step above did not add this runner's egress IP to the LKE-E control-plane ACL (check its log + LINODE_API_TOKEN scope)."
+            exit 1
+          }
+
+      # The whole in-cluster bootstrap in one native command (see
+      # tools/cmd/llz/ci_bootstrap_cluster.go): read the live coredns IP, inject the
+      # runtime secrets into the committed apl-values, SSA the StorageClass +
+      # namespaces, `helm upgrade --install` apl-core, race the two Kyverno policies
+      # concurrently with the apl-pipeline readiness gate, then SSA the
+      # platform-bootstrap AppProject + Applications. Idempotent, so a re-run is
+      # safe; the chart version is read from the spec.
+      - name: Bootstrap cluster (apl-core + Kyverno + Argo bridge)
+        if: inputs.bootstrap_cluster
+        env:
+          APL_VALUES_REPO_TOKEN: ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          LINODE_DNS_TOKEN:      ${{ secrets.LINODE_DNS_TOKEN || 'placeholder-set-LINODE_DNS_TOKEN-to-enable-dns' }}
+          GHCR_TOKEN:            ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USERNAME:         ${{ vars.GHCR_USERNAME }}
+          APPS_REPO_REVISION:    ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
+        run: |
+          llz ci bootstrap-cluster \
+            --env "${REGION}" \
+            --apps-repo-revision "${APPS_REPO_REVISION}" \
+            --instance-repo "${{ inputs.instance_repo }}" \
+            --template-ref "${{ inputs.template-ref }}"
+
+      # Diagnostics for a failed cluster bootstrap (typically the apl-pipeline
+      # readiness gate timing out). Best-effort and always exits 0 — must never
+      # mask the original failure. Uses the default kubeconfig cluster-access wrote.
+      - name: Diagnose ArgoCD install failure
+        if: failure() && inputs.bootstrap_cluster
+        timeout-minutes: 10
+        run: llz ci diagnose-argocd
 
       # ── OpenBao serving TLS — issued by cert-manager, no bootstrap seed ─────────
       # The out-of-band self-signed openbao-tls seed that used to live here has
@@ -776,6 +894,22 @@ jobs:
           # state instead of waiting on the controller's reconcile timer.
           llz ci nudge-argo || true
 
+      # ── Event-pace the harbor tail instead of waiting out the */5 cron ─────────
+      # llz-cert-automation's rollout chains on the harbor-robot-provisioner
+      # CronJob seeding secret/harbor/robot → the harbor-docker-config
+      # ExternalSecret syncing → the rollout. Left to the schedule, the first
+      # tick is up to 5m out and ESO adds its 1m refreshInterval — the dominant
+      # always-pay tail the converge budget below absorbs. Force one tick NOW
+      # (a one-off Job from the CronJob, after harbor-core is Available) and
+      # force-sync the ExternalSecrets, collapsing that cron-paced tail to the
+      # Job's own runtime. Best-effort by design (the verb always exits 0): the
+      # cron schedule remains the standing safety net and the converge poll
+      # below is the verdict. Skipped on standby (no in-cluster Harbor).
+      - name: Kick harbor-robot-provisioner (skip the */5 first-tick wait)
+        if: env.HA_ROLE != 'standby'
+        continue-on-error: true
+        run: llz ci kick-harbor-provisioner
+
       # Explicit --budget bounds the convergence poll, well below the job's
       # timeout-minutes (45). NOT "anything longer is a real stall": the tail of a
       # fresh bootstrap is llz-cert-automation legitimately rolling out. It chains
@@ -785,7 +919,8 @@ jobs:
       # CronJob's first tick up to 5m out) that tail runs ~10-15m after the primary
       # converge, so a 10m ceiling was marginal and flaked the poll on a legit slow
       # rollout (Progressing, not stalled). 20m absorbs the worst-case tail while
-      # still catching a genuine stall well inside the 45m job timeout.
+      # still catching a genuine stall well inside the 45m job timeout — and the
+      # kick step above makes the worst case rare rather than routine.
       - name: Wait for cluster to converge
         run: llz ci converge --budget 1200
 
