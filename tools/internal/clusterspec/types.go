@@ -141,10 +141,16 @@ type VPC struct {
 }
 
 // Instance mirrors copier.yml's questions (upstream_org, instance_repo,
-// forge_flavor, llz_version). The renderer feeds these to copier as -d data.
+// llz_version) plus the git-forge the instance is hosted on. The renderer feeds
+// upstreamOrg/repo/templateVersion to copier as -d data; Forge selects the
+// internal/forge behavior (see docs/designs/forge-abstraction.md).
 type Instance struct {
-	UpstreamOrg     string `json:"upstreamOrg"`
-	Repo            string `json:"repo"`
+	UpstreamOrg string `json:"upstreamOrg"`
+	Repo        string `json:"repo"`
+	// Forge is one of validate.Forge*'s wire strings. It is validated for
+	// recognition (validateInstance) and for end-to-end support
+	// (forge.Supported) — the latter rejects a forge that is reserved but not
+	// yet wired, rather than silently ignoring it.
 	Forge           string `json:"forge"`
 	TemplateVersion string `json:"templateVersion"`
 }

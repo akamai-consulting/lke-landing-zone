@@ -26,10 +26,31 @@ import (
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 )
 
-// ghAPIBase is a seam so tests can point at an httptest server.
-var ghAPIBase = "https://api.github.com"
+// ghAPIBase is the REST API root for these in-cluster native GitHub calls. It
+// is resolved from the environment through internal/forge so a non-github.com
+// host is honored: GITHUB_API is an explicit override (the same var the CI-side
+// audit path in ci_gh_pat_expiry.go already reads — this closes the gap where
+// the write path ignored it and would silently target api.github.com on a GHES
+// instance), else a non-github.com GH_HOST is treated as a GHES appliance.
+// It stays a package var so tests can point it at an httptest server.
+var ghAPIBase = resolveGHAPIBase()
+
+func resolveGHAPIBase() string {
+	if v := os.Getenv("GITHUB_API"); v != "" {
+		return v
+	}
+	if h := os.Getenv("GH_HOST"); h != "" && h != "github.com" {
+		if f, err := forge.New(forge.GHES, h); err == nil {
+			return f.APIBase()
+		}
+	}
+	f, _ := forge.New(forge.GitHub, "")
+	return f.APIBase()
+}
 
 // ghSetRepoSecretNative writes one repo-level Actions secret: fetches the
 // repo's public key, seals the value (anonymous NaCl box — the libsodium

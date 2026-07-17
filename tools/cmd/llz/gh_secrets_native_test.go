@@ -156,3 +156,27 @@ func TestGHSetEnvSecretNativeRoundTrip(t *testing.T) {
 		t.Errorf("sealed box decrypted to %q ok=%v", plain, ok)
 	}
 }
+
+// resolveGHAPIBase must honor $GITHUB_API (the bug: the write path used to
+// ignore it and target api.github.com even on a GHES instance) and derive a
+// GHES api base from a non-github.com GH_HOST, else default to github.com.
+func TestResolveGHAPIBase(t *testing.T) {
+	cases := []struct {
+		name, githubAPI, ghHost, want string
+	}{
+		{"explicit override wins", "https://ghes.corp/api/v3", "", "https://ghes.corp/api/v3"},
+		{"ghes from GH_HOST", "", "ghes.corp", "https://ghes.corp/api/v3"},
+		{"github.com GH_HOST falls through", "", "github.com", "https://api.github.com"},
+		{"default", "", "", "https://api.github.com"},
+		{"GITHUB_API beats GH_HOST", "https://override/api/v3", "other.corp", "https://override/api/v3"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("GITHUB_API", c.githubAPI)
+			t.Setenv("GH_HOST", c.ghHost)
+			if got := resolveGHAPIBase(); got != c.want {
+				t.Errorf("resolveGHAPIBase() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

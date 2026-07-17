@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 )
 
@@ -154,6 +155,9 @@ func validateInstance(in Instance) []error {
 		errs = append(errs, fmt.Errorf("spec.instance.templateVersion is required (the pinned llz release, or 'main')"))
 	}
 	if err := validate.Forge(in.Forge); err != nil {
+		errs = append(errs, fmt.Errorf("spec.instance.%w", err))
+	} else if err := forge.Supported(forge.Flavor(in.Forge)); err != nil {
+		// Recognized but reserved: reject loudly rather than accept-and-ignore.
 		errs = append(errs, fmt.Errorf("spec.instance.%w", err))
 	}
 	return errs

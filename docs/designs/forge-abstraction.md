@@ -1,12 +1,19 @@
 # Design: the forge abstraction — GitHub.com, GHEC, GHES, GitLab
 
-**Status:** Design only (no code). Nothing here has landed. `spec.instance.forge`
-already exists in [validate.go](../../tools/internal/validate/validate.go) and
-already accepts `gitlab`, but it is **dead** — validated and never branched on
-(§Problem). This doc either makes that field real or deletes it; it should not
-survive another release as aspirational residue. Sequencing is deliberately
-front-loaded on Phases 0–1, which are cheap, fix live bugs, and deliver GHEC nearly
-for free.
+**Status:** Foundation landed on branch `feat/forge-abstraction` — **Phase 0**
+(the field is no longer dead: recognized-but-unwired forges now fail spec
+validation loudly instead of being silently ignored; the `github-enterprise-server`
+flavor split out of `github-enterprise`; the false docstrings on `validate.Forge`
+and `clusterspec.Instance` are corrected), **Phase 2 core** (a real
+[`internal/forge`](../../tools/internal/forge/) package — the four-flavor
+capability model, with API base / git-credential / OIDC-claim logic fully
+implemented and unit-tested), and the **Phase 1** live bug (`gh_secrets_native.go`
+now resolves its API base through the package and honors `$GITHUB_API`/`GH_HOST`,
+where the write path previously ignored them). Not yet landed: the network
+capability implementations (`SecretWriter`/`TokenMinter`/`TokenRotator`), GHES/GitLab
+end-to-end wiring, the GitHub App, and the workflow assimilation — Phases 3–7, each
+gated as below. No forge but GitHub.com is wired end-to-end yet, and `Supported`
+enforces exactly that.
 **Relates to:** [credential-single-pane.md](credential-single-pane.md),
 [credential-single-pane-incluster.md](credential-single-pane-incluster.md),
 [cross-org-reuse-pattern.md](cross-org-reuse-pattern.md),
