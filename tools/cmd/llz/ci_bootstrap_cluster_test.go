@@ -535,17 +535,60 @@ func TestHelmInstallApl_SkipsWhenAlreadyAtTargetVersion(t *testing.T) {
 			switch args[0] {
 			case "list":
 				return `[{"name":"apl","chart":"apl-6.0.0","status":"deployed"}]`, true
+			case "get": // get values -o yaml — same values, different formatting/order
+				return "b: 2\na: 1\n", true
 			case "upgrade":
 				upgraded = true
 			}
 			return "", true
 		},
 	}
-	if _, err := helmInstallApl(d, o, "rendered-values"); err != nil {
+	if _, err := helmInstallApl(d, o, "a: 1\nb: 2\n"); err != nil {
 		t.Fatalf("helmInstallApl: %v", err)
 	}
 	if upgraded {
-		t.Error("must NOT helm upgrade when apl is already deployed at the target version (rolls apl-operator on a reused cluster)")
+		t.Error("must NOT helm upgrade when apl is already deployed at the target version with identical values (rolls apl-operator on a reused cluster)")
+	}
+
+	// Same version but CHANGED values → must upgrade (a values-only fix like the
+	// loki memberlist publishNotReadyAddresses change has to reach the operator).
+	upgraded = false
+	d.helm = func(args ...string) (string, bool) {
+		switch args[0] {
+		case "list":
+			return `[{"name":"apl","chart":"apl-6.0.0","status":"deployed"}]`, true
+		case "get":
+			return "a: 1\n", true
+		case "upgrade":
+			upgraded = true
+		}
+		return "", true
+	}
+	if _, err := helmInstallApl(d, o, "a: 1\nb: 2\n"); err != nil {
+		t.Fatalf("helmInstallApl(values changed): %v", err)
+	}
+	if !upgraded {
+		t.Error("same version + CHANGED values must upgrade — a values-only change would otherwise never reach apl-operator on a reused cluster")
+	}
+
+	// Same version, values unreadable → bias to skip (don't roll on a blip).
+	upgraded = false
+	d.helm = func(args ...string) (string, bool) {
+		switch args[0] {
+		case "list":
+			return `[{"name":"apl","chart":"apl-6.0.0","status":"deployed"}]`, true
+		case "get":
+			return "", false
+		case "upgrade":
+			upgraded = true
+		}
+		return "", true
+	}
+	if _, err := helmInstallApl(d, o, "a: 1\n"); err != nil {
+		t.Fatalf("helmInstallApl(values unreadable): %v", err)
+	}
+	if upgraded {
+		t.Error("unreadable current values must bias to SKIP, not roll apl-operator")
 	}
 }
 
@@ -722,6 +765,12 @@ func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
 				line := strings.Join(args, " ")
 				if strings.Contains(line, "get services") && strings.Contains(line, "json") {
 					return dnsServicesJSON, true
+				}
+				if strings.Contains(line, "get configmap apl-installation-status") {
+					if deployed {
+						return "completed", true // reused cluster: installer done → reconcile-only
+					}
+					return "", false // fresh cluster: no status cm yet
 				}
 				if strings.Contains(line, "patch configmap apl-installation-status") {
 					patched = true

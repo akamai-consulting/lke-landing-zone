@@ -214,6 +214,18 @@ apps:
     # policy (_shared/manifest/kyverno-policies/), NOT here — overriding
     # schemaConfig corrupts it.
     _rawValues:
+      # memberlist DNS bootstrap deadlock (observed live: loki-0 at 37 restarts).
+      # loki-memberlist is a HEADLESS Service; with publishNotReadyAddresses
+      # false (the chart 6.x default) it publishes NO DNS records until an
+      # endpoint is READY — but the single-binary pod only becomes ready after
+      # joining its own memberlist ring, which it resolves via that very DNS
+      # name. Fresh installs sneak through; any RESTART of loki-0 deadlocks:
+      # not-ready → NXDOMAIN → "empty ring" crashloop → not-ready. Publishing
+      # not-ready addresses is the upstream-intended fix for single-member
+      # memberlist bootstrap.
+      memberlist:
+        service:
+          publishNotReadyAddresses: true
       gateway:
         nginxConfig:
           # nginx's `resolver` needs the cluster DNS Service IP, NOT a hostname.

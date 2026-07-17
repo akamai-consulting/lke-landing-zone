@@ -46,6 +46,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -446,18 +447,18 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		return err
 	}
 
-	// ── 6b. Re-run the operator's installer when the branch was RE-seeded on a
-	// reused cluster ── seeded && installSkipped means: the values branch did not
-	// exist (a fresh e2e instantiate deletes it), but apl is already installed —
-	// so the running apl-operator has apl-installation-status "completed" and will
-	// only RECONCILE, never re-bootstrap the full env values into the now-empty
-	// branch. Reconcile against an empty env crashes its derived-values template
-	// ("map has no entry for key customRootCA") and the gitops-* apps starve on
-	// "env/manifests/...: app path does not exist" until converge times out.
-	// The validated recovery (performed manually on e2e cluster 632033): reset the
-	// status to pending + restart the operator, which re-runs the INSTALLER phase —
-	// it re-bootstraps the full values and pushes them to the seeded branch.
-	if seedSHA != "" && installSkipped {
+	// ── 6b. Re-arm the operator's installer when the branch was RE-seeded on a
+	// cluster whose installation already COMPLETED ── only the INSTALLER phase
+	// bootstraps the full env values into the branch; once apl-installation-status
+	// is "completed" every cycle is reconcile-only and can never repopulate the
+	// now-empty branch (the gitops-* apps then starve on "env/manifests/...: app
+	// path does not exist" until converge times out). This holds whether the helm
+	// step SKIPPED (identical values) or UPGRADED (changed values) — an upgrade
+	// rolls the operator pod but does NOT reset its installation status. The reset
+	// itself checks the status and no-ops on a fresh install (absent/pending —
+	// the installer runs on its own). Validated live on e2e cluster 632033.
+	_ = installSkipped // the re-arm decision is driven by the installer status, not the helm path
+	if seedSHA != "" {
 		if err := resetAplInstaller(d); err != nil {
 			return err
 		}
@@ -867,8 +868,28 @@ func manifestName(obj map[string]any) string {
 // prior run self-heals.
 func helmInstallApl(d bootstrapDeps, o bootstrapClusterOpts, renderedValues string) (skipped bool, err error) {
 	if ver, status, ok := deployedAplRelease(d); ok && status == "deployed" && ver == o.aplChartVersion {
-		fmt.Printf("apl-core %s already deployed — skipping helm upgrade so a reused-cluster re-apply does not roll apl-operator (bump spec.cluster.bootstrap.aplChartVersion to upgrade).\n", ver)
-		return true, nil
+		// Version matches — but only skip when the VALUES are also unchanged.
+		// The apl release's values are the operator's whole input (VALUES_INPUT):
+		// otomi.git credentials, the loki/harbor app values, everything. Skipping
+		// on version alone would strand any values-only change (e.g. the loki
+		// memberlist publishNotReadyAddresses fix, a rotated values-repo token)
+		// on every reused cluster — the operator would keep reconciling stale
+		// values forever. A changed-values upgrade DOES roll apl-operator, but
+		// that is the intent: the change must reach it, and the pipeline gate +
+		// the values-branch populated-wait absorb the roll.
+		if cur, ok := d.helm("get", "values", "apl", "-n", "apl-operator", "-o", "yaml"); ok {
+			if yamlSemanticallyEqual(cur, renderedValues) {
+				fmt.Printf("apl-core %s already deployed with identical values — skipping helm upgrade so a reused-cluster re-apply does not roll apl-operator.\n", ver)
+				return true, nil
+			}
+			fmt.Printf("apl-core %s deployed but the rendered values changed — running helm upgrade so the change reaches apl-operator.\n", ver)
+		} else {
+			// Can't read the current values (transient helm/apiserver blip). Bias
+			// toward NOT rolling apl-operator — the skip is the safe side on a
+			// reused cluster, and a real values change will land on the next apply.
+			warn("could not read the deployed apl values to compare — skipping the upgrade (bias: don't roll apl-operator); re-run the apply if a values change must land")
+			return true, nil
+		}
 	}
 
 	tmp, err := os.CreateTemp("", "llz-apl-values-*.yaml")
@@ -1041,13 +1062,19 @@ func waitAplValuesBranchPopulated(d bootstrapDeps, o bootstrapClusterOpts, repoU
 }
 
 func resetAplInstaller(d bootstrapDeps) error {
-	fmt.Println("values branch was re-seeded but apl is already installed — re-arming apl-operator's installer (status→pending + restart) so it re-bootstraps the env values onto the branch.")
+	// Only a COMPLETED installation is reconcile-only and needs the re-arm; an
+	// absent/pending status means the installer will (re)run on its own.
+	status, ok := d.kubectl("-n", "apl-operator", "get", "configmap", "apl-installation-status",
+		"-o", "jsonpath={.data.status}")
+	if !ok || strings.TrimSpace(status) != "completed" {
+		fmt.Printf("apl-installation-status is %q — the installer will run on its own; no re-arm needed.\n", strings.TrimSpace(status))
+		return nil
+	}
+	fmt.Println("values branch was re-seeded but apl-operator's installation is 'completed' (reconcile-only) — re-arming the installer (status→pending + restart) so it re-bootstraps the env values onto the branch.")
 	if out, ok := d.kubectl("-n", "apl-operator", "patch", "configmap", "apl-installation-status",
 		"--type", "merge", "-p", `{"data":{"status":"pending"}}`); !ok {
-		// No status configmap = the installer never completed on this cluster; the
-		// running/next operator pod will install anyway — warn and continue.
-		warn(fmt.Sprintf("could not patch apl-installation-status (%s) — if the configmap does not exist the installer will run on its own", strings.TrimSpace(out)))
-		return nil
+		fmt.Fprint(os.Stderr, out)
+		return fmt.Errorf("could not re-arm apl-operator's installer (patch apl-installation-status) — the seeded values branch would never be populated")
 	}
 	if out, ok := d.kubectl("-n", "apl-operator", "rollout", "restart", "deployment/apl-operator"); !ok {
 		fmt.Fprint(os.Stderr, out)
@@ -1069,6 +1096,23 @@ func redactSecret(s, secret string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, secret, "***")
+}
+
+// yamlSemanticallyEqual reports whether two YAML documents carry the same data,
+// ignoring key order / formatting / comments. Used to compare `helm get values`
+// against the freshly-rendered values; parse failures compare as NOT equal so a
+// malformed side falls through to the (safe, explicit) upgrade path.
+func yamlSemanticallyEqual(a, b string) bool {
+	var av, bv any
+	if err := yaml.Unmarshal([]byte(a), &av); err != nil {
+		return false
+	}
+	if err := yaml.Unmarshal([]byte(b), &bv); err != nil {
+		return false
+	}
+	// sigs.k8s.io/yaml round-trips through JSON, so numbers/keys normalize
+	// identically on both sides — DeepEqual is sound here.
+	return reflect.DeepEqual(av, bv)
 }
 
 // deployedAplRelease reports the apl release's chart version + Helm status via
