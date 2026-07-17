@@ -16,11 +16,19 @@ GitLab capabilities (`GitLabClient`: `SecretWriter`, `TokenMinter`,
 `TokenRotator` incl. `RotateSelf`, `ExpiryProber`). Everything is unit-tested;
 the full `tools` suite and `llz-functional` stay green.
 
-What has **not** landed, and why: **Phase 5** (assimilating the ~3,400-line
-workflow bodies into `llz ci` verbs) is a large, forge-independent refactor of
-live CI and is deliberately left for its own incremental effort rather than a
-blind bulk conversion — it remains the long pole and GitLab's `.gitlab-ci.yml`
-is gated on it. The cluster-side couplings (NetworkPolicy egress, Argo repoURLs,
+**Phase 5** (assimilating the ~3,400-line workflow bodies into `llz ci` verbs) is
+incremental by nature — it is ~80% pre-existing (the workflows are already mostly
+`llz ci <verb>` calls; ~130 verbs exist) and the remainder is a residue of shell
+blocks. First tranche landed: the `tf-*` family is completed — `llz ci tf-output`
+(centralizes the "No outputs found" `-json` hardening; wired at all 6 read sites)
+and `llz ci tf-destroy` (two-phase destroy + `--refresh-only`; wired at all 3
+sites), removing the inline `terraform output`/`plan -destroy` shell from
+`llz-terraform.yml` and `llz-secret-rotation.yml`. Backlog, ranked, each its own
+tranche: `drain-buckets` (the 112-line s5cmd block — biggest single removal),
+`render-tfvars` (the 7-site `if [ -f landingzone.yaml ] … --tfvars-only` glue),
+`assert-prometheusrule-crs`, and folding the `linode-credentials` action's
+`jq → $GITHUB_OUTPUT` glue into `llz credentials`. It remains the long pole and
+GitLab's `.gitlab-ci.yml` is gated on it. The cluster-side couplings (NetworkPolicy egress, Argo repoURLs,
 the wizard's per-forge flows) and the wiring of the new GitLab/App capabilities
 into callers are gated on a real GHES appliance / GitLab project in the e2e
 harness — which does not exist yet, so `forge.Supported` still admits only
