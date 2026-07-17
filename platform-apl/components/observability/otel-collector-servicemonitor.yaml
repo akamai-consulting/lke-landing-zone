@@ -7,7 +7,7 @@
 #
 # REQUIRED label `prometheus: system`: apl-core's Prometheus serviceMonitorSelector
 # matches it (same reason as the reconciler/openbao ServiceMonitors — the empty
-# serviceMonitorSelector LLZ requests in _shared/values.yaml is ineffective on
+# serviceMonitorSelector LLZ requests in apl-values/values.yaml is ineffective on
 # apl-core v6). Selector targets the monitoring Service specifically (the collector
 # also has an OTLP-data Service on :4318 that serves no metrics).
 apiVersion: monitoring.coreos.com/v1

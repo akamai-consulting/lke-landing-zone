@@ -7,7 +7,7 @@ import (
 )
 
 // The values fragment carrying every override the allowlist depends on —
-// mirrors the real _shared/values.yaml keys.
+// mirrors the real apl-values/values.yaml keys.
 const waveGuardValuesAllOverrides = `
           resource.customizations.health.networking.k8s.io_NetworkPolicy: |
             local hs = {}

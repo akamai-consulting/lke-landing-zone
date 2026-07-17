@@ -19,7 +19,7 @@ Loki) is itself broken.
 
 > **Alertmanager runs; notification needs a one-time opt-in.** Alertmanager is
 > enabled (`apps.alertmanager.enabled: true` in
-> [apl-values/_shared/values.yaml](../instance-template/apl-values/_shared/values.yaml))
+> [apl-values/values.yaml](../instance-template/apl-values/values.yaml))
 > and every firing rule reaches it — but the default receiver set is `[none]`
 > (a null route), so until an instance wires a receiver the only alerts that
 > actively reach a human are the GitHub Actions annotations. See **Wiring a

@@ -1,5 +1,5 @@
 # DNS ClusterIssuer kustomize tree — Argo-synced as part of the mandatory
-# _shared/manifest base (pulled in via the parent manifest/kustomization.yaml
+# platform-apl/manifest base (pulled in via the parent manifest/kustomization.yaml
 # resources: list). No longer applied out-of-band.
 #
 # This tree holds only the llz-letsencrypt ClusterIssuers. DNS-01 challenges

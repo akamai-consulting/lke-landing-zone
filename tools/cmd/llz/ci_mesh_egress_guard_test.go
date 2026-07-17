@@ -20,7 +20,7 @@ func meWrite(t *testing.T, files map[string]string) []string {
 			t.Fatal(err)
 		}
 	}
-	return []string{filepath.Join(dir, "_shared", "manifest"), comp}
+	return []string{filepath.Join(dir, "platform-apl", "manifest"), comp}
 }
 
 func meNetpol(name, ns, targetNS string) string {

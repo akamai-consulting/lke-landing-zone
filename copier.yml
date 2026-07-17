@@ -77,7 +77,7 @@ _skip_if_exists:
   # global/ skeleton) is `owned`, so an update must never re-render + merge it — an
   # instance's own manifests here are theirs. (The ACME email is no longer a vendored
   # file rewrite — it's a JSON6902 patch in the per-env overlay now.)
-  - "apl-values/_shared/custom/**"
+  - "kubernetes-custom/**"
 
 # ── Content delivered from OUTSIDE the scaffold ──────────────────────────────
 # docs/ lives at the repo root — NOT under instance-template/ — so the scaffold a

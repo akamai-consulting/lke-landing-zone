@@ -109,14 +109,14 @@ func runEnvReadiness(env string) error {
 
 	files := tfvarsPaths(tfDir, env)
 	files = append(files, overlayScanFiles(overlay)...)
-	// The cert/DNS tree is shared (DRY) — its REPLACE_ME (webhook chart repoURL)
-	// placeholder lives ONCE under apl-values/_shared, not in the per-env overlay —
-	// so scan it too (no-op for older instances without _shared). isDeferrable
-	// classifies it under /manifest/dns/, so it surfaces as a deferrable cert/DNS
-	// item, not a blocker. (The ACME email is no longer a placeholder: it renders
-	// to a valid `email: ""` by default — the contact is optional — so there's
-	// nothing to flag there.)
-	files = append(files, overlayScanFiles(filepath.Join(aplDir, "_shared"))...)
+	// The apl-core values BASE is shared across envs (DRY), so any unfilled
+	// placeholder in it lives ONCE at apl-values/values.yaml rather than in the
+	// per-env overlay — scan it too (no-op on a tree without it). (The ACME email is
+	// no longer a placeholder: it renders to a valid `email: ""` by default — the
+	// contact is optional — so there's nothing to flag there. The cert/DNS tree that
+	// used to carry the REPLACE_ME webhook repoURL now lives at platform-apl/ and is
+	// fetched as a pinned remote ref, so it is no longer part of the instance.)
+	files = append(files, overlayScanFiles(filepath.Join(aplDir, "values.yaml"))...)
 	for _, cf := range chartValuesFiles {
 		if fi, err := os.Stat(cf); err == nil && !fi.IsDir() {
 			files = append(files, cf)

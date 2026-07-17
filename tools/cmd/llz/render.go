@@ -167,15 +167,12 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 		envs = []string{env}
 	}
 
-	// The escape hatch's directory contract, gated BEFORE anything is written. A flat,
-	// content-carrying custom/ predates the instance-custom ApplicationSet and cannot be
-	// migrated automatically (custom/** is operator-owned), and rendering over it would
-	// prune the old Application and cascade-delete the operator's workloads. It is an
+	// The escape hatch's directory contract, gated BEFORE anything is written. It is an
 	// instance-level property, so it is checked once here rather than per env — and only
 	// on the paths that emit the manifest tree, since --tfvars-only never touches it.
 	// See custom_layout.go.
 	if !tfvarsOnly {
-		if err := checkCustomLayout(filepath.Join(aplDir, clusterspec.CustomSubdir)); err != nil {
+		if err := checkCustomLayout(filepath.Join(specRoot, clusterspec.CustomRoot)); err != nil {
 			return fmt.Errorf("%s layout — fix these before rendering:\n%w", clusterspec.CustomRoot, err)
 		}
 	}
@@ -280,10 +277,10 @@ func untrackRenderedTfvars(relPrefix string) {
 
 // committedTargets returns every committed apl-values/<env>/ file a deployment
 // renders to, as {path → content}: the THIN manifest overlay (resources: the shared
-// _shared/manifest base + the carved Application CRs; components: the enabled plain
+// platform-apl/manifest base + the carved Application CRs; components: the enabled plain
 // component dirs), the per-env env-revision marker, each enabled carved component's
 // App CR + apps/<name>/ source root (kustomization + per-env patches), and — when an
-// apl-values/_shared/values.yaml base is present — the values.yaml with
+// apl-values/values.yaml base is present — the values.yaml with
 // apps.<key>.enabled + identity patched (the apl-core backend).
 // resolveTemplateRef returns the ref the shared apl-values tree is fetched at
 // (the remote refs RenderManifestKustomization emits). Priority:
@@ -392,7 +389,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances
 	// without the shared overlay.
-	if base, err := os.ReadFile(filepath.Join(aplDir, "_shared", "values.yaml")); err == nil {
+	if base, err := os.ReadFile(filepath.Join(aplDir, "values.yaml")); err == nil {
 		rendered, err := clusterspec.RenderValues(base, e.Components, id)
 		if err != nil {
 			return nil, fmt.Errorf("render values.yaml: %w", err)

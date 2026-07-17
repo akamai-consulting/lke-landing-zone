@@ -13,19 +13,19 @@ Consumed by Terraform's `cluster-bootstrap` root
 
 ```
 apl-values/
-  _shared/
-    values.yaml             # apl-core values base (identity/secrets tokenized)
-    custom/                 # OPERATOR ESCAPE HATCH — yours; see below
-      namespaces/<ns>/      #   resources synced into namespace <ns>
-      global/               #   cluster-scoped resources
+  values.yaml               # the apl-core values BASE (identity/secrets tokenized)
   <env>/                    # GENERATED per env by `llz render` — a THIN overlay
     manifest/
       kustomization.yaml    #   remote-refs the shared base + enabled components
       instance-custom.yaml  #   the escape hatch's ApplicationSet (carries this repo)
       env-revision-configmap.yaml               # per-env git revision marker
       linode-volume-labeler-region-patch.yaml   # the ONE genuine per-env delta
-    values.yaml             #   _shared/values.yaml + apps.<key>.enabled toggles
+    values.yaml             #   the base + apps.<key>.enabled toggles
 ```
+
+Your own Kubernetes manifests do **not** live here — they live at
+[`kubernetes-custom/`](../kubernetes-custom/) in the repo root. This directory is
+apl-core's inputs only.
 
 **The heavy platform manifests are NOT here.** The always-on base and the
 per-component kustomize Components live at [`platform-apl/`](../../platform-apl/)
@@ -64,7 +64,7 @@ llz env add <env>            # scaffolds environments/<env>.yaml, then renders
    Argo CD content tracks (a `cluster-bootstrap` plan-time precondition).
 4. `manifest/linode-volume-labeler-region-patch.yaml` — the volume-labeler
    `REGION_SHORT`, the one genuinely per-env manifest value (only when enabled).
-5. `values.yaml` — the `_shared/values.yaml` base with `apps.<key>.enabled` set
+5. `values.yaml` — the `apl-values/values.yaml` base with `apps.<key>.enabled` set
    from the component toggles and the spec-owned identity/platform keys patched in.
 
 An upstream fix lands **once** in `platform-apl/` and every environment inherits
@@ -81,9 +81,9 @@ per-env overlay onto the shared `llz-letsencrypt-*` ClusterIssuers. Any remainin
 `REPLACE_PER_ENV` / `REPLACE_ME` placeholder is yours to fill — `llz doctor --env
 <env>` flags the survivors.
 
-## Your own resources — `_shared/custom/`
+## Your own resources — `kubernetes-custom/`
 
-`_shared/custom/` is the operator escape hatch: drop your Kubernetes manifests
+`kubernetes-custom/` is the operator escape hatch: drop your Kubernetes manifests
 there and Argo CD applies them. It is `owned` (see `.template-manifest`) — the
 template ships it once and never touches it again.
 

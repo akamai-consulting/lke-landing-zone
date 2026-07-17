@@ -2,7 +2,7 @@
 #
 # Scopes every Application the `instance-custom` ApplicationSet generates (rendered
 # per env into apl-values/<env>/manifest/instance-custom.yaml) from the operator-owned
-# apl-values/_shared/custom/ tree: one App per custom/namespaces/<ns>/ directory plus
+# kubernetes-custom/ tree: one App per custom/namespaces/<ns>/ directory plus
 # instance-custom-global for custom/global/. This is the kube-native equivalent of the
 # .llz/commands.yaml / .githooks/pre-commit.local escape hatches
 # (docs/extending-llz.md): a place for an instance to apply its OWN resources without
@@ -32,7 +32,7 @@ spec:
   # AppProject spec.description max is 255 bytes (k8s validation); keep it short.
   description: >-
     Operator escape hatch: instance-owned custom Kubernetes resources synced from
-    apl-values/_shared/custom/ (namespaces/<ns>/ and global/). Wide-open within the
+    kubernetes-custom/ (namespaces/<ns>/ and global/). Wide-open within the
     cluster by design.
   # Any repo: the operator's own git tree (raw manifests) plus any chart repo a
   # dropped-in child Application points at (Helm/OCI). Narrow to specific repos

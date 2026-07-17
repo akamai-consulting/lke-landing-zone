@@ -128,7 +128,7 @@ func TestHaGroupMissingRole(t *testing.T) {
 // region patch + values) — the manifests themselves live in the shared base.
 func TestCommittedTargets(t *testing.T) {
 	chdirTempDir(t)
-	writeFileMkdir(t, filepath.Join("apl-values", "_shared", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
+	writeFileMkdir(t, filepath.Join("apl-values", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
 	e := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{}} // all default-enabled
 
 	targets, err := committedTargets("lab", e, clusterspec.ValuesIdentity{ClusterName: "x"}, "apl-values", "")

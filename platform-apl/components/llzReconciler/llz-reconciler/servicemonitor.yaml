@@ -5,7 +5,7 @@
 # (confirmed live on apl-core v6), NOT an empty/discover-all selector — so a
 # ServiceMonitor without this label is silently ignored and the pod's llz_*
 # metrics never reach Prometheus, leaving every reconciler alert a promtool-valid
-# but never-firing rule. (LLZ's `_shared/values.yaml` asks for an empty
+# but never-firing rule. (LLZ's `apl-values/values.yaml` asks for an empty
 # serviceMonitorSelector via `_rawValues`, but apl-core overrides it — the empty
 # selector does not take effect, so the label is mandatory, not belt-and-braces.)
 # The old `release: platform-prom` label matched nothing (apl-core does not select

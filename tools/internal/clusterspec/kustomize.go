@@ -76,7 +76,7 @@ func (c Component) hasManifestDir() bool {
 
 // RenderManifestKustomization returns a deployment's manifest/kustomization.yaml: a
 // thin overlay over the shared base. It lists, in registry order:
-//   - resources: the shared _shared/manifest base + one health-inert Application CR
+//   - resources: the shared platform-apl/manifest base + one health-inert Application CR
 //     per ENABLED carved component (blast-radius isolation — see CarvedApp);
 //   - components: each ENABLED plain (non-carved) component's shared Component dir;
 //   - patches: the per-env patches plain components bring (a carved component's
@@ -178,16 +178,20 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref, acm
 	return b.String()
 }
 
-// CustomSubdir is the operator escape-hatch tree relative to the apl-values dir, and
-// CustomRoot the same path relative to the INSTANCE REPO ROOT — the form Argo CD's git
-// generator needs (it resolves paths against the repo, not the working directory).
-// Callers walking the filesystem should join CustomSubdir onto their apl-values dir;
-// only manifests handed to Argo use CustomRoot. `owned` in .template-manifest — the
-// template ships this tree once and never touches it again.
-const (
-	CustomSubdir = "_shared/custom"
-	CustomRoot   = "apl-values/" + CustomSubdir
-)
+// CustomRoot is the operator escape-hatch tree, relative to the INSTANCE REPO ROOT —
+// which is also the form Argo CD's git generator needs (it resolves paths against the
+// repo, not the working directory). `owned` in .template-manifest: the template ships
+// this tree once and never touches it again.
+//
+// It sits at the repo root rather than under apl-values/ for two reasons. It is not
+// apl-core values — it is the operator's own Kubernetes manifests, which have nothing
+// to do with the apl-core chart's inputs. And a directory under apl-values/ would be a
+// SIBLING of the generated per-env dirs, where any name matching validate.EnvNameRe
+// (^[a-z][a-z0-9-]{1,30}$ — "custom" among them) could be clobbered by `llz env add`.
+// That collision is what the old `_shared` underscore was guarding against; at the repo
+// root nothing generates siblings, so no such guard is needed. The kubernetes- prefix
+// matches the template repo's own kubernetes-charts/ convention.
+const CustomRoot = "kubernetes-custom"
 
 // CustomGlobalDirName / CustomNamespacesDirName are the two top-level directories
 // under CustomRoot, mirroring the App Platform GitOps convention
@@ -199,7 +203,7 @@ const (
 )
 
 // RenderInstanceCustom returns the per-instance instance-custom ApplicationSet — the
-// operator escape hatch (wave 10) that syncs the instance's own apl-values/_shared/custom/
+// operator escape hatch (wave 10) that syncs the instance's own kubernetes-custom/
 // tree. It carries the instance's values-repo URL + revision, so it is render-emitted
 // LOCALLY into the overlay rather than vendored in the shared base (which is fetched
 // remotely and must be byte-identical across instances). Its AppProject

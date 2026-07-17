@@ -71,7 +71,7 @@ apps:
           resource.customizations.health.networking.k8s.io_NetworkPolicy: |
             local hs = {}
             hs.status = "Healthy"
-            hs.message = "NetworkPolicy applied (no status on this CNI; health forced — see _shared values.yaml)"
+            hs.message = "NetworkPolicy applied (no status on this CNI; health forced — see apl-values/values.yaml)"
             return hs
           # The llz-letsencrypt-* ClusterIssuers ship with a deferrable ACME
           # email (REPLACE_PER_ENV until spec.dns.acmeEmail is set — a documented
@@ -90,7 +90,7 @@ apps:
           resource.customizations.health.cert-manager.io_ClusterIssuer: |
             local hs = {}
             hs.status = "Healthy"
-            hs.message = "ClusterIssuer applied (readiness not sync-gating; llz ci health reports it — see _shared values.yaml)"
+            hs.message = "ClusterIssuer applied (readiness not sync-gating; llz ci health reports it — see apl-values/values.yaml)"
             if obj.status ~= nil and obj.status.conditions ~= nil then
               for _, c in ipairs(obj.status.conditions) do
                 if c.type == "Ready" then
@@ -211,7 +211,7 @@ apps:
     # creds come from the `loki-object-store` ESO Secret (synced from OpenBao)
     # mounted as env vars on the singleBinary pod. The schema's
     # object_store=filesystem→s3 flip is done by the kyverno-loki-s3-object-store
-    # policy (_shared/manifest/kyverno-policies/), NOT here — overriding
+    # policy (platform-apl/manifest/kyverno-policies/), NOT here — overriding
     # schemaConfig corrupts it.
     _rawValues:
       # memberlist DNS bootstrap deadlock (observed live: loki-0 at 37 restarts).

@@ -225,7 +225,7 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 components take capacity knobs alongside `enabled`, rendered into the env's
 `values.yaml` so prod can differ from the defaults without hand-editing the
 overlay — everything else (chart mechanism, secrets) stays in the shared
-`apl-values/_shared/values.yaml` base. `observability` takes `retention` (→
+`apl-values/values.yaml` base. `observability` takes `retention` (→
 `apps.prometheus.retention`, default `7d`), `storage` (→ `storageSize`, default
 `10Gi`), and `replicas` (default `1`); `harbor` takes `registryStorage` (registry
 image-store PVC, default `20Gi`). An unset knob keeps the base default; a knob set

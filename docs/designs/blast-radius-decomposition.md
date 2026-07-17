@@ -114,7 +114,7 @@ ClusterIssuer, #163 Deployment), and Argo's own `Application`/`AppProject` are
 health-inert, so the VAP excludes the whole `argoproj.io` group. This keeps the VAP's
 effective coverage equal to the CI guard's (non-argoproj platform-tree kinds) without
 false-denying child-App CRs. `Application`/`AppProject` stay in the allowlist for
-lockstep with the CI guard, which does scan them in `_shared/manifest`.
+lockstep with the CI guard, which does scan them in `platform-apl/manifest`.
 
 ## #4 — Wedge game-day
 

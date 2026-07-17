@@ -10,7 +10,7 @@ for this change (see Lab-validation).
 **Relates to:** [apl-core-v6-migration.md](apl-core-v6-migration.md),
 [blast-radius-decomposition.md](blast-radius-decomposition.md),
 `tools/internal/clusterspec/values.go` (the default),
-`instance-template/apl-values/_shared/values.yaml` (the `otomi.git` block),
+`instance-template/apl-values/values.yaml` (the `otomi.git` block),
 `.github/workflows/release-e2e.yml` (the retired `e2e-apps` mirror).
 
 ## Context

@@ -421,20 +421,19 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		errs = append(errs, err)
 	}
 
-	// Escape-hatch layout. `llz render` gates on this too (it must, since rendering a
-	// flat tree cascade-deletes the operator's workloads), but doctor is the readiness
-	// gate an operator runs FIRST — surfacing it here means they meet the migration
-	// before a terraform op trips over it. See custom_layout.go.
+	// Escape-hatch layout. `llz render` gates on this too, but doctor is the readiness
+	// gate an operator runs FIRST — surfacing it here means they meet a reserved-name
+	// mistake before a terraform op trips over it. See custom_layout.go.
 	fmt.Println("\n" + bold("Custom resources:"))
-	_, aplDir, _ := instanceLayout()
-	customDir := filepath.Join(aplDir, clusterspec.CustomSubdir)
+	tfDir, _, _ := instanceLayout()
+	customDir := filepath.Join(filepath.Dir(tfDir), clusterspec.CustomRoot)
 	if err := checkCustomLayout(customDir); err != nil {
 		report(clusterspec.CustomRoot+" layout", false)
 		errs = append(errs, err)
 	} else if _, statErr := os.Stat(customDir); statErr == nil {
 		report(clusterspec.CustomRoot+" layout", true)
 	} else {
-		fmt.Println("  (no custom/ tree in this repo — nothing to check)")
+		fmt.Printf("  (no %s/ tree in this repo — nothing to check)\n", clusterspec.CustomRoot)
 	}
 
 	// Opt-in SSH host reachability + known_hosts freshness (an SSH-based GitOps

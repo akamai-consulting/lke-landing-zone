@@ -121,7 +121,7 @@ classes — **MUST-SET** (identity: region, k8s version, cluster name/domain),
 **SECRET** (`TF_VAR_*` only, never committed), and **default** (Linode/apl-core
 shapes you keep). Adding a deployment is `llz env add`, which declares the env in
 the LandingZone spec and `llz render`s a thin overlay over the shared apl-values
-base (`_shared/` + `components/`) rather than cloning or hand-copying per-env files.
+base (`platform-apl/manifest` + `components/`) rather than cloning or hand-copying per-env files.
 
 - **Drives it:** `llz env add <env>` (with `--dry-run` to preview), the values
   contract in [adopter §3](adopter-guide.md), `llz validate --env <env>` to flag

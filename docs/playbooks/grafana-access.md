@@ -2,7 +2,7 @@
 
 **Applies to:** Grafana (`<release>-grafana` Deployment in the `observability` namespace) on every cluster.
 
-**Related:** your observability configuration (dashboards, metrics topology), [`grafana-values.yaml`](../../instance-template/apl-values/_shared/values.yaml).
+**Related:** your observability configuration (dashboards, metrics topology), [`grafana-values.yaml`](../../instance-template/apl-values/values.yaml).
 
 ---
 
@@ -55,7 +55,7 @@ These users live in Grafana's local SQLite DB — they survive pod restarts but 
 
 ## Adding a new data source
 
-The two data sources today are Prometheus and Loki, both configured declaratively in [`grafana-values.yaml`](../../instance-template/apl-values/_shared/values.yaml). For a new data source:
+The two data sources today are Prometheus and Loki, both configured declaratively in [`grafana-values.yaml`](../../instance-template/apl-values/values.yaml). For a new data source:
 
 1. Add a block under `grafana.datasources['datasources.yaml'].datasources` in `grafana-values.yaml`. Use the existing entries as a template.
 2. If the data source needs auth: seed credentials in OpenBao, add the path to the `platform-ci` policy in [`llz ci bao-configure`](../../tools/cmd/llz/ci_openbao_configure.go), render an ExternalSecret, and reference the resulting Kubernetes Secret from the Grafana data source via `secureJsonData`.

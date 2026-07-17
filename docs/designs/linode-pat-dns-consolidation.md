@@ -172,7 +172,7 @@ apl-core-owned one. Options, roughly in order of preference:
 - **(c) Kyverno mutation / post-render.** A mutation that rewrites the
   apl-core-generated webhook + ExternalDNS Secret references (or the Secret
   contents) to the ESO-synced one. The repo already uses Kyverno for exactly
-  this class of apl-core-gap patch (`_shared/manifest/kyverno-policies/`), so
+  this class of apl-core-gap patch (`platform-apl/manifest/kyverno-policies/`), so
   it is idiomatic — but it is a genuine ownership fight with apl-operator over
   a Secret and must be proven not to flap.
 - **(b) Landing-zone-owned webhook.** Ship our own

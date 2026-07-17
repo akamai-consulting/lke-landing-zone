@@ -318,7 +318,7 @@ func envCmd() *cobra.Command {
 			".copier-answers.yml + seeded spec.defaults) and one environments/<name>.yaml\n" +
 			"ClusterDefinition from the flags, then runs `llz render` to reconcile the spec\n" +
 			"into the tfvars + a THIN apl-values/<name>/ overlay (the manifests live ONCE\n" +
-			"in apl-values/_shared + components/, never cloned per env). --region and\n" +
+			"in platform-apl/manifest + components/, never cloned per env). --region and\n" +
 			"--obj-cluster are required (the spec validates them). Layout-aware (instance\n" +
 			"root or template checkout). Edit environments/<name>.yaml + re-run `llz render`\n" +
 			"(or `llz env set`) to change a deployment.",

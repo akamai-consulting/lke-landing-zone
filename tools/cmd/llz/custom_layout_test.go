@@ -5,14 +5,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
-// writeCustom builds a custom/ tree under a temp apl-values dir and returns the
-// customDir checkCustomLayout takes. files maps a path relative to custom/ to its
+// writeCustom builds a kubernetes-custom/ tree under a temp instance root and returns
+// the customDir checkCustomLayout takes. files maps a path relative to that tree to its
 // content; a "" content creates the directory only.
 func writeCustom(t *testing.T, files map[string]string) string {
 	t.Helper()
-	customDir := filepath.Join(t.TempDir(), "_shared", "custom")
+	customDir := filepath.Join(t.TempDir(), clusterspec.CustomRoot)
 	if err := os.MkdirAll(customDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -34,111 +36,46 @@ func writeCustom(t *testing.T, files map[string]string) string {
 	return customDir
 }
 
-// An absent custom/ is the template-repo case — silent, not an error.
+// An absent tree is the template-repo case — silent, not an error.
 func TestCheckCustomLayout_AbsentIsFine(t *testing.T) {
 	if err := checkCustomLayout(filepath.Join(t.TempDir(), "nope")); err != nil {
-		t.Errorf("absent custom/ must not error: %v", err)
+		t.Errorf("absent kubernetes-custom/ must not error: %v", err)
 	}
 }
 
-// The new layout passes.
-func TestCheckCustomLayout_NewLayoutPasses(t *testing.T) {
+// The documented layout passes, including a namespace dir carrying its own kustomize
+// root (optional, but supported).
+func TestCheckCustomLayout_ValidLayoutPasses(t *testing.T) {
 	dir := writeCustom(t, map[string]string{
 		"README.md":                         "# hatch",
 		"namespaces/my-app/deployment.yaml": "kind: Deployment\n",
-		"namespaces/argocd/app.yaml":        "kind: Application\n",
-		"global/crd.yaml":                   "kind: CustomResourceDefinition\n",
+		"namespaces/my-app/kustomization.yaml": "apiVersion: kustomize.config.k8s.io/v1beta1\n" +
+			"kind: Kustomization\nresources:\n  - deployment.yaml\n",
+		"namespaces/argocd/app.yaml": "kind: Application\n",
+		"global/crd.yaml":            "kind: CustomResourceDefinition\n",
 	})
 	if err := checkCustomLayout(dir); err != nil {
-		t.Errorf("new layout must pass: %v", err)
+		t.Errorf("valid layout must pass: %v", err)
 	}
 }
 
-// The untouched empty starter is inert — nothing was deployed through it, so there is
-// nothing to cascade-delete and no reason to fail a fresh instance.
-func TestCheckCustomLayout_EmptyFlatStarterPasses(t *testing.T) {
-	dir := writeCustom(t, map[string]string{
-		"kustomization.yaml": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources: []\n",
-	})
+// A tree with no namespaces/ at all is legal — the generator simply yields zero Apps.
+func TestCheckCustomLayout_NoNamespacesDirIsFine(t *testing.T) {
+	dir := writeCustom(t, map[string]string{"README.md": "# hatch"})
 	if err := checkCustomLayout(dir); err != nil {
-		t.Errorf("empty flat starter must not block: %v", err)
+		t.Errorf("a tree without namespaces/ must not error: %v", err)
 	}
 }
 
-// THE case this guard exists for: a flat root carrying content. Rendering over it would
-// prune the old Application and cascade-delete the operator's workloads.
-func TestCheckCustomLayout_FlatWithContentBlocks(t *testing.T) {
-	dir := writeCustom(t, map[string]string{
-		"kustomization.yaml": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - my-app.yaml\n",
-		"my-app.yaml":        "kind: Deployment\n",
-	})
-	err := checkCustomLayout(dir)
-	if err == nil {
-		t.Fatal("flat layout with content MUST block the render")
-	}
-	// The message has to carry the migration, not just the complaint.
-	for _, want := range []string{"FLAT layout", "namespaces/", "global/", "CASCADE-DELETE", "llz render"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("migration hint missing %q:\n%s", want, err)
-		}
-	}
-}
-
-// Content declared through any kustomize field counts, not just `resources:` — an
-// operator using helmCharts or generators has just as much to lose.
-func TestCheckCustomLayout_FlatNonResourceFieldsBlock(t *testing.T) {
-	for name, body := range map[string]string{
-		"helmCharts":         "helmCharts:\n  - name: nginx\n    repo: https://example.com\n",
-		"configMapGenerator": "configMapGenerator:\n  - name: cm\n    literals: [a=b]\n",
-		"components":         "components:\n  - ../thing\n",
-		"namespace":          "namespace: my-app\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			dir := writeCustom(t, map[string]string{
-				"kustomization.yaml": "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n" + body,
-			})
-			if err := checkCustomLayout(dir); err == nil {
-				t.Errorf("flat kustomization declaring %s must block", name)
-			}
-		})
-	}
-}
-
-// An unparseable kustomization can't be proven empty, so it blocks rather than being
-// waved through into a destructive render.
-func TestCheckCustomLayout_UnparseableFlatBlocks(t *testing.T) {
-	dir := writeCustom(t, map[string]string{"kustomization.yaml": "\t:::not yaml:::\n  - [\n"})
-	if err := checkCustomLayout(dir); err == nil {
-		t.Error("unparseable flat kustomization must block")
-	}
-}
-
-// Manifests loose in custom/ are matched by no generator — they would silently stop
-// being applied, which is worse than a failed render.
-func TestCheckCustomLayout_StrayRootManifestsBlock(t *testing.T) {
-	dir := writeCustom(t, map[string]string{"orphan.yaml": "kind: ConfigMap\n"})
-	err := checkCustomLayout(dir)
-	if err == nil {
-		t.Fatal("stray root manifests must block")
-	}
-	if !strings.Contains(err.Error(), "orphan.yaml") {
-		t.Errorf("error should name the stray file:\n%s", err)
-	}
-	// A README beside them is not a manifest and must not trip the check.
-	ok := writeCustom(t, map[string]string{"README.md": "# hatch", "namespaces/README.md": "# ns"})
-	if err := checkCustomLayout(ok); err != nil {
-		t.Errorf("non-manifest files in the root must not block: %v", err)
-	}
-}
-
-// apl-* namespaces belong to apl-core's own gitops-ns-apl-* Applications.
+// apl-* namespaces belong to apl-core's own gitops-ns-apl-* Applications; a second
+// Application over the same resources puts them in contention.
 func TestCheckCustomLayout_ReservedAplPrefixBlocks(t *testing.T) {
 	dir := writeCustom(t, map[string]string{"namespaces/apl-secrets/secret.yaml": "kind: Secret\n"})
 	err := checkCustomLayout(dir)
 	if err == nil {
 		t.Fatal("namespaces/apl-* must block")
 	}
-	for _, want := range []string{"apl-secrets", "contention", "reserved"} {
+	for _, want := range []string{"apl-secrets", "contention", "reserved", "gitops-ns-apl-secrets"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("apl-prefix error missing %q:\n%s", want, err)
 		}
@@ -163,10 +100,18 @@ func TestCheckCustomLayout_ReservedGlobalNameBlocks(t *testing.T) {
 	}
 }
 
+// A FILE named apl-something (rather than a directory) generates no Application, so it
+// is not a collision and must not block.
+func TestCheckCustomLayout_ReservedPrefixOnlyAppliesToDirs(t *testing.T) {
+	dir := writeCustom(t, map[string]string{"namespaces/apl-notes.md": "not a namespace"})
+	if err := checkCustomLayout(dir); err != nil {
+		t.Errorf("a file named apl-* is not a namespace dir: %v", err)
+	}
+}
+
 // Every finding surfaces at once — an operator fixing one thing per render is a bad loop.
 func TestCheckCustomLayout_ReportsAllFindings(t *testing.T) {
 	dir := writeCustom(t, map[string]string{
-		"kustomization.yaml":          "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - x.yaml\n",
 		"namespaces/apl-users/u.yaml": "kind: ConfigMap\n",
 		"namespaces/global/g.yaml":    "kind: ConfigMap\n",
 	})
@@ -174,7 +119,7 @@ func TestCheckCustomLayout_ReportsAllFindings(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected findings")
 	}
-	for _, want := range []string{"FLAT layout", "apl-users", "collide"} {
+	for _, want := range []string{"apl-users", "collide"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("expected all findings at once, missing %q:\n%s", want, err)
 		}

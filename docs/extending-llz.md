@@ -59,11 +59,11 @@ llz psql --db readonly    # extra args are appended to argv: ./hack/psql.sh --db
 
 This replaces the old `Makefile.local` escape hatch.
 
-## Your own Kubernetes resources — `apl-values/_shared/custom/`
+## Your own Kubernetes resources — `kubernetes-custom/`
 
 Need to apply your own manifests to the cluster — a NetworkPolicy, a ConfigMap,
 an app Deployment, an ExternalSecret, or a whole Helm chart? Drop them in
-`apl-values/_shared/custom/`. **No Terraform, no edits to the LLZ-managed
+`kubernetes-custom/`. **No Terraform, no edits to the LLZ-managed
 bootstrap tree.** Like the hatches above, this directory is `owned` (see
 `.template-manifest`): the template ships it once and a `copier update` never
 touches it again, and `llz render` never overwrites it.
@@ -75,7 +75,7 @@ The tree follows **App Platform's GitOps convention**
 know from the platform docs applies here unchanged:
 
 ```
-apl-values/_shared/custom/
+kubernetes-custom/
   namespaces/<namespace>/    # namespaced resources → synced INTO <namespace>
   global/                    # cluster-scoped resources (CRDs, ClusterRoles, ...)
 ```
@@ -99,7 +99,7 @@ the default-deny NetworkPolicies already being up.
 ### Raw manifests
 
 ```
-apl-values/_shared/custom/namespaces/my-app/
+kubernetes-custom/namespaces/my-app/
   namespace.yaml            # optional — the namespace is auto-created
   deployment.yaml
   networkpolicy.yaml
@@ -114,7 +114,7 @@ your Application** — that's your source of truth. `Application` objects live i
 `argocd` namespace, so they go under `namespaces/argocd/`:
 
 ```yaml
-# apl-values/_shared/custom/namespaces/argocd/my-helm-app.yaml
+# kubernetes-custom/namespaces/argocd/my-helm-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata: { name: my-helm-app, namespace: argocd }
@@ -153,26 +153,19 @@ spec:
 - **Revision.** The generated Apps track your `apps_repo_revision` — the same
   revision `platform-bootstrap` uses. No separate pin to maintain.
 
-### Migrating from the flat layout
+### Why it's at the repo root
 
-Before this layout, `custom/` was a single kustomize root (`custom/kustomization.yaml`
-listing every resource, synced by one `instance-custom` Application). If your instance
-still has content there, **`llz render` fails until you move it** — and that gate is
-deliberate. The old Application carries a resources finalizer and the
-`platform-bootstrap` app-of-apps prunes, so rendering the ApplicationSet over it would
-prune that Application and **cascade-delete every workload you deployed through the
-hatch**. Moving the files first makes the changeover additive.
+Two reasons, both deliberate:
 
-Nothing migrates this for you: `custom/**` is `owned`, so no `copier update` and no
-template rule may rewrite your files. To migrate:
-
-1. Move each manifest into `namespaces/<its namespace>/`, or `global/` if
-   cluster-scoped.
-2. Delete the flat `custom/kustomization.yaml`.
-3. Re-run `llz render`.
-
-An untouched empty starter (`resources: []`, nothing ever deployed through it) is
-inert and doesn't block.
+- **It isn't apl-core values.** `apl-values/` holds inputs to the apl-core chart. Your
+  manifests have nothing to do with that chart, so nesting them under it was a category
+  error.
+- **A directory under `apl-values/` would be unsafe.** The per-env overlays
+  (`apl-values/<env>/`) are *generated* siblings, and any name matching
+  `^[a-z][a-z0-9-]{1,30}$` is a legal env name — including `custom`. `llz env add custom`
+  would render straight over your manifests. The old location dodged this only via the
+  `_shared` underscore, which no env name can match. At the repo root nothing generates
+  siblings, so no such guard is needed.
 
 ## Extra pre-commit checks — `.githooks/pre-commit.local`
 

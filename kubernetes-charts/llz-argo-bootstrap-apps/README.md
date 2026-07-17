@@ -20,7 +20,7 @@ wrapper files. This chart captures it as **defaults** so the next adopter
 doesn't re-discover it.
 
 > **Not wired into the live tree.** The existing repo manages its Applications
-> via the `_shared/manifest/kustomization.yaml` resource list. This chart is the
+> via the `platform-apl/manifest/kustomization.yaml` resource list. This chart is the
 > *generator* a NEW system team uses instead — it is intentionally standalone.
 
 ## How a sibling team adopts it

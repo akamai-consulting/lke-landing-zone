@@ -77,5 +77,5 @@ spec:
     automated: { prune: true, selfHeal: true }
 ```
 
-See [docs/extending-llz.md](../../../../docs/extending-llz.md) →
+See [docs/extending-llz.md](../../docs/extending-llz.md) →
 "Your own Kubernetes resources" for the full contract.

@@ -15,7 +15,7 @@ package main
 // appears at a NEGATIVE sync wave anywhere in the platform-bootstrap tree
 // (platform-apl/manifest/ + platform-apl/components/) must be listed in
 // waveHealthAllowedKinds — either because Argo assesses no health for it, or
-// because _shared/values.yaml carries a resource.customizations.health
+// because apl-values/values.yaml carries a resource.customizations.health
 // override neutralizing its built-in check. Kinds whose safety DEPENDS on such
 // an override are cross-checked against values.yaml, so deleting the override
 // re-fails the guard.
@@ -39,7 +39,7 @@ import (
 // waveHealthKindRule describes why a kind is safe at a negative sync wave.
 type waveHealthKindRule struct {
 	// overrideKey non-empty → safety depends on the named
-	// resource.customizations.health entry in _shared/values.yaml; the guard
+	// resource.customizations.health entry in apl-values/values.yaml; the guard
 	// fails if that key is missing there.
 	overrideKey string
 	reason      string
@@ -77,7 +77,7 @@ var waveHealthAllowedKinds = map[string]waveHealthKindRule{
 	// in lockstep with THIS map by TestWaveHealthVAPMatchesGuard.
 	"admissionregistration.k8s.io/ValidatingAdmissionPolicy":        {reason: "no Argo health check (admission config)"},
 	"admissionregistration.k8s.io/ValidatingAdmissionPolicyBinding": {reason: "no Argo health check (admission config)"},
-	// Health-checked kinds neutralized by _shared/values.yaml overrides — the
+	// Health-checked kinds neutralized by apl-values/values.yaml overrides — the
 	// two wedges of PR #142. The override key is cross-checked below.
 	"networking.k8s.io/NetworkPolicy": {
 		overrideKey: "resource.customizations.health.networking.k8s.io_NetworkPolicy",
@@ -146,7 +146,7 @@ func ciWaveHealthGuardCmd() *cobra.Command {
 		Long: "Static guard for the PR #142 wedge class: Argo sync waves gate on per-resource\n" +
 			"health, so any kind at a negative wave in platform-apl/manifest/ or\n" +
 			"platform-apl/components/ must be health-inert or neutralized by a\n" +
-			"resource.customizations.health override in _shared/values.yaml. Unknown kinds at\n" +
+			"resource.customizations.health override in apl-values/values.yaml. Unknown kinds at\n" +
 			"negative waves fail with remediation guidance; kinds whose safety depends on a\n" +
 			"values override fail if the override key is missing.",
 		Args: cobra.NoArgs,
@@ -158,7 +158,7 @@ func ciWaveHealthGuardCmd() *cobra.Command {
 
 func runCIWaveHealthGuard(root string) error {
 	aplDir := esRepoPath(root, "apl-values")
-	valuesPath := filepath.Join(aplDir, "_shared", "values.yaml")
+	valuesPath := filepath.Join(aplDir, "values.yaml")
 	valuesRaw, err := os.ReadFile(valuesPath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", valuesPath, err)
@@ -175,11 +175,11 @@ func runCIWaveHealthGuard(root string) error {
 		}
 		failed = true
 		if f.rule.overrideKey != "" {
-			fmt.Printf("::error file=%s::%s/%s at sync-wave %d needs the %q health override in _shared/values.yaml (apps.argocd._rawValues.configs.cm) — it is missing. Without it this kind can wedge the platform-bootstrap sync before OpenBao (wave 0); see PR #142.\n",
+			fmt.Printf("::error file=%s::%s/%s at sync-wave %d needs the %q health override in apl-values/values.yaml (apps.argocd._rawValues.configs.cm) — it is missing. Without it this kind can wedge the platform-bootstrap sync before OpenBao (wave 0); see PR #142.\n",
 				f.file, f.groupKind, f.name, f.wave, f.rule.overrideKey)
 			continue
 		}
-		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in _shared/values.yaml and register the kind in waveHealthAllowedKinds (ci_wave_health_guard.go) with the override key, or register it with a documented reason it cannot wedge.\n",
+		fmt.Printf("::error file=%s::%s/%s sits at sync-wave %d but %q is not a known health-safe kind. Argo gates waves on per-resource health: if this kind can be not-Ready on a fresh cluster it will wedge the bootstrap before OpenBao (wave 0) — the PR #142 failure class. Either add a resource.customizations.health override in apl-values/values.yaml and register the kind in waveHealthAllowedKinds (ci_wave_health_guard.go) with the override key, or register it with a documented reason it cannot wedge.\n",
 			f.file, f.groupKind, f.name, f.wave, f.groupKind)
 	}
 	if failed {
