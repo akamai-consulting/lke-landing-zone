@@ -517,6 +517,58 @@ Phases 0–2 are worth doing on their own merits even if no adopter ever asks fo
 second forge: they close two live bugs, delete a lying field, and fix a rotation gap.
 That is the argument for starting now rather than when a customer forces it.
 
+## e2e lane isolation (shared Linode account)
+
+Standing up a GHES e2e lane alongside the github.com lane raises a clobber
+problem, because the natural instinct — "the GitHub environment secrets will
+collide" — is the *wrong* worry, and the real one is quieter.
+
+**The GitHub side is safe by construction.** Actions environment secrets are
+keyed by `(repo, environment, name)`, and the two lanes live on different hosts,
+so different repos. `infra-e2e` on github.com and `infra-e2e-ghes` on the
+appliance are distinct namespaces; the rotation writeback (`writeRotatedSecret` →
+`gh secret set --env`) can only clobber across lanes if a write lands on the
+**wrong host**. That is the one GitHub-side risk, and it is a config error, not a
+structural one — so it is guarded, not designed around.
+
+**The real collision surface is the Linode account**, when the two lanes share
+one (and one TF-state bucket). Everything the reapers and Terraform key off is a
+fixed string with no forge component: the region/deployment name `e2e`, which
+cascades into the TF state key `cluster/e2e/…`, the LKE cluster label, and
+`llz-incluster-e2e`; and the broad-PAT label. Two lanes on one account would have
+`terraform apply` and the revoke-old reapers step on each other.
+
+Two mechanisms close both:
+
+- **A lane-scoped deployment name is the master discriminator.**
+  `forge.LaneName(flavor, "e2e")` returns `e2e` for GitHub.com (unchanged — no
+  migration of the existing lane's live state) and `e2e-ghes` for GHES. Because
+  almost every account/env identifier is deployment-derived, that one suffix
+  cascades into `infra-<env>`, `cluster/<env>/…`, the cluster label,
+  `llz-incluster-<env>`, and (once interpolated) the broad-PAT label — so nothing
+  collides. `release-e2e.yml` sets `E2E_ENV` to the lane name per forge.
+- **Fail-closed forge targeting.** `resolveGHAPIBase` defaults to github.com when
+  no host is declared — correct for a single-forge instance, a clobber vector for
+  a multi-lane one. Under `LLZ_FORGE_STRICT` (which both e2e lanes set), an
+  env-scoped write **aborts** unless a forge target is explicit
+  (`GH_HOST`/`LLZ_FORGE`/`LLZ_FORGE_HOST`/`GITHUB_API`), so a GHES lane that
+  forgot its host can never silently write into github.com's environment.
+
+**Landed:** `forge.LaneName`, the strict guard (`ghWriteTargetStrictOK`), and the
+`release-e2e.yml` harness-side parametrization (a `forge` dispatch input, a
+lane-scoped concurrency group, host-parametrized git remote / repoURL, the
+lane-scoped broad-PAT label, and per-lane instance-repo / dispatch-token
+selection). The github.com lane is byte-unchanged.
+
+**Not yet landed (the instance-side gap):** the GHES appliance's instance repo
+needs its own `infra-e2e-ghes` Environment + secrets, self-hosted runners, and
+its vendored workflows (`llz-terraform.yml`, `llz-secret-rotation.yml`, …)
+threaded with `GH_HOST`/`LLZ_FORGE` so *their* writes also target the appliance —
+without that, the CI-side `gha-…` rotation label is still a hardcoded literal
+(`llz-secret-rotation.yml`) with no forge component, a latent shared-account
+clobber even between two ordinary instances. Until this lands the GHES lane
+instantiates but cannot provision.
+
 ## Open questions
 
 - **Where does a GHES instance come from for e2e?** Phases 3 and 6 are unvalidatable

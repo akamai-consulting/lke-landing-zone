@@ -53,6 +53,22 @@ name: Release E2E — provision, validate, destroy a real cluster
 # Region + OBJ cluster default to the canonical `lab` tier (us-ord / us-ord-1);
 # set vars E2E_LINODE_REGION / E2E_OBJ_CLUSTER only to override.
 #
+# ── The GHES lane (workflow_dispatch forge=github-enterprise-server) ──────────
+# An OPTIONAL second lane against a GHES appliance, isolated from the github.com
+# lane on a SHARED Linode account + TF-state bucket by a lane-scoped deployment
+# name (e2e → e2e-ghes) that cascades into every account/env-keyed identifier,
+# plus LLZ_FORGE_STRICT which makes a mis-targeted write fail closed instead of
+# clobbering github.com's infra-e2e. It needs its own, host-distinct config:
+#   vars:    E2E_GHES_HOST (the appliance host, e.g. ghes.corp.example)
+#            E2E_GHES_INSTANCE_REPO (owner/name of the throwaway repo ON the appliance)
+#   secrets: E2E_GHES_DISPATCH_TOKEN (same scopes as E2E_DISPATCH_TOKEN, on the appliance)
+# STILL REQUIRED and NOT yet wired (the instance-side gap): the appliance's
+# instance repo needs its own infra-e2e-ghes Environment + secrets, self-hosted
+# Actions runners, and its vendored workflows (llz-terraform.yml, llz-secret-
+# rotation.yml, …) threaded with GH_HOST/LLZ_FORGE so THEIR gh/git writes also
+# target the appliance. Until that lands the GHES lane instantiates but cannot
+# provision. See docs/designs/forge-abstraction.md (§e2e lane isolation).
+#
 # Smoke-test the plumbing cheaply first: workflow_dispatch with dry_run=true
 # instantiates + runs terraform.yml action=plan and SKIPS apply/validate/destroy.
 
@@ -61,6 +77,12 @@ on:
     types: [prereleased]
   workflow_dispatch:
     inputs:
+      forge:
+        description: 'Forge lane. github = github.com (default, and the only lane the release trigger runs). github-enterprise-server = an isolated GHES lane against a separate instance repo on the appliance (requires the E2E_GHES_* vars/secrets below).'
+        required: false
+        type: choice
+        options: [github, github-enterprise-server]
+        default: github
       dry_run:
         description: 'Instantiate + plan only (no real apply / validate / destroy)'
         required: false
@@ -75,14 +97,34 @@ on:
 permissions:
   contents: read
 
-# One E2E cluster at a time — never let two runs race the same e2e state/cluster.
+# One E2E cluster at a time PER LANE — never let two runs race the same lane's
+# state/cluster. The group is forge-scoped so a GHES lane and the github.com lane
+# do not serialize (or cancel) each other; within a lane, runs still queue.
 concurrency:
-  group: release-e2e
+  group: release-e2e-${{ github.event_name == 'workflow_dispatch' && inputs.forge || 'github' }}
   cancel-in-progress: false
 
 env:
-  E2E_ENV: e2e
-  INSTANCE_REPO: ${{ vars.E2E_INSTANCE_REPO }}
+  # Forge lane. The github.com lane (default, and the only lane the release
+  # trigger runs) is byte-unchanged; a workflow_dispatch with forge=
+  # github-enterprise-server runs an isolated GHES lane. LLZ_FORGE_STRICT makes
+  # every gh/git/llz write fail closed rather than silently default to github.com
+  # and clobber the other lane's shared-account / env-scoped state. GH_HOST also
+  # steers the gh CLI and git. See docs/designs/forge-abstraction.md.
+  E2E_FORGE: ${{ github.event_name == 'workflow_dispatch' && inputs.forge || 'github' }}
+  LLZ_FORGE: ${{ github.event_name == 'workflow_dispatch' && inputs.forge || 'github' }}
+  LLZ_FORGE_HOST: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && vars.E2E_GHES_HOST || '' }}
+  GH_HOST: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && vars.E2E_GHES_HOST || 'github.com' }}
+  LLZ_FORGE_STRICT: '1'
+  # Lane-scoped deployment name — the master isolation discriminator (mirrors
+  # forge.LaneName in Go). github.com stays 'e2e' (no migration to its live
+  # state); GHES becomes 'e2e-ghes', which cascades into infra-<env>, the TF
+  # state key cluster/<env>/…, the LKE cluster label and llz-incluster-<env>, so
+  # nothing collides on the shared Linode account + TF-state bucket.
+  E2E_ENV: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && 'e2e-ghes' || 'e2e' }}
+  # Per-lane instance repo — MUST differ (the lanes live on different hosts). GHES
+  # uses its own var; without it the GHES lane fails the require-config check.
+  INSTANCE_REPO: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && vars.E2E_GHES_INSTANCE_REPO || vars.E2E_INSTANCE_REPO }}
   # NOTE: apl-core's operator used to force-push its rendered values tree to
   # otomi.git.branch (= main), a divergent history that once wedged platform-bootstrap
   # on a stale operator-authored commit (v1beta1 ExternalSecrets 6.x's ESO rejects) and
@@ -155,8 +197,18 @@ jobs:
     with:
       kick_image_build: true
       seed_escape_hatch: true
+      # Lane parameters. A reusable workflow cannot see the CALLER's inputs.forge,
+      # so the lane-derived values are passed explicitly rather than re-derived
+      # from `vars` inside the callee (which is what it did while every value was
+      # forge-independent). Defaults in the callee are the github.com lane, so the
+      # warm caller passes none of these.
+      forge: ${{ github.event_name == 'workflow_dispatch' && inputs.forge || 'github' }}
+      e2e_env: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && 'e2e-ghes' || 'e2e' }}
+      instance_repo: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && vars.E2E_GHES_INSTANCE_REPO || vars.E2E_INSTANCE_REPO }}
+      gh_host: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && vars.E2E_GHES_HOST || 'github.com' }}
+      forge_host: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && vars.E2E_GHES_HOST || '' }}
     secrets:
-      E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+      E2E_DISPATCH_TOKEN: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
 
 
   # ── 2. Provision the real cluster by driving the instance's terraform.yml ────
@@ -170,7 +222,7 @@ jobs:
 
       - name: Dispatch terraform.yml (${{ env.DRY_RUN == 'true' && 'plan' || 'apply' }}) and watch
         env:
-          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
         run: |
           set -euo pipefail
           ACTION=apply; [[ "${DRY_RUN}" == "true" ]] && ACTION=plan
@@ -228,7 +280,7 @@ jobs:
       - name: Dispatch terraform.yml (destroy) and watch
         if: ${{ env.KEEP_CLUSTER != 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ (github.event_name == 'workflow_dispatch' && inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
         run: |
           set -euo pipefail
           .github/scripts/dispatch-and-watch.sh \
