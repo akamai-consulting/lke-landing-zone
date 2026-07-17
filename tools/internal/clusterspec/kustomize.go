@@ -270,7 +270,14 @@ spec:
           - path: ` + CustomRoot + `/` + CustomNamespacesDirName + `/*
     # global/ → cluster-scoped resources. Basename is "global", so this generates
     # instance-custom-global; the per-generator override only repoints its destination
-    # (cluster-scoped content needs no namespace of its own).
+    # (cluster-scoped content needs no namespace of its own). Everything it does NOT
+    # set is inherited from the template below: mergeGeneratorTemplate does
+    # mergo.Merge(generatorTemplate, appSetTemplate), filling only zero-valued fields.
+    #
+    # TRAP for anyone extending this: that merge has no WithOverride, so a generator
+    # template can never override an inherited value with a Go ZERO value. Setting
+    # prune false here against a top-level prune true would silently do nothing.
+    # Override with non-zero values only, or restructure the top-level template.
     - git:
         repoURL: ` + repoURL + `
         revision: ` + revision + `
