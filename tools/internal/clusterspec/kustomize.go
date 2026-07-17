@@ -210,10 +210,27 @@ const (
 // (instance-custom-project.yaml, no per-instance data) stays in the shared base.
 //
 // LAYOUT mirrors App Platform's documented GitOps convention so an operator's muscle
-// memory transfers: custom/namespaces/<ns>/ → one Application per directory, synced into
-// namespace <ns> (auto-created); custom/global/ → cluster-scoped resources. Splitting per
-// directory also gives per-namespace blast radius — the same cut blast-radius-decomposition.md
-// made for platform components — where the former single Application degraded wholesale.
+// memory transfers: namespaces/<ns>/ → one Application per directory, synced into
+// namespace <ns> (auto-created); global/ → cluster-scoped resources. Splitting per
+// directory gives per-namespace blast radius for CONTENT — the same cut
+// blast-radius-decomposition.md made for platform components — where the former single
+// Application degraded wholesale.
+//
+// BLAST RADIUS IS NARROWER THAN THE CARVED-APP CASE, and the difference is not academic.
+// A plain Application CR is health-INERT in the parent tree (Argo assesses no Application
+// health without an explicit customization). An ApplicationSet is NOT: Argo ships
+// resource_customizations/argoproj.io/ApplicationSet/health.lua, which reports Degraded
+// on an ErrorOccurred condition. So:
+//   - Bad manifest CONTENT in one namespace dir → only that generated App degrades.
+//     platform-bootstrap is unaffected. This is the common case and the property holds.
+//   - A generation/validation error → ErrorOccurred on the ApplicationSet ITSELF →
+//     Degraded → it degrades platform-bootstrap's health rollup. Causes: an unresolvable
+//     revision, an unreachable repo, or a generated App Kubernetes rejects (an invalid
+//     directory name). The directory-name cases are what custom_layout.go's reserved-name
+//     and RFC 1123 checks exist to catch at render time, before they can reach a cluster.
+//
+// Do not restate the old "a broken manifest here cannot wedge the platform bootstrap"
+// claim without qualifying it — it is true of content, not of the generator.
 //
 // TWO GIT GENERATORS, not static Applications, because custom/** is `owned`: an instance
 // that predates this layout never receives namespaces/ or global/ from a copier update, and
@@ -265,9 +282,10 @@ spec:
               namespace: default
   template:
     metadata:
+      # No sync-wave here: generated Applications are created by the ApplicationSet
+      # controller, not synced by an app-of-apps, so a wave on them gates nothing. The
+      # wave that matters is the one on the ApplicationSet itself (above).
       name: instance-custom-{{.path.basename}}
-      annotations:
-        argocd.argoproj.io/sync-wave: "10"
     spec:
       revisionHistoryLimit: 3
       project: instance-custom
@@ -276,8 +294,19 @@ spec:
         path: '{{.path.path}}'
         targetRevision: ` + revision + `
         # Recurse so subdirectories are organizational only — App Platform's semantics
-        # ("ArgoCD reconciles everything found there"). Ignored when the directory has a
-        # kustomization.yaml at its root: Argo then auto-detects kustomize instead.
+        # ("ArgoCD reconciles everything found there").
+        #
+        # Setting a directory source at all makes this EXPLICITLY the directory type:
+        # ApplicationSource.ExplicitType() keys off source.Directory != nil, and
+        # GetAppSourceType returns on the explicit type, so Argo's kustomize
+        # auto-detection never runs. A kustomization.yaml under this path would NOT be
+        # built — findManifests' manifest regex matches it like any other yaml, and Argo
+        # would try to apply a literal Kustomization object to the cluster. That is why
+        # llz render / llz doctor reject a kustomization.yaml anywhere under the escape
+        # hatch (custom_layout.go): the two are mutually exclusive, and recursion is the
+        # behavior App Platform's convention documents. Operators who want kustomize
+        # drop their own Argo CD Application pointing at a kustomize root — the same
+        # route the Helm/OCI escape uses.
         directory:
           recurse: true
       destination:

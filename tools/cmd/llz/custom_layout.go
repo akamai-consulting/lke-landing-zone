@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
@@ -39,6 +40,17 @@ import (
 // Applications in contention over the same resources.
 const aplReservedPrefix = "apl-"
 
+// dnsLabelRe / dnsLabelMax are Kubernetes' RFC 1123 LABEL rule, which a Namespace name
+// must satisfy. A namespaces/<ns>/ directory name becomes BOTH the generated
+// Application's destination namespace ({{.path.basename}}) and part of its object name
+// (instance-custom-<ns>), so a directory the operator can create freely on a
+// case-preserving filesystem — "My_App" — yields an Application that Kubernetes rejects
+// outright. The ApplicationSet then reports ErrorOccurred rather than anything that
+// points at the directory, so catch it here where the message can name the file.
+var dnsLabelRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+const dnsLabelMax = 63
+
 // checkCustomLayout validates the escape-hatch tree at customDir (an instance root joined
 // with clusterspec.CustomRoot). It returns nil when there is nothing to say — including
 // when the tree is absent entirely, which is the case for any caller pointed at a tree
@@ -47,11 +59,48 @@ func checkCustomLayout(customDir string) error {
 	if _, err := os.Stat(customDir); err != nil {
 		return nil // no escape hatch in this tree — nothing to check.
 	}
-	findings := checkNamespaceDirs(customDir)
+	findings := append(checkNamespaceDirs(customDir), checkNoKustomize(customDir)...)
 	if len(findings) == 0 {
 		return nil
 	}
 	return errors.New("  • " + strings.Join(findings, "\n\n  • "))
+}
+
+// kustomizeFileNames are the filenames kustomize recognizes as a build root.
+var kustomizeFileNames = map[string]bool{
+	"kustomization.yaml": true,
+	"kustomization.yml":  true,
+	"Kustomization":      true,
+}
+
+// checkNoKustomize rejects a kustomize root anywhere under the escape hatch.
+//
+// The generated Applications set `spec.source.directory.recurse` so that subdirectories
+// are organizational only — App Platform's documented semantics. But setting `directory`
+// at all makes the source EXPLICITLY the directory type
+// (ApplicationSource.ExplicitType keys off `source.Directory != nil`, and
+// GetAppSourceType returns on the explicit type), so Argo's kustomize auto-detection
+// never runs. A kustomization.yaml would therefore not be BUILT — Argo's manifest regex
+// matches it like any other yaml, and it would try to apply `kind: Kustomization` to the
+// cluster while separately applying every base directly, unkustomized.
+//
+// Recursion and kustomize are mutually exclusive here and recursion is what the
+// convention documents, so kustomize is out — and out LOUDLY, because the failure is
+// silent-ish and bizarre. Operators who want kustomize point their own Argo CD
+// Application at a kustomize root, the same route the Helm/OCI escape uses.
+func checkNoKustomize(customDir string) []string {
+	var findings []string
+	_ = filepath.WalkDir(customDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() || !kustomizeFileNames[d.Name()] {
+			return nil
+		}
+		findings = append(findings, fmt.Sprintf(
+			"%s: kustomize is not supported in %s/. The generated Applications sync with directory recursion (so subdirectories are organizational, per App Platform's convention), and Argo cannot do both: an explicit directory source disables its kustomize auto-detection, so this file would be applied to the cluster as a literal `kind: Kustomization` manifest rather than built.\n"+
+				"    Use plain manifests here, or — if you need kustomize — drop your own Argo CD Application pointing at your kustomize root (it rides the instance-custom AppProject, which allows any source repo).",
+			p, clusterspec.CustomRoot))
+		return nil
+	})
+	return findings
 }
 
 // checkNamespaceDirs returns one finding per namespaces/<ns> directory whose name would
@@ -80,6 +129,14 @@ func checkNamespaceDirs(customDir string) []string {
 				filepath.Join(nsDir, name), name, name,
 				clusterspec.CustomRoot, clusterspec.CustomGlobalDirName,
 				clusterspec.CustomRoot, clusterspec.CustomGlobalDirName))
+		case len(name) > dnsLabelMax:
+			findings = append(findings, fmt.Sprintf(
+				"%s: %q is %d characters — a Kubernetes namespace name is capped at %d. This directory name becomes the generated Application's destination namespace verbatim, so Kubernetes would reject it. Shorten the directory name.",
+				filepath.Join(nsDir, name), name, len(name), dnsLabelMax))
+		case !dnsLabelRe.MatchString(name):
+			findings = append(findings, fmt.Sprintf(
+				"%s: %q is not a valid Kubernetes namespace name (RFC 1123: lowercase alphanumeric and '-', must start and end alphanumeric). This directory name becomes the generated Application's destination namespace verbatim and part of its object name (instance-custom-%s), so Kubernetes would reject both — the ApplicationSet reports ErrorOccurred without naming this directory. Rename it.",
+				filepath.Join(nsDir, name), name, name))
 		}
 	}
 	return findings

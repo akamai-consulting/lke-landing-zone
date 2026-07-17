@@ -21,9 +21,12 @@ custom/
   created automatically if it does not exist.
 - **Subdirectories are organizational only** — everything under a namespace
   directory is recursed and applied into that namespace.
-- **A `kustomization.yaml` is optional.** A plain directory of manifests is applied
-  as-is; add one only when you want kustomize features (patches, generators). If
-  present at a directory's root, Argo builds it with kustomize instead of recursing.
+- **No kustomize here.** The generated Applications use directory recursion, and Argo
+  cannot do both — an explicit directory source disables its kustomize
+  auto-detection, so a `kustomization.yaml` would be applied to the cluster as a
+  literal `kind: Kustomization` object rather than built. `llz render` / `llz doctor`
+  reject one. If you want kustomize, drop your own Argo CD Application pointing at
+  your kustomize root (see "Helm / OCI charts" below — same route, any source repo).
 
 ## What syncs it
 
@@ -40,8 +43,10 @@ namespaces, and the default-deny NetworkPolicies already being up.
   second Application over the same resources puts them in contention. `llz render`
   and `llz doctor` reject it.
 - **Isolated blast radius.** A broken manifest degrades only its own namespace's
-  Application. It cannot wedge the platform bootstrap, and it cannot affect your
-  other namespaces.
+  Application. It cannot affect your other namespaces, and it cannot degrade the
+  platform bootstrap. (A directory *name* Kubernetes would reject is the one thing
+  that can — the ApplicationSet reports an error rather than the App. `llz render`
+  and `llz doctor` catch those names before they reach a cluster.)
 - **Nothing is deleted behind your back.** Generated Applications sync with
   `prune: false`, and the ApplicationSet sets `preserveResourcesOnDeletion: true` —
   so removing a directory from git orphans its resources rather than tearing down

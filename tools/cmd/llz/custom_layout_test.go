@@ -43,19 +43,50 @@ func TestCheckCustomLayout_AbsentIsFine(t *testing.T) {
 	}
 }
 
-// The documented layout passes, including a namespace dir carrying its own kustomize
-// root (optional, but supported).
+// The documented layout passes, including manifests in an organizational subdirectory
+// (the generated Apps recurse).
 func TestCheckCustomLayout_ValidLayoutPasses(t *testing.T) {
 	dir := writeCustom(t, map[string]string{
 		"README.md":                         "# hatch",
 		"namespaces/my-app/deployment.yaml": "kind: Deployment\n",
-		"namespaces/my-app/kustomization.yaml": "apiVersion: kustomize.config.k8s.io/v1beta1\n" +
-			"kind: Kustomization\nresources:\n  - deployment.yaml\n",
-		"namespaces/argocd/app.yaml": "kind: Application\n",
-		"global/crd.yaml":            "kind: CustomResourceDefinition\n",
+		"namespaces/my-app/rbac/role.yaml":  "kind: Role\n",
+		"namespaces/argocd/app.yaml":        "kind: Application\n",
+		"global/crd.yaml":                   "kind: CustomResourceDefinition\n",
 	})
 	if err := checkCustomLayout(dir); err != nil {
 		t.Errorf("valid layout must pass: %v", err)
+	}
+}
+
+// A kustomization.yaml is NOT buildable here: the generated Apps set an explicit
+// directory source (for recursion), which disables Argo's kustomize auto-detection — so
+// the file would be applied as a literal `kind: Kustomization` manifest. It must be
+// rejected loudly rather than silently mis-applied.
+func TestCheckCustomLayout_KustomizeRootBlocks(t *testing.T) {
+	for _, fn := range []string{"kustomization.yaml", "kustomization.yml", "Kustomization"} {
+		t.Run(fn, func(t *testing.T) {
+			dir := writeCustom(t, map[string]string{
+				filepath.Join("namespaces", "my-app", fn): "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n",
+			})
+			err := checkCustomLayout(dir)
+			if err == nil {
+				t.Fatalf("%s must block", fn)
+			}
+			for _, want := range []string{fn, "kustomize is not supported", "Application"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("kustomize error missing %q:\n%s", want, err)
+				}
+			}
+		})
+	}
+	// Anywhere under the tree, not just a namespace root — global/ and nested dirs too.
+	for _, p := range []string{
+		filepath.Join("global", "kustomization.yaml"),
+		filepath.Join("namespaces", "my-app", "sub", "kustomization.yaml"),
+	} {
+		if err := checkCustomLayout(writeCustom(t, map[string]string{p: "kind: Kustomization\n"})); err == nil {
+			t.Errorf("kustomize root at %s must block", p)
+		}
 	}
 }
 
@@ -106,6 +137,42 @@ func TestCheckCustomLayout_ReservedPrefixOnlyAppliesToDirs(t *testing.T) {
 	dir := writeCustom(t, map[string]string{"namespaces/apl-notes.md": "not a namespace"})
 	if err := checkCustomLayout(dir); err != nil {
 		t.Errorf("a file named apl-* is not a namespace dir: %v", err)
+	}
+}
+
+// The directory name becomes the destination namespace verbatim, so a name Kubernetes
+// would reject must fail here — where the message can name the directory — rather than
+// as an opaque ApplicationSet ErrorOccurred.
+func TestCheckCustomLayout_InvalidNamespaceNameBlocks(t *testing.T) {
+	for _, name := range []string{
+		"My_App",                // uppercase + underscore
+		"my.app",                // dots are not valid in a namespace (RFC 1123 label)
+		"-leading",              // must start alphanumeric
+		"trailing-",             // must end alphanumeric
+		"my app",                // space
+		strings.Repeat("x", 64), // one over the 63-char cap
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeCustom(t, map[string]string{
+				filepath.Join("namespaces", name, "x.yaml"): "kind: ConfigMap\n",
+			})
+			err := checkCustomLayout(dir)
+			if err == nil {
+				t.Fatalf("namespace dir %q must block", name)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error must name the offending directory:\n%s", err)
+			}
+		})
+	}
+	// Exactly 63 chars is legal, and so are ordinary names.
+	for _, name := range []string{strings.Repeat("x", 63), "my-app", "a", "app123"} {
+		dir := writeCustom(t, map[string]string{
+			filepath.Join("namespaces", name, "x.yaml"): "kind: ConfigMap\n",
+		})
+		if err := checkCustomLayout(dir); err != nil {
+			t.Errorf("valid namespace dir %q must pass: %v", name, err)
+		}
 	}
 }
 
