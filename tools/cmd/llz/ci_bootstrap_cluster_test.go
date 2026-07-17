@@ -541,7 +541,7 @@ func TestHelmInstallApl_SkipsWhenAlreadyAtTargetVersion(t *testing.T) {
 			return "", true
 		},
 	}
-	if err := helmInstallApl(d, o, "rendered-values"); err != nil {
+	if _, err := helmInstallApl(d, o, "rendered-values"); err != nil {
 		t.Fatalf("helmInstallApl: %v", err)
 	}
 	if upgraded {
@@ -574,7 +574,7 @@ func TestHelmInstallApl_UpgradesWhenNeeded(t *testing.T) {
 					return "", true
 				},
 			}
-			if err := helmInstallApl(d, o, "rendered-values"); err != nil {
+			if _, err := helmInstallApl(d, o, "rendered-values"); err != nil {
 				t.Fatalf("helmInstallApl: %v", err)
 			}
 			if !upgraded {
@@ -620,7 +620,7 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 	// No coords → clean skip, never touches git.
 	called := false
 	d := bootstrapDeps{git: func(_ ...string) (string, bool) { called = true; return "", true }}
-	if err := ensureAplValuesBranch(d, o, "", ""); err != nil || called {
+	if seeded, err := ensureAplValuesBranch(d, o, "", ""); err != nil || called || seeded {
 		t.Fatalf("empty coords should skip: err=%v called=%v", err, called)
 	}
 
@@ -650,8 +650,8 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		}
 		return "", true
 	}
-	if err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil {
-		t.Fatalf("existing branch should be a no-op: %v", err)
+	if seeded, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seeded {
+		t.Fatalf("existing branch should be a no-op (seeded=%v): %v", seeded, err)
 	}
 	if created {
 		t.Error("must NOT create a branch that already exists")
@@ -677,8 +677,8 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		}
 		return "", true // ls-remote empty = absent; rest succeed
 	}
-	if err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil {
-		t.Fatalf("absent branch should be seeded: %v", err)
+	if seeded, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || !seeded {
+		t.Fatalf("absent branch should be seeded (seeded=%v): %v", seeded, err)
 	}
 	if strings.Join(seq, ",") != "ls-remote,init,commit,push" {
 		t.Errorf("seed sequence = %v, want ls-remote,init,commit,push (EMPTY orphan seed)", seq)
@@ -697,12 +697,79 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		}
 		return "", true
 	}
-	err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e")
+	_, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e")
 	if err == nil || !strings.Contains(err.Error(), "Contents:write") {
 		t.Errorf("expected a loud push error naming the token, got %v", err)
 	}
 	if err != nil && strings.Contains(err.Error(), "PAT") {
 		t.Errorf("push error leaked the token: %v", err)
+	}
+}
+
+// TestBootstrapCluster_ReseededBranchReArmsInstaller guards the reused-cluster
+// composition: when the values branch had to be RE-seeded (a fresh instantiate
+// deleted it) AND the helm install was skipped (apl already deployed), the
+// running operator is reconcile-only (apl-installation-status: completed) and
+// can never repopulate the empty branch — bootstrap-cluster must re-arm the
+// installer (patch status→pending + rollout restart). Without both conditions
+// the reset must NOT run.
+func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
+	run := func(branchExists, deployed bool) (patched, restarted bool) {
+		o := bootstrapTestOpts(t, "main")
+		d := bootstrapDeps{
+			kubectl: func(args ...string) (string, bool) {
+				line := strings.Join(args, " ")
+				if strings.Contains(line, "get services") && strings.Contains(line, "json") {
+					return dnsServicesJSON, true
+				}
+				if strings.Contains(line, "patch configmap apl-installation-status") {
+					patched = true
+				}
+				if strings.Contains(line, "rollout restart deployment/apl-operator") {
+					restarted = true
+				}
+				return "", true
+			},
+			apply: func(_, _ string, _ bool) (string, bool) { return "", true },
+			helm: func(args ...string) (string, bool) {
+				if args[0] == "list" && deployed {
+					return `[{"name":"apl","chart":"apl-6.1.2","status":"deployed"}]`, true
+				}
+				if args[0] == "list" {
+					return `[]`, true
+				}
+				if args[0] == "get" {
+					return "", false
+				}
+				return "", true
+			},
+			git: func(args ...string) (string, bool) {
+				if args[0] == "ls-remote" && branchExists {
+					return "abc\trefs/heads/apl-primary", true
+				}
+				return "", true // absent → seed path; init/commit/push succeed
+			},
+			now:         time.Now,
+			sleep:       func(time.Duration) {},
+			genPassword: func() string { return "pw" },
+		}
+		if err := bootstrapCluster(o, d); err != nil {
+			t.Fatalf("bootstrapCluster(branchExists=%v deployed=%v): %v", branchExists, deployed, err)
+		}
+		return patched, restarted
+	}
+
+	// Re-seeded + install skipped → MUST re-arm.
+	if p, r := run(false, true); !p || !r {
+		t.Errorf("reseeded+skipped: patched=%v restarted=%v, want both true", p, r)
+	}
+	// Fresh install (seeded but helm installed) → installer runs anyway, no reset.
+	if p, r := run(false, false); p || r {
+		t.Errorf("seeded+fresh-install: patched=%v restarted=%v, want both false", p, r)
+	}
+	// Reused cluster, branch intact → nothing to fix, no reset.
+	if p, r := run(true, true); p || r {
+		t.Errorf("existing-branch+skipped: patched=%v restarted=%v, want both false", p, r)
 	}
 }
 

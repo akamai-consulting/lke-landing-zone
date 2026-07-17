@@ -435,13 +435,32 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// Seeding the branch FIRST means the installer finds it and pushes its full env
 	// tree as part of installation, on fresh and reused clusters alike.
 	repoURL, branch := aplValuesGitCoords(rendered)
-	if err := ensureAplValuesBranch(d, o, repoURL, branch); err != nil {
+	seeded, err := ensureAplValuesBranch(d, o, repoURL, branch)
+	if err != nil {
 		return err
 	}
 
 	// ── 6. apl-core (helm upgrade --install) ──
-	if err := helmInstallApl(d, o, rendered); err != nil {
+	installSkipped, err := helmInstallApl(d, o, rendered)
+	if err != nil {
 		return err
+	}
+
+	// ── 6b. Re-run the operator's installer when the branch was RE-seeded on a
+	// reused cluster ── seeded && installSkipped means: the values branch did not
+	// exist (a fresh e2e instantiate deletes it), but apl is already installed —
+	// so the running apl-operator has apl-installation-status "completed" and will
+	// only RECONCILE, never re-bootstrap the full env values into the now-empty
+	// branch. Reconcile against an empty env crashes its derived-values template
+	// ("map has no entry for key customRootCA") and the gitops-* apps starve on
+	// "env/manifests/...: app path does not exist" until converge times out.
+	// The validated recovery (performed manually on e2e cluster 632033): reset the
+	// status to pending + restart the operator, which re-runs the INSTALLER phase —
+	// it re-bootstraps the full values and pushes them to the seeded branch.
+	if seeded && installSkipped {
+		if err := resetAplInstaller(d); err != nil {
+			return err
+		}
 	}
 
 	// ── 7. argocd namespace (SSA) ──
@@ -831,24 +850,24 @@ func manifestName(obj map[string]any) string {
 // != target — the deliberate spec-driven upgrade path), and a release in any
 // non-`deployed` state (absent, pending-*, failed) still runs so a half-applied
 // prior run self-heals.
-func helmInstallApl(d bootstrapDeps, o bootstrapClusterOpts, renderedValues string) error {
+func helmInstallApl(d bootstrapDeps, o bootstrapClusterOpts, renderedValues string) (skipped bool, err error) {
 	if ver, status, ok := deployedAplRelease(d); ok && status == "deployed" && ver == o.aplChartVersion {
 		fmt.Printf("apl-core %s already deployed — skipping helm upgrade so a reused-cluster re-apply does not roll apl-operator (bump spec.cluster.bootstrap.aplChartVersion to upgrade).\n", ver)
-		return nil
+		return true, nil
 	}
 
 	tmp, err := os.CreateTemp("", "llz-apl-values-*.yaml")
 	if err != nil {
-		return fmt.Errorf("create apl-values tempfile: %w", err)
+		return false, fmt.Errorf("create apl-values tempfile: %w", err)
 	}
 	defer os.Remove(tmp.Name())
 	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
 		tmp.Close()
-		return fmt.Errorf("chmod apl-values tempfile: %w", err)
+		return false, fmt.Errorf("chmod apl-values tempfile: %w", err)
 	}
 	if _, err := tmp.WriteString(renderedValues); err != nil {
 		tmp.Close()
-		return fmt.Errorf("write apl-values: %w", err)
+		return false, fmt.Errorf("write apl-values: %w", err)
 	}
 	tmp.Close()
 
@@ -860,10 +879,10 @@ func helmInstallApl(d bootstrapDeps, o bootstrapClusterOpts, renderedValues stri
 		"--wait", "--wait-for-jobs", "--timeout", "600s")
 	if !ok {
 		fmt.Fprint(os.Stderr, out)
-		return fmt.Errorf("helm upgrade --install apl (%s) failed", o.aplChartVersion)
+		return false, fmt.Errorf("helm upgrade --install apl (%s) failed", o.aplChartVersion)
 	}
 	fmt.Printf("apl-core %s installed (apl-operator namespace).\n", o.aplChartVersion)
-	return nil
+	return false, nil
 }
 
 // aplValuesGitCoords pulls otomi.git.repoUrl + otomi.git.branch out of the rendered
@@ -906,10 +925,10 @@ func authedGitURL(rawURL, token string) string {
 // that does self-create). A push failure surfaces LOUD and EARLY here — naming the
 // values-repo token — instead of as an opaque converge timeout downstream.
 // A no-coords case (values missing otomi.git.*) is a clean skip.
-func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, branch string) error {
+func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, branch string) (seeded bool, err error) {
 	if repoURL == "" || branch == "" {
 		fmt.Println("otomi.git.repoUrl/branch absent from the rendered values — skipping the apl-values branch bootstrap.")
-		return nil
+		return false, nil
 	}
 	authURL := authedGitURL(repoURL, o.aplValuesRepoToken)
 	tok := o.aplValuesRepoToken
@@ -918,7 +937,7 @@ func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, bra
 	// Already present (reused cluster / prior run)? Nothing to do.
 	if out, ok := d.git("ls-remote", authURL, ref); ok && strings.TrimSpace(out) != "" {
 		fmt.Printf("values branch %q already exists on %s — apl-operator can pull it.\n", branch, repoURL)
-		return nil
+		return false, nil
 	}
 
 	// Seed an EMPTY orphan branch (a single history-less empty commit). Content
@@ -931,23 +950,53 @@ func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, bra
 	fmt.Printf("values branch %q absent on %s — seeding it EMPTY (orphan commit) for apl-operator to bootstrap...\n", branch, repoURL)
 	tmp, err := os.MkdirTemp("", "llz-apl-branch-*")
 	if err != nil {
-		return fmt.Errorf("mktemp for values-branch seed: %w", err)
+		return false, fmt.Errorf("mktemp for values-branch seed: %w", err)
 	}
 	defer os.RemoveAll(tmp)
 
 	if out, ok := d.git("init", "--initial-branch", branch, tmp); !ok {
-		return fmt.Errorf("init values-branch seed repo: %s", redactSecret(out, tok))
+		return false, fmt.Errorf("init values-branch seed repo: %s", redactSecret(out, tok))
 	}
 	if out, ok := d.git("-C", tmp,
 		"-c", "user.name=llz-bootstrap", "-c", "user.email=llz-bootstrap@noreply.local",
 		"commit", "--allow-empty", "-m", "chore: seed "+branch+" — empty branch for apl-operator to bootstrap (llz ci bootstrap-cluster)"); !ok {
-		return fmt.Errorf("create empty seed commit for %q: %s", branch, redactSecret(out, tok))
+		return false, fmt.Errorf("create empty seed commit for %q: %s", branch, redactSecret(out, tok))
 	}
 	if out, ok := d.git("-C", tmp, "push", authURL, "HEAD:refs/heads/"+branch); !ok {
-		return fmt.Errorf("push values branch %q to %s — does the values-repo token (otomi.git.password / APL_VALUES_REPO_TOKEN) have Contents:write? git: %s",
+		return false, fmt.Errorf("push values branch %q to %s — does the values-repo token (otomi.git.password / APL_VALUES_REPO_TOKEN) have Contents:write? git: %s",
 			branch, repoURL, redactSecret(out, tok))
 	}
 	fmt.Printf("seeded EMPTY values branch %q on %s — apl-operator will bootstrap its env tree onto it.\n", branch, repoURL)
+	return true, nil
+}
+
+// resetAplInstaller re-arms apl-operator's INSTALLER phase: patch
+// apl-installation-status back to pending and restart the operator Deployment.
+// Only the installer bootstraps the full env values into the otomi.git branch;
+// once status is "completed" every later cycle is reconcile-only and can never
+// repopulate a re-seeded (empty) branch. This is the exact recovery validated
+// manually on e2e cluster 632033 (status patch + rollout restart → the installer
+// re-ran, bootstrapped values, and pushed them to the branch within ~6 minutes).
+// The rollout wait is bounded; the downstream apl-pipeline gate + converge
+// budgets absorb the installer's run itself.
+func resetAplInstaller(d bootstrapDeps) error {
+	fmt.Println("values branch was re-seeded but apl is already installed — re-arming apl-operator's installer (status→pending + restart) so it re-bootstraps the env values onto the branch.")
+	if out, ok := d.kubectl("-n", "apl-operator", "patch", "configmap", "apl-installation-status",
+		"--type", "merge", "-p", `{"data":{"status":"pending"}}`); !ok {
+		// No status configmap = the installer never completed on this cluster; the
+		// running/next operator pod will install anyway — warn and continue.
+		warn(fmt.Sprintf("could not patch apl-installation-status (%s) — if the configmap does not exist the installer will run on its own", strings.TrimSpace(out)))
+		return nil
+	}
+	if out, ok := d.kubectl("-n", "apl-operator", "rollout", "restart", "deployment/apl-operator"); !ok {
+		fmt.Fprint(os.Stderr, out)
+		return fmt.Errorf("restart apl-operator after re-arming its installer failed")
+	}
+	if out, ok := d.kubectl("-n", "apl-operator", "rollout", "status", "deployment/apl-operator", "--timeout=180s"); !ok {
+		fmt.Fprint(os.Stderr, out)
+		return fmt.Errorf("apl-operator did not come back after the installer re-arm restart")
+	}
+	fmt.Println("apl-operator restarted with installer re-armed — it will bootstrap + push the env values on this cycle.")
 	return nil
 }
 
