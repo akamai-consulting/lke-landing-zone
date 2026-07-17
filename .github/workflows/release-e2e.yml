@@ -380,6 +380,39 @@ jobs:
             exit 1
           fi
 
+      # Seed the operator escape hatch so the provision can PROVE it works, not just
+      # that it renders. kubernetes-custom/ ships empty (README-only) — dropping a
+      # trivial manifest under namespaces/<ns>/ makes the instance-custom ApplicationSet's
+      # git directory generator emit one Application (instance-custom-<ns>), create the
+      # namespace (CreateNamespace=true) and sync the manifest. The post-converge gate
+      # `llz ci assert-instance-custom` (in bootstrap-openbao) then asserts it reaches
+      # Synced+Healthy. Runs AFTER the render pass so the token-survivor grep never sees
+      # this file; a ConfigMap is health-inert, so Synced ⇒ applied and the App goes
+      # Healthy. The name must match the assert step's default (llz-e2e-custom): valid
+      # RFC 1123, not apl-* and not `global`, so custom_layout.go accepts it on the
+      # instance's own `llz render`/doctor — exercising the hatch's happy path too.
+      - name: Seed the escape-hatch custom manifest (kubernetes-custom/namespaces/llz-e2e-custom)
+        run: |
+          set -euo pipefail
+          ns_dir=.e2e-instance/kubernetes-custom/namespaces/llz-e2e-custom
+          mkdir -p "$ns_dir"
+          cat > "$ns_dir/configmap.yaml" <<'YAML'
+          # release-e2e escape-hatch probe: a trivial, health-inert resource the
+          # instance-custom ApplicationSet must generate + sync. Deliberately no
+          # `namespace:` — Argo applies it into the generated App's destination
+          # namespace (the directory basename, llz-e2e-custom).
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: llz-e2e-escape-hatch
+            labels:
+              app.kubernetes.io/managed-by: llz-release-e2e
+          data:
+            probe: "instance-custom escape hatch reached Synced+Healthy"
+          YAML
+          echo "Seeded escape-hatch probe:"
+          ls -la "$ns_dir"
+
       - name: Stamp provenance + force-push instantiation
         id: push
         env:
