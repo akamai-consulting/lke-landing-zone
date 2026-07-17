@@ -218,3 +218,40 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 		t.Errorf("branch: must not pin a stale :latest, got %v", *setVars2)
 	}
 }
+
+// pinGHRetry rides out transient GitHub API failures (a 503 on the first
+// Instantiate query killed release-e2e run 29540787054 at minute one) but still
+// surfaces a persistent error after 3 attempts.
+func TestPinGHRetry(t *testing.T) {
+	origGH, origSleep := pinGH, pinSleep
+	t.Cleanup(func() { pinGH, pinSleep = origGH, origSleep })
+	var slept []time.Duration
+	pinSleep = func(d time.Duration) { slept = append(slept, d) }
+
+	// Fails twice (transient 503), succeeds on the third try.
+	calls := 0
+	pinGH = func(_ string, _ ...string) ([]byte, error) {
+		calls++
+		if calls < 3 {
+			return nil, errors.New("HTTP 503")
+		}
+		return []byte("1"), nil
+	}
+	out, err := pinGHRetry("tok", "api", "x")
+	if err != nil || string(out) != "1" {
+		t.Fatalf("retry should succeed on attempt 3: out=%q err=%v", out, err)
+	}
+	if calls != 3 || len(slept) != 2 {
+		t.Errorf("calls=%d slept=%d, want 3/2", calls, len(slept))
+	}
+
+	// Persistent failure → error surfaces after exactly 3 attempts.
+	calls = 0
+	pinGH = func(_ string, _ ...string) ([]byte, error) { calls++; return nil, errors.New("boom") }
+	if _, err := pinGHRetry("tok", "api", "x"); err == nil {
+		t.Fatal("persistent failure must surface")
+	}
+	if calls != 3 {
+		t.Errorf("calls=%d, want 3", calls)
+	}
+}

@@ -80,26 +80,8 @@ func TestRenderEnvTfvars(t *testing.T) {
 			t.Errorf("cluster/prod.tfvars missing %q:\n%s", want, cluster)
 		}
 	}
-	boot := read("cluster-bootstrap")
-	for _, want := range []string{`deployment = "prod"`, `apl_values_env = "prod"`} {
-		if !strings.Contains(boot, want) {
-			t.Errorf("cluster-bootstrap/prod.tfvars missing %q:\n%s", want, boot)
-		}
-	}
-	// cluster_domain is no longer a cluster-bootstrap tfvar (resolve-harbor-url
-	// reads domainSuffix straight from the spec).
-	if strings.Contains(boot, "cluster_domain") {
-		t.Errorf("cluster-bootstrap tfvars should no longer carry cluster_domain:\n%s", boot)
-	}
-	// No your-env sentinel survives on an ASSIGNMENT line (the embedded example's
-	// prose comments legitimately mention <your-env>, so match the value form).
-	if strings.Contains(boot, `= "your-env"`) {
-		t.Errorf("cluster-bootstrap still has a your-env sentinel assignment:\n%s", boot)
-	}
-	// The instance_repo copier token is substituted out of the embedded example.
-	if strings.Contains(boot, "<@") {
-		t.Errorf("cluster-bootstrap tfvars still has an unsubstituted copier token:\n%s", boot)
-	}
+	// The cluster-bootstrap tfvars root was retired with its Terraform workspace
+	// (the in-cluster bootstrap now runs via `llz ci bootstrap-cluster`, spec-driven).
 	obj := read("object-storage")
 	for _, want := range []string{`region_suffix = "prod"`, `obj_cluster = "us-ord-7"`} {
 		if !strings.Contains(obj, want) {

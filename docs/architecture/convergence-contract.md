@@ -1,6 +1,6 @@
 # Convergence contract
 
-**Audience:** anyone touching Terraform, the bootstrap workflows, the cluster-health script, or an Argo Application in this repo.
+**Audience:** anyone touching Terraform, `llz ci bootstrap-cluster`, the bootstrap workflows, the cluster-health script, or an Argo Application in this repo.
 
 This doc defines what "the cluster is done bootstrapping" means, and the three exit codes that every layer of the bootstrap honours.
 
@@ -8,8 +8,8 @@ This doc defines what "the cluster is done bootstrapping" means, and the three e
 
 Before this contract existed, the bootstrap declared completion based on **commands returning**, while the cluster only reached a working state through **async convergence nobody waited for**. Concretely:
 
-- `terraform apply` returned success while `helm_release.apl` had only confirmed the `apl-operator` Deployment was Ready — its 40-component helmfile pipeline still had 10–15 minutes of work left.
-- Every TF resource after that line raced an invisible pipeline. The result: ~6 polling `null_resource` loops in `instance-template/terraform-iac-bootstrap/cluster-bootstrap/main.tf` totalling ~40 minutes of timeout budget, each guessing about when something downstream would be ready.
+- The bootstrap returned success while the apl-core helm install had only confirmed the `apl-operator` Deployment was Ready — its 40-component helmfile pipeline still had 10–15 minutes of work left.
+- Every step after that raced an invisible pipeline. The result (when this bootstrap was still the `cluster-bootstrap` Terraform workspace): ~6 polling `null_resource` loops totalling ~40 minutes of timeout budget, each guessing about when something downstream would be ready. That workspace has since been retired — the bootstrap now runs as the native `llz ci bootstrap-cluster` command — but the contract below is unchanged.
 - ``llz ci health`` exited `0` for both *"fully converged"* and *"pre-bootstrap, nothing started yet"* (`Phase 0`). The workflow couldn't tell *"done"* from *"half-done"*.
 - Soft-fails (`|| true`, `::warning::`, `BOOTSTRAP_ERRORS=true`) accumulated state in OpenBao / GitHub secrets / Harbor while the bootstrap was already known-broken.
 
@@ -48,16 +48,15 @@ When writing a new check, the question to ask is:
 
 ## How the three layers honour the contract
 
-### 1. Terraform
+### 1. The bootstrap command (`llz ci bootstrap-cluster`)
 
-`terraform apply` for the `cluster-bootstrap` module returns success **only when the in-cluster bootstrap has converged**, not when the helm releases install.
+`llz ci bootstrap-cluster` returns success **only when the in-cluster bootstrap has reached the hand-off state**, not when the helm install returns. (Terraform now owns day-0 infra only — the cluster, VPC, firewall, node pool, and object-storage buckets; the in-cluster bootstrap that used to be the `cluster-bootstrap` Terraform workspace is this command.)
 
-Two real readiness gates replace ~600 lines of imperative polling that used to live in `null_resource.wait_for_argo_application_crd`, `null_resource.wait_for_kyverno_crd`, and friends:
+One loud readiness gate replaces the ~600 lines of imperative polling that used to live in `null_resource.wait_for_argo_application_crd`, `null_resource.wait_for_kyverno_crd`, and friends:
 
-- **`null_resource.apl_pipeline_ready`** — waits for the apl-operator's helmfile pipeline by asserting that **Argo CD's `argocd-application-controller` StatefulSet is `Available`**. That's the canonical "Argo is up and ready to accept Applications" signal; before it's true, applying the bootstrap Application is a race. (We pick this specifically rather than `helm_release.apl`'s built-in wait because the apl chart's wait only covers the `apl-operator` Deployment, not its downstream pipeline — see `cluster-bootstrap/main.tf` header for the historical rationale.)
-- **`null_resource.bootstrap_application_synced`** — waits for the bootstrap Argo Application to report `Synced` + `Healthy` (or for the cluster to reach the deferred-input steady-state where the only unhealthy items are documented `EXTERNAL_DEP_*` entries). This is the "TF has done its job" signal.
+- **`waitAplPipeline`** (`tools/cmd/llz/ci_wait_apl_pipeline.go`, also runnable as `llz ci wait-apl-pipeline`) — waits for the apl-operator's helmfile pipeline by asserting **Argo CD's `argocd-application-controller` is serving, Kyverno's admission controller is Available, and cert-manager's webhook is Available**. Those are the canonical "the platform prerequisites are up" signals; before they're true, applying the bootstrap Application (or letting the helmfile create PVCs) is a race. We gate on these rather than the helm install's built-in wait because that wait only covers the `apl-operator` Deployment, not its downstream pipeline. The gate **fails loud** (non-nil error → the command fails) — no soft-fail-and-continue.
 
-Everything after `bootstrap_application_synced` is free to proceed without polling. The previous pattern — bash polling loops scattered across multiple `null_resource`s that each made up their own answer to "is X ready?" — is replaced by **one shared readiness model**.
+The command applies the bootstrap Argo Application only **after** that gate returns; from there Argo owns the reconcile (its `retry: backoff` rides out the first-boot convergence window), and the deep-convergence verdict is `llz ci converge` (below). The previous pattern — bash polling loops scattered across multiple `null_resource`s that each made up their own answer to "is X ready?" — is replaced by **one shared readiness model**.
 
 ### 2. The cluster-health script
 
@@ -79,7 +78,7 @@ Three modes (driven by `--mode=`):
 4. If exit `1` — re-runs once after `$RETRY_DELAY` seconds (default 60) to absorb transient-but-misclassified failures, then propagates exit `1`.
 5. After `$BUDGET` seconds (default 30 min) of total elapsed time with no exit `0`, gives up with exit `1` and dumps a final diagnostic.
 
-`instance-template/.github/workflows/terraform.yml` calls ``llz ci converge`` immediately after `apply-cluster-bootstrap` and treats its exit code as authoritative: a passed workflow now means "the cluster converged within budget", not "every TF resource I happened to provision returned 0".
+`llz-terraform.yml`'s `bootstrap-openbao` chain calls ``llz ci converge`` at its tail (after the `bootstrap-cluster` job) and treats its exit code as authoritative: a passed workflow now means "the cluster converged within budget", not "every step I happened to run returned 0".
 
 ---
 
@@ -87,8 +86,8 @@ Three modes (driven by `--mode=`):
 
 If you find yourself writing any of these, stop and reconsider:
 
-1. **A `kubectl wait --for=condition=X` against a CRD that may not exist yet.** It errors `NotFound` immediately and `--timeout` only governs an *existing* resource. Use a real readiness gate (`null_resource.apl_pipeline_ready` and friends are already there).
-2. **A new polling `null_resource` in TF.** Almost every case is better solved by depending on `null_resource.bootstrap_application_synced` and letting Argo own the reconcile. If you genuinely need a new readiness gate (e.g., a new CRD-installing component lands), add it to that resource, not as a sibling.
+1. **A `kubectl wait --for=condition=X` against a CRD that may not exist yet.** It errors `NotFound` immediately and `--timeout` only governs an *existing* resource. Use a real readiness gate — `waitAplPipeline` (existence-poll then condition-wait) is already there.
+2. **A new polling step in the bootstrap (a `null_resource` back when it was TF, or an ad-hoc `kubectl wait` loop now).** Almost every case is better solved by letting the bootstrap Argo Application + Argo's reconcile own it. If you genuinely need a new platform-prerequisite gate (e.g., a new CRD-installing component the bootstrap depends on), add a stage to `aplPipelineStages`, not a sibling loop.
 3. **`|| true` after a step that performs a write.** That's the pattern that produced multiple `BOOTSTRAP_ERRORS=true` flags in `bootstrap-openbao.yml`. If the write can fail and we want to keep going, the right shape is *classify the failure* (exit-2 vs exit-1) and propagate that — not silently swallow the error.
 4. **A new side-controller to drive what an existing reconciler should observe.** Where cert-watcher side-controllers exist because upstream cached config until pod restart, they're tracked for removal as part of a follow-up that addresses CA trust via a normal cert-manager + Argo `health.lua` flow. Don't add a third one.
 5. **`exit 0` in a check.** A check returns one of `0/1/2`. If the answer is genuinely "I don't know", that's `2` (the caller polls), not `0` (the caller proceeds).
@@ -98,7 +97,8 @@ If you find yourself writing any of these, stop and reconsider:
 
 ## See also
 
-- `instance-template/terraform-iac-bootstrap/cluster-bootstrap/main.tf` — header comment + `null_resource.apl_pipeline_ready` and `null_resource.bootstrap_application_synced` definitions.
+- `tools/cmd/llz/ci_bootstrap_cluster.go` — the native bootstrap command: header comment + the ordered flow (the `waitAplPipeline` gate raced against the two Kyverno policies).
+- `tools/cmd/llz/ci_wait_apl_pipeline.go` — the loud readiness gate (`aplPipelineStages` + the existence-poll → condition-wait state machine).
 - ``llz ci health`` — header comment + the `MODE_*` constants + the helper functions that classify a resource into `0/1/2`.
 - `instance-template/.github/workflows/bootstrap-openbao.yml` — header comment + the Branch A / Branch B / Re-configure mode selector, which is the same `0/1/2` shape applied to OpenBao seal state.
 - ``llz ci converge`` — the polling wrapper itself.

@@ -849,6 +849,13 @@ func checkJobs(r *health.Report, phase1 bool) {
 		if json.Unmarshal(raw, &j) != nil {
 			continue
 		}
+		// Ephemeral e2e exercise Jobs (e.g. broad-pat-rotator-e2e) are judged by
+		// their own assert step; a Failed one lingering from a prior run on a
+		// reused cluster must not gate convergence. Same rationale as the Workflow
+		// scan (ClassifyWorkflowPhase / IsEphemeralE2EProbe).
+		if health.IsEphemeralE2EProbe(j.Metadata.Name) {
+			continue
+		}
 		items = append(items, j)
 		key := j.Metadata.Namespace + "/" + j.Metadata.Name
 		complete, failed := false, false
@@ -1074,6 +1081,13 @@ func checkPods(r *health.Report, phase1 bool) {
 		// workload gate. Skip them so a short-lived CronJob pod caught
 		// mid-creation (e.g. argo-resync-nudger) can't flunk the gate.
 		if health.IsJobControlled(p.Metadata.OwnerReferences) {
+			continue
+		}
+		// Ephemeral e2e health-probe pods (Argo-Workflow-owned, so NOT Job-
+		// controlled) are test scaffolding — a Failed one from a prior run on a
+		// reused cluster must not gate convergence. Same rationale as the Workflow
+		// scan (ClassifyWorkflowPhase).
+		if health.IsEphemeralE2EProbe(p.Metadata.Name) {
 			continue
 		}
 		key := p.Metadata.Namespace + "/" + p.Metadata.Name

@@ -50,7 +50,7 @@ apps:
   # configured the `eso` Kubernetes-auth role. A Degraded resource FAILS the platform-bootstrap sync
   # wave (it was the exact hook that wedged the first lab bootstrap). These
   # overrides reclassify "not ready yet" as Progressing, so Argo waits + retries
-  # (see the retry budget in terraform-iac-bootstrap/cluster-bootstrap/main.tf)
+  # (see the retry budget in tools/cmd/llz/ci_bootstrap_cluster_manifests.go)
   # instead of failing. Genuinely-broken stores/secrets still surface via the
   # converge health check (`llz ci health`), which verifies the synced Secret
   # exists independently of Argo's health rollup.
@@ -214,6 +214,18 @@ apps:
     # policy (_shared/manifest/kyverno-policies/), NOT here — overriding
     # schemaConfig corrupts it.
     _rawValues:
+      # memberlist DNS bootstrap deadlock (observed live: loki-0 at 37 restarts).
+      # loki-memberlist is a HEADLESS Service; with publishNotReadyAddresses
+      # false (the chart 6.x default) it publishes NO DNS records until an
+      # endpoint is READY — but the single-binary pod only becomes ready after
+      # joining its own memberlist ring, which it resolves via that very DNS
+      # name. Fresh installs sneak through; any RESTART of loki-0 deadlocks:
+      # not-ready → NXDOMAIN → "empty ring" crashloop → not-ready. Publishing
+      # not-ready addresses is the upstream-intended fix for single-member
+      # memberlist bootstrap.
+      memberlist:
+        service:
+          publishNotReadyAddresses: true
       gateway:
         nginxConfig:
           # nginx's `resolver` needs the cluster DNS Service IP, NOT a hostname.
@@ -227,6 +239,19 @@ apps:
           # the cm create. (Validated by a full e2e off main.)
           resolver: "${coredns_cluster_ip}"
       singleBinary:
+        # WAL-replay headroom. The apl default (2Gi limit) OOMKills loki on
+        # startup once the WAL has accumulated (observed live: exit 137 during
+        # replay after an extended crashloop) — and the OOM self-perpetuates,
+        # since every retry replays the same WAL and dies. Requests stay modest
+        # (burstable); the limit only bounds the replay spike. 500m CPU also
+        # made replay needlessly slow; 1 CPU halves the not-ready window.
+        resources:
+          requests:
+            cpu: 100m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 4Gi
         persistence:
           size: 5Gi
           # Pin the SC so a default-class flip can't land Loki on an

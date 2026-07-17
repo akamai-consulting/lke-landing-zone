@@ -111,3 +111,28 @@ func TestClassifyWorkflowPhase(t *testing.T) {
 		})
 	}
 }
+
+// healthTransientOnly gates the health-gate retry: ONLY "0 hard-failed with work
+// in progress" (a cluster mid-settle, e.g. the argocd-redis WRONGPASS flap right
+// after an operator roll) retries; hard failures and unparseable logs fail fast.
+func TestHealthTransientOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		logs string
+		want bool
+	}{
+		{"in-progress only (the live 29547902622 failure)", "PENDING x (Unknown/Healthy) — argocd-redis cache auth\nconvergence: 0 hard-failed, 9 in-progress\nError: exit status 2", true},
+		{"hard failures present", "convergence: 2 hard-failed, 3 in-progress", false},
+		{"hard failures, nothing pending", "convergence: 1 hard-failed, 0 in-progress", false},
+		{"fully converged (should not fail at all)", "convergence: 0 hard-failed, 0 in-progress", false},
+		{"no verdict line (crash, OOM, missing logs)", "panic: boom", false},
+		{"empty logs", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := healthTransientOnly(c.logs); got != c.want {
+				t.Errorf("healthTransientOnly(%q) = %v, want %v", c.logs, got, c.want)
+			}
+		})
+	}
+}

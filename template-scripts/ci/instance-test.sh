@@ -141,7 +141,6 @@ else
     || fail "llz env add failed inside the rendered instance"
   for p in \
     "terraform-iac-bootstrap/cluster/itest.tfvars" \
-    "terraform-iac-bootstrap/cluster-bootstrap/itest.tfvars" \
     "terraform-iac-bootstrap/object-storage/itest.tfvars" \
     "apl-values/itest/values.yaml"; do
     if [[ -e "$INSTANCE/$p" ]]; then echo "  ok   env add -> $p"; else fail "env add did not create $p"; fi

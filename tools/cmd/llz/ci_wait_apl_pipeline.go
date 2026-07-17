@@ -48,7 +48,6 @@ package main
 // clock, sleep) so it is unit-tested without a cluster.
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -128,9 +127,7 @@ func runCIWaitAplPipeline() error {
 		kubectl: func(args ...string) (string, bool) {
 			cmd := exec.Command("kubectl", args...)
 			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig.Name())
-			var buf bytes.Buffer
-			cmd.Stdout, cmd.Stderr = &buf, &buf
-			return buf.String(), cmd.Run() == nil
+			return runCombined(cmd)
 		},
 		now:   time.Now,
 		sleep: time.Sleep,

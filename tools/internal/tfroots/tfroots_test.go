@@ -8,7 +8,7 @@ import (
 )
 
 func TestRoots(t *testing.T) {
-	want := []string{"cluster", "cluster-bootstrap", "object-storage", "vpc"}
+	want := []string{"cluster", "object-storage", "vpc"}
 	got := Roots()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("Roots() = %v, want %v", got, want)
@@ -102,12 +102,9 @@ func TestRenderSkipsExampleAndReadme(t *testing.T) {
 			t.Errorf("Render must not write a README.md: %s", p)
 		}
 	}
-	// And they must not exist on disk at all.
+	// And the tfvars.example must not exist on disk at all.
 	if _, err := os.Stat(filepath.Join(dst, "terraform-iac-bootstrap", "cluster", "terraform.tfvars.example")); !os.IsNotExist(err) {
 		t.Errorf("tfvars.example was written to disk (err=%v)", err)
-	}
-	if _, err := os.Stat(filepath.Join(dst, "terraform-iac-bootstrap", "cluster-bootstrap", "README.md")); !os.IsNotExist(err) {
-		t.Errorf("README.md was written to disk (err=%v)", err)
 	}
 }
 
@@ -152,14 +149,6 @@ func TestTfvarsExample(t *testing.T) {
 			t.Errorf("TfvarsExample(%q) is empty", root)
 		}
 	}
-	// cluster-bootstrap's example carries the instance_repo token verbatim (raw bytes).
-	b, err := TfvarsExample("cluster-bootstrap")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(b), tokInstanceRepo) {
-		t.Errorf("cluster-bootstrap tfvars.example should keep the raw instance_repo token")
-	}
 	if _, err := TfvarsExample("nope"); err == nil {
 		t.Errorf("TfvarsExample of a bogus root should error")
 	}
@@ -180,7 +169,7 @@ func TestRenderMkdirError(t *testing.T) {
 func TestRenderWriteError(t *testing.T) {
 	dst := t.TempDir()
 	// Occupy a target path with a directory so os.WriteFile fails for that file.
-	blocked := filepath.Join(dst, "terraform-iac-bootstrap", "cluster-bootstrap", "backend.tf")
+	blocked := filepath.Join(dst, "terraform-iac-bootstrap", "cluster", "backend.tf")
 	if err := os.MkdirAll(blocked, 0o755); err != nil {
 		t.Fatal(err)
 	}

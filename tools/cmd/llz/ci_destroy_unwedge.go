@@ -31,7 +31,6 @@ package main
 // unit-tested without a cluster; the stale-APIService selection is a pure function.
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -90,9 +89,7 @@ func runCIDestroyUnwedge(region string) error {
 	kubectl := func(args ...string) (string, bool) {
 		cmd := exec.Command("kubectl", args...)
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-		var buf bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &buf, &buf
-		return buf.String(), cmd.Run() == nil
+		return runCombined(cmd)
 	}
 	return destroyUnwedge(kubectl)
 }

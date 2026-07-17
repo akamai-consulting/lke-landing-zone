@@ -22,8 +22,8 @@ import (
 // only the ones that exist (the Makefile used `$(wildcard ...)` for this).
 var candidateTFDirs = []string{
 	"terraform-iac-bootstrap/cluster",
-	"terraform-iac-bootstrap/cluster-bootstrap",
 	"terraform-iac-bootstrap/object-storage",
+	"terraform-iac-bootstrap/vpc",
 }
 
 // tfDirs returns the candidate Terraform roots that exist as directories.

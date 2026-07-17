@@ -362,22 +362,12 @@ func TestClusterTFVars_Golden(t *testing.T) {
 	}
 }
 
-func TestBootstrapAndObjTFVars_InjectEnvName(t *testing.T) {
+func TestObjTFVars_InjectEnvName(t *testing.T) {
 	lz := mustDecode(t, validSpec)
 	c := lz.Spec.Environments["primary"].Cluster
-	b := assignMap(BootstrapTFVars("primary", c))
-	if b["deployment"] != `"primary"` || b["apl_values_env"] != `"primary"` {
-		t.Errorf("deployment/apl_values_env must be the env name; got %v", b)
-	}
-	// Neither identity field is a bootstrap tfvar anymore: cluster_name is
-	// written into values.yaml by llz render, and resolve-harbor-url reads
-	// domainSuffix straight from the spec.
-	for _, k := range []string{"cluster_name", "cluster_domain"} {
-		if _, ok := b[k]; ok {
-			t.Errorf("%s should no longer be a bootstrap tfvar; got %v", k, b)
-		}
-	}
-	// The cluster name lives in the render identity instead.
+	// The cluster name lives in the render identity (values.yaml), not a tfvar —
+	// the former cluster-bootstrap tfvars (deployment/apl_values_env/cluster_name)
+	// were retired with the workspace; `llz ci bootstrap-cluster` reads the spec.
 	if id := lz.ValuesIdentity("primary"); id.ClusterName != "platform-primary" {
 		t.Errorf("ValuesIdentity.ClusterName = %q, want platform-primary", id.ClusterName)
 	}

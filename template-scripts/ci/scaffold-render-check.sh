@@ -62,7 +62,6 @@ FAILED=0
 INSTANCE="$ROOT/instance-template"
 GEN_TFVARS=(
   "$INSTANCE/terraform-iac-bootstrap/cluster/$ENV_NAME.tfvars"
-  "$INSTANCE/terraform-iac-bootstrap/cluster-bootstrap/$ENV_NAME.tfvars"
   "$INSTANCE/terraform-iac-bootstrap/object-storage/$ENV_NAME.tfvars"
 )
 GEN_OVERLAY="$INSTANCE/apl-values/$ENV_NAME"
@@ -101,7 +100,7 @@ if ! out="$( ( cd "$ROOT" && "$LLZ" env add "$ENV_NAME" --region "$REGION" --obj
   fail "llz env add failed to scaffold '$ENV_NAME'"
   exit 1
 fi
-echo "scaffolded ${GEN_OVERLAY#"$ROOT"/} + 3 tfvars"
+echo "scaffolded ${GEN_OVERLAY#"$ROOT"/} + 2 tfvars"
 
 # ── 2. No unfilled placeholders ──────────────────────────────────────────────
 step "Check for leftover 'your-env' placeholders"
@@ -116,9 +115,9 @@ else
   echo "none (comments excluded)."
 fi
 
-# ── 3. Per-env files cluster-bootstrap reads at plan time ─────────────────────
-# Mirrors terraform-iac-bootstrap/cluster-bootstrap/main.tf: templatefile(values.yaml) and
-# data.local_file.env_revision_configmap. Keep in sync if those reads change.
+# ── 3. Per-env files `llz ci bootstrap-cluster` reads ─────────────────────────
+# Mirrors tools/cmd/llz/ci_bootstrap_cluster.go: it renders values.yaml and reads
+# manifest/env-revision-configmap.yaml. Keep in sync if those reads change.
 step "Check required per-env files exist"
 REQUIRED=(
   "$GEN_OVERLAY/values.yaml"
@@ -128,22 +127,23 @@ for f in "${REQUIRED[@]}"; do
   if [[ -f "$f" ]]; then echo "ok   ${f#"$ROOT"/}"; else fail "missing required per-env file: ${f#"$ROOT"/}"; fi
 done
 
-# ── 4+5. templatefile var-contract + apl-core schema (unit-tested Go) ──────────
+# ── 4+5. runtime-placeholder var-contract + apl-core schema (unit-tested Go) ───
 # `llz ci validate-apl-values` owns both checks (the logic lives in tested Go —
-# ci_apl_schema.go — so this stays thin glue): (4) every unescaped ${...} left
-# in the rendered values is a key in cluster-bootstrap/main.tf's templatefile()
-# map, derived from main.tf so it can't drift (the ${apl_values_repo_url} class
-# that failed a 2026-07-02 plan); (5) the values pass apl-core's chart schema
-# via `helm template apl/apl`, pinned to the scaffolded tfvars' apl_chart_version
-# (the v6 `apps.loki: adminPassword is required` class). The schema half
-# self-skips without helm; the var-contract half always runs (no terraform).
-step "Validate apl-values (templatefile var-contract + apl-core schema)"
+# ci_apl_schema.go — so this stays thin glue): (4) every unescaped ${...} left in
+# the rendered values is one of the secrets-only runtime placeholders
+# `llz ci bootstrap-cluster` fills (the ${apl_values_repo_url} class that failed a
+# 2026-07-02 apply); (5) the values pass apl-core's chart schema via
+# `helm template apl/apl`, pinned to the spec's aplChartVersion (the v6
+# `apps.loki: adminPassword is required` class). The schema half self-skips
+# without helm or a chart version; the var-contract half always runs.
+step "Validate apl-values (runtime-placeholder var-contract + apl-core schema)"
 if [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
+  # Best-effort chart version from the scaffolded spec; empty → schema self-skips.
+  CHART_VER="$(grep -hoE 'aplChartVersion:[[:space:]]*["'"'"']?[0-9]+\.[0-9]+\.[0-9]+' "$ENV_YAML" "$LZ" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
   "$LLZ" ci validate-apl-values \
-    --values  "$GEN_OVERLAY/values.yaml" \
-    --tfvars  "$ROOT/instance-template/terraform-iac-bootstrap/cluster-bootstrap/$ENV_NAME.tfvars" \
-    --main-tf "$ROOT/instance-template/terraform-iac-bootstrap/cluster-bootstrap/main.tf" \
-    || fail "apl-values validation failed (see above) — fix before it fails at terraform apply / helm_release.apl in Release-E2E"
+    --values "$GEN_OVERLAY/values.yaml" \
+    --chart-version "$CHART_VER" \
+    || fail "apl-values validation failed (see above) — fix before it fails at helm_release apl in Release-E2E"
 fi
 
 # ── 6. kustomize-build every rendered overlay (Argo's load-restrictor) ────────

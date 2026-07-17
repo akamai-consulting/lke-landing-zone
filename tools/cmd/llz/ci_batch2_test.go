@@ -1,6 +1,6 @@
 package main
 
-// Tests for the second consolidation batch: stash-env-secret,
+// Tests for the second consolidation batch:
 // health-prom-rules, diagnose-argocd and fetch-kubeconfig-state.
 
 import (
@@ -14,80 +14,6 @@ import (
 	"testing"
 	"time"
 )
-
-// ── stash-env-secret ─────────────────────────────────────────────────────────
-
-// stubGHSecretSet records env-scoped gh secret writes, failing those named in
-// failFor.
-func stubGHSecretSet(t *testing.T, failFor map[string]bool) *[]string {
-	t.Helper()
-	var calls []string
-	prev := ghSetSecretFn
-	ghSetSecretFn = func(name, ghEnv, value string) error {
-		calls = append(calls, fmt.Sprintf("%s@%s=%s", name, ghEnv, value))
-		if failFor[name] {
-			return errors.New("HTTP 403")
-		}
-		return nil
-	}
-	t.Cleanup(func() { ghSetSecretFn = prev })
-	return &calls
-}
-
-func TestStashEnvSecret(t *testing.T) {
-	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
-		if name == "terraform" && len(args) == 3 && args[1] == "-raw" {
-			switch args[2] {
-			case "loki_access_key":
-				return []byte("AKIA1\n"), nil
-			case "loki_secret_key":
-				return []byte("shh\n"), nil
-			case "empty_output":
-				return []byte(""), nil
-			}
-		}
-		return nil, errors.New("unexpected: " + name + " " + strings.Join(args, " "))
-	})
-
-	// Both mappings stored.
-	calls := stubGHSecretSet(t, nil)
-	err := runCIStashEnvSecret("infra-primary", []string{
-		"loki_access_key=LOKI_S3_ACCESS_KEY", "loki_secret_key=LOKI_S3_SECRET_KEY"})
-	if err != nil {
-		t.Fatalf("stash: %v", err)
-	}
-	want := []string{"LOKI_S3_ACCESS_KEY@infra-primary=AKIA1", "LOKI_S3_SECRET_KEY@infra-primary=shh"}
-	if strings.Join(*calls, " ") != strings.Join(want, " ") {
-		t.Errorf("writes = %v, want %v", *calls, want)
-	}
-
-	// An empty terraform output fails — after attempting the rest.
-	calls = stubGHSecretSet(t, nil)
-	err = runCIStashEnvSecret("infra-primary", []string{
-		"empty_output=BROKEN", "loki_access_key=LOKI_S3_ACCESS_KEY"})
-	if err == nil {
-		t.Error("empty output must fail the stash")
-	}
-	if len(*calls) != 1 {
-		t.Errorf("remaining mappings must still be attempted, got %v", *calls)
-	}
-
-	// A failed gh write fails the run but does not abort the list.
-	calls = stubGHSecretSet(t, map[string]bool{"LOKI_S3_ACCESS_KEY": true})
-	err = runCIStashEnvSecret("infra-primary", []string{
-		"loki_access_key=LOKI_S3_ACCESS_KEY", "loki_secret_key=LOKI_S3_SECRET_KEY"})
-	if err == nil || len(*calls) != 2 {
-		t.Errorf("partial gh failure: err=%v calls=%v, want error after both attempts", err, *calls)
-	}
-
-	// Usage errors.
-	if err := runCIStashEnvSecret("", []string{"a=B"}); err == nil {
-		t.Error("missing --env must fail")
-	}
-	if err := runCIStashEnvSecret("infra-primary", []string{"malformed"}); err == nil {
-		t.Error("malformed mapping must fail")
-	}
-}
 
 // ── health-prom-rules ────────────────────────────────────────────────────────
 

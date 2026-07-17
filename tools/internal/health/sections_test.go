@@ -170,6 +170,27 @@ func TestClassifyWorkflowPhase(t *testing.T) {
 	if cat, _ := ClassifyWorkflowPhase("x/w", "Running", false); cat != CatOK {
 		t.Error("running is in-flight ok")
 	}
+	// Ephemeral e2e probe: ignored regardless of phase (a prior run's dead probe
+	// on a reused cluster must not gate converge).
+	if cat, _ := ClassifyWorkflowPhase("llz-argo-workflows/e2e-assert-health-vrvbr", "Failed", false); cat != CatOK {
+		t.Error("a FAILED e2e-assert-health probe must be CatOK (ignored), not CatFail")
+	}
+	if cat, _ := ClassifyWorkflowPhase("llz-argo-workflows/e2e-assert-health-xyz", "Error", false); cat != CatOK {
+		t.Error("an ERRORED e2e probe must be ignored")
+	}
+}
+
+func TestIsEphemeralE2EProbe(t *testing.T) {
+	for _, y := range []string{"e2e-assert-health-vrvbr", "e2e-assert-health-", "e2e-assert-health-abc123", "broad-pat-rotator-e2e"} {
+		if !IsEphemeralE2EProbe(y) {
+			t.Errorf("%q should be an ephemeral e2e probe", y)
+		}
+	}
+	for _, n := range []string{"llz-cluster-health", "e2e-assert", "cert-automation-xyz", "broad-pat-rotator", ""} {
+		if IsEphemeralE2EProbe(n) {
+			t.Errorf("%q should NOT be an ephemeral e2e probe", n)
+		}
+	}
 }
 
 func TestStuckFinalizer(t *testing.T) {

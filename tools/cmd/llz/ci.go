@@ -38,7 +38,7 @@ func ciCmd() *cobra.Command {
 			"in internal/terraform + internal/linode behind unit tests; these commands are\n" +
 			"the thin orchestration over it.",
 	}
-	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFUntrackCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
+	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
 		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
@@ -83,8 +83,11 @@ func ciCmd() *cobra.Command {
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())
-	// Apply-time secret stashes + failure diagnostics (llz-terraform.yml).
-	c.AddCommand(ciStashEnvSecretCmd(), ciEnsureEnvSecretCmd(), ciDiagnoseArgoCDCmd())
+	// Apply-time failure diagnostics (llz-terraform.yml). (The former
+	// stash-env-secret / ensure-env-secret siblings were retired with the S3-stash
+	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
+	// + apl-core-v6-migration.md — so their commands are gone too.)
+	c.AddCommand(ciDiagnoseArgoCDCmd())
 	// Release-e2e instantiate: pin the instance's TF_IMAGE/KUBE_IMAGE to this
 	// commit's ci images so the baked llz can't drift from the rendered workflow.
 	c.AddCommand(ciPinInstanceImagesCmd())
@@ -196,12 +199,14 @@ func ciCmd() *cobra.Command {
 	// Package + push + keyless-sign first-party charts to GHCR (immutable; re-signs a
 	// pushed-but-unsigned version). Replaces publish-charts.yml's inline bash.
 	c.AddCommand(ciPublishChartsCmd())
-	// Cluster-bootstrap local-exec bodies (instance-template cluster-bootstrap/
-	// main.tf): the apl_pipeline_ready readiness gate, the kyverno_* policy apply
-	// (readiness poll + apply + webhook-race soft-fail + retrofit kick), and the
-	// destroy-time finalizer-deadlock unwedge.
-	c.AddCommand(ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(), ciDestroyUnwedgeCmd(),
-		ciClearClusterSecretsCmd())
+	// Cluster-bootstrap native command + its former local-exec bodies. bootstrap-
+	// cluster is the whole in-cluster bootstrap (apl-core install + Argo bridge +
+	// the race-ahead Kyverno policies) that used to be the cluster-bootstrap
+	// Terraform workspace; wait-apl-pipeline + apply-kyverno-policy remain
+	// separately runnable (bootstrap-cluster calls them in-process), and
+	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
+	c.AddCommand(ciBootstrapClusterCmd(), ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(),
+		ciDestroyUnwedgeCmd(), ciClearClusterSecretsCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(ciAssertImageFreshCmd())

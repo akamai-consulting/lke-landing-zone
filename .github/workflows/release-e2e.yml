@@ -21,7 +21,7 @@ name: Release E2E — provision, validate, destroy a real cluster
 #      roots terraform-iac-bootstrap/), and force-push it to the E2E instance repo.
 #   2. provision  — `gh workflow run terraform.yml` (apply, module=all,
 #      region=e2e, assert_loki=true) in that repo + `gh run watch --exit-status`.
-#      terraform.yml's own chain (apply-cluster → cluster-bootstrap →
+#      terraform.yml's own chain (apply-cluster → bootstrap-cluster →
 #      bootstrap-openbao → converge) IS the wait-for-deploy + health gate; the
 #      converge job also runs `llz ci assert-loki` (Loki bootstrapped + S3-backed),
 #      so a green provision means "converged AND Loki is S3-backed".

@@ -4,24 +4,25 @@ package main
 // no-cloud port of the two apl-values checks that were previously Release-E2E-
 // ONLY, each of which burned multiple ~50-min runs in the week of 2026-07-02:
 //
-//  1. templatefile var-contract. cluster-bootstrap/main.tf renders the per-env
-//     values.yaml via templatefile() with a SECRETS-ONLY var map (llz render
+//  1. runtime-placeholder var-contract. `llz ci bootstrap-cluster` fills a
+//     SECRETS-ONLY set of ${...} tokens in the per-env values.yaml (llz render
 //     resolves everything else from the spec first). A ${...} left in the
-//     rendered file that is NOT in that map hard-fails `terraform apply`
-//     ("vars map does not contain key apl_values_repo_url" — a real 2026-07-02
-//     failure). We derive the map keys from main.tf and assert every unescaped
-//     ${...} still in the rendered values is one of them — no terraform needed.
+//     rendered file that is NOT in that set is a stale template the bootstrap
+//     can't fill (the ${apl_values_repo_url} class — a real 2026-07-02 apply
+//     failure). We assert every unescaped ${...} still in the rendered values is
+//     one of bootstrapValuePlaceholders (the same Go constant bootstrap-cluster
+//     fills) — no terraform, no main.tf parsing.
 //
-//  2. apl-core schema. helm_release.apl validates the rendered values against
-//     apl-core's bundled values.schema.json at APPLY time; the v6 migration
-//     burned runs on `apps.loki: adminPassword is required` surfacing there.
-//     `helm template apl/apl` runs the identical JSON-Schema check client-side
-//     (the apl chart has no dependencies — no cluster, no `helm dependency
-//     build`), pinned to the chart version read from the scaffolded tfvars so
-//     it always matches what deploys.
+//  2. apl-core schema. bootstrap-cluster's `helm upgrade --install apl` validates
+//     the rendered values against apl-core's bundled values.schema.json at APPLY
+//     time; the v6 migration burned runs on `apps.loki: adminPassword is
+//     required` surfacing there. `helm template apl/apl` runs the identical
+//     JSON-Schema check client-side (the apl chart has no dependencies — no
+//     cluster, no `helm dependency build`), pinned to the chart version passed in
+//     (--chart-version, read from the spec by the caller) so it matches deploy.
 //
-// Both the parsing/scan LOGIC and the helm orchestration live here (behind an
-// exec seam) so they are unit-tested without terraform, helm, or a network; the
+// Both the scan LOGIC and the helm orchestration live here (behind an exec seam)
+// so they are unit-tested without terraform, helm, or a network; the
 // scaffold-render-check.sh caller is left as thin glue.
 
 import (
@@ -37,7 +38,7 @@ import (
 )
 
 // aplChartRepo is the public Helm repo apl-core publishes to (mirrors
-// cluster-bootstrap/main.tf helm_release.apl.repository).
+// bootstrap-cluster's `helm upgrade --install --repo`).
 const aplChartRepo = "https://linode.github.io/apl-core"
 
 // unescapedPlaceholderRe matches a ${var} that is NOT escaped as $${var}: the
@@ -49,70 +50,52 @@ var unescapedPlaceholderRe = regexp.MustCompile(`(^|[^$])\$\{([a-zA-Z_][a-zA-Z0-
 // schema check — the schema cares about structure/required keys, not values.
 var anyPlaceholderRe = regexp.MustCompile(`\$\{[a-zA-Z_][a-zA-Z0-9_]*\}`)
 
-// templatefileKeyRe pulls the LHS `key =` map entries out of the
-// apl_rendered_values = templatefile( … ) block sliced from main.tf.
-var templatefileKeyRe = regexp.MustCompile(`(?m)^\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=`)
-
-// aplChartVersionRe pulls the pinned version out of an apl_chart_version tfvars
-// assignment (e.g. `apl_chart_version = "6.0.0"`).
-var aplChartVersionRe = regexp.MustCompile(`apl_chart_version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"`)
-
 // helmRunner runs a helm invocation, returning combined output and success.
 // A package var so tests substitute a fake without helm or a network.
 var helmRunner = func(args ...string) (string, bool) {
 	cmd := exec.Command("helm", args...)
-	var buf strings.Builder
-	cmd.Stdout, cmd.Stderr = &buf, &buf
 	cmd.Env = os.Environ()
-	return buf.String(), cmd.Run() == nil
+	return runCombined(cmd)
 }
 
 func ciAplSchemaValidateCmd() *cobra.Command {
-	var valuesPath, tfvarsPath, mainTFPath string
+	var valuesPath, chartVersion string
 	var skipSchema bool
 	cmd := &cobra.Command{
 		Use:   "validate-apl-values",
-		Short: "check a rendered apl-values file's templatefile var-contract + apl-core schema (no cluster)",
+		Short: "check a rendered apl-values file's runtime-placeholder contract + apl-core schema (no cluster)",
 		Long: "Two offline checks on a rendered apl-values values.yaml, shifted left from\n" +
-			"Release-E2E: (1) every unescaped ${...} still in the file is a key in\n" +
-			"cluster-bootstrap/main.tf's templatefile() map (else terraform apply fails);\n" +
-			"(2) the values pass apl-core's chart schema via `helm template apl/apl`, pinned\n" +
-			"to the version in the scaffolded tfvars. The schema check self-skips (--skip-schema\n" +
-			"or no helm on PATH); the var-contract check always runs.",
+			"Release-E2E: (1) every unescaped ${...} still in the file is one of the\n" +
+			"secrets-only runtime placeholders `llz ci bootstrap-cluster` fills (else the\n" +
+			"bootstrap can't fill it — the ${apl_values_repo_url} class); (2) the values\n" +
+			"pass apl-core's chart schema via `helm template apl/apl`, pinned to\n" +
+			"--chart-version. The schema check self-skips (--skip-schema, no helm on PATH,\n" +
+			"or no --chart-version); the var-contract check always runs.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runValidateAplValues(valuesPath, tfvarsPath, mainTFPath, skipSchema)
+			return runValidateAplValues(valuesPath, chartVersion, skipSchema)
 		},
 	}
 	cmd.Flags().StringVar(&valuesPath, "values", "", "path to the rendered apl-values values.yaml (required)")
-	cmd.Flags().StringVar(&tfvarsPath, "tfvars", "", "path to the scaffolded cluster-bootstrap <env>.tfvars (apl_chart_version)")
-	cmd.Flags().StringVar(&mainTFPath, "main-tf", "", "path to cluster-bootstrap/main.tf (templatefile var map) (required)")
+	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "apl-core chart version to pin the schema check (from spec.cluster.bootstrap.aplChartVersion)")
 	cmd.Flags().BoolVar(&skipSchema, "skip-schema", false, "skip the helm schema check (var-contract only)")
 	_ = cmd.MarkFlagRequired("values")
-	_ = cmd.MarkFlagRequired("main-tf")
 	return cmd
 }
 
-func runValidateAplValues(valuesPath, tfvarsPath, mainTFPath string, skipSchema bool) error {
+func runValidateAplValues(valuesPath, chartVersion string, skipSchema bool) error {
 	valuesRaw, err := os.ReadFile(valuesPath)
 	if err != nil {
 		return fmt.Errorf("read values %s: %w", valuesPath, err)
 	}
-	mainTFRaw, err := os.ReadFile(mainTFPath)
-	if err != nil {
-		return fmt.Errorf("read main.tf %s: %w", mainTFPath, err)
-	}
 
-	// ── Check 1: templatefile var-contract ────────────────────────────────────
-	keys := templatefileMapKeys(string(mainTFRaw))
-	if len(keys) == 0 {
-		return fmt.Errorf("no templatefile() var map found in %s — the apl_rendered_values block moved or was reformatted", mainTFPath)
-	}
+	// ── Check 1: runtime-placeholder var-contract ─────────────────────────────
+	keys := placeholderSet()
 	if unwired := unwiredPlaceholders(string(valuesRaw), keys); len(unwired) > 0 {
-		return fmt.Errorf("%s references ${%s} not in cluster-bootstrap/main.tf's templatefile map (keys: %s) — it will fail at terraform apply (the apl_values_repo_url class)",
+		return fmt.Errorf("%s references ${%s} not in the runtime-placeholder set (%s) — bootstrap-cluster cannot fill it (the apl_values_repo_url class)",
 			valuesPath, strings.Join(unwired, "}, ${"), strings.Join(sortedSetKeys(keys), " "))
 	}
-	fmt.Printf("templatefile var-contract ok (%d map keys, all leftover placeholders wired)\n", len(keys))
+	fmt.Printf("runtime-placeholder var-contract ok (%d placeholders, all leftover placeholders wired)\n", len(keys))
 
 	// ── Check 2: apl-core schema (helm template) ──────────────────────────────
 	if skipSchema {
@@ -123,31 +106,20 @@ func runValidateAplValues(valuesPath, tfvarsPath, mainTFPath string, skipSchema 
 		fmt.Println("schema check skipped (no helm on PATH)")
 		return nil
 	}
-	version := parseAplChartVersion(readOrEmpty(tfvarsPath))
-	if version == "" {
-		return fmt.Errorf("no apl_chart_version in tfvars %q — cannot pin the schema check (pass --skip-schema to run the var-contract only)", tfvarsPath)
+	if chartVersion == "" {
+		fmt.Println("schema check skipped (no --chart-version — pass spec.cluster.bootstrap.aplChartVersion to enable)")
+		return nil
 	}
-	return validateAplSchema(string(valuesRaw), version)
+	return validateAplSchema(string(valuesRaw), chartVersion)
 }
 
-// templatefileMapKeys slices the apl_rendered_values = templatefile( … ) block
-// and returns its map keys — mirrors what cluster-bootstrap actually passes.
-func templatefileMapKeys(mainTF string) map[string]bool {
-	start := strings.Index(mainTF, "apl_rendered_values")
-	if start < 0 {
-		return nil
-	}
-	tf := mainTF[start:]
-	tf = tf[strings.Index(tf, "templatefile(")+len("templatefile("):]
-	// The map is { … } up to the matching ) that closes templatefile(.
-	end := strings.Index(tf, "\n  )")
-	if end < 0 {
-		return nil
-	}
-	block := tf[:end]
-	keys := map[string]bool{}
-	for _, m := range templatefileKeyRe.FindAllStringSubmatch(block, -1) {
-		keys[m[1]] = true
+// placeholderSet is the set form of bootstrapValuePlaceholders (the secrets-only
+// ${...} tokens bootstrap-cluster fills) — the single source of truth this guard
+// checks a rendered values file against.
+func placeholderSet() map[string]bool {
+	keys := make(map[string]bool, len(bootstrapValuePlaceholders))
+	for _, k := range bootstrapValuePlaceholders {
+		keys[k] = true
 	}
 	return keys
 }
@@ -193,20 +165,4 @@ func validateAplSchema(values, version string) error {
 	}
 	fmt.Printf("schema ok (apl/apl %s)\n", version)
 	return nil
-}
-
-// parseAplChartVersion extracts the pinned apl_chart_version ("" if absent).
-func parseAplChartVersion(tfvars string) string {
-	if m := aplChartVersionRe.FindStringSubmatch(tfvars); m != nil {
-		return m[1]
-	}
-	return ""
-}
-
-func readOrEmpty(path string) string {
-	if path == "" {
-		return ""
-	}
-	b, _ := os.ReadFile(path)
-	return string(b)
 }
