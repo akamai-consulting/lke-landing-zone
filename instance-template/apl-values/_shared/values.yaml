@@ -245,13 +245,22 @@ apps:
         # since every retry replays the same WAL and dies. Requests stay modest
         # (burstable); the limit only bounds the replay spike. 500m CPU also
         # made replay needlessly slow; 1 CPU halves the not-ready window.
+        #
+        # 3Gi (not 4Gi): a healthy loki that flushes to S3 never approaches this
+        # (fresh-cluster e2e ran green well under it) — the 4Gi bump was
+        # compensating for a reused cluster's un-flushable chunk backlog, not a
+        # steady-state need. On a ~6Gi-allocatable node, a single 4Gi-limit pod
+        # co-scheduled with argocd-controller + prometheus could push the node to
+        # MemoryPressure and evict neighbors; 3Gi keeps replay headroom while a
+        # genuine spike OOM-restarts loki (self-heal) instead of pressuring the
+        # node (3Gi + argocd ~0.9Gi + prometheus ~0.8Gi fits 6Gi with margin).
         resources:
           requests:
             cpu: 100m
             memory: 512Mi
           limits:
             cpu: "1"
-            memory: 4Gi
+            memory: 3Gi
         persistence:
           size: 5Gi
           # Pin the SC so a default-class flip can't land Loki on an
