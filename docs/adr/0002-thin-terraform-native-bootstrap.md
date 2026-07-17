@@ -92,3 +92,18 @@ Supporting decisions (see the PR's plan for the full rationale):
   The offline apl-values var-contract guard (`llz ci validate-apl-values`) now
   checks against the Go `bootstrapValuePlaceholders` constant instead of parsing
   the deleted `main.tf`.
+- **The `apl-<env>` values branch is bootstrap-owned when absent, operator-owned
+  once populated.** apl-core v6's operator does NOT self-create
+  `otomi.git.branch` — it deadlocks pulling a missing ref, and once its
+  installation status is `completed` it is reconcile-only and never
+  re-bootstraps values into an emptied branch (both verified live). So
+  `bootstrap-cluster` seeds the branch EMPTY before the helm install, re-arms
+  the installer when it re-seeded on an already-installed cluster, and blocks
+  hand-off until the operator's first push lands.
+- **Watch-item — rebuilt clusters (destroy → recreate, same env).** Destroy does
+  not delete `apl-<env>`, so a rebuilt cluster's fresh installer pulls the OLD
+  cluster's operator-written env tree (including SealedSecrets sealed for the
+  old cluster's key) before force-pushing its own bootstrap over it. The
+  release-e2e instantiate sidesteps this by deleting the stale branch; real
+  instances rebuilding an env should do the same (delete `apl-<env>` before
+  re-applying) until apl-core's behavior on inherited env trees is validated.

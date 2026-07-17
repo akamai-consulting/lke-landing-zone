@@ -757,7 +757,7 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 // installer (patch status→pending + rollout restart). Without both conditions
 // the reset must NOT run.
 func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
-	run := func(branchExists, deployed bool) (patched, restarted bool) {
+	run := func(branchExists, deployed, valuesChanged bool) (patched, restarted bool) {
 		o := bootstrapTestOpts(t, "main")
 		gitPushed := false
 		d := bootstrapDeps{
@@ -788,8 +788,14 @@ func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
 				if args[0] == "list" {
 					return `[]`, true
 				}
+				if args[0] == "get" && strings.Contains(strings.Join(args, " "), "-o yaml") {
+					if valuesChanged {
+						return "stale: true\n", true // differs from the render → upgrade
+					}
+					return "", false // unreadable → bias to skip (values treated as equal)
+				}
 				if args[0] == "get" {
-					return "", false
+					return "", false // existingLokiPassword probe
 				}
 				return "", true
 			},
@@ -834,16 +840,24 @@ func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
 	}
 
 	// Re-seeded + install skipped → MUST re-arm.
-	if p, r := run(false, true); !p || !r {
+	if p, r := run(false, true, false); !p || !r {
 		t.Errorf("reseeded+skipped: patched=%v restarted=%v, want both true", p, r)
 	}
-	// Fresh install (seeded but helm installed) → installer runs anyway, no reset.
-	if p, r := run(false, false); p || r {
+	// Fresh install (seeded but helm installed) → installer status probe answers
+	// not-found → the reset no-ops on its own.
+	if p, r := run(false, false, false); p || r {
 		t.Errorf("seeded+fresh-install: patched=%v restarted=%v, want both false", p, r)
 	}
-	// Reused cluster, branch intact → nothing to fix, no reset.
-	if p, r := run(true, true); p || r {
+	// Reused cluster, branch intact, values unchanged → nothing to fix, no reset.
+	if p, r := run(true, true, false); p || r {
 		t.Errorf("existing-branch+skipped: patched=%v restarted=%v, want both false", p, r)
+	}
+	// Reused cluster, branch intact, VALUES CHANGED (case 3: downstream instance
+	// re-apply with a rotated token / new shared values) → the upgrade alone does
+	// not make reconcile-mode ingest VALUES_INPUT — the installer must be re-armed
+	// so the change propagates deterministically.
+	if p, r := run(true, true, true); !p || !r {
+		t.Errorf("existing-branch+values-upgrade: patched=%v restarted=%v, want both true", p, r)
 	}
 }
 

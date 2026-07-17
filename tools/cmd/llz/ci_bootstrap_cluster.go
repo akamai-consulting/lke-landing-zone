@@ -442,23 +442,28 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	}
 
 	// ── 6. apl-core (helm upgrade --install) ──
+	_, aplStatus, aplFound := deployedAplRelease(d)
+	aplWasDeployed := aplFound && aplStatus == "deployed"
 	installSkipped, err := helmInstallApl(d, o, rendered)
 	if err != nil {
 		return err
 	}
 
-	// ── 6b. Re-arm the operator's installer when the branch was RE-seeded on a
-	// cluster whose installation already COMPLETED ── only the INSTALLER phase
-	// bootstraps the full env values into the branch; once apl-installation-status
-	// is "completed" every cycle is reconcile-only and can never repopulate the
-	// now-empty branch (the gitops-* apps then starve on "env/manifests/...: app
-	// path does not exist" until converge times out). This holds whether the helm
-	// step SKIPPED (identical values) or UPGRADED (changed values) — an upgrade
-	// rolls the operator pod but does NOT reset its installation status. The reset
-	// itself checks the status and no-ops on a fresh install (absent/pending —
-	// the installer runs on its own). Validated live on e2e cluster 632033.
-	_ = installSkipped // the re-arm decision is driven by the installer status, not the helm path
-	if seedSHA != "" {
+	// ── 6b. Re-arm the operator's installer when needed ── only the INSTALLER
+	// phase bootstraps the full env values into the branch AND ingests changed
+	// helm values (VALUES_INPUT); once apl-installation-status is "completed"
+	// every cycle is reconcile-only. Two triggers:
+	//   * the branch was (re-)seeded — reconcile can never repopulate an empty
+	//     branch (gitops-* apps starve on "app path does not exist"), and
+	//   * a real VALUES upgrade landed on an already-deployed release — the
+	//     upgrade rolls the operator pod but does NOT reset its installation
+	//     status, and whether reconcile mode ever re-ingests changed VALUES_INPUT
+	//     is undocumented apl-core behavior; the installer re-run makes the
+	//     propagation deterministic through the same validated bootstrap-and-push.
+	// The reset itself probes the status and no-ops on a fresh install
+	// (absent/pending — the installer runs on its own). Validated live on 632033.
+	valuesUpgradedExisting := !installSkipped && aplWasDeployed
+	if seedSHA != "" || valuesUpgradedExisting {
 		if err := resetAplInstaller(d); err != nil {
 			return err
 		}
@@ -1200,7 +1205,9 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	fmt.Printf("  3. assert env-revision == %s (%s)\n", o.appsRepoRevision, o.envRevisionPath)
 	fmt.Printf("  4. kubectl apply --server-side apl-operator Namespace\n")
 	fmt.Printf("  5. kubectl apply --server-side block-storage-retain StorageClass\n")
-	fmt.Printf("  6. helm upgrade --install apl apl/apl --version %s -n apl-operator --wait\n", o.aplChartVersion)
+	fmt.Printf("  6a. ensure the otomi.git values branch exists (seed EMPTY orphan branch when absent)\n")
+	fmt.Printf("  6. helm upgrade --install apl apl/apl --version %s -n apl-operator --wait (skipped when deployed at this version with identical values)\n", o.aplChartVersion)
+	fmt.Printf("  6b. if the branch was seeded and apl-installation-status is 'completed': re-arm the installer (patch status + restart apl-operator)\n")
 	fmt.Printf("  7. kubectl apply --server-side argocd Namespace\n")
 	if o.ghcrToken != "" {
 		fmt.Printf("  8. kubectl apply --server-side GHCR OCI repo Secret + pull Secret\n")
@@ -1209,5 +1216,6 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	}
 	fmt.Printf("  9. wait-apl-pipeline (argocd/kyverno/cert-manager) CONCURRENTLY with the 2 Kyverno policies\n")
 	fmt.Printf(" 10. kubectl apply --server-side platform-bootstrap AppProject + Application + llz-secret-store Application\n")
+	fmt.Printf(" 11. if the branch was seeded: wait for apl-operator to populate it (ref must move past the seed commit)\n")
 	return nil
 }
