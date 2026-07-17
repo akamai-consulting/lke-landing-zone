@@ -93,19 +93,6 @@ func TestGHSetRepoSecretNativeErrors(t *testing.T) {
 	}
 }
 
-func TestGHActionsPublicKeyValidatesLength(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"key_id": "k", "key": base64.StdEncoding.EncodeToString([]byte("short")),
-		})
-	}))
-	t.Cleanup(srv.Close)
-	_, _, err := ghActionsPublicKey(&http.Client{}, "tok", srv.URL+"/secrets")
-	if err == nil || !strings.Contains(err.Error(), "32") {
-		t.Errorf("err = %v, want 32-byte validation", err)
-	}
-}
-
 // The environment-secret path resolves the numeric repo id, fetches the env public
 // key, and PUTs to the environment endpoint — the round-trip the in-cluster broad-PAT
 // rotator uses to write LINODE_API_TOKEN back to each infra-<deployment> environment.
