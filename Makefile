@@ -308,7 +308,7 @@ externalsecret-paths-check: render-charts
 # negative wave that can be not-Ready on a fresh cluster wedges the
 # platform-bootstrap sync before OpenBao (wave 0). Every negative-wave kind in
 # platform-apl/manifest/ + platform-apl/components/ must be health-inert or
-# backed by a resource.customizations.health override in _shared/values.yaml.
+# backed by a resource.customizations.health override in apl-values/values.yaml.
 wave-health-guard:
 	@if command -v llz >/dev/null 2>&1; then \
 		llz ci wave-health-guard; \

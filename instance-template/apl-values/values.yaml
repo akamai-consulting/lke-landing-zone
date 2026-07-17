@@ -1,12 +1,12 @@
-# apl-core values for the `example` environment — TEMPLATE SKELETON.
+# apl-core values — the shared BASE every environment renders from.
 #
-# This is the single reference overlay shipped by the lke-landing-zone template.
-# Create a real environment by cloning it with the instantiation script:
+# This is not an environment: it is the single, template-managed base that
+# `llz render` reads to produce each committed apl-values/<env>/values.yaml. You
+# do not clone it. Declare an environment in the spec and render it:
 #
-#     llz env add <env> --template-env example
+#     llz env add <env>
 #
-# That copies this directory to apl-values/<env>/ and fills it in. A
-# landingzone.yaml spec is REQUIRED — there is no non-spec path. `llz render`
+# A landingzone.yaml spec is REQUIRED — there is no non-spec path. `llz render`
 # resolves every non-secret $${...} placeholder below straight from the spec into
 # the committed apl-values/<env>/values.yaml: the cluster identity
 # (cluster.name/domainSuffix, dns.domainFilters), the platform flags (otomi.has*),

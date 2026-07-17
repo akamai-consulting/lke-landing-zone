@@ -77,5 +77,7 @@ spec:
     automated: { prune: true, selfHeal: true }
 ```
 
-See [docs/extending-llz.md](../../docs/extending-llz.md) →
-"Your own Kubernetes resources" for the full contract.
+For the full contract, see **`docs/extending-llz.md` → "Your own Kubernetes
+resources"** in the template repo. (It is deliberately not copied into your
+instance — `llz ci deliver-docs` keeps only quickstart + runbooks + playbooks
+locally. `docs/README.md` carries the version-pinned link to the rest.)
