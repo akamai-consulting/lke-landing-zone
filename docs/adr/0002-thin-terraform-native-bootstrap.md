@@ -100,6 +100,15 @@ Supporting decisions (see the PR's plan for the full rationale):
   `bootstrap-cluster` seeds the branch EMPTY before the helm install, re-arms
   the installer when it re-seeded on an already-installed cluster, and blocks
   hand-off until the operator's first push lands.
+- **Watch-item — skip-if-present strands OpenBao secret SCHEMA growth on reuse.**
+  `mint-bootstrap-objkeys` and `bao-seed --skip-if-present` no-op a whole KV path
+  when one `presentField` is already set. KV v2 writes replace the entire secret,
+  so a reused cluster seeded under an OLD field set never gains fields ADDED later
+  (e.g. a new key in `harborRegistryS3Fields`) — a fresh cluster gets them, the
+  reused one silently keeps the stale shape. Not currently firing; when a
+  skip-guarded path's field set grows, either widen its `presentField` to the new
+  key or re-seed that path on reuse. (Latent; same class as the loki
+  first-install-password reuse.)
 - **Watch-item — rebuilt clusters (destroy → recreate, same env).** Destroy does
   not delete `apl-<env>`, so a rebuilt cluster's fresh installer pulls the OLD
   cluster's operator-written env tree (including SealedSecrets sealed for the

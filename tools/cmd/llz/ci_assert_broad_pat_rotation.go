@@ -153,7 +153,16 @@ func e2eRotationJobJSON(cronJobJSON []byte) ([]byte, error) {
 		return nil, fmt.Errorf("CronJob has no .spec.jobTemplate.spec")
 	}
 
-	// Upsert ROTATE_AFTER_DAYS=0 on every container (there is exactly one).
+	// Upsert two env overrides on every container (there is exactly one):
+	//   ROTATE_AFTER_DAYS=0 — the tick is DUE by construction (isDue always true).
+	//   GRACE_DAYS=0        — revoke ALL superseded siblings immediately, so the
+	//                         exercise self-reaps. The e2e forces a rotation every
+	//                         run (autonomous keep_cluster loop → many runs/day);
+	//                         the production 7-day grace would otherwise leave
+	//                         dozens of live account:read_write PATs accumulating
+	//                         under the e2e label. Single-cluster e2e needs no
+	//                         propagation grace. (Reviewer finding #3.)
+	overrides := map[string]string{"ROTATE_AFTER_DAYS": "0", "GRACE_DAYS": "0"}
 	tmpl, _ := jtSpec["template"].(map[string]any)
 	tmplSpec, _ := tmpl["spec"].(map[string]any)
 	containers, _ := tmplSpec["containers"].([]any)
@@ -163,17 +172,19 @@ func e2eRotationJobJSON(cronJobJSON []byte) ([]byte, error) {
 	for _, c := range containers {
 		cm, _ := c.(map[string]any)
 		env, _ := cm["env"].([]any)
-		replaced := false
-		for _, e := range env {
-			em, _ := e.(map[string]any)
-			if em["name"] == "ROTATE_AFTER_DAYS" {
-				em["value"] = "0"
-				delete(em, "valueFrom")
-				replaced = true
+		for name, val := range overrides {
+			replaced := false
+			for _, e := range env {
+				em, _ := e.(map[string]any)
+				if em["name"] == name {
+					em["value"] = val
+					delete(em, "valueFrom")
+					replaced = true
+				}
 			}
-		}
-		if !replaced {
-			env = append(env, map[string]any{"name": "ROTATE_AFTER_DAYS", "value": "0"})
+			if !replaced {
+				env = append(env, map[string]any{"name": name, "value": val})
+			}
 		}
 		cm["env"] = env
 	}

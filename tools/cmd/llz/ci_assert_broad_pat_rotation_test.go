@@ -60,23 +60,31 @@ func TestE2ERotationJobJSON(t *testing.T) {
 	if c["image"] != "ghcr.io/akamai-consulting/llz:latest" {
 		t.Errorf("container image not carried over: %v", c["image"])
 	}
-	// ROTATE_AFTER_DAYS must be UPSERTED to 0 (replacing the existing 60).
-	days := ""
-	labels := ""
+	// ROTATE_AFTER_DAYS AND GRACE_DAYS must be UPSERTED to 0 (due by construction +
+	// self-reap accumulated test PATs), preserving unrelated env.
+	days, grace, labels := "", "", ""
+	seen := map[string]int{}
 	for _, e := range c["env"].([]any) {
 		em := e.(map[string]any)
-		switch em["name"] {
+		name, _ := em["name"].(string)
+		seen[name]++
+		switch name {
 		case "ROTATE_AFTER_DAYS":
-			if days != "" {
-				t.Error("duplicate ROTATE_AFTER_DAYS env entries")
-			}
 			days = em["value"].(string)
+		case "GRACE_DAYS":
+			grace = em["value"].(string)
 		case "BROAD_PAT_LABEL":
 			labels = em["value"].(string)
 		}
 	}
 	if days != "0" {
 		t.Errorf("ROTATE_AFTER_DAYS = %q, want 0 (due by construction)", days)
+	}
+	if grace != "0" {
+		t.Errorf("GRACE_DAYS = %q, want 0 (self-reap accumulated e2e PATs)", grace)
+	}
+	if seen["ROTATE_AFTER_DAYS"] != 1 || seen["GRACE_DAYS"] != 1 {
+		t.Errorf("env upsert must not duplicate: ROTATE_AFTER_DAYS=%d GRACE_DAYS=%d", seen["ROTATE_AFTER_DAYS"], seen["GRACE_DAYS"])
 	}
 	if labels != "llz-e2e-broad-pat" {
 		t.Errorf("other env entries must be preserved, got label %q", labels)
@@ -88,8 +96,10 @@ func TestE2ERotationJobJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no-env cronjob: %v", err)
 	}
-	if !strings.Contains(string(out2), `"ROTATE_AFTER_DAYS","value":"0"`) && !strings.Contains(string(out2), `"name":"ROTATE_AFTER_DAYS"`) {
-		t.Errorf("ROTATE_AFTER_DAYS not injected when env absent: %s", out2)
+	for _, want := range []string{"ROTATE_AFTER_DAYS", "GRACE_DAYS"} {
+		if !strings.Contains(string(out2), `"name":"`+want+`"`) {
+			t.Errorf("%s not injected when env absent: %s", want, out2)
+		}
 	}
 
 	// Malformed input fails loud.
