@@ -35,7 +35,7 @@ spec:
   source:
     repoURL: ghcr.io/akamai-consulting/charts
     chart: llz-cluster-foundation
-    targetRevision: 0.1.9
+    targetRevision: 0.1.10
     helm:
       releaseName: llz-cluster-foundation
       valuesObject:

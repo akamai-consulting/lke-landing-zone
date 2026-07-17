@@ -27,7 +27,10 @@ type: application
 #        served version, so a v1beta1 manifest fails to apply ("no matches for kind
 #        … in version external-secrets.io/v1beta1") and the harbor-docker-config
 #        ExternalSecret never syncs.
-version: 0.1.6
+# 0.1.7: doc-only — retarget a stale apl-values/_shared/… comment path ref in
+#        network-policies.yaml to the platform-apl/ layout (behavior unchanged;
+#        bumped so the guard republishes the corrected artifact).
+version: 0.1.7
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"

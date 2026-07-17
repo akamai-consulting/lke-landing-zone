@@ -42,7 +42,10 @@ type: application
 #         ingress rule so apl-core's Prometheus can scrape the OTel Collector).
 # 0.1.17: bump the llz-cluster-foundation pin to 0.1.9 (adds harbor-allow-metrics
 #         so Prometheus can scrape Harbor's :8001 metrics endpoints, issue #183).
-version: 0.1.17
+# 0.1.18: doc-only README path refs (_shared/ → platform-apl/), and mirror the pins
+#         to the doc-only bumps of the two first-party charts it lists:
+#         llz-cluster-foundation 0.1.9→0.1.10 and llz-cert-automation 0.1.6→0.1.7.
+version: 0.1.18
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"
