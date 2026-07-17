@@ -27,6 +27,12 @@ git-path `Application` whose CR is health-inert in the parent tree (Argo assesse
 does not), so platform-bootstrap stays `Synced/Healthy` while the App health-gates its
 OWN content. A `Degraded` resource then fails only its own App.
 
+> **Update:** `instance-custom` has since taken this one cut further — it is now an
+> `ApplicationSet` generating one App per `custom/namespaces/<ns>/` directory (plus
+> `global/`), so the operator's escape hatch has per-namespace blast radius rather than
+> a single shared fate. The ApplicationSet CR is health-inert in the parent tree for the
+> same reason, so the property described here is unchanged. See docs/extending-llz.md.
+
 This PR generalizes that to the four bundles. When `spec.components.<name>` is enabled
 and the component declares a `CarvedApp` (registry field in
 `tools/internal/clusterspec/components.go`), `llz render` emits:

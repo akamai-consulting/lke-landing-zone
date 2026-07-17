@@ -92,7 +92,7 @@ func (c Component) hasManifestDir() bool {
 // the pinned remote-ref URL when a template ref is resolved, else the local relative
 // path (repo-root platform-apl/, four levels up from an env's manifest/ overlay — the
 // no-version drift-check / test context only). The per-instance instance-custom
-// Application is NOT part of this base (it carries the instance repo) —
+// ApplicationSet is NOT part of this base (it carries the instance repo + revision) —
 // RenderManifestKustomization adds it as a local resource.
 func sharedManifestRef(ref string) string {
 	if ref == "" {
@@ -130,9 +130,9 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref, acm
 
 	var b strings.Builder
 	b.WriteString(kustomizePreamble)
-	// The shared base (remote when pinned) + the per-instance instance-custom App
-	// (local, render-emitted with this instance's repo — NOT in the shared base) +
-	// one health-inert App CR per enabled carved component.
+	// The shared base (remote when pinned) + the per-instance instance-custom
+	// ApplicationSet (local, render-emitted with this instance's repo — NOT in the
+	// shared base) + one health-inert App CR per enabled carved component.
 	b.WriteString("\nresources:\n  - " + sharedManifestRef(ref) + "\n")
 	b.WriteString("  - instance-custom.yaml\n")
 	for _, a := range carvedApps {
@@ -178,47 +178,122 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref, acm
 	return b.String()
 }
 
-// RenderInstanceCustomApp returns the per-instance instance-custom Argo Application —
-// the operator escape hatch (wave 10, prune:false) that syncs the instance's own
-// apl-values/_shared/custom/ tree. It carries the instance's values-repo URL, so it is
-// render-emitted LOCALLY into the overlay rather than vendored in the shared base (which
-// is fetched remotely and must be byte-identical across instances). Its AppProject
+// CustomSubdir is the operator escape-hatch tree relative to the apl-values dir, and
+// CustomRoot the same path relative to the INSTANCE REPO ROOT — the form Argo CD's git
+// generator needs (it resolves paths against the repo, not the working directory).
+// Callers walking the filesystem should join CustomSubdir onto their apl-values dir;
+// only manifests handed to Argo use CustomRoot. `owned` in .template-manifest — the
+// template ships this tree once and never touches it again.
+const (
+	CustomSubdir = "_shared/custom"
+	CustomRoot   = "apl-values/" + CustomSubdir
+)
+
+// CustomGlobalDirName / CustomNamespacesDirName are the two top-level directories
+// under CustomRoot, mirroring the App Platform GitOps convention
+// (https://techdocs.akamai.com/app-platform/docs/gitops): namespaces/<ns>/ is synced
+// into namespace <ns>, global/ carries cluster-scoped resources.
+const (
+	CustomNamespacesDirName = "namespaces"
+	CustomGlobalDirName     = "global"
+)
+
+// RenderInstanceCustom returns the per-instance instance-custom ApplicationSet — the
+// operator escape hatch (wave 10) that syncs the instance's own apl-values/_shared/custom/
+// tree. It carries the instance's values-repo URL + revision, so it is render-emitted
+// LOCALLY into the overlay rather than vendored in the shared base (which is fetched
+// remotely and must be byte-identical across instances). Its AppProject
 // (instance-custom-project.yaml, no per-instance data) stays in the shared base.
-func RenderInstanceCustomApp(repoURL string) string {
+//
+// LAYOUT mirrors App Platform's documented GitOps convention so an operator's muscle
+// memory transfers: custom/namespaces/<ns>/ → one Application per directory, synced into
+// namespace <ns> (auto-created); custom/global/ → cluster-scoped resources. Splitting per
+// directory also gives per-namespace blast radius — the same cut blast-radius-decomposition.md
+// made for platform components — where the former single Application degraded wholesale.
+//
+// TWO GIT GENERATORS, not static Applications, because custom/** is `owned`: an instance
+// that predates this layout never receives namespaces/ or global/ from a copier update, and
+// a static App pointing at an absent path goes ComparisonError. A directory generator that
+// matches nothing simply yields ZERO Applications, so the absence is inert.
+//
+// revision pins the escape hatch to the same apps_repo_revision the platform-bootstrap
+// Application uses. It used to hardcode HEAD, which left an otherwise-pinned instance's
+// custom tree floating on the default branch. Empty → "HEAD" (the unpinned default).
+func RenderInstanceCustom(repoURL, revision string) string {
+	if revision == "" {
+		revision = "HEAD"
+	}
 	return genHeader + `apiVersion: argoproj.io/v1alpha1
-kind: Application
+kind: ApplicationSet
 metadata:
   name: instance-custom
   namespace: argocd
   annotations:
     argocd.argoproj.io/sync-wave: "10"
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
-  revisionHistoryLimit: 3
-  project: instance-custom
-  source:
-    repoURL: ` + repoURL + `
-    path: apl-values/_shared/custom
-    targetRevision: HEAD
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: default
+  # Deleting a generated Application (operator removed the directory from git, or the
+  # ApplicationSet itself is pruned) must NOT tear down running workloads — the same
+  # contract the former single Application held with prune:false. This keeps the
+  # resources-finalizer OFF the generated Apps, so a vanished generator result ORPHANS
+  # the resources instead of cascade-deleting them. Removing resources stays deliberate.
   syncPolicy:
-    automated:
-      prune: false
-      selfHeal: true
-    retry:
-      limit: 5
-      backoff:
-        duration: 5s
-        maxDuration: 3m
-        factor: 2
-    syncOptions:
-      - ApplyOutOfSyncOnly=true
-      - SkipDryRunOnMissingResource=true
-      - ServerSideApply=true
-      - CreateNamespace=false
+    preserveResourcesOnDeletion: true
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    # namespaces/<ns>/ → one App per directory, synced into <ns>.
+    - git:
+        repoURL: ` + repoURL + `
+        revision: ` + revision + `
+        directories:
+          - path: ` + CustomRoot + `/` + CustomNamespacesDirName + `/*
+    # global/ → cluster-scoped resources. Basename is "global", so this generates
+    # instance-custom-global; the per-generator override only repoints its destination
+    # (cluster-scoped content needs no namespace of its own).
+    - git:
+        repoURL: ` + repoURL + `
+        revision: ` + revision + `
+        directories:
+          - path: ` + CustomRoot + `/` + CustomGlobalDirName + `
+        template:
+          spec:
+            destination:
+              namespace: default
+  template:
+    metadata:
+      name: instance-custom-{{.path.basename}}
+      annotations:
+        argocd.argoproj.io/sync-wave: "10"
+    spec:
+      revisionHistoryLimit: 3
+      project: instance-custom
+      source:
+        repoURL: ` + repoURL + `
+        path: '{{.path.path}}'
+        targetRevision: ` + revision + `
+        # Recurse so subdirectories are organizational only — App Platform's semantics
+        # ("ArgoCD reconciles everything found there"). Ignored when the directory has a
+        # kustomization.yaml at its root: Argo then auto-detects kustomize instead.
+        directory:
+          recurse: true
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{.path.basename}}'
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            maxDuration: 3m
+            factor: 2
+        syncOptions:
+          - ApplyOutOfSyncOnly=true
+          - SkipDryRunOnMissingResource=true
+          - ServerSideApply=true
+          - CreateNamespace=true
 `
 }
 
@@ -376,6 +451,7 @@ spec:
 //     keep this in step.
 //   - GH_REPO: the instance's own <owner>/<name> (this env's values-repo slug) — the
 //     repo-secret publication target the standby bootstrap reads.
+//
 // env is a keyed list (mergeKey name), so these merge onto the component's other
 // env entries by name. The container image is retagged separately by the carved
 // app's images: transformer (llzImageName), not here.

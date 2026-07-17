@@ -12,9 +12,11 @@ kind: Kustomization
 resources:
   - platform-support-project.yaml
   - applications/cluster-foundation.yaml
-  # Operator escape hatch: the instance-custom AppProject + Application sync the
-  # operator-owned apl-values/_shared/custom/ tree (the instance's own resources,
-  # no Terraform). Wave 10, isolated blast radius. See docs/extending-llz.md.
+  # Operator escape hatch: this AppProject scopes the instance-custom ApplicationSet
+  # (rendered per env — it carries the instance repo, so it can't live in this shared
+  # base) that syncs the operator-owned apl-values/_shared/custom/ tree: one App per
+  # namespaces/<ns>/ dir + one for global/. Wave 10, per-namespace blast radius. The
+  # layout mirrors App Platform's GitOps convention. See docs/extending-llz.md.
   - instance-custom-project.yaml
   # (The argo-resync-nudger CronJob — standing safety net that re-triggered any
   # Argo CD Application whose sync terminally failed — was retired: the argo-nudge

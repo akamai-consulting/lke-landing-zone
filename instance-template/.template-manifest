@@ -81,12 +81,13 @@ managed  terraform-iac-bootstrap/cluster-bootstrap/.gitignore
 # pure template logic (no fork-local tokens), overwritten on update.
 managed  terraform-iac-bootstrap/cluster-bootstrap/scripts/**
 managed  apl-values/README.md
-# The apl-core values base (_shared/values.yaml) + the secret-store bootstrap tree
-# (_shared/manifest-secret-store). Template-managed — every env's thin overlay
-# references them; `llz render` writes only the per-env overlay (owned, below). The
-# heavy platform manifests (components/<name>/ + the always-on _shared/manifest base)
-# now live at platform-apl/ (repo root, OUTSIDE the scaffold) and are fetched
-# remotely, so they are no longer part of the instance and carry no manifest entry.
+# The apl-core values base (_shared/values.yaml). Template-managed — every env's
+# thin overlay references it; `llz render` writes only the per-env overlay (owned,
+# below). The heavy platform manifests (the always-on manifest base, the
+# per-component trees, and the secret-store bootstrap tree) now live at
+# platform-apl/ (repo root, OUTSIDE the scaffold) and are fetched as pinned
+# kustomize remote refs, so they are no longer part of the instance and carry no
+# manifest entry. The one exception below (custom/**) is operator-owned.
 managed  apl-values/_shared/**
 
 # ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─

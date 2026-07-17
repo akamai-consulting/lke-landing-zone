@@ -73,9 +73,10 @@ _answers_file: .copier-answers.yml
 _skip_if_exists:
   - "terraform-iac-bootstrap/*/.terraform.lock.hcl"
   - "terraform-iac-bootstrap/cluster/extra-acl-cidrs.txt"
-  # The operator-owned custom/ escape hatch (shipped once as an empty starter) is
-  # `owned`, so an update must never re-render + merge it. (The ACME email is no longer
-  # a vendored file rewrite — it's a JSON6902 patch in the per-env overlay now.)
+  # The operator-owned custom/ escape hatch (shipped once as an empty namespaces/ +
+  # global/ skeleton) is `owned`, so an update must never re-render + merge it — an
+  # instance's own manifests here are theirs. (The ACME email is no longer a vendored
+  # file rewrite — it's a JSON6902 patch in the per-env overlay now.)
   - "apl-values/_shared/custom/**"
 
 # ── Content delivered from OUTSIDE the scaffold ──────────────────────────────

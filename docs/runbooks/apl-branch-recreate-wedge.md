@@ -13,8 +13,9 @@ a kept cluster the same day
 
 ## Why this happens
 
-apl-core's operator force-pushes its rendered values tree **and the platform
-SealedSecrets** to `apl-<env>`. The branch is self-created on first reconcile — but
+apl-core's operator commits its rendered values tree **and the platform
+SealedSecrets** to `apl-<env>` on every reconcile. The branch is self-created on
+first reconcile — but
 nothing resets it when the **cluster** is destroyed and recreated. The recreated
 cluster's operator then clones the stale branch and finds the *previous* cluster's
 SealedSecrets — sealed by a sealed-secrets keypair that died with that cluster. The
@@ -43,9 +44,9 @@ All of these together (each individually is ambiguous):
 
 ## Remediation (proven, ~2 minutes)
 
-The branch is **machine-owned and force-pushed freely** per the ADR — deleting it is
-always safe; the operator self-creates a fresh one (with secrets sealed by the
-*current* cluster's key) on its next reconcile.
+The branch is **machine-owned** per the ADR — nothing but the operator authors it, so
+deleting it is always safe; the operator self-creates a fresh one (with secrets sealed
+by the *current* cluster's key) on its next reconcile.
 
 ```sh
 # 1. Delete the stale branch

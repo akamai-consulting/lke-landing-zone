@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 // secretSpec is one credential the token wizard requests. Dest records where the
@@ -417,6 +419,22 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 	fmt.Println("\n" + bold("Workflow reuse:"))
 	if err := checkCrossOrgReuse(); err != nil {
 		errs = append(errs, err)
+	}
+
+	// Escape-hatch layout. `llz render` gates on this too (it must, since rendering a
+	// flat tree cascade-deletes the operator's workloads), but doctor is the readiness
+	// gate an operator runs FIRST — surfacing it here means they meet the migration
+	// before a terraform op trips over it. See custom_layout.go.
+	fmt.Println("\n" + bold("Custom resources:"))
+	_, aplDir, _ := instanceLayout()
+	customDir := filepath.Join(aplDir, clusterspec.CustomSubdir)
+	if err := checkCustomLayout(customDir); err != nil {
+		report(clusterspec.CustomRoot+" layout", false)
+		errs = append(errs, err)
+	} else if _, statErr := os.Stat(customDir); statErr == nil {
+		report(clusterspec.CustomRoot+" layout", true)
+	} else {
+		fmt.Println("  (no custom/ tree in this repo — nothing to check)")
 	}
 
 	// Opt-in SSH host reachability + known_hosts freshness (an SSH-based GitOps
