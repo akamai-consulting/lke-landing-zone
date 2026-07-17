@@ -16,17 +16,25 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 )
 
-// oidcAudienceForRepo returns the OpenBao jwt-role audience for a
-// GITHUB_REPOSITORY ("<owner>/<name>"): the owner's GitHub-OIDC default
-// audience, matching the bound_audiences `llz ci bao-configure` pins on the role.
+// oidcAudienceForRepo returns the OpenBao jwt-role audience for a repo slug
+// ("<owner>/<name>"): the owner's OIDC default audience, matching the
+// bound_audiences `llz ci bao-configure` pins on the role. Forge-derived so the
+// minted audience and the role's bound audience stay in lockstep across GitHub /
+// GHES / GitLab; defaults to GitHub. See docs/designs/forge-abstraction.md.
 func oidcAudienceForRepo(ghRepo string) string {
 	owner := ghRepo
 	if i := strings.IndexByte(ghRepo, '/'); i > 0 {
 		owner = ghRepo[:i]
 	}
-	return "https://github.com/" + owner
+	f, err := forgeFromEnv()
+	if err != nil {
+		return "https://github.com/" + owner // conservative fallback
+	}
+	return forge.AudienceFor(f, owner)
 }
 
 // githubActionsOIDCToken mints a GitHub Actions OIDC JWT for the given audience.
