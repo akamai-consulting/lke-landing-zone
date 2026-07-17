@@ -2,6 +2,7 @@ package health
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -179,7 +180,21 @@ func ClassifyIngress(key string, addressCount int, phase1 bool) (Category, strin
 // ClassifyWorkflowPhase classifies a (persisted) Argo Workflow by phase:
 // Failed/Error fails (pends under Phase 1, where cert-automation is gated on
 // OpenBao); Succeeded passes; Pending/Running are in-flight (OK/info).
+// IsEphemeralE2EProbe reports whether a Workflow/Pod name is an ephemeral e2e
+// health probe (submitted by `llz ci assert-health-workflow`, generateName
+// "e2e-assert-health-"). These are TEST SCAFFOLDING, not platform components: a
+// Failed one lingering on a REUSED e2e cluster must never gate convergence — the
+// assert-health-workflow step checks its OWN workflow by name, and converge
+// scanning all Workflows/Pods would otherwise inherit a prior run's dead probe.
+func IsEphemeralE2EProbe(name string) bool {
+	return strings.HasPrefix(name, "e2e-assert-health-")
+}
+
 func ClassifyWorkflowPhase(key, phase string, phase1 bool) (Category, string) {
+	// key is "namespace/name" — ignore ephemeral e2e probes regardless of phase.
+	if name := key[strings.LastIndex(key, "/")+1:]; IsEphemeralE2EProbe(name) {
+		return CatOK, "Workflow " + key + " (ephemeral e2e probe — not a convergence signal)"
+	}
 	switch phase {
 	case "Failed", "Error":
 		if phase1 {

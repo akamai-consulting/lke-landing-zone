@@ -169,6 +169,11 @@ func runCIAssertHealthWorkflow(namespace, template string, timeout, interval tim
 		return 0
 	}
 
+	// Reap any prior e2e probe Workflows first: on a REUSED cluster a Failed one
+	// lingers and (even with converge now ignoring them) is just noise. Best-effort.
+	execCombined("kubectl", "-n", namespace, "delete", "workflow",
+		"-l", "workflows.argoproj.io/workflow-template="+template, "--field-selector=status.phase!=Running", "--ignore-not-found")
+
 	for attempt := 1; ; attempt++ {
 		out, err := submitHealthWorkflowFn(namespace, healthWorkflowManifest(template, namespace))
 		if err != nil {

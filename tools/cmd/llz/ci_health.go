@@ -1076,6 +1076,13 @@ func checkPods(r *health.Report, phase1 bool) {
 		if health.IsJobControlled(p.Metadata.OwnerReferences) {
 			continue
 		}
+		// Ephemeral e2e health-probe pods (Argo-Workflow-owned, so NOT Job-
+		// controlled) are test scaffolding — a Failed one from a prior run on a
+		// reused cluster must not gate convergence. Same rationale as the Workflow
+		// scan (ClassifyWorkflowPhase).
+		if health.IsEphemeralE2EProbe(p.Metadata.Name) {
+			continue
+		}
 		key := p.Metadata.Namespace + "/" + p.Metadata.Name
 		if health.PodIsFailing(p.Status) {
 			detail := fmt.Sprintf("Pod %s phase=%s ready=%s state=%s", key, p.Status.Phase, health.ReadyRatio(p.Status), health.SummarizeStates(p.Status))
