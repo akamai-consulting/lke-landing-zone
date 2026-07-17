@@ -1,19 +1,31 @@
 # Design: the forge abstraction — GitHub.com, GHEC, GHES, GitLab
 
-**Status:** Foundation landed on branch `feat/forge-abstraction` — **Phase 0**
-(the field is no longer dead: recognized-but-unwired forges now fail spec
-validation loudly instead of being silently ignored; the `github-enterprise-server`
-flavor split out of `github-enterprise`; the false docstrings on `validate.Forge`
-and `clusterspec.Instance` are corrected), **Phase 2 core** (a real
-[`internal/forge`](../../tools/internal/forge/) package — the four-flavor
-capability model, with API base / git-credential / OIDC-claim logic fully
-implemented and unit-tested), and the **Phase 1** live bug (`gh_secrets_native.go`
-now resolves its API base through the package and honors `$GITHUB_API`/`GH_HOST`,
-where the write path previously ignored them). Not yet landed: the network
-capability implementations (`SecretWriter`/`TokenMinter`/`TokenRotator`), GHES/GitLab
-end-to-end wiring, the GitHub App, and the workflow assimilation — Phases 3–7, each
-gated as below. No forge but GitHub.com is wired end-to-end yet, and `Supported`
-enforces exactly that.
+**Status:** The `internal/forge` package and all of its code-level phases have
+landed on branch `feat/forge` (off `origin/main`). **Phase 0** — the field is no
+longer dead (recognized-but-unwired forges fail spec validation loudly; the
+`github-enterprise-server` flavor split out of `github-enterprise`; the false
+docstrings are corrected). **Phase 1** — `gh_secrets_native.go` resolves its API
+base through the package and honors `$GITHUB_API`/`GH_HOST`, closing the live bug
+where the write path ignored them. **Phase 2** — the four-flavor core (API base /
+git-credential / OIDC-claim logic) plus the GitHub `SecretWriter` moved behind the
+interface, cmd/llz delegating. **Phase 3** — the OpenBao jwt config/roles are
+forge-derived (`forge.OpenBaoJWTAuthConfig`/`OpenBaoJWTRoleBody`), byte-identical
+on GitHub and issuer-/claim-correct on GHES/GitLab. **Phase 4** — the GitHub App
+installation-token minter (`GitHubAppMinter`, stdlib RS256). **Phase 6** — the
+GitLab capabilities (`GitLabClient`: `SecretWriter`, `TokenMinter`,
+`TokenRotator` incl. `RotateSelf`, `ExpiryProber`). Everything is unit-tested;
+the full `tools` suite and `llz-functional` stay green.
+
+What has **not** landed, and why: **Phase 5** (assimilating the ~3,400-line
+workflow bodies into `llz ci` verbs) is a large, forge-independent refactor of
+live CI and is deliberately left for its own incremental effort rather than a
+blind bulk conversion — it remains the long pole and GitLab's `.gitlab-ci.yml`
+is gated on it. The cluster-side couplings (NetworkPolicy egress, Argo repoURLs,
+the wizard's per-forge flows) and the wiring of the new GitLab/App capabilities
+into callers are gated on a real GHES appliance / GitLab project in the e2e
+harness — which does not exist yet, so `forge.Supported` still admits only
+GitHub.com. The non-GitHub code paths above are reserved and tested but dead
+until that gate opens (§Open questions).
 **Relates to:** [credential-single-pane.md](credential-single-pane.md),
 [credential-single-pane-incluster.md](credential-single-pane-incluster.md),
 [cross-org-reuse-pattern.md](cross-org-reuse-pattern.md),
