@@ -72,8 +72,8 @@ func ciAssertInstanceCustomCmd() *cobra.Command {
 		"the kubernetes-custom/namespaces/<ns> basename the release-e2e seed uses; the asserted App is instance-custom-<ns>")
 	cmd.Flags().StringVar(&appSet, "appset", "instance-custom",
 		"the ApplicationSet whose status explains a generated App that never appeared")
-	cmd.Flags().IntVar(&within, "within", 300,
-		"seconds to wait for the App to appear AND reach Synced+Healthy")
+	cmd.Flags().IntVar(&within, "within", 600,
+		"seconds to wait for the App to appear AND reach Synced+Healthy — the App generates instantly, but its FIRST Argo reconcile can lag several minutes on a freshly-converged cluster whose app-controller is backlogged (observed ~5m in e2e), so the budget is generous and phase 2 nudges a refresh")
 	return cmd
 }
 
@@ -103,6 +103,14 @@ func assertInstanceCustom(d aplGateDeps, namespace, appSet string, within time.D
 	fmt.Printf("Application %s exists — waiting for Synced + Healthy…\n", app)
 
 	// Phase 2: the generated App must sync the seeded manifest and go Healthy.
+	//
+	// The App is generated instantly, but on a freshly-converged cluster the Argo
+	// application-controller can be backlogged and not reconcile the new App for
+	// minutes — its .status stays EMPTY (sync= health=), observed ~5m in e2e, which
+	// is what a 300s budget just missed. Nudge a refresh (throttled to 30s) so the
+	// controller picks it up promptly instead of only on its own slow cycle; the
+	// generous deadline is the backstop.
+	var lastRefresh time.Time
 	for {
 		sync, health := argoSyncHealth(d, "argocd", app)
 		if sync == "Synced" && health == "Healthy" {
@@ -115,7 +123,13 @@ func assertInstanceCustom(d aplGateDeps, namespace, appSet string, within time.D
 				app, within, sync, health, argoAppDiag(d, "argocd", app))
 			return fmt.Errorf("%s not Synced+Healthy within %s (sync=%s health=%s)", app, within, sync, health)
 		}
-		fmt.Printf("  %s sync=%s health=%s — retrying…\n", app, sync, health)
+		if d.now().Sub(lastRefresh) >= 30*time.Second {
+			// Best-effort: prompt the app-controller to reconcile now rather than on
+			// its backlogged cycle. Failure is fine — the poll continues regardless.
+			d.kubectl("-n", "argocd", "annotate", "application.argoproj.io", app, "argocd.argoproj.io/refresh=normal", "--overwrite")
+			lastRefresh = d.now()
+		}
+		fmt.Printf("  %s sync=%s health=%s — nudged refresh, retrying…\n", app, sync, health)
 		d.sleep(10 * time.Second)
 	}
 }
