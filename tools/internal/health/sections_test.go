@@ -181,12 +181,12 @@ func TestClassifyWorkflowPhase(t *testing.T) {
 }
 
 func TestIsEphemeralE2EProbe(t *testing.T) {
-	for _, y := range []string{"e2e-assert-health-vrvbr", "e2e-assert-health-", "e2e-assert-health-abc123"} {
+	for _, y := range []string{"e2e-assert-health-vrvbr", "e2e-assert-health-", "e2e-assert-health-abc123", "broad-pat-rotator-e2e"} {
 		if !IsEphemeralE2EProbe(y) {
 			t.Errorf("%q should be an ephemeral e2e probe", y)
 		}
 	}
-	for _, n := range []string{"llz-cluster-health", "e2e-assert", "cert-automation-xyz", ""} {
+	for _, n := range []string{"llz-cluster-health", "e2e-assert", "cert-automation-xyz", "broad-pat-rotator", ""} {
 		if IsEphemeralE2EProbe(n) {
 			t.Errorf("%q should NOT be an ephemeral e2e probe", n)
 		}
