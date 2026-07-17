@@ -182,6 +182,61 @@ func TestValidateEnv_Errors(t *testing.T) {
 	}
 }
 
+// wedgeEnv is a minimal-but-valid Environment for exercising the branch-collision
+// guard in isolation — every OTHER required field is filled so the only finding under
+// test is the branch one.
+func wedgeEnv(appsRev, aplRev string) Environment {
+	return Environment{Cluster: Cluster{
+		ClusterLabel: "x", Region: "us-ord", K8sVersion: "1.31",
+		NodePool:  NodePool{Type: "g6-standard-4", Count: 3},
+		Bootstrap: Bootstrap{Name: "c", AppsRepoRevision: appsRev, AplValues: AplValues{Revision: aplRev}},
+	}}
+}
+
+func hasBranchWedge(errs []error) bool {
+	return strings.Contains(errsString(errs), "reproduces the pre-ADR converge wedge")
+}
+
+// The apl-owned branch (apl-<env> by default) and the LLZ apps branch (main by
+// default) must resolve to different branches, or apl-operator's env/ commits land on
+// the branch platform-bootstrap reads — the pre-ADR wedge.
+func TestValidateEnv_BranchWedge(t *testing.T) {
+	// Defaults never collide: apl-lab vs main.
+	if hasBranchWedge(validateEnv("lab", wedgeEnv("", ""))) {
+		t.Error("defaults (apl-lab vs main) must not trip the wedge guard")
+	}
+	// The classic reintroduction: point the apl branch at main.
+	if !hasBranchWedge(validateEnv("lab", wedgeEnv("", "main"))) {
+		t.Error("aplValues.revision=main (== default appsRepoRevision) must be flagged")
+	}
+	// The mirror: point the apps branch at the apl-owned branch.
+	if !hasBranchWedge(validateEnv("lab", wedgeEnv("apl-lab", ""))) {
+		t.Error("appsRepoRevision=apl-lab (== default aplValues branch) must be flagged")
+	}
+	// Both set to the same custom branch — neither is a default, still a collision.
+	if !hasBranchWedge(validateEnv("lab", wedgeEnv("shared", "shared"))) {
+		t.Error("two explicit values resolving equal must be flagged")
+	}
+	// Two distinct explicit branches are fine.
+	if hasBranchWedge(validateEnv("lab", wedgeEnv("release-1", "apl-lab"))) {
+		t.Error("distinct explicit branches must not be flagged")
+	}
+}
+
+func TestBootstrap_BranchDefaults(t *testing.T) {
+	var b Bootstrap
+	if got := b.AplValuesBranch("prod"); got != "apl-prod" {
+		t.Errorf("AplValuesBranch default = %q, want apl-prod", got)
+	}
+	if got := b.AppsRevision(); got != "main" {
+		t.Errorf("AppsRevision default = %q, want main", got)
+	}
+	b = Bootstrap{AppsRepoRevision: "v1", AplValues: AplValues{Revision: "b2"}}
+	if b.AplValuesBranch("prod") != "b2" || b.AppsRevision() != "v1" {
+		t.Errorf("explicit values must win: got %q / %q", b.AplValuesBranch("prod"), b.AppsRevision())
+	}
+}
+
 func errsString(errs []error) string {
 	parts := make([]string, len(errs))
 	for i, e := range errs {

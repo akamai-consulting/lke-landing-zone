@@ -116,12 +116,10 @@ func (lz *LandingZone) ValuesIdentity(env string) ValuesIdentity {
 	// branch-protectable. Each env gets its OWN branch (apl-lab, apl-primary, …) so
 	// parallel envs never share apl-core state on one branch. apl-operator self-creates
 	// the branch on first commit (checkout -B + push -u origin), so it need not
-	// pre-exist. Override via spec.cluster.bootstrap.aplValues.revision. See
-	// docs/designs/apl-core-values-branch-isolation.md.
-	branch := b.AplValues.Revision
-	if branch == "" {
-		branch = "apl-" + env
-	}
+	// pre-exist. Override via spec.cluster.bootstrap.aplValues.revision. The default
+	// lives on Bootstrap.AplValuesBranch so the wedge guard in Validate compares the
+	// same value this renders. See docs/designs/apl-core-values-branch-isolation.md.
+	branch := b.AplValuesBranch(env)
 	// otomi.git.repoUrl defaults to the instance repo itself — the same literal
 	// the copier-rendered tfvars example carried
 	// ("https://github.com/<@ instance_repo @>.git"). Without this an env whose

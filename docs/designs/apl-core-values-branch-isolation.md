@@ -64,10 +64,19 @@ apl-core writing to `main` at all.
 - Overridable per env via `spec.cluster.bootstrap.aplValues.revision`.
 
 The change is one line of intent in
-[values.go](../../tools/internal/clusterspec/values.go) (`branch = "apl-" + env`);
-`otomi.git.branch` is written *only* by `llz render` into the committed
-`values.yaml` — it is not a Terraform variable and no bootstrap resource consumes
-it — so there is no other wiring to touch.
+[values.go](../../tools/internal/clusterspec/values.go)
+(`Bootstrap.AplValuesBranch` → `apl-<env>`); `otomi.git.branch` is written *only* by
+`llz render` into the committed `values.yaml` — it is not a Terraform variable and no
+bootstrap resource consumes it — so there is no other wiring to touch.
+
+**The override is guarded.** Changing the default is not enough: an operator could set
+`aplValues.revision: main` (or point `appsRepoRevision` at the apl-owned branch) and
+walk straight back into the wedge. `Validate` (in
+[validate.go](../../tools/internal/clusterspec/validate.go), so it gates every `llz
+render`) fails the spec whenever the two branches resolve — after defaults — to the
+same ref. The defaults (`apl-<env>` vs `main`) never collide; the guard exists for the
+override that reintroduces the collision. Both defaults live on `Bootstrap`
+(`AplValuesBranch` / `AppsRevision`) so the guard compares exactly what renders.
 
 ## Why this is safe to point at a fresh branch
 

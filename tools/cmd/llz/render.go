@@ -351,9 +351,11 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// manifest overlay's JSON6902 patch sets it locally. See resolveLLZImageTag.
 	imageTag := resolveLLZImageTag()
 	// The revision this env's in-repo Argo CD content is pinned to — shared by the
-	// platform-bootstrap Application, the carved component Apps, and (since the escape
-	// hatch stopped hardcoding HEAD) the instance-custom ApplicationSet.
-	revision := orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")
+	// platform-bootstrap Application, the carved component Apps, and the env-revision
+	// marker. (The instance-custom ApplicationSet deliberately does NOT use it — the
+	// escape hatch floats on the default branch; see RenderInstanceCustom.) Resolved
+	// via Bootstrap.AppsRevision so the wedge guard in Validate sees the same value.
+	revision := e.Cluster.Bootstrap.AppsRevision()
 	targets := map[string]string{
 		// THIN overlay over the shared base + per-component kustomize Components —
 		// the shared, token-free resources are fetched from the template repo at `ref`;

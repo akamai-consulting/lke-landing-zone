@@ -249,6 +249,30 @@ type Bootstrap struct {
 	AppsRepoRevision string    `json:"appsRepoRevision,omitempty"` // apps_repo_revision
 }
 
+// AplValuesBranch is the values-repo branch apl-operator commits its rendered env/
+// tree + platform SealedSecrets to (otomi.git.branch). It defaults to the per-env,
+// apl-core-OWNED branch apl-<env> — deliberately NOT main. This is the single source
+// of truth for that default; RenderValues (the committed otomi.git.branch) and
+// Validate (the wedge guard) both call it so they cannot drift. See
+// docs/designs/apl-core-values-branch-isolation.md.
+func (b Bootstrap) AplValuesBranch(env string) string {
+	if b.AplValues.Revision != "" {
+		return b.AplValues.Revision
+	}
+	return "apl-" + env
+}
+
+// AppsRevision is the git revision the LLZ-owned Argo tree is read at — the
+// platform-bootstrap Application, the carved component Apps, and the env-revision
+// marker. Defaults to main (the human-owned IaC branch). Single source of truth for
+// that default, shared by render and Validate.
+func (b Bootstrap) AppsRevision() string {
+	if b.AppsRepoRevision != "" {
+		return b.AppsRepoRevision
+	}
+	return "main"
+}
+
 type AplValues struct {
 	RepoURL  string `json:"repoURL,omitempty"`  // apl_values_repo_url
 	Revision string `json:"revision,omitempty"` // apl_values_repo_revision
