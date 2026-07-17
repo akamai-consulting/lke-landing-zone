@@ -362,9 +362,12 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		// per-env local-config marker the bootstrap-cluster env-revision precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(revision),
 		// The operator escape-hatch ApplicationSet, render-emitted locally with this
-		// instance's repo + revision (its shared base is fetched remotely, so it can't
-		// carry them).
-		filepath.Join(manifest, "instance-custom.yaml"): clusterspec.RenderInstanceCustom(id.RepoURL, revision),
+		// instance's repo (its shared base is fetched remotely, so it can't carry it).
+		// It deliberately takes NO revision: unlike platform-bootstrap and the carved
+		// Apps below, the hatch floats on the values repo's default branch so "drop a
+		// file, Argo applies it" holds even on a release-pinned instance. See
+		// RenderInstanceCustom.
+		filepath.Join(manifest, "instance-custom.yaml"): clusterspec.RenderInstanceCustom(id.RepoURL),
 	}
 	// Carved components (blast-radius decomposition): each enabled one renders its
 	// own health-inert Application CR into the manifest tree PLUS a self-contained

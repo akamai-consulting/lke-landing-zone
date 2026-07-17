@@ -170,7 +170,7 @@ func TestRenderManifestKustomization_HealthWorkflowRetag(t *testing.T) {
 }
 
 func TestRenderInstanceCustom(t *testing.T) {
-	app := RenderInstanceCustom("https://github.com/acme/inst.git", "v1.2.3")
+	app := RenderInstanceCustom("https://github.com/acme/inst.git")
 	for _, want := range []string{
 		"kind: ApplicationSet",
 		"name: instance-custom",
@@ -193,27 +193,40 @@ func TestRenderInstanceCustom(t *testing.T) {
 			t.Errorf("instance-custom ApplicationSet missing %q:\n%s", want, app)
 		}
 	}
-	// The generated Apps must NOT carry a resources finalizer — that is what
-	// preserveResourcesOnDeletion buys, and a finalizer would defeat prune:false by
-	// tearing down workloads when a directory disappears from git.
-	if strings.Contains(app, "resources-finalizer.argocd.argoproj.io") {
-		t.Errorf("generated Apps must not carry a resources finalizer:\n%s", app)
+	// DATA-LOSS GUARD. Removing a directory from git must orphan its resources, never
+	// tear down running workloads. Verified in argo-cd source: preserveResourcesOnDeletion
+	// keeps resources-finalizer OFF generated Apps (it is implemented in the RENDER path),
+	// and Argo only cascades to cluster resources when that finalizer is present. Both
+	// assertions below are load-bearing, and each guards a distinct way to silently arm
+	// destruction:
+	//   1. dropping/flipping the flag — the finalizer is then re-applied to EXISTING apps
+	//      on the next reconcile, with no git change at all;
+	//   2. declaring ANY finalizer in the template — the render only adds the finalizer
+	//      when the template has none, so a template finalizer voids the flag entirely.
+	// Note prune:false does NOT buy this; it governs sync-time diffing, not the cascade.
+	if !strings.Contains(app, "preserveResourcesOnDeletion: true") {
+		t.Errorf("preserveResourcesOnDeletion is the ONLY thing preventing cascade-delete on directory removal:\n%s", app)
 	}
-	// The escape hatch pins to the instance's apps_repo_revision, like every other
-	// rendered App. It used to hardcode HEAD, leaving custom/ floating on a pinned
-	// instance — the regression this asserts against.
-	if strings.Count(app, "targetRevision: v1.2.3")+strings.Count(app, "revision: v1.2.3") != 3 {
-		t.Errorf("revision must pin both generators + the App template:\n%s", app)
+	if strings.Contains(app, "finalizers:") || strings.Contains(app, "resources-finalizer.argocd.argoproj.io") {
+		t.Errorf("no finalizer may appear: any template finalizer voids preserveResourcesOnDeletion:\n%s", app)
 	}
-	if strings.Contains(app, "HEAD") {
-		t.Errorf("a pinned instance must not float on HEAD:\n%s", app)
+	// The hatch DELIBERATELY floats on the default branch — "drop a file, Argo applies
+	// it" must hold even on a release-pinned instance, so it does NOT track
+	// apps_repo_revision the way platform-bootstrap and the carved Apps do.
+	// Both generators AND the App template must float in lockstep: discovering
+	// directories at one revision while syncing their contents at another would be a
+	// genuinely confusing failure.
+	if strings.Count(app, "revision: HEAD") != 2 || !strings.Contains(app, "targetRevision: HEAD") {
+		t.Errorf("both generators + the App template must float on HEAD:\n%s", app)
 	}
-	// Unpinned instances keep the old default.
-	if !strings.Contains(RenderInstanceCustom("https://github.com/acme/inst.git", ""), "revision: HEAD") {
-		t.Error("empty revision should fall back to HEAD")
+	// Guard the regression directly: no rendered revision may leak in from the spec.
+	for _, pin := range []string{"v1.2.3", "main", "targetRevision: v", "revision: v"} {
+		if strings.Contains(app, pin) {
+			t.Errorf("the hatch must not carry a pinned revision (%q):\n%s", pin, app)
+		}
 	}
-	// The repo is substituted verbatim.
-	if !strings.Contains(RenderInstanceCustom("https://github.com/other/repo.git", "main"), "repoURL: https://github.com/other/repo.git") {
+	// The repo is the ONLY per-instance value — a different repo flows through verbatim.
+	if !strings.Contains(RenderInstanceCustom("https://github.com/other/repo.git"), "repoURL: https://github.com/other/repo.git") {
 		t.Error("repoURL should be substituted verbatim")
 	}
 }

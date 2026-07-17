@@ -162,12 +162,32 @@ spec:
   edge, not the project. Tighten `sourceRepos` / `destinations` in
   `platform-apl/manifest/instance-custom-project.yaml` if you want a
   narrower scope (that file is template-managed, so re-apply on update).
-- **Nothing is deleted behind your back.** Generated Apps sync with `prune: false`,
-  and the ApplicationSet sets `preserveResourcesOnDeletion: true` — removing a
-  directory from git orphans its resources rather than tearing down running
-  workloads. Deleting is deliberate: `kubectl delete` what you mean to.
-- **Revision.** The generated Apps track your `apps_repo_revision` — the same
-  revision `platform-bootstrap` uses. No separate pin to maintain.
+- **Nothing is deleted behind your back.** Removing a directory from git **orphans**
+  its resources: the generated Application is deleted, its running workloads are not.
+  Deleting is deliberate — `kubectl delete` what you mean to.
+
+  The mechanism is worth knowing, because it is one field deep. The ApplicationSet
+  sets `preserveResourcesOnDeletion: true`, which makes the controller never attach
+  `resources-finalizer.argocd.argoproj.io` to the Applications it generates — and Argo
+  only cascades a deletion to cluster resources when that finalizer is present. It is
+  **not** `prune: false` that saves you (pruning governs resources removed from a
+  directory that still exists), and the field's own upstream godoc is misleading: the
+  Applications *are* deleted, only their resources survive. Two ways to silently arm
+  destruction: drop/flip that field (the finalizer is then re-applied to existing Apps
+  on the next reconcile — no git change needed), or declare any finalizer in the
+  ApplicationSet's template (the render only adds the finalizer when the template has
+  none, so yours voids the flag).
+- **Revision — live, not pinned.** The generated Apps float on the values repo's
+  default branch (`HEAD`). They deliberately do **not** track `apps_repo_revision` the
+  way `platform-bootstrap` and the carved Apps do: pinning the hatch would mean that on
+  a release-pinned instance, dropping in a manifest does nothing until you cut a new
+  pin — which is not an escape hatch. Your platform stays reproducible; your own apps
+  stay live.
+
+  The trade is real: there is no pin to roll back to, and a commit to the default
+  branch deploys itself. The gate is that branch's review — it is human-owned, PR-only,
+  and branch-protectable precisely because apl-core was moved off it (see
+  `docs/designs/apl-core-values-branch-isolation.md`).
 
 ### Why it's at the repo root
 

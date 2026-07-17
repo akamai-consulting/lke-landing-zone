@@ -47,12 +47,15 @@ namespaces, and the default-deny NetworkPolicies already being up.
   platform bootstrap. (A directory *name* Kubernetes would reject is the one thing
   that can — the ApplicationSet reports an error rather than the App. `llz render`
   and `llz doctor` catch those names before they reach a cluster.)
-- **Nothing is deleted behind your back.** Generated Applications sync with
-  `prune: false`, and the ApplicationSet sets `preserveResourcesOnDeletion: true` —
-  so removing a directory from git orphans its resources rather than tearing down
-  running workloads. Deleting is deliberate: `kubectl delete` what you mean to.
-- **Pinned with the platform.** The generated Applications track your instance's
-  `apps_repo_revision`, the same revision `platform-bootstrap` uses.
+- **Nothing is deleted behind your back.** Removing a directory from git **orphans**
+  its resources — the Application goes away, the running workloads stay. Deleting is
+  deliberate: `kubectl delete` what you mean to. (The ApplicationSet's
+  `preserveResourcesOnDeletion: true` is what buys this; `prune: false` governs
+  something else — resources removed from a directory that still exists.)
+- **Live, not pinned.** The generated Applications track the default branch, so
+  dropping a file in applies it — even when your platform is pinned to a release
+  tag. The trade: there's no pin to roll back to, so that branch's PR review is the
+  gate. Deliberate; see `docs/extending-llz.md` in the template repo.
 
 ## Helm / OCI charts
 

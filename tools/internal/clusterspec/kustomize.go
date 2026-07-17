@@ -92,7 +92,7 @@ func (c Component) hasManifestDir() bool {
 // the pinned remote-ref URL when a template ref is resolved, else the local relative
 // path (repo-root platform-apl/, four levels up from an env's manifest/ overlay — the
 // no-version drift-check / test context only). The per-instance instance-custom
-// ApplicationSet is NOT part of this base (it carries the instance repo + revision) —
+// ApplicationSet is NOT part of this base (it carries the instance repo) —
 // RenderManifestKustomization adds it as a local resource.
 func sharedManifestRef(ref string) string {
 	if ref == "" {
@@ -204,7 +204,7 @@ const (
 
 // RenderInstanceCustom returns the per-instance instance-custom ApplicationSet — the
 // operator escape hatch (wave 10) that syncs the instance's own kubernetes-custom/
-// tree. It carries the instance's values-repo URL + revision, so it is render-emitted
+// tree. It carries the instance's values-repo URL, so it is render-emitted
 // LOCALLY into the overlay rather than vendored in the shared base (which is fetched
 // remotely and must be byte-identical across instances). Its AppProject
 // (instance-custom-project.yaml, no per-instance data) stays in the shared base.
@@ -237,13 +237,30 @@ const (
 // a static App pointing at an absent path goes ComparisonError. A directory generator that
 // matches nothing simply yields ZERO Applications, so the absence is inert.
 //
-// revision pins the escape hatch to the same apps_repo_revision the platform-bootstrap
-// Application uses. It used to hardcode HEAD, which left an otherwise-pinned instance's
-// custom tree floating on the default branch. Empty → "HEAD" (the unpinned default).
-func RenderInstanceCustom(repoURL, revision string) string {
-	if revision == "" {
-		revision = "HEAD"
-	}
+// REVISION: the escape hatch DELIBERATELY FLOATS on the values repo's default branch
+// (HEAD — the human-owned `main`; see apl-core-values-branch-isolation.md), and does NOT
+// track apps_repo_revision the way platform-bootstrap and the carved Apps do.
+//
+// This is a product decision, not an oversight. The hatch's whole contract is "drop a
+// file, Argo applies it". Pinning it to the platform's revision would mean that on an
+// instance pinned to a release tag, adding a manifest does nothing until the operator
+// cuts a new pin — which is not an escape hatch. So the platform stays reproducible and
+// the operator's own apps stay live, independently.
+//
+// The trade is real and accepted: there is no pin to roll back to, and a commit to the
+// default branch deploys itself. The gate is that branch's review — it is human-owned,
+// PR-only, and branch-protectable precisely because apl-core was moved off it.
+//
+// Both the generators and the App template use HEAD, and must stay in lockstep:
+// discovering directories at one revision while syncing their contents at another would
+// be a genuinely confusing failure. There is deliberately no revision parameter — a
+// revision that cannot be passed cannot be passed wrongly.
+//
+// (An earlier revision of this function took apps_repo_revision and pinned everything to
+// it, reading the old extending-llz.md advice — "if you pin apps_repo_revision, pin the
+// Application's targetRevision to match" — as intent. That advice was the bug; it has
+// been removed.)
+func RenderInstanceCustom(repoURL string) string {
 	return genHeader + `apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -252,11 +269,30 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "10"
 spec:
-  # Deleting a generated Application (operator removed the directory from git, or the
-  # ApplicationSet itself is pruned) must NOT tear down running workloads — the same
-  # contract the former single Application held with prune:false. This keeps the
-  # resources-finalizer OFF the generated Apps, so a vanished generator result ORPHANS
-  # the resources instead of cascade-deleting them. Removing resources stays deliberate.
+  # LOAD-BEARING, AND THE ONLY THING HOLDING THIS PROMISE UP: removing a directory from
+  # git must ORPHAN its resources, never tear down running workloads.
+  #
+  # Mechanism (verified in argo-cd source, not inferred from the field's godoc — which is
+  # wrong, see below): this flag is implemented in the RENDER path
+  # (applicationset/utils/utils.go), not a deletion path. When true, the controller never
+  # puts resources-finalizer on a generated Application; deleteInCluster then does a plain
+  # Delete, and Argo only cascades to cluster resources when CascadedDeletion() sees that
+  # finalizer. So BOTH deletion routes preserve resources: the whole ApplicationSet being
+  # deleted, and a single directory disappearing from the generator's results.
+  #
+  # Do NOT credit prune:false below for this — pruning governs sync-time diffing, not the
+  # deletion cascade. And do not quote the field's godoc ("these Applications will not be
+  # deleted"): the Applications ARE deleted; only their resources survive.
+  #
+  # TWO WAYS TO SILENTLY ARM DESTRUCTION — both fail closed to data loss, neither is
+  # caught by any test of ours that does not assert on this manifest:
+  #   1. Flipping this to false (or dropping it). The finalizer is re-applied to EXISTING
+  #      apps on the next reconcile (the controller force-syncs generated finalizers), so
+  #      destruction is armed retroactively, with no git change and no sync.
+  #   2. Declaring ANY finalizer in the template below. The render only adds
+  #      resources-finalizer when the template has none, so a template finalizer voids
+  #      this flag entirely (upstream's own test: "user-specified finalizer should
+  #      overwrite preserveResourcesOnDeletion").
   syncPolicy:
     preserveResourcesOnDeletion: true
   goTemplate: true
@@ -265,7 +301,7 @@ spec:
     # namespaces/<ns>/ → one App per directory, synced into <ns>.
     - git:
         repoURL: ` + repoURL + `
-        revision: ` + revision + `
+        revision: HEAD
         directories:
           - path: ` + CustomRoot + `/` + CustomNamespacesDirName + `/*
     # global/ → cluster-scoped resources. Basename is "global", so this generates
@@ -280,7 +316,7 @@ spec:
     # Override with non-zero values only, or restructure the top-level template.
     - git:
         repoURL: ` + repoURL + `
-        revision: ` + revision + `
+        revision: HEAD
         directories:
           - path: ` + CustomRoot + `/` + CustomGlobalDirName + `
         template:
@@ -299,7 +335,7 @@ spec:
       source:
         repoURL: ` + repoURL + `
         path: '{{.path.path}}'
-        targetRevision: ` + revision + `
+        targetRevision: HEAD
         # Recurse so subdirectories are organizational only — App Platform's semantics
         # ("ArgoCD reconciles everything found there").
         #
