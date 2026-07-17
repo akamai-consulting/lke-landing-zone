@@ -755,12 +755,14 @@ jobs:
       # force-syncs the ExternalSecret on the store going Ready — which is why it's
       # checked HERE rather than in the earlier
       # control-plane "Wait for Harbor readiness" gate (gating on it there always hit
-      # the 2m rollout timeout on fresh bootstraps). continue-on-error matches the
-      # control-plane gate: a real registry stall is surfaced (and the release-e2e
-      # image push exercises the registry plane proper) without failing the bootstrap.
+      # the 2m rollout timeout on fresh bootstraps). `wait-harbor --registry-only` now
+      # polls the real rollout budget and self-reports non-fatally: it prints a
+      # ::warning:: and exits 0 if the registry hasn't rolled out in time (the
+      # convergence gate is the hard check, and the release-e2e image push exercises
+      # the registry plane proper). So this step is honestly green and no longer needs
+      # continue-on-error painting a check over a "timed out … exit 1".
       - name: Wait for Harbor registry rollout
         if: steps.ensure.outputs.available == 'true'
-        continue-on-error: true
         run: |
           if ! kubectl -n harbor get svc harbor-core >/dev/null 2>&1; then
             echo "harbor-core absent — Harbor not deployed here; skipping registry wait." >> "$GITHUB_STEP_SUMMARY"
