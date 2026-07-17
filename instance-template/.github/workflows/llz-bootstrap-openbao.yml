@@ -217,7 +217,12 @@ jobs:
 
   bootstrap:
     name: Bootstrap OpenBao (${{ inputs.region }})
-    needs: resolve
+    # No `needs: resolve`: this job self-resolves HA role/peer in its first step
+    # (same `llz env resolve`, same container image) instead of serializing
+    # behind the standalone `resolve` job's container spin (~30-40s on the
+    # critical path). `resolve` still exists — and now runs CONCURRENTLY — for
+    # the standby jobs below (provision-peer-ca / fetch-standby-ca /
+    # reprovision-peer-ca), which consume its outputs across job boundaries.
     if: inputs.reprovision_ca_only == false
     runs-on: ubuntu-latest
     container:
@@ -241,11 +246,10 @@ jobs:
       GH_REPO: ${{ inputs.instance_repo }}
       GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
       HARBOR_URL: ${{ vars.HARBOR_URL }}
-      # HA role/peer resolved from the cluster tfvars (see the `resolve` job).
-      # HA_ROLE drives the Harbor seed direction (ci_harbor reads it), the
-      # github-dispatch-token standby skip, and the cross-region CA extract gate below.
-      HA_ROLE: ${{ needs.resolve.outputs.role }}
-      HA_PEER: ${{ needs.resolve.outputs.peer }}
+      # HA_ROLE / HA_PEER are exported to $GITHUB_ENV by the in-job "Resolve HA
+      # role + peer" step below (drives the Harbor seed direction — ci_harbor
+      # reads it — the github-dispatch-token standby skip, and the cross-region
+      # CA extract gate).
       # S3 backend creds for the merged convergence gate's cluster-access
       # terraform-init (the former `converge` job set these at job level).
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -260,6 +264,17 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # In-job HA resolution (see the `needs` note on this job). Two steps: the
+      # verb emits role=/peer= step outputs; the export step promotes them to
+      # job-wide env so every later step's `env.HA_ROLE` reference (and the
+      # ci_harbor env read) keeps working unchanged.
+      - name: Resolve HA role + peer
+        id: ha
+        run: llz env resolve "$REGION"
+      - name: Export HA role for later steps
+        run: |
+          { echo "HA_ROLE=${{ steps.ha.outputs.role }}"; echo "HA_PEER=${{ steps.ha.outputs.peer }}"; } >> "$GITHUB_ENV"
 
       # ── Cluster-bootstrap phase (bootstrap_cluster=true only) ──────────────────
       # MERGED here from llz-terraform.yml's former standalone `bootstrap-cluster`
@@ -363,15 +378,20 @@ jobs:
           register-runner-lease: 'true'
 
       # ── Cluster-bootstrap phase, part 2 (bootstrap_cluster=true only) ──────────
-      # wait-cluster-ready gates on BOTH apiserver reachability AND the node pool
-      # actually coming up: --tfvars reads node_count so it waits for the whole
-      # statically-sized pool to report Ready, not just for the API to answer.
-      - name: Wait for cluster API ready
+      # Split gate: install apl-core as soon as the apiserver answers and ONE node
+      # is Ready (the install is SSA + CRDs + a helm release whose operator pod
+      # needs a single schedulable node), and assert the FULL statically-sized
+      # pool only after the bootstrap — by then the remaining nodes have had the
+      # whole apl-pipeline wait to join, so on a healthy day the assert is
+      # instant, and on a bad day (Linode capacity/quota, a ≥16-char
+      # node_pool_label wedging join) it still fails the job with the same
+      # message it always did. Serializing the full-pool wait BEFORE the install
+      # paid node-join variance on the critical path for no correctness gain.
+      - name: Wait for cluster API ready (first node)
         if: inputs.bootstrap_cluster
         run: |
-          llz ci wait-cluster-ready --timeout 900 --interval 10 \
-            --tfvars "terraform-iac-bootstrap/cluster/${REGION}.tfvars" || {
-            echo "Persisting failure = control plane still provisioning (re-run later), OR the node pool never reached the expected Ready count (Linode capacity/quota for the node type, or a node_pool_label ≥ 16 chars wedging node join), OR the cluster-access step above did not add this runner's egress IP to the LKE-E control-plane ACL (check its log + LINODE_API_TOKEN scope)."
+          llz ci wait-cluster-ready --timeout 900 --interval 10 || {
+            echo "Persisting failure = control plane still provisioning (re-run later), OR no node ever reached Ready, OR the cluster-access step above did not add this runner's egress IP to the LKE-E control-plane ACL (check its log + LINODE_API_TOKEN scope)."
             exit 1
           }
 
@@ -396,6 +416,19 @@ jobs:
             --apps-repo-revision "${APPS_REPO_REVISION}" \
             --instance-repo "${{ inputs.instance_repo }}" \
             --template-ref "${{ inputs.template-ref }}"
+
+      # The full-pool assert deferred from the split gate above: --tfvars reads
+      # node_count so the whole pool must be Ready before the OpenBao phase
+      # proceeds. Instant on a healthy run (the pool joined during the
+      # apl-pipeline wait); a wedged pool fails HERE with the classic message.
+      - name: Assert the full node pool joined
+        if: inputs.bootstrap_cluster
+        run: |
+          llz ci wait-cluster-ready --timeout 300 --interval 10 \
+            --tfvars "terraform-iac-bootstrap/cluster/${REGION}.tfvars" || {
+            echo "The node pool never reached the expected Ready count (Linode capacity/quota for the node type, or a node_pool_label ≥ 16 chars wedging node join) — apl-core is installed but the cluster is under-capacity."
+            exit 1
+          }
 
       # Diagnostics for a failed cluster bootstrap (typically the apl-pipeline
       # readiness gate timing out). Best-effort and always exits 0 — must never
@@ -932,65 +965,62 @@ jobs:
       # the e2e critical path. Default-off, so normal instance bootstraps are
       # unchanged; only the release-e2e provision dispatch passes assert_loki=true.
       # Uses the job's default kubeconfig ($HOME/.kube/config), same as the poll.
-      - name: Assert Loki is bootstrapped and S3-backed
+      # ── E2E assert suite — independent gates in PARALLEL lanes ─────────────────
+      # These five gates ran back-to-back (~80s serial best case; minutes when
+      # assert-health-workflow retries), but they are independent read-mostly
+      # checks against the already-converged cluster, so they fan out as
+      # background lanes and the step fails if ANY lane fails. Wall clock =
+      # slowest lane (typically wave-health-audit ~45s or a health-workflow run).
+      # Per-lane rationale (each verb is unit-tested; details in its Go file):
+      #  - loki: Loki bootstrapped + S3-backed (the former `validate` job's one
+      #    net-new check, folded here to drop that job's container cycle).
+      #  - scrape+reconciler: ONE lane, ordered — assert-scrape-targets proves
+      #    every landing-zone ServiceMonitor has a live `up` target and each
+      #    PrometheusRule group loaded (the silent un-scraped-CR regression
+      #    class); assert-reconciler then reads llz_reconcile_up/_leader, which
+      #    the scrape assert just proved fresh. Splitting them would race the
+      #    gauge's first scrape.
+      #  - health-workflow: submits a one-shot Workflow from the llz-cluster-health
+      #    WorkflowTemplate and asserts it Succeeds — the day-2 RUN path (kyverno
+      #    signature policy on the pod, SA/executor RBAC, health-incluster verb).
+      #    SKIPS clean when the component is disabled (normal instances).
+      #  - broad-pat: forces one rotation Job from the weekly CronJob and asserts
+      #    action=rotated — exercises mint → OpenBao → GitHub publish → revoke
+      #    against real backends. SAFE: e2e-unique label + broadPATDeployments=e2e
+      #    scope the mint/revoke to the e2e PAT family only. Self-gates on the
+      #    component toggle.
+      #  - wave-audit: GATING runtime negative-wave audit (--fail-on-unvetted) —
+      #    enumerates live negative-wave resources and applies the VAP's decision,
+      #    catching coverage gaps the static guard + admission VAP can't see.
+      # Mutating lanes (health-workflow's Workflow, broad-pat's Job) touch
+      # disjoint namespaces/objects, so concurrency is safe.
+      - name: (e2e) assert suite — loki / scrape+reconciler / health-workflow / broad-pat / wave-audit
         if: ${{ inputs.assert_loki }}
-        run: llz ci assert-loki
-
-      # E2E gate for the observability-pipeline WIRING. converge/health/assert-loki
-      # all stay green when a ServiceMonitor/PrometheusRule regression (a dropped
-      # `prometheus: system` label, a renamed Service port, a wrong
-      # namespaceSelector) silently leaves the CRs un-scraped/un-loaded — the exact
-      # class the recent SM/rule fixes closed. This asserts each landing-zone
-      # ServiceMonitor has a live `up` target and each PrometheusRule group is
-      # loaded, so that regression fails the e2e instead of shipping a metrics
-      # surface that quietly stopped flowing. Gating (no `|| true`); logic lives in
-      # the unit-tested `llz ci assert-scrape-targets`. Same assert_loki gate.
-      - name: (e2e) assert scrape targets up + rule groups loaded
-        if: ${{ inputs.assert_loki }}
-        run: llz ci assert-scrape-targets
-
-      # E2E gate for the reconciler's FUNCTIONAL health. converge sees the
-      # reconciler Deployment as green the moment its pod is Ready, and
-      # alert-eval --strict ignores a FIRING LLZReconcilerReportingDown — so a
-      # reconcile loop that is up but silently failing (a permission dropped by
-      # the least-privilege RBAC, or lost OpenBao/Linode access) slips through
-      # both. This asserts llz_reconcile_up=1 (loop reporting success) and
-      # llz_reconcile_leader=1 (a replica holds the driving Lease) directly. Runs
-      # after assert-scrape-targets, so the gauge is already fresh. Logic lives in
-      # the unit-tested `llz ci assert-reconciler`.
-      - name: (e2e) assert reconciler is functionally healthy
-        if: ${{ inputs.assert_loki }}
-        run: llz ci assert-reconciler
-
-      # E2E gate for the day-2 clusterHealthWorkflow component's RUN path. The
-      # release-e2e provision enables the component, so converge already validated
-      # it DEPLOYS (kyverno admits the WorkflowTemplate/CronWorkflow/RBAC, Argo
-      # syncs them). This submits a one-shot Workflow from the llz-cluster-health
-      # WorkflowTemplate and asserts it Succeeds — proving the RUN path a scheduled
-      # CronWorkflow would take: the signed llz image passes the kyverno signature
-      # policy on the pod, the SA + executor RBAC authorize it, and
-      # `llz ci health-incluster` exits clean on the converged cluster. Same
-      # assert_loki gate; the verb SKIPS (exit 0) if the WorkflowTemplate is absent,
-      # so it stays inert on a normal instance where the component is disabled.
-      # Logic lives in the unit-tested `llz ci assert-health-workflow`.
-      - name: (e2e) assert day-2 health WorkflowTemplate runs green
-        if: ${{ inputs.assert_loki }}
-        run: llz ci assert-health-workflow
-
-      # E2E gate that EXERCISES the in-cluster broad-PAT rotator (not just asserts it
-      # deployed). converge sees its carved App green once the CronJob + ESO Secrets
-      # exist, but the CronJob is weekly — so the mint → verify → OpenBao write →
-      # GitHub env-secret publish → revoke path against real OpenBao k8s-auth / Linode
-      # / GitHub is unproven until it runs. This forces one Job from the CronJob (--apply,
-      # rotated_at=0 seeded by seed-broad-pat makes it due) and asserts action=rotated;
-      # an in-cluster failure (bad role, missing scope, GitHub write denied) fails e2e.
-      # SAFE: e2e enabled it with an e2e-unique label + broadPATDeployments=e2e, so the
-      # mint/revoke touch only the e2e PAT family and only infra-e2e is rewritten.
-      # Self-gates on the component being enabled; logic lives in the unit-tested
-      # `llz ci assert-broad-pat-rotation`.
-      - name: (e2e) exercise the broad-PAT rotator end-to-end
-        if: ${{ inputs.assert_loki }}
-        run: llz ci assert-broad-pat-rotation --region "$REGION"
+        run: |
+          set -uo pipefail
+          dir="$(mktemp -d)"
+          lane() { # <name> <cmd…> — run in background, capture log + exit code
+            local name="$1"; shift
+            { "$@" >"${dir}/${name}.log" 2>&1; echo $? >"${dir}/${name}.rc"; } &
+          }
+          lane loki              llz ci assert-loki
+          lane scrape-reconciler bash -ec 'llz ci assert-scrape-targets && llz ci assert-reconciler'
+          lane health-workflow   llz ci assert-health-workflow
+          lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
+          lane wave-audit        llz ci wave-health-audit --fail-on-unvetted
+          wait
+          fail=0
+          for n in loki scrape-reconciler health-workflow broad-pat wave-audit; do
+            rc="$(cat "${dir}/${n}.rc" 2>/dev/null || echo 1)"
+            echo "::group::assert ${n} (rc=${rc})"
+            cat "${dir}/${n}.log" 2>/dev/null || true
+            echo "::endgroup::"
+            if [ "${rc}" != 0 ]; then
+              echo "::error::e2e assert '${n}' failed (rc=${rc}) — see its group above"
+              fail=1
+            fi
+          done
+          exit "${fail}"
 
       # E2E-only support-plane metric-surface diagnostic. Gated on the same
       # assert_loki input as the check above, so it runs on the release-e2e
@@ -1025,19 +1055,8 @@ jobs:
           llz ci alert-eval 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      # E2E runtime wave-health audit — GATING (--fail-on-unvetted). The static
-      # wave-health-guard scans the git tree at PR time and the VAP enforces at
-      # admission, but neither sees what a CONVERGED cluster actually runs at
-      # negative sync-waves from paths outside the platform-bootstrap kustomize
-      # tree (child-App-rendered content, apl-core resources, operator writeback).
-      # This enumerates every live negative-wave resource and applies the same
-      # decision the VAP makes, failing the e2e on any kind the VAP would DENY —
-      # a coverage gap to add to the allowlist, or a latent false-positive to fix —
-      # instead of waiting for the weekly scheduled audit to surface it. Logic
-      # lives in the unit-tested `llz ci wave-health-audit`.
-      - name: (e2e) runtime wave-health audit
-        if: ${{ inputs.assert_loki }}
-        run: llz ci wave-health-audit --fail-on-unvetted
+      # (The runtime wave-health audit that ran here as its own step now runs as
+      # the `wave-audit` lane of the parallel assert suite above.)
 
       # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx logs
       # WHILE the cluster is still up — before the ACL revoke below cuts apiserver
