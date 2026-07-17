@@ -167,3 +167,36 @@ func TestResolveGHAPIBase(t *testing.T) {
 		})
 	}
 }
+
+// The fail-closed guard: under LLZ_FORGE_STRICT an env write must have an
+// explicit forge target, so a lane cannot silently fall back to github.com and
+// clobber another lane's identically-named environment secret.
+func TestGHWriteTargetStrict(t *testing.T) {
+	// Not strict → always OK (single-forge instances keep defaulting).
+	t.Setenv("LLZ_FORGE_STRICT", "")
+	t.Setenv("GH_HOST", "")
+	t.Setenv("GITHUB_API", "")
+	t.Setenv("LLZ_FORGE", "")
+	t.Setenv("LLZ_FORGE_HOST", "")
+	if err := ghWriteTargetStrictOK(); err != nil {
+		t.Errorf("non-strict must be OK, got %v", err)
+	}
+
+	// Strict + nothing declared → refuse.
+	t.Setenv("LLZ_FORGE_STRICT", "1")
+	if err := ghWriteTargetStrictOK(); err == nil {
+		t.Error("strict with no forge target must refuse (clobber guard)")
+	}
+
+	// Strict + an explicit declaration → OK.
+	for _, k := range []string{"GH_HOST", "LLZ_FORGE", "LLZ_FORGE_HOST", "GITHUB_API"} {
+		t.Setenv("GH_HOST", "")
+		t.Setenv("GITHUB_API", "")
+		t.Setenv("LLZ_FORGE", "")
+		t.Setenv("LLZ_FORGE_HOST", "")
+		t.Setenv(k, "declared")
+		if err := ghWriteTargetStrictOK(); err != nil {
+			t.Errorf("strict with %s declared must be OK, got %v", k, err)
+		}
+	}
+}

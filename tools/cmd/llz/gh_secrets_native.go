@@ -47,7 +47,33 @@ func ghNativeWriter() (*forge.GitHubSecretWriter, error) {
 	if token == "" || repo == "" {
 		return nil, fmt.Errorf("GH_TOKEN and GH_REPO must be set for native GitHub secret writes")
 	}
+	if err := ghWriteTargetStrictOK(); err != nil {
+		return nil, err
+	}
 	return forge.NewGitHubSecretWriter(ghAPIBase, token, repo)
+}
+
+// ghWriteTargetStrictOK is the fail-closed forge-target guard. resolveGHAPIBase
+// silently defaults to github.com when no forge host is declared — fine for a
+// single-forge instance, but in a multi-lane setup (a github.com e2e lane and a
+// GHES lane sharing one Linode account) that default is a clobber vector: a GHES
+// lane that forgets GH_HOST/LLZ_FORGE_HOST would write its rotated secret into
+// github.com's identically-named infra-<env> environment, overwriting the other
+// lane's credential. When LLZ_FORGE_STRICT is set (the e2e/rotation lanes set
+// it), an env-scoped write must have an EXPLICIT forge target and aborts rather
+// than fall back to github.com. See docs/designs/forge-abstraction.md.
+func ghWriteTargetStrictOK() error {
+	if os.Getenv("LLZ_FORGE_STRICT") == "" {
+		return nil
+	}
+	for _, k := range []string{"GITHUB_API", "GH_HOST", "LLZ_FORGE_HOST", "LLZ_FORGE"} {
+		if os.Getenv(k) != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("LLZ_FORGE_STRICT is set but no forge target is declared " +
+		"(GH_HOST / LLZ_FORGE / LLZ_FORGE_HOST / GITHUB_API) — refusing to default to " +
+		"github.com and risk clobbering another lane's env-scoped secrets")
 }
 
 // ghSetRepoSecretNative writes one repo-level Actions secret.
