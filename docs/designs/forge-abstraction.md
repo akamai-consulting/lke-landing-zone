@@ -554,11 +554,25 @@ Two mechanisms close both:
   (`GH_HOST`/`LLZ_FORGE`/`LLZ_FORGE_HOST`/`GITHUB_API`), so a GHES lane that
   forgot its host can never silently write into github.com's environment.
 
+**Sequencing — the lanes must NOT overlap.** The LKE-E clusters are quota-bound;
+two cannot stand side by side. So the lanes run strictly one at a time, each
+through its own teardown (cluster gone) before the next provisions. This is why
+the pipeline is split into a reusable lane (`release-e2e-lane.yml`, one forge per
+invocation) driven by a thin `release-e2e.yml` that calls it in a
+`max-parallel: 1` matrix: the whole github.com lane finishes before the GHES lane
+begins. A matrix over the individual jobs would not suffice — teardown[A] and
+provision[B] could overlap, two clusters at once. Lane selection: **release**
+runs both (github.com then GHES); **workflow_dispatch** runs the single chosen
+`forge` (default github.com), so a human can exercise one lane in isolation. A
+shared `release-e2e` concurrency group is the outer safety net so two separately
+triggered runs cannot race the shared account either.
+
 **Landed:** `forge.LaneName`, the strict guard (`ghWriteTargetStrictOK`), and the
-`release-e2e.yml` harness-side parametrization (a `forge` dispatch input, a
-lane-scoped concurrency group, host-parametrized git remote / repoURL, the
-lane-scoped broad-PAT label, and per-lane instance-repo / dispatch-token
-selection). The github.com lane is byte-unchanged.
+`release-e2e.yml` / `release-e2e-lane.yml` split (the `forge` parameter, the
+sequential matrix, host-parametrized git remote / repoURL, the lane-scoped
+broad-PAT label, and per-lane instance-repo / dispatch-token selection). The
+github.com lane is byte-unchanged: every new expression defaults to its prior
+value, and `release` still runs github.com.
 
 **Not yet landed (the instance-side gap):** the GHES appliance's instance repo
 needs its own `infra-e2e-ghes` Environment + secrets, self-hosted runners, and
