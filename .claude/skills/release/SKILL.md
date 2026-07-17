@@ -1,13 +1,16 @@
 ---
 name: release
-description: Cutting an LLZ release, and the pin/immutability traps around it. Use when asked to cut, tag, promote or roll back a release; when a chart change needs to ship; when an adopter's pin or CI image looks skewed; or when pre-merge e2e needs artifacts that only exist after a merge. Never promotes on its own — the promote click is the human approval.
+description: Cutting an LLZ release, and the pin/immutability traps around it. Use when asked to cut, tag, promote or roll back a release; when a chart change needs to ship; when an adopter's pin or CI image looks skewed; or when pre-merge e2e needs artifacts that only exist after a merge. User-invoked only — releasing is a human decision, and the promote click is the approval.
+disable-model-invocation: true
 ---
 
 # Cutting a release
 
 [`terraform-modules/RELEASING.md`](../../../terraform-modules/RELEASING.md) is
-canonical. This file is the operating procedure and the traps, because publishing
-here is close to a one-way door: **tags are immutable and charts are immutable**.
+canonical for the umbrella tag and
+[`kubernetes-charts/README.md`](../../../kubernetes-charts/README.md) for charts.
+This file is the operating procedure and the traps, because publishing here is
+close to a one-way door: **tags are immutable and charts are immutable**.
 
 > **Never promote a release yourself.** Step 2 below is the human approval. Do
 > everything up to it, then hand it over.
@@ -25,6 +28,21 @@ yourself writing a version literal into the delivered surface, stop — the
 upgrade-churn guard will reject it, and it would add a line to every instance's
 upgrade diff on every release forever.
 
+Per ADR 0003 the workflow bodies are referenced by repo-local `./` paths, so
+there is no cross-repo `uses:@vX.Y.Z` to pin and no `template-ref:` input — CI
+reads the pin from `.copier-answers.yml` at runtime.
+
+## Step 0 — pre-flight
+
+- Working tree clean on the release commit.
+- `make LINT_ALL=1 lint` exits 0 (the unconditional sweep, not the change-aware one).
+- `make coverage` green.
+- **Pick the version off the INTERFACE.** MAJOR = a breaking change to any module
+  input/output, reusable-workflow input/secret, or the scaffold file contract;
+  MINOR = a backward-compatible addition; PATCH = a fix with no interface change.
+  The module READMEs' Inputs/Outputs tables and each reusable workflow's
+  `on.workflow_call` are the SemVer surface — diff those to decide.
+
 ## Step 1 — pre-release, which arms the gate
 
 ```bash
@@ -32,16 +50,17 @@ gh release create vX.Y.Z --prerelease --generate-notes
 ```
 
 That creates the tag and fires `release: prereleased` → `release-e2e.yml` stands
-up a real LKE-E cluster. The pre-release is **not consumable**: `llz self-update`
-and `llz new` skip pre-releases, and no binaries or image are built yet.
+up a real LKE-E cluster (slow, billable). The pre-release is **not consumable**:
+`llz self-update` and `llz new` skip pre-releases, and no binaries or image are
+built yet.
 
 While it runs, the failure surface is the `e2e-triage` skill.
 
 ## Step 2 — promote, once e2e is green (human)
 
 Unchecking "pre-release" fires `release: released`, which builds the CLI binaries
-and the operator image. **That click is the approval** — e2e cannot mechanically
-block it.
+and the `firewall-controller` image. **That click is the approval** — e2e cannot
+mechanically block it.
 
 If e2e fails: **fix forward with the next patch version.** Do not promote a red
 tag and do not move a tag. A failed run leaves only an immutable tag and a
@@ -66,9 +85,11 @@ published. A NetworkPolicy fix without a version bump silently never ships — n
 error, no warning, the old chart keeps serving.
 
 `chart-version-guard` fires on **any** edit inside a chart directory, including a
-README. And the bump **cascades**: `llz-argo-bootstrap-apps` pins the other
-charts, an unmoved pin 404s at Argo sync time, so moving the pin bumps that chart
-too. Do not weaken the gate in the PR that trips it.
+README; `chart-pin-guard` asserts every Argo pin matches a local chart version.
+And the bump **cascades**: `llz-argo-bootstrap-apps` pins the other charts, an
+unmoved pin 404s at Argo sync time, so moving the pin bumps that chart too. Do not
+weaken either gate in the PR that trips it. `helm lint --strict` + `helm template`
+must be clean (`make helm-lint-charts`).
 
 ### The two pin records must agree
 
@@ -98,8 +119,19 @@ there while rejecting one stamped elsewhere.
 > adopter an unpullable image. This is why `build-images` runs on **every** push to
 > main rather than behind a path filter.
 
+> **`llz tokens` will not correct an image pin that is already set.** It computes
+> `TF_IMAGE`/`KUBE_IMAGE` only when they are absent, deliberately, so it never
+> overwrites an operator's choice. An instance carrying a stale pin from before
+> this fix has to have those variables deleted (or corrected) by hand — upgrading
+> alone will not do it.
+
 ## After the release
 
-An adopter takes it with `llz self-update`, then `llz upgrade`. If the version
-bump produced a diff larger than a handful of lines in a delivered instance, that
-is a churn regression, not a normal release — see the `delivered-surface` skill.
+An adopter takes it with `llz self-update`, then `llz upgrade`. Do not add a
+version-bump step for the first-party pins — Renovate is deliberately disabled on
+them so `llz upgrade` stays the single channel; Renovate PRs move charts and
+external actions only.
+
+If the version bump produced a diff larger than a handful of lines in a delivered
+instance, that is a churn regression, not a normal release — see the
+`delivered-surface` skill.

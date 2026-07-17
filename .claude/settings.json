@@ -5,11 +5,51 @@
       "Bash(shellcheck *)",
       "Bash(actionlint *)",
       "Bash(git fetch *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
       "Bash(kubectl kustomize *)",
       "Bash(gofmt -l *)",
       "Bash(kubectl get *)",
       "Bash(go vet *)",
+      "Bash(go build *)",
+      "Bash(go test *)",
+      "Bash(make lint)",
+      "Bash(make lint *)",
+      "Bash(make test)",
+      "Bash(make coverage)",
+      "Bash(make fmt-check)",
+      "Bash(make tf-fmt-check)",
+      "Bash(helm lint *)",
+      "Bash(helm template *)",
+      "Bash(tofu fmt -check *)",
+      "Bash(tflint *)",
+      "Bash(kubeconform *)",
+      "Bash(kube-linter *)",
       "Bash(copier --version)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-sensitive-files.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format-on-edit.sh"
+          }
+        ]
+      }
     ]
   }
 }
