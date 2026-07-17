@@ -183,7 +183,9 @@ func TestRenderInstanceCustom(t *testing.T) {
 		"- path: kubernetes-custom/namespaces/*",
 		"- path: kubernetes-custom/global",
 		"name: instance-custom-{{.path.basename}}",
-		"namespace: '{{.path.basename}}'",
+		// global/ → default namespace; namespaces/<ns>/ → <ns>. Chosen in the single
+		// top-level template so no generator carries a CRD-invalid partial template.
+		`namespace: '{{ if eq .path.basename "global" }}default{{ else }}{{ .path.basename }}{{ end }}'`,
 		"goTemplate: true",
 		"CreateNamespace=true",
 		// Removing a dir from git must orphan resources, never cascade-delete them.
@@ -209,6 +211,17 @@ func TestRenderInstanceCustom(t *testing.T) {
 	}
 	if strings.Contains(app, "finalizers:") || strings.Contains(app, "resources-finalizer.argocd.argoproj.io") {
 		t.Errorf("no finalizer may appear: any template finalizer voids preserveResourcesOnDeletion:\n%s", app)
+	}
+	// CRD-VALIDITY GUARD. There must be exactly ONE template — the top-level one. A
+	// per-generator `template:` block that omits metadata/spec.project (as an earlier
+	// revision had, to repoint only the global generator's namespace) is rejected by
+	// the ApplicationSet CRD's admission validation ("spec.generators[N].git.template.
+	// spec.project: Required value"), so the ENTIRE ApplicationSet never applies while
+	// platform-bootstrap stays Healthy — the silent break assert-instance-custom
+	// exists to catch. Keep generators template-free; choose the destination namespace
+	// in the top-level template (goTemplate) instead.
+	if n := strings.Count(app, "template:"); n != 1 {
+		t.Errorf("expected exactly 1 (top-level) template, found %d — a per-generator template block fails ApplicationSet CRD admission validation:\n%s", n, app)
 	}
 	// The hatch DELIBERATELY floats on the default branch — "drop a file, Argo applies
 	// it" must hold even on a release-pinned instance, so it does NOT track

@@ -305,24 +305,26 @@ spec:
         directories:
           - path: ` + CustomRoot + `/` + CustomNamespacesDirName + `/*
     # global/ → cluster-scoped resources. Basename is "global", so this generates
-    # instance-custom-global; the per-generator override only repoints its destination
-    # (cluster-scoped content needs no namespace of its own). Everything it does NOT
-    # set is inherited from the template below: mergeGeneratorTemplate does
-    # mergo.Merge(generatorTemplate, appSetTemplate), filling only zero-valued fields.
+    # instance-custom-global, synced into the default namespace (cluster-scoped
+    # content needs no namespace of its own); the top-level template below picks
+    # the default for this generator by basename.
     #
-    # TRAP for anyone extending this: that merge has no WithOverride, so a generator
-    # template can never override an inherited value with a Go ZERO value. Setting
-    # prune false here against a top-level prune true would silently do nothing.
-    # Override with non-zero values only, or restructure the top-level template.
+    # NO per-generator template — deliberately. An earlier revision set one here to
+    # repoint only the destination namespace, trusting mergeGeneratorTemplate
+    # (mergo.Merge, zero-value fill) to inherit metadata/project/source from the
+    # top-level template. But that merge is a CONTROLLER-runtime step; the
+    # ApplicationSet CRD validates each generator's template at ADMISSION first and
+    # requires template.metadata AND template.spec.project on ANY template block — so
+    # a partial one is rejected outright ("spec.generators[1].git.template.spec.project:
+    # Required value") and the ENTIRE ApplicationSet never applies (platform-bootstrap
+    # retries the invalid object forever while staying Healthy — the silent gap
+    # assert-instance-custom exists to catch). Keep generators template-free and choose
+    # the destination namespace in the single top-level template instead.
     - git:
         repoURL: ` + repoURL + `
         revision: HEAD
         directories:
           - path: ` + CustomRoot + `/` + CustomGlobalDirName + `
-        template:
-          spec:
-            destination:
-              namespace: default
   template:
     metadata:
       # No sync-wave here: generated Applications are created by the ApplicationSet
@@ -354,7 +356,12 @@ spec:
           recurse: true
       destination:
         server: https://kubernetes.default.svc
-        namespace: '{{.path.basename}}'
+        # global/ (basename "global") → the default namespace for cluster-scoped
+        # resources; every namespaces/<ns>/ dir → its own <ns>. Chosen here in the one
+        # top-level template (goTemplate) so no generator needs a partial template of
+        # its own — a per-generator template omitting metadata/spec.project fails the
+        # ApplicationSet CRD's admission validation and blocks the whole object.
+        namespace: '{{ if eq .path.basename "global" }}default{{ else }}{{ .path.basename }}{{ end }}'
       syncPolicy:
         automated:
           prune: false
