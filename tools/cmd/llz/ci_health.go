@@ -91,39 +91,22 @@ func ciConvergeCmd() *cobra.Command {
 
 // ── converge loop ────────────────────────────────────────────────────────────
 
-// convergeState carries poll-to-poll memory inside one `llz ci converge` run so
-// later polls skip work earlier polls already proved out. The memo only ever
-// makes an IN-PROGRESS poll cheaper; it must NEVER decide the converged verdict
-// — a monotonic section that regressed within the run would be masked by its
-// skip. runConverge enforces that by confirming any ConvergeDone with one full
-// un-memoized pass before returning 0 (see the ConvergeDone case there).
+// convergeState carries the one piece of poll-to-poll memory a `llz ci converge`
+// run keeps: whether phase1 (OpenBao bootstrap pending) has resolved. (An earlier
+// per-section memoization was removed — it forced a full confirm-on-DONE pass
+// [~a whole extra health scan] on every converge to guard against masking a
+// regression, and once the harbor-kick / store-recovery work made converge hit
+// green on the FIRST poll, that confirm was pure cost with no multi-poll benefit
+// to recoup it. Each poll now just runs the full health scan; the elapsed-aware
+// convergeSleep keeps the pacing cheap.)
 type convergeState struct {
-	// phase1Done: phase1 (OpenBao bootstrap pending) resolved FALSE once — the
-	// platform-app-ca / ClusterSecretStore probes (each up to 3 tries with 3s
-	// pauses) never need to run again this converge.
+	// phase1Done: phase1 resolved FALSE once — the platform-app-ca /
+	// ClusterSecretStore probes (each up to 3 tries with 3s pauses) never need to
+	// run again this converge (leaving phase1 is one-way within a bootstrap).
 	phase1Done bool
-	// clean marks monotonic health sections (see healthSections) that reported
-	// zero non-OK findings on an earlier poll; they are skipped on later polls.
-	clean map[string]bool
 }
 
-func newConvergeState() *convergeState { return &convergeState{clean: map[string]bool{}} }
-
-// anySkipped reports whether any monotonic section has been memoized clean, so a
-// ConvergeDone verdict MIGHT rest on a skip and must be confirmed by a full pass.
-// It conservatively also fires on the first all-clean poll (memo just populated,
-// nothing actually skipped yet) — a harmless one-off redundant confirm; the case
-// it must never miss is a genuine skip masking a later regression. An empty memo
-// (no section ever went clean) means the just-returned ConvergeDone came from a
-// full pass and needs no confirmation.
-func (s *convergeState) anySkipped() bool {
-	for _, c := range s.clean {
-		if c {
-			return true
-		}
-	}
-	return false
-}
+func newConvergeState() *convergeState { return &convergeState{} }
 
 // convergeSleep is the pause after an in-progress poll: the remainder of
 // --interval after the poll's own duration. A full health pass costs tens of
@@ -200,9 +183,7 @@ func runConverge(budget, interval, retryDelay int) int {
 	// Long-pole tracking (Tier-3 instrumentation): remember which apps/resources
 	// were still not-OK on the most recent in-progress poll, so on convergence we
 	// can report what was the LAST thing to go healthy — confirming the tail's
-	// identity across runs instead of assuming it. The memoized poll only skips
-	// already-clean monotonic sections, so the not-OK set still reflects the real
-	// long poles (the never-memoized convergence-signal sections).
+	// identity across runs instead of assuming it.
 	var prevNonOK []string
 	var prevAttempt int
 	redisRealigned := false
@@ -243,23 +224,8 @@ func runConverge(budget, interval, retryDelay int) int {
 		}
 		switch step {
 		case health.ConvergeDone:
-			// Never declare converged on a memoized skip: a monotonic section that
-			// went clean→broken within this run would be invisible to the memoized
-			// poll. Confirm with ONE full un-memoized pass (healthExitCode → nil
-			// state). If it disagrees, the memo is stale — reset it and keep polling
-			// so the regressed section is re-evaluated every poll from here on.
-			if st.anySkipped() {
-				if health.ConvergeStep(healthExitCode()) != health.ConvergeDone {
-					fmt.Fprintln(os.Stderr, "::warning::a memoized-clean section regressed — dropping the converge memo and re-polling in full.")
-					st = newConvergeState()
-					if time.Now().After(deadline) {
-						fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the cluster still in-progress.\n", budget)
-						return 1
-					}
-					time.Sleep(convergeSleep(time.Duration(interval)*time.Second, pollDur))
-					continue
-				}
-			}
+			// Every poll is a full health scan (no memoized skips), so the DONE
+			// verdict already rests on a complete pass — no confirm needed.
 			reportConvergeLongPole(prevNonOK, prevAttempt)
 			return 0
 		case health.ConvergePoll:
@@ -321,42 +287,10 @@ func realignArgocdRedis() {
 // returns the convergence-contract exit code (0/2/1).
 func healthExitCode() int { return healthExitCodeState(nil) }
 
-// healthSection is one named check group. monotonic marks sections whose fully-
-// clean state cannot regress within a single converge run's minutes (installed
-// CRDs, admitted webhooks with live endpoints, an unsealed+configured OpenBao)
-// — a converge poll that saw one clean may skip it on later polls. Sections
-// that ARE the convergence signal (Argo apps, workloads, pods, ESO resources)
-// are never monotonic: they must be re-read every poll.
-type healthSection struct {
-	name      string
-	monotonic bool
-	run       func(*health.Report)
-}
-
-// runHealthSections executes the sections in order, skipping monotonic ones a
-// prior poll (tracked in st) proved clean, and marking newly-clean ones. Skips
-// are recorded as OK lines so the report still accounts for every section.
-// Nothing is memoized during phase1: its leniency downgrades findings (e.g. the
-// OpenBao audit-device check doesn't run yet), so "clean under phase1" is not
-// "clean".
-func runHealthSections(r *health.Report, sections []healthSection, st *convergeState, phase1 bool) {
-	for _, s := range sections {
-		if st != nil && s.monotonic && st.clean[s.name] {
-			record(r, health.CatOK, "section "+s.name+" clean on an earlier converge poll — skipped")
-			continue
-		}
-		f, p, d, df := len(r.Failed), len(r.Pending), len(r.Drift), len(r.Deferred)
-		s.run(r)
-		if st != nil && s.monotonic && !phase1 &&
-			len(r.Failed) == f && len(r.Pending) == p && len(r.Drift) == d && len(r.Deferred) == df {
-			st.clean[s.name] = true
-		}
-	}
-}
-
-// healthExitCodeState is healthExitCode with an optional converge memo: nil for
-// a one-shot `llz ci health` (every check runs, every time), non-nil inside
-// `llz ci converge`, where monotonic facts persist across polls.
+// healthExitCodeState is healthExitCode with optional converge state: nil for a
+// one-shot `llz ci health`, non-nil inside `llz ci converge`, where the only
+// carried fact is phase1Done (so the phase1 probes resolve once per run, not per
+// poll). Every poll runs the full set of checks below.
 func healthExitCodeState(st *convergeState) int {
 	lastHealthRedisAuthSplit = false  // set true only by a full scan that sees the split
 	lastHealthAnnotationWedge = false // ditto for the annotation-limit wedge
@@ -393,32 +327,30 @@ func healthExitCodeState(st *convergeState) int {
 	}
 
 	var r health.Report
-	runHealthSections(&r, []healthSection{
-		{"nodes", false, func(r *health.Report) { checkNodes(r) }},
-		{"namespaces", false, func(r *health.Report) { checkNamespaces(r) }},
-		{"apiservices", false, func(r *health.Report) { checkAPIServices(r) }},
-		{"required-crds", true, func(r *health.Report) { checkRequiredCRDs(r) }},
-		{"storageclasses", true, func(r *health.Report) { checkStorageClasses(r) }},
-		{"firewall-bootstrap", true, func(r *health.Report) { checkFirewallBootstrap(r) }},
-		{"openbao", true, func(r *health.Report) { checkOpenBao(r, phase1) }},
-		{"ready-resources", false, func(r *health.Report) { checkReadyResources(r, phase1) }},
-		{"webhooks", true, func(r *health.Report) { checkWebhooks(r) }},
-		{"appprojects", true, func(r *health.Report) { checkAppProjects(r) }},
-		{"leases", false, func(r *health.Report) { checkLeases(r) }},
-		{"argo-apps", false, func(r *health.Report) { checkArgoApps(r, phase1) }},
-		{"workloads", false, func(r *health.Report) { checkWorkloads(r, phase1) }},
-		{"pvcs", false, func(r *health.Report) { checkPVCs(r) }},
-		{"pvs", false, func(r *health.Report) { checkPVs(r) }},
-		{"network-policies", true, func(r *health.Report) { checkNetworkPolicies(r) }},
-		{"jobs", false, func(r *health.Report) { checkJobs(r, phase1) }},
-		{"cronworkflows", false, func(r *health.Report) { checkCronWorkflows(r) }},
-		{"services", false, func(r *health.Report) { checkServices(r, phase1) }},
-		{"pdbs", false, func(r *health.Report) { checkPDBs(r, phase1) }},
-		{"ingresses", false, func(r *health.Report) { checkIngresses(r, phase1) }},
-		{"workflows", false, func(r *health.Report) { checkWorkflows(r, phase1) }},
-		{"stuck-finalizers", false, func(r *health.Report) { checkStuckFinalizers(r) }},
-		{"pods", false, func(r *health.Report) { checkPods(r, phase1) }},
-	}, st, phase1)
+	checkNodes(&r)
+	checkNamespaces(&r)
+	checkAPIServices(&r)
+	checkRequiredCRDs(&r)
+	checkStorageClasses(&r)
+	checkFirewallBootstrap(&r)
+	checkOpenBao(&r, phase1)
+	checkReadyResources(&r, phase1)
+	checkWebhooks(&r)
+	checkAppProjects(&r)
+	checkLeases(&r)
+	checkArgoApps(&r, phase1)
+	checkWorkloads(&r, phase1)
+	checkPVCs(&r)
+	checkPVs(&r)
+	checkNetworkPolicies(&r)
+	checkJobs(&r, phase1)
+	checkCronWorkflows(&r)
+	checkServices(&r, phase1)
+	checkPDBs(&r, phase1)
+	checkIngresses(&r, phase1)
+	checkWorkflows(&r, phase1)
+	checkStuckFinalizers(&r)
+	checkPods(&r, phase1)
 
 	printHealthSummary(&r)
 
