@@ -92,9 +92,11 @@ func ciConvergeCmd() *cobra.Command {
 // ── converge loop ────────────────────────────────────────────────────────────
 
 // convergeState carries poll-to-poll memory inside one `llz ci converge` run so
-// later polls skip work earlier polls already proved out. Monotonic-only: a
-// remembered fact can only make later polls CHEAPER, never change the verdict a
-// fresh `llz ci health` would reach on anything still converging.
+// later polls skip work earlier polls already proved out. The memo only ever
+// makes an IN-PROGRESS poll cheaper; it must NEVER decide the converged verdict
+// — a monotonic section that regressed within the run would be masked by its
+// skip. runConverge enforces that by confirming any ConvergeDone with one full
+// un-memoized pass before returning 0 (see the ConvergeDone case there).
 type convergeState struct {
 	// phase1Done: phase1 (OpenBao bootstrap pending) resolved FALSE once — the
 	// platform-app-ca / ClusterSecretStore probes (each up to 3 tries with 3s
@@ -106,6 +108,22 @@ type convergeState struct {
 }
 
 func newConvergeState() *convergeState { return &convergeState{clean: map[string]bool{}} }
+
+// anySkipped reports whether any monotonic section has been memoized clean, so a
+// ConvergeDone verdict MIGHT rest on a skip and must be confirmed by a full pass.
+// It conservatively also fires on the first all-clean poll (memo just populated,
+// nothing actually skipped yet) — a harmless one-off redundant confirm; the case
+// it must never miss is a genuine skip masking a later regression. An empty memo
+// (no section ever went clean) means the just-returned ConvergeDone came from a
+// full pass and needs no confirmation.
+func (s *convergeState) anySkipped() bool {
+	for _, c := range s.clean {
+		if c {
+			return true
+		}
+	}
+	return false
+}
 
 // convergeSleep is the pause after an in-progress poll: the remainder of
 // --interval after the poll's own duration. A full health pass costs tens of
@@ -138,6 +156,23 @@ func runConverge(budget, interval, retryDelay int) int {
 		pollDur := time.Since(pollStart)
 		switch step {
 		case health.ConvergeDone:
+			// Never declare converged on a memoized skip: a monotonic section that
+			// went clean→broken within this run would be invisible to the memoized
+			// poll. Confirm with ONE full un-memoized pass (healthExitCode → nil
+			// state). If it disagrees, the memo is stale — reset it and keep polling
+			// so the regressed section is re-evaluated every poll from here on.
+			if st.anySkipped() {
+				if health.ConvergeStep(healthExitCode()) != health.ConvergeDone {
+					fmt.Fprintln(os.Stderr, "::warning::a memoized-clean section regressed — dropping the converge memo and re-polling in full.")
+					st = newConvergeState()
+					if time.Now().After(deadline) {
+						fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the cluster still in-progress.\n", budget)
+						return 1
+					}
+					time.Sleep(convergeSleep(time.Duration(interval)*time.Second, pollDur))
+					continue
+				}
+			}
 			return 0
 		case health.ConvergePoll:
 			if time.Now().After(deadline) {

@@ -383,6 +383,54 @@ func TestRunConvergeUnreachableExhaustsBudget(t *testing.T) {
 	}
 }
 
+func TestConvergeStateAnySkipped(t *testing.T) {
+	st := newConvergeState()
+	if st.anySkipped() {
+		t.Error("a fresh memo has skipped nothing")
+	}
+	st.clean["required-crds"] = true
+	if !st.anySkipped() {
+		t.Error("a populated memo must report a possible skip so DONE is confirmed")
+	}
+}
+
+// TestConvergeMemoMaskingIsCaughtByFullPass locks the invariant the confirm-on-
+// DONE path depends on: a monotonic section that regresses clean→broken is
+// SKIPPED (masked) by the retained memo, but a fresh (reset) memo re-runs it and
+// sees the regression. runConverge's ConvergeDone branch resets the memo and
+// re-polls exactly this way, so a masked regression can never be the final
+// verdict.
+func TestConvergeMemoMaskingIsCaughtByFullPass(t *testing.T) {
+	broken := false
+	sections := []healthSection{{"required-crds", true, func(r *health.Report) {
+		if broken {
+			r.Add(health.CatFail, "CRD vanished")
+		}
+	}}}
+
+	st := newConvergeState()
+	// Poll 1: clean → memoized.
+	var r1 health.Report
+	runHealthSections(&r1, sections, st, false)
+	if len(r1.Failed) != 0 || !st.anySkipped() {
+		t.Fatalf("poll 1 should be clean + memoized: failed=%v skipped=%v", r1.Failed, st.anySkipped())
+	}
+	// Section regresses. A poll that REUSES the memo skips it — the regression is
+	// masked (this is the hole the confirm pass closes).
+	broken = true
+	var r2 health.Report
+	runHealthSections(&r2, sections, st, false)
+	if len(r2.Failed) != 0 {
+		t.Fatalf("memoized poll should MASK the regression (skip the section), got %v", r2.Failed)
+	}
+	// The confirm/reset path runs the section fresh and catches it.
+	var r3 health.Report
+	runHealthSections(&r3, sections, newConvergeState(), false)
+	if len(r3.Failed) != 1 {
+		t.Fatalf("a reset memo must re-run the section and see the regression, got %v", r3.Failed)
+	}
+}
+
 func TestConvergeSleep(t *testing.T) {
 	cases := []struct {
 		interval, elapsed, want time.Duration
