@@ -447,9 +447,14 @@ jobs:
             echo "> All PrometheusRules present." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # health-prom-rules port-forwards the Prometheus pod and reports any rule
+      # health-prom-rules queries Prometheus /api/v1/rules and reports any rule
       # group with lastError set — evaluation failures promtool's syntax check
-      # cannot catch. Warn-only, like the other health-* checks.
+      # cannot catch. Warn-only in the sense that findings are annotations, but it
+      # no longer passes vacuously: an unreachable Prometheus fails the step (the
+      # job is continue-on-error, so it surfaces without blocking siblings). It
+      # used to look for the pod in llz-observability, which holds the LLZ CRs
+      # while apl-core Prometheus runs in monitoring — so it skipped clean on every
+      # run and nothing validated the live rules.
       - name: Check Prometheus has loaded rules (no evaluation errors)
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci health-prom-rules

@@ -12,31 +12,30 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
-	"os/exec"
-	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 )
 
 func ciHealthPromRulesCmd() *cobra.Command {
-	var localPort, timeout int
+	var prom string
 	c := &cobra.Command{
 		Use:   "health-prom-rules",
 		Short: "report PrometheusRule groups with evaluation errors (warn-only)",
-		Long: "Native port of the Prometheus rule-evaluation scheduled check. Port-forwards\n" +
-			"the llz-observability Prometheus pod, queries /api/v1/rules, and reports any\n" +
-			"rule with a lastError to the step summary + ::warning:: annotations —\n" +
-			"evaluation failures (missing metric, label-join mistake) that promtool's\n" +
-			"syntax check cannot catch. Skips cleanly when no Prometheus pod is found.\n" +
-			"Reads REGION for the report headings.",
+		Long: "Queries Prometheus /api/v1/rules and reports any rule carrying a lastError to\n" +
+			"the step summary + ::warning:: annotations — evaluation failures (missing\n" +
+			"metric, label-join mistake) that promtool's syntax check cannot catch. Reads\n" +
+			"REGION for the report headings.\n\n" +
+			"Warn-only by design, but it no longer passes VACUOUSLY: an unreachable\n" +
+			"Prometheus is an error, not a clean skip. It previously looked for the pod in\n" +
+			"llz-observability — which holds the LLZ ServiceMonitor/PrometheusRule CRs,\n" +
+			"while apl-core's Prometheus runs in monitoring — so it took its skip path on\n" +
+			"every run and nothing ever validated the live rules.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIHealthPromRules(localPort, timeout) },
+		RunE: func(_ *cobra.Command, _ []string) error { return runCIHealthPromRules(prom) },
 	}
-	c.Flags().IntVar(&localPort, "local-port", 19090, "local port for the Prometheus port-forward")
-	c.Flags().IntVar(&timeout, "timeout", 10, "seconds to wait for the port-forward to answer /-/ready")
+	c.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
+		"Prometheus to query, as <namespace>/<service-or-pod>:<port>")
 	return c
 }
 
@@ -75,72 +74,29 @@ func ruleEvalErrors(body []byte) []string {
 	return errs
 }
 
-// startAttachedPortForward starts a kubectl port-forward that lives only for
-// this command (killed by the returned stop func) — unlike harbor-port-forward,
-// nothing after this command needs the tunnel. A package var for tests.
-var startAttachedPortForward = func(ns, target, ports string) (stop func(), err error) {
-	cmd := exec.Command("kubectl", "-n", ns, "port-forward", target, ports)
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}, nil
-}
-
-func runCIHealthPromRules(localPort, timeout int) error {
+func runCIHealthPromRules(prom string) error {
 	region := os.Getenv("REGION")
 
-	out, err := execOutput("kubectl", "-n", "llz-observability", "get", "pod",
-		"-l", "app.kubernetes.io/name=prometheus",
-		"-o", "jsonpath={.items[0].metadata.name}")
-	pod := strings.TrimSpace(string(out))
-	if err != nil || pod == "" {
-		fmt.Fprintf(os.Stderr, "::warning::No Prometheus pod found in llz-observability namespace on %s — skipping rule load check\n", region)
-		return nil
-	}
-
-	stop, err := startAttachedPortForward("llz-observability", pod, fmt.Sprintf("%d:9090", localPort))
-	if err != nil {
-		return fmt.Errorf("start kubectl port-forward: %w", err)
-	}
-	defer stop()
-
-	base := fmt.Sprintf("http://localhost:%d", localPort)
-	client := &http.Client{Timeout: 5 * time.Second}
-	httpOK := func(url string) (body []byte, ok bool) {
-		resp, err := client.Get(url)
+	// Route through the shared withPrometheus seam, like alert-eval /
+	// assert-scrape-targets / assert-reconciler / prom-metrics. That fixes the
+	// namespace (this used to look in llz-observability, which holds the LLZ CRs —
+	// apl-core's Prometheus lives in monitoring) and drops a hand-rolled transport
+	// that pinned local port 19090, never drained the port-forward's stdout, and
+	// had its own readiness poll.
+	var body []byte
+	if err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+		raw, err := get("/api/v1/rules")
 		if err != nil {
-			return nil, false
+			return err
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, false
-		}
-		b := make([]byte, 0, 1<<20)
-		buf := make([]byte, 32*1024)
-		for {
-			n, rerr := resp.Body.Read(buf)
-			b = append(b, buf[:n]...)
-			if rerr != nil {
-				break
-			}
-		}
-		return b, true
-	}
-	if !waitPoll(time.Duration(timeout)*time.Second, time.Second, func() bool {
-		_, ok := httpOK(base + "/-/ready")
-		return ok
-	}) {
-		fmt.Fprintf(os.Stderr, "::warning::Prometheus port-forward did not become ready on %s — skipping rule load check\n", region)
+		body = raw
 		return nil
-	}
-
-	body, ok := httpOK(base + "/api/v1/rules")
-	if !ok {
-		fmt.Fprintf(os.Stderr, "::warning::could not query Prometheus /api/v1/rules on %s — skipping rule load check\n", region)
-		return nil
+	}); err != nil {
+		// NOT a clean skip. This check's whole job is to notice rules that fail to
+		// evaluate; if it cannot ask, it has established nothing, and returning nil
+		// would report green. The scheduled job is continue-on-error, so a genuinely
+		// unreachable cluster still won't block other work — it will just be visible.
+		return fmt.Errorf("health-prom-rules: could not query %s on %s: %w", prom, region, err)
 	}
 	errored := ruleEvalErrors(body)
 
