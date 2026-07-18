@@ -712,14 +712,13 @@ jobs:
       # apps that own them — re-triggering the sync if an earlier first-boot race
       # already drove it to a terminally-failed state (Argo CD does NOT auto-retry a
       # failed sync to the same revision; selfHeal only corrects drift after a
-      # successful one) — then (2) WAITS for the ClusterSecretStore to actually go
-      # Ready and force-syncs every ExternalSecret. ESO doesn't re-trigger an
-      # ExternalSecret when its store recovers, so without (2) the registry/log
-      # Secrets idle until their own refreshInterval (observed: ~14m of
-      # CreateContainerConfigError after the store was already Ready). The standing
-      # safety net is the in-cluster nudger CronJob
-      # (platform-apl/manifest/argo-resync-nudger); this collapses the latency
-      # at the exact moment seeding unblocks them. Never fails the bootstrap.
+      # successful one) — then (2) bumps a revalidation annotation on the
+      # ClusterSecretStore and WAITS for it to go Ready: the converge precondition
+      # only CI can assert, because only CI knows seeding just finished.
+      # It no longer force-syncs the ExternalSecrets itself (secrets-before-apps
+      # Phase 3): the in-cluster es-store-recovery reconciler lane fires on the very
+      # not-Ready→Ready transition (2) triggers, and covers PushSecrets too. Never
+      # fails the bootstrap.
       - name: Nudge Argo CD to converge secrets (post-seed)
         if: steps.ensure.outputs.available == 'true'
         continue-on-error: true
@@ -728,8 +727,9 @@ jobs:
       # ── Gate: Harbor registry rollout (post-S3-seed) ───────────────────────────
       # harbor-registry mounts the harbor-registry-s3 Secret via secretKeyRef, so it
       # stays in CreateContainerConfigError until that Secret exists. It only appears
-      # after the registry-S3 KV path is seeded (above) AND nudge-argo force-syncs the
-      # ExternalSecret — which is why it's checked HERE rather than in the earlier
+      # after the registry-S3 KV path is seeded (above) AND the es-store-recovery lane
+      # force-syncs the ExternalSecret on the store going Ready — which is why it's
+      # checked HERE rather than in the earlier
       # control-plane "Wait for Harbor readiness" gate (gating on it there always hit
       # the 2m rollout timeout on fresh bootstraps). continue-on-error matches the
       # control-plane gate: a real registry stall is surfaced (and the release-e2e
@@ -847,16 +847,16 @@ jobs:
       # llz image; on a freshly-built main sha the Sigstore/Rekor + GHCR signature
       # can lag the cluster's first admission attempt, failing the platform-bootstrap
       # sync (Argo backs off to 5m retries and does not auto-retry a failed sync to
-      # the same revision), so confirm the cluster can admit the CronJob, then force
-      # platform-bootstrap to re-attempt admission (nudge-argo). The CronJob manifest
-      # is read from the RENDERED instance checkout (source of truth). Only nudge once
-      # the dry-run admits; best-effort — the converge poll below is the verdict.
+      # the same revision), so confirm the cluster can admit the CronJob before the
+      # converge poll adjudicates. The CronJob manifest is read from the RENDERED
+      # instance checkout (source of truth). Best-effort probe only — the re-sync it
+      # used to trigger is the argo-nudge reconciler lane's job now.
       # No `available` gate (unlike the seed/configure steps above): the old
       # standalone converge job ran on bootstrap success REGARDLESS of OpenBao
       # availability, so an OpenBao that never came up still surfaces as a
       # convergence FAILURE here rather than a silently-skipped gate. Default
       # success() gating preserves that — it runs unless an earlier step failed.
-      - name: Preflight — confirm the cluster admits the llz CronJob, then re-sync
+      - name: Preflight — confirm the cluster admits the llz CronJob
         run: |
           set -uo pipefail
           # The rendered CronJob manifests that run the in-cluster llz image — the
@@ -868,7 +868,6 @@ jobs:
             echo "no in-cluster llz CronJob in the instance manifests — nothing to gate; skipping"
             exit 0
           fi
-          all_ok=1
           for FILE in ${FILES}; do
             IMAGE="$(grep -oE 'ghcr\.io/[A-Za-z0-9._-]+/llz:[A-Za-z0-9._-]+' "${FILE}" | head -n1)"
             echo "== preflight ${IMAGE} (${FILE}) =="
@@ -882,20 +881,16 @@ jobs:
               echo "  not admissible yet (attempt ${i}/20) — retrying in 15s"; sleep 15
             done
             if [ "${ok}" != 1 ]; then
-              all_ok=0
               echo "::warning::${IMAGE} (${FILE}): Kyverno CronJob dry-run still failing — $(tr '\n' ' ' </tmp/preflight-admit.err 2>/dev/null | tail -c 300)"
             fi
           done
-          # Argo does not fast-retry a sync that terminally failed on the earlier
-          # (pre-signature) admission denial; force platform-bootstrap to re-apply
-          # now so the CronJobs are re-admitted. Skip the nudge if admission is still
-          # denied (a real Kyverno-side gap: creds/egress) — surfaced above; the
-          # converge poll is the verdict.
-          if [ "${all_ok}" = 1 ]; then
-            llz ci nudge-argo || true
-          else
-            echo "::warning::skipping the re-sync nudge — llz CronJob admission not confirmed; converge will report the verdict"
-          fi
+          # No re-sync nudge here (secrets-before-apps Phase 3). Argo doesn't
+          # fast-retry a sync that terminally failed on the earlier (pre-signature)
+          # admission denial — but the in-cluster argo-nudge reconciler lane watches
+          # for exactly that and re-triggers phase=Failed apps within seconds,
+          # continuously, so a CI-side one-shot adds nothing. This step is now purely
+          # the dry-run probe: it produces the actionable warning above, and the
+          # converge poll below is the verdict.
 
       # (The one-shot pre-converge "Realign argocd-redis on WRONGPASS" step was
       # REMOVED. The converge poll's own reactive realign (ci_health.go: on a
