@@ -726,24 +726,15 @@ jobs:
         continue-on-error: true
         run: llz ci nudge-argo
 
-      # ── Gate: Harbor registry rollout (post-S3-seed) ───────────────────────────
-      # harbor-registry mounts the harbor-registry-s3 Secret via secretKeyRef, so it
-      # stays in CreateContainerConfigError until that Secret exists. It only appears
-      # after the registry-S3 KV path is seeded (above) AND nudge-argo force-syncs the
-      # ExternalSecret — which is why it's checked HERE rather than in the earlier
-      # control-plane "Wait for Harbor readiness" gate (gating on it there always hit
-      # the 2m rollout timeout on fresh bootstraps). continue-on-error matches the
-      # control-plane gate: a real registry stall is surfaced (and the release-e2e
-      # image push exercises the registry plane proper) without failing the bootstrap.
-      - name: Wait for Harbor registry rollout
-        if: steps.ensure.outputs.available == 'true'
-        continue-on-error: true
-        run: |
-          if ! kubectl -n harbor get svc harbor-core >/dev/null 2>&1; then
-            echo "harbor-core absent — Harbor not deployed here; skipping registry wait." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          llz ci wait-harbor --registry-only
+      # (The explicit pre-converge "Wait for Harbor registry rollout"
+      # [`llz ci wait-harbor --registry-only`, ~52s] was REMOVED: it was
+      # continue-on-error so it never gated, and the converge poll below already
+      # checks harbor-registry health — so it was a redundant serial wait duplicating
+      # converge's own harbor check. harbor-registry rolls out after its S3 secret is
+      # seeded + force-synced (above); if it isn't ready when converge runs, converge
+      # simply reports it as the long pole and polls once more — which is strictly
+      # MORE observable than a silent pre-wait. converge is the single source of truth
+      # for harbor readiness now.)
 
       # NOTE — the "Seed Gitea backup S3 credentials in OpenBao" step that
       # wrote secret/gitea/backup-s3 was removed in the apl-core anti-
