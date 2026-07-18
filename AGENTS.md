@@ -45,8 +45,8 @@ scaffold generator that a downstream instance repo consumes.
 ## Repo layout
 
 ```
-terraform-modules/   7 reusable TF modules; published as git:: tagged sources (see RELEASING.md)
-kubernetes-charts/   6 first-party Helm charts; published to GHCR as OCI artifacts
+terraform-modules/   Reusable TF modules; published as git:: tagged sources (see RELEASING.md)
+kubernetes-charts/   First-party Helm charts; published to GHCR as OCI artifacts
 tools/               Native Go module: llz (adopter CLI + CI plumbing), firewall-cidrs, firewall-controller
 dockerfiles/         Container images (ci-terraform, ci-kubernetes, devcontainer) → ghcr.io/akamai-consulting/*
 template-scripts/    stamp/drift scaffold provenance, git hooks, ci helpers

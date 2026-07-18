@@ -25,7 +25,7 @@ flowchart LR
     subgraph TPL["📦 Template repo (this repo) — builds & publishes"]
         direction TB
         TF["terraform-modules/<br/>llz-cluster · llz-pool · llz-node-firewall<br/>llz-object-storage · llz-openbao"]
-        CH["kubernetes-charts/<br/>5 first-party Helm charts"]
+        CH["kubernetes-charts/<br/>first-party Helm charts"]
         IMG["dockerfiles/<br/>ci-terraform · ci-kubernetes · devcontainer"]
         CLI["tools/<br/>the llz CLI (Go)"]
         WF["reusable workflows<br/>+ instance-template/ scaffold"]
