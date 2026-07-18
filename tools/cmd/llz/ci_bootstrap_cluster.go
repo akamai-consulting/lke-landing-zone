@@ -484,6 +484,16 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		return err
 	}
 
+	// ── 7b. llz-openbao namespace (SSA) ──
+	// Pre-create the OpenBao namespace so bootstrap-openbao's seal-key seed lands
+	// immediately instead of spending ~40s waiting for the llz-cluster-foundation
+	// Argo app (wave -20) to create it (the dominant cost of the seal-key step —
+	// e2e timing). Same adopt-later pattern as the two namespaces above; the
+	// seal-key step keeps its own namespace-wait as the safety net.
+	if err := applyManifest(d, llzOpenbaoNamespaceManifest(), "cluster-bootstrap-tf", true); err != nil {
+		return err
+	}
+
 	// ── 8. optional GHCR secrets (SSA; gated on a token, like the count guard) ──
 	// Only for a private fork keeping its first-party OCI charts private, or the
 	// optional internal firewall-controller image. Empty token = public path, skip.
