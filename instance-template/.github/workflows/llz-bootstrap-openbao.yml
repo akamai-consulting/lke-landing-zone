@@ -985,7 +985,7 @@ jobs:
           }
           lane loki              llz ci assert-loki
           lane scrape-reconciler bash -ec 'llz ci assert-scrape-targets && llz ci assert-reconciler'
-          lane health-workflow   llz ci assert-health-workflow
+          lane health-workflow   llz ci assert-health-workflow --region "$REGION"
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
           lane wave-vap          llz ci assert-wave-health-vap
           wait
