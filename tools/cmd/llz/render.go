@@ -256,7 +256,7 @@ func untrackRenderedTfvars(relPrefix string) {
 		return
 	}
 	// All tracked files under the TF roots, filtered in Go to the rendered per-env
-	// tfvars across every root (cluster, cluster-bootstrap, object-storage, vpc).
+	// tfvars across every root (cluster, object-storage, vpc).
 	// terraform.tfvars.example stays tracked — it ends in .example, not .tfvars.
 	listed := gitOut("ls-files", "--", "terraform-iac-bootstrap")
 	var tracked []string

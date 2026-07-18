@@ -2,32 +2,6 @@ package terraform
 
 import "testing"
 
-// -no-color apply output: no ╷│╵ box, plain 2-space-indented "with" lines (the
-// exact reason terraform-apply-with-heal mandates -no-color).
-const helmPhantomLog = `module.cluster_bootstrap.helm_release.apl: Destroying...
-
-Error: uninstall: Release not loaded: apl: release: not found
-
-  with helm_release.apl,
-  on main.tf line 10, in resource "helm_release" "apl":
-  10: resource "helm_release" "apl" {
-`
-
-func TestParseHelmPhantom(t *testing.T) {
-	if got := ParseHelmPhantom(helmPhantomLog); got != "helm_release.apl" {
-		t.Errorf("ParseHelmPhantom = %q, want helm_release.apl", got)
-	}
-	// No matching error => no address.
-	if got := ParseHelmPhantom("Apply complete!"); got != "" {
-		t.Errorf("ParseHelmPhantom(clean) = %q, want empty", got)
-	}
-	// A `with helm_release.` line that is NOT preceded by the not-found error
-	// must not be picked up (the `saw` gate).
-	if got := ParseHelmPhantom("  with helm_release.other,\n"); got != "" {
-		t.Errorf("ParseHelmPhantom(no error preamble) = %q, want empty", got)
-	}
-}
-
 const fwCollisionLog = `Error: Failed to Create Firewall
 
   with module.cluster.module.node_firewall.linode_firewall.this,
@@ -53,38 +27,39 @@ func TestFirewallCollisionAndAddress(t *testing.T) {
 	}
 }
 
-const clusterUnreachableLog = `helm_release.apl: Still creating... [10s elapsed]
+// A real connection-level blip against the Linode API mid-apply — the class this
+// heal absorbs now that no root dials the LKE-E apiserver.
+const linodeAPIFlakeLog = `linode_lke_cluster.this: Still creating... [10m0s elapsed]
 
-Error: Kubernetes cluster unreachable: Get "https://lke621819.api.us-ord.enterprise.linodelke.net:6443/version": net/http: TLS handshake timeout
+Error: Error waiting for LKE Cluster to finish creating: Get "https://api.linode.com/v4beta/lke/clusters/622766": net/http: TLS handshake timeout
 
-  with helm_release.apl,
-  on main.tf line 357, in resource "helm_release" "apl":
- 357: resource "helm_release" "apl" {
+  with linode_lke_cluster.this,
+  on main.tf line 12, in resource "linode_lke_cluster" "this":
+  12: resource "linode_lke_cluster" "this" {
 `
 
-// The plan-time data-source read that flaked in a real run — note there is NO
-// "Kubernetes cluster unreachable" wording here, only a bare API GET that timed
-// out, so the old narrow matcher missed it.
-const corednsPlanFlakeLog = `data.kubernetes_service.coredns[0]: Reading...
-
-Error: Get "https://lke622766.api.us-ord.enterprise.linodelke.net:6443/api/v1/namespaces/kube-system/services/coredns": net/http: TLS handshake timeout
-
-  with data.kubernetes_service.coredns[0],
-  on main.tf line 125, in data "kubernetes_service" "coredns":
- 125: data "kubernetes_service" "coredns" {
+const linodeAPIEOFLog = `Error: [Get "https://api.linode.com/v4/networking/firewalls/12345": EOF]
 `
 
 func TestTransientAPIFlake(t *testing.T) {
-	if !TransientAPIFlake(clusterUnreachableLog) {
-		t.Error("should detect the provider 'cluster unreachable' wording")
+	if !TransientAPIFlake(linodeAPIFlakeLog) {
+		t.Error("should detect a TLS handshake timeout against api.linode.com")
 	}
-	if !TransientAPIFlake(corednsPlanFlakeLog) {
-		t.Error("should detect a bare API GET TLS-handshake-timeout against the cluster endpoint")
+	if !TransientAPIFlake(linodeAPIEOFLog) {
+		t.Error("should detect a bare EOF against api.linode.com")
 	}
-	// A connection error that does NOT name the cluster API endpoint must not be
-	// treated as a control-plane blip.
+	// A connection error that does NOT name the Linode API must not be treated as
+	// a transient blip — that narrowness is what keeps a genuine resource error
+	// from being silently retried.
 	if TransientAPIFlake(`Error: dial tcp 10.0.0.5:443: connect: connection refused`) {
 		t.Error("false positive on a connection error to a non-API endpoint")
+	}
+	// The retired anchor: the LKE-E apiserver. Nothing in the surviving roots
+	// (cluster, object-storage, vpc) dials it — a136aa5 deleted the
+	// cluster-bootstrap workspace that did — so a log naming it is not a class we
+	// can still produce, and matching it would only widen the retry surface.
+	if TransientAPIFlake(`Error: Kubernetes cluster unreachable: Get "https://lke621819.api.us-ord.enterprise.linodelke.net:6443/version": net/http: TLS handshake timeout`) {
+		t.Error("must not match the retired LKE-E apiserver anchor")
 	}
 	// Genuine resource-level failures must NOT be treated as transient.
 	if TransientAPIFlake(fwCollisionLog) {

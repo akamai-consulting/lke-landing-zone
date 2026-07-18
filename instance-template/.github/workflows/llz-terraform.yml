@@ -121,7 +121,12 @@ concurrency:
 
 env:
   # TF_IMAGE, KUBE_IMAGE must be set as GitHub Actions repository variables.
-  TF_VERSION: '1.9.8'
+  # (A TF_VERSION: '1.9.8' literal sat here, and in 8 other jobs across the
+  # instance workflows. NOTHING read it — not a step, not a composite action, not
+  # llz. Terraform's version comes from the image (dockerfiles/Dockerfile's own
+  # ARG TF_VERSION), so this pinned nothing while reading exactly like a pin: a
+  # terraform bump in the image would have left 9 stale literals claiming
+  # otherwise.)
   TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
   AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
   TF_IN_AUTOMATION: 'true'

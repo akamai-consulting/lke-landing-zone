@@ -100,7 +100,6 @@ jobs:
       matrix:
         region: ${{ fromJSON(needs.discover.outputs.deployments) }}
     env:
-      TF_VERSION:          '1.9.8'
       TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       REGION:              ${{ matrix.region }}
@@ -166,7 +165,6 @@ jobs:
       matrix:
         region: ${{ fromJSON(needs.discover.outputs.deployments) }}
     env:
-      TF_VERSION:          '1.9.8'
       TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       REGION:              ${{ matrix.region }}
@@ -316,7 +314,6 @@ jobs:
       matrix:
         region: ${{ fromJSON(needs.discover.outputs.deployments) }}
     env:
-      TF_VERSION:          '1.9.8'
       TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       REGION:              ${{ matrix.region }}
@@ -388,7 +385,6 @@ jobs:
       matrix:
         region: ${{ fromJSON(needs.discover.outputs.deployments) }}
     env:
-      TF_VERSION:          '1.9.8'
       TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       REGION:              ${{ matrix.region }}
@@ -502,7 +498,6 @@ jobs:
       matrix:
         region: ${{ fromJSON(needs.discover.outputs.deployments) }}
     env:
-      TF_VERSION:          '1.9.8'
       TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       REGION:              ${{ matrix.region }}
@@ -577,7 +572,6 @@ jobs:
       matrix:
         region: ${{ fromJSON(needs.discover.outputs.deployments) }}
     env:
-      TF_VERSION:          '1.9.8'
       TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
       AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
       REGION:              ${{ matrix.region }}

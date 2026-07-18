@@ -10,19 +10,16 @@ import (
 // lines with ANSI codes and a "│" box that defeat these anchors.
 
 var (
-	helmNotFoundRe = regexp.MustCompile(`Error:.*release.*not found`)
-	withHelmRe     = regexp.MustCompile(`^\s*with\s+(helm_release\.[^\s,]+)`)
-
 	fwCreateFailRe = regexp.MustCompile(`Failed to Create Firewall`)
 	withFirewallRe = regexp.MustCompile(`^\s*with\s+([^\s,]*linode_firewall\.[^\s,]+)`)
 
 	fwDeviceReadRe = regexp.MustCompile(`Failed to Get Devices for Firewall`)
 )
 
-// transientAPINetErrors are the connection-level failures that mean "the LKE-E
-// apiserver flaked", not "a resource is wrong". Matched only on a line that also
-// names the API endpoint (see TransientAPIFlake) so a genuine resource error is
-// never mistaken for a connectivity blip and silently retried.
+// transientAPINetErrors are the connection-level failures that mean "the Linode
+// API flaked", not "a resource is wrong". Matched only on a line that also names
+// the API endpoint (see TransientAPIFlake) so a genuine resource error is never
+// mistaken for a connectivity blip and silently retried.
 var transientAPINetErrors = []string{
 	"tls handshake timeout",
 	"i/o timeout",
@@ -32,27 +29,23 @@ var transientAPINetErrors = []string{
 	": eof",
 }
 
+// transientAPIHost anchors the transient-flake match to the Linode API endpoint,
+// so a resource-level error that merely happens to contain a net-error substring
+// is never retried as a connectivity blip.
+//
+// This used to anchor on linodelke.net / :6443 — the LKE-E APISERVER — because
+// the flake it absorbed came from the cluster-bootstrap workspace's
+// data.kubernetes_service / helm provider. Commit a136aa5 deleted that workspace,
+// and nothing in the remaining roots (cluster, object-storage, vpc) dials the
+// apiserver, so that anchor could no longer match anything. The roots DO talk to
+// api.linode.com throughout a 20-30 minute cluster apply, and transient TLS/5xx
+// blips there are a real class (Heal D exists because one burned a cold e2e), so
+// the mechanism is retargeted rather than deleted.
+const transientAPIHost = "api.linode.com"
+
 // FirewallCollisionMsg is the Linode error that signals two Cloud Firewalls would
 // share a label (labels are account-unique).
 const FirewallCollisionMsg = "Label must be unique among your Cloud Firewalls"
-
-// ParseHelmPhantom returns the address of a helm_release whose apply failed with
-// "release: not found" — a phantom left in TF state after the cluster lost the
-// release (Heal A). "" if the log shows no such failure.
-func ParseHelmPhantom(applyLog string) string {
-	saw := false
-	for _, line := range strings.Split(applyLog, "\n") {
-		if helmNotFoundRe.MatchString(line) {
-			saw = true
-		}
-		if saw {
-			if m := withHelmRe.FindStringSubmatch(line); m != nil {
-				return m[1]
-			}
-		}
-	}
-	return ""
-}
 
 // FirewallCollision reports whether the apply failed because a Cloud Firewall
 // label already exists (Heal B's trigger).
@@ -79,10 +72,7 @@ func FirewallCollision(applyLog string) bool {
 func TransientAPIFlake(log string) bool {
 	for _, line := range strings.Split(log, "\n") {
 		l := strings.ToLower(line)
-		if strings.Contains(l, "kubernetes cluster unreachable") {
-			return true
-		}
-		if !strings.Contains(l, "linodelke.net") && !strings.Contains(l, ":6443") {
+		if !strings.Contains(l, transientAPIHost) {
 			continue
 		}
 		for _, e := range transientAPINetErrors {

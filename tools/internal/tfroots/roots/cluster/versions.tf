@@ -6,10 +6,6 @@ terraform {
       source  = "linode/linode"
       version = "~> 3.11"
     }
-    external = {
-      source  = "hashicorp/external"
-      version = "~> 2.3"
-    }
     time = {
       source  = "hashicorp/time"
       version = "~> 0.12"

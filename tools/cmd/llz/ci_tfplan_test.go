@@ -193,7 +193,7 @@ func TestCITFPlanRetriesTransientAPIFlake(t *testing.T) {
 	stubTFPlan(t, func(w io.Writer, _ []string) error {
 		calls++
 		if calls == 1 {
-			io.WriteString(w, `Error: Get "https://lke622766.api.us-ord.enterprise.linodelke.net:6443/api/v1/namespaces/kube-system/services/coredns": net/http: TLS handshake timeout`+"\n")
+			io.WriteString(w, `Error: Get "https://api.linode.com/v4beta/lke/clusters/622766": net/http: TLS handshake timeout`+"\n")
 			return errors.New("exit status 1")
 		}
 		io.WriteString(w, "Plan: 1 to add, 0 to change, 0 to destroy.\n")
