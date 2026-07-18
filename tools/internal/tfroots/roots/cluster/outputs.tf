@@ -24,7 +24,7 @@ output "api_endpoints" {
 }
 
 output "kubeconfig_raw" {
-  description = "Raw kubeconfig content. Consumed by the cluster-bootstrap workspace via terraform_remote_state. Marked sensitive."
+  description = "Raw kubeconfig content. Read from state by `llz ci fetch-kubeconfig-state` (the cluster-bootstrap workspace that formerly consumed it via terraform_remote_state is gone). Marked sensitive."
   value       = module.cluster.kubeconfig_raw
   sensitive   = true
 }

@@ -382,7 +382,6 @@ jobs:
       # failed or is mid-flight — it triggers Build Container Images on this ref and
       # waits, instead of pinning stale or failing. One build covers both images.
       - name: Pin instance CI images to this commit (build them first if missing)
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN_INSTANCE: ${{ secrets.E2E_DISPATCH_TOKEN }}
@@ -396,7 +395,6 @@ jobs:
       # never trips that. GITHUB_TOKEN has packages:read (GHCR HEAD) + actions:write
       # (dispatch publish-charts.yml on THIS repo), so one token covers both.
       - name: Ensure first-party charts are published (publish + wait if missing)
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-

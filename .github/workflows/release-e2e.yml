@@ -200,7 +200,6 @@ jobs:
       # trigger-only: no wait, no pin — the full pin step below finds the run in
       # flight and completes the wait+pin with whatever publish time remains.
       - name: Kick the image build early (overlap the publish wait)
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         continue-on-error: true
         env:
           GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
@@ -499,7 +498,6 @@ jobs:
       # failed or is mid-flight — it triggers Build Container Images on this ref and
       # waits, instead of pinning stale or failing. One build covers both images.
       - name: Pin instance CI images to this commit (build them first if missing)
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN_INSTANCE: ${{ secrets.E2E_DISPATCH_TOKEN }}
@@ -513,7 +511,6 @@ jobs:
       # never trips that. GITHUB_TOKEN has packages:read (GHCR HEAD) + actions:write
       # (dispatch publish-charts.yml on THIS repo), so one token covers both.
       - name: Ensure first-party charts are published (publish + wait if missing)
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
@@ -561,7 +558,10 @@ jobs:
   # ── 4. Teardown — ALWAYS, so a paid cluster is never leaked ───────────────────
   teardown:
     name: Teardown (destroy + sweep)
-    needs: [instantiate, provision]
+    # provision already needs instantiate, and teardown reads no needs.instantiate.*
+    # output, so naming instantiate here adds no ordering and no data — it just
+    # reads like a dependency that exists.
+    needs: [provision]
     # Run whenever provisioning actually started; skip only for a dry run (plan
     # only — nothing was created).
     if: ${{ always() && needs.provision.result != 'skipped' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run) }}

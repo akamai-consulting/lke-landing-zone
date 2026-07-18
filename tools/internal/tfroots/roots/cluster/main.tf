@@ -52,8 +52,10 @@ module "cluster" {
   github_runner_ipv4_cidrs = var.github_runner_ipv4_cidrs
   github_runner_ipv6_cidrs = var.github_runner_ipv6_cidrs
 
-  # cluster-bootstrap workspace consumes the kubeconfig via terraform_remote_state
-  # output (kubeconfig_raw); we do not need a local copy in this workspace.
+  # The kubeconfig is consumed from the kubeconfig_raw state OUTPUT (by
+  # `llz ci fetch-kubeconfig-state`), not from a file, so this workspace does not
+  # need a local copy. (It used to be read via terraform_remote_state by the
+  # cluster-bootstrap workspace, which no longer exists.)
   kubeconfig_path = ""
 }
 

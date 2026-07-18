@@ -325,14 +325,20 @@ func ciTFApplyCmd() *cobra.Command {
 	var varFile, plan string
 	c := &cobra.Command{
 		Use:   "tf-apply",
-		Short: "terraform apply with self-heal for two known idempotent failure modes",
+		Short: "terraform apply with self-heal for known idempotent failure modes",
 		Long: "Native port of terraform-apply-with-heal.sh. Runs `terraform apply` once; on\n" +
-			"failure it matches two known patterns, applies a targeted heal, re-plans, and\n" +
-			"retries ONCE. Heal A: a phantom helm_release in state (cluster lost the release)\n" +
-			"→ `terraform state rm`. Heal B: a duplicate Cloud Firewall label → find the\n" +
-			"existing firewall by label (paginated) and `terraform import` it so the retry\n" +
-			"adopts it. Any other error passes through. Reads LINODE_TOKEN (or\n" +
-			"TF_VAR_linode_token) for Heal B.",
+			"failure it matches a known pattern, applies a targeted heal, re-plans, and\n" +
+			"retries ONCE.\n\n" +
+			"Heal B: a duplicate Cloud Firewall label → find the existing firewall by label\n" +
+			"(paginated) and `terraform import` it so the retry adopts it.\n" +
+			"Heal C: a connection-level flake against api.linode.com → settle, then re-plan\n" +
+			"and retry.\n" +
+			"Heal D: the provider's read-back of a just-created firewall's devices failing on\n" +
+			"Linode read-after-write consistency → settle, then re-plan and retry.\n\n" +
+			"(Heal A was a phantom helm_release in state. The workspace holding every\n" +
+			"helm_release was deleted, so it could no longer match; it is gone.)\n\n" +
+			"Any other error passes through. Reads LINODE_TOKEN (or TF_VAR_linode_token)\n" +
+			"for Heal B.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCITFApply(gopts, plan, varFile) },
 	}
@@ -598,14 +604,11 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 
 	healed := false
 
-	// ── Heal A: phantom helm_release in state ──
-	if addr := tf.ParseHelmPhantom(applyLog); addr != "" {
-		fmt.Fprintf(os.Stderr, "::warning::Detected stale TF state for %s (cluster lacks the underlying release). Self-healing.\n", addr)
-		if err := runTF("state", "rm", addr); err != nil {
-			return fmt.Errorf("terraform state rm %s failed — original apply error stands (exit %d): %w", addr, code, err)
-		}
-		healed = true
-	}
+	// (Heal A — a phantom helm_release in state, repaired with `terraform state
+	// rm` — was removed. It matched on the literal `helm_release.` address prefix,
+	// and a136aa5 deleted the cluster-bootstrap workspace that held every
+	// helm_release and kubernetes_* data source in the repo. Nothing in the
+	// remaining roots can produce that address, so the branch was unreachable.)
 
 	// ── Heal B: duplicate Cloud Firewall label ──
 	if !healed && tf.FirewallCollision(applyLog) {
@@ -615,14 +618,21 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 		healed = true
 	}
 
-	// ── Heal C: transient "Kubernetes cluster unreachable" ──
-	// No state to repair: the apiserver flaked on a TLS handshake mid-apply
-	// (the LKE-E HA control plane can drop an individual replica seconds after
-	// wait-cluster-ready passed). Let it settle, then fall through to the shared
-	// re-plan + re-apply — the re-plan is load-bearing here, since the failed
-	// apply already created earlier resources and staled the saved plan.
+	// ── Heal C: transient Linode API flake ──
+	// No state to repair: a connection-level failure (TLS handshake, i/o timeout,
+	// EOF) against api.linode.com mid-apply. Let it settle, then fall through to
+	// the shared re-plan + re-apply — the re-plan is load-bearing here, since the
+	// failed apply already created earlier resources and staled the saved plan.
+	//
+	// RETARGETED: this used to anchor on the LKE-E apiserver (linodelke.net /
+	// :6443), because the flake it absorbed came from the cluster-bootstrap
+	// workspace's kubernetes/helm providers. a136aa5 deleted that workspace and
+	// nothing left dials the apiserver, so the anchor had gone dead. The surviving
+	// roots talk to api.linode.com for the whole 20-30 minute cluster apply, which
+	// is where transient blips actually happen now (Heal D exists because one such
+	// class burned a cold e2e).
 	if !healed && tf.TransientAPIFlake(applyLog) {
-		fmt.Fprintf(os.Stderr, "::warning::Apply hit a transient control-plane API flake (TLS handshake/timeout against :6443 after readiness passed). Waiting %s for the control plane to settle, then retrying.\n", clusterUnreachableSettle)
+		fmt.Fprintf(os.Stderr, "::warning::Apply hit a transient Linode API flake (connection-level error against api.linode.com). Waiting %s to settle, then retrying.\n", clusterUnreachableSettle)
 		time.Sleep(clusterUnreachableSettle)
 		healed = true
 	}

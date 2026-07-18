@@ -176,7 +176,7 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 			setGHAOutput("available", "false")
 			return nil
 		}
-		return fmt.Errorf("kubeconfig_raw for %s %s. cluster-bootstrap reads the SAME state output via terraform_remote_state; if that job passed in this build the state HAS a valid output — the diagnostics above show why 'terraform output -raw' did not", region, reason)
+		return fmt.Errorf("kubeconfig_raw for %s %s. The cluster apply writes this output, so if apply-cluster passed in this build the state HAS a valid value — the diagnostics above show why 'terraform output -raw' did not", region, reason)
 	}
 
 	if err := os.WriteFile(output, stdout.Bytes(), 0o600); err != nil {
