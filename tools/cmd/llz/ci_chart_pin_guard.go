@@ -32,9 +32,18 @@ import (
 )
 
 // chartPinScanRoots are the repo subtrees scanned for first-party chart pins:
-// the live per-env Argo Application manifests and the app-of-apps generator's
-// component list. Both pin chart versions that must track kubernetes-charts/.
-var chartPinScanRoots = []string{"instance-template", "kubernetes-charts"}
+// the platform-bootstrap Applications, the live per-env Argo Application
+// manifests, and the app-of-apps generator's component list. All pin chart
+// versions that must track kubernetes-charts/.
+//
+// platform-apl was MISSING here, and it holds 3 of the repo's 5 first-party
+// pins (manifest/applications/cluster-foundation.yaml,
+// components/openbao/openbao.yaml, components/certManager/cert-automation.yaml).
+// The guard reported "2 first-party chart pin(s) match" and read as full
+// coverage while 3 pins could drift from their Chart.yaml unwatched — a pin the
+// registry never received 404s at Argo sync time, which is the exact failure
+// this guard exists to prevent.
+var chartPinScanRoots = []string{"platform-apl", "instance-template", "kubernetes-charts"}
 
 // chartPinRe matches a `chart: <name>` line, capturing its indent and name.
 // versionPinRe matches the sibling `targetRevision:`/`version:` line (the two
@@ -158,26 +167,16 @@ func extractChartPins(content string) []chartPin {
 			continue
 		}
 		indent, name := m[1], strings.Trim(m[2], `"'`)
-		for j := i + 1; j < len(lines); j++ {
-			next := lines[j]
-			if strings.TrimSpace(next) == "" {
-				continue
-			}
-			curIndent := next[:len(next)-len(strings.TrimLeft(next, " \t"))]
-			if len(curIndent) < len(indent) {
-				break // dedented out of the source block before a version key
-			}
-			if len(curIndent) > len(indent) {
-				continue // deeper nesting (e.g. helm.valuesObject) — not the sibling
-			}
-			if v := versionPinRe.FindStringSubmatch(next); v != nil {
-				pins = append(pins, chartPin{
-					Chart:   name,
-					Version: strings.Trim(v[2], `"'`),
-					Line:    i + 1,
-				})
-			}
-			break // first same-indent sibling decides (version key or otherwise)
+		// Search BOTH directions for the version sibling. This used to scan forward
+		// only and break at the first same-indent key whatever it was, so a source
+		// block that writes `targetRevision:` ABOVE `chart:` yielded no pin at all —
+		// silently exempting that chart from drift checking. chart-publish-check
+		// reads the same YAML with a bidirectional scan, so the two guards disagreed
+		// about which pins even exist.
+		if v := siblingValue(lines, i, indent, "targetRevision"); v != "" {
+			pins = append(pins, chartPin{Chart: name, Version: v, Line: i + 1})
+		} else if v := siblingValue(lines, i, indent, "version"); v != "" {
+			pins = append(pins, chartPin{Chart: name, Version: v, Line: i + 1})
 		}
 	}
 	return pins
