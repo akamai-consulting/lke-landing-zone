@@ -20,17 +20,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
-// renderedArgoApp is the slice of a rendered ArgoCD Application this gate reads.
+// renderedArgoApp is the slice of a rendered ArgoCD Application/AppProject this
+// gate reads.
 type renderedArgoApp struct {
 	Kind     string `yaml:"kind"`
 	Metadata struct {
-		Name string `yaml:"name"`
+		Name        string            `yaml:"name"`
+		Annotations map[string]string `yaml:"annotations"`
 	} `yaml:"metadata"`
 	Spec struct {
 		Source  *argoSource  `yaml:"source"`
@@ -102,13 +105,23 @@ func runArgoCDRenderedApps(renderDir string, out io.Writer) error {
 				// schema validation owns malformed-manifest reporting.
 				continue
 			}
-			if app.Kind != "Application" {
+			if app.Kind != "Application" && app.Kind != "AppProject" {
 				continue
 			}
 			apps++
 			name := app.Metadata.Name
 			if name == "" {
 				name = "<unknown>"
+			}
+			// Every Application/AppProject must declare a sync-wave. Without one it
+			// defaults to wave 0 and races the resources it should be ordered
+			// against, which can deadlock a greenfield install.
+			if msg := missingSyncWave(app); msg != "" {
+				fmt.Fprintf(os.Stderr, "::error file=%s::%s %q %s\n", f, app.Kind, name, msg)
+				problems++
+			}
+			if app.Kind != "Application" {
+				continue
 			}
 			for _, dup := range duplicateHelmParams(app) {
 				fmt.Fprintf(os.Stderr, "::error file=%s::Rendered Application '%s' has duplicate Helm parameter '%s'\n", f, name, dup)
@@ -120,9 +133,34 @@ func runArgoCDRenderedApps(renderDir string, out io.Writer) error {
 	if problems > 0 {
 		return fmt.Errorf("argocd-rendered-apps: %d rendered ArgoCD Application validation error(s)", problems)
 	}
-	fmt.Fprintf(out, "%d rendered ArgoCD Application(s) passed semantic validation.\n", apps)
+	fmt.Fprintf(out, "%d rendered ArgoCD Application(s)/AppProject(s) passed semantic validation.\n", apps)
 	return nil
 }
+
+// missingSyncWave returns a complaint when the object has no usable
+// argocd.argoproj.io/sync-wave annotation, or "" when it is fine.
+//
+// This absorbs the former `sync-wave-lint` Makefile target, which was FILE
+// scoped: it grepped the whole file for `^kind: (Application|AppProject)` and
+// then for the sync-wave string anywhere in that same file. Helm renders many
+// Applications per output file, so ONE annotated Application satisfied the check
+// for every other Application beside it. It also matched the annotation name in a
+// comment, never checked the value parsed as an integer, and never required it to
+// sit under metadata.annotations. Decoding per document fixes all four.
+func missingSyncWave(app renderedArgoApp) string {
+	v, ok := app.Metadata.Annotations[syncWaveAnnotation]
+	if !ok {
+		return "has no " + syncWaveAnnotation + " annotation — it would default to wave 0 and race the resources it should be ordered against (deadlocks a greenfield install)"
+	}
+	if _, err := strconv.Atoi(strings.TrimSpace(v)); err != nil {
+		return fmt.Sprintf("has a non-integer %s value %q — Argo CD ignores what it cannot parse, so this silently behaves as wave 0", syncWaveAnnotation, v)
+	}
+	return ""
+}
+
+// syncWaveAnnotation is the Argo CD ordering annotation both this guard and the
+// wave-health guards read.
+const syncWaveAnnotation = "argocd.argoproj.io/sync-wave"
 
 // duplicateHelmParams returns the sorted set of Helm parameter names that appear
 // more than once across an Application's source and sources[] helm blocks.

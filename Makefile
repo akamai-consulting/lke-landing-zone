@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .PHONY: help \
         build build-tools llz \
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint sync-wave-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -286,8 +286,15 @@ argocd-rendered-apps-check: render-charts
 # placeholder-lint: reject unsubstituted placeholder.example.com hostnames in the
 # rendered manifests — anything Argo CD reconciles into a cluster must carry real
 # addresses, never the template's example placeholders.
+# A missing/empty RENDER_DIR made `grep -r` exit non-zero, which this read as
+# "no placeholders found" — the same clean pass as a fully-rendered tree with
+# none. Assert the corpus exists first so the green means something.
 placeholder-lint: render-charts
-	@if grep -rn 'placeholder\.example\.com' $(RENDER_DIR)/; then \
+	@if [ -z "$$(find $(RENDER_DIR)/ -name '*.yaml' 2>/dev/null | head -1)" ]; then \
+		echo "::error::placeholder-lint: no rendered manifests under $(RENDER_DIR)/ — refusing to report 'no placeholders' having scanned nothing."; \
+		exit 1; \
+	fi; \
+	if grep -rn 'placeholder\.example\.com' $(RENDER_DIR)/; then \
 		echo "::error::Unsubstituted placeholder.example.com found in rendered manifests."; \
 		exit 1; \
 	fi; \
@@ -421,29 +428,14 @@ helm-lint-charts: helm-repos
 actions-lint:
 	actionlint .github/workflows/*.yml
 
-# sync-wave-lint: every Application + AppProject YAML in apl-values/ must carry
-# an argocd.argoproj.io/sync-wave annotation. Missing annotations cause
-# undefined sync ordering — in particular, AppProjects without a wave default
-# to wave 0, which is AFTER wave -5/-10 Applications that reference them,
-# causing a deadlock on greenfield install. Mirrors the CI check in
-# .github/workflows/lint.yml sync-wave-lint job.
-sync-wave-lint: render-charts
-	@set -euo pipefail; \
-	FAIL=false; \
-	while IFS= read -r file; do \
-		if ! grep -qE "^kind: (Application|AppProject)" "$$file"; then continue; fi; \
-		if ! grep -q "argocd.argoproj.io/sync-wave" "$$file"; then \
-			KIND=$$(grep -oE "^kind: (Application|AppProject)" "$$file" | head -1); \
-			echo "ERROR $$file: ArgoCD $$KIND is missing argocd.argoproj.io/sync-wave annotation"; \
-			FAIL=true; \
-		fi; \
-	done < <(find $(RENDER_DIR)/ -name "*.yaml"); \
-	if [ "$$FAIL" = "true" ]; then \
-		echo "One or more Applications or AppProjects are missing sync-wave annotations."; \
-		echo "Add argocd.argoproj.io/sync-wave: \"<N>\" to the metadata.annotations block."; \
-		exit 1; \
-	fi; \
-	echo "All ArgoCD Applications and AppProjects have sync-wave annotations."
+# (sync-wave-lint lived here. It grepped whole FILES for `^kind: (Application|
+# AppProject)` and then for the sync-wave string anywhere in that same file, so
+# one annotated Application satisfied the check for every other Application Helm
+# rendered beside it. It also matched the annotation name in a comment, never
+# checked the value parsed as an integer, and passed vacuously when RENDER_DIR
+# was empty (the find loop simply never ran). Folded into `llz ci
+# argocd-rendered-apps`, which already decodes every document individually over
+# the same corpus and already fails loudly on an empty render dir.)
 
 # ── Combined lint ─────────────────────────────────────────────────────────────
 # By default, only lints files changed since the last commit (git diff HEAD).
@@ -455,7 +447,7 @@ sync-wave-lint: render-charts
 # targets share a render-charts prerequisite, so one $(MAKE) invocation renders
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
-LINT_K8S := k8s-lint k8s-validate sync-wave-lint wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard placeholder-lint \
+LINT_K8S := k8s-lint k8s-validate wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard placeholder-lint \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
             helm-lint-charts helm-lint-real-values helm-lint-argocd \
             helm-dep-lock-check
