@@ -22,7 +22,7 @@ func wdWrite(t *testing.T, files map[string]string) []string {
 			t.Fatal(err)
 		}
 	}
-	return []string{filepath.Join(dir, "_shared", "manifest"), comp}
+	return []string{filepath.Join(dir, "platform-apl", "manifest"), comp}
 }
 
 const wdReconcilerDeploy = `apiVersion: apps/v1

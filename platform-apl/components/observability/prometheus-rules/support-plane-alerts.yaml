@@ -204,7 +204,7 @@ spec:
             description: 'The OTel Collector exporter has failed sends for 15m — telemetry is being dropped downstream; check the exporter endpoint and credentials.'
         # ── Harbor error-rate / saturation ────────────────────────────────────────
         # PROVISIONAL (issue #183). harbor_* only exists once metrics are enabled
-        # (this branch: _shared/values.yaml harbor._rawValues.metrics + the
+        # (this branch: apl-values/values.yaml harbor._rawValues.metrics + the
         # harbor-allow-metrics NetworkPolicy) AND the scrape converges — until then
         # `alert-eval` reports these DEAD?. Names are the goharbor v2.15 exporter/core
         # metrics; verify live once deployed with `llz ci prom-metrics --match '^harbor_'`

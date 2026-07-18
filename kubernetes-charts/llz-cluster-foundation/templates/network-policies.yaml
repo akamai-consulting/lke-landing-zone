@@ -254,7 +254,7 @@ spec:
 ---
 # apl-core's Prometheus (monitoring ns) scrapes Harbor's :8001 metrics endpoints
 # (harbor-exporter + core/registry/jobservice) once metrics are enabled (see
-# _shared/values.yaml harbor._rawValues.metrics, issue #183). harbor-default-deny
+# apl-values/values.yaml harbor._rawValues.metrics, issue #183). harbor-default-deny
 # blocks it otherwise. Scoped to harbor app pods on the metrics port; the mesh is
 # PERMISSIVE, so the plaintext scrape from the (non-mesh) Prometheus needs no
 # PeerAuthentication exception — same shape as the CNPG :9187 rule above.

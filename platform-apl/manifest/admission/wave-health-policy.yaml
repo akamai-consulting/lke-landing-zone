@@ -49,7 +49,7 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["leases"]
       # The whole argoproj.io group. Unlike the CI wave-health-guard — which scans
-      # ONLY the platform-bootstrap kustomize tree (_shared/manifest + components) —
+      # ONLY the platform-bootstrap kustomize tree (platform-apl/manifest + components) —
       # this policy sees EVERY admission cluster-wide. Argo Events CRs
       # (Sensor/EventSource/EventBus, e.g. llz-cert-automation's at wave -14) and
       # Workflows are managed by CHILD Apps that health-gate their own content; they
@@ -58,7 +58,7 @@ spec:
       # AppProject) are health-inert. Every historical wedge class this guard exists
       # for is non-argoproj (#142 NetworkPolicy/ClusterIssuer, #163 Deployment). So
       # exclude the group wholesale. (Application/AppProject stay in the allowlist
-      # below for lockstep with the CI guard, which DOES scan them in _shared.)
+      # below for lockstep with the CI guard, which DOES scan them in platform-apl/manifest.)
       # Found by a live negative-wave census on an e2e cluster — see
       # docs/designs/blast-radius-decomposition.md.
       - apiGroups: ["argoproj.io"]
@@ -92,7 +92,7 @@ spec:
     - name: nameKey
       expression: 'variables.groupKind + "/" + (has(object.metadata.name) ? object.metadata.name : "")'
     # Kinds that are health-inert OR neutralized by a resource.customizations.health
-    # override in _shared/values.yaml (the CI guard cross-checks the override's
+    # override in apl-values/values.yaml (the CI guard cross-checks the override's
     # presence; admission can only assert the kind is vetted). == waveHealthAllowedKinds.
     - name: allowedKinds
       expression: >-

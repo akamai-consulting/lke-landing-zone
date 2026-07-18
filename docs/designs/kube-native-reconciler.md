@@ -11,7 +11,7 @@ ESO-synced `LINODE_TOKEN` Secret + the per-env `REGION_SHORT` **render-patch**
 [`RenderReconcilerEnvPatch`, emitted by `llz render` like the volume-labeler's] +
 Linode-API egress, already covered by the bare `:443` rule). All are
 idempotent alongside their CronJobs — **three of which are now retired** (the
-`argo-resync-nudger` [`_shared/manifest`], `linode-volume-labeler` [the
+`argo-resync-nudger` [`platform-apl/manifest`], `linode-volume-labeler` [the
 `volumeLabeler` component, deleted], and the `sc-default-patcher` **CronJob** [the
 durable backstop in `llz-cluster-foundation` 0.1.7 — the PostSync Job + Kyverno
 admission policy remain]); their reconcilers proved out in #161/#163. The

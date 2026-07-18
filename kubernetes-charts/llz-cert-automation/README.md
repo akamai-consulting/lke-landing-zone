@@ -51,7 +51,7 @@ helm install llz-cert-automation oci://ghcr.io/akamai-consulting/charts/llz-cert
 
 In this repo it is consumed by an Argo CD Application referencing the published
 OCI chart (replacing the raw manifests under
-`apl-values/_shared/manifest/cert-automation/`).
+`platform-apl/manifest/cert-automation/`).
 
 ## Values
 

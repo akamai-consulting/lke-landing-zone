@@ -339,7 +339,7 @@ jobs:
             --namespace kyverno --create-namespace \
             --version "$KYVERNO_HELM_VERSION" \
             --wait --timeout 5m
-          echo "Applying _shared/manifest/kyverno-policies against the validate-policy webhook..."
+          echo "Applying platform-apl/manifest/kyverno-policies against the validate-policy webhook..."
           kubectl kustomize platform-apl/manifest/kyverno-policies \
             | kubectl apply --server-side=true -f -
 

@@ -99,7 +99,12 @@ require ".copier-answers.yml"
 require "renovate.json"
 require ".github/workflows/terraform.yml"
 require ".github/workflows/cluster-health.yml"
-require "apl-values/_shared/values.yaml"
+require "apl-values/values.yaml"
+# The operator escape hatch ships as an empty namespaces/ + global/ skeleton at the
+# REPO ROOT (not under apl-values/ — see .template-manifest). Assert the skeleton
+# lands: an instance that never receives it silently loses the documented layout.
+require "kubernetes-custom/namespaces"
+require "kubernetes-custom/global"
 # Operational tooling (the llz CLI, which absorbed instance-scripts/) is
 # template-INTERNAL and intentionally NOT delivered: the reusable llz-* workflows
 # build it from a template checkout (_llz-template/), so an instance must NOT

@@ -40,7 +40,7 @@ Argo Applications pin `targetRevision: X.Y.Z`.
 ## Consumption (the monorepo dogfoods its own charts)
 
 Each cut-over chart is consumed by an Argo CD `Application` under
-`apl-values/_shared/manifest/<component>/argocd/applications/` that references the
+`platform-apl/manifest/<component>/argocd/applications/` that references the
 OCI chart instead of an in-repo path. This consumer relationship is the forcing
 function that keeps the extracted charts honestly reusable.
 

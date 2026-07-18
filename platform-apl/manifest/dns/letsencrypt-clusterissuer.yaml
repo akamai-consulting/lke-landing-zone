@@ -34,7 +34,7 @@ metadata:
     # ClusterIssuer health check grades a transient Ready=False as Degraded, which
     # would fail this sync wave and wedge the whole platform-bootstrap sync BEFORE
     # OpenBao (wave 0) is ever applied. The
-    # cert-manager.io_ClusterIssuer health override in _shared/values.yaml
+    # cert-manager.io_ClusterIssuer health override in apl-values/values.yaml
     # (apps.argocd._rawValues) neutralizes that; `llz ci health` (which defers
     # llz-letsencrypt-* via ExternalDepIssuers) owns readiness visibility.
     # (An argocd.argoproj.io/ignore-healthcheck annotation is NOT sufficient —
@@ -60,7 +60,7 @@ metadata:
   annotations:
     # See llz-letsencrypt-production above: deferred ACME must not health-gate
     # the platform-bootstrap waves (handled by the ClusterIssuer health
-    # override in _shared/values.yaml).
+    # override in apl-values/values.yaml).
     argocd.argoproj.io/sync-wave: "-5"
 spec:
   acme:

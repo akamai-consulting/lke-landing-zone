@@ -32,7 +32,7 @@ type Component struct {
 	ManifestResources []string
 	// ArgoApps are the wave-ordered component Applications (+ the AppProject) this
 	// component's shared kustomize Component lists — the per-env overlay pulls them
-	// in via components: (mandatory components list them in the _shared base instead).
+	// in via components: (mandatory components list them in the platform-apl/manifest base instead).
 	ArgoApps []string
 	// Patches are kustomize patches this component contributes. For a plain
 	// (in-bundle) component they land in the parent manifest/kustomization.yaml
@@ -191,7 +191,7 @@ var Components = []Component{
 	{
 		// In-cluster Gitea — apl-core-only. Disabled by default on apl-core v6:
 		// the landing zone runs GitOps against an external HTTPS repo (BYO Git),
-		// v6 ships git-server as the default values-repo backend, and _shared
+		// v6 ships git-server as the default values-repo backend, and platform-apl/manifest
 		// values.yaml pins `gitea: { enabled: false }`. Modeling it enabled-by-
 		// default here would make `llz render` flip that committed `false` back to
 		// `true` (RenderValues forces every default-enabled component's app on),

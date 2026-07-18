@@ -96,7 +96,7 @@ spec:
 #      EventBus client port (4222) on the JetStream replicas; without this
 #      they crashloop with "failed to new Nats Rpc: dial tcp ...:4222: i/o
 #      timeout" within ~5s of pod start.
-# Mirrors apl-values/_shared/manifest/argo-events/network-policies.yaml's
+# Mirrors platform-apl/manifest/argo-events/network-policies.yaml's
 # `argo-events-allow-intra-namespace` rule.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

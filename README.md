@@ -168,7 +168,7 @@ chart are an Akamai-internal feature; they live in the private
   instance repo instantiates: the LandingZone spec examples
   (`landingzone.yaml.example`, `environments/<env>.yaml.example`), Terraform roots
   (`cluster`, `cluster-bootstrap`, `object-storage`), the shared
-  `apl-values` tree (`_shared/` base + per-component `components/`, from which
+  `apl-values` tree (the `platform-apl/` base + per-component `components/`, from which
   `llz render` generates each env's thin overlay), and instance GitHub workflows +
   composite actions. The
   template repo itself only builds and publishes the reusable artifacts;

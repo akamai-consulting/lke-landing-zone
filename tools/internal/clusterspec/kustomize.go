@@ -76,7 +76,7 @@ func (c Component) hasManifestDir() bool {
 
 // RenderManifestKustomization returns a deployment's manifest/kustomization.yaml: a
 // thin overlay over the shared base. It lists, in registry order:
-//   - resources: the shared _shared/manifest base + one health-inert Application CR
+//   - resources: the shared platform-apl/manifest base + one health-inert Application CR
 //     per ENABLED carved component (blast-radius isolation — see CarvedApp);
 //   - components: each ENABLED plain (non-carved) component's shared Component dir;
 //   - patches: the per-env patches plain components bring (a carved component's
@@ -92,7 +92,7 @@ func (c Component) hasManifestDir() bool {
 // the pinned remote-ref URL when a template ref is resolved, else the local relative
 // path (repo-root platform-apl/, four levels up from an env's manifest/ overlay — the
 // no-version drift-check / test context only). The per-instance instance-custom
-// Application is NOT part of this base (it carries the instance repo) —
+// ApplicationSet is NOT part of this base (it carries the instance repo) —
 // RenderManifestKustomization adds it as a local resource.
 func sharedManifestRef(ref string) string {
 	if ref == "" {
@@ -130,9 +130,9 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref, acm
 
 	var b strings.Builder
 	b.WriteString(kustomizePreamble)
-	// The shared base (remote when pinned) + the per-instance instance-custom App
-	// (local, render-emitted with this instance's repo — NOT in the shared base) +
-	// one health-inert App CR per enabled carved component.
+	// The shared base (remote when pinned) + the per-instance instance-custom
+	// ApplicationSet (local, render-emitted with this instance's repo — NOT in the
+	// shared base) + one health-inert App CR per enabled carved component.
 	b.WriteString("\nresources:\n  - " + sharedManifestRef(ref) + "\n")
 	b.WriteString("  - instance-custom.yaml\n")
 	for _, a := range carvedApps {
@@ -178,47 +178,205 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref, acm
 	return b.String()
 }
 
-// RenderInstanceCustomApp returns the per-instance instance-custom Argo Application —
-// the operator escape hatch (wave 10, prune:false) that syncs the instance's own
-// apl-values/_shared/custom/ tree. It carries the instance's values-repo URL, so it is
-// render-emitted LOCALLY into the overlay rather than vendored in the shared base (which
-// is fetched remotely and must be byte-identical across instances). Its AppProject
+// CustomRoot is the operator escape-hatch tree, relative to the INSTANCE REPO ROOT —
+// which is also the form Argo CD's git generator needs (it resolves paths against the
+// repo, not the working directory). `owned` in .template-manifest: the template ships
+// this tree once and never touches it again.
+//
+// It sits at the repo root rather than under apl-values/ for two reasons. It is not
+// apl-core values — it is the operator's own Kubernetes manifests, which have nothing
+// to do with the apl-core chart's inputs. And a directory under apl-values/ would be a
+// SIBLING of the generated per-env dirs, where any name matching validate.EnvNameRe
+// (^[a-z][a-z0-9-]{1,30}$ — "custom" among them) could be clobbered by `llz env add`.
+// That collision is what the old `_shared` underscore was guarding against; at the repo
+// root nothing generates siblings, so no such guard is needed. The kubernetes- prefix
+// matches the template repo's own kubernetes-charts/ convention.
+const CustomRoot = "kubernetes-custom"
+
+// CustomGlobalDirName / CustomNamespacesDirName are the two top-level directories
+// under CustomRoot, mirroring the App Platform GitOps convention
+// (https://techdocs.akamai.com/app-platform/docs/gitops): namespaces/<ns>/ is synced
+// into namespace <ns>, global/ carries cluster-scoped resources.
+const (
+	CustomNamespacesDirName = "namespaces"
+	CustomGlobalDirName     = "global"
+)
+
+// RenderInstanceCustom returns the per-instance instance-custom ApplicationSet — the
+// operator escape hatch (wave 10) that syncs the instance's own kubernetes-custom/
+// tree. It carries the instance's values-repo URL, so it is render-emitted
+// LOCALLY into the overlay rather than vendored in the shared base (which is fetched
+// remotely and must be byte-identical across instances). Its AppProject
 // (instance-custom-project.yaml, no per-instance data) stays in the shared base.
-func RenderInstanceCustomApp(repoURL string) string {
+//
+// LAYOUT mirrors App Platform's documented GitOps convention so an operator's muscle
+// memory transfers: namespaces/<ns>/ → one Application per directory, synced into
+// namespace <ns> (auto-created); global/ → cluster-scoped resources. Splitting per
+// directory gives per-namespace blast radius for CONTENT — the same cut
+// blast-radius-decomposition.md made for platform components — where the former single
+// Application degraded wholesale.
+//
+// BLAST RADIUS IS NARROWER THAN THE CARVED-APP CASE, and the difference is not academic.
+// A plain Application CR is health-INERT in the parent tree (Argo assesses no Application
+// health without an explicit customization). An ApplicationSet is NOT: Argo ships
+// resource_customizations/argoproj.io/ApplicationSet/health.lua, which reports Degraded
+// on an ErrorOccurred condition. So:
+//   - Bad manifest CONTENT in one namespace dir → only that generated App degrades.
+//     platform-bootstrap is unaffected. This is the common case and the property holds.
+//   - A generation/validation error → ErrorOccurred on the ApplicationSet ITSELF →
+//     Degraded → it degrades platform-bootstrap's health rollup. Causes: an unresolvable
+//     revision, an unreachable repo, or a generated App Kubernetes rejects (an invalid
+//     directory name). The directory-name cases are what custom_layout.go's reserved-name
+//     and RFC 1123 checks exist to catch at render time, before they can reach a cluster.
+//
+// Do not restate the old "a broken manifest here cannot wedge the platform bootstrap"
+// claim without qualifying it — it is true of content, not of the generator.
+//
+// TWO GIT GENERATORS, not static Applications, because custom/** is `owned`: an instance
+// that predates this layout never receives namespaces/ or global/ from a copier update, and
+// a static App pointing at an absent path goes ComparisonError. A directory generator that
+// matches nothing simply yields ZERO Applications, so the absence is inert.
+//
+// REVISION: the escape hatch DELIBERATELY FLOATS on the values repo's default branch
+// (HEAD — the human-owned `main`; see apl-core-values-branch-isolation.md), and does NOT
+// track apps_repo_revision the way platform-bootstrap and the carved Apps do.
+//
+// This is a product decision, not an oversight. The hatch's whole contract is "drop a
+// file, Argo applies it". Pinning it to the platform's revision would mean that on an
+// instance pinned to a release tag, adding a manifest does nothing until the operator
+// cuts a new pin — which is not an escape hatch. So the platform stays reproducible and
+// the operator's own apps stay live, independently.
+//
+// The trade is real and accepted: there is no pin to roll back to, and a commit to the
+// default branch deploys itself. The gate is that branch's review — it is human-owned,
+// PR-only, and branch-protectable precisely because apl-core was moved off it.
+//
+// Both the generators and the App template use HEAD, and must stay in lockstep:
+// discovering directories at one revision while syncing their contents at another would
+// be a genuinely confusing failure. There is deliberately no revision parameter — a
+// revision that cannot be passed cannot be passed wrongly.
+//
+// (An earlier revision of this function took apps_repo_revision and pinned everything to
+// it, reading the old extending-llz.md advice — "if you pin apps_repo_revision, pin the
+// Application's targetRevision to match" — as intent. That advice was the bug; it has
+// been removed.)
+func RenderInstanceCustom(repoURL string) string {
 	return genHeader + `apiVersion: argoproj.io/v1alpha1
-kind: Application
+kind: ApplicationSet
 metadata:
   name: instance-custom
   namespace: argocd
   annotations:
     argocd.argoproj.io/sync-wave: "10"
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
-  revisionHistoryLimit: 3
-  project: instance-custom
-  source:
-    repoURL: ` + repoURL + `
-    path: apl-values/_shared/custom
-    targetRevision: HEAD
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: default
+  # LOAD-BEARING, AND THE ONLY THING HOLDING THIS PROMISE UP: removing a directory from
+  # git must ORPHAN its resources, never tear down running workloads.
+  #
+  # Mechanism (verified in argo-cd source, not inferred from the field's godoc — which is
+  # wrong, see below): this flag is implemented in the RENDER path
+  # (applicationset/utils/utils.go), not a deletion path. When true, the controller never
+  # puts resources-finalizer on a generated Application; deleteInCluster then does a plain
+  # Delete, and Argo only cascades to cluster resources when CascadedDeletion() sees that
+  # finalizer. So BOTH deletion routes preserve resources: the whole ApplicationSet being
+  # deleted, and a single directory disappearing from the generator's results.
+  #
+  # Do NOT credit prune:false below for this — pruning governs sync-time diffing, not the
+  # deletion cascade. And do not quote the field's godoc ("these Applications will not be
+  # deleted"): the Applications ARE deleted; only their resources survive.
+  #
+  # TWO WAYS TO SILENTLY ARM DESTRUCTION — both fail closed to data loss, neither is
+  # caught by any test of ours that does not assert on this manifest:
+  #   1. Flipping this to false (or dropping it). The finalizer is re-applied to EXISTING
+  #      apps on the next reconcile (the controller force-syncs generated finalizers), so
+  #      destruction is armed retroactively, with no git change and no sync.
+  #   2. Declaring ANY finalizer in the template below. The render only adds
+  #      resources-finalizer when the template has none, so a template finalizer voids
+  #      this flag entirely (upstream's own test: "user-specified finalizer should
+  #      overwrite preserveResourcesOnDeletion").
   syncPolicy:
-    automated:
-      prune: false
-      selfHeal: true
-    retry:
-      limit: 5
-      backoff:
-        duration: 5s
-        maxDuration: 3m
-        factor: 2
-    syncOptions:
-      - ApplyOutOfSyncOnly=true
-      - SkipDryRunOnMissingResource=true
-      - ServerSideApply=true
-      - CreateNamespace=false
+    preserveResourcesOnDeletion: true
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    # namespaces/<ns>/ → one App per directory, synced into <ns>.
+    - git:
+        repoURL: ` + repoURL + `
+        revision: HEAD
+        directories:
+          - path: ` + CustomRoot + `/` + CustomNamespacesDirName + `/*
+    # global/ → cluster-scoped resources. Basename is "global", so this generates
+    # instance-custom-global, synced into the default namespace (cluster-scoped
+    # content needs no namespace of its own); the top-level template below picks
+    # the default for this generator by basename.
+    #
+    # NO per-generator template — deliberately. An earlier revision set one here to
+    # repoint only the destination namespace, trusting mergeGeneratorTemplate
+    # (mergo.Merge, zero-value fill) to inherit metadata/project/source from the
+    # top-level template. But that merge is a CONTROLLER-runtime step; the
+    # ApplicationSet CRD validates each generator's template at ADMISSION first and
+    # requires template.metadata AND template.spec.project on ANY template block — so
+    # a partial one is rejected outright ("spec.generators[1].git.template.spec.project:
+    # Required value") and the ENTIRE ApplicationSet never applies (platform-bootstrap
+    # retries the invalid object forever while staying Healthy — the silent gap
+    # assert-instance-custom exists to catch). Keep generators template-free and choose
+    # the destination namespace in the single top-level template instead.
+    - git:
+        repoURL: ` + repoURL + `
+        revision: HEAD
+        directories:
+          - path: ` + CustomRoot + `/` + CustomGlobalDirName + `
+  template:
+    metadata:
+      # No sync-wave here: generated Applications are created by the ApplicationSet
+      # controller, not synced by an app-of-apps, so a wave on them gates nothing. The
+      # wave that matters is the one on the ApplicationSet itself (above).
+      name: instance-custom-{{.path.basename}}
+    spec:
+      revisionHistoryLimit: 3
+      project: instance-custom
+      source:
+        repoURL: ` + repoURL + `
+        path: '{{.path.path}}'
+        targetRevision: HEAD
+        # Recurse so subdirectories are organizational only — App Platform's semantics
+        # ("ArgoCD reconciles everything found there").
+        #
+        # Setting a directory source at all makes this EXPLICITLY the directory type:
+        # ApplicationSource.ExplicitType() keys off source.Directory != nil, and
+        # GetAppSourceType returns on the explicit type, so Argo's kustomize
+        # auto-detection never runs. A kustomization.yaml under this path would NOT be
+        # built — findManifests' manifest regex matches it like any other yaml, and Argo
+        # would try to apply a literal Kustomization object to the cluster. That is why
+        # llz render / llz doctor reject a kustomization.yaml anywhere under the escape
+        # hatch (custom_layout.go): the two are mutually exclusive, and recursion is the
+        # behavior App Platform's convention documents. Operators who want kustomize
+        # drop their own Argo CD Application pointing at a kustomize root — the same
+        # route the Helm/OCI escape uses.
+        directory:
+          recurse: true
+      destination:
+        server: https://kubernetes.default.svc
+        # global/ (basename "global") → the default namespace for cluster-scoped
+        # resources; every namespaces/<ns>/ dir → its own <ns>. Chosen here in the one
+        # top-level template (goTemplate) so no generator needs a partial template of
+        # its own — a per-generator template omitting metadata/spec.project fails the
+        # ApplicationSet CRD's admission validation and blocks the whole object.
+        namespace: '{{ if eq .path.basename "global" }}default{{ else }}{{ .path.basename }}{{ end }}'
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            maxDuration: 3m
+            factor: 2
+        syncOptions:
+          - ApplyOutOfSyncOnly=true
+          - SkipDryRunOnMissingResource=true
+          - ServerSideApply=true
+          - CreateNamespace=true
 `
 }
 
@@ -376,6 +534,7 @@ spec:
 //     keep this in step.
 //   - GH_REPO: the instance's own <owner>/<name> (this env's values-repo slug) — the
 //     repo-secret publication target the standby bootstrap reads.
+//
 // env is a keyed list (mergeKey name), so these merge onto the component's other
 // env entries by name. The container image is retagged separately by the carved
 // app's images: transformer (llzImageName), not here.

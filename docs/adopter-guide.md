@@ -252,7 +252,7 @@ the `owned` (never-touched) escape hatches:
 
 Use `llz env add` instead of hand-copying overlays. It declares the env in the
 LandingZone spec and `llz render`s a thin overlay over the shared apl-values base
-(`_shared/` + `components/`) — no per-env clone to keep in sync — swapping its
+(`platform-apl/manifest` + `components/`) — no per-env clone to keep in sync — swapping its
 identity tokens (env name, `cluster.name`, domain suffix, `REGION_SHORT`, Linode
 region, OBJ cluster). The scaffolding is built into the binary, so it works in an
 instance with no scripts/ tree:
@@ -319,7 +319,7 @@ new env, in order:
    auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
    engine, auth methods, and policies.
 6. **DNS** — no dedicated step. The `llz-letsencrypt-*` ClusterIssuers sync
-   automatically via Argo CD (they live in the mandatory `_shared/manifest/dns`
+   automatically via Argo CD (they live in the mandatory `platform-apl/manifest/dns`
    base). DNS-01 challenges are solved by apl-core's `cert-manager-webhook-linode`,
    which holds its own Linode token (`TF_VAR_linode_dns_token` from the
    `LINODE_DNS_TOKEN` secret, applied at the `cluster-bootstrap` TF apply) — no

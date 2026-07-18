@@ -192,7 +192,7 @@ func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
 
 	for _, dir := range dirs {
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-			continue // a layout without this dir (e.g. no _shared overlay) — nothing to scan
+			continue // a layout without this dir (e.g. no such overlay) — nothing to scan
 		}
 		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".yaml") {

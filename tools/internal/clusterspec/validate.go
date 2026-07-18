@@ -199,6 +199,25 @@ func validateEnv(name string, env Environment) []error {
 		}
 	}
 
+	// The apl-core-owned branch (apl-operator commits its env/ tree here) and the
+	// LLZ-owned apps branch (platform-bootstrap reads here) MUST differ. If they
+	// coincide, apl-operator's additive env/ commits land on the same branch
+	// platform-bootstrap syncs, and it reads an operator-authored commit — the exact
+	// pre-ADR production wedge (v1beta1 ExternalSecrets that 6.x's ESO rejects,
+	// convergence hard-fails). The defaults (apl-<env> vs main) never collide; this
+	// catches an override that reintroduces the collision — e.g. aplValues.revision:
+	// main, or appsRepoRevision pointed at apl-<env>. Compare EFFECTIVE values so a
+	// defaulted-and-an-explicit form that resolve equal are still caught. See
+	// docs/designs/apl-core-values-branch-isolation.md.
+	if aplBranch, appsRev := c.Bootstrap.AplValuesBranch(name), c.Bootstrap.AppsRevision(); aplBranch == appsRev {
+		errs = append(errs, prefix(
+			"cluster.bootstrap: aplValues.revision (%q) and appsRepoRevision (%q) resolve to the same branch %q — "+
+				"apl-operator commits its env/ tree to the former while platform-bootstrap reads the latter, so sharing one "+
+				"branch reproduces the pre-ADR converge wedge. Leave aplValues.revision unset (defaults to the apl-core-owned "+
+				"apl-%s) or point it at a branch other than %q. See docs/designs/apl-core-values-branch-isolation.md",
+			c.Bootstrap.AplValues.Revision, c.Bootstrap.AppsRepoRevision, aplBranch, name, appsRev))
+	}
+
 	errs = append(errs, validateComponents(name, env.Components)...)
 	return errs
 }

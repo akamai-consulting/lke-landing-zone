@@ -22,7 +22,7 @@
 # rides out the window before ESO installs the generator/pushsecret CRDs; a
 # PushSecret that can't write until OpenBao is unsealed is reclassified
 # Progressing (not Degraded) by the resource.customizations health check in
-# apl-values/_shared/values.yaml, so it never fails the bootstrap wave.
+# apl-values/values.yaml, so it never fails the bootstrap wave.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:

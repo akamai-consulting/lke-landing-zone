@@ -114,6 +114,11 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciSeedBroadPATCmd())
 	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
 	c.AddCommand(ciAssertBroadPATRotationCmd())
+	// e2e: prove the operator escape hatch works end to end — the release-e2e seed
+	// drops a trivial manifest under kubernetes-custom/namespaces/<ns>/, and this
+	// asserts the instance-custom ApplicationSet generated instance-custom-<ns> and
+	// it reached Synced+Healthy (a silently-empty hatch leaves platform apps green).
+	c.AddCommand(ciAssertInstanceCustomCmd())
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
 	c.AddCommand(ciRelabelVolumesCmd())

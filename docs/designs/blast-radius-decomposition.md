@@ -27,6 +27,23 @@ git-path `Application` whose CR is health-inert in the parent tree (Argo assesse
 does not), so platform-bootstrap stays `Synced/Healthy` while the App health-gates its
 OWN content. A `Degraded` resource then fails only its own App.
 
+> **Update:** `instance-custom` has since taken this one cut further — it is now an
+> `ApplicationSet` generating one App per `kubernetes-custom/namespaces/<ns>/` directory
+> (plus `global/`), so the operator's escape hatch has per-namespace blast radius for its
+> CONTENT rather than a single shared fate.
+>
+> **But the health-inertness argument above does NOT transfer to it.** A plain
+> `Application` is health-inert; an `ApplicationSet` is not — Argo ships
+> `resource_customizations/argoproj.io/ApplicationSet/health.lua`, which reports Degraded
+> on an `ErrorOccurred` condition (generation errors, validation errors, create/update
+> failures). Bad manifest content still degrades only the generated App, but a generation
+> or validation error degrades the ApplicationSet itself and thus platform-bootstrap's
+> health rollup. The operator-triggerable causes are directory names that yield an
+> invalid Application/namespace, which `llz render`/`llz doctor` reject at render time
+> (`tools/cmd/llz/custom_layout.go`). That render-time gate is weaker than the VAP-style
+> admission enforcement this document argues for elsewhere — a direct commit bypasses it.
+> Closing that gap is open work. See docs/extending-llz.md.
+
 This PR generalizes that to the four bundles. When `spec.components.<name>` is enabled
 and the component declares a `CarvedApp` (registry field in
 `tools/internal/clusterspec/components.go`), `llz render` emits:
@@ -108,7 +125,7 @@ ClusterIssuer, #163 Deployment), and Argo's own `Application`/`AppProject` are
 health-inert, so the VAP excludes the whole `argoproj.io` group. This keeps the VAP's
 effective coverage equal to the CI guard's (non-argoproj platform-tree kinds) without
 false-denying child-App CRs. `Application`/`AppProject` stay in the allowlist for
-lockstep with the CI guard, which does scan them in `_shared/manifest`.
+lockstep with the CI guard, which does scan them in `platform-apl/manifest`.
 
 ## #4 — Wedge game-day
 

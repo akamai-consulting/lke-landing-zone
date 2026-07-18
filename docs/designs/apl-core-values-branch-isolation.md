@@ -10,7 +10,7 @@ for this change (see Lab-validation).
 **Relates to:** [apl-core-v6-migration.md](apl-core-v6-migration.md),
 [blast-radius-decomposition.md](blast-radius-decomposition.md),
 `tools/internal/clusterspec/values.go` (the default),
-`instance-template/apl-values/_shared/values.yaml` (the `otomi.git` block),
+`instance-template/apl-values/values.yaml` (the `otomi.git` block),
 `.github/workflows/release-e2e.yml` (the retired `e2e-apps` mirror).
 
 ## Context
@@ -27,18 +27,20 @@ present in the example instance repo.
 
 Until now `otomi.git.branch` defaulted to **`main`** — the same branch that holds
 the human-authored Terraform + `apl-values` source, receives `copier update`s, and
-is the base for every PR. Sharing `main` between a force-pushing operator and the
-IaC source is wrong on several counts:
+is the base for every PR. Sharing `main` between a committing bot and the IaC
+source is wrong on several counts:
 
-- **It already caused a production wedge.** apl-core's operator force-pushes a
-  divergent history (no common ancestor); when the landing zone's own
-  `platform-bootstrap` app-of-apps read the same `main`, it synced a stale,
-  operator-authored commit — v1beta1 ExternalSecrets that 6.x's ESO rejects —
-  and convergence hard-failed. The e2e worked around this by pointing the LZ's
-  apps at a separate `e2e-apps` snapshot branch and *leaving apl-core on main*
-  (see [release-e2e.yml](../../.github/workflows/release-e2e.yml)).
-- **`main` cannot be branch-protected** while a bot force-pushes it every reconcile.
-- **Human PRs / `copier update` race the operator's force-push** on the same ref.
+- **It already caused a production wedge.** The operator lands its own `env/`
+  commits on the branch; when the landing zone's own `platform-bootstrap`
+  app-of-apps read the same `main`, it synced a stale, operator-authored commit —
+  v1beta1 ExternalSecrets that 6.x's ESO rejects — and convergence hard-failed. The
+  e2e worked around this by pointing the LZ's apps at a separate `e2e-apps` snapshot
+  branch and *leaving apl-core on main* (see
+  [release-e2e.yml](../../.github/workflows/release-e2e.yml)).
+- **`main` cannot be branch-protected** while a bot pushes to it every reconcile.
+- **Human PRs / `copier update` race the operator's push** on the same ref. The
+  operator retries (pull-rebase, 20×), so the race resolves in its favor and the
+  human's push is the one that fails.
 - **Secret material (even sealed) lands on the IaC repo's primary branch.**
 - Both `otomi.git.branch` and `apps_repo_revision` defaulted to `main`, so a
   *default* real install reproduces the exact wedge condition — the e2e only
@@ -55,17 +57,26 @@ apl-core writing to `main` at all.
 
 - `main` stays human-owned: IaC + `apl-values` source, PR-only, branch-protectable.
 - `apl-<env>` is machine-owned: apl-core's `env/` tree + platform SealedSecrets,
-  force-pushed freely, read only by apl-core's own `gitops-*` Applications.
+  committed to freely, read only by apl-core's own `gitops-*` Applications.
 - **Each env gets its own branch** so parallel envs (lab / primary / secondary HA
   pairs) never share apl-core state on one branch — a per-env blast radius,
   consistent with [blast-radius-decomposition.md](blast-radius-decomposition.md).
 - Overridable per env via `spec.cluster.bootstrap.aplValues.revision`.
 
 The change is one line of intent in
-[values.go](../../tools/internal/clusterspec/values.go) (`branch = "apl-" + env`);
-`otomi.git.branch` is written *only* by `llz render` into the committed
-`values.yaml` — it is not a Terraform variable and no bootstrap resource consumes
-it — so there is no other wiring to touch.
+[values.go](../../tools/internal/clusterspec/values.go)
+(`Bootstrap.AplValuesBranch` → `apl-<env>`); `otomi.git.branch` is written *only* by
+`llz render` into the committed `values.yaml` — it is not a Terraform variable and no
+bootstrap resource consumes it — so there is no other wiring to touch.
+
+**The override is guarded.** Changing the default is not enough: an operator could set
+`aplValues.revision: main` (or point `appsRepoRevision` at the apl-owned branch) and
+walk straight back into the wedge. `Validate` (in
+[validate.go](../../tools/internal/clusterspec/validate.go), so it gates every `llz
+render`) fails the spec whenever the two branches resolve — after defaults — to the
+same ref. The defaults (`apl-<env>` vs `main`) never collide; the guard exists for the
+override that reintroduces the collision. Both defaults live on `Bootstrap`
+(`AplValuesBranch` / `AppsRevision`) so the guard compares exactly what renders.
 
 ## Why this is safe to point at a fresh branch
 
@@ -121,11 +132,33 @@ Different top-level dirs *and* different branches — no cross-read, no contenti
       `main` (runs 29374149739 / 29380924847 / 29409532035).
 - [ ] **`main` untouched.** No `pipeline@cluster.local` commits land on `main`
       during or after bootstrap.
-- [ ] **Force-push semantics.** Confirm the operator's push is confined to
-      `apl-<env>` (reconciles the static-analysis "add-only, no `--force`" claim in
-      [apl-core-v6-migration.md](apl-core-v6-migration.md) §(b) against the
-      EXECUTION_FLOW "force-push every reconcile" description — either way it must
-      stay on `apl-<env>`).
+- [x] **Push semantics — SETTLED 2026-07-17, this ADR was wrong.** The operator does
+      **NOT** force-push. `commitAndPush` in
+      [src/cmd/commit.ts @ v6.0.0](https://github.com/linode/apl-core/blob/v6.0.0/src/cmd/commit.ts#L96-L135)
+      runs `git add -A` → `git commit` → `git checkout -B <branch>` →
+      `git pull --rebase origin <branch>` → `git push -u origin <branch>`, retried 20×.
+      There is no `push --force` / `-f` / `--force-with-lease` anywhere in the v6.0.0
+      tree, and v5.0.0 is identical. The operator works from a real full clone
+      ([git-repository.ts:79](https://github.com/linode/apl-core/blob/v6.0.0/src/operator/git-repository.ts#L79)),
+      and `bootstrap.ts` rsyncs with `-rl` and **no `--delete`**
+      ([bootstrap.ts:59-72](https://github.com/linode/apl-core/blob/v6.0.0/src/common/bootstrap.ts#L59-L72)),
+      so the overlay is additive and **foreign files on the branch survive**. This ADR's
+      original "force-pushes a divergent history (no common ancestor)" claim appears to
+      have been a grep-for-`force` false positive against `EXECUTION_FLOW.md`, whose only
+      two `force` hits are helmfile/kubectl flags. The
+      [v6-migration doc](apl-core-v6-migration.md) §(b) was correct all along (nit: the
+      retry is `pull --rebase`, not a merge).
+
+      **The decision above still stands** — it never depended on force-push. Operator
+      commits on the IaC branch, secret material on `main`, bot-vs-PR contention, and
+      branch protection are each independently sufficient. Only the mechanism was
+      misstated.
+
+      **Adjacent hazard (real).** If the remote branch exists but is unreachable/empty at
+      bootstrap, `bootstrapGit` falls back to `git init` + a fresh root commit; the push
+      is then rejected as non-fast-forward and retried 20× until the operator wedges. It
+      does not clobber the branch — wedge, not destroy. Consistent with
+      [apl-branch-recreate-wedge.md](../runbooks/apl-branch-recreate-wedge.md).
 - [ ] **release-e2e green** end-to-end with `env=e2e` → `apl-e2e`.
 
 ## Migration — downstream instances

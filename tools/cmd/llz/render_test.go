@@ -114,12 +114,12 @@ spec:
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// The shared values.yaml base lets renderManifest exercise the apl-core backend
-	// too — including the spec-owned identity write.
-	if err := os.MkdirAll(filepath.Join(aplDir, "_shared"), 0o755); err != nil {
+	// The values.yaml base lets renderManifest exercise the apl-core backend too —
+	// including the spec-owned identity write.
+	if err := os.MkdirAll(aplDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(aplDir, "_shared", "values.yaml"), []byte(
+	if err := os.WriteFile(filepath.Join(aplDir, "values.yaml"), []byte(
 		"cluster:\n  name: ${cluster_name}\n  domainSuffix: ${cluster_domain}\napps:\n  harbor: { enabled: true }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

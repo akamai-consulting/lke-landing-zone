@@ -167,6 +167,16 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 		envs = []string{env}
 	}
 
+	// The escape hatch's directory contract, gated BEFORE anything is written. It is an
+	// instance-level property, so it is checked once here rather than per env — and only
+	// on the paths that emit the manifest tree, since --tfvars-only never touches it.
+	// See custom_layout.go.
+	if !tfvarsOnly {
+		if err := checkCustomLayout(filepath.Join(specRoot, clusterspec.CustomRoot)); err != nil {
+			return fmt.Errorf("%s layout — fix these before rendering:\n%w", clusterspec.CustomRoot, err)
+		}
+	}
+
 	// --check is the CI drift guard: the spec is valid AND the committed manifest
 	// kustomizations match what the spec renders (they are committed because Argo
 	// syncs git; a working-tree-only render would let them silently diverge).
@@ -267,10 +277,10 @@ func untrackRenderedTfvars(relPrefix string) {
 
 // committedTargets returns every committed apl-values/<env>/ file a deployment
 // renders to, as {path → content}: the THIN manifest overlay (resources: the shared
-// _shared/manifest base + the carved Application CRs; components: the enabled plain
+// platform-apl/manifest base + the carved Application CRs; components: the enabled plain
 // component dirs), the per-env env-revision marker, each enabled carved component's
 // App CR + apps/<name>/ source root (kustomization + per-env patches), and — when an
-// apl-values/_shared/values.yaml base is present — the values.yaml with
+// apl-values/values.yaml base is present — the values.yaml with
 // apps.<key>.enabled + identity patched (the apl-core backend).
 // resolveTemplateRef returns the ref the shared apl-values tree is fetched at
 // (the remote refs RenderManifestKustomization emits). Priority:
@@ -301,10 +311,10 @@ func resolveTemplateRef() string {
 // components run (reconciler / harbor-provisioner). The image NAME is a constant
 // (ghcr.io/akamai-consulting/llz — no forks), so only the tag varies; a carved app's
 // kustomize `images:` transformer overrides it. Priority mirrors resolveTemplateRef:
-//   1. $LLZ_IMAGE_REF — release-e2e exports the signed sha image for the commit under
-//      test (ghcr.io/…/llz:sha-<SHA>); take the tag after the last ':';
-//   2. .copier-answers.yml llz_version — a real instance pins to its release tag;
-//   3. "latest".
+//  1. $LLZ_IMAGE_REF — release-e2e exports the signed sha image for the commit under
+//     test (ghcr.io/…/llz:sha-<SHA>); take the tag after the last ':';
+//  2. .copier-answers.yml llz_version — a real instance pins to its release tag;
+//  3. "latest".
 func resolveLLZImageTag() string {
 	if r := strings.TrimSpace(os.Getenv("LLZ_IMAGE_REF")); r != "" {
 		if i := strings.LastIndex(r, ":"); i >= 0 && !strings.Contains(r[i+1:], "/") {
@@ -340,16 +350,26 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// token-free component can't bake — a carved app's images: transformer or the
 	// manifest overlay's JSON6902 patch sets it locally. See resolveLLZImageTag.
 	imageTag := resolveLLZImageTag()
+	// The revision this env's in-repo Argo CD content is pinned to — shared by the
+	// platform-bootstrap Application, the carved component Apps, and the env-revision
+	// marker. (The instance-custom ApplicationSet deliberately does NOT use it — the
+	// escape hatch floats on the default branch; see RenderInstanceCustom.) Resolved
+	// via Bootstrap.AppsRevision so the wedge guard in Validate sees the same value.
+	revision := e.Cluster.Bootstrap.AppsRevision()
 	targets := map[string]string{
 		// THIN overlay over the shared base + per-component kustomize Components —
 		// the shared, token-free resources are fetched from the template repo at `ref`;
 		// only per-env + per-instance pieces are carried locally.
 		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref, acmeEmail, imageTag),
 		// per-env local-config marker the bootstrap-cluster env-revision precondition reads.
-		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")),
-		// The operator escape-hatch Application, render-emitted locally with this
+		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(revision),
+		// The operator escape-hatch ApplicationSet, render-emitted locally with this
 		// instance's repo (its shared base is fetched remotely, so it can't carry it).
-		filepath.Join(manifest, "instance-custom.yaml"): clusterspec.RenderInstanceCustomApp(id.RepoURL),
+		// It deliberately takes NO revision: unlike platform-bootstrap and the carved
+		// Apps below, the hatch floats on the values repo's default branch so "drop a
+		// file, Argo applies it" holds even on a release-pinned instance. See
+		// RenderInstanceCustom.
+		filepath.Join(manifest, "instance-custom.yaml"): clusterspec.RenderInstanceCustom(id.RepoURL),
 	}
 	// Carved components (blast-radius decomposition): each enabled one renders its
 	// own health-inert Application CR into the manifest tree PLUS a self-contained
@@ -357,7 +377,6 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// patches). A Degraded resource then fails only its own App, never
 	// platform-bootstrap. The App CR pins the same repo + apps_repo_revision the
 	// platform-bootstrap Application uses. See docs/designs/blast-radius-decomposition.md.
-	revision := orElse(e.Cluster.Bootstrap.AppsRepoRevision, "main")
 	// This instance's repo slug (harbor GH_REPO) is the other per-instance value a
 	// remote token-free component can't bake — the env patch sets it locally.
 	ghRepo := repoOwnerName(id.RepoURL)
@@ -375,7 +394,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
 	// patched into the shared values.yaml base. Skipped (not an error) for instances
 	// without the shared overlay.
-	if base, err := os.ReadFile(filepath.Join(aplDir, "_shared", "values.yaml")); err == nil {
+	if base, err := os.ReadFile(filepath.Join(aplDir, "values.yaml")); err == nil {
 		rendered, err := clusterspec.RenderValues(base, e.Components, id)
 		if err != nil {
 			return nil, fmt.Errorf("render values.yaml: %w", err)

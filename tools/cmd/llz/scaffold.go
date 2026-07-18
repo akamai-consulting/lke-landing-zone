@@ -152,7 +152,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	fmt.Printf("  %s  %s\n", green("created"), envFile)
 
 	// ── 3. render → tfvars + the THIN apl-values/<env>/ overlay ──────────────
-	// Nothing to clone: the manifests live ONCE in apl-values/_shared/ +
+	// Nothing to clone: the manifests live ONCE in platform-apl/manifest/ +
 	// platform-apl/components/; render writes only the per-env overlay (a thin
 	// kustomization referencing the shared base + the enabled component dirs, the
 	// volume-labeler REGION_SHORT patch, env-revision) and values.yaml.

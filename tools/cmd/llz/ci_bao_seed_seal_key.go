@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -54,11 +53,12 @@ const (
 var newSeedGateDeps = func() aplGateDeps {
 	return aplGateDeps{
 		kubectl: func(args ...string) (string, bool) {
+			// runCombined runs before reading the buffer; the old
+			// `return buf.String(), c.Run()==nil` evaluated buf.String() first
+			// (left-to-right) and returned empty output.
 			c := exec.Command("kubectl", args...)
-			var buf strings.Builder
-			c.Stdout, c.Stderr = &buf, &buf
 			c.Env = os.Environ()
-			return buf.String(), c.Run() == nil
+			return runCombined(c)
 		},
 		now:   time.Now,
 		sleep: time.Sleep,
