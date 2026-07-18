@@ -268,3 +268,15 @@ func TestRunAssertReconcilerUnreachable(t *testing.T) {
 		t.Errorf("expected exit 1 when Prometheus is unreachable, got %d", code)
 	}
 }
+
+func TestGaugeStr(t *testing.T) {
+	if got := gaugeStr(0, false); got != "<absent>" {
+		t.Errorf("absent series = %q, want <absent>", got)
+	}
+	if got := gaugeStr(0, true); got != "0" {
+		t.Errorf("present zero = %q, want 0 (distinct from absent)", got)
+	}
+	if got := gaugeStr(3, true); got != "3" {
+		t.Errorf("present 3 = %q, want 3", got)
+	}
+}

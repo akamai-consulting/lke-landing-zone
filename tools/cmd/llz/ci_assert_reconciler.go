@@ -218,8 +218,49 @@ func runCIAssertReconciler(prom, namespace string, settle, interval time.Duratio
 		fmt.Fprintln(os.Stderr, "::error::reconciler is not functionally healthy")
 		return 1
 	}
+	// Surface the es-store-recovery lane's signals — the gate DATA for retiring
+	// the CI nudge-argo force-sync (secrets-before-apps Phase 3). Non-gating.
+	reportESRecoveryGauges(prom, namespace)
 	fmt.Println("Reconciler is reporting healthy and has a leader.")
 	return 0
+}
+
+// reportESRecoveryGauges surfaces the store-recovery lane's signals (NON-GATING):
+// llz_es_store_ready (is the lane observing the openbao ClusterSecretStore's Ready
+// condition) and llz_es_recovery_nudges_total (how many times it force-synced on a
+// store recovery). This is the gate DATA for retiring the CI-imperative nudge-argo
+// force-sync — read here rather than asserted, because a legitimate run can see 0
+// nudges (the store was already Ready when the lane's leader started, so nothing to
+// recover). Best-effort: a scrape miss is a note, never a failure.
+func reportESRecoveryGauges(prom, namespace string) {
+	readyQ := fmt.Sprintf(`max(llz_es_store_ready{namespace=%q})`, namespace)
+	nudgesQ := fmt.Sprintf(`max(llz_es_recovery_nudges_total{namespace=%q})`, namespace)
+	err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+		readyRaw, rerr := get("/api/v1/query?query=" + url.QueryEscape(readyQ))
+		if rerr != nil {
+			return rerr
+		}
+		nudgesRaw, nerr := get("/api/v1/query?query=" + url.QueryEscape(nudgesQ))
+		if nerr != nil {
+			return nerr
+		}
+		ready, rok := promScalar(readyRaw)
+		nudges, nok := promScalar(nudgesRaw)
+		fmt.Printf("es-store-recovery lane (non-gating): llz_es_store_ready=%s  llz_es_recovery_nudges_total=%s\n",
+			gaugeStr(ready, rok), gaugeStr(nudges, nok))
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("es-store-recovery lane (non-gating): metrics unavailable (%v)\n", err)
+	}
+}
+
+// gaugeStr renders a scraped scalar, distinguishing an absent series from 0.
+func gaugeStr(v float64, present bool) string {
+	if !present {
+		return "<absent>"
+	}
+	return fmt.Sprintf("%g", v)
 }
 
 // reconcilerLeaseName is the leader-election Lease the elector maintains
