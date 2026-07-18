@@ -171,6 +171,28 @@ type reconcileOpts struct {
 	esRecoveryResync    time.Duration
 }
 
+// openbaoBootstrapGrace wraps the read-only openbao-gauges sample so an
+// unreachable OpenBao is a clean no-op UNTIL it has answered once, then a
+// real error thereafter. The reconciler now starts at wave 0 (before OpenBao
+// is up — secrets-before-apps Phase 2), so without this a fresh bootstrap
+// would accrue llz_reconcile_errors_total and trip the OpenBao-down alerts for
+// ~10-15m every time; a genuine day-2 outage (after the store was once up)
+// still surfaces. Per-process sticky bool (replicas=1, lane is un-gated).
+func openbaoBootstrapGrace(sample func(context.Context) error) func(context.Context) error {
+	seen := false
+	return func(ctx context.Context) error {
+		err := sample(ctx)
+		if err == nil {
+			seen = true
+			return nil
+		}
+		if !seen {
+			return nil // pre-OpenBao bootstrap window — expected, not a fault
+		}
+		return err
+	}
+}
+
 // drivingEnabled reports whether any state-mutating reconciler is on — the case
 // that needs a single writer, hence leader election.
 func (o reconcileOpts) drivingEnabled() bool {
@@ -428,12 +450,18 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		})
 	}
 	if o.reconcileOpenBao {
+		// Sticky bootstrap grace: since the reconciler now starts at wave 0 (before
+		// OpenBao is up — secrets-before-apps Phase 2), an unreachable OpenBao on
+		// the FIRST passes is expected, not a fault. Swallow the error until OpenBao
+		// answers once, so a fresh cluster bootstrap doesn't accrue
+		// llz_reconcile_errors_total{openbao-gauges} or trip the OpenBao-down alerts
+		// for ~10-15m every time. After the first success a failure IS a real day-2
+		// outage and surfaces normally (gauge + error + alert). Per-process bool;
+		// replicas=1 and the lane is read-only/un-gated so no coordination needed.
 		recs = append(recs, reconciler{
 			name:     "openbao-gauges",
 			interval: o.openbaoInterval,
-			// Read-only (seal + credential-age gauges), so NOT gated on leadership
-			// — every replica may read OpenBao harmlessly.
-			run: func(ctx context.Context) error { return sampleOpenBao(ctx, reg, time.Now()) },
+			run:      openbaoBootstrapGrace(func(ctx context.Context) error { return sampleOpenBao(ctx, reg, time.Now()) }),
 		})
 	}
 	if o.reconcileTokens {
