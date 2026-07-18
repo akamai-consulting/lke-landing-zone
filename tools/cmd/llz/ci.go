@@ -621,6 +621,20 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 		healed = true
 	}
 
+	// ── Heal D: transient Cloud Firewall device-read flake ──
+	// No state to repair: the node firewall was created but the provider's
+	// immediate read-back of its attached devices failed on Linode read-after-
+	// write consistency ("Failed to Get Devices for Firewall <id>", usually with
+	// terraform's generic "Provider returned invalid result object after apply").
+	// A settle + shared re-plan + re-apply re-reads the now-consistent firewall
+	// and succeeds. This class of flake burned a whole cold e2e create (run
+	// 29655607246) that "no self-heal pattern detected" refused to retry.
+	if !healed && tf.FirewallDeviceReadFlake(applyLog) {
+		fmt.Fprintf(os.Stderr, "::warning::Apply hit a transient Cloud Firewall device-read flake (Linode read-after-write consistency). Waiting %s to settle, then retrying.\n", clusterUnreachableSettle)
+		time.Sleep(clusterUnreachableSettle)
+		healed = true
+	}
+
 	if !healed {
 		return fmt.Errorf("terraform apply failed (exit %d); no self-heal pattern detected, not retrying", code)
 	}
@@ -940,6 +954,13 @@ func itoaOrUnknown(n int) string {
 	return strconv.Itoa(n)
 }
 
+// volumeDetachPollInterval is the pause between detach re-checks. The Volumes
+// detach asynchronously as the LKE nodes tear down, so a tighter poll catches
+// "all detached" sooner (a ListVolumes read is cheap) — 10s trims up to ~20s off
+// teardown vs the former 30s without meaningfully more API load. A package var so
+// tests can zero it.
+var volumeDetachPollInterval = 10 * time.Second
+
 // waitVolumesDetached polls until none of the tracked Volume ids is still
 // attached (linode_id non-null), bounded by waitSec. Best-effort: a list error
 // or timeout just falls through to the sweep — VolumeIsCandidate skips anything
@@ -975,7 +996,7 @@ func waitVolumesDetached(ctx context.Context, client interface {
 		} else {
 			fmt.Printf("tracked Volumes still attached: %d (attempt %d)\n", still, attempt)
 		}
-		time.Sleep(30 * time.Second)
+		time.Sleep(volumeDetachPollInterval)
 	}
 }
 
