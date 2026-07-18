@@ -52,6 +52,20 @@ rules:
     resources: ["clustersecretstores"]
     resourceNames: ["openbao"]
     verbs: ["get"]
+  # es-store-recovery: WATCH the store for the Ready transition. list/watch
+  # cannot be resourceNames-scoped (RBAC only checks names on single-object
+  # URLs), so this is a collection-wide read of the two store objects; the lane
+  # scopes its watch with a metadata.name fieldSelector.
+  - apiGroups: ["external-secrets.io"]
+    resources: ["clustersecretstores"]
+    verbs: ["list", "watch"]
+  # es-store-recovery: bump the force-sync annotation on every ExternalSecret/
+  # PushSecret when the store recovers (the CI nudge's force-sync half, moved
+  # in-cluster — secrets-before-apps Phase 2). patch surface is metadata
+  # annotations only; the lane never reads or writes secret DATA.
+  - apiGroups: ["external-secrets.io"]
+    resources: ["externalsecrets", "pushsecrets"]
+    verbs: ["get", "list", "patch"]
   # observe cert gauge: read cert-manager Certificates across ALL namespaces
   # (certsPath is cluster-wide — it counts not-Ready certs platform-wide), so this
   # genuinely needs a cluster-scoped read.

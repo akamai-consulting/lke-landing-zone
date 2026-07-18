@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fixWrite writes a fixture file under root at the slash-relative path rel.
@@ -262,6 +263,7 @@ func TestRunCIExternalSecretPathsHappyPath(t *testing.T) {
 		"  ok: otel/ingress",
 		"  ok (seeded policy): harbor/admin",
 		"  ok (seeded policy): infra/github-dispatch-token",
+		"  ok: every platform ExternalSecret/PushSecret bounds refreshInterval ≤ 5m0s (or one-shot 0)",
 		"",
 		"All ExternalSecret refs and bootstrap-seeded paths are policy-covered.",
 		"",
@@ -363,4 +365,51 @@ func TestExternalSecretPathsRealRepo(t *testing.T) {
 		t.Errorf("template repo validation failed: %v\n%s", err, buf.String())
 	}
 	t.Log(buf.String())
+}
+
+// checkESRefreshIntervals enforces the secrets-before-apps Phase-1 bound:
+// every platform ExternalSecret/PushSecret declares refreshInterval ≤ 5m, with
+// "0" (one-shot generators) exempt and a missing interval failing.
+func TestCheckESRefreshIntervals(t *testing.T) {
+	root := t.TempDir()
+	fixWrite(t, root, "platform-apl/manifest/ok.yaml",
+		"apiVersion: external-secrets.io/v1\nkind: ExternalSecret\nspec:\n  refreshInterval: 1m\n")
+	fixWrite(t, root, "platform-apl/manifest/oneshot.yaml",
+		"kind: ExternalSecret\nspec:\n  refreshInterval: \"0\"\n---\nkind: PushSecret\nspec:\n  refreshInterval: 5m\n")
+	fixWrite(t, root, "platform-apl/components/x/notes.yaml",
+		"kind: ConfigMap\nmetadata:\n  name: unrelated\n")
+	var buf bytes.Buffer
+	if got := checkESRefreshIntervals(root, &buf); got != 0 {
+		t.Fatalf("compliant tree: %d errors\n%s", got, buf.String())
+	}
+
+	// 1h ES + PushSecret with no interval → 2 errors.
+	fixWrite(t, root, "platform-apl/components/bad/es.yaml",
+		"kind: ExternalSecret\nspec:\n  refreshInterval: 1h\n")
+	fixWrite(t, root, "platform-apl/components/bad/push.yaml",
+		"kind: PushSecret\nspec:\n  updatePolicy: Replace\n")
+	buf.Reset()
+	if got := checkESRefreshIntervals(root, &buf); got != 2 {
+		t.Fatalf("violating tree: %d errors, want 2\n%s", got, buf.String())
+	}
+	for _, want := range []string{"exceeds the 5m0s propagation bound", "declares no refreshInterval"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, buf.String())
+		}
+	}
+}
+
+// esParseRefreshInterval accepts ESO's duration forms; bare numbers are seconds.
+func TestESParseRefreshInterval(t *testing.T) {
+	for s, want := range map[string]time.Duration{
+		"0": 0, "60": time.Minute, "1m": time.Minute, "5m": 5 * time.Minute, "1h": time.Hour,
+	} {
+		got, err := esParseRefreshInterval(s)
+		if err != nil || got != want {
+			t.Errorf("esParseRefreshInterval(%q) = %v, %v; want %v", s, got, err, want)
+		}
+	}
+	if _, err := esParseRefreshInterval("often"); err == nil {
+		t.Error("non-duration must error")
+	}
 }

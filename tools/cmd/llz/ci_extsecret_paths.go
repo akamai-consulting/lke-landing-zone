@@ -30,7 +30,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -525,12 +527,86 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		}
 	}
 
+	// Phase-1 invariant of docs/designs/secrets-before-apps.md: every
+	// OpenBao-bound ExternalSecret/PushSecret bounds its propagation window.
+	errors += checkESRefreshIntervals(root, w)
+
 	if errors > 0 {
 		fmt.Fprintf(w, "\n%d ExternalSecret ref(s) failed seed or policy validation.\n", errors)
 		return fmt.Errorf("%d ExternalSecret ref(s) failed seed or policy validation", errors)
 	}
 	fmt.Fprintf(w, "\nAll ExternalSecret refs and bootstrap-seeded paths are policy-covered.\n")
 	return nil
+}
+
+// ── refreshInterval bound (secrets-before-apps Phase 1) ──────────────────────
+
+// esMaxRefreshInterval is the propagation ceiling for OpenBao-bound
+// ExternalSecrets/PushSecrets: a rotated credential (or a store that recovered
+// after a blip, post-first-sync) must be re-served within this window. "0" is
+// exempt — one-shot generator ExternalSecrets (grafana-admin, otel-ingress)
+// must never re-run, or a live generated password would rotate on a timer.
+const esMaxRefreshInterval = 5 * time.Minute
+
+var (
+	esKindRx            = regexp.MustCompile(`(?m)^kind:\s+(ExternalSecret|PushSecret)\s*$`)
+	esRefreshIntervalRx = regexp.MustCompile(`(?m)^\s+refreshInterval:\s+"?([0-9][0-9a-z]*)"?\s*$`)
+)
+
+// esParseRefreshInterval parses the ESO duration forms used in the trees
+// ("0", "60", "1m", "5m", "1h"); a bare number is seconds.
+func esParseRefreshInterval(s string) (time.Duration, error) {
+	if n, err := strconv.Atoi(s); err == nil {
+		return time.Duration(n) * time.Second, nil
+	}
+	return time.ParseDuration(s)
+}
+
+// checkESRefreshIntervals scans the platform trees for ExternalSecret/PushSecret
+// documents and fails any whose refreshInterval is missing or above
+// esMaxRefreshInterval (except the exempt one-shot "0"). Store binding is not
+// inspected: every ES/PushSecret in these trees binds the openbao(-push)
+// ClusterSecretStores, and a future non-OpenBao ES would deserve the same
+// propagation bound anyway.
+func checkESRefreshIntervals(root string, w io.Writer) int {
+	errors := 0
+	for _, dir := range platformTreeDirs(root) {
+		_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d == nil || d.IsDir() || !strings.HasSuffix(p, ".yaml") {
+				return nil
+			}
+			b, rerr := os.ReadFile(p)
+			if rerr != nil {
+				return nil
+			}
+			for _, doc := range strings.Split(string(b), "\n---") {
+				if !esKindRx.MatchString(doc) {
+					continue
+				}
+				m := esRefreshIntervalRx.FindStringSubmatch(doc)
+				if m == nil {
+					fmt.Fprintf(w, "::error file=%s::ExternalSecret/PushSecret declares no refreshInterval — set one ≤ %s (or \"0\" for a one-shot generator); see docs/designs/secrets-before-apps.md\n", p, esMaxRefreshInterval)
+					errors++
+					continue
+				}
+				dur, perr := esParseRefreshInterval(m[1])
+				if perr != nil {
+					fmt.Fprintf(w, "::error file=%s::unparseable refreshInterval %q\n", p, m[1])
+					errors++
+					continue
+				}
+				if dur != 0 && dur > esMaxRefreshInterval {
+					fmt.Fprintf(w, "::error file=%s::refreshInterval %s exceeds the %s propagation bound (secrets-before-apps Phase 1) — a rotated credential would be served stale that long\n", p, m[1], esMaxRefreshInterval)
+					errors++
+				}
+			}
+			return nil
+		})
+	}
+	if errors == 0 {
+		fmt.Fprintf(w, "  ok: every platform ExternalSecret/PushSecret bounds refreshInterval ≤ %s (or one-shot 0)\n", esMaxRefreshInterval)
+	}
+	return errors
 }
 
 func ciExternalSecretPathsCmd() *cobra.Command {

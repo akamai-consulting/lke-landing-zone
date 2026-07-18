@@ -56,6 +56,9 @@ func reconcileCmd() *cobra.Command {
 			"                             harbor-robot-provisioner CronJob)\n" +
 			"  --reconcile-openbao-gauges seal + credential-age gauges (read-only; needs\n" +
 			"                             OpenBao egress + the reconciler k8s-auth role)\n" +
+			"  --reconcile-es-store-recovery force-sync ExternalSecrets/PushSecrets when\n" +
+			"                             the openbao ClusterSecretStore goes Ready\n" +
+			"                             (supersedes the CI nudge's force-sync half)\n" +
 			"Runs from the slim distroless image with an in-pod ServiceAccount. Terminates\n" +
 			"gracefully on SIGTERM.",
 		Args: cobra.NoArgs,
@@ -85,6 +88,8 @@ func reconcileCmd() *cobra.Command {
 				reconcileSCDemote:   o.reconcileSCDemote,
 				scDemoteResync:      time.Duration(o.scDemoteResync) * time.Second,
 				scDemoteName:        o.scDemoteName,
+				reconcileESRecovery: o.reconcileESRecovery,
+				esRecoveryResync:    time.Duration(o.esRecoveryResync) * time.Second,
 			})
 		},
 	}
@@ -109,6 +114,8 @@ func reconcileCmd() *cobra.Command {
 	f.BoolVar(&o.reconcileSCDemote, "reconcile-sc-demote", false, "enable the StorageClass default-demote watch reconciler (default off: the CronJob owns it)")
 	f.IntVar(&o.scDemoteResync, "sc-demote-resync", 120, "resync-floor seconds for the sc-demote reconciler (defeats the admission-policy starvation case)")
 	f.StringVar(&o.scDemoteName, "sc-demote-name", defaultDemoteSC, "the StorageClass to keep non-default (LKE's Flux-promoted retain class)")
+	f.BoolVar(&o.reconcileESRecovery, "reconcile-es-store-recovery", false, "enable the ES store-recovery watch reconciler: force-sync ExternalSecrets/PushSecrets when the openbao ClusterSecretStore goes Ready (default off)")
+	f.IntVar(&o.esRecoveryResync, "es-store-recovery-resync", 300, "resync-floor seconds for the es-store-recovery reconciler (the store watch drives immediacy)")
 	return c
 }
 
@@ -135,6 +142,8 @@ type reconcileFlags struct {
 	reconcileSCDemote   bool
 	scDemoteResync      int
 	scDemoteName        string
+	reconcileESRecovery bool
+	esRecoveryResync    int
 }
 
 type reconcileOpts struct {
@@ -158,13 +167,38 @@ type reconcileOpts struct {
 	openbaoInterval     time.Duration
 	reconcileTokens     bool
 	tokensInterval      time.Duration
+	reconcileESRecovery bool
+	esRecoveryResync    time.Duration
+}
+
+// openbaoBootstrapGrace wraps the read-only openbao-gauges sample so an
+// unreachable OpenBao is a clean no-op UNTIL it has answered once, then a
+// real error thereafter. The reconciler now starts at wave 0 (before OpenBao
+// is up — secrets-before-apps Phase 2), so without this a fresh bootstrap
+// would accrue llz_reconcile_errors_total and trip the OpenBao-down alerts for
+// ~10-15m every time; a genuine day-2 outage (after the store was once up)
+// still surfaces. Per-process sticky bool (replicas=1, lane is un-gated).
+func openbaoBootstrapGrace(sample func(context.Context) error) func(context.Context) error {
+	seen := false
+	return func(ctx context.Context) error {
+		err := sample(ctx)
+		if err == nil {
+			seen = true
+			return nil
+		}
+		if !seen {
+			return nil // pre-OpenBao bootstrap window — expected, not a fault
+		}
+		return err
+	}
 }
 
 // drivingEnabled reports whether any state-mutating reconciler is on — the case
 // that needs a single writer, hence leader election.
 func (o reconcileOpts) drivingEnabled() bool {
 	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolLabels ||
-		o.reconcileSCDemote || o.reconcileLinodeCred || o.reconcileHarbor
+		o.reconcileSCDemote || o.reconcileLinodeCred || o.reconcileHarbor ||
+		o.reconcileESRecovery
 }
 
 // nodeGetter is the slice of the kube client the observe sampler needs.
@@ -290,6 +324,15 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 		// the shared internal/health predicate). A convergence read failure zeroes
 		// observe's up; a hard-failed cluster does not (that's a valid observation).
 		run: func(ctx context.Context) error {
+			// Cheap presence gauge for the lazily-read in-cluster Linode token
+			// (optional Secret volume — see linode_token.go): lets the e2e and
+			// day-2 alerting see the linode lanes' activation state instead of
+			// inferring it from their silence.
+			present := 0.0
+			if inclusterLinodeToken() != "" {
+				present = 1
+			}
+			reg.SetGauge("llz_reconcile_linode_token_present", "1 once the in-cluster Linode token (env or optional Secret volume) is readable", nil, present)
 			if err := sampleNodes(ctx, client, reg); err != nil {
 				return err
 			}
@@ -299,6 +342,18 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			return sampleHealth(ctx, client, reg)
 		},
 	}}
+	// requireLinodeToken wraps a linode-dependent lane: before the ESO-synced
+	// token exists (bootstrap pre-store, by design since the Deployment's secret
+	// ref became an optional volume) the lane is a clean no-op instead of a
+	// failed pass — the observe gauge above reports the waiting state.
+	requireLinodeToken := func(run func(context.Context) error) func(context.Context) error {
+		return func(ctx context.Context) error {
+			if inclusterLinodeToken() == "" {
+				return nil
+			}
+			return run(ctx)
+		}
+	}
 	if o.reconcileArgoNudge {
 		recs = append(recs, reconciler{
 			name:     "argo-nudge",
@@ -319,7 +374,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// Same logic the cidrFirewall CronJob runs (`ci discover-firewall-config`);
 			// reads NODE_NAME/LINODE_TOKEN from env. Node changes shift which instance
 			// (and thus which firewall/VPC) backs this pod, so watch Nodes.
-			run: gate(func(ctx context.Context) error { return runCIDiscoverFirewallConfig(ctx) }),
+			run: gate(requireLinodeToken(func(ctx context.Context) error { return runCIDiscoverFirewallConfig(ctx) })),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, "/api/v1/nodes", "", func(kube.WatchEvent) error {
 					onEvent()
@@ -335,7 +390,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// Go port of the linode-volume-labeler relabel.sh (`ci relabel-volumes`);
 			// reads REGION_SHORT/LINODE_TOKEN from env. A new PV means a new Linode
 			// Volume to relabel, so watch PersistentVolumes.
-			run: gate(func(ctx context.Context) error { return runRelabelVolumes(ctx) }),
+			run: gate(requireLinodeToken(func(ctx context.Context) error { return runRelabelVolumes(ctx) })),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, "/api/v1/persistentvolumes", "", func(kube.WatchEvent) error {
 					onEvent()
@@ -367,7 +422,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			interval: o.linodeCredInterval,
 			// Same logic the linodeCredRotator CronJob runs (`ci rotate-linode-creds
 			// --apply`); reads REGION/OBJ_CLUSTER/LINODE_TOKEN/OPENBAO_* from env.
-			run: gate(func(ctx context.Context) error { return runRotateLinodeCreds(ctx, true) }),
+			run: gate(requireLinodeToken(func(ctx context.Context) error { return runRotateLinodeCreds(ctx, true) })),
 		})
 	}
 	if o.reconcileHarbor {
@@ -378,13 +433,35 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			run: gate(func(context.Context) error { return runCIHarborProvisioner() }),
 		})
 	}
+	if o.reconcileESRecovery {
+		state := &esStoreRecovery{}
+		recs = append(recs, reconciler{
+			name:     "es-store-recovery",
+			interval: o.esRecoveryResync, // resync floor; the store watch drives immediacy
+			// Driving (patches ES/PushSecret annotations) → leader-gated. State is
+			// per-process; the leader gate means only the driving replica advances it.
+			run: gate(func(ctx context.Context) error { return state.reconcile(ctx, client, reg) }),
+			watch: func(ctx context.Context, onEvent func()) error {
+				return client.Watch(ctx, esStoresWatchPath, "", func(kube.WatchEvent) error {
+					onEvent()
+					return nil
+				})
+			},
+		})
+	}
 	if o.reconcileOpenBao {
+		// Sticky bootstrap grace: since the reconciler now starts at wave 0 (before
+		// OpenBao is up — secrets-before-apps Phase 2), an unreachable OpenBao on
+		// the FIRST passes is expected, not a fault. Swallow the error until OpenBao
+		// answers once, so a fresh cluster bootstrap doesn't accrue
+		// llz_reconcile_errors_total{openbao-gauges} or trip the OpenBao-down alerts
+		// for ~10-15m every time. After the first success a failure IS a real day-2
+		// outage and surfaces normally (gauge + error + alert). Per-process bool;
+		// replicas=1 and the lane is read-only/un-gated so no coordination needed.
 		recs = append(recs, reconciler{
 			name:     "openbao-gauges",
 			interval: o.openbaoInterval,
-			// Read-only (seal + credential-age gauges), so NOT gated on leadership
-			// — every replica may read OpenBao harmlessly.
-			run: func(ctx context.Context) error { return sampleOpenBao(ctx, reg, time.Now()) },
+			run:      openbaoBootstrapGrace(func(ctx context.Context) error { return sampleOpenBao(ctx, reg, time.Now()) }),
 		})
 	}
 	if o.reconcileTokens {

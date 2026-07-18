@@ -23,7 +23,9 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "5"
 spec:
-  refreshInterval: 1h
+  # ≤5m: bounds rotation propagation + post-blip staleness (secrets-before-apps
+  # Phase 1 invariant, guard-enforced by `llz ci externalsecret-paths`).
+  refreshInterval: 5m
   updatePolicy: Replace
   # Keep the OpenBao value if this PushSecret is pruned — consumers depend on it.
   deletionPolicy: None
