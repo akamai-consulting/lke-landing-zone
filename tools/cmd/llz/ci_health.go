@@ -148,6 +148,12 @@ var lastHealthNonOK []string
 // a stale value across polls.
 var lastHealthRedisAuthSplit bool
 
+// lastHealthAnnotationWedge records whether the most recent scan saw an Argo app
+// sync fail on the 256KB metadata.annotations limit. runConverge reads it to
+// self-heal by stripping the oversized CRD annotation once; like the redis flag a
+// full scan always assigns it, so it never carries a stale value across polls.
+var lastHealthAnnotationWedge bool
+
 // longPoleCandidates returns the labels keeping a report in-progress (Pending +
 // Failed). Pure — the report's tolerated categories (Drift/Deferred) are excluded
 // because they do not hold up convergence.
@@ -200,6 +206,7 @@ func runConverge(budget, interval, retryDelay int) int {
 	var prevNonOK []string
 	var prevAttempt int
 	redisRealigned := false
+	crdAnnotationsStripped := false
 	for attempt := 1; ; attempt++ {
 		fmt.Fprintf(os.Stderr, "::notice::convergence poll attempt %d\n", attempt)
 		pollStart := time.Now()
@@ -220,6 +227,19 @@ func runConverge(budget, interval, retryDelay int) int {
 		if lastHealthRedisAuthSplit && !redisRealigned {
 			redisRealigned = true
 			realignArgocdRedis()
+		}
+		// Self-heal a 256KB metadata.annotations wedge. A CRD carrying an oversized
+		// client-side last-applied-configuration annotation (a reused-cluster stale
+		// copy, or an inherently-large schema like Kyverno's policy CRDs / Gateway-API
+		// httproutes) fails EVERY apply to it — including apl-core's own SSA sync — so
+		// the owning Application never converges. Stripping that dead-weight annotation
+		// (SSA never writes it) unwedges the apply. Once per run; if it doesn't clear,
+		// the budget still bounds the poll. Mirrors the bootstrap's proactive step 1b
+		// for a wedge that only surfaces during this wait.
+		if lastHealthAnnotationWedge && !crdAnnotationsStripped {
+			crdAnnotationsStripped = true
+			fmt.Fprintln(os.Stderr, "::warning::an Argo sync hit the 256KB annotation limit — stripping oversized CRD last-applied-configuration annotations")
+			stripOversizedCRDLastApplied(kubectlBoolViaExec)
 		}
 		switch step {
 		case health.ConvergeDone:
@@ -338,7 +358,8 @@ func runHealthSections(r *health.Report, sections []healthSection, st *convergeS
 // a one-shot `llz ci health` (every check runs, every time), non-nil inside
 // `llz ci converge`, where monotonic facts persist across polls.
 func healthExitCodeState(st *convergeState) int {
-	lastHealthRedisAuthSplit = false // set true only by a full scan that sees the split
+	lastHealthRedisAuthSplit = false  // set true only by a full scan that sees the split
+	lastHealthAnnotationWedge = false // ditto for the annotation-limit wedge
 	if !kubectlReachable() {
 		// Exit 3 (not 1): an unreachable apiserver is an infrastructure transient,
 		// not a cluster hard-failure. The converge loop retries it against the
@@ -407,6 +428,7 @@ func healthExitCodeState(st *convergeState) int {
 	// candidates for "last thing to go healthy".
 	lastHealthNonOK = longPoleCandidates(&r)
 	lastHealthRedisAuthSplit = r.RedisAuthSplit
+	lastHealthAnnotationWedge = r.AnnotationLimitWedge
 
 	// In phase1 the support plane is still installing (apl-core's CRDs, webhook
 	// Services, and endpoints land in later helmfile phases), so a hard-fail here
@@ -927,6 +949,12 @@ func checkArgoApps(r *health.Report, phase1 bool) {
 		// once rather than poll to budget exhaustion on a self-inflicted deadlock.
 		if health.IsRepoServerCacheAuthError(a.SpecErr) {
 			r.RedisAuthSplit = true
+		}
+		// A sync that failed on the 256KB metadata.annotations limit (an oversized
+		// client-side last-applied-configuration on a CRD) wedges every apply to
+		// that object; flag it so the converge loop strips the annotation once.
+		if health.IsAnnotationLimitError(a.OpErr) {
+			r.AnnotationLimitWedge = true
 		}
 	}
 }

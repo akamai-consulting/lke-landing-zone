@@ -172,6 +172,31 @@ func TestCheckArgoAppsRedisAuthSplit(t *testing.T) {
 	}
 }
 
+// An Argo app whose sync FAILED on the 256KB annotation limit classifies as
+// pending (not a hard strike) AND raises the AnnotationLimitWedge signal so
+// converge strips the oversized CRD annotation.
+func TestCheckArgoAppsAnnotationLimitWedge(t *testing.T) {
+	withKubectl(t, func(a string) ([]byte, error) {
+		if a != "-n argocd get applications.argoproj.io -o json" {
+			return nil, errors.New("nope")
+		}
+		return items(
+			`{"metadata":{"name":"kyverno-kyverno"},"spec":{"syncPolicy":{"automated":{}}},"status":{"sync":{"status":"OutOfSync"},"health":{"status":"Degraded"},"operationState":{"phase":"Failed","message":"CustomResourceDefinition clusterpolicies.kyverno.io is invalid: metadata.annotations: Too long"}}}`,
+		), nil
+	})
+	var r health.Report
+	checkArgoApps(&r, false)
+	if !r.AnnotationLimitWedge {
+		t.Error("checkArgoApps did not set AnnotationLimitWedge on a 'Too long' sync failure")
+	}
+	if len(r.Failed) != 0 {
+		t.Errorf("annotation-limit wedge must not hard-fail (self-healable); got failed %v", r.Failed)
+	}
+	if len(r.Pending) != 1 {
+		t.Errorf("annotation-limit wedge should classify as pending; got pending %v", r.Pending)
+	}
+}
+
 // realignArgocdRedis restarts argocd-redis and waits for the rollout, and is
 // best-effort — a restart error is logged, not fatal, and skips the status wait.
 func TestRealignArgocdRedis(t *testing.T) {

@@ -945,7 +945,7 @@ func TestBootstrapCluster_GHCRSecretsGatedOnToken(t *testing.T) {
 			},
 			helm:        func(_ ...string) (string, bool) { return "", true },
 			git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
-		now:         time.Now,
+			now:         time.Now,
 			sleep:       func(time.Duration) {},
 			genPassword: func() string { return "pw" },
 		}
