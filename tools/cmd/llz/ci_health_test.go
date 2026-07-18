@@ -143,6 +143,62 @@ func TestCheckArgoApps(t *testing.T) {
 	if len(r.Failed) != 1 || len(r.Deferred) != 1 {
 		t.Errorf("checkArgoApps = failed %v deferred %v, want 1 each", r.Failed, r.Deferred)
 	}
+	if r.RedisAuthSplit {
+		t.Error("checkArgoApps set RedisAuthSplit with no WRONGPASS/NOAUTH app present")
+	}
+}
+
+// A WRONGPASS/NOAUTH ComparisonError classifies as pending (never a hard strike)
+// AND raises the RedisAuthSplit signal so converge can self-heal.
+func TestCheckArgoAppsRedisAuthSplit(t *testing.T) {
+	withKubectl(t, func(a string) ([]byte, error) {
+		if a != "-n argocd get applications.argoproj.io -o json" {
+			return nil, errors.New("nope")
+		}
+		return items(
+			`{"metadata":{"name":"llz-harbor"},"spec":{"syncPolicy":{"automated":{}}},"status":{"sync":{"status":"Unknown"},"health":{"status":"Healthy"},"conditions":[{"type":"ComparisonError","message":"failed to list refs: WRONGPASS invalid username-password pair or user is disabled."}]}}`,
+		), nil
+	})
+	var r health.Report
+	checkArgoApps(&r, false)
+	if !r.RedisAuthSplit {
+		t.Error("checkArgoApps did not set RedisAuthSplit on a WRONGPASS ComparisonError")
+	}
+	if len(r.Failed) != 0 {
+		t.Errorf("WRONGPASS must not hard-fail; got failed %v", r.Failed)
+	}
+	if len(r.Pending) != 1 {
+		t.Errorf("WRONGPASS should classify as pending; got pending %v", r.Pending)
+	}
+}
+
+// realignArgocdRedis restarts argocd-redis and waits for the rollout, and is
+// best-effort — a restart error is logged, not fatal, and skips the status wait.
+func TestRealignArgocdRedis(t *testing.T) {
+	var got []string
+	withKubectl(t, func(a string) ([]byte, error) {
+		got = append(got, a)
+		return nil, nil
+	})
+	realignArgocdRedis()
+	want := []string{
+		"-n argocd rollout restart deploy/argocd-redis",
+		"-n argocd rollout status deploy/argocd-redis --timeout=120s",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("realignArgocdRedis issued %v, want %v", got, want)
+	}
+
+	// Restart failure => log + return, no status wait.
+	got = nil
+	withKubectl(t, func(a string) ([]byte, error) {
+		got = append(got, a)
+		return nil, errors.New("forbidden")
+	})
+	realignArgocdRedis()
+	if len(got) != 1 || got[0] != "-n argocd rollout restart deploy/argocd-redis" {
+		t.Errorf("on restart failure, expected only the restart call; got %v", got)
+	}
 }
 
 func TestCheckWorkloads(t *testing.T) {

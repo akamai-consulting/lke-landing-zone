@@ -42,6 +42,14 @@ type Report struct {
 	Pending  []string
 	Deferred []string
 	Drift    []string
+
+	// RedisAuthSplit is set when at least one Argo Application ComparisonErrors
+	// with a repo-server↔argocd-redis auth code (WRONGPASS/NOAUTH). It does not
+	// affect the verdict — the split classifies as Pending (poll) — but signals
+	// the convergence loop to self-heal by restarting argocd-redis once, so a
+	// split that surfaces mid-converge is repaired instead of polling to budget
+	// exhaustion. See health.IsRepoServerCacheAuthError and runConverge.
+	RedisAuthSplit bool
 }
 
 // AddFail records a hard failure (a required component the reconciler can't fix).

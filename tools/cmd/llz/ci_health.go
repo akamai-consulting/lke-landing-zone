@@ -141,6 +141,13 @@ func convergeSleep(interval, elapsed time.Duration) time.Duration {
 // healthExitCode call, so runConverge can report the convergence long pole.
 var lastHealthNonOK []string
 
+// lastHealthRedisAuthSplit records whether the most recent scan saw a repo-
+// server↔argocd-redis auth split (WRONGPASS/NOAUTH). runConverge reads it to
+// self-heal by restarting argocd-redis once; a full scan always assigns it
+// (cleared on the unreachable/pre-bootstrap early returns), so it never carries
+// a stale value across polls.
+var lastHealthRedisAuthSplit bool
+
 // longPoleCandidates returns the labels keeping a report in-progress (Pending +
 // Failed). Pure — the report's tolerated categories (Drift/Deferred) are excluded
 // because they do not hold up convergence.
@@ -192,12 +199,28 @@ func runConverge(budget, interval, retryDelay int) int {
 	// long poles (the never-memoized convergence-signal sections).
 	var prevNonOK []string
 	var prevAttempt int
+	redisRealigned := false
 	for attempt := 1; ; attempt++ {
 		fmt.Fprintf(os.Stderr, "::notice::convergence poll attempt %d\n", attempt)
 		pollStart := time.Now()
 		step := health.ConvergeStep(healthExitCodeState(st))
 		nonOK := lastHealthNonOK
 		pollDur := time.Since(pollStart)
+		// Self-heal a repo-server↔argocd-redis auth split. The redis pod bakes its
+		// --requirepass from the argocd-redis Secret at pod start and never re-reads
+		// it; on a reused (KEEP_CLUSTER) cluster the Secret can be rewritten (apl-core
+		// regenerates it) after redis starts, so freshly-rolled clients read the new
+		// password while redis still serves the old one — every app ComparisonErrors
+		// with WRONGPASS and converge would otherwise poll until the budget runs out.
+		// Restarting redis makes it re-read the current Secret, realigning it with the
+		// clients. Once per run: a single restart repairs the split; if it doesn't the
+		// budget still bounds the poll and we fail as before (no worse than not trying).
+		// This complements the bootstrap workflow's one-shot pre-converge realign,
+		// which misses a split that only surfaces during this wait.
+		if lastHealthRedisAuthSplit && !redisRealigned {
+			redisRealigned = true
+			realignArgocdRedis()
+		}
 		switch step {
 		case health.ConvergeDone:
 			// Never declare converged on a memoized skip: a monotonic section that
@@ -253,6 +276,25 @@ func runConverge(budget, interval, retryDelay int) int {
 	}
 }
 
+// realignArgocdRedis restarts the argocd-redis Deployment so it re-reads the
+// current argocd-redis Secret password, repairing a repo-server↔redis auth split
+// (WRONGPASS/NOAUTH). This is the in-cluster complement to the bootstrap
+// workflow's one-shot pre-converge realign: that step only fires if the split is
+// already visible when it runs, so a split that surfaces *during* the converge
+// wait (a mid-poll Secret rotation) would otherwise go unrepaired. Best-effort:
+// failures are logged, never fatal — the convergence budget still bounds the poll
+// if the restart doesn't take.
+func realignArgocdRedis() {
+	fmt.Fprintln(os.Stderr, "::warning::argocd-redis auth split (WRONGPASS/NOAUTH) detected — restarting argocd-redis to re-read the current password")
+	if out, err := execOutput("kubectl", "-n", "argocd", "rollout", "restart", "deploy/argocd-redis"); err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::argocd-redis rollout restart failed (%v): %s\n", err, strings.TrimSpace(string(out)))
+		return
+	}
+	if _, err := execOutput("kubectl", "-n", "argocd", "rollout", "status", "deploy/argocd-redis", "--timeout=120s"); err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::argocd-redis rollout status wait failed (%v) — continuing to poll\n", err)
+	}
+}
+
 // ── health orchestrator ──────────────────────────────────────────────────────
 
 // healthExitCode runs every check against $KUBECONFIG, prints the report, and
@@ -296,6 +338,7 @@ func runHealthSections(r *health.Report, sections []healthSection, st *convergeS
 // a one-shot `llz ci health` (every check runs, every time), non-nil inside
 // `llz ci converge`, where monotonic facts persist across polls.
 func healthExitCodeState(st *convergeState) int {
+	lastHealthRedisAuthSplit = false // set true only by a full scan that sees the split
 	if !kubectlReachable() {
 		// Exit 3 (not 1): an unreachable apiserver is an infrastructure transient,
 		// not a cluster hard-failure. The converge loop retries it against the
@@ -363,6 +406,7 @@ func healthExitCodeState(st *convergeState) int {
 	// in-progress (Drift/Deferred are tolerated-as-converged), so they are the
 	// candidates for "last thing to go healthy".
 	lastHealthNonOK = longPoleCandidates(&r)
+	lastHealthRedisAuthSplit = r.RedisAuthSplit
 
 	// In phase1 the support plane is still installing (apl-core's CRDs, webhook
 	// Services, and endpoints land in later helmfile phases), so a hard-fail here
@@ -878,6 +922,12 @@ func checkArgoApps(r *health.Report, phase1 bool) {
 		}
 		cat, msg := health.ClassifyArgoApp(a, phase1)
 		record(r, cat, msg)
+		// A repo-server↔argocd-redis auth split (WRONGPASS/NOAUTH) makes every app
+		// ComparisonError at once; flag it so the converge loop can restart redis
+		// once rather than poll to budget exhaustion on a self-inflicted deadlock.
+		if health.IsRepoServerCacheAuthError(a.SpecErr) {
+			r.RedisAuthSplit = true
+		}
 	}
 }
 
