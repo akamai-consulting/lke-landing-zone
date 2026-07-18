@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -111,5 +112,46 @@ func TestRunChartVersionGuard(t *testing.T) {
 	// Missing --base is an explicit error.
 	if err := runChartVersionGuard("", root); err == nil {
 		t.Error("runChartVersionGuard(no base) = nil, want error")
+	}
+}
+
+// TestRunChartVersionGuardFailsOnUnresolvableBase pins the fail-closed contract.
+// Per-chart `git show` errors are (correctly) discarded, because "path absent at
+// base" is exactly how a genuinely new chart looks. But an unresolvable base ref
+// — a bad --base, or the far more likely shallow clone without the base commit —
+// produces the same empty result for EVERY chart, and classifyChartBump exempts
+// new charts from the bump requirement. The guard would then pass a changeset
+// having compared nothing.
+func TestRunChartVersionGuardFailsOnUnresolvableBase(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "kubernetes-charts", "unbumped")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Same version as the base would have: without the base check this chart is
+	// silently reclassified as "new" and waved through.
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"),
+		[]byte("name: unbumped\nversion: 0.4.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "rev-parse"):
+			return nil, errors.New("fatal: Needed a single revision")
+		case strings.Contains(joined, "diff"):
+			return []byte("kubernetes-charts/unbumped/values.yaml\n"), nil
+		}
+		// Every `git show` fails, as it would against a commit we don't have.
+		return nil, errors.New("fatal: invalid object name")
+	})
+
+	err := runChartVersionGuard("BASE", root)
+	if err == nil {
+		t.Fatal("an unresolvable base must FAIL — every chart looks new, so the bump check silently applies to nothing")
+	}
+	if !strings.Contains(err.Error(), "does not resolve") {
+		t.Errorf("error should name the unresolvable base: %v", err)
 	}
 }

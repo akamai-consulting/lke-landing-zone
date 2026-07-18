@@ -62,11 +62,24 @@ func runChartVersionGuard(base, root string) error {
 		return nil
 	}
 
+	// Resolve the base ONCE before comparing anything. Per-chart `git show` errors
+	// are discarded below because "path absent at base" is how a genuinely new
+	// chart looks — but that same empty result is what a bad base ref, a shallow
+	// clone missing the base commit, or any git failure produces. Without this
+	// check every chart would look brand-new, and classifyChartBump exempts new
+	// charts from the bump requirement: the guard would pass the entire changeset
+	// having compared nothing.
+	if _, err := gitOutput(root, "rev-parse", "--verify", base+"^{commit}"); err != nil {
+		return fmt.Errorf("chart-version-guard: base ref %q does not resolve (%v) — every chart would look new and skip the bump check; "+
+			"fetch the base commit (actions/checkout needs fetch-depth: 0 or an explicit base fetch)", base, err)
+	}
+
 	var failed []string
 	for _, dir := range dirs {
 		// New version from the working tree; "" when the chart was removed.
 		newVer := chartVersion(readFileOrEmpty(filepath.Join(root, dir, "Chart.yaml")))
-		// Old version from the base; "" when the chart is new (or had none).
+		// Old version from the base; "" when the chart is new. Safe to discard the
+		// error now that the base ref itself is known good.
 		oldRaw, _ := gitOutput(root, "show", base+":"+dir+"/Chart.yaml")
 		oldVer := chartVersion(oldRaw)
 
