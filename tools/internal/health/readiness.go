@@ -40,24 +40,18 @@ func LokiConfigUsesS3(configText string) bool {
 	return lokiS3MarkerRe.MatchString(configText)
 }
 
-// HarborDeployments are the Harbor control-plane Deployments wait-for-harbor
-// rolls out before declaring Harbor's API plane ready (apl-core 5.0.0; the
-// upstream harbor-nginx ingress is absent — the Istio Gateway handles ingress).
-// harbor-registry is intentionally NOT here: it mounts the harbor-registry-s3
-// Secret, which is seeded + ExternalSecret-synced only LATER in the same
-// bootstrap (see HarborRegistryDeployments + llz-bootstrap-openbao.yml), so it
-// cannot be Ready when this pre-seed control-plane gate runs.
-func HarborDeployments() []string {
-	return []string{"harbor-core", "harbor-jobservice", "harbor-portal"}
-}
-
 // HarborRegistryDeployments are the Harbor Deployments that depend on the
 // object-storage credentials seeded mid-bootstrap (harbor-registry mounts the
-// harbor-registry-s3 Secret via secretKeyRef). wait-harbor --registry-only rolls
-// these out as a post-seed gate, after the registry-S3 KV path is seeded and the
-// ExternalSecret force-synced; gating on them earlier guarantees a timeout.
+// harbor-registry-s3 Secret via secretKeyRef). wait-harbor rolls these out as a
+// post-seed gate, after the registry-S3 KV path is seeded and the
+// es-store-recovery lane force-syncs the ExternalSecret; gating on them earlier
+// guarantees a timeout.
+//
+// The former HarborDeployments/HarborStatefulSets control-plane sets lived here
+// too. They fed wait-harbor's pre-seed gate, which was a continue-on-error wait
+// inside the workflow's `harbor` job — a convenience so that job's robot
+// provisioning wouldn't race Harbor coming up. f0aa68f moved robot provisioning
+// in-cluster and retired that job, so the gate's only consumer left with it, and
+// kick-harbor-provisioner now does its own harbor-core Available wait.
 func HarborRegistryDeployments() []string { return []string{"harbor-registry"} }
 
-// HarborStatefulSets are the Harbor StatefulSets (Redis + Trivy) harbor-core
-// depends on — a belt-and-suspenders rollout check.
-func HarborStatefulSets() []string { return []string{"harbor-redis", "harbor-trivy"} }

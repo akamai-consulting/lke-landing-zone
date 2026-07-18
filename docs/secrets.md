@@ -213,8 +213,8 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `LINODE_API_TOKEN` | Linode provisioning PAT (read/write) — **CI/Terraform-only** (never enters a cluster; also mints the narrow in-cluster PAT) | **Automated** — `secret-rotation.yml` mints monthly (`0 4 1 * *`), revokes old daily (`30 3 * * *`); ≤90-day policy with daily expiry audit |
 | `LINODE_DNS_TOKEN` | Linode API token for the DNS **first-boot fallback** (`TF_VAR_linode_dns_token` → `apps.cert-manager.dns.provider.linode.apiToken`); steady-state DNS auth is the rotating in-cluster PAT via the `dns-rotating-token` Kyverno policy | **Manual** — **static** operator input; ≤90-day policy |
 | `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` | Object Storage key for the TF-state backend bucket | **On-demand** via `secret-rotation.yml` (`tf-state-key` / `tf-state-key-revoke` scopes); no scheduled rotation (bootstrap dependency) |
-| `OPENBAO_SECRETS_WRITE_TOKEN` | GitHub classic PAT (Actions + Secrets: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
-| `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `gh-pat-expiry` audit |
+| `OPENBAO_SECRETS_WRITE_TOKEN` | GitHub classic PAT (Actions + Secrets: write) | **Manual**; ≤90-day policy, daily `token-inventory` expiry measurement (alerts via `LLZToken*`) |
+| `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `token-inventory` expiry measurement (alerts via `LLZToken*`) |
 | LKE admin kubeconfig | Cluster-admin credential | **Automated** — `secret-rotation.yml` (`lke-admin` scope), monthly; see [lke-admin-rotation.md](runbooks/lke-admin-rotation.md) |
 | `E2E_DISPATCH_TOKEN` | GitHub classic PAT for the e2e harness (template-repo scope) | **Manual** (template-repo admin) |
 
