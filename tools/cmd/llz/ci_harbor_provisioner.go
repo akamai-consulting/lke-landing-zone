@@ -51,9 +51,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
 // Seams for tests.
@@ -259,31 +256,5 @@ func smokeSeededRobot(h *harborAPI, creds [2]string) error {
 // harbor-provisioner role using the pod's ServiceAccount token — the same
 // contract as the linode-cred-rotator's login (see openLinodeRotatorBaoStore).
 func openHarborProvisionerBaoStore(ctx context.Context) (baoStore, error) {
-	addr := envOrDefault(os.Getenv, "OPENBAO_ADDR", "https://platform-openbao.llz-openbao.svc.cluster.local:8200")
-	mount := envOrDefault(os.Getenv, "OPENBAO_KUBERNETES_MOUNT", "kubernetes")
-	role := envOrDefault(os.Getenv, "OPENBAO_KUBERNETES_ROLE", "harbor-provisioner")
-	saFile := envOrDefault(os.Getenv, "SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
-	var httpClient *http.Client
-	if caFile := os.Getenv("OPENBAO_CA_FILE"); caFile != "" {
-		caPEM, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read OPENBAO_CA_FILE: %w", err)
-		}
-		if httpClient, err = openbao.HTTPClientWithCA(caPEM, 30*time.Second); err != nil {
-			return nil, err
-		}
-	} else if cli.EnvBool("OPENBAO_SKIP_VERIFY", false) {
-		httpClient = openbao.HTTPClientInsecure(30 * time.Second)
-	} else {
-		return nil, fmt.Errorf("set OPENBAO_CA_FILE (mounted openbao CA) or OPENBAO_SKIP_VERIFY=true")
-	}
-	jwt, err := os.ReadFile(saFile)
-	if err != nil {
-		return nil, fmt.Errorf("read ServiceAccount token: %w", err)
-	}
-	token, err := openbao.KubernetesLogin(ctx, httpClient, addr, mount, role, strings.TrimSpace(string(jwt)))
-	if err != nil {
-		return nil, err
-	}
-	return openbao.NewWithClient(addr, token, "", httpClient), nil
+	return openInClusterBaoStore(ctx, "harbor-provisioner")
 }

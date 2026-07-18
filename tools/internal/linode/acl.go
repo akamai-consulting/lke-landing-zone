@@ -101,7 +101,7 @@ func (a ControlPlaneACL) WithIP(ip string) (ControlPlaneACL, bool) {
 	}
 	merged := append(append([]string{}, a.IPv4...), ip)
 	sort.Strings(merged)
-	return ControlPlaneACL{Enabled: true, IPv4: dedupeSorted(merged), IPv6: a.IPv6}, true
+	return ControlPlaneACL{Enabled: true, IPv4: collapseAdjacentInPlace(merged), IPv6: a.IPv6}, true
 }
 
 // WithoutIP returns a copy of the ACL with ip removed from the IPv4 set (both
@@ -154,8 +154,16 @@ func NonNil(s []string) []string {
 	return s
 }
 
-// dedupeSorted collapses adjacent duplicates in an already-sorted slice.
-func dedupeSorted(in []string) []string {
+// collapseAdjacentInPlace removes adjacent duplicates from an ALREADY-SORTED
+// slice, reusing its backing array (out := in[:0]) — so it also clobbers the
+// caller's slice contents.
+//
+// It was named dedupeSorted, matching a function in cmd/llz (import.go) whose
+// contract is the opposite: that one is map-based, tolerates unsorted input, and
+// allocates rather than mutating. Two different behaviors behind one name is a
+// trap for whoever reaches for the "wrong" one — this name states both
+// preconditions it actually has.
+func collapseAdjacentInPlace(in []string) []string {
 	out := in[:0]
 	var prev string
 	for i, s := range in {
