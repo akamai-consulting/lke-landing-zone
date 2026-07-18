@@ -443,7 +443,7 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 	if gi, hi := rec.indexOf("git ls-remote"), rec.indexOf("upgrade --install apl"); gi < 0 || gi > hi {
 		t.Errorf("values-branch ensure (git ls-remote, idx %d) must precede the helm install (idx %d); calls:\n%s", gi, hi, strings.Join(calls, "\n"))
 	}
-	// The two inline SSA namespaces + SC come before helm; the 3 bridge applies come after the gate.
+	// The three inline SSA namespaces (apl-operator, argocd, llz-openbao) + SC come before helm; the 3 bridge applies come after the gate.
 	firstApply := rec.indexOf("apply-inline")
 	helmIdx := rec.indexOf("upgrade --install apl")
 	if firstApply < 0 || helmIdx < 0 || firstApply > helmIdx {
@@ -964,5 +964,30 @@ func TestBootstrapCluster_GHCRSecretsGatedOnToken(t *testing.T) {
 	withToken.ghcrUsername = "bot"
 	if got := countApplies(withToken); got != 2 {
 		t.Errorf("with GHCR token: want 2 ghcr applies (repo + pull secret), got %d", got)
+	}
+}
+
+// TestLlzOpenbaoNamespaceManifest: the pre-created OpenBao namespace matches
+// llz-cluster-foundation's namespaces.yaml (restricted PSS + monitoring) so
+// Argo adopts it via SSA, and carries the bootstrap marker like its siblings.
+// Pre-creating it is what removes the ~40s seal-key namespace-wait.
+func TestLlzOpenbaoNamespaceManifest(t *testing.T) {
+	m := llzOpenbaoNamespaceManifest()
+	if m["kind"] != "Namespace" {
+		t.Fatalf("kind = %v, want Namespace", m["kind"])
+	}
+	meta := m["metadata"].(map[string]any)
+	if meta["name"] != "llz-openbao" {
+		t.Errorf("name = %v, want llz-openbao", meta["name"])
+	}
+	labels := meta["labels"].(map[string]any)
+	for k, want := range map[string]string{
+		"pod-security.kubernetes.io/enforce": "restricted",
+		"monitoring":                         "enabled",
+		managedByBootstrapLabel:              "true",
+	} {
+		if labels[k] != want {
+			t.Errorf("label %s = %v, want %s", k, labels[k], want)
+		}
 	}
 }

@@ -61,6 +61,33 @@ func argocdNamespaceManifest() map[string]any {
 	}
 }
 
+// llzOpenbaoNamespaceManifest — the llz-openbao namespace, pre-created so the
+// bootstrap-openbao seal-key seed lands immediately instead of waiting ~40s for
+// the llz-cluster-foundation Argo app (wave -20) to create it (measured: the
+// seal-key step spent 43 of its 44s purely on this wait — e2e timing artifacts,
+// run 29651276573). Same SSA pre-create + Argo adoption pattern as the argocd /
+// apl-operator namespaces above. Stamped restricted-PSS + monitoring to match
+// llz-cluster-foundation's namespaces.yaml so Argo's later SSA is a clean adopt
+// (the PSS *-version labels land when the chart syncs; enforce=restricted alone
+// already restricts at the latest version until then). The seal-key step keeps
+// its own namespace-wait as the safety net if this ever doesn't run.
+func llzOpenbaoNamespaceManifest() map[string]any {
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Namespace",
+		"metadata": map[string]any{
+			"name": "llz-openbao",
+			"labels": map[string]any{
+				"monitoring":                         "enabled",
+				"pod-security.kubernetes.io/enforce": "restricted",
+				"pod-security.kubernetes.io/warn":    "restricted",
+				"pod-security.kubernetes.io/audit":   "restricted",
+				managedByBootstrapLabel:              "true",
+			},
+		},
+	}
+}
+
 // ghcrOCIRepoSecretManifest — the ArgoCD repository Secret that authenticates to
 // GHCR for the first-party OCI Helm charts (only created when a token is set;
 // the charts are public otherwise).
