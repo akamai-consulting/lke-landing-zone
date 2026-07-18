@@ -680,7 +680,8 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		return ""
 	}
 
-	// Branch already exists (ls-remote returns a SHA) → no clone/push, authed URL used.
+	// Branch exists AND this cluster has apl-core history (REUSED cluster: its
+	// sealing key still decrypts the branch) → no clone/push, authed URL used.
 	var lsURL, lsRef string
 	created := false
 	d.git = func(args ...string) (string, bool) {
@@ -693,14 +694,43 @@ func TestEnsureAplValuesBranch(t *testing.T) {
 		}
 		return "", true
 	}
+	d.kubectl = func(args ...string) (string, bool) { return "some-cm", true } // apl-installation-status present
 	if seedSHA, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seedSHA != "" {
-		t.Fatalf("existing branch should be a no-op (seedSHA=%q): %v", seedSHA, err)
+		t.Fatalf("existing branch on a reused cluster should be a no-op (seedSHA=%q): %v", seedSHA, err)
 	}
 	if created {
-		t.Error("must NOT create a branch that already exists")
+		t.Error("must NOT create a branch that already exists on a reused cluster")
 	}
 	if lsURL != "https://x-access-token:PAT@github.com/acme/inst.git" || lsRef != "refs/heads/apl-e2e" {
 		t.Errorf("ls-remote called with (%q,%q)", lsURL, lsRef)
+	}
+
+	// Branch exists BUT this cluster has NO apl-core history (a destroy+recreate:
+	// the branch's SealedSecrets are sealed with a key this fresh cluster lacks) →
+	// RESET: force-push an empty orphan branch and return a seedSHA so the installer
+	// re-arm + populate-wait re-bootstrap it.
+	var reseq []string
+	var forcePushed bool
+	d.git = func(args ...string) (string, bool) {
+		sub := gitSub(args)
+		reseq = append(reseq, sub)
+		if sub == "ls-remote" {
+			return "abc123\trefs/heads/apl-e2e", true // present
+		}
+		if sub == "push" && strings.Contains(strings.Join(args, " "), "--force") {
+			forcePushed = true
+		}
+		return "", true
+	}
+	d.kubectl = func(args ...string) (string, bool) { return "NotFound", false } // apl-installation-status absent (fresh cluster)
+	if seedSHA, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seedSHA == "" {
+		t.Fatalf("orphaned branch on a fresh cluster must be RESET (seedSHA=%q): %v", seedSHA, err)
+	}
+	if !forcePushed {
+		t.Errorf("reset must force-push the empty orphan over the orphaned branch; seq=%v", reseq)
+	}
+	if strings.Join(reseq, ",") != "ls-remote,init,commit,push,rev-parse" {
+		t.Errorf("reset sequence = %v, want ls-remote,init,commit,push,rev-parse", reseq)
 	}
 
 	// Branch absent → seed an EMPTY orphan branch: init → empty commit → push.
