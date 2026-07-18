@@ -170,3 +170,64 @@ func TestGhcrShouldRetryAnon(t *testing.T) {
 		}
 	}
 }
+
+// TestScanPublishPinsCoversPlatformApl pins the scan-tree fix. The filter used to
+// require "apl-values/" alone — a tree that holds no chart pin at all (an
+// instance's is README.md + values.yaml) — so the check found zero pins and
+// reported every chart published while verifying none, on every run including
+// the release gate.
+func TestScanPublishPinsCoversPlatformApl(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := func(chart, version string) string {
+		return "apiVersion: argoproj.io/v1alpha1\nkind: Application\nspec:\n  source:\n" +
+			"    repoURL: oci://ghcr.io/acme/charts\n    chart: " + chart + "\n    targetRevision: " + version + "\n"
+	}
+	// Where the pins actually live.
+	write("platform-apl/manifest/applications/foundation.yaml", app("llz-cluster-foundation", "0.1.10"))
+	write("platform-apl/components/openbao/openbao.yaml", app("llz-openbao-platform", "0.1.19"))
+	// A tree the old filter DID match, holding no pins — the state that made the
+	// check vacuous.
+	write("apl-values/values.yaml", "# no chart pins here\n")
+
+	pins, err := scanPublishPins(root)
+	if err != nil {
+		t.Fatalf("scanPublishPins: %v", err)
+	}
+	if len(pins) != 2 {
+		t.Fatalf("found %d first-party pins, want 2 — platform-apl must be scanned: %+v", len(pins), pins)
+	}
+	got := map[string]string{}
+	for _, p := range pins {
+		got[p.Chart] = p.Version
+	}
+	if got["llz-cluster-foundation"] != "0.1.10" || got["llz-openbao-platform"] != "0.1.19" {
+		t.Errorf("pins = %+v, want both platform-apl charts at their pinned versions", got)
+	}
+}
+
+func TestUnderAny(t *testing.T) {
+	for _, tt := range []struct {
+		path string
+		want bool
+	}{
+		{"platform-apl/manifest/applications/x.yaml", true},
+		{"instance-template/apl-values/values.yaml", true},
+		{"kubernetes-charts/llz-argo-bootstrap-apps/values.yaml", true},
+		{"docs/designs/whatever.yaml", false},
+		{"tools/cmd/llz/testdata/x.yaml", false},
+	} {
+		if got := underAny(tt.path, publishPinTrees); got != tt.want {
+			t.Errorf("underAny(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
