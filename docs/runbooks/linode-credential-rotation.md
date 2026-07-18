@@ -20,12 +20,12 @@ separate, LKE-Enterprise-specific case — see
 | `LINODE_DNS_TOKEN` | Linode PAT (DNS scope) | ≤90-day expiry | Same as above | Job red |
 | TF-state OBJ key (`TF_STATE_ACCESS_KEY` / `_SECRET_KEY`) | Linode OBJ key | Revoke ≤120 days | **Manual** (bootstrapping paradox — see below) | — (manual SLA) |
 | Loki OBJ key (`linode_object_storage_key.loki`) | Linode OBJ key | Revoke ≤120 days | Declarative `time_rotating` in `instance-template/terraform-iac-bootstrap/object-storage`; age verified daily by `loki-objkey-rotation-health` | Job red |
-| `OPENBAO_SECRETS_WRITE_TOKEN` | github.com classic PAT | ≤90-day expiry | Per-token header self-check, daily, by `gh-pat-expiry-health` | Job red |
-| `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write on the instance repo) | ≤90-day expiry | Per-token header self-check, daily, by `gh-pat-expiry-health` (same as the other GitHub PATs). Rotate by minting a new fine-grained PAT and updating the `infra-<env>` env secret(s). Used as apl-core's `otomi.git.password` (apl-operator pushes its values tree) and the argocd repo Secrets. | Job red |
+| `OPENBAO_SECRETS_WRITE_TOKEN` | github.com classic PAT | ≤90-day expiry | Per-token expiry measured daily by `llz ci token-inventory` (credential single pane); alerts via `LLZToken*` | Alert fires |
+| `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write on the instance repo) | ≤90-day expiry | Per-token expiry measured daily by `llz ci token-inventory` (same as the other GitHub PATs). Rotate by minting a new fine-grained PAT and updating the `infra-<env>` env secret(s). Used as apl-core's `otomi.git.password` (apl-operator pushes its values tree) and the argocd repo Secrets. | Job red |
 
 > **Why not a CSPM scanner?** Cloud Security Posture Management tooling
 > generally does **not** inspect Linode personal/service-token expiry. The
-> `llz ci cred-audit` command (run by the `linode-pat-expiry-health` scheduled
+> `llz ci token-inventory` command (run by the credential-single-pane scheduled
 > check) is the concrete substitute.
 
 > **One env list, no drift.** The per-deployment matrices in both
@@ -47,22 +47,24 @@ creation. So the policy is enforced as **verify-and-alert**, not auto-rotate.
 
 ### Automated verification
 
-`instance-template/.github/workflows/scheduled-checks.yml → linode-pat-expiry-health`
-runs daily (06:00 UTC, each environment). It runs `llz ci cred-audit`, which
-calls `GET /v4/profile/tokens` and **fails the job** (the alert) if any token:
+`instance-template/.github/workflows/scheduled-checks.yml → credential single pane`
+runs daily (06:00 UTC, each environment), in two steps sharing one kubeconfig:
 
-- has **no expiry**, or
-- has a lifetime (`expiry − created`) **> 90 days**, or
-- is **already expired**.
+1. **`llz ci token-inventory`** (writer) — measures every CI token this job
+   holds: GitHub service PATs (via the `GitHub-Authentication-Token-Expiration`
+   header) and Linode account PATs (via `GET /v4/profile/tokens`). It writes the
+   `llz-token-inventory` ConfigMap, which the in-cluster reconciler re-exposes as
+   `llz_token_expiry_*` metrics. Only metadata leaves the job — never a token.
+2. **`llz ci alert-eval --strict`** (reader) — asks live Prometheus whether any
+   `LLZToken*` / `LLZCertificate*` alert is firing or BROKEN.
 
-It also warns (non-failing unless `--strict`) when a token is within 14 days of
-expiry, and inventories all Object Storage keys for the audit trail. Run it
-locally against a token:
+A token with no expiry, a lifetime > 90 days, or one already expired surfaces as
+a firing alert through Alertmanager rather than only as a red job — the cluster
+is the single pane, so the same breach pages the same way whether CI ran or not.
 
-```bash
-LINODE_TOKEN=<pat> llz ci cred-audit
-# JSON audit record on stdout; structured logs on stderr; exit 1 on breach.
-```
+> The former per-provider probe verbs (`llz ci cred-audit`,
+> `llz ci gh-pat-expiry`) were retired once this flow subsumed them; their
+> measurement lives in `token-inventory` and their reporting in `alert-eval`.
 
 ### Rotating `LINODE_API_TOKEN` (automated — `secret-rotation.yml`)
 
@@ -239,7 +241,7 @@ with the built-in `GITHUB_TOKEN`, so they need no rotatable credential — the
 `ci-*` GHCR packages must be public or grant caller repos package-read access.)
 The ArgoCD/apl-core values-repo credential is `APL_VALUES_REPO_TOKEN`, a
 fine-grained PAT (Contents: write) — it carries an expiration header like the
-other GitHub PATs, so the daily `gh-pat-expiry-health` check covers it; rotate
+other GitHub PATs, so the daily credential-single-pane check covers it; rotate
 by minting a new PAT and updating the `infra-<env>` env secret(s). (The former
 `ARGOCD_REPO_SSH_KEY` SSH deploy key was retired when the in-cluster Gitea was
 obsoleted in favour of external HTTPS+PAT git.)
@@ -250,9 +252,9 @@ inventory:
 
 ### Automated verification
 
-`instance-template/.github/workflows/scheduled-checks.yml → gh-pat-expiry-health`
-runs daily. For each known service PAT it makes one authenticated request to
-the matching API (`https://api.github.com`) and
+`instance-template/.github/workflows/scheduled-checks.yml → credential single pane`
+runs daily. For each known service PAT `llz ci token-inventory` makes one
+authenticated request to the matching API (`https://api.github.com`) and
 reads the **`GitHub-Authentication-Token-Expiration`** response header. The job
 goes red
 (the alert) if any token:
@@ -280,8 +282,8 @@ can automate. Track it as a quarterly manual review with the GitHub org admins.
    had.
 2. Update the matching GitHub Actions secret (repo scope — these are not
    environment-scoped).
-3. Re-run the consuming workflow (or `gh-pat-expiry-health` via
-   `workflow_dispatch`) to confirm the new token authenticates.
+3. Re-run the consuming workflow (or the scheduled-checks credential single
+   pane via `workflow_dispatch`) to confirm the new token authenticates.
 4. Revoke the old token.
 
 ---
@@ -290,9 +292,10 @@ can automate. Track it as a quarterly manual review with the GitHub org admins.
 
 - **Linode PATs:** ≤90-day expiry. Daily `linode-pat-expiry-health` (job red on
   breach; warns ≤14 days before expiry).
-- **github.com service PATs:** ≤90-day expiry. Daily
-  `gh-pat-expiry-health` (per-token header self-check; job red on no-expiry /
-  >90d / 401). Ad-hoc individual PATs: manual GitHub audit-log review only.
+- **github.com service PATs:** ≤90-day expiry. Measured daily by
+  `llz ci token-inventory` (per-token header self-check) and alerted via
+  `LLZToken*` on no-expiry / >90d / 401. Ad-hoc individual PATs: manual GitHub
+  audit-log review only.
 - **Loki OBJ key:** revoke ≤120 days. Daily `loki-objkey-rotation-health`
   (warn 105d, job red 120d) + declarative `time_rotating` replacement.
 - **TF-state OBJ key:** revoke ≤120 days. **Calendar-tracked, manual** — no

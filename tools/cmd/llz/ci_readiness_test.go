@@ -2,33 +2,9 @@ package main
 
 import (
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
-
-func TestHarborPingOK(t *testing.T) {
-	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v2.0/ping" {
-			t.Errorf("pinged %q, want /api/v2.0/ping", r.URL.Path)
-		}
-		w.WriteHeader(200)
-	}))
-	defer good.Close()
-	if !harborPingOK(good.URL + "/") { // trailing slash trimmed
-		t.Error("200 ping should be OK")
-	}
-
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }))
-	defer bad.Close()
-	if harborPingOK(bad.URL) {
-		t.Error("503 ping should not be OK")
-	}
-	if harborPingOK("http://127.0.0.1:0") {
-		t.Error("unreachable ping should not be OK")
-	}
-}
 
 func TestRunCIAssertLoki(t *testing.T) {
 	// All checks pass: a Ready Loki pod (by label) + an S3-backed config + a
@@ -92,32 +68,28 @@ func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
 
 func TestRunCIWaitHarbor(t *testing.T) {
 	orig := harborRollout
-	harborRollout = func(string) error { return nil } // stub: rollouts succeed
 	t.Cleanup(func() { harborRollout = orig })
 
-	// Secret present, rollouts OK, no URL => exit 0 (API ping skipped).
-	withKubectl(t, func(a string) ([]byte, error) {
-		if a == "-n harbor get secret harbor-admin-password" {
-			return nil, nil
+	// The verb waits for the harbor-registry rollout and nothing else. Its two
+	// parameters are vestigial (kept so vendored instance workflows that still
+	// pass --registry-only / --harbor-url keep parsing), so every combination
+	// must behave identically — that equivalence is the point of the test.
+	harborRollout = func(string) error { return nil }
+	for _, tc := range []struct {
+		url          string
+		registryOnly bool
+	}{{"", false}, {"", true}, {"https://harbor.example", false}, {"https://harbor.example", true}} {
+		if ec := runCIWaitHarbor(tc.url, tc.registryOnly); ec != 0 {
+			t.Errorf("rollout OK (url=%q registryOnly=%v) => exit %d, want 0", tc.url, tc.registryOnly, ec)
 		}
-		return nil, errors.New("nope")
-	})
-	if ec := runCIWaitHarbor("", false); ec != 0 {
-		t.Errorf("ready Harbor (no URL) => exit %d, want 0", ec)
 	}
 
-	// registry-only: rolls out harbor-registry without touching the admin
-	// Secret/control-plane checks => exit 0 on success.
-	if ec := runCIWaitHarbor("", true); ec != 0 {
-		t.Errorf("registry-only ready => exit %d, want 0", ec)
-	}
-
-	// A failing rollout => exit 1 (both the full gate and registry-only).
+	// A failing rollout fails the gate, again regardless of the vestigial args.
 	harborRollout = func(string) error { return errors.New("timed out") }
 	if ec := runCIWaitHarbor("", false); ec != 1 {
 		t.Errorf("rollout timeout => exit %d, want 1", ec)
 	}
-	if ec := runCIWaitHarbor("", true); ec != 1 {
-		t.Errorf("registry-only rollout timeout => exit %d, want 1", ec)
+	if ec := runCIWaitHarbor("https://harbor.example", true); ec != 1 {
+		t.Errorf("rollout timeout (vestigial args set) => exit %d, want 1", ec)
 	}
 }

@@ -29,47 +29,6 @@ func TestProgressingCondition(t *testing.T) {
 	}
 }
 
-func TestPatReport(t *testing.T) {
-	tgt := patTarget{name: "FOO_PAT", api: "https://api.github.com/x"}
-
-	cases := []struct {
-		state    health.PATCheckState
-		annHas   string // substring expected in the annotation ("" = expect empty)
-		cellWant string
-	}{
-		{health.PATNotSet, "::warning::", "⚠️ not set"},
-		{health.PATUnreachable, "::warning::", "⚠️ unreachable"},
-		{health.PATInvalid, "::error::", "❌ HTTP 403 (invalid/expired)"},
-		{health.PATNoExpiry, "::error::", "❌ no expiry set"},
-		{health.PATUnparseable, "::warning::", "⚠️ unparseable expiry"},
-		{health.PATExpired, "::error::", "❌ expired"},
-		{health.PATOverPolicy, "::error::", "❌ 120d left (>90d policy)"},
-		{health.PATWarn, "::warning::", "⚠️ 5d left"},
-		{health.PATOK, "", "✅ 30d left"},
-	}
-	for _, c := range cases {
-		var days int
-		switch c.state {
-		case health.PATOverPolicy:
-			days = 120
-		case health.PATWarn:
-			days = 5
-		default:
-			days = 30
-		}
-		ann, cell := patReport(tgt, c.state, days, 403, 90, 14)
-		if c.annHas == "" && ann != "" {
-			t.Errorf("state %d: expected empty annotation, got %q", c.state, ann)
-		}
-		if c.annHas != "" && !strings.Contains(ann, c.annHas) {
-			t.Errorf("state %d: annotation %q missing %q", c.state, ann, c.annHas)
-		}
-		if cell != c.cellWant {
-			t.Errorf("state %d: cell = %q, want %q", c.state, cell, c.cellWant)
-		}
-	}
-}
-
 func TestPrintHealthSummary(t *testing.T) {
 	hardFail := captureStdout(t, func() {
 		printHealthSummary(&health.Report{Failed: []string{"openbao sealed"}, Drift: []string{"argocd OutOfSync"}})

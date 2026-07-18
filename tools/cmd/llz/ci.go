@@ -77,8 +77,10 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciBootstrapCloudFirewallCmd(), ciDiscoverFirewallConfigCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
-	// Scheduled credential SLA checks (llz-scheduled-checks.yml).
-	c.AddCommand(ciGHPATExpiryCmd(), ciCredAuditCmd())
+	// (gh-pat-expiry + cred-audit were registered here. They were the per-provider
+	// expiry probes, superseded by the credential single-pane flow below, and were
+	// retired once they had zero callers. Their measurement primitives live on in
+	// credentials_probe.go.)
 	// Credential single-pane-of-glass writer: measure CI-token expiry and emit the
 	// ConfigMap the in-cluster reconciler re-exposes as metrics (llz-scheduled-checks.yml).
 	c.AddCommand(ciTokenInventoryCmd())

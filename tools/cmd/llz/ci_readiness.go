@@ -6,10 +6,8 @@ package main
 // health predicates; this file is the kubectl orchestration + Harbor poll loops.
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -51,23 +49,30 @@ func ciWaitHarborCmd() *cobra.Command {
 	var registryOnly bool
 	c := &cobra.Command{
 		Use:   "wait-harbor",
-		Short: "wait for Harbor to be ready (admin Secret, deployment/STS rollouts, API ping)",
-		Long: "Native port of wait-for-harbor.sh. Polls for the harbor-admin-password Secret\n" +
-			"(10s × up to 600s), waits for the Harbor control-plane Deployments +\n" +
-			"StatefulSets to roll out, then — if --harbor-url is set — pings the Harbor API.\n" +
-			"Exit 0 ready, 1 on any timeout.\n\n" +
-			"harbor-registry is NOT part of this gate: it mounts the harbor-registry-s3\n" +
-			"Secret, seeded + ExternalSecret-synced later in the bootstrap, so it can't be\n" +
-			"Ready here. Run `wait-harbor --registry-only` AFTER that seed (post nudge-argo)\n" +
-			"to gate on the registry rollout instead.",
+		Short: "wait for the harbor-registry rollout (the post-S3-seed gate)",
+		Long: "Waits for harbor-registry to roll out. It mounts the harbor-registry-s3\n" +
+			"Secret via secretKeyRef, so it stays in CreateContainerConfigError until that\n" +
+			"Secret exists — seeded mid-bootstrap, then synced when the es-store-recovery\n" +
+			"lane sees the store go Ready. Exit 0 rolled out, 1 on timeout.\n\n" +
+			"This verb used to carry a second, PRE-seed half (admin Secret + control-plane\n" +
+			"Deployments/StatefulSets + an API ping). That half gated the workflow's\n" +
+			"`harbor` job, whose robot provisioning moved in-cluster in f0aa68f; the job\n" +
+			"went with it and took the gate's only caller, leaving the code unreachable.\n" +
+			"kick-harbor-provisioner now does its own harbor-core Available wait.\n\n" +
+			"--registry-only and --harbor-url are accepted and IGNORED. Instance repos\n" +
+			"vendor their workflows, so a rendered-but-not-yet-upgraded instance can still\n" +
+			"pass --registry-only; rejecting it would break those instances on image bump\n" +
+			"alone. They go once `llz upgrade` has carried the new call site everywhere.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			os.Exit(runCIWaitHarbor(harborURL, registryOnly))
 			return nil
 		},
 	}
-	c.Flags().StringVar(&harborURL, "harbor-url", os.Getenv("HARBOR_URL"), "Harbor base URL for the API ping (empty skips the ping)")
-	c.Flags().BoolVar(&registryOnly, "registry-only", false, "wait only for the harbor-registry rollout (post-S3-seed gate); skips the admin-Secret/control-plane/API checks")
+	c.Flags().StringVar(&harborURL, "harbor-url", os.Getenv("HARBOR_URL"), "accepted and ignored (vendored-workflow compatibility)")
+	c.Flags().BoolVar(&registryOnly, "registry-only", false, "accepted and ignored — the registry rollout is now the only behavior (vendored-workflow compatibility)")
+	_ = c.Flags().MarkDeprecated("harbor-url", "it is ignored; the API ping was retired with the pre-seed gate")
+	_ = c.Flags().MarkDeprecated("registry-only", "it is ignored; the registry rollout is now the only behavior")
 	return c
 }
 
@@ -228,58 +233,23 @@ func lokiConfigText(match string) string {
 
 // ── wait-harbor ──────────────────────────────────────────────────────────────
 
-func runCIWaitHarbor(harborURL string, registryOnly bool) int {
-	// Post-seed gate: harbor-registry can only roll out once the harbor-registry-s3
-	// Secret exists (seeded + ExternalSecret-synced mid-bootstrap). Skip the
-	// admin-Secret/control-plane/API checks the pre-seed gate already covered.
-	if registryOnly {
-		for _, d := range health.HarborRegistryDeployments() {
-			if harborRollout("deployment/"+d) != nil {
-				return 1
-			}
-		}
-		fmt.Println("harbor-registry rolled out.")
-		return 0
-	}
-
-	fmt.Println("Waiting for harbor-admin-password Secret in harbor namespace...")
-	if !waitPoll(harborWaitBudget, 10*time.Second, func() bool {
-		return kExists("-n", "harbor", "get", "secret", "harbor-admin-password")
-	}) {
-		fmt.Fprintln(os.Stderr, "::error::Timed out waiting for harbor/harbor-admin-password; Harbor did not create the admin Secret needed for credential seeding.")
-		return 1
-	}
-	fmt.Println("harbor-admin-password Secret is present.")
-
-	for _, d := range health.HarborDeployments() {
+// runCIWaitHarbor waits for the harbor-registry rollout — the post-S3-seed gate.
+// harbor-registry mounts the harbor-registry-s3 Secret via secretKeyRef, so it
+// stays in CreateContainerConfigError until that Secret exists (seeded
+// mid-bootstrap, then synced by the es-store-recovery lane when the store goes
+// Ready).
+//
+// The harborURL / registryOnly parameters are vestigial and ignored; see the
+// command's help for why they are still accepted.
+func runCIWaitHarbor(_ string, _ bool) int {
+	for _, d := range health.HarborRegistryDeployments() {
 		if harborRollout("deployment/"+d) != nil {
 			return 1
 		}
 	}
-	for _, s := range health.HarborStatefulSets() {
-		if harborRollout("statefulset/"+s) != nil {
-			return 1
-		}
-	}
-
-	if harborURL == "" {
-		fmt.Println("HARBOR_URL not set; Harbor Kubernetes workloads are Ready, API readiness check skipped.")
-		return 0
-	}
-	fmt.Printf("Waiting for Harbor API at %s...\n", harborURL)
-	if waitPoll(harborWaitBudget, 10*time.Second, func() bool { return harborPingOK(harborURL) }) {
-		fmt.Println("Harbor API is reachable.")
-		return 0
-	}
-	fmt.Fprintf(os.Stderr, "::error::Timed out waiting for Harbor API at %s; admin and robot credential seeding would fail.\n", harborURL)
-	return 1
+	fmt.Println("harbor-registry rolled out.")
+	return 0
 }
-
-// harborWaitBudget is the wall-clock deadline for each Harbor readiness poll
-// (the former harborPoll's 60 attempts × 10s). waitPoll (ci_wait.go) bounds the
-// total wait, so a slow probe can't stretch it the way the old attempt-count
-// loop could.
-const harborWaitBudget = 600 * time.Second
 
 // harborRollout runs `kubectl -n harbor rollout status <ref> --timeout=2m`,
 // streaming output; returns the error (which fails the wait) on timeout. A
@@ -288,19 +258,4 @@ var harborRollout = func(ref string) error {
 	cmd := exec.Command("kubectl", "-n", "harbor", "rollout", "status", ref, "--timeout=2m")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
-}
-
-// harborPingOK reports whether GET <url>/api/v2.0/ping returns 2xx (curl -ksSf:
-// insecure TLS, success only on a 2xx).
-func harborPingOK(url string) bool {
-	client := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, //nolint:gosec
-	}
-	resp, err := client.Get(strings.TrimRight(url, "/") + "/api/v2.0/ping")
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }

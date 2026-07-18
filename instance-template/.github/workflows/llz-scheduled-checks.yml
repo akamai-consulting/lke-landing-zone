@@ -43,7 +43,7 @@ on:
       OPENBAO_SECRETS_WRITE_TOKEN:
         required: false
       APL_VALUES_REPO_TOKEN:
-        description: 'github.com fine-grained PAT (Contents: write) for apl-core otomi.git + the argocd repo Secrets. Checked for expiry by gh-pat-expiry-health.'
+        description: 'github.com fine-grained PAT (Contents: write) for apl-core otomi.git + the argocd repo Secrets. Checked for expiry by the credential single-pane job (token-inventory).'
         required: false
 
 permissions:
