@@ -170,7 +170,14 @@ func printMissingChart(m publishPin) {
 func runChartPublishCheck(o chartPublishOpts) error {
 	pins, err := scanPublishPins(o.root)
 	if err != nil {
-		return fmt.Errorf("scanning apl-values chart pins: %w", err)
+		return fmt.Errorf("scanning chart pins: %w", err)
+	}
+	// With the scan trees corrected, finding nothing means the pins moved again —
+	// not that everything is published. Refuse to report success having checked
+	// none; that vacuous green is what hid this bug on every run.
+	if len(pins) == 0 {
+		return fmt.Errorf("chart-publish-check: found no first-party chart pins under %s (searched %s) — refusing to report every chart published having checked none",
+			o.root, strings.Join(publishPinTrees, ", "))
 	}
 	missing, checked, err := collectMissingPins(pins, o.published)
 	if err != nil {
@@ -222,6 +229,19 @@ func runChartPublishCheck(o chartPublishOpts) error {
 
 // scanPublishPins walks root for apl-values YAML and returns every first-party
 // (llz-*) chart pin whose repoURL is rendered (not a copier placeholder).
+// publishPinTrees are the path markers under which first-party chart pins live.
+var publishPinTrees = []string{"platform-apl/", "apl-values/", "kubernetes-charts/"}
+
+// underAny reports whether p sits under one of the given path markers.
+func underAny(p string, markers []string) bool {
+	for _, m := range markers {
+		if strings.Contains(p, m) {
+			return true
+		}
+	}
+	return false
+}
+
 func scanPublishPins(root string) ([]publishPin, error) {
 	var pins []publishPin
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -235,8 +255,15 @@ func scanPublishPins(root string) ([]publishPin, error) {
 			}
 			return nil
 		}
-		// Only Argo Application manifests live under an apl-values/ tree.
-		if !strings.Contains(filepath.ToSlash(path), "apl-values/") {
+		// Scan only the trees that hold Argo Application / app-of-apps chart pins.
+		//
+		// This used to require "apl-values/" alone, which no longer holds a single
+		// chart pin — an instance's apl-values/ is just README.md + values.yaml, and
+		// the first-party pins live in platform-apl/ (the platform-bootstrap
+		// Applications) and kubernetes-charts/ (the app-of-apps component list). The
+		// check therefore found zero pins and reported every chart published while
+		// verifying none, on every run including the release gate.
+		if !underAny(filepath.ToSlash(path), publishPinTrees) {
 			return nil
 		}
 		if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {

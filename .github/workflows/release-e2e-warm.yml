@@ -399,7 +399,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
           bin/llz ci chart-publish-check
-          --root .e2e-instance
+          --root .
           --publish-if-missing
           --ref "${GITHUB_REF_NAME}"
           --template-repo "${GITHUB_REPOSITORY}"
