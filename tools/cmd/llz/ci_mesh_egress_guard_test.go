@@ -47,7 +47,7 @@ func TestMeshEgressFlagsCrossMeshToHarbor(t *testing.T) {
 	dirs := meWrite(t, map[string]string{
 		"llzReconciler/network-policy.yaml": meNetpol("llz-reconciler", "llz-reconciler", "harbor"),
 	})
-	f, err := collectMeshEgressFindings(dirs)
+	f, _, err := collectMeshEgressFindings(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestMeshEgressAllowsSameNamespace(t *testing.T) {
 	dirs := meWrite(t, map[string]string{
 		"harbor/harbor-robot-provisioner/network-policy.yaml": meNetpol("harbor-robot-provisioner-egress", "harbor", "harbor"),
 	})
-	f, err := collectMeshEgressFindings(dirs)
+	f, _, err := collectMeshEgressFindings(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestMeshEgressAllowsNonMeshTarget(t *testing.T) {
 	dirs := meWrite(t, map[string]string{
 		"llzReconciler/network-policy.yaml": meNetpol("llz-reconciler", "llz-reconciler", "llz-openbao"),
 	})
-	f, err := collectMeshEgressFindings(dirs)
+	f, _, err := collectMeshEgressFindings(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}

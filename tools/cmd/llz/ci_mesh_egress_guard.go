@@ -83,8 +83,12 @@ func ciMeshEgressGuardCmd() *cobra.Command {
 }
 
 func runCIMeshEgressGuard(root string) error {
-	findings, err := collectMeshEgressFindings(platformTreeDirs(root))
+	dirs := platformTreeDirs(root)
+	findings, examined, err := collectMeshEgressFindings(dirs)
 	if err != nil {
+		return err
+	}
+	if err := requireCorpus("mesh-egress-guard", examined, dirs); err != nil {
 		return err
 	}
 	if len(findings) == 0 {
@@ -101,8 +105,7 @@ func runCIMeshEgressGuard(root string) error {
 // collectMeshEgressFindings walks the dirs and flags every NetworkPolicy egress
 // whose namespaceSelector targets a meshStrictNamespaces entry from a different
 // source namespace.
-func collectMeshEgressFindings(dirs []string) ([]meFinding, error) {
-	var findings []meFinding
+func collectMeshEgressFindings(dirs []string) (findings []meFinding, examined int, err error) {
 	for _, dir := range dirs {
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 			continue
@@ -115,6 +118,7 @@ func collectMeshEgressFindings(dirs []string) ([]meFinding, error) {
 			if err != nil {
 				return err
 			}
+			examined++
 			for _, doc := range splitMeshEgressDocs(string(raw)) {
 				if doc.Kind != "NetworkPolicy" {
 					continue
@@ -141,7 +145,7 @@ func collectMeshEgressFindings(dirs []string) ([]meFinding, error) {
 			return nil
 		})
 		if err != nil {
-			return nil, err
+			return nil, examined, err
 		}
 	}
 	sort.Slice(findings, func(i, j int) bool {
@@ -150,7 +154,7 @@ func collectMeshEgressFindings(dirs []string) ([]meFinding, error) {
 		}
 		return findings[i].targetNS < findings[j].targetNS
 	})
-	return findings, nil
+	return findings, examined, nil
 }
 
 // splitMeshEgressDocs parses a multi-doc YAML file, skipping docs that fail to

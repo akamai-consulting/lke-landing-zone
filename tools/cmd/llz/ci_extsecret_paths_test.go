@@ -52,7 +52,7 @@ func TestCollectExternalSecretRefs(t *testing.T) {
 	fixWrite(t, root, "apl-values/env/not-an-es.yaml", "kind: ConfigMap\n  remoteRef:\n    key: nope\n")
 	fixWrite(t, root, "apl-values/env/wrong-ext.yml", esFixtureExternalSecret)
 
-	refs := collectExternalSecretRefs(root, "rendered")
+	refs, _ := collectExternalSecretRefs(root, "rendered")
 	want := map[esRef][]string{}
 	want[esRef{key: "grafana/admin", prop: "user", hasProp: true}] = []string{"apl-values/env/secrets.yaml"}
 	want[esRef{key: "grafana/admin", prop: "password", hasProp: true}] = []string{"apl-values/env/secrets.yaml"}

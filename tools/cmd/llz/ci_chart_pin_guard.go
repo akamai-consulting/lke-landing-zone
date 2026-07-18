@@ -131,6 +131,15 @@ func runChartPinGuard(root string) error {
 	if len(mismatches) > 0 {
 		return fmt.Errorf("chart-pin-guard: %d first-party chart pin(s) drifted from kubernetes-charts/", len(mismatches))
 	}
+	// Zero verified pins means this vouched for nothing. The scan skips a root
+	// that is absent (statErr → continue), so a moved/unrendered tree yields no
+	// files, no pins, and — before this — a clean pass claiming the pins matched.
+	// Assert on `checked` rather than on files read: it is the quantity the guard
+	// actually reasons about, and it catches the empty-tree case too.
+	if checked == 0 {
+		return fmt.Errorf("chart-pin-guard: verified 0 first-party chart pins under %s — refusing to pass having compared nothing. "+
+			"Either the scan roots moved, or the first-party pins were removed", strings.Join(chartPinScanRoots, ", "))
+	}
 	fmt.Printf("chart-pin-guard: %d first-party chart pin(s) match their Chart.yaml version.\n", checked)
 	return nil
 }
