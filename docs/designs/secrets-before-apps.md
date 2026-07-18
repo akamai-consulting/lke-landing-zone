@@ -86,36 +86,87 @@ Add a lane to the existing watch-driven reconciler
 ([kube-native-reconciler](kube-native-reconciler.md)) that watches the
 `openbao` ClusterSecretStore's Ready condition and, on a False→True
 transition, bumps the `force-sync` annotation once on every ExternalSecret
-bound to that store — exactly what `nudge-argo`'s force-sync half does from
-CI, but event-driven, in-cluster, and active on every recovery (day-2 store
-blips included, which CI never sees). This is the same justification the
-argo-nudge lane already carries: a controller *observing* a condition upstream
-refuses to watch (contract anti-pattern #4 is about CI driving what a
-reconciler should observe — this moves the driving INTO a reconciler).
+**and PushSecret** bound to the store — what `nudge-argo`'s force-sync half
+does from CI, but event-driven, in-cluster, and active on every recovery
+(day-2 store blips included, which CI never sees). Same justification the
+argo-nudge lane already carries: converting a documented driver from
+CI-imperative to watch-triggered is not a new driver (contract anti-pattern
+#4/#6 analysis in `reconcile_argo_nudge.go`'s header).
 
-Prerequisite: the reconciler must run *before* the store is Ready, and today
-its Deployment consumes the `linode-api-token` ExternalSecret (wave 6, itself
-store-bound) — a circular dependency that keeps the argo-nudge and
-store-recovery lanes offline exactly when they matter most. Fix: make the
-linode token Secret an **optional** mount/read; lanes that need Linode
-self-gate on its presence, the argo-nudge + store-watch lanes need only the
-kube API. The reconciler then starts at wave 6 with or without secrets.
+**Lane mechanics** (mirrors the argo-nudge lane's registration in
+`reconcile.go`):
+
+- Flag `--reconcile-es-store-recovery`, default off per lane convention,
+  enabled in the Deployment args. Leader-gated like every driving lane.
+- Watch `clustersecretstores?fieldSelector=metadata.name=openbao` for
+  immediacy + a resync floor (300s) as the safety net; RBAC gains
+  `list, watch` on `clustersecretstores` (resourceNames `openbao`,
+  `openbao-push`) and `get, list, patch` on `externalsecrets` + `pushsecrets`
+  cluster-wide — the patch surface is metadata annotations only.
+- Transition tracking is in-memory (`lastReady`), so a pod restart
+  mid-bootstrap re-bumps once if the store is Ready but any bound
+  ExternalSecret still reports not-Ready — idempotent (a redundant bump is
+  one cheap ESO reconcile), so restart amnesia is harmless.
+- New gauges: `llz_es_store_ready` and `llz_es_recovery_nudges_total`, so the
+  e2e can *assert the lane fired* (see rollout) and day-2 alerting can see a
+  store that never recovers.
+- **PushSecret gap**: the CI force-sync (`nudge-argo`) annotates only
+  `externalsecret` — the three PushSecrets (harbor-admin, grafana-admin,
+  otel-ingress) were never covered and today ride out their own intervals
+  after a store recovery. The lane covers both kinds; this is a net coverage
+  gain over the mechanism it replaces, not just a relocation.
+
+**Prerequisite — break the reconciler's own circular dependency.** The
+Deployment consumes `linode-api-token` via an env `secretKeyRef`
+(`deployment.yaml`), so the pod sits in CreateContainerConfigError until the
+store serves — the argo-nudge and store-recovery lanes are offline exactly
+when they matter most (this is why the Deployment carries the wave-6
+annotation and its inversion war-story). Making the env ref `optional: true`
+is NOT sufficient: Kubernetes never injects env into a running pod, so the
+linode lanes would stay token-less until a restart — and that same property
+means **today's pod serves a stale token after any linode/api-token rotation
+until something restarts it**, a live day-2 gap independent of bootstrap.
+Fix both at once:
+
+- Replace the env ref with an **optional Secret volume** and a lazy per-tick
+  file read (kubelet refreshes mounted Secret content, ~1m): a helper
+  `linodeToken()` reads the file, falling back to `LINODE_TOKEN` env for
+  CLI/CronJob compatibility. The linode-dependent lanes (volume-labels,
+  cidr-firewall, linode-creds) self-gate: token absent → clean no-op + a
+  `llz_reconcile_linode_token_present` gauge, never a crash.
+- With no hard secret ref the pod is Ready immediately, so the Deployment's
+  sync-wave drops from 6 to 0 — the wave-6 workaround (and its comment)
+  retires with the inversion it papered over. The `linode-api-token`
+  ExternalSecret stays at wave 5 unchanged.
+
+**Not moving**: the lane does NOT revalidate the store itself (the post-seed
+CI bump keeps that — CI uniquely knows "seeding just finished"), and Harbor
+provisioning stays out of the reconciler (mesh-unreachable from this
+namespace, per the Deployment's header note).
 
 ### Phase 3 — retire the CI steering (after a validated Phase 2)
 
-With Phase 2 live from first boot:
+Call-site by call-site, with the lane that supersedes each:
 
-- `nudge-argo`'s force-sync half → delete (the store-watch lane owns it).
-- `nudge-argo`'s app-sync half → delete (the argo-nudge lane now runs from
-  first boot; the bootstrap keeps only the one post-seed ClusterSecretStore
-  revalidation bump, which is knowledge CI uniquely has — "seeding just
-  finished, validate NOW").
-- The Kyverno admit preflight and `kick-harbor-provisioner` are separate
-  designs (signature-ready-at-publish; PostSync provisioner hook) and are not
-  retired by this one.
+| CI call today (`llz-bootstrap-openbao.yml`) | superseded by | disposition |
+|---|---|---|
+| post-seed `nudge-argo`: app-sync half | argo-nudge lane, live from first boot once the wave-6 inversion is gone | delete |
+| post-seed `nudge-argo`: store-Ready wait + ES force-sync half | store-recovery lane fires on the very Ready transition the CI bump triggers | slim to `nudge-argo --store-only` (bump + bounded Ready wait as a converge precondition) |
+| Kyverno admit preflight's `nudge-argo \|\| true` | argo-nudge lane re-triggers phase=Failed apps within seconds continuously | delete the nudge call; keep the dry-run admission probe (it produces the actionable warning) |
+| redis-realign's `nudge-argo \|\| true` | partially — the lane's transient ComparisonError patterns must first be extended to the WRONGPASS/NOAUTH signature | keep until the pattern lands, then delete |
+| `kick-harbor-provisioner` | NOT this design (PostSync provisioner hook is its own) | stays |
 
-Each deletion lands only after a full release-e2e pass with the corresponding
-in-cluster lane proven in the run's converge log.
+Rollout gates, in order:
+
+1. Phase-2 PR lands with the CI nudges **still in place** (belt and
+   suspenders); the e2e's prom-metrics step additionally dumps
+   `llz_es_recovery_nudges_total` and `llz_reconcile_linode_token_present`.
+2. A full release-e2e pass whose converge log shows (a) the store-recovery
+   lane fired ≥1, (b) the reconciler pod went Ready *before* the store did
+   (wave-0 start proven), (c) the linode lanes activated once the token
+   arrived.
+3. Phase-3 PR deletes per the table; a second full e2e pass green without
+   the CI halves is the merge gate.
 
 ## Invariants
 
@@ -129,6 +180,8 @@ in-cluster lane proven in the run's converge log.
 ## Rollout
 
 1. This PR: ADR + Phase 1 (interval caps + guard).
-2. Phase 2 PR: reconciler store-watch lane + optional linode mount; validated
-   by a release-e2e run whose converge log shows the lane firing.
-3. Phase 3 PR: delete the CI force-sync/nudge halves; e2e green without them.
+2. Phase 2 PR: store-recovery lane + optional-volume token read + wave-6
+   retirement, with the CI nudges still in place; gated by the three
+   e2e-observable proofs listed under Phase 3's rollout gates.
+3. Phase 3 PR: delete/slim the CI call sites per the disposition table; a
+   full e2e pass green without the deleted halves is the merge gate.
