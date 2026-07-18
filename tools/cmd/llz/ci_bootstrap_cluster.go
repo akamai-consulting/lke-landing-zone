@@ -982,20 +982,43 @@ func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, bra
 	tok := o.aplValuesRepoToken
 	ref := "refs/heads/" + branch
 
-	// Already present (reused cluster / prior run)? Nothing to do.
+	// Does the branch already exist on the instance repo?
+	branchExists := false
 	if out, ok := d.git("ls-remote", authURL, ref); ok && strings.TrimSpace(out) != "" {
-		fmt.Printf("values branch %q already exists on %s — apl-operator can pull it.\n", branch, repoURL)
+		branchExists = true
+	}
+
+	// A branch populated by a PRIOR cluster is only reusable if THIS cluster still
+	// holds the sealed-secrets key that sealed it. That key is cluster-local: a
+	// reused cluster keeps it (apl-core bootstrapped here before), but a destroyed-
+	// and-recreated cluster mints a NEW key that cannot decrypt the branch's
+	// SealedSecrets — apl-operator's installer then wedges forever at "Waiting for
+	// sealed secrets to be decrypted" (ErrUnsealFailed on apl-users/*; observed on
+	// e2e run 29647910608, a destroy+recreate). OpenBao, the only key-restore path,
+	// is not up until AFTER apl-core installs, so a fresh cluster can never recover
+	// the old key. Use apl-core's install-history marker as the proxy for "the
+	// sealing key is present": branch present + history present ⇒ reusable; branch
+	// present + NO history ⇒ orphaned, RESET it to empty so the operator re-
+	// bootstraps and re-seals every secret with this cluster's key.
+	if branchExists && clusterHasAplInstallHistory(d) {
+		fmt.Printf("values branch %q already exists on %s and this cluster has apl-core history — apl-operator can pull it.\n", branch, repoURL)
 		return "", nil
 	}
 
-	// Seed an EMPTY orphan branch (a single history-less empty commit). Content
-	// matters: an earlier iteration seeded a COPY OF MAIN, and apl-operator then
-	// applied the instance-repo tree as its otomi env repo — its derived-values
-	// template crashed ("map has no entry for key customRootCA") and it still never
-	// pushed env/manifests/**. Empty is the contract the operator's gitea heritage
-	// expects: it clones an empty repo, bootstraps the env structure, commits, and
-	// pushes — exactly what it does with a fresh gitea repo.
-	fmt.Printf("values branch %q absent on %s — seeding it EMPTY (orphan commit) for apl-operator to bootstrap...\n", branch, repoURL)
+	// Seed (or reset an orphaned branch to) an EMPTY orphan branch (a single
+	// history-less empty commit). Content matters: an earlier iteration seeded a
+	// COPY OF MAIN, and apl-operator then applied the instance-repo tree as its
+	// otomi env repo — its derived-values template crashed ("map has no entry for
+	// key customRootCA") and it still never pushed env/manifests/**. Empty is the
+	// contract the operator's gitea heritage expects: it clones an empty repo,
+	// bootstraps the env structure, commits, and pushes — exactly what it does with
+	// a fresh gitea repo. A reset discards only undecryptable SealedSecrets (dead
+	// key); the operator regenerates + re-seals them from the committed values.
+	if branchExists {
+		fmt.Printf("::warning::values branch %q exists on %s but this cluster has no apl-core install history — its SealedSecrets are sealed with a key this cluster lacks (a destroy+recreate); resetting the branch to EMPTY so apl-operator re-seals.\n", branch, repoURL)
+	} else {
+		fmt.Printf("values branch %q absent on %s — seeding it EMPTY (orphan commit) for apl-operator to bootstrap...\n", branch, repoURL)
+	}
 	tmp, err := os.MkdirTemp("", "llz-apl-branch-*")
 	if err != nil {
 		return "", fmt.Errorf("mktemp for values-branch seed: %w", err)
@@ -1010,7 +1033,9 @@ func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, bra
 		"commit", "--allow-empty", "-m", "chore: seed "+branch+" — empty branch for apl-operator to bootstrap (llz ci bootstrap-cluster)"); !ok {
 		return "", fmt.Errorf("create empty seed commit for %q: %s", branch, redactSecret(out, tok))
 	}
-	if out, ok := d.git("-C", tmp, "push", authURL, "HEAD:refs/heads/"+branch); !ok {
+	// --force so a reset overwrites an orphaned branch in place; on a fresh create
+	// the branch is absent and --force is a harmless no-op.
+	if out, ok := d.git("-C", tmp, "push", "--force", authURL, "HEAD:refs/heads/"+branch); !ok {
 		return "", fmt.Errorf("push values branch %q to %s — does the values-repo token (otomi.git.password / APL_VALUES_REPO_TOKEN) have Contents:write? git: %s",
 			branch, repoURL, redactSecret(out, tok))
 	}
@@ -1071,6 +1096,19 @@ func waitAplValuesBranchPopulated(d bootstrapDeps, o bootstrapClusterOpts, repoU
 		}
 		d.sleep(aplBranchPopulateInterval)
 	}
+}
+
+// clusterHasAplInstallHistory reports whether apl-core has bootstrapped on THIS
+// cluster before — probed via the apl-installation-status ConfigMap apl-operator's
+// installer writes in the apl-operator namespace. That ConfigMap, and the cluster-
+// local sealed-secrets key that seals the values branch, are BOTH wiped by a
+// cluster destroy, so its presence is a reliable proxy for "the key that sealed
+// this branch's SealedSecrets is still here": true on a reused cluster (branch
+// decryptable), false on a fresh/recreated one (branch orphaned from a dead key).
+// See ensureAplValuesBranch.
+func clusterHasAplInstallHistory(d bootstrapDeps) bool {
+	_, ok := d.kubectl("-n", "apl-operator", "get", "configmap", "apl-installation-status")
+	return ok
 }
 
 func resetAplInstaller(d bootstrapDeps) error {
