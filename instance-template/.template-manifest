@@ -58,8 +58,9 @@ owned    environments/*.yaml
 # Operational tooling is NOT classified here: it's template-INTERNAL and not
 # delivered to instances (unlike .github/actions above, which IS vendored now).
 # The former instance-scripts/ were assimilated into the llz CLI, which is baked
-# into the ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable
-# `llz-*` workflows run in, so an instance carries no scripts/ for this manifest to own.
+# into the ci-terraform CI image (the ci-terraform target of dockerfiles/Dockerfile)
+# the reusable `llz-*` workflows run in, so an instance carries no scripts/ for
+# this manifest to own.
 # Operator docs (runbooks/playbooks/architecture/…) are delivered from the repo-
 # root docs/ tree by copier.yml `_tasks` (OUTSIDE the scaffold), so they refresh
 # on update — overwrite-managed, never hand-edited in an instance.

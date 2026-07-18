@@ -14,7 +14,7 @@ description: >
 
   The read-modify-write + cluster resolution is the native `llz ci runner-acl`
   command (tools/cmd/llz), baked onto PATH in the TF_IMAGE these jobs run in
-  (dockerfiles/terraform/Dockerfile). open records what it changed in a
+  (dockerfiles/Dockerfile (ci-terraform target)). open records what it changed in a
   per-region state file under RUNNER_TEMP so revoke is self-describing and
   idempotent.
 

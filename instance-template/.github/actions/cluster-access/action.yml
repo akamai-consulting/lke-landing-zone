@@ -5,7 +5,7 @@ description: >
   dynamic egress IP in the LKE-E control-plane ACL. Wraps the fetch-kubeconfig
   and lke-runner-acl actions in the order every cluster-facing job repeats.
   `llz` itself is baked into the TF_IMAGE these jobs run in
-  (dockerfiles/terraform/Dockerfile) — already on PATH, no install step.
+  (dockerfiles/Dockerfile (ci-terraform target)) — already on PATH, no install step.
 
   Sibling actions (fetch-kubeconfig, lke-runner-acl) live alongside this action
   under the instance's own .github/actions/ — the whole tree is vendored into every

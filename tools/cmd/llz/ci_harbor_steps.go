@@ -1,6 +1,6 @@
 package main
 
-// ci_harbor_steps.go — shared helpers left behind by the retired Harbor CI
+// ci_harbor_steps.go — the shared helper left behind by the retired Harbor CI
 // steps. `llz ci harbor-port-forward`, `harbor-ensure-project` and
 // `harbor-smoke` were REMOVED along with the workflow's `harbor` job: the
 // active-path provisioning runs IN-CLUSTER as the harbor-robot-provisioner
@@ -10,17 +10,9 @@ package main
 // ensure-project/smoke logic now lives inside the provisioner loop.
 
 import (
-	"fmt"
 	"os"
 	"strings"
 )
-
-// flagBootstrapError records a deferred bootstrap failure: an ::error::
-// annotation plus BOOTSTRAP_ERRORS=true for the job's final gate.
-func flagBootstrapError(format string, a ...any) error {
-	fmt.Fprintf(os.Stderr, "::error::"+format+"\n", a...)
-	return appendGHAFile("GITHUB_ENV", "BOOTSTRAP_ERRORS=true")
-}
 
 // baoKVGetField reads one field of a KV path via the in-pod bao CLI, "" on any
 // failure (unseeded path, sealed pod) — the bash `|| true`.

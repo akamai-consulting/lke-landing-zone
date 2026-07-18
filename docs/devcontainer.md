@@ -104,8 +104,8 @@ If you forked the template and want the devcontainer to track **your** tools, th
 image build ships with it:
 
 1. The Dockerfile lives at
-   [`dockerfiles/devcontainer/Dockerfile`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/dockerfiles/devcontainer/Dockerfile)
-   in the template repo; [`.github/workflows/build-images.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/.github/workflows/build-images.yml)
+   [`dockerfiles/Dockerfile`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/dockerfiles/Dockerfile)
+   in the template repo (the `devcontainer` target); [`.github/workflows/build-images.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/.github/workflows/build-images.yml)
    builds and pushes it (amd64 + arm64) to `ghcr.io/<your-org>/devcontainer` on
    every change under `dockerfiles/**`. Trigger it manually with **Run workflow →
    image: devcontainer**.

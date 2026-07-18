@@ -41,7 +41,7 @@ flowchart LR
     subgraph TPL["📦 Template repo (this repo) — builds & publishes"]
         direction TB
         TF["terraform-modules/<br/>cluster · pool · firewall · object-storage · openbao"]
-        CH["kubernetes-charts/<br/>5 first-party Helm charts"]
+        CH["kubernetes-charts/<br/>first-party Helm charts"]
         IMG["dockerfiles/<br/>ci-terraform · ci-kubernetes · devcontainer"]
         CLI["tools/ — the llz CLI (Go)"]
         WF["reusable workflows + instance-template/ scaffold"]
@@ -141,7 +141,11 @@ by convention (bump `Chart.yaml` `version:` to release). See
 
 Multi-arch (amd64 + arm64) images built by
 [`.github/workflows/build-images.yml`](.github/workflows/build-images.yml)
-and pushed to `ghcr.io/akamai-consulting/*`:
+and pushed to `ghcr.io/akamai-consulting/*`. All of them are targets of the
+single [`dockerfiles/Dockerfile`](dockerfiles/Dockerfile) (`--target
+ci-terraform`, `ci-kubernetes`, `devcontainer`, `llz`), which builds the `llz`
+binary once and downloads each third-party CLI once from one set of version
+pins — so the images cannot drift from each other:
 
 | Image | Contents |
 |---|---|

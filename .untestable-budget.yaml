@@ -59,7 +59,15 @@ categories:
     # template-scripts/stamp-template-version.sh moved into
     # `llz ci stamp-template-version`: remaining shell is 408, so keep ~3%
     # headroom and do not let the retired checkers creep back as shell.
-    budget: 420
+    #
+    # Ratcheted 420 → 375 when template-scripts/linting-and-validation/
+    # cleanup-workflow-runs.sh (54 counted lines) was deleted: a one-shot utility
+    # that purged Actions run history for seven workflows (ci/fuzz/scorecard/
+    # trivy/build-firewall-controller/sync-firewall-cidrs/firewall.yml) which no
+    # longer exist, with no caller in any workflow, Makefile, or script. Remaining
+    # shell is 364, so keep ~3% headroom rather than leaving the freed budget as
+    # slack a future PR could fill with untested bash.
+    budget: 375
     include:
       - "template-scripts/**/*.sh"
       - ".github/scripts/**/*.sh"
