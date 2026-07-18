@@ -137,6 +137,41 @@ func convergeSleep(interval, elapsed time.Duration) time.Duration {
 	return 0
 }
 
+// lastHealthNonOK holds the Pending+Failed labels from the most recent
+// healthExitCode call, so runConverge can report the convergence long pole.
+var lastHealthNonOK []string
+
+// longPoleCandidates returns the labels keeping a report in-progress (Pending +
+// Failed). Pure — the report's tolerated categories (Drift/Deferred) are excluded
+// because they do not hold up convergence.
+func longPoleCandidates(r *health.Report) []string {
+	out := make([]string, 0, len(r.Pending)+len(r.Failed))
+	out = append(out, r.Pending...)
+	out = append(out, r.Failed...)
+	return out
+}
+
+// reportConvergeLongPole emits, on convergence, what was still not-OK on the last
+// in-progress poll — the tail that gated the run. Best-effort: a notice line plus
+// a step-summary section so it lands alongside the phase timeline. No prior
+// in-progress poll (converged on the first look) reports a clean fast-path.
+func reportConvergeLongPole(prevNonOK []string, prevAttempt int) {
+	if len(prevNonOK) == 0 {
+		fmt.Fprintln(os.Stderr, "::notice::converge long-pole: none — converged on the first full poll")
+		return
+	}
+	fmt.Fprintf(os.Stderr, "::notice::converge long-pole (still not-OK on poll %d, the last before convergence): %s\n",
+		prevAttempt, strings.Join(prevNonOK, "; "))
+	var b strings.Builder
+	fmt.Fprintf(&b, "### converge long-pole\n\nLast items to go healthy (still not-OK on poll %d):\n\n", prevAttempt)
+	for _, item := range prevNonOK {
+		fmt.Fprintf(&b, "- %s\n", item)
+	}
+	if err := appendGHAFile("GITHUB_STEP_SUMMARY", b.String()); err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::converge long-pole: step-summary write failed (ignored): %v\n", err)
+	}
+}
+
 func runConverge(budget, interval, retryDelay int) int {
 	deadline := time.Now().Add(time.Duration(budget) * time.Second)
 	st := newConvergeState()
@@ -149,10 +184,19 @@ func runConverge(budget, interval, retryDelay int) int {
 	prevProbeRetries := phase1ProbeRetries
 	phase1ProbeRetries = 1
 	defer func() { phase1ProbeRetries = prevProbeRetries }()
+	// Long-pole tracking (Tier-3 instrumentation): remember which apps/resources
+	// were still not-OK on the most recent in-progress poll, so on convergence we
+	// can report what was the LAST thing to go healthy — confirming the tail's
+	// identity across runs instead of assuming it. The memoized poll only skips
+	// already-clean monotonic sections, so the not-OK set still reflects the real
+	// long poles (the never-memoized convergence-signal sections).
+	var prevNonOK []string
+	var prevAttempt int
 	for attempt := 1; ; attempt++ {
 		fmt.Fprintf(os.Stderr, "::notice::convergence poll attempt %d\n", attempt)
 		pollStart := time.Now()
 		step := health.ConvergeStep(healthExitCodeState(st))
+		nonOK := lastHealthNonOK
 		pollDur := time.Since(pollStart)
 		switch step {
 		case health.ConvergeDone:
@@ -173,8 +217,10 @@ func runConverge(budget, interval, retryDelay int) int {
 					continue
 				}
 			}
+			reportConvergeLongPole(prevNonOK, prevAttempt)
 			return 0
 		case health.ConvergePoll:
+			prevNonOK, prevAttempt = nonOK, attempt
 			if time.Now().After(deadline) {
 				fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the cluster still in-progress.\n", budget)
 				return 1
@@ -311,6 +357,12 @@ func healthExitCodeState(st *convergeState) int {
 	}, st, phase1)
 
 	printHealthSummary(&r)
+
+	// Capture the still-converging set for the converge long-pole report (Tier-3
+	// instrumentation): Pending + Failed are the categories that keep the cluster
+	// in-progress (Drift/Deferred are tolerated-as-converged), so they are the
+	// candidates for "last thing to go healthy".
+	lastHealthNonOK = longPoleCandidates(&r)
 
 	// In phase1 the support plane is still installing (apl-core's CRDs, webhook
 	// Services, and endpoints land in later helmfile phases), so a hard-fail here

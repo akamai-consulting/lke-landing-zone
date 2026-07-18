@@ -429,6 +429,10 @@ jobs:
     env:
       REGION:                          ${{ inputs.region }}
       ACTION:                          ${{ inputs.action }}
+      # Phase-timeline log (docs/designs/e2e-instrumentation.md): captures the
+      # precise LKE-E create wall-time — the baseline the HA-control-plane-off
+      # experiment compares against — cleaner than the job-level number.
+      LLZ_PHASE_LOG:                   /tmp/llz-phases.jsonl
       LINODE_TOKEN:                    ${{ secrets.LINODE_API_TOKEN }}
       TF_VAR_github_token:             ${{ secrets.GITHUB_TOKEN }}
       TF_VAR_github_api_url:           ${{ github.api_url }}
@@ -492,7 +496,10 @@ jobs:
         # prior cancelled run, or one the import-before-plan step missed) self-
         # heals: the wrapper imports the existing firewall by label and retries,
         # instead of failing the whole provision on a [400] label collision.
-        run: llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
+        run: |
+          llz ci phase-mark tf-apply-cluster
+          llz ci tf-apply --plan tfplan.bin --var-file "${REGION}.tfvars"
+          llz ci phase-mark tf-apply-done
 
       - name: Show cluster API endpoints
         if: env.ACTION == 'apply'
@@ -500,6 +507,24 @@ jobs:
         run: |
           echo "Cluster API endpoints:"
           terraform output -json api_endpoints
+
+      # Precise LKE-E create wall-time → step summary + artifact (the HA-off
+      # baseline). Best-effort; instrumentation never affects the apply outcome.
+      # See docs/designs/e2e-instrumentation.md.
+      - name: Report cluster-create timing
+        if: always() && env.ACTION == 'apply'
+        continue-on-error: true
+        run: llz ci collect-timing --dir "$RUNNER_TEMP/timing" --title "apply-cluster (LKE-E create) timing"
+
+      - name: Upload create timing artifact
+        if: always() && env.ACTION == 'apply'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timing-apply-cluster-${{ env.REGION }}
+          path: ${{ runner.temp }}/timing/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ── Bootstrap the cluster (apl-core + Argo bridge) — MERGED into the
   # bootstrap-openbao call below (bootstrap_cluster: true). The standalone job

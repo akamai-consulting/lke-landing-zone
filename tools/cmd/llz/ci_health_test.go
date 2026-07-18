@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -544,4 +545,39 @@ func TestPrintHealthSummaryAndRecord(t *testing.T) {
 		t.Fatalf("record routing wrong: %+v", r)
 	}
 	printHealthSummary(&r) // exercises the summary formatting (HardFailed branch)
+}
+
+func TestLongPoleCandidatesAndReport(t *testing.T) {
+	// Pending + Failed are candidates; Drift/Deferred are excluded (they don't
+	// hold up convergence).
+	r := health.Report{
+		Pending:  []string{"monitoring-loki (Progressing)"},
+		Failed:   []string{"harbor-harbor (Degraded)"},
+		Drift:    []string{"llz-observability (OutOfSync)"},
+		Deferred: []string{"external-dns"},
+	}
+	got := longPoleCandidates(&r)
+	if len(got) != 2 {
+		t.Fatalf("candidates = %v, want 2 (pending+failed only)", got)
+	}
+	joined := strings.Join(got, "|")
+	if strings.Contains(joined, "observability") || strings.Contains(joined, "external-dns") {
+		t.Errorf("drift/deferred must be excluded: %v", got)
+	}
+
+	// reportConvergeLongPole writes the last-poll set to the step summary.
+	summary := t.TempDir() + "/summary.md"
+	t.Setenv("GITHUB_STEP_SUMMARY", summary)
+	reportConvergeLongPole(got, 4)
+	sb, _ := os.ReadFile(summary)
+	if !strings.Contains(string(sb), "long-pole") || !strings.Contains(string(sb), "monitoring-loki") {
+		t.Errorf("summary missing long-pole detail: %s", sb)
+	}
+	// Empty set (converged on first poll) is a clean no-op (no summary write).
+	summary2 := t.TempDir() + "/s2.md"
+	t.Setenv("GITHUB_STEP_SUMMARY", summary2)
+	reportConvergeLongPole(nil, 0)
+	if _, err := os.Stat(summary2); err == nil {
+		t.Error("no long-pole should not write a summary section")
+	}
 }
