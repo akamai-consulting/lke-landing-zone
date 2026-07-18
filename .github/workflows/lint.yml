@@ -452,14 +452,14 @@ jobs:
       - name: tflint + checkov + validate instance roots
         run: make lint-tf
 
-      - name: Upload Checkov SARIF report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: checkov-results
-          path: results_*.sarif
-          if-no-files-found: ignore
-          retention-days: 14
+      # (An "Upload Checkov SARIF report" step ran here, uploading results_*.sarif.
+      # `make checkov` never passed -o sarif or an output path, so that file was
+      # never produced; if-no-files-found: ignore kept the step permanently green,
+      # and nothing downloaded the artifact or fed it to codeql-action/upload-sarif.
+      # It read as security coverage and was none. Checkov itself still GATES —
+      # the make target exits non-zero on a finding, which is what actually
+      # enforces. Re-add this only together with `-o sarif --output-file-path` and
+      # a real consumer.)
 
   # ── Go tests + coverage ──────────────────────────────────────────────────────
   # `make coverage` runs `go test` across the tools module, then enforces the
