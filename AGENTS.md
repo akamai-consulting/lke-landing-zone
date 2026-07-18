@@ -49,7 +49,7 @@ terraform-modules/   7 reusable TF modules; published as git:: tagged sources (s
 kubernetes-charts/   6 first-party Helm charts; published to GHCR as OCI artifacts
 tools/               Native Go module: llz (adopter CLI + CI plumbing), firewall-cidrs, firewall-controller
 dockerfiles/         Container images (ci-terraform, ci-kubernetes, devcontainer) → ghcr.io/akamai-consulting/*
-template-scripts/    stamp/drift scaffold provenance, git hooks, linting-and-validation, ci helpers
+template-scripts/    stamp/drift scaffold provenance, git hooks, ci helpers
 instance-template/   Genericized starter material a downstream instance repo instantiates
 docs/                adopter-guide.md, agents.md
 .github/workflows/   build-images.yml, publish-charts.yml, ci-gate.yml, kubernetes.yml

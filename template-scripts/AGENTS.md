@@ -28,9 +28,6 @@ GitHub Actions-side helpers + tooling install. Don't run these from a workstatio
 - `install-syft.sh` / `install-trivy.sh` — pinned SBOM/scanner installers
 - `sbom-kubernetes.sh` — extracts images from cluster state and runs `syft` on each
 
-### `linting-and-validation/` — CI lint inputs
-- `cleanup-workflow-runs.sh` — deletes old GitHub Actions runs (maintenance utility)
-
 > Rendered-app, Chart.lock, template-manifest validation, and template-version
 > stamping moved into the unit-tested `llz` CLI:
 > `llz ci argocd-rendered-apps` (duplicate Helm parameter names) and
