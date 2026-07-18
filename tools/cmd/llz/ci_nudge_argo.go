@@ -11,13 +11,17 @@ package main
 //     drove a sync to a terminally-failed state gets re-attempted (Argo CD does
 //     not auto-retry a failed sync to the same revision).
 //
-//  2. Wait for the `openbao` ClusterSecretStore to actually go Ready, then bump a
-//     `force-sync` annotation on every ExternalSecret. ESO's ExternalSecret
-//     controller does NOT watch SecretStore status, so when the store recovers
-//     (post unseal+seed) the secrets would otherwise idle until their own
-//     refreshInterval — observed as ~14m of CreateContainerConfigError on
-//     harbor-registry / loki-0 after the store was already Ready. The annotation
-//     bump forces an immediate reconcile, collapsing that gap to seconds.
+//  2. Bump a revalidation annotation on the `openbao` ClusterSecretStore and wait
+//     for it to go Ready — a converge precondition CI is uniquely placed to
+//     assert, because only CI knows seeding just finished. (ESO revalidates a
+//     store on its own cadence; the bump makes that Ready wait event-paced.)
+//
+// It NO LONGER force-syncs the ExternalSecrets (secrets-before-apps Phase 3): the
+// in-cluster es-store-recovery reconciler lane watches this store and force-syncs
+// every ExternalSecret AND PushSecret on the not-Ready→Ready transition the bump
+// above triggers. Hand-off is evidence-backed — a cold e2e reported
+// llz_es_recovery_nudges_total=1 — and the lane is strictly broader than the CI
+// half was (PushSecrets too, plus day-2 store blips CI never observes).
 
 import (
 	"fmt"
@@ -33,15 +37,15 @@ import (
 var defaultNudgeApps = []string{"llz-secret-store", "platform-bootstrap"}
 
 // defaultSecretStore is the ClusterSecretStore every platform ExternalSecret
-// binds to; the force-sync waits on its Ready condition first.
+// binds to; the nudge revalidates it and waits on its Ready condition.
 const defaultSecretStore = "openbao"
 
-// nowUnix is a seam so the force-sync annotation value is deterministic in tests.
+// nowUnix is a seam so the revalidation annotation value is deterministic in tests.
 var nowUnix = func() int64 { return time.Now().Unix() }
 
 type nudgeOpts struct {
 	apps         []string
-	store        string // ClusterSecretStore to wait Ready before force-syncing ("" skips the force-sync)
+	store        string // ClusterSecretStore to revalidate + wait Ready ("" skips that half)
 	storeTimeout int    // seconds to wait for the store Ready condition
 }
 
@@ -49,22 +53,24 @@ func ciNudgeArgoCmd() *cobra.Command {
 	o := nudgeOpts{}
 	c := &cobra.Command{
 		Use:   "nudge-argo",
-		Short: "refresh+sync Argo apps, then force-sync ExternalSecrets once the store is Ready (best-effort)",
+		Short: "refresh+sync Argo apps and revalidate the ClusterSecretStore post-seed (best-effort)",
 		Long: "Native port of the \"Nudge Argo CD to converge secrets (post-seed)\" step.\n" +
 			"First annotates each Application with argocd.argoproj.io/refresh=hard and\n" +
 			"patches a fresh sync operation onto it (re-triggering any sync an earlier race\n" +
-			"drove to a terminal failure). Then waits for the ClusterSecretStore to go Ready\n" +
-			"and bumps a force-sync annotation on every ExternalSecret — ESO doesn't\n" +
-			"re-trigger ExternalSecrets when their store recovers, so without this they idle\n" +
-			"until their own refreshInterval. Every kubectl call is best-effort; this never\n" +
-			"fails the job. Defaults to the llz-secret-store + platform-bootstrap apps and\n" +
-			"the openbao store.",
+			"drove to a terminal failure). Then bumps a revalidation annotation on the\n" +
+			"ClusterSecretStore and waits for it to go Ready — the converge precondition\n" +
+			"only CI can assert, since only CI knows seeding just finished.\n\n" +
+			"It does NOT force-sync the ExternalSecrets: the in-cluster es-store-recovery\n" +
+			"reconciler lane owns that, firing on the Ready transition this bump triggers\n" +
+			"(and covering PushSecrets + day-2 blips the CI half never did). Every kubectl\n" +
+			"call is best-effort; this never fails the job. Defaults to the llz-secret-store\n" +
+			"+ platform-bootstrap apps and the openbao store.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCINudgeArgo(gopts, o) },
 	}
 	c.Flags().StringSliceVar(&o.apps, "apps", defaultNudgeApps, "Argo CD Applications (argocd namespace) to refresh + sync")
-	c.Flags().StringVar(&o.store, "secret-store", defaultSecretStore, "ClusterSecretStore to wait Ready before force-syncing ExternalSecrets (empty skips the force-sync)")
-	c.Flags().IntVar(&o.storeTimeout, "store-timeout", 300, "seconds to wait for the ClusterSecretStore Ready condition before force-syncing")
+	c.Flags().StringVar(&o.store, "secret-store", defaultSecretStore, "ClusterSecretStore to revalidate and wait Ready (empty skips that half)")
+	c.Flags().IntVar(&o.storeTimeout, "store-timeout", 300, "seconds to wait for the ClusterSecretStore Ready condition")
 	return c
 }
 
@@ -94,7 +100,7 @@ func runCINudgeArgo(g globalOpts, o nudgeOpts) error {
 		return nil
 	}
 	if g.dryRun {
-		fmt.Fprintf(os.Stderr, "→ (dry-run) would wait for clustersecretstore/%s Ready then force-sync all ExternalSecrets\n", o.store)
+		fmt.Fprintf(os.Stderr, "→ (dry-run) would revalidate clustersecretstore/%s and wait for it to go Ready\n", o.store)
 		return nil
 	}
 	// The store's Ready condition only flips when ESO re-VALIDATES the store, and
@@ -108,25 +114,25 @@ func runCINudgeArgo(g globalOpts, o nudgeOpts) error {
 		stampStore, "--overwrite"); err != nil {
 		fmt.Fprintf(os.Stderr, "nudge: clustersecretstore/%s revalidation bump failed (ignored): %v\n", o.store, err)
 	}
-	// Block until the store can actually serve (post unseal + bao-configure), THEN
-	// force every ExternalSecret to reconcile NOW. Best-effort: even if the store
-	// never reports Ready within the budget we still bump the annotation (harmless;
-	// ESO will retry), so a slow store doesn't strand the secrets at 1h.
+	// Block until the store can actually serve (post unseal + bao-configure) — a
+	// converge precondition CI is uniquely placed to assert, since it alone knows
+	// seeding just finished. Best-effort: a store that never reports Ready in the
+	// budget is left to converge to adjudicate.
 	if _, err := execOutput("kubectl", "wait", "--for=condition=Ready",
 		"clustersecretstore/"+o.store, fmt.Sprintf("--timeout=%ds", o.storeTimeout)); err != nil {
-		fmt.Fprintf(os.Stderr, "nudge: clustersecretstore/%s not Ready within %ds (force-syncing anyway): %v\n", o.store, o.storeTimeout, err)
+		fmt.Fprintf(os.Stderr, "nudge: clustersecretstore/%s not Ready within %ds (converge will adjudicate): %v\n", o.store, o.storeTimeout, err)
 	} else {
 		fmt.Printf("clustersecretstore/%s Ready\n", o.store)
 	}
-	// A changing annotation value is what triggers an immediate ESO reconcile;
-	// --all-namespaces --all covers every store-gated ExternalSecret without
-	// hardcoding their names/namespaces.
-	stamp := fmt.Sprintf("force-sync=%d", nowUnix())
-	if _, err := execOutput("kubectl", "annotate", "externalsecret", "--all-namespaces", "--all",
-		stamp, "--overwrite"); err != nil {
-		fmt.Fprintf(os.Stderr, "nudge: force-sync ExternalSecrets failed (ignored): %v\n", err)
-	} else {
-		fmt.Println("force-synced all ExternalSecrets")
-	}
+	// NOTE (secrets-before-apps Phase 3): the blanket
+	// `kubectl annotate externalsecret --all-namespaces --all force-sync=<ts>`
+	// that used to run here is GONE. The in-cluster es-store-recovery reconciler
+	// lane owns it now — it watches this very store and force-syncs every
+	// ExternalSecret AND PushSecret on the not-Ready→Ready transition this bump
+	// triggers. That hand-off is evidence-backed, not assumed: a cold e2e reported
+	// `llz_es_recovery_nudges_total=1`, i.e. the lane fired exactly once on the
+	// recovery. The lane is strictly better than the CI half was — it also covers
+	// PushSecrets (which the CI annotate never touched) and day-2 store blips CI
+	// never sees.
 	return nil
 }

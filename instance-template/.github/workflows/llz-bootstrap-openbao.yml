@@ -437,13 +437,12 @@ jobs:
             exit 1
           }
 
-      # Diagnostics for a failed cluster bootstrap (typically the apl-pipeline
-      # readiness gate timing out). Best-effort and always exits 0 — must never
-      # mask the original failure. Uses the default kubeconfig cluster-access wrote.
-      - name: Diagnose ArgoCD install failure
-        if: failure() && inputs.bootstrap_cluster
-        timeout-minutes: 10
-        run: llz ci diagnose-argocd
+      # (Argo diagnostics for a failed bootstrap are NOT dumped here: since the
+      # cluster-bootstrap and converge jobs were folded into this one, the job-tail
+      # "Diagnose convergence failure" step — `if: failure() || cancelled()` — already
+      # fires on a bootstrap_cluster-phase failure and runs the same
+      # `llz ci diagnose-argocd`. Having both meant every red run dumped Argo state
+      # twice, each capped at 10 minutes.)
 
       # (apl-core bring-up timing — image pulls + apl-operator logs — is collected
       # once at the job tail by "Report bootstrap timing", which runs before the ACL
@@ -713,14 +712,13 @@ jobs:
       # apps that own them — re-triggering the sync if an earlier first-boot race
       # already drove it to a terminally-failed state (Argo CD does NOT auto-retry a
       # failed sync to the same revision; selfHeal only corrects drift after a
-      # successful one) — then (2) WAITS for the ClusterSecretStore to actually go
-      # Ready and force-syncs every ExternalSecret. ESO doesn't re-trigger an
-      # ExternalSecret when its store recovers, so without (2) the registry/log
-      # Secrets idle until their own refreshInterval (observed: ~14m of
-      # CreateContainerConfigError after the store was already Ready). The standing
-      # safety net is the in-cluster nudger CronJob
-      # (platform-apl/manifest/argo-resync-nudger); this collapses the latency
-      # at the exact moment seeding unblocks them. Never fails the bootstrap.
+      # successful one) — then (2) bumps a revalidation annotation on the
+      # ClusterSecretStore and WAITS for it to go Ready: the converge precondition
+      # only CI can assert, because only CI knows seeding just finished.
+      # It no longer force-syncs the ExternalSecrets itself (secrets-before-apps
+      # Phase 3): the in-cluster es-store-recovery reconciler lane fires on the very
+      # not-Ready→Ready transition (2) triggers, and covers PushSecrets too. Never
+      # fails the bootstrap.
       - name: Nudge Argo CD to converge secrets (post-seed)
         if: steps.ensure.outputs.available == 'true'
         continue-on-error: true
@@ -729,8 +727,9 @@ jobs:
       # ── Gate: Harbor registry rollout (post-S3-seed) ───────────────────────────
       # harbor-registry mounts the harbor-registry-s3 Secret via secretKeyRef, so it
       # stays in CreateContainerConfigError until that Secret exists. It only appears
-      # after the registry-S3 KV path is seeded (above) AND nudge-argo force-syncs the
-      # ExternalSecret — which is why it's checked HERE rather than in the earlier
+      # after the registry-S3 KV path is seeded (above) AND the es-store-recovery lane
+      # force-syncs the ExternalSecret on the store going Ready — which is why it's
+      # checked HERE rather than in the earlier
       # control-plane "Wait for Harbor readiness" gate (gating on it there always hit
       # the 2m rollout timeout on fresh bootstraps). continue-on-error matches the
       # control-plane gate: a real registry stall is surfaced (and the release-e2e
@@ -848,16 +847,16 @@ jobs:
       # llz image; on a freshly-built main sha the Sigstore/Rekor + GHCR signature
       # can lag the cluster's first admission attempt, failing the platform-bootstrap
       # sync (Argo backs off to 5m retries and does not auto-retry a failed sync to
-      # the same revision), so confirm the cluster can admit the CronJob, then force
-      # platform-bootstrap to re-attempt admission (nudge-argo). The CronJob manifest
-      # is read from the RENDERED instance checkout (source of truth). Only nudge once
-      # the dry-run admits; best-effort — the converge poll below is the verdict.
+      # the same revision), so confirm the cluster can admit the CronJob before the
+      # converge poll adjudicates. The CronJob manifest is read from the RENDERED
+      # instance checkout (source of truth). Best-effort probe only — the re-sync it
+      # used to trigger is the argo-nudge reconciler lane's job now.
       # No `available` gate (unlike the seed/configure steps above): the old
       # standalone converge job ran on bootstrap success REGARDLESS of OpenBao
       # availability, so an OpenBao that never came up still surfaces as a
       # convergence FAILURE here rather than a silently-skipped gate. Default
       # success() gating preserves that — it runs unless an earlier step failed.
-      - name: Preflight — confirm the cluster admits the llz CronJob, then re-sync
+      - name: Preflight — confirm the cluster admits the llz CronJob
         run: |
           set -uo pipefail
           # The rendered CronJob manifests that run the in-cluster llz image — the
@@ -869,7 +868,6 @@ jobs:
             echo "no in-cluster llz CronJob in the instance manifests — nothing to gate; skipping"
             exit 0
           fi
-          all_ok=1
           for FILE in ${FILES}; do
             IMAGE="$(grep -oE 'ghcr\.io/[A-Za-z0-9._-]+/llz:[A-Za-z0-9._-]+' "${FILE}" | head -n1)"
             echo "== preflight ${IMAGE} (${FILE}) =="
@@ -883,61 +881,26 @@ jobs:
               echo "  not admissible yet (attempt ${i}/20) — retrying in 15s"; sleep 15
             done
             if [ "${ok}" != 1 ]; then
-              all_ok=0
               echo "::warning::${IMAGE} (${FILE}): Kyverno CronJob dry-run still failing — $(tr '\n' ' ' </tmp/preflight-admit.err 2>/dev/null | tail -c 300)"
             fi
           done
-          # Argo does not fast-retry a sync that terminally failed on the earlier
-          # (pre-signature) admission denial; force platform-bootstrap to re-apply
-          # now so the CronJobs are re-admitted. Skip the nudge if admission is still
-          # denied (a real Kyverno-side gap: creds/egress) — surfaced above; the
-          # converge poll is the verdict.
-          if [ "${all_ok}" = 1 ]; then
-            llz ci nudge-argo || true
-          else
-            echo "::warning::skipping the re-sync nudge — llz CronJob admission not confirmed; converge will report the verdict"
-          fi
+          # No re-sync nudge here (secrets-before-apps Phase 3). Argo doesn't
+          # fast-retry a sync that terminally failed on the earlier (pre-signature)
+          # admission denial — but the in-cluster argo-nudge reconciler lane watches
+          # for exactly that and re-triggers phase=Failed apps within seconds,
+          # continuously, so a CI-side one-shot adds nothing. This step is now purely
+          # the dry-run probe: it produces the actionable warning above, and the
+          # converge poll below is the verdict.
 
-      # ── Realign argocd-redis if its clients drifted onto a new password ─────────
-      # argocd-redis bakes `--requirepass $(REDIS_PASSWORD)` from the argocd-redis
-      # Secret at *pod start* and never re-reads it; the repo-server and application-
-      # controller read the same Secret's `auth` key at *their* start. On a reused
-      # (KEEP_CLUSTER) cluster the redis pod can outlive a rewrite of that Secret
-      # while the clients roll onto the new value — so every repo-server->redis AUTH
-      # fails with WRONGPASS and *all* Applications go Unknown/ComparisonError
-      # ("failed to list refs: WRONGPASS ..."), which the converge poll below now
-      # classifies as a transient (pending) rather than a hard strike. Restarting
-      # redis makes it re-read the current Secret, realigning server and clients so
-      # that poll can actually converge. Best-effort + conditional: only fires when
-      # the WRONGPASS/NOAUTH signature is actually present, so normal runs never lose
-      # the cache. The durable fix lives in apl-core (static redis password, or
-      # restart-on-rotation) — tracked separately; this is the e2e-side backstop.
-      - name: Realign argocd-redis on repo-server auth split (WRONGPASS)
-        run: |
-          set -uo pipefail
-          split=0
-          # Primary signal: the repo-servers are the ones failing AUTH — grep their
-          # recent logs. Secondary: an Application condition already carries the code.
-          for pod in $(kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-repo-server -o name 2>/dev/null); do
-            if kubectl -n argocd logs "${pod}" --since=10m --tail=2000 2>/dev/null | grep -qE 'WRONGPASS|NOAUTH'; then
-              split=1; break
-            fi
-          done
-          if [ "${split}" != 1 ] && kubectl get applications.argoproj.io -A \
-              -o jsonpath='{range .items[*]}{.status.conditions[*].message}{"\n"}{end}' 2>/dev/null \
-              | grep -qE 'WRONGPASS|NOAUTH'; then
-            split=1
-          fi
-          if [ "${split}" != 1 ]; then
-            echo "no argocd-redis auth split detected — nothing to realign"
-            exit 0
-          fi
-          echo "::warning::argocd-redis auth split (WRONGPASS/NOAUTH) — restarting argocd-redis to re-read the current password"
-          kubectl -n argocd rollout restart deploy/argocd-redis || true
-          kubectl -n argocd rollout status  deploy/argocd-redis --timeout=120s || true
-          # Force an immediate re-comparison so the converge poll sees the recovered
-          # state instead of waiting on the controller's reconcile timer.
-          llz ci nudge-argo || true
+      # (The one-shot pre-converge "Realign argocd-redis on WRONGPASS" step was
+      # REMOVED. The converge poll's own reactive realign (ci_health.go: on a
+      # detected WRONGPASS/NOAUTH split it restarts argocd-redis once per run)
+      # already covers this — including a split present BEFORE converge, which it
+      # catches on poll 1 — so the pre-step only realigned ~one poll earlier while
+      # putting ~25 lines of warm-cluster (KEEP_CLUSTER) debug logic on the shared
+      # production bootstrap path. The durable fix still belongs in apl-core
+      # (restart-on-rotation / static redis password); until then the reactive
+      # self-heal is the single compensator.)
 
       # ── Event-pace the harbor tail instead of waiting out the */5 cron ─────────
       # llz-cert-automation's rollout chains on the harbor-robot-provisioner
@@ -984,7 +947,7 @@ jobs:
       # assert-health-workflow retries), but they are independent read-mostly
       # checks against the already-converged cluster, so they fan out as
       # background lanes and the step fails if ANY lane fails. Wall clock =
-      # slowest lane (typically wave-health-audit ~45s or a health-workflow run).
+      # slowest lane (typically a health-workflow run).
       # Per-lane rationale (each verb is unit-tested; details in its Go file):
       #  - loki: Loki bootstrapped + S3-backed (the former `validate` job's one
       #    net-new check, folded here to drop that job's container cycle).
@@ -1003,12 +966,15 @@ jobs:
       #    against real backends. SAFE: e2e-unique label + broadPATDeployments=e2e
       #    scope the mint/revoke to the e2e PAT family only. Self-gates on the
       #    component toggle.
-      #  - wave-audit: GATING runtime negative-wave audit (--fail-on-unvetted) —
-      #    enumerates live negative-wave resources and applies the VAP's decision,
-      #    catching coverage gaps the static guard + admission VAP can't see.
+      #  - wave-vap: GATING proof that the llz-wave-health-guard VAP is BOUND and
+      #    ENFORCING — server-dry-runs a Deployment at sync-wave -5 and requires the
+      #    guard's own denial. What makes the static guard's PR-time verdict hold at
+      #    runtime. Replaced the old ~45s live negative-wave enumeration, which was
+      #    tautological: the Deny binding means a flaggable resource could never have
+      #    been admitted.
       # Mutating lanes (health-workflow's Workflow, broad-pat's Job) touch
       # disjoint namespaces/objects, so concurrency is safe.
-      - name: (e2e) assert suite — loki / scrape+reconciler / health-workflow / broad-pat / wave-audit
+      - name: (e2e) assert suite — loki / scrape+reconciler / health-workflow / broad-pat / wave-vap
         if: ${{ inputs.assert_loki }}
         run: |
           set -uo pipefail
@@ -1021,10 +987,10 @@ jobs:
           lane scrape-reconciler bash -ec 'llz ci assert-scrape-targets && llz ci assert-reconciler'
           lane health-workflow   llz ci assert-health-workflow
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
-          lane wave-audit        llz ci wave-health-audit --fail-on-unvetted
+          lane wave-vap          llz ci assert-wave-health-vap
           wait
           fail=0
-          for n in loki scrape-reconciler health-workflow broad-pat wave-audit; do
+          for n in loki scrape-reconciler health-workflow broad-pat wave-vap; do
             rc="$(cat "${dir}/${n}.rc" 2>/dev/null || echo 1)"
             echo "::group::assert ${n} (rc=${rc})"
             cat "${dir}/${n}.log" 2>/dev/null || true
@@ -1088,8 +1054,8 @@ jobs:
           llz ci alert-eval 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      # (The runtime wave-health audit that ran here as its own step now runs as
-      # the `wave-audit` lane of the parallel assert suite above.)
+      # (The runtime wave-health check that ran here as its own step now runs as
+      # the `wave-vap` lane of the parallel assert suite above.)
 
       # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx logs
       # WHILE the cluster is still up — before the ACL revoke below cuts apiserver

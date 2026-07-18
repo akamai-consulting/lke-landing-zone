@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// fixedNow pins nowUnix for the duration of a test so the force-sync annotation
-// value is deterministic.
+// fixedNow pins nowUnix for the duration of a test so the revalidation
+// annotation value is deterministic.
 func fixedNow(t *testing.T, v int64) {
 	t.Helper()
 	orig := nowUnix
@@ -15,7 +15,7 @@ func fixedNow(t *testing.T, v int64) {
 	t.Cleanup(func() { nowUnix = orig })
 }
 
-func TestRunCINudgeArgoRefreshesSyncsAndForceSyncs(t *testing.T) {
+func TestRunCINudgeArgoRefreshesSyncsAndRevalidatesStore(t *testing.T) {
 	fixedNow(t, 1700000000)
 	var calls []string
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
@@ -26,10 +26,10 @@ func TestRunCINudgeArgoRefreshesSyncsAndForceSyncs(t *testing.T) {
 	if err := runCINudgeArgo(globalOpts{}, o); err != nil {
 		t.Fatalf("nudge-argo: %v", err)
 	}
-	// annotate+patch per app, plus the store revalidation bump, one store-wait,
-	// and one ExternalSecret force-sync.
-	if want := 2*len(defaultNudgeApps) + 3; len(calls) != want {
-		t.Fatalf("exec calls = %d, want %d (annotate+patch per app + store bump + wait + force-sync)", len(calls), want)
+	// annotate+patch per app, plus the store revalidation bump and one store-wait.
+	// No ExternalSecret force-sync: the es-store-recovery reconciler lane owns it.
+	if want := 2*len(defaultNudgeApps) + 2; len(calls) != want {
+		t.Fatalf("exec calls = %d, want %d (annotate+patch per app + store bump + wait)", len(calls), want)
 	}
 	joined := strings.Join(calls, " | ")
 	for _, app := range defaultNudgeApps {
@@ -43,48 +43,41 @@ func TestRunCINudgeArgoRefreshesSyncsAndForceSyncs(t *testing.T) {
 	if !strings.Contains(joined, "-n argocd") {
 		t.Errorf("nudge must target the argocd namespace: %q", joined)
 	}
-	// The revalidation bump must precede the store-Ready wait (it's what makes the
-	// wait event-paced), the wait must precede the force-sync, and force-sync must
-	// hit every ExternalSecret with a changing value.
+	// The revalidation bump must precede the store-Ready wait — it's what makes the
+	// wait event-paced rather than pinned to ESO's own refresh cadence.
 	bumpAt := strings.Index(joined, "annotate clustersecretstore openbao force-sync=1700000000 --overwrite")
 	waitAt := strings.Index(joined, "wait --for=condition=Ready clustersecretstore/openbao --timeout=300s")
-	syncAt := strings.Index(joined, "annotate externalsecret --all-namespaces --all force-sync=1700000000 --overwrite")
 	if bumpAt < 0 {
 		t.Errorf("missing ClusterSecretStore revalidation bump in %q", joined)
 	}
 	if waitAt < 0 {
 		t.Errorf("missing store-Ready wait in %q", joined)
 	}
-	if syncAt < 0 {
-		t.Errorf("missing ExternalSecret force-sync in %q", joined)
-	}
 	if bumpAt >= 0 && waitAt >= 0 && bumpAt > waitAt {
 		t.Errorf("the revalidation bump must run BEFORE the store-Ready wait: %q", joined)
 	}
-	if waitAt >= 0 && syncAt >= 0 && waitAt > syncAt {
-		t.Errorf("force-sync must run AFTER the store-Ready wait: %q", joined)
-	}
 }
 
-func TestRunCINudgeArgoForceSyncsEvenIfStoreNeverReady(t *testing.T) {
-	// The store-wait timing out must NOT skip the force-sync (best-effort: a slow
-	// store shouldn't strand the secrets at their refreshInterval).
+func TestRunCINudgeArgoNeverForceSyncsExternalSecrets(t *testing.T) {
+	// secrets-before-apps Phase 3: the blanket ExternalSecret force-sync moved to
+	// the in-cluster es-store-recovery reconciler lane, which fires on the store's
+	// not-Ready→Ready transition and also covers PushSecrets. Re-adding it here
+	// would duplicate the lane's work on every bootstrap — regression-guard it,
+	// including on the store-wait-timeout path where the old code still fired.
 	fixedNow(t, 42)
-	var sawForceSync bool
-	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+	var joined string
+	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
+		joined += " | " + name + " " + strings.Join(args, " ")
 		if len(args) > 0 && args[0] == "wait" {
 			return nil, errors.New("timed out waiting for the condition")
-		}
-		if strings.Contains(strings.Join(args, " "), "force-sync=42") {
-			sawForceSync = true
 		}
 		return nil, nil
 	})
 	if err := runCINudgeArgo(globalOpts{}, nudgeOpts{apps: nil, store: defaultSecretStore, storeTimeout: 1}); err != nil {
 		t.Fatalf("best-effort nudge must not return error, got %v", err)
 	}
-	if !sawForceSync {
-		t.Error("force-sync must still run after a store-wait timeout")
+	if strings.Contains(joined, "externalsecret") {
+		t.Errorf("nudge-argo must not touch ExternalSecrets (the reconciler lane owns that): %q", joined)
 	}
 }
 
@@ -106,7 +99,7 @@ func TestRunCINudgeArgoBestEffort(t *testing.T) {
 	}
 }
 
-func TestRunCINudgeArgoEmptyStoreSkipsForceSync(t *testing.T) {
+func TestRunCINudgeArgoEmptyStoreSkipsStoreHalf(t *testing.T) {
 	var joined string
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		joined += " | " + name + " " + strings.Join(args, " ")
@@ -115,8 +108,8 @@ func TestRunCINudgeArgoEmptyStoreSkipsForceSync(t *testing.T) {
 	if err := runCINudgeArgo(globalOpts{}, nudgeOpts{apps: defaultNudgeApps, store: ""}); err != nil {
 		t.Fatalf("nudge-argo: %v", err)
 	}
-	if strings.Contains(joined, "wait") || strings.Contains(joined, "externalsecret") {
-		t.Errorf("empty --secret-store must skip the store-wait + force-sync: %q", joined)
+	if strings.Contains(joined, "wait") || strings.Contains(joined, "clustersecretstore") {
+		t.Errorf("empty --secret-store must skip the revalidation bump + store-wait: %q", joined)
 	}
 }
 

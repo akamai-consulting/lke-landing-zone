@@ -4,8 +4,9 @@ name: llz-cluster-health (reusable)
 # the instance's cluster-health.yml caller — they differ only by flags:
 #   - recovery / diagnostic (the all-defaults dispatch):
 #     report-only; the job summary is the deliverable, the job never fails.
-#   - E2E validation (dispatched by the template repo's release-e2e gate):
-#     fail-on-unhealthy + assert-loki.
+#   - gate mode (OPERATOR-dispatched): fail-on-unhealthy + assert-loki. NOTE:
+#     release-e2e no longer dispatches this — its former `validate` job was folded
+#     into bootstrap-openbao's converge, which runs the assert suite inline.
 #
 # This is the canonical surface-reduction pattern (docs/adr/0003-vendor-actions-and-bodies-into-instances.md): an instance ships a ~20-line caller stub that
 # owns the trigger surface, and vendors this body + the composite actions it
@@ -201,7 +202,7 @@ jobs:
           llz ci assert-scrape-targets
           llz ci assert-reconciler
           llz ci alert-eval --strict
-          llz ci wave-health-audit --fail-on-unvetted
+          llz ci assert-wave-health-vap
 
       - name: Revoke control-plane ACL for this runner
         if: always()

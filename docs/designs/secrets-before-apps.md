@@ -9,7 +9,7 @@ consumers that need them have already been applied:
 | mechanism | where | what it compensates for |
 |---|---|---|
 | `llz ci nudge-argo` (app half) | CI, post-seed + pre-converge | Argo CD does not retry a terminally-failed sync to the same revision |
-| `llz ci nudge-argo` (force-sync half) | CI | ESO does not re-trigger ExternalSecrets when their store recovers |
+| `llz ci nudge-argo` (force-sync half) | CI | ESO does not re-trigger ExternalSecrets when their store recovers — **deleted in Phase 3; the es-store-recovery lane owns it** |
 | argo-nudge reconciler lane | in-cluster (`llz-reconciler`) | same as the app half, day-2 |
 | `llz ci kick-harbor-provisioner` | CI, pre-converge | the provisioner's first *useful* tick is cron-paced (separate design: PostSync hook) |
 
@@ -144,16 +144,20 @@ CI bump keeps that — CI uniquely knows "seeding just finished"), and Harbor
 provisioning stays out of the reconciler (mesh-unreachable from this
 namespace, per the Deployment's header note).
 
-### Phase 3 — retire the CI steering (after a validated Phase 2)
+### Phase 3 — retire the CI steering (LANDED, partially)
 
-Call-site by call-site, with the lane that supersedes each:
+Call-site by call-site, with the lane that supersedes each. Phase 2's validation
+gate cleared on a cold e2e that reported `llz_es_recovery_nudges_total=1` —
+direct proof the store-recovery lane fires on the recovery, which is what
+authorized the ES force-sync deletion below.
 
-| CI call today (`llz-bootstrap-openbao.yml`) | superseded by | disposition |
+| CI call (`llz-bootstrap-openbao.yml`) | superseded by | disposition |
 |---|---|---|
-| post-seed `nudge-argo`: app-sync half | argo-nudge lane, live from first boot once the wave-6 inversion is gone | delete |
-| post-seed `nudge-argo`: store-Ready wait + ES force-sync half | store-recovery lane fires on the very Ready transition the CI bump triggers | slim to `nudge-argo --store-only` (bump + bounded Ready wait as a converge precondition) |
-| Kyverno admit preflight's `nudge-argo \|\| true` | argo-nudge lane re-triggers phase=Failed apps within seconds continuously | delete the nudge call; keep the dry-run admission probe (it produces the actionable warning) |
-| redis-realign's `nudge-argo \|\| true` | partially — the lane's transient ComparisonError patterns must first be extended to the WRONGPASS/NOAUTH signature | keep until the pattern lands, then delete |
+| post-seed `nudge-argo`: app-sync half | argo-nudge lane covers *failed* syncs, but nothing yet covers "apps need a refresh now that secrets just landed" | **KEPT** — deleting it was unevidenced |
+| post-seed `nudge-argo`: store revalidation bump + Ready wait | nothing — only CI knows seeding just finished | **KEPT** as a converge precondition |
+| post-seed `nudge-argo`: ES force-sync half | store-recovery lane fires on the very Ready transition the CI bump triggers, and covers PushSecrets too | **DELETED** |
+| Kyverno admit preflight's `nudge-argo \|\| true` | argo-nudge lane re-triggers phase=Failed apps within seconds continuously | **DELETED**; the dry-run admission probe stays (it produces the actionable warning) |
+| redis-realign's `nudge-argo \|\| true` | the reactive realign inside the converge poll | **DELETED** with the whole pre-converge realign step |
 | `kick-harbor-provisioner` | NOT this design (PostSync provisioner hook is its own) | stays |
 
 Rollout gates, in order:
