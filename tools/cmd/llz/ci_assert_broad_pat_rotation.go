@@ -259,18 +259,8 @@ func dumpBroadPATRotatorDiag() {
 // waitBroadPATJob polls the exercise Job until it reports success or failure (or
 // the poll budget runs out).
 func waitBroadPATJob() (succeeded, failed bool) {
-	deadline := time.Now().Add(broadPATRotationPollTimeout)
-	for {
-		out, _ := execOutput("kubectl", "-n", broadPATRotatorNS, "get", "job", broadPATRotatorE2EJob,
-			"-o", "jsonpath={.status.succeeded}/{.status.failed}")
-		if succ, fail := parseJobStatus(string(out)); succ || fail {
-			return succ, fail
-		}
-		if !time.Now().Before(deadline) {
-			return false, false
-		}
-		time.Sleep(broadPATRotationPollInterval)
-	}
+	return waitJobTerminal(broadPATRotatorNS, broadPATRotatorE2EJob,
+		broadPATRotationPollTimeout, broadPATRotationPollInterval)
 }
 
 // parseJobStatus reads the `{.status.succeeded}/{.status.failed}` jsonpath output

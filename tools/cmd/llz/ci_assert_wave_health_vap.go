@@ -83,12 +83,14 @@ var dryRunCanaryFn = func(manifest string) (string, error) {
 // classifyWaveHealthCanary turns a dry-run result into a verdict. Pure, so the
 // three outcomes are unit-testable without a cluster.
 //
-// Denied naming the guard  → enforcing (pass).
-// Admitted                 → the policy is not enforcing (fail): unbound, absent,
-//                            or its binding is Audit/Warn rather than Deny.
-// Denied by something else → inconclusive (fail): we cannot claim to have seen the
-//                            guard work, and a silently-unbound guard is exactly
-//                            the regression this exists to catch.
+// Denied naming the guard: enforcing, so this passes.
+//
+// Admitted: the policy is NOT enforcing — unbound, absent, or its binding is
+// Audit/Warn rather than Deny. Fails.
+//
+// Denied by something else: inconclusive, so it also fails. We cannot claim to
+// have seen the guard work, and a silently-unbound guard is exactly the
+// regression this verb exists to catch.
 func classifyWaveHealthCanary(out string, err error) (ok bool, msg string) {
 	switch {
 	case err == nil:

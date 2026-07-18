@@ -115,10 +115,13 @@ func runKickHarborProvisioner(namespace, cronjob string, coreTimeout int) {
 
 // waitKickHarborJob polls the kicked Job until success/failure or the budget
 // runs out (same status contract as waitBroadPATJob, reusing its parser).
-func waitKickHarborJob(namespace string) (succeeded, failed bool) {
-	deadline := time.Now().Add(time.Duration(kickHarborJobTimeout) * time.Second)
+// waitJobTerminal polls a Job until it reports succeeded or failed, or the
+// budget runs out (false, false). Shared with assert-broad-pat-rotation, whose
+// copy of this loop was identical apart from its constants.
+func waitJobTerminal(namespace, name string, budget, interval time.Duration) (succeeded, failed bool) {
+	deadline := time.Now().Add(budget)
 	for {
-		out, _ := execOutput("kubectl", "-n", namespace, "get", "job", kickHarborJobName,
+		out, _ := execOutput("kubectl", "-n", namespace, "get", "job", name,
 			"-o", "jsonpath={.status.succeeded}/{.status.failed}")
 		if succ, fail := parseJobStatus(string(out)); succ || fail {
 			return succ, fail
@@ -126,6 +129,12 @@ func waitKickHarborJob(namespace string) (succeeded, failed bool) {
 		if !time.Now().Before(deadline) {
 			return false, false
 		}
-		time.Sleep(time.Duration(kickHarborJobInterval) * time.Second)
+		time.Sleep(interval)
 	}
+}
+
+func waitKickHarborJob(namespace string) (succeeded, failed bool) {
+	return waitJobTerminal(namespace, kickHarborJobName,
+		time.Duration(kickHarborJobTimeout)*time.Second,
+		time.Duration(kickHarborJobInterval)*time.Second)
 }

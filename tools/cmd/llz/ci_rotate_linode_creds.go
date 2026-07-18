@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -28,7 +27,6 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/cli"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
 )
 
@@ -338,34 +336,5 @@ func drainOld(ctx context.Context, lc rotatorLinodeAPI, e credEntry, keepNewest 
 // linode-rotator role) using the pod's ServiceAccount token, trusting the
 // mounted openbao CA, and returns a write-capable client.
 func openLinodeRotatorBaoStore(ctx context.Context) (baoStore, error) {
-	addr := envOrDefault(os.Getenv, "OPENBAO_ADDR", "https://platform-openbao.llz-openbao.svc.cluster.local:8200")
-	mount := envOrDefault(os.Getenv, "OPENBAO_KUBERNETES_MOUNT", "kubernetes")
-	role := envOrDefault(os.Getenv, "OPENBAO_KUBERNETES_ROLE", "linode-rotator")
-	saFile := envOrDefault(os.Getenv, "SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
-	// TLS to OpenBao: mount the CA and set OPENBAO_CA_FILE to verify it; otherwise
-	// OPENBAO_SKIP_VERIFY=true falls back to the established in-cluster posture
-	// (every baoExec uses VAULT_SKIP_VERIFY) for pod→OpenBao traffic.
-	var httpClient *http.Client
-	if caFile := os.Getenv("OPENBAO_CA_FILE"); caFile != "" {
-		caPEM, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read OPENBAO_CA_FILE: %w", err)
-		}
-		if httpClient, err = openbao.HTTPClientWithCA(caPEM, 30*time.Second); err != nil {
-			return nil, err
-		}
-	} else if cli.EnvBool("OPENBAO_SKIP_VERIFY", false) {
-		httpClient = openbao.HTTPClientInsecure(30 * time.Second)
-	} else {
-		return nil, fmt.Errorf("set OPENBAO_CA_FILE (mounted openbao CA) or OPENBAO_SKIP_VERIFY=true")
-	}
-	jwt, err := os.ReadFile(saFile)
-	if err != nil {
-		return nil, fmt.Errorf("read ServiceAccount token: %w", err)
-	}
-	token, err := openbao.KubernetesLogin(ctx, httpClient, addr, mount, role, strings.TrimSpace(string(jwt)))
-	if err != nil {
-		return nil, err
-	}
-	return openbao.NewWithClient(addr, token, "", httpClient), nil
+	return openInClusterBaoStore(ctx, "linode-rotator")
 }
