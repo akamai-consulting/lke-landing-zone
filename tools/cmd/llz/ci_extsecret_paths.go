@@ -90,7 +90,7 @@ var (
 // collectExternalSecretRefs returns {(remoteRef.key, property): [file, …]} from
 // every *.yaml under apl-values/ and the rendered chart output, skipping
 // vendored chart subtrees (/charts/).
-func collectExternalSecretRefs(root, renderDir string) map[esRef][]string {
+func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int) {
 	refs := map[esRef][]string{}
 	var sources []string
 	for _, dir := range []string{filepath.Join(root, "apl-values"), filepath.Join(root, filepath.FromSlash(renderDir))} {
@@ -104,10 +104,12 @@ func collectExternalSecretRefs(root, renderDir string) map[esRef][]string {
 			return nil
 		})
 	}
+	examined := 0
 	for _, f := range sources {
 		if strings.Contains(filepath.ToSlash(f), "/charts/") {
 			continue
 		}
+		examined++
 		b, _ := os.ReadFile(f)
 		text := string(b)
 		if !strings.Contains(text, "kind: ExternalSecret") {
@@ -130,7 +132,8 @@ func collectExternalSecretRefs(root, renderDir string) map[esRef][]string {
 			refs[ref] = append(refs[ref], filepath.ToSlash(relf))
 		}
 	}
-	return refs
+	// examined counts files actually READ (post /charts/ filter), not files found.
+	return refs, examined
 }
 
 var (
@@ -415,7 +418,15 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// render-charts.sh → $RENDER_DIR), not only a raw apl-values/ tree. Both are
 	// scanned so this works in the template repo and in a populated instance.
 	renderDir := firstNonEmpty(os.Getenv("RENDER_DIR"), "rendered")
-	refs := collectExternalSecretRefs(root, renderDir)
+	esDirs := []string{filepath.Join(root, "apl-values"), filepath.Join(root, filepath.FromSlash(renderDir))}
+	refs, examined := collectExternalSecretRefs(root, renderDir)
+	// The walk discarded its error (`_ = filepath.WalkDir`), so an absent
+	// apl-values/ AND an unrendered chart tree both yielded zero sources, zero
+	// refs, and a clean pass — the guard would vouch for ExternalSecret paths it
+	// never read.
+	if err := requireCorpus("externalsecret-paths", examined, esDirs); err != nil {
+		return err
+	}
 
 	// The `bao kv put secret/…` seeding lives in the reusable workflow BODIES
 	// (the per-instance bootstrap-*.yml are thin callers with no seeds) and in
