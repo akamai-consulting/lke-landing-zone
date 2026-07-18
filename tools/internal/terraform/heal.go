@@ -15,6 +15,8 @@ var (
 
 	fwCreateFailRe = regexp.MustCompile(`Failed to Create Firewall`)
 	withFirewallRe = regexp.MustCompile(`^\s*with\s+([^\s,]*linode_firewall\.[^\s,]+)`)
+
+	fwDeviceReadRe = regexp.MustCompile(`Failed to Get Devices for Firewall`)
 )
 
 // transientAPINetErrors are the connection-level failures that mean "the LKE-E
@@ -90,6 +92,25 @@ func TransientAPIFlake(log string) bool {
 		}
 	}
 	return false
+}
+
+// FirewallDeviceReadFlake reports whether the apply failed only because the
+// Linode provider could not read a Cloud Firewall's attached devices
+// (linodes/nodebalancers) immediately after creating it — a read-after-write
+// consistency flake. The provider surfaces it as
+//
+//	Error: Failed to Get Devices for Firewall 76987661
+//
+// usually alongside terraform core's generic "Provider returned invalid result
+// object after apply" on the same module.cluster…linode_firewall.this. There is
+// NO state to repair: the firewall exists; the device read just needs a moment
+// to settle, after which a re-plan + re-apply succeeds. Narrow by construction —
+// only this specific device-read error is matched, so a genuine firewall
+// misconfiguration (quota, invalid rule) still fails fast rather than being
+// silently retried. This class of transient burned a whole cold e2e create
+// (run 29655607246), which is why it is retriable.
+func FirewallDeviceReadFlake(log string) bool {
+	return fwDeviceReadRe.MatchString(log)
 }
 
 // ParseFirewallAddress returns the linode_firewall resource address whose create

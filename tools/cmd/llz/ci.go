@@ -621,6 +621,20 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 		healed = true
 	}
 
+	// ── Heal D: transient Cloud Firewall device-read flake ──
+	// No state to repair: the node firewall was created but the provider's
+	// immediate read-back of its attached devices failed on Linode read-after-
+	// write consistency ("Failed to Get Devices for Firewall <id>", usually with
+	// terraform's generic "Provider returned invalid result object after apply").
+	// A settle + shared re-plan + re-apply re-reads the now-consistent firewall
+	// and succeeds. This class of flake burned a whole cold e2e create (run
+	// 29655607246) that "no self-heal pattern detected" refused to retry.
+	if !healed && tf.FirewallDeviceReadFlake(applyLog) {
+		fmt.Fprintf(os.Stderr, "::warning::Apply hit a transient Cloud Firewall device-read flake (Linode read-after-write consistency). Waiting %s to settle, then retrying.\n", clusterUnreachableSettle)
+		time.Sleep(clusterUnreachableSettle)
+		healed = true
+	}
+
 	if !healed {
 		return fmt.Errorf("terraform apply failed (exit %d); no self-heal pattern detected, not retrying", code)
 	}

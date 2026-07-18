@@ -94,3 +94,32 @@ func TestTransientAPIFlake(t *testing.T) {
 		t.Error("false positive on a clean apply")
 	}
 }
+
+// fwDeviceReadLog is the read-after-write consistency flake that burned a cold
+// e2e create (run 29655607246): the node firewall was created but the provider's
+// device read-back failed, with terraform's generic invalid-result diagnostic.
+const fwDeviceReadLog = `module.cluster.module.node_firewall.linode_firewall.this.linodes. All values
+Error: Provider returned invalid result object after apply
+Error: Failed to Get Devices for Firewall 76987661
+  with module.cluster.module.node_firewall.linode_firewall.this,
+  on .terraform/modules/cluster/terraform-modules/llz-node-firewall/main.tf line 5, in resource "linode_firewall" "this":
+   5: resource "linode_firewall" "this" {`
+
+func TestFirewallDeviceReadFlake(t *testing.T) {
+	if !FirewallDeviceReadFlake(fwDeviceReadLog) {
+		t.Error("should detect the 'Failed to Get Devices for Firewall' read-after-write flake")
+	}
+	// Must NOT be confused with the create-collision heal (that one imports; this
+	// one just retries) or a clean apply.
+	if FirewallDeviceReadFlake(fwCollisionLog) {
+		t.Error("false positive on a firewall label collision (that is Heal B, not a device-read retry)")
+	}
+	if FirewallDeviceReadFlake("Apply complete! Resources: 6 added.") {
+		t.Error("false positive on a clean apply")
+	}
+	// The generic 'invalid result object' alone (no firewall device-read) must NOT
+	// match — too broad to retry blindly.
+	if FirewallDeviceReadFlake("Error: Provider returned invalid result object after apply") {
+		t.Error("false positive on the generic invalid-result error without the firewall device-read signature")
+	}
+}
