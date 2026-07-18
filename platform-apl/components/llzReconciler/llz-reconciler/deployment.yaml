@@ -16,17 +16,17 @@ metadata:
   name: llz-reconciler
   namespace: llz-reconciler
   annotations:
-    # Wave 6: apply AFTER the wave-5 linode-api-token ExternalSecret
-    # (externalsecret.yaml). The container has a hard secretKeyRef on that Secret,
-    # so this Deployment must not apply until the Secret exists. If it applies
-    # first (the default wave 0), Argo's wave-gating blocks the ENTIRE manifest
-    # sync waiting for this Deployment to go Healthy — which it never can without
-    # the wave-5 secret — starving every other wave-5 ExternalSecret in the sync
-    # (harbor-registry-s3, loki-object-store) and wedging harbor + loki too.
-    # Ordering the workload after its secret breaks that inversion.
-    argocd.argoproj.io/sync-wave: "6"
-    ignore-check.kube-linter.io/env-value-from: "linode-api-token Secret is created at runtime by ESO (externalsecret.yaml); not a static manifest the linter can resolve"
-    ignore-check.kube-linter.io/read-secret-from-env-var: "the volume-labels reconciler reads LINODE_TOKEN via env to authenticate to the Linode API; no file-mount path without a binary rewrite"
+    # Wave 0 (was 6): the linode-api-token Secret is now an OPTIONAL volume with
+    # a lazy per-pass file read (secrets-before-apps Phase 2), so the pod goes
+    # Ready with or without it and the old wave-6 inversion workaround (a hard
+    # env secretKeyRef that held the pod in CreateContainerConfigError until the
+    # OpenBao store served — starving the whole wave when ordered wrong) is
+    # retired. Starting BEFORE the store is the point: the argo-nudge and
+    # es-store-recovery lanes must be live during bootstrap, exactly when the
+    # store recovers. The linode-dependent lanes no-op cleanly until the token
+    # file appears (kubelet syncs the mounted Secret, which ALSO picks up
+    # rotations — the env ref never did without a pod restart).
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   replicas: 1
   # Never run two pods at once: the old pod terminates before the new starts.
@@ -92,6 +92,12 @@ spec:
             - --reconcile-volume-labels
             - --reconcile-cidr-firewall
             - --reconcile-linode-creds
+            # es-store-recovery: force-sync every ExternalSecret/PushSecret when
+            # the openbao ClusterSecretStore transitions to Ready — the
+            # in-cluster, event-driven owner of what `llz ci nudge-argo`'s
+            # force-sync half does from CI (secrets-before-apps Phase 2; the CI
+            # half stays until Phase 3 validates this lane end-to-end).
+            - --reconcile-es-store-recovery
           env:
             # Leader-election identity + Lease namespace (downward API). Only used
             # when a driving reconciler is enabled; harmless otherwise.
@@ -106,14 +112,12 @@ spec:
             # is set explicitly for legibility.
             - name: OPENBAO_ADDR
               value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
-            # volume-labels reconciler: the ESO-synced in-cluster Linode token +
-            # the per-env label prefix. REGION_SHORT is a placeholder overwritten
-            # per-env by llz-reconciler-env-patch.yaml (llz render).
-            - name: LINODE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: linode-api-token
-                  key: token
+            # (LINODE_TOKEN is no longer an env secretKeyRef: the linode lanes
+            # lazily read the optional linode-api-token volume below — env would
+            # hold the pod hostage pre-store AND never see a rotation.)
+            # volume-labels reconciler: the per-env label prefix. REGION_SHORT is
+            # a placeholder overwritten per-env by llz-reconciler-env-patch.yaml
+            # (llz render).
             - name: REGION_SHORT
               value: "REPLACE_ME"
             # cidr-firewall reconciler: the node this pod lands on identifies the
@@ -164,8 +168,19 @@ spec:
             seccompProfile: { type: RuntimeDefault }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            - name: linode-api-token
+              mountPath: /var/run/secrets/llz/linode-api-token
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        # optional: the ESO-synced token lands only after the OpenBao store is
+        # Ready; the pod starts (and the argo-nudge + es-store-recovery lanes
+        # run) without it, and kubelet materializes/refreshes the file when the
+        # Secret appears or rotates. Consumed via linode_token.go's lazy read.
+        - name: linode-api-token
+          secret:
+            secretName: linode-api-token
+            optional: true

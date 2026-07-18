@@ -867,7 +867,12 @@ jobs:
       # prom-metrics` command, so no logic lives in the workflow.
       - name: (e2e) support-plane exporter metric surface
         if: ${{ inputs.assert_loki }}
-        run: llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_)' || true
+        # llz_es_ / the token-present gauge: the secrets-before-apps Phase-2
+        # rollout gates read these from the run log — the store-recovery lane
+        # must be seen firing (llz_es_recovery_nudges_total ≥ 1) and the linode
+        # lanes activating (llz_reconcile_linode_token_present = 1) before
+        # Phase 3 may delete the CI nudge halves.
+        run: llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_|llz_es_|llz_reconcile_linode_token)' || true
 
       # E2E live alert evaluation, surfaced in the job summary. Every PrometheusRule
       # ships promtool-valid (syntax), but promtool can't tell a rule that

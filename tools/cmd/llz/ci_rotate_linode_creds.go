@@ -204,7 +204,7 @@ func runRotateLinodeCreds(ctx context.Context, apply bool) error {
 		return fmt.Errorf("REGION must be set")
 	}
 	objCluster := os.Getenv("OBJ_CLUSTER")
-	minting := os.Getenv("LINODE_TOKEN")
+	minting := inclusterLinodeToken()
 	if minting == "" {
 		return fmt.Errorf("LINODE_TOKEN must be set (the in-cluster Linode token used to mint replacements)")
 	}

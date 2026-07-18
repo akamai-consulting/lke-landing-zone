@@ -58,9 +58,9 @@ func runRelabelVolumes(ctx context.Context) error {
 	if regionShort == "" {
 		return fmt.Errorf("REGION_SHORT must be set (e.g. pri|sec|sta|lab)")
 	}
-	token := os.Getenv("LINODE_TOKEN")
+	token := inclusterLinodeToken()
 	if token == "" {
-		return fmt.Errorf("LINODE_TOKEN must be set (the ESO-synced linode-api-token Secret)")
+		return fmt.Errorf("LINODE_TOKEN must be set (env or the optional linode-api-token Secret volume)")
 	}
 
 	k, err := discoverKubeFn()
