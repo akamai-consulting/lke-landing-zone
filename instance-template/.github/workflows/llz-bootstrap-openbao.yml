@@ -437,13 +437,12 @@ jobs:
             exit 1
           }
 
-      # Diagnostics for a failed cluster bootstrap (typically the apl-pipeline
-      # readiness gate timing out). Best-effort and always exits 0 — must never
-      # mask the original failure. Uses the default kubeconfig cluster-access wrote.
-      - name: Diagnose ArgoCD install failure
-        if: failure() && inputs.bootstrap_cluster
-        timeout-minutes: 10
-        run: llz ci diagnose-argocd
+      # (Argo diagnostics for a failed bootstrap are NOT dumped here: since the
+      # cluster-bootstrap and converge jobs were folded into this one, the job-tail
+      # "Diagnose convergence failure" step — `if: failure() || cancelled()` — already
+      # fires on a bootstrap_cluster-phase failure and runs the same
+      # `llz ci diagnose-argocd`. Having both meant every red run dumped Argo state
+      # twice, each capped at 10 minutes.)
 
       # (apl-core bring-up timing — image pulls + apl-operator logs — is collected
       # once at the job tail by "Report bootstrap timing", which runs before the ACL
@@ -898,46 +897,15 @@ jobs:
             echo "::warning::skipping the re-sync nudge — llz CronJob admission not confirmed; converge will report the verdict"
           fi
 
-      # ── Realign argocd-redis if its clients drifted onto a new password ─────────
-      # argocd-redis bakes `--requirepass $(REDIS_PASSWORD)` from the argocd-redis
-      # Secret at *pod start* and never re-reads it; the repo-server and application-
-      # controller read the same Secret's `auth` key at *their* start. On a reused
-      # (KEEP_CLUSTER) cluster the redis pod can outlive a rewrite of that Secret
-      # while the clients roll onto the new value — so every repo-server->redis AUTH
-      # fails with WRONGPASS and *all* Applications go Unknown/ComparisonError
-      # ("failed to list refs: WRONGPASS ..."), which the converge poll below now
-      # classifies as a transient (pending) rather than a hard strike. Restarting
-      # redis makes it re-read the current Secret, realigning server and clients so
-      # that poll can actually converge. Best-effort + conditional: only fires when
-      # the WRONGPASS/NOAUTH signature is actually present, so normal runs never lose
-      # the cache. The durable fix lives in apl-core (static redis password, or
-      # restart-on-rotation) — tracked separately; this is the e2e-side backstop.
-      - name: Realign argocd-redis on repo-server auth split (WRONGPASS)
-        run: |
-          set -uo pipefail
-          split=0
-          # Primary signal: the repo-servers are the ones failing AUTH — grep their
-          # recent logs. Secondary: an Application condition already carries the code.
-          for pod in $(kubectl -n argocd get pods -l app.kubernetes.io/name=argocd-repo-server -o name 2>/dev/null); do
-            if kubectl -n argocd logs "${pod}" --since=10m --tail=2000 2>/dev/null | grep -qE 'WRONGPASS|NOAUTH'; then
-              split=1; break
-            fi
-          done
-          if [ "${split}" != 1 ] && kubectl get applications.argoproj.io -A \
-              -o jsonpath='{range .items[*]}{.status.conditions[*].message}{"\n"}{end}' 2>/dev/null \
-              | grep -qE 'WRONGPASS|NOAUTH'; then
-            split=1
-          fi
-          if [ "${split}" != 1 ]; then
-            echo "no argocd-redis auth split detected — nothing to realign"
-            exit 0
-          fi
-          echo "::warning::argocd-redis auth split (WRONGPASS/NOAUTH) — restarting argocd-redis to re-read the current password"
-          kubectl -n argocd rollout restart deploy/argocd-redis || true
-          kubectl -n argocd rollout status  deploy/argocd-redis --timeout=120s || true
-          # Force an immediate re-comparison so the converge poll sees the recovered
-          # state instead of waiting on the controller's reconcile timer.
-          llz ci nudge-argo || true
+      # (The one-shot pre-converge "Realign argocd-redis on WRONGPASS" step was
+      # REMOVED. The converge poll's own reactive realign (ci_health.go: on a
+      # detected WRONGPASS/NOAUTH split it restarts argocd-redis once per run)
+      # already covers this — including a split present BEFORE converge, which it
+      # catches on poll 1 — so the pre-step only realigned ~one poll earlier while
+      # putting ~25 lines of warm-cluster (KEEP_CLUSTER) debug logic on the shared
+      # production bootstrap path. The durable fix still belongs in apl-core
+      # (restart-on-rotation / static redis password); until then the reactive
+      # self-heal is the single compensator.)
 
       # ── Event-pace the harbor tail instead of waiting out the */5 cron ─────────
       # llz-cert-automation's rollout chains on the harbor-robot-provisioner

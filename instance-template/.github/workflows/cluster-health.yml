@@ -11,9 +11,11 @@ name: Cluster health (diagnostic + E2E validate)
 #   • Recovery / diagnostic (the all-defaults dispatch): report-only, the job
 #     summary is the deliverable. Set verbose: true to dump describe/logs even
 #     when nothing is failing.
-#   • E2E validation: set fail-on-unhealthy: true (+ assert-loki: true) to gate.
-#     The template repo's release-e2e gate dispatches THIS caller by filename and
-#     watches it, passing those flags explicitly (see release-e2e.yml §validate).
+#   • Gate mode: set fail-on-unhealthy: true (+ assert-loki: true) to make it fail
+#     on an unhealthy cluster. NOTE: release-e2e no longer dispatches this — its
+#     former `validate` job was folded into bootstrap-openbao's converge (which
+#     runs `llz ci converge` + the assert suite inline), so gate mode is now an
+#     OPERATOR-dispatched path only.
 #
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
 # copier-delivered into this repo, so `secrets: inherit` is same-repo (#201).
