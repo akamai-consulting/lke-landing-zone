@@ -148,8 +148,11 @@ func ciWaveDependencyGuardCmd() *cobra.Command {
 
 func runCIWaveDependencyGuard(root string) error {
 	dirs := platformTreeDirs(root)
-	inversions, err := collectWaveDependencyInversions(dirs)
+	inversions, examined, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
+		return err
+	}
+	if err := requireCorpus("wave-dependency-guard", examined, dirs); err != nil {
 		return err
 	}
 	if len(inversions) == 0 {
@@ -174,7 +177,7 @@ func runCIWaveDependencyGuard(root string) error {
 // sync-wave (Argo orders a single App's resources by it); across Applications by the
 // App-LEVEL wave (a carved App's content cannot sync before the app-of-apps creates
 // the App, and sibling Apps sync with no cross-App health gate). See the file header.
-func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
+func collectWaveDependencyInversions(dirs []string) (_ []wdInversion, examined int, err error) {
 	type res struct {
 		file, app        string
 		resWave, appWave int
@@ -202,6 +205,7 @@ func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
 			if err != nil {
 				return err
 			}
+			examined++
 			app, appWave := wdOwningApp(path) // same for every doc in a file
 			for _, doc := range splitWaveDependencyDocs(string(raw)) {
 				r := res{file: path, app: app, resWave: wdSyncWave(doc.Metadata.Annotations), appWave: appWave}
@@ -225,7 +229,7 @@ func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
 			return nil
 		})
 		if err != nil {
-			return nil, err
+			return nil, examined, err
 		}
 	}
 
@@ -267,7 +271,7 @@ func collectWaveDependencyInversions(dirs []string) ([]wdInversion, error) {
 		}
 		return inversions[i].secret < inversions[j].secret
 	})
-	return inversions, nil
+	return inversions, examined, nil
 }
 
 // wdWorkloadSecretRefs gathers every Secret reference (env secretKeyRef, envFrom

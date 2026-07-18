@@ -63,7 +63,7 @@ func TestWaveDependencyInversionDetected(t *testing.T) {
 		"llzReconciler/deployment.yaml":     wdFmt(wdReconcilerDeploy, "", ""), // no sync-wave → wave 0
 		"llzReconciler/externalsecret.yaml": wdReconcilerES,
 	})
-	inv, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestWaveDependencyOrderedOK(t *testing.T) {
     argocd.argoproj.io/sync-wave: "6"`, ""),
 		"llzReconciler/externalsecret.yaml": wdReconcilerES,
 	})
-	inv, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestWaveDependencyOptionalSkipped(t *testing.T) {
 		"llzReconciler/deployment.yaml":     wdFmt(wdReconcilerDeploy, "", "\n                  optional: true"),
 		"llzReconciler/externalsecret.yaml": wdReconcilerES,
 	})
-	inv, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestWaveDependencySameWaveOK(t *testing.T) {
     argocd.argoproj.io/sync-wave: "5"`, ""),
 		"llzReconciler/externalsecret.yaml": wdReconcilerES,
 	})
-	inv, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestWaveDependencyNoMatchingES(t *testing.T) {
 		"llzReconciler/deployment.yaml": wdFmt(wdReconcilerDeploy, "", ""),
 		// no ExternalSecret for linode-api-token
 	})
-	inv, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ spec:
 		"llzReconciler/deployment.yaml": wdFmt(wdReconcilerDeploy, "", ""),
 		"other/externalsecret.yaml":     otherNsES,
 	})
-	inv, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ spec:
 		"externalSecrets/needs-secret.yaml": xWorkload, // carved App wave -10
 		"harbor/es.yaml":                    xES,       // carved App wave 5
 	})
-	inv, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ spec:
 		"harbor/consumer.yaml":       workload, // carved App wave 5
 		"externalSecrets/store.yaml": es,       // carved App wave -10
 	})
-	inv, err := collectWaveDependencyInversions(dirs)
+	inv, _, err := collectWaveDependencyInversions(dirs)
 	if err != nil {
 		t.Fatal(err)
 	}

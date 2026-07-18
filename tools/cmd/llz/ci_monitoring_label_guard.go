@@ -76,8 +76,15 @@ func ciMonitoringLabelGuardCmd() *cobra.Command {
 }
 
 func runMonitoringLabelGuard(roots []string) error {
-	findings, err := collectMonitoringLabelFindings(roots)
+	findings, examined, err := collectMonitoringLabelFindings(roots)
 	if err != nil {
+		return err
+	}
+	// This guard is the one that most needed the empty-corpus check: the openbao
+	// ServiceMonitor renders its `prometheus: system` label from
+	// serviceMonitor.selectorLabels, so only the RENDERED tree carries the real
+	// value — and rendered/ not being built was exactly the silently-skipped case.
+	if err := requireCorpus("monitoring-label-guard", examined, roots); err != nil {
 		return err
 	}
 	if len(findings) == 0 {
@@ -85,14 +92,18 @@ func runMonitoringLabelGuard(roots []string) error {
 		return nil
 	}
 	for _, f := range findings {
-		fmt.Printf("  MISSING `prometheus: system` — %s %q (%s)\n", f.kind, f.name, f.file)
+		// ::error file=…:: so the finding lands as a PR annotation. This printed a
+		// plain indented line, so the guard failed the build with its reasons buried
+		// in log output — an odd shape for a check that exists because #175 was a
+		// silently-ignored signal.
+		fmt.Printf("::error file=%s::%s %q lacks `prometheus: system` — apl-core's Prometheus selects on that label, so this CR is silently ignored (metrics unscraped / rules unloaded)\n",
+			f.file, f.kind, f.name)
 	}
 	return fmt.Errorf("monitoring-label-guard: %d monitoring CR(s) lack `prometheus: system` — "+
 		"apl-core's Prometheus will silently ignore them (metrics unscraped / rules unloaded)", len(findings))
 }
 
-func collectMonitoringLabelFindings(roots []string) ([]monitoringLabelFinding, error) {
-	var findings []monitoringLabelFinding
+func collectMonitoringLabelFindings(roots []string) (findings []monitoringLabelFinding, examined int, err error) {
 	for _, root := range roots {
 		if _, err := os.Stat(root); os.IsNotExist(err) {
 			continue // a root not present (e.g. rendered/ not built yet) is skipped
@@ -115,6 +126,7 @@ func collectMonitoringLabelFindings(roots []string) ([]monitoringLabelFinding, e
 			if err != nil {
 				return err
 			}
+			examined++
 			for _, doc := range splitMonitoringDocs(string(raw)) {
 				if monitoringGuardKinds[doc.Kind] &&
 					doc.Metadata.Labels[requiredMonitoringLabelKey] != requiredMonitoringLabelVal {
@@ -124,7 +136,7 @@ func collectMonitoringLabelFindings(roots []string) ([]monitoringLabelFinding, e
 			return nil
 		})
 		if err != nil {
-			return nil, err
+			return nil, examined, err
 		}
 	}
 	sort.Slice(findings, func(i, j int) bool {
@@ -133,7 +145,7 @@ func collectMonitoringLabelFindings(roots []string) ([]monitoringLabelFinding, e
 		}
 		return findings[i].name < findings[j].name
 	})
-	return findings, nil
+	return findings, examined, nil
 }
 
 // splitMonitoringDocs parses a multi-doc YAML file, skipping docs that fail to

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -45,7 +46,7 @@ func TestCollectMonitoringLabelFindings(t *testing.T) {
 	// Not a monitoring kind → ignored even without the label.
 	write("deploy.yaml", "kind: Deployment\nmetadata:\n  name: dep\n")
 
-	findings, err := collectMonitoringLabelFindings([]string{dir})
+	findings, _, err := collectMonitoringLabelFindings([]string{dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +69,32 @@ func TestCollectMonitoringLabelFindings(t *testing.T) {
 }
 
 // A missing root (e.g. rendered/ not built) is skipped, not an error.
-func TestMonitoringGuardMissingRootSkipped(t *testing.T) {
-	if err := runMonitoringLabelGuard([]string{filepath.Join(t.TempDir(), "does-not-exist")}); err != nil {
-		t.Errorf("missing root should be skipped, got %v", err)
+// TestMonitoringGuardEmptyCorpusFails inverts what this test used to assert. It
+// required a missing root to be "skipped" — exit 0 — which is precisely how this
+// guard could report green having examined nothing. Its whole reason for existing
+// (the openbao ServiceMonitor renders `prometheus: system` from
+// serviceMonitor.selectorLabels, so only the RENDERED tree shows the true value)
+// lives under rendered/, and an unbuilt rendered/ IS the missing-root case.
+func TestMonitoringGuardEmptyCorpusFails(t *testing.T) {
+	err := runMonitoringLabelGuard([]string{filepath.Join(t.TempDir(), "does-not-exist")})
+	if err == nil {
+		t.Fatal("an empty corpus must FAIL — a guard with nothing to check reports the same green as one that checked everything")
+	}
+	if !strings.Contains(err.Error(), "examined 0") {
+		t.Errorf("error should say it examined nothing: %v", err)
+	}
+}
+
+// A root that EXISTS but holds no monitoring CRs is still a real corpus — the
+// guard read files and found no violations. That must stay a pass, or every
+// tree without a ServiceMonitor would fail.
+func TestMonitoringGuardRealCorpusWithNoFindingsPasses(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cm.yaml"),
+		[]byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runMonitoringLabelGuard([]string{dir}); err != nil {
+		t.Errorf("a non-empty corpus with no violations must pass, got %v", err)
 	}
 }
