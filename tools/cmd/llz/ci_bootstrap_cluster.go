@@ -1108,17 +1108,22 @@ func waitAplValuesBranchPopulated(d bootstrapDeps, o bootstrapClusterOpts, repoU
 	}
 }
 
-// clusterHasAplInstallHistory reports whether apl-core has bootstrapped on THIS
-// cluster before — probed via the apl-installation-status ConfigMap apl-operator's
-// installer writes in the apl-operator namespace. That ConfigMap, and the cluster-
-// local sealed-secrets key that seals the values branch, are BOTH wiped by a
-// cluster destroy, so its presence is a reliable proxy for "the key that sealed
-// this branch's SealedSecrets is still here": true on a reused cluster (branch
-// decryptable), false on a fresh/recreated one (branch orphaned from a dead key).
-// See ensureAplValuesBranch.
+// clusterHasAplInstallHistory reports whether apl-core has COMPLETED a bootstrap on
+// THIS cluster before — probed via the apl-installation-status ConfigMap apl-
+// operator's installer writes in the apl-operator namespace. That ConfigMap, and
+// the cluster-local sealed-secrets key that seals the values branch, are BOTH wiped
+// by a cluster destroy, so a "completed" status is a reliable proxy for "the key
+// that sealed this branch's SealedSecrets is still here": true on a reused cluster
+// (branch decryptable), false on a fresh/recreated one (branch orphaned from a dead
+// key). Requiring "completed" (not mere existence, like resetAplInstaller) also
+// self-heals a cluster wedged MID-install: a "pending"/"in-progress" status means
+// the operator never finished sealing against a reconcilable branch (e.g. it stalled
+// on an undecryptable one), so we treat it like a fresh cluster and reset — no
+// destroy+recreate needed to recover. See ensureAplValuesBranch.
 func clusterHasAplInstallHistory(d bootstrapDeps) bool {
-	_, ok := d.kubectl("-n", "apl-operator", "get", "configmap", "apl-installation-status")
-	return ok
+	status, ok := d.kubectl("-n", "apl-operator", "get", "configmap", "apl-installation-status",
+		"-o", "jsonpath={.data.status}")
+	return ok && strings.TrimSpace(status) == "completed"
 }
 
 func resetAplInstaller(d bootstrapDeps) error {
