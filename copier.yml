@@ -102,8 +102,8 @@ _skip_if_exists:
 # Operational tooling is deliberately NOT delivered here. Like .github/actions
 # (see `_exclude` above), it is template-INTERNAL: the former instance-scripts/
 # were assimilated into the llz CLI (tools/cmd/llz), which is baked into the
-# ci-terraform CI image (dockerfiles/terraform/Dockerfile) the reusable `llz-*`
-# workflows run in, so an instance never carries its own copy.
+# ci-terraform CI image (the ci-terraform target of dockerfiles/Dockerfile) the
+# reusable `llz-*` workflows run in, so an instance never carries its own copy.
 _tasks:
   # Deliver docs/: copy the template's full set in, then `llz ci deliver-docs`
   # prunes to the day-to-day operator set (quickstart + runbooks + playbooks) and

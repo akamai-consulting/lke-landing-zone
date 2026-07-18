@@ -120,7 +120,7 @@ runs:
         esac
 
     # `llz` and `jq` are baked into the TF_IMAGE these jobs run in
-    # (dockerfiles/terraform/Dockerfile) — no build/install step needed.
+    # (dockerfiles/Dockerfile (ci-terraform target)) — no build/install step needed.
 
     # ── pat create ───────────────────────────────────────────────────────────
     - name: Create new PAT

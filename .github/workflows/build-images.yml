@@ -119,7 +119,8 @@ jobs:
             --tag ${{ steps.ns.outputs.repo }}/ci-terraform:sha-${{ env.SHA }} \
             --cache-from type=gha,scope=ci-terraform \
             --cache-to   type=gha,scope=ci-terraform,mode=max \
-            dockerfiles/terraform
+            --file dockerfiles/Dockerfile --target ci-terraform \
+            dockerfiles
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
       - name: Sign ci-terraform (keyless)
@@ -207,7 +208,8 @@ jobs:
             --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:sha-${{ env.SHA }} \
             --cache-from type=gha,scope=ci-kubernetes \
             --cache-to   type=gha,scope=ci-kubernetes,mode=max \
-            dockerfiles/kubernetes
+            --file dockerfiles/Dockerfile --target ci-kubernetes \
+            dockerfiles
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
       - name: Sign ci-kubernetes (keyless)
@@ -285,7 +287,8 @@ jobs:
             --tag ${{ steps.ns.outputs.repo }}/devcontainer:sha-${{ env.SHA }} \
             --cache-from type=gha,scope=devcontainer \
             --cache-to   type=gha,scope=devcontainer,mode=max \
-            dockerfiles/devcontainer
+            --file dockerfiles/Dockerfile --target devcontainer \
+            dockerfiles
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
       - name: Sign devcontainer (keyless)
@@ -364,7 +367,8 @@ jobs:
             --tag ${{ steps.ns.outputs.repo }}/llz:sha-${{ env.SHA }} \
             --cache-from type=gha,scope=llz \
             --cache-to   type=gha,scope=llz,mode=max \
-            dockerfiles/llz
+            --file dockerfiles/Dockerfile --target llz \
+            dockerfiles
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
       - name: Sign llz (keyless)
