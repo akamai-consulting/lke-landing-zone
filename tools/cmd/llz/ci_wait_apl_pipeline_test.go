@@ -18,18 +18,62 @@ func TestWaitAplPipelineAllReady(t *testing.T) {
 	if err := waitAplPipeline(aplPipelineStages(), aplTestDeps(f, time.Second)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// All six stages: CRD Established → workload readiness, in order.
-	for _, want := range []string{
-		"get crd/applications.argoproj.io",
-		// StatefulSet readiness is a jsonpath --for clause passed verbatim (not condition=).
-		"wait --for=jsonpath={.status.readyReplicas}=1 statefulset/argocd-application-controller --timeout=10m",
-		"wait --for=condition=Available deployment/kyverno-admission-controller --timeout=5m",
-		"-n cert-manager wait --for=condition=Available deployment/cert-manager-webhook --timeout=5m",
-		"wait --for=condition=Established crd/certificates.cert-manager.io --timeout=5m",
-	} {
-		if !f.called(want) {
-			t.Errorf("expected kubectl call containing %q\ncalls: %v", want, f.calls)
+	// Every stage must produce an existence probe and a wait carrying ITS OWN
+	// condTimeout, in order. Derived from the stage table rather than restating
+	// the numbers: the budgets are sized from measurement and will be re-tuned, and
+	// a test that hardcodes them fails on a re-size while proving nothing about the
+	// behavior that matters (shape, ordering, per-stage timeout wiring).
+	stages := aplPipelineStages()
+	if len(stages) == 0 {
+		t.Fatal("no stages — the gate would pass having waited for nothing")
+	}
+	for _, st := range stages {
+		if !f.called("get " + st.resource) {
+			t.Errorf("stage %q: no existence probe for %s\ncalls: %v", st.desc, st.resource, f.calls)
 		}
+		// A bare condition becomes --for=condition=X; a full clause is passed verbatim.
+		forFlag := "--for=" + st.forClause
+		if !strings.Contains(st.forClause, "=") {
+			forFlag = "--for=condition=" + st.forClause
+		}
+		want := "wait " + forFlag + " " + st.resource + " --timeout=" + st.condTimeout
+		if !f.called(want) {
+			t.Errorf("stage %q: expected kubectl call containing %q\ncalls: %v", st.desc, want, f.calls)
+		}
+	}
+	// Ordering: cert-manager (last) must come after Argo CD (first).
+	if idx(f.calls, "crd/applications.argoproj.io") > idx(f.calls, "crd/certificates.cert-manager.io") {
+		t.Errorf("stages ran out of order: %v", f.calls)
+	}
+}
+
+// idx returns the position of the first call containing sub, or -1.
+func idx(calls []string, sub string) int {
+	for i, c := range calls {
+		if strings.Contains(c, sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestAplPipelineBudgetsFitTheJob pins the invariant the old budgets broke: the
+// gate's worst case must be reachable INSIDE the bootstrap job, or a genuinely
+// slow run is killed by GitHub with no verdict instead of failing with the
+// message this gate exists to print. The job is timeout-minutes: 70 on the
+// bootstrap_cluster path; leave room for every other step in it.
+func TestAplPipelineBudgetsFitTheJob(t *testing.T) {
+	const jobBudget = 70 * time.Minute
+	var total time.Duration
+	for _, st := range aplPipelineStages() {
+		d, err := time.ParseDuration(st.condTimeout)
+		if err != nil {
+			t.Fatalf("stage %q: unparseable condTimeout %q: %v", st.desc, st.condTimeout, err)
+		}
+		total += st.existBudget + d
+	}
+	if total >= jobBudget {
+		t.Errorf("stage budgets sum to %s, which meets or exceeds the job's %s timeout — a slow run would be axed by GitHub before any stage could report its own timeout", total, jobBudget)
 	}
 }
 
