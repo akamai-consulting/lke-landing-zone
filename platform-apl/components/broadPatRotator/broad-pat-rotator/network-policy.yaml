@@ -19,7 +19,12 @@ metadata:
   name: broad-pat-rotator-egress
   namespace: llz-pat-rotator
   annotations:
-    argocd.argoproj.io/sync-wave: "5"
+    # -10, with the default-deny it complements and with every other
+    # per-namespace NetworkPolicy in the tree. It sat at 5 — the same wave as the
+    # CronJob it exists to unblock — so a tick landing before the allow rule
+    # would fail CLOSED against the default-deny already in force since -10.
+    # The schedule is weekly, which is exactly why nobody would have noticed.
+    argocd.argoproj.io/sync-wave: "-10"
 spec:
   podSelector:
     matchLabels:

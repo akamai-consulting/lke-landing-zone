@@ -9,7 +9,13 @@ kind: Namespace
 metadata:
   name: llz-reconciler
   annotations:
-    argocd.argoproj.io/sync-wave: "-1"
+    # -20 with every other namespace in the tree (cluster-foundation,
+    # cert-automation, llz-pat-rotator). It sat at -1, which is what FORCED the
+    # NetworkPolicy beside it to stay at the default wave 0: an NP at the
+    # conventional -10 would have been applied before its namespace existed and
+    # failed the sync. The two off-convention values were load-bearing on each
+    # other; fixing the namespace is what lets the NP move.
+    argocd.argoproj.io/sync-wave: "-20"
   labels:
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted

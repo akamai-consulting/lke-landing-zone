@@ -14,6 +14,16 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: llz-reconciler
+  annotations:
+    # -10, the tree's stated convention for per-namespace NetworkPolicies ("so
+    # they land before workload pods", llz-cluster-foundation/values.yaml).
+    #
+    # This carried NO sync-wave, so it defaulted to wave 0 — the same wave as the
+    # Deployment it is supposed to isolate. It worked only because Argo's default
+    # intra-wave kind ordering happens to apply NetworkPolicy before Deployment:
+    # an unstated dependency on Argo internals rather than a declared ordering.
+    # Now the isolation is guaranteed to exist before the pod it isolates.
+    argocd.argoproj.io/sync-wave: "-10"
   namespace: llz-reconciler
 spec:
   podSelector:

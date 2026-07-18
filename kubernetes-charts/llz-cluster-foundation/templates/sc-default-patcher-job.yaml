@@ -44,7 +44,15 @@ metadata:
   name: sc-default-patcher-isolate
   namespace: kube-system
   annotations:
-    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.corednsRestart | quote }}
+    # networkPolicies (-10), the knob for exactly this. It read
+    # syncWaves.corednsRestart (-9) — an unrelated knob for the CoreDNS restart
+    # Job, borrowed because it was the nearest available value. This was the only
+    # NetworkPolicy in the chart not on the networkPolicies knob, so a future
+    # retune of the CoreDNS wave would have silently moved this NP with it.
+    #
+    # Safe either way: the Job it isolates is a PostSync hook, which runs after
+    # the whole sync, so -10 vs -9 both land comfortably ahead of it.
+    argocd.argoproj.io/sync-wave: {{ .Values.syncWaves.networkPolicies | quote }}
 spec:
   podSelector:
     matchLabels:
