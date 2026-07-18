@@ -126,3 +126,61 @@ func TestCountFirstPartyPins(t *testing.T) {
 		t.Errorf("countFirstPartyPins = %d, want 1", got)
 	}
 }
+
+// TestExtractChartPinsFindsVersionAboveChart pins the pairing fix. The scan used
+// to run FORWARD only and break at the first same-indent sibling whatever it
+// was, so a source block that writes the version key ABOVE `chart:` produced no
+// pin — silently exempting that chart from drift checking. chart-publish-check
+// reads the same YAML bidirectionally, so the two guards disagreed about which
+// pins even exist.
+func TestExtractChartPinsFindsVersionAboveChart(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "version below chart (always worked)",
+			yaml: "  source:\n    chart: llz-foo\n    targetRevision: 1.2.3\n",
+		},
+		{
+			name: "version above chart (previously missed entirely)",
+			yaml: "  source:\n    targetRevision: 1.2.3\n    chart: llz-foo\n",
+		},
+		{
+			name: "repoURL between them, version above",
+			yaml: "  source:\n    targetRevision: 1.2.3\n    repoURL: oci://example.test\n    chart: llz-foo\n",
+		},
+		{
+			name: "`version:` key instead of targetRevision",
+			yaml: "  component:\n    version: 1.2.3\n    chart: llz-foo\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pins := extractChartPins(tt.yaml)
+			if len(pins) != 1 {
+				t.Fatalf("extractChartPins = %+v, want exactly 1 pin", pins)
+			}
+			if pins[0].Chart != "llz-foo" || pins[0].Version != "1.2.3" {
+				t.Errorf("pin = %+v, want llz-foo@1.2.3", pins[0])
+			}
+		})
+	}
+}
+
+// TestChartPinScanRootsCoverPlatformApl guards the coverage gap directly:
+// platform-apl holds 3 of the repo's 5 first-party pins, and its absence from
+// the scan roots let them drift unwatched while the guard reported green.
+func TestChartPinScanRootsCoverPlatformApl(t *testing.T) {
+	for _, want := range []string{"platform-apl", "kubernetes-charts"} {
+		found := false
+		for _, r := range chartPinScanRoots {
+			if r == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("chartPinScanRoots is missing %q — first-party pins there would be exempt from drift checking while the guard still reports success: %v", want, chartPinScanRoots)
+		}
+	}
+}
