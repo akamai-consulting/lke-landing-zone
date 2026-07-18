@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 )
@@ -379,6 +380,158 @@ func TestRunConvergeUnreachableExhaustsBudget(t *testing.T) {
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("refused") })
 	if ec := runConverge(0, 0, 0); ec != 1 {
 		t.Errorf("unreachable + exhausted budget => exit %d, want 1", ec)
+	}
+}
+
+func TestConvergeStateAnySkipped(t *testing.T) {
+	st := newConvergeState()
+	if st.anySkipped() {
+		t.Error("a fresh memo has skipped nothing")
+	}
+	st.clean["required-crds"] = true
+	if !st.anySkipped() {
+		t.Error("a populated memo must report a possible skip so DONE is confirmed")
+	}
+}
+
+// TestConvergeMemoMaskingIsCaughtByFullPass locks the invariant the confirm-on-
+// DONE path depends on: a monotonic section that regresses clean→broken is
+// SKIPPED (masked) by the retained memo, but a fresh (reset) memo re-runs it and
+// sees the regression. runConverge's ConvergeDone branch resets the memo and
+// re-polls exactly this way, so a masked regression can never be the final
+// verdict.
+func TestConvergeMemoMaskingIsCaughtByFullPass(t *testing.T) {
+	broken := false
+	sections := []healthSection{{"required-crds", true, func(r *health.Report) {
+		if broken {
+			r.Add(health.CatFail, "CRD vanished")
+		}
+	}}}
+
+	st := newConvergeState()
+	// Poll 1: clean → memoized.
+	var r1 health.Report
+	runHealthSections(&r1, sections, st, false)
+	if len(r1.Failed) != 0 || !st.anySkipped() {
+		t.Fatalf("poll 1 should be clean + memoized: failed=%v skipped=%v", r1.Failed, st.anySkipped())
+	}
+	// Section regresses. A poll that REUSES the memo skips it — the regression is
+	// masked (this is the hole the confirm pass closes).
+	broken = true
+	var r2 health.Report
+	runHealthSections(&r2, sections, st, false)
+	if len(r2.Failed) != 0 {
+		t.Fatalf("memoized poll should MASK the regression (skip the section), got %v", r2.Failed)
+	}
+	// The confirm/reset path runs the section fresh and catches it.
+	var r3 health.Report
+	runHealthSections(&r3, sections, newConvergeState(), false)
+	if len(r3.Failed) != 1 {
+		t.Fatalf("a reset memo must re-run the section and see the regression, got %v", r3.Failed)
+	}
+}
+
+func TestConvergeSleep(t *testing.T) {
+	cases := []struct {
+		interval, elapsed, want time.Duration
+	}{
+		{30 * time.Second, 5 * time.Second, 25 * time.Second}, // fast poll → sleep the remainder
+		{30 * time.Second, 30 * time.Second, 0},               // poll consumed the interval → no sleep
+		{30 * time.Second, 45 * time.Second, 0},               // slow poll → proceed immediately
+		{15 * time.Second, 0, 15 * time.Second},
+	}
+	for _, c := range cases {
+		if got := convergeSleep(c.interval, c.elapsed); got != c.want {
+			t.Errorf("convergeSleep(%v, %v) = %v, want %v", c.interval, c.elapsed, got, c.want)
+		}
+	}
+}
+
+func TestRunHealthSectionsMemoizesCleanMonotonicSections(t *testing.T) {
+	runs := map[string]int{}
+	section := func(name string, monotonic bool, cat health.Category) healthSection {
+		return healthSection{name, monotonic, func(r *health.Report) {
+			runs[name]++
+			r.Add(cat, name)
+		}}
+	}
+	sections := []healthSection{
+		section("clean-mono", true, health.CatOK),      // memoized after poll 1
+		section("dirty-mono", true, health.CatPending), // non-OK → re-run every poll
+		section("clean-live", false, health.CatOK),     // never monotonic → re-run every poll
+	}
+	st := newConvergeState()
+	for poll := 0; poll < 3; poll++ {
+		var r health.Report
+		runHealthSections(&r, sections, st, false)
+	}
+	if runs["clean-mono"] != 1 {
+		t.Errorf("clean monotonic section ran %d times, want 1 (memoized)", runs["clean-mono"])
+	}
+	if runs["dirty-mono"] != 3 {
+		t.Errorf("non-clean monotonic section ran %d times, want 3", runs["dirty-mono"])
+	}
+	if runs["clean-live"] != 3 {
+		t.Errorf("non-monotonic section ran %d times, want 3", runs["clean-live"])
+	}
+	// The skip must still record an OK line so the report accounts for the section.
+	var r health.Report
+	runHealthSections(&r, sections, st, false)
+	if len(r.Failed)+len(r.Pending) != 1 { // only dirty-mono's Pending
+		t.Errorf("skips must not change the verdict: failed=%v pending=%v", r.Failed, r.Pending)
+	}
+}
+
+func TestRunHealthSectionsNoMemoDuringPhase1OrWithoutState(t *testing.T) {
+	runs := 0
+	sections := []healthSection{{"mono", true, func(r *health.Report) { runs++; r.Add(health.CatOK, "x") }}}
+
+	// phase1=true → clean must NOT be remembered (phase1 leniency masks findings).
+	st := newConvergeState()
+	for poll := 0; poll < 2; poll++ {
+		var r health.Report
+		runHealthSections(&r, sections, st, true)
+	}
+	if runs != 2 {
+		t.Errorf("phase1 polls ran the section %d times, want 2 (no memoization under phase1)", runs)
+	}
+	// nil state (one-shot `llz ci health`) → always runs.
+	runs = 0
+	for poll := 0; poll < 2; poll++ {
+		var r health.Report
+		runHealthSections(&r, sections, nil, false)
+	}
+	if runs != 2 {
+		t.Errorf("stateless runs ran the section %d times, want 2", runs)
+	}
+}
+
+func TestHealthExitCodeStatePhase1ResolvedOnce(t *testing.T) {
+	prevDelay := phase1ProbeDelay
+	phase1ProbeDelay = 0
+	t.Cleanup(func() { phase1ProbeDelay = prevDelay })
+
+	probes := 0
+	withKubectl(t, func(a string) ([]byte, error) {
+		switch {
+		case a == "version --request-timeout=10s",
+			a == "get crd applications.argoproj.io",
+			a == "-n argocd get application platform-bootstrap":
+			return nil, nil
+		case a == "-n cert-manager get secret platform-app-ca":
+			probes++
+			return nil, nil // present → phase1 over
+		}
+		return nil, errors.New("nope") // every section sees an empty cluster
+	})
+	st := newConvergeState()
+	healthExitCodeState(st)
+	healthExitCodeState(st)
+	if probes != 1 {
+		t.Errorf("phase1 probe ran %d times across two polls, want 1 (memoized once resolved)", probes)
+	}
+	if !st.phase1Done {
+		t.Error("phase1Done must be set once the probe resolves phase1=false")
 	}
 }
 

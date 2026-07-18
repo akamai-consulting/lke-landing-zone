@@ -97,6 +97,17 @@ func runCINudgeArgo(g globalOpts, o nudgeOpts) error {
 		fmt.Fprintf(os.Stderr, "→ (dry-run) would wait for clustersecretstore/%s Ready then force-sync all ExternalSecrets\n", o.store)
 		return nil
 	}
+	// The store's Ready condition only flips when ESO re-VALIDATES the store, and
+	// ESO does that on its own retry/refresh cadence — observed as ~2m of pure
+	// waiting in the post-seed nudge while OpenBao was already serving. A changing
+	// annotation on the ClusterSecretStore triggers an immediate reconcile (and
+	// with it the validation), making the Ready wait below event-paced instead of
+	// timer-paced. Best-effort like everything else here.
+	stampStore := fmt.Sprintf("force-sync=%d", nowUnix())
+	if _, err := execOutput("kubectl", "annotate", "clustersecretstore", o.store,
+		stampStore, "--overwrite"); err != nil {
+		fmt.Fprintf(os.Stderr, "nudge: clustersecretstore/%s revalidation bump failed (ignored): %v\n", o.store, err)
+	}
 	// Block until the store can actually serve (post unseal + bao-configure), THEN
 	// force every ExternalSecret to reconcile NOW. Best-effort: even if the store
 	// never reports Ready within the budget we still bump the annotation (harmless;

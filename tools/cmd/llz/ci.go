@@ -64,7 +64,9 @@ func ciCmd() *cobra.Command {
 	// (the harbor-robot-provisioner CronJob); seed-standby-harbor-robots is the
 	// CI-side standby half. port-forward/ensure-project/smoke were retired with
 	// the workflow's harbor job.
-	c.AddCommand(ciHarborProvisionerCmd(), ciSeedStandbyHarborRobotsCmd())
+	// kick-harbor-provisioner force-ticks that CronJob at bootstrap so the
+	// converge tail is event-paced instead of waiting out the */5 schedule.
+	c.AddCommand(ciHarborProvisionerCmd(), ciSeedStandbyHarborRobotsCmd(), ciKickHarborProvisionerCmd())
 	// Pre-flight guards (require-secret.sh / assert-destroy-confirm.sh).
 	c.AddCommand(ciRequireSecretCmd(), ciAssertDestroyConfirmCmd())
 	// Bootstrap seeding (bootstrap-cloud-firewall.sh / provision-harbor-robots.sh).

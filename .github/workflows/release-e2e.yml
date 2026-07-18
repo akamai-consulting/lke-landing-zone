@@ -21,8 +21,9 @@ name: Release E2E — provision, validate, destroy a real cluster
 #      roots terraform-iac-bootstrap/), and force-push it to the E2E instance repo.
 #   2. provision  — `gh workflow run terraform.yml` (apply, module=all,
 #      region=e2e, assert_loki=true) in that repo + `gh run watch --exit-status`.
-#      terraform.yml's own chain (apply-cluster → bootstrap-cluster →
-#      bootstrap-openbao → converge) IS the wait-for-deploy + health gate; the
+#      terraform.yml's own chain (apply-cluster → bootstrap-openbao with
+#      bootstrap_cluster=true, one job folding cluster bootstrap + OpenBao +
+#      converge) IS the wait-for-deploy + health gate; the
 #      converge job also runs `llz ci assert-loki` (Loki bootstrapped + S3-backed),
 #      so a green provision means "converged AND Loki is S3-backed".
 #   3. (health + Loki validation is FOLDED INTO provision via assert_loki — the
@@ -191,6 +192,19 @@ jobs:
 
       - name: Build llz (the env-add scaffolder)
         run: cd tools && go build -o ../bin/llz ./cmd/llz
+
+      # Fire the ci-image build for this commit NOW (if one is needed) so its
+      # publish overlaps the scaffold/render/push work below instead of the
+      # "Pin instance CI images" step serially waiting out the whole build at the
+      # end of this job (observed: ~4.5m of pure wait on a mid-flight build).
+      # trigger-only: no wait, no pin — the full pin step below finds the run in
+      # flight and completes the wait+pin with whatever publish time remains.
+      - name: Kick the image build early (overlap the publish wait)
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          GH_TOKEN_TEMPLATE: ${{ secrets.GITHUB_TOKEN }}
+        run: bin/llz ci pin-instance-images --instance "${INSTANCE_REPO}" --owner "${GITHUB_REPOSITORY_OWNER}" --template-repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" --ref "${GITHUB_REF_NAME}" --build-if-missing --trigger-only
 
       - name: Scaffold the e2e environment
         # The shared, token-free apl-values manifests are fetched from the template
