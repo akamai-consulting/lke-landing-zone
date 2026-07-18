@@ -882,12 +882,25 @@ func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, wa
 		attempts = 1
 	}
 
+	// Detach is a precondition of the SWEEP, not of each retry: the retries
+	// re-verify DELETION (countVolumesPresent), not detachment. Waiting inside the
+	// loop made the worst case attempts × (waitDetach + retryDelay) — with the
+	// destroy job's real flags that is 4 × (600s + 30s) = 42 MINUTES inside a
+	// 30-minute job, so the loud terminal error this function exists to print
+	// ("orphans remain; failing the destroy so they don't block the next apply's
+	// preflight") was unreachable on exactly the path it was written for: the job
+	// was killed first. Hoisted out, the ceiling is waitDetach + (attempts-1) ×
+	// retryDelay = 11.5 minutes.
+	//
+	// The happy path is unchanged either way — waitVolumesDetached returns on its
+	// first poll when the volumes are already detached.
+	if waitDetach > 0 && volumeIDs != "" {
+		waitVolumesDetached(ctx, client, volumeIDs, waitDetach)
+	}
+
 	var lastErr error
 	remaining := -1
 	for attempt := 1; attempt <= attempts; attempt++ {
-		if waitDetach > 0 && volumeIDs != "" {
-			waitVolumesDetached(ctx, client, volumeIDs, waitDetach)
-		}
 		del, fin := ciDeleter(ctx, g, client)
 		fmt.Printf("=== orphan Volumes (region=%q volume-ids=%q tag=%q, label prefix pvc-, unattached) [attempt %d/%d] ===\n",
 			region, volumeIDs, tagMustInclude, attempt, attempts)

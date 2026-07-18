@@ -68,16 +68,33 @@ type aplWaitStage struct {
 }
 
 // aplPipelineStages — the platform prerequisites apl-operator's helmfile brings
-// up, in order; budgets/timeouts match the bash this ports. Each CRD is gated
-// Established first, then its serving workload for real readiness.
+// up, in order. Each CRD is gated Established first, then its serving workload
+// for real readiness.
+//
+// BUDGETS ARE SIZED FROM MEASUREMENT, not inherited from the bash this ports.
+// Those numbers summed to 6600s (110 MINUTES) inside a job whose timeout-minutes
+// is 70 — so no stage could ever report its own timeout on a genuinely slow run;
+// GitHub's job axe always landed first, with no verdict and no diagnostics. The
+// file's own comment sized the job at "worst-case ~25m", already 4.4x under its
+// own budget.
+//
+// Measured on a passing cold e2e (run 29658429694): the whole "Bootstrap cluster"
+// step — apl-core install plus all six stages below — took 342s (5m42s).
+//
+// Stage 1 keeps the largest existence budget because it is the load-bearing one:
+// it waits for apl-operator's helmfile to START producing anything. Once the
+// first CRD lands the rest follow within a minute, so their inherited 900s/600s
+// ceilings were pure padding. Worst case is now 3300s (55m) — still ~10x the
+// measured value, but inside the job timeout, so a hung stage FAILS with the
+// message it was written to print.
 func aplPipelineStages() []aplWaitStage {
 	return []aplWaitStage{
-		{"Argo CD CRD", "", "crd/applications.argoproj.io", "Established", 900 * time.Second, "5m"},
-		{"Argo CD application-controller", "argocd", "statefulset/argocd-application-controller", "jsonpath={.status.readyReplicas}=1", 600 * time.Second, "10m"},
-		{"Kyverno CRD", "", "crd/clusterpolicies.kyverno.io", "Established", 900 * time.Second, "5m"},
-		{"Kyverno admission-controller", "kyverno", "deployment/kyverno-admission-controller", "Available", 600 * time.Second, "5m"},
-		{"cert-manager CRD", "", "crd/certificates.cert-manager.io", "Established", 900 * time.Second, "5m"},
-		{"cert-manager webhook", "cert-manager", "deployment/cert-manager-webhook", "Available", 600 * time.Second, "5m"},
+		{"Argo CD CRD", "", "crd/applications.argoproj.io", "Established", 600 * time.Second, "3m"},
+		{"Argo CD application-controller", "argocd", "statefulset/argocd-application-controller", "jsonpath={.status.readyReplicas}=1", 300 * time.Second, "5m"},
+		{"Kyverno CRD", "", "crd/clusterpolicies.kyverno.io", "Established", 300 * time.Second, "3m"},
+		{"Kyverno admission-controller", "kyverno", "deployment/kyverno-admission-controller", "Available", 300 * time.Second, "3m"},
+		{"cert-manager CRD", "", "crd/certificates.cert-manager.io", "Established", 300 * time.Second, "3m"},
+		{"cert-manager webhook", "cert-manager", "deployment/cert-manager-webhook", "Available", 300 * time.Second, "3m"},
 	}
 }
 

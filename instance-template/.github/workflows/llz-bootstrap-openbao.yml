@@ -235,8 +235,26 @@ jobs:
     # THIS job, reusing the one cluster-access/ACL cycle instead of paying a fresh
     # container-init + checkout + kubeconfig fetch. See "Final convergence gate".
     # With bootstrap_cluster the in-cluster bootstrap phase (apl-core install +
-    # the wait-apl-pipeline gate, worst-case ~25m — the former standalone job's
-    # 50m budget minus its own overhead) runs at the head of this job too: 70m.
+    # the wait-apl-pipeline gate) runs at the head of this job too: 70m.
+    #
+    # MEASURED (passing cold e2e, run 29658429694): this job takes 13m24s end to
+    # end — bootstrap-cluster 342s, the post-seed nudge 94s, the OpenBao App
+    # assert 96s, converge 66s, the whole assert suite 42s. So the timeout is ~3x
+    # observed reality on the 45m path.
+    #
+    # THE INVARIANT THAT MATTERS: no SINGLE step's budget may exceed this timeout,
+    # or a genuinely slow run is killed by GitHub with no verdict — losing both
+    # the step's own error message and the always()/failure() diagnostics at the
+    # job tail (Argo state capture, and the control-plane ACL revoke that keeps a
+    # runner IP from being left in the LKE-E allowlist). wait-apl-pipeline broke
+    # that invariant badly: 6600s of stage budgets, 110 minutes, inside a 70m job.
+    # It is now 3300s.
+    #
+    # What is NOT claimed: that the budgets SUM to less than this. They do not,
+    # and making them would trade real robustness for a property that never binds
+    # — the steps are sequential worst cases that are never all consumed (13m24s
+    # measured against ~147m of ceilings). If two slow steps ever do coincide, the
+    # axe still lands; that is a knowingly accepted residual, not an oversight.
     timeout-minutes: ${{ inputs.bootstrap_cluster && 70 || 45 }}
     env:
       # github.com is the default host, so GH_TOKEN alone authenticates.
