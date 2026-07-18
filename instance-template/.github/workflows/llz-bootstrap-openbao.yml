@@ -244,6 +244,10 @@ jobs:
       # (which fails on "dubious ownership" in the container's checkout dir).
       # OPENBAO_SECRETS_WRITE_TOKEN is a fine-grained PAT (Actions + Secrets: write).
       GH_REPO: ${{ inputs.instance_repo }}
+      # Phase-timeline log (docs/designs/e2e-instrumentation.md): the converge
+      # mark below + the report/upload at job end capture the converge phase; the
+      # converge verb additionally reports its long-pole (last apps to go healthy).
+      LLZ_PHASE_LOG: /tmp/llz-phases.jsonl
       GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
       HARBOR_URL: ${{ vars.HARBOR_URL }}
       # HA_ROLE / HA_PEER are exported to $GITHUB_ENV by the in-job "Resolve HA
@@ -390,6 +394,7 @@ jobs:
       - name: Wait for cluster API ready (first node)
         if: inputs.bootstrap_cluster
         run: |
+          llz ci phase-mark wait-cluster-ready
           llz ci wait-cluster-ready --timeout 900 --interval 10 || {
             echo "Persisting failure = control plane still provisioning (re-run later), OR no node ever reached Ready, OR the cluster-access step above did not add this runner's egress IP to the LKE-E control-plane ACL (check its log + LINODE_API_TOKEN scope)."
             exit 1
@@ -411,11 +416,13 @@ jobs:
           GHCR_USERNAME:         ${{ vars.GHCR_USERNAME }}
           APPS_REPO_REVISION:    ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
         run: |
+          llz ci phase-mark apl-core-install
           llz ci bootstrap-cluster \
             --env "${REGION}" \
             --apps-repo-revision "${APPS_REPO_REVISION}" \
             --instance-repo "${{ inputs.instance_repo }}" \
             --template-ref "${{ inputs.template-ref }}"
+          llz ci phase-mark foundation-ready
 
       # The full-pool assert deferred from the split gate above: --tfvars reads
       # node_count so the whole pool must be Ready before the OpenBao phase
@@ -437,6 +444,11 @@ jobs:
         if: failure() && inputs.bootstrap_cluster
         timeout-minutes: 10
         run: llz ci diagnose-argocd
+
+      # (apl-core bring-up timing — image pulls + apl-operator logs — is collected
+      # once at the job tail by "Report bootstrap timing", which runs before the ACL
+      # revoke while cluster access still exists; the Pulled events are well within
+      # their TTL by then. The phase marks above complete the timeline.)
 
       # ── OpenBao serving TLS — issued by cert-manager, no bootstrap seed ─────────
       # The out-of-band self-signed openbao-tls seed that used to live here has
@@ -955,7 +967,9 @@ jobs:
       # still catching a genuine stall well inside the 45m job timeout — and the
       # kick step above makes the worst case rare rather than routine.
       - name: Wait for cluster to converge
-        run: llz ci converge --budget 1200
+        run: |
+          llz ci phase-mark converge
+          llz ci converge --budget 1200
 
       # E2E validation gate, folded in from release-e2e.yml's former `validate`
       # job: that job dispatched cluster-health.yml only to run `llz ci converge`
@@ -1103,6 +1117,27 @@ jobs:
       # Revoke BEFORE the job ends: passes the kubeconfig so the runner-lease in the
       # firewall-runner-acl ConfigMap is released via kubectl before the Linode-API
       # call cuts apiserver access (we register-runner-lease on cluster-access above).
+      # Bootstrap timeline → step summary + artifact (best-effort, always-on). With
+      # bootstrap_cluster=true this job runs the whole cluster+OpenBao bring-up, so
+      # the marks span wait-cluster-ready → apl-core-install → foundation-ready →
+      # converge; the collector above added image-pulls.json + apl-operator.log to
+      # the same dir. The converge verb also appended its long-pole to the summary.
+      # See docs/designs/e2e-instrumentation.md.
+      - name: Report bootstrap timing
+        if: always()
+        continue-on-error: true
+        run: llz ci collect-timing --dir "$RUNNER_TEMP/timing" --title "bootstrap (cluster + openbao) timeline" --image-pulls --apl-operator
+
+      - name: Upload bootstrap timing artifact
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: timing-bootstrap-openbao-${{ env.REGION }}
+          path: ${{ runner.temp }}/timing/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl

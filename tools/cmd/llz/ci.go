@@ -90,6 +90,10 @@ func ciCmd() *cobra.Command {
 	// hop and the loki-admin-password step — see docs/designs/linode-credential-rotator.md
 	// + apl-core-v6-migration.md — so their commands are gone too.)
 	c.AddCommand(ciDiagnoseArgoCDCmd())
+	// E2E timing instrumentation (docs/designs/e2e-instrumentation.md): a phase
+	// timeline (phase-mark/phase-report → step summary + JSON artifact) and the
+	// image-pull collector that answers whether a bring-up phase is pull-bound.
+	c.AddCommand(ciPhaseMarkCmd(), ciPhaseReportCmd(), ciCollectImagePullsCmd(), ciCollectTimingCmd())
 	// Release-e2e instantiate: pin the instance's TF_IMAGE/KUBE_IMAGE to this
 	// commit's ci images so the baked llz can't drift from the rendered workflow.
 	c.AddCommand(ciPinInstanceImagesCmd())
