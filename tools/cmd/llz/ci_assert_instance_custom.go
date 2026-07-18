@@ -22,10 +22,11 @@ package main
 // generation fault), not platform-bootstrap's operationState — so this carries its own
 // diagnostics rather than reusing assert-argo-app's app-of-apps ones.
 //
-// Read-only; drives the ambient KUBECONFIG through the same aplGateDeps seam as
-// assert-argo-app, so the deadline loop is unit-testable without a cluster.
+// Read-only; drives the ambient KUBECONFIG through the aplGateDeps seam, so the
+// deadline loop is unit-testable without a cluster.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -56,11 +57,13 @@ func ciAssertInstanceCustomCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			d := aplGateDeps{
 				kubectl: func(args ...string) (string, bool) {
+					// runCombined runs the command BEFORE reading its buffer; a
+					// `return buf.String(), cmd.Run()==nil` here evaluates buf.String()
+					// first (Go left-to-right) and always returns empty output — the
+					// bug that made this gate read sync= health= forever.
 					c := exec.Command("kubectl", args...)
-					var buf strings.Builder
-					c.Stdout, c.Stderr = &buf, &buf
 					c.Env = os.Environ()
-					return buf.String(), c.Run() == nil
+					return runCombined(c)
 				},
 				now:   time.Now,
 				sleep: time.Sleep,
@@ -72,8 +75,8 @@ func ciAssertInstanceCustomCmd() *cobra.Command {
 		"the kubernetes-custom/namespaces/<ns> basename the release-e2e seed uses; the asserted App is instance-custom-<ns>")
 	cmd.Flags().StringVar(&appSet, "appset", "instance-custom",
 		"the ApplicationSet whose status explains a generated App that never appeared")
-	cmd.Flags().IntVar(&within, "within", 600,
-		"seconds to wait for the App to appear AND reach Synced+Healthy — the App generates instantly, but its FIRST Argo reconcile can lag several minutes on a freshly-converged cluster whose app-controller is backlogged (observed ~5m in e2e), so the budget is generous and phase 2 nudges a refresh")
+	cmd.Flags().IntVar(&within, "within", 300,
+		"seconds to wait for the App to appear AND reach Synced+Healthy (converge already gates it healthy, so this is margin)")
 	return cmd
 }
 
@@ -103,14 +106,6 @@ func assertInstanceCustom(d aplGateDeps, namespace, appSet string, within time.D
 	fmt.Printf("Application %s exists — waiting for Synced + Healthy…\n", app)
 
 	// Phase 2: the generated App must sync the seeded manifest and go Healthy.
-	//
-	// The App is generated instantly, but on a freshly-converged cluster the Argo
-	// application-controller can be backlogged and not reconcile the new App for
-	// minutes — its .status stays EMPTY (sync= health=), observed ~5m in e2e, which
-	// is what a 300s budget just missed. Nudge a refresh (throttled to 30s) so the
-	// controller picks it up promptly instead of only on its own slow cycle; the
-	// generous deadline is the backstop.
-	var lastRefresh time.Time
 	for {
 		sync, health := argoSyncHealth(d, "argocd", app)
 		if sync == "Synced" && health == "Healthy" {
@@ -123,31 +118,34 @@ func assertInstanceCustom(d aplGateDeps, namespace, appSet string, within time.D
 				app, within, sync, health, argoAppDiag(d, "argocd", app))
 			return fmt.Errorf("%s not Synced+Healthy within %s (sync=%s health=%s)", app, within, sync, health)
 		}
-		if d.now().Sub(lastRefresh) >= 30*time.Second {
-			// Best-effort: prompt the app-controller to reconcile now rather than on
-			// its backlogged cycle. Failure is fine — the poll continues regardless.
-			d.kubectl("-n", "argocd", "annotate", "application.argoproj.io", app, "argocd.argoproj.io/refresh=normal", "--overwrite")
-			lastRefresh = d.now()
-		}
-		fmt.Printf("  %s sync=%s health=%s — nudged refresh, retrying…\n", app, sync, health)
+		fmt.Printf("  %s sync=%s health=%s — retrying…\n", app, sync, health)
 		d.sleep(10 * time.Second)
 	}
 }
 
 // argoSyncHealth returns the Application's sync and health status ("" when the app is
-// unreadable — e.g. it was deleted mid-poll, which the deadline path surfaces).
+// unreadable — e.g. it was deleted mid-poll, which the deadline path surfaces). Reads
+// the object as JSON and parses the two fields — simpler and less fragile than a
+// tab-delimited `-o jsonpath` shape, and the same read `llz ci converge` uses.
 func argoSyncHealth(d aplGateDeps, namespace, app string) (sync, health string) {
-	out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", app,
-		"-o", "jsonpath={.status.sync.status}{\"\\t\"}{.status.health.status}")
+	out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", app, "-o", "json")
 	if !ok {
 		return "", ""
 	}
-	parts := strings.SplitN(strings.TrimSpace(out), "\t", 2)
-	sync = strings.TrimSpace(parts[0])
-	if len(parts) == 2 {
-		health = strings.TrimSpace(parts[1])
+	// The seam folds stderr into out; skip any leading noise before the JSON body.
+	if i := strings.IndexByte(out, '{'); i > 0 {
+		out = out[i:]
 	}
-	return sync, health
+	var a struct {
+		Status struct {
+			Sync   struct{ Status string } `json:"sync"`
+			Health struct{ Status string } `json:"health"`
+		} `json:"status"`
+	}
+	if json.Unmarshal([]byte(out), &a) != nil {
+		return "", ""
+	}
+	return a.Status.Sync.Status, a.Status.Health.Status
 }
 
 // appSetDiag summarizes the ApplicationSet's status conditions — a generation /
@@ -167,7 +165,7 @@ func appSetDiag(d aplGateDeps, appSet string) string {
 // generated Application for the deadline failure annotation. Best-effort.
 func argoAppDiag(d aplGateDeps, namespace, app string) string {
 	out, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", app,
-		"-o", `jsonpath={.status.sync.status}/{.status.health.status}{range .status.conditions[*]} [{.type}: {.message}]{end}{"  op="}{.status.operationState.message}`)
+		"-o", `jsonpath={.status.sync.status}/{.status.health.status}{range .status.conditions[*]} [{.type}: {.message}]{end} op={.status.operationState.message}`)
 	if out = strings.TrimSpace(out); !ok || out == "" {
 		return fmt.Sprintf("%s state unavailable", app)
 	}

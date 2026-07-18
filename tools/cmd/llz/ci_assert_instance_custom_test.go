@@ -21,13 +21,19 @@ func instanceCustomDeps(script func(call int, args []string) (string, bool)) (ap
 	}, &calls
 }
 
+// appStatusJSON is the `kubectl get application -o json` shape argoSyncHealth parses
+// (it reads JSON, not jsonpath — see the argoSyncHealth doc for why).
+func appStatusJSON(sync, health string) string {
+	return `{"status":{"sync":{"status":"` + sync + `"},"health":{"status":"` + health + `"}}}`
+}
+
 // Happy path: the App appears on a later existence probe, then reads Synced+Healthy.
 func TestAssertInstanceCustomHappyPath(t *testing.T) {
 	d, _ := instanceCustomDeps(func(call int, args []string) (string, bool) {
 		joined := strings.Join(args, " ")
 		switch {
-		case strings.Contains(joined, "jsonpath={.status.sync.status}"):
-			return "Synced\tHealthy", true
+		case strings.HasSuffix(joined, "-o json"):
+			return appStatusJSON("Synced", "Healthy"), true
 		case strings.Contains(joined, "get application.argoproj.io instance-custom-llz-e2e-custom"):
 			return "", call > 2 // missing on the first existence probe, present later
 		default:
@@ -65,8 +71,8 @@ func TestAssertInstanceCustomStuckOutOfSyncFails(t *testing.T) {
 	d, _ := instanceCustomDeps(func(_ int, args []string) (string, bool) {
 		joined := strings.Join(args, " ")
 		switch {
-		case strings.Contains(joined, "jsonpath={.status.sync.status}"):
-			return "OutOfSync\tMissing", true // never converges
+		case strings.HasSuffix(joined, "-o json"):
+			return appStatusJSON("OutOfSync", "Missing"), true // never converges
 		case strings.Contains(joined, "get application.argoproj.io"):
 			return "", true // exists
 		default:
@@ -87,8 +93,8 @@ func TestAssertInstanceCustomStuckOutOfSyncFails(t *testing.T) {
 func TestAssertInstanceCustomHealthyButOutOfSyncDoesNotPass(t *testing.T) {
 	d, _ := instanceCustomDeps(func(_ int, args []string) (string, bool) {
 		joined := strings.Join(args, " ")
-		if strings.Contains(joined, "jsonpath={.status.sync.status}") {
-			return "OutOfSync\tHealthy", true
+		if strings.HasSuffix(joined, "-o json") {
+			return appStatusJSON("OutOfSync", "Healthy"), true
 		}
 		return "", true // app exists
 	})
@@ -105,8 +111,8 @@ func TestAssertInstanceCustomDerivesAppName(t *testing.T) {
 		if strings.Contains(joined, "get application.argoproj.io instance-custom-") {
 			probedApp = "seen"
 		}
-		if strings.Contains(joined, "jsonpath={.status.sync.status}") {
-			return "Synced\tHealthy", true
+		if strings.HasSuffix(joined, "-o json") {
+			return appStatusJSON("Synced", "Healthy"), true
 		}
 		return "", true
 	})
