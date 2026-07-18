@@ -5,9 +5,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,48 +29,44 @@ func TestRuleEvalErrors(t *testing.T) {
 	}
 }
 
-func TestHealthPromRulesSkipsWithoutPod(t *testing.T) {
-	withKubectl(t, func(string) ([]byte, error) { return []byte(""), nil })
-	if err := runCIHealthPromRules(19090, 1); err != nil {
-		t.Errorf("no Prometheus pod must skip cleanly: %v", err)
+// TestHealthPromRulesFailsClosedWhenUnreachable inverts what the old test
+// asserted. It used to require a clean exit 0 when no Prometheus pod was found —
+// and the pod lookup targeted llz-observability, where apl-core's Prometheus has
+// never run. So the test PINNED the bug: the verb always took its skip path and
+// the test called that correct.
+func TestHealthPromRulesFailsClosedWhenUnreachable(t *testing.T) {
+	withPrometheusStub(t, func(string, func(func(string) ([]byte, error)) error) error {
+		return errors.New("no cluster")
+	})
+	err := runCIHealthPromRules("monitoring/prometheus-operated:9090")
+	if err == nil {
+		t.Fatal("an unreachable Prometheus must FAIL — a check that cannot ask has established nothing, and exit 0 reads as a green rule set")
+	}
+	if !strings.Contains(err.Error(), "could not query") {
+		t.Errorf("error should say what it could not do: %v", err)
 	}
 }
 
 func TestHealthPromRulesReportsErrors(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/-/ready":
-			w.WriteHeader(200)
-		case "/api/v1/rules":
-			fmt.Fprint(w, `{"data":{"groups":[{"name":"g","rules":[{"name":"r","lastError":"boom"}]}]}}`)
-		default:
-			w.WriteHeader(404)
+	withPrometheusStub(t, func(prom string, fn func(func(string) ([]byte, error)) error) error {
+		// The namespace regression this fixes: the default must be apl-core's
+		// Prometheus in `monitoring`, not the llz-observability namespace that holds
+		// only the ServiceMonitor/PrometheusRule CRs.
+		if !strings.HasPrefix(prom, "monitoring/") {
+			t.Errorf("prom = %q, want it to target the monitoring namespace", prom)
 		}
-	}))
-	defer srv.Close()
-	var port int
-	if _, err := fmt.Sscanf(srv.URL, "http://127.0.0.1:%d", &port); err != nil {
-		t.Skipf("could not parse httptest port from %s", srv.URL)
-	}
-	withKubectl(t, func(a string) ([]byte, error) {
-		if strings.Contains(a, "get pod") {
-			return []byte("prometheus-0"), nil
-		}
-		return nil, errors.New("unexpected: " + a)
+		return fn(func(path string) ([]byte, error) {
+			if path != "/api/v1/rules" {
+				return nil, errors.New("unexpected path " + path)
+			}
+			return []byte(`{"data":{"groups":[{"name":"g","rules":[{"name":"r","lastError":"boom"}]}]}}`), nil
+		})
 	})
-	prev := startAttachedPortForward
-	startAttachedPortForward = func(ns, target, ports string) (func(), error) {
-		if ns != "llz-observability" || target != "prometheus-0" {
-			t.Errorf("port-forward %s/%s, want llz-observability/prometheus-0", ns, target)
-		}
-		return func() {}, nil
-	}
-	t.Cleanup(func() { startAttachedPortForward = prev })
 	sum := filepath.Join(t.TempDir(), "sum")
 	t.Setenv("GITHUB_STEP_SUMMARY", sum)
 	t.Setenv("REGION", "primary")
 
-	if err := runCIHealthPromRules(port, 2); err != nil {
+	if err := runCIHealthPromRules("monitoring/prometheus-operated:9090"); err != nil {
 		t.Fatalf("health-prom-rules: %v", err)
 	}
 	b, _ := os.ReadFile(sum)

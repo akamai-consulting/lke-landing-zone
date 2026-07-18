@@ -70,6 +70,23 @@ type evalVerdict struct {
 	detail  string // error text for BROKEN
 }
 
+// vacuous reports a check that could not actually be performed. Report-only mode
+// warns and passes (the report is the deliverable; a diagnostic that can't reach
+// the cluster is not a finding). --strict mode FAILS.
+//
+// Without this split, --strict was unfalsifiable four different ways: any of the
+// four inputs below could be unavailable and the verb would still exit 0, having
+// evaluated nothing. A gate that passes when it cannot run is worse than no gate,
+// because it reads as evidence.
+func vacuous(strict bool, format string, args ...any) error {
+	msg := fmt.Sprintf(format, args...)
+	if strict {
+		return fmt.Errorf("alert-eval --strict: %s — refusing to pass without evaluating the rules", msg)
+	}
+	fmt.Fprintf(os.Stderr, "alert-eval: %s\n", msg)
+	return nil
+}
+
 func runCIAlertEval(match, prom, summary string, strict bool) error {
 	re, err := regexp.Compile(match)
 	if err != nil {
@@ -78,13 +95,11 @@ func runCIAlertEval(match, prom, summary string, strict bool) error {
 
 	rulesJSON, err := execOutput("kubectl", "get", "prometheusrules.monitoring.coreos.com", "-A", "-o", "json")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "alert-eval: could not list PrometheusRules (%v) — is this pointed at the cluster?\n", err)
-		return nil
+		return vacuous(strict, "could not list PrometheusRules (%v) — is this pointed at the cluster?", err)
 	}
 	rules := parseAlertRules(rulesJSON, re)
 	if len(rules) == 0 {
-		fmt.Fprintf(os.Stderr, "alert-eval: no alert rules match %q\n", match)
-		return nil
+		return vacuous(strict, "no alert rules match %q, so nothing would be evaluated", match)
 	}
 
 	// One port-forward session serves the metric-name fetch AND every per-expr
@@ -92,13 +107,20 @@ func runCIAlertEval(match, prom, summary string, strict bool) error {
 	var out []evalVerdict
 	ferr := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		// The full metric-name set powers DEAD? detection (an expr whose named
-		// metrics are all absent can never fire). Best-effort: if it fails, we skip
-		// the DEAD? distinction rather than mislabel.
+		// metrics are all absent can never fire). If this fetch fails, `known` is
+		// empty and exprMetricsExist stops claiming DEAD? at all — which silently
+		// zeroes one of the two verdicts --strict gates on. Report-only tolerates
+		// that (and says so); --strict must not.
 		known := map[string]bool{}
-		if nameJSON, nerr := get("/api/v1/label/__name__/values"); nerr == nil {
-			for _, n := range parsePromLabelValues(nameJSON) {
-				known[n] = true
+		nameJSON, nerr := get("/api/v1/label/__name__/values")
+		if nerr != nil {
+			if strict {
+				return fmt.Errorf("metric-name fetch failed (%v): DEAD? detection would be disabled", nerr)
 			}
+			fmt.Fprintf(os.Stderr, "alert-eval: metric-name fetch failed (%v) — DEAD? detection disabled for this run\n", nerr)
+		}
+		for _, n := range parsePromLabelValues(nameJSON) {
+			known[n] = true
 		}
 		for _, r := range rules {
 			raw, qerr := get("/api/v1/query?query=" + url.QueryEscape(r.Expr))
@@ -107,8 +129,7 @@ func runCIAlertEval(match, prom, summary string, strict bool) error {
 		return nil
 	})
 	if ferr != nil {
-		fmt.Fprintf(os.Stderr, "alert-eval: could not reach Prometheus at %s (%v)\n", prom, ferr)
-		return nil
+		return vacuous(strict, "could not evaluate against Prometheus at %s (%v)", prom, ferr)
 	}
 	return printAlertEval(out, summary, strict)
 }
@@ -171,7 +192,11 @@ var promIdentRe = regexp.MustCompile(`[a-zA-Z_:][a-zA-Z0-9_:]*`)
 // won't be in the known-metric set, so the intersection is the filter.
 func exprMetricsExist(expr string, known map[string]bool) bool {
 	if len(known) == 0 {
-		return true // unknown metric set → don't claim DEAD?
+		// Unknown metric set → don't claim DEAD?. This is REPORT-ONLY behavior:
+		// runCIAlertEval fails under --strict rather than reaching here with an
+		// empty set, because doing so would zero the DEAD? count and quietly
+		// disable half of what --strict gates on.
+		return true
 	}
 	for _, id := range promIdentRe.FindAllString(expr, -1) {
 		if known[id] {

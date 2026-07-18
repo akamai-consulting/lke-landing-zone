@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -132,6 +135,101 @@ func TestHealthTransientOnly(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := healthTransientOnly(c.logs); got != c.want {
 				t.Errorf("healthTransientOnly(%q) = %v, want %v", c.logs, got, c.want)
+			}
+		})
+	}
+}
+
+// TestHealthWorkflowExpected pins the anchoring fix: whether an absent
+// WorkflowTemplate is a failure is decided by the SPEC, never by the cluster.
+// Anchoring it to the cluster is what let a component the e2e explicitly enables
+// fail to deploy and still report green.
+func TestHealthWorkflowExpected(t *testing.T) {
+	// A spec with clusterHealthWorkflow enabled for "e2e" and absent (default
+	// disabled) for "lab" — the two cases that must diverge.
+	dir := t.TempDir()
+	mustWrite := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("landingzone.yaml", `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: t }
+spec:
+  instance: { upstreamOrg: akamai-consulting, repo: o/t, forge: github, templateVersion: v0.4.0 }
+  defaults:
+    cluster:
+      k8sVersion: v1.33.6+lke7
+      nodePool: { type: g8-dedicated-8-4, count: 3 }
+`)
+	env := func(name, components string) string {
+		return `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata: { name: ` + name + ` }
+spec:
+  cluster:
+    clusterLabel: c-` + name + `
+    region: us-sea
+    bootstrap: { name: b-` + name + ` }
+    objectStorage: { cluster: us-sea-1 }
+` + components
+	}
+	mustWrite("environments/e2e.yaml", env("e2e", "  components:\n    clusterHealthWorkflow: { enabled: true }\n"))
+	mustWrite("environments/lab.yaml", env("lab", ""))
+
+	tests := []struct {
+		name       string
+		region     string
+		chdir      bool
+		wantExpect bool
+		wantWhy    string
+	}{
+		{
+			// THE regression this fixes: enabled in spec + template missing = deploy
+			// failure, which must fail rather than read as "component disabled".
+			name:   "enabled in spec => absent template is a failure",
+			region: "e2e", chdir: true, wantExpect: true, wantWhy: "IS enabled",
+		},
+		{
+			name:   "disabled in spec => absent template is a legitimate no-op",
+			region: "lab", chdir: true, wantExpect: false, wantWhy: "is disabled",
+		},
+		{
+			name:   "unknown deployment => cannot claim it is expected",
+			region: "nope", chdir: true, wantExpect: false, wantWhy: "not a deployment",
+		},
+		{
+			// The one remaining hole, now explicit and stated in the output rather
+			// than being every caller's silent default.
+			name:   "no --region => unanchored, and says so",
+			region: "", chdir: true, wantExpect: false, wantWhy: "no --region",
+		},
+		{
+			name:   "unreadable spec => not expected, so ad-hoc runs still work",
+			region: "e2e", chdir: false, wantExpect: false, wantWhy: "could not be read",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.chdir {
+				t.Chdir(dir)
+			} else {
+				t.Chdir(t.TempDir()) // no landingzone.yaml here
+			}
+			got, why := healthWorkflowExpected(tt.region)
+			if got != tt.wantExpect {
+				t.Errorf("expected = %v, want %v (why: %s)", got, tt.wantExpect, why)
+			}
+			if !strings.Contains(why, tt.wantWhy) {
+				t.Errorf("reason %q should explain itself with %q", why, tt.wantWhy)
 			}
 		})
 	}

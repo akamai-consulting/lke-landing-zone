@@ -27,11 +27,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 )
 
 func ciAssertHealthWorkflowCmd() *cobra.Command {
-	var namespace, template string
+	var region, namespace, template string
 	var timeout, interval int
 	c := &cobra.Command{
 		Use:   "assert-health-workflow",
@@ -40,17 +41,23 @@ func ciAssertHealthWorkflowCmd() *cobra.Command {
 			"(fail-on-unhealthy=true, gate mode) and waits for it to Succeed — proving the\n" +
 			"day-2 clusterHealthWorkflow component RUNS end-to-end: the signed llz image\n" +
 			"passes the kyverno signature policy, the SA + executor RBAC authorize the run,\n" +
-			"and `llz ci health-incluster` exits clean on the converged cluster. SKIPS (exit\n" +
-			"0) if the WorkflowTemplate is absent — the component is DefaultDisabled, so this\n" +
-			"is inert unless an env (the release-e2e gate) enabled it. Exit 0 succeeded/\n" +
-			"skipped, 1 on Failed/Error/timeout.",
+			"and `llz ci health-incluster` exits clean on the converged cluster.\n\n" +
+			"Skipping is anchored to the SPEC, not the cluster: with --region set, it skips\n" +
+			"only when spec.components.clusterHealthWorkflow is disabled for that env. If the\n" +
+			"component IS enabled and the WorkflowTemplate is absent, that is a deploy\n" +
+			"failure (a render regression, a Kyverno denial on the CR, an unsynced Argo app)\n" +
+			"and this FAILS — the cluster is the thing under test, so it cannot also be the\n" +
+			"thing that decides whether to test. Without --region it falls back to skipping\n" +
+			"on an absent template, for ad-hoc runs outside an instance checkout.\n\n" +
+			"Exit 0 succeeded/skipped, 1 on Failed/Error/timeout.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIAssertHealthWorkflow(namespace, template,
+			os.Exit(runCIAssertHealthWorkflow(region, namespace, template,
 				time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second))
 			return nil
 		},
 	}
+	c.Flags().StringVar(&region, "region", "", "deployment whose spec decides if the component is expected (empty falls back to skipping on an absent WorkflowTemplate)")
 	c.Flags().StringVar(&namespace, "namespace", "llz-argo-workflows", "namespace the WorkflowTemplate + submitted Workflow live in")
 	c.Flags().StringVar(&template, "template", "llz-cluster-health", "WorkflowTemplate to submit a one-shot Workflow from")
 	c.Flags().IntVar(&timeout, "timeout", 300, "seconds to wait for the submitted Workflow to reach a terminal phase before failing")
@@ -160,12 +167,21 @@ var submitHealthWorkflowFn = func(namespace, manifest string) ([]byte, error) {
 	return cmd.Output()
 }
 
-func runCIAssertHealthWorkflow(namespace, template string, timeout, interval time.Duration) int {
-	// Inert on a normal instance: the component is DefaultDisabled, so the
-	// WorkflowTemplate won't exist. Skip (exit 0) rather than fail — this verb
-	// only means something where an env explicitly enabled the component.
+func runCIAssertHealthWorkflow(region, namespace, template string, timeout, interval time.Duration) int {
+	// Whether to skip is a question about the SPEC, not the cluster. Anchoring it
+	// to the cluster made the gate unfalsifiable: the e2e explicitly enables
+	// clusterHealthWorkflow, so a WorkflowTemplate that never synced — a render
+	// regression, a Kyverno denial on the CR, a wedged Argo app — read as
+	// "component disabled" and passed green, proving nothing. Nothing else asserts
+	// the template SHOULD exist. Same anchoring assert-broad-pat-rotation uses.
 	if !kExists("-n", namespace, "get", "workflowtemplate", template) {
-		fmt.Printf("::notice::assert-health-workflow: WorkflowTemplate %s/%s not found — clusterHealthWorkflow component disabled; skipping.\n", namespace, template)
+		expected, why := healthWorkflowExpected(region)
+		if expected {
+			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: WorkflowTemplate %s/%s is MISSING but %s. The component did not deploy — check the Argo app that owns it and whether admission denied the CR.\n",
+				namespace, template, why)
+			return 1
+		}
+		fmt.Printf("::notice::assert-health-workflow: WorkflowTemplate %s/%s not found and %s; skipping.\n", namespace, template, why)
 		return 0
 	}
 
@@ -250,4 +266,30 @@ func waitHealthWorkflow(namespace, name string, timeout, interval time.Duration)
 		}
 		time.Sleep(interval)
 	}
+}
+
+// healthWorkflowExpected reports whether spec.components.clusterHealthWorkflow is
+// enabled for region — i.e. whether an absent WorkflowTemplate is a failure or a
+// legitimate no-op — along with the reason, for the operator-facing message.
+//
+// An unreadable spec is treated as NOT expected: the fallback must not turn
+// ad-hoc runs outside an instance checkout into failures. That keeps one hole
+// (no --region, no spec) but it is now explicit and stated in the output,
+// instead of being the default for every caller.
+func healthWorkflowExpected(region string) (bool, string) {
+	if region == "" {
+		return false, "no --region was given, so the spec could not say whether the component is expected"
+	}
+	lz, err := clusterspec.LoadInstance(".")
+	if err != nil {
+		return false, fmt.Sprintf("the instance spec could not be read (%v), so the component's expected state is unknown", err)
+	}
+	e, ok := lz.Env(region)
+	if !ok {
+		return false, fmt.Sprintf("%q is not a deployment in the instance spec", region)
+	}
+	if clusterspec.ComponentEnabled(e.Components, "clusterHealthWorkflow") {
+		return true, fmt.Sprintf("spec.components.clusterHealthWorkflow IS enabled for %s", region)
+	}
+	return false, fmt.Sprintf("spec.components.clusterHealthWorkflow is disabled for %s", region)
 }

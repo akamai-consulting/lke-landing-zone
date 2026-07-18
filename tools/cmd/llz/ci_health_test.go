@@ -227,17 +227,23 @@ func TestRealignArgocdRedis(t *testing.T) {
 }
 
 func TestCheckWorkloads(t *testing.T) {
+	// Stubs the LIVE namespace name. This test used to stub "openbao", matching a
+	// healthNamespaces entry that had gone stale when the platform namespaces were
+	// llz- prefixed — so it passed while the real check silently skipped the
+	// namespace on every run (the loops `continue` on a namespace that isn't
+	// there). Using openbaoNamespace ties the fixture to the same const the
+	// production list uses, so the two cannot drift apart again.
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch {
-		case a == "get ns openbao":
+		case a == "get ns "+openbaoNamespace:
 			return nil, nil
 		case strings.HasPrefix(a, "get ns "):
 			return nil, errors.New("absent")
-		case a == "-n openbao get deploy -o json":
+		case a == "-n "+openbaoNamespace+" get deploy -o json":
 			return items(`{"metadata":{"name":"d"},"spec":{"replicas":2},"status":{"readyReplicas":1}}`), nil
-		case a == "-n openbao get sts -o json":
+		case a == "-n "+openbaoNamespace+" get sts -o json":
 			return items(`{"metadata":{"name":"s"},"spec":{"replicas":1},"status":{"readyReplicas":1}}`), nil
-		case a == "-n openbao get ds -o json":
+		case a == "-n "+openbaoNamespace+" get ds -o json":
 			return items(), nil
 		}
 		return nil, errors.New("nope")
@@ -246,6 +252,25 @@ func TestCheckWorkloads(t *testing.T) {
 	checkWorkloads(&r, false)
 	if len(r.Failed) != 1 {
 		t.Errorf("checkWorkloads = %v, want 1 (the 1/2 deploy)", r.Failed)
+	}
+}
+
+// TestHealthNamespacesAreLLZPrefixed guards the regression class directly: every
+// loop over healthNamespaces skips a namespace that does not exist, so a stale
+// name disables its checks SILENTLY. These three were stale for exactly that
+// reason. The platform namespaces are llz- prefixed; the shared ones
+// (argocd/kube-system/cert-manager/external-secrets/harbor/istio-system) are
+// upstream-owned and are not.
+func TestHealthNamespacesAreLLZPrefixed(t *testing.T) {
+	stale := map[string]string{
+		"openbao":         openbaoNamespace,
+		"observability":   "llz-observability",
+		"cert-automation": "llz-cert-automation",
+	}
+	for _, ns := range healthNamespaces {
+		if want, bad := stale[ns]; bad {
+			t.Errorf("healthNamespaces contains the retired name %q — every per-namespace check would silently skip it; use %q", ns, want)
+		}
 	}
 }
 

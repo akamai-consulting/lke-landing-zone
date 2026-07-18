@@ -18,11 +18,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// healthNamespaces are the namespaces this repo touches (matches the script's
-// NAMESPACES) — iterated for per-namespace checks.
+// healthNamespaces are the namespaces this repo touches — iterated for the
+// per-namespace checks (workloads, NetworkPolicies, Services, Leases).
+//
+// Every loop over this list gates on `if !kExists("get","ns",ns) { continue }`,
+// so a name that no longer exists is not an error — it is a SILENT SKIP. Three
+// entries had gone stale when the platform namespaces were llz- prefixed
+// ("openbao", "observability", "cert-automation"), which meant the OpenBao,
+// observability, and cert-automation namespaces were never inspected at all:
+// no workload check, no default-deny NetworkPolicy check, no Service or Lease
+// check. The openbaoNamespace const eight lines below had the correct name the
+// whole time.
+//
+// Keep the llz- prefixed names in sync with the namespaces the components
+// actually create (platform-apl/components/*, kubernetes-charts/*). A rename
+// here fails open, so it is worth checking against the tree rather than
+// assuming.
 var healthNamespaces = []string{
-	"argocd", "kube-system", "cert-manager", "cert-automation", "external-secrets",
-	"openbao", "observability", "harbor", "istio-system",
+	"argocd", "kube-system", "cert-manager", "llz-cert-automation", "external-secrets",
+	openbaoNamespace, "llz-observability", "harbor", "istio-system",
 }
 
 const openbaoNamespace = "llz-openbao"
