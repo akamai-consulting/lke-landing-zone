@@ -742,23 +742,24 @@ jobs:
         run: llz ci nudge-argo
 
       # ── Gate: Harbor registry rollout (post-S3-seed) ───────────────────────────
-      # (The "Wait for Harbor registry rollout" step ran HERE, and `llz ci
-      # wait-harbor` with it. Both are gone.
-      #
       # harbor-registry mounts the harbor-registry-s3 Secret via secretKeyRef, so it
-      # stays in CreateContainerConfigError until the registry-S3 KV path is seeded
-      # (above) and the es-store-recovery lane force-syncs the ExternalSecret on the
-      # store going Ready. The step waited up to 2m for that rollout —
-      # continue-on-error, so it never gated anything; it only reported.
-      #
-      # The wait was always paid, in SERIES, ahead of the converge poll. But converge
-      # already adjudicates the Harbor Argo apps, and it polls everything at once —
-      # so harbor-registry's readiness overlaps whatever else converge is waiting on
-      # (currently monitoring-loki, a longer pole). Waiting for it here first bought
-      # no earlier readiness, only a later start. A genuine registry stall still
-      # surfaces: converge reports the unhealthy Harbor app, diagnose-argocd dumps
-      # its state on failure, and the release-e2e image push exercises the registry
-      # plane proper.)
+      # stays in CreateContainerConfigError until that Secret exists. It only appears
+      # after the registry-S3 KV path is seeded (above) AND the es-store-recovery lane
+      # force-syncs the ExternalSecret on the store going Ready — which is why it's
+      # checked HERE rather than in the earlier
+      # control-plane "Wait for Harbor readiness" gate (gating on it there always hit
+      # the 2m rollout timeout on fresh bootstraps). continue-on-error matches the
+      # control-plane gate: a real registry stall is surfaced (and the release-e2e
+      # image push exercises the registry plane proper) without failing the bootstrap.
+      - name: Wait for Harbor registry rollout
+        if: steps.ensure.outputs.available == 'true'
+        continue-on-error: true
+        run: |
+          if ! kubectl -n harbor get svc harbor-core >/dev/null 2>&1; then
+            echo "harbor-core absent — Harbor not deployed here; skipping registry wait." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          llz ci wait-harbor --registry-only
 
       # NOTE — the "Seed Gitea backup S3 credentials in OpenBao" step that
       # wrote secret/gitea/backup-s3 was removed in the apl-core anti-
@@ -888,23 +889,30 @@ jobs:
             IMAGE="$(grep -oE 'ghcr\.io/[A-Za-z0-9._-]+/llz:[A-Za-z0-9._-]+' "${FILE}" | head -n1)"
             echo "== preflight ${IMAGE} (${FILE}) =="
             ok=0
-            # 3 attempts, not 20. This step only WARNS — the retry budget used to be
-            # sized to outlast a Sigstore/GHCR signature lag because a CI-side
-            # re-sync nudge followed it and had to fire once admission was possible.
-            # Phase 3 deleted that nudge (the argo-nudge lane re-triggers failed apps
-            # continuously), so nothing here acts on the result: a few attempts shake
-            # out an apiserver blip, and 5 minutes of extra waiting bought nothing but
-            # a later start for the converge poll that is the actual verdict.
-            for i in 1 2 3; do
+            # 8 attempts x 15s (2m), between the original 20x15s (5m) and the 3x10s
+            # this was briefly cut to.
+            #
+            # The cut was reasoned from "nothing acts on the result, so a warning-only
+            # probe needs one attempt" — true, but it missed WHAT the retries wait
+            # for. On a cold bootstrap the CronJob is not admissible yet because its
+            # NAMESPACE does not exist: e2e run 29664222266 warned
+            # `namespaces "llz-pat-rotator" not found` after exhausting 3 attempts in
+            # 46s, where the 20-attempt budget had admitted on attempt 1. So the
+            # retries were riding out platform convergence, not a Sigstore lag, and
+            # cutting them turned a probe that passes into one that reliably reports
+            # a false alarm.
+            #
+            # 2m covers namespace creation without re-adding the 5m tail.
+            for i in $(seq 1 8); do
               # Kyverno admits the real CronJob — server dry-run runs the autogen-cronjob
               # verifyImages rule (and every other admission policy) without persisting.
               if kubectl apply --dry-run=server -f "${FILE}" >/dev/null 2>/tmp/preflight-admit.err; then
                 echo "  Kyverno admits the CronJob (attempt ${i})"; ok=1; break
               fi
-              [ "${i}" = 3 ] || { echo "  not admissible yet (attempt ${i}/3) — retrying in 10s"; sleep 10; }
+              [ "${i}" = 8 ] || { echo "  not admissible yet (attempt ${i}/8) — retrying in 15s"; sleep 15; }
             done
             if [ "${ok}" != 1 ]; then
-              echo "::warning::${IMAGE} (${FILE}): Kyverno CronJob dry-run still failing after 3 attempts — $(tr '\n' ' ' </tmp/preflight-admit.err 2>/dev/null | tail -c 300). Not fatal: the argo-nudge lane keeps re-triggering the sync, and converge below is the verdict."
+              echo "::warning::${IMAGE} (${FILE}): Kyverno CronJob dry-run still failing after 8 attempts — $(tr '\n' ' ' </tmp/preflight-admit.err 2>/dev/null | tail -c 300). Not fatal: the argo-nudge lane keeps re-triggering the sync, and converge below is the verdict."
             fi
           done
           # No re-sync nudge here (secrets-before-apps Phase 3). Argo doesn't

@@ -65,3 +65,31 @@ func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
 		t.Errorf("a first-attempt transient should be ridden out => exit %d, want 0 (calls=%d)", ec, n)
 	}
 }
+
+func TestRunCIWaitHarbor(t *testing.T) {
+	orig := harborRollout
+	t.Cleanup(func() { harborRollout = orig })
+
+	// The verb waits for the harbor-registry rollout and nothing else. Its two
+	// parameters are vestigial (kept so vendored instance workflows that still
+	// pass --registry-only / --harbor-url keep parsing), so every combination
+	// must behave identically — that equivalence is the point of the test.
+	harborRollout = func(string) error { return nil }
+	for _, tc := range []struct {
+		url          string
+		registryOnly bool
+	}{{"", false}, {"", true}, {"https://harbor.example", false}, {"https://harbor.example", true}} {
+		if ec := runCIWaitHarbor(tc.url, tc.registryOnly); ec != 0 {
+			t.Errorf("rollout OK (url=%q registryOnly=%v) => exit %d, want 0", tc.url, tc.registryOnly, ec)
+		}
+	}
+
+	// A failing rollout fails the gate, again regardless of the vestigial args.
+	harborRollout = func(string) error { return errors.New("timed out") }
+	if ec := runCIWaitHarbor("", false); ec != 1 {
+		t.Errorf("rollout timeout => exit %d, want 1", ec)
+	}
+	if ec := runCIWaitHarbor("https://harbor.example", true); ec != 1 {
+		t.Errorf("rollout timeout (vestigial args set) => exit %d, want 1", ec)
+	}
+}
