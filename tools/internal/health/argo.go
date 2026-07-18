@@ -18,6 +18,7 @@ type ArgoApp struct {
 	Health    string // .status.health.status
 	Automated bool   // .spec.syncPolicy.automated present (non-null)
 	SpecErr   string // joined ComparisonError/InvalidSpecError condition messages
+	OpErr     string // .status.operationState.message when the last sync FAILED (apply-time errors, e.g. the 256KB annotation limit — these never surface as a ComparisonError)
 }
 
 // ClassifyArgoApp applies section 2's decision order to one Application:
@@ -34,6 +35,16 @@ func ClassifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 	label := fmt.Sprintf("%s (%s/%s)", a.Name, a.Sync, a.Health)
 	if reason, ok := MatchExternalDep(a.Name, ExternalDepApps()); ok {
 		return CatDeferred, label + " — " + reason
+	}
+	// A sync that failed on the 256KB metadata.annotations limit ("... is invalid:
+	// metadata.annotations: Too long") is an infra wedge, not an app-config fault:
+	// a CRD (or other object) carries an oversized client-side last-applied-
+	// configuration annotation, so every apply to it fails. The convergence gate
+	// self-heals by stripping that annotation and re-polling (see runConverge), so
+	// treat it as transient/pending rather than a hard strike — same rationale as
+	// the argocd-redis auth split above.
+	if IsAnnotationLimitError(a.OpErr) {
+		return CatPending, label + " — sync hit the 256KB annotation limit; converge strips the oversized CRD annotation and re-polls"
 	}
 	if a.SpecErr != "" {
 		// A ComparisonError carrying a Redis auth code (WRONGPASS/NOAUTH) is not an
@@ -91,6 +102,17 @@ func IsRepoServerCacheAuthError(specErr string) bool {
 	return strings.Contains(specErr, "WRONGPASS") || strings.Contains(specErr, "NOAUTH")
 }
 
+// IsAnnotationLimitError reports whether a sync/operation error message carries
+// the Kubernetes 256KB metadata.annotations cap ("metadata.annotations: Too
+// long"). It's raised when applying an object whose client-side last-applied-
+// configuration annotation is oversized — most often a CRD with a huge embedded
+// OpenAPI schema (Kyverno policy CRDs, Gateway-API httproutes). The convergence
+// gate strips that annotation to unwedge the apply, so this marks a self-healable
+// transient rather than a real spec fault.
+func IsAnnotationLimitError(msg string) bool {
+	return strings.Contains(msg, "annotations: Too long")
+}
+
 // argoAppJSON is the subset of an ArgoCD Application object we parse.
 type argoAppJSON struct {
 	Metadata struct {
@@ -112,6 +134,10 @@ type argoAppJSON struct {
 			Type    string `json:"type"`
 			Message string `json:"message"`
 		} `json:"conditions"`
+		OperationState struct {
+			Phase   string `json:"phase"`
+			Message string `json:"message"`
+		} `json:"operationState"`
 	} `json:"status"`
 }
 
@@ -135,11 +161,19 @@ func ParseArgoApp(raw []byte) (ArgoApp, error) {
 		}
 	}
 	auto := len(j.Spec.SyncPolicy.Automated) > 0 && strings.TrimSpace(string(j.Spec.SyncPolicy.Automated)) != "null"
+	// A FAILED sync surfaces its apply-time error in operationState.message (never
+	// as a ComparisonError). Only carry it when the phase actually failed, so a
+	// Succeeded/Running message can't be mistaken for an error.
+	opErr := ""
+	if j.Status.OperationState.Phase == "Failed" || j.Status.OperationState.Phase == "Error" {
+		opErr = j.Status.OperationState.Message
+	}
 	return ArgoApp{
 		Name:      j.Metadata.Name,
 		Sync:      j.Status.Sync.Status,
 		Health:    j.Status.Health.Status,
 		Automated: auto,
 		SpecErr:   strings.Join(specErrs, " | "),
+		OpErr:     opErr,
 	}, nil
 }

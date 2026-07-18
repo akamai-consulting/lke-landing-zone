@@ -64,6 +64,8 @@ func TestClassifyArgoApp(t *testing.T) {
 		{"redis NOAUTH cache auth -> pending (transient, poll)", ArgoApp{Name: "monitoring-loki", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: failed to list refs: NOAUTH Authentication required.", Automated: true}, false, CatPending},
 		{"deferred still wins over redis cache auth", ArgoApp{Name: "external-dns-external-dns", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: failed to list refs: WRONGPASS", Automated: true}, false, CatDeferred},
 		{"real comparison error still fails (no redis code)", ArgoApp{Name: "platform-foo", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: rpc error: repository not found", Automated: true}, false, CatFail},
+		{"annotation-limit sync error -> pending (transient, self-heal)", ArgoApp{Name: "kyverno-kyverno", Sync: "OutOfSync", Health: "Degraded", OpErr: `error when patching "/dev/shm/x": CustomResourceDefinition.apiextensions.k8s.io "clusterpolicies.kyverno.io" is invalid: metadata.annotations: Too long: may not be more than 262144 bytes`, Automated: true}, false, CatPending},
+		{"deferred still wins over annotation-limit", ArgoApp{Name: "external-dns-external-dns", Sync: "OutOfSync", Health: "Degraded", OpErr: "metadata.annotations: Too long", Automated: true}, false, CatDeferred},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -109,6 +111,29 @@ func TestParseArgoApp(t *testing.T) {
 	noAuto, _ := ParseArgoApp([]byte(`{"metadata":{"name":"x"},"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"}}}`))
 	if noAuto.Automated || noAuto.SpecErr != "" {
 		t.Errorf("absent automated/conditions: %+v", noAuto)
+	}
+
+	// A FAILED operationState carries its apply-time message into OpErr...
+	failed, _ := ParseArgoApp([]byte(`{"metadata":{"name":"kyverno-kyverno"},"status":{"sync":{"status":"OutOfSync"},"health":{"status":"Degraded"},"operationState":{"phase":"Failed","message":"metadata.annotations: Too long"}}}`))
+	if failed.OpErr != "metadata.annotations: Too long" {
+		t.Errorf("failed-sync OpErr = %q, want the annotation-limit message", failed.OpErr)
+	}
+	// ...but a Succeeded/Running phase must NOT be treated as an error.
+	ok, _ := ParseArgoApp([]byte(`{"metadata":{"name":"x"},"status":{"operationState":{"phase":"Succeeded","message":"successfully synced"}}}`))
+	if ok.OpErr != "" {
+		t.Errorf("succeeded sync must leave OpErr empty, got %q", ok.OpErr)
+	}
+}
+
+func TestIsAnnotationLimitError(t *testing.T) {
+	if !IsAnnotationLimitError(`CustomResourceDefinition "clusterpolicies.kyverno.io" is invalid: metadata.annotations: Too long: may not be more than 262144 bytes`) {
+		t.Error("should match the 256KB annotation-limit sync error")
+	}
+	if IsAnnotationLimitError("some unrelated sync failure") {
+		t.Error("must not match an unrelated error")
+	}
+	if IsAnnotationLimitError("") {
+		t.Error("empty message must not match")
 	}
 }
 

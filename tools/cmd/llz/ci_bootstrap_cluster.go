@@ -375,6 +375,13 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// `try(data.kubernetes_service.coredns…, "")`.
 	coreDNSIP := readCoreDNSClusterIP(d)
 
+	// ── 1b. Unwedge oversized CRD last-applied-configuration annotations ──
+	// Runs before the apl-core deploy (step 6) so any CRD carrying a near-limit
+	// client-side annotation (a reused-cluster stale copy, or an inherently-large
+	// schema like Kyverno's policy CRDs / Gateway-API httproutes) is clean before
+	// apl-operator's helmfile re-syncs it. Best-effort; see stripOversizedCRDLastApplied.
+	stripOversizedCRDLastApplied(d.kubectl)
+
 	// ── 2. Render values (was templatefile + random_password.loki_admin) ──
 	// Fill the four secrets-only placeholders in the committed values.yaml. The
 	// loki admin password is FIRST-INSTALL-ONLY: on an upgrade we read the value

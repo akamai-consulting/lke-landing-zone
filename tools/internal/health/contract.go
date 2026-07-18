@@ -50,6 +50,13 @@ type Report struct {
 	// split that surfaces mid-converge is repaired instead of polling to budget
 	// exhaustion. See health.IsRepoServerCacheAuthError and runConverge.
 	RedisAuthSplit bool
+
+	// AnnotationLimitWedge is set when at least one Argo Application's sync failed
+	// on the 256KB metadata.annotations limit. Like RedisAuthSplit it classifies
+	// as Pending (poll), and signals the convergence loop to self-heal by stripping
+	// the oversized CRD last-applied-configuration annotation once. See
+	// health.IsAnnotationLimitError and runConverge.
+	AnnotationLimitWedge bool
 }
 
 // AddFail records a hard failure (a required component the reconciler can't fix).
