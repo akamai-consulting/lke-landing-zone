@@ -1,20 +1,15 @@
 package main
 
-// ci_readiness.go implements `llz ci assert-loki` — the native port of
-// assert-loki-bootstrapped.sh. The Loki classification (pod readiness,
-// S3-config detection) is the tested internal/health predicates; this file is
-// the kubectl orchestration around them.
-//
-// `llz ci wait-harbor` also lived here. Its last half waited on the
-// harbor-registry rollout post-S3-seed — continue-on-error, so it never gated,
-// and always paid in series ahead of a converge poll that already adjudicates
-// the Harbor Argo apps concurrently with everything else. Retired with its call
-// site; see llz-bootstrap-openbao.yml where the step used to run.
+// ci_readiness.go implements `llz ci assert-loki` and `llz ci wait-harbor` — the
+// native ports of assert-loki-bootstrapped.sh and wait-for-harbor.sh. The Loki
+// classification (pod readiness, S3-config detection) is the tested internal/
+// health predicates; this file is the kubectl orchestration + Harbor poll loops.
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -46,6 +41,38 @@ func ciAssertLokiCmd() *cobra.Command {
 	c.Flags().StringVar(&nameMatch, "name-match", "loki", "substring/regex identifying Loki workloads/objects")
 	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling for Loki to bootstrap before failing (rides out a transient kubectl blip / readiness lag)")
 	c.Flags().IntVar(&interval, "interval", 10, "seconds between poll attempts")
+	return c
+}
+
+func ciWaitHarborCmd() *cobra.Command {
+	var harborURL string
+	var registryOnly bool
+	c := &cobra.Command{
+		Use:   "wait-harbor",
+		Short: "wait for the harbor-registry rollout (the post-S3-seed gate)",
+		Long: "Waits for harbor-registry to roll out. It mounts the harbor-registry-s3\n" +
+			"Secret via secretKeyRef, so it stays in CreateContainerConfigError until that\n" +
+			"Secret exists — seeded mid-bootstrap, then synced when the es-store-recovery\n" +
+			"lane sees the store go Ready. Exit 0 rolled out, 1 on timeout.\n\n" +
+			"This verb used to carry a second, PRE-seed half (admin Secret + control-plane\n" +
+			"Deployments/StatefulSets + an API ping). That half gated the workflow's\n" +
+			"`harbor` job, whose robot provisioning moved in-cluster in f0aa68f; the job\n" +
+			"went with it and took the gate's only caller, leaving the code unreachable.\n" +
+			"kick-harbor-provisioner now does its own harbor-core Available wait.\n\n" +
+			"--registry-only and --harbor-url are accepted and IGNORED. Instance repos\n" +
+			"vendor their workflows, so a rendered-but-not-yet-upgraded instance can still\n" +
+			"pass --registry-only; rejecting it would break those instances on image bump\n" +
+			"alone. They go once `llz upgrade` has carried the new call site everywhere.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			os.Exit(runCIWaitHarbor(harborURL, registryOnly))
+			return nil
+		},
+	}
+	c.Flags().StringVar(&harborURL, "harbor-url", os.Getenv("HARBOR_URL"), "accepted and ignored (vendored-workflow compatibility)")
+	c.Flags().BoolVar(&registryOnly, "registry-only", false, "accepted and ignored — the registry rollout is now the only behavior (vendored-workflow compatibility)")
+	_ = c.Flags().MarkDeprecated("harbor-url", "it is ignored; the API ping was retired with the pre-seed gate")
+	_ = c.Flags().MarkDeprecated("registry-only", "it is ignored; the registry rollout is now the only behavior")
 	return c
 }
 
@@ -202,4 +229,33 @@ func lokiConfigText(match string) string {
 		}
 	}
 	return b.String()
+}
+
+// ── wait-harbor ──────────────────────────────────────────────────────────────
+
+// runCIWaitHarbor waits for the harbor-registry rollout — the post-S3-seed gate.
+// harbor-registry mounts the harbor-registry-s3 Secret via secretKeyRef, so it
+// stays in CreateContainerConfigError until that Secret exists (seeded
+// mid-bootstrap, then synced by the es-store-recovery lane when the store goes
+// Ready).
+//
+// The harborURL / registryOnly parameters are vestigial and ignored; see the
+// command's help for why they are still accepted.
+func runCIWaitHarbor(_ string, _ bool) int {
+	for _, d := range health.HarborRegistryDeployments() {
+		if harborRollout("deployment/"+d) != nil {
+			return 1
+		}
+	}
+	fmt.Println("harbor-registry rolled out.")
+	return 0
+}
+
+// harborRollout runs `kubectl -n harbor rollout status <ref> --timeout=2m`,
+// streaming output; returns the error (which fails the wait) on timeout. A
+// package var so tests can stub the rollout wait.
+var harborRollout = func(ref string) error {
+	cmd := exec.Command("kubectl", "-n", "harbor", "rollout", "status", ref, "--timeout=2m")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
 }
