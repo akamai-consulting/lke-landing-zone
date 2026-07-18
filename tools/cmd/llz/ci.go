@@ -153,9 +153,9 @@ func ciCmd() *cobra.Command {
 	// the wedge is contained to its own carved Application (blast-radius
 	// decomposition proof). Run on a warm e2e cluster.
 	c.AddCommand(ciWedgeGamedayCmd())
-	// Runtime counterpart to wave-health-guard + the VAP: audit a live cluster for
-	// negative-sync-wave kinds the VAP would deny (coverage gap / false-positive).
-	c.AddCommand(ciWaveHealthAuditCmd())
+	// Runtime counterpart to wave-health-guard: assert the VAP is bound + enforcing
+	// (negative canary), which is what makes the static guard's verdict hold live.
+	c.AddCommand(ciAssertWaveHealthVAPCmd())
 	// Cluster diagnostic: list in-cluster Prometheus metric names matching a regex
 	// (metric-name discovery for writing error-rate/saturation alerts).
 	c.AddCommand(ciPromMetricsCmd())

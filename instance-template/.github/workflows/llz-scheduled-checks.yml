@@ -542,18 +542,23 @@ jobs:
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ matrix.region }}
 
-  # ── Wave-health runtime audit ────────────────────────────────────────────────
-  # Runtime counterpart to the static `wave-health-guard` (PR-time, git tree) and the
-  # llz-wave-health-guard ValidatingAdmissionPolicy (admission). Enumerates every LIVE
-  # resource at a negative sync-wave and flags any kind the VAP would deny — a coverage
-  # gap to vet, or a latent false-positive the VAP would reject. Catches negative-wave
-  # kinds that only exist at runtime (child-App-rendered content, apl-core resources,
-  # operator writebacks) which neither the git-tree guard nor kubeconform can see. The
-  # argoproj.io Events kinds (Sensor/EventSource/EventBus) were found this way manually;
-  # this makes that census a standing check. Warning-only (continue-on-error): a finding
-  # annotates the job summary but does not block other scheduled work.
-  wave-health-audit:
-    name: Wave-health Runtime Audit (${{ matrix.region }})
+  # ── Wave-health guard enforcement canary ─────────────────────────────────────
+  # Runtime counterpart to the static `wave-health-guard` (PR-time, git tree): assert
+  # the llz-wave-health-guard ValidatingAdmissionPolicy is still BOUND and ENFORCING,
+  # by server-dry-running a Deployment at sync-wave -5 and requiring the guard's own
+  # denial. That binding is what makes the static guard's PR-time verdict hold against
+  # non-CI write paths (apl-operator writebacks, direct kubectl/SSA) — so an operator
+  # writeback or a bad sync that drops the policy/binding is the drift worth catching
+  # here. Warning-only (continue-on-error): a finding annotates the job summary but
+  # does not block other scheduled work.
+  #
+  # This replaced a full live negative-wave ENUMERATION that re-applied the VAP's own
+  # decision to every resource it found. With validationActions: [Deny], a resource
+  # that enumeration could flag can never have been admitted — its findings were empty
+  # by construction, and its only real signal was "the policy isn't enforcing", which
+  # this asserts directly (one round-trip vs ~45s of api-resources sweeping).
+  wave-health-vap:
+    name: Wave-health Guard Enforcement (${{ matrix.region }})
     needs: discover
     runs-on: ubuntu-latest
     container:
@@ -563,7 +568,9 @@ jobs:
     environment: infra-${{ matrix.region }}
     timeout-minutes: 15
     continue-on-error: true
-    # Weekly Sunday 02:00 UTC (or on demand) — a full api-resources sweep, so not daily.
+    # Weekly Sunday 02:00 UTC (or on demand). The check itself is now ~1 round-trip,
+    # but the job cycle around it (checkout + container + kubeconfig/ACL) is not — and
+    # a policy binding does not silently vanish on a daily cadence.
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
     strategy:
       fail-fast: false
@@ -589,9 +596,9 @@ jobs:
           region:                ${{ matrix.region }}
           allow-missing:         'true'
 
-      - name: Audit negative-wave kinds against the wave-health guard/VAP
+      - name: Assert the wave-health guard VAP is bound and enforcing
         if: steps.kubeconfig.outputs.available == 'true'
-        run: llz ci wave-health-audit | tee "$GITHUB_STEP_SUMMARY"
+        run: llz ci assert-wave-health-vap | tee "$GITHUB_STEP_SUMMARY"
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f "$HOME/.kube/config"

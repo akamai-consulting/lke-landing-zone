@@ -172,10 +172,13 @@ Two further gates run in the same converge:
   `llz_reconcile_leader == 1` (a replica holds the driving Lease). `alert-eval
   --strict` can't cover this — the matching `LLZReconcilerReportingDown` /
   `LLZReconcilerNoLeader` alerts would be *firing*, and `--strict` ignores FIRING.
-- **`llz ci wave-health-audit --fail-on-unvetted`** — the runtime counterpart to
-  the static wave-health-guard + VAP: it enumerates every live negative-sync-wave
-  resource and fails on any kind the VAP would DENY (a coverage gap or a latent
-  false-positive), instead of waiting for the weekly scheduled audit.
+- **`llz ci assert-wave-health-vap`** — the runtime counterpart to the static
+  wave-health-guard: it server-dry-runs a Deployment at sync-wave -5 and requires
+  the `llz-wave-health-guard` VAP's own denial, proving the policy and its Deny
+  binding are live. That binding is what makes the static guard's PR-time verdict
+  hold against non-CI write paths (an apl-operator writeback, a direct SSA), so an
+  unbound guard is a silent regression worth failing on rather than waiting for
+  the weekly scheduled check.
 
 ### Visualizing the in-cluster signal
 

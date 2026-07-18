@@ -202,7 +202,7 @@ jobs:
           llz ci assert-scrape-targets
           llz ci assert-reconciler
           llz ci alert-eval --strict
-          llz ci wave-health-audit --fail-on-unvetted
+          llz ci assert-wave-health-vap
 
       - name: Revoke control-plane ACL for this runner
         if: always()

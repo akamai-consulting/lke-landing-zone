@@ -947,7 +947,7 @@ jobs:
       # assert-health-workflow retries), but they are independent read-mostly
       # checks against the already-converged cluster, so they fan out as
       # background lanes and the step fails if ANY lane fails. Wall clock =
-      # slowest lane (typically wave-health-audit ~45s or a health-workflow run).
+      # slowest lane (typically a health-workflow run).
       # Per-lane rationale (each verb is unit-tested; details in its Go file):
       #  - loki: Loki bootstrapped + S3-backed (the former `validate` job's one
       #    net-new check, folded here to drop that job's container cycle).
@@ -966,12 +966,15 @@ jobs:
       #    against real backends. SAFE: e2e-unique label + broadPATDeployments=e2e
       #    scope the mint/revoke to the e2e PAT family only. Self-gates on the
       #    component toggle.
-      #  - wave-audit: GATING runtime negative-wave audit (--fail-on-unvetted) —
-      #    enumerates live negative-wave resources and applies the VAP's decision,
-      #    catching coverage gaps the static guard + admission VAP can't see.
+      #  - wave-vap: GATING proof that the llz-wave-health-guard VAP is BOUND and
+      #    ENFORCING — server-dry-runs a Deployment at sync-wave -5 and requires the
+      #    guard's own denial. What makes the static guard's PR-time verdict hold at
+      #    runtime. Replaced the old ~45s live negative-wave enumeration, which was
+      #    tautological: the Deny binding means a flaggable resource could never have
+      #    been admitted.
       # Mutating lanes (health-workflow's Workflow, broad-pat's Job) touch
       # disjoint namespaces/objects, so concurrency is safe.
-      - name: (e2e) assert suite — loki / scrape+reconciler / health-workflow / broad-pat / wave-audit
+      - name: (e2e) assert suite — loki / scrape+reconciler / health-workflow / broad-pat / wave-vap
         if: ${{ inputs.assert_loki }}
         run: |
           set -uo pipefail
@@ -984,10 +987,10 @@ jobs:
           lane scrape-reconciler bash -ec 'llz ci assert-scrape-targets && llz ci assert-reconciler'
           lane health-workflow   llz ci assert-health-workflow
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
-          lane wave-audit        llz ci wave-health-audit --fail-on-unvetted
+          lane wave-vap          llz ci assert-wave-health-vap
           wait
           fail=0
-          for n in loki scrape-reconciler health-workflow broad-pat wave-audit; do
+          for n in loki scrape-reconciler health-workflow broad-pat wave-vap; do
             rc="$(cat "${dir}/${n}.rc" 2>/dev/null || echo 1)"
             echo "::group::assert ${n} (rc=${rc})"
             cat "${dir}/${n}.log" 2>/dev/null || true
@@ -1051,8 +1054,8 @@ jobs:
           llz ci alert-eval 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-      # (The runtime wave-health audit that ran here as its own step now runs as
-      # the `wave-audit` lane of the parallel assert suite above.)
+      # (The runtime wave-health check that ran here as its own step now runs as
+      # the `wave-vap` lane of the parallel assert suite above.)
 
       # On a convergence hard-fail, snapshot the loki-gateway resolver + nginx logs
       # WHILE the cluster is still up — before the ACL revoke below cuts apiserver
