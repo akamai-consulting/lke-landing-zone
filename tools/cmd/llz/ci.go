@@ -954,6 +954,13 @@ func itoaOrUnknown(n int) string {
 	return strconv.Itoa(n)
 }
 
+// volumeDetachPollInterval is the pause between detach re-checks. The Volumes
+// detach asynchronously as the LKE nodes tear down, so a tighter poll catches
+// "all detached" sooner (a ListVolumes read is cheap) — 10s trims up to ~20s off
+// teardown vs the former 30s without meaningfully more API load. A package var so
+// tests can zero it.
+var volumeDetachPollInterval = 10 * time.Second
+
 // waitVolumesDetached polls until none of the tracked Volume ids is still
 // attached (linode_id non-null), bounded by waitSec. Best-effort: a list error
 // or timeout just falls through to the sweep — VolumeIsCandidate skips anything
@@ -989,7 +996,7 @@ func waitVolumesDetached(ctx context.Context, client interface {
 		} else {
 			fmt.Printf("tracked Volumes still attached: %d (attempt %d)\n", still, attempt)
 		}
-		time.Sleep(30 * time.Second)
+		time.Sleep(volumeDetachPollInterval)
 	}
 }
 
