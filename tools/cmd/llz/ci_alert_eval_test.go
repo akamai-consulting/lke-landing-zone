@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+// withPrometheusStub replaces the port-forward + query seam for one test, so the
+// eval paths are exercisable without a cluster.
+func withPrometheusStub(t *testing.T, fn func(string, func(func(string) ([]byte, error)) error) error) {
+	t.Helper()
+	orig := withPrometheus
+	withPrometheus = fn
+	t.Cleanup(func() { withPrometheus = orig })
+}
+
 func TestParseAlertRulesSkipsRecordingAndNonMatching(t *testing.T) {
 	raw := []byte(`{"items":[
 	  {"metadata":{"namespace":"llz-reconciler"},"spec":{"groups":[
@@ -127,5 +136,82 @@ func TestAlertEvalUnreachableNonFatal(t *testing.T) {
 	execOutput = func(_ string, _ ...string) ([]byte, error) { return nil, errors.New("no cluster") }
 	if err := runCIAlertEval(".", "monitoring/prometheus-operated:9090", "", false); err != nil {
 		t.Errorf("unreachable cluster must be non-fatal, got %v", err)
+	}
+}
+
+// TestAlertEvalStrictFailsClosed pins the contract that --strict cannot pass
+// without having actually evaluated the rules. Each subtest disables ONE input
+// and asserts the split: report-only passes (the report is the deliverable),
+// --strict fails (a gate that passes when it cannot run reads as evidence it
+// never gathered).
+func TestAlertEvalStrictFailsClosed(t *testing.T) {
+	const prom = "monitoring/prometheus-operated:9090"
+	rulesJSON := []byte(`{"items":[{"spec":{"groups":[{"name":"g","rules":[` +
+		`{"alert":"LLZTokenExpiringSoon","expr":"llz_token_expiry_days < 14"}]}]}}]}`)
+
+	tests := []struct {
+		name string
+		// setup installs the seams for this scenario and returns nothing; each
+		// scenario breaks exactly one input.
+		setup func(t *testing.T)
+	}{
+		{
+			name: "cluster unreachable (cannot list PrometheusRules)",
+			setup: func(t *testing.T) {
+				withExecOutput(t, func(string, ...string) ([]byte, error) {
+					return nil, errors.New("no cluster")
+				})
+			},
+		},
+		{
+			name: "no rule matches --match, so nothing would be evaluated",
+			setup: func(t *testing.T) {
+				withExecOutput(t, func(string, ...string) ([]byte, error) {
+					return []byte(`{"items":[]}`), nil
+				})
+			},
+		},
+		{
+			name: "Prometheus unreachable (port-forward fails)",
+			setup: func(t *testing.T) {
+				withExecOutput(t, func(string, ...string) ([]byte, error) { return rulesJSON, nil })
+				withPrometheusStub(t, func(string, func(func(string) ([]byte, error)) error) error {
+					return errors.New("port-forward failed")
+				})
+			},
+		},
+		{
+			// The subtle one: this path used to leave `known` empty, which makes
+			// exprMetricsExist return true for every rule — so the DEAD? count is
+			// structurally 0 and --strict can never fail on it.
+			name: "metric-name fetch fails, disabling DEAD? detection",
+			setup: func(t *testing.T) {
+				withExecOutput(t, func(string, ...string) ([]byte, error) { return rulesJSON, nil })
+				withPrometheusStub(t, func(_ string, fn func(func(string) ([]byte, error)) error) error {
+					return fn(func(path string) ([]byte, error) {
+						if strings.Contains(path, "__name__") {
+							return nil, errors.New("500 from Prometheus")
+						}
+						return []byte(`{"status":"success","data":{"result":[]}}`), nil
+					})
+				})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.setup(t)
+			if err := runCIAlertEval(".", prom, "", false); err != nil {
+				t.Errorf("report-only must stay non-fatal, got %v", err)
+			}
+			tt.setup(t)
+			err := runCIAlertEval(".", prom, "", true)
+			if err == nil {
+				t.Fatal("--strict must FAIL rather than pass having evaluated nothing")
+			}
+			if !strings.Contains(err.Error(), "--strict") {
+				t.Errorf("error should name --strict so the operator knows why: %v", err)
+			}
+		})
 	}
 }
