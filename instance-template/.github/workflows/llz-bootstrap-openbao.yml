@@ -872,16 +872,23 @@ jobs:
             IMAGE="$(grep -oE 'ghcr\.io/[A-Za-z0-9._-]+/llz:[A-Za-z0-9._-]+' "${FILE}" | head -n1)"
             echo "== preflight ${IMAGE} (${FILE}) =="
             ok=0
-            for i in $(seq 1 20); do
+            # 3 attempts, not 20. This step only WARNS — the retry budget used to be
+            # sized to outlast a Sigstore/GHCR signature lag because a CI-side
+            # re-sync nudge followed it and had to fire once admission was possible.
+            # Phase 3 deleted that nudge (the argo-nudge lane re-triggers failed apps
+            # continuously), so nothing here acts on the result: a few attempts shake
+            # out an apiserver blip, and 5 minutes of extra waiting bought nothing but
+            # a later start for the converge poll that is the actual verdict.
+            for i in 1 2 3; do
               # Kyverno admits the real CronJob — server dry-run runs the autogen-cronjob
               # verifyImages rule (and every other admission policy) without persisting.
               if kubectl apply --dry-run=server -f "${FILE}" >/dev/null 2>/tmp/preflight-admit.err; then
                 echo "  Kyverno admits the CronJob (attempt ${i})"; ok=1; break
               fi
-              echo "  not admissible yet (attempt ${i}/20) — retrying in 15s"; sleep 15
+              [ "${i}" = 3 ] || { echo "  not admissible yet (attempt ${i}/3) — retrying in 10s"; sleep 10; }
             done
             if [ "${ok}" != 1 ]; then
-              echo "::warning::${IMAGE} (${FILE}): Kyverno CronJob dry-run still failing — $(tr '\n' ' ' </tmp/preflight-admit.err 2>/dev/null | tail -c 300)"
+              echo "::warning::${IMAGE} (${FILE}): Kyverno CronJob dry-run still failing after 3 attempts — $(tr '\n' ' ' </tmp/preflight-admit.err 2>/dev/null | tail -c 300). Not fatal: the argo-nudge lane keeps re-triggering the sync, and converge below is the verdict."
             fi
           done
           # No re-sync nudge here (secrets-before-apps Phase 3). Argo doesn't
@@ -943,10 +950,10 @@ jobs:
       # unchanged; only the release-e2e provision dispatch passes assert_loki=true.
       # Uses the job's default kubeconfig ($HOME/.kube/config), same as the poll.
       # ── E2E assert suite — independent gates in PARALLEL lanes ─────────────────
-      # These five gates ran back-to-back (~80s serial best case; minutes when
+      # These gates ran back-to-back (~80s serial best case; minutes when
       # assert-health-workflow retries), but they are independent read-mostly
       # checks against the already-converged cluster, so they fan out as
-      # background lanes and the step fails if ANY lane fails. Wall clock =
+      # background lanes and the step fails if ANY GATING lane fails. Wall clock =
       # slowest lane (typically a health-workflow run).
       # Per-lane rationale (each verb is unit-tested; details in its Go file):
       #  - loki: Loki bootstrapped + S3-backed (the former `validate` job's one
@@ -972,9 +979,16 @@ jobs:
       #    runtime. Replaced the old ~45s live negative-wave enumeration, which was
       #    tautological: the Deny binding means a flaggable resource could never have
       #    been admitted.
-      # Mutating lanes (health-workflow's Workflow, broad-pat's Job) touch
-      # disjoint namespaces/objects, so concurrency is safe.
-      - name: (e2e) assert suite — loki / scrape+reconciler / health-workflow / broad-pat / wave-vap
+      #  - instance-custom: GATING proof of the operator escape hatch — see the
+      #    note below the step for why converge cannot cover it.
+      #  - metric-surface / alert-eval: report-only diagnostics (|| true), folded in
+      #    from the serial tail that used to follow this step.
+      # Concurrency safety: the two MUTATING lanes (health-workflow's Workflow,
+      # broad-pat's Job) touch disjoint namespaces/objects. The four lanes that
+      # query Prometheus (scrape+reconciler, metric-surface, alert-eval) each open
+      # their own port-forward with local port :0, so kubectl assigns a free port
+      # per lane and they cannot collide.
+      - name: (e2e) assert suite — 6 gates + 2 diagnostics, in parallel lanes
         if: ${{ inputs.assert_loki }}
         run: |
           set -uo pipefail
@@ -988,9 +1002,14 @@ jobs:
           lane health-workflow   llz ci assert-health-workflow
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
           lane wave-vap          llz ci assert-wave-health-vap
+          lane instance-custom   llz ci assert-instance-custom
+          # Report-only lanes (|| true): diagnostics, not gates. They join the fan-out
+          # because they are read-only and were costing serial time after it.
+          lane metric-surface    bash -c 'llz ci prom-metrics --match "^(loki_|cortex_|otelcol_|harbor_)" || true'
+          lane alert-eval        bash -c 'llz ci alert-eval || true'
           wait
           fail=0
-          for n in loki scrape-reconciler health-workflow broad-pat wave-vap; do
+          for n in loki scrape-reconciler health-workflow broad-pat wave-vap instance-custom metric-surface alert-eval; do
             rc="$(cat "${dir}/${n}.rc" 2>/dev/null || echo 1)"
             echo "::group::assert ${n} (rc=${rc})"
             cat "${dir}/${n}.log" 2>/dev/null || true
@@ -1000,59 +1019,41 @@ jobs:
               fail=1
             fi
           done
+          # alert-eval's FIRING/ARMED/DEAD?/BROKEN report is the deliverable, so it
+          # goes to the job summary as it did when this ran as its own step.
+          {
+            echo '### alert-eval — live rule evaluation'
+            echo '```'
+            cat "${dir}/alert-eval.log" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           exit "${fail}"
 
-      # E2E gate that PROVES the operator escape hatch (the instance-custom
-      # ApplicationSet syncing kubernetes-custom/). The release-e2e instantiate step
-      # seeds a trivial manifest under kubernetes-custom/namespaces/llz-e2e-custom/, so
-      # on a converged cluster the ApplicationSet's git directory generator must have
-      # generated instance-custom-llz-e2e-custom, created the namespace and synced it.
-      # converge/assert-loki gate the PLATFORM apps and stay green when the hatch
-      # generated NOTHING (the generated App just wouldn't exist) — only an assertion
-      # that names it catches that. This asserts it exists and is Synced+Healthy. Same
-      # assert_loki gate (release-e2e only); logic lives in the unit-tested
-      # `llz ci assert-instance-custom`.
-      - name: (e2e) assert the instance-custom escape hatch synced
-        if: ${{ inputs.assert_loki }}
-        run: llz ci assert-instance-custom
-
-      # E2E-only support-plane metric-surface diagnostic. Gated on the same
-      # assert_loki input as the check above, so it runs on the release-e2e
-      # provision (which holds cluster access) and never on a normal instance
-      # bootstrap. Dumps the loki/cortex/otelcol/harbor exporter metric NAMES so
-      # error-rate/saturation alerts are written against series that actually
-      # exist (promtool checks syntax, not existence). Read-only + best-effort
-      # (|| true); a single-line glue invocation of the unit-tested `llz ci
-      # prom-metrics` command, so no logic lives in the workflow.
-      - name: (e2e) support-plane exporter metric surface
-        if: ${{ inputs.assert_loki }}
-        # llz_es_ / the token-present gauge: the secrets-before-apps Phase-2
-        # rollout gates read these from the run log — the store-recovery lane
-        # must be seen firing (llz_es_recovery_nudges_total ≥ 1) and the linode
-        # lanes activating (llz_reconcile_linode_token_present = 1) before
-        # Phase 3 may delete the CI nudge halves.
-        run: llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_|llz_es_|llz_reconcile_linode_token)' || true
-
-      # E2E live alert evaluation, surfaced in the job summary. Every PrometheusRule
-      # ships promtool-valid (syntax), but promtool can't tell a rule that
-      # references a non-existent metric (silent never-fire, DEAD?) from one simply
-      # not tripping (ARMED). This runs each deployed alert expr through the live
-      # Prometheus and writes the FIRING/ARMED/DEAD?/BROKEN report to the step
-      # summary, so DEAD?/BROKEN are visible on the run instead of failing silent in
-      # prod. Report-only for now (|| true); the intent is to harden to
-      # `alert-eval --strict` (fail on DEAD?/BROKEN) once today's known-DEAD? alerts
-      # — real cluster bugs, not rule bugs — are resolved. This branch fixes the
-      # OpenBao/OTel scrape path (un-DEADs the vault_*/otelcol_* alerts), but two
-      # alerts fed by the opt-in --reconcile-openbao-gauges reconciler stay DEAD?
-      # on a default cluster, so the flip to --strict is deferred. Glue over the
-      # unit-tested `llz ci alert-eval`. Same assert_loki gate + cluster access.
-      - name: (e2e) live alert evaluation
-        if: ${{ inputs.assert_loki }}
-        run: |
-          echo '### alert-eval — live rule evaluation' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          llz ci alert-eval 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      # (Three steps used to run serially HERE — assert-instance-custom, the
+      # support-plane metric-surface dump, and alert-eval. All three are read-only
+      # against the already-converged cluster, so they are now lanes of the
+      # parallel assert suite above rather than a serial tail after it. What each
+      # one is for:
+      #  - instance-custom: GATING proof of the operator escape hatch. The
+      #    release-e2e instantiate seeds a trivial manifest under
+      #    kubernetes-custom/namespaces/llz-e2e-custom/, so on a converged cluster
+      #    the instance-custom ApplicationSet's git directory generator must have
+      #    generated instance-custom-llz-e2e-custom and synced it. converge and
+      #    assert-loki gate the PLATFORM apps and stay green when the hatch
+      #    generated NOTHING (the generated App simply would not exist) — only an
+      #    assertion that names it catches that.
+      #  - metric-surface: report-only dump of the loki/cortex/otelcol/harbor
+      #    exporter metric NAMES, so error-rate/saturation alerts get written
+      #    against series that actually exist (promtool checks syntax, not
+      #    existence). The llz_es_/llz_reconcile_linode_token families were also
+      #    dumped here to feed the secrets-before-apps Phase-2 rollout gate; Phase 3
+      #    has landed, so that half of the regex is gone.
+      #  - alert-eval: report-only live evaluation of every deployed alert expr,
+      #    written to the job summary. promtool cannot tell a rule referencing a
+      #    non-existent metric (silent never-fire, DEAD?) from one simply not
+      #    tripping (ARMED); this can. The intent is still to harden to
+      #    `alert-eval --strict` once today's known-DEAD? alerts — real cluster
+      #    bugs, not rule bugs — are resolved.)
 
       # (The runtime wave-health check that ran here as its own step now runs as
       # the `wave-vap` lane of the parallel assert suite above.)
