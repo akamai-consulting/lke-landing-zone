@@ -1,4 +1,4 @@
-# `custom/namespaces/` — your namespaced resources
+# `kubernetes-custom/namespaces/` — your namespaced resources
 
 One directory per Kubernetes namespace. Each becomes its **own Argo CD
 Application** (`instance-custom-<namespace>`), synced into a namespace of that
@@ -25,8 +25,8 @@ is recursed and applied into that namespace.
   `gitops-ns-apl-*` Applications. A directory here would put two Argo CD
   Applications in contention over the same resources. Rejected by `llz render`
   and `llz doctor`.
-- **`global`** — would collide with the Application generated from `custom/global/`.
-  Put cluster-scoped resources in `custom/global/` instead.
+- **`global`** — would collide with the Application generated from `kubernetes-custom/global/`.
+  Put cluster-scoped resources in `kubernetes-custom/global/` instead.
 
 This directory is empty until you add to it; the ApplicationSet simply generates
 no Applications. This README is a placeholder so the directory exists in git —

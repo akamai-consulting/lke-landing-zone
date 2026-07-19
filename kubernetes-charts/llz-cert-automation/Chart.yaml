@@ -30,7 +30,7 @@ type: application
 # 0.1.7: doc-only — retarget a stale apl-values/_shared/… comment path ref in
 #        network-policies.yaml to the platform-apl/ layout (behavior unchanged;
 #        bumped so the guard republishes the corrected artifact).
-version: 0.1.7
+version: 0.1.8
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"

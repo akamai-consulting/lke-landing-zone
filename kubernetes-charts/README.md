@@ -40,13 +40,13 @@ Argo Applications pin `targetRevision: X.Y.Z`.
 ## Consumption (the monorepo dogfoods its own charts)
 
 Each cut-over chart is consumed by an Argo CD `Application` under
-`platform-apl/manifest/<component>/argocd/applications/` that references the
+`platform-apl/manifest/applications/` that references the
 OCI chart instead of an in-repo path. This consumer relationship is the forcing
 function that keeps the extracted charts honestly reusable.
 
 ### Cutover status
 
-All five platform charts are **consumed live** via OCI Argo Applications (the
+All four platform charts are **consumed live** via OCI Argo Applications (the
 monorepo dogfoods its own published charts). `llz-argo-bootstrap-apps` is a
 standalone generator. The cluster is rebuilt greenfield, so there is no live
 state to migrate — the bootstrap stands the whole platform up from the charts.
