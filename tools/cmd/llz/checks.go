@@ -228,12 +228,21 @@ func conflictMarkerLines(content string) []int {
 // producing invalid YAML that only surfaces when Argo/kustomize chokes far
 // downstream — the exact silent-breakage class Phase 0 of the cross-org reuse
 // pattern closes (docs/designs/cross-org-reuse-pattern.md). Native (no external
-// tool), so it can never skip; outside a git repo it no-ops like the others.
+// tool), so the only legitimate skip is "not a git repo".
+//
+// It used to skip on ANY gitOutput error while the comment claimed it "can never
+// skip" — so a corrupt index, a permissions problem, or git missing from PATH
+// silently passed a scan that exists precisely to stop silent breakage. Now the
+// two are told apart: no repo is a skip, a repo we cannot read is an error.
 func stepConflictMarkers(_ globalOpts) error {
 	out, err := gitOutput("", "ls-files")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "  skip: not a git repo (conflict-marker scan)")
-		return nil
+		if _, repoErr := gitOutput("", "rev-parse", "--git-dir"); repoErr != nil {
+			fmt.Fprintln(os.Stderr, "  skip: not a git repo (conflict-marker scan)")
+			return nil
+		}
+		return fmt.Errorf("conflict-marker scan: this IS a git repo but `git ls-files` failed, "+
+			"so nothing was scanned — refusing to report clean: %w", err)
 	}
 	var hits []string
 	for _, f := range strings.Split(out, "\n") {

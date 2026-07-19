@@ -70,7 +70,19 @@ func esRepoPath(root, rel string) string {
 // platform-apl move they live at the repo ROOT, outside the instance scaffold.
 func platformTreeDirs(root string) []string {
 	p := esRepoPath(root, "platform-apl")
-	return []string{filepath.Join(p, "manifest"), filepath.Join(p, "components")}
+	// manifest-secret-store is a real deployed unit — ci_bootstrap_cluster_manifests
+	// gives it its own llz-secret-store Application ("path":
+	// "platform-apl/manifest-secret-store") — and it holds the two
+	// ClusterSecretStores every ExternalSecret in the repo binds to. It was absent
+	// here, so the four guards that share these roots (wave-health,
+	// wave-dependency, mesh-egress, and the refreshInterval check) never opened it.
+	// No live finding today; a negative-wave annotation added there would have been
+	// invisible to the #142 gate.
+	return []string{
+		filepath.Join(p, "manifest"),
+		filepath.Join(p, "manifest-secret-store"),
+		filepath.Join(p, "components"),
+	}
 }
 
 // esRef is one (remoteRef.key, remoteRef.property) pair; hasProp distinguishes
