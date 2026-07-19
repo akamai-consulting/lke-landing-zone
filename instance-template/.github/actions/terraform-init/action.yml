@@ -5,7 +5,7 @@ description: >
 
 inputs:
   module:
-    description: Module directory under terraform-iac-bootstrap/ (cluster, cluster-bootstrap, object-storage)
+    description: Module directory under terraform-iac-bootstrap/ (cluster, object-storage, vpc)
     required: false
     default: cluster
   aws-access-key-id:

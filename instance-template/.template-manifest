@@ -83,10 +83,9 @@ managed  terraform-iac-bootstrap/AGENTS.md
 # Gitignores the per-env <env>.tfvars that `llz render` regenerates (the spec is
 # the source of truth) — see the file's header. Template-owned.
 managed  terraform-iac-bootstrap/.gitignore
-managed  terraform-iac-bootstrap/cluster-bootstrap/.gitignore
-# Shared local-exec bodies for the kyverno_* policy null_resources in main.tf —
-# pure template logic (no fork-local tokens), overwritten on update.
-managed  terraform-iac-bootstrap/cluster-bootstrap/scripts/**
+# (The cluster-bootstrap/ rules that sat here matched nothing: there is no
+# cluster-bootstrap Terraform root any more — installing apl-core is
+# `llz ci bootstrap-cluster`, run from the bootstrap-openbao job.)
 managed  apl-values/README.md
 # The apl-core values BASE. Template-managed — `llz render` renders every env's
 # values.yaml from it and writes only the per-env overlay (owned, below). The heavy

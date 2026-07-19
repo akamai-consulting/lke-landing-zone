@@ -1,17 +1,12 @@
 name: llz-wedge-gameday (reusable)
 
 # Reusable (`workflow_call`) blast-radius game-day. Breaks ONE platform
-# ExternalSecret on a live (warm) cluster and asserts the wedge is contained to the
-# carved Application that owns it — platform-bootstrap and every sibling carved App
-# stay Healthy (docs/designs/blast-radius-decomposition.md). The concrete before/after
-# proof of the #163 containment claim; `llz ci wedge-gameday` always restores the
-# ExternalSecret (and Argo self-heal reverts it too), so the cluster is left as found.
-#
-# Same surface-reduction + single-checkout + cluster-access pattern as
-# llz-cluster-health.yml (which see): the instance ships a ~20-line caller stub
-# and vendors this body + the composite actions. Run
-# it against a warm cluster the converge-only fast-path (#146) keeps up, or after an
-# e2e provision with keep_cluster=true.
+# ExternalSecret on a live (warm) cluster and asserts the wedge stays contained
+# to the carved Application that owns it. Always restores the ExternalSecret, so
+# the cluster is left as found. Run against a warm cluster, or after an e2e
+# provision with keep_cluster=true.
+# Maintainer rationale (incidents, PR archaeology, why-not-X) lives in the
+# TEMPLATE repo: docs/workflows/llz-wedge-gameday.md
 
 on:
   workflow_call:

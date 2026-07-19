@@ -45,7 +45,7 @@ spec:
 
     promotionRank: 3                               # → promotion_rank (pipeline position)
 
-    bootstrap:                                     # → cluster-bootstrap/<env>.tfvars
+    bootstrap:                                     # → apl-core bootstrap inputs (llz ci bootstrap-cluster)
       name: platform-prod-web                      # → cluster.name (apl-core identity)
       domainSuffix: web.prod.example.com           # → cluster.domainSuffix + dns.domainFilters
       aplChartVersion: 6.0.0                       # → apl_chart_version (optional)

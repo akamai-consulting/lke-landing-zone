@@ -5,8 +5,8 @@
 # — so a spec edit produces one reviewable diff (the spec) instead of two, and a
 # rendered-but-unformatted tfvars can never trip the pre-commit `tofu fmt -check`.
 #
-# Matches cluster/<env>.tfvars, cluster-bootstrap/<env>.tfvars,
-# object-storage/<env>.tfvars, and vpc/<network>.tfvars. The committed
+# Matches cluster/<env>.tfvars, object-storage/<env>.tfvars, and
+# vpc/<network>.tfvars. The committed
 # terraform.tfvars.example defaults stay tracked (they end in .example, not
 # .tfvars). A working `llz` is therefore required for any terraform op — see
 # docs/landing-zone-spec.md.
@@ -15,7 +15,7 @@
 # file; their hand-authored <env>.tfvars stay tracked as the source of truth.
 */*.tfvars
 
-# The four TF roots' *.tf are generated on the fly by `llz render` from the
+# The three TF roots' *.tf (cluster, object-storage, vpc) are generated on the fly by `llz render` from the
 # embedded tfroots package (like the per-env *.tfvars) — an instance commits ZERO
 # Terraform code, only the .terraform.lock.hcl provider pins. See tools/internal/tfroots.
 */*.tf
