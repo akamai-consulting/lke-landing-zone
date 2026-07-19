@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -33,18 +34,41 @@ func NewClient(token string, timeout time.Duration) *Client {
 	return &Client{token: token, http: &http.Client{Timeout: timeout}, base: APIBase}
 }
 
-func (c *Client) get(ctx context.Context, version, path string) (*http.Response, error) {
-	url := fmt.Sprintf("%s/%s/%s", c.base, version, path)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// do issues one authenticated Linode API request and returns the raw response.
+// A non-nil body is JSON-marshalled and sent with Content-Type: application/json;
+// a nil body sends no payload and no content type. Transport failures are wrapped
+// as "<METHOD> <url>: <err>".
+//
+// Every verb below (and the paginated GET in rotate.go) funnels through here —
+// they were previously five hand-rolled copies of the same marshal → build →
+// set Authorization → Do → wrap sequence, with no divergence in headers,
+// timeout, or error shape.
+func (c *Client) do(ctx context.Context, method, url string, body any) (*http.Response, error) {
+	var payload io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		payload = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, payload)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", url, err)
+		return nil, fmt.Errorf("%s %s: %w", method, url, err)
 	}
 	return resp, nil
+}
+
+func (c *Client) get(ctx context.Context, version, path string) (*http.Response, error) {
+	return c.do(ctx, http.MethodGet, fmt.Sprintf("%s/%s/%s", c.base, version, path), nil)
 }
 
 // ListRaw GETs a Linode collection endpoint and returns its `data` array as
@@ -72,19 +96,5 @@ func (c *Client) ListRaw(ctx context.Context, version, path string) ([]map[strin
 }
 
 func (c *Client) put(ctx context.Context, url string, body any) (*http.Response, error) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(buf))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("PUT %s: %w", url, err)
-	}
-	return resp, nil
+	return c.do(ctx, http.MethodPut, url, body)
 }

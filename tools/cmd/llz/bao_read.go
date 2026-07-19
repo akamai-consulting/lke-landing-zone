@@ -110,8 +110,10 @@ var baoPodUsable = func() bool {
 	return ok && !st.Sealed
 }
 
-// baoKVGetFieldOK reads one field of a KV path and reports what it learned. Use
-// this — not baoKVGetField — anywhere the empty answer gates a write.
+// baoKVGetFieldOK reads one field of a KV path and reports what it learned. It
+// is the ONLY read helper — the "" -swallowing baoKVGetField described above was
+// deleted once its last caller was converted, so the unsafe spelling is no longer
+// available to reach for.
 func baoKVGetFieldOK(path, field string) (string, baoReadVerdict) {
 	token := os.Getenv("OPENBAO_ROOT_TOKEN")
 	out, stderr, err := baoExecFn(rootOpenbaoPod, token, "", "kv", "get", "-field="+field, path)
@@ -131,14 +133,6 @@ func baoKVGetFieldOK(path, field string) (string, baoReadVerdict) {
 		return "", baoReadAbsent
 	}
 	return val, baoReadFound
-}
-
-// baoKVGetField reads one field of a KV path, "" on anything that is not a
-// value. Safe ONLY where an empty read leads somewhere harmless — a report, a
-// log line, a retry. If "" makes the caller WRITE, use baoKVGetFieldOK.
-func baoKVGetField(path, field string) string {
-	val, _ := baoKVGetFieldOK(path, field)
-	return val
 }
 
 // tokenLookupRejectedMarkers are OpenBao's own answers to `token lookup` when

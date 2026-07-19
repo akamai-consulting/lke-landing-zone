@@ -25,34 +25,11 @@ const DaySecs int64 = 86_400
 // ── Generic HTTP helpers (POST / DELETE; GET + paginated GET) ────────────────
 
 func (c *Client) post(ctx context.Context, url string, body any) (*http.Response, error) {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", url, err)
-	}
-	return resp, nil
+	return c.do(ctx, http.MethodPost, url, body)
 }
 
 func (c *Client) del(ctx context.Context, url string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("DELETE %s: %w", url, err)
-	}
-	return resp, nil
+	return c.do(ctx, http.MethodDelete, url, nil)
 }
 
 // listAllPages GETs every page of a Linode collection (page_size=100), returning
@@ -62,14 +39,9 @@ func (c *Client) listAllPages(ctx context.Context, path string) ([]map[string]an
 	var out []map[string]any
 	for page := 1; ; page++ {
 		url := fmt.Sprintf("%s%s?page=%d&page_size=100", c.base, path, page)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		resp, err := c.do(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+c.token)
-		resp, err := c.http.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("GET %s: %w", url, err)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			text := readBody(resp)

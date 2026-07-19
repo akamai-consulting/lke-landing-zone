@@ -3,7 +3,9 @@ SHELL := /bin/bash
 .PHONY: help \
         build build-tools llz \
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+        sbom-go sbom-terraform sbom-kubernetes sbom-scan \
+        chart-pin-guard chart-version-guard \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -46,7 +48,7 @@ help:
 	@echo "  fmt             gofmt -w (auto-fix formatting)"
 	@echo "  fmt-check       gofmt -l (CI-safe, no writes)"
 	@echo "  vet             go vet ./... across the tools module"
-	@echo "  shellcheck      shellcheck all template-scripts/*.sh"
+	@echo "  shellcheck      shellcheck every *.sh in the repo (+ template-scripts/hooks)"
 	@echo "  audit           govulncheck ./... — Go vulnerability database scan"
 	@echo "  tidy            go mod tidy (and verify it leaves no diff)"
 	@echo "  update          go get -u ./... + go mod tidy (bump dependencies)"
@@ -60,7 +62,7 @@ help:
 	@echo "  tf-fmt          tofu fmt (auto-fix formatting)"
 	@echo "  tf-fmt-check    tofu fmt -check (CI-safe, no writes)"
 	@echo "  tf-lint         tflint — Terraform best-practice rules (.tflintrc.hcl)"
-	@echo "  tf-validate     terraform validate — syntax + type checking (requires prior init)"
+	@echo "  tf-validate     terraform validate — syntax + type checking (inits each module first)"
 	@echo "  checkov         Checkov IaC security scan across all Terraform modules"
 	@echo
 	@echo "Kubernetes targets:"
@@ -78,7 +80,7 @@ help:
 	@echo "  mesh-egress-guard           no NetworkPolicy egress to a STRICT-mesh namespace (harbor) from outside it"
 	@echo "  monitoring-label-guard      every ServiceMonitor/PodMonitor/PrometheusRule carries prometheus: system (#175 day-2-blind class)"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
-	@echo "  actions-lint    actionlint — GitHub Actions workflow and composite-action linting"
+	@echo "  actions-lint    actionlint — GitHub Actions workflow linting"
 	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
 	@echo "                  the CI 'Lint' workflow (.github/workflows/lint.yml): go + shell +"
 	@echo "                  py + actions, \$$(LINT_TF), and \$$(LINT_K8S). The kind server-side"
@@ -159,8 +161,13 @@ fmt-check:
 vet:
 	cd $(GO_DIR) && go vet ./...
 
+# Every shell script in the repo, not just template-scripts/: .github/scripts/
+# dispatch-and-watch.sh and instance-template/.github/actions/_lib/git-auth.sh were
+# never linted, yet `make lint`'s router fires shellcheck on ANY *.sh change — so
+# editing either one triggered a check that then skipped it.
 shellcheck:
-	find template-scripts -type f \( -name '*.sh' -o -path 'template-scripts/hooks/*' \) -print0 | xargs -0 shellcheck -x
+	find . -path ./.git -prune -o \( -name '*.sh' -o -path './template-scripts/hooks/*' \) -type f -print0 \
+		| xargs -0 shellcheck -x
 
 # ── Terraform ─────────────────────────────────────────────────────────────────
 
@@ -182,10 +189,16 @@ tf-fmt-check:
 tf-lint:
 	@for d in $(TF_DIRS); do tflint --chdir="$$d" --config="$(CURDIR)/.tflintrc.hcl" || exit 1; done
 
-# tf-validate: HCL syntax + provider type checking. Requires terraform init to
-# have been run in each module (use init -backend=false for offline use).
+# tf-validate: HCL syntax + provider type checking. Runs its own
+# `init -backend=false` per module first — it previously documented prior init as
+# a precondition, but no target performs one for TF_DIRS, so the target could
+# never succeed as written. Both working counterparts (tf-validate-roots and
+# llz's stepTFValidate) already init themselves; this matches them.
 tf-validate:
-	@for d in $(TF_DIRS); do terraform -chdir="$$d" validate || exit 1; done
+	@for d in $(TF_DIRS); do \
+		terraform -chdir="$$d" init -backend=false -input=false >/dev/null || exit 1; \
+		terraform -chdir="$$d" validate || exit 1; \
+	done
 
 checkov:
 	@for d in $(TF_DIRS); do checkov -d "$$d" --framework terraform --config-file .checkov.yaml --compact --quiet || exit 1; done
@@ -321,24 +334,14 @@ helm-lint-real-values: helm-repos
 		-n llz-openbao >/dev/null
 
 argocd-rendered-apps-check: render-charts
-	cd $(GO_DIR) && go run ./cmd/llz ci argocd-rendered-apps --root .. --render-dir $(RENDER_DIR)
+	$(call LLZ_CI,argocd-rendered-apps --render-dir $(RENDER_DIR),--root ..)
 
-# placeholder-lint: reject unsubstituted placeholder.example.com hostnames in the
-# rendered manifests — anything Argo CD reconciles into a cluster must carry real
-# addresses, never the template's example placeholders.
-# A missing/empty RENDER_DIR made `grep -r` exit non-zero, which this read as
-# "no placeholders found" — the same clean pass as a fully-rendered tree with
-# none. Assert the corpus exists first so the green means something.
-placeholder-lint: render-charts
-	@if [ -z "$$(find $(RENDER_DIR)/ -name '*.yaml' 2>/dev/null | head -1)" ]; then \
-		echo "::error::placeholder-lint: no rendered manifests under $(RENDER_DIR)/ — refusing to report 'no placeholders' having scanned nothing."; \
-		exit 1; \
-	fi; \
-	if grep -rn 'placeholder\.example\.com' $(RENDER_DIR)/; then \
-		echo "::error::Unsubstituted placeholder.example.com found in rendered manifests."; \
-		exit 1; \
-	fi; \
-	echo "No placeholder addresses found in rendered manifests."
+# placeholder-guard: reject unsubstituted placeholder.example.com hostnames in the
+# rendered manifests. Was nine lines of inline recipe bash hand-rolling the
+# empty-corpus assertion and the tree walk the guard framework already owns
+# (requireCorpus + walkManifests) — the last un-unit-tested guard in LINT_K8S.
+placeholder-guard: render-charts
+	$(call LLZ_CI,placeholder-guard --render-dir $(RENDER_DIR),--root ..)
 
 # externalsecret-paths-check: `llz ci externalsecret-paths` (the native port of
 # the former validate-externalsecret-paths.py). Uses the PATH llz when present
@@ -481,7 +484,7 @@ actions-lint:
 # targets share a render-charts prerequisite, so one $(MAKE) invocation renders
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
-LINT_K8S := k8s-lint k8s-validate wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard placeholder-lint \
+LINT_K8S := k8s-lint k8s-validate wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard placeholder-guard \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
             cosign-subject-guard \
             helm-lint-charts helm-lint-real-values \
@@ -494,8 +497,13 @@ lint-tf: $(LINT_TF) template-manifest-check
 
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
 # so the template-update tooling never has to guess about a new file.
+# Both branches need a --root, and they need DIFFERENT ones (the source branch
+# runs from $(GO_DIR), one level down). $(1) carries the repo-root spelling and
+# $(2) appends the re-based one, so the source branch passes --root twice and the
+# LAST occurrence wins — pflag's documented behaviour, verified. Don't "fix" the
+# apparent duplicate: dropping either one breaks one of the two branches.
 template-manifest-check:
-	cd $(GO_DIR) && go run ./cmd/llz ci template-manifest --root ../instance-template
+	$(call LLZ_CI,template-manifest --root instance-template,--root ../instance-template)
 
 lint:
 	@set -e; \
@@ -592,38 +600,34 @@ SBOM_FAIL_ON ?= CRITICAL
 
 sbom: sbom-go sbom-terraform sbom-kubernetes
 
-sbom-go:
+# SBOM_STEP — one sbom-* step: run $(2) if the tool is on PATH, else warn and
+# skip so a local `make sbom` still produces what it can. CI installs both tools
+# first (release.yml); SBOM_STRICT=1 turns the skip into a failure.
+#
+# Three targets stamped out this same block, differing only in tool, command and
+# label — the shape LLZ_CI above was introduced to kill, with the same drift risk
+# already realised once (sbom-scan below had diverged).
+#
+#   $(1) tool binary   $(2) command to run   $(3) target name (for the message)
+define SBOM_STEP
 	@mkdir -p sbom
-	@if command -v $(TRIVY) >/dev/null 2>&1; then \
-		$(TRIVY) fs --quiet --format cyclonedx --output sbom/sbom-tools.json $(GO_DIR); \
+	@if command -v $(1) >/dev/null 2>&1; then \
+		$(2); \
 	else \
-		echo "WARNING: trivy not installed — skipping sbom-go."; \
-		echo "  Install: make install-trivy"; \
+		echo "WARNING: $(1) not installed — skipping $(3)."; \
+		echo "  Install: make install-$(1)"; \
 		[ -z "$(SBOM_STRICT)" ] || { echo "SBOM_STRICT=1 set — failing"; exit 1; }; \
 	fi
+endef
 
-# syft/trivy-using targets: skip with a warning when the tool is not installed,
-# so a local `make sbom` still produces what it can. CI always installs both
-# first (release.yml). Force the check by setting SBOM_STRICT=1.
+sbom-go:
+	$(call SBOM_STEP,$(TRIVY),$(TRIVY) fs --quiet --format cyclonedx --output sbom/sbom-tools.json $(GO_DIR),sbom-go)
+
 sbom-terraform:
-	@mkdir -p sbom
-	@if command -v $(SYFT) >/dev/null 2>&1; then \
-		$(SYFT) scan dir:terraform-iac-bootstrap -o cyclonedx-json=sbom/sbom-terraform.json; \
-	else \
-		echo "WARNING: syft not installed — skipping sbom-terraform."; \
-		echo "  Install: make install-syft"; \
-		[ -z "$(SBOM_STRICT)" ] || { echo "SBOM_STRICT=1 set — failing"; exit 1; }; \
-	fi
+	$(call SBOM_STEP,$(SYFT),$(SYFT) scan dir:terraform-iac-bootstrap -o cyclonedx-json=sbom/sbom-terraform.json,sbom-terraform)
 
 sbom-kubernetes:
-	@mkdir -p sbom
-	@if command -v $(TRIVY) >/dev/null 2>&1; then \
-		./template-scripts/ci/sbom-kubernetes.sh; \
-	else \
-		echo "WARNING: trivy not installed — skipping sbom-kubernetes."; \
-		echo "  Install: make install-trivy"; \
-		[ -z "$(SBOM_STRICT)" ] || { echo "SBOM_STRICT=1 set — failing"; exit 1; }; \
-	fi
+	$(call SBOM_STEP,$(TRIVY),./template-scripts/ci/sbom-kubernetes.sh,sbom-kubernetes)
 
 # Vulnerability gate. Reads the generated SBOMs in sbom/ and fails on any CVE
 # at or above SBOM_FAIL_ON severity (default CRITICAL). Override via env to
@@ -673,13 +677,16 @@ coverage:
 # workflow proves the template by standing up a REAL LKE-Enterprise cluster
 # (instantiate → provision → validate → destroy) — slow and billable. This target
 # runs only the parts that need no cloud: `copier copy` renders instance-template/
-# into $(INSTANCE_TEST_DIR) via the REAL instantiation path (so it catches the
+# into the build dir via the REAL instantiation path (so it catches the
 # <@ token @> substitution bugs the release-e2e raw-cp hoist silently passes),
 # then validates the rendered instance offline — no unrendered tokens, the
 # load-bearing files present, and `terraform validate` on every rendered TF root
 # (git:: module sources rewritten to the in-repo terraform-modules/, same trick as
 # tf-validate-roots). Stands up NO cluster. Set SKIP_TF=1 to skip terraform.
-INSTANCE_TEST_DIR ?= .instance-test
+# (The output dir is $${INSTANCE_TEST_DIR:-.instance-test}, read from the
+# ENVIRONMENT by instance-test.sh. There is deliberately no `INSTANCE_TEST_DIR ?=`
+# here: make does not export ordinary variables to recipes, so the assignment that
+# used to sit on this line was dead — the script's own default always governed.)
 instance-test: scaffold-check
 	template-scripts/ci/instance-test.sh
 

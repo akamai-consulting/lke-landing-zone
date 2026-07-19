@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,8 +14,6 @@ func strconvI(n int64) string { return strconv.FormatInt(n, 10) }
 // jn mirrors how the Linode client decodes ids — json.Number, the only type
 // cli.AsUint64 accepts.
 func jn(i int) json.Number { return json.Number(strconv.Itoa(i)) }
-
-var errStub = errors.New("stub error")
 
 func TestIsDue(t *testing.T) {
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)

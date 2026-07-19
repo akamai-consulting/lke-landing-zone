@@ -27,6 +27,13 @@
 #                           provisioners. Single-line `command = "./x.sh"` is
 #                           glue (the script is already counted under shell) and
 #                           not tallied, same as a single-line `run:`.
+#   makefile-recipe       : LOGICAL lines of shell in Makefile recipe bodies
+#                           (tab-indented rule bodies + `define … endef` macro
+#                           bodies, which expand to recipe shell). Backslash
+#                           continuations count once, and a recipe whose whole
+#                           body is ONE logical line is tool-invocation glue —
+#                           the shape `$(call LLZ_CI,<verb>)` takes — so it is
+#                           not counted, same rule as a single-line `run:`.
 #
 # Baseline (post check-coverage / chart-lock-drift / argocd-rendered-apps
 # conversion to `llz ci`): inline-bash 669, shell 576, python 56,
@@ -41,11 +48,33 @@
 categories:
   workflow-inline-bash:
     kind: workflow-run
-    budget: 605
+    # Ratcheted 605 → 550 when release-e2e.yml's and release-e2e-warm.yml's
+    # byte-identical `instantiate` jobs were extracted into the shared reusable
+    # workflow .github/workflows/e2e-instantiate.yml: the duplicated `run:` blocks
+    # were being counted TWICE by the glob below, so deduplicating them dropped the
+    # tally 597 → 534 without deleting any logic. Keep ~3% headroom rather than
+    # leaving the freed budget as slack a future PR could fill with untested bash.
+    budget: 550
     include:
       - ".github/workflows/*.yml"
       - "instance-template/.github/workflows/*.yml"
       - ".github/actions/**/action.yml"
+
+  makefile-recipe:
+    kind: makefile-recipe
+    # The Makefile was invisible to every other counter — its recipes are not a
+    # workflow `run:`, not a standalone script, not a TF provisioner heredoc — so
+    # shell moved from a workflow INTO a Makefile recipe scored as a REDUCTION.
+    # That hole is why several multi-line recipes accumulated while the workflow
+    # categories were being ratcheted down. Budgeted at today's count + ~3%, same
+    # convention as the others: this is a ceiling to ratchet down as recipes move
+    # into `llz ci` verbs, never a raise.
+    # Baseline at introduction: 100. Ratcheted 103 -> 99 in the same change, once
+    # placeholder-lint became `llz ci placeholder-guard` and the three sbom-* steps
+    # collapsed onto one SBOM_STEP macro: remaining is 96, keeping ~3% headroom.
+    budget: 99
+    include:
+      - "Makefile"
 
   shell-scripts:
     kind: script

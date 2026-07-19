@@ -16,9 +16,7 @@ package tfroots
 
 import (
 	"embed"
-	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -48,14 +46,6 @@ const (
 // still collide loudly). Three copies of one literal, each claiming to mirror
 // the HCL, with nothing enforcing it — that is the drift this prevents.
 const DefaultVPCSubnetCIDR = "10.0.0.0/13"
-
-// Roots returns the three day-0 TF root names in deterministic order (matches the
-// on-disk terraform-iac-bootstrap/<root>/ layout an instance applies). The former
-// cluster-bootstrap root was retired — its in-cluster bootstrap now runs natively
-// via `llz ci bootstrap-cluster`, not Terraform.
-func Roots() []string {
-	return []string{"cluster", "object-storage", "vpc"}
-}
 
 // Substitute fills the three copier tokens in a root file's content. Any token a
 // given file does not contain is a harmless no-op.
@@ -93,16 +83,6 @@ var tfRel = func() []string {
 	return rel
 }()
 
-// Targets returns the absolute paths Render would write under dst, without writing
-// anything — the render engine uses it for its --dry-run reporting.
-func Targets(dst string) []string {
-	out := make([]string, 0, len(tfRel))
-	for _, r := range tfRel {
-		out = append(out, filepath.Join(dst, "terraform-iac-bootstrap", r))
-	}
-	return out
-}
-
 // Files returns the generated *.tf as an absolute-path → substituted-content map
 // under dst, WITHOUT writing anything — the render engine's --diff uses it to
 // preview the roots alongside the tfvars. Reads are from the compile-time embed, so
@@ -114,28 +94,6 @@ func Files(dst, upstreamOrg, ref, instanceRepo string) map[string]string {
 		out[filepath.Join(dst, "terraform-iac-bootstrap", r)] = Substitute(string(raw), upstreamOrg, ref, instanceRepo)
 	}
 	return out
-}
-
-// Render generates the four TF roots' *.tf files under
-// dst/terraform-iac-bootstrap/<root>/, substituting the three copier tokens, and
-// returns the sorted list of written paths. Parent directories are created.
-// terraform.tfvars.example and README.md are deliberately skipped — the tfvars
-// example is consumed by the render engine (TfvarsExample) to build each
-// <env>.tfvars, not laid down as a root file.
-func Render(dst, upstreamOrg, ref, instanceRepo string) ([]string, error) {
-	f := Files(dst, upstreamOrg, ref, instanceRepo)
-	written := make([]string, 0, len(f))
-	for out, content := range f {
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(out, []byte(content), 0o644); err != nil {
-			return nil, fmt.Errorf("write %s: %w", out, err)
-		}
-		written = append(written, out)
-	}
-	sort.Strings(written)
-	return written, nil
 }
 
 // TfvarsExample returns the embedded roots/<root>/terraform.tfvars.example bytes,

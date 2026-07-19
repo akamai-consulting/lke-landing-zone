@@ -17,7 +17,7 @@ permissions:
 ```
 
 ```yaml
-- uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+- uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
   with:
     registry: ghcr.io
     username: ${{ github.actor }}
@@ -46,7 +46,12 @@ Prefer these over reimplementing their logic inline:
 
 | Action | Purpose |
 |--------|---------|
+| `./.github/actions/setup-llz` | Sets up Go (version from `tools/go.mod`) and builds the `llz` CLI onto `PATH`. The repo's only composite action — use it instead of a hand-rolled `setup-go` + `go build` pair. `actions/setup-go` should appear nowhere else. |
 | `ghcr.io/<owner>/ci-terraform` | CI image with terraform, tflint, helm, kubectl, kustomize, checkov (bundles the `firewall-cidrs` Go binary) |
+
+The one deliberate exception to `setup-llz` is `llz-release.yml`, which hand-rolls
+its `go build` to stamp the real release version via `-ldflags` — something the
+composite intentionally does not do.
 
 ## Tool installation pattern
 
@@ -59,7 +64,16 @@ On GitHub-hosted runners, install CLI tools with the official marketplace setup 
 | yq | `dcarbone/install-yq-action` |
 | kind (+ cluster) | `helm/kind-action` |
 
-Pin the version from the workflow `env:` block, e.g. `version: v${{ env.HELM_VERSION }}`, so the tool version stays reproducible. Tools consumed inside the `ci-terraform` / `ci-kubernetes` container images are already baked into those images — don't re-install them. In particular `ci-terraform` ships `gh` and the prebuilt Go CLIs (`llz`, `firewall-cidrs`) on `PATH`, so `TF_IMAGE` jobs call them directly with no `setup-go`/`go build`/`install-*` step. They track the image tag (`vars.TF_IMAGE`), so keep `TF_IMAGE` in step with the template release the instance pins.
+Pin the version from the workflow `env:` block, e.g. `version: v${{ env.HELM_VERSION }}`, so the tool version stays reproducible. Tools consumed inside the `ci-terraform` / `ci-kubernetes` container images are already baked into those images — don't re-install them. In particular `ci-terraform` ships `gh` and the prebuilt Go CLIs (`llz`, `firewall-cidrs`) on `PATH`, so `TF_IMAGE` jobs call them directly with no `setup-go`/`go build`/`install-*` step.
+
+**Carve-out — do not "clean up" `setup-llz` inside a container job.** A PR that
+changes `tools/` runs BEFORE the image carrying that change is rebuilt, and the
+images ship no Go toolchain, so the Makefile's `go run ./cmd/llz` fallback cannot
+fire either. Two jobs in `lint.yml` therefore run `setup-llz` inside the container
+on purpose and are load-bearing: the `ci-kubernetes` guard job, and the
+`template-manifest` gate (`make lint-tf` → `template-manifest-check` → `go run
+./cmd/llz ci template-manifest`). Each carries its own inline justification.
+Once the rebuilt image catches up they are fast, redundant no-ops — not dead steps. They track the image tag (`vars.TF_IMAGE`), so keep `TF_IMAGE` in step with the template release the instance pins.
 
 ## CRD installation
 
@@ -109,9 +123,11 @@ Jobs that push to GHCR need `packages: write` (pulling a private GHCR `container
 > rotation, app deploy) are NOT shipped here — they live with the instance
 > scaffolding under [../../instance-template/.github/workflows/](../../instance-template/.github/workflows/).
 > The workflows in this directory build and publish the reusable artifacts: the
-> Helm charts (`publish-charts.yml`), the CI tool images (`build-images.yml`),
-> and the firewall-controller operator image (`firewall-controller.yml`), plus
-> chart/manifest validation (`kubernetes.yml`).
+> Helm charts (`publish-charts.yml`) and the CI tool images (`build-images.yml`,
+> a matrix over terraform / kubernetes / devcontainer / llz — the in-cluster
+> reconciler and Harbor components ship in the `llz` image, so there is no
+> separate operator-image workflow). Chart/manifest validation lives in
+> `lint.yml`, which merged the former `kubernetes.yml` and `terraform.yml`.
 
 ## Release orchestration
 
@@ -130,7 +146,6 @@ A release goes public in **two human steps, gated by e2e** (see
 | Workflow | On `released` |
 |----------|---------------|
 | `llz-release.yml` | builds + attaches the `llz` CLI binaries |
-| `firewall-controller.yml` | pushes the operator image tagged `:vX.Y.Z` |
 
 Keyed off release events (not a tag push) because a release created with the
 built-in `GITHUB_TOKEN` suppresses downstream runs — the human publishing the

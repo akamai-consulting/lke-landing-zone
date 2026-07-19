@@ -72,11 +72,16 @@ func HTTPClientWithCA(caPEM []byte, timeout time.Duration) (*http.Client, error)
 	}, nil
 }
 
-// KubernetesLogin exchanges a Kubernetes ServiceAccount JWT for an OpenBao token
-// via the kubernetes auth method (POST /v1/auth/<mount>/login {role, jwt}) and
-// returns the issued client_token. Unauthenticated by design — the JWT is the
-// credential — so it takes a bare *http.Client + addr rather than a *Client.
-func KubernetesLogin(ctx context.Context, httpClient *http.Client, addr, mount, role, jwt string) (string, error) {
+// authLogin exchanges a JWT for an OpenBao client token via a JWT-shaped auth
+// method (POST /v1/auth/<mount>/login {role, jwt}) and returns the issued
+// client_token. Unauthenticated by design — the JWT is the credential — so it
+// takes a bare *http.Client + addr rather than a *Client.
+//
+// `label` names the auth method in every error ("kubernetes auth login", "jwt
+// auth login"), and `hint` is appended to the no-token error when a method has
+// actionable guidance for that case. KubernetesLogin and JWTLogin below were
+// line-for-line identical apart from those two strings and the mount segment.
+func authLogin(ctx context.Context, httpClient *http.Client, addr, mount, label, role, jwt, hint string) (string, error) {
 	body, err := json.Marshal(map[string]string{"role": role, "jwt": jwt})
 	if err != nil {
 		return "", err
@@ -89,11 +94,11 @@ func KubernetesLogin(ctx context.Context, httpClient *http.Client, addr, mount, 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("kubernetes auth login (role %s): %w", role, err)
+		return "", fmt.Errorf("%s (role %s): %w", label, role, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("kubernetes auth login (role %s): HTTP %d: %s", role, resp.StatusCode, respBody(resp))
+		return "", fmt.Errorf("%s (role %s): HTTP %d: %s", label, role, resp.StatusCode, respBody(resp))
 	}
 	var out struct {
 		Auth struct {
@@ -101,12 +106,19 @@ func KubernetesLogin(ctx context.Context, httpClient *http.Client, addr, mount, 
 		} `json:"auth"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("parse kubernetes auth login response: %w", err)
+		return "", fmt.Errorf("parse %s response: %w", label, err)
 	}
 	if out.Auth.ClientToken == "" {
-		return "", fmt.Errorf("kubernetes auth login (role %s) returned no client_token", role)
+		return "", fmt.Errorf("%s (role %s) returned no client_token%s", label, role, hint)
 	}
 	return out.Auth.ClientToken, nil
+}
+
+// KubernetesLogin exchanges a Kubernetes ServiceAccount JWT for an OpenBao token
+// via the kubernetes auth method (POST /v1/auth/<mount>/login {role, jwt}) and
+// returns the issued client_token.
+func KubernetesLogin(ctx context.Context, httpClient *http.Client, addr, mount, role, jwt string) (string, error) {
+	return authLogin(ctx, httpClient, addr, mount, "kubernetes auth login", role, jwt, "")
 }
 
 // JWTLogin exchanges a GitHub Actions OIDC JWT for an OpenBao client token via
@@ -116,36 +128,8 @@ func KubernetesLogin(ctx context.Context, httpClient *http.Client, addr, mount, 
 // runner hitting the ClusterIP — and is the auth primitive behind the secretless
 // day-2 thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
 func JWTLogin(ctx context.Context, httpClient *http.Client, addr, role, jwt string) (string, error) {
-	body, err := json.Marshal(map[string]string{"role": role, "jwt": jwt})
-	if err != nil {
-		return "", err
-	}
-	url := strings.TrimRight(addr, "/") + "/v1/auth/jwt/login"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("jwt auth login (role %s): %w", role, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("jwt auth login (role %s): HTTP %d: %s", role, resp.StatusCode, respBody(resp))
-	}
-	var out struct {
-		Auth struct {
-			ClientToken string `json:"client_token"`
-		} `json:"auth"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("parse jwt auth login response: %w", err)
-	}
-	if out.Auth.ClientToken == "" {
-		return "", fmt.Errorf("jwt auth login (role %s) returned no client_token — check the role's bound_claims/bound_audiences match this repo (llz ci bao-configure)", role)
-	}
-	return out.Auth.ClientToken, nil
+	return authLogin(ctx, httpClient, addr, "jwt", "jwt auth login", role, jwt,
+		" — check the role's bound_claims/bound_audiences match this repo (llz ci bao-configure)")
 }
 
 // DataPath turns an operator KV path (secret/app/keys) into the KV v2 data API
