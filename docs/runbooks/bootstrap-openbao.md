@@ -61,7 +61,7 @@ The workflow detects cluster state automatically and chooses the right path:
 
 ### Single-trigger path (recommended)
 
-`terraform.yml` chains `bootstrap-openbao.yml` automatically as a downstream job after `apply-cluster-bootstrap` + `bootstrap-cluster` complete. A single `module=all` apply walks the whole bootstrap path end-to-end (object-storage → cluster → cluster-bootstrap → firewall-controller → OpenBao). When you run more than one cluster, bootstrap the first cluster fully before the next:
+`terraform.yml` chains OpenBao bootstrap automatically as the downstream `bootstrap-openbao` job after `apply-cluster` completes (it calls `llz-bootstrap-openbao.yml` directly; the former standalone `bootstrap-cluster` job is folded into it). A single `module=all` apply walks the whole bootstrap path end-to-end (vpc → cluster → object-storage → in-cluster bootstrap → OpenBao). When you run more than one cluster, bootstrap the first cluster fully before the next:
 
 ```bash
 # First cluster, end-to-end:
@@ -109,7 +109,6 @@ gh workflow run bootstrap-openbao.yml \
    - `HARBOR_PULL_ROBOT_NAME` + `HARBOR_PULL_PASSWORD` GitHub secrets (first cluster only)
    - `secret/infra/github-dispatch-token`
    - `secret/cert-automation/github-token` (used by cert-automation Argo Workflow)
-   - `secret/<release>/mtls-ca` (mTLS CA keypair for the platform's internal mTLS ClusterIssuer)
    - `secret/loki/object-store` + `secret/harbor/registry-s3` (minted + seeded by `llz ci mint-bootstrap-objkeys` — no GitHub secrets involved; skip-if-present so a rotator-minted key is never clobbered)
    - Note: `secret/harbor/admin`, `secret/grafana/admin` and `secret/otel/ingress` are no longer seeded by this workflow — External Secrets Operator writes them in-cluster via PushSecrets (harbor mirrors its Helm-generated `harbor-admin-password` Secret; grafana/otel use a Password generator + `updatePolicy: IfNotExists`) through the `openbao-push` store. See `platform-apl/components/harbor/` and `platform-apl/manifest/generated-secrets/`.
 11. Configures the `secret-propagator` GitHub-OIDC (`jwt`) role + policy. This
@@ -144,7 +143,7 @@ for the pods to self-unseal, then exits without re-configuring or re-seeding.
 
 On a fresh cluster, cert-manager issues `openbao-tls` before OpenBao starts, signed by the stable self-signed `openbao-ca` ClusterIssuer (`platform-apl/components/certManager/openbao-bootstrap-ca.yaml`). There is no workflow-side cert seed (the old `llz ci gen-bootstrap-tls` seed was retired), and the serving CA never changes — the only rotation left is the ~80-day *leaf* renewal under that same CA.
 
-The `openbao-cert-watcher` Deployment (`instance-template/platform-apl/components/openbao/openbao-cert-watcher.yaml`) detects that leaf renewal and deletes the 3 OpenBao pods so they reload the new cert. The pods restart and **auto-unseal themselves** from the static seal key within seconds — no operator action and no re-dispatch needed.
+The `openbao-cert-watcher` Deployment (`platform-apl/components/openbao/openbao-cert-watcher.yaml`) detects that leaf renewal and deletes the 3 OpenBao pods so they reload the new cert. The pods restart and **auto-unseal themselves** from the static seal key within seconds — no operator action and no re-dispatch needed.
 
 If a pod stays sealed after a restart, the static seal key is the problem: check that the `openbao-unseal-key` Secret exists and is readable in the `llz-openbao` namespace, that it matches `OPENBAO_SEAL_KEY` on the `infra-<env>` environment, and inspect `bao status` + the pod logs (a missing/wrong key, or Raft storage that is unhealthy).
 
@@ -171,7 +170,7 @@ Use this if the cluster is already initialized and unsealed but configuration st
 
 These steps are not automated and must be done manually after the workflow completes:
 
-- [ ] Confirm `kubectl -n openbao get pods` shows all 3 pods `Running`.
+- [ ] Confirm `kubectl -n llz-openbao get pods` shows all 3 pods `Running`.
 - [ ] Verify Argo CD is syncing: `kubectl -n argocd get applications`.
 - [ ] Confirm ESO ClusterSecretStore is healthy: `kubectl -n external-secrets get clustersecretstore`.
 - [ ] Confirm the workflow reached the Harbor seeding steps; the first-cluster bootstrap waits for `harbor/harbor-admin-password`, Harbor deployments, and the Harbor API before seeding credentials.
@@ -190,7 +189,7 @@ If a standby's bootstrap runs before the active's provisioner has published the 
 
 ## Relationship to the release workflow
 
-A full release workflow calls `bootstrap-openbao.yml` as a reusable workflow (`workflow_call`) after cluster provisioning via Terraform. It bootstraps the first cluster first, then any additional clusters, because additional clusters seed Harbor robot credentials from repo-level secrets written during the first cluster's bootstrap. This covers the first-time bootstrap path during a full release. Emergency re-unseal and re-configure must be run manually via `workflow_dispatch`.
+A full release workflow reaches OpenBao bootstrap through `llz-terraform.yml`'s own `bootstrap-openbao` job, which calls the reusable `llz-bootstrap-openbao.yml`. (The `bootstrap-openbao.yml` stub in the instance is `workflow_dispatch`-only — it is not the path a release takes.) It bootstraps the first cluster first, then any additional clusters, because additional clusters seed Harbor robot credentials from repo-level secrets written during the first cluster's bootstrap. This covers the first-time bootstrap path during a full release. Emergency re-unseal and re-configure must be run manually via `workflow_dispatch`.
 
 ---
 

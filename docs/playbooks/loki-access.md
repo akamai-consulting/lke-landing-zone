@@ -1,6 +1,6 @@
 # Loki Access — Playbook
 
-**Applies to:** Loki (`<release>-loki` SingleBinary deployment in the `observability` namespace) on every cluster. Backed by Linode Object Storage per cluster.
+**Applies to:** Loki (`<release>-loki` SingleBinary deployment in the `monitoring` namespace) on every cluster. Backed by Linode Object Storage per cluster.
 
 **Related:** your observability configuration, [`loki-values.yaml`](../../instance-template/apl-values/values.yaml), [`grafana-access.md`](grafana-access.md).
 
@@ -10,10 +10,8 @@
 
 Two facts shape every Loki playbook:
 
-1. **No external Ingress.** Loki is reachable only as `http://<release>-loki-gateway.observability.svc.cluster.local` — inside the cluster network. Operators reach it via Grafana (preferred) or `kubectl port-forward` (debug).
-2. **Multi-tenancy is on.** `loki.auth_enabled: true` in [`loki-values.yaml`](../../instance-template/apl-values/values.yaml). Every read or write **must** carry the header `X-Scope-OrgID: <project>` — Loki returns 401 / "no org id" otherwise.
-
-The single tenant we use today is **`<project>`** ([`loki-values.yaml`](../../instance-template/apl-values/values.yaml), [`grafana-values.yaml`](../../instance-template/apl-values/values.yaml), [`otel-collector-values.yaml`](../../instance-template/apl-values/values.yaml)).
+1. **No external Ingress.** Loki is reachable only as `http://<release>-loki-gateway.monitoring.svc.cluster.local` — inside the cluster network. Operators reach it via Grafana (preferred) or `kubectl port-forward` (debug).
+2. **Multi-tenancy is OFF.** `auth_enabled` is not set anywhere in the values, so Loki runs single-tenant. Do **not** add an `X-Scope-OrgID` header — and if you are chasing a 401 / "no org id", tenancy is not the cause. Should multi-tenancy ever be enabled, this playbook's read/write recipes all need the header added.
 
 ---
 
@@ -27,7 +25,7 @@ Grafana is the supported read path: it carries the tenant header for you, ships 
 
     ```logql
     {app="<release>-app"} |= "error"
-    {namespace="openbao"} |~ "(?i)sealed"
+    {namespace="llz-openbao"} |~ "(?i)sealed"
     sum by (level) (count_over_time({app="<release>-app"}[5m]))
     ```
 
@@ -41,7 +39,7 @@ When Grafana itself is broken, or you want to script queries:
 
 ```bash
 # 1. Port-forward Loki's HTTP gateway
-kubectl -n observability port-forward svc/<release>-loki-gateway 3100:80
+kubectl -n monitoring port-forward svc/<release>-loki-gateway 3100:80
 
 # 2. LogQL via the HTTP API — note the mandatory X-Scope-OrgID header
 curl -G "http://localhost:3100/loki/api/v1/query_range" \
@@ -68,7 +66,7 @@ Forgetting the header is the most common debug-time mistake; the API returns a u
 
 You should not normally write to Loki by hand. The two production writers are:
 
-- **OTel Collector** (see `otel-collector-values.yaml`) — exports OTLP logs to `loki-gateway` with `X-Scope-OrgID: <project>` baked in.
+- **OTel Collector** — note its pipelines currently use the `debug` exporter only (`platform-apl/components/observability/otel-collector.yaml`); it is not yet wired to Loki. Extend `exporters:` when a downstream is in place.
 - **Promtail sidecar in the OpenBao pod** — tails `/openbao/audit/audit.log` and pushes to the same gateway. See the audit-logging notes in [`docs/secrets.md`](../secrets.md#audit-logging).
 
 If you need to push test logs manually:
@@ -101,4 +99,4 @@ Don't reuse `<project>` as a catch-all — once a workload's logs are mixed in t
 
 ## SLA + rotation
 
-The bucket-access key Loki uses to talk to Linode Object Storage is `secret/loki/object-store` in OpenBao, rotated declaratively by the `object-storage` Terraform module (`time_rotating`) on a 120-day cadence. Drift is monitored by the `loki-objkey-rotation-health` scheduled check (warns at 105d, errors at 120d) — see [`docs/runbooks/linode-credential-rotation.md`](../runbooks/linode-credential-rotation.md) for the manual reseed procedure if it ever falls behind.
+The bucket-access key Loki uses to talk to Linode Object Storage is `secret/loki/object-store` in OpenBao, rotated in-cluster by the `linodeCredRotator` lane on a 120-day cadence — NOT by Terraform (the TF-managed keys and their `time_rotating` clock were removed). Drift is monitored by the `loki-objkey-rotation-health` step of the weekly `weekly-cluster-checks` job (warns at 105d, errors at 120d) — see [`docs/runbooks/linode-credential-rotation.md`](../runbooks/linode-credential-rotation.md) for the manual reseed procedure if it ever falls behind.

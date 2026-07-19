@@ -25,7 +25,7 @@ commands:
 
   - name: tf-plan
     short: terraform plan the cluster root
-    argv: [tofu, -chdir=terraform/cluster, plan]
+    argv: [tofu, -chdir=terraform-iac-bootstrap/cluster, plan]
 ```
 
 Now:

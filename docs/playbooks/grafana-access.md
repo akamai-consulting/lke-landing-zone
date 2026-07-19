@@ -1,6 +1,6 @@
 # Grafana Access — Playbook
 
-**Applies to:** Grafana (`<release>-grafana` Deployment in the `observability` namespace) on every cluster.
+**Applies to:** Grafana (`<release>-grafana` Deployment in the `grafana` namespace) on every cluster.
 
 **Related:** your observability configuration (dashboards, metrics topology), [`grafana-values.yaml`](../../instance-template/apl-values/values.yaml).
 
@@ -22,7 +22,7 @@ Auth is the Helm-chart-default local-DB admin user. The password is generated at
 #    same dashboards but different metrics.
 
 # 2. Port-forward Grafana to localhost:3000
-kubectl -n observability port-forward svc/<release>-grafana 3000:80
+kubectl -n grafana port-forward svc/<release>-grafana 3000:80
 
 # 3. Browse to http://localhost:3000
 
@@ -30,7 +30,7 @@ kubectl -n observability port-forward svc/<release>-grafana 3000:80
 llz openbao get active secret/grafana/admin password
 
 # ... or from the in-cluster Secret (already synced by ESO):
-kubectl -n observability get secret <release>-grafana-admin-credentials \
+kubectl -n grafana get secret <release>-grafana-admin-credentials \
   -o jsonpath='{.data.admin-password}' | base64 -d
 
 # 5. Log in as admin / <password>
@@ -83,7 +83,7 @@ Drop a `.json` export into your apl-values dashboards directory and commit. Argo
 3. Force ESO to refresh (optional — happens within `refreshInterval` otherwise):
 
     ```bash
-    kubectl -n observability annotate externalsecret grafana-admin-credentials \
+    kubectl -n grafana annotate externalsecret grafana-admin-credentials \
       force-sync=$(date +%s) --overwrite
     ```
 

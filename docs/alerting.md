@@ -13,7 +13,7 @@ Loki) is itself broken.
 
 | Mechanism | Defined in | Notification path |
 |-----------|------------|-------------------|
-| Prometheus rules (custom) | `PrometheusRule` CRs under [platform-apl/components/observability/prometheus-rules/](../instance-template/platform-apl/components/observability/prometheus-rules/) — deployed source of truth, synced by apl-core's Argo CD and picked up by kube-prometheus-stack's `ruleSelector` | Prometheus UI / Grafana (see caveat below) |
+| Prometheus rules (custom) | `PrometheusRule` CRs under [platform-apl/components/observability/prometheus-rules/](../platform-apl/components/observability/prometheus-rules/) — deployed source of truth, synced by apl-core's Argo CD and picked up by kube-prometheus-stack's `ruleSelector` | Prometheus UI / Grafana (see caveat below) |
 | Prometheus rules (defaults) | `kube-prometheus-stack.defaultRules.create: true` — node, kubelet, kube-state, and Prometheus self-monitoring | Prometheus UI / Grafana |
 | Scheduled CI checks | [.github/workflows/scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) | GitHub Actions `::warning::`/`::error::` annotations + job failure |
 
@@ -55,7 +55,7 @@ no GitHub secret, no values churn:
 
    apl-core mounts the URL from the `alertmanager-credentials` Secret; the
    `kyverno-alertmanager-slack-webhook` policy
-   ([kyverno-policies/](../instance-template/platform-apl/manifest/kyverno-policies/))
+   ([kyverno-policies/](../platform-apl/manifest/kyverno-policies/))
    repoints that Secret's ExternalSecret at the `openbao` store, so ESO picks
    the seed up within its 5m refresh. Rotation is the same `llz openbao set`
    again. An unseeded path leaves the ExternalSecret NotReady — a loud, named
@@ -92,7 +92,7 @@ inventory below covers the alerts the **platform itself** ships.
 ### Secrets plane — OpenBao
 
 Covered by `openbao-alerts` (under
-[platform-apl/components/observability/prometheus-rules/](../instance-template/platform-apl/components/observability/prometheus-rules/)).
+[platform-apl/components/observability/prometheus-rules/](../platform-apl/components/observability/prometheus-rules/)).
 
 | Condition | Alert | Severity | Status |
 |-----------|-------|----------|--------|
@@ -116,7 +116,7 @@ Covered by `openbao-alerts` (under
 ### Observability / support plane
 
 Covered by `support-plane-alerts` (under
-[platform-apl/components/observability/prometheus-rules/](../instance-template/platform-apl/components/observability/prometheus-rules/)).
+[platform-apl/components/observability/prometheus-rules/](../platform-apl/components/observability/prometheus-rules/)).
 Two layers now: the original **scrape-health** alerts (`...MetricsTargetDown`,
 `up == 0`) plus **workload-availability** alerts (`SupportPlaneDeploymentUnavailable`,
 `LokiStatefulSetUnavailable`) that fire on zero available/ready replicas via
@@ -184,7 +184,7 @@ Two further gates run in the same converge:
 
 The reconciler's day-2 gauges (convergence, ESO/cert readiness, OpenBao seal,
 credential age, per-reconciler status) are surfaced in the **LLZ Day-2** Grafana
-dashboard ([llz-day2-dashboard.yaml](../instance-template/platform-apl/components/observability/llz-day2-dashboard.yaml),
+dashboard ([llz-day2-dashboard.yaml](../platform-apl/components/observability/llz-day2-dashboard.yaml),
 a ConfigMap the Grafana dashboard sidecar auto-imports). This is the at-a-glance
 view for a receiver-less operator — alerts aggregate in Alertmanager but notify
 nobody until a receiver is wired, so the dashboard is their window.
@@ -193,18 +193,18 @@ nobody until a receiver is wired, so the dashboard is their window.
 
 | Item | Trigger | Mechanism | Status |
 |------|---------|-----------|--------|
-| cert-manager Certificates | `Ready=False` | in-cluster `LLZCertificatesNotReady` alert (continuous) + `certmanager-health` job in [scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) (weekly, belt-and-suspenders) | ✅ covered |
+| cert-manager Certificates | `Ready=False` | in-cluster `LLZCertificatesNotReady` alert (continuous) + `health-certmanager` step of `weekly-cluster-checks` in [scheduled-checks.yml](../instance-template/.github/workflows/scheduled-checks.yml) (weekly, belt-and-suspenders) | ✅ covered |
 
 ### Credential rotation
 
 | Item | Trigger | Mechanism | Status |
 |------|---------|-----------|--------|
 | `lke-admin-token` rotation overdue | Newest Secret age ≥35d (warn) / ≥90d (job red) | `scheduled-checks.yml → lke-admin-rotation-health` → [docs/runbooks/lke-admin-rotation.md](runbooks/lke-admin-rotation.md) | ✅ covered |
-| Linode PAT expiry policy breach | Any PAT with no expiry / >90d lifetime / expired (warn ≤14d before expiry) | `scheduled-checks.yml → linode-pat-expiry-health` runs the Linode credential audit tool (exit 1 → job red) → [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) | ✅ covered |
+| Linode PAT expiry policy breach | Any PAT with no expiry / >90d lifetime / expired (warn ≤14d before expiry) | `scheduled-checks.yml → credential-single-pane` runs the Linode credential audit tool (exit 1 → job red) → [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) | ✅ covered |
 | github.com service PAT expiry breach | Named service PAT with no expiry / >90d / 401 (warn ≤14d) | `scheduled-checks.yml → credential single pane` — `llz ci token-inventory` measures each token's `GitHub-Authentication-Token-Expiration` header into the `llz-token-inventory` ConfigMap; the reconciler exports `llz_token_expiry_*` and `LLZToken*` alerts fire → [docs/runbooks/linode-credential-rotation.md](runbooks/linode-credential-rotation.md) | ✅ covered (named service PATs) |
 | Ad-hoc individual classic PATs | — | **Manual** — GitHub has no classic-PAT list API; enterprise audit-log / admin review only | ⚠️ manual only |
 | Loki object-storage bucket key overdue (≤120d) | `secret/loki/object-store` version age ≥105d (warn) / ≥120d (job red) | in-cluster `LLZCredentialRotationOverdue` alert (>90d, continuous) + `scheduled-checks.yml → loki-objkey-rotation-health` (weekly, belt-and-suspenders); declarative `time_rotating` replacement in the `object-storage` Terraform module | ✅ covered |
-| TF-state object-storage bucket key overdue (≤120d) | — | **Manual, calendar-tracked** — bootstrapping paradox (the key guards the state any automation would need). No automated alert possible. | ⚠️ manual only |
+| TF-state object-storage bucket key overdue (≤120d) | — | Rotated by `secret-rotation.yml` (`scope: tf-state-key` / `tf-state-key-revoke`) outside Terraform. Linode exposes no OBJ-key creation time, so the SLA itself is calendar-tracked. | ⚠️ manual only |
 | Prometheus rule drift | Expected rule groups missing from cluster | `scheduled-checks.yml` — surfaces silently-broken alerting before an incident | ✅ covered |
 
 ### Cluster / platform
@@ -217,7 +217,7 @@ template.
 ## Adding or changing an alert
 
 1. Edit (or add) the matching `PrometheusRule` file under
-   [platform-apl/components/observability/prometheus-rules/](../instance-template/platform-apl/components/observability/prometheus-rules/)
+   [platform-apl/components/observability/prometheus-rules/](../platform-apl/components/observability/prometheus-rules/)
    (deployed source of truth) and reference it from that directory's
    `kustomization.yaml`.
 2. If you add a new rule group, also add it to the `EXPECTED_RULES` list in the

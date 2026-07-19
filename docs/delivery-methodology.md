@@ -133,21 +133,20 @@ base (`platform-apl/manifest` + `components/`) rather than cloning or hand-copyi
 
 ### Phase 3 — Bootstrap
 
-**Entry:** a configured deployment. **Done:** the cluster reports
-`bootstrap_application_synced` = `Synced + Healthy` — exit 0 on the convergence
-gate.
+**Entry:** a configured deployment. **Done:** the bootstrap Application reports
+`Synced + Healthy` — exit 0 on the convergence gate.
 
 Bootstrap is **ordered and gated**, not a single button. The Terraform roots apply
-in sequence (`cluster → object-storage → cluster-bootstrap`);
-`cluster-bootstrap` installs apl-core, which stands up Argo CD, which fans out the
-first-party charts in sync-wave order (foundation → OpenBao platform → cert
-automation). The methodology's "convergence over completion" tenet is most visible
-here: TF returns success **only** once the bootstrap Application converges, and the
-poll/stop/fail decision is the three-exit-code contract — never a human eyeballing
-`kubectl get pods`.
+in sequence (`vpc` when shared → `cluster` → `object-storage`), then
+`llz ci bootstrap-cluster` installs apl-core, which stands up Argo CD, which fans
+out the first-party charts in sync-wave order (foundation → OpenBao platform →
+cert automation). The methodology's "convergence over completion" tenet is most
+visible here: bootstrap returns success **only** once the bootstrap Application
+converges, and the poll/stop/fail decision is the convergence contract's exit
+codes — never a human eyeballing `kubectl get pods`.
 
 - **Drives it:** the Terraform workflow dispatched per module (`cluster`,
-  `object-storage`, `cluster-bootstrap`), then `bootstrap-openbao.yml`; the
+  `object-storage`, or `all`), then `bootstrap-openbao.yml`; the
   polling `llz ci converge` (wrapping `llz ci health`).
 - **Ordering caveat:** the **first** cluster bootstrapped writes Harbor robot
   credentials later clusters read — bootstrap one fully before the next

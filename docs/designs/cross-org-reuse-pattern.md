@@ -57,8 +57,8 @@ apply-vpc:
 The pipeline is already ~80% here (verified against the tree):
 
 - Everything runs in the central container image (`vars.TF_IMAGE`); all real work is `llz ci …` subcommands.
-- The reusables already check out the template into `_llz-template/` and call its composite actions (e.g. `./_llz-template/.github/actions/terraform-init`, [.github/workflows/llz-terraform.yml](../../.github/workflows/llz-terraform.yml)).
-- The composite actions already take `with:` inputs, not `secrets:` ([terraform-init/action.yml](../../.github/actions/terraform-init/action.yml)).
+- The reusables already check out the template into `_llz-template/` and call its composite actions (e.g. `./_llz-template/.github/actions/terraform-init`, [.github/workflows/llz-terraform.yml](../../instance-template/.github/workflows/llz-terraform.yml)).
+- The composite actions already take `with:` inputs, not `secrets:` ([terraform-init/action.yml](../../instance-template/.github/actions/terraform-init/action.yml)).
 - The repo is **public**, so GHCR images + composite actions at a pinned tag are consumable cross-org with no auth.
 - `copier.yml` delimiters (`<@ @>`/`<% %>`) were chosen specifically so `${{ }}` job graphs pass through untouched, and the `upstream_org` / `llz_version` / `llz_image_ref` tokens already exist.
 

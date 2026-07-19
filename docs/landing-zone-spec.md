@@ -100,7 +100,7 @@ spec:
       ipv4: ["203.0.113.0/24"]                    # → github_runner_ipv4_cidrs
       ipv6: []                                    # → github_runner_ipv6_cidrs
     promotionRank: 3                              # → promotion_rank (pipeline position)
-    bootstrap:                                    # → cluster-bootstrap/<env>.tfvars
+    bootstrap:                                    # → apl-core values (llz ci bootstrap-cluster)
       name: platform-prod                         # → cluster_name
       domainSuffix: prod.example.com              # → cluster_domain
       aplChartVersion: 6.0.0                      # → apl_chart_version
@@ -112,7 +112,8 @@ spec:
       cluster: us-ord-7                           # → obj_cluster
       # keyRotationDays: DEPRECATED/ignored — rotation is owned by the
       # in-cluster linodeCredRotator CronJob (obj_key_rotation_days was removed).
-  # components omitted → all default-enabled except dns (see "Component defaults")
+  # components omitted → all default-enabled except gitea, cidrFirewall,
+  # broadPatRotator, clusterHealthWorkflow (see "Component defaults")
 ```
 
 ```yaml
@@ -161,7 +162,8 @@ spec:
 
 ## Minimal example
 
-The smallest valid spec — components default to all-on except `dns`, and
+The smallest valid spec — components default to all-on except `gitea`,
+`cidrFirewall`, `broadPatRotator`, and `clusterHealthWorkflow`, and
 `domainSuffix` defaults to `<env>.internal`:
 
 ```yaml
@@ -212,14 +214,19 @@ enables apl-core's Harbor app *and* adds the llz registry-S3 ExternalSecret;
 `observability` enables apl-core's prometheus/loki/grafana/alertmanager/otel *and*
 adds the loki ExternalSecret + alert rules.
 
-Omit the `components:` block and every component is enabled except `dns`. A partial
+Omit the `components:` block and every component is enabled except `gitea`,
+`cidrFirewall`, `broadPatRotator`, and `clusterHealthWorkflow`. A partial
 block changes only the components you name — an explicit `enabled: false` sticks;
 unmentioned components default on. `enabled` is tri-state: omitting it (a tune-only
 toggle, see below) inherits the default rather than reading as a disable. The set:
 `argocd` (mandatory), `clusterFoundation` (mandatory), `externalSecrets`,
 `certManager`, `openbao` (requires `externalSecrets` + `certManager`),
-`argoWorkflows`, `argoEvents`, `volumeLabeler`, `observability`, `harbor`,
-`policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`.
+`argoWorkflows`, `argoEvents`, `observability`, `harbor`,
+`policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
+`cidrFirewall`, `broadPatRotator`, `llzReconciler`, `clusterHealthWorkflow`.
+(There is no `volumeLabeler` — it was retired into the `volume-labels` lane of
+`llz reconcile` — and no `dns` component. `Validate` rejects unknown keys, so
+naming either is a hard spec error.)
 
 **Per-component sizing (config in the spec, mechanism in the base).** A few
 components take capacity knobs alongside `enabled`, rendered into the env's
@@ -248,8 +255,8 @@ overrides it field-by-field (see [Layout](#layout)).
 `llz render` writes the cluster identity and apl-core global flags straight into
 each env's `values.yaml` — resolving the `${cluster_name}`/`${cluster_domain}`
 placeholders from the spec *before* Terraform runs, so `landingzone.yaml` is the
-single source (the cluster-bootstrap `templatefile()` then has nothing left to
-substitute for them; it remains the identity path for non-spec instances). From
+single source (`llz ci bootstrap-cluster`'s own substitution then has nothing
+left to fill for them; it remains the identity path for non-spec instances). From
 the env: `cluster.name` ← `cluster.bootstrap.name`, and `cluster.domainSuffix` +
 `dns.domainFilters[0]` ← `cluster.bootstrap.domainSuffix`. From
 `spec.defaults.platform` (instance-wide): `otomi.hasExternalDNS` ← `externalDNS`

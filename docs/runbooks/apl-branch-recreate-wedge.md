@@ -3,7 +3,7 @@
 **Applies to:** any deployment whose cluster is **destroyed and recreated** while its
 values repo still carries the operator's per-env `apl-<env>` branch (values-branch
 isolation, [ADR](../designs/apl-core-values-branch-isolation.md))
-**Symptom class:** bootstrap convergence timeout — `null_resource.apl_pipeline_ready`
+**Symptom class:** bootstrap convergence timeout — `llz ci bootstrap-cluster`'s pipeline-ready gate (formerly `null_resource.apl_pipeline_ready`)
 fails with `crd/applications.argoproj.io did not appear within 15m0s — apl-operator
 helmfile likely stalled`
 **First seen:** v0.0.25 e2e (run 29446982026, 2026-07-15); mechanism confirmed live on
@@ -22,7 +22,7 @@ SealedSecrets — sealed by a sealed-secrets keypair that died with that cluster
 new controller can never decrypt them, so the operator wedges at
 `waitForSealedSecrets` **before helmfile installs anything**: no stage-01 charts
 (kyverno / ESO / cert-manager), an empty `argocd` namespace, and the
-`apl_pipeline_ready` gate times out on its first stage.
+pipeline-ready gate times out on its first stage.
 
 ## How to recognize it
 
@@ -60,8 +60,8 @@ kubectl -n apl-operator rollout restart deploy/apl-operator
 Observed recovery on a live wedged cluster: helmfile stage-01 installs resumed
 within ~60s of the restart; `crd/applications.argoproj.io` appeared ~2min in;
 `ErrUnsealFailed` stopped immediately. If the wedge was hit during a `terraform
-apply` (cluster-bootstrap), re-run the apply after the operator converges — the
-failed `apl_pipeline_ready` gate re-runs and passes.
+bootstrap run, re-run `llz ci bootstrap-cluster` after the operator converges — the
+failed pipeline-ready gate re-runs and passes.
 
 ## Prevention
 
@@ -70,6 +70,6 @@ failed `apl_pipeline_ready` gate re-runs and passes.
 - **Real deployments:** deliberate destroy/recreate of an env must include deleting
   its `apl-<env>` branch (step 1 above) before the new cluster's bootstrap. The
   ADR's validation checklist covers fresh-branch self-creation but not recreate —
-  closing that gap in the template (e.g. cluster-bootstrap resetting the branch when
+  closing that gap in the template (e.g. bootstrap resetting the branch when
   the cluster id changes) is an open follow-up; until then this is an operator step
   on the teardown path.

@@ -28,7 +28,7 @@ checks, so a fresh container reports green tooling out of the box:
 | Tool | For |
 |---|---|
 | `llz` | the adopter CLI that drives the whole flow — built from this template commit |
-| `terraform` | the Terraform roots under `terraform/` |
+| `terraform` | the Terraform roots under `terraform-iac-bootstrap/` |
 | `kubectl`, `helm`, `kustomize` | rendering + inspecting the cluster |
 | `bao` | the OpenBao CLI |
 | `copier` | `llz upgrade` / `copier update` to pull template releases |

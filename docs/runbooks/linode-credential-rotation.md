@@ -16,10 +16,10 @@ separate, LKE-Enterprise-specific case — see
 
 | Credential | Type | Policy | Automation | Failure alert |
 |------------|------|--------|------------|---------------|
-| `LINODE_API_TOKEN` | Linode PAT (broad — LKE/VPC/NB/OBJ) | ≤90-day expiry | Manual create in Cloud Manager; **verified** daily by `linode-pat-expiry-health` | Job red |
+| `LINODE_API_TOKEN` | Linode PAT (broad — LKE/VPC/NB/OBJ) | ≤90-day expiry | Manual create in Cloud Manager; **verified** daily by the `credential-single-pane` scheduled check | Job red |
 | `LINODE_DNS_TOKEN` | Linode PAT (DNS scope) | ≤90-day expiry | Same as above | Job red |
 | TF-state OBJ key (`TF_STATE_ACCESS_KEY` / `_SECRET_KEY`) | Linode OBJ key | Revoke ≤120 days | **Manual** (bootstrapping paradox — see below) | — (manual SLA) |
-| Loki OBJ key (`linode_object_storage_key.loki`) | Linode OBJ key | Revoke ≤120 days | Declarative `time_rotating` in `instance-template/terraform-iac-bootstrap/object-storage`; age verified daily by `loki-objkey-rotation-health` | Job red |
+| Loki OBJ key (`secret/loki/object-store`) | Linode OBJ key | Revoke ≤120 days | Rotated in-cluster by the `linodeCredRotator` lane (NOT Terraform — the TF-managed keys and their `time_rotating` clock were removed); age verified weekly by the `loki-objkey-rotation-health` step | Job red |
 | `OPENBAO_SECRETS_WRITE_TOKEN` | github.com classic PAT | ≤90-day expiry | Per-token expiry measured daily by `llz ci token-inventory` (credential single pane); alerts via `LLZToken*` | Alert fires |
 | `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write on the instance repo) | ≤90-day expiry | Per-token expiry measured daily by `llz ci token-inventory` (same as the other GitHub PATs). Rotate by minting a new fine-grained PAT and updating the `infra-<env>` env secret(s). Used as apl-core's `otomi.git.password` (apl-operator pushes its values tree) and the argocd repo Secrets. | Job red |
 
@@ -154,7 +154,7 @@ keeps fresh — via the cidrFirewall component.)
 4. Re-run a no-op `terraform plan` (terraform.yml) to confirm the new token
    authenticates before the old one is revoked.
 5. **Revoke** the old token in Cloud Manager.
-6. Confirm the next `linode-pat-expiry-health` run is green.
+6. Confirm the next `credential-single-pane` run is green.
 
 Rotate same-day on operator exit, on InfoSec direction, or on suspected leak.
 
@@ -207,28 +207,30 @@ longer TF-managed.
 
 ---
 
-## 3. TF-state Object Storage key (manual — bootstrapping paradox)
+## 3. TF-state Object Storage key (workflow-driven)
 
 `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` is the OBJ key for the Terraform
-**state backend itself**. It **cannot** be rotated by Terraform or any
-in-cluster job — anything that could rotate it depends on the state it guards.
-This one is irreducibly manual; track its ≤120-day SLA on the platform team
-calendar.
+**state backend itself**. It cannot be rotated *by Terraform* — anything
+Terraform could do depends on the state the key guards — but it is **not**
+manual: `secret-rotation.yml` rotates it outside Terraform, create-then-revoke.
 
 ### Procedure
 
-1. Cloud Manager → **Object Storage** → **Access Keys** → create a new key
-   with the **same bucket scope** as the current state-bucket key.
-2. Update `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` in **every** scope that
-   uses them: each `infra-<env>` Environment **and** the repo-scope copies
-   (workflows that run without an environment).
-3. Trigger a no-op `terraform plan` (terraform.yml) and one
-   `scheduled-checks.yml` run; confirm state reads/writes succeed with the new
-   key **before** revoking the old one.
-4. Revoke the old key in Cloud Manager.
+Dispatch `secret-rotation.yml`:
 
-> There is no automated age signal for this key (Linode exposes no OBJ-key
-> creation time, and it is outside Terraform state). Calendar-tracked only.
+| Step | `scope` | Arming input | Confirm token |
+|---|---|---|---|
+| 1. Mint the new pair | `tf-state-key` | `tf-state-apply: true` | `rotate:tf-state-key` |
+| 2. Revoke the old pairs, once plans are green | `tf-state-key-revoke` | `tf-state-revoke-apply: true` | `rotate:tf-state-key-revoke` |
+
+Leaving the arming input `false` is a dry run. Step 1 (`create-tf-state-key`)
+mints the pair and propagates it to every scope that uses it; step 2
+(`revoke-tf-state-key`) drains the old pairs keep-newest-N. Between the two, run
+a no-op `terraform plan` and confirm state reads/writes succeed on the new key.
+
+Do **not** hand-swap this credential across Environments — that is the riskiest
+possible way to rotate the key guarding Terraform state, and the workflow exists
+precisely to avoid it.
 
 ---
 
@@ -290,16 +292,19 @@ can automate. Track it as a quarterly manual review with the GitHub org admins.
 
 ## SLA & alerting
 
-- **Linode PATs:** ≤90-day expiry. Daily `linode-pat-expiry-health` (job red on
+- **Linode PATs:** ≤90-day expiry. Daily `credential-single-pane` (job red on
   breach; warns ≤14 days before expiry).
 - **github.com service PATs:** ≤90-day expiry. Measured daily by
   `llz ci token-inventory` (per-token header self-check) and alerted via
   `LLZToken*` on no-expiry / >90d / 401. Ad-hoc individual PATs: manual GitHub
   audit-log review only.
-- **Loki OBJ key:** revoke ≤120 days. Daily `loki-objkey-rotation-health`
-  (warn 105d, job red 120d) + declarative `time_rotating` replacement.
-- **TF-state OBJ key:** revoke ≤120 days. **Calendar-tracked, manual** — no
-  automated alert is possible.
+- **Loki OBJ key:** revoke ≤120 days. The `loki-objkey-rotation-health` step of
+  the weekly `weekly-cluster-checks` job (warn 105d, job red 120d); replacement
+  is the in-cluster `linodeCredRotator` lane, not Terraform.
+- **TF-state OBJ key:** revoke ≤120 days. Rotated by `secret-rotation.yml`
+  (`scope: tf-state-key` / `tf-state-key-revoke`), with a daily reaper cron
+  draining superseded pairs. Linode exposes no OBJ-key creation time, so the
+  ≤120-day SLA itself is still calendar-tracked.
 
 These jobs are the alert surface (same as `lke-admin-rotation-health`); there
 is no kube-state-metrics secret-age metric
@@ -312,6 +317,6 @@ in this Prometheus, so a PrometheusRule would never fire. See
 
 1. The relevant scheduled-checks job is green on its next daily run.
 2. For OBJ-key rotations: Loki is ingesting/serving logs after the restart
-   (`kubectl -n observability logs -l app.kubernetes.io/name=loki`).
+   (`kubectl -n monitoring logs -l app.kubernetes.io/name=loki`).
 3. For TF-state-key rotation: a `terraform plan` completes (state read/write OK)
    with the new key and the old key is revoked.

@@ -48,7 +48,7 @@ You consume two published artifact sets — you do **not** copy their source:
 
 Upstream fixes reach you via version bumps, not manual diffs. To point at your own
 fork/registry, override the chart `gitRepoURL`/`chartsRegistry` values (§5) and the
-module `git::` host in the four TF roots.
+module `git::` host in the generated TF roots.
 
 ### Keeping the pins current — Renovate
 
@@ -133,11 +133,11 @@ are never committed. Everything else is a Linode/apl-core default you usually ke
 > cloud-firewall-controller owns the ACL — it resolves EAA/bastion CIDRs from the
 > Linode firewall template via the Linode API and reconciles every cycle.
 
-### `cluster-bootstrap/` — install apl-core + seed GitOps creds
+### apl-core install — `llz ci bootstrap-cluster` (formerly the `cluster-bootstrap/` TF root)
 
 | Variable (spec field) | Class | Notes |
 |---|---|---|
-| `region`, `apl_values_env` (env name) | MUST-SET | Deployment discriminator; must match the cluster workspace + `apl-values/<env>` dir |
+| `region`, env name | MUST-SET | Deployment discriminator; must match the cluster deployment + `apl-values/<env>` dir |
 | `cluster.bootstrap.name` | MUST-SET | → apl-core `cluster.name` (Istio hosts, Argo context). Written straight into values.yaml by `llz render` — **no longer a cluster-bootstrap tfvar** |
 | `cluster.bootstrap.domainSuffix` | MUST-SET | → apl-core `cluster.domainSuffix`. Written into values.yaml by `llz render`; `llz ci resolve-harbor-url` derives `harbor.<domain>` from the spec directly (no `cluster_domain` tfvar). Per-env prefix so siblings don't collide |
 | `cluster.bootstrap.aplValues.repoURL` (`apl_values_repo_url`) | MUST-SET | **HTTPS**, publicly reachable (see §1). `llz render` writes `otomi.git.repoUrl`; the tfvar also feeds the Argo CD values-repo credential Secret |
@@ -207,7 +207,7 @@ where you changed a line the template also changed. The same `--trust`-gated tas
 re-runs on update, so `docs/` refreshes to the new template version too. What
 gets overwritten vs. merged vs. left alone follows `.template-manifest` (managed /
 merge / owned);
-`terraform/*/.terraform.lock.hcl` files are seeded
+`terraform-iac-bootstrap/*/.terraform.lock.hcl` files are seeded
 once and never re-touched (`_skip_if_exists` in `copier.yml`). This is the clean
 counterpart to the **versioned-artifact** track (Renovate bumps the
 independently-versioned OCI charts + external action digests — §2): `llz upgrade`
@@ -263,10 +263,10 @@ llz env add <env> --region us-sea --obj-cluster us-sea-1 --dry-run
 
 # then create the scaffold (must-set values can be passed as flags up front)
 llz env add <env> --region us-sea --obj-cluster us-sea-1 \
-  --k8s-version v1.33.6+lke7 --acl-inventory-repo my-org/ip-inventory
+  --k8s-version v1.33.6+lke7 --promotion-rank 1
 ```
 
-It generates `terraform-iac-bootstrap/{cluster,cluster-bootstrap,object-storage}/<env>.tfvars`
+It generates `terraform-iac-bootstrap/{cluster,object-storage}/<env>.tfvars`
 (**gitignored** build artifacts — regenerated from the spec on every render and in CI, so you
 commit only the spec + overlay) and the `apl-values/<env>/` overlay, then prints the values
 you must still fill (region, `k8s_version`, `apl_values_repo_url`, `obj_cluster`)
@@ -282,7 +282,7 @@ kubectl kustomize apl-values/<env>/manifest >/dev/null   # must succeed
 **Everything inside `instance-template/` is repointed by Copier — you don't
 hand-edit it.** `copier copy`/`copier update` fill the two scaffold-level tokens
 for you: `upstream_org` (every `akamai-consulting` in the scaffold — module
-`git::` sources, the OCI charts registry at `cluster-bootstrap/main.tf`, every
+`git::` sources, the OCI charts registry pin in the spec, every
 Argo CD Application's `repoURL: ghcr.io/<org>/charts`, CI images) and
 `instance_repo` (the bootstrap Application repo URL + `gh` targeting). The
 workflows need no repointing at all: the reusable bodies and composite actions
@@ -310,7 +310,7 @@ new env, in order:
    (`.github/workflows/terraform.yml`) with `action=apply`, `module=cluster`,
    `region=<env>`. Creates the LKE-E cluster, VPC, firewall, node pool.
 2. **Object storage** — `module=object-storage` for the registry/log buckets.
-3. **Install apl-core** — `module=cluster-bootstrap`. Helm-installs apl-core and
+3. **Install apl-core** — folded into `module=all`, which runs `llz ci bootstrap-cluster` after the cluster apply. Helm-installs apl-core and
    applies the `apl-values/<env>/manifest` Argo CD Applications.
 4. **Converge** — the workflow polls ``llz ci converge`` (wrapping
    ``llz ci health``) until the cluster meets the convergence contract.
@@ -322,7 +322,7 @@ new env, in order:
    automatically via Argo CD (they live in the mandatory `platform-apl/manifest/dns`
    base). DNS-01 challenges are solved by apl-core's `cert-manager-webhook-linode`,
    which holds its own Linode token (`TF_VAR_linode_dns_token` from the
-   `LINODE_DNS_TOKEN` secret, applied at the `cluster-bootstrap` TF apply) — no
+   `LINODE_DNS_TOKEN` secret, rendered into apl-core's values by `llz ci bootstrap-cluster`) — no
    OpenBao seed or ExternalSecret is involved. (The Argo CD / apl-core values-repo
    credential is the `APL_VALUES_REPO_TOKEN` PAT, provisioned by `llz tokens`.)
 

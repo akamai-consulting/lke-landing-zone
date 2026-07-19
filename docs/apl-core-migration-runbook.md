@@ -23,7 +23,7 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       default) and holding the Linode token from `LINODE_DNS_TOKEN` above. The
       landing zone no longer ships its own webhook Application; the
       `llz-letsencrypt-{production,staging}` ClusterIssuers
-      ([`platform-apl/manifest/dns/letsencrypt-clusterissuer.yaml`](../instance-template/platform-apl/manifest/dns/letsencrypt-clusterissuer.yaml))
+      ([`platform-apl/manifest/dns/letsencrypt-clusterissuer.yaml`](../platform-apl/manifest/dns/letsencrypt-clusterissuer.yaml))
       target that group via `groupName: acme.slicen.me` + `solverName: linode`.
       Just confirm apl-core's `cert-manager-webhook-linode` pod reaches Ready
       (its APIService `v1alpha1.acme.slicen.me` shows `Available=True`) — if it
@@ -31,8 +31,8 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       Gateway gets TLS.
 - [ ] **Verify the apl chart version** — run
       `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`
-      and update `apl_chart_version` in each
-      `instance-template/terraform-iac-bootstrap/cluster-bootstrap/<env>.tfvars` to match.
+      and update `spec.cluster.bootstrap.aplChartVersion` in each
+      `environments/<env>.yaml` to match.
       The current pin is the GA `6.0.0` release. If you are upgrading
       an existing 5.x cluster (rather than cutting over a fresh one), read the
       [apl-core v6 migration design](designs/apl-core-v6-migration.md) first — it
@@ -46,13 +46,12 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       to read.
       Recommended: a github.com private repo synced from your primary Git host
       via a CI job, or an internal HTTPS mirror.
-- [ ] Update `apl_values_repo_url` + `apl_values_repo_username` in every
-      `instance-template/terraform-iac-bootstrap/cluster-bootstrap/<env>.tfvars` if the
+- [ ] Update the values-repo URL + username in the spec
+      (`spec.cluster.bootstrap`) in every `environments/<env>.yaml` if the
       placeholder values don't match your environment.
 - [ ] Note that OpenBao's KV-v2 mount, Kubernetes auth, and policies are
       configured by `llz ci bao-configure` (run from `bootstrap-openbao.yml`
-      after the cluster is up), not by a Terraform root and not by
-      `cluster-bootstrap/`.
+      after the cluster is up), not by a Terraform root.
 
 ## Phase 1 — Lab cutover (the rehearsal)
 
@@ -73,13 +72,13 @@ hand-rolled or that doesn't fit apl-core's defaults before touching staging.
    (Historical: earlier releases copied `LOKI_S3_*` outputs into the
    `infra-<env>` GitHub environment secrets.
 
-3. **Apply cluster-bootstrap Terraform** — this is the apl-core install:
+3. **Run the in-cluster bootstrap** — this is the apl-core install:
    ```bash
-   cd ../cluster-bootstrap
-   terraform apply -var-file=<env>.tfvars
+   llz ci bootstrap-cluster --env <env>
    ```
-   The `helm_release.apl` resource installs apl-core. Apply blocks until
-   the `apl-operator` deployment is Ready (timeout 900s).
+   It Helm-installs apl-core and blocks until the `apl-operator` deployment is
+   Ready. There is no `cluster-bootstrap` Terraform root — Terraform owns day-0
+   infrastructure only (ADR 0002).
 
 4. **Watch the helmfile pipeline** in apl-operator logs:
    ```bash
@@ -140,7 +139,7 @@ hand-rolled or that doesn't fit apl-core's defaults before touching staging.
 
 9. **Verify Istio Gateway routes**:
    ```bash
-   kubectl -n observability get gateway,virtualservice
+   kubectl -n istio-system get gateway,virtualservice
    kubectl -n harbor get gateway,virtualservice
    curl -kI https://otel.<env>.<cluster_domain>/v1/metrics    # expect 401 (no auth) or 200 (with token)
    curl -kI https://harbor.<env>.<cluster_domain>/v2/         # expect 401
@@ -195,11 +194,10 @@ If apl-core itself is the problem (not your manifests), the rollback path is
 **recreate the LKE-E cluster** — apl-core has no clean uninstall path because
 it manages 40+ namespaces with finalizers. Restore by:
 
-1. `terraform destroy` in `cluster-bootstrap/` to remove the values-repo Secret.
-2. `terraform destroy` in `cluster/` to remove the LKE-E cluster.
-3. Roll the working tree back to before the migration change.
-4. Re-apply `cluster/` then `cluster-bootstrap/` to rebuild the bootstrap
-   Argo CD install.
+1. `terraform destroy` in `cluster/` to remove the LKE-E cluster.
+2. Roll the working tree back to before the migration change.
+3. Re-apply `cluster/`, then re-run `llz ci bootstrap-cluster` to rebuild the
+   bootstrap Argo CD install.
 
 Production cutover gate: **lab + staging green for at least one full chaos
 cycle** (delete a node, kill the OpenBao leader, force a cert-rebuild

@@ -8,20 +8,22 @@ mechanism — not via StorageClass parameters, not via the CSI spec's
 `--extra-create-metadata`.
 
 To get human-readable labels (e.g. `<env>-openbao-data-<release>-openbao-0`)
-we run a CronJob that walks the cluster's PVs and PUTs labels via the Linode
-Volumes API.
+the in-cluster reconciler watches PVs and PUTs labels via the Linode Volumes API.
 
 ## What runs and where
 
-| Resource | Namespace | Provisioner |
-|---|---|---|
-| `CronJob/linode-volume-labeler` | `linode-volume-labeler` | `instance-template/terraform-iac-bootstrap/cluster-bootstrap` |
-| `ConfigMap/linode-volume-labeler-script` | `linode-volume-labeler` | TF (script content from `manifests/linode-volume-labeler/relabel.sh`) |
-| `Secret/linode-api-token` | `linode-volume-labeler` | TF, sourced from `var.linode_token` |
-| `NetworkPolicy/linode-volume-labeler-egress` | `linode-volume-labeler` | TF — restricts egress to DNS + `api.linode.com` (TCP/443) + apiserver (TCP/6443) |
+This used to be a `CronJob/linode-volume-labeler` in its own namespace, seeded by
+the `cluster-bootstrap` Terraform root. **Both are gone.** The CronJob was
+retired into the `volume-labels` lane of the `llz-reconciler` Deployment, and the
+Terraform root was deleted (ADR 0002).
 
-The CronJob schedule is `*/15 * * * *` with `concurrencyPolicy: Forbid` and
-`startingDeadlineSeconds: 600`.
+| Resource | Namespace | Owner |
+|---|---|---|
+| `Deployment/llz-reconciler` (lane `--reconcile-volume-labels`) | `llz-reconciler` | the `llzReconciler` component, synced by Argo CD |
+
+The lane is **watch-driven** off PVs rather than scheduled, with a resync floor
+of `--volume-labels-resync` seconds (default 3600). It needs `REGION_SHORT` and
+`LINODE_TOKEN`, supplied by the component's ExternalSecret.
 
 ## Label format
 
@@ -42,34 +44,25 @@ with region-short `<env>` becomes `<env>-openbao-data-<release>-openbao-0`.
 ## Inspecting the labeler
 
 ```bash
-# CronJob state
-kubectl -n linode-volume-labeler get cronjob
+# Reconciler state
+kubectl -n llz-reconciler get deploy llz-reconciler
 
-# Last few Jobs (failedJobsHistoryLimit=3, successfulJobsHistoryLimit=1)
-kubectl -n linode-volume-labeler get jobs
-
-# Pod logs for the most recent Job
-kubectl -n linode-volume-labeler logs --tail=200 -l app.kubernetes.io/component=relabel
-# or
-kubectl -n linode-volume-labeler logs job/$(kubectl -n linode-volume-labeler get jobs -o name | tail -1 | cut -d/ -f2)
+# Logs for the volume-labels lane
+kubectl -n llz-reconciler logs deploy/llz-reconciler | grep volume-labels
 ```
 
-The Job log summary line is the quick health check:
+The lane's summary line is the quick health check:
 ```
 summary: renamed=N already-ok=M api-404=0 errors=0
 ```
 
-`errors > 0` produces a non-zero pod exit code so the Job is marked Failed.
-
 ## Manual one-shot
 
-Create a Job directly from the CronJob template to relabel immediately
-without waiting for the next 15-minute slot:
+Run the relabel pass directly, without waiting for a watch event or the resync
+floor:
 
 ```bash
-kubectl -n linode-volume-labeler create job \
-  --from=cronjob/linode-volume-labeler \
-  manual-relabel-$(date +%s)
+llz ci relabel-volumes      # needs REGION_SHORT + LINODE_TOKEN
 ```
 
 ## Why not the "first-class" path
@@ -90,19 +83,10 @@ its env vars from the user cluster. The two first-class paths are:
    SC parameter that uses Go-template substitution against
    `--extra-create-metadata`'s `csi.storage.k8s.io/pvc/{name,namespace}`.
 
-This CronJob is the pragmatic fallback while either of those is pending.
+This reconciler lane is the pragmatic fallback while either of those is pending.
 
 ## Disabling
 
-Suspend the CronJob:
-```bash
-kubectl -n linode-volume-labeler patch cronjob linode-volume-labeler \
-  -p '{"spec":{"suspend":true}}'
-```
-
-Re-enable by patching `"suspend":false`. The TF resource will reconcile the
-spec back to `false` on the next apply unless the CronJob YAML is also edited.
-
-To remove entirely, delete the TF resources in
-[`instance-template/terraform-iac-bootstrap/cluster-bootstrap/main.tf`](../../instance-template/terraform-iac-bootstrap/cluster-bootstrap/main.tf)
-under the `# Linode Volume relabeler` block and `terraform apply`.
+Turn off the `llzReconciler` component in the spec, or drop the
+`--reconcile-volume-labels` flag from the Deployment. Argo CD owns the manifest,
+so an ad-hoc `kubectl` edit is reverted on the next sync — change the spec.
