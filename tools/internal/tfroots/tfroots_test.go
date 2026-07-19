@@ -186,3 +186,48 @@ func TestSubstitute(t *testing.T) {
 		t.Errorf("Substitute = %q, want %q", got, want)
 	}
 }
+
+// TestDefaultVPCSubnetCIDRMatchesRoot ties DefaultVPCSubnetCIDR to the HCL it
+// claims to mirror. internal/terraform and internal/clusterspec both alias the
+// constant, so a change to the root's default that is not reflected in Go — or
+// vice versa — fails here rather than silently producing a VPC_CIDR that
+// disagrees with what Terraform actually applied.
+func TestDefaultVPCSubnetCIDRMatchesRoot(t *testing.T) {
+	raw, err := embedded.ReadFile("roots/cluster/variables.tf")
+	if err != nil {
+		t.Fatalf("read embedded cluster/variables.tf: %v", err)
+	}
+
+	// Scan forward from the `vpc_subnet_cidr` block header to its `default =`.
+	lines := strings.Split(string(raw), "\n")
+	idx := -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), `variable "vpc_subnet_cidr"`) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal(`no variable "vpc_subnet_cidr" block in roots/cluster/variables.tf`)
+	}
+
+	want := ""
+	for _, l := range lines[idx:] {
+		s := strings.TrimSpace(l)
+		if s == "}" {
+			break
+		}
+		if strings.HasPrefix(s, "default") {
+			if _, v, ok := strings.Cut(s, "="); ok {
+				want = strings.Trim(strings.TrimSpace(v), `"`)
+			}
+			break
+		}
+	}
+	if want == "" {
+		t.Fatal("vpc_subnet_cidr block has no default = ... line")
+	}
+	if want != DefaultVPCSubnetCIDR {
+		t.Errorf("DefaultVPCSubnetCIDR = %q, but roots/cluster/variables.tf defaults to %q", DefaultVPCSubnetCIDR, want)
+	}
+}
