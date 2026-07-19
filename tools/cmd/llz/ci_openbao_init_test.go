@@ -205,6 +205,41 @@ func TestRunCIBaoRegenRootFullQuorumFlow(t *testing.T) {
 	}
 }
 
+// A lookup that never got an answer is not a revoked token. Taking the quorum
+// branch on an exec failure mints a SECOND root token and overwrites the
+// infra-<region> env secret, leaving the current root live and untracked.
+func TestRunCIBaoRegenRootInconclusiveLookupDoesNotRegenerate(t *testing.T) {
+	t.Setenv("OPENBAO_ROOT_TOKEN", "s.current")
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
+	generateRootCalled := false
+	withBaoExec(t, func(_, _, _ string, args ...string) (string, string, error) {
+		switch {
+		case args[0] == "status":
+			return `{"initialized":true,"sealed":false}`, "", nil
+		case args[0] == "token":
+			// The exec never landed — no bao verdict at all.
+			return "", "error dialing backend: No agent available", errors.New("exit status 1")
+		case args[0] == "operator":
+			generateRootCalled = true
+		}
+		return "", "", nil
+	})
+	secrets := withGHSetSecret(t, nil)
+
+	err := runCIBaoRegenRoot(globalOpts{}, "primary")
+	if err == nil || !strings.Contains(err.Error(), "inconclusive") {
+		t.Fatalf("err = %v, want an inconclusive-validation failure", err)
+	}
+	if generateRootCalled {
+		t.Error("burned a recovery-key quorum on the strength of an exec failure")
+	}
+	if len(*secrets) != 0 {
+		t.Errorf("overwrote the OPENBAO_ROOT_TOKEN env secret (%v) without evidence the old one was revoked", *secrets)
+	}
+}
+
 func TestRunCIBaoRegenRootQuorumWithoutToken(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "s.revoked")
 	t.Setenv("RECOVERY_K1", "k1")
@@ -216,7 +251,9 @@ func TestRunCIBaoRegenRootQuorumWithoutToken(t *testing.T) {
 		case args[0] == "status":
 			return `{"initialized":true,"sealed":false}`, "", nil
 		case args[0] == "token":
-			return "", "", errors.New("exit status 2")
+			// OpenBao's own answer for a revoked token. An EMPTY stderr here would
+			// mean "the lookup never got an answer", which no longer regenerates.
+			return "", "permission denied", errors.New("exit status 2")
 		case strings.Contains(cmd, "-init"):
 			return `{"nonce":"n-1","otp":"otp-1"}`, "", nil
 		case strings.Contains(cmd, "-nonce"):
@@ -241,7 +278,7 @@ func TestRunCIBaoRegenRootMissingKeys(t *testing.T) {
 		if args[0] == "status" {
 			return `{"initialized":true,"sealed":false}`, "", nil
 		}
-		return "", "", errors.New("exit status 2")
+		return "", "permission denied", errors.New("exit status 2")
 	})
 	if err := runCIBaoRegenRoot(globalOpts{}, "primary"); err == nil || !strings.Contains(err.Error(), "RECOVERY_K1") {
 		t.Errorf("err = %v, want missing-keys error", err)

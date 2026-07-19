@@ -211,13 +211,34 @@ func runCIBaoRegenRoot(g globalOpts, region string) error {
 
 	// `token lookup` (no args = self) succeeds for any valid token; the -self
 	// flag isn't supported on every OpenBao version.
+	//
+	// err != nil used to mean "revoked", full stop — so a kubectl exec failure, a
+	// container not yet ready, or a konnectivity drop that outlasted the retries
+	// all took the regeneration branch: burn a recovery-key quorum, mint a SECOND
+	// live root token, and overwrite the infra-<region> env secret. The original
+	// token stays valid and untracked — a privileged credential nobody holds a
+	// reference to. The sealed-status probe directly above already draws this
+	// distinction ("unknown" vs sealed); this one now does too, and stops rather
+	// than guessing, because both wrong guesses here are expensive.
 	if token := os.Getenv("OPENBAO_ROOT_TOKEN"); token != "" {
-		if _, _, err := baoExecFn(pod, token, "", "token", "lookup"); err == nil {
+		_, stderr, err := baoExecFn(pod, token, "", "token", "lookup")
+		switch {
+		case err == nil:
 			fmt.Println("Root token is valid — skipping regeneration.")
 			return nil
+		case tokenLookupRejected(stderr):
+			fmt.Println("Root token is invalid (revoked from prior run?) — regenerating via quorum.")
+		default:
+			fmt.Fprintf(os.Stderr, "::error::could not validate OPENBAO_ROOT_TOKEN on %s: the lookup did not "+
+				"come back with an answer (%v: %s). This is NOT evidence the token was revoked, and "+
+				"regenerating on a guess would mint a second root token while leaving the current one live "+
+				"and untracked. Fix the exec path (pod Ready? konnectivity up?) and re-run.\n",
+				pod, err, strings.TrimSpace(stderr))
+			return fmt.Errorf("root-token validation on %s was inconclusive: %w", pod, err)
 		}
+	} else {
+		fmt.Println("No OPENBAO_ROOT_TOKEN set — regenerating via quorum.")
 	}
-	fmt.Println("Root token is invalid (revoked from prior run?) — regenerating via quorum.")
 
 	keys, err := recoveryKeysFromEnv()
 	if err != nil {

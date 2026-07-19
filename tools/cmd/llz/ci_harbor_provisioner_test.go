@@ -120,6 +120,36 @@ func TestHarborProvisionerSteadyStateNoop(t *testing.T) {
 	}
 }
 
+// An OpenBao read failure is not an unseeded path. robotsSeeded used to fold
+// the error into false, and the 409 branch then told the operator to delete a
+// robot whose credentials were intact in OpenBao — turning a recoverable blip
+// into a destroyed credential. The read failure must stop the tick instead.
+func TestHarborProvisionerUnreadableBaoDoesNotAdviseDeletingTheRobot(t *testing.T) {
+	srv, payloads := harborStub(t, http.StatusConflict, nil) // the robot already exists
+	store := &fakeBaoStore{
+		data:   map[string]map[string]string{},
+		getErr: errors.New("Error making API request: 503 Service Unavailable"),
+	}
+	gh := setProvisionerEnv(t, "adminpass", store)
+	t.Setenv("HARBOR_API_URL", srv.URL)
+
+	var err error
+	out := captureStdout(t, func() { err = runCIHarborProvisioner() })
+	if err == nil {
+		t.Fatal("an unreadable OpenBao must fail the tick, not fall through to the create path")
+	}
+	if !strings.Contains(err.Error(), "cannot tell") {
+		t.Errorf("the error should name the ambiguity it refuses to resolve: %v", err)
+	}
+	if strings.Contains(out, "delete the robot") {
+		t.Error("advised deleting a live robot on the strength of a failed read")
+	}
+	if len(*payloads) != 0 || len(store.writes) != 0 || len(*gh) != 0 {
+		t.Errorf("nothing should have been created/written/published: robots=%v bao=%v gh=%v",
+			*payloads, store.writes, *gh)
+	}
+}
+
 func TestHarborProvisionerSteadySmoke401IsFatal(t *testing.T) {
 	srv := httptestNewSmoke401(t)
 	store := &fakeBaoStore{data: map[string]map[string]string{

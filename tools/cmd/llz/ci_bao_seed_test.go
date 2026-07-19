@@ -187,6 +187,13 @@ func TestK8sSecretField(t *testing.T) {
 
 // stubBaoSeedKV stubs baoExecFn for bao-seed runs: `kv get` of presentPath/
 // presentField returns presentValue; every `kv put` is recorded.
+func lastArg(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[len(args)-1]
+}
+
 func stubBaoSeedKV(t *testing.T, presentField, presentValue string) *[][]string {
 	t.Helper()
 	var puts [][]string
@@ -198,7 +205,10 @@ func stubBaoSeedKV(t *testing.T, presentField, presentValue string) *[][]string 
 			if presentField != "" && strings.Contains(joined, "-field="+presentField) {
 				return presentValue + "\n", "", nil
 			}
-			return "", "no value", errors.New("exit 2")
+			// bao's own words for an absent path. A bare error with no stderr
+			// would now mean "the read never got an answer" — which fails the
+			// seed closed instead of overwriting a possibly-live credential.
+			return "", "No value found at " + lastArg(args), errors.New("exit 2")
 		case strings.HasPrefix(joined, "kv put"):
 			puts = append(puts, args)
 			return "", "", nil

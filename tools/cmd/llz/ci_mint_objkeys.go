@@ -93,7 +93,14 @@ func runCIMintBootstrapObjkeys(region string) error {
 		}
 		// Idempotency: a seeded path means an earlier bootstrap (or the rotator)
 		// owns a live key — minting again would orphan it until the next drain.
-		if baoKVGetField(e.baoPath, e.presentField) != "" {
+		// An unreadable path is not an unseeded one: reading "" off a sealed pod
+		// mints a REAL object-storage key at Linode and overwrites the live one,
+		// breaking Loki/Harbor S3 auth until the next drain. Fail closed.
+		seeded, verdict := baoKVGetFieldOK(e.baoPath, e.presentField)
+		if verdict == baoReadUnknown {
+			return errBaoReadUnknown(e.baoPath, e.presentField, "mint a replacement key for "+e.name)
+		}
+		if seeded != "" {
 			fmt.Printf("%s: %s already seeded — skipping mint.\n", e.name, e.baoPath)
 			continue
 		}

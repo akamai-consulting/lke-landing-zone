@@ -253,9 +253,22 @@ func runCIBaoSeed(o baoSeedOpts) error {
 
 	// Idempotency guard: a value already at the path means an earlier run
 	// seeded it; re-seeding would rotate a credential that is live in-cluster.
-	if o.skipIfPresent != "" && baoKVGetField(o.path, o.skipIfPresent) != "" {
-		fmt.Printf("%s already exists — skipping.\n", o.path)
-		return nil
+	//
+	// The guard is only as good as the read behind it. baoKVGetField returned ""
+	// for a sealed pod exactly as for an unseeded path, so the guard silently
+	// did not fire and the seeder below overwrote a live credential with fresh
+	// crypto/rand bytes — the precise outcome this branch exists to prevent. An
+	// unreadable path is now fatal: a failed run is recoverable, a clobbered
+	// credential is not.
+	if o.skipIfPresent != "" {
+		val, verdict := baoKVGetFieldOK(o.path, o.skipIfPresent)
+		if verdict == baoReadUnknown {
+			return errBaoReadUnknown(o.path, o.skipIfPresent, "seed it")
+		}
+		if val != "" {
+			fmt.Printf("%s already exists — skipping.\n", o.path)
+			return nil
+		}
 	}
 
 	values, missing, err := resolveSeedFields(fields, os.Getenv, k8sSecretField, seedRandRead)

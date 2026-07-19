@@ -130,7 +130,13 @@ func runCIMintBootstrapPAT(region string) error {
 	}
 	// Idempotency: a seeded path means a rotation (or an earlier bootstrap)
 	// owns a live token — minting again would strand it until the next drain.
-	if baoKVGetField("secret/linode/api-token", "token") != "" {
+	// Reading "" off a sealed pod strands it in exactly the way this guard is
+	// written to avoid, so an unreadable path stops the mint instead.
+	seeded, verdict := baoKVGetFieldOK("secret/linode/api-token", "token")
+	if verdict == baoReadUnknown {
+		return errBaoReadUnknown("secret/linode/api-token", "token", "mint a replacement PAT")
+	}
+	if seeded != "" {
 		fmt.Println("secret/linode/api-token already seeded — skipping mint (rotation owns it).")
 		return nil
 	}
