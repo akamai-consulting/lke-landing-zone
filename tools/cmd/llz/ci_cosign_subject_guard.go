@@ -6,7 +6,7 @@ package main
 // Why it exists: keyless signing derives the certificate subject from the
 // signing workflow's PATH. kyverno-verify-llz-image-signature.yaml pins
 //
-//	https://github.com/akamai-consulting/*/.github/workflows/build-images.yml@*
+//	https://github.com/akamai-consulting/lke-landing-zone/.github/workflows/build-images.yml@*
 //
 // so the policy only trusts signatures produced by a workflow at exactly that
 // path. Renaming or moving build-images.yml changes the subject of every
@@ -27,10 +27,15 @@ package main
 // repo doing the renaming, with the policy file named, instead of a silent
 // admission failure in every instance downstream.
 //
-// SCOPE: this checks that the pinned path RESOLVES. It deliberately does not
-// judge how tightly the subject is scoped — the org-wildcard in the repo
-// position is a documented trust-anchor decision in the policy's own comments,
-// and narrowing it is the owner's call, not this guard's.
+// SCOPE: two checks. The pinned workflow path must RESOLVE, and the owner/repo
+// position must not be a glob. The repo position was originally a wildcard
+// (akamai-consulting/*), meaning any repo in the org with a workflow at that
+// path could mint an accepted signature; the owner narrowed it to the single
+// repo that builds the image, and this refuses to let the wildcard back in.
+//
+// The @ref glob is deliberately NOT judged: build-images.yml is
+// workflow_dispatch-able and release-e2e drives it on feature branches, so
+// those signatures legitimately carry a non-main ref.
 //
 // The extraction is pure and unit-tested; the filesystem is reached only by the
 // walk in RunE.
@@ -129,6 +134,24 @@ func runCosignSubjectGuard(root string) error {
 			strings.Join(dirs, ", "))
 	}
 
+	// A wildcard in the owner/repo position widens the trust anchor to every repo
+	// under the org: anyone who can create a repo there, or push a workflow to an
+	// existing one, can mint a signature this policy accepts. The image name is a
+	// hard constant with exactly one legitimate signer, so there is never a reason
+	// for the identity to be broader. The ref (@…) is exempt — build-images.yml is
+	// dispatched on feature branches by release-e2e, so that glob is load-bearing.
+	if wide := wildcardRepoSubjects(refs); len(wide) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "cosign-subject-guard: %d keyless subject pin(s) wildcard the owner/repo position:\n", len(wide))
+		for _, w := range wide {
+			fmt.Fprintf(&b, "  %s\n    subject: %s\n", w.File, w.Subject)
+		}
+		b.WriteString("\nThat accepts a signature from ANY repo matching the glob, not just the one that\n" +
+			"builds this image. Pin the owner and repo explicitly; keep the @ref a glob if the\n" +
+			"signing workflow is dispatched on branches.")
+		return fmt.Errorf("%s", b.String())
+	}
+
 	var missing []cosignSubjectRef
 	for _, r := range refs {
 		if _, statErr := os.Stat(filepath.Join(root, ".github", "workflows", r.Workflow)); statErr != nil {
@@ -155,4 +178,22 @@ func runCosignSubjectGuard(root string) error {
 		"never get created. Either restore the workflow path or update the subject pin to the new one\n" +
 		"(and re-sign, or re-publish, any image whose signature carries the old subject).")
 	return fmt.Errorf("%s", b.String())
+}
+
+// wildcardRepoSubjects returns the subjects whose owner/repo position contains a
+// glob. Only the portion BEFORE "/.github/workflows/" is examined — a glob in the
+// trailing @ref is legitimate and common.
+func wildcardRepoSubjects(refs []cosignSubjectRef) []cosignSubjectRef {
+	const marker = "/.github/workflows/"
+	var out []cosignSubjectRef
+	for _, r := range refs {
+		i := strings.Index(r.Subject, marker)
+		if i < 0 {
+			continue
+		}
+		if strings.ContainsAny(r.Subject[:i], "*?") {
+			out = append(out, r)
+		}
+	}
+	return out
 }
