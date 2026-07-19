@@ -77,23 +77,49 @@ func runCIResolveHarborURL(region string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
-	if v := os.Getenv("HARBOR_URL"); v != "" {
-		fmt.Printf("HARBOR_URL: %s (from vars.HARBOR_URL).\n", v)
-		return nil
-	}
+	override := os.Getenv("HARBOR_URL")
 	lz, err := clusterspec.LoadInstance(".")
 	if err != nil {
+		// An override still works without a spec — it just cannot be cross-checked
+		// against what the in-cluster provisioner will derive. Only the no-override
+		// case is fatal.
+		if override != "" {
+			fmt.Printf("HARBOR_URL: %s (from vars.HARBOR_URL; spec unreadable, so no cross-check against harbor.<domainSuffix>).\n", override)
+			return nil
+		}
 		fmt.Fprintf(os.Stderr, "::error::HARBOR_URL is unset and the LandingZone spec could not be loaded (%v). Set the vars.HARBOR_URL variable, or fix the spec.\n", err)
 		return fmt.Errorf("resolve harbor url: %w", err)
 	}
 	e, ok := lz.Env(region)
 	domain := e.Cluster.Bootstrap.DomainSuffix
 	if !ok || domain == "" {
+		if override != "" {
+			// An override with no spec to check it against: usable, but say so.
+			fmt.Printf("HARBOR_URL: %s (from vars.HARBOR_URL; no domainSuffix in the spec to cross-check).\n", override)
+			return nil
+		}
 		fmt.Fprintf(os.Stderr, "::error::HARBOR_URL is unset and spec.environments.%s.cluster.bootstrap.domainSuffix is empty. Set the vars.HARBOR_URL variable, or fill the spec field.\n", region)
 		return fmt.Errorf("domainSuffix not found in the spec for env %s", region)
 	}
-	fmt.Printf("HARBOR_URL unset — derived harbor.<domainSuffix> = harbor.%s\n", domain)
-	return appendGHAFile("GITHUB_ENV", "HARBOR_URL=harbor."+domain)
+	derived := clusterspec.HarborHost(domain)
+
+	if override != "" {
+		// The in-cluster harbor-robot-provisioner gets HARBOR_HOST from
+		// RenderHarborHostPatch, which ALWAYS derives harbor.<domainSuffix> and does
+		// not read this override. So an override that diverges from the derivation
+		// leaves CI and the in-cluster provisioner pointed at different registries —
+		// the provisioner writes the wrong registry_host into OpenBao, and nothing
+		// reports it. kustomize.go notes the two "must be kept in step"; this is
+		// what actually checks.
+		if override != derived {
+			fmt.Fprintf(os.Stderr, "::warning::HARBOR_URL is %q but the in-cluster provisioner will use %q (harbor.<domainSuffix>, from RenderHarborHostPatch, which ignores this override). CI and the cluster will disagree about the registry host — align vars.HARBOR_URL with the spec's domainSuffix, or change the domainSuffix.\n", override, derived)
+		}
+		fmt.Printf("HARBOR_URL: %s (from vars.HARBOR_URL).\n", override)
+		return nil
+	}
+
+	fmt.Printf("HARBOR_URL unset — derived harbor.<domainSuffix> = %s\n", derived)
+	return appendGHAFile("GITHUB_ENV", "HARBOR_URL="+derived)
 }
 
 // ── audit-pvc-storageclass ────────────────────────────────────────────────────
