@@ -613,7 +613,7 @@ type meta struct {
 
 func checkNodes(r *health.Report) {
 	hdr("node health")
-	for _, n := range kList[health.Node]("get", "nodes") {
+	for _, n := range sectionItems[health.Node](r, "Nodes", "get", "nodes") {
 		ok, ready, mem, disk, pid := health.NodeHealthy(n)
 		if ok {
 			record(r, health.CatOK, fmt.Sprintf("Node %s (Ready, no pressure)", n.Name()))
@@ -682,7 +682,7 @@ func checkStorageClasses(r *health.Report) {
 			record(r, health.CatFail, "StorageClass "+sc+" missing")
 		}
 	}
-	classes := kList[health.StorageClass]("get", "storageclass")
+	classes := sectionItems[health.StorageClass](r, "StorageClasses", "get", "storageclass")
 	switch def := health.DefaultStorageClasses(classes); len(def) {
 	case 1:
 		record(r, health.CatOK, "exactly one default StorageClass ("+def[0]+")")
@@ -924,7 +924,7 @@ func checkLeases(r *health.Report, inv *clusterInventory) {
 		if !inv.nsExists[ns] {
 			continue
 		}
-		for _, it := range kList[leaseItem]("-n", ns, "get", "leases.coordination.k8s.io") {
+		for _, it := range sectionItems[leaseItem](r, "Leases in "+ns, "-n", ns, "get", "leases.coordination.k8s.io") {
 			if it.Spec.RenewTime == "" {
 				continue
 			}
@@ -945,7 +945,7 @@ func checkLeases(r *health.Report, inv *clusterInventory) {
 
 func checkArgoApps(r *health.Report, phase1 bool) {
 	hdr("ArgoCD Applications")
-	for _, raw := range kItems("-n", "argocd", "get", "applications.argoproj.io") {
+	for _, raw := range sectionItems[json.RawMessage](r, "ArgoCD Applications", "-n", "argocd", "get", "applications.argoproj.io") {
 		a, err := health.ParseArgoApp(raw)
 		if err != nil {
 			continue
@@ -1006,16 +1006,16 @@ func checkWorkloads(r *health.Report, inv *clusterInventory, phase1 bool) {
 		if !inv.nsExists[ns] {
 			continue
 		}
-		for _, d := range kList[deploymentItem]("-n", ns, "get", "deploy") {
+		for _, d := range sectionItems[deploymentItem](r, "Deployments in "+ns, "-n", ns, "get", "deploy") {
 			preason, pmsg := progressingCondition(d.Status.Conditions)
 			cat, msg := health.ClassifyWorkload("Deployment", ns, d.Metadata.Name, d.Spec.Replicas, d.Status.ReadyReplicas, preason, pmsg, phase1)
 			record(r, cat, msg)
 		}
-		for _, s := range kList[statefulSetItem]("-n", ns, "get", "sts") {
+		for _, s := range sectionItems[statefulSetItem](r, "StatefulSets in "+ns, "-n", ns, "get", "sts") {
 			cat, msg := health.ClassifyWorkload("StatefulSet", ns, s.Metadata.Name, s.Spec.Replicas, s.Status.ReadyReplicas, "", "", phase1)
 			record(r, cat, msg)
 		}
-		for _, ds := range kList[daemonSetItem]("-n", ns, "get", "ds") {
+		for _, ds := range sectionItems[daemonSetItem](r, "DaemonSets in "+ns, "-n", ns, "get", "ds") {
 			cat, msg := health.ClassifyDaemonSet(ns, ds.Metadata.Name, ds.Status.DesiredNumberScheduled, ds.Status.NumberReady, ds.Status.UpdatedNumberScheduled, ds.Status.NumberMisscheduled)
 			record(r, cat, msg)
 		}
@@ -1043,7 +1043,7 @@ type pvItem struct {
 
 func checkPVCs(r *health.Report) {
 	hdr("PersistentVolumeClaim binding")
-	for _, p := range kList[pvcItem]("get", "pvc", "-A") {
+	for _, p := range sectionItems[pvcItem](r, "PVCs", "get", "pvc", "-A") {
 		cat, msg := health.ClassifyPVC(p.Metadata.Namespace, p.Metadata.Name, p.Status.Phase, p.Spec.StorageClassName)
 		record(r, cat, msg)
 	}
@@ -1052,7 +1052,7 @@ func checkPVCs(r *health.Report) {
 func checkPVs(r *health.Report) {
 	hdr("PersistentVolume hygiene")
 	released := 0
-	for _, p := range kList[pvItem]("get", "pv") {
+	for _, p := range sectionItems[pvItem](r, "PVs", "get", "pv") {
 		switch health.ClassifyPVPhase(p.Status.Phase) {
 		case health.CatFail:
 			record(r, health.CatFail, fmt.Sprintf("PV %s %s — provisioner/CSI issue; dependent PVC will stay Pending", p.Metadata.Name, p.Status.Phase))
@@ -1101,7 +1101,7 @@ func checkJobs(r *health.Report, phase1 bool) {
 	hdr("Jobs (failed or stuck)")
 	var items []jobItem
 	var runs []health.JobRun
-	for _, j := range kList[jobItem]("get", "jobs", "-A") {
+	for _, j := range sectionItems[jobItem](r, "Jobs", "get", "jobs", "-A") {
 		// Ephemeral e2e exercise Jobs (e.g. broad-pat-rotator-e2e) are judged by
 		// their own assert step; a Failed one lingering from a prior run on a
 		// reused cluster must not gate convergence. Same rationale as the Workflow
@@ -1164,7 +1164,7 @@ func checkCronWorkflows(r *health.Report, inv *clusterInventory) {
 		return
 	}
 	now := time.Now()
-	for _, cw := range kList[cronWorkflowItem]("get", "cronworkflows.argoproj.io", "-A") {
+	for _, cw := range sectionItems[cronWorkflowItem](r, "CronWorkflows", "get", "cronworkflows.argoproj.io", "-A") {
 		key := cw.Metadata.Namespace + "/" + cw.Metadata.Name
 		submissionErr := ""
 		for _, c := range cw.Status.Conditions {
@@ -1199,7 +1199,7 @@ func checkServices(r *health.Report, inv *clusterInventory, phase1 bool) {
 		if !inv.nsExists[ns] {
 			continue
 		}
-		for _, s := range kList[serviceItem]("-n", ns, "get", "svc") {
+		for _, s := range sectionItems[serviceItem](r, "Services in "+ns, "-n", ns, "get", "svc") {
 			if s.Spec.Type == "ExternalName" || s.Spec.ClusterIP == "None" {
 				continue
 			}
@@ -1226,7 +1226,7 @@ type pdbItem struct {
 
 func checkPDBs(r *health.Report, phase1 bool) {
 	hdr("PodDisruptionBudgets")
-	for _, p := range kList[pdbItem]("get", "pdb", "-A") {
+	for _, p := range sectionItems[pdbItem](r, "PDBs", "get", "pdb", "-A") {
 		key := p.Metadata.Namespace + "/" + p.Metadata.Name
 		cat, msg := health.ClassifyPDB(key, p.Status.CurrentHealthy, p.Status.DesiredHealthy, p.Status.DisruptionsAllowed, p.Status.ExpectedPods, phase1)
 		if cat != health.CatOK {
@@ -1247,7 +1247,7 @@ type ingressItem struct {
 
 func checkIngresses(r *health.Report, phase1 bool) {
 	hdr("Ingress addresses")
-	for _, ing := range kList[ingressItem]("get", "ingress", "-A") {
+	for _, ing := range sectionItems[ingressItem](r, "Ingresses", "get", "ingress", "-A") {
 		key := ing.Metadata.Namespace + "/" + ing.Metadata.Name
 		cat, msg := health.ClassifyIngress(key, len(ing.Status.LoadBalancer.Ingress), phase1)
 		record(r, cat, msg)
@@ -1267,7 +1267,7 @@ func checkWorkflows(r *health.Report, inv *clusterInventory, phase1 bool) {
 	if !inv.crds["workflows.argoproj.io"] {
 		return
 	}
-	for _, wf := range kList[workflowItem]("get", "workflows.argoproj.io", "-A") {
+	for _, wf := range sectionItems[workflowItem](r, "Workflows", "get", "workflows.argoproj.io", "-A") {
 		key := wf.Metadata.Namespace + "/" + wf.Metadata.Name
 		if cat, msg := health.ClassifyWorkflowPhase(key, wf.Status.Phase, phase1); cat != health.CatOK {
 			record(r, cat, msg)
@@ -1290,7 +1290,7 @@ func checkStuckFinalizers(r *health.Report, inv *clusterInventory) {
 			args = append(args, "-A")
 		}
 		args = append(args, kind)
-		for _, m := range kList[meta](args...) {
+		for _, m := range sectionItems[meta](r, "stuck-finalizer "+kind, args...) {
 			if m.Metadata.DeletionTimestamp == "" {
 				continue
 			}
@@ -1327,7 +1327,7 @@ type podItem struct {
 func checkPods(r *health.Report, phase1 bool) {
 	hdr("unhealthy pods (all namespaces)")
 	bad := false
-	for _, p := range kList[podItem]("get", "pods", "-A") {
+	for _, p := range sectionItems[podItem](r, "Pods", "get", "pods", "-A") {
 		// Job/CronJob pods are ephemeral and self-completing — their health is
 		// the Job section's (checkJobs/ClassifyJob), not this steady-state
 		// workload gate. Skip them so a short-lived CronJob pod caught
