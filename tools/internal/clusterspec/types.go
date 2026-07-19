@@ -216,6 +216,12 @@ type NodePool struct {
 	// AutoscalerEnabled is a pointer so an omitted value leaves the tfvars
 	// default rather than forcing false; nil == "don't touch".
 	AutoscalerEnabled *bool `json:"autoscalerEnabled,omitempty"` // autoscaler_enabled
+	// AutoscalerMin/Max bound the pool when autoscaling is on. Pointers for the
+	// same reason: nil leaves the tfvars default (3/6). Without these, a spec
+	// could turn autoscaling ON but had no way to set its range — the rendered
+	// tfvars are git-untracked, so hand-editing them was not an option either.
+	AutoscalerMin *int `json:"autoscalerMin,omitempty"` // autoscaler_min
+	AutoscalerMax *int `json:"autoscalerMax,omitempty"` // autoscaler_max
 }
 
 // ControlPlane fields are pointers so an omitted value leaves the tfvars default

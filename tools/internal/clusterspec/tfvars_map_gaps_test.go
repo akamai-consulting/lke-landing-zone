@@ -28,6 +28,9 @@ func fullCluster() Cluster {
 	c.NodePool.Type = "g8-dedicated-8-4"
 	c.NodePool.Count = 5
 	c.NodePool.AutoscalerEnabled = &tru
+	amin, amax := 2, 9
+	c.NodePool.AutoscalerMin = &amin
+	c.NodePool.AutoscalerMax = &amax
 	c.ControlPlane.HighAvailability = &tru
 	c.ControlPlane.AuditLogsEnabled = &fls
 	c.APIServerAllowCIDRs.IPv4 = []string{"1.2.3.4/32"}
@@ -53,7 +56,8 @@ func TestClusterTFVars_AllOptionalsEmitted(t *testing.T) {
 	keys := assignKeys(ClusterTFVars(fullCluster()))
 	for _, k := range []string{
 		"cluster_label", "region", "k8s_version", "tags", "node_type", "node_count",
-		"autoscaler_enabled", "control_plane_high_availability", "control_plane_audit_logs_enabled",
+		"autoscaler_enabled", "autoscaler_min", "autoscaler_max",
+		"control_plane_high_availability", "control_plane_audit_logs_enabled",
 		"github_runner_ipv4_cidrs", "github_runner_ipv6_cidrs", "vpc_subnet_cidr", "vpc_network",
 		"ha_role", "ha_group",
 	} {
@@ -68,7 +72,7 @@ func TestClusterTFVars_MinimalOmitsOptionals(t *testing.T) {
 	c.ClusterLabel, c.Region, c.K8sVersion = "l", "r", "v"
 	c.NodePool.Type, c.NodePool.Count = "t", 1
 	keys := assignKeys(ClusterTFVars(c))
-	for _, k := range []string{"tags", "autoscaler_enabled", "vpc_subnet_cidr", "vpc_network", "ha_role", "ha_group"} {
+	for _, k := range []string{"tags", "autoscaler_enabled", "autoscaler_min", "autoscaler_max", "vpc_subnet_cidr", "vpc_network", "ha_role", "ha_group"} {
 		if _, ok := keys[k]; ok {
 			t.Errorf("ClusterTFVars(minimal) should omit %q", k)
 		}

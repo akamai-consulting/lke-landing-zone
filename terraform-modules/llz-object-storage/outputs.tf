@@ -22,23 +22,3 @@ output "s3_endpoint" {
 # TF-managed keys — see main.tf's "Access keys" note. Credentials are minted by
 # `llz ci mint-bootstrap-objkeys` + rotated in-cluster, and never transit
 # Terraform state or GitHub secrets.)
-
-output "next_steps" {
-  description = "Post-apply checklist."
-  value       = <<-EOT
-
-    ── Post-apply ──────────────────────────────────────────────────────────
-
-    Buckets only — no access keys live in this workspace. The scoped keys are
-    minted by bootstrap-openbao.yml (`llz ci mint-bootstrap-objkeys`) and
-    rotated by the in-cluster linodeCredRotator CronJob; nothing to extract,
-    stash, or reseed here.
-
-    Next: run bootstrap-openbao.yml for the region if this is a first apply.
-    Rotation SLA visibility: the loki-objkey-rotation health check reads the
-    OpenBao secret's age. Full background:
-    docs/designs/linode-credential-rotator.md
-
-    ────────────────────────────────────────────────────────────────────────
-  EOT
-}

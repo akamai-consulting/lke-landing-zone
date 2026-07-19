@@ -81,8 +81,9 @@ load-bearing.
 - **SemVer on the interface:** MAJOR = breaking module-IO / reusable-workflow-input
   / scaffold change, MINOR = backward-compatible addition, PATCH = fix. The module
   READMEs and the reusable workflows' `on.workflow_call` are the SemVer surface.
-- Internal module-to-module references stay **relative** (`../llz-node-firewall`),
-  never `git::` — that keeps the two halves pinned to the same umbrella tag.
+- Internal module-to-module references stay **relative** (`../llz-<name>`), never
+  `git::` — that keeps the two halves pinned to the same umbrella tag. (There are
+  none today; each root composes the modules directly.)
 - **The template hardcodes no version.** `instance-template/`'s first-party pins
   are copier `<@ llz_version @>` placeholders; `llz new`/`llz upgrade` render them
   to the `llz` binary's own version (the CLI is the version anchor). Don't write a

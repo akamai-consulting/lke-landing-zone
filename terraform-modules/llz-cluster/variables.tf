@@ -88,10 +88,14 @@ variable "github_runner_ipv6_cidrs" {
   default     = []
 }
 
-# ── Kubeconfig ────────────────────────────────────────────────────────────────
-
-variable "kubeconfig_path" {
-  description = "Absolute path to write the generated kubeconfig file (mode 0600). Leave empty to skip writing to disk and consume kubeconfig_raw from outputs instead."
+variable "control_plane_cidr" {
+  description = "Linode private network CIDR the LKE control plane uses to reach worker nodes (kubelet, DNS, Calico, etc.)."
   type        = string
-  default     = ""
+  default     = "192.168.128.0/17"
+}
+
+variable "nodebalancer_cidr" {
+  description = "Linode NodeBalancer source CIDR. NodeBalancers health-check and forward traffic from this range."
+  type        = string
+  default     = "192.168.255.0/24"
 }

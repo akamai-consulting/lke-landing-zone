@@ -24,7 +24,7 @@ it from scaffold to a converged LKE-Enterprise cluster and on into day-2.
 flowchart LR
     subgraph TPL["📦 Template repo (this repo) — builds & publishes"]
         direction TB
-        TF["terraform-modules/<br/>llz-cluster · llz-pool · llz-node-firewall<br/>llz-object-storage · llz-openbao"]
+        TF["terraform-modules/<br/>llz-cluster · llz-object-storage"]
         CH["kubernetes-charts/<br/>first-party Helm charts"]
         IMG["dockerfiles/<br/>ci-terraform · ci-kubernetes · devcontainer"]
         CLI["tools/<br/>the llz CLI (Go)"]
@@ -95,7 +95,7 @@ flowchart TB
 
     subgraph TFROOTS["Terraform roots — instance-template/terraform-iac-bootstrap/"]
         direction TB
-        R1["cluster<br/>→ llz-cluster (VPC + LKE-E)<br/>→ llz-pool (encrypted nodes + firewall)"]
+        R1["cluster<br/>→ llz-cluster (VPC + firewall + LKE-E)<br/>→ linode_lke_node_pool (encrypted nodes)"]
         R2["object-storage<br/>→ llz-object-storage (OBJ + scoped keys)"]
         R4["cluster-bootstrap<br/>helm_release.apl + readiness gates"]
     end

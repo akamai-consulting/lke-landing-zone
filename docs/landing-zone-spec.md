@@ -234,9 +234,11 @@ error. Example: `observability: { retention: 30d, storage: 50Gi, replicas: 2 }`.
 
 **Optional fields are only written when set.** The optional bools
 (`nodePool.autoscalerEnabled`, `controlPlane.highAvailability`,
-`controlPlane.auditLogsEnabled`) and the `apiServerAllowCIDRs` lists are written
-to the tfvars only when you specify them (on the env or in `spec.defaults`); omit
-them and the `terraform.tfvars.example` default is left untouched.
+`controlPlane.auditLogsEnabled`), the optional pool bounds
+(`nodePool.autoscalerMin` / `nodePool.autoscalerMax`, defaulting to 3 and 6) and
+the `apiServerAllowCIDRs` lists are written to the tfvars only when you specify
+them (on the env or in `spec.defaults`); omit them and the
+`terraform.tfvars.example` default is left untouched.
 
 **Shared defaults.** `spec.defaults.cluster` / `spec.defaults.components` in
 `landingzone.yaml` set a baseline inherited by every environment; a per-env value

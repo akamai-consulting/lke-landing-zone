@@ -1,17 +1,16 @@
-// Package tfroots embeds the four Terraform root directories an instance builds
-// on (cluster, cluster-bootstrap, object-storage, vpc) and generates them on the
-// fly. An instance commits ZERO Terraform: `llz render` writes the roots' *.tf
-// files (gitignored build artifacts) the same way it writes each <env>.tfvars,
-// from this single embedded copy — so the roots live ONCE, in the binary, and an
-// instance never vendors ~700 lines of byte-identical HCL.
+// Package tfroots embeds the three Terraform root directories an instance builds
+// on (cluster, object-storage, vpc) and generates them on the fly. An instance
+// commits ZERO Terraform: `llz render` writes the roots' *.tf files (gitignored
+// build artifacts) the same way it writes each <env>.tfvars, from this single
+// embedded copy — so the roots live ONCE, in the binary, and an instance never
+// vendors ~700 lines of byte-identical HCL.
 //
 // The embedded files keep their copier tokens verbatim (<@ upstream_org @>,
-// <@ llz_version @>, <@ instance_repo @>); Render/Substitute fill them at
-// generation time from values the command layer resolves (upstream_org is the
-// constant akamai-consulting — no forks; ref is the template version the instance
-// tracks; instance_repo is the instance's own owner/name). backend.tf is a static
-// partial `backend "s3" {}` (all per-env params arrive via -backend-config at
-// init), so it carries no token and lands identically everywhere.
+// <@ llz_version @>); Render/Substitute fill them at generation time from values
+// the command layer resolves (upstream_org is the constant akamai-consulting —
+// no forks; ref is the template version the instance tracks). backend.tf is a
+// static partial `backend "s3" {}` (all per-env params arrive via -backend-config
+// at init), so it carries no token and lands identically everywhere.
 package tfroots
 
 import (
@@ -25,12 +24,11 @@ import (
 //go:embed roots
 var embedded embed.FS
 
-// The three copier token types the roots carry (established: 5 upstream_org, 4
-// llz_version, 2 instance_repo across all four roots). Substituted verbatim.
+// The two copier token types the roots carry (established: 3 upstream_org, 3
+// llz_version across the three roots). Substituted verbatim.
 const (
-	tokUpstreamOrg  = "<@ upstream_org @>"
-	tokLLZVersion   = "<@ llz_version @>"
-	tokInstanceRepo = "<@ instance_repo @>"
+	tokUpstreamOrg = "<@ upstream_org @>"
+	tokLLZVersion  = "<@ llz_version @>"
 )
 
 // DefaultVPCSubnetCIDR is the cluster root's `vpc_subnet_cidr` default. It lives
@@ -47,13 +45,12 @@ const (
 // the HCL, with nothing enforcing it — that is the drift this prevents.
 const DefaultVPCSubnetCIDR = "10.0.0.0/13"
 
-// Substitute fills the three copier tokens in a root file's content. Any token a
+// Substitute fills the two copier tokens in a root file's content. Any token a
 // given file does not contain is a harmless no-op.
-func Substitute(content, upstreamOrg, ref, instanceRepo string) string {
+func Substitute(content, upstreamOrg, ref string) string {
 	r := strings.NewReplacer(
 		tokUpstreamOrg, upstreamOrg,
 		tokLLZVersion, ref,
-		tokInstanceRepo, instanceRepo,
 	)
 	return r.Replace(content)
 }
@@ -87,11 +84,11 @@ var tfRel = func() []string {
 // under dst, WITHOUT writing anything — the render engine's --diff uses it to
 // preview the roots alongside the tfvars. Reads are from the compile-time embed, so
 // they cannot fail at runtime.
-func Files(dst, upstreamOrg, ref, instanceRepo string) map[string]string {
+func Files(dst, upstreamOrg, ref string) map[string]string {
 	out := make(map[string]string, len(tfRel))
 	for _, r := range tfRel {
 		raw, _ := embedded.ReadFile("roots/" + r) // enumerated at init — cannot fail
-		out[filepath.Join(dst, "terraform-iac-bootstrap", r)] = Substitute(string(raw), upstreamOrg, ref, instanceRepo)
+		out[filepath.Join(dst, "terraform-iac-bootstrap", r)] = Substitute(string(raw), upstreamOrg, ref)
 	}
 	return out
 }

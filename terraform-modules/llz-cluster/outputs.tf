@@ -5,11 +5,6 @@ output "cluster_id" {
   value       = linode_lke_cluster.this.id
 }
 
-output "cluster_status" {
-  description = "LKE cluster status."
-  value       = linode_lke_cluster.this.status
-}
-
 output "api_endpoints" {
   description = "Kubernetes API server endpoints."
   value       = linode_lke_cluster.this.api_endpoints
@@ -20,12 +15,6 @@ output "api_endpoints" {
 output "kubeconfig_raw" {
   description = "Decoded kubeconfig content. Marked sensitive — consume via 'terraform output -raw kubeconfig_raw'."
   value       = base64decode(linode_lke_cluster.this.kubeconfig)
-  sensitive   = true
-}
-
-output "kubeconfig_path" {
-  description = "Path of the kubeconfig file written to disk. Empty string when kubeconfig_path was not set."
-  value       = var.kubeconfig_path != "" ? local_sensitive_file.kubeconfig[0].filename : ""
   sensitive   = true
 }
 
@@ -50,20 +39,10 @@ output "vpc_subnet_cidr" {
 
 output "node_firewall_id" {
   description = "Cloud Firewall ID. Pass as firewall_id when creating linode_lke_node_pool resources."
-  value       = module.node_firewall.firewall_id
+  value       = linode_firewall.this.id
 }
 
 output "node_firewall_label" {
   description = "Resolved label of the Cloud Firewall."
-  value       = module.node_firewall.firewall_label
-}
-
-output "acl_cidrs_ipv4" {
-  description = "GitHub runner IPv4 CIDRs surfaced from the firewall module. Useful for referencing the bootstrap ACL set in downstream resources."
-  value       = module.node_firewall.acl_cidrs_ipv4
-}
-
-output "acl_cidrs_ipv6" {
-  description = "GitHub runner IPv6 CIDRs surfaced from the firewall module. Useful for referencing the bootstrap ACL set in downstream resources."
-  value       = module.node_firewall.acl_cidrs_ipv6
+  value       = linode_firewall.this.label
 }

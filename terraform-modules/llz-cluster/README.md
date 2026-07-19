@@ -2,7 +2,7 @@
 
 Terraform module that provisions a secure LKE Enterprise cluster with no default node pool.
 
-The module creates the supporting VPC and subnet, calls [`llz-node-firewall`](../llz-node-firewall/) to stamp a baseline Cloud Firewall, and then provisions the LKE-E cluster with a locked-down control-plane ACL. No node pools are created — callers attach them separately using the `node_firewall_id` output, which allows pool configuration, autoscaling, and lifecycle to be controlled independently of cluster infrastructure.
+The module creates the supporting VPC and subnet, stamps a baseline Cloud Firewall (`firewall.tf`), and then provisions the LKE-E cluster with a locked-down control-plane ACL. No node pools are created — callers attach them separately using the `node_firewall_id` output, which allows pool configuration, autoscaling, and lifecycle to be controlled independently of cluster infrastructure.
 
 ---
 
@@ -12,7 +12,7 @@ The module creates the supporting VPC and subnet, calls [`llz-node-firewall`](..
 llz-cluster
 ├── linode_vpc               (dedicated VPC for the cluster)
 ├── linode_vpc_subnet        (worker node subnet, /13 or /14)
-├── module.node_firewall     (llz-node-firewall — bootstrap baseline rules)
+├── linode_firewall          (node firewall — bootstrap baseline rules)
 └── linode_lke_cluster       (tier = "enterprise", no node pool)
 ```
 
@@ -70,20 +70,9 @@ module "cluster" {
 }
 ```
 
-### With kubeconfig written to disk
+### Consuming the kubeconfig
 
-```hcl
-module "cluster" {
-  source = "../../terraform-modules/llz-cluster"
-
-  cluster_label   = "platform-primary"
-  region          = "us-ord"
-  k8s_version     = "v1.32.9+lke4"
-  kubeconfig_path = "/home/runner/.kube/platform-primary.yaml"
-}
-```
-
-Leave `kubeconfig_path` unset to skip writing to disk and consume the kubeconfig directly from the output:
+The module never writes the kubeconfig to disk — take it from the output:
 
 ```
 terraform output -raw kubeconfig_raw > ~/.kube/platform-primary.yaml
@@ -129,7 +118,11 @@ resource "linode_lke_node_pool" "gpu" {
 
 At `terraform apply` time, the module writes a bootstrap ACL to the cluster control plane (your static CIDRs plus any runner CIDRs). After that, the `cloud-firewall-controller` owns the ACL via the Linode API. Terraform ignores ACL drift on subsequent applies so it does not overwrite the controller's live state.
 
-The node firewall follows the same model via `llz-node-firewall` — see that module's README for full details on the handoff and the `terraform state rm` escape hatch.
+The node firewall follows the same model: `firewall.tf` lays down a bootstrap baseline and sets `ignore_changes = [inbound, outbound]`, after which the controller owns the rules. To drop the resource from state entirely after handoff:
+
+```
+terraform state rm module.<name>.linode_firewall.this
+```
 
 ---
 
@@ -142,6 +135,7 @@ The node firewall follows the same model via `llz-node-firewall` — see that mo
 | `k8s_version` | `string` | required | LKE-E Kubernetes version, e.g. `v1.32.9+lke4`. |
 | `tags` | `list(string)` | `[]` | Tags applied to all resources. |
 | `vpc_subnet_cidr` | `string` | `"10.0.0.0/13"` | Worker node subnet CIDR. LKE-E requires `/13` or `/14`. |
+| `vpc_id` | `string` | `""` | Attach to an EXISTING (shared) VPC by ID instead of creating a dedicated `<cluster_label>-vpc`. When set, only this cluster's subnet is created inside it; subnets across clusters sharing a VPC must not overlap. |
 | `control_plane_high_availability` | `bool` | `true` | Enable control-plane HA. |
 | `control_plane_audit_logs_enabled` | `bool` | `true` | Enable control-plane audit logs. |
 | `control_plane_acl_ipv4` | `list(string)` | `[]` | Static IPv4 CIDRs for the bootstrap control-plane ACL. |
@@ -149,23 +143,21 @@ The node firewall follows the same model via `llz-node-firewall` — see that mo
 | `firewall_label` | `string` | `""` | Override the Cloud Firewall label. Defaults to `<cluster_label>-nodes`. |
 | `github_runner_ipv4_cidrs` | `list(string)` | `[]` | Runner IPv4 CIDRs — adds NodePort rules and merges into bootstrap ACL. |
 | `github_runner_ipv6_cidrs` | `list(string)` | `[]` | Runner IPv6 CIDRs — adds NodePort rules and merges into bootstrap ACL. |
-| `kubeconfig_path` | `string` | `""` | Path to write the kubeconfig (mode `0600`). Skip by leaving empty. |
+| `control_plane_cidr` | `string` | `"192.168.128.0/17"` | Linode private-network CIDR the LKE control plane reaches nodes from (kubelet, DNS, Calico). Source for the node firewall's control-plane rules. |
+| `nodebalancer_cidr` | `string` | `"192.168.255.0/24"` | Linode NodeBalancer source CIDR. Source for the node firewall's NodePort rules. |
 
 ## Outputs
 
 | Name | Description |
 |---|---|
 | `cluster_id` | LKE cluster ID. |
-| `cluster_status` | LKE cluster status. |
 | `api_endpoints` | Kubernetes API server endpoints. |
 | `kubeconfig_raw` | Decoded kubeconfig. Sensitive. |
-| `kubeconfig_path` | Path of the kubeconfig file on disk. Empty if not written. |
 | `vpc_id` | VPC ID. |
 | `vpc_subnet_id` | Worker node subnet ID. |
+| `vpc_subnet_cidr` | IPv4 CIDR of the worker subnet — the single source of truth for node, pod, and service ranges. The firewall-controller's `VPC_CIDR` is derived from this so its rules match the VPC the node firewall was built from. |
 | `node_firewall_id` | Cloud Firewall ID — pass as `firewall_id` on `linode_lke_node_pool`. |
 | `node_firewall_label` | Resolved Cloud Firewall label. |
-| `acl_cidrs_ipv4` | Runner IPv4 CIDRs echoed for downstream reference. |
-| `acl_cidrs_ipv6` | Runner IPv6 CIDRs echoed for downstream reference. |
 
 ## Requirements
 
@@ -173,4 +165,4 @@ The node firewall follows the same model via `llz-node-firewall` — see that mo
 |---|---|
 | Terraform | `>= 1.5.0` |
 | `linode/linode` provider | `~> 3.11` |
-| `hashicorp/local` provider | `~> 2.5` |
+| `hashicorp/time` provider | `~> 0.12` |

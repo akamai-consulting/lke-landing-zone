@@ -40,6 +40,12 @@ func ClusterTFVars(c Cluster) []Assign {
 	if c.NodePool.AutoscalerEnabled != nil {
 		add("autoscaler_enabled", hclBool(*c.NodePool.AutoscalerEnabled))
 	}
+	if c.NodePool.AutoscalerMin != nil {
+		add("autoscaler_min", strconv.Itoa(*c.NodePool.AutoscalerMin))
+	}
+	if c.NodePool.AutoscalerMax != nil {
+		add("autoscaler_max", strconv.Itoa(*c.NodePool.AutoscalerMax))
+	}
 	if c.ControlPlane.HighAvailability != nil {
 		add("control_plane_high_availability", hclBool(*c.ControlPlane.HighAvailability))
 	}

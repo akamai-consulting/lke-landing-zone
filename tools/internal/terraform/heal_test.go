@@ -4,8 +4,8 @@ import "testing"
 
 const fwCollisionLog = `Error: Failed to Create Firewall
 
-  with module.cluster.module.node_firewall.linode_firewall.this,
-  on ../../terraform-modules/llz-node-firewall/main.tf line 1:
+  with module.cluster.linode_firewall.this,
+  on ../../terraform-modules/llz-cluster/firewall.tf line 16:
 
 [400] [label] Label must be unique among your Cloud Firewalls
 `
@@ -18,7 +18,7 @@ func TestFirewallCollisionAndAddress(t *testing.T) {
 		t.Error("FirewallCollision false positive")
 	}
 	got := ParseFirewallAddress(fwCollisionLog)
-	want := "module.cluster.module.node_firewall.linode_firewall.this"
+	want := "module.cluster.linode_firewall.this"
 	if got != want {
 		t.Errorf("ParseFirewallAddress = %q, want %q", got, want)
 	}

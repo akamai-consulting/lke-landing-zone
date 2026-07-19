@@ -7,6 +7,9 @@ locals {
   # one we attach this cluster's subnet to the caller-provided shared VPC.
   create_vpc = var.vpc_id == ""
   vpc_id     = local.create_vpc ? linode_vpc.this[0].id : var.vpc_id
+
+  # Consumed by the node firewall in firewall.tf.
+  has_runner_cidrs = length(var.github_runner_ipv4_cidrs) > 0 || length(var.github_runner_ipv6_cidrs) > 0
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -39,18 +42,7 @@ resource "linode_vpc_subnet" "nodes" {
   depends_on = [time_sleep.vpc_settle]
 }
 
-# ── Node firewall (bootstrap baseline) ───────────────────────────────────────
-
-module "node_firewall" {
-  source = "../llz-node-firewall"
-
-  label           = local.firewall_label
-  vpc_subnet_cidr = var.vpc_subnet_cidr
-  tags            = var.tags
-
-  github_runner_ipv4_cidrs = var.github_runner_ipv4_cidrs
-  github_runner_ipv6_cidrs = var.github_runner_ipv6_cidrs
-}
+# The node firewall lives in firewall.tf.
 
 # ── LKE Enterprise cluster ────────────────────────────────────────────────────
 
@@ -78,8 +70,8 @@ resource "linode_lke_cluster" "this" {
         # Runner CIDRs are merged at bootstrap time so they can reach the API
         # server. The firewall-controller takes over ACL management after init,
         # which is why ignore_changes is set below.
-        ipv4 = concat(var.control_plane_acl_ipv4, module.node_firewall.acl_cidrs_ipv4)
-        ipv6 = concat(var.control_plane_acl_ipv6, module.node_firewall.acl_cidrs_ipv6)
+        ipv4 = concat(var.control_plane_acl_ipv4, var.github_runner_ipv4_cidrs)
+        ipv6 = concat(var.control_plane_acl_ipv6, var.github_runner_ipv6_cidrs)
       }
     }
   }
@@ -99,21 +91,12 @@ resource "linode_lke_cluster" "this" {
   }
 
   # Fail fast: force the node firewall (and, via vpc_id/subnet_id above, the VPC
-  # + subnet) to be created BEFORE the cluster. The cluster only references the
-  # firewall module through acl_cidrs_ipv4/ipv6, which are pass-throughs of input
-  # variables — so without this depends_on Terraform creates the firewall and the
+  # + subnet) to be created BEFORE the cluster. This depends_on is the ONLY edge
+  # to the firewall — the ACL above reads the runner CIDRs straight from the
+  # input variables — so without it Terraform creates the firewall and the
   # cluster in PARALLEL. A stale/duplicate firewall label then 400s immediately
   # ("Label must be unique among your Cloud Firewalls") while the ~20-30 min
   # cluster create is already in flight. Ordering firewall/VPC first surfaces
   # those cheap, instant failures before the expensive create begins.
-  depends_on = [module.node_firewall]
-}
-
-# ── Kubeconfig (optional) ─────────────────────────────────────────────────────
-
-resource "local_sensitive_file" "kubeconfig" {
-  count           = var.kubeconfig_path != "" ? 1 : 0
-  filename        = var.kubeconfig_path
-  content         = base64decode(linode_lke_cluster.this.kubeconfig)
-  file_permission = "0600"
+  depends_on = [linode_firewall.this]
 }

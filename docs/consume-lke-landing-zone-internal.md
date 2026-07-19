@@ -8,7 +8,7 @@ its rule data is internal infrastructure detail, so it lives in the private repo
 
 This public repo keeps the pieces that are safe to ship and that drive the feature:
 
-- `terraform-modules/llz-node-firewall/` — *creates* the Linode Cloud Firewall and attaches it to the node pool.
+- `terraform-modules/llz-cluster/` (firewall.tf) — *creates* the Linode Cloud Firewall and attaches it to the node pool.
 - the `cidrFirewall` spec component (`platform-apl/components/cidrFirewall/`) — the
   ESO-synced `kube-system/linode` token Secret plus the
   `llz-cidr-firewall-discover` CronJob, which self-discovers

@@ -119,8 +119,6 @@ and the version/publish contract in
 | Module | Purpose |
 |---|---|
 | [`llz-cluster`](terraform-modules/llz-cluster/) | VPC + subnet + LKE-E cluster (no default node pool) |
-| [`llz-pool`](terraform-modules/llz-pool/) | Node pool with `disk_encryption` and `firewall_id` enforced |
-| [`llz-node-firewall`](terraform-modules/llz-node-firewall/) | Cloud Firewall with baseline rules; hands off to the controller |
 | [`llz-object-storage`](terraform-modules/llz-object-storage/) | Linode OBJ buckets + scoped keys for registry/log storage, with key rotation |
 
 ### Helm charts — `kubernetes-charts/`

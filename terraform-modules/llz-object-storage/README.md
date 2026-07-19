@@ -44,8 +44,7 @@ instead of copying YAML. The operational scars travel with the module:
 
 ## Outputs
 
-`bucket_names`, `harbor_registry_bucket`, `s3_endpoint`,
-`next_steps` (post-apply checklist).
+`bucket_names`, `harbor_registry_bucket`, `s3_endpoint`.
 
 ## Provider
 

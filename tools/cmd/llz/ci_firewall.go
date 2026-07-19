@@ -14,7 +14,7 @@ package main
 //
 // The controller does NOT create a CloudFirewall CR or use the upstream Linode
 // cloud-firewall-controller — Linode caps Cloud Firewalls at one per linode,
-// and Terraform's llz-node-firewall module already created and attached the
+// and Terraform's llz-cluster module already created and attached the
 // firewall. The controller just edits that firewall's ruleset on every
 // reconcile via PUT /v4/networking/firewalls/{id}/rules.
 //
