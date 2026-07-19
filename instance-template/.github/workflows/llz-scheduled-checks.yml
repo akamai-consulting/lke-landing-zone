@@ -70,8 +70,10 @@ jobs:
   #   • OpenBao pod seal state (all 3 Raft pods)
   #   • ESO ClusterSecretStore readiness
   #   • Any unhealthy ExternalSecrets across all namespaces
-  # Warning-only (continue-on-error) — a sealed pod pages the operator via the
-  # job summary warning annotations but does not block other scheduled work.
+  # Findings are warning-only IN THE VERB — health-openbao emits ::warning:: and
+  # exits 0, so a sealed pod pages via annotations rather than reddening the run.
+  # The job no longer carries continue-on-error, so what DOES fail it is the probe
+  # path itself (checkout, ACL open, image pull) — see the note on the job.
   #
   # DEMOTED to WEEKLY (was daily): the in-cluster llz-reconciler now samples these
   # continuously and fires them as Prometheus alerts — OpenBaoSealed /
@@ -91,19 +93,24 @@ jobs:
   # fewer read-modify-write mutations of the SHARED LKE-E ACL object, which four
   # concurrent jobs were racing on every week.
   #
-  # FAILURE SEMANTICS ARE PRESERVED EXACTLY, per check, because they were NOT
-  # uniform across the four jobs (an audit that proposed this fold assumed they
-  # were — they differ, and folding naively would have either silenced a real
-  # gate or made three warn-only checks newly fatal):
+  # NO continue-on-error, anywhere — deliberately, and this is a change from the
+  # four jobs that preceded this one (three of which carried it at job level).
   #
-  #   openbao-health          job-level continue-on-error  →  step-level, warn-only
-  #   certmanager-health      job-level continue-on-error  →  step-level, warn-only
-  #   wave-health-vap         job-level continue-on-error  →  step-level, warn-only
-  #   loki-objkey-rotation    NO continue-on-error (a GATE) →  no step-level either
+  # It was swallowing less than it appeared to, and the wrong thing. health-openbao
+  # and health-certmanager are warn-only IN GO ("never fails the job") — they emit
+  # ::warning:: and exit 0 on a finding. So continue-on-error could only ever hide
+  # a PROBE-PATH failure: a dead checkout, a failed ACL open, a bad image pull.
+  # That is precisely what this weekly run exists to prove still works, and a probe
+  # that cannot report itself broken re-proves nothing.
   #
-  # The gate runs LAST so that a genuine SLA breach fails the job without
-  # skipping the three warn-only checks ahead of it. The cleanup + ACL revoke
-  # below are if: always(), so they still run when it fails.
+  # Two of these DO fail on a real finding, and now say so:
+  #   assert-wave-health-vap  — the wave-health guard VAP stopped enforcing (the
+  #                             #142 bootstrap-wedge class it exists to prevent)
+  #   health-loki-objkey      — the object-store key breached its rotation SLA
+  #
+  # Every check carries `if: always()` (except the first, which has nothing before
+  # it to skip on), so one failure does not skip its siblings — all four still run
+  # and report. Cleanup + ACL revoke are if: always() too.
   weekly-cluster-checks:
     name: Weekly cluster checks (${{ matrix.region }})
     needs: discover
@@ -140,12 +147,10 @@ jobs:
 
       - name: Check OpenBao seal + ESO readiness
         if: steps.kubeconfig.outputs.available == 'true'
-        continue-on-error: true
         run: llz ci health-openbao
 
       - name: Check cert-manager Certificate readiness
         if: always() && steps.kubeconfig.outputs.available == 'true'
-        continue-on-error: true
         run: llz ci health-certmanager
 
       # tee -a, not tee. As its own job this truncated $GITHUB_STEP_SUMMARY, which
@@ -154,7 +159,6 @@ jobs:
       # whatever the steps above had written.
       - name: Assert the wave-health guard VAP is bound and enforcing
         if: always() && steps.kubeconfig.outputs.available == 'true'
-        continue-on-error: true
         run: llz ci assert-wave-health-vap | tee -a "$GITHUB_STEP_SUMMARY"
 
       # THE GATE — deliberately no continue-on-error, and last.
@@ -333,7 +337,6 @@ jobs:
       contents: read
     environment: infra-${{ matrix.region }}
     timeout-minutes: 15
-    continue-on-error: true
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     strategy:
       fail-fast: false
@@ -400,9 +403,9 @@ jobs:
 
       # health-prom-rules queries Prometheus /api/v1/rules and reports any rule
       # group with lastError set — evaluation failures promtool's syntax check
-      # cannot catch. Warn-only in the sense that findings are annotations, but it
-      # no longer passes vacuously: an unreachable Prometheus fails the step (the
-      # job is continue-on-error, so it surfaces without blocking siblings). It
+      # cannot catch. Rule findings are annotations, but an unreachable Prometheus
+      # FAILS: the check cannot report on rules it never read, and the job no
+      # longer carries continue-on-error to swallow that. It
       # used to look for the pod in llz-observability, which holds the LLZ CRs
       # while apl-core Prometheus runs in monitoring — so it skipped clean on every
       # run and nothing validated the live rules.
