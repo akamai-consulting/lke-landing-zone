@@ -147,10 +147,23 @@ func classifyChartBump(dir, oldVer, newVer string) (ok bool, msg string) {
 // chartVersion extracts the top-level `version:` value from Chart.yaml content,
 // or "" when absent. Only column-0 `version:` matches, so nested keys and
 // `appVersion:` are not mistaken for it.
-func chartVersion(chartYAML string) string {
+func chartVersion(chartYAML string) string { return chartScalar(chartYAML, "version:") }
+
+// chartScalar reads a column-0 `<key> <value>` scalar out of Chart.yaml, with
+// surrounding quotes stripped.
+//
+// The quote stripping is the point: `version: "0.1.11"` is valid YAML, and the
+// PIN side of every comparison already strips quotes (extractChartPins,
+// siblingValue). Without it here, quoting a chart version makes chart-pin-guard
+// compare `"0.1.11"` against `0.1.11` and report a drift that does not exist —
+// a spurious failure on a legal edit. Latent today (no chart is quoted), and
+// cheaper to make symmetric than to discover.
+//
+// Column-0 only, so nested keys and `appVersion:` are never mistaken for it.
+func chartScalar(chartYAML, key string) string {
 	for _, line := range strings.Split(chartYAML, "\n") {
-		if strings.HasPrefix(line, "version:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "version:"))
+		if strings.HasPrefix(line, key) {
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, key)), `"'`)
 		}
 	}
 	return ""
