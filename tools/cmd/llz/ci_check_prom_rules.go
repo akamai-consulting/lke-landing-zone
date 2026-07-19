@@ -25,17 +25,29 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
-// defaultPromRulesDir is where the template ships its PrometheusRule CRDs
-// (matched by kube-prometheus-stack's ruleSelector). It was
-// platform-apl/manifest/observability/prometheus-rules-crd until the
-// rules moved into the observability component — the stale default made the
-// gate skip-clean on every run, so nothing promtool-validated the live rules.
-const defaultPromRulesDir = "platform-apl/components/observability/prometheus-rules"
+// defaultPromRulesDirs are the roots that ship PrometheusRule CRDs (matched by
+// kube-prometheus-stack's ruleSelector). It was a single dir,
+// platform-apl/manifest/observability/prometheus-rules-crd, until the rules moved
+// into the observability component — the stale default made the gate skip-clean
+// on every run, so nothing promtool-validated the live rules.
+//
+// The llzReconciler component was the same hole one directory over: its
+// prometheusrule.yaml holds the entire reconciler alert surface (and now the
+// label-joined LLZReconcilerStale, exactly the class promtool catches) and sat
+// outside the only root this gate walked. That dir is a mixed component tree —
+// Deployment, ServiceMonitor, RBAC — so the walk selects PrometheusRules by kind
+// rather than assuming every manifest is one. Explicit file args keep the strict
+// behavior: naming a non-PrometheusRule is still an error, not a silent skip.
+var defaultPromRulesDirs = []string{
+	"platform-apl/components/observability/prometheus-rules",
+	"platform-apl/components/llzReconciler/llz-reconciler",
+}
 
 // extractBareGroups parses a PrometheusRule CRD and returns the bare-groups
 // YAML document (`groups: …`) promtool expects. Pure and faithful to the Python
@@ -66,6 +78,25 @@ func extractBareGroups(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("PrometheusRule has no spec.groups")
 	}
 	return yaml.Marshal(map[string]yaml.Node{"groups": doc.Spec.Groups})
+}
+
+// isPrometheusRule reports whether a manifest is a PrometheusRule CRD. Used only
+// on the walked (directory) path, so a mixed component tree contributes its rules
+// without its Deployment/ServiceMonitor tripping the kind check.
+func isPrometheusRule(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	var doc struct {
+		Kind string `yaml:"kind"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		// Unparseable YAML is not this gate's business to adjudicate — the manifest
+		// guards cover it — but it is certainly not a rule file to validate.
+		return false, nil
+	}
+	return doc.Kind == "PrometheusRule", nil
 }
 
 // promtoolCheckRules runs `promtool check rules <path>`, streaming promtool's
@@ -124,25 +155,45 @@ func walkPromRuleFiles(dir string) ([]string, error) {
 // absent (an instance overlay that removed the observability component).
 // rulesDir tolerates both repo layouts via esRepoPath: apl-values/ at the root
 // (an instance) or under instance-template/ (this template repo).
-func runCICheckPromRules(rulesDir string, files []string, w io.Writer) error {
+func runCICheckPromRules(rulesDirs []string, files []string, w io.Writer) error {
 	if len(files) == 0 {
-		if !filepath.IsAbs(rulesDir) {
-			rulesDir = esRepoPath(".", rulesDir)
+		present := 0
+		for _, dir := range rulesDirs {
+			if !filepath.IsAbs(dir) {
+				dir = esRepoPath(".", dir)
+			}
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				fmt.Fprintf(w, "check-prom-rules: %s absent — skipping that root\n", dir)
+				continue
+			}
+			present++
+			walked, walkErr := walkPromRuleFiles(dir)
+			if walkErr != nil {
+				// Not the skip case: the dir exists and the walk broke partway, so an
+				// empty or short list means "could not read", not "nothing to check".
+				return fmt.Errorf("check-prom-rules: scanning %s: %w", dir, walkErr)
+			}
+			for _, f := range walked {
+				isRule, err := isPrometheusRule(f)
+				if err != nil {
+					return fmt.Errorf("check-prom-rules: reading %s: %w", f, err)
+				}
+				if isRule {
+					files = append(files, f)
+				}
+			}
 		}
-		if info, err := os.Stat(rulesDir); err != nil || !info.IsDir() {
-			fmt.Fprintf(w, "check-prom-rules: no PrometheusRule manifests (%s absent) — skipping\n", rulesDir)
+		if present == 0 {
+			fmt.Fprintf(w, "check-prom-rules: no PrometheusRule roots present — skipping\n")
 			return nil
 		}
-		walked, walkErr := walkPromRuleFiles(rulesDir)
-		if walkErr != nil {
-			// Not the skip case: the dir exists and the walk broke partway, so an
-			// empty or short list means "could not read", not "nothing to check".
-			return fmt.Errorf("check-prom-rules: scanning %s: %w", rulesDir, walkErr)
-		}
-		files = walked
 		if len(files) == 0 {
-			fmt.Fprintf(w, "check-prom-rules: no YAML manifests under %s — skipping\n", rulesDir)
-			return nil
+			// A root exists but holds no PrometheusRule. Same posture as
+			// requireCorpus (guard_corpus.go): a gate that validated nothing prints
+			// the same success as one that validated every rule, so it fails instead.
+			return fmt.Errorf("check-prom-rules: found 0 PrometheusRule CRDs under %s — "+
+				"refusing to pass on an empty corpus. Update --rules-dir if the rules moved",
+				strings.Join(rulesDirs, ", "))
 		}
 	}
 	failed := 0
@@ -161,7 +212,7 @@ func runCICheckPromRules(rulesDir string, files []string, w io.Writer) error {
 }
 
 func ciCheckPromRulesCmd() *cobra.Command {
-	var rulesDir string
+	var rulesDirs []string
 	c := &cobra.Command{
 		Use:   "check-prom-rules [file ...]",
 		Short: "promtool check rules over PrometheusRule CRDs (extracts spec.groups first)",
@@ -173,9 +224,10 @@ func ciCheckPromRulesCmd() *cobra.Command {
 			"instance layout and the template's instance-template/ nesting), skipping\n" +
 			"cleanly when that directory is absent.",
 		RunE: func(_ *cobra.Command, args []string) error {
-			return runCICheckPromRules(rulesDir, args, os.Stdout)
+			return runCICheckPromRules(rulesDirs, args, os.Stdout)
 		},
 	}
-	c.Flags().StringVar(&rulesDir, "rules-dir", defaultPromRulesDir, "directory walked for YAML manifests when no file args are given")
+	c.Flags().StringSliceVar(&rulesDirs, "rules-dir", defaultPromRulesDirs,
+		"directories walked for PrometheusRule CRDs when no file args are given (repeatable)")
 	return c
 }

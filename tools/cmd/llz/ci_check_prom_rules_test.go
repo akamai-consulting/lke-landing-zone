@@ -107,7 +107,7 @@ func TestRunCICheckPromRulesPass(t *testing.T) {
 	seen := stubPromtool(t, false)
 
 	var out bytes.Buffer
-	if err := runCICheckPromRules(dir, nil, &out); err != nil {
+	if err := runCICheckPromRules([]string{dir}, nil, &out); err != nil {
 		t.Fatalf("expected pass, got %v\n%s", err, out.String())
 	}
 	if len(*seen) != 1 || (*seen)[0] == "" {
@@ -126,7 +126,7 @@ func TestRunCICheckPromRulesPromtoolFails(t *testing.T) {
 	stubPromtool(t, true)
 
 	var out bytes.Buffer
-	err := runCICheckPromRules(dir, nil, &out)
+	err := runCICheckPromRules([]string{dir}, nil, &out)
 	if err == nil {
 		t.Fatal("expected failure when promtool rejects rules")
 	}
@@ -138,15 +138,18 @@ func TestRunCICheckPromRulesPromtoolFails(t *testing.T) {
 	}
 }
 
+// An EXPLICIT non-PrometheusRule arg is still an error — naming a file and
+// having it silently skipped is how a rule file stops being validated.
 func TestRunCICheckPromRulesBadCRD(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte("kind: ConfigMap\n"), 0o644); err != nil {
+	bad := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(bad, []byte("kind: ConfigMap\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	seen := stubPromtool(t, false)
 
 	var out bytes.Buffer
-	err := runCICheckPromRules(dir, nil, &out)
+	err := runCICheckPromRules(nil, []string{bad}, &out)
 	if err == nil {
 		t.Fatal("expected failure for a non-PrometheusRule file")
 	}
@@ -158,10 +161,77 @@ func TestRunCICheckPromRulesBadCRD(t *testing.T) {
 	}
 }
 
+// A walked root is a mixed component tree: the rules are validated, the
+// Deployment/ServiceMonitor beside them are passed over rather than failing.
+func TestRunCICheckPromRulesWalkSelectsByKind(t *testing.T) {
+	dir := t.TempDir()
+	rule := filepath.Join(dir, "prometheusrule.yaml")
+	if err := os.WriteFile(rule, []byte(promRuleCRDValid), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"deployment.yaml":    "kind: Deployment\n",
+		"servicemonitor.yml": "kind: ServiceMonitor\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := stubPromtool(t, false)
+
+	var out bytes.Buffer
+	if err := runCICheckPromRules([]string{dir}, nil, &out); err != nil {
+		t.Fatalf("mixed component dir should validate just its rules, got %v\n%s", err, out.String())
+	}
+	if len(*seen) != 1 {
+		t.Errorf("promtool should run once (the one PrometheusRule), ran %d times", len(*seen))
+	}
+	if !strings.Contains(out.String(), "ok: "+rule) {
+		t.Errorf("missing ok line for the rule file:\n%s", out.String())
+	}
+}
+
+// A root that exists but holds no PrometheusRule fails: a gate that validated
+// nothing must not print the same success as one that validated everything.
+func TestRunCICheckPromRulesEmptyCorpusFails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cm.yaml"), []byte("kind: ConfigMap\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stubPromtool(t, false)
+
+	var out bytes.Buffer
+	err := runCICheckPromRules([]string{dir}, nil, &out)
+	if err == nil {
+		t.Fatal("a present root with zero PrometheusRules must not pass")
+	}
+	if !strings.Contains(err.Error(), "empty corpus") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// The shipped defaults must actually resolve — a stale root is how this gate
+// skipped clean for months. Both roots are walked, and the reconciler's alerts
+// (the label-joined LLZReconcilerStale) must be among what gets validated.
+func TestDefaultPromRulesDirsCoverShippedRules(t *testing.T) {
+	t.Chdir("../../..") // the roots are repo-relative; tests run in tools/cmd/llz
+	seen := stubPromtool(t, false)
+	var out bytes.Buffer
+	if err := runCICheckPromRules(defaultPromRulesDirs, nil, &out); err != nil {
+		t.Fatalf("shipped rule roots should validate, got %v\n%s", err, out.String())
+	}
+	if len(*seen) < 2 {
+		t.Errorf("expected rules from both default roots, promtool ran %d time(s):\n%s", len(*seen), out.String())
+	}
+	if !strings.Contains(out.String(), "llz-reconciler/prometheusrule.yaml") {
+		t.Errorf("the reconciler alert rules were not validated:\n%s", out.String())
+	}
+}
+
 func TestRunCICheckPromRulesSkipsMissingDir(t *testing.T) {
 	seen := stubPromtool(t, false)
 	var out bytes.Buffer
-	if err := runCICheckPromRules(filepath.Join(t.TempDir(), "nope"), nil, &out); err != nil {
+	if err := runCICheckPromRules([]string{filepath.Join(t.TempDir(), "nope")}, nil, &out); err != nil {
 		t.Fatalf("absent rules dir should skip cleanly, got %v", err)
 	}
 	if len(*seen) != 0 {
@@ -182,7 +252,7 @@ func TestRunCICheckPromRulesExplicitArgs(t *testing.T) {
 
 	var out bytes.Buffer
 	// Explicit args bypass --rules-dir entirely (the dir arg is a bogus path).
-	if err := runCICheckPromRules("/does/not/exist", []string{f}, &out); err != nil {
+	if err := runCICheckPromRules([]string{"/does/not/exist"}, []string{f}, &out); err != nil {
 		t.Fatalf("expected pass on explicit file, got %v", err)
 	}
 	if len(*seen) != 1 {
