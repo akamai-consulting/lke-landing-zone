@@ -63,6 +63,16 @@ jobs:
         # release → both lanes (github.com first); dispatch → the chosen one.
         forge: ${{ fromJSON(github.event_name == 'release' && '["github","github-enterprise-server"]' || format('["{0}"]', inputs.forge)) }}
     uses: ./.github/workflows/release-e2e-lane.yml
+    # A CALLED workflow's jobs can never hold more than the calling job's token,
+    # so this must be the union of what the lane's jobs ask for — the lane's
+    # instantiate job needs actions:write (dispatch terraform.yml in the instance
+    # repo) + packages:read (pull the ci-image). Left at the workflow default of
+    # contents:read, the lane's request is an escalation and GitHub fails the run
+    # at startup (startup_failure, before any job logs exist).
+    permissions:
+      contents: read
+      packages: read
+      actions: write
     with:
       forge: ${{ matrix.forge }}
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
