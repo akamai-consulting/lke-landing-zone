@@ -1,0 +1,18 @@
+# Local build output of the tools module. These live here, anchored with a
+# leading slash, rather than as `tools/<name>` in the root .gitignore.
+#
+# Why: ripgrep matches a root-level pattern like `tools/llz` against the
+# DIRECTORY `tools/cmd/llz`, pruning the entire llz CLI source tree (~290 files)
+# from every rg search scoped to tools/. git was unaffected, so the blind spot
+# was silent — it made live symbols in cmd/llz look dead to any grep-based
+# audit. No pattern spelling avoids it (leading-slash anchoring, `!` negation,
+# and character classes were all tested); only moving the rule into this
+# directory-scoped file does, because `/llz` here cannot match `cmd/llz`.
+#
+# Keep new tools-module artifacts in THIS file, anchored, for the same reason —
+# a root-level `tools/firewall-cidrs` would hide a future `cmd/firewall-cidrs`.
+/llz
+/firewall-cidrs
+/firewall-controller/firewall-controller
+/linode-cred-audit
+/bin/
