@@ -580,3 +580,45 @@ func TestLongPoleCandidatesAndReport(t *testing.T) {
 		t.Error("no long-pole should not write a summary section")
 	}
 }
+
+// TestLeaseNamespacesAreLive guards the drift this fixed. checkLeases kept its
+// OWN namespace list, separate from healthNamespaces, and it went stale: it
+// still named "cert-automation" and "openbao" after the platform namespaces were
+// llz- prefixed. The loop `continue`s on an absent namespace, so both entries
+// were inert and nothing said so.
+//
+// A stale lease records CatFail — this list gates converge — so an entry that
+// can never match is a gate watching nothing.
+func TestLeaseNamespacesAreLive(t *testing.T) {
+	var seen []string
+	withKubectl(t, func(a string) ([]byte, error) {
+		if strings.HasPrefix(a, "get ns ") {
+			seen = append(seen, strings.TrimPrefix(a, "get ns "))
+			return nil, errors.New("absent") // skip the body; we only want the list
+		}
+		return nil, errors.New("nope")
+	})
+	var r health.Report
+	checkLeases(&r)
+
+	retired := map[string]string{
+		"openbao":         openbaoNamespace,
+		"cert-automation": "llz-cert-automation",
+		"observability":   "llz-observability",
+	}
+	for _, ns := range seen {
+		if want, bad := retired[ns]; bad {
+			t.Errorf("checkLeases probes the retired namespace %q — it cannot match, so that lease is never checked; use %q", ns, want)
+		}
+	}
+	// The one leader election this repo runs must be in scope.
+	found := false
+	for _, ns := range seen {
+		if ns == "llz-reconciler" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("checkLeases does not probe llz-reconciler, home of the llz-reconciler-leader Lease — the only leader-elected controller this repo runs, and precisely what this check exists to catch: %v", seen)
+	}
+}

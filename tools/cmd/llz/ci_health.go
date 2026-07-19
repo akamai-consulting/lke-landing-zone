@@ -848,7 +848,20 @@ func checkLeases(r *health.Report) {
 	hdr("controller Lease freshness")
 	now := time.Now()
 	stale := false
-	for _, ns := range []string{"argocd", "cert-manager", "external-secrets", "cert-automation", "openbao", "kube-system"} {
+	// Namespaces that host a leader-elected controller. Kept deliberately narrower
+	// than healthNamespaces (a stale lease here is a CatFail, so this list gates
+	// converge) — but it is its own copy, and it DRIFTED: it still said
+	// "cert-automation" and "openbao" long after those namespaces were llz-
+	// prefixed, in the same file whose healthNamespaces was corrected and eight
+	// lines below `openbaoNamespace = "llz-openbao"`. Both entries had therefore
+	// been inert since the rename: the loop `continue`s on a namespace that is not
+	// there, so the skip is silent.
+	//
+	// llz-reconciler is new here, and is the one this check most needed: its
+	// llz-reconciler-leader Lease (reconcile.go — newLeaderElector) is the only
+	// leader election this repo actually runs, and "leader-elected controller
+	// silently stopped" is the exact failure the FAIL string below describes.
+	for _, ns := range []string{"argocd", "cert-manager", "external-secrets", "llz-cert-automation", openbaoNamespace, "llz-reconciler", "kube-system"} {
 		if !kExists("get", "ns", ns) {
 			continue
 		}
