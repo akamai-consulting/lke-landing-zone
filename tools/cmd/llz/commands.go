@@ -347,6 +347,11 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) stamp .template-version")
 		return nil
 	}
+	// Snapshot the stamp before overwriting it: the conflict gate below can still
+	// abort the upgrade, and a .template-version naming a ref the tree has not
+	// actually reached is a lie every later `llz upgrade` / drift report reads as
+	// truth. Restored on that path.
+	priorStamp, hadPriorStamp := readTemplateVersionFile()
 	if err := stampTemplateVersion(""); err != nil {
 		return fmt.Errorf("stamp template version: %w", err)
 	}
@@ -357,11 +362,17 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 	// invalid YAML far downstream (the gsap-apl incident). Fail loudly here BEFORE
 	// the operator commits, instead of relying on `llz lint` to catch it later.
 	if bad := upgradeConflictFiles(); len(bad) > 0 {
+		// Roll the stamp back to what it said before this attempt. The tree is still
+		// at the OLD template version until the markers are resolved, so the recorded
+		// version must say so — otherwise an aborted upgrade leaves the instance
+		// claiming a ref it never reached, and the next run computes its diff from
+		// the wrong base.
+		restoreTemplateVersionFile(priorStamp, hadPriorStamp)
 		fmt.Fprintf(os.Stderr, "\n%s copier update left merge-conflict markers in %d file(s):\n", red("✗"), len(bad))
 		for _, f := range bad {
 			fmt.Fprintf(os.Stderr, "    %s\n", f)
 		}
-		return fmt.Errorf("resolve the conflict marker(s) above, then commit — the upgrade is NOT complete")
+		return fmt.Errorf("resolve the conflict marker(s) above, then re-run `llz upgrade` — the upgrade is NOT complete (.template-version left at the previous ref)")
 	}
 
 	// One place to see what the upgrade touched, so a big managed-file churn is a
@@ -376,6 +387,35 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 	}
 	fmt.Fprintln(os.Stderr, dim("  (re-run with --commit to stage + commit this upgrade as one labeled commit)"))
 	return nil
+}
+
+// readTemplateVersionFile returns the raw .template-version bytes and whether the
+// file existed, so an aborted upgrade can put the stamp back byte-for-byte rather
+// than re-deriving it (a re-stamp would rewrite stamped_at and could pick up a
+// different ref than the one actually recorded).
+func readTemplateVersionFile() ([]byte, bool) {
+	b, err := os.ReadFile(".template-version")
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// restoreTemplateVersionFile undoes a stamp written earlier in this upgrade. An
+// instance that had no stamp before (first upgrade of a pre-stamp repo) gets the
+// file removed again, so the abort leaves no trace either way. Best-effort: the
+// caller is already returning an error, and a failure to restore must not mask it
+// — but it is surfaced, since a stale stamp silently misreports the instance.
+func restoreTemplateVersionFile(prior []byte, had bool) {
+	var err error
+	if had {
+		err = os.WriteFile(".template-version", prior, 0o644)
+	} else if err = os.Remove(".template-version"); os.IsNotExist(err) {
+		err = nil
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s could not restore .template-version (it may name a ref this tree has not reached): %v\n", yellow("!"), err)
+	}
 }
 
 // currentTemplateRef reads the recorded template ref from .template-version
