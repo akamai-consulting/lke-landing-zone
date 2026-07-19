@@ -76,11 +76,20 @@ func runCheckCoverage(profile string, args []string, out io.Writer) error {
 	failed := 0
 	for _, r := range results {
 		switch {
+		// The aligned row stays — it is the readable table when a human scrolls the
+		// log. The ::error:: is what makes a failure an ANNOTATION on the PR
+		// instead of a line buried in job output. This guard failed the build with
+		// its reasons invisible unless you opened the log, the same gap
+		// monitoring-label-guard had.
 		case !r.HasData:
 			fmt.Fprintf(out, "  ??   %-26s no coverage data (min %s%%)\n", r.Threshold.Suffix, r.Threshold.MinStr)
+			fmt.Fprintf(os.Stderr, "::error::coverage: %s has NO coverage data (min %s%%) — the package was renamed, removed, or its tests did not run\n",
+				r.Threshold.Suffix, r.Threshold.MinStr)
 			failed++
 		case !r.OK:
 			fmt.Fprintf(out, "  FAIL %-26s %5.1f%% (min %s%%)\n", r.Threshold.Suffix, r.Pct, r.Threshold.MinStr)
+			fmt.Fprintf(os.Stderr, "::error::coverage: %s at %.1f%% is below its %s%% floor — add tests, or adjust COVERAGE_MINS in the Makefile\n",
+				r.Threshold.Suffix, r.Pct, r.Threshold.MinStr)
 			failed++
 		default:
 			fmt.Fprintf(out, "  ok   %-26s %5.1f%% (min %s%%)\n", r.Threshold.Suffix, r.Pct, r.Threshold.MinStr)

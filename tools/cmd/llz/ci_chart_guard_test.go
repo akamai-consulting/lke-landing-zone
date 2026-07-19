@@ -155,3 +155,30 @@ func TestRunChartVersionGuardFailsOnUnresolvableBase(t *testing.T) {
 		t.Errorf("error should name the unresolvable base: %v", err)
 	}
 }
+
+// TestChartScalarStripsQuotes pins the symmetry fix. The PIN side of every
+// comparison strips quotes (extractChartPins, siblingValue); Chart.yaml's reader
+// did not. A legal `version: "0.1.11"` therefore made chart-pin-guard compare
+// `"0.1.11"` against `0.1.11` and report drift that does not exist.
+func TestChartScalarStripsQuotes(t *testing.T) {
+	for _, tt := range []struct {
+		name, yaml, want string
+	}{
+		{"unquoted", "name: llz-foo\nversion: 0.1.11\n", "0.1.11"},
+		{"double-quoted", "name: llz-foo\nversion: \"0.1.11\"\n", "0.1.11"},
+		{"single-quoted", "name: llz-foo\nversion: '0.1.11'\n", "0.1.11"},
+		{"absent", "name: llz-foo\n", ""},
+		// appVersion and nested keys must never be mistaken for the chart version.
+		{"appVersion not matched", "appVersion: 9.9.9\nversion: 0.1.11\n", "0.1.11"},
+		{"nested not matched", "dependencies:\n  version: 3.3.3\n", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := chartVersion(tt.yaml); got != tt.want {
+				t.Errorf("chartVersion = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if got := chartName("name: \"llz-foo\"\nversion: 0.1.0\n"); got != "llz-foo" {
+		t.Errorf("chartName = %q, want llz-foo (quotes stripped, as the pin side does)", got)
+	}
+}

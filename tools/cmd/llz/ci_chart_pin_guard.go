@@ -210,14 +210,7 @@ func loadLocalChartVersions(root string) (map[string]string, error) {
 // chartName extracts the top-level `name:` value from Chart.yaml content, or ""
 // when absent. Mirrors chartVersion (ci_chart_guard.go): only a column-0 key
 // matches, so nested `name:` fields are not picked up.
-func chartName(chartYAML string) string {
-	for _, line := range strings.Split(chartYAML, "\n") {
-		if strings.HasPrefix(line, "name:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "name:"))
-		}
-	}
-	return ""
-}
+func chartName(chartYAML string) string { return chartScalar(chartYAML, "name:") }
 
 // countFirstPartyPins counts the pins across all files that reference a chart
 // present in local — the denominator for the success message (third-party pins
