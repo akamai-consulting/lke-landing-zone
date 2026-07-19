@@ -430,6 +430,14 @@ func printHealthSummary(r *health.Report) {
 	for _, c := range r.Failed {
 		fmt.Println("  " + red("FAILED:  ") + " " + c)
 	}
+	// One dead tunnel fails every apiserver→pod check at once. Name it as the single
+	// cause it is — otherwise the reader sees N unrelated component failures sitting
+	// directly under a green "konnectivity-agent (3/3)" line and debugs the symptoms.
+	if r.TunnelDown {
+		fmt.Println(yellow("  konnectivity tunnel (apiserver → pod) unavailable — the checks above that " +
+			"depend on it are inconclusive, not failed. konnectivity-agent reporting Ready does not " +
+			"prove the tunnel: its readiness probe does not exercise the dial-out."))
+	}
 	switch r.Verdict() {
 	case health.HardFailed:
 		fmt.Printf("%s\n", red(fmt.Sprintf("%d check(s) hard-failed.", len(r.Failed))))
@@ -585,6 +593,16 @@ var catStyles = map[health.Category]struct {
 // record prints a labeled line for a finding and routes it into the report
 // (CatOK/CatWarn print but never affect the verdict).
 func record(r *health.Report, cat health.Category, msg string) {
+	// A hard failure whose text is the konnectivity signature is an apiserver→pod
+	// transport outage, not a verdict on the component — downgrade it to Pending so
+	// converge polls its budget instead of spending a hard strike. Done here, at the
+	// single funnel every check routes through, so it covers each apiserver→pod
+	// surface (APIService discovery, exec-based probes) without touching them
+	// individually. See health.IsTunnelBlocked.
+	if cat == health.CatFail && health.IsTunnelBlocked(msg) {
+		r.TunnelDown = true
+		cat = health.CatPending
+	}
 	style := catStyles[cat]
 	// Pad to the fixed column on the PLAIN label, then color — the ANSI escapes are
 	// zero-width, so the columns stay aligned (color.go).
@@ -814,6 +832,13 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 		return
 	}
 	active := 0
+	// Set when a pod's seal state could not be read because the konnectivity tunnel
+	// was down. The leader count is DERIVED from those reads, so it must not be
+	// judged on them: with all three execs blocked, active stays 0 and the count
+	// would hard-fail "no active leader" — a conclusion drawn from three
+	// measurements that never happened. Its own text carries no tunnel signature,
+	// so record() cannot catch it; the fact has to be threaded here.
+	tunnelBlocked := false
 	for i := 0; i < replicas; i++ {
 		pod := fmt.Sprintf("platform-openbao-%d", i)
 		if !kExists("-n", openbaoNamespace, "get", "pod", pod) {
@@ -825,11 +850,22 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 			record(r, health.CatPending, "Pod openbao/"+pod+" (openbao container not Ready — can't query seal status)")
 			continue
 		}
-		out, _ := execOutput("kubectl", "-n", openbaoNamespace, "exec", pod, "-c", "openbao", "--",
+		out, execErr := execOutput("kubectl", "-n", openbaoNamespace, "exec", pod, "-c", "openbao", "--",
 			"env", "VAULT_ADDR=https://127.0.0.1:8200", "VAULT_SKIP_VERIFY=true", "bao", "status", "-format=json")
 		st, perr := health.ParseBaoStatus(out)
 		if perr != nil {
-			record(r, health.CatFail, "Pod openbao/"+pod+" (could not parse bao status JSON)")
+			// `bao status` runs through `kubectl exec`, i.e. the konnectivity tunnel.
+			// The exec error was previously discarded, so a dead tunnel surfaced as the
+			// unattributable "could not parse bao status JSON" on all three pods —
+			// reading as an OpenBao fault when OpenBao was never reached. Carry the
+			// stderr into the message: it names the real cause, and lets record()
+			// classify a tunnel outage as Pending rather than a hard failure.
+			msg := "Pod openbao/" + pod + " (could not parse bao status JSON"
+			if detail := strings.TrimSpace(execErrText(execErr)); detail != "" {
+				msg += " — " + detail
+			}
+			record(r, health.CatFail, msg+")")
+			tunnelBlocked = tunnelBlocked || health.IsTunnelBlocked(msg)
 			continue
 		}
 		cat, msg := health.ClassifyBaoSeal(st)
@@ -846,6 +882,10 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 		}
 	}
 	if cat, msg := health.ClassifyLeaderCount(replicas, active); cat != health.CatOK {
+		if tunnelBlocked && cat == health.CatFail {
+			cat = health.CatPending
+			msg += " — seal state unread on ≥1 pod (konnectivity tunnel down); leader count inconclusive"
+		}
 		record(r, cat, msg)
 	}
 }
