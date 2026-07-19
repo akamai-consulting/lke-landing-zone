@@ -26,11 +26,8 @@ package main
 
 import (
 	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // meshStrictNamespaces maps a namespace known to enforce Istio STRICT mTLS to the
@@ -104,10 +101,7 @@ func runCIMeshEgressGuard(root string) error {
 // source namespace.
 func collectMeshEgressFindings(dirs []string) (findings []meFinding, examined int, err error) {
 	examined, err = walkManifests(dirs, func(path string, raw []byte) error {
-		for _, doc := range splitMeshEgressDocs(string(raw)) {
-			if doc.Kind != "NetworkPolicy" {
-				continue
-			}
+		for _, doc := range decodeDocs(string(raw), func(d meDoc) bool { return d.Kind == "NetworkPolicy" }) {
 			for _, e := range doc.Spec.Egress {
 				for _, to := range e.To {
 					if to.NamespaceSelector == nil {
@@ -132,28 +126,6 @@ func collectMeshEgressFindings(dirs []string) (findings []meFinding, examined in
 	if err != nil {
 		return nil, examined, err
 	}
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].file != findings[j].file {
-			return findings[i].file < findings[j].file
-		}
-		return findings[i].targetNS < findings[j].targetNS
-	})
+	sortGuardFindings(findings, func(f meFinding) (string, string) { return f.file, f.targetNS })
 	return findings, examined, nil
-}
-
-// splitMeshEgressDocs parses a multi-doc YAML file, skipping docs that fail to
-// parse (kustomize patches etc.).
-func splitMeshEgressDocs(raw string) []meDoc {
-	var docs []meDoc
-	dec := yaml.NewDecoder(strings.NewReader(raw))
-	for {
-		var d meDoc
-		if err := dec.Decode(&d); err != nil {
-			break
-		}
-		if d.Kind != "" {
-			docs = append(docs, d)
-		}
-	}
-	return docs
 }

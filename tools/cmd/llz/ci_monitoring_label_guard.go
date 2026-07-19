@@ -22,11 +22,8 @@ package main
 
 import (
 	"fmt"
-	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // monitoringGuardKinds are the CR kinds apl-core's Prometheus label-selects.
@@ -102,9 +99,8 @@ func runMonitoringLabelGuard(roots []string) error {
 
 func collectMonitoringLabelFindings(roots []string) (findings []monitoringLabelFinding, examined int, err error) {
 	examined, err = walkManifests(roots, func(path string, raw []byte) error {
-		for _, doc := range splitMonitoringDocs(string(raw)) {
-			if monitoringGuardKinds[doc.Kind] &&
-				doc.Metadata.Labels[requiredMonitoringLabelKey] != requiredMonitoringLabelVal {
+		for _, doc := range decodeDocs(string(raw), func(d monitoringDoc) bool { return monitoringGuardKinds[d.Kind] }) {
+			if doc.Metadata.Labels[requiredMonitoringLabelKey] != requiredMonitoringLabelVal {
 				findings = append(findings, monitoringLabelFinding{file: path, kind: doc.Kind, name: doc.Metadata.Name})
 			}
 		}
@@ -113,28 +109,6 @@ func collectMonitoringLabelFindings(roots []string) (findings []monitoringLabelF
 	if err != nil {
 		return nil, examined, err
 	}
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].file != findings[j].file {
-			return findings[i].file < findings[j].file
-		}
-		return findings[i].name < findings[j].name
-	})
+	sortGuardFindings(findings, func(f monitoringLabelFinding) (string, string) { return f.file, f.name })
 	return findings, examined, nil
-}
-
-// splitMonitoringDocs parses a multi-doc YAML file, skipping docs that fail to
-// parse (kustomize patches etc. are not this guard's concern).
-func splitMonitoringDocs(raw string) []monitoringDoc {
-	var docs []monitoringDoc
-	dec := yaml.NewDecoder(strings.NewReader(raw))
-	for {
-		var d monitoringDoc
-		if err := dec.Decode(&d); err != nil {
-			break
-		}
-		if d.Kind != "" {
-			docs = append(docs, d)
-		}
-	}
-	return docs
 }

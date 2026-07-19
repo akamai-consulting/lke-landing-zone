@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestSplitMonitoringDocs(t *testing.T) {
+func TestDecodeMonitoringDocs(t *testing.T) {
 	raw := `
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -21,7 +21,7 @@ kind: Deployment
 metadata:
   name: not-a-monitor
 `
-	docs := splitMonitoringDocs(raw)
+	docs := decodeDocs(raw, func(d monitoringDoc) bool { return d.Kind != "" })
 	if len(docs) != 2 || docs[0].Kind != "ServiceMonitor" || docs[1].Kind != "Deployment" {
 		t.Fatalf("expected SM + Deployment, got %+v", docs)
 	}

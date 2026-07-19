@@ -21,7 +21,6 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -45,14 +44,15 @@ import (
 // this guard exists to prevent.
 var chartPinScanRoots = []string{"platform-apl", "instance-template", "kubernetes-charts"}
 
-// chartPinRe matches a `chart: <name>` line, capturing its indent and name.
-// versionPinRe matches the sibling `targetRevision:`/`version:` line (the two
-// keys Argo Applications and llz-argo-bootstrap-apps components respectively use
-// for the pinned chart SemVer). Quotes are stripped by the caller.
-var (
-	chartPinRe   = regexp.MustCompile(`^(\s*)chart:\s*(\S+)\s*$`)
-	versionPinRe = regexp.MustCompile(`^(\s*)(?:targetRevision|version):\s*(\S+)\s*$`)
-)
+// chartPinRe matches a `chart: <name>` line, capturing its indent and name. The
+// SemVer sibling — `targetRevision:` or `version:`, the two keys Argo
+// Applications and llz-argo-bootstrap-apps components respectively use — is not
+// matched by a regex of its own: extractChartPins hands the indent to
+// siblingValue, which scans the source block in BOTH directions. A regex would
+// have to pick a direction, and picking forward is exactly the bug the
+// bidirectional scan fixed (a block writing targetRevision above chart yielded
+// no pin at all). Quotes are stripped by siblingValue.
+var chartPinRe = regexp.MustCompile(`^(\s*)chart:\s*(\S+)\s*$`)
 
 // chartPin is a single first-party chart version pin found in a manifest.
 type chartPin struct {
@@ -96,36 +96,17 @@ func runChartPinGuard(root string) error {
 
 	byFile := map[string][]chartPin{}
 	for _, sub := range chartPinScanRoots {
-		base := filepath.Join(root, sub)
-		if _, statErr := os.Stat(base); statErr != nil {
-			continue // subtree absent in this layout — nothing to scan
-		}
-		walkErr := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				// Helm chart templates/ hold Go-templated `chart: {{ ... }}`
-				// values, not literal pins — skip them to avoid false matches.
-				if d.Name() == "templates" {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
-				return nil
-			}
-			b, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
+		// walkManifests is the shared walk: it skips an absent subtree, skips Helm
+		// templates/ (which hold Go-templated `chart: {{ ... }}` values, not literal
+		// pins), and matches both YAML extensions. Walked one root at a time so a
+		// failure still names the root it was scanning.
+		if _, walkErr := walkManifests([]string{filepath.Join(root, sub)}, func(path string, b []byte) error {
 			if pins := extractChartPins(string(b)); len(pins) > 0 {
 				rel, _ := filepath.Rel(root, path)
 				byFile[filepath.ToSlash(rel)] = pins
 			}
 			return nil
-		})
-		if walkErr != nil {
+		}); walkErr != nil {
 			return fmt.Errorf("scanning %s: %w", sub, walkErr)
 		}
 	}
@@ -211,6 +192,7 @@ func loadLocalChartVersions(root string) (map[string]string, error) {
 // when absent. Mirrors chartVersion (ci_chart_guard.go): only a column-0 key
 // matches, so nested `name:` fields are not picked up.
 func chartName(chartYAML string) string { return chartScalar(chartYAML, "name:") }
+
 
 // countFirstPartyPins counts the pins across all files that reference a chart
 // present in local — the denominator for the success message (third-party pins

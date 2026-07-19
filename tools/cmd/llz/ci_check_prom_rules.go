@@ -22,7 +22,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,19 +106,16 @@ func checkRuleCRD(path string) error {
 	return nil
 }
 
-// walkPromRuleFiles returns every *.yaml under dir (sorted by WalkDir's lexical
-// order), the set promtool validates.
+// walkPromRuleFiles returns every YAML manifest under dir (sorted), the set
+// promtool validates. It shares collectManifestPaths with the other tree-scanning
+// guards, which also picks up *.yml — a PrometheusRule saved with that extension
+// used to be skipped silently, i.e. never promtool-validated.
+//
+// A walk error yields no files, which the caller reports as the skip-clean
+// "nothing to validate" case — it has already stat'd the directory, so the only
+// way here is an unreadable subtree.
 func walkPromRuleFiles(dir string) []string {
-	var files []string
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d == nil || d.IsDir() {
-			return nil
-		}
-		if filepath.Ext(p) == ".yaml" {
-			files = append(files, p)
-		}
-		return nil
-	})
+	files, _ := collectManifestPaths([]string{dir})
 	return files
 }
 
@@ -139,7 +135,7 @@ func runCICheckPromRules(rulesDir string, files []string, w io.Writer) error {
 		}
 		files = walkPromRuleFiles(rulesDir)
 		if len(files) == 0 {
-			fmt.Fprintf(w, "check-prom-rules: no *.yaml under %s — skipping\n", rulesDir)
+			fmt.Fprintf(w, "check-prom-rules: no YAML manifests under %s — skipping\n", rulesDir)
 			return nil
 		}
 	}
@@ -174,6 +170,6 @@ func ciCheckPromRulesCmd() *cobra.Command {
 			return runCICheckPromRules(rulesDir, args, os.Stdout)
 		},
 	}
-	c.Flags().StringVar(&rulesDir, "rules-dir", defaultPromRulesDir, "directory walked for *.yaml when no file args are given")
+	c.Flags().StringVar(&rulesDir, "rules-dir", defaultPromRulesDir, "directory walked for YAML manifests when no file args are given")
 	return c
 }

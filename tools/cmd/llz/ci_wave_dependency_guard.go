@@ -45,13 +45,11 @@ package main
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // wdSecretRef is one Secret reference by a container/volume, with its optionality.
@@ -192,7 +190,7 @@ func collectWaveDependencyInversions(dirs []string) (_ []wdInversion, examined i
 
 	examined, err = walkManifests(dirs, func(path string, raw []byte) error {
 		app, appWave := wdOwningApp(path) // same for every doc in a file
-		for _, doc := range splitWaveDependencyDocs(string(raw)) {
+		for _, doc := range decodeDocs(string(raw), func(d wdDoc) bool { return d.Kind != "" }) {
 			r := res{file: path, app: app, resWave: wdSyncWave(doc.Metadata.Annotations), appWave: appWave}
 			ns := doc.Metadata.Namespace
 			switch {
@@ -249,12 +247,7 @@ func collectWaveDependencyInversions(dirs []string) (_ []wdInversion, examined i
 			})
 		}
 	}
-	sort.Slice(inversions, func(i, j int) bool {
-		if inversions[i].file != inversions[j].file {
-			return inversions[i].file < inversions[j].file
-		}
-		return inversions[i].secret < inversions[j].secret
-	})
+	sortGuardFindings(inversions, func(v wdInversion) (string, string) { return v.file, v.secret })
 	return inversions, examined, nil
 }
 
@@ -326,23 +319,6 @@ func wdSyncWave(ann map[string]string) int {
 		return 0
 	}
 	return w
-}
-
-// splitWaveDependencyDocs parses a multi-doc YAML file, skipping docs that fail
-// to parse (kustomize patches, comments-only files).
-func splitWaveDependencyDocs(raw string) []wdDoc {
-	var docs []wdDoc
-	dec := yaml.NewDecoder(strings.NewReader(raw))
-	for {
-		var d wdDoc
-		if err := dec.Decode(&d); err != nil {
-			break
-		}
-		if d.Kind != "" {
-			docs = append(docs, d)
-		}
-	}
-	return docs
 }
 
 func boolVal(p *bool) bool { return p != nil && *p }

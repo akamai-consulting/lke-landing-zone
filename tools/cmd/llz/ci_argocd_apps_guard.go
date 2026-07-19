@@ -13,10 +13,8 @@ package main
 // repeated entries. The duplicate-detection core is pure and unit-tested.
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // renderedArgoApp is the slice of a rendered ArgoCD Application/AppProject this
@@ -73,20 +70,12 @@ func ciArgoCDRenderedAppsCmd() *cobra.Command {
 }
 
 func runArgoCDRenderedApps(renderDir string, out io.Writer) error {
-	var files []string
-	err := filepath.WalkDir(renderDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && strings.HasSuffix(path, ".yaml") {
-			files = append(files, path)
-		}
-		return nil
-	})
+	// collectManifestPaths (shared with the other tree-scanning guards) also picks
+	// up *.yml, which this hand-rolled walk ignored.
+	files, err := collectManifestPaths([]string{renderDir})
 	if err != nil || len(files) == 0 {
 		return fmt.Errorf("argocd-rendered-apps: no rendered manifests under %s/ — run 'make render-charts' first", renderDir)
 	}
-	sort.Strings(files)
 
 	apps, problems := 0, 0
 	for _, f := range files {
@@ -94,20 +83,12 @@ func runArgoCDRenderedApps(renderDir string, out io.Writer) error {
 		if readErr != nil {
 			return fmt.Errorf("reading %s: %w", f, readErr)
 		}
-		dec := yaml.NewDecoder(strings.NewReader(string(raw)))
-		for {
-			var app renderedArgoApp
-			if decErr := dec.Decode(&app); decErr != nil {
-				if errors.Is(decErr, io.EOF) {
-					break
-				}
-				// Skip a document that does not parse as an Application shape;
-				// schema validation owns malformed-manifest reporting.
-				continue
-			}
-			if app.Kind != "Application" && app.Kind != "AppProject" {
-				continue
-			}
+		// Documents that do not parse as an Application shape are skipped without
+		// abandoning the rest of the file; schema validation owns malformed-manifest
+		// reporting.
+		for _, app := range decodeDocs(string(raw), func(a renderedArgoApp) bool {
+			return a.Kind == "Application" || a.Kind == "AppProject"
+		}) {
 			apps++
 			name := app.Metadata.Name
 			if name == "" {
