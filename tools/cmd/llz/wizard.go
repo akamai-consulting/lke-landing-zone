@@ -61,20 +61,6 @@ func ghFineGrainedTokenURL(name, owner, desc string) string {
 	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
 }
 
-// ghFineGrainedPackagesURL builds a fine-grained PAT creation URL pre-filled for
-// reading org packages (GHCR): name, resource owner, 90-day expiry. GitHub can't
-// pre-select the Packages permission via query, so the caller tells the operator
-// to set "Packages: Read-only" on the page.
-func ghFineGrainedPackagesURL(name, owner string) string {
-	q := url.Values{}
-	q.Set("name", name)
-	if owner != "" {
-		q.Set("target_name", owner)
-	}
-	q.Set("expires_in", "90")
-	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
-}
-
 // ghFineGrainedDispatchURL builds a fine-grained PAT creation URL pre-filled for
 // the e2e dispatch token: name, resource owner, 90-day expiry, and the three
 // repository permissions the e2e run needs — Contents (force-push the

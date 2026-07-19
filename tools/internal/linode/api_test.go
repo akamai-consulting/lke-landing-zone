@@ -229,31 +229,3 @@ func TestDeleteResourcePath(t *testing.T) {
 		t.Error("DeleteResourcePath on 500 = nil error, want error")
 	}
 }
-
-func TestUpdateControlPlaneACL(t *testing.T) {
-	// Delegates to PutControlPlaneACL: the correct control_plane_acl (underscore)
-	// endpoint with an `acl`-wrapped body. The old control_plane/acl path 404s.
-	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v4beta/lke/clusters/2/control_plane_acl" {
-			t.Errorf("path = %q, want .../control_plane_acl", r.URL.Path)
-		}
-		var body struct {
-			ACL struct {
-				Enabled   bool `json:"enabled"`
-				Addresses struct {
-					IPv4 []string `json:"ipv4"`
-				} `json:"addresses"`
-			} `json:"acl"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode body: %v", err)
-		}
-		if !body.ACL.Enabled || len(body.ACL.Addresses.IPv4) != 1 || body.ACL.Addresses.IPv4[0] != "1.2.3.0/24" {
-			t.Errorf("body acl = %+v, want enabled + ipv4=[1.2.3.0/24]", body.ACL)
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-	if err := c.UpdateControlPlaneACL(context.Background(), 2, []string{"1.2.3.0/24"}, nil); err != nil {
-		t.Errorf("UpdateControlPlaneACL = %v, want nil", err)
-	}
-}

@@ -18,9 +18,9 @@ import (
 //
 // The Linode endpoint is /v4beta/lke/clusters/{id}/control_plane_acl and wraps
 // the fields in an {"acl": {...}} envelope — the documented endpoint the
-// runner-acl read-modify-write was ported from. UpdateControlPlaneACL (used by
-// firewall-controller) now delegates here, so this is the single implementation;
-// it previously hit /control_plane/acl with an unwrapped body, which 404s.
+// runner-acl read-modify-write was ported from. Get/PutControlPlaneACL are the
+// single implementation of it; an earlier duplicate hit /control_plane/acl with
+// an unwrapped body, which 404s on LKE-E.
 type ControlPlaneACL struct {
 	Enabled bool
 	IPv4    []string

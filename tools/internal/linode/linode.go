@@ -71,16 +71,6 @@ func (c *Client) ListRaw(ctx context.Context, version, path string) ([]map[strin
 	return body.Data, resp.StatusCode, nil
 }
 
-// UpdateControlPlaneACL enables and sets the LKE control-plane ACL for the given
-// cluster to the supplied IPv4 / IPv6 CIDR sets. It delegates to
-// PutControlPlaneACL so there is one correct implementation of the endpoint:
-// /v4beta/lke/clusters/{id}/control_plane_acl with an `acl`-wrapped body. (The
-// former inline version here used /control_plane/acl with an unwrapped body,
-// which 404s on LKE-E.)
-func (c *Client) UpdateControlPlaneACL(ctx context.Context, clusterID uint64, ipv4, ipv6 []string) error {
-	return c.PutControlPlaneACL(ctx, clusterID, ControlPlaneACL{Enabled: true, IPv4: ipv4, IPv6: ipv6})
-}
-
 func (c *Client) put(ctx context.Context, url string, body any) (*http.Response, error) {
 	buf, err := json.Marshal(body)
 	if err != nil {

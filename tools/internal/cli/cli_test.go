@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"reflect"
 	"testing"
 )
 
@@ -39,24 +38,9 @@ func TestEnvBool(t *testing.T) {
 	}
 }
 
-func TestMustInt(t *testing.T) {
-	if got := MustInt("42"); got != 42 {
-		t.Errorf("MustInt(\"42\") = %d, want 42", got)
-	}
-	if got := MustInt("-7"); got != -7 {
-		t.Errorf("MustInt(\"-7\") = %d, want -7", got)
-	}
-}
-
 func TestMustUint(t *testing.T) {
 	if got := MustUint("613260"); got != 613260 {
 		t.Errorf("MustUint(\"613260\") = %d, want 613260", got)
-	}
-}
-
-func TestArg(t *testing.T) {
-	if got := Arg([]string{"--flag", "value"}, 1); got != "value" {
-		t.Errorf("Arg = %q, want value", got)
 	}
 }
 
@@ -99,63 +83,11 @@ func TestPrintRecord(t *testing.T) {
 	}
 }
 
-func TestParseRotatorArgs(t *testing.T) {
-	t.Setenv("LINODE_TOKEN", "envtok")
-	t.Setenv("ROTATION_APPLY", "")
-
-	// Flag overrides the env token; subcommand is split from its rest; --apply arms.
-	a := ParseRotatorArgs([]string{"--linode-token", "flagtok", "create", "--label", "x", "--apply"})
-	if a.Token != "flagtok" {
-		t.Errorf("Token = %q, want flagtok (flag overrides env)", a.Token)
-	}
-	if !a.Apply {
-		t.Error("Apply = false, want true (--apply)")
-	}
-	if a.Sub != "create" {
-		t.Errorf("Sub = %q, want create", a.Sub)
-	}
-	if !reflect.DeepEqual(a.Rest, []string{"--label", "x"}) {
-		t.Errorf("Rest = %v, want [--label x]", a.Rest)
-	}
-}
-
-func TestParseRotatorArgsDefaults(t *testing.T) {
-	t.Setenv("LINODE_TOKEN", "envtok")
-	t.Setenv("ROTATION_APPLY", "true")
-
-	a := ParseRotatorArgs(nil)
-	if a.Token != "envtok" {
-		t.Errorf("Token = %q, want envtok (from env)", a.Token)
-	}
-	if !a.Apply {
-		t.Error("Apply = false, want true (from ROTATION_APPLY)")
-	}
-	if a.Sub != "" {
-		t.Errorf("Sub = %q, want empty", a.Sub)
-	}
-}
-
 // ── os.Exit(2) paths, exercised via a forked test binary ─────────────────────
 //
-// Arg / MustInt / MustUint call os.Exit on malformed input, which would abort the
+// MustUint calls os.Exit on malformed input, which would abort the
 // test process. The canonical Go pattern re-execs this binary running only the
 // target test with CLI_FORK set, then asserts the child exited with status 2.
-
-func TestArgExitsPastEnd(t *testing.T) {
-	if os.Getenv("CLI_FORK") == "arg" {
-		Arg([]string{"--flag"}, 1) // value index past the end
-		return
-	}
-	assertExit2(t, "TestArgExitsPastEnd", "arg")
-}
-
-func TestMustIntExitsOnBadInput(t *testing.T) {
-	if os.Getenv("CLI_FORK") == "mustint" {
-		MustInt("not-a-number")
-		return
-	}
-	assertExit2(t, "TestMustIntExitsOnBadInput", "mustint")
-}
 
 func TestMustUintExitsOnBadInput(t *testing.T) {
 	if os.Getenv("CLI_FORK") == "mustuint" {
