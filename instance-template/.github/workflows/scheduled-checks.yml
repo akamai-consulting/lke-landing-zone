@@ -26,10 +26,6 @@ on:
     - cron: "0 7 1 * *"
   workflow_dispatch:
     inputs:
-      fuzz_seconds:
-        description: "Seconds to run each fuzz target"
-        required: false
-        default: "60"
       drift_branch:
         description: "Template branch the drift report compares against"
         required: false
@@ -50,7 +46,6 @@ jobs:
     # ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).
     uses: ./.github/workflows/llz-scheduled-checks.yml
     with:
-      fuzz_seconds: ${{ inputs.fuzz_seconds || '60' }}
       drift_branch: ${{ inputs.drift_branch || 'main' }}
       drift_strict: ${{ inputs.drift_strict || false }}
       # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
