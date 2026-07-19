@@ -240,3 +240,62 @@ func TestFetchKubeconfigState(t *testing.T) {
 		t.Errorf("init tried %d times with %d sleeps, want %d/%d", initCalls, initSleeps, tfInitAttempts, tfInitAttempts-1)
 	}
 }
+
+// TestHealthPromRulesRefusesVacuousGreen covers the two ways this reported
+// health it had not observed. promRulesJSON had no Status field, so an
+// {"status":"error"} envelope unmarshalled cleanly with zero groups — and zero
+// groups then read as "no evaluation errors", which is an affirmative claim
+// derived from a failure. Zero groups is also the ruleSelector regression
+// (a PrometheusRule missing `prometheus: system` is never LOADED, so it
+// evaluates nothing and reports nothing) that monitoring-label-guard exists for.
+func TestHealthPromRulesRefusesVacuousGreen(t *testing.T) {
+	tests := []struct {
+		name, body, wantErr string
+	}{
+		{
+			name:    "prometheus error envelope at HTTP 200",
+			body:    `{"status":"error","error":"query engine unavailable"}`,
+			wantErr: "query engine unavailable",
+		},
+		{
+			name:    "zero rule groups loaded",
+			body:    `{"status":"success","data":{"groups":[]}}`,
+			wantErr: "ZERO rule groups",
+		},
+		{
+			name:    "unparseable body",
+			body:    `not json`,
+			wantErr: "could not parse",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withPrometheusStub(t, func(_ string, fn func(func(string) ([]byte, error)) error) error {
+				return fn(func(string) ([]byte, error) { return []byte(tt.body), nil })
+			})
+			t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(t.TempDir(), "sum"))
+			t.Setenv("REGION", "primary")
+			err := runCIHealthPromRules("monitoring/prometheus-operated:9090")
+			if err == nil {
+				t.Fatalf("must fail rather than report healthy rules it never observed (body: %s)", tt.body)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want it to mention %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	// A real, loaded rule set still passes.
+	t.Run("loaded groups with no lastError pass", func(t *testing.T) {
+		withPrometheusStub(t, func(_ string, fn func(func(string) ([]byte, error)) error) error {
+			return fn(func(string) ([]byte, error) {
+				return []byte(`{"status":"success","data":{"groups":[{"name":"g","rules":[{"name":"r"}]}]}}`), nil
+			})
+		})
+		t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(t.TempDir(), "sum"))
+		t.Setenv("REGION", "primary")
+		if err := runCIHealthPromRules("monitoring/prometheus-operated:9090"); err != nil {
+			t.Errorf("a loaded rule set with no errors must pass, got %v", err)
+		}
+	})
+}

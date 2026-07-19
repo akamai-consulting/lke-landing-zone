@@ -41,7 +41,13 @@ func ciHealthPromRulesCmd() *cobra.Command {
 
 // promRulesJSON is the slice of the /api/v1/rules response the check reads.
 type promRulesJSON struct {
-	Data struct {
+	// Status/Error are Prometheus's own envelope. Without them an
+	// {"status":"error"} body unmarshalled CLEANLY with zero groups, and the
+	// caller reported "All Prometheus rule groups evaluated without errors" —
+	// an affirmative claim derived from a failure.
+	Status string `json:"status"`
+	Error  string `json:"error"`
+	Data   struct {
 		Groups []struct {
 			Name  string `json:"name"`
 			Rules []struct {
@@ -97,6 +103,26 @@ func runCIHealthPromRules(prom string) error {
 		// would report green. The scheduled job is continue-on-error, so a genuinely
 		// unreachable cluster still won't block other work — it will just be visible.
 		return fmt.Errorf("health-prom-rules: could not query %s on %s: %w", prom, region, err)
+	}
+	// Zero groups is not "no errors" — it is the ruleSelector regression
+	// monitoring-label-guard exists to catch (a PrometheusRule whose
+	// `prometheus: system` label is missing is never LOADED, so it evaluates
+	// nothing and reports nothing). Refuse to call that healthy.
+	var doc promRulesJSON
+	if uErr := json.Unmarshal(body, &doc); uErr != nil {
+		return fmt.Errorf("health-prom-rules: could not parse the /api/v1/rules response on %s: %w", region, uErr)
+	}
+	if doc.Status != "" && doc.Status != "success" {
+		detail := doc.Error
+		if detail == "" {
+			detail = "status=" + doc.Status
+		}
+		return fmt.Errorf("health-prom-rules: Prometheus returned an error for /api/v1/rules on %s: %s", region, detail)
+	}
+	if len(doc.Data.Groups) == 0 {
+		return fmt.Errorf("health-prom-rules: Prometheus has ZERO rule groups loaded on %s — "+
+			"not 'no evaluation errors' but nothing to evaluate. A PrometheusRule missing its `prometheus: system` "+
+			"label is never selected, so it loads no groups and reports no errors", region)
 	}
 	errored := ruleEvalErrors(body)
 
