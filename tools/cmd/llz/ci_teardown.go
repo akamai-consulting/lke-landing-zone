@@ -43,6 +43,17 @@ var newTeardownClient = func(token string) teardownClient {
 	return linode.NewClient(token, 60*time.Second)
 }
 
+// Force-delete cluster verify/retry knobs (overridable in tests). A wedged LKE-E
+// cluster accepts a DELETE but its async teardown can stall, so force-delete
+// re-issues the DELETE and verifies the cluster actually leaves the account rather
+// than firing once and hoping — a single fire-and-forget DELETE is what let a dead
+// cluster linger and hang the next apply's tf-import.
+var (
+	forceDeleteClusterAttempts = 6
+	forceDeleteClusterDelay    = 15 * time.Second
+	teardownSleep              = time.Sleep
+)
+
 func ciTeardownCaptureCmd() *cobra.Command {
 	var region, tfDir string
 	c := &cobra.Command{
@@ -191,12 +202,30 @@ func runCIAssertNoOrphans(region, volumeRegion, clusterID string, threshold, att
 		if ownVPC {
 			ownVPCs = 1
 		}
-		if ownNBs > 0 || ownVPC {
-			fmt.Fprintf(os.Stderr, "::error::cluster %s left its OWN orphans after destroy: %d NodeBalancer(s) + %d VPC. Clear them: LINODE_TOKEN=<token> llz reap --region %s --cluster-label <label> --yes\n",
-				clusterID, ownNBs, ownVPCs, orAll(volRegion))
-			return fmt.Errorf("assert-no-orphans: destroyed cluster %s left %d NodeBalancer(s) and %d VPC of its own", clusterID, ownNBs, ownVPCs)
+		// The cluster ITSELF must be gone. A wedged LKE-E cluster that force-delete
+		// could not remove (dead control plane, async teardown stalled) survives
+		// here — and left un-flagged it hangs the NEXT apply's tf-import on the same
+		// unreadable state-refresh (the incident this closes). Fatal, like a leaked
+		// own NB/VPC (which means the scoped sweeps failed).
+		clusterSurvived := false
+		if cNum, perr := strconv.ParseUint(clusterID, 10, 64); perr == nil && cNum != 0 {
+			clusters, verr := client.ListClusters(ctx)
+			if verr != nil {
+				return fmt.Errorf("list clusters: %w", verr)
+			}
+			clusterSurvived = clusterIDPresent(clusters, cNum)
 		}
-		fmt.Printf("cluster %s left no NodeBalancers or VPC of its own — scoped teardown is clean.\n", clusterID)
+		if clusterSurvived || ownNBs > 0 || ownVPC {
+			if clusterSurvived {
+				fmt.Fprintf(os.Stderr, "::error::cluster %s STILL EXISTS after destroy — its control plane is likely wedged (force-delete could not remove it). The next apply's tf-import will hang on it. Delete it: curl -X DELETE -H \"Authorization: Bearer $LINODE_TOKEN\" https://api.linode.com/v4beta/lke/clusters/%s\n", clusterID, clusterID)
+			}
+			if ownNBs > 0 || ownVPC {
+				fmt.Fprintf(os.Stderr, "::error::cluster %s left its OWN orphans after destroy: %d NodeBalancer(s) + %d VPC. Clear them: LINODE_TOKEN=<token> llz reap --region %s --cluster-label <label> --yes\n",
+					clusterID, ownNBs, ownVPCs, orAll(volRegion))
+			}
+			return fmt.Errorf("assert-no-orphans: destroyed cluster %s survived=%t and left %d NodeBalancer(s) + %d VPC of its own", clusterID, clusterSurvived, ownNBs, ownVPCs)
+		}
+		fmt.Printf("cluster %s is gone and left no NodeBalancers or VPC of its own — scoped teardown is clean.\n", clusterID)
 	}
 
 	var scan orphanScan
@@ -354,8 +383,8 @@ func runCITeardownForceDelete(g globalOpts, region, tfDir string) error {
 		fmt.Printf("Cluster %q not found — already deleted.\n", labels.Cluster)
 	}
 	for _, id := range ids {
-		fmt.Printf("Cluster %q (id=%d) still exists — deleting via API...\n", labels.Cluster, id)
-		del(fmt.Sprintf("/v4beta/lke/clusters/%d", id), fmt.Sprintf("cluster %d", id))
+		fmt.Printf("Cluster %q (id=%d) still exists — force-deleting via API...\n", labels.Cluster, id)
+		forceDeleteCluster(ctx, client, labels.Cluster, id, confirm)
 	}
 
 	// ── Node firewall: exact id output first, then the module-correct label ──
@@ -377,6 +406,70 @@ func runCITeardownForceDelete(g globalOpts, region, tfDir string) error {
 	fmt.Printf("Node firewall (id=%s) still exists — deleting via API...\n", fwID)
 	del("/v4/networking/firewalls/"+fwID, "firewall "+fwID)
 	return nil
+}
+
+// forceDeleteCluster deletes an LKE cluster and VERIFIES it actually leaves the
+// account, re-issuing the DELETE across a bounded retry.
+//
+// A single fire-and-forget DELETE is not enough for the failure this exists to
+// contain: a wedged LKE-E cluster (dead control plane, kubeconfig unavailable)
+// accepts the DELETE but its async teardown stalls, so the cluster object lingers.
+// The NEXT apply's `llz ci tf-import` then hangs on that unreadable state-refresh
+// until its 300s deadline SIGKILLs terraform — the incident this change follows.
+// Polling until the cluster is gone (re-deleting each round) turns a silent leak
+// into either a real deletion or a loud, actionable warning.
+//
+// Warn-not-fail, like the rest of this always()-path cleanup: assert-no-orphans is
+// the hard gate that reds the teardown when a cluster genuinely will not die.
+func forceDeleteCluster(ctx context.Context, client teardownClient, label string, id uint64, confirm bool) {
+	path := fmt.Sprintf("/v4beta/lke/clusters/%d", id)
+	if !confirm {
+		fmt.Printf("  would DELETE cluster %d (with delete-verify retry)\n", id)
+		return
+	}
+	for attempt := 1; attempt <= forceDeleteClusterAttempts; attempt++ {
+		if err := client.DeleteResourcePath(ctx, path); err != nil {
+			fmt.Fprintf(os.Stderr, "::warning::DELETE cluster %d failed on attempt %d/%d (%v) — retrying.\n", id, attempt, forceDeleteClusterAttempts, err)
+		} else {
+			fmt.Printf("  DELETE cluster %d issued (attempt %d/%d; deletion is asynchronous)\n", id, attempt, forceDeleteClusterAttempts)
+		}
+		remaining, err := client.ClustersWithLabel(ctx, label)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "::warning::could not re-list clusters to verify %d deleted (%v) — leaving it to assert-no-orphans.\n", id, err)
+			return
+		}
+		if !containsUint(remaining, id) {
+			fmt.Printf("  cluster %d is gone.\n", id)
+			return
+		}
+		if attempt < forceDeleteClusterAttempts {
+			teardownSleep(forceDeleteClusterDelay)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "::warning::cluster %d (%s) still present after %d force-delete attempts — its control plane is likely wedged, blocking deletion. assert-no-orphans will red the teardown; delete it manually: curl -X DELETE -H \"Authorization: Bearer $LINODE_TOKEN\" https://api.linode.com/v4beta/lke/clusters/%d\n", id, label, forceDeleteClusterAttempts, id)
+}
+
+func containsUint(xs []uint64, want uint64) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
+// clusterIDPresent reports whether an LKE cluster with the given id is still on the
+// account (ListClusters returns each cluster as a JSON map; "id" decodes to float64).
+func clusterIDPresent(clusters []map[string]any, id uint64) bool {
+	if id == 0 {
+		return false
+	}
+	for _, cl := range clusters {
+		if v, ok := cl["id"].(float64); ok && uint64(v) == id {
+			return true
+		}
+	}
+	return false
 }
 
 func runCITeardownDeleteVPC(g globalOpts, region, tfDir, clusterID string, attempts, retryDelay int, requireDeleted bool) error {

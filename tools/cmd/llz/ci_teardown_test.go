@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeTeardownClient implements teardownClient from canned data, recording
@@ -41,7 +43,27 @@ func (f *fakeTeardownClient) DeleteResourcePath(_ context.Context, path string) 
 	if err, ok := f.deleteErr[path]; ok {
 		return err
 	}
+	// Model async success: a deleted cluster leaves the account, so a later
+	// ClustersWithLabel no longer returns it — this is what drives
+	// forceDeleteCluster's verify loop to completion (a delete that errors above
+	// leaves the cluster in place, modelling a wedged cluster that won't die).
+	const cp = "/v4beta/lke/clusters/"
+	if strings.HasPrefix(path, cp) {
+		if id, err := strconv.ParseUint(strings.TrimPrefix(path, cp), 10, 64); err == nil {
+			f.clusters = removeUint(f.clusters, id)
+		}
+	}
 	return nil
+}
+
+func removeUint(xs []uint64, drop uint64) []uint64 {
+	out := xs[:0:0]
+	for _, x := range xs {
+		if x != drop {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // withTeardown wires the fake client, a tfvars dir, the token env, and a
@@ -57,7 +79,9 @@ func withTeardown(t *testing.T, fake *fakeTeardownClient, tfvars string) (string
 	t.Setenv("LINODE_TOKEN", "tok")
 	prev := newTeardownClient
 	newTeardownClient = func(string) teardownClient { return fake }
-	t.Cleanup(func() { newTeardownClient = prev })
+	prevSleep := teardownSleep
+	teardownSleep = func(time.Duration) {} // force-delete retries don't wait in tests
+	t.Cleanup(func() { newTeardownClient = prev; teardownSleep = prevSleep })
 	return dir, ghaEnv
 }
 
@@ -182,6 +206,54 @@ func TestTeardownForceDeleteDryRun(t *testing.T) {
 	}
 	if len(fake.deletes) != 0 {
 		t.Errorf("dry-run must delete nothing, got %v", fake.deletes)
+	}
+}
+
+// A wedged cluster whose DELETE keeps failing is re-issued the DELETE across the
+// whole retry budget (the verify never sees it leave), then warns rather than
+// erroring — the always()-path contract; assert-no-orphans is the hard gate.
+func TestTeardownForceDeleteWedgedClusterRetriesThenWarns(t *testing.T) {
+	fake := &fakeTeardownClient{
+		clusters:  []uint64{777},
+		deleteErr: map[string]error{"/v4beta/lke/clusters/777": errors.New("cluster stuck deleting")},
+	}
+	dir, _ := withTeardown(t, fake, teardownTFVars)
+	stubTerraformOutputs(t, map[string]string{})
+
+	prevA := forceDeleteClusterAttempts
+	forceDeleteClusterAttempts = 3
+	t.Cleanup(func() { forceDeleteClusterAttempts = prevA })
+
+	if err := runCITeardownForceDelete(globalOpts{yes: true}, "e2e", dir); err != nil {
+		t.Fatalf("wedged cluster must warn, not error (always()-path cleanup): %v", err)
+	}
+	got := 0
+	for _, p := range fake.deletes {
+		if p == "/v4beta/lke/clusters/777" {
+			got++
+		}
+	}
+	if got != 3 {
+		t.Errorf("wedged cluster: %d DELETE attempts, want 3 (the retry budget)", got)
+	}
+}
+
+func TestClusterIDPresent(t *testing.T) {
+	clusters := []map[string]any{
+		{"id": float64(632652), "label": "instance-template-e2e"},
+		{"id": float64(11), "label": "other"},
+	}
+	if !clusterIDPresent(clusters, 632652) {
+		t.Error("632652 present but not detected")
+	}
+	if clusterIDPresent(clusters, 999) {
+		t.Error("999 absent but reported present")
+	}
+	if clusterIDPresent(clusters, 0) {
+		t.Error("id 0 must never match a real cluster")
+	}
+	if clusterIDPresent(nil, 632652) {
+		t.Error("empty cluster list must not match")
 	}
 }
 

@@ -9,8 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -245,21 +245,63 @@ func lokiConfigText(match string) string {
 //
 // The harborURL / registryOnly parameters are vestigial and ignored; see the
 // command's help for why they are still accepted.
+//
+// It polls a REAL budget and self-reports non-fatally rather than running a
+// single 2m `kubectl rollout status`. harbor-registry only becomes schedulable
+// once its ExternalSecret syncs — a few minutes after the KV seed on a fresh
+// bootstrap — so that single 2m wait predictably timed out, and the caller's
+// `continue-on-error` then painted a green check over a scary
+// "error: timed out … exit code 1" that carried no signal (it "passed" whether
+// or not the registry came up). Now a healthy bootstrap goes green honestly, and
+// a genuine stall is a visible ::warning:: — the convergence gate is the hard
+// check — never a masked error. That is what lets the caller drop
+// continue-on-error.
 func runCIWaitHarbor(_ string, _ bool) error {
+	allRolled := true
 	for _, d := range health.HarborRegistryDeployments() {
-		if err := harborRollout("deployment/" + d); err != nil {
-			return fmt.Errorf("harbor-registry rollout did not complete (deployment/%s): %w", d, err)
+		if waitPoll(harborWaitBudget, 10*time.Second, func() bool { return deploymentRolledOut("harbor", d) }) {
+			fmt.Printf("harbor deployment %q rolled out.\n", d)
+			continue
 		}
+		allRolled = false
+		fmt.Fprintf(os.Stderr, "::warning::harbor deployment %q not rolled out within %s — its harbor-registry-s3 ExternalSecret may still be syncing; the convergence gate will catch a genuine stall.\n", d, harborWaitBudget)
 	}
-	fmt.Println("harbor-registry rolled out.")
+	if allRolled {
+		fmt.Println("harbor-registry rolled out.")
+	}
 	return nil
 }
 
-// harborRollout runs `kubectl -n harbor rollout status <ref> --timeout=2m`,
-// streaming output; returns the error (which fails the wait) on timeout. A
-// package var so tests can stub the rollout wait.
-var harborRollout = func(ref string) error {
-	cmd := exec.Command("kubectl", "-n", "harbor", "rollout", "status", ref, "--timeout=2m")
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+// harborWaitBudget is the wall-clock deadline for each Harbor readiness poll
+// (the former harborPoll's 60 attempts × 10s). waitPoll (ci_wait.go) bounds the
+// total wait, so a slow probe can't stretch it the way the old attempt-count
+// loop could. A var (not const) so tests can shrink it to avoid a real 10m poll.
+var harborWaitBudget = 600 * time.Second
+
+// deploymentRolledOut reports whether the deployment has all its desired replicas
+// available. A quiet kubectl read (jsonpath), unlike `rollout status`, which prints
+// a noisy "error: timed out" on its deadline — so the registry gate can poll a real
+// budget without littering the log with per-attempt errors.
+func deploymentRolledOut(namespace, name string) bool {
+	out, err := kubectlOut("-n", namespace, "get", "deployment", name,
+		"-o", "jsonpath={.status.availableReplicas}/{.spec.replicas}")
+	if err != nil {
+		return false
+	}
+	return replicasRolledOut(out)
+}
+
+// replicasRolledOut parses "<available>/<desired>" and reports whether every
+// desired replica is available (desired>0, available>=desired). Pure — unit-tested.
+func replicasRolledOut(availSlashDesired string) bool {
+	parts := strings.SplitN(strings.TrimSpace(availSlashDesired), "/", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	avail, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	desired, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return desired > 0 && avail >= desired
 }

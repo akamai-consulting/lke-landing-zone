@@ -452,6 +452,32 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 		}
 	}
 
+	// ── Node firewall (nonfatal-aware; account-unique label) ──
+	//
+	// BEFORE the cluster on purpose. The firewall import depends on nothing the
+	// cluster/pool imports produce (it resolves by account-unique label), and the
+	// cluster import is the one step that can burn its full fatal deadline on a
+	// stuck Linode state-refresh. Ordered AFTER the cluster, that hang returns a
+	// fatal error that aborts runTFImport before the firewall is ever adopted —
+	// stranding the account's orphaned node firewall as a label collision the next
+	// apply trips over (exactly the wedge a killed cluster import left behind).
+	// Ordered here, the firewall lands in state regardless of how the cluster goes.
+	if fwInState := tfStateID(addrFirewall); fwInState != "" {
+		fmt.Printf("%s already in state — skipping\n", addrFirewall)
+	} else {
+		fws, err := client.ListFirewalls(ctx)
+		if err != nil {
+			return fmt.Errorf("list firewalls: %w", err)
+		}
+		if fid, ok := linode.FindIDByLabel(fws, labels.Firewall); ok {
+			if _, err := tfImport(g, varFile, addrFirewall, strconv.FormatUint(fid, 10), !nonfatal); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("Firewall %q not found — skipping import\n", labels.Firewall)
+		}
+	}
+
 	// ── LKE cluster (nonfatal-aware; a failed import clears the id so the pool
 	//    import is skipped too) ──
 	clusterID := tfStateID(addrCluster)
@@ -493,23 +519,6 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 			}
 		} else {
 			fmt.Printf("Node pool %q not found by label or tag — skipping import\n", labels.NodePool)
-		}
-	}
-
-	// ── Node firewall (nonfatal-aware; account-unique label) ──
-	if fwInState := tfStateID(addrFirewall); fwInState != "" {
-		fmt.Printf("%s already in state — skipping\n", addrFirewall)
-	} else {
-		fws, err := client.ListFirewalls(ctx)
-		if err != nil {
-			return fmt.Errorf("list firewalls: %w", err)
-		}
-		if fid, ok := linode.FindIDByLabel(fws, labels.Firewall); ok {
-			if _, err := tfImport(g, varFile, addrFirewall, strconv.FormatUint(fid, 10), !nonfatal); err != nil {
-				return err
-			}
-		} else {
-			fmt.Printf("Firewall %q not found — skipping import\n", labels.Firewall)
 		}
 	}
 
@@ -565,7 +574,16 @@ func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err 
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "terraform", "import", "-var-file="+varFile, addr, id)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if runErr := cmd.Run(); runErr != nil {
+	runErr := cmd.Run()
+	// A context-deadline kill returns from Run() as an opaque "signal: killed"
+	// (SIGKILL from CommandContext), which reads like an OOM/crash. When the
+	// deadline is what fired, say so — a hung Linode state-refresh (e.g. a stuck
+	// LKE cluster whose kubeconfig/pool read never returns) is then diagnosable at
+	// a glance instead of sending the next reader digging through the runner log.
+	if ctx.Err() == context.DeadlineExceeded {
+		runErr = fmt.Errorf("timed out after %s (terraform import hung — likely a stuck Linode state-refresh)", timeout)
+	}
+	if runErr != nil {
 		if fatal {
 			return false, fmt.Errorf("import %s: %w", addr, runErr)
 		}

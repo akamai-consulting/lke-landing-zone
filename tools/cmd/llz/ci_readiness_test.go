@@ -2,9 +2,30 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestReplicasRolledOut(t *testing.T) {
+	for in, want := range map[string]bool{
+		"1/1":     true, // fully available
+		"2/2":     true,
+		"3/1":     true,  // more available than desired (surge) still counts
+		"0/1":     false, // the fresh-bootstrap harbor-registry case
+		"0/0":     false, // desired 0 → nothing to roll out, not "ready"
+		"1/0":     false,
+		"/":       false, // empty jsonpath (no availableReplicas yet)
+		"":        false,
+		"1":       false, // malformed
+		"a/1":     false, // non-numeric
+		" 1 / 1 ": true,  // whitespace tolerated
+	} {
+		if got := replicasRolledOut(in); got != want {
+			t.Errorf("replicasRolledOut(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
 
 func TestRunCIAssertLoki(t *testing.T) {
 	// All checks pass: a Ready Loki pod (by label) + an S3-backed config + a
@@ -67,14 +88,19 @@ func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
 }
 
 func TestRunCIWaitHarbor(t *testing.T) {
-	orig := harborRollout
-	t.Cleanup(func() { harborRollout = orig })
+	origBudget := harborWaitBudget
+	t.Cleanup(func() { harborWaitBudget = origBudget })
 
 	// The verb waits for the harbor-registry rollout and nothing else. Its two
 	// parameters are vestigial (kept so vendored instance workflows that still
 	// pass --registry-only / --harbor-url keep parsing), so every combination
 	// must behave identically — that equivalence is the point of the test.
-	harborRollout = func(string) error { return nil }
+	withKubectl(t, func(a string) ([]byte, error) {
+		if strings.Contains(a, "get deployment harbor-registry") {
+			return []byte("1/1"), nil // rolled out
+		}
+		return nil, errors.New("unexpected kubectl call: " + a)
+	})
 	for _, tc := range []struct {
 		url          string
 		registryOnly bool
@@ -84,12 +110,20 @@ func TestRunCIWaitHarbor(t *testing.T) {
 		}
 	}
 
-	// A failing rollout fails the gate, again regardless of the vestigial args.
-	harborRollout = func(string) error { return errors.New("timed out") }
-	if err := runCIWaitHarbor("", false); err == nil {
-		t.Errorf("rollout timeout => err %v, want non-nil", err)
-	}
-	if err := runCIWaitHarbor("https://harbor.example", true); err == nil {
-		t.Errorf("rollout timeout (vestigial args set) => err %v, want non-nil", err)
+	// A registry that never rolls out is a SOFT gate: it warns and returns nil,
+	// because the convergence gate is the hard check. Previously this was a single
+	// 2m `rollout status` that hard-failed, which the caller then had to mask with
+	// continue-on-error — painting a green check over a scary "timed out" that
+	// carried no signal either way. Budget 0 so waitPoll evaluates once instead of
+	// polling the real budget.
+	harborWaitBudget = 0
+	withKubectl(t, func(a string) ([]byte, error) {
+		if strings.Contains(a, "get deployment harbor-registry") {
+			return []byte("0/1"), nil // never becomes available
+		}
+		return nil, errors.New("nope")
+	})
+	if err := runCIWaitHarbor("", true); err != nil {
+		t.Errorf("registry not rolled out is soft => err %v, want nil (warn only)", err)
 	}
 }
