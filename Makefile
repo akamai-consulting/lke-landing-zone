@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .PHONY: help \
         build build-tools llz \
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-argocd helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -67,8 +67,8 @@ help:
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
 	@echo "  k8s-validate    kubeconform — schema validation against k8s 1.31"
 	@echo "  prom-rules-check  promtool check rules — PromQL syntax + rule structure"
-	@echo "  helm-lint-argocd  helm lint the observability ArgoCD app chart"
-	@echo "  helm-lint-real-values  helm lint --strict/template all charts (observability, registry, secrets, cert-manager, external-secrets) with production + staging values"
+	@echo "  helm-lint-charts  helm lint --strict + template every first-party chart"
+	@echo "  helm-lint-real-values  hard dep-build + namespaced render of the OpenBao chart (lint --strict is helm-lint-charts' job)"
 	@echo "  helm-dep-lock-check  verify committed Chart.lock files match Chart.yaml dependency declarations"
 	@echo "  argocd-rendered-apps-check  render overlays and reject duplicate ArgoCD Helm parameters"
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
@@ -270,13 +270,19 @@ helm-repos:
 # installed by apl-core directly — validated by `make argocd-rendered-apps-check`.
 OPENBAO_CHART := kubernetes-charts/llz-openbao-platform
 
-helm-lint-argocd: helm-repos
-	helm dependency build $(OPENBAO_CHART)
-	helm lint --strict $(OPENBAO_CHART)
-
+# helm-lint-real-values: the two OpenBao checks helm-lint-charts does NOT cover.
+# `helm dependency build` runs HARD here — helm-lint-charts soft-ignores build
+# failures (`|| true`) so one chart's broken dependency cannot mask lint for the
+# rest, which means nothing else fails the build on it. The render is namespaced
+# and uses the real release name, exercising the templates that key off
+# .Release.Namespace/.Release.Name; helm-lint-charts renders with defaults only.
+#
+# `helm lint --strict` deliberately is NOT repeated here: helm-lint-charts
+# already lints every first-party chart including this one, and this target and
+# the now-deleted helm-lint-argocd each used to repeat it, linting one chart
+# three times per lint-k8s run.
 helm-lint-real-values: helm-repos
 	helm dependency build $(OPENBAO_CHART)
-	helm lint --strict $(OPENBAO_CHART)
 	helm template platform-openbao $(OPENBAO_CHART) \
 		-n llz-openbao >/dev/null
 
@@ -449,7 +455,7 @@ actions-lint:
 # TF_IMAGE) and added explicitly to the local all-checks run.
 LINT_K8S := k8s-lint k8s-validate wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard placeholder-lint \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
-            helm-lint-charts helm-lint-real-values helm-lint-argocd \
+            helm-lint-charts helm-lint-real-values \
             helm-dep-lock-check
 LINT_TF := tf-lint checkov tf-validate-roots
 
