@@ -97,15 +97,6 @@ func aplPipelineStages() []aplWaitStage {
 	}
 }
 
-// aplGateDeps are the seams the gate drives: one kubectl invocation (KUBECONFIG
-// already wired) returning combined output + whether it exited 0, plus now/sleep
-// for the testable deadline loop.
-type aplGateDeps struct {
-	kubectl func(args ...string) (string, bool)
-	now     func() time.Time
-	sleep   func(time.Duration)
-}
-
 func ciWaitAplPipelineCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "wait-apl-pipeline",

@@ -35,6 +35,20 @@ const (
 	tokInstanceRepo = "<@ instance_repo @>"
 )
 
+// DefaultVPCSubnetCIDR is the cluster root's `vpc_subnet_cidr` default. It lives
+// here because this package embeds the roots, so it is the one place that can be
+// checked against the HCL itself — TestDefaultVPCSubnetCIDRMatchesRoot parses
+// roots/cluster/variables.tf and fails if the two drift.
+//
+// internal/terraform and internal/clusterspec both alias this rather than
+// restating the literal: terraform resolves an omitted <region>.tfvars value to
+// it (so the firewall-controller's VPC_CIDR matches what `terraform output
+// vpc_subnet_cidr` would have returned), and clusterspec resolves an unset
+// SubnetCIDR to it when checking peer overlap (so two envs that BOTH omit it
+// still collide loudly). Three copies of one literal, each claiming to mirror
+// the HCL, with nothing enforcing it — that is the drift this prevents.
+const DefaultVPCSubnetCIDR = "10.0.0.0/13"
+
 // Roots returns the three day-0 TF root names in deterministic order (matches the
 // on-disk terraform-iac-bootstrap/<root>/ layout an instance applies). The former
 // cluster-bootstrap root was retired — its in-cluster bootstrap now runs natively

@@ -45,10 +45,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// kubectlRunner runs one kubectl invocation (KUBECONFIG already wired by the
-// caller) and returns its combined output plus whether it exited 0.
-type kubectlRunner func(args ...string) (string, bool)
-
 func ciDestroyUnwedgeCmd() *cobra.Command {
 	var region string
 	cmd := &cobra.Command{

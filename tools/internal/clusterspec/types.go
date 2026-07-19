@@ -14,7 +14,11 @@
 // the same way internal/terraform is.
 package clusterspec
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
+)
 
 // APIVersion / Kind are the only accepted values for v1alpha1. v1alpha1 signals
 // the CLI-rendered, pre-CRD maturity level.
@@ -220,11 +224,12 @@ type AllowCIDRs struct {
 	IPv6 []string `json:"ipv6,omitempty"` // github_runner_ipv6_cidrs
 }
 
-// DefaultSubnetCIDR mirrors the cluster TF root's vpc_subnet_cidr default
-// (terraform-iac-bootstrap/cluster/variables.tf). The validator resolves an unset
-// SubnetCIDR to this when checking overlap, so peers that BOTH omit it are still
-// caught (the silent collision).
-const DefaultSubnetCIDR = "10.0.0.0/13"
+// DefaultSubnetCIDR is what the validator resolves an unset SubnetCIDR to when
+// checking overlap, so peers that BOTH omit it are still caught (the silent
+// collision). Aliased from tfroots, which embeds the cluster root and enforces
+// the value against the HCL itself (TestDefaultVPCSubnetCIDRMatchesRoot) — do
+// not restate the literal here.
+const DefaultSubnetCIDR = tfroots.DefaultVPCSubnetCIDR
 
 // ClusterNetwork is one env's VPC placement: the shared VPC it attaches to (VPC,
 // a spec.networks key; empty → its own dedicated VPC named <cluster_label>-vpc),

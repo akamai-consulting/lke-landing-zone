@@ -23,32 +23,7 @@
 # covered here — its NPs live in its own Application tree.
 
 # ── cert-manager ─────────────────────────────────────────────────────────────
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: cert-manager-default-deny
-  namespace: cert-manager
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
-spec:
-  podSelector: {}
-  policyTypes: [Ingress, Egress]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: cert-manager-allow-dns
-  namespace: cert-manager
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
-spec:
-  podSelector: {}
-  policyTypes: [Egress]
-  egress:
-    - ports:
-        {{- range $np.dnsPorts }}
-        - { port: {{ .port }}, protocol: {{ .protocol }} }
-        {{- end }}
+{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "cert-manager" "ns" "cert-manager" "wave" $wave "dnsPorts" $np.dnsPorts) }}
 ---
 # cert-manager controllers call Let's Encrypt ACME + the Linode DNS API (both
 # HTTPS) and the apiserver. The 6443 entry covers LKE-E's apiserver DNAT. Istio
@@ -124,32 +99,7 @@ spec:
 
 # ── harbor ───────────────────────────────────────────────────────────────────
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: harbor-default-deny
-  namespace: harbor
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
-spec:
-  podSelector: {}
-  policyTypes: [Ingress, Egress]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: harbor-allow-dns
-  namespace: harbor
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
-spec:
-  podSelector: {}
-  policyTypes: [Egress]
-  egress:
-    - ports:
-        {{- range $np.dnsPorts }}
-        - { port: {{ .port }}, protocol: {{ .protocol }} }
-        {{- end }}
+{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "harbor" "ns" "harbor" "wave" $wave "dnsPorts" $np.dnsPorts) }}
 ---
 # Harbor talks to apiserver + Linode Object Storage (S3 over HTTPS).
 apiVersion: networking.k8s.io/v1
@@ -282,32 +232,7 @@ spec:
 
 # ── istio-system ─────────────────────────────────────────────────────────────
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: istio-system-default-deny
-  namespace: {{ $np.istiod.namespace }}
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
-spec:
-  podSelector: {}
-  policyTypes: [Ingress, Egress]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: istio-system-allow-dns
-  namespace: {{ $np.istiod.namespace }}
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
-spec:
-  podSelector: {}
-  policyTypes: [Egress]
-  egress:
-    - ports:
-        {{- range $np.dnsPorts }}
-        - { port: {{ .port }}, protocol: {{ .protocol }} }
-        {{- end }}
+{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "istio-system" "ns" $np.istiod.namespace "wave" $wave "dnsPorts" $np.dnsPorts) }}
 ---
 # istiod watches K8s resources cluster-wide; gateways pull from upstream services
 # in every namespace. Egress wide-open — gateways proxy to arbitrary upstream
@@ -368,32 +293,7 @@ spec:
 
 # ── observability ────────────────────────────────────────────────────────────
 ---
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: observability-default-deny
-  namespace: llz-observability
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
-spec:
-  podSelector: {}
-  policyTypes: [Ingress, Egress]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: observability-allow-dns
-  namespace: llz-observability
-  annotations:
-    argocd.argoproj.io/sync-wave: {{ $wave | quote }}
-spec:
-  podSelector: {}
-  policyTypes: [Egress]
-  egress:
-    - ports:
-        {{- range $np.dnsPorts }}
-        - { port: {{ .port }}, protocol: {{ .protocol }} }
-        {{- end }}
+{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "observability" "ns" "llz-observability" "wave" $wave "dnsPorts" $np.dnsPorts) }}
 ---
 # Workloads here (OTel Collector, observability sidecars) reach apiserver +
 # Linode Object Storage (Loki S3). Internet HTTPS covered by 443.

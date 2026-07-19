@@ -3,7 +3,6 @@ package health
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // infra.go ports the OpenBao seal/HA (1a), admission-webhook (1d) / Service
@@ -142,74 +141,9 @@ func ClassifyFirewallConfigKey(key, value string) Category {
 	return CatDeferred
 }
 
-// ── Control-plane ACL outcome verification ───────────────────────────────────
-
-// ControlPlaneACLState is the live LKE control-plane ACL as the health check
-// observes it: whether access is restricted (Enabled) and the allowed CIDR sets.
-// A local mirror of linode.ControlPlaneACL so the health package stays decoupled
-// from the Linode client (cmd/llz maps one to the other).
-type ControlPlaneACLState struct {
-	Enabled bool
-	IPv4    []string
-	IPv6    []string
-}
-
-// ClassifyControlPlaneACL verifies the live control-plane ACL actually enforces
-// access and contains every EAA/bastion CIDR the firewall-controller is meant to
-// keep allowed (expectedIPv4 = ParsedCIDRs.ControlPlaneACLIPv4(), expectedIPv6 =
-// the EAA IPv6 set). It is the OUTCOME check the input-only firewall-bootstrap
-// section can't be: a SUPERSET test where extra live entries (CI-runner leases,
-// operator additions) are fine but a missing expected CIDR is a hard failure —
-// the exact symptom of a controller that resolves the CIDRs yet never writes them
-// (e.g. a stale RBAC Role 403ing the runner-acl ConfigMap read, which trips the
-// reconcile fail-safe and silently skips the ACL PUT).
-//
-// A disabled ACL (open to all) fails regardless of contents. With nothing
-// expected — template and committed fallback both empty — there is nothing to
-// assert, so it is informational rather than a pass we can vouch for.
-func ClassifyControlPlaneACL(acl ControlPlaneACLState, expectedIPv4, expectedIPv6 []string) (Category, string) {
-	if !acl.Enabled {
-		return CatFail, "control-plane ACL is DISABLED (open to all) — the firewall-controller should keep it enforced"
-	}
-	if len(expectedIPv4) == 0 && len(expectedIPv6) == 0 {
-		return CatWarn, "no EAA/bastion CIDRs resolved from the firewall template — nothing to verify"
-	}
-	missing := append(missingHostCIDRs(acl.IPv4, expectedIPv4, "/32"), missingHostCIDRs(acl.IPv6, expectedIPv6, "/128")...)
-	if len(missing) > 0 {
-		return CatFail, fmt.Sprintf("control-plane ACL is missing %d of %d expected EAA/bastion CIDR(s) — "+
-			"firewall-controller resolved them but did not write them (check its logs for "+
-			"\"skipping control-plane ACL update\"): %s",
-			len(missing), len(expectedIPv4)+len(expectedIPv6), strings.Join(truncateList(missing, 8), ", "))
-	}
-	return CatOK, fmt.Sprintf("control-plane ACL enforced; all %d expected EAA/bastion CIDR(s) present",
-		len(expectedIPv4)+len(expectedIPv6))
-}
-
-// missingHostCIDRs returns the entries of want absent from have, treating a bare
-// host address and its single-host CIDR (hostSuffix = "/32" for v4, "/128" for
-// v6) as equal — the only normalization Linode applies to the ACL address set, so
-// "1.2.3.4" and "1.2.3.4/32" must not read as a spurious miss.
-func missingHostCIDRs(have, want []string, hostSuffix string) []string {
-	set := make(map[string]bool, len(have)*2)
-	for _, h := range have {
-		set[h] = true
-		set[strings.TrimSuffix(h, hostSuffix)] = true
-	}
-	var missing []string
-	for _, w := range want {
-		if set[w] || set[strings.TrimSuffix(w, hostSuffix)] {
-			continue
-		}
-		missing = append(missing, w)
-	}
-	return missing
-}
-
-// truncateList caps a list for display, appending an "(+N more)" marker so a long
-// miss list does not flood the convergence summary.
-func truncateList(s []string, n int) []string {
-	if len(s) <= n {
-		return s
-	}
-	return append(append([]string{}, s[:n]...), fmt.Sprintf("(+%d more)", len(s)-n))
-}
+// NOTE: the control-plane ACL outcome check (ControlPlaneACLState /
+// ClassifyControlPlaneACL) lived here until its only caller was removed by
+// f3b3bcb, which extracted the EAA/internal-CIDR firewall feature to a private
+// repo. It sat orphaned afterwards — unreachable from cmd/llz and unusable from
+// outside the module (internal/). Removed rather than left as extraction
+// residue; recover from history if the feature returns.

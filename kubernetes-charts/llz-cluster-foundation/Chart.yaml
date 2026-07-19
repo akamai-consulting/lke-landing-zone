@@ -50,7 +50,12 @@ type: application
 #         platform-apl/ layout the custom-gitops-layout branch moved to (a template
 #         comment in network-policies.yaml; behavior unchanged, bumped so the guard
 #         republishes the corrected artifact).
-version: 0.1.11
+# 0.1.12: refactor-only — collapse the four byte-identical per-namespace
+#         default-deny + allow-dns NetworkPolicy pairs into one baselineNP helper
+#         (invoked inline so document order and per-namespace grouping are kept).
+#         `helm template` output is BYTE-IDENTICAL: 21 NetworkPolicies before and
+#         after. Bumped so the guard republishes the refactored artifact.
+version: 0.1.12
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"

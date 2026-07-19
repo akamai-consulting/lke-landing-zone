@@ -571,7 +571,6 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 // safe.
 func gateAndPolicies(o bootstrapClusterOpts, d bootstrapDeps) error {
 	gate := aplGateDeps{kubectl: d.kubectl, now: d.now, sleep: d.sleep}
-	kdeps := kyvernoDeps{kubectl: d.kubectl, now: d.now, sleep: d.sleep}
 
 	policies, cleanup, err := kyvernoPolicySpecs()
 	// cleanup is always non-nil and always the real removal — defer it BEFORE the
@@ -594,7 +593,7 @@ func gateAndPolicies(o bootstrapClusterOpts, d bootstrapDeps) error {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			polErrs[i] = applyKyvernoPolicy(policies[i], kdeps)
+			polErrs[i] = applyKyvernoPolicy(policies[i], gate)
 		}(i)
 	}
 	wg.Wait()

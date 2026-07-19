@@ -9,6 +9,8 @@ package terraform
 import (
 	"strconv"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/tfroots"
 )
 
 // DefaultNodePoolLabel is the fallback node-pool label when <region>.tfvars sets
@@ -27,12 +29,11 @@ const DefaultNodePoolLabel = "platform-pool"
 const MaxNodePoolLabelLen = 16
 
 // DefaultVPCSubnetCIDR is the effective vpc_subnet_cidr when <region>.tfvars omits
-// it — identical to the cluster module's variable default. MUST stay in lockstep
-// with the `vpc_subnet_cidr` default in
-// instance-template/terraform-iac-bootstrap/cluster/variables.tf so resolving the
-// firewall-controller's VPC_CIDR from tfvars matches what `terraform output
-// vpc_subnet_cidr` would have returned. TestDefaultVPCSubnetCIDR guards it.
-const DefaultVPCSubnetCIDR = "10.0.0.0/13"
+// it, so resolving the firewall-controller's VPC_CIDR from tfvars matches what
+// `terraform output vpc_subnet_cidr` would have returned. Aliased from tfroots,
+// which embeds the cluster root and enforces the value against the HCL itself
+// (TestDefaultVPCSubnetCIDRMatchesRoot) — do not restate the literal here.
+const DefaultVPCSubnetCIDR = tfroots.DefaultVPCSubnetCIDR
 
 // TFVars holds the handful of values the CI terraform steps read out of a
 // <region>.tfvars file. FirewallLabel is the raw firewall_label override (""

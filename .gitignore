@@ -1,14 +1,11 @@
 kubernetes/observability/argocd/applications/charts/
 certs/*.pem
 
-# Go test binaries / local build output of the tools module
+# Go test binaries. The tools module's own build artifacts are ignored from
+# tools/.gitignore instead — see the comment there for why they cannot live
+# here as `tools/<name>` patterns.
 *.test
-tools/firewall-cidrs
-tools/firewall-controller/firewall-controller
-tools/linode-cred-audit
-tools/llz
 /bin/llz
-tools/bin/
 
 # Tokens gathered by `llz new` / `llz secrets gather` (0600, never committed)
 .llz/
