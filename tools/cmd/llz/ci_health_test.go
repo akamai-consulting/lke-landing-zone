@@ -484,45 +484,10 @@ func TestCheckPods(t *testing.T) {
 	}
 }
 
-func TestSecretPresentWithRetry(t *testing.T) {
-	prevDelay := phase1ProbeDelay
-	phase1ProbeDelay = 0 // no real sleeps in the test
-	t.Cleanup(func() { phase1ProbeDelay = prevDelay })
-
-	// Present on the first try → true, no retries needed.
-	calls := 0
-	withExecOutput(t, func(string, ...string) ([]byte, error) { calls++; return nil, nil })
-	if !secretPresentWithRetry("-n", "cert-manager", "get", "secret", "platform-app-ca") || calls != 1 {
-		t.Errorf("present-first: got false or calls=%d, want true in 1 call", calls)
-	}
-
-	// Transient blip then success → present wins (a one-off error must not read
-	// as "absent" / flip phase1). This is fix #3.
-	calls = 0
-	withExecOutput(t, func(string, ...string) ([]byte, error) {
-		calls++
-		if calls == 1 {
-			return nil, errors.New("transient: connection refused")
-		}
-		return nil, nil
-	})
-	if !secretPresentWithRetry("x") || calls != 2 {
-		t.Errorf("blip-then-ok: want true after 2 calls, got calls=%d", calls)
-	}
-
-	// Genuinely absent → false after exhausting all attempts.
-	calls = 0
-	withExecOutput(t, func(string, ...string) ([]byte, error) { calls++; return nil, errors.New("NotFound") })
-	if secretPresentWithRetry("x") || calls != phase1ProbeRetries {
-		t.Errorf("absent: want false after %d calls, got true or calls=%d", phase1ProbeRetries, calls)
-	}
-}
+// The retry behavior secretPresentWithRetry used to own now lives in every
+// probe — see TestKExistsOKSeparatesAbsentFromUnreadable in kubectl_probe_test.go.
 
 func TestPhase1OpenBaoBootstrapPending(t *testing.T) {
-	prevDelay := phase1ProbeDelay
-	phase1ProbeDelay = 0 // no real sleeps in the test
-	t.Cleanup(func() { phase1ProbeDelay = prevDelay })
-
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch a {
 		case "-n cert-manager get secret platform-app-ca":
@@ -631,10 +596,6 @@ func TestConvergeSleep(t *testing.T) {
 }
 
 func TestHealthExitCodeStatePhase1ResolvedOnce(t *testing.T) {
-	prevDelay := phase1ProbeDelay
-	phase1ProbeDelay = 0
-	t.Cleanup(func() { phase1ProbeDelay = prevDelay })
-
 	probes := 0
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch {
