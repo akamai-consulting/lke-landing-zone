@@ -81,11 +81,23 @@ spec:
             - count: 1
               entries:
                 - keyless:
-                    # Any repo under the upstream org, any ref, signed by the
-                    # build-images.yml workflow. Narrow to a single repo/branch
-                    # (…/lke-landing-zone/.github/workflows/build-images.yml@refs/heads/main)
-                    # for a tighter trust anchor.
-                    subject: "https://github.com/akamai-consulting/*/.github/workflows/build-images.yml@*"
+                    # Pinned to the ONE repo that builds this image. The repo
+                    # position was a wildcard (akamai-consulting/*), so any repo
+                    # in the org with a workflow at .github/workflows/build-images.yml
+                    # minted a signature this policy accepted — including a repo
+                    # created by anyone with org write. The image name is a hard
+                    # constant (resolveLLZImageTag: "ghcr.io/akamai-consulting/llz
+                    # — no forks"), so there is exactly one legitimate signer and
+                    # no reason for the identity to be broader than it.
+                    # cosign-subject-guard fails CI if the wildcard comes back.
+                    #
+                    # The REF stays a glob, deliberately: build-images.yml is
+                    # workflow_dispatch-able on any branch and release-e2e drives
+                    # it that way (`gh workflow run --ref <branch>`, to build the
+                    # exact commit under test), so those signatures legitimately
+                    # carry refs/heads/<feature-branch>. Pinning @refs/heads/main
+                    # would reject every e2e image.
+                    subject: "https://github.com/akamai-consulting/lke-landing-zone/.github/workflows/build-images.yml@*"
                     issuer: "https://token.actions.githubusercontent.com"
                     rekor:
                       url: https://rekor.sigstore.dev

@@ -138,3 +138,34 @@ func TestCosignSubjectGuardCatchesRename(t *testing.T) {
 		t.Fatalf("guard failed with the pinned workflow present: %v", err)
 	}
 }
+
+// TestCosignSubjectGuardRefusesWildcardRepo pins the owner's trust-anchor
+// decision: the repo position must name one repo. A glob there accepts a
+// signature from any repo matching it, which is a weaker anchor than it looks —
+// the identity check appears present while barely constraining who signed.
+//
+// The @ref glob must stay allowed in the same breath, or the guard would reject
+// the live policy: build-images.yml is dispatched on feature branches by
+// release-e2e, so real signatures carry refs/heads/<branch>.
+func TestCosignSubjectGuardRefusesWildcardRepo(t *testing.T) {
+	cases := []struct {
+		name    string
+		subject string
+		wantErr bool
+	}{
+		{"org wildcard in the repo position", "https://github.com/akamai-consulting/*/.github/workflows/build-images.yml@*", true},
+		{"glob spanning owner and repo", "https://github.com/*/.github/workflows/build-images.yml@*", true},
+		{"single-char glob still widens", "https://github.com/akamai-consulting/lke-landing-zon?/.github/workflows/build-images.yml@*", true},
+		{"pinned repo, glob ref — the live policy", "https://github.com/akamai-consulting/lke-landing-zone/.github/workflows/build-images.yml@*", false},
+		{"pinned repo and pinned ref", "https://github.com/akamai-consulting/lke-landing-zone/.github/workflows/build-images.yml@refs/heads/main", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := wildcardRepoSubjects([]cosignSubjectRef{{Subject: tc.subject}})
+			if (len(got) > 0) != tc.wantErr {
+				t.Fatalf("wildcardRepoSubjects(%q) flagged=%v, want flagged=%v", tc.subject, len(got) > 0, tc.wantErr)
+			}
+		})
+	}
+}
