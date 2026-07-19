@@ -336,15 +336,22 @@ jobs:
             --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
           [ "$FAIL" -eq 0 ]
 
-      # A pinned first-party chart (llz-*) whose bumped version isn't in GHCR yet
-      # fails ONLY at Argo sync time — fail fast with a static scan + GHCR HEAD.
-      - name: Pre-flight — first-party chart pins are published to GHCR
-        if: inputs.bootstrap_cluster
-        env:
-          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
-          GHCR_USERNAME:   ${{ vars.GHCR_USERNAME }}
-          GH_TOKEN:        ${{ github.token }}
-        run: llz ci chart-publish-check --root .
+      # (A "first-party chart pins are published to GHCR" preflight ran HERE. It
+      # could never work from this checkout and is removed.
+      #
+      # Its goal was sound — a pinned llz-* chart whose bumped version is not in
+      # GHCR fails only at Argo sync time, so catching it early is worth doing.
+      # But the pins are not in the instance: platform-apl/ and kubernetes-charts/
+      # live in the TEMPLATE and reach the cluster through the terraform modules,
+      # fetched by `terraform init` in the APPLY job — a different job with a
+      # different checkout. This job sees only the rendered instance, whose
+      # apl-values/ is a README and a values.yaml. So the scan found zero pins and
+      # reported "every chart published" having verified none, on every run.
+      #
+      # That vacuous pass is now a hard failure (the check refuses to pass having
+      # checked nothing), which is correct behavior in the wrong place. The real
+      # verification runs template-side in release-e2e, where the pins actually
+      # are, with --publish-if-missing to publish anything absent.)
 
       # Regenerate the gitignored cluster tfvars from the spec so wait-cluster-ready
       # below can read node_count (its pool-Ready target).
