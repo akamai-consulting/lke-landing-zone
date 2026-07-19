@@ -258,10 +258,25 @@ k8s-validate: render-charts
 # and carry no Go toolchain, so `go run` cannot fire there at all. Set
 # LLZ_FORCE_SOURCE=1 to invert it and always build from source — what you want
 # locally the moment you have touched tools/. `make chart-guards` sets it.
+# NOTE ON THE ASYMMETRY: $(2) is passed ONLY to the source branch, and that is
+# deliberate — do not "fix" it by threading $(2) into the PATH branch. The two
+# branches run from different working directories: the source branch cds into
+# $(GO_DIR), so it needs `--root ..` to climb back to the repo root, while the
+# PATH branch already runs there and its `--root .` default is correct. Passing
+# `--root ..` to the PATH branch would point every guard OUTSIDE the repo.
+#
+# NOTE ON VERSION SKEW: the PATH branch runs whatever `llz` is installed, which
+# is NOT your working tree. That is the point in CI (the images bake a known
+# build), but locally it means editing a guard and running its make target can
+# report the OLD guard's verdict — a silent, very convincing wrong answer. So
+# the branch taken is announced on every run. Set LLZ_FORCE_SOURCE=1 to always
+# build from source when iterating on a guard.
 define LLZ_CI
 	@if [ -z "$$LLZ_FORCE_SOURCE" ] && command -v llz >/dev/null 2>&1; then \
+		echo "[llz: $$(command -v llz) $$(llz version 2>/dev/null | head -1) — NOT your working tree; LLZ_FORCE_SOURCE=1 to build from source]"; \
 		llz ci $(1); \
 	else \
+		echo "[llz: built from source]"; \
 		cd $(GO_DIR) && go run ./cmd/llz ci $(1) $(2); \
 	fi
 endef
