@@ -477,7 +477,16 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 			return fmt.Errorf("list firewalls: %w", err)
 		}
 		if fid, ok := linode.FindIDByLabel(fws, labels.Firewall); ok {
-			if _, err := tfImport(g, varFile, addrFirewall, strconv.FormatUint(fid, 10), !nonfatal); err != nil {
+			id := strconv.FormatUint(fid, 10)
+			// The destination address being empty is NOT the same question as "is
+			// this firewall already managed". Mid-`moved`-migration the object sits
+			// at the pre-migration source address, so importing here adopts it a
+			// SECOND time — which blocks the `moved` block and makes terraform plan
+			// to destroy the source, i.e. this very firewall. See tf.StateIDs.
+			if at := tfStateAddrForID(id); at != "" && at != addrFirewall {
+				fmt.Printf("Firewall %q (id=%s) is already in state at %s — skipping import\n", labels.Firewall, id, at)
+				fmt.Fprintf(os.Stderr, "::warning::Firewall id=%s is tracked at %s, not %s. Importing it again would block the `moved` migration and make terraform destroy the live firewall. Leaving state alone; the `moved` block will relocate it during apply.\n", id, at, addrFirewall)
+			} else if _, err := tfImport(g, varFile, addrFirewall, id, !nonfatal); err != nil {
 				return err
 			}
 		} else {
@@ -609,6 +618,35 @@ func tfStateID(addr string) string {
 		return ""
 	}
 	return tf.ParseStateID(string(out))
+}
+
+// tfShowJSONFn returns `terraform show -json` for the current workspace. A
+// package var so tests can stub the exec.
+var tfShowJSONFn = func() (string, error) {
+	out, err := exec.Command("terraform", "show", "-json").Output()
+	return string(out), err
+}
+
+// tfStateAddrForID returns the state address already tracking a cloud object id,
+// or "" if nothing does. Used to make an import-by-label idempotent against the
+// OBJECT rather than against one address — see tf.StateIDs for why the two differ
+// during a `moved` migration.
+//
+// Fails open: an unreadable/absent state returns "" so a first import is never
+// blocked by this guard.
+func tfStateAddrForID(id string) string {
+	if id == "" {
+		return ""
+	}
+	out, err := tfShowJSONFn()
+	if err != nil {
+		return ""
+	}
+	ids, err := tf.StateIDs(out)
+	if err != nil {
+		return ""
+	}
+	return ids[id]
 }
 
 // clusterUnreachableSettle is how long Heal C waits for the LKE-E control plane
