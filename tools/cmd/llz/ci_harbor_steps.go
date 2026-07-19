@@ -9,18 +9,6 @@ package main
 // HARBOR_URL is internal DNS the GitHub runner cannot resolve, and the
 // ensure-project/smoke logic now lives inside the provisioner loop.
 
-import (
-	"os"
-	"strings"
-)
-
-// baoKVGetField reads one field of a KV path via the in-pod bao CLI, "" on any
-// failure (unseeded path, sealed pod) — the bash `|| true`.
-func baoKVGetField(path, field string) string {
-	token := os.Getenv("OPENBAO_ROOT_TOKEN")
-	out, _, err := baoExecFn(rootOpenbaoPod, token, "", "kv", "get", "-field="+field, path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(out)
-}
+// baoKVGetField and its classifying sibling baoKVGetFieldOK now live in
+// bao_read.go — the "" this returned on a sealed pod was gating credential
+// overwrites.

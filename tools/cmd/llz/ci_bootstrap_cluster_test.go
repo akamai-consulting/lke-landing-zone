@@ -230,21 +230,35 @@ func TestReadCoreDNSClusterIP_RetriesUntilAssigned(t *testing.T) {
 
 func TestExistingLokiPassword(t *testing.T) {
 	cases := []struct {
-		name string
-		out  string
-		ok   bool
-		want string
+		name    string
+		out     string
+		ok      bool
+		want    string
+		wantErr bool
 	}{
-		{"first-install-no-release", "", false, ""},
-		{"upgrade-reuses", "apps:\n  loki:\n    adminPassword: abc123XYZ\n", true, "abc123XYZ"},
-		{"ignores-null", "apps:\n  loki:\n    adminPassword: null\n", true, ""},
-		{"ignores-unfilled-placeholder", "apps:\n  loki:\n    adminPassword: ${loki_admin_password}\n", true, ""},
+		// helm SAYS there is no release: first install, generate a password.
+		{"first-install-no-release", "Error: release: not found\n", false, "", false},
+		{"upgrade-reuses", "apps:\n  loki:\n    adminPassword: abc123XYZ\n", true, "abc123XYZ", false},
+		{"ignores-null", "apps:\n  loki:\n    adminPassword: null\n", true, "", false},
+		{"ignores-unfilled-placeholder", "apps:\n  loki:\n    adminPassword: ${loki_admin_password}\n", true, "", false},
+		// The bug: a transient failure is not "no release". Returning "" here made
+		// the caller mint a fresh password, which diffed the rendered values, which
+		// rolled apl-operator with a ROTATED Loki admin password — silently.
+		{"unreadable-refuses-to-rotate", "Error: Kubernetes cluster unreachable: i/o timeout\n", false, "", true},
+		{"empty-output-failure-refuses", "", false, "", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			d := bootstrapDeps{helm: func(_ ...string) (string, bool) { return c.out, c.ok }}
-			if got := existingLokiPassword(d); got != c.want {
+			got, err := existingLokiPassword(d)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, c.wantErr)
+			}
+			if got != c.want {
 				t.Errorf("got %q want %q", got, c.want)
+			}
+			if c.wantErr && !strings.Contains(err.Error(), "ROTATE") {
+				t.Errorf("the error must say what it is protecting: %v", err)
 			}
 		})
 	}
@@ -410,7 +424,7 @@ func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
 			line := strings.Join(args, " ")
 			rec.add("helm " + line)
 			if len(args) > 1 && args[0] == "get" {
-				return "", false // no existing release → first install
+				return "Error: release: not found\n", false // helm's own words for "no release yet"
 			}
 			return "", true
 		},
@@ -490,7 +504,7 @@ func TestBootstrapCluster_BridgeAppliesForceConflicts(t *testing.T) {
 		},
 		helm: func(args ...string) (string, bool) {
 			if len(args) > 1 && args[0] == "get" {
-				return "", false // first install
+				return "Error: release: not found\n", false // helm's own words for "no release yet"
 			}
 			return "", true
 		},
@@ -578,7 +592,7 @@ func TestHelmInstallApl_SkipsWhenAlreadyAtTargetVersion(t *testing.T) {
 		case "list":
 			return `[{"name":"apl","chart":"apl-6.0.0","status":"deployed"}]`, true
 		case "get":
-			return "", false
+			return "Error: release: not found\n", false
 		case "upgrade":
 			upgraded = true
 		}
@@ -847,7 +861,8 @@ func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
 					return "", false // unreadable → bias to skip (values treated as equal)
 				}
 				if args[0] == "get" {
-					return "", false // existingLokiPassword probe
+					// existingLokiPassword probe: helm's own "no release yet".
+					return "Error: release: not found\n", false
 				}
 				return "", true
 			},
@@ -949,7 +964,7 @@ func TestBootstrapCluster_KyvernoRacesAheadOfGate(t *testing.T) {
 		apply: func(_ string, _ string, _ bool) (string, bool) { return "", true },
 		helm: func(args ...string) (string, bool) {
 			if len(args) > 1 && args[0] == "get" {
-				return "", false
+				return "Error: release: not found\n", false
 			}
 			return "", true
 		},

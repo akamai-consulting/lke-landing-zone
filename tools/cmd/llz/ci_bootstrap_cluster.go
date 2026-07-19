@@ -386,7 +386,10 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	if err != nil {
 		return fmt.Errorf("read apl-values %s: %w", o.valuesPath, err)
 	}
-	lokiPassword := existingLokiPassword(d)
+	lokiPassword, err := existingLokiPassword(d)
+	if err != nil {
+		return err
+	}
 	if lokiPassword == "" {
 		lokiPassword = d.genPassword()
 	}
@@ -1199,24 +1202,42 @@ func deployedAplRelease(d bootstrapDeps) (version, status string, ok bool) {
 // helm stored — used to reuse it on upgrade so it never churns across re-runs.
 var lokiAdminPasswordRe = regexp.MustCompile(`(?m)^\s*adminPassword:\s*(\S+)\s*$`)
 
+// helmReleaseNotFoundRe matches helm's own answer that there is nothing to read.
+// The helm seam reports only a bool, so "no such release" (first install) and
+// "the apiserver blipped" arrive identically — this is what separates them.
+var helmReleaseNotFoundRe = regexp.MustCompile(`(?i)release: not found|not found|no deployed releases`)
+
 // existingLokiPassword returns the loki admin password helm already stored for
-// the apl release (the values we passed on first install), or "" if the release
-// is absent / unreadable. On first install this is "", so the caller generates
-// one; on upgrade it returns the stable first-install value.
-func existingLokiPassword(d bootstrapDeps) string {
+// the apl release (the values we passed on first install). On first install
+// there is none, so it returns "" and the caller generates one; on upgrade it
+// returns the stable first-install value.
+//
+// An UNREADABLE release is an error, not "". Returning "" made the caller mint a
+// fresh password, which changed the rendered values, which made helmInstallApl
+// see a diff and run an upgrade — silently rotating the Loki admin password
+// because `helm get values` happened to fail. Nothing in the output said a
+// rotation had happened. The sibling read of the same values at helmInstallApl
+// already biases toward not acting on an unreadable release ("bias: don't roll
+// apl-operator"); this now matches it.
+func existingLokiPassword(d bootstrapDeps) (string, error) {
 	out, ok := d.helm("get", "values", "apl", "-n", "apl-operator")
 	if !ok {
-		return ""
+		if helmReleaseNotFoundRe.MatchString(out) {
+			return "", nil // genuinely absent: first install
+		}
+		return "", fmt.Errorf("could not read the deployed apl values (%s) — refusing to continue, because "+
+			"generating a password here would silently ROTATE the live Loki admin password and roll "+
+			"apl-operator. Re-run once helm can read the release", strings.TrimSpace(firstLine(out)))
 	}
 	if m := lokiAdminPasswordRe.FindStringSubmatch(out); m != nil {
 		v := strings.TrimSpace(m[1])
 		// `helm get values` prints "null" for an absent value and could echo the
 		// un-filled placeholder on a broken prior run — treat both as "no value".
 		if v != "" && v != "null" && !strings.Contains(v, "${") {
-			return v
+			return v, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // lokiPasswordAlphabet matches apl-core's `randAlphaNum 20` generator charset

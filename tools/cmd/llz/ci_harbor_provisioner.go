@@ -105,7 +105,15 @@ func runCIHarborProvisioner() error {
 	// seed, or a deleted repo secret, would otherwise strand the standby channel
 	// forever — the values are re-publishable from OpenBao without touching
 	// Harbor), then no-op.
-	if seeded, creds := robotsSeeded(ctx, bao); seeded {
+	seeded, creds, err := robotsSeeded(ctx, bao)
+	if err != nil {
+		// The seeded/unseeded decision drives everything below, up to and
+		// including telling an operator to delete a live robot. A failed OpenBao
+		// read is not an unseeded path — bail and let the next tick retry.
+		return fmt.Errorf("cannot read the robot credentials from OpenBao, so this tick cannot tell "+
+			"a seeded robot from an unseeded one: %w", err)
+	}
+	if seeded {
 		if err := smokeSeededRobot(h, creds); err != nil {
 			return err
 		}
@@ -149,12 +157,16 @@ func runCIHarborProvisioner() error {
 			return err
 		}
 		if !created {
-			// 409: the robot exists but its OpenBao path is unseeded (we only get
-			// here when robotsSeeded was false). The secret is unrecoverable from
-			// Harbor — an operator must delete the robot so the next tick can
-			// recreate it with a fresh secret. Loud, but keep going: the sibling
-			// robot may still provision.
-			fmt.Fprintf(os.Stderr, "robot %q exists but secret/harbor path is unseeded — delete the robot in Harbor UI so the next tick recreates it.\n", spec.payload.Name)
+			// 409: the robot exists but its OpenBao path is unseeded. The premise
+			// "unseeded" now holds — robotsSeeded returns its read error instead of
+			// reporting false — which is what makes this advice safe to print: it
+			// asks an operator to destroy a credential, so it must never be reached
+			// on a failed read. The secret is unrecoverable from Harbor, so deleting
+			// the robot is the only way the next tick can recreate it. Loud, but
+			// keep going: the sibling robot may still provision.
+			fmt.Fprintf(os.Stderr, "robot %q exists but %s is unseeded in OpenBao (read succeeded, path empty) — "+
+				"delete the robot in Harbor UI so the next tick recreates it and re-seeds.\n",
+				spec.payload.Name, spec.kvPath)
 			continue
 		}
 		if err := bao.Write(ctx, spec.kvPath, map[string]string{
@@ -215,14 +227,22 @@ func republishMissingRepoSecrets(ctx context.Context, bao baoStore) error {
 
 // robotsSeeded reports whether both OpenBao robot paths hold credentials, and
 // returns the push robot's for the smoke test.
-func robotsSeeded(ctx context.Context, bao baoStore) (bool, [2]string) {
+//
+// The read error is RETURNED rather than folded into false. baoStore.Get already
+// separates "absent" (ok) from "the read failed" (err); collapsing them here made
+// an OpenBao 503 look like an unseeded path, and the caller's 409 branch then
+// told the operator to delete a robot whose credentials were intact — destroying
+// the very secret that was still recoverable.
+func robotsSeeded(ctx context.Context, bao baoStore) (bool, [2]string, error) {
 	user, ok1, err1 := bao.Get(ctx, "secret/harbor/robot", "username")
 	pass, ok2, err2 := bao.Get(ctx, "secret/harbor/robot", "password")
 	_, ok3, err3 := bao.Get(ctx, "secret/harbor/pull-robot", "username")
-	if err1 != nil || err2 != nil || err3 != nil {
-		return false, [2]string{}
+	for _, err := range []error{err1, err2, err3} {
+		if err != nil {
+			return false, [2]string{}, err
+		}
 	}
-	return ok1 && ok2 && ok3 && user != "" && pass != "", [2]string{user, pass}
+	return ok1 && ok2 && ok3 && user != "" && pass != "", [2]string{user, pass}, nil
 }
 
 // smokeSeededRobot verifies the seeded push robot authenticates. 401 is the one
