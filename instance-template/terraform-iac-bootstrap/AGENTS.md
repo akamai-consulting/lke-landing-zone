@@ -13,8 +13,6 @@ terraform-iac-bootstrap/
   object-storage/     Loki S3 buckets (Linode Object Storage) — run once per region
   modules/
     llz-cluster/     Reusable LKE cluster module
-    llz-pool/        Reusable node pool module
-    llz-node-firewall/                 Node-level firewall rules module
 ```
 
 ## Apply order

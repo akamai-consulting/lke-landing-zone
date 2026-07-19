@@ -39,10 +39,10 @@ output "vpc_subnet_cidr" {
 
 output "node_firewall_id" {
   description = "Cloud Firewall ID. Pass as firewall_id when creating linode_lke_node_pool resources."
-  value       = module.node_firewall.firewall_id
+  value       = linode_firewall.this.id
 }
 
 output "node_firewall_label" {
   description = "Resolved label of the Cloud Firewall."
-  value       = module.node_firewall.firewall_label
+  value       = linode_firewall.this.label
 }

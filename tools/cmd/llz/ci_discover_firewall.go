@@ -8,7 +8,7 @@ package main
 //	NODE_NAME (downward API) → Node.spec.providerID → the node's Linode ID →
 //	  - LINODE_FIREWALL_ID: the firewall attached to that instance (Linode caps
 //	    Cloud Firewalls at one per linode, so the attached one IS the node-pool
-//	    firewall the llz-node-firewall module created)
+//	    firewall llz-cluster created)
 //	  - LKE_CLUSTER_ID: the instance's lke_cluster_id (node-name parse fallback)
 //	  - VPC_CIDR: the instance's VPC-interface subnet ipv4 range
 //
@@ -75,7 +75,7 @@ func resolveFirewallInputs(ctx context.Context, client firewallDiscoverer, linod
 		return "", "", "", fmt.Errorf("list firewalls of instance %d: %w", linodeID, err)
 	}
 	if len(fws) == 0 {
-		return "", "", "", fmt.Errorf("instance %d has no attached Cloud Firewall — was the llz-node-firewall module applied?", linodeID)
+		return "", "", "", fmt.Errorf("instance %d has no attached Cloud Firewall — was the llz-cluster module applied?", linodeID)
 	}
 	if len(fws) > 1 {
 		labels := make([]string, 0, len(fws))

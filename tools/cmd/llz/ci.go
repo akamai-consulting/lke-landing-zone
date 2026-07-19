@@ -370,8 +370,12 @@ const (
 	addrVPC      = "module.cluster.linode_vpc.this"
 	addrSubnet   = "module.cluster.linode_vpc_subnet.nodes"
 	addrCluster  = "module.cluster.linode_lke_cluster.this"
-	addrNodePool = "module.node_pool.linode_lke_node_pool.this"
-	addrFirewall = "module.cluster.module.node_firewall.linode_firewall.this"
+	// The pool is a root-level resource and the firewall lives directly in
+	// llz-cluster; both were modules (module.node_pool / module.node_firewall)
+	// before the wrappers were inlined. `moved` blocks migrate existing state,
+	// but an IMPORT names the post-move address, so these must be the new ones.
+	addrNodePool = "linode_lke_node_pool.this"
+	addrFirewall = "module.cluster.linode_firewall.this"
 )
 
 func runCITFImport(g globalOpts, region string, nonfatal bool) error {

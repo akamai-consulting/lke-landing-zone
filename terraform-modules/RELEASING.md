@@ -120,12 +120,12 @@ Renovate-managed in the instance.
 
 ## Internal module-to-module references
 
-`llz-cluster` calls `llz-node-firewall` via a **relative** source
-(`../llz-node-firewall`). This is intentional and works under `git::` consumption:
-Terraform checks out the whole repo for the `git::` fetch, so the relative path
-resolves to the sibling module inside that same checkout — pinned to the *same*
-umbrella tag as the parent. Do **not** rewrite internal references to `git::`;
-that would let the two halves drift to different versions.
+There are none: the modules are independent, and each root composes them
+directly. Should one ever need another, use a **relative** source
+(`../llz-<name>`), never `git::` — under `git::` consumption Terraform checks out
+the whole repo, so a relative path resolves to the sibling module inside that
+same checkout, pinned to the *same* umbrella tag. A `git::` internal reference
+would let the two halves drift to different versions.
 
 ## Module interface = the published contract
 

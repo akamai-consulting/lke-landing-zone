@@ -176,9 +176,7 @@ shellcheck:
 # scaffolding (placeholders + git:: tags that resolve only after publishing), so
 # they are not linted here.
 TF_DIRS := $(wildcard terraform-modules/llz-cluster \
-                      terraform-modules/llz-pool \
-                      terraform-modules/llz-object-storage \
-                      terraform-modules/llz-node-firewall)
+                      terraform-modules/llz-object-storage)
 
 tf-fmt:
 	@for d in $(TF_DIRS); do tofu fmt "$$d"; done

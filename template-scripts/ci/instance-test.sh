@@ -178,8 +178,8 @@ else
   # in-repo module path so init/validate work with no tags, backend, or creds —
   # same approach as template-scripts/ci/instantiate-terraform.sh. The path MUST be a
   # local *relative* source: a relative module source stays in the calling root's
-  # Terraform "package", so a module's own internal "../llz-node-firewall" refs
-  # can traverse up; an absolute source would make each module its own package and
+  # Terraform "package", so any internal "../llz-<name>" ref a module carries can
+  # traverse up; an absolute source would make each module its own package and
   # those internal refs would error with "Local module path escapes module
   # package". All roots are siblings at $INSTANCE/terraform-iac-bootstrap/<root>, so one relative
   # path (computed lexically, name is just a depth placeholder) serves them all.

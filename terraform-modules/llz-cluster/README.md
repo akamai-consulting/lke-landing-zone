@@ -2,7 +2,7 @@
 
 Terraform module that provisions a secure LKE Enterprise cluster with no default node pool.
 
-The module creates the supporting VPC and subnet, calls [`llz-node-firewall`](../llz-node-firewall/) to stamp a baseline Cloud Firewall, and then provisions the LKE-E cluster with a locked-down control-plane ACL. No node pools are created — callers attach them separately using the `node_firewall_id` output, which allows pool configuration, autoscaling, and lifecycle to be controlled independently of cluster infrastructure.
+The module creates the supporting VPC and subnet, stamps a baseline Cloud Firewall (`firewall.tf`), and then provisions the LKE-E cluster with a locked-down control-plane ACL. No node pools are created — callers attach them separately using the `node_firewall_id` output, which allows pool configuration, autoscaling, and lifecycle to be controlled independently of cluster infrastructure.
 
 ---
 
@@ -12,7 +12,7 @@ The module creates the supporting VPC and subnet, calls [`llz-node-firewall`](..
 llz-cluster
 ├── linode_vpc               (dedicated VPC for the cluster)
 ├── linode_vpc_subnet        (worker node subnet, /13 or /14)
-├── module.node_firewall     (llz-node-firewall — bootstrap baseline rules)
+├── linode_firewall          (node firewall — bootstrap baseline rules)
 └── linode_lke_cluster       (tier = "enterprise", no node pool)
 ```
 
@@ -118,7 +118,11 @@ resource "linode_lke_node_pool" "gpu" {
 
 At `terraform apply` time, the module writes a bootstrap ACL to the cluster control plane (your static CIDRs plus any runner CIDRs). After that, the `cloud-firewall-controller` owns the ACL via the Linode API. Terraform ignores ACL drift on subsequent applies so it does not overwrite the controller's live state.
 
-The node firewall follows the same model via `llz-node-firewall` — see that module's README for full details on the handoff and the `terraform state rm` escape hatch.
+The node firewall follows the same model: `firewall.tf` lays down a bootstrap baseline and sets `ignore_changes = [inbound, outbound]`, after which the controller owns the rules. To drop the resource from state entirely after handoff:
+
+```
+terraform state rm module.<name>.linode_firewall.this
+```
 
 ---
 

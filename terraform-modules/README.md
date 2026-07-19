@@ -8,8 +8,6 @@ with GitOps via ArgoCD.
 | Module | Purpose |
 |---|---|
 | [`llz-cluster`](llz-cluster/) | VPC + subnet + LKE-E cluster (no default node pool) |
-| [`llz-node-firewall`](llz-node-firewall/) | Cloud Firewall with baseline rules; hands off to controller |
-| [`llz-pool`](llz-pool/) | Node pool with `disk_encryption` and `firewall_id` enforced |
 | [`llz-object-storage`](llz-object-storage/) | Linode OBJ buckets + scoped keys for registry/log storage, with 120-day key rotation |
 
 See [`../instance-template/terraform-iac-bootstrap/cluster/`](../instance-template/terraform-iac-bootstrap/cluster/) for a working composition of the cluster modules,

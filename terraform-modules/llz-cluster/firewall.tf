@@ -1,10 +1,21 @@
-locals {
-  has_runner_cidrs = length(var.github_runner_ipv4_cidrs) > 0 || length(var.github_runner_ipv6_cidrs) > 0
+# ── Node firewall (bootstrap baseline) ───────────────────────────────────────
+#
+# Formerly the separate llz-node-firewall module. It had exactly one consumer
+# (this module, via a relative source) and was never called by a root, so the
+# module boundary bought indirection and nothing else — every input it took was
+# already a variable here. Folded in; the rules below are unchanged.
+
+# State migration for consumers upgrading across the inline. Module-relative, so
+# this resolves to <caller>.module.cluster.module.node_firewall.linode_firewall.this
+# → <caller>.module.cluster.linode_firewall.this and the firewall is NOT recreated.
+moved {
+  from = module.node_firewall.linode_firewall.this
+  to   = linode_firewall.this
 }
 
 resource "linode_firewall" "this" {
   #checkov:skip=CKV_LIN_6: LKE nodes need unrestricted egress for image pulls, DNS, and workload traffic.
-  label           = var.label
+  label           = local.firewall_label
   tags            = var.tags
   inbound_policy  = "DROP"
   outbound_policy = "ACCEPT"
@@ -126,9 +137,8 @@ resource "linode_firewall" "this" {
 
   # ── Optional: GitHub Actions runner NodePort access ────────────────────────
   # Enables integration-test and deployment health-check traffic from runners.
-  # Set github_runner_ipv4_cidrs / github_runner_ipv6_cidrs to activate.
-  # The same CIDRs are exposed as acl_cidrs_ipv4 / acl_cidrs_ipv6 outputs for
-  # concat() into the LKE-E control-plane ACL.
+  # Set github_runner_ipv4_cidrs / github_runner_ipv6_cidrs to activate. The same
+  # CIDRs are concat()'d into the bootstrap control-plane ACL in main.tf.
   dynamic "inbound" {
     for_each = local.has_runner_cidrs ? [1] : []
     content {
@@ -153,10 +163,10 @@ resource "linode_firewall" "this" {
     }
   }
 
-  # This module seeds a bootstrap baseline only. After the node pool
-  # initialises, the cloud-firewall-controller and ACL controller take over
-  # rule management via the Linode API. Ignoring rule drift here prevents
-  # Terraform from overwriting their live state on subsequent applies.
+  # This is a bootstrap baseline only. After the node pool initialises, the
+  # cloud-firewall-controller and ACL controller take over rule management via
+  # the Linode API. Ignoring rule drift here prevents Terraform from overwriting
+  # their live state on subsequent applies.
   #
   # To fully remove the resource from state after handoff:
   #   terraform state rm module.<name>.linode_firewall.this

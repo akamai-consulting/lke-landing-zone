@@ -1,11 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase-3 dogfood cutover — see terraform-modules/RELEASING.md.
-# node_pool is CUT OVER to its published git:: source (the canary). The remaining
-# modules each keep a commented `git::?ref=` line staged above an active relative
-# `source` — they still resolve locally so `terraform plan` keeps working. To cut
-# the next one over: PUSH its tag first, then swap the two `source` lines (comment
-# the relative one, uncomment the git:: one).
-# Order: node_pool (done) → cluster.
+# Phase-3 dogfood cutover — see terraform-modules/RELEASING.md. COMPLETE: every
+# module this root consumes resolves from its published git:: source pinned to
+# the umbrella tag. The relative path stays commented beneath each as the
+# local-dev override.
 #
 # EAA / control-plane-ACL CIDRs are no longer fetched here. The old GitHub
 # (-Enterprise) inventory fetch (llz-acl-cidr-sync) and its Linode-template
@@ -53,33 +50,44 @@ module "cluster" {
   github_runner_ipv6_cidrs = var.github_runner_ipv6_cidrs
 }
 
-module "node_pool" {
-  # This root dogfoods the PUBLISHED modules from their tagged git:: sources per
-  # terraform-modules/RELEASING.md. Every module pins to the same umbrella tag,
-  # rendered here as the copier `llz_version` that `llz new`/`llz upgrade` set to
-  # the version of the llz binary you ran. The relative path is kept commented as
-  # the local-dev override.
-  #
-  # checkov:skip=CKV_TF_1: First-party module sources pin to immutable-by-convention
-  # SemVer tags (terraform-modules/RELEASING.md — tags are never moved), which are the
-  # human-readable version contract; a raw commit SHA here would defeat that scheme.
-  source = "git::ssh://git@github.com/<@ upstream_org @>/lke-landing-zone.git//terraform-modules/llz-pool?ref=<@ llz_version @>"
-  # source = "../../terraform-modules/llz-pool"
+# ── Node pool ─────────────────────────────────────────────────────────────────
+#
+# Formerly the llz-pool module: a single linode_lke_node_pool behind eleven
+# pass-through variables, with no locals or computed logic. Inlined — this root
+# already declares every input it took.
 
-  cluster_id       = module.cluster.cluster_id
-  node_firewall_id = module.cluster.node_firewall_id
+# State migration for instances upgrading across the inline: keeps the existing
+# pool in state instead of destroy/recreate. That matters here — node_type is
+# ForceNew, so a missed move would rebuild the whole pool.
+moved {
+  from = module.node_pool.linode_lke_node_pool.this
+  to   = linode_lke_node_pool.this
+}
 
-  label     = var.node_pool_label
-  node_type = var.node_type
-  tags      = concat(var.tags, [var.node_pool_label])
+resource "linode_lke_node_pool" "this" {
+  cluster_id = module.cluster.cluster_id
+  label      = var.node_pool_label
+  type       = var.node_type
+  tags       = concat(var.tags, [var.node_pool_label])
 
-  node_labels = {
+  # Static count is ignored by the API when autoscaling is enabled.
+  node_count = var.autoscaler_enabled ? null : var.node_count
+
+  # Security invariants — not configurable. These were the llz-pool module's
+  # reason to exist; keep them hardcoded rather than re-exposing them as knobs.
+  firewall_id     = module.cluster.node_firewall_id
+  disk_encryption = "enabled"
+
+  labels = {
     environment = "shared"
     role        = "observability"
   }
 
-  node_count         = var.node_count
-  autoscaler_enabled = var.autoscaler_enabled
-  autoscaler_min     = var.autoscaler_min
-  autoscaler_max     = var.autoscaler_max
+  dynamic "autoscaler" {
+    for_each = var.autoscaler_enabled ? [1] : []
+    content {
+      min = var.autoscaler_min
+      max = var.autoscaler_max
+    }
+  }
 }
