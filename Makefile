@@ -509,6 +509,13 @@ template-manifest-check:
 # .github/ files it covers. Editing a llz-*.yml body without re-running
 # `llz ci workflows-fresh --write` would ship a lock that every instance fails on,
 # so catch it here instead. Same two-branch --root trick as above (last wins).
+#
+# FROM SOURCE (like chart-guards, and for a sharper reason): this gate compares
+# the WORKING TREE's scaffold against the WORKING TREE's lock, so it must run the
+# working tree's llz. LLZ_CI's PATH-first default would use the prebuilt image
+# binary — which is built from the merge-base and therefore doesn't even have this
+# verb on the PR that introduces it.
+workflows-lock-check: export LLZ_FORCE_SOURCE := 1
 workflows-lock-check:
 	$(call LLZ_CI,workflows-fresh --root instance-template,--root ../instance-template)
 
