@@ -52,13 +52,29 @@ func runChartVersionGuard(base, root string) error {
 		return fmt.Errorf("--base (PR base ref/SHA) is required")
 	}
 
-	diff, err := gitOutput(root, "diff", "--name-only", base+"...HEAD", "--", chartsRoot)
+	// Which charts changed, unioned from three sources. The committed diff alone
+	// is all CI needs (its tree is clean), but newVer below is read from the
+	// WORKING TREE — so with only the committed diff a local pre-commit run
+	// compares the old chart set against new on-disk files and prints "No chart
+	// directories changed" for a chart the very next commit fails on. That false
+	// green is the whole reason the other two sources are here.
+	committed, err := gitOutput(root, "diff", "--name-only", base+"...HEAD", "--", chartsRoot)
 	if err != nil {
 		return fmt.Errorf("git diff against base %s: %w", base, err)
 	}
-	dirs := changedChartDirs(splitLines(diff))
+	// Staged + unstaged edits to tracked files, then untracked additions (a new
+	// chart, or a new template inside an existing one). Errors are discarded on
+	// purpose and are safe to discard here, unlike the base ref below: both
+	// commands are working-tree queries that need no history, so the only way
+	// they fail is a broken repo the committed diff above would already have
+	// errored on. A failure degrades to CI's committed-only view, never to a
+	// pass-having-compared-nothing.
+	worktree, _ := gitOutput(root, "diff", "--name-only", "HEAD", "--", chartsRoot)
+	untracked, _ := gitOutput(root, "ls-files", "--others", "--exclude-standard", "--", chartsRoot)
+
+	dirs := changedChartDirs(splitLines(committed + "\n" + worktree + "\n" + untracked))
 	if len(dirs) == 0 {
-		fmt.Println("No chart directories changed.")
+		fmt.Println("No chart directories changed (working tree included).")
 		return nil
 	}
 
@@ -97,6 +113,8 @@ func runChartVersionGuard(base, root string) error {
 			len(failed), strings.Join(failed, ", "))
 	}
 	fmt.Println("chart-version-guard: every changed chart bumped its version.")
+	fmt.Println("  next: `make chart-pin-guard` — a bump leaves the Argo pins on the OLD version, " +
+		"and a pin the registry never received 404s at Argo sync time.")
 	return nil
 }
 
@@ -138,7 +156,8 @@ func classifyChartBump(dir, oldVer, newVer string) (ok bool, msg string) {
 		return true, fmt.Sprintf("%s: new chart (version %s) — no prior version to compare", dir, newVer)
 	case newVer == oldVer:
 		return false, fmt.Sprintf("%s changed but Chart.yaml version is still %s — bump version: to publish "+
-			"(publish-charts.yml only pushes a NEW version, so an unbumped change is never released)", dir, newVer)
+			"(publish-charts.yml only pushes a NEW version, so an unbumped change is never released), "+
+			"then realign the Argo pins with `make chart-pin-guard` — the bump is only half done until they match", dir, newVer)
 	default:
 		return true, fmt.Sprintf("%s: %s → %s", dir, oldVer, newVer)
 	}

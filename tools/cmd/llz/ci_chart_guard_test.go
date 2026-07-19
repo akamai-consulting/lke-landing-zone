@@ -182,3 +182,74 @@ func TestChartScalarStripsQuotes(t *testing.T) {
 		t.Errorf("chartName = %q, want llz-foo (quotes stripped, as the pin side does)", got)
 	}
 }
+
+// TestRunChartVersionGuardSeesWorkingTree locks the false-green this guard used
+// to give before a commit. Detection used to be `git diff base...HEAD` alone —
+// committed changes only — while the NEW version is read from the working tree.
+// So an edited-but-uncommitted chart produced an empty changed set and the guard
+// printed "No chart directories changed", passing a chart that the very next
+// commit fails on in CI. Here the committed diff is deliberately EMPTY and the
+// change exists only in the working tree; the guard must still fail.
+func TestRunChartVersionGuardSeesWorkingTree(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "kubernetes-charts", "wt-only")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"),
+		[]byte("name: wt-only\nversion: 0.4.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stubGit := func(_ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		// Committed diff vs the base: nothing committed yet.
+		case strings.Contains(joined, "BASE...HEAD"):
+			return nil, nil
+		// Staged + unstaged edits against HEAD: this is where the change lives.
+		case strings.Contains(joined, "diff --name-only HEAD"):
+			return []byte("kubernetes-charts/wt-only/values.yaml\n"), nil
+		case strings.Contains(joined, "ls-files"):
+			return nil, nil
+		case strings.Contains(joined, "show") && strings.Contains(joined, "wt-only/Chart.yaml"):
+			return []byte("name: wt-only\nversion: 0.4.0\n"), nil
+		}
+		return nil, nil
+	}
+	withExecOutput(t, stubGit)
+
+	err := runChartVersionGuard("BASE", root)
+	if err == nil || !strings.Contains(err.Error(), "wt-only") {
+		t.Fatalf("runChartVersionGuard = %v, want failure naming the uncommitted chart", err)
+	}
+}
+
+// TestRunChartVersionGuardUntrackedChart covers the other working-tree source: a
+// brand-new chart directory that git does not track yet still counts as changed.
+// It is exempt from the bump rule (no prior published artifact), so the guard
+// passes — but it must be SEEN, not silently absent from the report.
+func TestRunChartVersionGuardUntrackedChart(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "kubernetes-charts", "brand-new")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"),
+		[]byte("name: brand-new\nversion: 0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stubGit := func(_ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "ls-files") {
+			return []byte("kubernetes-charts/brand-new/Chart.yaml\n"), nil
+		}
+		return nil, nil // no committed diff, no tracked-file diff, absent at base
+	}
+	withExecOutput(t, stubGit)
+
+	if err := runChartVersionGuard("BASE", root); err != nil {
+		t.Fatalf("runChartVersionGuard = %v, want nil (new chart is exempt from the bump rule)", err)
+	}
+}
