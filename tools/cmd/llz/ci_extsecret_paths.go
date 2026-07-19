@@ -86,6 +86,33 @@ var (
 	esPropertyRx  = regexp.MustCompile(`property:\s+(\S+)`)
 )
 
+// esScanDirs are the trees that hold ExternalSecrets/PushSecrets.
+//
+// platform-apl is the one that matters and was missing: it holds the concrete
+// remoteRef keys (harbor/registry-s3, linode/api-token, loki/object-store,
+// infra/github-dispatch-token, linode/broad-pat). The scan covered only
+// apl-values — which at the template root does not exist, the tree being
+// instance-template/apl-values, and which holds a README and a values.yaml
+// anyway — plus rendered/, populated by render-charts.sh from kubernetes-charts
+// ONLY. So ref collection saw 4 chart-derived refs and none of the real ones.
+//
+// Those keys were not unvalidated: the SEEDED-paths half of this verb checks
+// them against the policy (the "ok (seeded policy)" lines). What was missing is
+// the other direction — a platform-apl ExternalSecret referencing a key that is
+// neither seeded nor policy-covered would have been invisible, which is the
+// class this verb exists to catch.
+//
+// ONE definition, used by both the walk and the requireCorpus report: they were
+// two separate literals, and the walk's copy is the one that decided coverage
+// while the reported list said something else.
+func esScanDirs(root, renderDir string) []string {
+	return []string{
+		esRepoPath(root, "platform-apl"),
+		esRepoPath(root, "apl-values"),
+		filepath.Join(root, filepath.FromSlash(renderDir)),
+	}
+}
+
 // collectExternalSecretRefs returns {(remoteRef.key, property): [file, …]} from
 // every YAML manifest under apl-values/ and the rendered chart output, skipping
 // vendored chart subtrees (/charts/).
@@ -98,10 +125,7 @@ func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int,
 	// The walk error is returned, not dropped: requireCorpus only asserts
 	// examined > 0, so a walk that broke PARTWAY still yields a non-empty corpus
 	// and would pass the gate having validated only the files it reached.
-	sources, walkErr := collectManifestPaths([]string{
-		filepath.Join(root, "apl-values"),
-		filepath.Join(root, filepath.FromSlash(renderDir)),
-	})
+	sources, walkErr := collectManifestPaths(esScanDirs(root, renderDir))
 	examined := 0
 	for _, f := range sources {
 		if strings.Contains(filepath.ToSlash(f), "/charts/") {
@@ -416,7 +440,11 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// render-charts.sh → $RENDER_DIR), not only a raw apl-values/ tree. Both are
 	// scanned so this works in the template repo and in a populated instance.
 	renderDir := firstNonEmpty(os.Getenv("RENDER_DIR"), "rendered")
-	esDirs := []string{filepath.Join(root, "apl-values"), filepath.Join(root, filepath.FromSlash(renderDir))}
+	// esScanDirs, not a second literal: the walk's copy of this list decided
+	// coverage while this one only decided what requireCorpus reported, and they
+	// disagreed — platform-apl, where the concrete remoteRef keys live, was in
+	// neither. See esScanDirs.
+	esDirs := esScanDirs(root, renderDir)
 	refs, examined, walkErr := collectExternalSecretRefs(root, renderDir)
 	if walkErr != nil {
 		return fmt.Errorf("externalsecret-paths: scanning manifests: %w", walkErr)
@@ -454,6 +482,11 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		"tools/cmd/llz/ci_bao_seed_all.go",
 		"tools/cmd/llz/ci_rotate_linode_creds.go",
 		"tools/cmd/llz/ci_incluster_pat.go",
+		// seed-broad-pat writes secret/linode/broad-pat (its own header: "Nothing
+		// else seeds that path"). It was missing here, which stayed invisible only
+		// because the REF side could not see the ExternalSecret that reads it — the
+		// two incomplete corpora masked each other.
+		"tools/cmd/llz/ci_seed_broad_pat.go",
 	} {
 		goPaths, goFields, err := collectSeededGo(esRepoPath(root, goSrc))
 		if err != nil {
