@@ -109,9 +109,15 @@ func variableSetArgv(name string) []string {
 
 // statusArgv is the read-only convergence check set (matches the verify steps in
 // docs/runbooks/bootstrap-openbao.md).
+//
+// The OpenBao namespace comes from openbaoNamespace, not a literal. It WAS the
+// literal "openbao", which has not existed since the platform namespaces were
+// llz- prefixed — so `llz status <env>` reported nothing for the OpenBao pods and
+// looked like a cluster with none, on every invocation. Same class as the three
+// stale entries in healthNamespaces (#242).
 func statusArgv() [][]string {
 	return [][]string{
-		{"kubectl", "-n", "openbao", "get", "pods"},
+		{"kubectl", "-n", openbaoNamespace, "get", "pods"},
 		{"kubectl", "-n", "argocd", "get", "applications"},
 		{"kubectl", "-n", "external-secrets", "get", "clustersecretstore"},
 	}
