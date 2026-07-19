@@ -48,10 +48,10 @@ func ciAssertReconcilerCmd() *cobra.Command {
 			"alert-eval --strict (ignores FIRING) both miss. Polls a short settle budget,\n" +
 			"then exits 0 (healthy) or 1. Read-only; ephemeral kubectl port-forward.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIAssertReconciler(prom, namespace,
-				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second))
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runCIAssertReconciler(prom, namespace,
+				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
 	c.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
@@ -180,7 +180,11 @@ func probeReconciler(prom, namespace string) (reconcilerProbe, error) {
 	return p, err
 }
 
-func runCIAssertReconciler(prom, namespace string, settle, interval time.Duration) int {
+// runCIAssertReconciler returns nil when the reconciler is functionally healthy
+// and an error otherwise (cobra exits 1 on it). The ::error:: annotations stay
+// as direct writes: GitHub parses an annotation only at the start of a line, and
+// a returned error reaches stderr behind main.go's "llz: " prefix.
+func runCIAssertReconciler(prom, namespace string, settle, interval time.Duration) error {
 	fmt.Println("## Reconciler functional-health assertion")
 
 	var last reconcilerProbe
@@ -205,7 +209,7 @@ func runCIAssertReconciler(prom, namespace string, settle, interval time.Duratio
 
 	if lastErr != nil {
 		fmt.Fprintf(os.Stderr, "::error::could not reach Prometheus at %s within %s (%v)\n", prom, settle, lastErr)
-		return 1
+		return fmt.Errorf("could not reach Prometheus at %s within %s: %w", prom, settle, lastErr)
 	}
 
 	// up has no authoritative fallback — a failing sample loop is a real fault.
@@ -242,10 +246,10 @@ func runCIAssertReconciler(prom, namespace string, settle, interval time.Duratio
 	if upFail || leaderFail {
 		dumpReconcilerDiagnostics(namespace)
 		fmt.Fprintln(os.Stderr, "::error::reconciler is not functionally healthy")
-		return 1
+		return fmt.Errorf("reconciler is not functionally healthy")
 	}
 	fmt.Println("Reconciler is reporting healthy and has a leader.")
-	return 0
+	return nil
 }
 
 // reconcilerLeaseName is the leader-election Lease the elector maintains

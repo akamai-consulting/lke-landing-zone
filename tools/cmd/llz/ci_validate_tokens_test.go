@@ -22,8 +22,8 @@ func TestRunCIValidateTokens_OptionalVsRequired(t *testing.T) {
 	ghcrTokenProbe = func(_, _ string) (int, error) { return 200, nil }
 	clearAll()
 	t.Setenv("LINODE_API_TOKEN", "dead")
-	if code := runCIValidateTokens(true); code != 1 {
-		t.Errorf("invalid required token: exit %d, want 1", code)
+	if err := runCIValidateTokens(true); err == nil {
+		t.Errorf("invalid required token: err %v, want non-nil", err)
 	}
 
 	// A dead OPTIONAL token (GHCR) only → warning → exit 0.
@@ -31,15 +31,15 @@ func TestRunCIValidateTokens_OptionalVsRequired(t *testing.T) {
 	ghcrTokenProbe = func(_, _ string) (int, error) { return 403, nil }
 	clearAll()
 	t.Setenv("GHCR_READ_TOKEN", "stale")
-	if code := runCIValidateTokens(true); code != 0 {
-		t.Errorf("invalid optional token: exit %d, want 0 (warn only)", code)
+	if err := runCIValidateTokens(true); err != nil {
+		t.Errorf("invalid optional token: err %v, want nil (warn only)", err)
 	}
 
 	// Blocking-invalid but --fail-on-invalid=false → report only → exit 0.
 	linodeProbe = func(string) (int, error) { return 401, nil }
 	clearAll()
 	t.Setenv("LINODE_API_TOKEN", "dead")
-	if code := runCIValidateTokens(false); code != 0 {
-		t.Errorf("fail-on-invalid=false: exit %d, want 0", code)
+	if err := runCIValidateTokens(false); err != nil {
+		t.Errorf("fail-on-invalid=false: err %v, want nil", err)
 	}
 }

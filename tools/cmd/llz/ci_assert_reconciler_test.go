@@ -110,8 +110,8 @@ func seamReconcilerProm(t *testing.T, upBody, leaderBody []byte) {
 func TestRunAssertReconcilerHealthy(t *testing.T) {
 	one := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
 	seamReconcilerProm(t, one, one)
-	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 30*time.Second, time.Second); code != 0 {
-		t.Errorf("expected exit 0 when up=1 and leader=1, got %d", code)
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 30*time.Second, time.Second); err != nil {
+		t.Errorf("expected no error when up=1 and leader=1, got %v", err)
 	}
 }
 
@@ -141,8 +141,8 @@ func TestRunAssertReconcilerReportingDown(t *testing.T) {
 	leader1 := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
 	seamReconcilerProm(t, up0, leader1)
 	calls := stubExecCombined(t, "")
-	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
-		t.Errorf("expected exit 1 when llz_reconcile_up=0, got %d", code)
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+		t.Errorf("expected an error when llz_reconcile_up=0, got %v", err)
 	}
 	if len(*calls) == 0 {
 		t.Error("a failed assertion must dump reconciler diagnostics")
@@ -156,8 +156,8 @@ func TestRunAssertReconcilerNoLeaderOrAbsent(t *testing.T) {
 	seamReconcilerProm(t, up1, absent)
 	stubReconcilerLease(t, "", false)
 	calls := stubExecCombined(t, "")
-	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
-		t.Errorf("expected exit 1 when leader gauge is absent, got %d", code)
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+		t.Errorf("expected an error when leader gauge is absent, got %v", err)
 	}
 	if len(*calls) == 0 {
 		t.Error("a failed assertion must dump reconciler diagnostics")
@@ -173,8 +173,8 @@ func TestRunAssertReconcilerLeaderGaugeLagsButLeaseLive(t *testing.T) {
 	seamReconcilerProm(t, up1, leader0)
 	stubReconcilerLease(t, "llz-reconciler-abc123", true)
 	calls := stubExecCombined(t, "")
-	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 0 {
-		t.Fatalf("expected exit 0 when the gauge lags but the Lease is live, got %d", code)
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err != nil {
+		t.Fatalf("expected no error when the gauge lags but the Lease is live, got %v", err)
 	}
 	if len(*calls) != 0 {
 		t.Errorf("a Lease-confirmed leader must NOT dump diagnostics, got %d calls", len(*calls))
@@ -188,8 +188,8 @@ func TestRunAssertReconcilerLeaderDownAndLeaseDead(t *testing.T) {
 	seamReconcilerProm(t, up1, leader0)
 	stubReconcilerLease(t, "", false)
 	calls := stubExecCombined(t, "")
-	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
-		t.Fatalf("expected exit 1 when leader=0 and the Lease has no live holder, got %d", code)
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+		t.Fatalf("expected an error when leader=0 and the Lease has no live holder, got %v", err)
 	}
 	if len(*calls) == 0 {
 		t.Error("a real no-leader stall must still dump diagnostics")
@@ -207,8 +207,8 @@ func TestRunAssertReconcilerUpFailHasNoLeaseFallback(t *testing.T) {
 	t.Cleanup(func() { reconcilerLeaseLive = orig })
 	reconcilerLeaseLive = func(string, time.Time) (string, bool) { leaseConsulted = true; return "holder", true }
 	stubExecCombined(t, "")
-	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
-		t.Fatalf("expected exit 1 when up=0 regardless of the Lease, got %d", code)
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+		t.Fatalf("expected an error when up=0 regardless of the Lease, got %v", err)
 	}
 	if leaseConsulted {
 		t.Error("the Lease fallback must not run when up is failing")
@@ -244,8 +244,8 @@ func TestRunAssertReconcilerHealthyDoesNotDump(t *testing.T) {
 	one := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
 	seamReconcilerProm(t, one, one)
 	calls := stubExecCombined(t, "")
-	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 30*time.Second, time.Second); code != 0 {
-		t.Fatalf("expected exit 0, got %d", code)
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 30*time.Second, time.Second); err != nil {
+		t.Fatalf("expected exit 0, got %v", err)
 	}
 	if len(*calls) != 0 {
 		t.Errorf("a healthy assertion must NOT dump diagnostics, got %d calls", len(*calls))
@@ -298,7 +298,7 @@ func TestRunAssertReconcilerUnreachable(t *testing.T) {
 	withPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
 		return errors.New("port-forward failed")
 	}
-	if code := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); code != 1 {
-		t.Errorf("expected exit 1 when Prometheus is unreachable, got %d", code)
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+		t.Errorf("expected an error when Prometheus is unreachable, got %v", err)
 	}
 }
