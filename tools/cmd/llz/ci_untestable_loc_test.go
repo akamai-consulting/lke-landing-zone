@@ -232,6 +232,103 @@ func TestCountTerraformProvisionerLines(t *testing.T) {
 	}
 }
 
+func TestCountMakefileRecipeLines(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{
+			name: "single-line recipe is glue and not counted",
+			in: "" +
+				"placeholder-guard:\n" +
+				"\t$(call LLZ_CI,placeholder-guard,--root ..)\n",
+			want: 0,
+		},
+		{
+			name: "multi-line recipe counts every logical line",
+			in: "" +
+				"lint-something:\n" +
+				"\t@echo one\n" +
+				"\techo two\n" +
+				"\techo three\n",
+			want: 3,
+		},
+		{
+			name: "blank lines and comments are skipped",
+			in: "" +
+				"t:\n" +
+				"\t# explanatory comment\n" +
+				"\t@echo a\n" +
+				"\n" +
+				"\t@# silenced comment\n" +
+				"\techo b\n",
+			want: 2,
+		},
+		{
+			name: "backslash continuation counts once",
+			in: "" +
+				"t:\n" +
+				"\t@echo start\n" +
+				"\tbin/llz ci foo \\\n" +
+				"\t  --a one \\\n" +
+				"\t  --b two\n",
+			want: 2,
+		},
+		{
+			name: "recipe-line prefixes are stripped before classification",
+			in: "" +
+				"t:\n" +
+				"\t-rm -f x\n" +
+				"\t+$(MAKE) sub\n" +
+				"\t@echo done\n",
+			want: 3,
+		},
+		{
+			name: "define/endef macro bodies count as recipe shell",
+			in: "" +
+				"define SBOM_STEP\n" +
+				"@if command -v $(1) >/dev/null; then \\\n" +
+				"  $(2); \\\n" +
+				"else \\\n" +
+				"  echo missing; \\\n" +
+				"fi\n" +
+				"echo done\n" +
+				"endef\n",
+			want: 2,
+		},
+		{
+			name: "non-recipe lines (vars, targets, .PHONY) are ignored",
+			in: "" +
+				".PHONY: a b c\n" +
+				"TF_DIRS := one two\n" +
+				"# a comment\n" +
+				"a: b\n",
+			want: 0,
+		},
+		{
+			name: "two separate recipes are tallied independently",
+			in: "" +
+				"a:\n" +
+				"\techo one\n" +
+				"\techo two\n" +
+				"b:\n" +
+				"\techo glue-only\n" +
+				"c:\n" +
+				"\techo x\n" +
+				"\techo y\n",
+			want: 4, // 2 from a, 0 from b (glue), 2 from c
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countMakefileRecipeLines(tt.in); got != tt.want {
+				t.Errorf("countMakefileRecipeLines() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMatchGlob(t *testing.T) {
 	tests := []struct {
 		pattern, path string

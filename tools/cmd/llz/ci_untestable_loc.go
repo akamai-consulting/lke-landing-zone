@@ -203,8 +203,10 @@ func scanUntestable(root string, cfg untestableBudget) ([]categoryResult, error)
 				n = countScriptLines(string(b))
 			case "terraform-provisioner":
 				n = countTerraformProvisionerLines(string(b))
+			case "makefile-recipe":
+				n = countMakefileRecipeLines(string(b))
 			default:
-				return nil, fmt.Errorf("category %q has unknown kind %q (want workflow-run|script|terraform-provisioner)", name, cat.Kind)
+				return nil, fmt.Errorf("category %q has unknown kind %q (want workflow-run|script|terraform-provisioner|makefile-recipe)", name, cat.Kind)
 			}
 			if n > 0 {
 				r.files = append(r.files, fileCount{path: rel, count: n})
@@ -331,6 +333,81 @@ func countTerraformProvisionerLines(content string) int {
 		}
 	}
 	return total
+}
+
+// countMakefileRecipeLines counts logical lines of shell embedded in Makefile
+// recipe bodies (tab-indented lines under a rule) and in `define … endef` macro
+// bodies, which expand to recipe shell just the same.
+//
+// This category exists because the Makefile was invisible to every other counter:
+// its recipes are neither a workflow `run:` block, a standalone script, nor a
+// Terraform provisioner heredoc. That left a hole in the ratchet where shell
+// evicted from a workflow INTO a Makefile recipe scored as a reduction, which is
+// the opposite of what this gate is for.
+//
+// Counting mirrors countRunBlockLines so the two are directly comparable and
+// neither penalizes a conversion:
+//   - blank lines and whole-line `#` comments are skipped;
+//   - a backslash-continued command counts once (wrapping a long tool call
+//     across physical lines is not a cost);
+//   - recipe-line prefixes (`@`, `-`, `+`) are stripped before inspection;
+//   - a recipe whose whole body is ONE logical line is tool-invocation glue —
+//     exactly the shape `$(call LLZ_CI,<verb>)` takes — and is not counted, the
+//     same rule single-line `run:` gets. Converting a multi-line recipe into one
+//     `llz ci` call therefore drops it from the tally entirely.
+func countMakefileRecipeLines(content string) int {
+	lines := strings.Split(content, "\n")
+	total := 0
+	for i := 0; i < len(lines); i++ {
+		var body []string
+		switch {
+		case strings.HasPrefix(lines[i], "define "):
+			// Macro body: everything up to `endef`. Expands into recipes, so its
+			// shell is as untestable as a rule's.
+			for i++; i < len(lines) && strings.TrimSpace(lines[i]) != "endef"; i++ {
+				body = append(body, lines[i])
+			}
+		case strings.HasPrefix(lines[i], "\t"):
+			// A rule's recipe: the run of tab-indented lines. Blank lines do not
+			// end the run — a recipe may be visually grouped, and two recipes are
+			// always separated by a (non-tab, non-blank) target line, so absorbing
+			// blanks can never merge two rules into one body.
+			for ; i < len(lines) && (strings.HasPrefix(lines[i], "\t") || strings.TrimSpace(lines[i]) == ""); i++ {
+				body = append(body, lines[i])
+			}
+			i-- // re-examine the first non-recipe line in the outer loop
+		default:
+			continue
+		}
+		total += countRecipeBodyLines(body)
+	}
+	return total
+}
+
+// countRecipeBodyLines returns the logical-line count of one recipe body, or 0
+// when the body is a single logical line (glue — see countMakefileRecipeLines).
+func countRecipeBodyLines(body []string) int {
+	n := 0
+	prevContinues := false
+	for _, l := range body {
+		s := strings.TrimSpace(l)
+		if s == "" {
+			continue
+		}
+		// Strip make's recipe-line prefixes (@ silent, - ignore-errors, + always-run)
+		// so `@# comment` and `@echo` are classified on their shell content.
+		s = strings.TrimLeft(s, "@-+")
+		s = strings.TrimSpace(s)
+		isComment := s == "" || strings.HasPrefix(s, "#")
+		if !isComment && !prevContinues {
+			n++
+		}
+		prevContinues = !isComment && strings.HasSuffix(s, `\`)
+	}
+	if n <= 1 {
+		return 0
+	}
+	return n
 }
 
 func lineIndent(l string) int {
