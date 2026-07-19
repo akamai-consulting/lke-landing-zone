@@ -16,6 +16,7 @@ type fakeBao struct {
 	mu        sync.Mutex
 	versions  map[string][]map[string]any // data-api path -> versions (idx 0 == v1)
 	failWrite bool                        // POST returns 500
+	failRead  bool                        // GET returns 500 (a transport/permission blip, NOT a 404)
 	tamper    func(map[string]any) map[string]any
 	srv       *httptest.Server
 }
@@ -34,6 +35,10 @@ func (f *fakeBao) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "secret/data/"):
+		if f.failRead {
+			http.Error(w, "upstream unavailable", http.StatusInternalServerError)
+			return
+		}
 		vers := f.versions[path]
 		if len(vers) == 0 {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -157,5 +162,59 @@ func TestPathHelpers(t *testing.T) {
 	}
 	if ValidatePath("kv/app") == nil {
 		t.Error("ValidatePath should reject non-secret/ path")
+	}
+}
+
+// TestDualWriteRefusesWhenPriorVersionUnreadable is a DATA-LOSS regression test.
+//
+// DualWrite used to discard the error from CurrentVersion:
+//
+//	priorP, _ := primary.CurrentVersion(ctx, path)
+//
+// CurrentVersion returns (0, nil) when the secret genuinely does not exist and
+// (0, err) when it could not be READ. Rollback treats priorVersion 0 as "nothing
+// was here before" and DELETEs the metadata path — which in KV v2 destroys the
+// secret and every version.
+//
+// So a read blip followed by a secondary write failure permanently destroyed a
+// live credential that the rollback existed to restore.
+func TestDualWriteRefusesWhenPriorVersionUnreadable(t *testing.T) {
+	primary, secondary := newFakeBao(t), newFakeBao(t)
+	pc, sc := primary.client(), secondary.client()
+	ctx := context.Background()
+	const path = "secret/linode/api-token"
+
+	// A live secret with history — exactly what must not be destroyed.
+	if err := pc.Write(ctx, path, map[string]string{"token": "v1"}); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	if err := pc.Write(ctx, path, map[string]string{"token": "v2"}); err != nil {
+		t.Fatalf("seed v2: %v", err)
+	}
+
+	// The read blips, and the secondary write would fail. Previously: prior
+	// version reads as 0 -> rollback DELETEs -> secret gone.
+	primary.failRead = true
+	secondary.failWrite = true
+
+	err := DualWrite(ctx, pc, sc, path, map[string]string{"token": "v3"})
+	if err == nil {
+		t.Fatal("DualWrite must fail when it cannot read the prior version")
+	}
+	if !strings.Contains(err.Error(), "no change made") {
+		t.Errorf("error should say nothing was changed, got: %v", err)
+	}
+
+	// THE ASSERTION THAT MATTERS: the secret survived.
+	primary.failRead = false
+	kv, ok, readErr := pc.readKV(ctx, path)
+	if readErr != nil {
+		t.Fatalf("re-read after refused DualWrite: %v", readErr)
+	}
+	if !ok {
+		t.Fatal("the secret was DESTROYED — rollback deleted the metadata path because an unreadable prior version looked like 'no prior secret'")
+	}
+	if got := kv.Data.Data["token"]; got != "v2" {
+		t.Errorf("token = %v, want the untouched v2", got)
 	}
 }

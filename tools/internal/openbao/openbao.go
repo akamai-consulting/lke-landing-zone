@@ -363,7 +363,21 @@ func (c *Client) Rollback(ctx context.Context, path string, priorVersion int) er
 // failure rolls the primary back to its prior version; a post-write hash
 // mismatch is flagged for manual intervention.
 func DualWrite(ctx context.Context, primary, secondary *Client, path string, data map[string]string) error {
-	priorP, _ := primary.CurrentVersion(ctx, path)
+	// The error is NOT discardable. CurrentVersion returns (0, nil) when the
+	// secret genuinely does not exist, and (0, err) when it could not be read —
+	// a transport blip, a 403, an undecodable body. Rollback treats priorVersion
+	// 0 as "there was nothing here before" and DELETES the metadata path, which
+	// in KV v2 destroys the secret AND EVERY VERSION.
+	//
+	// So discarding this error meant: read blips → secondary write fails →
+	// rollback permanently destroys a live credential it was supposed to restore.
+	// A dual write that cannot establish the prior state must not begin; failing
+	// here preserves the documented "primary failure leaves no change" contract.
+	priorP, verErr := primary.CurrentVersion(ctx, path)
+	if verErr != nil {
+		return fmt.Errorf("could not read the current version of %s (no change made) — refusing to dual-write, "+
+			"because a rollback could not tell 'no prior secret' from 'could not read it' and would DELETE the path: %w", path, verErr)
+	}
 
 	if err := primary.Write(ctx, path, data); err != nil {
 		return fmt.Errorf("primary write failed (no change made): %w", err)
