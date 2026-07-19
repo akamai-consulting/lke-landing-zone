@@ -511,7 +511,7 @@ jobs:
         working-directory: terraform-iac-bootstrap/cluster
         run: |
           echo "Cluster API endpoints:"
-          terraform output -json api_endpoints
+          llz ci tf-output api_endpoints --json
 
       # Precise LKE-E create wall-time → step summary + artifact (the HA-off
       # baseline). Best-effort; instrumentation never affects the apply outcome.
@@ -812,11 +812,7 @@ jobs:
       - name: Terraform destroy — cluster
         working-directory: terraform-iac-bootstrap/cluster
         run: |
-          terraform plan -destroy \
-            -var-file="${REGION}.tfvars" \
-            -out=destroy-plan.bin \
-            -no-color
-          terraform apply destroy-plan.bin
+          llz ci tf-destroy --var-file="${REGION}.tfvars"
 
       # Handles the case where the cluster was in an indeterminate state and
       # Terraform couldn't reach or import it: deletes the cluster by label,
@@ -1026,8 +1022,8 @@ jobs:
         working-directory: terraform-iac-bootstrap/object-storage
         run: |
           set -euo pipefail
-          BUCKETS=$(terraform output -json bucket_names)
-          HARBOR_BUCKET=$(terraform output -raw harbor_registry_bucket)
+          BUCKETS=$(llz ci tf-output bucket_names --json)
+          HARBOR_BUCKET=$(llz ci tf-output harbor_registry_bucket)
           {
             echo "### Object Storage buckets provisioned"
             echo ""
@@ -1272,8 +1268,4 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
         run: |
-          terraform plan -destroy \
-            -var-file="${REGION}.tfvars" \
-            -out=destroy-plan.bin \
-            -no-color
-          terraform apply destroy-plan.bin
+          llz ci tf-destroy --var-file="${REGION}.tfvars"

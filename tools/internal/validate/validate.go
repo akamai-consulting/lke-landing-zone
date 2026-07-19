@@ -18,12 +18,17 @@ const (
 	RoleStandby    = "standby"
 )
 
-// Forge flavors an instance may target — mirrors copier.yml's forge_flavor
-// choices and forge.Flavor() in internal/forge.
+// Forge flavors an instance may target. These are the canonical wire strings
+// for spec.instance.forge; internal/forge re-exports them as its Flavor type
+// and holds the per-flavor behavior. GHEC (Enterprise Cloud) and GHES
+// (Enterprise Server) are distinct flavors: GHEC is github.com's API with an
+// enterprise tenant, GHES is a self-hosted appliance with its own API base and
+// OIDC issuer. See docs/designs/forge-abstraction.md.
 const (
-	ForgeGitHub           = "github"
-	ForgeGitHubEnterprise = "github-enterprise"
-	ForgeGitLab           = "gitlab"
+	ForgeGitHub                 = "github"
+	ForgeGitHubEnterprise       = "github-enterprise"        // Enterprise Cloud (GHEC)
+	ForgeGitHubEnterpriseServer = "github-enterprise-server" // Enterprise Server (GHES)
+	ForgeGitLab                 = "gitlab"
 )
 
 // EnvNameRe is the deployment-name contract: lowercase start, then
@@ -59,13 +64,16 @@ func OBJClusterID(v string) error {
 	return nil
 }
 
-// Forge returns an error if f is not a recognized git-forge flavor.
+// Forge returns an error if f is not a recognized git-forge flavor. Recognized
+// is not the same as supported end-to-end — internal/forge.Supported is the
+// gate for that; this only rejects a value that names no forge at all.
 func Forge(f string) error {
 	switch f {
-	case ForgeGitHub, ForgeGitHubEnterprise, ForgeGitLab:
+	case ForgeGitHub, ForgeGitHubEnterprise, ForgeGitHubEnterpriseServer, ForgeGitLab:
 		return nil
 	default:
-		return fmt.Errorf("forge %q invalid (want %s|%s|%s)", f, ForgeGitHub, ForgeGitHubEnterprise, ForgeGitLab)
+		return fmt.Errorf("forge %q invalid (want %s|%s|%s|%s)", f,
+			ForgeGitHub, ForgeGitHubEnterprise, ForgeGitHubEnterpriseServer, ForgeGitLab)
 	}
 }
 

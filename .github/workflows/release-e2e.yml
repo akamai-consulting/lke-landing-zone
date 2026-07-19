@@ -1,73 +1,42 @@
-name: Release E2E — provision, validate, destroy a real cluster
+name: Release E2E — run the forge lanes (github.com always; all on release)
 
-# Release gate: runs on a published *pre-release* `vX.Y.Z` (the candidate), proving
-# the template can instantiate a working instance, stand up a REAL LKE-Enterprise
-# cluster, reach a healthy + Loki-bootstrapped state, and tear itself back down
-# cleanly. Only after this is green does a human PROMOTE the pre-release to a full
-# release — which fires the binaries (llz-release.yml) and operator image
-# (firewall-controller.yml), keyed on `released`. The pre-release tag is ignored by
-# `llz self-update`/`new` (selfupdate.go skips pre-releases), so an un-validated
-# candidate is never consumable. (Convention: always cut a pre-release first; a
-# direct full release skips this gate.)
+# Thin driver over release-e2e-lane.yml (the actual instantiate → provision →
+# teardown → gate pipeline, one forge per invocation).
 #
-# ── How it works (and why) ───────────────────────────────────────────────────
-# terraform.yml is the provisioning engine, but here it lives under
-# instance-template/.github/workflows/, so it is NOT runnable in THIS template
-# repo — it only becomes dispatchable once it sits at .github/workflows/ on the
-# default branch of a real instance. So this workflow drives a dedicated,
-# throwaway E2E *instance repo*:
-#   1. instantiate — scaffold the `e2e` env (llz env add), lay the template out as
-#      an instance (instance-template/* → root; the scaffold already names its TF
-#      roots terraform-iac-bootstrap/), and force-push it to the E2E instance repo.
-#   2. provision  — `gh workflow run terraform.yml` (apply, module=all,
-#      region=e2e, assert_loki=true) in that repo + `gh run watch --exit-status`.
-#      terraform.yml's own chain (apply-cluster → bootstrap-openbao with
-#      bootstrap_cluster=true, one job folding cluster bootstrap + OpenBao +
-#      converge) IS the wait-for-deploy + health gate; the
-#      converge job also runs `llz ci assert-loki` (Loki bootstrapped + S3-backed),
-#      so a green provision means "converged AND Loki is S3-backed".
-#   3. (health + Loki validation is FOLDED INTO provision via assert_loki — the
-#      former separate `validate` job that dispatched cluster-health.yml is gone;
-#      its only net-new check, assert-loki, now runs inside the converge above.)
-#   4. teardown   — `gh workflow run terraform.yml` (destroy) + watch. ALWAYS
-#      runs once provisioning started, so a paid cluster is never leaked.
-#   5. gate       — pass only if provision + teardown all succeeded.
+# WHY a driver + reusable lane, not a matrix over the pipeline's jobs: the LKE-E
+# clusters are quota-bound — we cannot stand two up side by side. Each lane must
+# run to completion (through its OWN teardown, so its cluster is gone) before the
+# next lane provisions. A `max-parallel: 1` matrix over a reusable-workflow call
+# gives exactly that: the whole github.com lane finishes before the GHES lane
+# begins. (A matrix over the individual jobs would let teardown[A] and
+# provision[B] overlap — two clusters at once.)
 #
-# ── Prerequisites (org-specific; this workflow cannot create them) ────────────
-# A dedicated throwaway E2E instance repo (its default branch is overwritten
-# every run) that has: terraform.yml + cluster-health.yml active (on GitHub-hosted
-# runners), and an `infra-e2e` Environment holding LINODE_API_TOKEN / TF_STATE_* /
-# APL_VALUES_REPO_TOKEN / OPENBAO_* (all the infra secrets — they live THERE, not
-# here). (apl-core 6.x auto-generates the Loki admin password in-cluster, so there
-# is no LOKI_ADMIN_PASSWORD to seed.) It also needs `e2e` added to terraform.yml's region
-# choices (done) and an `e2e.tfvars` set produced by instantiate. The instance's
-# TF_IMAGE / KUBE_IMAGE vars are auto-pinned by the instantiate job on `release`
-# runs (see "Pin instance CI images to this commit") so the baked llz can never
-# drift from the rendered workflow — no need to bump them by hand per release.
-#
-# This (template) repo only needs two values that can't be derived:
-#   vars:    E2E_INSTANCE_REPO (owner/name of the throwaway instance repo)
-#   secrets: E2E_DISPATCH_TOKEN — PAT/app token with contents:write +
-#            actions:read/write + Variables:read/write on E2E_INSTANCE_REPO
-#            (Variables:write is what lets the instantiate job pin TF_IMAGE/KUBE_IMAGE).
-# Region + OBJ cluster default to the canonical `lab` tier (us-ord / us-ord-1);
-# set vars E2E_LINODE_REGION / E2E_OBJ_CLUSTER only to override.
-#
-# Smoke-test the plumbing cheaply first: workflow_dispatch with dry_run=true
-# instantiates + runs terraform.yml action=plan and SKIPS apply/validate/destroy.
+# Lane selection:
+#   • release (prereleased) → BOTH lanes, sequentially: github.com then GHES.
+#   • workflow_dispatch      → the single `forge` chosen (default github.com), so a
+#                              human can exercise one lane (incl. GHES) in isolation.
+# The GHES lane needs the E2E_GHES_* vars/secrets documented in the lane file; on a
+# repo without them a release run's GHES leg fails its require-config check (the
+# github.com leg, having already finished, is unaffected).
 
 on:
   release:
     types: [prereleased]
   workflow_dispatch:
     inputs:
+      forge:
+        description: 'Which lane to run (dispatch only; release always runs all).'
+        required: false
+        type: choice
+        options: [github, github-enterprise-server]
+        default: github
       dry_run:
-        description: 'Instantiate + plan only (no real apply / validate / destroy)'
+        description: 'Instantiate + plan only (no real apply / validate / destroy).'
         required: false
         type: boolean
         default: true
       keep_cluster:
-        description: 'On a full run, SKIP teardown so the cluster survives for debugging (it keeps billing — destroy it manually). Ignored on dry_run and on the release trigger.'
+        description: 'On a full run, SKIP teardown so the cluster survives for debugging (keeps billing). Ignored on dry_run / release.'
         required: false
         type: boolean
         default: false
@@ -75,190 +44,37 @@ on:
 permissions:
   contents: read
 
-# One E2E cluster at a time — never let two runs race the same e2e state/cluster.
+# One E2E run at a time across ALL lanes — a global safety net on top of the
+# in-run max-parallel:1 sequencing, so two separately-triggered runs can never
+# race the shared Linode account either.
 concurrency:
   group: release-e2e
   cancel-in-progress: false
 
-env:
-  E2E_ENV: e2e
-  INSTANCE_REPO: ${{ vars.E2E_INSTANCE_REPO }}
-  # NOTE: apl-core's operator used to force-push its rendered values tree to
-  # otomi.git.branch (= main), a divergent history that once wedged platform-bootstrap
-  # on a stale operator-authored commit (v1beta1 ExternalSecrets 6.x's ESO rejects) and
-  # forced a dedicated `e2e-apps` snapshot branch for the LZ app-of-apps to read. Per-env
-  # values-branch isolation (docs/designs/apl-core-values-branch-isolation.md) moved
-  # apl-core off main to a per-env apl-<env> branch (here apl-e2e), so the operator no
-  # longer touches main — the snapshot branch was RETIRED and platform-bootstrap reads
-  # `main` (the instantiated tree) directly again.
-  # Region + OBJ cluster default to the canonical `lab` tier (terraform-iac-bootstrap/
-  # {cluster,object-storage}/lab.tfvars on the instance repo's default branch) — lab is the throwaway
-  # tier co-located in us-ord, the right shape for an E2E run. Override via repo vars
-  # only to exercise a different region.
-  E2E_LINODE_REGION: ${{ vars.E2E_LINODE_REGION || 'us-ord' }}
-  E2E_OBJ_CLUSTER: ${{ vars.E2E_OBJ_CLUSTER || 'us-ord-1' }}
-  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-  # keep_cluster is honored ONLY on a manual full-run dispatch — never on the
-  # release trigger (which must always tear down). Lets a human keep the cluster
-  # to debug a converge hang instead of having teardown reap the evidence.
-  KEEP_CLUSTER: ${{ github.event_name == 'workflow_dispatch' && inputs.keep_cluster || false }}
-
-defaults:
-  run:
-    shell: bash
-
 jobs:
-  # ── 0. Functional test of the llz CLI (fast, no cloud) ───────────────────────
-  # Proves the BUILT binary behaves and — the part a 404 install complaint
-  # surfaced — that docs/quickstart.md §2's install flow works against the
-  # just-published private release: `gh release download` + checksum, the
-  # authenticated `curl` on the API asset endpoint, and `llz self-update`'s
-  # download→verify→replace. Runs in BOTH dry-run and full mode (no cloud, cheap)
-  # and gates the release. The built-in GITHUB_TOKEN authenticates gh + reads this
-  # repo's own private releases.
-  llz-functional:
-    name: llz functional (commands + install flow)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Set up Go and build llz
-        uses: ./.github/actions/setup-llz
-        with:
-          install-path: ${{ github.workspace }}/bin/llz
-
-      - name: Functional test — basic commands (offline)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LLZ_FUNCTIONAL_REPO: ${{ github.repository }}
-          # Section A (offline command checks) only. The documented install flow
-          # (Section B) needs published full-release binaries — but this gate runs
-          # on the PRE-release `vX.Y.Z`, before any binaries are attached (those land
-          # on promotion to a full release). So the install flow is validated there
-          # instead, in llz-release.yml's `functional` job (post-attach, no race).
-          LLZ_FUNCTIONAL_NET: "0"
-        run: template-scripts/ci/llz-functional.sh
-
-  # ── 1. Instantiate the template into the throwaway E2E instance repo ──────────
-  # Body lives in the shared reusable workflow (also called by release-e2e-warm.yml)
-  # so the safety-critical copier-token render pass exists exactly once.
-  # kick_image_build: overlap the ci-image publish with the scaffold work.
-  # seed_escape_hatch: seed the probe this gate's assert-instance-custom asserts.
-  instantiate:
-    name: Instantiate
-    uses: ./.github/workflows/e2e-instantiate.yml
+  lanes:
+    name: e2e lane (${{ matrix.forge }})
+    strategy:
+      # Quota: exactly one live cluster at a time. Run the lanes strictly
+      # one-after-another; a failing lane does not skip the next (fail-fast off).
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        # release → both lanes (github.com first); dispatch → the chosen one.
+        forge: ${{ fromJSON(github.event_name == 'release' && '["github","github-enterprise-server"]' || format('["{0}"]', inputs.forge)) }}
+    uses: ./.github/workflows/release-e2e-lane.yml
+    # A CALLED workflow's jobs can never hold more than the calling job's token,
+    # so this must be the union of what the lane's jobs ask for — the lane's
+    # instantiate job needs actions:write (dispatch terraform.yml in the instance
+    # repo) + packages:read (pull the ci-image). Left at the workflow default of
+    # contents:read, the lane's request is an escalation and GitHub fails the run
+    # at startup (startup_failure, before any job logs exist).
     permissions:
       contents: read
       packages: read
       actions: write
     with:
-      kick_image_build: true
-      seed_escape_hatch: true
-    secrets:
-      E2E_DISPATCH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
-
-
-  # ── 2. Provision the real cluster by driving the instance's terraform.yml ────
-  provision:
-    name: Provision (apply + converge)
-    needs: instantiate
-    runs-on: ubuntu-latest
-    timeout-minutes: 200
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Dispatch terraform.yml (${{ env.DRY_RUN == 'true' && 'plan' || 'apply' }}) and watch
-        env:
-          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
-        run: |
-          set -euo pipefail
-          ACTION=apply; [[ "${DRY_RUN}" == "true" ]] && ACTION=plan
-          # assert_loki=true folds the former `validate` job in: bootstrap-openbao's
-          # converge job runs `llz ci assert-loki` (Loki bootstrapped + S3-backed)
-          # inside the cluster access it already holds. Harmless on a plan (the
-          # apply-gated bootstrap chain doesn't run).
-          .github/scripts/dispatch-and-watch.sh \
-            --repo "${INSTANCE_REPO}" --workflow terraform.yml \
-            --field action="${ACTION}" --field module=all --field region="${E2E_ENV}" \
-            --field assert_loki=true
-
-  # ── 3. Health + Loki validation — FOLDED INTO provision ──────────────────────
-  # The former `validate` job dispatched the instance's cluster-health.yml in gate
-  # mode (fail-on-unhealthy + assert-loki). But `fail-on-unhealthy` just re-ran
-  # `llz ci converge`, which the provision chain (bootstrap-openbao's converge job)
-  # already ran — so the only net-new check was `llz ci assert-loki`. That now runs
-  # inside the converge job (release-e2e dispatches terraform.yml with
-  # assert_loki=true → llz-terraform.yml → llz-bootstrap-openbao.yml), reusing the
-  # cluster access it already holds. Dropping the separate job removes its
-  # container-init + checkout + fresh kubeconfig/ACL cycle (~1-2m) from the gate.
-  # The provision job's success now means "converged AND Loki is S3-backed".
-
-  # ── 4. Teardown — ALWAYS, so a paid cluster is never leaked ───────────────────
-  teardown:
-    name: Teardown (destroy + sweep)
-    # provision already needs instantiate, and teardown reads no needs.instantiate.*
-    # output, so naming instantiate here adds no ordering and no data — it just
-    # reads like a dependency that exists.
-    needs: [provision]
-    # Run whenever provisioning actually started; skip only for a dry run (plan
-    # only — nothing was created).
-    if: ${{ always() && needs.provision.result != 'skipped' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      # keep_cluster debug escape hatch: leave the cluster running so a human can
-      # kubectl into it (provision's converge job already dumped the full
-      # `llz ci health`/converge state; what teardown otherwise destroys is the live
-      # cluster to poke at). Mutually exclusive with the destroy step below.
-      - name: Keep cluster for debugging (SKIP destroy)
-        if: ${{ env.KEEP_CLUSTER == 'true' }}
-        run: |
-          set -euo pipefail
-          echo "::warning::keep_cluster=true — SKIPPING teardown. The E2E cluster (env ${E2E_ENV}, region ${E2E_LINODE_REGION}) is LEFT RUNNING and is billing."
-          echo "Debug it:"
-          echo "  1. Pull the kubeconfig from ${INSTANCE_REPO} (terraform output / Linode), and"
-          echo "  2. open your IP in the LKE-E apiserver ACL (Cloud Manager → cluster → Control Plane ACL, add your /32),"
-          echo "     then: export KUBECONFIG=... && kubectl get pods -A"
-          echo "When done, destroy it manually:"
-          echo "  gh workflow run terraform.yml -R ${INSTANCE_REPO} -f action=destroy -f module=cluster -f region=${E2E_ENV} -f confirm_destroy=destroy:${E2E_ENV}:cluster"
-
-      - name: Dispatch terraform.yml (destroy) and watch
-        if: ${{ env.KEEP_CLUSTER != 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.E2E_DISPATCH_TOKEN }}
-        run: |
-          set -euo pipefail
-          .github/scripts/dispatch-and-watch.sh \
-            --repo "${INSTANCE_REPO}" --workflow terraform.yml \
-            --field action=destroy --field module=cluster --field region="${E2E_ENV}" \
-            --field confirm_destroy="destroy:${E2E_ENV}:cluster"
-
-  # ── 5. Gate — the release passes only if every stage above was green ─────────
-  gate:
-    name: E2E gate
-    needs: [llz-functional, provision, teardown]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require llz-functional + provision + teardown to have succeeded
-        env:
-          F: ${{ needs.llz-functional.result }}
-          P: ${{ needs.provision.result }}
-          T: ${{ needs.teardown.result }}
-        run: |
-          set -euo pipefail
-          echo "llz-functional=$F provision=$P teardown=$T (dry_run=${DRY_RUN})"
-          fail=0
-          # F + P gate both modes (F is no-cloud). provision now also asserts Loki
-          # is S3-backed (assert_loki=true → bootstrap-openbao converge), so the
-          # former separate `validate` result folds into P. T only when a cluster
-          # was built.
-          [[ "$F" == "success" ]] || { echo "::error::llz-functional $F"; fail=1; }
-          [[ "$P" == "success" ]] || { echo "::error::provision $P"; fail=1; }
-          if [[ "${DRY_RUN}" != "true" ]]; then
-            [[ "$T" == "success" ]] || { echo "::error::teardown $T — a cluster may have leaked; check ${INSTANCE_REPO} state"; fail=1; }
-          fi
-          exit $fail
+      forge: ${{ matrix.forge }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      keep_cluster: ${{ github.event_name == 'workflow_dispatch' && inputs.keep_cluster || false }}
+    secrets: inherit

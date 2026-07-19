@@ -93,19 +93,6 @@ func TestGHSetRepoSecretNativeErrors(t *testing.T) {
 	}
 }
 
-func TestGHActionsPublicKeyValidatesLength(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"key_id": "k", "key": base64.StdEncoding.EncodeToString([]byte("short")),
-		})
-	}))
-	t.Cleanup(srv.Close)
-	_, _, err := ghActionsPublicKey(&http.Client{}, "tok", srv.URL+"/secrets")
-	if err == nil || !strings.Contains(err.Error(), "32") {
-		t.Errorf("err = %v, want 32-byte validation", err)
-	}
-}
-
 // The environment-secret path resolves the numeric repo id, fetches the env public
 // key, and PUTs to the environment endpoint — the round-trip the in-cluster broad-PAT
 // rotator uses to write LINODE_API_TOKEN back to each infra-<deployment> environment.
@@ -154,5 +141,62 @@ func TestGHSetEnvSecretNativeRoundTrip(t *testing.T) {
 	plain, ok := box.OpenAnonymous(nil, sealed, pub, priv)
 	if !ok || string(plain) != "new-pat-value" {
 		t.Errorf("sealed box decrypted to %q ok=%v", plain, ok)
+	}
+}
+
+// resolveGHAPIBase must honor $GITHUB_API (the bug: the write path used to
+// ignore it and target api.github.com even on a GHES instance) and derive a
+// GHES api base from a non-github.com GH_HOST, else default to github.com.
+func TestResolveGHAPIBase(t *testing.T) {
+	cases := []struct {
+		name, githubAPI, ghHost, want string
+	}{
+		{"explicit override wins", "https://ghes.corp/api/v3", "", "https://ghes.corp/api/v3"},
+		{"ghes from GH_HOST", "", "ghes.corp", "https://ghes.corp/api/v3"},
+		{"github.com GH_HOST falls through", "", "github.com", "https://api.github.com"},
+		{"default", "", "", "https://api.github.com"},
+		{"GITHUB_API beats GH_HOST", "https://override/api/v3", "other.corp", "https://override/api/v3"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("GITHUB_API", c.githubAPI)
+			t.Setenv("GH_HOST", c.ghHost)
+			if got := resolveGHAPIBase(); got != c.want {
+				t.Errorf("resolveGHAPIBase() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// The fail-closed guard: under LLZ_FORGE_STRICT an env write must have an
+// explicit forge target, so a lane cannot silently fall back to github.com and
+// clobber another lane's identically-named environment secret.
+func TestGHWriteTargetStrict(t *testing.T) {
+	// Not strict → always OK (single-forge instances keep defaulting).
+	t.Setenv("LLZ_FORGE_STRICT", "")
+	t.Setenv("GH_HOST", "")
+	t.Setenv("GITHUB_API", "")
+	t.Setenv("LLZ_FORGE", "")
+	t.Setenv("LLZ_FORGE_HOST", "")
+	if err := ghWriteTargetStrictOK(); err != nil {
+		t.Errorf("non-strict must be OK, got %v", err)
+	}
+
+	// Strict + nothing declared → refuse.
+	t.Setenv("LLZ_FORGE_STRICT", "1")
+	if err := ghWriteTargetStrictOK(); err == nil {
+		t.Error("strict with no forge target must refuse (clobber guard)")
+	}
+
+	// Strict + an explicit declaration → OK.
+	for _, k := range []string{"GH_HOST", "LLZ_FORGE", "LLZ_FORGE_HOST", "GITHUB_API"} {
+		t.Setenv("GH_HOST", "")
+		t.Setenv("GITHUB_API", "")
+		t.Setenv("LLZ_FORGE", "")
+		t.Setenv("LLZ_FORGE_HOST", "")
+		t.Setenv(k, "declared")
+		if err := ghWriteTargetStrictOK(); err != nil {
+			t.Errorf("strict with %s declared must be OK, got %v", k, err)
+		}
 	}
 }

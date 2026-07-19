@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/spf13/cobra"
 )
 
@@ -257,34 +258,40 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 	// instance repo is known; a repo-less configure (local/dry-run without
 	// GITHUB_REPOSITORY) omits them rather than create an unbindable role.
 	if ghRepo != "" {
-		owner := ghRepo
-		if i := strings.IndexByte(ghRepo, '/'); i > 0 {
-			owner = ghRepo[:i]
+		// The forge (GitHub by default; GHES/GitLab via LLZ_FORGE) supplies the
+		// OIDC issuer, audience, and repo-identity claim. On GitHub this is
+		// byte-identical to the previously hardcoded config (locked by
+		// forge.OpenBaoJWTRoleBody's test); on GHES the issuer becomes the
+		// appliance's /_services/token, and on GitLab the bound claim is
+		// project_path, not repository.
+		f, err := forgeFromEnv()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "::warning::forge resolution failed (%v) — skipping OIDC (jwt) auth setup\n", err)
+			return steps
 		}
+		discoveryURL, boundIssuer := forge.OpenBaoJWTAuthConfig(f)
 		// SECURITY — bound_claims pins each role to THIS instance repo and
-		// bound_audiences to the owner's GitHub-OIDC default audience. Without
-		// BOTH, any GitHub repo's OIDC token could mint a token here.
+		// bound_audiences to the owner's OIDC default audience. Without BOTH, any
+		// repo's OIDC token could mint a token here.
 		//
 		// The role body is written as a JSON object over stdin (`bao write <path> -`)
 		// rather than key=value args: bound_claims is a MAP field, and the CLI
 		// rejects a key=value string for it ("expected map[string]interface{}, got
 		// string"). JSON also types bound_audiences/token_policies as lists.
 		jwtRole := func(name, policy string) baoConfigStep {
-			body := fmt.Sprintf(
-				`{"role_type":"jwt","user_claim":"sub","bound_audiences":["https://github.com/%s"],"bound_claims":{"repository":"%s"},"token_policies":["%s"],"token_ttl":"15m","token_max_ttl":"30m"}`,
-				owner, ghRepo, policy)
+			body, _ := forge.OpenBaoJWTRoleBody(f, ghRepo, policy) // json.Marshal of a fixed struct
 			return baoConfigStep{desc: "write jwt role " + name, fatal: true, stdin: body,
 				args: []string{"write", "auth/jwt/role/" + name, "-"}}
 		}
 		steps = append(steps,
 			// Non-fatal enable (tolerates already-enabled on re-runs), matching
 			// the other auth enables above.
-			baoConfigStep{desc: "enable jwt (GitHub OIDC) auth",
+			baoConfigStep{desc: "enable jwt (OIDC) auth",
 				args: []string{"auth", "enable", "jwt"}},
-			baoConfigStep{desc: "configure jwt with the GitHub Actions OIDC issuer", fatal: true,
+			baoConfigStep{desc: "configure jwt with the CI OIDC issuer", fatal: true,
 				args: []string{"write", "auth/jwt/config",
-					"oidc_discovery_url=https://token.actions.githubusercontent.com",
-					"bound_issuer=https://token.actions.githubusercontent.com"}},
+					"oidc_discovery_url=" + discoveryURL,
+					"bound_issuer=" + boundIssuer}},
 			jwtRole("platform-ci", "platform-ci"),
 			jwtRole("secret-propagator", "secret-propagator"),
 		)

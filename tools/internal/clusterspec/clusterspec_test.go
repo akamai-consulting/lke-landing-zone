@@ -213,6 +213,22 @@ func TestValidate_BadForgeAndAPIVersion(t *testing.T) {
 	}
 }
 
+// A recognized-but-not-yet-wired forge must be rejected loudly (the Phase 0
+// honesty gate), not silently accepted the way spec.instance.forge used to be.
+func TestValidate_RecognizedForgeNotYetSupported(t *testing.T) {
+	for _, fl := range []string{"github-enterprise", "github-enterprise-server", "gitlab"} {
+		y := strings.Replace(validSpec, "forge: github", "forge: "+fl, 1)
+		errs := mustDecode(t, y).Validate()
+		if !containsSub(errs, "not yet supported") {
+			t.Errorf("forge %q: want a not-yet-supported error; got %v", fl, errs)
+		}
+	}
+	// github stays clean.
+	if errs := mustDecode(t, validSpec).Validate(); len(errs) != 0 {
+		t.Errorf("forge github should validate clean; got %v", errs)
+	}
+}
+
 // haPairSpec builds an active/standby HA pair in two regions; an empty cidr omits
 // the env's network block (so it falls back to the default).
 func haPairSpec(cidrA, cidrB string) string {
