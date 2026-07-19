@@ -29,7 +29,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -55,20 +54,7 @@ func ciAssertInstanceCustomCmd() *cobra.Command {
 			"ambient KUBECONFIG. Read-only.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			d := aplGateDeps{
-				kubectl: func(args ...string) (string, bool) {
-					// runCombined runs the command BEFORE reading its buffer; a
-					// `return buf.String(), cmd.Run()==nil` here evaluates buf.String()
-					// first (Go left-to-right) and always returns empty output — the
-					// bug that made this gate read sync= health= forever.
-					c := exec.Command("kubectl", args...)
-					c.Env = os.Environ()
-					return runCombined(c)
-				},
-				now:   time.Now,
-				sleep: time.Sleep,
-			}
-			return assertInstanceCustom(d, namespace, appSet, time.Duration(within)*time.Second)
+			return assertInstanceCustom(newAplGateDeps(), namespace, appSet, time.Duration(within)*time.Second)
 		},
 	}
 	cmd.Flags().StringVar(&namespace, "namespace", "llz-e2e-custom",

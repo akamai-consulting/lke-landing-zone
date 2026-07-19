@@ -33,8 +33,8 @@ func withSeedRand(t *testing.T, fill byte) {
 // TestWaitForOpenbaoNamespace*.
 func withSeedNamespace(t *testing.T, present bool) {
 	t.Helper()
-	orig := newSeedGateDeps
-	newSeedGateDeps = func() aplGateDeps {
+	orig := newAplGateDeps
+	newAplGateDeps = func() aplGateDeps {
 		return aplGateDeps{
 			kubectl: func(args ...string) (string, bool) {
 				if strings.HasPrefix(strings.Join(args, " "), "get namespace") {
@@ -46,7 +46,7 @@ func withSeedNamespace(t *testing.T, present bool) {
 			sleep: func(time.Duration) {},
 		}
 	}
-	t.Cleanup(func() { newSeedGateDeps = orig })
+	t.Cleanup(func() { newAplGateDeps = orig })
 }
 
 // namespace appears after a few polls (no ComparisonError) → success.

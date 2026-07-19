@@ -68,12 +68,16 @@ func ciTokenInventoryCmd() *cobra.Command {
 			"as llz_token_expiry_timestamp_seconds so Prometheus alerts before expiry.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// The canonical PAT reader, but an absent token is NOT fatal here:
+			// buildTokenInventory skips the Linode section on "" and still
+			// reports the GitHub PATs.
+			linodeToken, _ := ciToken()
 			inv := buildTokenInventory(cmd.Context(), tokenInvDeps{
 				ghTargets: []patTarget{
 					{"OPENBAO_SECRETS_WRITE_TOKEN", envOr("GITHUB_API", "https://api.github.com"), os.Getenv("OPENBAO_SECRETS_WRITE_TOKEN")},
 					{"APL_VALUES_REPO_TOKEN", envOr("GITHUB_API", "https://api.github.com"), os.Getenv("APL_VALUES_REPO_TOKEN")},
 				},
-				linodeToken: firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN")),
+				linodeToken: linodeToken,
 				newLinode:   func(t string) credLister { return linode.NewClient(t, 30*time.Second) },
 				region:      os.Getenv("REGION"),
 				now:         time.Now(),

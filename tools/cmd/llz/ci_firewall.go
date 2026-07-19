@@ -136,9 +136,9 @@ var firewallResolveFn = func(token string, labels tf.Labels) (firewallID, cluste
 // VPC subnet CIDR straight from tfvars. Any value already set in the environment
 // is left untouched, so an explicit override still wins.
 func resolveFirewallInputsIntoEnv(region string) error {
-	token := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
-	if token == "" {
-		return fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) to a Linode PAT so --region can resolve the firewall + cluster IDs by label")
+	token, err := ciToken()
+	if err != nil {
+		return fmt.Errorf("%w — needed so --region can resolve the firewall + cluster IDs by label", err)
 	}
 
 	// tfvars file: prefer <region>.tfvars, fall back to the .example — mirrors

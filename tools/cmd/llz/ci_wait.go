@@ -37,9 +37,9 @@ func ciWaitPodsCmd() *cobra.Command {
 			"the stuck pod's describe, and recent events (combined stdout+stderr, so an\n" +
 			"empty namespace or a NotFound still surfaces the reason), then exits 1.",
 		Args: cobra.MinimumNArgs(1),
-		RunE: func(_ *cobra.Command, pods []string) error {
-			os.Exit(runCIWaitPods(ns, phase, pods, timeout, interval))
-			return nil
+		RunE: func(cmd *cobra.Command, pods []string) error {
+			cmd.SilenceUsage = true
+			return runCIWaitPods(ns, phase, pods, timeout, interval)
 		},
 	}
 	c.Flags().StringVar(&ns, "namespace", "", "namespace of the pods (required)")
@@ -70,9 +70,9 @@ func ciWaitClusterReadyCmd() *cobra.Command {
 			"blocks this runner', and 'API up, nodes never joined' are distinguishable.\n" +
 			"Exit 0 ready, 1 on timeout.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIWaitClusterReady(timeout, interval, requestTimeout, resolveExpectNodes(tfvarsPath, expectNodes)))
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runCIWaitClusterReady(timeout, interval, requestTimeout, resolveExpectNodes(tfvarsPath, expectNodes))
 		},
 	}
 	c.Flags().IntVar(&timeout, "timeout", 360, "total wait budget in seconds")
@@ -107,27 +107,22 @@ func resolveExpectNodes(tfvarsPath string, fallback int) int {
 	return fallback
 }
 
-// waitPoll calls cond until it returns true or timeout elapses, sleeping
-// interval between tries; the first try is immediate. Returns whether cond
-// succeeded within the budget.
+// waitPoll is pollUntil (ci_shared.go) against the real clock: it calls cond
+// until it returns true or timeout elapses, sleeping interval between tries with
+// an immediate first try. Returns whether cond succeeded within the budget.
 func waitPoll(timeout, interval time.Duration, cond func() bool) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		if cond() {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(interval)
-	}
+	return pollUntil(time.Now, time.Sleep, timeout, interval, cond)
 }
 
-func runCIWaitPods(ns, phase string, pods []string, timeout, interval int) int {
+// runCIWaitPods returns nil once every pod reaches the phase, or an error (which
+// cobra exits 1 on). The ::error:: annotations stay as direct stderr writes —
+// GitHub only parses an annotation at the start of a line, and the returned
+// error is printed behind main.go's "llz: " prefix.
+func runCIWaitPods(ns, phase string, pods []string, timeout, interval int) error {
 	_ = interval // kubectl wait is watch-based; --interval retained for CLI compatibility
 	if ns == "" {
 		fmt.Fprintln(os.Stderr, "::error::--namespace is required")
-		return 1
+		return fmt.Errorf("--namespace is required")
 	}
 	// One shared deadline across all pods, like the bash loop: a StatefulSet's
 	// OrderedReady pods come up one at a time, so per-pod budgets would either
@@ -141,17 +136,17 @@ func runCIWaitPods(ns, phase string, pods []string, timeout, interval int) int {
 			fmt.Sprintf("--timeout=%ds", remainingSecs(deadline))); err != nil {
 			fmt.Fprintf(os.Stderr, "::error::%s was not created within %ds\n", pod, timeout)
 			dumpPodDiagnostics(ns, pod)
-			return 1
+			return fmt.Errorf("%s was not created within %ds", pod, timeout)
 		}
 		if err := kubectlWaitStream("-n", ns, "wait", "--for=jsonpath={.status.phase}="+phase,
 			"pod/"+pod, fmt.Sprintf("--timeout=%ds", remainingSecs(deadline))); err != nil {
 			fmt.Fprintf(os.Stderr, "::error::%s did not reach %s phase within %ds\n", pod, phase, timeout)
 			dumpPodDiagnostics(ns, pod)
-			return 1
+			return fmt.Errorf("%s did not reach %s phase within %ds", pod, phase, timeout)
 		}
 		fmt.Printf("%s is %s\n", pod, phase)
 	}
-	return 0
+	return nil
 }
 
 // remainingSecs is the whole seconds left until deadline, floored at 1 so a
@@ -183,7 +178,7 @@ func dumpPodDiagnostics(ns, pod string) {
 	}
 }
 
-func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) int {
+func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) error {
 	if expectNodes < 1 {
 		expectNodes = 1
 	}
@@ -206,19 +201,28 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) i
 		}
 		return true
 	})
+	// The two timeout arms stay distinguishable in the returned error, the same
+	// way the ::error:: annotations distinguish them: "API never came up" and
+	// "API up, nodes never joined" want different operator responses. The
+	// annotations are still written directly — GitHub parses an annotation only
+	// at the start of a line, and the returned error is printed behind main.go's
+	// "llz: " prefix.
 	if !ok {
+		var err error
 		if apiReachable {
 			fmt.Fprintf(os.Stderr, "::error::control plane is reachable but fewer than %d node(s) became Ready within %ds — the node pool never came up (check Linode capacity/quota for the requested type, or a node_pool_label ≥ 16 chars).\n", expectNodes, timeout)
 			fmt.Fprintf(os.Stderr, "\n# kubectl get nodes -o wide\n%s\n", tailLines(execCombined("kubectl", "get", "nodes", "-o", "wide"), 40))
+			err = fmt.Errorf("control plane is reachable but fewer than %d node(s) became Ready within %ds — the node pool never came up", expectNodes, timeout)
 		} else {
 			fmt.Fprintf(os.Stderr, "::error::cluster unreachable after %ds — investigate the kubeconfig before relying on CI.\n", timeout)
+			err = fmt.Errorf("cluster unreachable after %ds — investigate the kubeconfig before relying on CI", timeout)
 		}
 		diagnoseAPIServer()
-		return 1
+		return err
 	}
 	fmt.Printf("Control plane is reachable and ≥%d node(s) Ready:\n", expectNodes)
 	fmt.Print(execCombined("kubectl", "get", "nodes", "-o", "wide"))
-	return 0
+	return nil
 }
 
 // countReadyNodes counts nodes reporting Ready=True from the wait loop's

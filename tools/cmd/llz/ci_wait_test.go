@@ -49,8 +49,8 @@ func TestRunCIWaitPods(t *testing.T) {
 	// Both pods reach the phase → 0, no diagnostics fetched. Each pod is a
 	// create-wait then a phase-wait, so two pods = four kubectl wait calls.
 	calls := stubKubectlWait(t, func(string) error { return nil })
-	if got := runCIWaitPods("ns", "Running", []string{"p-0", "p-1"}, 0, 0); got != 0 {
-		t.Errorf("wait-pods (all Running) = %d, want 0", got)
+	if err := runCIWaitPods("ns", "Running", []string{"p-0", "p-1"}, 0, 0); err != nil {
+		t.Errorf("wait-pods (all Running) = %v, want nil", err)
 	}
 	if len(*calls) != 4 {
 		t.Errorf("wait-pods (2 pods) made %d kubectl wait calls, want 4: %v", len(*calls), *calls)
@@ -79,8 +79,8 @@ func TestRunCIWaitPods(t *testing.T) {
 		return "diag\n"
 	}
 	t.Cleanup(func() { execCombined = origCombined })
-	if got := runCIWaitPods("ns", "Running", []string{"p-0"}, 0, 0); got != 1 {
-		t.Errorf("wait-pods (stuck Pending) = %d, want 1", got)
+	if err := runCIWaitPods("ns", "Running", []string{"p-0"}, 0, 0); err == nil {
+		t.Errorf("wait-pods (stuck Pending) = %v, want an error", err)
 	}
 	if !sawWorkloads || !sawDescribe || !sawEvents {
 		t.Errorf("timeout diagnostics: workloads=%v describe=%v events=%v, want all",
@@ -88,8 +88,8 @@ func TestRunCIWaitPods(t *testing.T) {
 	}
 
 	// Missing --namespace is an immediate usage failure.
-	if got := runCIWaitPods("", "Running", []string{"p-0"}, 0, 0); got != 1 {
-		t.Errorf("wait-pods (no namespace) = %d, want 1", got)
+	if err := runCIWaitPods("", "Running", []string{"p-0"}, 0, 0); err == nil {
+		t.Errorf("wait-pods (no namespace) = %v, want an error", err)
 	}
 }
 
@@ -154,8 +154,8 @@ func TestRunCIWaitClusterReady(t *testing.T) {
 		}
 		return nil, errors.New("unexpected: " + a)
 	})
-	if got := runCIWaitClusterReady(0, 0, 10, 2); got != 0 {
-		t.Errorf("wait-cluster-ready (2 Ready, expect 2) = %d, want 0", got)
+	if err := runCIWaitClusterReady(0, 0, 10, 2); err != nil {
+		t.Errorf("wait-cluster-ready (2 Ready, expect 2) = %v, want nil", err)
 	}
 
 	// Reachable but only 1 of the expected 3 nodes Ready → 1 (pool never came up).
@@ -167,8 +167,8 @@ func TestRunCIWaitClusterReady(t *testing.T) {
 		}
 		return nil, errors.New("no server")
 	})
-	if got := runCIWaitClusterReady(0, 0, 10, 3); got != 1 {
-		t.Errorf("wait-cluster-ready (1 Ready, expect 3) = %d, want 1", got)
+	if err := runCIWaitClusterReady(0, 0, 10, 3); err == nil {
+		t.Errorf("wait-cluster-ready (1 Ready, expect 3) = %v, want an error", err)
 	}
 
 	// Unreachable: exit 1, and the timeout path probes the apiserver directly
@@ -186,7 +186,7 @@ func TestRunCIWaitClusterReady(t *testing.T) {
 		}
 		return nil, errors.New("connection refused")
 	})
-	if got := runCIWaitClusterReady(0, 0, 10, 1); got != 1 {
-		t.Errorf("wait-cluster-ready (unreachable) = %d, want 1", got)
+	if err := runCIWaitClusterReady(0, 0, 10, 1); err == nil {
+		t.Errorf("wait-cluster-ready (unreachable) = %v, want an error", err)
 	}
 }

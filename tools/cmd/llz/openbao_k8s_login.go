@@ -28,10 +28,10 @@ import (
 // defaultRole is the k8s-auth role to assume when OPENBAO_KUBERNETES_ROLE is
 // unset — the only thing that ever differed between the callers.
 func openInClusterBaoStore(ctx context.Context, defaultRole string) (baoStore, error) {
-	addr := envOrDefault(os.Getenv, "OPENBAO_ADDR", "https://platform-openbao.llz-openbao.svc.cluster.local:8200")
-	mount := envOrDefault(os.Getenv, "OPENBAO_KUBERNETES_MOUNT", "kubernetes")
-	role := envOrDefault(os.Getenv, "OPENBAO_KUBERNETES_ROLE", defaultRole)
-	saFile := envOrDefault(os.Getenv, "SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
+	addr := envOr("OPENBAO_ADDR", "https://platform-openbao.llz-openbao.svc.cluster.local:8200")
+	mount := envOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
+	role := envOr("OPENBAO_KUBERNETES_ROLE", defaultRole)
+	saFile := envOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
 
 	// TLS to OpenBao: mount the CA and set OPENBAO_CA_FILE to verify it; otherwise
 	// OPENBAO_SKIP_VERIFY=true falls back to the established in-cluster posture

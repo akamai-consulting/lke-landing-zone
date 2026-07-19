@@ -23,7 +23,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -47,23 +46,6 @@ const (
 	openbaoNSParentNS = "argocd"
 	openbaoNSParent   = "platform-bootstrap"
 )
-
-// newSeedGateDeps builds the real kubectl/clock seam for the namespace wait
-// (overridable in tests) — the same shape assert-argo-app uses.
-var newSeedGateDeps = func() aplGateDeps {
-	return aplGateDeps{
-		kubectl: func(args ...string) (string, bool) {
-			// runCombined runs before reading the buffer; the old
-			// `return buf.String(), c.Run()==nil` evaluated buf.String() first
-			// (left-to-right) and returned empty output.
-			c := exec.Command("kubectl", args...)
-			c.Env = os.Environ()
-			return runCombined(c)
-		},
-		now:   time.Now,
-		sleep: time.Sleep,
-	}
-}
 
 // waitForOpenbaoNamespace polls until the llz-openbao namespace exists or the
 // budget is spent. The namespace is pre-created at wave -20 of llz-cluster-
@@ -144,7 +126,7 @@ func runCIBaoSeedSealKey(g globalOpts, region string) error {
 	// so wait for the namespace first — otherwise both the idempotency check below
 	// and the apply race it, and a fresh key would be generated + persisted only to
 	// fail on `kubectl apply`. Fail loud if it never appears.
-	if err := waitForOpenbaoNamespace(newSeedGateDeps(), openbaoNS, openbaoNSWait); err != nil {
+	if err := waitForOpenbaoNamespace(newAplGateDeps(), openbaoNS, openbaoNSWait); err != nil {
 		return err
 	}
 

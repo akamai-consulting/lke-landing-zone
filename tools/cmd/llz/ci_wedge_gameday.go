@@ -26,7 +26,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -113,22 +112,7 @@ func ciWedgeGamedayCmd() *cobra.Command {
 			"converge-only fast-path reuses one).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			d := aplGateDeps{
-				kubectl: func(args ...string) (string, bool) {
-					c := exec.Command("kubectl", args...)
-					var buf strings.Builder
-					c.Stdout, c.Stderr = &buf, &buf
-					c.Env = os.Environ()
-					// Run BEFORE reading buf — `return buf.String(), c.Run()==nil`
-					// evaluates buf.String() first (empty, pre-run) per Go's
-					// left-to-right operand order, so every read would come back blank.
-					ok := c.Run() == nil
-					return buf.String(), ok
-				},
-				now:   time.Now,
-				sleep: time.Sleep,
-			}
-			return runWedgeGameday(d, wedgeOpts{
+			return runWedgeGameday(newAplGateDeps(), wedgeOpts{
 				esRef:     externalSecret,
 				targetApp: targetApp,
 				namespace: namespace,
