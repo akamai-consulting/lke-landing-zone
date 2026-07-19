@@ -1,107 +1,65 @@
 # LKE Secure-by-Default Terraform Modules
 
-Reusable Terraform modules for bootstrapping a hardened LKE Enterprise cluster
-with GitOps via ArgoCD.
+Reusable Terraform modules for standing up a hardened LKE Enterprise cluster and
+its object storage. Everything above the infrastructure layer — ArgoCD, apl-core,
+the platform apps — is bootstrapped by `llz`, not by Terraform (see
+[ADR 0002](../docs/adr/0002-thin-terraform-native-bootstrap.md)).
 
 ## Module inventory
 
 | Module | Purpose |
 |---|---|
-| [`llz-cluster`](llz-cluster/) | VPC + subnet + LKE-E cluster (no default node pool) |
-| [`llz-object-storage`](llz-object-storage/) | Linode OBJ buckets + scoped keys for registry/log storage, with 120-day key rotation |
+| [`llz-cluster`](llz-cluster/) | VPC + subnet + node Cloud Firewall + LKE-E cluster (no node pool) |
+| [`llz-object-storage`](llz-object-storage/) | Linode OBJ buckets for registry/log storage (buckets only — no keys) |
 
-See [`../instance-template/terraform-iac-bootstrap/cluster/`](../instance-template/terraform-iac-bootstrap/cluster/) for a working composition of the cluster modules,
-and [`RELEASING.md`](RELEASING.md) for the version/tag (`git::?ref=`) contract that
-makes these publishable as Phase-3 reuse units.
+The node firewall used to be a separate `llz-node-firewall` module and the node
+pool an `llz-pool` module. Both were single-consumer wrappers and are now inlined
+— the firewall into `llz-cluster` (`firewall.tf`), the pool into the cluster root
+as a plain `linode_lke_node_pool`.
 
----
+**A working composition** is the generated `cluster` root:
+[`../tools/internal/tfroots/roots/cluster/`](../tools/internal/tfroots/roots/cluster/)
+(alongside `object-storage/` and `vpc/`). An instance commits **zero** Terraform —
+`llz render` writes these roots and their `<env>.tfvars` as gitignored build
+artifacts, so the roots live once, in the binary.
 
-## Bootstrap sequence
-
-A new cluster bootstraps in a single apply. `kubectl_manifest` (gavinbunney/kubectl)
-is used for the ArgoCD root Application instead of `kubernetes_manifest` because it
-does not validate against CRD schemas at plan time, so `depends_on` alone is
-sufficient to sequence the apply correctly.
-
-```
-terraform apply -var-file="<region>.tfvars"
-```
-
-After apply, get the deploy public key:
-
-```
-terraform output -raw argocd_deploy_public_key
-```
-
-Then register it on the GitOps repo (see below).
+See [`RELEASING.md`](RELEASING.md) for the version/tag (`git::?ref=`) contract that
+makes these publishable reuse units, and for why each module's README
+Inputs/Outputs tables are the SemVer surface.
 
 ---
 
-## Registering the ArgoCD deploy key
+## What Terraform does, and where it stops
 
-The TF config generates a per-cluster ED25519 SSH key and injects the private
-key into a Kubernetes Secret that ArgoCD reads. The public half must be
-registered as a **read-only deploy key** on the GitOps repository before ArgoCD
-can clone it.
-
-### Option A — Automated (github.com API)
-
-The `apply-cluster` GitHub Actions job handles this automatically when
-`GH_TOKEN` is set as a repository secret. It calls the github.com
-Deploy Keys API after every successful `terraform apply`
-and is idempotent — running it again when the key is unchanged is a no-op.
-
-Required secret: `GH_TOKEN` — a github.com
-personal access token with `repo` scope on `akamai-consulting/lke-landing-zone`.
-
-### Option B — Manual (github.com UI)
-
-If you are running Terraform locally or the API token is unavailable:
-
-1. Get the public key:
-   ```
-   terraform output -raw argocd_deploy_public_key
-   ```
-
-2. Go to **github.com/akamai-consulting/lke-landing-zone → Settings → Repository → Deploy keys**.
-
-3. Click **Add new deploy key**.
-   - Title: `argocd-primary` (or `argocd-secondary`)
-   - Key: paste the output from step 1
-   - **Grant write permissions to this key**: leave unchecked
-
-4. Click **Add key**.
-
-ArgoCD will pick up the credential within its next refresh cycle (default 3 min).
-
-### Option C — No github.com access (TBD)
-
-If the GitOps repository is moved to a different SCM (GitHub, self-hosted
-Gitea, etc.):
-
-1. Update `argocd_repo_url` in the relevant `*.tfvars` file to the new SSH URL.
-2. Update all `repoURL:` fields in the `kubernetes/` Application manifests to
-   match.
-3. Register the deploy key on the new SCM using its equivalent API or UI.
-
-The TF config itself is SCM-agnostic — only the URL and the credential
-registration step differ.
-
----
-
-## Rotating the deploy key
-
-If the key is compromised or you want to rotate it:
+Terraform owns the infrastructure and nothing else:
 
 ```
-# Terraform: force a new key
-terraform taint tls_private_key.argocd_repo
-terraform apply
-
-# Get the new public key
-terraform output -raw argocd_deploy_public_key
+terraform apply -var-file="<env>.tfvars"
 ```
 
-The `apply-cluster` CI job will automatically replace the old deploy key on
-github.com. If running manually, follow Option B above with the new key,
-then delete the old one from the Deploy keys list.
+That creates the VPC and subnet, the node Cloud Firewall with a **bootstrap
+baseline** rule set, the LKE-E cluster with a locked-down control-plane ACL, and
+the node pool (`disk_encryption` enabled, firewall attached — both non-negotiable).
+
+It then hands off. Two owners take over what Terraform seeded:
+
+- The **cloud-firewall-controller** owns the node firewall rules and the
+  control-plane ACL from the first reconcile onward, resolving EAA/bastion CIDRs
+  from the Linode firewall template via the API. `llz-cluster` sets
+  `ignore_changes` on both so later applies do not overwrite live controller
+  state. Terraform seeds only enough ACL for the bootstrapping runner to reach the
+  API server.
+- **apl-core** owns the ArgoCD repo credential (its `argocd-repo-creds`
+  ExternalSecret). No deploy key is generated, registered, or rotated by Terraform.
+
+In-cluster bootstrap runs natively via `llz ci bootstrap-cluster` — there is no
+Terraform workspace for it, and no `kubectl_manifest`/`kubernetes_manifest`
+resource anywhere in these modules.
+
+## Object Storage credentials
+
+`llz-object-storage` creates **buckets only**. The scoped Loki/Harbor access keys
+are minted at bootstrap by `llz ci mint-bootstrap-objkeys` and rotated in-cluster
+by the `linodeCredRotator` CronJob. No key material transits Terraform state or
+GitHub secrets, and there is no rotation clock in this module — see
+[`../docs/designs/linode-credential-rotator.md`](../docs/designs/linode-credential-rotator.md).
