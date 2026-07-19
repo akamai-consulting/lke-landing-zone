@@ -19,7 +19,7 @@ spec:
   source:
     repoURL: ghcr.io/akamai-consulting/charts
     chart: llz-cert-automation
-    targetRevision: 0.1.8
+    targetRevision: 0.1.9
     helm:
       releaseName: llz-cert-automation
       valuesObject:

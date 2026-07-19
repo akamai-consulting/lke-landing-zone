@@ -66,7 +66,7 @@ a branch. Argo CD `Application` objects live in the `argocd` namespace, so put t
 under `namespaces/argocd/`:
 
 ```yaml
-# custom/namespaces/argocd/my-helm-app.yaml
+# kubernetes-custom/namespaces/argocd/my-helm-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

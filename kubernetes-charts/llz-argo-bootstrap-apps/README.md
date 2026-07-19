@@ -11,8 +11,7 @@ Application YAML.
 
 The bootstrap path is deterministic only because the Applications sync in a
 specific order: the `AppProject` (wave -20) must exist before any Application
-that references it; the External Secrets Operator (-15) must install its CRDs
-before any `ExternalSecret` consumer; Argo Events (-15) must register the
+that references it; Argo Events (-15) must register the
 `EventBus` CRD before llz-cert-automation (-14) references it; stateful OpenBao (0)
 consumes the CA chain laid down earlier. That ordering is operational knowledge
 that previously lived only in a pile of per-component `argocd/applications/`
@@ -34,7 +33,7 @@ doesn't re-discover it.
 
 ```sh
 helm template our-bootstrap oci://ghcr.io/akamai-consulting/charts/llz-argo-bootstrap-apps \
-  --version 0.1.21 \
+  --version 0.1.22 \
   --set global.gitRepoURL='git@github.com:yourorg/yourplatform.git' \
   --set 'components[N].enabled=false'   # disable a component you don't run
 ```
