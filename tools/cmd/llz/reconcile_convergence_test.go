@@ -75,6 +75,7 @@ func TestSampleConvergenceConverged(t *testing.T) {
 		"llz_convergence_state 0",
 		"llz_convergence_apps_failed 0",
 		"llz_convergence_apps_pending 0",
+		"llz_convergence_apps_observed 2", // state 0 is only meaningful with a corpus
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
@@ -129,6 +130,141 @@ func TestSampleConvergenceCRDAbsentIsInProgress(t *testing.T) {
 	}
 	if !strings.Contains(convergenceState(t, reg), "llz_convergence_state 2") {
 		t.Error("CRD-absent should report state 2 (in-progress)")
+	}
+}
+
+// convergenceRawServer serves an arbitrary JSON body at the Applications path,
+// for the malformed-collection cases convergenceServer cannot express.
+func convergenceRawServer(t *testing.T, body string) *kube.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != argoAppsPath {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return kube.NewClient(srv.URL, "tok", srv.Client())
+}
+
+// An unread corpus must not report the same green as a healthy one. Each case
+// here used to render as llz_convergence_state=0 — "all Argo Applications
+// converged" — on the strength of having classified nothing at all.
+func TestSampleConvergenceEmptyCorpusIsNotConverged(t *testing.T) {
+	cases := []struct {
+		name         string
+		client       func(t *testing.T) *kube.Client
+		wantObserved string
+		wantPending  string
+	}{
+		{
+			name:         "empty list (CRD registered, bootstrap has not created apps)",
+			client:       func(t *testing.T) *kube.Client { return convergenceServer(t, nil, 0) },
+			wantObserved: "llz_convergence_apps_observed 0",
+			wantPending:  "llz_convergence_apps_pending 1",
+		},
+		{
+			name:         "items key absent",
+			client:       func(t *testing.T) *kube.Client { return convergenceRawServer(t, `{"kind":"ApplicationList"}`) },
+			wantObserved: "llz_convergence_apps_observed 0",
+			wantPending:  "llz_convergence_apps_pending 1",
+		},
+		{
+			name:         "items is not an array",
+			client:       func(t *testing.T) *kube.Client { return convergenceRawServer(t, `{"items":{"oops":1}}`) },
+			wantObserved: "llz_convergence_apps_observed 0",
+			wantPending:  "llz_convergence_apps_pending 1",
+		},
+		{
+			name:         "every item unparseable",
+			client:       func(t *testing.T) *kube.Client { return convergenceRawServer(t, `{"items":["nope","also-nope"]}`) },
+			wantObserved: "llz_convergence_apps_observed 0",
+			wantPending:  "llz_convergence_apps_pending 1",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reg := metrics.NewRegistry()
+			if err := sampleConvergence(context.Background(), c.client(t), reg); err != nil {
+				t.Fatalf("sampleConvergence: %v", err)
+			}
+			out := convergenceState(t, reg)
+			if !strings.Contains(out, "llz_convergence_state 2") {
+				t.Errorf("nothing was classified — want state 2 (in-progress), got:\n%s", out)
+			}
+			for _, want := range []string{c.wantObserved, c.wantPending} {
+				if !strings.Contains(out, want) {
+					t.Errorf("missing %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+}
+
+// A partial read is partial: the apps that DID parse are still classified, and
+// the ones that did not are unknown rather than healthy.
+func TestSampleConvergenceUnparsedAppsAreUnknownNotHealthy(t *testing.T) {
+	app, err := json.Marshal(convApp("app-a", "Synced", "Healthy", true))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	client := convergenceRawServer(t, `{"items":[`+string(app)+`,"unparseable"]}`)
+	reg := metrics.NewRegistry()
+	if err := sampleConvergence(context.Background(), client, reg); err != nil {
+		t.Fatalf("sampleConvergence: %v", err)
+	}
+	out := convergenceState(t, reg)
+	for _, want := range []string{
+		"llz_convergence_state 2",         // not 0 — one app's health is unknown
+		"llz_convergence_apps_observed 1", // the healthy one still counted
+		"llz_convergence_apps_pending 1",  // the unparseable one
+		"llz_convergence_apps_failed 0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// The gate reads the same report: an empty corpus must not exit 0.
+func TestHealthInClusterGateRejectsEmptyCorpus(t *testing.T) {
+	r, crdPresent, err := convergenceReport(context.Background(), convergenceServer(t, nil, 0))
+	if err != nil {
+		t.Fatalf("convergenceReport: %v", err)
+	}
+	if got := convergenceExit(r, crdPresent, true); got != 2 {
+		t.Errorf("health-incluster on zero Applications: exit %d, want 2 (in-progress)", got)
+	}
+}
+
+// The CRD-absent path must publish its counts, not leave the previous sample's
+// on the endpoint — the registry never expires a gauge.
+func TestSampleConvergenceCRDAbsentClearsCounts(t *testing.T) {
+	reg := metrics.NewRegistry()
+	healthy := convergenceServer(t, []map[string]any{
+		convApp("app-a", "Synced", "Healthy", true),
+		convApp("app-b", "OutOfSync", "Degraded", true),
+	}, 0)
+	if err := sampleConvergence(context.Background(), healthy, reg); err != nil {
+		t.Fatalf("sampleConvergence: %v", err)
+	}
+	if !strings.Contains(convergenceState(t, reg), "llz_convergence_apps_observed 2") {
+		t.Fatal("setup: expected 2 observed apps")
+	}
+	// Now the CRD goes away (404) on the same registry.
+	if err := sampleConvergence(context.Background(), convergenceServer(t, nil, http.StatusNotFound), reg); err != nil {
+		t.Fatalf("sampleConvergence 404: %v", err)
+	}
+	out := convergenceState(t, reg)
+	for _, want := range []string{
+		"llz_convergence_apps_observed 0",
+		"llz_convergence_apps_failed 0",
+		"llz_convergence_apps_pending 0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stale count survived the CRD-absent sample, missing %q:\n%s", want, out)
+		}
 	}
 }
 

@@ -11,6 +11,21 @@
 #   LLZReconcilerStale       — scraped and up, but the sample loop has not advanced
 #                              (wedged goroutine). Timestamp staleness catches what
 #                              up=1 alone would miss.
+#
+# One property governs half the rules below: the reconciler's registry is
+# UPSERT-ONLY (tools/internal/metrics — no Delete, no expiry). A lane that stops
+# sampling does not go absent and does not go stale to Prometheus, because the
+# endpoint is up and still answering with the last value it ever wrote. So an
+# alert shaped `max(llz_foo) == 1` cannot fire while the thing that would set it
+# to 1 is broken: the alerts go quiet exactly when their input dies.
+#
+# Two rule shapes exist to counter that, and any new gauge-fed alert needs one:
+#   - freshness — LLZReconcilerStale joins every lane against its own
+#     llz_reconcile_interval_seconds, so a wedged feeder is loud even while its
+#     gauges read healthy.
+#   - corpus/presence — LLZConvergenceUnobserved and LLZConvergenceSignalAbsent
+#     fire on "this verdict was computed from nothing" and "this series does not
+#     exist", neither of which a threshold on the value can express.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -53,19 +68,38 @@ spec:
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The {{ $labels.reconciler }} reconciler is scraped but its last pass failed (e.g. lost Kubernetes API access, or a rotation/provisioning error).
         - alert: LLZReconcilerStale
-          # Scoped to the observe reconciler: it samples every 30s, so a >5m gap
-          # in its success timestamp means the loop is wedged. The timed
-          # reconcilers run hourly/daily, so staleness is not a signal for them —
-          # LLZReconcilerErroring covers their failures instead.
-          expr: time() - max(llz_reconcile_last_success_timestamp_seconds{namespace="llz-reconciler", reconciler="observe"}) > 300
+          # EVERY lane, each against its OWN cadence (llz_reconcile_interval_seconds,
+          # published per pass): no successful pass in 10 intervals. For observe
+          # (30s) that is the same >5m this rule always used.
+          #
+          # It was scoped to reconciler="observe" on the reasoning that "the timed
+          # reconcilers run hourly/daily, so staleness is not a signal for them".
+          # That was not true of openbao-gauges, which runs every 60s — and it is
+          # the lane feeding LLZOpenBaoSealed and LLZCredentialRotationOverdue.
+          # Because the registry never expires a gauge, a dead lane does not go
+          # absent: it keeps serving its last-known-good sample, so
+          # llz_openbao_sealed stays 0 and the critical alert can never fire. The
+          # freshness series is the only thing that can contradict a stale value,
+          # so every lane that has a cadence now gets checked against it.
+          #
+          # Both sides are aggregated `by (reconciler)` before the join: a bare
+          # series-to-series match would be one-to-one on the reconciler label, so
+          # the two pods that coexist during a rolling update (or any future
+          # replica bump — leader election exists for exactly that) would make it a
+          # duplicate match group and the rule would ERROR OUT rather than fire.
+          # max() over replicas is also the semantics we want: if any replica
+          # completed a pass recently, the lane is not stale.
+          expr: |
+            (time() - max by (reconciler) (llz_reconcile_last_success_timestamp_seconds{namespace="llz-reconciler"}))
+              > on(reconciler) (10 * max by (reconciler) (llz_reconcile_interval_seconds{namespace="llz-reconciler"}))
           for: 10m
           labels:
             severity: warning
             service: llz-reconciler
           annotations:
-            summary: llz observe reconciler loop is stale
+            summary: llz reconciler {{ $labels.reconciler }} loop is stale
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
-            description: The observe reconciler has not completed a successful pass in over 5 minutes; its sample loop may be wedged.
+            description: The {{ $labels.reconciler }} reconciler has not completed a successful pass in 10 of its own intervals ({{ $value }}s ago). Its loop may be wedged — and every gauge it publishes is still being served at its last-known-good value, so the alerts fed by those gauges are silently unfalsifiable until this clears.
         - alert: LLZReconcilerErroring
           # A folded timed reconciler (Linode cred rotation / Harbor provisioning)
           # failing repeatedly — distinct from a single transient blip.
@@ -93,6 +127,38 @@ spec:
             summary: cluster is not converged (hard-failed)
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
             description: The reconciler classifies the cluster as hard-failed (an Argo Application the reconciler can't resolve on its own). See llz_convergence_apps_failed.
+        - alert: LLZConvergenceUnobserved
+          # llz_convergence_state == 0 means "converged" — but the state is derived
+          # from classifying Argo Applications, and classifying NOTHING produced the
+          # same 0. An empty items[], a malformed list, or a batch that all failed to
+          # parse rendered as "all Argo Applications converged" (fixed in
+          # reconcile_convergence.go, which now reports in-progress). This alert is
+          # the observability half of that fix: it fires on the corpus itself, so a
+          # convergence claim backed by zero evidence is visible rather than silently
+          # green. Pre-bootstrap it rides the same 15m as LLZClusterNotConverged.
+          expr: max(llz_convergence_apps_observed{namespace="llz-reconciler"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: convergence is being reported from zero Argo Applications
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: The reconciler classified no Argo Applications at all, so llz_convergence_state carries no evidence either way. Either bootstrap has not created the Applications yet, or the list read is returning nothing (RBAC, a renamed namespace, an unparseable response).
+        - alert: LLZConvergenceSignalAbsent
+          # The convergence gauge is the in-cluster mirror of the bootstrap converge
+          # gate. If the observe lane never publishes it the series is ABSENT, not 0
+          # — and every other convergence rule is a threshold on a series that isn't
+          # there, which never fires. absent() is what makes "no signal" loud.
+          expr: absent(llz_convergence_state{namespace="llz-reconciler"})
+          for: 15m
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: llz convergence gauge is not being published
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+            description: No llz_convergence_state series exists. The observe reconciler is not publishing it, so LLZClusterNotConverged and LLZConvergenceUnobserved cannot fire — the cluster's convergence is unmonitored, not healthy.
         - alert: LLZESOStoreNotReady
           # The openbao ClusterSecretStore is not Ready — every platform
           # ExternalSecret binds to it, so a sustained not-Ready stalls secret sync.

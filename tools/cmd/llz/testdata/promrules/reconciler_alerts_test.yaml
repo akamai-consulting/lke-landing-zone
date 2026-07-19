@@ -1,0 +1,156 @@
+# promtool unit tests for the reconciler alert rules.
+#
+# `promtool check rules` proves an expression PARSES. It says nothing about
+# whether the alert fires when the condition it is named for is true — which is
+# the failure this suite exists to pin down: the reconciler's registry never
+# expires a gauge, so a dead lane keeps serving its last good sample and every
+# threshold alert fed by it goes quiet exactly when its input breaks.
+#
+# rules.yml is written by the Go test (ci_check_prom_rules_test.go) from the
+# PrometheusRule CRD's spec.groups, so these run against the rules the cluster
+# actually loads, not a copy.
+rule_files:
+  - rules.yml
+
+evaluation_interval: 30s
+
+tests:
+  # A lane freezes. Its gauges keep reading healthy forever; only its freshness
+  # series can contradict them.
+  - interval: 30s
+    name: a wedged lane is stale even while its gauges read healthy
+    input_series:
+      # observe: healthy — its success timestamp advances with wall clock.
+      - series: 'llz_reconcile_interval_seconds{namespace="llz-reconciler",reconciler="observe"}'
+        values: "30x80"
+      - series: 'llz_reconcile_last_success_timestamp_seconds{namespace="llz-reconciler",reconciler="observe"}'
+        values: "0+30x80"
+      # openbao-gauges: wedged at t=0. 60s cadence, so 10 intervals = 600s.
+      - series: 'llz_reconcile_interval_seconds{namespace="llz-reconciler",reconciler="openbao-gauges"}'
+        values: "60x80"
+      - series: 'llz_reconcile_last_success_timestamp_seconds{namespace="llz-reconciler",reconciler="openbao-gauges"}'
+        values: "0x80"
+      # The gauge that lane feeds, stuck at its last-known-good "not sealed".
+      - series: 'llz_openbao_sealed{namespace="llz-reconciler"}'
+        values: "0x80"
+    alert_rule_test:
+      # Not yet: 10 intervals (600s) + for:10m means it cannot fire before 20m.
+      - eval_time: 15m
+        alertname: LLZReconcilerStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: LLZReconcilerStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+              reconciler: openbao-gauges
+            exp_annotations:
+              summary: llz reconciler openbao-gauges loop is stale
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+              # $value is the staleness in seconds — 25m minus the frozen t=0
+              # sample. It names the lane, which the old observe-scoped rule
+              # could not.
+              description: The openbao-gauges reconciler has not completed a successful pass in 10 of its own intervals (1500s ago). Its loop may be wedged — and every gauge it publishes is still being served at its last-known-good value, so the alerts fed by those gauges are silently unfalsifiable until this clears.
+      # The whole point: OpenBao could be sealed and this would still read 0.
+      # LLZOpenBaoSealed is silent, and LLZReconcilerStale above is the only
+      # thing telling the operator the 0 is fiction.
+      - eval_time: 25m
+        alertname: LLZOpenBaoSealed
+        exp_alerts: []
+
+  # The healthy case must stay quiet — a staleness rule that fires on a live
+  # lane is worse than none.
+  - interval: 30s
+    name: a live lane is never stale
+    input_series:
+      - series: 'llz_reconcile_interval_seconds{namespace="llz-reconciler",reconciler="observe"}'
+        values: "30x80"
+      - series: 'llz_reconcile_last_success_timestamp_seconds{namespace="llz-reconciler",reconciler="observe"}'
+        values: "0+30x80"
+      - series: 'llz_reconcile_interval_seconds{namespace="llz-reconciler",reconciler="token-inventory"}'
+        values: "86400x80"
+      - series: 'llz_reconcile_last_success_timestamp_seconds{namespace="llz-reconciler",reconciler="token-inventory"}'
+        values: "0x80"
+    alert_rule_test:
+      # token-inventory is a daily lane: 10 intervals is 10 days, so a 40m-old
+      # sample is not stale for it. The per-lane cadence is doing the work — a
+      # single hard-coded threshold would have paged for this.
+      - eval_time: 40m
+        alertname: LLZReconcilerStale
+        exp_alerts: []
+
+  # Convergence: state 0 from an empty corpus is not evidence of convergence.
+  - interval: 30s
+    name: convergence reported from zero Applications is loud
+    input_series:
+      - series: 'llz_convergence_state{namespace="llz-reconciler"}'
+        values: "0x80"
+      - series: 'llz_convergence_apps_observed{namespace="llz-reconciler"}'
+        values: "0x80"
+      - series: 'llz_convergence_apps_failed{namespace="llz-reconciler"}'
+        values: "0x80"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLZConvergenceUnobserved
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+            exp_annotations:
+              summary: convergence is being reported from zero Argo Applications
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+              description: The reconciler classified no Argo Applications at all, so llz_convergence_state carries no evidence either way. Either bootstrap has not created the Applications yet, or the list read is returning nothing (RBAC, a renamed namespace, an unparseable response).
+      # state 0 is "converged", so the not-converged alert stays silent — which
+      # is precisely why the corpus needs its own alert.
+      - eval_time: 20m
+        alertname: LLZClusterNotConverged
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LLZConvergenceSignalAbsent
+        exp_alerts: []
+
+  # A real cluster with a real corpus must not trip the corpus alert.
+  - interval: 30s
+    name: convergence backed by a corpus is quiet
+    input_series:
+      - series: 'llz_convergence_state{namespace="llz-reconciler"}'
+        values: "0x80"
+      - series: 'llz_convergence_apps_observed{namespace="llz-reconciler"}'
+        values: "24x80"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLZConvergenceUnobserved
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LLZConvergenceSignalAbsent
+        exp_alerts: []
+
+  # The observe lane never publishes the gauge at all: every convergence
+  # threshold is a rule over a series that does not exist, so only absent() can
+  # speak.
+  - interval: 30s
+    name: a missing convergence series is not a converged cluster
+    input_series:
+      - series: 'llz_reconcile_up{namespace="llz-reconciler",reconciler="observe"}'
+        values: "1x80"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LLZConvergenceSignalAbsent
+        exp_alerts:
+          # absent() synthesizes the labels named in its argument, so the
+          # namespace matcher rides through onto the alert.
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+              namespace: llz-reconciler
+            exp_annotations:
+              summary: llz convergence gauge is not being published
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/reconciler-alerts.md"
+              description: No llz_convergence_state series exists. The observe reconciler is not publishing it, so LLZClusterNotConverged and LLZConvergenceUnobserved cannot fire — the cluster's convergence is unmonitored, not healthy.
+      - eval_time: 20m
+        alertname: LLZClusterNotConverged
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LLZConvergenceUnobserved
+        exp_alerts: []

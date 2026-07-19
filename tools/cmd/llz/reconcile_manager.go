@@ -203,6 +203,17 @@ func reconcileOnce(ctx context.Context, reg *metrics.Registry, now func() time.T
 	lbl := map[string]string{"reconciler": r.name}
 	reg.AddCounter("llz_reconcile_runs_total", "total reconcile passes per reconciler", lbl, 1)
 	reg.AddCounter("llz_reconcile_errors_total", "total failed reconcile passes per reconciler", lbl, 0) // register at 0
+	// Publish the lane's own cadence so staleness can be alerted GENERICALLY —
+	// "no successful pass in 10× your own interval" — instead of one rule
+	// hard-coded to the observe lane's 30s. Every gauge this lane publishes is
+	// upsert-only (the registry never expires a sample), so a lane that dies keeps
+	// serving its last good values forever; its freshness series is the only thing
+	// that can contradict them. A 0-interval lane is event-driven and has no
+	// cadence to be stale against, so it publishes none.
+	if r.interval > 0 {
+		reg.SetGauge("llz_reconcile_interval_seconds",
+			"configured interval between this reconciler's passes", lbl, r.interval.Seconds())
+	}
 
 	start := now()
 	err := r.run(ctx)
