@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,6 +223,26 @@ func conflictMarkerLines(content string) []int {
 	return lines
 }
 
+// stepVendoredFresh fails the lint gate when a vendored, template-owned file
+// under .github/ has been hand-edited. Those files are `managed`, so `llz upgrade`
+// overwrites them from a clean render — an operator's local fix is silently lost
+// on the next bump, which is precisely the drift the cross-org reuse design said
+// should "fail CI rather than silently diverge".
+//
+// Lives in the LINT gate rather than a workflow step on purpose: lint already runs
+// in every instance's CI and pre-commit hook, so the guard reaches instances
+// without editing (and thereby churning) the vendored workflows it protects.
+//
+// Skips cleanly when there is no .template-manifest / no lock — a template-repo
+// checkout or a pre-lock instance has nothing to verify.
+func stepVendoredFresh(_ globalOpts) error {
+	if _, err := loadTemplateManifest(""); err != nil {
+		fmt.Fprintln(os.Stderr, "  skip: no .template-manifest (vendored-fresh)")
+		return nil
+	}
+	return runWorkflowsFresh("", false, io.Discard, os.Stderr)
+}
+
 // stepConflictMarkers fails the lint gate if any git-tracked text file carries a
 // committed merge-conflict marker. A botched `copier update` / `llz upgrade`
 // 3-way merge can leave these in place (e.g. an instance's kustomization.yaml),
@@ -304,7 +325,7 @@ func stepCheckov(g globalOpts) error {
 // runLint is the fast pre-commit gate (also called by `llz precommit`).
 func runLint(g globalOpts) error {
 	for _, step := range []func(globalOpts) error{
-		stepConflictMarkers, stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
+		stepConflictMarkers, stepVendoredFresh, stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
 	} {
 		if err := step(g); err != nil {
 			return err
@@ -403,6 +424,7 @@ func checkCmd() *cobra.Command {
 		fn         func(globalOpts) error
 	}{
 		{"conflict-markers", "fail on committed merge-conflict markers", stepConflictMarkers},
+		{"vendored-fresh", "fail when a vendored .github/ file drifts from the template", stepVendoredFresh},
 		{"fmt-check", "tofu fmt -check (no writes)", stepFmtCheck},
 		{"tf-lint", "tflint each terraform/ root", stepTFLint},
 		{"actions-lint", "actionlint the instance workflows", stepActionsLint},

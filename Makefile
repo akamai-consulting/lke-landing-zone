@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -491,7 +491,7 @@ LINT_TF := tf-lint checkov tf-validate-roots
 
 # CI job entrypoints — one target per lint.yml container job.
 lint-k8s: $(LINT_K8S) shellcheck
-lint-tf: $(LINT_TF) template-manifest-check
+lint-tf: $(LINT_TF) template-manifest-check workflows-lock-check
 
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
 # so the template-update tooling never has to guess about a new file.
@@ -503,10 +503,24 @@ lint-tf: $(LINT_TF) template-manifest-check
 template-manifest-check:
 	$(call LLZ_CI,template-manifest --root instance-template,--root ../instance-template)
 
+# Assert instance-template/.template-workflows.lock still matches the vendored
+# .github/ files it covers. Editing a llz-*.yml body without re-running
+# `llz ci workflows-fresh --write` would ship a lock that every instance fails on,
+# so catch it here instead. Same two-branch --root trick as above (last wins).
+#
+# FROM SOURCE (like chart-guards, and for a sharper reason): this gate compares
+# the WORKING TREE's scaffold against the WORKING TREE's lock, so it must run the
+# working tree's llz. LLZ_CI's PATH-first default would use the prebuilt image
+# binary — which is built from the merge-base and therefore doesn't even have this
+# verb on the PR that introduces it.
+workflows-lock-check: export LLZ_FORCE_SOURCE := 1
+workflows-lock-check:
+	$(call LLZ_CI,workflows-fresh --root instance-template,--root ../instance-template)
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check workflows-lock-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
