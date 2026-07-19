@@ -33,6 +33,21 @@ on:
 permissions:
   contents: read
 
+# Serialize builds per ref. Because this runs on EVERY main push (see above), two
+# merges in quick succession otherwise race the same mutable `:latest` tag and the
+# same `--cache-to type=gha,scope=<image>` entry — and the later-FINISHING run wins
+# `:latest`, which may be the OLDER commit. That reintroduces exactly the
+# `:latest`-vs-HEAD skew the no-path-filter design above exists to prevent, just
+# through a different door.
+#
+# cancel-in-progress MUST stay false: cancelling a mid-flight build would leave
+# that commit's `sha-<>` tag unpublished, which `llz ci pin-instance-images
+# --build-if-missing` then has to re-trigger from scratch (and may be actively
+# waiting on). Serialize; never cancel.
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   # The commit to build: a caller-supplied sha (release-e2e) pins the exact commit
