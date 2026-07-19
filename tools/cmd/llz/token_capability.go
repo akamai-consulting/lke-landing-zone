@@ -105,8 +105,14 @@ var capabilityChecks = []capabilityCheck{
 			}
 			return fmt.Sprintf("/repos/%s/environments/infra-%s/secrets/public-key", repo, region), ""
 		},
-		hint: "the fine-grained PAT needs Secrets: read and write (plus Environments: read) on this repo — " +
-			"without it `llz ci bao-seed-seal-key` cannot persist OPENBAO_SEAL_KEY and the deployment is left unsealable",
+		// Keep this wording in lockstep with wizard.go's catalog note and the
+		// require-secret hint in llz-bootstrap-openbao.yml — three copies of the
+		// same remediation that must not drift. Note the SECOND cause: the scope
+		// can be right and the write still fail if the PAT's owner is not an
+		// Environment admin on infra-<region>, so name both.
+		hint: "fine-grained PAT needs Actions + Secrets: write on this repo (or a classic repo+workflow PAT), AND " +
+			"its owner must be an Environment admin on infra-<region> — without both, `llz ci bao-seed-seal-key` " +
+			"cannot persist OPENBAO_SEAL_KEY and the deployment is left unsealable",
 	},
 }
 
