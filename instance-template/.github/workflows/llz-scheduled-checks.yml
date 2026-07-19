@@ -1,13 +1,9 @@
 name: llz-scheduled-checks (reusable)
 
-# Reusable (`workflow_call`) version of the scheduled health/audit checks.
-# Surface-reduction pattern
-# (docs/adr/0003-vendor-actions-and-bodies-into-instances.md): an instance ships a thin caller stub (which owns the `schedule:` crons)
-# and vendors this body plus the composite actions it calls, so every job runs
-# self-contained with no cross-repo checkout — which is what lets it run on an
-# air-gapped GitHub Enterprise. `github.event_name` / `github.event.schedule` are
-# inherited from the caller, so every job's schedule/dispatch `if:` gate is
-# unchanged.
+# Reusable (`workflow_call`) body of the scheduled health/audit checks. Vendored
+# verbatim into every instance; the caller stub owns the `schedule:` crons.
+# Maintainer rationale (incidents, PR archaeology, why-not-X) lives in the
+# TEMPLATE repo: docs/workflows/llz-scheduled-checks.md
 on:
   workflow_call:
     inputs:
@@ -56,61 +52,23 @@ defaults:
 jobs:
 
   # ── Discover deployments (the per-env matrix source of truth) ────────────────
-  # Single source of truth for every per-env matrix below — see
-  # llz-discover-deployments.yml. The credential rotation and the Terraform PR
-  # plan call the SAME reusable workflow, so the set these checks verify cannot
-  # drift from the set the rotation propagates into (no checked-but-unrotated, or
-  # rotated-but-unchecked, deployment).
+  # Single source of truth for every per-env matrix below. The credential
+  # rotation and the Terraform PR plan call the SAME reusable workflow, so the
+  # set these checks verify cannot drift from the set the rotation covers.
   discover:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     uses: ./.github/workflows/llz-discover-deployments.yml
 
-  # ── OpenBao + ESO health checks ──────────────────────────────────────────────
-  # Checks each cluster for:
-  #   • OpenBao pod seal state (all 3 Raft pods)
-  #   • ESO ClusterSecretStore readiness
-  #   • Any unhealthy ExternalSecrets across all namespaces
-  # Findings are warning-only IN THE VERB — health-openbao emits ::warning:: and
-  # exits 0, so a sealed pod pages via annotations rather than reddening the run.
-  # The job no longer carries continue-on-error, so what DOES fail it is the probe
-  # path itself (checkout, ACL open, image pull) — see the note on the job.
-  #
-  # DEMOTED to WEEKLY (was daily): the in-cluster llz-reconciler now samples these
-  # continuously and fires them as Prometheus alerts — OpenBaoSealed /
-  # OpenBaoNoActiveLeader (observability openbao-alerts) and LLZESOStoreNotReady
-  # (llz-reconciler PrometheusRule) — so a daily hosted-runner probe (fetch-
-  # kubeconfig + runner-ACL, the CIDR-fragile port-forward path this migration set
-  # out to retire) is redundant. This weekly run stays as belt-and-suspenders: it
-  # catches a cluster whose operator has not wired an Alertmanager receiver
-  # (spec.alerting.receivers: [none]) and re-proves the probe path itself. Still
-  # on-demand via workflow_dispatch.
   # ── Weekly cluster checks — ONE job, four checks ─────────────────────────────
-  # Was four separate jobs (openbao-health, loki-objkey-rotation-health,
-  # certmanager-health, wave-health-vap), each on the same weekly cron and each
-  # paying its own container-init + checkout + kubeconfig fetch + control-plane
-  # ACL open/revoke. Folding them saves three of those cycles per region per
-  # week, and — the part that matters more than runner minutes — it makes three
-  # fewer read-modify-write mutations of the SHARED LKE-E ACL object, which four
-  # concurrent jobs were racing on every week.
+  # Folded from four jobs on the same cron so they share one container init,
+  # checkout, kubeconfig and control-plane ACL open/revoke (four jobs raced the
+  # SHARED LKE-E ACL object weekly). Daily→weekly: the in-cluster llz-reconciler
+  # now alerts on all of this continuously; this run is belt-and-suspenders.
   #
-  # NO continue-on-error, anywhere — deliberately, and this is a change from the
-  # four jobs that preceded this one (three of which carried it at job level).
-  #
-  # It was swallowing less than it appeared to, and the wrong thing. health-openbao
-  # and health-certmanager are warn-only IN GO ("never fails the job") — they emit
-  # ::warning:: and exit 0 on a finding. So continue-on-error could only ever hide
-  # a PROBE-PATH failure: a dead checkout, a failed ACL open, a bad image pull.
-  # That is precisely what this weekly run exists to prove still works, and a probe
-  # that cannot report itself broken re-proves nothing.
-  #
-  # Two of these DO fail on a real finding, and now say so:
-  #   assert-wave-health-vap  — the wave-health guard VAP stopped enforcing (the
-  #                             #142 bootstrap-wedge class it exists to prevent)
-  #   health-loki-objkey      — the object-store key breached its rotation SLA
-  #
-  # Every check carries `if: always()` (except the first, which has nothing before
-  # it to skip on), so one failure does not skip its siblings — all four still run
-  # and report. Cleanup + ACL revoke are if: always() too.
+  # NO continue-on-error, anywhere — deliberately. The openbao/certmanager checks
+  # are warn-only in Go, so it could only ever hide a probe-path failure (dead
+  # checkout, failed ACL open, bad image pull) — the thing this run proves.
+  # `if: always()` on each check so one failure does not skip its siblings.
   weekly-cluster-checks:
     name: Weekly cluster checks (${{ matrix.region }})
     needs: discover
@@ -153,10 +111,8 @@ jobs:
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci health-certmanager
 
-      # tee -a, not tee. As its own job this truncated $GITHUB_STEP_SUMMARY, which
-      # was harmless only because nothing else in that job wrote to it. Sharing a
-      # job with three other checks makes that a live bug: it would clobber
-      # whatever the steps above had written.
+      # tee -a, not tee — plain tee truncates $GITHUB_STEP_SUMMARY and would
+      # clobber what the checks above wrote.
       - name: Assert the wave-health guard VAP is bound and enforcing
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci assert-wave-health-vap | tee -a "$GITHUB_STEP_SUMMARY"
@@ -201,11 +157,9 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
-      # LKE-E control-plane ACL so the kubectl checks below are permitted
-      # (revoked at job end), and install llz. allow-missing — these checks
-      # tolerate a torn-down cluster: the ACL open + llz install are skipped
-      # internally and the check steps gate on the `available` output.
+      # Opens this runner's dynamic egress IP in the LKE-E control-plane ACL
+      # (revoked at job end). allow-missing — a torn-down cluster is skipped
+      # internally and the checks below gate on the `available` output.
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
@@ -218,8 +172,8 @@ jobs:
           region:                ${{ matrix.region }}
           allow-missing:         'true'
 
-      # Native port — newest-token age vs warn/critical SLA is health.ClassifyRotationAge;
-      # the cluster-unreachable skip lives in the command.
+      # Age-vs-SLA classification is health.ClassifyRotationAge; the
+      # cluster-unreachable skip lives in the command, not here.
       - name: Check lke-admin-token age
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci health-lke-admin-rotation
@@ -236,21 +190,10 @@ jobs:
           region:       ${{ matrix.region }}
 
   # ── Credential single pane of glass ──────────────────────────────────────────
-  # Runs daily. Replaces the former per-provider probe jobs (Linode cred-audit +
-  # gh-pat-expiry-health) with a cluster-as-source-of-truth flow (two steps, one
-  # kubeconfig):
-  #   1. token-inventory (WRITER) — measures every CI token's expiry this job holds:
-  #      GitHub service PATs (token-expiration header) + Linode account PATs (API) —
-  #      and writes the llz-token-inventory ConfigMap the in-cluster reconciler
-  #      re-exposes as llz_token_expiry_* metrics. Only metadata leaves; never a token.
-  #   2. alert-eval (READER) — asks LIVE Prometheus whether any credential alert
-  #      (LLZToken* / LLZCertificate*) is firing or BROKEN. The cluster is the single
-  #      pane; the actual expiry pages via Alertmanager. --strict fails the job if a
-  #      credential alert can't evaluate (a missing metric — e.g. the funnel is down),
-  #      catching a broken pipeline the per-provider probes used to mask.
-  # Per-region: Linode PATs are per-env, GitHub PATs instance-wide, so each cluster's
-  # reconciler exposes that region's view. Self-skips a not-bootstrapped deployment
-  # (cluster-access allow-missing + the writer's own token skip).
+  # Daily. Cluster-as-source-of-truth: a WRITER step publishes token expiry into
+  # the cluster, a READER step asks live Prometheus what is firing. Per-region
+  # because Linode PATs are per-env (GitHub PATs are instance-wide). Self-skips a
+  # not-bootstrapped deployment.
   credential-single-pane:
     name: Credential Single Pane (${{ matrix.region }})
     needs: discover
@@ -288,16 +231,15 @@ jobs:
           region:                ${{ matrix.region }}
           allow-missing:         'true'
 
-      # WRITER: measure token expiry and push the inventory ConfigMap the reconciler
-      # reads. kubectl defaults to the $HOME/.kube/config the cluster-access step wrote,
-      # and the default GitHub shell (-eo pipefail) fails the step if either side does.
+      # WRITER: measure token expiry, push the llz-token-inventory ConfigMap the
+      # reconciler re-exposes as metrics. Only metadata leaves; never a token.
       - name: Write token inventory to the cluster
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci token-inventory | kubectl apply -f -
 
-      # READER: the cluster is the single pane — evaluate the credential alerts against
-      # live Prometheus. --strict fails on a BROKEN alert (missing metric / dead funnel);
-      # --summary writes the verdict table to the job summary (see `llz ci alert-eval`).
+      # READER: evaluate the credential alerts against live Prometheus. --strict
+      # fails on a BROKEN alert (missing metric / dead funnel), not just a firing
+      # one — that is what catches a dead pipeline.
       - name: Read cluster credential alert status
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)' --strict --summary "Credential single pane (${REGION})"
@@ -313,20 +255,9 @@ jobs:
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ matrix.region }}
 
-  # ── Loki OBJ key 120-day rotation SLA ────────────────────────────────────────
-  # Linode Object Storage keys have no native expiry; the Guidelines mandate
-  # revoking bucket access keys after 120 days. The object-storage Terraform
-  # module force-rotates the key declaratively (time_rotating), but the OpenBao
-  # reseed hop is manual — this check reads the age of the current
-  # secret/loki/object-store version and alerts if the live credential has fallen
-  # behind the 120-day clock.
-  #
-  # DEMOTED to WEEKLY (was daily): the in-cluster llz-reconciler samples the same
-  # OpenBao rotation age continuously (llz_credential_age_days{cred=...}) and fires
-  # the LLZCredentialRotationOverdue alert (>90d) for both the Loki and Harbor
-  # object-storage keys — so the daily hosted-runner probe is redundant. Weekly
-  # stays as belt-and-suspenders (covers a receiver-less cluster + re-proves the
-  # probe path). Still on-demand via workflow_dispatch.
+  # ── PrometheusRule health ────────────────────────────────────────────────────
+  # Two layers: the expected LLZ rule CRs exist, and Prometheus has actually
+  # loaded its rules without evaluation errors.
   prometheusrule-health:
     name: PrometheusRule Health (${{ matrix.region }})
     needs: discover
@@ -349,11 +280,9 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # Fetch the kubeconfig and open this hosted-runner's dynamic egress IP in
-      # the LKE-E control-plane ACL so the kubectl checks below are permitted
-      # (revoked at job end). allow-missing — these checks tolerate a torn-down
-      # cluster: the ACL open is skipped internally and the check steps gate on
-      # `available`.
+      # Opens this runner's dynamic egress IP in the LKE-E control-plane ACL
+      # (revoked at job end). allow-missing — a torn-down cluster is skipped
+      # internally and the checks below gate on `available`.
       - name: Cluster access (kubeconfig + runner ACL)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
@@ -401,14 +330,9 @@ jobs:
             echo "> All PrometheusRules present." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # health-prom-rules queries Prometheus /api/v1/rules and reports any rule
-      # group with lastError set — evaluation failures promtool's syntax check
-      # cannot catch. Rule findings are annotations, but an unreachable Prometheus
-      # FAILS: the check cannot report on rules it never read, and the job no
-      # longer carries continue-on-error to swallow that. It
-      # used to look for the pod in llz-observability, which holds the LLZ CRs
-      # while apl-core Prometheus runs in monitoring — so it skipped clean on every
-      # run and nothing validated the live rules.
+      # Reports rule groups with lastError set — evaluation failures promtool
+      # cannot catch. Findings are annotations, but an unreachable Prometheus
+      # FAILS: the check cannot report on rules it never read.
       - name: Check Prometheus has loaded rules (no evaluation errors)
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci health-prom-rules
@@ -425,24 +349,9 @@ jobs:
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ matrix.region }}
 
-  # NOTE: the former `go-vuln-audit` job (govulncheck of the template's Go tools
-  # module) was REMOVED here: it checked out the central template repo, which a
-  # self-contained instance cannot reach on an air-gapped GitHub Enterprise, and it
-  # audited template code rather than instance config. CVE-auditing the tools module
-  # belongs in the TEMPLATE repo's own CI — see docs/designs/cross-org-reuse-pattern.md.
-
-  # ── cert-manager Certificate health ─────────────────────────────────────────
-  # Checks every cert-manager Certificate across all namespaces for Ready=True. A
-  # stuck ACME renewal (e.g. DNS-01 challenge failure for otel.<env>.internal)
-  # leaves the Certificate in Ready=False indefinitely — this surfaces it before
-  # pods start rejecting connections.
-  #
-  # DEMOTED to WEEKLY (was daily): the in-cluster llz-reconciler now samples
-  # cert-manager Certificate readiness continuously (llz_certificates_not_ready)
-  # and fires the LLZCertificatesNotReady Prometheus alert, so the daily hosted-
-  # runner probe is redundant. Weekly stays as belt-and-suspenders (covers a
-  # receiver-less cluster + re-proves the probe path). Still on-demand via
-  # workflow_dispatch.
+  # ── Template drift ───────────────────────────────────────────────────────────
+  # Its own job, not a step: monthly cron rather than daily/weekly, and no
+  # `environment:` — it touches no cluster and no per-region secrets.
   template-drift:
     name: Template drift
     runs-on: ubuntu-latest
@@ -459,9 +368,8 @@ jobs:
 
       - name: Compare .template-version against the template head
         env:
-          # `llz drift` resolves the template head via `git ls-remote`, which
-          # needs auth when the template repo is private; route github.com
-          # fetches through the token.
+          # `llz drift` resolves the head via `git ls-remote`, which needs auth
+          # when the template repo is private (hence the insteadOf rewrite).
           GH_TOKEN: ${{ github.token }}
         run: |
           git config --global \

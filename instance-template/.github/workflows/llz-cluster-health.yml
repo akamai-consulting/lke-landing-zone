@@ -1,26 +1,10 @@
 name: llz-cluster-health (reusable)
 
-# Reusable (`workflow_call`) cluster-health check. One body serves both uses of
-# the instance's cluster-health.yml caller — they differ only by flags:
-#   - recovery / diagnostic (the all-defaults dispatch):
-#     report-only; the job summary is the deliverable, the job never fails.
-#   - gate mode (OPERATOR-dispatched): fail-on-unhealthy + assert-loki. NOTE:
-#     release-e2e no longer dispatches this — its former `validate` job was folded
-#     into bootstrap-openbao's converge, which runs the assert suite inline.
-#
-# This is the canonical surface-reduction pattern (docs/adr/0003-vendor-actions-and-bodies-into-instances.md): an instance ships a ~20-line caller stub that
-# owns the trigger surface, and vendors this body + the composite actions it
-# calls; the health tooling (`llz ci health`) is baked into vars.TF_IMAGE.
-# Single checkout: the instance at the workspace root (so the fetch-kubeconfig
-# action's terraform-iac-bootstrap/cluster working-dir resolves), and the
-# composite actions resolve from the instance's own vendored .github/actions/ —
-# self-contained, with no separate template checkout.
-#
-# vars (TF_IMAGE, TF_STATE_BUCKET, TF_STATE_ENDPOINT) resolve from the CALLER's
-# repo/org variables automatically; secrets are passed by the caller via
-# `secrets: inherit`. The CI image is pulled with the built-in GITHUB_TOKEN
-# (github.actor) — no GHCR PAT — so the images must be public or grant the
-# caller repo package-read access.
+# Reusable (`workflow_call`) cluster-health check. Vendored verbatim into every
+# instance; the caller stub owns the trigger surface. Two modes: report-only
+# (all defaults) and gate mode (fail-on-unhealthy + assert-loki).
+# Maintainer rationale (incidents, PR archaeology, why-not-X) lives in the
+# TEMPLATE repo: docs/workflows/llz-cluster-health.md
 
 on:
   workflow_call:
@@ -80,17 +64,12 @@ jobs:
       TF_IN_AUTOMATION:     'true'
       VERBOSE:              ${{ inputs.verbose && '1' || '0' }}
     steps:
-      # Single checkout. The fetch-kubeconfig composite action hard-codes
-      # `working-directory: terraform-iac-bootstrap/cluster` — the INSTANCE's TF
-      # layout — and a composite action's working-directory is resolved against
-      # the workspace root and cannot be overridden by the caller. The caller
-      # instance is at the workspace root and vendors .github/actions/, so the
-      # composite actions resolve locally with no separate template checkout.
+      # Single checkout at the workspace root — the vendored composite actions
+      # resolve their working-directory against it.
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
-      # LKE-E control-plane ACL before the kubectl steps (revoked at job end,
-      # if: always()), and install llz.
+      # Kubeconfig + opens this runner's egress IP in the LKE-E control-plane
+      # ACL (revoked by the always() step at job end) + installs llz.
       - name: Cluster access (kubeconfig + runner ACL + llz)
         uses: ./.github/actions/cluster-access
         with:
@@ -109,16 +88,9 @@ jobs:
         run: |
           set +e
           export KUBECONFIG="$HOME/.kube/config"
-          # Wait for the apiserver to answer before the one-shot health check.
-          # The cluster-access step opened THIS runner's egress IP in the LKE-E
-          # control-plane ACL moments ago, and a fresh ACL change takes tens of
-          # seconds to take effect — so probing immediately spuriously trips
-          # `llz ci health`'s exit-3 ("apiserver unreachable") gate on a cluster
-          # that is actually up. The provisioning gate (`llz ci converge`) already
-          # absorbs this transient by retrying exit-3 against its budget; this
-          # gives the one-shot validate gate the same tolerance so the two agree.
-          # Bounded by wall clock (SECONDS) so a genuinely dead apiserver still
-          # fails fast enough, well inside the job timeout and before assert-loki.
+          # Wait for the just-opened control-plane ACL to propagate before
+          # probing, else health trips its exit-3 on a cluster that is up.
+          # Wall-clock bounded so a dead apiserver still fails fast.
           deadline=$(( SECONDS + 180 ))
           until kubectl version --request-timeout=10s >/dev/null 2>&1; do
             if (( SECONDS >= deadline )); then
@@ -128,13 +100,8 @@ jobs:
             echo "apiserver not reachable yet — waiting for the control-plane ACL to propagate…"
             sleep 5
           done
-          # Gate mode polls (converge) instead of taking a one-shot snapshot, so a
-          # transient — an ephemeral CronJob pod caught mid-ContainerCreating (e.g.
-          # argo-resync-nudger firing on schedule), or a phase/ACL blip — can't fail
-          # the gate moments after the provisioning converge already passed. Same
-          # tolerance the provisioning gate has; short budget so a genuinely broken
-          # cluster still fails well inside the job timeout. Report-only mode keeps
-          # the one-shot snapshot: a point-in-time diagnostic, not a gate.
+          # Gate mode polls (converge) so a transient can't fail the gate;
+          # report-only keeps the one-shot snapshot. See the sidecar doc.
           if [[ "$FAIL_ON_UNHEALTHY" == "true" ]]; then
             llz ci converge --budget 300 --interval 20 | tee /tmp/health.txt
             EC=${PIPESTATUS[0]}
@@ -159,10 +126,7 @@ jobs:
       # data `llz ci health` doesn't surface. Never alters the outcome.
       - name: Argo CD sync diagnostics (best-effort)
         if: always()
-        # Cap the diagnostics' own runtime — diagnose-argocd itself gates on apiserver
-        # reachability (~10s clean skip when unreachable), but the follow-up kubectl loop
-        # below is unbounded, so keep a hung apiserver from stacking per-probe dial
-        # timeouts against the job budget.
+        # Caps the unbounded kubectl loop below against a hung apiserver.
         timeout-minutes: 10
         run: |
           export KUBECONFIG="$HOME/.kube/config"
@@ -175,9 +139,7 @@ jobs:
             kubectl -n argocd get application "${app}" -o jsonpath='{.status.conditions}' 2>/dev/null || true
             echo
           done
-          # Live alert + metric-surface snapshot: which deployed alerts are
-          # FIRING/ARMED/DEAD?/BROKEN right now, and the exporter metric surface.
-          # Surfaces silent never-fire rules on prod day-2, not just in the e2e.
+          # Live alert + metric-surface snapshot (report-only).
           llz ci alert-eval || true
           llz ci prom-metrics --match '^(loki_|cortex_|otelcol_|harbor_|vault_|llz_)' || true
 
@@ -188,12 +150,9 @@ jobs:
           export KUBECONFIG="$HOME/.kube/config"
           llz ci assert-loki
 
-      # E2E validation gate (same assert-loki input): assert the observability
-      # pipeline is WIRED — every landing-zone ServiceMonitor has a live `up`
-      # target and every PrometheusRule group is loaded — and that no deployed
-      # alert is DEAD?/BROKEN (--strict). The best-effort alert-eval above (in the
-      # always() diagnostics block) stays report-only for recovery dispatches;
-      # these two are gating and run only under the E2E validation input.
+      # E2E validation gate (same assert-loki input): asserts the observability
+      # pipeline is WIRED, and --strict fails on DEAD?/BROKEN alerts. Unlike the
+      # best-effort alert-eval above, these are gating.
       - name: Assert observability + reconciler + wave-health (E2E gate)
         if: ${{ inputs.assert-loki }}
         run: |
