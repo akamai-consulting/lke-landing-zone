@@ -94,6 +94,46 @@ jobs:
         # makes re-runs idempotent.
         run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist/llz-* dist/SHA256SUMS
 
+  # ── Publish the release-version container tag ────────────────────────────────
+  # build-images.yml only ever pushes :latest and :sha-<SHA> (the llz image has no
+  # static `version` in its matrix). Nothing published :vX.Y.Z — so an instance
+  # pinned to a release rendered ghcr.io/…/llz:v0.0.28 into its carved apps and
+  # got a 404 / ImagePullBackOff (see llzImageTagFor in tools/cmd/llz/render.go).
+  #
+  # RETAG rather than rebuild: the sha- image for this commit is the artifact
+  # release-e2e already validated, so pointing the version tag at the same
+  # manifest keeps the release byte-identical to what was tested. `imagetools
+  # create` copies the multi-arch index, preserving both platforms + provenance.
+  image-tag:
+    name: Retag the llz image as ${{ github.event.release.tag_name }}
+    # Only a real release has a version to publish; a dispatch run has no tag.
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point the version tag at this commit's image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA:   ${{ github.sha }}
+          VER:   ${{ github.event.release.tag_name }}
+        # Fails loudly if the sha- image is missing (a release cut from a commit
+        # whose build-images run never completed) — better than a silent 404 that
+        # only surfaces as an ImagePullBackOff in an adopter's cluster.
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "ghcr.io/${OWNER}/llz:${VER}" "ghcr.io/${OWNER}/llz:sha-${SHA}"
+          docker buildx imagetools inspect "ghcr.io/${OWNER}/llz:${VER}" >/dev/null
+
   functional:
     name: Documented install flow (against the published release)
     needs: release
