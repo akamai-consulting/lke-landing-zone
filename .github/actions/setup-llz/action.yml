@@ -1,0 +1,43 @@
+# setup-llz — the Go toolchain pinned by tools/go.mod, and optionally the llz
+# CLI built from source.
+#
+# This block was stamped out 13 times across the workflows, byte-identical every
+# time, with 8 of those followed by the same `go build ./cmd/llz`. That made the
+# pinned actions/setup-go SHA a 13-site sweep to bump, and let the build flags
+# drift (4 sites passed -buildvcs=false, 4 did not).
+#
+# install-path must be ABSOLUTE. The build runs from tools/, so a relative path
+# would resolve against the wrong directory — and the two conventions in use
+# ("/usr/local/bin/llz" to put llz on PATH for the Makefile's `command -v llz`
+# branch, and "<workspace>/bin/llz" for the e2e workflows that invoke `bin/llz`
+# explicitly) cannot both be expressed relatively. Callers pass
+# ${{ github.workspace }}/bin/llz for the latter.
+#
+# -buildvcs=false is applied uniformly, which is what the 4 sites that already
+# passed it were right about: in a container job the checkout is owned by a
+# different UID than the container's root user, so git refuses VCS queries
+# ("dubious ownership") and stamping fails the build outright. It costs nothing
+# elsewhere — llz takes its version from the -X main.version ldflag (main.go),
+# never from debug.ReadBuildInfo. The release build in llz-release.yml stamps
+# the real version and deliberately does NOT use this action.
+name: Set up llz
+description: Install the Go toolchain from tools/go.mod, and optionally build the llz CLI onto a given absolute path.
+
+inputs:
+  install-path:
+    description: Absolute path to write the llz binary to. Leave empty to install the Go toolchain only (jobs that just need `go`, or that reach llz through `go run`).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      with:
+        go-version-file: tools/go.mod
+        cache-dependency-path: tools/go.sum
+
+    - name: Build llz onto ${{ inputs.install-path }}
+      if: inputs.install-path != ''
+      shell: bash
+      run: mkdir -p "$(dirname "${{ inputs.install-path }}")" && cd tools && go build -buildvcs=false -o "${{ inputs.install-path }}" ./cmd/llz

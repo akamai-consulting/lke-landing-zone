@@ -24,9 +24,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
+        uses: ./.github/actions/setup-llz
       - name: Audit the tools module
         run: make audit

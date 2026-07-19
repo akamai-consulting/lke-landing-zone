@@ -49,14 +49,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go (to build llz)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
         with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
-
-      - name: Build llz onto PATH
-        run: cd tools && go build -buildvcs=false -o /usr/local/bin/llz ./cmd/llz
+          install-path: /usr/local/bin/llz
 
       - name: Assert every changed chart bumped its version
         env:
