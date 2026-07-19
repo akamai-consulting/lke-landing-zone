@@ -45,9 +45,6 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -193,44 +190,31 @@ func collectWaveDependencyInversions(dirs []string) (_ []wdInversion, examined i
 	}
 	var workloads []workload
 
-	for _, dir := range dirs {
-		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-			continue // a layout without this dir (e.g. no such overlay) — nothing to scan
-		}
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".yaml") {
-				return err
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			examined++
-			app, appWave := wdOwningApp(path) // same for every doc in a file
-			for _, doc := range splitWaveDependencyDocs(string(raw)) {
-				r := res{file: path, app: app, resWave: wdSyncWave(doc.Metadata.Annotations), appWave: appWave}
-				ns := doc.Metadata.Namespace
-				switch {
-				case doc.Kind == "ExternalSecret":
-					name := doc.Metadata.Name
-					if doc.Spec.Target != nil && doc.Spec.Target.Name != "" {
-						name = doc.Spec.Target.Name
-					}
-					esBySecret[ns+"/"+name] = esInfo{res: r}
-				case wdWorkloadKinds[doc.Kind] && doc.Spec.Template != nil:
-					refs := wdWorkloadSecretRefs(doc.Spec.Template.Spec.Containers,
-						doc.Spec.Template.Spec.InitContainers, doc.Spec.Template.Spec.Volumes)
-					r.file = path
-					workloads = append(workloads, workload{
-						res: r, name: doc.Kind + "/" + doc.Metadata.Name, namespace: ns, refs: refs,
-					})
+	examined, err = walkManifests(dirs, func(path string, raw []byte) error {
+		app, appWave := wdOwningApp(path) // same for every doc in a file
+		for _, doc := range splitWaveDependencyDocs(string(raw)) {
+			r := res{file: path, app: app, resWave: wdSyncWave(doc.Metadata.Annotations), appWave: appWave}
+			ns := doc.Metadata.Namespace
+			switch {
+			case doc.Kind == "ExternalSecret":
+				name := doc.Metadata.Name
+				if doc.Spec.Target != nil && doc.Spec.Target.Name != "" {
+					name = doc.Spec.Target.Name
 				}
+				esBySecret[ns+"/"+name] = esInfo{res: r}
+			case wdWorkloadKinds[doc.Kind] && doc.Spec.Template != nil:
+				refs := wdWorkloadSecretRefs(doc.Spec.Template.Spec.Containers,
+					doc.Spec.Template.Spec.InitContainers, doc.Spec.Template.Spec.Volumes)
+				r.file = path
+				workloads = append(workloads, workload{
+					res: r, name: doc.Kind + "/" + doc.Metadata.Name, namespace: ns, refs: refs,
+				})
 			}
-			return nil
-		})
-		if err != nil {
-			return nil, examined, err
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, examined, err
 	}
 
 	var inversions []wdInversion

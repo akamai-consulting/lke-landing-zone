@@ -22,9 +22,6 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -104,40 +101,17 @@ func runMonitoringLabelGuard(roots []string) error {
 }
 
 func collectMonitoringLabelFindings(roots []string) (findings []monitoringLabelFinding, examined int, err error) {
-	for _, root := range roots {
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue // a root not present (e.g. rendered/ not built yet) is skipped
+	examined, err = walkManifests(roots, func(path string, raw []byte) error {
+		for _, doc := range splitMonitoringDocs(string(raw)) {
+			if monitoringGuardKinds[doc.Kind] &&
+				doc.Metadata.Labels[requiredMonitoringLabelKey] != requiredMonitoringLabelVal {
+				findings = append(findings, monitoringLabelFinding{file: path, kind: doc.Kind, name: doc.Metadata.Name})
+			}
 		}
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				// Go template dirs are not final YAML (they hold `{{ }}`).
-				if d.Name() == "templates" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
-				return nil
-			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			examined++
-			for _, doc := range splitMonitoringDocs(string(raw)) {
-				if monitoringGuardKinds[doc.Kind] &&
-					doc.Metadata.Labels[requiredMonitoringLabelKey] != requiredMonitoringLabelVal {
-					findings = append(findings, monitoringLabelFinding{file: path, kind: doc.Kind, name: doc.Metadata.Name})
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, examined, err
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, examined, err
 	}
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].file != findings[j].file {

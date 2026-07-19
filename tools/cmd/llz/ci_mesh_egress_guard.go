@@ -26,9 +26,6 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -106,47 +103,34 @@ func runCIMeshEgressGuard(root string) error {
 // whose namespaceSelector targets a meshStrictNamespaces entry from a different
 // source namespace.
 func collectMeshEgressFindings(dirs []string) (findings []meFinding, examined int, err error) {
-	for _, dir := range dirs {
-		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-			continue
-		}
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".yaml") {
-				return err
+	examined, err = walkManifests(dirs, func(path string, raw []byte) error {
+		for _, doc := range splitMeshEgressDocs(string(raw)) {
+			if doc.Kind != "NetworkPolicy" {
+				continue
 			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			examined++
-			for _, doc := range splitMeshEgressDocs(string(raw)) {
-				if doc.Kind != "NetworkPolicy" {
-					continue
-				}
-				for _, e := range doc.Spec.Egress {
-					for _, to := range e.To {
-						if to.NamespaceSelector == nil {
-							continue
-						}
-						target := to.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]
-						reason, strict := meshStrictNamespaces[target]
-						// Same-namespace egress (the mesh workload's own netpol) is
-						// in-mesh and fine; only a DIFFERENT source namespace is a
-						// cross-mesh reach.
-						if strict && target != doc.Metadata.Namespace {
-							findings = append(findings, meFinding{
-								file: path, policy: doc.Metadata.Name,
-								sourceNS: doc.Metadata.Namespace, targetNS: target, reason: reason,
-							})
-						}
+			for _, e := range doc.Spec.Egress {
+				for _, to := range e.To {
+					if to.NamespaceSelector == nil {
+						continue
+					}
+					target := to.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]
+					reason, strict := meshStrictNamespaces[target]
+					// Same-namespace egress (the mesh workload's own netpol) is
+					// in-mesh and fine; only a DIFFERENT source namespace is a
+					// cross-mesh reach.
+					if strict && target != doc.Metadata.Namespace {
+						findings = append(findings, meFinding{
+							file: path, policy: doc.Metadata.Name,
+							sourceNS: doc.Metadata.Namespace, targetNS: target, reason: reason,
+						})
 					}
 				}
 			}
-			return nil
-		})
-		if err != nil {
-			return nil, examined, err
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, examined, err
 	}
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].file != findings[j].file {
