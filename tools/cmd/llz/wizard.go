@@ -84,12 +84,22 @@ func ghFineGrainedDispatchURL(name, owner string) string {
 
 // ghFineGrainedSecretsWriteURL builds a fine-grained PAT creation URL pre-filled
 // for OPENBAO_SECRETS_WRITE_TOKEN: name, resource owner, 90-day expiry, and the
-// two repository permissions CI's `gh secret set` needs — Actions and Secrets,
-// both write (the exact scoping llz-bootstrap-openbao.yml documents). GitHub
-// can't pre-select WHICH repository via query, so the caller tells the operator
-// to pick it under "Only select repositories". owner may be "" (the operator
-// then picks the resource owner). A classic repo+workflow PAT also works; this
-// is the least-privilege option.
+// repository permissions CI's `gh secret set --env` needs. GitHub can't
+// pre-select WHICH repository via query, so the caller tells the operator to
+// pick it under "Only select repositories". owner may be "" (the operator then
+// picks the resource owner). A classic repo+workflow PAT also works; this is the
+// least-privilege option.
+//
+// ENVIRONMENTS, not Secrets, is the permission that governs this token's actual
+// job. This pre-fill used to request Actions + Secrets: write, which reads right
+// and is WRONG: the fine-grained "Secrets" permission covers only repo-level
+// Actions secrets (/repos/{o}/{r}/actions/secrets/...), while every secret in
+// catalog() is destined for an infra-<env> ENVIRONMENT secret, and those
+// endpoints — including the public-key GET that `gh secret set` must make before
+// it can encrypt anything — sit under "Environments". So a PAT minted from the
+// old link authenticated fine, passed every preflight, and then 403'd on the
+// first environment-secret write of a first-ever bootstrap. Actions: write stays
+// (the token is also used for workflow dispatch).
 func ghFineGrainedSecretsWriteURL(name, owner string) string {
 	q := url.Values{}
 	q.Set("name", name)
@@ -98,7 +108,7 @@ func ghFineGrainedSecretsWriteURL(name, owner string) string {
 	}
 	q.Set("expires_in", "90")
 	q.Set("actions", "write")
-	q.Set("secrets", "write")
+	q.Set("environments", "write")
 	return "https://github.com/settings/personal-access-tokens/new?" + q.Encode()
 }
 
@@ -119,7 +129,7 @@ func catalog() []secretSpec {
 			Purpose: "GitHub PAT — CI stashes OBJ keys + persists OpenBao unseal keys",
 			Dest:    "infra-<env> environment secret",
 			URL:     ghFineGrainedSecretsWriteURL("llz-openbao-secrets-write", ""),
-			Note:    "Fine-grained PAT, Actions + Secrets: write (set Resource owner to your org, then Only select repositories: your instance repo) — or a classic repo+workflow PAT. Either way you must ALSO be Environment admin on every infra-<env> environment, or --env writes 401.",
+			Note:    "Fine-grained PAT, Actions: write + ENVIRONMENTS: write (set Resource owner to your org, then Only select repositories: your instance repo) — or a classic repo+workflow PAT. Environments is the permission that governs infra-<env> environment secrets; the \"Secrets\" permission covers only repo-level secrets and is NOT enough. You must ALSO be Environment admin on every infra-<env> environment.",
 		},
 		{
 			Name:    "APL_VALUES_REPO_TOKEN",

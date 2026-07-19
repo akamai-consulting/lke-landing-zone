@@ -173,14 +173,15 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	}
 	owner, _, _ := strings.Cut(instanceRepo, "/")
 	// OPENBAO_SECRETS_WRITE_TOKEN: CI's `gh secret set` persists the OpenBao
-	// unseal keys back into the infra-<env> environment. The
-	// consuming workflow (llz-bootstrap-openbao.yml) documents fine-grained
-	// Actions + Secrets: write, but a classic repo+workflow PAT works too — offer
-	// both. Either way the PAT owner must be Environment admin on every
+	// unseal keys back into the infra-<env> environment. Fine-grained needs
+	// Actions: write + ENVIRONMENTS: write — not "Secrets", which governs only
+	// repo-level secrets and leaves environment writes 403ing (see
+	// ghFineGrainedSecretsWriteURL). A classic repo+workflow PAT works too —
+	// offer both. Either way the PAT owner must be Environment admin on every
 	// infra-<env> environment, or the --env-scoped writes 401.
 	gatherGH("OPENBAO_SECRETS_WRITE_TOKEN",
 		"CI persists OpenBao unseal keys into the infra-<env> environment (you must also be Environment admin on it)",
-		"fine-grained, recommended (Actions + Secrets: write; Only select repositories: "+instanceRepo+")",
+		"fine-grained, recommended (Actions: write + Environments: write; Only select repositories: "+instanceRepo+")",
 		ghFineGrainedSecretsWriteURL("llz-openbao-secrets-write", owner),
 		"classic (scopes repo + workflow)",
 		ghTokenURL("repo,workflow", "llz-openbao-secrets-write"))

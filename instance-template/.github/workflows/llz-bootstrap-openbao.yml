@@ -219,7 +219,7 @@ jobs:
           llz ci require-secret APL_VALUES_REPO_TOKEN \
             --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions: write + Environments: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
           [ "$FAIL" -eq 0 ]
 
       # (A "chart pins published to GHCR" preflight ran HERE and was removed — it

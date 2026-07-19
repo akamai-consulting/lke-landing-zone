@@ -103,3 +103,38 @@ func TestCheckCapability_OnlyRegisteredTokens(t *testing.T) {
 		t.Error("a denial must carry remediation text")
 	}
 }
+
+// TestSealKeyHintNamesEnvironmentsPermission guards the remediation text against
+// regressing to "Secrets: write". That is the intuitive answer and the wrong
+// one: GitHub governs /repos/{o}/{r}/environments/{env}/secrets/* under the
+// ENVIRONMENTS permission, while "Secrets" covers only repo-level Actions
+// secrets. A PAT with Actions + Secrets: write — exactly what the wizard used to
+// mint — authenticates, passes every preflight, and still 403s on the first
+// environment-secret write. Pointing an operator at the Secrets toggle sends
+// them to a control that changes nothing.
+func TestSealKeyHintNamesEnvironmentsPermission(t *testing.T) {
+	h := capabilityHint("OPENBAO_SECRETS_WRITE_TOKEN")
+	if !strings.Contains(h, "Environments: write") {
+		t.Errorf("hint must name the Environments permission; got %q", h)
+	}
+	if !strings.Contains(h, "Environment admin") {
+		t.Errorf("hint must also name the Environment-admin requirement; got %q", h)
+	}
+}
+
+// TestSecretsWritePATURLRequestsEnvironments pins the wizard's pre-filled PAT
+// link to the permission that actually governs environment secrets. Every
+// credential in catalog() is destined for an infra-<env> ENVIRONMENT secret, so
+// a link that pre-fills `secrets=write` mints a token that cannot do the job.
+func TestSecretsWritePATURLRequestsEnvironments(t *testing.T) {
+	u := ghFineGrainedSecretsWriteURL("llz-openbao-secrets-write", "acme")
+	if !strings.Contains(u, "environments=write") {
+		t.Errorf("pre-fill must request environments=write; got %q", u)
+	}
+	if strings.Contains(u, "secrets=write") {
+		t.Errorf("pre-fill must NOT request secrets=write (repo-level only, not environment secrets); got %q", u)
+	}
+	if !strings.Contains(u, "actions=write") {
+		t.Errorf("pre-fill should keep actions=write (workflow dispatch); got %q", u)
+	}
+}

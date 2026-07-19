@@ -107,12 +107,13 @@ var capabilityChecks = []capabilityCheck{
 		},
 		// Keep this wording in lockstep with wizard.go's catalog note and the
 		// require-secret hint in llz-bootstrap-openbao.yml — three copies of the
-		// same remediation that must not drift. Note the SECOND cause: the scope
-		// can be right and the write still fail if the PAT's owner is not an
-		// Environment admin on infra-<region>, so name both.
-		hint: "fine-grained PAT needs Actions + Secrets: write on this repo (or a classic repo+workflow PAT), AND " +
-			"its owner must be an Environment admin on infra-<region> — without both, `llz ci bao-seed-seal-key` " +
-			"cannot persist OPENBAO_SEAL_KEY and the deployment is left unsealable",
+		// same remediation that must not drift. It names ENVIRONMENTS explicitly
+		// because the intuitive answer ("Secrets: write") is the wrong one and
+		// sends the operator to a toggle that changes nothing.
+		hint: "fine-grained PAT needs Environments: write on this repo — NOT \"Secrets: write\", which governs only " +
+			"repo-level secrets and leaves environment-secret writes 403ing (a classic repo+workflow PAT also works). " +
+			"The PAT owner must additionally be an Environment admin on infra-<region>. Without this, " +
+			"`llz ci bao-seed-seal-key` cannot persist OPENBAO_SEAL_KEY and the deployment is left unsealable",
 	},
 }
 
