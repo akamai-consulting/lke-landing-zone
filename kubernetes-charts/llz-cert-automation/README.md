@@ -46,7 +46,7 @@ and `6443` per the LKE-E post-DNAT Cilium quirk.
 
 ```sh
 helm install llz-cert-automation oci://ghcr.io/akamai-consulting/charts/llz-cert-automation \
-  --version 0.1.0
+  --version 0.1.8
 ```
 
 In this repo it is consumed by an Argo CD Application referencing the published
@@ -61,7 +61,7 @@ OCI chart (replacing the raw manifests under
 | `namespace` | `llz-cert-automation` | Namespace all resources run in (created by the chart). |
 | `certManagerNamespace` | `cert-manager` | Namespace of the watched TLS Secret. |
 | `eventBus.name` | `default` | EventBus name — must match every `eventBusName` reference. |
-| `eventBus.jetstream.version` | `latest` | JetStream version. |
+| `eventBus.jetstream.version` | `"2.10.10"` | JetStream version. Pinned (was `latest`, the same nats image in argo-events 2.4.13). MUST be one of argo-events' supported `configs.jetstream.versions` keys — re-verify when bumping the argo-events chart. |
 | `eventBus.jetstream.replicas` | `3` | JetStream replicas (at-least-once delivery). |
 | `watchedSecret.name` | `haproxy-tls` | cert-manager Secret whose rotation drives a rebuild. |
 | `harborUrl` | `https://harbor.<cluster-domain>:5000` | Harbor push destination (set to the cluster's Harbor host). |
@@ -80,8 +80,8 @@ OCI chart (replacing the raw manifests under
 | `externalSecrets.githubToken.remoteKey` | `cert-automation/github-token` | Backend key (no mount prefix). |
 | `externalSecrets.githubToken.remoteProperty` | `token` | Backend property + secret key. |
 | `externalSecrets.harborDockerConfig.secretName` | `harbor-docker-config` | K8s Secret for the Harbor docker config. |
-| `externalSecrets.harborDockerConfig.remoteKey` | `harbor/docker-config` | Backend key (no mount prefix). |
-| `externalSecrets.harborDockerConfig.remoteProperty` | `config_json` | Backend property. |
+| `externalSecrets.harborDockerConfig.robotKey` | `harbor/robot` | Backend key holding the robot creds (username/password/registry_host). There is no separate `harbor/docker-config` seed — ESO derives the config.json in-cluster. |
+| `externalSecrets.harborDockerConfig.configTemplate` | see values.yaml | ESO v2 template rendered at sync time (not by Helm) into the dockerconfigjson. |
 | `networkPolicy.certManagerNamespace` | `cert-manager` | Namespace-label egress target for the workflow. |
 | `networkPolicy.harborNamespace` | `harbor` | Namespace-label egress target for the workflow. |
 | `networkPolicy.apiserverPorts` | `[443, 6443]` | apiserver egress ports (both required on LKE-E). |

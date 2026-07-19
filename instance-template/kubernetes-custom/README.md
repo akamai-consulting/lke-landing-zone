@@ -12,7 +12,7 @@ It follows App Platform's GitOps convention
 platform docs applies here:
 
 ```
-custom/
+kubernetes-custom/
   namespaces/<namespace>/    # namespaced resources → synced INTO <namespace>
   global/                    # cluster-scoped resources (CRDs, ClusterRoles, ...)
 ```

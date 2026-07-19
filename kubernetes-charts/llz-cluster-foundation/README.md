@@ -9,9 +9,12 @@ gaps as **correct-by-default**.
 
 ## What it deploys
 
-1. **Namespaces apl-core does NOT manage** — `openbao`, `observability`,
-   `grafana`, `argo-workflows`, `argo-events`, `external-secrets`,
-   `linode-volume-labeler`. Each with restricted Pod Security Standards where
+1. **Namespaces apl-core does NOT manage** — `llz-openbao`, `grafana`,
+   `monitoring`, `llz-observability`, `llz-argo-workflows`, `llz-argo-events`.
+   (`external-secrets` and `linode-volume-labeler` are NOT created here: ESO
+   ships with apl-core 6.x, and the volume labeler was retired into the
+   `llz reconcile` volume-labels lane — re-declaring it pinned platform-bootstrap
+   OutOfSync.) Each with restricted Pod Security Standards where
    appropriate; a few are pre-created purely to win a cold-bootstrap race against
    apl-core's later create-or-replace (server-side-apply merges cleanly). Sync
    wave `-20` so they exist before anything targets them.
@@ -58,7 +61,7 @@ Every allow rule here exists because a default-deny without it broke something:
 
 ```sh
 helm install llz-cluster-foundation oci://ghcr.io/akamai-consulting/charts/llz-cluster-foundation \
-  --version 0.1.0
+  --version 0.1.13
 ```
 
 In this repo it is consumed by an Argo CD Application at an early sync wave
@@ -76,7 +79,7 @@ In this repo it is consumed by an Argo CD Application at an early sync wave
 | `syncWaves.networkPolicies` | `"-10"` | NPs before workload pods. |
 | `syncWaves.corednsCustom` | `"-10"` | CoreDNS ConfigMap before pods that wait on `*.internal`. |
 | `syncWaves.corednsRestart` | `"-9"` | CoreDNS restart Job + its RBAC/NP. |
-| `podSecurityStandardsVersion` | `"v1.31"` | PSS version pin (match the cluster K8s minor). |
+| `podSecurityStandardsVersion` | `"v1.33"` | PSS version pin (match the cluster K8s minor). |
 | `namespaces` | see values.yaml | List of `{name, restricted, labels}` for namespaces apl-core doesn't manage. |
 | `networkPolicies.enabled` | `true` | Master toggle for the foundation NP set. |
 | `networkPolicies.apiserverPorts` | `[443, 6443]` | LKE-E apiserver egress port pair. |
@@ -85,7 +88,9 @@ In this repo it is consumed by an Argo CD Application at an early sync wave
 | `networkPolicies.gateway` | `gateway-name: platform`, ingress `[80,443,15021]` | Platform Istio gateway selector + ingress ports. |
 | `networkPolicies.istiodIngressPorts` | `[15010,15012,15014,15017]` | istiod ingress ports. |
 | `networkPolicies.cnpg` | see values.yaml | CNPG instance selector + operator/metrics allows in `harbor`. |
-| `networkPolicies.grafanaNamespace` | `grafana` | Allowed ingress source into `observability`. |
+| `networkPolicies.grafanaNamespace` | `grafana` | Allowed ingress source into `llz-observability`. |
+| `networkPolicies.harborMetrics` | see values.yaml | Allows the `monitoring` namespace to scrape Harbor metrics. |
+| `networkPolicies.otelMetrics` | see values.yaml | Allows the `monitoring` namespace to scrape the OTel Collector. |
 | `coreDNS.custom.enabled` | `true` | Toggle the `coredns-custom` ConfigMap. |
 | `coreDNS.custom.matchSuffix` | `internal` | Domain suffix the rewrite matches. |
 | `coreDNS.custom.gatewayTarget` | `platform-istio.istio-system.svc.cluster.local.` | Rewrite target (platform Istio gateway Service FQDN). |

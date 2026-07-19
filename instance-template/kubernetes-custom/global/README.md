@@ -1,4 +1,4 @@
-# `custom/global/` — your cluster-scoped resources
+# `kubernetes-custom/global/` — your cluster-scoped resources
 
 Resources that belong to no namespace: CRDs, ClusterRoles, ClusterRoleBindings,
 StorageClasses, ValidatingWebhookConfigurations, and the like. Synced by the

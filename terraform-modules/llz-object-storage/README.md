@@ -23,7 +23,7 @@ instead of copying YAML. The operational scars travel with the module:
 - **No native `force_destroy`.** The Linode provider's
   `linode_object_storage_bucket` does not support auto-emptying on destroy, so
   buckets must be drained before `terraform destroy` — the destroy-time drain
-  step in `.github/workflows/terraform.yml` mints a temporary scoped key
+  step in `instance-template/.github/workflows/llz-terraform.yml` mints a temporary scoped key
   (`llz ci temp-objkey`) for the sweep and deletes it afterwards.
 - **Separate scoped keys** for Harbor vs Loki (minted outside TF) so a leak on
   one side doesn't expose the other.

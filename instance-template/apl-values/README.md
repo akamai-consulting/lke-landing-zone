@@ -5,9 +5,10 @@ here. An environment is **not** a clone of a reference overlay — it is a thin
 kustomization that references the shared platform tree and toggles components
 on/off.
 
-Consumed by Terraform's `cluster-bootstrap` root
-(`../terraform-iac-bootstrap/cluster-bootstrap`), which renders the per-env
-`values.yaml` and installs apl-core, and by Argo CD, which syncs the manifest tree.
+Consumed by `llz ci bootstrap-cluster`, which reads the per-env
+`<env>/values.yaml` (written by `llz render`) and installs apl-core, and by
+Argo CD, which syncs the manifest tree. There is no longer a `cluster-bootstrap`
+Terraform root — Terraform owns day-0 infrastructure only (ADR 0002).
 
 ## What lives here
 
@@ -61,7 +62,7 @@ llz env add <env>            # scaffolds environments/<env>.yaml, then renders
    carries this instance's repo URL + pinned revision, so it is emitted locally
    rather than fetched from the (instance-agnostic) shared base.
 3. `manifest/env-revision-configmap.yaml` — the git revision this env's in-repo
-   Argo CD content tracks (a `cluster-bootstrap` plan-time precondition).
+   Argo CD content tracks (checked by `llz ci bootstrap-cluster` before install).
 4. `manifest/linode-volume-labeler-region-patch.yaml` — the volume-labeler
    `REGION_SHORT`, the one genuinely per-env manifest value (only when enabled).
 5. `values.yaml` — the `apl-values/values.yaml` base with `apps.<key>.enabled` set
@@ -75,7 +76,7 @@ no drift between clones.
 
 Identity values (`${cluster_name}`, `${cluster_domain}`) and the other `${...}`
 tokens (secrets + infra outputs: repo creds, dns token, loki/harbor object-store,
-coredns IP) are rendered by Terraform `templatefile()` at cluster-bootstrap.
+coredns IP) are substituted by `llz ci bootstrap-cluster` at install time.
 `spec.dns.acmeEmail`, being instance-wide, is applied by a JSON6902 patch in the
 per-env overlay onto the shared `llz-letsencrypt-*` ClusterIssuers. Any remaining
 `REPLACE_PER_ENV` / `REPLACE_ME` placeholder is yours to fill — `llz doctor --env
