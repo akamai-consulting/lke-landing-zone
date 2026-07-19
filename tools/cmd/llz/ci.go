@@ -198,6 +198,7 @@ func ciCmd() *cobra.Command {
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).
 	c.AddCommand(ciMeshEgressGuardCmd())
+	c.AddCommand(ciPlaceholderGuardCmd())
 	// Static guard for the #175 day-2-blind class: every ServiceMonitor/PodMonitor/
 	// PrometheusRule must carry `prometheus: system` or apl-core's Prometheus
 	// silently ignores it (metrics unscraped / rules unloaded) — Makefile

@@ -69,8 +69,10 @@ categories:
     # categories were being ratcheted down. Budgeted at today's count + ~3%, same
     # convention as the others: this is a ceiling to ratchet down as recipes move
     # into `llz ci` verbs, never a raise.
-    # Baseline at introduction: 100.
-    budget: 103
+    # Baseline at introduction: 100. Ratcheted 103 -> 99 in the same change, once
+    # placeholder-lint became `llz ci placeholder-guard` and the three sbom-* steps
+    # collapsed onto one SBOM_STEP macro: remaining is 96, keeping ~3% headroom.
+    budget: 99
     include:
       - "Makefile"
 
