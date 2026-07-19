@@ -376,28 +376,18 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 	if region == "" {
 		return fmt.Errorf("--region is required (the tfvars prefix, e.g. primary)")
 	}
-	token, err := ciToken()
+	// Token first, so a missing credential still reports before a missing tfvars
+	// file — the order this verb has always failed in.
+	client, ctx, err := ciClient()
 	if err != nil {
 		return err
 	}
 
-	// tfvars file: prefer <region>.tfvars, fall back to the .example (mirrors the
-	// script + the plan step's own resolution).
-	varFile := region + ".tfvars"
-	if _, err := os.Stat(varFile); err != nil {
-		varFile = region + ".tfvars.example"
-	}
-	content, err := os.ReadFile(varFile)
+	vars, varFile, err := readRegionTFVars("", region)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", varFile, err)
+		return err
 	}
-	labels := tf.DeriveLabels(tf.ParseTFVars(string(content)))
-	if labels.Cluster == "" {
-		return fmt.Errorf("%s has no cluster_label", varFile)
-	}
-
-	client := linode.NewClient(token, 60*time.Second)
-	ctx := context.Background()
+	labels := tf.DeriveLabels(vars)
 
 	if err := ensureKubeconfig(ctx, g, client, labels.Cluster); err != nil {
 		return err
@@ -412,7 +402,7 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 	// the un-indexed `.this` fails with "Configuration for import target does not
 	// exist", which silently orphaned the VPC/subnet (they could not be re-adopted
 	// into state) and surfaced as label-collisions on the next apply.
-	dedicatedVPC := tf.ParseTFVars(string(content)).VPCNetwork == ""
+	dedicatedVPC := vars.VPCNetwork == ""
 	addrVPCEff := addrVPC + "[0]"
 	var vpcID string
 	if dedicatedVPC {
@@ -837,12 +827,10 @@ func runCIReapObjKeys(g globalOpts, env string) error {
 	if env == "" {
 		return fmt.Errorf("--env is required")
 	}
-	token, err := ciToken()
+	client, ctx, err := ciClient()
 	if err != nil {
 		return err
 	}
-	client := linode.NewClient(token, 60*time.Second)
-	ctx := context.Background()
 	del, fin := ciDeleter(ctx, g, client)
 	if err := reapEnvObjKeys(ctx, client, env, del); err != nil {
 		return err
@@ -983,12 +971,10 @@ func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, wa
 	if requireEmpty && volumeIDs == "" {
 		return fmt.Errorf("--require-empty needs --volume-ids (the precise set whose disappearance is verified)")
 	}
-	token, err := ciToken()
+	client, ctx, err := ciClient()
 	if err != nil {
 		return err
 	}
-	client := linode.NewClient(token, 60*time.Second)
-	ctx := context.Background()
 
 	// Detach is a precondition of the SWEEP, not of each retry: the retries
 	// re-verify DELETION (countVolumesPresent), not detachment. Waiting inside the
@@ -1111,12 +1097,10 @@ func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, re
 	if requireEmpty && clusterID == "" {
 		return fmt.Errorf("--require-empty needs --cluster-id (the scoped set whose disappearance is verified)")
 	}
-	token, err := ciToken()
+	client, ctx, err := ciClient()
 	if err != nil {
 		return err
 	}
-	client := linode.NewClient(token, 60*time.Second)
-	ctx := context.Background()
 
 	// Account-wide orphan sweep (cluster gone / 0-backend) — reuse reap's logic.
 	// There's no precise scoped set to converge on, so this stays single-pass.

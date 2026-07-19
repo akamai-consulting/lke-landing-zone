@@ -338,23 +338,6 @@ func runCombined(cmd *exec.Cmd) (string, bool) {
 	return buf.String(), ok
 }
 
-// envWithKubeconfig returns the process env with KUBECONFIG set to exactly `path`
-// — dropping any inherited KUBECONFIG first so kubectl/helm can't read a duplicate
-// (often empty) entry instead. Duplicate KUBECONFIG env keys are resolved
-// inconsistently, which is how an empty placeholder $KUBECONFIG shadowed the real
-// resolved path in the e2e.
-func envWithKubeconfig(path string) []string {
-	src := os.Environ()
-	env := make([]string, 0, len(src)+1)
-	for _, e := range src {
-		if strings.HasPrefix(e, "KUBECONFIG=") {
-			continue
-		}
-		env = append(env, e)
-	}
-	return append(env, "KUBECONFIG="+path)
-}
-
 // bootstrapCluster runs the ordered flow (the numbered steps mirror the former
 // module's resource graph). Every kubectl apply is server-side (idempotent by
 // construction, so CI re-runs are safe); helm is `upgrade --install`.

@@ -30,12 +30,18 @@ const staleApplyAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 // ~16KB under the cap; 180KB leaves ~82KB of headroom.
 const crdUnwedgeThreshold = 180 * 1024
 
-// kubectlBool is the seam both callers adapt to: run one kubectl invocation,
-// returning its combined output and whether it exited 0. bootstrapDeps.kubectl
-// already matches; the converge gate uses kubectlBoolViaExec.
-type kubectlBool func(args ...string) (string, bool)
+// The seam both callers adapt to is kubectlRunner (ci_shared.go): run one
+// kubectl invocation, returning its output and whether it exited 0.
+// bootstrapDeps.kubectl already matches; the converge gate uses
+// kubectlBoolViaExec. This file used to declare a structurally identical
+// `kubectlBool` of its own — the same duplicate-seam-type shape ci_shared.go's
+// header records having already collapsed once for the kyverno gate.
+//
+// One difference the shared type does NOT erase: kubectlBoolViaExec returns
+// STDOUT ONLY (via execOutput), while aplGateKubectl returns COMBINED output.
+// The type unifies; the constructors are not interchangeable.
 
-// kubectlBoolViaExec adapts the package-wide execOutput seam to kubectlBool for
+// kubectlBoolViaExec adapts the package-wide execOutput seam to kubectlRunner for
 // callers (the converge gate) that don't carry a bootstrapDeps.
 func kubectlBoolViaExec(args ...string) (string, bool) {
 	out, err := execOutput("kubectl", args...)
@@ -49,7 +55,7 @@ func kubectlBoolViaExec(args ...string) (string, bool) {
 // patch is admitted even when the current object is already over the cap. Returns
 // the CRDs it stripped (for logging/testing). Never fatal — read/parse failures
 // and per-CRD annotate failures are logged and skipped.
-func stripOversizedCRDLastApplied(kubectl kubectlBool) []string {
+func stripOversizedCRDLastApplied(kubectl kubectlRunner) []string {
 	out, ok := kubectl("get", "crd", "-o", "json")
 	if !ok || out == "" {
 		return nil // no CRDs yet (fresh cluster) or a transient read failure

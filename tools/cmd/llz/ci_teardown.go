@@ -156,12 +156,10 @@ func ciAssertNoOrphansCmd() *cobra.Command {
 }
 
 func runCIAssertNoOrphans(region, volumeRegion, clusterID string, threshold, attempts, retryDelay int) error {
-	token, err := ciToken()
+	client, ctx, err := ciClient()
 	if err != nil {
 		return err
 	}
-	client := linode.NewClient(token, 60*time.Second)
-	ctx := context.Background()
 	if attempts < 1 {
 		attempts = 1
 	}
@@ -228,19 +226,11 @@ func teardownLabels(region, tfDir string) (tf.Labels, error) {
 	if region == "" {
 		return tf.Labels{}, fmt.Errorf("--region is required (the tfvars prefix, e.g. primary)")
 	}
-	varFile := tfDir + "/" + region + ".tfvars"
-	if _, err := os.Stat(varFile); err != nil {
-		varFile = tfDir + "/" + region + ".tfvars.example"
-	}
-	content, err := os.ReadFile(varFile)
+	vars, _, err := readRegionTFVars(tfDir, region)
 	if err != nil {
-		return tf.Labels{}, fmt.Errorf("read %s: %w", varFile, err)
+		return tf.Labels{}, err
 	}
-	labels := tf.DeriveLabels(tf.ParseTFVars(string(content)))
-	if labels.Cluster == "" {
-		return tf.Labels{}, fmt.Errorf("%s has no cluster_label", varFile)
-	}
-	return labels, nil
+	return tf.DeriveLabels(vars), nil
 }
 
 // tfOutputRaw returns `terraform -chdir=<dir> output -raw <name>`, "" when the

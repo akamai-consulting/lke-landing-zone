@@ -98,18 +98,11 @@ var unwedgeResolveKubeconfigFn = func(region string) (b64 string, found bool, er
 	if err != nil {
 		return "", false, fmt.Errorf("%w — needed so --region can resolve the cluster kubeconfig by label", err)
 	}
-	varFile := region + ".tfvars"
-	if _, err := os.Stat(varFile); err != nil {
-		varFile = region + ".tfvars.example"
-	}
-	content, err := os.ReadFile(varFile)
+	vars, _, err := readRegionTFVars("", region)
 	if err != nil {
-		return "", false, fmt.Errorf("read %s: %w", varFile, err)
+		return "", false, err
 	}
-	label := tf.ParseTFVars(string(content)).ClusterLabel
-	if label == "" {
-		return "", false, fmt.Errorf("%s has no cluster_label", varFile)
-	}
+	label := vars.ClusterLabel
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
 	ids, err := client.ClustersWithLabel(ctx, label)

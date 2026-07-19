@@ -141,19 +141,9 @@ func resolveFirewallInputsIntoEnv(region string) error {
 		return fmt.Errorf("%w — needed so --region can resolve the firewall + cluster IDs by label", err)
 	}
 
-	// tfvars file: prefer <region>.tfvars, fall back to the .example — mirrors
-	// runCITFImport so resolution works in the same working dirs.
-	varFile := region + ".tfvars"
-	if _, err := os.Stat(varFile); err != nil {
-		varFile = region + ".tfvars.example"
-	}
-	content, err := os.ReadFile(varFile)
+	vars, _, err := readRegionTFVars("", region)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", varFile, err)
-	}
-	vars := tf.ParseTFVars(string(content))
-	if vars.ClusterLabel == "" {
-		return fmt.Errorf("%s has no cluster_label", varFile)
+		return err
 	}
 
 	fid, cid, err := firewallResolveFn(token, tf.DeriveLabels(vars))
