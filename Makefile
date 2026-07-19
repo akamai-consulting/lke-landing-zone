@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .PHONY: help \
         build build-tools llz \
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-lint template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -70,6 +70,7 @@ help:
 	@echo "  helm-lint-charts  helm lint --strict + template every first-party chart"
 	@echo "  helm-lint-real-values  hard dep-build + namespaced render of the OpenBao chart (lint --strict is helm-lint-charts' job)"
 	@echo "  helm-dep-lock-check  verify committed Chart.lock files match Chart.yaml dependency declarations"
+	@echo "  chart-guards    run BOTH chart guards (version bump + Argo pin realignment) — a bump needs both"
 	@echo "  argocd-rendered-apps-check  render overlays and reject duplicate ArgoCD Helm parameters"
 	@echo "  externalsecret-paths-check  validate ExternalSecret refs and OpenBao policy coverage"
 	@echo "  wave-health-guard           negative-sync-wave kinds must be health-safe (PR #142 wedge class)"
@@ -382,6 +383,27 @@ untestable-loc-check:
 	else \
 		cd $(GO_DIR) && go run ./cmd/llz ci untestable-loc --root ..; \
 	fi
+
+# chart-guards: the two halves of "I changed a chart" — run them together.
+# Bumping a Chart.yaml version is only half the job: the bump leaves every Argo
+# pin on the OLD version, and chart-version-guard passing says nothing about
+# whether chart-pin-guard does. Realigning a pin can itself change another
+# chart's values.yaml and require a second bump, so this may take two passes —
+# re-run until clean. CI runs both in the same job ("Charts bump version and
+# pins stay aligned"); this is the local equivalent.
+#
+# Deliberately invokes the CLI from SOURCE instead of depending on the
+# chart-version-guard / chart-pin-guard targets. Those try `command -v llz`
+# first, which on a workstation is whatever binary you last installed — running
+# a months-old llz against today's working tree, and reporting a pass that means
+# nothing. That is the exact failure this target exists to prevent, so it cannot
+# inherit it. CI is unaffected either way: it calls `llz ci ...` directly with a
+# binary built in the same job, never through these targets.
+chart-guards:
+	@echo "── chart-version-guard (from source, base=$(CHART_GUARD_BASE))"
+	@cd $(GO_DIR) && go run ./cmd/llz ci chart-version-guard --root .. --base $(CHART_GUARD_BASE)
+	@echo "── chart-pin-guard (from source)"
+	@cd $(GO_DIR) && go run ./cmd/llz ci chart-pin-guard --root ..
 
 # chart-pin-guard: assert every Argo CD first-party chart pin (apl-values
 # targetRevision + llz-argo-bootstrap-apps component version) matches the chart's
