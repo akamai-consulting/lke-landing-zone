@@ -54,4 +54,3 @@ func LokiConfigUsesS3(configText string) bool {
 // in-cluster and retired that job, so the gate's only consumer left with it, and
 // kick-harbor-provisioner now does its own harbor-core Available wait.
 func HarborRegistryDeployments() []string { return []string{"harbor-registry"} }
-

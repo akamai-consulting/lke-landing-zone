@@ -311,3 +311,75 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 		t.Errorf("kubectl failure must not fail the audit: %v", err)
 	}
 }
+
+// TestResolveHarborURLWarnsOnDivergentOverride pins the cross-check. The
+// in-cluster harbor-robot-provisioner gets HARBOR_HOST from
+// clusterspec.RenderHarborHostPatch, which ALWAYS derives harbor.<domainSuffix>
+// and ignores vars.HARBOR_URL. An override that diverges therefore points CI and
+// the cluster at different registries, and kustomize.go's comment ("must keep
+// this in step") was the only thing holding the two together.
+func TestResolveHarborURLWarnsOnDivergentOverride(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("landingzone.yaml", `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata: { name: t }
+spec:
+  instance: { upstreamOrg: akamai-consulting, repo: o/t, forge: github, templateVersion: v0.4.0 }
+  defaults:
+    cluster:
+      k8sVersion: v1.33.6+lke7
+      nodePool: { type: g8-dedicated-8-4, count: 3 }
+`)
+	write("environments/e2e.yaml", `
+apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata: { name: e2e }
+spec:
+  cluster:
+    clusterLabel: c-e2e
+    region: us-sea
+    bootstrap: { name: b-e2e, domainSuffix: e2e.example.com }
+    objectStorage: { cluster: us-sea-1 }
+`)
+	t.Chdir(dir)
+
+	t.Run("override matching the derivation is quiet", func(t *testing.T) {
+		t.Setenv("HARBOR_URL", "harbor.e2e.example.com")
+		errOut := captureStderr(t, func() {
+			if err := runCIResolveHarborURL("e2e"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+		if strings.Contains(errOut, "::warning::") {
+			t.Errorf("an override equal to harbor.<domainSuffix> must not warn:\n%s", errOut)
+		}
+	})
+
+	t.Run("override diverging from the derivation warns", func(t *testing.T) {
+		t.Setenv("HARBOR_URL", "registry.elsewhere.test")
+		errOut := captureStderr(t, func() {
+			if err := runCIResolveHarborURL("e2e"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+		if !strings.Contains(errOut, "::warning::") {
+			t.Errorf("a divergent override must warn — CI and the in-cluster provisioner would use different registries:\n%s", errOut)
+		}
+		for _, want := range []string{"registry.elsewhere.test", "harbor.e2e.example.com"} {
+			if !strings.Contains(errOut, want) {
+				t.Errorf("warning should name both hosts, missing %q:\n%s", want, errOut)
+			}
+		}
+	})
+}

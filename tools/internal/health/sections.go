@@ -184,6 +184,7 @@ func ClassifyIngress(key string, addressCount int, phase1 bool) (Category, strin
 // EXERCISE object created by an `llz ci assert-*` step, NOT a platform component:
 //   - the health-probe Workflow (generateName "e2e-assert-health-")
 //   - the broad-PAT rotator exercise Job ("broad-pat-rotator-e2e")
+//
 // Each is judged by its OWN assert step; a Failed one lingering on a REUSED e2e
 // cluster must never gate convergence, which scans ALL Workflows/Jobs/Pods and
 // would otherwise inherit a prior run's dead exercise object (converge runs
