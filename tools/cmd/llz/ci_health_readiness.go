@@ -44,9 +44,17 @@ func runHealthOpenbao() error {
 		"|-----|-------------|--------|------------|--------|",
 	}
 
-	sealed := 0
+	sealed, unknown := 0, 0
 	for _, pod := range []string{"platform-openbao-0", "platform-openbao-1", "platform-openbao-2"} {
-		st := baoStatusOrSealed(pod)
+		st, ok := baoStatus(pod)
+		if !ok {
+			// Distinct from sealed: the exec never answered (after the transient
+			// retries), so this pod's seal state is simply not known.
+			unknown++
+			fmt.Fprintf(os.Stderr, "::warning::OpenBao pod %s (%s): could not read `bao status` — seal state UNKNOWN (exec failed; not a seal failure)\n", pod, reg)
+			summary = append(summary, fmt.Sprintf("| %s | ? | ? | ? | ? |", pod))
+			continue
+		}
 		if st.Sealed {
 			sealed++
 			fmt.Fprintf(os.Stderr, "::warning::OpenBao pod %s (%s) is SEALED\n", pod, reg)
@@ -60,9 +68,16 @@ func runHealthOpenbao() error {
 	if sealed > 0 {
 		fmt.Fprintf(os.Stderr, "::warning::%d/3 OpenBao pod(s) sealed on %s — pods auto-unseal from the static seal key at boot, so a persistently sealed pod means the openbao-unseal-key Secret is missing/unreadable, the static key is wrong, or Raft storage is unhealthy.\n", sealed, reg)
 		summary = append(summary, fmt.Sprintf("> **Sealed pods detected on %s.** Pods auto-unseal from the static seal key (`seal \"static\"`) at boot — a persistently sealed pod means the `openbao-unseal-key` Secret is missing/unreadable, the 32-byte static key is wrong, or Raft storage is unhealthy. Inspect `bao status` and the openbao pod logs.", reg))
-	} else {
+	} else if unknown == 0 {
 		fmt.Printf("All OpenBao pods unsealed on %s.\n", reg)
 		summary = append(summary, "> All pods unsealed.")
+	}
+	if unknown > 0 {
+		// Say what is actually wrong. Reporting these as sealed sent operators to
+		// the unseal key, the static key and Raft storage — none of which is the
+		// problem when the exec channel itself is down.
+		fmt.Fprintf(os.Stderr, "::warning::%d/3 OpenBao pod(s) on %s could not be read — seal state unknown. This is an EXEC/connectivity failure (konnectivity tunnel, apiserver→kubelet dial), not evidence about the seal.\n", unknown, reg)
+		summary = append(summary, fmt.Sprintf("> **%d/3 pod(s) unreadable on %s** — `kubectl exec` did not answer after the transient retries, so seal state is unknown. Check konnectivity/agent health before suspecting the seal key.", unknown, reg))
 	}
 
 	// ── ESO ClusterSecretStore + ExternalSecrets ──
@@ -156,18 +171,34 @@ func runHealthCertManager() error {
 // baoStatusOrSealed runs `bao status -format=json` in the pod and parses it,
 // falling back to the fail-safe sealed/uninitialized default on any exec or
 // parse error — the Go form of the job's `|| echo '{...sealed:true...}'`.
-func baoStatusOrSealed(pod string) health.BaoStatus {
-	sealedDefault := health.BaoStatus{Initialized: false, Sealed: true, HAMode: "standalone"}
-	out, err := execOutput("kubectl", "-n", openbaoNamespace, "exec", pod, "--",
+// baoStatus reports a pod's seal state, and whether it could be determined AT
+// ALL. The second return is the point.
+//
+// This used to collapse every failure into {Sealed: true} and go through a bare
+// execOutput, which meant two separate problems:
+//
+//  1. It bypassed baoExecFn, so it did not retry the exec failures this repo
+//     documents as transient — konnectivity's "No agent available" (observed
+//     burning 17 of 18 tries in one e2e), "error dialing backend", SPDY upgrade
+//     failures. A tunnel blip is not a seal state.
+//  2. It reported "could not ask" as "SEALED", which sends the operator to the
+//     openbao-unseal-key Secret, the 32-byte static key, and Raft storage —
+//     three places that are all fine. A false alarm pointing at the wrong
+//     subsystem is worse than no alarm.
+//
+// Now the exec retries, and an undeterminable pod is reported as unknown rather
+// than silently counted as sealed.
+func baoStatus(pod string) (st health.BaoStatus, ok bool) {
+	stdout, _, err := baoExecFn(pod, "", "",
 		"env", "VAULT_ADDR=https://127.0.0.1:8200", "VAULT_SKIP_VERIFY=true", "bao", "status", "-format=json")
 	if err != nil {
-		return sealedDefault
+		return health.BaoStatus{}, false
 	}
-	st, perr := health.ParseBaoStatus(out)
+	parsed, perr := health.ParseBaoStatus([]byte(stdout))
 	if perr != nil {
-		return sealedDefault
+		return health.BaoStatus{}, false
 	}
-	return st
+	return parsed, true
 }
 
 // readyCell renders a Ready-condition status for a summary cell, showing
