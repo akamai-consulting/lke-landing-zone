@@ -7,6 +7,14 @@ package main
 // mid-bootstrap being the motivating case — fails FAST with "rotate it" instead
 // of 401/403-ing deep inside a 45-minute provision.
 //
+// It probes two independent things per credential: VALIDITY (does it
+// authenticate? — token_validate.go) and CAPABILITY (is it scoped for the job it
+// exists for? — token_capability.go). The second exists because the first is not
+// sufficient: an under-scoped PAT authenticates perfectly and still 403s on the
+// operation, which is how a "✓ valid, expires in 77d" verdict was followed six
+// minutes later by `gh secret set --env infra-prod` failing 403 — after the
+// cluster was already up. See token_capability.go for that scar in full.
+//
 // This is what closes the gap the local wizard can't: GitHub exposes secret
 // values only inside the job, never to `llz doctor` on a laptop. Wire it as an
 // early preflight in a workflow that already has the credentials in env. Probe
@@ -53,9 +61,12 @@ func ciValidateTokensCmd() *cobra.Command {
 			"Linode PATs (GET /v4/profile), GitHub PATs (token-expiration probe), and the\n" +
 			"GHCR read token (GHCR token endpoint) — so a set-but-expired/revoked/mistyped\n" +
 			"credential fails HERE with a clear 'rotate it' rather than 401/403-ing deep in\n" +
-			"a later provision. Absent credentials are skipped (a ::notice::, not a failure)\n" +
-			"and an unreachable endpoint is a warning (not the token's fault). Exit 0 when\n" +
-			"nothing is invalid, 1 when a probed credential is INVALID (unless\n" +
+			"a later provision. Credentials with a required SCOPE are additionally probed\n" +
+			"for authorization against the read-only twin of the call they later make, so\n" +
+			"an under-scoped-but-valid PAT is caught here too. Absent credentials are\n" +
+			"skipped (a ::notice::, not a failure) and an unreachable endpoint is a warning\n" +
+			"(not the token's fault). Exit 0 when nothing is invalid, 1 when a probed\n" +
+			"credential is INVALID or DENIED its required scope (unless\n" +
 			"--fail-on-invalid=false). The local counterpart is `llz doctor`.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -77,7 +88,7 @@ func runCIValidateTokens(failOnInvalid bool) error {
 	ghcrUser := os.Getenv("GHCR_USERNAME")
 
 	fmt.Printf("%s\n", bold("Token validity — probing pipeline credentials in the environment"))
-	probed, blockingInvalid, optionalInvalid := 0, 0, 0
+	probed, blockingInvalid, optionalInvalid, blockingDenied := 0, 0, 0, 0
 	for _, name := range validatableTokens {
 		val := os.Getenv(name)
 		if val == "" {
@@ -99,6 +110,24 @@ func runCIValidateTokens(failOnInvalid bool) error {
 			}
 		}
 		fmt.Printf("  %-30s %s%s\n", name, validityCell(tv), suffix)
+
+		// Authorization, reported as an indented child of the validity line. Asked
+		// only of a credential that authenticated: a dead token has nothing to
+		// authorize, and a second verdict would just bury the real cause.
+		if tv.status == vInvalid {
+			continue
+		}
+		if cr, ok := checkCapability(name, val); ok {
+			if cr.status == capDenied {
+				if optionalTokens[name] {
+					fmt.Fprintf(os.Stderr, "::warning::%s is not authorized for its required scope but is optional — it won't block the run.\n", name)
+				} else {
+					blockingDenied++
+					fmt.Fprintf(os.Stderr, "::error::%s: %s\n", name, capabilityHint(name))
+				}
+			}
+			fmt.Printf("  %-30s %s\n", "  └ scope", capabilityCell(cr))
+		}
 	}
 
 	// OBJ state-bucket key pair (REQUIRED) — validated together via SigV4.
@@ -113,10 +142,25 @@ func runCIValidateTokens(failOnInvalid bool) error {
 		fmt.Printf("  %-30s %s\n", "TF_STATE_ACCESS_KEY/SECRET", validityCell(tv))
 	}
 
-	fmt.Printf("\nprobed %d credential(s): %d blocking-invalid, %d optional-invalid.\n", probed, blockingInvalid, optionalInvalid)
-	if blockingInvalid > 0 && failOnInvalid {
-		fmt.Fprintf(os.Stderr, "::error::%d REQUIRED pipeline credential(s) are invalid — rotate them before this run proceeds.\n", blockingInvalid)
-		return fmt.Errorf("%d REQUIRED pipeline credential(s) are invalid — rotate them before this run proceeds", blockingInvalid)
+	fmt.Printf("\nprobed %d credential(s): %d blocking-invalid, %d optional-invalid, %d scope-denied.\n",
+		probed, blockingInvalid, optionalInvalid, blockingDenied)
+
+	// Denial and invalidity are reported separately because the remediation
+	// differs: an invalid token needs ROTATING, a denied one needs RE-SCOPING, and
+	// telling an operator to rotate a perfectly live PAT sends them down the wrong
+	// path. Both are gated by --fail-on-invalid — one switch for "report only".
+	if failOnInvalid {
+		switch {
+		case blockingInvalid > 0 && blockingDenied > 0:
+			fmt.Fprintf(os.Stderr, "::error::%d REQUIRED credential(s) are invalid and %d lack a required scope — fix both before this run proceeds.\n", blockingInvalid, blockingDenied)
+			return fmt.Errorf("%d REQUIRED pipeline credential(s) are invalid and %d lack a required scope", blockingInvalid, blockingDenied)
+		case blockingInvalid > 0:
+			fmt.Fprintf(os.Stderr, "::error::%d REQUIRED pipeline credential(s) are invalid — rotate them before this run proceeds.\n", blockingInvalid)
+			return fmt.Errorf("%d REQUIRED pipeline credential(s) are invalid — rotate them before this run proceeds", blockingInvalid)
+		case blockingDenied > 0:
+			fmt.Fprintf(os.Stderr, "::error::%d REQUIRED pipeline credential(s) authenticate but lack a required scope — re-scope them (NOT rotate) before this run proceeds.\n", blockingDenied)
+			return fmt.Errorf("%d REQUIRED pipeline credential(s) lack a required scope — re-scope them before this run proceeds", blockingDenied)
+		}
 	}
 	return nil
 }
