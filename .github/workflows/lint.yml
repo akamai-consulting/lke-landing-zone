@@ -127,17 +127,10 @@ jobs:
       # the Makefile's `go run` fallback can't fire either. Set up Go and build
       # llz onto PATH so the check runs regardless of the image's age; once the
       # rebuilt image carries llz this is a fast, redundant no-op.
-      - name: Set up Go (to build llz)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - name: Set up Go and build llz onto PATH
+        uses: ./.github/actions/setup-llz
         with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
-      - name: Build llz onto PATH
-        # -buildvcs=false: the checkout is owned by a different UID than the
-        # container's root user, so git refuses VCS queries ("dubious
-        # ownership") and stamping would fail. The lint build needs no version
-        # stamp (the released binary is stamped by llz-release.yml).
-        run: cd tools && go build -buildvcs=false -o /usr/local/bin/llz ./cmd/llz
+          install-path: /usr/local/bin/llz
 
       - name: Render + lint/validate charts, manifests, and scripts
         run: make lint-k8s
@@ -366,10 +359,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set up Go (build llz — the scaffolder)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
+        uses: ./.github/actions/setup-llz
       - name: Install Helm (apl-core schema validation)
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
@@ -404,13 +394,10 @@ jobs:
           # git describe --tags (llz_version) + copier's `--vcs-ref HEAD` need the
           # full history + tags, not the default shallow clone.
           fetch-depth: 0
-      - name: Set up Go (build llz + actionlint)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
         with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
-      - name: Build llz onto PATH
-        run: cd tools && go build -buildvcs=false -o /usr/local/bin/llz ./cmd/llz
+          install-path: /usr/local/bin/llz
       - name: Install copier + actionlint
         run: |
           set -euo pipefail
@@ -444,10 +431,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go (source llz for template-manifest gate)
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
+        uses: ./.github/actions/setup-llz
 
       - name: tflint + checkov + validate instance roots
         run: make lint-tf
@@ -475,10 +459,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
+      - name: Set up Go
+        uses: ./.github/actions/setup-llz
 
       # gofmt + vet. `make lint` runs these, but no CI job invokes plain `make
       # lint` — the workflows call the decomposed lint-k8s / lint-tf / coverage

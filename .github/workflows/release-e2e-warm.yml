@@ -114,13 +114,10 @@ jobs:
           fi
           echo "E2E config OK — instance=${INSTANCE_REPO} region=${E2E_LINODE_REGION} obj=${E2E_OBJ_CLUSTER}"
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
         with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
-
-      - name: Build llz (the env-add scaffolder)
-        run: cd tools && go build -o ../bin/llz ./cmd/llz
+          install-path: ${{ github.workspace }}/bin/llz
 
       - name: Scaffold the e2e environment
         # The shared, token-free apl-values manifests are fetched from the template

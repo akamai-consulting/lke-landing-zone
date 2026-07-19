@@ -36,10 +36,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
+      - name: Set up Go
+        uses: ./.github/actions/setup-llz
 
       - name: Build
         working-directory: tools
@@ -106,13 +104,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - name: Set up Go and build llz
+        uses: ./.github/actions/setup-llz
         with:
-          go-version-file: tools/go.mod
-          cache-dependency-path: tools/go.sum
-
-      - name: Build llz
-        run: cd tools && go build -o ../bin/llz ./cmd/llz
+          install-path: ${{ github.workspace }}/bin/llz
 
       - name: Functional + install/self-update flow
         env:
