@@ -65,34 +65,55 @@ func ciAssertReconcilerCmd() *cobra.Command {
 // promScalar parses an instant-query response, returning the first sample's value
 // and whether ANY series was returned. A non-success status or unparseable body
 // is treated as no series (the caller decides how to classify an absent gauge).
-func promScalar(raw []byte) (value float64, hasSeries bool) {
+// promScalar returns the first sample's value, whether a series came back, and
+// whether the QUERY ITSELF failed.
+//
+// The third return is the point. This used to fold four different conditions
+// into hasSeries=false — unparseable JSON, status!="success" (Prometheus
+// returned an error), a genuinely absent series, and a malformed value tuple —
+// and evalReconcilerGauge then reported all four with its absentWhy string,
+// e.g. "the reconciler isn't reporting (pod down / not scraped)".
+//
+// So a Prometheus hiccup failed a GATING e2e assert while blaming the
+// reconciler: the operator goes and inspects a pod that is perfectly healthy.
+// Same shape as the OpenBao false-SEALED report and alert-eval's vacuous
+// --strict pass — "could not ask" is not an answer about the subject.
+func promScalar(raw []byte) (value float64, hasSeries bool, queryErr error) {
 	var resp struct {
 		Status string `json:"status"`
+		Error  string `json:"error"`
 		Data   struct {
 			Result []struct {
 				Value []any `json:"value"`
 			} `json:"result"`
 		} `json:"data"`
 	}
-	if json.Unmarshal(raw, &resp) != nil || resp.Status != "success" {
-		return 0, false
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return 0, false, fmt.Errorf("unparseable Prometheus response: %w", err)
+	}
+	if resp.Status != "success" {
+		detail := resp.Error
+		if detail == "" {
+			detail = "status=" + resp.Status
+		}
+		return 0, false, fmt.Errorf("Prometheus returned an error: %s", detail)
 	}
 	if len(resp.Data.Result) == 0 {
-		return 0, false
+		return 0, false, nil // a real answer: the series genuinely is not there
 	}
 	v := resp.Data.Result[0].Value
 	if len(v) != 2 {
-		return 0, false
+		return 0, false, fmt.Errorf("malformed sample: expected [ts, value], got %d element(s)", len(v))
 	}
-	s, ok := v[1].(string)
+	str, ok := v[1].(string)
 	if !ok {
-		return 0, false
+		return 0, false, fmt.Errorf("malformed sample: value is %T, not a string", v[1])
 	}
-	f, perr := strconv.ParseFloat(s, 64)
+	f, perr := strconv.ParseFloat(str, 64)
 	if perr != nil {
-		return 0, false
+		return 0, false, fmt.Errorf("malformed sample: value %q is not numeric", str)
 	}
-	return f, true
+	return f, true, nil
 }
 
 // gaugeCheck is one reconciler gauge assertion and its evaluated outcome.
@@ -108,8 +129,13 @@ type gaugeCheck struct {
 // series is a failure (the reconciler isn't emitting it — down or not reporting).
 func evalReconcilerGauge(name, query string, raw []byte, want float64, absentWhy, mismatchWhy string) gaugeCheck {
 	g := gaugeCheck{name: name, query: query}
-	g.value, g.present = promScalar(raw)
+	var qerr error
+	g.value, g.present, qerr = promScalar(raw)
 	switch {
+	case qerr != nil:
+		// The query did not answer. Do NOT reuse absentWhy — that blames the
+		// reconciler for a Prometheus failure.
+		g.failWhy = fmt.Sprintf("could not evaluate %q against Prometheus (%v) — this is a QUERY failure, not evidence about the reconciler", query, qerr)
 	case !g.present:
 		g.failWhy = absentWhy
 	case g.value != want:
