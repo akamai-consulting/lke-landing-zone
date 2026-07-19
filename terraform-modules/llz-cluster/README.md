@@ -10,7 +10,8 @@ The module creates the supporting VPC and subnet, stamps a baseline Cloud Firewa
 
 ```
 llz-cluster
-├── linode_vpc               (dedicated VPC for the cluster)
+├── linode_vpc               (dedicated VPC — skipped when vpc_id is set)
+├── time_sleep.vpc_settle    (VPC propagation delay — dedicated-VPC path only)
 ├── linode_vpc_subnet        (worker node subnet, /13 or /14)
 ├── linode_firewall          (node firewall — bootstrap baseline rules)
 └── linode_lke_cluster       (tier = "enterprise", no node pool)
@@ -118,7 +119,7 @@ resource "linode_lke_node_pool" "gpu" {
 
 At `terraform apply` time, the module writes a bootstrap ACL to the cluster control plane (your static CIDRs plus any runner CIDRs). After that, the `cloud-firewall-controller` owns the ACL via the Linode API. Terraform ignores ACL drift on subsequent applies so it does not overwrite the controller's live state.
 
-The node firewall follows the same model: `firewall.tf` lays down a bootstrap baseline and sets `ignore_changes = [inbound, outbound]`, after which the controller owns the rules. To drop the resource from state entirely after handoff:
+The node firewall follows the same model: `firewall.tf` lays down a bootstrap baseline and sets `ignore_changes = [inbound]`, after which the controller owns the rules. To drop the resource from state entirely after handoff:
 
 ```
 terraform state rm module.<name>.linode_firewall.this

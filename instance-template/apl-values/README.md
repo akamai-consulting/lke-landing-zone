@@ -19,8 +19,11 @@ apl-values/
     manifest/
       kustomization.yaml    #   remote-refs the shared base + enabled components
       instance-custom.yaml  #   the escape hatch's ApplicationSet (carries this repo)
-      env-revision-configmap.yaml               # per-env git revision marker
-      linode-volume-labeler-region-patch.yaml   # the ONE genuine per-env delta
+      env-revision-configmap.yaml   # per-env git revision marker
+      <carved-app>.yaml             # one health-inert Application CR per carved component
+    apps/<carved-app>/              # that component's self-contained per-env source root
+      kustomization.yaml            #   remote-refs the shared Component
+      <name>-env-patch.yaml         #   its per-env patch (e.g. llz-reconciler-env-patch.yaml)
     values.yaml             #   the base + apps.<key>.enabled toggles
 ```
 
@@ -48,7 +51,8 @@ See `tools/internal/clusterspec/kustomize.go` (`RemoteBase`, `sharedManifestRef`
 
 You do not copy a reference overlay or maintain a fixed `lab/staging/primary`
 list. You declare each environment in the
-[LandingZone spec](../../docs/landing-zone-spec.md) and let `llz` generate it:
+LandingZone spec (`docs/landing-zone-spec.md` in the template repo — see
+`docs/README.md` for the version-pinned link) and let `llz` generate it:
 
 ```bash
 llz env add <env>            # scaffolds environments/<env>.yaml, then renders
@@ -63,8 +67,11 @@ llz env add <env>            # scaffolds environments/<env>.yaml, then renders
    rather than fetched from the (instance-agnostic) shared base.
 3. `manifest/env-revision-configmap.yaml` — the git revision this env's in-repo
    Argo CD content tracks (checked by `llz ci bootstrap-cluster` before install).
-4. `manifest/linode-volume-labeler-region-patch.yaml` — the volume-labeler
-   `REGION_SHORT`, the one genuinely per-env manifest value (only when enabled).
+4. `manifest/<carved-app>.yaml` plus `apps/<carved-app>/…-env-patch.yaml` — each
+   carved component's health-inert Application CR and its per-env patch, e.g.
+   `apps/llz-reconciler/llz-reconciler-env-patch.yaml` (`REGION_SHORT` for volume
+   labels plus `REGION`/`OBJ_CLUSTER` for linode-creds), emitted only when that
+   component is enabled.
 5. `values.yaml` — the `apl-values/values.yaml` base with `apps.<key>.enabled` set
    from the component toggles and the spec-owned identity/platform keys patched in.
 
@@ -92,8 +99,8 @@ Its layout mirrors the App Platform GitOps convention
 (https://techdocs.akamai.com/app-platform/docs/gitops): `namespaces/<ns>/` for
 namespaced resources (one Argo CD Application per directory, namespace
 auto-created) and `global/` for cluster-scoped ones. See
-[docs/extending-llz.md](../../docs/extending-llz.md) → "Your own Kubernetes
-resources" for the full contract.
+`docs/extending-llz.md` → "Your own Kubernetes resources" in the template repo
+for the full contract.
 
 ## The values repo has a second branch — don't confuse the two
 
@@ -102,4 +109,4 @@ machine-owned branch (`apl-<env>`), where apl-operator pushes its own rendered
 `env/` tree and platform SealedSecrets. That tree is apl-core's, not yours:
 `main` holds the human-authored IaC + `apl-values/` source you are reading now.
 Never hand-edit `apl-<env>`. See
-[docs/designs/apl-core-values-branch-isolation.md](../../docs/designs/apl-core-values-branch-isolation.md).
+`docs/designs/apl-core-values-branch-isolation.md` in the template repo.

@@ -69,7 +69,12 @@ type: application
 #         without the allowedClientPods entry its login is L4-blocked (TCP timeout),
 #         and the rotator Job fails on its 300s deadline — the broad-pat e2e assertion
 #         never passed. Symmetric with the harbor-robot-provisioner entry (0.1.12).
-version: 0.1.20
+# 0.1.21: doc-only README corrections — the Application name (llz-openbao, not the
+#         releaseName platform-openbao), the PSS version (v1.33, not v1.31), the
+#         missing llz-pat-rotator/broad-pat-rotator allowedClientPods entry added in
+#         0.1.19, and a Bootstrap section that predated static-key auto-unseal (0.1.10)
+#         and cited a workflow path that does not exist.
+version: 0.1.21
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

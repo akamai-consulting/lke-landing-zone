@@ -46,12 +46,11 @@ and `6443` per the LKE-E post-DNAT Cilium quirk.
 
 ```sh
 helm install llz-cert-automation oci://ghcr.io/akamai-consulting/charts/llz-cert-automation \
-  --version 0.1.8
+  --version 0.1.9
 ```
 
 In this repo it is consumed by an Argo CD Application referencing the published
-OCI chart (replacing the raw manifests under
-`platform-apl/manifest/cert-automation/`).
+OCI chart (`platform-apl/components/certManager/cert-automation.yaml`).
 
 ## Values
 

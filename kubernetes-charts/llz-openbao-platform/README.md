@@ -1,7 +1,7 @@
 # llz-openbao-platform
 
 > **Cutover status: live (consumed via OCI Argo Application).** The cluster's
-> `platform-openbao` Application now sources this chart from GHCR
+> `llz-openbao` Application (Helm `releaseName: platform-openbao`) now sources this chart from GHCR
 > (`platform-apl/components/openbao/openbao.yaml`); the old
 > in-repo chart machinery was removed and the `OPENBAO_CHART` Makefile targets +
 > per-env `replacements:` were repointed/cleaned. HA-Raft boots fresh on the
@@ -32,7 +32,7 @@ This chart captures them as **defaults**:
 
 - **Raft join ordering** — `retry_join` blocks for all peers, with the per-pod
   FQDNs present as cert SANs so TLS forms before bootstrap.
-- **Pod Security Standards** — the `restricted:v1.31` securityContexts the
+- **Pod Security Standards** — the `restricted:v1.33` securityContexts the
   StatefulSet needs to schedule at all.
 - **Liveness during bootstrap** — `sealedcode=204&uninitcode=204` so a freshly
   deployed (sealed) OpenBao isn't SIGKILLed before `bao operator init` runs.
@@ -58,7 +58,7 @@ knobs live under `platform` and `openbaoPromtail`:
 | `platform.networkPolicy.enabled` | `true` | |
 | `platform.networkPolicy.allowedClientNamespaces` | `[external-secrets, llz-cert-automation, llz-observability]` | Namespaces allowed to reach `:8200`. `external-secrets` is apl-core 6.x's namespace for the bundled ESO controller. |
 | `platform.networkPolicy.observabilityNamespace` | `llz-observability` | Audit egress target on `:80`. |
-| `platform.networkPolicy.allowedClientPods` | see values.yaml | Pods allowed to reach `:8200` across namespaces: `harbor/harbor-robot-provisioner`, `llz-reconciler/llz-reconciler`, and apl-core's Prometheus in `monitoring`. Dropping the Prometheus entry L4-blocks the `/v1/sys/metrics` scrape, so every `vault_*` series disappears and the OpenBao alerts go DEAD (the 0.1.18 regression). |
+| `platform.networkPolicy.allowedClientPods` | see values.yaml | Pods allowed to reach `:8200` across namespaces: `harbor/harbor-robot-provisioner`, `llz-reconciler/llz-reconciler`, `llz-pat-rotator/broad-pat-rotator`, and apl-core's Prometheus in `monitoring`. Dropping the Prometheus entry L4-blocks the `/v1/sys/metrics` scrape, so every `vault_*` series disappears and the OpenBao alerts go DEAD (the 0.1.18 regression). |
 | `platform.serviceMonitor.enabled` | `true` | Decoupled from the old `Release.Name == "platform-prom"` magic gate. |
 | `platform.serviceMonitor.selectorLabels` | `{prometheus: system}` | Labels the Prometheus Operator's `serviceMonitorSelector` matches (apl-core selects on `prometheus: system`, not a release label). |
 | `openbao.server.ha.replicas` | `3` | Raft replica count (passed through to the subchart). |
@@ -76,7 +76,7 @@ knobs live under `platform` and `openbaoPromtail`:
 ```sh
 helm dependency build kubernetes-charts/llz-openbao-platform
 helm install platform-openbao oci://ghcr.io/akamai-consulting/charts/llz-openbao-platform \
-  --version 0.1.20 \
+  --version 0.1.21 \
   -n llz-openbao --create-namespace
 ```
 
@@ -92,6 +92,13 @@ StatefulSet `volumeClaimTemplates` + the ESO `deletionPolicy` defaulting.
 
 ## Bootstrap
 
-After first sync the pods come up **sealed**. Bootstrap is automated — run
-`.github/workflows/bootstrap-openbao.yml` for each region (init, unseal, Raft
-join, KV v2, Kubernetes auth, GitHub-OIDC auth, policies, audit, secret seeding).
+Before first sync, seed the static auto-unseal key with `llz ci bao-seed-seal-key`
+— it creates the `openbao-unseal-key` Secret the `seal "static"` stanza reads from
+`file:///openbao/seal/unseal.key`. Without it the pods sit in ContainerCreating.
+
+After first sync the pods **auto-unseal themselves at boot**. Configuration is
+then automated — run the instance repo's `bootstrap-openbao` workflow
+(`instance-template/.github/workflows/bootstrap-openbao.yml`, see
+[docs/runbooks/bootstrap-openbao.md](../../docs/runbooks/bootstrap-openbao.md))
+for each region (`bao operator init`, Raft join, KV v2, Kubernetes auth,
+GitHub-OIDC auth, policies, audit, secret seeding).

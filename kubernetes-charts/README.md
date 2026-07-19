@@ -29,7 +29,7 @@ oci://ghcr.io/akamai-consulting/charts/<chart>:<version>
 
 GHCR (not the in-cluster Harbor) is deliberate: the charts the bootstrap itself
 consumes must come from a registry that exists *before* the cluster does
-(§9 — avoids the Harbor chicken-and-egg).
+(avoids the Harbor chicken-and-egg).
 
 [`.github/workflows/publish-charts.yml`](../.github/workflows/publish-charts.yml)
 packages and pushes every chart whose `version:` is not already published.
@@ -39,14 +39,16 @@ Argo Applications pin `targetRevision: X.Y.Z`.
 
 ## Consumption (the monorepo dogfoods its own charts)
 
-Each cut-over chart is consumed by an Argo CD `Application` under
-`platform-apl/manifest/applications/` that references the
-OCI chart instead of an in-repo path. This consumer relationship is the forcing
+Each cut-over chart is consumed by an Argo CD `Application` that references the
+OCI chart instead of an in-repo path — `platform-apl/manifest/applications/cluster-foundation.yaml`
+for the foundation chart, and the `platform-apl/components/` kustomize components
+(`components/openbao/openbao.yaml`, `components/certManager/cert-automation.yaml`)
+for the other two. This consumer relationship is the forcing
 function that keeps the extracted charts honestly reusable.
 
 ### Cutover status
 
-All four platform charts are **consumed live** via OCI Argo Applications (the
+Three of the four platform charts are **consumed live** via OCI Argo Applications (the
 monorepo dogfoods its own published charts). `llz-argo-bootstrap-apps` is a
 standalone generator. The cluster is rebuilt greenfield, so there is no live
 state to migrate — the bootstrap stands the whole platform up from the charts.

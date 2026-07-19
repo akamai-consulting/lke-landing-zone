@@ -30,7 +30,11 @@ type: application
 # 0.1.7: doc-only — retarget a stale apl-values/_shared/… comment path ref in
 #        network-policies.yaml to the platform-apl/ layout (behavior unchanged;
 #        bumped so the guard republishes the corrected artifact).
-version: 0.1.8
+# 0.1.9: doc-only — the README pointed at `platform-apl/manifest/cert-automation/`,
+#        a directory that never existed in the platform-apl/ layout; retargeted to
+#        the real consumer `platform-apl/components/certManager/cert-automation.yaml`
+#        (behavior unchanged; bumped so the guard republishes the corrected artifact).
+version: 0.1.9
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"

@@ -48,7 +48,11 @@ type: application
 # 0.1.20: bump the llz-cluster-foundation pin to 0.1.12 (refactor-only NetworkPolicy
 #         template collapse; rendered output byte-identical). Pin-only change — a
 #         pin the registry never received 404s at Argo sync time.
-version: 0.1.21
+# 0.1.22: doc-only README correction — drop the External Secrets Operator from the
+#         sync-order rationale (its bootstrap Application was removed in 0.1.14;
+#         apl-core 6.x ships ESO itself, as the README already said further down).
+#         Mirrors the doc-only bump of llz-cert-automation 0.1.8→0.1.9.
+version: 0.1.22
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"

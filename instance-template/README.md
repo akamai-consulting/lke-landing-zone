@@ -19,7 +19,7 @@ and driven by the **`llz`** CLI. Pinned to template release **`<@ llz_version @>
 | [`environments/`](environments/) | One `<env>.yaml` cluster definition per deployment |
 | [`terraform-iac-bootstrap/`](terraform-iac-bootstrap/) | Terraform roots; the `*.tfvars` are **rendered** from the spec |
 | [`apl-values/`](apl-values/) | The apl-core values overlay, per deployment |
-| [`docs/`](docs/) | A copy of the landing-zone docs (canonical copy lives upstream) |
+| [`docs/`](docs/) | The operator doc set (quickstart + runbooks + playbooks); the rest is referenced upstream |
 | [`.github/workflows/`](.github/workflows/) | Build / bootstrap / health workflows (thin callers of the reusable `llz-*` workflows) |
 
 ## Quick start
@@ -59,11 +59,12 @@ Run `llz <command> --help` for any command.
 Shipped locally under [`docs/`](docs/):
 
 - [Quick start](docs/quickstart.md) — nothing → converged cluster, the fast path
-- [Adopter guide](docs/adopter-guide.md) — the same path with full rationale
-- [Landing-zone spec](docs/landing-zone-spec.md) — the `landingzone.yaml` + `environments/<env>.yaml` model
-- [Environments & promotion](docs/environments-and-promotion.md) — deployments, HA pairs, dev→staging→prod
-- [Secrets](docs/secrets.md) + [OpenBao bootstrap runbook](docs/runbooks/bootstrap-openbao.md)
-- [Dev Container](docs/devcontainer.md) — a prebuilt workstation with the whole toolchain
+- [Runbooks](docs/runbooks/) — incident recovery (e.g. the [OpenBao bootstrap runbook](docs/runbooks/bootstrap-openbao.md))
+- [Playbooks](docs/playbooks/) — routine operational how-tos
+
+The rest — adopter guide, landing-zone spec, environments & promotion, secrets,
+architecture, design docs, Dev Container — is *referenced* rather than copied in.
+[`docs/README.md`](docs/README.md) carries the version-pinned links.
 
 The always-current source of these docs lives upstream:
 [`<@ upstream_org @>/lke-landing-zone/docs`](https://github.com/<@ upstream_org @>/lke-landing-zone/tree/main/docs).
