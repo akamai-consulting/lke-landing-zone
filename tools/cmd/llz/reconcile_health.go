@@ -125,22 +125,39 @@ func sampleOpenBaoPods(ctx context.Context, client nodeGetter, reg *metrics.Regi
 
 // readyCondition returns the status/reason/message of a resource's Ready
 // condition (or empty strings if absent).
+// readyCondition reads the Ready condition out of an unstructured object.
+//
+// It hand-rolled the same walk health.FindReady already does, and the two
+// DISAGREED on the absent-condition case: this returned "", FindReady returns
+// "Unknown". Both feed health.ClassifyReady, which only branches on "True", so
+// no verdict changed — but the status string is interpolated into the
+// operator-facing detail, where the empty value rendered as "(Ready= reason=)"
+// and reads like a formatting bug rather than "no Ready condition was
+// published". Now one reader, one answer.
 func readyCondition(obj map[string]any) (status, reason, msg string) {
+	return health.FindReady(unstructuredConditions(obj))
+}
+
+// unstructuredConditions lifts status.conditions out of an unstructured object
+// into the typed shape the health predicates take. Entries that are not objects
+// are skipped rather than failing the read: this parses whatever the apiserver
+// returned, and a malformed condition should not blind the rest.
+func unstructuredConditions(obj map[string]any) []health.Condition {
 	st, _ := obj["status"].(map[string]any)
-	conds, _ := st["conditions"].([]any)
-	for _, c := range conds {
+	raw, _ := st["conditions"].([]any)
+	conds := make([]health.Condition, 0, len(raw))
+	for _, c := range raw {
 		cm, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
-		if cm["type"] == "Ready" {
-			s, _ := cm["status"].(string)
-			r, _ := cm["reason"].(string)
-			m, _ := cm["message"].(string)
-			return s, r, m
-		}
+		t, _ := cm["type"].(string)
+		s, _ := cm["status"].(string)
+		r, _ := cm["reason"].(string)
+		m, _ := cm["message"].(string)
+		conds = append(conds, health.Condition{Type: t, Status: s, Reason: r, Message: m})
 	}
-	return "", "", ""
+	return conds
 }
 
 // certName returns a namespace/name key for a Certificate object.
