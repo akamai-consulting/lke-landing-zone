@@ -145,7 +145,7 @@ jobs:
       contents: read
     environment: infra-${{ matrix.region }}
     timeout-minutes: 15
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *'
     strategy:
       fail-fast: false
       matrix:
@@ -204,7 +204,7 @@ jobs:
       contents: read
     environment: infra-${{ matrix.region }}
     timeout-minutes: 15
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *'
     strategy:
       fail-fast: false
       matrix:
@@ -268,7 +268,7 @@ jobs:
       contents: read
     environment: infra-${{ matrix.region }}
     timeout-minutes: 15
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *'
     strategy:
       fail-fast: false
       matrix:
