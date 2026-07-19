@@ -148,9 +148,9 @@ func fakeClock(step time.Duration) (func() time.Time, *time.Duration) {
 	return now, elapsed
 }
 
-func testDeps(f *fakeKubectl, step time.Duration) kyvernoDeps {
+func testDeps(f *fakeKubectl, step time.Duration) aplGateDeps {
 	now, _ := fakeClock(step)
-	return kyvernoDeps{kubectl: f.run, now: now, sleep: func(time.Duration) {}}
+	return aplGateDeps{kubectl: f.run, now: now, sleep: func(time.Duration) {}}
 }
 
 func TestApplyKyvernoPolicy(t *testing.T) {

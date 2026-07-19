@@ -52,15 +52,6 @@ type kyvernoPolicyOpts struct {
 	retrofitWait      time.Duration
 }
 
-// kyvernoDeps are the seams the state machine drives. kubectl runs one kubectl
-// invocation (KUBECONFIG already wired by the caller) and returns combined
-// output plus whether it exited 0; now/sleep make the deadline loops testable.
-type kyvernoDeps struct {
-	kubectl func(args ...string) (string, bool)
-	now     func() time.Time
-	sleep   func(time.Duration)
-}
-
 func ciApplyKyvernoPolicyCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "apply-kyverno-policy",
@@ -88,7 +79,7 @@ func runCIApplyKyvernoPolicy() error {
 	}
 	defer cleanup()
 
-	return applyKyvernoPolicy(o, kyvernoDeps(newAplGateDepsFor(kubeconfig)))
+	return applyKyvernoPolicy(o, newAplGateDepsFor(kubeconfig))
 }
 
 func kyvernoOptsFromEnv(getenv func(string) string) (kyvernoPolicyOpts, error) {
@@ -147,7 +138,7 @@ func isKyvernoWebhookRace(out string) bool { return kyvernoWebhookRaceRE.MatchSt
 // non-nil error ONLY on a hard apply failure (a non-race kubectl-apply error);
 // every readiness timeout, missing-CRD guard, and webhook race is a soft-fail
 // (::warning:: + nil) exactly as the bash exited 0.
-func applyKyvernoPolicy(o kyvernoPolicyOpts, d kyvernoDeps) error {
+func applyKyvernoPolicy(o kyvernoPolicyOpts, d aplGateDeps) error {
 	if o.waitForKyverno {
 		// Poll until the CRD exists AND the admission controller is Available.
 		ready := pollUntil(d.now, d.sleep, o.waitTimeout, 5*time.Second, func() bool {
@@ -205,7 +196,7 @@ func applyKyvernoPolicy(o kyvernoPolicyOpts, d kyvernoDeps) error {
 // ConfigMap created by another controller: if the target predates the policy
 // (so the admission rule never fired on it), force one UPDATE through admission
 // and optionally roll the consumer. Best-effort — never returns an error.
-func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d kyvernoDeps) {
+func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d aplGateDeps) {
 	ns := o.retrofitNamespace
 	present := pollUntil(d.now, d.sleep, o.retrofitWait, 5*time.Second, func() bool {
 		_, ok := d.kubectl("-n", ns, "get", "configmap", o.retrofitConfigMap)

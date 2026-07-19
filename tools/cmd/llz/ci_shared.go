@@ -1,11 +1,11 @@
 package main
 
 // ci_shared.go holds the primitives the ci gate verbs share: the kubectl/clock
-// seam constructor (aplGateDeps / kyvernoDeps), the deadline poll loop every
-// gate spells the same way, the env-with-default reader, and the kubeconfig
-// tempfile spill. Each of these had drifted into three-to-five near-identical
-// inline copies across the verbs; collapsing them here keeps the incident
-// history (the comments below) in exactly one place.
+// seam type and constructor (aplGateDeps), the deadline poll loop every gate
+// spells the same way, the env-with-default reader, and the kubeconfig tempfile
+// spill. Each of these had drifted into three-to-five near-identical inline
+// copies across the verbs; collapsing them here keeps the incident history (the
+// comments below) in exactly one place.
 
 import (
 	"fmt"
@@ -13,6 +13,21 @@ import (
 	"os/exec"
 	"time"
 )
+
+// kubectlRunner runs one kubectl invocation (KUBECONFIG already wired by the
+// caller) and returns its combined output plus whether it exited 0.
+type kubectlRunner func(args ...string) (string, bool)
+
+// aplGateDeps are the seams every ci gate drives: one kubectl invocation plus
+// now/sleep for the testable deadline loop. One type for all the gates — the
+// kyverno and destroy-unwedge verbs each used to declare their own structurally
+// identical copy, to the point that one call site had to write
+// `kyvernoDeps(newAplGateDepsFor(…))` to convert between them.
+type aplGateDeps struct {
+	kubectl kubectlRunner
+	now     func() time.Time
+	sleep   func(time.Duration)
+}
 
 // aplGateKubectl builds the kubectl runner for the gate seams. kubeconfig == ""
 // inherits the ambient environment so kubectl resolves $KUBECONFIG /
@@ -23,7 +38,7 @@ import (
 // left-to-right operand order), snapshotting the buffer EMPTY before the command
 // ever ran — so every gate read back blank output and sat reading sync= health=
 // forever. Do not "simplify" this back into a single return expression.
-func aplGateKubectl(kubeconfig string) func(args ...string) (string, bool) {
+func aplGateKubectl(kubeconfig string) kubectlRunner {
 	return func(args ...string) (string, bool) {
 		c := exec.Command("kubectl", args...)
 		if kubeconfig == "" {
