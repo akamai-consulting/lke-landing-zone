@@ -42,25 +42,61 @@ env:
   SHA: ${{ inputs.sha || github.sha }}
 
 jobs:
-  build-terraform:
-    name: Build ci-terraform
-    # The Dockerfile builds `llz` from the Go tools module, supplied via
-    # `--build-context tools-src=tools`, so there is no separate builder image to
-    # depend on.
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.image == 'terraform' ||
-      inputs.image == 'all'
+  # ── Which images to build ────────────────────────────────────────────────────
+  # The four images are built by ONE matrix job below; this computes which rows it
+  # runs. It exists because `matrix` is NOT an available context in a job-level
+  # `if:` (actionlint: "available contexts are github, inputs, needs, vars"), so
+  # the per-image dispatch filter cannot live on the build job itself.
+  plan:
+    name: Plan image matrix
     runs-on: ubuntu-latest
-    # packages: write lets the built-in GITHUB_TOKEN push to GHCR — no PAT needed.
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Pick the images to build
+        id: pick
+        env:
+          # Non-dispatch triggers (push, schedule) always build everything.
+          WANT: ${{ github.event_name == 'workflow_dispatch' && inputs.image || 'all' }}
+        run: |
+          set -euo pipefail
+          ALL='[
+            {"key":"terraform","image":"ci-terraform","target":"ci-terraform","version":"1.9.8"},
+            {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.31.0"},
+            {"key":"devcontainer","image":"devcontainer","target":"devcontainer","version":""},
+            {"key":"llz","image":"llz","target":"llz","version":""}
+          ]'
+          if [ "${WANT}" = "all" ]; then
+            SEL="${ALL}"
+          else
+            SEL="$(printf '%s' "${ALL}" | jq -c --arg k "${WANT}" '[.[] | select(.key == $k)]')"
+          fi
+          if [ "$(printf '%s' "${SEL}" | jq 'length')" -eq 0 ]; then
+            echo "::error::no image matches '${WANT}' — expected one of terraform|kubernetes|devcontainer|llz|all"
+            exit 1
+          fi
+          printf 'matrix=%s\n' "$(printf '%s' "${SEL}" | jq -c '{include: .}')" >> "$GITHUB_OUTPUT"
+
+  # ── Build + sign, one row per image ──────────────────────────────────────────
+  # Was four jobs (build-terraform/-kubernetes/-devcontainer/-llz) that a
+  # normalized diff showed to be identical except for THREE things: the dispatch
+  # key, the image name, and an optional version tag. Everything else — platforms,
+  # --provenance/--sbom, the tools-src build context, the gha cache scopes, and the
+  # keyless cosign signature — was duplicated four times, so every change to the
+  # build or signing recipe was four edits with three chances to miss one.
+  build:
+    name: Build ${{ matrix.image }}
+    needs: plan
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      # Keyless cosign signing trades this OIDC token to Fulcio for a
-      # short-lived signing cert; the signature + the cert's workflow identity
-      # are recorded in the public Rekor transparency log (only the image digest
-      # and identity — never image content).
       id-token: write
+    strategy:
+      # One image failing must not cancel the others — they are independent
+      # publishes, and a partial set is more useful than none.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -69,18 +105,15 @@ jobs:
 
       - name: Resolve GHCR namespace
         id: ns
-        # GHCR paths must be lowercase; derive the namespace from the repo owner so
-        # images always land in this repo's org (akamai-consulting), and in an
-        # adopter's own org after they fork — never a hardcoded personal account.
         run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
-          # All three build jobs run in parallel and each pull the same binfmt
-          # image, which setup-qemu-action otherwise caches under one fixed GHA
-          # key — so the jobs race to reserve it and log a "another job may be
-          # creating this cache" warning. The image is tiny; skip caching it.
+          # All rows run in parallel and each pull the same binfmt image, which
+          # setup-qemu-action otherwise caches under one fixed GHA key — so they
+          # race to reserve it and log "another job may be creating this cache".
+          # The image is tiny; skip caching it.
           cache-image: false
 
       - name: Set up Docker Buildx
@@ -96,16 +129,25 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Build and push ci-terraform
+      # --provenance/--sbom attach SLSA provenance + an SBOM as OCI attestations in
+      # the pushed index; --metadata-file captures the digest so the signature below
+      # binds to the exact manifest that was pushed, not to a tag that could move.
+      # The tools module is supplied via --build-context tools-src=tools so the
+      # Dockerfile's llz stage can build without broadening the primary context.
+      - name: Build and push ${{ matrix.image }}
         id: build
-        # --build-context tools-src=tools exposes the Go tools module to the
-        # Dockerfile's `llz` build stage without broadening the primary
-        # build context. The gha cache is wired up by setup-buildx-action above.
-        # --provenance/--sbom attach SLSA provenance + an SBOM as OCI
-        # attestations in the pushed image index; --metadata-file captures the
-        # pushed manifest-list digest so the next step signs by digest (immune to
-        # tag re-pointing).
+        env:
+          REPO:    ${{ steps.ns.outputs.repo }}
+          IMAGE:   ${{ matrix.image }}
+          TARGET:  ${{ matrix.target }}
+          VERSION: ${{ matrix.version }}
         run: |
+          set -euo pipefail
+          # The version tag is per-image and optional (ci-terraform pins the
+          # terraform version, ci-kubernetes the kubectl one; devcontainer and llz
+          # carry none), so it is appended rather than templated inline.
+          TAGS=(--tag "${REPO}/${IMAGE}:latest" --tag "${REPO}/${IMAGE}:sha-${SHA}")
+          [ -n "${VERSION}" ] && TAGS+=(--tag "${REPO}/${IMAGE}:${VERSION}")
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
@@ -113,267 +155,16 @@ jobs:
             --sbom=true \
             --metadata-file /tmp/build-meta.json \
             --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ env.SHA }} \
-            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:1.9.8 \
-            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:latest \
-            --tag ${{ steps.ns.outputs.repo }}/ci-terraform:sha-${{ env.SHA }} \
-            --cache-from type=gha,scope=ci-terraform \
-            --cache-to   type=gha,scope=ci-terraform,mode=max \
-            --file dockerfiles/Dockerfile --target ci-terraform \
+            --build-arg "LLZ_VERSION=dev-${SHA}" \
+            "${TAGS[@]}" \
+            --cache-from "type=gha,scope=${IMAGE}" \
+            --cache-to   "type=gha,scope=${IMAGE},mode=max" \
+            --file dockerfiles/Dockerfile --target "${TARGET}" \
             dockerfiles
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Sign ci-terraform (keyless)
-        # Sign the manifest-list by digest. Keyless: cosign uses the job's OIDC
-        # token (id-token: write) + Fulcio/Rekor public-good instances, so no
-        # signing key is stored. The Kyverno verifyImages policy in
-        # instance-template verifies this same identity at admission.
-        #
-        # --use-signing-config=false --new-bundle-format=false: force legacy
-        # `sha256-<digest>.sig` tag storage. cosign v3.x (installed above) defaults
-        # to the new Sigstore-bundle format stored via the OCI 1.1 referrers API,
-        # which produces NO `.sig` tag — GHCR serves referrers flakily (303) and
-        # Kyverno's keyless verifyImages reads the legacy `.sig` tag, so a
-        # bundle-format signature is undiscoverable → admission fails "no signatures
-        # found" and the in-cluster llz CronJobs are blocked. --use-signing-config
-        # must be false too: v3 defaults it true and then REJECTS --new-bundle-format
-        # =false. Verified: this pair yields the same simplesigning `.sig` manifest
-        # cosign v2 produced. See the verify-llz-image-signature policy.
+      - name: Sign ${{ matrix.image }} (keyless)
         env:
-          IMAGE: ${{ steps.ns.outputs.repo }}/ci-terraform
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
-
-  build-kubernetes:
-    name: Build ci-kubernetes
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.image == 'kubernetes' ||
-      inputs.image == 'all'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      # Keyless cosign signing trades this OIDC token to Fulcio for a
-      # short-lived signing cert; the signature + the cert's workflow identity
-      # are recorded in the public Rekor transparency log (only the image digest
-      # and identity — never image content).
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ env.SHA }} # build the requested commit, not just the ref HEAD
-
-      - name: Resolve GHCR namespace
-        id: ns
-        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          # See build-terraform: avoid the parallel binfmt cache-reserve race.
-          cache-image: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Build and push ci-kubernetes
-        id: build
-        # --build-context tools-src=tools exposes the Go tools module to the
-        # Dockerfile's llz build stage (the image bakes `llz` for the Makefile's
-        # externalsecret-paths-check), exactly like ci-terraform/devcontainer.
-        # --provenance/--sbom + --metadata-file: see ci-terraform above.
-        run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ env.SHA }} \
-            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:1.31.0 \
-            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:latest \
-            --tag ${{ steps.ns.outputs.repo }}/ci-kubernetes:sha-${{ env.SHA }} \
-            --cache-from type=gha,scope=ci-kubernetes \
-            --cache-to   type=gha,scope=ci-kubernetes,mode=max \
-            --file dockerfiles/Dockerfile --target ci-kubernetes \
-            dockerfiles
-          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Sign ci-kubernetes (keyless)
-        # Keyless cosign sign by digest — see ci-terraform above.
-        env:
-          IMAGE: ${{ steps.ns.outputs.repo }}/ci-kubernetes
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
-
-  build-devcontainer:
-    name: Build devcontainer
-    # The adopter-workstation image consumed by instances' .devcontainer/. Like
-    # ci-terraform it bakes a Go binary from the tools/ module (the `llz` CLI,
-    # supplied via `--build-context tools-src=tools`); every other tool is fetched
-    # by digest at build time.
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.image == 'devcontainer' ||
-      inputs.image == 'all'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      # Keyless cosign signing trades this OIDC token to Fulcio for a
-      # short-lived signing cert; the signature + the cert's workflow identity
-      # are recorded in the public Rekor transparency log (only the image digest
-      # and identity — never image content).
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ env.SHA }} # build the requested commit, not just the ref HEAD
-
-      - name: Resolve GHCR namespace
-        id: ns
-        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          # See build-terraform: avoid the parallel binfmt cache-reserve race.
-          cache-image: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Build and push devcontainer
-        id: build
-        # --build-context tools-src=tools exposes the Go tools module to the
-        # Dockerfile's llz build stage. LLZ_VERSION stamps main.version so the
-        # baked-in `llz version` is traceable to this build. Adopters pin :latest
-        # to a :sha-... tag in .devcontainer/devcontainer.json for reproducibility.
-        # --provenance/--sbom + --metadata-file: see ci-terraform above.
-        run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ env.SHA }} \
-            --tag ${{ steps.ns.outputs.repo }}/devcontainer:latest \
-            --tag ${{ steps.ns.outputs.repo }}/devcontainer:sha-${{ env.SHA }} \
-            --cache-from type=gha,scope=devcontainer \
-            --cache-to   type=gha,scope=devcontainer,mode=max \
-            --file dockerfiles/Dockerfile --target devcontainer \
-            dockerfiles
-          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Sign devcontainer (keyless)
-        # Keyless cosign sign by digest — see ci-terraform above.
-        env:
-          IMAGE: ${{ steps.ns.outputs.repo }}/devcontainer
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
-
-  build-llz:
-    name: Build llz (slim in-cluster image)
-    # Slim distroless image carrying ONLY the static llz binary, for workloads
-    # that run llz IN the cluster (the Linode credential rotator CronJob, and the
-    # volume-labeler once it moves off the alpine/k8s shell script). Bakes llz from
-    # the tools/ module via `--build-context tools-src=tools`, like the CI images.
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.image == 'llz' ||
-      inputs.image == 'all'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      # Keyless cosign signing trades this OIDC token to Fulcio for a
-      # short-lived signing cert; the signature + the cert's workflow identity
-      # are recorded in the public Rekor transparency log (only the image digest
-      # and identity — never image content).
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ env.SHA }} # build the requested commit, not just the ref HEAD
-
-      - name: Resolve GHCR namespace
-        id: ns
-        run: echo "repo=${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-        with:
-          # See build-terraform: avoid the parallel binfmt cache-reserve race.
-          cache-image: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Build and push llz
-        id: build
-        # --build-context tools-src=tools exposes the Go tools module to the
-        # Dockerfile's llz build stage. In-cluster consumers pin :latest to a
-        # :sha-... tag for reproducibility (same convention as devcontainer).
-        # --provenance/--sbom + --metadata-file: see ci-terraform above. This is
-        # the one image that runs IN the cluster (credential-rotator CronJob),
-        # so its signature is what the Kyverno verifyImages policy enforces.
-        run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --push \
-            --provenance=true \
-            --sbom=true \
-            --metadata-file /tmp/build-meta.json \
-            --build-context tools-src=tools \
-            --build-arg LLZ_VERSION=dev-${{ env.SHA }} \
-            --tag ${{ steps.ns.outputs.repo }}/llz:latest \
-            --tag ${{ steps.ns.outputs.repo }}/llz:sha-${{ env.SHA }} \
-            --cache-from type=gha,scope=llz \
-            --cache-to   type=gha,scope=llz,mode=max \
-            --file dockerfiles/Dockerfile --target llz \
-            dockerfiles
-          echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
-
-      - name: Sign llz (keyless)
-        # Keyless cosign sign by digest — see ci-terraform above.
-        env:
-          IMAGE: ${{ steps.ns.outputs.repo }}/llz
+          IMAGE:  ${{ steps.ns.outputs.repo }}/${{ matrix.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
