@@ -54,6 +54,61 @@ func TestKItemsAndKExists(t *testing.T) {
 	}
 }
 
+// kList decodes .items[] into T and drops what will not decode, so one bad item
+// can't take a whole section down (the unmarshal-and-continue every section used
+// to spell out inline).
+func TestKList(t *testing.T) {
+	withKubectl(t, func(a string) ([]byte, error) {
+		if a != "get ns -o json" {
+			return nil, errors.New("nope")
+		}
+		return items(
+			`{"metadata":{"name":"good"},"status":{"phase":"Active"}}`,
+			`{"metadata":[]}`, // metadata is an object — this item must be dropped
+		), nil
+	})
+	got := kList[namespaceItem]("get", "ns")
+	if len(got) != 1 || got[0].Metadata.Name != "good" {
+		t.Errorf("kList = %+v, want just the decodable item", got)
+	}
+	if len(kList[namespaceItem]("get", "missing")) != 0 {
+		t.Error("kList on an errored call should be empty")
+	}
+}
+
+// scanInventory answers "does this CRD/namespace exist?" for the whole pass from
+// two list calls, replacing the ~60 per-name `kubectl get` probes a pass used to
+// spawn. Absence — and a list that failed outright — must read exactly as a
+// failed per-name get did: not present.
+func TestScanInventory(t *testing.T) {
+	withKubectl(t, func(a string) ([]byte, error) {
+		switch a {
+		case "get crd -o json":
+			return items(`{"metadata":{"name":"applications.argoproj.io"}}`), nil
+		case "get ns -o json":
+			return items(`{"metadata":{"name":"argocd"},"status":{"phase":"Active"}}`), nil
+		}
+		return nil, errors.New("nope")
+	})
+	inv := scanInventory()
+	if !inv.crds["applications.argoproj.io"] || inv.crds["absent.example.io"] {
+		t.Errorf("crds = %v", inv.crds)
+	}
+	if !inv.nsExists["argocd"] || inv.nsExists["nope"] {
+		t.Errorf("nsExists = %v", inv.nsExists)
+	}
+	if len(inv.namespaces) != 1 || inv.namespaces[0].Status.Phase != "Active" {
+		t.Errorf("namespaces = %+v, want the phase-carrying list checkNamespaces reuses", inv.namespaces)
+	}
+
+	// Both lists failing => everything reads absent, never present.
+	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("refused") })
+	empty := scanInventory()
+	if len(empty.crds) != 0 || len(empty.nsExists) != 0 {
+		t.Errorf("a failed list must yield no names, got %v / %v", empty.crds, empty.nsExists)
+	}
+}
+
 func TestCheckNodes(t *testing.T) {
 	withKubectl(t, func(a string) ([]byte, error) {
 		if a != "get nodes -o json" {
@@ -74,13 +129,16 @@ func TestCheckNodes(t *testing.T) {
 
 func TestCheckNamespaces(t *testing.T) {
 	withKubectl(t, func(a string) ([]byte, error) {
+		if a != "get ns -o json" {
+			return nil, errors.New("nope")
+		}
 		return items(
 			`{"metadata":{"name":"ok"},"status":{"phase":"Active"}}`,
 			`{"metadata":{"name":"stuck"},"status":{"phase":"Terminating"}}`,
 		), nil
 	})
 	var r health.Report
-	checkNamespaces(&r)
+	checkNamespaces(&r, scanInventory())
 	if len(r.Failed) != 1 || !strings.Contains(r.Failed[0], "stuck") {
 		t.Errorf("checkNamespaces = %v, want 1 stuck", r.Failed)
 	}
@@ -102,20 +160,18 @@ func TestCheckAPIServices(t *testing.T) {
 
 func TestCheckRequiredCRDsAndStorageClasses(t *testing.T) {
 	withKubectl(t, func(a string) ([]byte, error) {
-		switch {
-		case a == "get crd applications.argoproj.io":
-			return nil, nil // present
-		case strings.HasPrefix(a, "get crd "):
-			return nil, errors.New("absent")
-		case a == "get storageclass block-storage-retain":
+		switch a {
+		case "get crd -o json": // applications.argoproj.io is the only one installed
+			return items(`{"metadata":{"name":"applications.argoproj.io"}}`), nil
+		case "get storageclass block-storage-retain":
 			return nil, nil
-		case a == "get storageclass -o json":
+		case "get storageclass -o json":
 			return items(`{"metadata":{"name":"block-storage-retain","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}`), nil
 		}
 		return nil, errors.New("nope")
 	})
 	var r health.Report
-	checkRequiredCRDs(&r)
+	checkRequiredCRDs(&r, scanInventory())
 	// all but applications.argoproj.io are absent => many fails.
 	if len(r.Failed) < 10 {
 		t.Errorf("checkRequiredCRDs failures = %d, want most CRDs missing", len(r.Failed))
@@ -230,15 +286,13 @@ func TestCheckWorkloads(t *testing.T) {
 	// Stubs the LIVE namespace name. This test used to stub "openbao", matching a
 	// healthNamespaces entry that had gone stale when the platform namespaces were
 	// llz- prefixed — so it passed while the real check silently skipped the
-	// namespace on every run (the loops `continue` on a namespace that isn't
-	// there). Using openbaoNamespace ties the fixture to the same const the
+	// namespace on every run (the loop `continue`s on a namespace that isn't in
+	// the inventory). Using openbaoNamespace ties the fixture to the same const the
 	// production list uses, so the two cannot drift apart again.
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch {
-		case a == "get ns "+openbaoNamespace:
-			return nil, nil
-		case strings.HasPrefix(a, "get ns "):
-			return nil, errors.New("absent")
+		case a == "get ns -o json":
+			return items(`{"metadata":{"name":"` + openbaoNamespace + `"},"status":{"phase":"Active"}}`), nil
 		case a == "-n "+openbaoNamespace+" get deploy -o json":
 			return items(`{"metadata":{"name":"d"},"spec":{"replicas":2},"status":{"readyReplicas":1}}`), nil
 		case a == "-n "+openbaoNamespace+" get sts -o json":
@@ -249,7 +303,7 @@ func TestCheckWorkloads(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	var r health.Report
-	checkWorkloads(&r, false)
+	checkWorkloads(&r, scanInventory(), false)
 	if len(r.Failed) != 1 {
 		t.Errorf("checkWorkloads = %v, want 1 (the 1/2 deploy)", r.Failed)
 	}
@@ -300,8 +354,8 @@ func TestCheckJobsAndWorkflows(t *testing.T) {
 		switch a {
 		case "get jobs -A -o json":
 			return items(`{"metadata":{"namespace":"x","name":"j"},"status":{"failed":1,"conditions":[{"type":"Failed","status":"True"}]}}`), nil
-		case "get crd workflows.argoproj.io":
-			return nil, nil
+		case "get crd -o json":
+			return items(`{"metadata":{"name":"workflows.argoproj.io"}}`), nil
 		case "get workflows.argoproj.io -A -o json":
 			return items(`{"metadata":{"namespace":"x","name":"w"},"status":{"phase":"Failed"}}`), nil
 		}
@@ -309,7 +363,7 @@ func TestCheckJobsAndWorkflows(t *testing.T) {
 	})
 	var r health.Report
 	checkJobs(&r, false)
-	checkWorkflows(&r, false)
+	checkWorkflows(&r, scanInventory(), false)
 	if len(r.Failed) != 2 {
 		t.Errorf("jobs+workflows = %v, want 2", r.Failed)
 	}
@@ -485,8 +539,8 @@ func TestRunConvergeUnreachableExhaustsBudget(t *testing.T) {
 	// the unreachable branch — never the twice-in-a-row hard-fail abort. budget=0
 	// trips the deadline immediately; retry-delay=0 keeps it from sleeping.
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("refused") })
-	if ec := runConverge(0, 0, 0); ec != 1 {
-		t.Errorf("unreachable + exhausted budget => exit %d, want 1", ec)
+	if err := runConverge(0, 0, 0); err == nil {
+		t.Errorf("unreachable + exhausted budget => err %v, want non-nil", err)
 	}
 }
 
@@ -515,9 +569,10 @@ func TestHealthExitCodeStatePhase1ResolvedOnce(t *testing.T) {
 	withKubectl(t, func(a string) ([]byte, error) {
 		switch {
 		case a == "version --request-timeout=10s",
-			a == "get crd applications.argoproj.io",
 			a == "-n argocd get application platform-bootstrap":
 			return nil, nil
+		case a == "get crd -o json":
+			return items(`{"metadata":{"name":"applications.argoproj.io"}}`), nil
 		case a == "-n cert-manager get secret platform-app-ca":
 			probes++
 			return nil, nil // present → phase1 over
