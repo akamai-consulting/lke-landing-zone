@@ -40,6 +40,9 @@ func ciCmd() *cobra.Command {
 	}
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
 		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
+		// BREAK-GLASS (deliberately callerless — see the note at the bottom of this
+		// function): bao-status, bao-init and bao-regen-root are the manual handles
+		// for a wedged bao-ensure-ready. No workflow calls them, BY DESIGN.
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd())
@@ -76,7 +79,23 @@ func ciCmd() *cobra.Command {
 	// component's CronJob (discover-firewall-config) is the steady-state owner.
 	c.AddCommand(ciBootstrapCloudFirewallCmd(), ciDiscoverFirewallConfigCmd())
 	// Cluster access plumbing (lke-runner-acl action / fetch-kubeconfig action).
+	// fetch-kubeconfig (the Linode-API variant) is BREAK-GLASS and deliberately
+	// callerless: the workflows use fetch-kubeconfig-state, which reads the TF
+	// state output. The API variant exists precisely because it does NOT need
+	// terraform init, the S3 backend, or git auth — the things most likely to be
+	// broken when an operator needs a kubeconfig by hand.
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
+	// ── BREAK-GLASS VERBS: deliberately callerless ───────────────────────────
+	// bao-status, bao-init, bao-regen-root, fetch-kubeconfig (the API variant) and
+	// openbao-login have ZERO workflow callers on purpose. They are the manual
+	// handles an operator reaches for during an incident — documented in
+	// docs/runbooks/bootstrap-openbao.md ("Break-glass handles").
+	//
+	// They therefore look identical to dead code to any "0 callers" scan, and one
+	// such audit proposed deleting ~500 LOC of them. Owner confirmed: intentional.
+	// Confirm with the owner before retiring any verb in this group — unlike
+	// gh-pat-expiry/cred-audit below, which were genuinely superseded.
+
 	// (gh-pat-expiry + cred-audit were registered here. They were the per-provider
 	// expiry probes, superseded by the credential single-pane flow below, and were
 	// retired once they had zero callers. Their measurement primitives live on in
@@ -135,6 +154,7 @@ func ciCmd() *cobra.Command {
 	// Secretless day-2 auth: exchange a GitHub OIDC token for an OpenBao token
 	// (jwt auth) over a direct API call, for in-cluster runners — the primitive
 	// behind the cross-org thin-caller pattern (docs/designs/cross-org-reuse-pattern.md).
+	// BREAK-GLASS / forward-looking: deliberately callerless today.
 	c.AddCommand(ciOpenBaoLoginCmd())
 	// Copier render-time slimming: prune docs/ to the operator set + reference
 	// the rest at the template repo. (The former strip-comments verb is gone:

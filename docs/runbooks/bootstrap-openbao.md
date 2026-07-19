@@ -194,6 +194,38 @@ A full release workflow calls `bootstrap-openbao.yml` as a reusable workflow (`w
 
 ---
 
+## Break-glass handles (when `bao-ensure-ready` is wedged)
+
+The bootstrap drives the whole seal/token lifecycle through one verb,
+`llz ci bao-ensure-ready` — probe every pod, init if uninitialized, wait for
+unseal, regenerate the root token if the loaded one was revoked.
+
+When that verb itself is stuck, the three steps it orchestrates are also exposed
+individually. **No workflow calls them, deliberately** — they are manual handles,
+run against a cluster you already have a kubeconfig for:
+
+| verb | what it does | reach for it when |
+|---|---|---|
+| `llz ci bao-status` | probes every OpenBao pod, reports initialized/sealed | you want the seal state without changing anything — always safe, start here |
+| `llz ci bao-init` | first-time `bao operator init`; persists recovery keys + root token | the cluster is genuinely uninitialized and the automated branch did not run |
+| `llz ci bao-regen-root` | regenerates the root token by quorum | the loaded root token was revoked (the end-of-run revoke raced a retry) and you need a usable one back |
+
+Two more in the same category, listed so nobody mistakes them for dead code:
+
+- `llz ci fetch-kubeconfig` — the **Linode-API** kubeconfig fetch. The workflows
+  use `fetch-kubeconfig-state` (reads the Terraform state output); this one exists
+  precisely because it needs no `terraform init`, no S3 backend and no git auth —
+  the things most likely to be broken when you need a kubeconfig by hand.
+- `llz ci openbao-login` — exchanges a GitHub OIDC token for a short-lived
+  OpenBao token (jwt auth), the primitive behind the cross-org thin-caller
+  pattern.
+
+> These verbs report **zero callers** to any "is this still used?" scan. That is
+> expected: a break-glass tool is used by a human during an incident, not by a
+> workflow. Confirm with the owner before "retiring" any of them.
+
+---
+
 ## See also
 
 - [`docs/secrets.md`](../secrets.md) — full secrets operations guide, dual-write rotation, query examples
