@@ -66,3 +66,7 @@ github_runner_ipv4_cidrs = []  # e.g. ["203.0.113.0/24"]
 github_runner_ipv6_cidrs = []
 
 autoscaler_enabled = false
+# Pool bounds — only consulted when autoscaler_enabled = true. Uncomment to
+# override the 3/6 default (spec: cluster.nodePool.autoscalerMin/autoscalerMax).
+# autoscaler_min = 3
+# autoscaler_max = 6

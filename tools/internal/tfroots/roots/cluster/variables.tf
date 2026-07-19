@@ -1,9 +1,3 @@
-variable "linode_api_version" {
-  description = "Linode API version. LKE Enterprise requires v4beta."
-  type        = string
-  default     = "v4beta"
-}
-
 variable "cluster_label" {
   description = "Unique label for the LKE Enterprise cluster."
   type        = string

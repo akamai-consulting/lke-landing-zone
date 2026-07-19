@@ -13,6 +13,63 @@ moved {
   to   = linode_firewall.this
 }
 
+locals {
+  # The baseline inbound rule set, as data. Every rule is ACCEPT against an
+  # inbound_policy of DROP, so relative order carries no meaning — but the list
+  # order is preserved on create anyway, so this stays byte-comparable with the
+  # firewall Terraform used to stamp from thirteen hand-written blocks.
+  #
+  # EAA SSH-bastion (TCP/22) and HTTPS (TCP/443) are deliberately absent: the
+  # in-cluster cloud-firewall-controller resolves those CIDRs from the Linode
+  # firewall template via the API and reconciles them (with a committed
+  # firewall_rules/ fallback) every cycle. Terraform lays down this static
+  # baseline plus the optional GitHub-runner NodePort rules and then hands off.
+  firewall_rules = concat(
+    [
+      # VPC intra-cluster — Cilium overlay (VXLAN 8472), health checks (4240),
+      # and inter-node DNS, all sourced from the VPC subnet.
+      { label = "allow-vpc-intra-tcp", protocol = "TCP", ports = "1-65535", ipv4 = [var.vpc_subnet_cidr], ipv6 = null },
+      { label = "allow-vpc-intra-udp", protocol = "UDP", ports = "1-65535", ipv4 = [var.vpc_subnet_cidr], ipv6 = null },
+
+      # ICMP, all sources.
+      { label = "allow-icmp", protocol = "ICMP", ports = null, ipv4 = ["0.0.0.0/0"], ipv6 = ["::/0"] },
+
+      # Control-plane → node, over the Linode private network.
+      { label = "allow-kubelet", protocol = "TCP", ports = "10250,10256", ipv4 = [var.control_plane_cidr], ipv6 = null },
+      { label = "allow-lke-wireguard", protocol = "UDP", ports = "51820", ipv4 = [var.control_plane_cidr], ipv6 = null },
+      { label = "allow-cluster-dns-tcp", protocol = "TCP", ports = "53", ipv4 = [var.control_plane_cidr], ipv6 = null },
+      { label = "allow-cluster-dns-udp", protocol = "UDP", ports = "53", ipv4 = [var.control_plane_cidr], ipv6 = null },
+      { label = "allow-calico-bgp", protocol = "TCP", ports = "179", ipv4 = [var.control_plane_cidr], ipv6 = null },
+      { label = "allow-calico-typha", protocol = "TCP", ports = "5473", ipv4 = [var.control_plane_cidr], ipv6 = null },
+      { label = "allow-cluster-ipencap", protocol = "IPENCAP", ports = null, ipv4 = [var.control_plane_cidr], ipv6 = null },
+      { label = "allow-prometheus-healthcheck", protocol = "TCP", ports = "9098", ipv4 = [var.control_plane_cidr], ipv6 = null },
+
+      # NodePort services — NodeBalancer health checks and forwarded traffic.
+      { label = "allow-nodeports-tcp", protocol = "TCP", ports = "30000-32767", ipv4 = [var.nodebalancer_cidr], ipv6 = null },
+      { label = "allow-nodeports-udp", protocol = "UDP", ports = "30000-32767", ipv4 = [var.nodebalancer_cidr], ipv6 = null },
+    ],
+    # Optional: GitHub Actions runner NodePort access, for integration tests and
+    # deployment health checks. The same CIDRs are concat()'d into the bootstrap
+    # control-plane ACL in main.tf.
+    local.has_runner_cidrs ? [
+      {
+        label    = "allow-nodeports-tcp-gh-runners"
+        protocol = "TCP"
+        ports    = "30000-32767"
+        ipv4     = length(var.github_runner_ipv4_cidrs) > 0 ? var.github_runner_ipv4_cidrs : null
+        ipv6     = length(var.github_runner_ipv6_cidrs) > 0 ? var.github_runner_ipv6_cidrs : null
+      },
+      {
+        label    = "allow-nodeports-udp-gh-runners"
+        protocol = "UDP"
+        ports    = "30000-32767"
+        ipv4     = length(var.github_runner_ipv4_cidrs) > 0 ? var.github_runner_ipv4_cidrs : null
+        ipv6     = length(var.github_runner_ipv6_cidrs) > 0 ? var.github_runner_ipv6_cidrs : null
+      },
+    ] : [],
+  )
+}
+
 resource "linode_firewall" "this" {
   #checkov:skip=CKV_LIN_6: LKE nodes need unrestricted egress for image pulls, DNS, and workload traffic.
   label           = local.firewall_label
@@ -20,157 +77,28 @@ resource "linode_firewall" "this" {
   inbound_policy  = "DROP"
   outbound_policy = "ACCEPT"
 
-  # ── VPC intra-cluster ──────────────────────────────────────────────────────
-  # Covers Cilium overlay (VXLAN 8472), health checks (4240), and inter-node
-  # DNS — all sourced from the VPC subnet.
-  inbound {
-    label    = "allow-vpc-intra-tcp"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "1-65535"
-    ipv4     = [var.vpc_subnet_cidr]
-  }
-
-  inbound {
-    label    = "allow-vpc-intra-udp"
-    action   = "ACCEPT"
-    protocol = "UDP"
-    ports    = "1-65535"
-    ipv4     = [var.vpc_subnet_cidr]
-  }
-
-  # ── ICMP (all sources) ─────────────────────────────────────────────────────
-  inbound {
-    label    = "allow-icmp"
-    action   = "ACCEPT"
-    protocol = "ICMP"
-    ipv4     = ["0.0.0.0/0"]
-    ipv6     = ["::/0"]
-  }
-
-  # ── Control-plane → node (Linode private network) ─────────────────────────
-  inbound {
-    label    = "allow-kubelet"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "10250,10256"
-    ipv4     = [var.control_plane_cidr]
-  }
-
-  inbound {
-    label    = "allow-lke-wireguard"
-    action   = "ACCEPT"
-    protocol = "UDP"
-    ports    = "51820"
-    ipv4     = [var.control_plane_cidr]
-  }
-
-  inbound {
-    label    = "allow-cluster-dns-tcp"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "53"
-    ipv4     = [var.control_plane_cidr]
-  }
-
-  inbound {
-    label    = "allow-cluster-dns-udp"
-    action   = "ACCEPT"
-    protocol = "UDP"
-    ports    = "53"
-    ipv4     = [var.control_plane_cidr]
-  }
-
-  inbound {
-    label    = "allow-calico-bgp"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "179"
-    ipv4     = [var.control_plane_cidr]
-  }
-
-  inbound {
-    label    = "allow-calico-typha"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "5473"
-    ipv4     = [var.control_plane_cidr]
-  }
-
-  inbound {
-    label    = "allow-cluster-ipencap"
-    action   = "ACCEPT"
-    protocol = "IPENCAP"
-    ipv4     = [var.control_plane_cidr]
-  }
-
-  inbound {
-    label    = "allow-prometheus-healthcheck"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "9098"
-    ipv4     = [var.control_plane_cidr]
-  }
-
-  # ── NodePort services (NodeBalancer health checks + external traffic) ──────
-  inbound {
-    label    = "allow-nodeports-tcp"
-    action   = "ACCEPT"
-    protocol = "TCP"
-    ports    = "30000-32767"
-    ipv4     = [var.nodebalancer_cidr]
-  }
-
-  inbound {
-    label    = "allow-nodeports-udp"
-    action   = "ACCEPT"
-    protocol = "UDP"
-    ports    = "30000-32767"
-    ipv4     = [var.nodebalancer_cidr]
-  }
-
-  # EAA SSH-bastion (TCP/22) and HTTPS (TCP/443) rules are no longer seeded here:
-  # the in-cluster cloud-firewall-controller resolves those CIDRs from the Linode
-  # firewall template via the Linode API and reconciles them (with a committed
-  # firewall_rules/ fallback) on every cycle. Terraform only lays down the static
-  # baseline below plus the optional GitHub-runner NodePort rules.
-
-  # ── Optional: GitHub Actions runner NodePort access ────────────────────────
-  # Enables integration-test and deployment health-check traffic from runners.
-  # Set github_runner_ipv4_cidrs / github_runner_ipv6_cidrs to activate. The same
-  # CIDRs are concat()'d into the bootstrap control-plane ACL in main.tf.
   dynamic "inbound" {
-    for_each = local.has_runner_cidrs ? [1] : []
+    for_each = local.firewall_rules
     content {
-      label    = "allow-nodeports-tcp-gh-runners"
+      label    = inbound.value.label
       action   = "ACCEPT"
-      protocol = "TCP"
-      ports    = "30000-32767"
-      ipv4     = length(var.github_runner_ipv4_cidrs) > 0 ? var.github_runner_ipv4_cidrs : null
-      ipv6     = length(var.github_runner_ipv6_cidrs) > 0 ? var.github_runner_ipv6_cidrs : null
-    }
-  }
-
-  dynamic "inbound" {
-    for_each = local.has_runner_cidrs ? [1] : []
-    content {
-      label    = "allow-nodeports-udp-gh-runners"
-      action   = "ACCEPT"
-      protocol = "UDP"
-      ports    = "30000-32767"
-      ipv4     = length(var.github_runner_ipv4_cidrs) > 0 ? var.github_runner_ipv4_cidrs : null
-      ipv6     = length(var.github_runner_ipv6_cidrs) > 0 ? var.github_runner_ipv6_cidrs : null
+      protocol = inbound.value.protocol
+      ports    = inbound.value.ports
+      ipv4     = inbound.value.ipv4
+      ipv6     = inbound.value.ipv6
     }
   }
 
   # This is a bootstrap baseline only. After the node pool initialises, the
   # cloud-firewall-controller and ACL controller take over rule management via
   # the Linode API. Ignoring rule drift here prevents Terraform from overwriting
-  # their live state on subsequent applies.
+  # their live state on subsequent applies. (Only `inbound` is listed: the
+  # resource declares outbound_policy but no outbound blocks, so ignoring
+  # `outbound` was a no-op naming a rule set that does not exist.)
   #
   # To fully remove the resource from state after handoff:
   #   terraform state rm module.<name>.linode_firewall.this
   lifecycle {
-    ignore_changes = [inbound, outbound]
+    ignore_changes = [inbound]
   }
 }

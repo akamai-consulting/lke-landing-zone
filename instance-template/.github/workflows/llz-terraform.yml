@@ -221,7 +221,6 @@ jobs:
         working-directory: terraform-iac-bootstrap/cluster
         env:
           LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
-          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
           AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
           REGION:                ${{ matrix.region }}
@@ -230,7 +229,6 @@ jobs:
         working-directory: terraform-iac-bootstrap/cluster
         env:
           LINODE_TOKEN:                    ${{ secrets.LINODE_API_TOKEN }}
-          TF_VAR_linode_token:             ${{ secrets.LINODE_API_TOKEN }}
           TF_VAR_github_token:             ${{ secrets.GITHUB_TOKEN }}
           TF_VAR_github_api_url:           ${{ github.api_url }}
           AWS_ACCESS_KEY_ID:               ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -347,7 +345,6 @@ jobs:
       REGION:                ${{ inputs.region }}
       ACTION:                ${{ inputs.action }}
       LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
-      TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
@@ -987,7 +984,7 @@ jobs:
     env:
       REGION:                ${{ inputs.region }}
       ACTION:                ${{ inputs.action }}
-      TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+      LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
       AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
     steps:
@@ -1073,7 +1070,7 @@ jobs:
       - name: Terraform plan destroy — object-storage
         working-directory: terraform-iac-bootstrap/object-storage
         env:
-          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
           AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
         run: |
@@ -1264,7 +1261,7 @@ jobs:
       - name: Terraform destroy — object-storage
         working-directory: terraform-iac-bootstrap/object-storage
         env:
-          TF_VAR_linode_token:   ${{ secrets.LINODE_API_TOKEN }}
+          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
           AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
         run: |

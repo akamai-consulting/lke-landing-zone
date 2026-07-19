@@ -22,6 +22,8 @@ spec:
       type: g8-dedicated-16-8
       count: 8
       autoscalerEnabled: true                      # optional; omit → tfvars-example default
+      autoscalerMin: 6                             # optional; omit → 3
+      autoscalerMax: 12                            # optional; omit → 6
 
     controlPlane:                                  # → control_plane_* (both optional)
       highAvailability: true
