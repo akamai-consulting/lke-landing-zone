@@ -3,9 +3,9 @@ name: Dependabot auto-merge
 on:
   pull_request:
 
-permissions:
-  contents: write
-  pull-requests: write
+# No workflow-level `permissions:` block: the only job declares its own (below),
+# which overrides it entirely. The previous workflow-level `contents: write` was
+# therefore granted to nothing, while reading as though the workflow could push.
 
 jobs:
   auto-merge:
@@ -19,28 +19,33 @@ jobs:
       - name: Auto-merge patch and minor updates
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # There is no checkout step here (nothing needs the tree), so gh has no
+          # git remote to infer the repo from — name it explicitly.
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+        # `gh` is preinstalled on the runner and does natively what this step used
+        # to hand-roll with two curls and three `python3 -c` JSON parsers.
+        #
+        # The rewrite also fixes a silent failure. The old final call was
+        # `curl -sSf -X POST` against $GITHUB_GRAPHQL_URL — but `-f` only fails on
+        # HTTP >= 400, and GraphQL reports errors as HTTP 200 with an `errors`
+        # array. So when enablePullRequestAutoMerge was rejected (auto-merge
+        # disabled on the repo, branch protection missing, PR not mergeable) the
+        # step exited 0 and reported green having enabled nothing, and nobody read
+        # the response body. `gh pr merge --auto` performs the same mutation and
+        # exits non-zero when it fails.
         run: |
-          pr=$(curl -sSf \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
-          body=$(echo "$pr" | python3 -c "import sys,json; print(json.load(sys.stdin).get('body') or '')")
+          set -euo pipefail
+          body="$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')"
 
-          if echo "$body" | grep -qF 'update-type: version-update:semver-major'; then
+          if grep -qF 'update-type: version-update:semver-major' <<<"$body"; then
             echo "Contains major update — skipping auto-merge"
             exit 0
           fi
-          if ! echo "$body" | grep -qF 'update-type: version-update:semver-'; then
+          if ! grep -qF 'update-type: version-update:semver-' <<<"$body"; then
             echo "No recognised semver update-type found — skipping"
             exit 0
           fi
 
           echo "Patch/minor update — enabling auto-merge"
-          node_id=$(echo "$pr" | python3 -c "import sys,json; print(json.load(sys.stdin)['node_id'])")
-          mutation="mutation{enablePullRequestAutoMerge(input:{pullRequestId:\"${node_id}\",mergeMethod:SQUASH}){pullRequest{number}}}"
-          curl -sSf -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            "$GITHUB_GRAPHQL_URL" \
-            -d "$(python3 -c "import json,sys; print(json.dumps({'query': sys.argv[1]}))" "$mutation")"
+          gh pr merge "$PR_NUMBER" --auto --squash
