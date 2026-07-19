@@ -87,11 +87,3 @@ variable "github_runner_ipv6_cidrs" {
   type        = list(string)
   default     = []
 }
-
-# ── Kubeconfig ────────────────────────────────────────────────────────────────
-
-variable "kubeconfig_path" {
-  description = "Absolute path to write the generated kubeconfig file (mode 0600). Leave empty to skip writing to disk and consume kubeconfig_raw from outputs instead."
-  type        = string
-  default     = ""
-}

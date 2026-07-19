@@ -33,6 +33,11 @@ variable "ha_role" {
   }
 }
 
+# ha_role/ha_group are consumed OUT OF BAND, not by this root's HCL: `llz topology`
+# parses them straight out of the rendered <env>.tfvars text. They are declared here
+# so (a) terraform does not reject the tfvars for an undeclared variable and (b) the
+# pairing validation below fails a bad HA config at plan time.
+# tflint-ignore: terraform_unused_declarations
 variable "ha_group" {
   description = <<-EOT
     HA pair identifier. The two deployments sharing one non-empty ha_group are

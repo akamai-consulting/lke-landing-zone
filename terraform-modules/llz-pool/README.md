@@ -110,11 +110,8 @@ module "pool" {
 
 ## Outputs
 
-| Name | Description |
-|---|---|
-| `node_pool_id` | Node pool ID. |
-| `node_pool_label` | Node pool label. |
-| `nodes` | List of node objects (`id`, `instance_id`, `status`). |
+None. The pool's label is an input (`label`), and its id/nodes are read from the
+Linode API by `llz` rather than plumbed through Terraform state.
 
 ## Requirements
 

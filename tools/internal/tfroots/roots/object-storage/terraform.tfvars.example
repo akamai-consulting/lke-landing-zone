@@ -1,21 +1,20 @@
-# object-storage — Linode Object Storage buckets (registry + logs) with scoped
-# access keys and a rotation clock. Consumed by Harbor and Loki.
+# object-storage — Linode Object Storage buckets (registry + logs). Consumed by
+# Harbor and Loki. Buckets only: the scoped access keys are minted by
+# `llz ci mint-bootstrap-objkeys` and rotated in-cluster, never by Terraform.
 #
-#   terraform workspace select <env>      # must match the cluster workspace
 #   terraform apply -var-file=<env>.tfvars
+#
+# Per-env separation is the backend state key (-backend-config at init), NOT a
+# terraform workspace.
 #
 # Copy to <env>.tfvars (lab | staging | primary | secondary | <your-env>).
 
-# Deployment suffix — must match the matching cluster workspace deployment.
+# Deployment suffix — must match the matching cluster deployment.
 region_suffix = "your-env"
 
 # Linode Object Storage cluster ID. List options with:
 #   linode-cli object-storage clusters-list
 obj_cluster = "us-ord-1"
-
-# Maximum Loki OBJ access-key age (days) before forced rotation. LKE Secrets
-# Rotation Guidelines mandate ≤120. Default is 120; uncomment to tighten.
-# obj_key_rotation_days = 120
 
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
 #   TF_VAR_linode_token   Linode account API token (object-storage:read_write)

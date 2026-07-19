@@ -70,20 +70,9 @@ module "cluster" {
 }
 ```
 
-### With kubeconfig written to disk
+### Consuming the kubeconfig
 
-```hcl
-module "cluster" {
-  source = "../../terraform-modules/llz-cluster"
-
-  cluster_label   = "platform-primary"
-  region          = "us-ord"
-  k8s_version     = "v1.32.9+lke4"
-  kubeconfig_path = "/home/runner/.kube/platform-primary.yaml"
-}
-```
-
-Leave `kubeconfig_path` unset to skip writing to disk and consume the kubeconfig directly from the output:
+The module never writes the kubeconfig to disk — take it from the output:
 
 ```
 terraform output -raw kubeconfig_raw > ~/.kube/platform-primary.yaml
@@ -149,23 +138,18 @@ The node firewall follows the same model via `llz-node-firewall` — see that mo
 | `firewall_label` | `string` | `""` | Override the Cloud Firewall label. Defaults to `<cluster_label>-nodes`. |
 | `github_runner_ipv4_cidrs` | `list(string)` | `[]` | Runner IPv4 CIDRs — adds NodePort rules and merges into bootstrap ACL. |
 | `github_runner_ipv6_cidrs` | `list(string)` | `[]` | Runner IPv6 CIDRs — adds NodePort rules and merges into bootstrap ACL. |
-| `kubeconfig_path` | `string` | `""` | Path to write the kubeconfig (mode `0600`). Skip by leaving empty. |
 
 ## Outputs
 
 | Name | Description |
 |---|---|
 | `cluster_id` | LKE cluster ID. |
-| `cluster_status` | LKE cluster status. |
 | `api_endpoints` | Kubernetes API server endpoints. |
 | `kubeconfig_raw` | Decoded kubeconfig. Sensitive. |
-| `kubeconfig_path` | Path of the kubeconfig file on disk. Empty if not written. |
 | `vpc_id` | VPC ID. |
 | `vpc_subnet_id` | Worker node subnet ID. |
 | `node_firewall_id` | Cloud Firewall ID — pass as `firewall_id` on `linode_lke_node_pool`. |
 | `node_firewall_label` | Resolved Cloud Firewall label. |
-| `acl_cidrs_ipv4` | Runner IPv4 CIDRs echoed for downstream reference. |
-| `acl_cidrs_ipv6` | Runner IPv6 CIDRs echoed for downstream reference. |
 
 ## Requirements
 

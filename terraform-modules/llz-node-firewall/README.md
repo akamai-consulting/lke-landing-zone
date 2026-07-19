@@ -45,8 +45,8 @@ resource "linode_lke_cluster" "this" {
       enabled = true
       addresses {
         # Merge your static allow-list with the runner CIDRs from the module.
-        ipv4 = concat(var.control_plane_acl_ipv4, module.lke_node_firewall.acl_cidrs_ipv4)
-        ipv6 = concat(var.control_plane_acl_ipv6, module.lke_node_firewall.acl_cidrs_ipv6)
+        ipv4 = concat(var.control_plane_acl_ipv4, var.github_runner_ipv4_cidrs)
+        ipv6 = concat(var.control_plane_acl_ipv6, var.github_runner_ipv6_cidrs)
       }
     }
   }
@@ -115,8 +115,6 @@ Outbound default: **ACCEPT** (nodes need unrestricted egress for image pulls, DN
 |---|---|
 | `firewall_id` | Cloud Firewall ID. Pass as `firewall_id` on `linode_lke_node_pool`. |
 | `firewall_label` | Resolved label of the Cloud Firewall. |
-| `acl_cidrs_ipv4` | GitHub runner IPv4 CIDRs for `concat()` into the LKE-E control-plane ACL. |
-| `acl_cidrs_ipv6` | GitHub runner IPv6 CIDRs for `concat()` into the LKE-E control-plane ACL. |
 
 ## Requirements
 

@@ -32,20 +32,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// tfrootTokens resolves the three copier tokens the generated TF roots carry:
+// tfrootTokens resolves the two copier tokens the generated TF roots carry:
 // upstream_org is the constant akamai-consulting (no forks — mirrors the kustomize
 // hardcoding); ref is the template version the instance tracks (resolveTemplateRef,
-// "main" when un-scaffolded); instance_repo is the instance's own owner/name from
-// .copier-answers.yml, falling back to the spec's instance repo.
-func tfrootTokens() (upstreamOrg, ref, instanceRepo string) {
-	upstreamOrg = "akamai-consulting"
-	ref = orElse(resolveTemplateRef(), "main")
-	if a, _ := readAnswers("."); a != nil && a.InstanceRepo != "" {
-		instanceRepo = a.InstanceRepo
-	} else if lz, present, err := loadSpec(); present && err == nil {
-		instanceRepo = lz.Spec.Instance.Repo
-	}
-	return
+// "main" when un-scaffolded).
+func tfrootTokens() (upstreamOrg, ref string) {
+	return "akamai-consulting", orElse(resolveTemplateRef(), "main")
 }
 
 // tfrootExample reads a root's terraform.tfvars.example from the embedded tfroots
@@ -56,8 +48,8 @@ func tfrootExample(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	org, ref, instRepo := tfrootTokens()
-	return tfroots.Substitute(string(b), org, ref, instRepo), nil
+	org, ref := tfrootTokens()
+	return tfroots.Substitute(string(b), org, ref), nil
 }
 
 // envVPCCmd prints the shared VPC (spec.networks name) a deployment attaches to,
@@ -264,8 +256,8 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 
 	// The generated TF roots (env-identical; all per-env variation lives in tfvars).
 	// dst is the instance root, so the files land under tfDir.
-	org, ref, instRepo := tfrootTokens()
-	for p, c := range tfroots.Files(filepath.Dir(tfDir), org, ref, instRepo) {
+	org, ref := tfrootTokens()
+	for p, c := range tfroots.Files(filepath.Dir(tfDir), org, ref) {
 		targets[p] = c
 	}
 

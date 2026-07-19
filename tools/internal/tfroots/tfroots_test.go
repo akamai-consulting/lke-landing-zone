@@ -20,7 +20,7 @@ var wantRoots = []string{"cluster", "object-storage", "vpc"}
 // byte-identical to the embed, and a token-bearing file reflects the values.
 func TestFilesProducesTokenFreeTF(t *testing.T) {
 	dst := t.TempDir()
-	files := Files(dst, "akamai-consulting", "v9.9.9", "acme/inst")
+	files := Files(dst, "akamai-consulting", "v9.9.9")
 	if len(files) == 0 {
 		t.Fatal("Files produced nothing")
 	}
@@ -100,9 +100,9 @@ func TestTfvarsExample(t *testing.T) {
 }
 
 func TestSubstitute(t *testing.T) {
-	in := "org=<@ upstream_org @> ref=<@ llz_version @> repo=<@ instance_repo @>"
-	got := Substitute(in, "akamai-consulting", "v1.2.3", "acme/inst")
-	want := "org=akamai-consulting ref=v1.2.3 repo=acme/inst"
+	in := "org=<@ upstream_org @> ref=<@ llz_version @>"
+	got := Substitute(in, "akamai-consulting", "v1.2.3")
+	want := "org=akamai-consulting ref=v1.2.3"
 	if got != want {
 		t.Errorf("Substitute = %q, want %q", got, want)
 	}

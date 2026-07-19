@@ -51,12 +51,6 @@ module "cluster" {
   firewall_label           = var.firewall_label
   github_runner_ipv4_cidrs = var.github_runner_ipv4_cidrs
   github_runner_ipv6_cidrs = var.github_runner_ipv6_cidrs
-
-  # The kubeconfig is consumed from the kubeconfig_raw state OUTPUT (by
-  # `llz ci fetch-kubeconfig-state`), not from a file, so this workspace does not
-  # need a local copy. (It used to be read via terraform_remote_state by the
-  # cluster-bootstrap workspace, which no longer exists.)
-  kubeconfig_path = ""
 }
 
 module "node_pool" {

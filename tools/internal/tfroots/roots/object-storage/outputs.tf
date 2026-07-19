@@ -21,8 +21,3 @@ output "s3_endpoint" {
   description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster so destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
   value       = module.object_storage.s3_endpoint
 }
-
-output "next_steps" {
-  description = "Post-apply checklist."
-  value       = module.object_storage.next_steps
-}
