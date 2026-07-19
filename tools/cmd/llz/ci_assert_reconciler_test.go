@@ -9,22 +9,56 @@ import (
 
 func TestPromScalar(t *testing.T) {
 	one := []byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1720000000,"1"]}]}}`)
-	if v, ok := promScalar(one); !ok || v != 1 {
-		t.Errorf("expected (1,true), got (%v,%v)", v, ok)
+	if v, ok, err := promScalar(one); !ok || v != 1 || err != nil {
+		t.Errorf("expected (1,true,nil), got (%v,%v,%v)", v, ok, err)
 	}
 	zero := []byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1720000000,"0"]}]}}`)
-	if v, ok := promScalar(zero); !ok || v != 0 {
-		t.Errorf("expected (0,true), got (%v,%v)", v, ok)
+	if v, ok, err := promScalar(zero); !ok || v != 0 || err != nil {
+		t.Errorf("expected (0,true,nil), got (%v,%v,%v)", v, ok, err)
 	}
+
+	// An empty result is a real ANSWER: Prometheus was asked and the series is
+	// genuinely absent. No query error.
 	empty := []byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`)
-	if _, ok := promScalar(empty); ok {
-		t.Error("empty result must report no series")
+	if _, ok, err := promScalar(empty); ok || err != nil {
+		t.Errorf("empty result must be (no series, no error), got (ok=%v, err=%v)", ok, err)
 	}
-	if _, ok := promScalar([]byte(`{"status":"error","error":"bad"}`)); ok {
-		t.Error("non-success status must report no series")
+
+	// These are NOT answers about the series — the query itself failed. Folding
+	// them into "no series" is what made a Prometheus hiccup report as "the
+	// reconciler isn't reporting (pod down / not scraped)".
+	for _, tt := range []struct{ name, body string }{
+		{"prometheus returned an error", `{"status":"error","error":"bad"}`},
+		{"unparseable body", `not json`},
+		{"malformed sample tuple", `{"status":"success","data":{"result":[{"value":[1720000000]}]}}`},
+		{"non-string value", `{"status":"success","data":{"result":[{"value":[1720000000,7]}]}}`},
+		{"non-numeric value", `{"status":"success","data":{"result":[{"value":[1720000000,"NaNsense"]}]}}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok, err := promScalar([]byte(tt.body)); ok || err == nil {
+				t.Errorf("must report a QUERY error, not an absent series; got (ok=%v, err=%v)", ok, err)
+			}
+		})
 	}
-	if _, ok := promScalar([]byte(`not json`)); ok {
-		t.Error("unparseable body must report no series")
+}
+
+// TestEvalReconcilerGaugeBlamesTheRightThing pins the message split: an absent
+// series accuses the reconciler; a failed query must not.
+func TestEvalReconcilerGaugeBlamesTheRightThing(t *testing.T) {
+	const absentWhy = "the reconciler isn't reporting (pod down / not scraped)"
+
+	absent := []byte(`{"status":"success","data":{"result":[]}}`)
+	if g := evalReconcilerGauge("m", "q", absent, 1, absentWhy, "mismatch"); g.failWhy != absentWhy {
+		t.Errorf("a genuinely absent series should keep its diagnosis, got %q", g.failWhy)
+	}
+
+	broken := []byte(`{"status":"error","error":"query timed out"}`)
+	g := evalReconcilerGauge("m", "q", broken, 1, absentWhy, "mismatch")
+	if g.failWhy == absentWhy {
+		t.Error("a Prometheus query failure must NOT be reported as the reconciler being down — that sends the operator to a healthy pod")
+	}
+	if !strings.Contains(g.failWhy, "QUERY failure") || !strings.Contains(g.failWhy, "query timed out") {
+		t.Errorf("failure should name the query and carry Prometheus's reason, got %q", g.failWhy)
 	}
 }
 
