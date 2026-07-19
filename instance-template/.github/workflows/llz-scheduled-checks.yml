@@ -7,11 +7,6 @@ name: llz-scheduled-checks (reusable)
 on:
   workflow_call:
     inputs:
-      fuzz_seconds:
-        description: "Seconds to run each fuzz target (forwarded from the caller's dispatch input)."
-        required: false
-        type: string
-        default: "60"
       template-ref:
         description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
         required: false
