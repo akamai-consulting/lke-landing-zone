@@ -68,13 +68,38 @@ var withPrometheus = func(promSpec string, fn func(get func(apiPath string) ([]b
 	if err := warmUpForward(client, base); err != nil {
 		return err
 	}
+	// A non-2xx is an ERROR, not a body. This returned any response with err ==
+	// nil, so a 503, a 500, or Prometheus's own {"status":"error"} envelope
+	// reached callers as if it were data — and every caller then read it as an
+	// answer about the cluster:
+	//
+	//   alert-eval  a failed metric-name fetch left `known` empty, which makes
+	//               exprMetricsExist return true for every rule, so the DEAD?
+	//               count was structurally 0 and --strict could not fail on it.
+	//               #242 closed the transport path; this closes the body.
+	//   prom-rules  promRulesJSON has no status field, so an error envelope
+	//               unmarshals cleanly with zero groups → "All Prometheus rule
+	//               groups evaluated without errors". Zero rules loaded — the
+	//               exact ruleSelector regression monitoring-label-guard exists
+	//               for — read identically green.
+	//
+	// The body is carried into the error (truncated) so callers keep Prometheus's
+	// own explanation instead of just a status number.
 	get := func(apiPath string) ([]byte, error) {
 		resp, err := client.Get(base + apiPath)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
-		return io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("GET %s: reading response: %w", apiPath, readErr)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("GET %s: Prometheus returned HTTP %d: %s",
+				apiPath, resp.StatusCode, truncateForError(body))
+		}
+		return body, nil
 	}
 	return fn(get)
 }
@@ -143,4 +168,18 @@ func readForwardPort(r io.Reader) (string, error) {
 		return "", err
 	}
 	return "", fmt.Errorf("kubectl port-forward did not report a local port")
+}
+
+// truncateForError keeps an error message readable when the body is an HTML error
+// page or a long JSON envelope.
+func truncateForError(b []byte) string {
+	const max = 200
+	t := strings.TrimSpace(string(b))
+	if t == "" {
+		return "(empty body)"
+	}
+	if len(t) > max {
+		return t[:max] + "…"
+	}
+	return t
 }

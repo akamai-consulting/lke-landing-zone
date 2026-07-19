@@ -215,3 +215,45 @@ func TestAlertEvalStrictFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// TestAlertEvalStrictFailsOnPrometheusErrorBody closes the residual half of the
+// #242 fix. That change made --strict fail when the metric-name fetch returned a
+// transport error. But prom_query's `get` returned ANY response with err == nil,
+// so a 503 or a `{"status":"error"}` envelope arrived as data: nerr stayed nil,
+// the strict guard never fired, `known` stayed empty, exprMetricsExist returned
+// true for every rule, the DEAD? count was structurally 0, and --strict passed
+// green having evaluated nothing.
+//
+// The transport path was closed; the body was not.
+func TestAlertEvalStrictFailsOnPrometheusErrorBody(t *testing.T) {
+	rulesJSON := []byte(`{"items":[{"spec":{"groups":[{"name":"g","rules":[` +
+		`{"alert":"LLZTokenExpiringSoon","expr":"llz_token_expiry_days < 14"}]}]}}]}`)
+
+	// A 200 response whose BODY says error — Prometheus's own failure envelope.
+	setup := func(t *testing.T) {
+		withExecOutput(t, func(string, ...string) ([]byte, error) { return rulesJSON, nil })
+		withPrometheusStub(t, func(_ string, fn func(func(string) ([]byte, error)) error) error {
+			return fn(func(path string) ([]byte, error) {
+				if strings.Contains(path, "__name__") {
+					// What a hardened `get` now produces for a non-2xx.
+					return nil, errors.New(`GET /api/v1/label/__name__/values: Prometheus returned HTTP 503: {"status":"error"}`)
+				}
+				return []byte(`{"status":"success","data":{"result":[]}}`), nil
+			})
+		})
+	}
+
+	setup(t)
+	if err := runCIAlertEval(".", "monitoring/prometheus-operated:9090", "", false); err != nil {
+		t.Errorf("report-only must stay non-fatal, got %v", err)
+	}
+
+	setup(t)
+	err := runCIAlertEval(".", "monitoring/prometheus-operated:9090", "", true)
+	if err == nil {
+		t.Fatal("--strict must FAIL when the metric-name fetch errored — otherwise DEAD? is structurally 0 and the gate passes having checked nothing")
+	}
+	if !strings.Contains(err.Error(), "--strict") {
+		t.Errorf("error should name --strict: %v", err)
+	}
+}
