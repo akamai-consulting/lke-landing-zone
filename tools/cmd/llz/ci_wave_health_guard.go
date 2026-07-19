@@ -25,7 +25,6 @@ package main
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -193,26 +192,19 @@ func runCIWaveHealthGuard(root string) error {
 // negative-wave resource against waveHealthAllowedKinds + the values overrides.
 func collectWaveHealthFindings(dirs []string, values string) ([]waveHealthFinding, error) {
 	var findings []waveHealthFinding
-	for _, dir := range dirs {
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".yaml") {
-				return err
+	// walkManifests also brings the missing-directory tolerance this guard alone
+	// lacked — it used to hard-error on a layout its three siblings skipped — and
+	// the *.yml extension it alone would have ignored.
+	if _, err := walkManifests(dirs, func(path string, raw []byte) error {
+		for _, doc := range splitWaveHealthDocs(string(raw)) {
+			f, ok := classifyWaveHealthDoc(path, doc, values)
+			if ok {
+				findings = append(findings, f)
 			}
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			for _, doc := range splitWaveHealthDocs(string(raw)) {
-				f, ok := classifyWaveHealthDoc(path, doc, values)
-				if ok {
-					findings = append(findings, f)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].file != findings[j].file {
