@@ -59,6 +59,22 @@ func TestClassifyLeaderCount(t *testing.T) {
 	}
 }
 
+func TestIsTunnelBlocked(t *testing.T) {
+	if !IsTunnelBlocked(`Get "https://10.3.193.169:443/apis/metrics.k8s.io/v1beta1": No agent available`) {
+		t.Error("aggregated-API discovery through a dead tunnel should match")
+	}
+	if !IsTunnelBlocked("error dialing backend: No agent available") {
+		t.Error("a tunnel-blocked exec should match")
+	}
+	// A real component fault must not be excused as transport.
+	if IsTunnelBlocked("Pod openbao/platform-openbao-0 (sealed)") {
+		t.Error("a genuine failure must not match the tunnel signature")
+	}
+	if IsTunnelBlocked("") {
+		t.Error("empty message must not match")
+	}
+}
+
 func TestCountReadyEndpointsAndWebhook(t *testing.T) {
 	const raw = `[
       {"endpoints": [{"conditions": {"ready": true}}, {"conditions": {"ready": false}}]},

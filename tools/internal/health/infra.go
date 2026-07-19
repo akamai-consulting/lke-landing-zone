@@ -3,11 +3,42 @@ package health
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // infra.go ports the OpenBao seal/HA (1a), admission-webhook (1d) / Service
 // endpoint readiness, and cloud-firewall bootstrap (the kube-system Secret +
 // ConfigMap) checks.
+
+// ── Konnectivity tunnel (apiserver → pod) ────────────────────────────────────
+
+// IsTunnelBlocked reports whether a check's failure text is the konnectivity
+// signature — the apiserver having no proxy agent to reach a pod through.
+//
+// On LKE-Enterprise the control plane is not on the node network, so every
+// apiserver→pod call (aggregated APIService discovery, `kubectl exec`, admission
+// webhooks) is routed through konnectivity. When no agent is registered the
+// apiserver answers "No agent available" on ALL of them at once. That is one
+// infrastructure fault, not several component faults, and it heals on its own —
+// so it must classify as Pending (poll) rather than banking a hard strike.
+//
+// WHY this is not covered by the existing exit-3 "apiserver unreachable" path:
+// that path is gated on the apiserver answering US (kubectlReachable). During a
+// tunnel outage the apiserver is perfectly reachable — `kubectl get` works, which
+// is how the health scan enumerates everything — and only its onward hop to the
+// pods is broken. So the blip lands as exit 1 and, with the default 60s
+// --retry-delay, trips the hard-failed-twice abort ~2 minutes into a 20-minute
+// budget. Observed on the v0.0.x release gate: six checks (two APIServices, three
+// `bao status` execs, and the leader count derived from them) hard-failed
+// together while konnectivity-agent itself reported 3/3 Ready — its readiness
+// probe does not exercise the dial-out — and the run aborted having spent 121s of
+// a 1200s budget. A re-run 10 minutes later converged on the first poll.
+//
+// A tunnel that never recovers still fails: the checks stay Pending and converge
+// exhausts its budget, reporting the tunnel rather than its symptoms.
+func IsTunnelBlocked(msg string) bool {
+	return strings.Contains(msg, "No agent available")
+}
 
 // ── OpenBao seal / Raft HA (1a) ──────────────────────────────────────────────
 

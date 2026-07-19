@@ -98,19 +98,25 @@ var absenceMarkers = []string{
 	"could not find the requested resource", // 404 for a kind that is not served
 }
 
+// execErrText is a failed shell-out's diagnostic text: the captured stderr, or
+// the error itself when there is none (a stubbed execOutput in tests, or a
+// failure before the process ran). execOutput returns stdout only, so without
+// this a kubectl failure's actual reason — the apiserver's "No agent available",
+// a NotFound — is discarded and the caller is left guessing from an empty stdout.
+func execErrText(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && strings.TrimSpace(string(ee.Stderr)) != "" {
+		return string(ee.Stderr)
+	}
+	return err.Error()
+}
+
 // classifyKubectlErr decides whether a failed kubectl call answered the question.
 func classifyKubectlErr(err error) probeVerdict {
-	var ee *exec.ExitError
-	stderr := ""
-	if errors.As(err, &ee) {
-		stderr = string(ee.Stderr)
-	}
-	// Fall back to the error text itself when there is no captured stderr (a
-	// stubbed execOutput in tests, or a failure before the process ran).
-	if strings.TrimSpace(stderr) == "" {
-		stderr = err.Error()
-	}
-	low := strings.ToLower(stderr)
+	low := strings.ToLower(execErrText(err))
 	for _, m := range absenceMarkers {
 		if strings.Contains(low, m) {
 			return probeAbsent

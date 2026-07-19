@@ -551,6 +551,78 @@ func TestCheckOpenBaoSkips(t *testing.T) {
 	}
 }
 
+// record() downgrades a konnectivity-signature hard failure to pending and raises
+// the TunnelDown signal — the transport is down, so the check never reached the
+// component and cannot be a verdict on it.
+func TestRecordDowngradesTunnelFailure(t *testing.T) {
+	var r health.Report
+	record(&r, health.CatFail, `APIService v1beta1.metrics.k8s.io not Available — FailedDiscoveryCheck: Get "https://10.3.193.169:443/apis/metrics.k8s.io/v1beta1": No agent available`)
+	if len(r.Failed) != 0 {
+		t.Errorf("a tunnel outage must not hard-fail; got failed %v", r.Failed)
+	}
+	if len(r.Pending) != 1 {
+		t.Errorf("a tunnel outage should classify as pending; got pending %v", r.Pending)
+	}
+	if !r.TunnelDown {
+		t.Error("record did not raise TunnelDown on the konnectivity signature")
+	}
+	// A genuine failure still hard-fails — the downgrade is signature-scoped, not a
+	// blanket amnesty on everything reported while the tunnel happens to be down.
+	record(&r, health.CatFail, "Pod openbao/platform-openbao-0 (sealed)")
+	if len(r.Failed) != 1 {
+		t.Errorf("a non-tunnel failure must still hard-fail; got failed %v", r.Failed)
+	}
+}
+
+// The end-to-end shape of the release-gate flake: `bao status` execs blocked by a
+// dead tunnel must leave the report pollable (exit 2), not hard-failed — including
+// the leader count, which is derived from those unread pods.
+func TestCheckOpenBaoTunnelBlocked(t *testing.T) {
+	withKubectl(t, func(a string) ([]byte, error) {
+		switch {
+		case strings.Contains(a, "get sts platform-openbao"):
+			return []byte("3"), nil
+		case strings.Contains(a, "exec"):
+			// kubectl surfaces the apiserver's konnectivity error on a failed exec.
+			return nil, errors.New(`error dialing backend: No agent available`)
+		case strings.Contains(a, "containerStatuses"):
+			return []byte("true"), nil
+		case strings.Contains(a, "get pod platform-openbao-"):
+			return []byte("platform-openbao"), nil
+		}
+		return nil, errors.New("unexpected " + a)
+	})
+	var r health.Report
+	checkOpenBao(&r, false)
+	if len(r.Failed) != 0 {
+		t.Errorf("a tunnel outage must not hard-fail the seal check; got failed %v", r.Failed)
+	}
+	if !r.TunnelDown {
+		t.Error("checkOpenBao did not raise TunnelDown when every exec was tunnel-blocked")
+	}
+	if r.ExitCode() != 2 {
+		t.Errorf("tunnel-blocked report = exit %d, want 2 (converge keeps polling)", r.ExitCode())
+	}
+	// The leader count must not assert "no active leader" off three reads that never
+	// happened — it carries no tunnel signature, so this is the threaded guard.
+	for _, p := range r.Pending {
+		if strings.Contains(p, "no active leader") && !strings.Contains(p, "inconclusive") {
+			t.Errorf("leader count concluded from unread pods: %q", p)
+		}
+	}
+}
+
+func TestExecErrText(t *testing.T) {
+	if got := execErrText(nil); got != "" {
+		t.Errorf("execErrText(nil) = %q, want empty", got)
+	}
+	// No captured stderr (a stubbed exec, or a failure before the process ran) =>
+	// fall back to the error text rather than reporting nothing.
+	if got := execErrText(errors.New("boom")); got != "boom" {
+		t.Errorf("execErrText = %q, want the error text", got)
+	}
+}
+
 func TestHealthExitCodePaths(t *testing.T) {
 	// Unreachable apiserver => 3 (infrastructure transient, not a hard strike).
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("refused") })

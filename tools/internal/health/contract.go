@@ -57,6 +57,16 @@ type Report struct {
 	// the oversized CRD last-applied-configuration annotation once. See
 	// health.IsAnnotationLimitError and runConverge.
 	AnnotationLimitWedge bool
+
+	// TunnelDown is set when at least one check failed because the konnectivity
+	// tunnel (apiserver → pod) was unavailable. Like the two above it classifies as
+	// Pending (poll) rather than a hard failure — the tunnel is Linode-managed
+	// infrastructure that heals on its own, so a blip must not burn the converge
+	// budget's hard-strike allowance. It is also printed as a single line in the
+	// summary, because one dead tunnel fails EVERY apiserver→pod check at once and
+	// the unaggregated list reads like several unrelated component faults.
+	// See health.IsTunnelBlocked.
+	TunnelDown bool
 }
 
 // AddFail records a hard failure (a required component the reconciler can't fix).
