@@ -199,7 +199,7 @@ branching the repo:
 
 | Knob | Where | Typical pipeline use |
 |---|---|---|
-| `apl_chart_version` | `cluster-bootstrap/<env>.tfvars` | bump `dev` first, promote the pin to `staging`/`prod` once green |
+| `aplChartVersion` | `spec.cluster.bootstrap.aplChartVersion` (env YAML) | bump `dev` first, promote the pin to `staging`/`prod` once green |
 | `k8s_version` | `cluster/<env>.tfvars` | canary a new LKE-E version on `dev` |
 | node sizing / count | `cluster/<env>.tfvars` | smaller `dev`, production-sized `prod` |
 | region | `cluster/<env>.tfvars` | co-locate or spread stages |

@@ -15,7 +15,7 @@ external-credential substrate this would copy).
 ## What runs today (out of cluster)
 
 The `credential-single-pane` job in
-[`.github/workflows/llz-scheduled-checks.yml`](../../.github/workflows/llz-scheduled-checks.yml)
+[`.github/workflows/llz-scheduled-checks.yml`](../../instance-template/.github/workflows/llz-scheduled-checks.yml)
 runs **daily, per region** (matrix). Per run it:
 
 1. **Opens the ACL dance** — the `cluster-access` composite action reads the cluster
@@ -71,7 +71,7 @@ into that review.
 
 It is one of the two GitHub PATs the inventory measures, but today it exists **only** as
 a GitHub Actions secret. Its lifecycle: TF var `apl_values_repo_token`
-([`cluster-bootstrap/variables.tf`](../../tools/internal/tfroots/roots/cluster-bootstrap/variables.tf))
+(the since-deleted `cluster-bootstrap` root's `variables.tf`)
 → apl-core's `otomi.git.password`. It is **not** in landing-zone OpenBao, not in any
 `ExternalSecret`, and not in the `platform-ci` policy the ESO `openbao` store reads with
 (that policy is a deliberate per-path allowlist — `ci_openbao_configure.go`, "wildcard

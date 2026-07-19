@@ -10,7 +10,7 @@ This document is the runbook for the platform's secret backend. It covers:
 
 The secret store itself runs as an Argo CD-managed Helm release of the published
 `llz-openbao-platform` chart; its Argo CD Application + manifests live ONCE in the
-shared `instance-template/platform-apl/components/openbao/` component (enabled per env
+shared `platform-apl/components/openbao/` component (enabled per env
 via `spec.components.openbao`), and per-env value overrides in `apl-values/<env>/values.yaml`.
 Your application workloads never talk to OpenBao directly — CI fetches the values
 it needs and injects them as deploy-time configuration. (For an edge/serverless
@@ -304,7 +304,7 @@ gh workflow run <deploy-workflow>.yml --ref main
 | Primary write fails                   | 2    | No change in either region |
 | Secondary write fails                 | 3    | Primary rolled back to its prior version |
 | Post-write hash mismatch              | 4    | Both regions updated, but inconsistent — manual intervention |
-| Dry run (`SECRET_SET_DRY_RUN=1`)      | 0    | Nothing written; preview only |
+| Dry run (the default — pass `--yes` to execute) | 0    | Nothing written; preview only |
 
 The script uses KV v2's version history for rollback. If the prior version was 0 (no
 secret existed), rollback is implemented as deleting the metadata path entirely so
@@ -362,7 +362,7 @@ including the caller identity of each write/read of a KV secret) as JSON to
 
 Each OpenBao pod runs a **Promtail sidecar** (see the `llz-openbao-platform` chart's
 `extraContainers`) that tails the audit log and ships events to the in-cluster Loki
-instance in `observability`. The Promtail config is rendered by the chart into the
+instance in `monitoring`. The Promtail config is rendered by the chart into the
 `<release>-openbao-promtail` ConfigMap.
 
 ### Enable the audit device (one-time, per region)
@@ -373,7 +373,7 @@ audit device is declared in the OpenBao HA config so it is present on every pod 
 OpenBao with HTTP 400). To verify the device is active:
 
 ```bash
-kubectl -n openbao exec -it <release>-openbao-0 -- \
+kubectl -n llz-openbao exec -it <release>-openbao-0 -- \
     env VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true VAULT_TOKEN=<token> \
     bao audit list
 ```
@@ -414,7 +414,7 @@ config. Override per cluster via the per-env Argo CD Application value overrides
 
 ### Loki backend
 
-Loki runs in the `observability` namespace on each regional cluster (apl-core
+Loki runs in the `monitoring` namespace on each regional cluster (apl-core
 managed), with storage on **Linode Object Storage** (chunks + index) and **Linode
 Block Storage** (WAL only). See [docs/playbooks/loki-access.md](playbooks/loki-access.md)
 for access and bucket/credentials setup.

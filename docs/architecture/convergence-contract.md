@@ -17,15 +17,16 @@ The contract below replaces all of that with explicit signals.
 
 ---
 
-## The three exit codes
+## The four exit codes
 
-Every "is the cluster ready?" check in this repo — ``llz ci health``, the TF readiness gates, the converge wrapper, any future workflow that needs to ask the question — uses **exactly three exit codes**:
+Every "is the cluster ready?" check in this repo — ``llz ci health``, the TF readiness gates, the converge wrapper, any future workflow that needs to ask the question — uses **exactly four exit codes**:
 
 | Exit | Meaning | What the caller should do |
 |---|---|---|
 | **`0`** | **Converged**. Every required component is Synced + Healthy or Ready, every operator-deferred input is documented as such, and no transient reconciles are in flight. | Proceed. |
 | **`2`** | **In-progress**. The cluster is not yet converged, but no hard failure is observable — Argo apps are still applying / Pods are still pulling / Certificates are still issuing / a CRD just landed and its first reconcile loop hasn't run. | **Poll**. Re-run the same check after a backoff. |
 | **`1`** | **Hard-failed**. A required component is in a state the reconciler cannot resolve on its own — ImagePullBackOff on an image that doesn't exist, CrashLoopBackOff with `Error` exit code, a Job past `backoffLimit`, a Certificate stuck on `IssuerNotReady` for an Issuer that itself is in a `NotReady` terminal state. | Stop. Operator intervention required. |
+| **`3`** | **Apiserver unreachable**. An infrastructure-level blip, not a statement about the cluster's contents — the check could not ask the question at all. | **Retry without spending a hard strike.** Callers MUST distinguish this from `1`; collapsing it into `1` turns every transient apiserver blip into an operator-visible failure. |
 
 ### How to classify a check
 
@@ -62,23 +63,21 @@ The command applies the bootstrap Argo Application only **after** that gate retu
 
 ``llz ci health`` is the single source of truth for "is the cluster converged?". It is the **only** script that decides exit `0` vs `1` vs `2` — every other script and workflow that needs the answer **calls it** rather than re-implementing.
 
-Three modes (driven by `--mode=`):
-
-- **`--mode=converge`** (the default the TF readiness gate and the ``llz ci converge`` wrapper use) — exits `0` on full convergence, `2` while reconciling, `1` on hard failure.
-- **`--mode=verbose`** (debugging) — same exit semantics, dumps describe/log details for everything in `1` or `2` state.
-- **`--mode=summary`** (the `terraform.yml::Check cluster health` step) — same exit semantics, condensed Markdown for the GitHub step summary.
+It takes no mode flag — there is one behavior, and callers distinguish outcomes
+by exit code alone. Its only flag is `--fail-on-unhealthy`.
 
 ### 3. The converge wrapper
 
 ``llz ci converge`` is the "poll until ready" primitive. It:
 
-1. Calls ``llz ci health` --mode=converge`.
+1. Calls ``llz ci health``.
 2. If exit `0` — succeeds.
 3. If exit `2` — sleeps `$INTERVAL` seconds (default 30) and re-checks.
 4. If exit `1` — re-runs once after `$RETRY_DELAY` seconds (default 60) to absorb transient-but-misclassified failures, then propagates exit `1`.
-5. After `$BUDGET` seconds (default 30 min) of total elapsed time with no exit `0`, gives up with exit `1` and dumps a final diagnostic.
+5. If exit `3` — retries without counting a hard strike (the apiserver was unreachable, so the cluster's state is simply unknown).
+6. After `$BUDGET` seconds (default 30 min) of total elapsed time with no exit `0`, gives up with exit `1` and dumps a final diagnostic.
 
-`llz-terraform.yml`'s `bootstrap-openbao` chain calls ``llz ci converge`` at its tail (after the `bootstrap-cluster` job) and treats its exit code as authoritative: a passed workflow now means "the cluster converged within budget", not "every step I happened to run returned 0".
+`llz-terraform.yml`'s `bootstrap-openbao` chain calls ``llz ci converge`` at its tail (the former standalone `bootstrap-cluster` and `converge` jobs are folded into the single `bootstrap` job) and treats its exit code as authoritative: a passed workflow now means "the cluster converged within budget", not "every step I happened to run returned 0".
 
 ---
 

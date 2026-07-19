@@ -6,7 +6,7 @@ went green in release-e2e run 29345530071). #206 trimmed it to on-demand only
 (dropped the scheduled CronWorkflow — see "Triggers" below). Originally pulled
 from PR #202 (the cross-org reuse pattern) after a second critical review found it
 couldn't run as designed; this doc records how it was made real.
-**Relates to:** `instance-template/platform-apl/components/clusterHealthWorkflow/`,
+**Relates to:** `platform-apl/components/clusterHealthWorkflow/`,
 `tools/cmd/llz/ci_health.go`, `docs/designs/kube-native-reconciler.md`,
 `docs/designs/cross-org-reuse-pattern.md` (§ "Day-2", in #202).
 

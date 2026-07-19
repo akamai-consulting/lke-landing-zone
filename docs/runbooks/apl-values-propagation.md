@@ -10,20 +10,23 @@ gate, and no `otomi/values` Gitea repo to seed.
 
 `instance-template/apl-values/<env>/values.yaml` feeds two consumers:
 
-1. **`helm_release.apl`** (cluster-bootstrap) — the file is rendered through
-   `templatefile()` and passed as the apl-core chart values on every
-   `terraform apply`. This sets `otomi.git.*` (the external repo + PAT),
-   `apps.*`, `cluster.*`, and `dns.*`. (apl-core 6.x auto-generates
-   `apps.loki.adminPassword` as an x-secret, so it is no longer rendered here.)
+1. **`llz ci bootstrap-cluster`** — the file is substituted (identity
+   placeholders, tokens) and passed as the apl-core chart values on every
+   bootstrap. This sets `otomi.git.*` (the external repo + PAT), `apps.*`,
+   `cluster.*`, and `dns.*`. Note `apps.loki.adminPassword` IS still rendered
+   here: apl-core 6.x declares it as an x-secret with a generator, but that
+   generator only runs inside otomi's own bootstrap — a raw `helm install apl/apl`
+   validates the schema first and fails "adminPassword is required" if it is
+   omitted.
 
 2. **apl-operator** — on bootstrap it materialises its values tree in the
    external repo (the `env/`, `apps/`, … layout apl-core owns) using the same
    PAT, then reconciles continuously. Argo CD syncs the platform from that repo
    over HTTPS — no SSH keys, no Gitea readiness race.
 
-So edits to `values.yaml` land in the cluster by running `terraform apply` for
-cluster-bootstrap (which re-renders the chart values); ongoing reconciliation is
-Argo-native against the external repo.
+So edits to `values.yaml` land in the cluster by re-running
+`llz ci bootstrap-cluster` (which re-renders the chart values); ongoing
+reconciliation is Argo-native against the external repo.
 
 ## Verifying
 

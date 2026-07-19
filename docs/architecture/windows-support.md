@@ -100,15 +100,13 @@ Grounded in the code as it stands. "Build" = stops a Windows binary from existin
   (`template-scripts/install-llz.sh:42-46`). Adding `windows/amd64` (+ `arm64`)
   to the matrix and an `.exe` suffix is mechanical — but it's the precondition
   for everything below.
-- **One CI step won't *compile* for Windows.** `ci_harbor_steps.go:79` sets
+- ~~**One CI step won't *compile* for Windows.**~~ **RESOLVED.** This document
+  was written when `ci_harbor_steps.go` set
   `cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}` to detach a
-  `kubectl port-forward`. `Setsid` does not exist in `syscall.SysProcAttr` on
-  Windows, so `GOOS=windows go build ./...` **fails to compile the whole
-  binary** — even though this step only ever runs on a CI runner and no operator
-  invokes it. The fix is a build-tag split (`*_unix.go` / `*_windows.go`) behind
-  a small `detachProcess()` seam. This is the cleanest illustration of the cost:
-  a Linux-only *CI* concern forces a portability split in the *operator* binary,
-  because Go compiles the package as a whole.
+  `kubectl port-forward`, which does not compile on Windows. Those port-forward
+  steps were since removed along with the workflow's `harbor` job — `Setsid`
+  appears nowhere in `tools/` today, and `GOOS=windows go build ./...`
+  **succeeds**. No build-tag split is needed.
 
 ### Runtime-level (binary exists, specific commands break)
 
@@ -122,7 +120,7 @@ Grounded in the code as it stands. "Build" = stops a Windows binary from existin
   `open`/`xdg-open` and silently no-ops elsewhere; add `runtime.GOOS ==
   "windows"` → `rundll32 url.dll,FileProtocolHandler` (or `cmd /c start`).
   One-liner.
-- **Hardcoded `/tmp`.** `ci_harbor_steps.go:32-33` pins `/tmp/harbor-pf.{log,pid}`;
+- **Hardcoded `/tmp`.** (Also resolved with the Harbor port-forward removal — `harbor-pf.{log,pid}` no longer exists. Retained as an example of the class.)
   replace with `os.TempDir()` (the pattern `runner_acl.go:309-311` already uses).
   CI-path only, but trivially correct to fix.
 - **Mostly already portable.** Path handling uses `filepath` throughout, password
@@ -160,20 +158,15 @@ cross-compile is already clean: the release build is `CGO_ENABLED=0` with a sing
 (`.github/workflows/llz-release.yml:44-57`), so the binary is one matrix entry
 away once it compiles at all.
 
-### The one hard prerequisite
+### The former hard prerequisite — already cleared
 
-`GOOS=windows go build ./cmd/llz` **fails today** on the `Setsid` field
-(`ci_harbor_steps.go:79`), so nothing ships until that is split. Extract a
-`detachProcess(*exec.Cmd)` seam into two files:
-
-- `harbor_detach_unix.go` (`//go:build !windows`) — sets
-  `SysProcAttr.Setsid = true`, exactly as today.
-- `harbor_detach_windows.go` (`//go:build windows`) — a no-op (or
-  `CREATE_NEW_PROCESS_GROUP`); the step is CI-only and never runs on an operator
-  box, so the Windows arm need only *compile*, not detach for real.
-
-~30 lines, no behavior change on Linux. This is the gate; everything below assumes
-the binary now builds.
+`GOOS=windows go build ./cmd/llz` **succeeds today.** The `Setsid` blocker this
+section was built around is gone (the Harbor port-forward steps that needed it
+were removed with the workflow's `harbor` job), so there is no build-tag split to
+do and no gate in front of the work below. What remains are the genuine gaps:
+`openURL` in `wizard.go` (darwin/xdg-open arms only), `os.Rename` in
+`selfupdate.go`, the missing `.exe` in `assetName`, the bash shim in `hooks.go`
+and its `0o111` gate, and the `[darwin, linux] × [amd64, arm64]` release matrix.
 
 ### Build + publish
 
@@ -304,6 +297,5 @@ fraction of the standing cost.
   Tier-0 answer.
 - [adopter-guide.md](../adopter-guide.md) — the operator flow whose surface this
   doc scopes (§2 install, §4 scaffold + hooks).
-- [recipes.md](recipes.md) — the other live design doc; provider integrations
-  there share the "compiled-in, per-platform driver" shape a `detachProcess()`
-  seam would use.
+- [convergence-contract.md](convergence-contract.md) — the other live doc in this
+  directory.

@@ -47,12 +47,12 @@ scaffold generator that a downstream instance repo consumes.
 ```
 terraform-modules/   Reusable TF modules; published as git:: tagged sources (see RELEASING.md)
 kubernetes-charts/   First-party Helm charts; published to GHCR as OCI artifacts
-tools/               Native Go module: llz (adopter CLI + CI plumbing), firewall-cidrs, firewall-controller
+tools/               Native Go module: llz (adopter CLI + CI plumbing). firewall-cidrs/firewall-controller moved to the private lke-landing-zone-internal repo
 dockerfiles/         Container images (ci-terraform, ci-kubernetes, devcontainer) → ghcr.io/akamai-consulting/*
 template-scripts/    stamp/drift scaffold provenance, git hooks, ci helpers
 instance-template/   Genericized starter material a downstream instance repo instantiates
 docs/                adopter-guide.md, agents.md
-.github/workflows/   build-images.yml, publish-charts.yml, ci-gate.yml, kubernetes.yml
+.github/workflows/   build-images.yml, publish-charts.yml, lint.yml, chart-version-guard.yml, release-e2e*.yml, llz-release.yml, secret-scan.yml
 ```
 
 Per-directory details live in each directory's `AGENTS.md`.
@@ -66,15 +66,16 @@ load-bearing.
 
 - The whole landing zone versions in **lockstep under one bare SemVer tag
   `vX.Y.Z`**: the Terraform modules (`git::?ref=vX.Y.Z`), the reusable workflows +
-  scaffold (`uses:@vX.Y.Z` / `template-ref:`), the `llz` CLI binaries, and the
-  `firewall-controller` image — all at the same commit. (Helm charts are the
+  scaffold (`template-ref:` — the reusable-workflow bodies are referenced by
+  repo-local `./` paths per ADR 0003, so there is no cross-repo `uses:@` to pin),
+  and the `llz` CLI binaries — all at the same commit. (Helm charts are the
   exception: independently versioned via `Chart.yaml`, see below.)
 - **A release is two human steps, gated by e2e.** (1) Publish a **pre-release**
   `vX.Y.Z` → fires `release: prereleased` → `release-e2e.yml` stands up a real
   cluster. The pre-release tag is ignored by `llz self-update`/`new`, and no
   binaries/image are built yet. (2) Once e2e is green, **promote** it to a full
   release (uncheck pre-release) → fires `release: released` → `llz-release.yml`
-  (binaries) + `firewall-controller.yml` (image). The promote click is the
+  (binaries). The promote click is the
   approval; nothing public exists until it. There is nothing to bump first — the
   template hardcodes no version.
 - **Tags are immutable** — never move a tag. To release a change, cut a new one.
@@ -101,8 +102,8 @@ load-bearing.
 ### Container images (`.github/workflows/build-images.yml`)
 
 - `ci-terraform`, `ci-kubernetes`, `devcontainer` build multi-arch (amd64 +
-  arm64) to `ghcr.io/akamai-consulting/*`. `ci-terraform` builds the
-  `firewall-cidrs` Go binary from the `tools/` module (supplied via
+  arm64) to `ghcr.io/akamai-consulting/*`. `ci-terraform` builds the `llz` Go
+  binary from the `tools/` module (supplied via
   `--build-context tools-src=tools`) in a multi-stage build.
 - `devcontainer` is the adopter-workstation image consumed by an instance's
   `.devcontainer/devcontainer.json`; keep its tool versions in lockstep with the

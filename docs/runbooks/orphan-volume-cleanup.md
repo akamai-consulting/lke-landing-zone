@@ -1,8 +1,8 @@
 # Orphan Linode Volume cleanup
 
-The cluster-bootstrap module's destroy hook
-([`null_resource.cleanup_volumes_on_destroy`](../../instance-template/terraform-iac-bootstrap/cluster-bootstrap/main.tf))
-sweeps Linode Block Storage Volumes tagged with this instance's
+The destroy pipeline's volume sweep (`llz ci reap-volumes`, run as a CI step —
+it was formerly a `null_resource` destroy hook in the deleted cluster-bootstrap
+Terraform root) removes Linode Block Storage Volumes tagged with this instance's
 volume-tag (`<volume-tag>` — the StorageClass tag value configured for
 this deployment) after PVC reap. The sweep relies on the StorageClass
 actually applying that tag via its `linodebs.csi.linode.com/volumeTags`

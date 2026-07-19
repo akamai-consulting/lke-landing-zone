@@ -24,7 +24,7 @@ Harbor has no OIDC / LDAP integration in this deployment (`harbor-values.yaml`, 
 1. Get the admin password:
 
     ```bash
-    kubectl -n registry get secret <release>-harbor-core \
+    kubectl -n harbor get secret harbor-admin-password \
       -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' | base64 -d
     ```
 
@@ -49,7 +49,7 @@ Two robots already exist (the CI robot, `pull-<project>`) — both created by th
 
 ```bash
 # Auth as admin
-HARBOR_PASS=$(kubectl -n registry get secret <release>-harbor-core \
+HARBOR_PASS=$(kubectl -n harbor get secret harbor-admin-password \
   -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' | base64 -d)
 
 # Decide the minimum permissions. Examples below — adjust to taste.

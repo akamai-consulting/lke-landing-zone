@@ -79,10 +79,10 @@ flowchart LR
 
 ## Low-level: how an instance converges
 
-Inside an instance, `llz` drives four Terraform roots, the in-cluster bootstrap
-chain hands off to Argo CD, and a set of scheduled workflows keep the cluster
-converged on day-2. Every "is it ready?" check honours the
-[three-exit-code convergence contract](convergence-contract.md).
+Inside an instance, `llz` drives three Terraform roots, runs the in-cluster
+bootstrap natively, hands off to Argo CD, and a set of scheduled workflows keep
+the cluster converged on day-2. Every "is it ready?" check honours the
+[convergence contract](convergence-contract.md).
 
 ```mermaid
 flowchart TB
@@ -95,9 +95,9 @@ flowchart TB
 
     subgraph TFROOTS["Terraform roots — instance-template/terraform-iac-bootstrap/"]
         direction TB
+        R0["vpc (optional)<br/>→ shared VPC, applied before the clusters that attach"]
         R1["cluster<br/>→ llz-cluster (VPC + firewall + LKE-E)<br/>→ linode_lke_node_pool (encrypted nodes)"]
-        R2["object-storage<br/>→ llz-object-storage (OBJ + scoped keys)"]
-        R4["cluster-bootstrap<br/>helm_release.apl + readiness gates"]
+        R2["object-storage<br/>→ llz-object-storage (buckets only)"]
     end
 
     subgraph CLUSTER["☸️ In-cluster bootstrap chain (sync-wave ordered)"]
@@ -110,18 +110,19 @@ flowchart TB
         CERT["llz-cert-automation<br/>(event-driven cert renewal)"]
     end
 
-    GATE{{"Convergence contract<br/>0 = converged · 2 = in-progress (poll) · 1 = hard-fail (stop)"}}
+    GATE{{"Convergence contract<br/>0 = converged · 2 = in-progress (poll) · 1 = hard-fail (stop) · 3 = apiserver unreachable (retry)"}}
+    BOOT["llz ci bootstrap-cluster<br/>(native Helm install — not Terraform)"]
 
     NEW --> R1
-    UP --> R1 --> R2 --> R4
-    R4 -->|"helm_release.apl"| APL
+    UP --> R0 --> R1 --> R2 --> BOOT
+    BOOT -->|"helm install apl/apl"| APL
     APL --> ARGO
-    R4 -.->|"apl_pipeline_ready gate<br/>(controller Available)"| ARGO
+    BOOT -.->|"waits for argocd-application-controller Available"| ARGO
     ARGO --> AOA
     AOA --> FOUND
     AOA --> BAO
     AOA --> CERT
-    R4 -.->|"bootstrap_application_synced gate"| GATE
+    BOOT -.->|"bootstrap Application Synced + Healthy"| GATE
     AOA --> GATE
     GATE -->|"exit 2 → poll"| DAY2
     GATE -->|"exit 0"| DAY2
@@ -142,7 +143,7 @@ flowchart TB
     classDef gate fill:#fce8e6,stroke:#ea4335,color:#111;
     classDef sch fill:#fef7e0,stroke:#f9ab00,color:#111;
     class NEW,UP,DAY2 cli;
-    class R1,R2,R4 tf;
+    class R0,R1,R2 tf;
     class APL,ARGO,AOA,FOUND,BAO,CERT k8s;
     class GATE gate;
     class H,ROT,CHK sch;
@@ -150,18 +151,20 @@ flowchart TB
 
 **Reading the bootstrap chain**
 
-1. `llz up` applies the Terraform roots in order; `cluster-bootstrap` installs the
-   apl-operator via `helm_release.apl`.
+1. `llz up` applies the Terraform roots in order (`vpc` when shared → `cluster`
+   → `object-storage`), then `llz ci bootstrap-cluster` installs the apl-operator
+   with a native Helm install. Terraform owns day-0 infrastructure only (ADR
+   0002); there is no `cluster-bootstrap` Terraform root.
 2. The apl-operator runs its helmfile pipeline (~40 components) and stands up
-   **Argo CD**. Terraform's `apl_pipeline_ready` gate waits for the
+   **Argo CD**. `bootstrap-cluster` waits for the
    `argocd-application-controller` StatefulSet to be `Available` before applying
    the bootstrap Application — otherwise it would race the pipeline.
 3. The **app-of-apps** (`llz-argo-bootstrap-apps`) fans out the first-party charts
    in **sync-wave order**: foundation (namespaces, default-deny NetworkPolicy)
    before the OpenBao platform and cert automation.
-4. `cluster-bootstrap` returns success **only** once
-   `bootstrap_application_synced` reports `Synced + Healthy` (or the documented
-   deferred-input steady state) — the single "TF has done its job" signal.
+4. `llz ci bootstrap-cluster` returns success **only** once the bootstrap
+   Application reports `Synced + Healthy` (or the documented deferred-input
+   steady state) — the single "bootstrap has done its job" signal.
 5. Day-2 reusable workflows poll the same readiness model and keep the cluster
    converged without standing operator toil.
 

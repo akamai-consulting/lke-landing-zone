@@ -13,9 +13,9 @@ Five distinct surfaces, each with its own playbook for ongoing work:
 | Surface | Where | Playbook | Auth model |
 |---|---|---|---|
 | Kubernetes (per cluster / per env) | LKE-Enterprise via `lke-admin` kubeconfig | — | kubeconfig (operator) |
-| OpenBao (per region) | `<release>-openbao-0` pod in `openbao` ns | [openbao-accounts.md](openbao-accounts.md) | root via `generate-root` (3-of-5 unseal shares) |
+| OpenBao (per region) | `<release>-openbao-0` pod in `llz-openbao` ns | [openbao-accounts.md](openbao-accounts.md) | root via `generate-root` (3-of-5 unseal shares) |
 | Harbor (primary only) | `harbor.<primary-cluster>.internal:5000` | [harbor-accounts.md](harbor-accounts.md) | admin password / per-person local user |
-| Grafana (per region) | port-forward `<release>-grafana` in `observability` | [grafana-access.md](grafana-access.md) | admin / per-person local user |
+| Grafana (per region) | port-forward `<release>-grafana` in `grafana` | [grafana-access.md](grafana-access.md) | admin / per-person local user |
 | Loki (per region) | through Grafana or port-forward `<release>-loki-gateway` | [loki-access.md](loki-access.md) | `X-Scope-OrgID: <project>` header |
 
 GitHub Actions (the CI surface) is separate: see [Git + GitHub access](#git--github-access) below.
@@ -67,7 +67,7 @@ export AWS_ACCESS_KEY_ID="$TF_STATE_ACCESS_KEY"           # from your password m
 export AWS_SECRET_ACCESS_KEY="$TF_STATE_SECRET_KEY"
 export AWS_ENDPOINT_URL_S3="https://us-ord-10.linodeobjects.com"
 
-cd instance-template/terraform-iac-bootstrap/cluster-bootstrap
+cd instance-template/terraform-iac-bootstrap/cluster
 for cluster in <cluster-1> <cluster-2>; do
   terraform init -reconfigure \
     -backend-config="bucket=<state-bucket>" \
@@ -83,7 +83,7 @@ done
 Verify:
 
 - [ ] `kubectl get nodes` returns nodes on each cluster (skip envs that aren't deployed yet — `terraform output` will be empty).
-- [ ] `kubectl -n openbao get pods` shows the 3-replica OpenBao StatefulSet.
+- [ ] `kubectl -n llz-openbao get pods` shows the 3-replica OpenBao StatefulSet.
 
 ### 4. OpenBao access
 
@@ -91,7 +91,7 @@ You don't get a permanent OpenBao token — operator access is via `bao operator
 
 Verify (no token needed for this — just port-forward):
 
-- [ ] `llz openbao get <cluster> secret/<example-path> <key> | head -1` returns the expected first line. If it errors with auth, you don't have an operator token yet — see [openbao-accounts.md](openbao-accounts.md).
+- [ ] `llz openbao get <active|standby> secret/<example-path> <key> | head -1` (the first argument is the HA role, not a cluster name) returns the expected first line. If it errors with auth, you don't have an operator token yet — see [openbao-accounts.md](openbao-accounts.md).
 
 You'll receive a **recovery key share** if you're a shareholder. That share lives in your password manager forever — it authorizes `bao operator generate-root` (emergency root-token regeneration), not unseal: the cluster auto-unseals itself from a static seal key after a pod restart. Never lose it.
 
@@ -104,17 +104,17 @@ Harbor only runs on the primary cluster. Browse to `https://harbor.<primary-clus
 
 ### 6. Grafana access
 
-- [ ] `kubectl -n observability port-forward svc/<release>-grafana 3000:80` works against the primary cluster.
+- [ ] `kubectl -n grafana port-forward svc/<release>-grafana 3000:80` works against the primary cluster.
 - [ ] You can log in at <http://localhost:3000> as admin with the password from [grafana-access.md](grafana-access.md). An admin should create a per-person Grafana user for you.
 - [ ] The platform dashboards load with data.
 
 ### 7. Loki access (sanity)
 
-- [ ] In Grafana → Explore → Loki, run `{namespace="openbao"}` over the last 24h. You should see audit-log entries from OpenBao.
+- [ ] In Grafana → Explore → Loki, run `{namespace="llz-openbao"}` over the last 24h. You should see audit-log entries from OpenBao.
 
 ### 8. Argo CD access
 
-Argo CD is the GitOps engine for everything under the Argo manifests (the shared `instance-template/platform-apl/manifest/` base + the per-component `instance-template/platform-apl/components/`). To inspect deploys:
+Argo CD is the GitOps engine for everything under the Argo manifests (the shared `platform-apl/manifest/` base + the per-component `platform-apl/components/`). To inspect deploys:
 
 ```bash
 kubectl -n argocd port-forward svc/argocd-server 8080:443

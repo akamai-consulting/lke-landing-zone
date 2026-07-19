@@ -1,6 +1,6 @@
 # OpenBao Accounts — Playbook
 
-**Applies to:** OpenBao on every regional cluster (`<release>-openbao-0/1/2` in the `openbao` namespace). No external Ingress — all access is via `kubectl exec` into the pod.
+**Applies to:** OpenBao on every regional cluster (`<release>-openbao-0/1/2` in the `llz-openbao` namespace). No external Ingress — all access is via `kubectl exec` into the pod.
 
 **Related:** [`docs/secrets.md`](../secrets.md) (architecture + dual-write), [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial bootstrap), [`llz ci bao-configure`](../../tools/cmd/llz/ci_openbao_configure.go) (auth methods + policies definition).
 
@@ -30,7 +30,7 @@ Run `bao operator generate-root` on the cluster you need to touch (each region h
 
 ```bash
 # 1. Open a shell into the OpenBao leader
-kubectl -n openbao exec -it <release>-openbao-0 -- sh
+kubectl -n llz-openbao exec -it <release>-openbao-0 -- sh
 
 # 2. Inside the pod:
 export VAULT_ADDR=https://127.0.0.1:8200

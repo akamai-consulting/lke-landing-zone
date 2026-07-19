@@ -4,7 +4,7 @@
 
 **Related:** [`operator-onboarding.md`](operator-onboarding.md), `llz status <env>` (one-shot support-plane Application health report; `--wait` polls), and the sync-wave + correctness rules described in [`docs/architecture/convergence-contract.md`](../architecture/convergence-contract.md).
 
-> **Rule of thumb:** the change you want to make is almost always a PR to the Argo manifests (the shared base under `instance-template/platform-apl/manifest/` + the per-component `instance-template/platform-apl/components/`) that Argo CD reconciles. `kubectl edit` and the Argo CD UI's manual-sync button are for unwedging a stuck reconciliation, not for routine changes. Direct edits get blown away on next sync.
+> **Rule of thumb:** the change you want to make is almost always a PR to the Argo manifests (the shared base under `platform-apl/manifest/` + the per-component `platform-apl/components/`) that Argo CD reconciles. `kubectl edit` and the Argo CD UI's manual-sync button are for unwedging a stuck reconciliation, not for routine changes. Direct edits get blown away on next sync.
 
 ---
 
@@ -130,7 +130,7 @@ If the error is a Helm template failure, reproduce locally with `helm template` 
 
 ### AppProject missing / sync-wave violation
 
-Every `Application` and `AppProject` must carry `argocd.argoproj.io/sync-wave: "N"` (see the sync-wave + correctness rules in [`docs/architecture/convergence-contract.md`](../architecture/convergence-contract.md)). If a new manifest fails CI with a `sync-wave-lint` error:
+Every `Application` and `AppProject` must carry `argocd.argoproj.io/sync-wave: "N"` (see the sync-wave + correctness rules in [`docs/architecture/convergence-contract.md`](../architecture/convergence-contract.md)). If a new manifest fails CI with a `llz ci argocd-rendered-apps` (which absorbed the former `sync-wave-lint`) error:
 
 - Add the annotation per the wave table in the convergence contract.
 - AppProjects: wave `-20`. Applications: usually `0` or higher; cert-manager bootstrap and CRD-installing apps go earlier.
@@ -185,11 +185,13 @@ kubectl -n argocd describe pod <argocd-server-...>
 # 2. Common causes:
 #    - LKE node restart: argocd-repo-server has cached chart deps that vanished.
 #      → kubectl -n argocd rollout restart deployment/argocd-repo-server
-#    - SSH deploy key rotated: argocd-server can't pull from github.com.
-#      → re-seed the deploy-key secret and restart.
+#    - Repo credential rotated: argocd-server can't pull from github.com.
+#      → the credential is apl-core's argocd-repo-creds ExternalSecret, backed by
+#        the APL_VALUES_REPO_TOKEN PAT over HTTPS (the old ARGOCD_REPO_SSH_KEY
+#        deploy key was retired). Check the ExternalSecret synced, then restart.
 
-# 3. If you need to re-create Argo CD from scratch, the install manifest lives under
-#    instance-template/platform-apl/components/openbao/ — the bootstrap workflow can re-apply it.
+# 3. Argo CD itself is installed by apl-core, not by a manifest in this repo.
+#    To re-create it, re-run the bootstrap (`llz ci bootstrap-cluster`).
 ```
 
 In a true Argo-CD-down emergency, fall back to `kubectl apply -f` against the Argo manifests directly — but expect Argo CD to undo any drift the moment it comes back up unless you also fixed the source.

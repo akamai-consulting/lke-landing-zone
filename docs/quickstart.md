@@ -43,8 +43,8 @@ llz up lab --yes
 #    • delete the OPENBAO_ROOT_TOKEN secret from infra-lab if you seeded one
 #      (`llz status` flags it every run until you do)
 
-# 7. Finish DNS-01 issuance, then verify convergence (§4)
-llz bootstrap dns lab --yes
+# 7. Verify convergence (§4). DNS-01 needs no step — the llz-letsencrypt-*
+#    ClusterIssuers sync via Argo CD once LINODE_DNS_TOKEN is set.
 llz status lab
 ```
 
@@ -413,7 +413,6 @@ Then finish the deferred DNS bit once its token exists (the ArgoCD deploy key wa
 already provisioned by `llz tokens`), and verify convergence:
 
 ```bash
-llz bootstrap dns lab --yes    # cert-manager DNS-01 (needs LINODE_DNS_TOKEN)
 llz status lab                 # openbao pods / argocd apps / ESO ClusterSecretStore
 ```
 
@@ -524,7 +523,7 @@ then `llz upgrade`. Because the scaffold's first-party pins are rendered from
 `llz_version`, the same `copier update` **re-pins the Terraform-module `?ref=`,
 `uses:@`, and `template-ref:` refs in lockstep** — there is no separate version
 bump for them. Ownership follows `.template-manifest`;
-`terraform/*/.terraform.lock.hcl` files are seeded once and never re-touched.
+`terraform-iac-bootstrap/*/.terraform.lock.hcl` files are seeded once and never re-touched.
 
 Check how far behind you are any time:
 
@@ -563,7 +562,7 @@ versioned charts + external actions*.
 - [ ] `llz doctor --env <env>` green — deployment files + every required value set (§4)
 - [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); cluster converges (`llz status <env>`) (§4)
 - [ ] Static seal key + recovery keys 4 & 5 + root token saved offline; `OPENBAO_ROOT_TOKEN` deleted
-- [ ] `llz bootstrap dns <env> --yes` run once `LINODE_DNS_TOKEN` exists
+- [ ] `LINODE_DNS_TOKEN` set — `llz ci bootstrap-cluster` renders it into apl-core's DNS values; the ClusterIssuers then sync via Argo CD (no dedicated command)
 - [ ] Renovate enabled and repointed; `llz upgrade` path understood (§5)
 
 ## See also

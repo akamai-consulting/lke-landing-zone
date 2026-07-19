@@ -19,7 +19,7 @@ This public repo keeps the pieces that are safe to ship and that drive the featu
   Secret + ConfigMap from CI or a workstation.
 - `llz ci health` (`checkFirewallBootstrap`) — health-checks that ConfigMap
   (skipped when the component is disabled and the controller absent).
-- `llz runner-acl` — punches the CI runner egress IP into the control-plane ACL.
+- `llz ci runner-acl` — punches the CI runner egress IP into the control-plane ACL.
 
 You add the **controller + chart** back from the private repo. Three steps.
 

@@ -31,7 +31,7 @@ to be stale, fix it in place rather than working around it.
 - **CI gates key on path.** Terraform gates include both `terraform-iac-bootstrap/**`
   and `terraform-modules/**`; Helm gates key on `kubernetes-charts/`. Moving a file
   between trees can silently change which gates run.
-- **TF module sibling refs stay relative** (`../lke-node-firewall`) — they resolve
+- **TF module sibling refs stay relative** (`../llz-node-firewall`) — they resolve
   inside the `git::` checkout. Never rewrite an internal sibling reference to a
   `git::` source; that would unpin the two halves from the same tag.
 
