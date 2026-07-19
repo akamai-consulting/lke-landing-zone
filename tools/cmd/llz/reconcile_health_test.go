@@ -155,3 +155,70 @@ func TestSampleHealthAggregatesAndSurfacesError(t *testing.T) {
 		t.Error("a failing sub-sample should surface from sampleHealth")
 	}
 }
+
+// TestReadyConditionAgreesWithFindReady pins the behavior the two readers
+// disagreed on. reconcile_es_store_recovery's objReadyStatus routes through
+// health.FindReady (absent => "Unknown"); readyCondition hand-rolled the same
+// walk and returned "". No verdict depended on it — ClassifyReady only branches
+// on "True" — but the value is interpolated into the operator-facing detail,
+// where "" renders as "(Ready= reason=)".
+func TestReadyConditionAgreesWithFindReady(t *testing.T) {
+	tests := []struct {
+		name       string
+		obj        map[string]any
+		wantStatus string
+		wantReason string
+	}{
+		{
+			name: "Ready=True is read with its reason and message",
+			obj: map[string]any{"status": map[string]any{"conditions": []any{
+				map[string]any{"type": "Ready", "status": "True", "reason": "Valid", "message": "ok"},
+			}}},
+			wantStatus: "True", wantReason: "Valid",
+		},
+		{
+			name: "Ready=False is read verbatim",
+			obj: map[string]any{"status": map[string]any{"conditions": []any{
+				map[string]any{"type": "Ready", "status": "False", "reason": "SecretSyncedError"},
+			}}},
+			wantStatus: "False", wantReason: "SecretSyncedError",
+		},
+		{
+			// THE divergence: previously "" here, "Unknown" from the sibling reader.
+			name:       "no conditions at all => Unknown, not empty",
+			obj:        map[string]any{"status": map[string]any{}},
+			wantStatus: "Unknown",
+		},
+		{
+			name: "some other condition type only => Unknown",
+			obj: map[string]any{"status": map[string]any{"conditions": []any{
+				map[string]any{"type": "Synced", "status": "True"},
+			}}},
+			wantStatus: "Unknown",
+		},
+		{
+			// A malformed entry must not blind the reader to a valid sibling.
+			name: "non-object condition entries are skipped",
+			obj: map[string]any{"status": map[string]any{"conditions": []any{
+				"garbage",
+				map[string]any{"type": "Ready", "status": "True"},
+			}}},
+			wantStatus: "True",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, r, _ := readyCondition(tt.obj)
+			if s != tt.wantStatus {
+				t.Errorf("status = %q, want %q", s, tt.wantStatus)
+			}
+			if tt.wantReason != "" && r != tt.wantReason {
+				t.Errorf("reason = %q, want %q", r, tt.wantReason)
+			}
+			// Both readers must now answer identically for the same object.
+			if got := objReadyStatus(tt.obj); got != s {
+				t.Errorf("objReadyStatus = %q but readyCondition = %q — the two readers must agree", got, s)
+			}
+		})
+	}
+}

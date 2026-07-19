@@ -63,6 +63,22 @@ func listArgoApps() ([]argoApp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kubectl get applications: %w", err)
 	}
+	apps, err := parseArgoAppList(out)
+	if err != nil {
+		return nil, fmt.Errorf("parse applications JSON: %w", err)
+	}
+	return apps, nil
+}
+
+// parseArgoAppList reads `kubectl get applications -o json` into the name +
+// sync/health triple. The same anonymous struct and the same append loop were
+// written out twice, here and in selectPlatformApps (verify.go) — identical down
+// to the field tags.
+//
+// Deliberately NOT health.ParseArgoApp: that one is richer (spec-error
+// conditions, automated-policy detection) and is the right tool where those
+// matter. These two callers want only the triple.
+func parseArgoAppList(raw []byte) ([]argoApp, error) {
 	var doc struct {
 		Items []struct {
 			Metadata struct {
@@ -74,8 +90,8 @@ func listArgoApps() ([]argoApp, error) {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	if err := json.Unmarshal(out, &doc); err != nil {
-		return nil, fmt.Errorf("parse applications JSON: %w", err)
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
 	}
 	apps := make([]argoApp, 0, len(doc.Items))
 	for _, it := range doc.Items {

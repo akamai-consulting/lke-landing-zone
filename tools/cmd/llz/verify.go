@@ -198,25 +198,14 @@ func knownHostsHas(knownHosts, host string) bool {
 
 // selectPlatformApps returns the platform-* (or known llz-*) Applications.
 func selectPlatformApps(appsJSON string) []argoApp {
-	var doc struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Status struct {
-				Sync   struct{ Status string } `json:"sync"`
-				Health struct{ Status string } `json:"health"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if json.Unmarshal([]byte(appsJSON), &doc) != nil {
+	all, err := parseArgoAppList([]byte(appsJSON))
+	if err != nil {
 		return nil
 	}
 	var out []argoApp
-	for _, it := range doc.Items {
-		n := it.Metadata.Name
-		if strings.HasPrefix(n, "platform-") || platformAppRe.MatchString(n) {
-			out = append(out, argoApp{n, it.Status.Sync.Status, it.Status.Health.Status})
+	for _, a := range all {
+		if strings.HasPrefix(a.Name, "platform-") || platformAppRe.MatchString(a.Name) {
+			out = append(out, a)
 		}
 	}
 	return out
