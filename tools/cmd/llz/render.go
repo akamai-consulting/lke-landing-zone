@@ -20,11 +20,11 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
@@ -129,16 +129,13 @@ func renderCmd() *cobra.Command {
 // renderedPath / wouldRenderPath print one file-mutation line with a consistent
 // colored verb — green for done, cyan for a dry-run plan — so the render/scaffold
 // output reads as a scannable action log. Both degrade to plain text off a TTY
-// (color.go). `note` is an optional trailing parenthetical (e.g. "(N assignments)").
+// (color.go).
 func renderedPath(prefix, path string) {
 	fmt.Printf("  %s  %s%s\n", green("rendered"), prefix, path)
 }
 
-func wouldRenderPath(prefix, path, note string) {
-	if note != "" {
-		note = " " + dim(note)
-	}
-	fmt.Printf("  %s  %s%s%s\n", cyan("would-render"), prefix, path, note)
+func wouldRenderPath(prefix, path string) {
+	fmt.Printf("  %s  %s%s\n", cyan("would-render"), prefix, path)
 }
 
 func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
@@ -177,60 +174,52 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 		}
 	}
 
-	// --check is the CI drift guard: the spec is valid AND the committed manifest
-	// kustomizations match what the spec renders (they are committed because Argo
-	// syncs git; a working-tree-only render would let them silently diverge).
-	if check {
-		if !tfvarsOnly {
-			if err := checkManifestDrift(lz, aplDir, envs); err != nil {
-				return err
-			}
-		}
-		fmt.Printf("%s LandingZone spec valid (%d environment(s)); committed manifests in sync\n", green("✓"), len(lz.Spec.Environments))
-		return nil
-	}
+	// All three paths below render from the SAME target set (renderTargets) — the
+	// write path writes it, --check compares it, --diff diffs it — so they cannot
+	// disagree about what a render produces.
 
 	// --diff previews what a render would create/change, writing nothing.
 	if diff {
 		return runRenderDiff(lz, envs, tfDir, aplDir, tfvarsOnly)
 	}
 
-	dryRun := g.dryRun
-	// Generate the four TF root directories (their *.tf files) from the embedded
-	// tfroots copy — an instance commits ZERO Terraform: the roots are gitignored
-	// build artifacts regenerated here on every render, exactly like the per-env
-	// tfvars. Rendered ONCE per instance (the roots are env-identical; per-env
-	// variation lives entirely in tfvars). dst is the instance root, so the files
-	// land under tfDir (= <specRoot>/terraform-iac-bootstrap).
-	if dryRun {
-		for _, p := range tfroots.Targets(specRoot) {
-			wouldRenderPath(relPrefix, filepathRel(tfDir, p), "")
-		}
-	} else {
-		org, ref, instRepo := tfrootTokens()
-		written, err := tfroots.Render(specRoot, org, ref, instRepo)
-		if err != nil {
-			return fmt.Errorf("generate TF roots: %w", err)
-		}
-		for _, p := range written {
-			renderedPath(relPrefix, filepathRel(tfDir, p))
-		}
-	}
-	// Shared VPCs (spec.networks) render to vpc/<name>.tfvars and must exist before
-	// the clusters that attach to them. No-op when no networks are declared.
-	if err := renderNetworks(lz, tfDir, relPrefix, dryRun); err != nil {
+	targets, err := renderTargets(lz, envs, tfDir, aplDir, tfvarsOnly)
+	if err != nil {
 		return err
 	}
-	for _, name := range envs {
-		e, _ := lz.Env(name)
-		if err := renderEnvTfvars(name, e.Cluster, tfDir, relPrefix, dryRun); err != nil {
-			return fmt.Errorf("render %s: %w", name, err)
+
+	// --check is the CI drift guard: the spec is valid AND the on-disk render targets
+	// match what the spec renders (the apl-values artifacts are committed because Argo
+	// syncs git; a working-tree-only render would let them silently diverge). It now
+	// covers the tfvars/TF-root targets too — they used to be computed only by the
+	// write and --diff paths, so a STALE rendered tfvars passed --check while --diff
+	// showed it changing.
+	//
+	// Their ABSENCE, however, is not drift: everything under terraform-iac-bootstrap
+	// is a gitignored build artifact (see its .gitignore — `*/*.tfvars`, `*/*.tf`),
+	// regenerated before each terraform op, so on a fresh CI checkout none of it
+	// exists and demanding it would fail every instance's check for no reason.
+	if check {
+		if err := reportDrift(targets, func(p string) bool {
+			return !strings.HasPrefix(p, tfDir+string(filepath.Separator))
+		}); err != nil {
+			return err
 		}
-		if !tfvarsOnly {
-			if err := renderManifest(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail, relPrefix, dryRun); err != nil {
-				return fmt.Errorf("render %s manifests: %w", name, err)
-			}
-		}
+		fmt.Printf("%s LandingZone spec valid (%d environment(s)); committed manifests in sync\n", green("✓"), len(lz.Spec.Environments))
+		return nil
+	}
+
+	// The write path. Targets are written in sorted path order so the action log is
+	// deterministic. It covers, in one loop:
+	//   - the four TF root directories' *.tf, generated from the embedded tfroots copy
+	//     (an instance commits ZERO Terraform: the roots are gitignored build artifacts
+	//     regenerated on every render, exactly like the per-env tfvars);
+	//   - the shared-VPC (spec.networks) and per-env tfvars;
+	//   - unless --tfvars-only, the committed apl-values artifacts.
+	// filepathRel is relative to the instance root for both tfDir and aplDir targets.
+	dryRun := g.dryRun
+	if err := writeTargets(targets, tfDir, relPrefix, dryRun); err != nil {
+		return err
 	}
 	// The instance-wide ACME contact is no longer written into the (now remotely-
 	// fetched) shared dns tree — it rides as a kustomize patch in each env's manifest
@@ -239,6 +228,87 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 		untrackRenderedTfvars(relPrefix)
 	}
 	return nil
+}
+
+// writeTargets writes a renderTargets set to disk (creating parents), in sorted path
+// order so the action log is deterministic — or, on --dry-run, just prints what it
+// would write.
+func writeTargets(targets map[string]string, tfDir, relPrefix string, dryRun bool) error {
+	for _, dst := range slices.Sorted(maps.Keys(targets)) {
+		if dryRun {
+			wouldRenderPath(relPrefix, filepathRel(tfDir, dst))
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, []byte(targets[dst]), 0o644); err != nil {
+			return err
+		}
+		renderedPath(relPrefix, filepathRel(tfDir, dst))
+	}
+	return nil
+}
+
+// renderTargets is THE definition of what a render produces: every file path a
+// render writes, mapped to its would-be content. It is the single computation the
+// write path, --check and --diff all consume, so a target can never be written by
+// one and ignored by another (before this existed, --check validated only the
+// committed apl-values and silently skipped every tfvars target that --diff
+// covered).
+//
+// Nothing here touches the filesystem except to READ the committed values.yaml
+// base, so it is safe on the write-nothing paths.
+func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir string, tfvarsOnly bool) (map[string]string, error) {
+	targets := map[string]string{}
+
+	// The generated TF roots (env-identical; all per-env variation lives in tfvars).
+	// dst is the instance root, so the files land under tfDir.
+	org, ref, instRepo := tfrootTokens()
+	for p, c := range tfroots.Files(filepath.Dir(tfDir), org, ref, instRepo) {
+		targets[p] = c
+	}
+
+	// Shared VPCs (spec.networks) render to vpc/<name>.tfvars — one apply each (state
+	// key vpc/<name>) — and must exist before the clusters that attach to them. No-op
+	// when none are declared, so instances that use only dedicated VPCs never touch
+	// the vpc root.
+	for _, name := range slices.Sorted(maps.Keys(lz.Spec.Networks)) {
+		base, err := tfrootExample("vpc")
+		if err != nil {
+			return nil, fmt.Errorf("read embedded vpc tfvars.example (spec.networks needs the vpc root): %w", err)
+		}
+		targets[filepath.Join(tfDir, "vpc", name+".tfvars")] = renderTfvars(base, clusterspec.NetworkTFVars(name, lz.Spec.Networks[name]))
+	}
+
+	for _, name := range envs {
+		e, _ := lz.Env(name)
+		// The per-deployment tfvars. Each starts from the root's
+		// terraform.tfvars.example (so unmodeled fields keep their documented
+		// defaults) and gets the spec's assignments applied.
+		assigns := map[string][]clusterspec.Assign{
+			"cluster":        clusterspec.ClusterTFVars(e.Cluster),
+			"object-storage": clusterspec.ObjectStorageTFVars(name, e.Cluster),
+		}
+		for _, root := range tfRoots {
+			base, err := tfrootExample(root)
+			if err != nil {
+				return nil, fmt.Errorf("render %s: read embedded %s tfvars.example: %w", name, root, err)
+			}
+			targets[filepath.Join(tfDir, root, name+".tfvars")] = renderTfvars(base, assigns[root])
+		}
+		if tfvarsOnly {
+			continue
+		}
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
+		if err != nil {
+			return nil, fmt.Errorf("render %s manifests: %w", name, err)
+		}
+		for p, c := range ct {
+			targets[p] = c
+		}
+	}
+	return targets, nil
 }
 
 // untrackRenderedTfvars self-heals an instance that committed its per-env tfvars
@@ -439,123 +509,56 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 	return out
 }
 
-// renderManifest writes a deployment's committed apl-values/<env>/ artifacts (the
-// manifest kustomizations + the apps-toggled values.yaml) from its components.
-func renderManifest(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, acmeEmail, relPrefix string, dryRun bool) error {
-	targets, err := committedTargets(env, e, id, aplDir, acmeEmail)
-	if err != nil {
-		return err
-	}
-	for dst, content := range targets {
-		if dryRun {
-			wouldRenderPath(relPrefix, filepathRel(aplDir, dst), "")
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(dst, []byte(content), 0o644); err != nil {
-			return err
-		}
-		renderedPath(relPrefix, filepathRel(aplDir, dst))
-	}
-	return nil
-}
-
 // checkManifestDrift verifies every env's committed apl-values artifacts match what
-// its components render — the CI guard so a spec edit can't silently diverge from
-// the committed (Argo-synced) tree. Reports all drifted files at once.
+// its components render — the readiness guard so a spec edit can't silently diverge
+// from the committed (Argo-synced) tree. Reports all drifted files at once. Scoped
+// deliberately to the COMMITTED targets: `llz ready` scans the (gitignored) rendered
+// tfvars separately, and they need not exist yet when it runs. `llz render --check`
+// checks the full renderTargets set instead.
 func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []string) error {
-	var drifted []string
+	targets := map[string]string{}
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		targets, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
 		if err != nil {
 			return err
 		}
-		for dst, want := range targets {
-			got, err := os.ReadFile(dst)
-			if err != nil {
-				drifted = append(drifted, fmt.Sprintf("%s (%v)", dst, err))
+		for p, c := range ct {
+			targets[p] = c
+		}
+	}
+	return reportDrift(targets, func(string) bool { return true })
+}
+
+// reportDrift compares a render target set against the tree on disk and reports
+// every drifted file at once — the shared body of `llz render --check` and
+// checkManifestDrift. A target whose content differs is always drift; a target that
+// is ABSENT is drift only when mustExist says so, which is how the committed
+// apl-values (absent == drift) are separated from the gitignored build artifacts
+// under terraform-iac-bootstrap (absent == simply not rendered yet).
+func reportDrift(targets map[string]string, mustExist func(path string) bool) error {
+	var drifted []string
+	for _, dst := range slices.Sorted(maps.Keys(targets)) {
+		got, err := os.ReadFile(dst)
+		if err != nil {
+			if os.IsNotExist(err) && !mustExist(dst) {
 				continue
 			}
-			if string(got) != want {
-				drifted = append(drifted, dst)
-			}
-		}
-	}
-	if len(drifted) > 0 {
-		fmt.Fprintln(os.Stderr, "committed apl-values are out of sync with the spec — run `llz render`:")
-		for _, d := range drifted {
-			fmt.Fprintf(os.Stderr, "  • %s\n", d)
-		}
-		return fmt.Errorf("%d apl-values file(s) drifted from the spec", len(drifted))
-	}
-	return nil
-}
-
-// renderNetworks writes one vpc/<name>.tfvars per shared VPC in spec.networks
-// (vpc_label + region) from the vpc root's terraform.tfvars.example. Each is its
-// own apply (state key vpc/<name>). No-op when none are declared, so instances
-// that use only dedicated VPCs never touch the vpc root.
-func renderNetworks(lz *clusterspec.LandingZone, tfDir, relPrefix string, dryRun bool) error {
-	names := make([]string, 0, len(lz.Spec.Networks))
-	for n := range lz.Spec.Networks {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		assigns := clusterspec.NetworkTFVars(name, lz.Spec.Networks[name])
-		dst := filepath.Join(tfDir, "vpc", name+".tfvars")
-		base, err := tfrootExample("vpc")
-		if err != nil {
-			return fmt.Errorf("read embedded vpc tfvars.example (spec.networks needs the vpc root): %w", err)
-		}
-		out := renderTfvars(base, assigns)
-		if dryRun {
-			wouldRenderPath(relPrefix, filepathRel(tfDir, dst), fmt.Sprintf("(%d assignments)", len(assigns)))
+			drifted = append(drifted, fmt.Sprintf("%s (%v)", dst, err))
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
+		if string(got) != targets[dst] {
+			drifted = append(drifted, dst)
 		}
-		if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
-			return err
-		}
-		renderedPath(relPrefix, filepathRel(tfDir, dst))
 	}
-	return nil
-}
-
-// renderEnvTfvars writes the three <env>.tfvars for one deployment from the
-// spec's cluster definition. Each starts from the root's terraform.tfvars.example
-// (so unmodeled fields keep their documented defaults) and gets the spec's
-// assignments applied.
-func renderEnvTfvars(env string, c clusterspec.Cluster, tfDir, relPrefix string, dryRun bool) error {
-	roots := map[string][]clusterspec.Assign{
-		"cluster":        clusterspec.ClusterTFVars(c),
-		"object-storage": clusterspec.ObjectStorageTFVars(env, c),
+	if len(drifted) == 0 {
+		return nil
 	}
-	for _, root := range tfRoots {
-		dst := filepath.Join(tfDir, root, env+".tfvars")
-		base, err := tfrootExample(root)
-		if err != nil {
-			return fmt.Errorf("read embedded %s tfvars.example: %w", root, err)
-		}
-		out := renderTfvars(base, roots[root])
-		if dryRun {
-			wouldRenderPath(relPrefix, filepathRel(tfDir, dst), fmt.Sprintf("(%d assignments)", len(roots[root])))
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(dst, []byte(out), 0o644); err != nil {
-			return err
-		}
-		renderedPath(relPrefix, filepathRel(tfDir, dst))
+	fmt.Fprintln(os.Stderr, "rendered files are out of sync with the spec — run `llz render`:")
+	for _, d := range drifted {
+		fmt.Fprintf(os.Stderr, "  • %s\n", d)
 	}
-	return nil
+	return fmt.Errorf("%d file(s) drifted from the spec", len(drifted))
 }
 
 // applyAssigns sets each `key = value` in content, replacing an existing
@@ -606,9 +609,19 @@ func applyAssigns(content string, assigns []clusterspec.Assign) string {
 	return content
 }
 
-// hasHCLKey reports whether content has an uncommented `<key> =` assignment.
+// hasHCLKey reports whether content has an uncommented `<key> =` assignment: a line
+// STARTING with key (so a commented-out `# key = …` does not match) followed by
+// optional blanks and `=`. A line scan rather than a regexp — this runs once per
+// assignment × per root × per env on both the write and the --diff path, and the
+// old `regexp.MustCompile` on every call recompiled the pattern every time.
 func hasHCLKey(content, key string) bool {
-	return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `\s*=`).MatchString(content)
+	for _, line := range strings.Split(content, "\n") {
+		rest, ok := strings.CutPrefix(line, key)
+		if ok && strings.HasPrefix(strings.TrimLeft(rest, " \t"), "=") {
+			return true
+		}
+	}
+	return false
 }
 
 // filepathRel renders dst relative to tfDir's parent for tidy operator output;
@@ -621,63 +634,17 @@ func filepathRel(tfDir, dst string) string {
 }
 
 // runRenderDiff prints, per target file, whether a render would create or change
-// it (with a compact line diff), writing nothing. It mirrors what runRender emits:
-// the shared-VPC tfvars, each env's three tfvars, and — unless tfvarsOnly — the
-// committed apl-values artifacts.
+// it (with a compact line diff), writing nothing. It previews the SAME renderTargets
+// set the write path writes and --check compares, so the preview cannot drift from
+// what a render actually does: the generated TF roots, the shared-VPC tfvars, each
+// env's tfvars, and — unless tfvarsOnly — the committed apl-values artifacts.
 func runRenderDiff(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir string, tfvarsOnly bool) error {
-	want := map[string]string{} // path -> would-be content
-	readExample := tfrootExample
-
-	// The generated TF roots are part of what a render would write (gitignored build
-	// artifacts, like the tfvars) — preview them too.
-	org, ref, instRepo := tfrootTokens()
-	for p, c := range tfroots.Files(filepath.Dir(tfDir), org, ref, instRepo) {
-		want[p] = c
+	want, err := renderTargets(lz, envs, tfDir, aplDir, tfvarsOnly)
+	if err != nil {
+		return err
 	}
-
-	netNames := make([]string, 0, len(lz.Spec.Networks))
-	for n := range lz.Spec.Networks {
-		netNames = append(netNames, n)
-	}
-	sort.Strings(netNames)
-	for _, n := range netNames {
-		base, err := readExample("vpc")
-		if err != nil {
-			return fmt.Errorf("read vpc tfvars.example: %w", err)
-		}
-		want[filepath.Join(tfDir, "vpc", n+".tfvars")] = renderTfvars(base, clusterspec.NetworkTFVars(n, lz.Spec.Networks[n]))
-	}
-
-	for _, name := range envs {
-		e, _ := lz.Env(name)
-		for root, assigns := range map[string][]clusterspec.Assign{
-			"cluster":        clusterspec.ClusterTFVars(e.Cluster),
-			"object-storage": clusterspec.ObjectStorageTFVars(name, e.Cluster),
-		} {
-			base, err := readExample(root)
-			if err != nil {
-				return fmt.Errorf("read %s tfvars.example: %w", root, err)
-			}
-			want[filepath.Join(tfDir, root, name+".tfvars")] = renderTfvars(base, assigns)
-		}
-		if !tfvarsOnly {
-			ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
-			if err != nil {
-				return err
-			}
-			for p, c := range ct {
-				want[p] = c
-			}
-		}
-	}
-
-	paths := make([]string, 0, len(want))
-	for p := range want {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
 	changed := 0
-	for _, p := range paths {
+	for _, p := range slices.Sorted(maps.Keys(want)) {
 		cur, err := os.ReadFile(p)
 		switch {
 		case err != nil:
@@ -708,6 +675,24 @@ func lineDiff(oldS, newS string) string {
 	}
 	n = strings.Split(strings.TrimRight(newS, "\n"), "\n")
 
+	type dl struct {
+		sign byte
+		text string
+	}
+	var seq []dl
+
+	// Trim the common PREFIX before the DP below, which allocates a full m×k int
+	// matrix — a 2000-line tfroot with a late change would otherwise cost ~32MB to
+	// preview 20 lines. This is exactly output-preserving: the backtrack's first case
+	// is `o[i] == n[j]`, so identical leading lines are always emitted as context in
+	// the same order. (Trimming the common SUFFIX is NOT safe here — the backtrack
+	// breaks LCS ties toward deletions, so e.g. ["a","x"]→["x","x"] emits `-a  x +x`
+	// with the full matrix but `-a +x  x` if the trailing "x" is trimmed off first.)
+	for len(o) > 0 && len(n) > 0 && o[0] == n[0] {
+		seq = append(seq, dl{' ', n[0]})
+		o, n = o[1:], n[1:]
+	}
+
 	// LCS-length DP, then backtrack into a ' '/'-'/'+' line sequence.
 	m, k := len(o), len(n)
 	dp := make([][]int, m+1)
@@ -725,11 +710,6 @@ func lineDiff(oldS, newS string) string {
 			}
 		}
 	}
-	type dl struct {
-		sign byte
-		text string
-	}
-	var seq []dl
 	i, j := 0, 0
 	for i < m && j < k {
 		switch {
