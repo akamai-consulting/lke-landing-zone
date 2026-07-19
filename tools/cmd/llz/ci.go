@@ -367,9 +367,9 @@ func ciTFApplyCmd() *cobra.Command {
 
 // cluster-resource terraform addresses (stable; match the bootstrap modules).
 const (
-	addrVPC      = "module.cluster.linode_vpc.this"
-	addrSubnet   = "module.cluster.linode_vpc_subnet.nodes"
-	addrCluster  = "module.cluster.linode_lke_cluster.this"
+	addrVPC     = "module.cluster.linode_vpc.this"
+	addrSubnet  = "module.cluster.linode_vpc_subnet.nodes"
+	addrCluster = "module.cluster.linode_lke_cluster.this"
 	// The pool is a root-level resource and the firewall lives directly in
 	// llz-cluster; both were modules (module.node_pool / module.node_firewall)
 	// before the wrappers were inlined. `moved` blocks migrate existing state,

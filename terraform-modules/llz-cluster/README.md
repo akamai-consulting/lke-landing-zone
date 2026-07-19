@@ -135,6 +135,7 @@ terraform state rm module.<name>.linode_firewall.this
 | `k8s_version` | `string` | required | LKE-E Kubernetes version, e.g. `v1.32.9+lke4`. |
 | `tags` | `list(string)` | `[]` | Tags applied to all resources. |
 | `vpc_subnet_cidr` | `string` | `"10.0.0.0/13"` | Worker node subnet CIDR. LKE-E requires `/13` or `/14`. |
+| `vpc_id` | `string` | `""` | Attach to an EXISTING (shared) VPC by ID instead of creating a dedicated `<cluster_label>-vpc`. When set, only this cluster's subnet is created inside it; subnets across clusters sharing a VPC must not overlap. |
 | `control_plane_high_availability` | `bool` | `true` | Enable control-plane HA. |
 | `control_plane_audit_logs_enabled` | `bool` | `true` | Enable control-plane audit logs. |
 | `control_plane_acl_ipv4` | `list(string)` | `[]` | Static IPv4 CIDRs for the bootstrap control-plane ACL. |
@@ -142,6 +143,8 @@ terraform state rm module.<name>.linode_firewall.this
 | `firewall_label` | `string` | `""` | Override the Cloud Firewall label. Defaults to `<cluster_label>-nodes`. |
 | `github_runner_ipv4_cidrs` | `list(string)` | `[]` | Runner IPv4 CIDRs — adds NodePort rules and merges into bootstrap ACL. |
 | `github_runner_ipv6_cidrs` | `list(string)` | `[]` | Runner IPv6 CIDRs — adds NodePort rules and merges into bootstrap ACL. |
+| `control_plane_cidr` | `string` | `"192.168.128.0/17"` | Linode private-network CIDR the LKE control plane reaches nodes from (kubelet, DNS, Calico). Source for the node firewall's control-plane rules. |
+| `nodebalancer_cidr` | `string` | `"192.168.255.0/24"` | Linode NodeBalancer source CIDR. Source for the node firewall's NodePort rules. |
 
 ## Outputs
 
@@ -152,6 +155,7 @@ terraform state rm module.<name>.linode_firewall.this
 | `kubeconfig_raw` | Decoded kubeconfig. Sensitive. |
 | `vpc_id` | VPC ID. |
 | `vpc_subnet_id` | Worker node subnet ID. |
+| `vpc_subnet_cidr` | IPv4 CIDR of the worker subnet — the single source of truth for node, pod, and service ranges. The firewall-controller's `VPC_CIDR` is derived from this so its rules match the VPC the node firewall was built from. |
 | `node_firewall_id` | Cloud Firewall ID — pass as `firewall_id` on `linode_lke_node_pool`. |
 | `node_firewall_label` | Resolved Cloud Firewall label. |
 
@@ -161,4 +165,4 @@ terraform state rm module.<name>.linode_firewall.this
 |---|---|
 | Terraform | `>= 1.5.0` |
 | `linode/linode` provider | `~> 3.11` |
-| `hashicorp/local` provider | `~> 2.5` |
+| `hashicorp/time` provider | `~> 0.12` |
