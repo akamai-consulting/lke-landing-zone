@@ -302,3 +302,46 @@ func TestElectorLeaseTimestampIsMicroPrecision(t *testing.T) {
 		}
 	}
 }
+
+// TestElectorDoesNotStealOnUnreadableRenewTime is a SPLIT-BRAIN regression test.
+//
+// leaseHolderRenew discarded its parse error, so a renewTime that was present but
+// unusable — unparseable, or not a string — produced the zero time. The elector
+// treats a zero renewTime as "takeable NOW", identically to a lease that was
+// never held. So an unreadable timestamp read as evidence the lease was FREE and
+// a live peer's lease was stolen, putting two reconcilers on every write lane at
+// once — precisely what leader election exists to prevent.
+func TestElectorDoesNotStealOnUnreadableRenewTime(t *testing.T) {
+	tests := []struct {
+		name      string
+		renewTime any
+		wantSteal bool
+	}{
+		{"fresh peer lease is left alone", time.Now().UTC().Format(time.RFC3339), false},
+		{"expired peer lease is taken", time.Now().Add(-time.Hour).UTC().Format(time.RFC3339), true},
+		{"absent renewTime is genuinely free", nil, true},
+		// The regression: present, but we cannot read it.
+		{"unparseable renewTime must NOT be taken", "not-a-timestamp", false},
+		{"non-string renewTime must NOT be taken", 12345, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := map[string]any{"holderIdentity": "peer-0"}
+			if tt.renewTime != nil {
+				spec["renewTime"] = tt.renewTime
+			}
+			obj := map[string]any{"spec": spec}
+
+			holder, renew, renewOK := leaseHolderRenew(obj)
+			if holder != "peer-0" {
+				t.Fatalf("holder = %q, want peer-0", holder)
+			}
+			// Reproduce the elector's decision: !renewOK yields, then the free/expired test.
+			steal := renewOK && (holder == "" || renew.IsZero() || time.Since(renew) > 30*time.Second)
+			if steal != tt.wantSteal {
+				t.Errorf("steal = %v, want %v (renewOK=%v renew=%v) — taking a lease we cannot prove is free puts two leaders on every write lane",
+					steal, tt.wantSteal, renewOK, renew)
+			}
+		})
+	}
+}

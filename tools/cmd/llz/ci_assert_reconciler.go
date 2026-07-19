@@ -272,8 +272,11 @@ func leaseLeaderFresh(raw []byte, now time.Time, maxAge time.Duration) (holder s
 	if json.Unmarshal(raw, &obj) != nil {
 		return "", false
 	}
-	holder, renew := leaseHolderRenew(obj)
-	if holder == "" || renew.IsZero() {
+	holder, renew, renewOK := leaseHolderRenew(obj)
+	// An unreadable renewTime means not-fresh here, which is the safe direction for
+	// an ASSERT (it fails rather than vouching). The elector needs the opposite
+	// treatment — there, unreadable must not read as a free lease.
+	if !renewOK || holder == "" || renew.IsZero() {
 		return holder, false
 	}
 	return holder, now.Sub(renew) <= maxAge
