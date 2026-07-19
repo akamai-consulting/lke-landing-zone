@@ -77,11 +77,11 @@ func ciAssertScrapeTargetsCmd() *cobra.Command {
 			"short settle budget to absorb a first-scrape race, then exits 0 (all wired) or\n" +
 			"1. Read-only; reaches Prometheus via an ephemeral kubectl port-forward.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIAssertScrapeTargets(prom,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runCIAssertScrapeTargets(prom,
 				splitCSVList(monitors), splitCSVList(ruleGroups),
-				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second))
-			return nil
+				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
 	c.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
@@ -237,13 +237,17 @@ func probeScrapeState(prom string, monitors, ruleGroups []string) (scrapeProbe, 
 	return p, err
 }
 
-func runCIAssertScrapeTargets(prom string, monitors, ruleGroups []string, settle, interval time.Duration) int {
+// runCIAssertScrapeTargets returns nil when the pipeline is fully wired and an
+// error otherwise (cobra exits 1 on it). The ::error:: annotations stay as
+// direct writes: GitHub parses an annotation only at the start of a line, and a
+// returned error reaches stderr behind main.go's "llz: " prefix.
+func runCIAssertScrapeTargets(prom string, monitors, ruleGroups []string, settle, interval time.Duration) error {
 	sort.Strings(monitors)
 	sort.Strings(ruleGroups)
 	fmt.Println("## Scrape-target + rule-load assertion")
 	if len(monitors) == 0 && len(ruleGroups) == 0 {
 		fmt.Fprintln(os.Stderr, "::error::no --monitors and no --rule-groups to assert — refusing to pass vacuously")
-		return 1
+		return fmt.Errorf("no --monitors and no --rule-groups to assert — refusing to pass vacuously")
 	}
 
 	var last scrapeProbe
@@ -268,7 +272,7 @@ func runCIAssertScrapeTargets(prom string, monitors, ruleGroups []string, settle
 
 	if lastErr != nil {
 		fmt.Fprintf(os.Stderr, "::error::could not reach Prometheus at %s within %s (%v)\n", prom, settle, lastErr)
-		return 1
+		return fmt.Errorf("could not reach Prometheus at %s within %s: %w", prom, settle, lastErr)
 	}
 
 	fail := false
@@ -297,8 +301,8 @@ func runCIAssertScrapeTargets(prom string, monitors, ruleGroups []string, settle
 
 	if fail {
 		fmt.Fprintln(os.Stderr, "::error::observability scrape/rule pipeline is not fully wired")
-		return 1
+		return fmt.Errorf("observability scrape/rule pipeline is not fully wired")
 	}
 	fmt.Println("Scrape targets are up and rule groups are loaded.")
-	return 0
+	return nil
 }

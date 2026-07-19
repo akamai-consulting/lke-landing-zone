@@ -306,17 +306,11 @@ func resolveKubeconfig(path string) (string, func(), error) {
 	}
 	// 2. KUBECONFIG_RAW → spill to a 0600 tempfile → override.
 	if raw := os.Getenv("KUBECONFIG_RAW"); raw != "" {
-		tmp, err := os.CreateTemp("", "llz-bootstrap-kubeconfig-*")
+		path, cleanup, err := writeTempKubeconfig("llz-bootstrap-kubeconfig-*", []byte(raw))
 		if err != nil {
-			return "", noop, fmt.Errorf("create kubeconfig tempfile: %w", err)
+			return "", noop, err
 		}
-		if _, err := tmp.WriteString(raw); err != nil {
-			tmp.Close()
-			os.Remove(tmp.Name())
-			return "", noop, fmt.Errorf("write kubeconfig: %w", err)
-		}
-		tmp.Close()
-		return tmp.Name(), func() { os.Remove(tmp.Name()) }, nil
+		return path, cleanup, nil
 	}
 	// 3. Otherwise INHERIT the ambient environment — let kubectl/helm resolve
 	//    $KUBECONFIG / ~/.kube/config THEMSELVES, exactly like wait-cluster-ready +
@@ -580,10 +574,12 @@ func gateAndPolicies(o bootstrapClusterOpts, d bootstrapDeps) error {
 	kdeps := kyvernoDeps{kubectl: d.kubectl, now: d.now, sleep: d.sleep}
 
 	policies, cleanup, err := kyvernoPolicySpecs()
+	// cleanup is always non-nil and always the real removal — defer it BEFORE the
+	// error check so a partially-staged tempdir is reaped too.
+	defer cleanup()
 	if err != nil {
 		return err
 	}
-	defer cleanup()
 
 	var wg sync.WaitGroup
 	var gateErr error
@@ -614,40 +610,29 @@ func gateAndPolicies(o bootstrapClusterOpts, d bootstrapDeps) error {
 	return nil
 }
 
-// kyvernoPolicySpecs writes the two embedded Kyverno manifests to tempfiles (the
-// reused applyKyvernoPolicy takes a manifest PATH) and returns the opts that
-// carry the exact race-ahead warnings the null_resource `environment` blocks
-// set. cleanup removes the tempfiles.
+// kyvernoPolicySpecs writes the two embedded Kyverno manifests into one tempdir
+// (the reused applyKyvernoPolicy takes a manifest PATH) and returns the opts that
+// carry the exact race-ahead warnings the null_resource `environment` blocks set.
+//
+// cleanup is ALWAYS the real tempdir removal, including on the error returns: the
+// previous version ran its cleanup eagerly and then returned a no-op func(), so a
+// caller that (correctly) deferred the returned cleanup silently leaked every
+// staged file on the success path it cared about. One dir + RemoveAll makes the
+// contract "defer the cleanup you were handed" true unconditionally.
 func kyvernoPolicySpecs() (specs []kyvernoPolicyOpts, cleanup func(), err error) {
-	var tmpFiles []string
-	cleanup = func() {
-		for _, p := range tmpFiles {
-			os.Remove(p)
-		}
+	dir, err := os.MkdirTemp("", "llz-kyverno-policies-*")
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("stage Kyverno policies: %w", err)
 	}
-	write := func(name string, body []byte) (string, error) {
-		tmp, err := os.CreateTemp("", "llz-"+name+"-*.yaml")
-		if err != nil {
-			return "", err
-		}
-		if _, err := tmp.Write(body); err != nil {
-			tmp.Close()
-			return "", err
-		}
-		tmp.Close()
-		tmpFiles = append(tmpFiles, tmp.Name())
-		return tmp.Name(), nil
-	}
+	cleanup = func() { os.RemoveAll(dir) }
 
-	pvcPath, err := write("kyverno-pvc-encrypted-storage-class", kyvernoPVCEncryptedYAML)
-	if err != nil {
-		cleanup()
-		return nil, func() {}, fmt.Errorf("stage PVC-encryption policy: %w", err)
+	pvcPath := filepath.Join(dir, "kyverno-pvc-encrypted-storage-class.yaml")
+	if err := os.WriteFile(pvcPath, kyvernoPVCEncryptedYAML, 0o600); err != nil {
+		return nil, cleanup, fmt.Errorf("stage PVC-encryption policy: %w", err)
 	}
-	scPath, err := write("kyverno-sc-default-demote", kyvernoSCDefaultDemoteYAML)
-	if err != nil {
-		cleanup()
-		return nil, func() {}, fmt.Errorf("stage sc-default-demote policy: %w", err)
+	scPath := filepath.Join(dir, "kyverno-sc-default-demote.yaml")
+	if err := os.WriteFile(scPath, kyvernoSCDefaultDemoteYAML, 0o600); err != nil {
+		return nil, cleanup, fmt.Errorf("stage sc-default-demote policy: %w", err)
 	}
 
 	specs = []kyvernoPolicyOpts{

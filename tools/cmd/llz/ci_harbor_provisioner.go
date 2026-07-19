@@ -79,12 +79,12 @@ func ciHarborProvisionerCmd() *cobra.Command {
 
 func runCIHarborProvisioner() error {
 	ctx := context.Background()
-	apiURL := envOrDefault(os.Getenv, "HARBOR_API_URL", "http://harbor-core.harbor.svc.cluster.local")
+	apiURL := envOr("HARBOR_API_URL", "http://harbor-core.harbor.svc.cluster.local")
 	registryHost := os.Getenv("HARBOR_HOST")
 
 	// Admin password: a missing/empty mounted file means Harbor's Helm release
 	// hasn't created harbor-admin-password yet — not an error, just "not yet".
-	passFile := envOrDefault(os.Getenv, "HARBOR_ADMIN_PASSWORD_FILE", "/etc/harbor-admin/HARBOR_ADMIN_PASSWORD")
+	passFile := envOr("HARBOR_ADMIN_PASSWORD_FILE", "/etc/harbor-admin/HARBOR_ADMIN_PASSWORD")
 	passRaw, err := readAdminPasswordFile(passFile)
 	adminPass := strings.TrimSpace(string(passRaw))
 	if err != nil || adminPass == "" {

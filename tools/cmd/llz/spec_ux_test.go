@@ -59,8 +59,8 @@ func TestReadTopologyFromSpec(t *testing.T) {
 	if d.haRole != "active" || d.haGroup != "prod" {
 		t.Errorf("east from spec = %+v, want active/prod", d)
 	}
-	if peer, ok := peerOf(deps, "east"); !ok || peer != "west" {
-		t.Errorf("peerOf(east) = %q,%v, want west", peer, ok)
+	if peer, ok, err := peerOf(deps, "east"); err != nil || !ok || peer != "west" {
+		t.Errorf("peerOf(east) = %q,%v,%v, want west", peer, ok, err)
 	}
 	if lab, _ := findDeployment(deps, "lab"); lab.haRole != "standalone" {
 		t.Errorf("lab role = %q, want standalone default", lab.haRole)

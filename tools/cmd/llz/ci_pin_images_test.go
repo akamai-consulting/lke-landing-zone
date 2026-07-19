@@ -222,7 +222,7 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 func TestRunPinInstanceImagesTriggerOnly(t *testing.T) {
 	// trigger-only with a missing image: trigger the build, then return WITHOUT
 	// waiting for the publish and WITHOUT setting any instance variable.
-	setVars := stubPinSeams(t, 1, func(string) bool { return false /* never publishes */})
+	setVars := stubPinSeams(t, 1, func(string) bool { return false /* never publishes */ })
 	triggered := false
 	pinTriggerBuild = func(string, string, string, string) error { triggered = true; return nil }
 	pinBuildInProgress = func(string, string, string) bool { return false }

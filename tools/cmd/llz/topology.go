@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
@@ -54,6 +55,14 @@ func hclStringField(body, field string) (string, bool) {
 // present — the source of truth, so `llz env role`/`peer` stay correct even when
 // the committed tfvars lag a spec edit — and falls back to <tfDir>/cluster/*.tfvars
 // otherwise (reusing listDeployments' name discovery so the set is identical).
+// It deliberately does NOT enforce the whole-set pairing contract. `llz env add`
+// writes an HA pair one half at a time — scaffold.go defers the render with
+// "HA group %q still needs its %s peer" precisely because that half-formed state
+// is expected — and `llz env resolve` runs for EVERY deployment at the head of
+// the OpenBao bootstrap job. Validating the whole set here would make one
+// incomplete group fail role/peer/resolve for every cluster in the repo,
+// including unrelated standalone ones. peerOf enforces what it needs, where the
+// answer would otherwise be a guess.
 func readTopology(tfDir string) ([]deployment, error) {
 	if lz, present, err := loadSpec(); present {
 		if err != nil {
@@ -131,18 +140,36 @@ func byRole(deps []deployment, role string) []string {
 }
 
 // peerOf returns the other member of name's HA group. ok is false for a
-// standalone deployment (no peer) or an unknown name.
-func peerOf(deps []deployment, name string) (string, bool) {
+// standalone deployment, an unknown name, or a group whose other half has not
+// been added yet.
+//
+// An AMBIGUOUS group is an error, not an arbitrary answer. This used to return
+// the first other member, so a group holding two standbys silently resolved to
+// whichever came first — and `llz env peer` is what tells CI which cluster to
+// seed Harbor creds from and exchange CAs with, so guessing seeds from the wrong
+// cluster. validateHAFlags cannot catch this: it runs at `llz env add` and sees
+// one env, never the cross-deployment pairing.
+func peerOf(deps []deployment, name string) (string, bool, error) {
 	self, found := findDeployment(deps, name)
 	if !found || self.haRole == roleStandalone || self.haGroup == "" {
-		return "", false
+		return "", false, nil
 	}
+	var peers []string
 	for _, d := range deps {
 		if d.name != name && d.haGroup == self.haGroup {
-			return d.name, true
+			peers = append(peers, d.name)
 		}
 	}
-	return "", false
+	if len(peers) > 1 {
+		sort.Strings(peers)
+		return "", false, fmt.Errorf("ha_group %q holds more than one peer for %q (%s) — exactly one "+
+			"active and one standby are required; refusing to guess which cluster to pair with",
+			self.haGroup, name, strings.Join(peers, ", "))
+	}
+	if len(peers) == 0 {
+		return "", false, nil
+	}
+	return peers[0], true, nil
 }
 
 // validateTopology enforces the pairing contract: every non-empty ha_group has
@@ -224,7 +251,10 @@ func envPeerCmd() *cobra.Command {
 			if _, ok := findDeployment(deps, args[0]); !ok {
 				return fmt.Errorf("no such deployment %q (run `llz env list`)", args[0])
 			}
-			peer, ok := peerOf(deps, args[0])
+			peer, ok, err := peerOf(deps, args[0])
+			if err != nil {
+				return err
+			}
 			if !ok {
 				return fmt.Errorf("deployment %q is standalone — it has no HA peer", args[0])
 			}
@@ -265,7 +295,12 @@ func writeHAResolution(deps []deployment, name string) error {
 	if !ok {
 		return fmt.Errorf("no such deployment %q (run `llz env list`)", name)
 	}
-	peer, _ := peerOf(deps, name) // empty for standalone — expected, not an error
+	// Empty peer is expected for a standalone or a half-added pair; an ambiguous
+	// group is not — this value drives which cluster CI pairs with.
+	peer, _, err := peerOf(deps, name)
+	if err != nil {
+		return err
+	}
 	shown := peer
 	if shown == "" {
 		shown = "<none>"

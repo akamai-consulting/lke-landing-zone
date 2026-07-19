@@ -33,9 +33,9 @@ func ciAssertLokiCmd() *cobra.Command {
 			"same treatment assert-scrape-targets/assert-reconciler already carry. Exit 0\n" +
 			"bootstrapped, 1 otherwise.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIAssertLoki(nameMatch, time.Duration(settle)*time.Second, time.Duration(interval)*time.Second))
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runCIAssertLoki(nameMatch, time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
 	c.Flags().StringVar(&nameMatch, "name-match", "loki", "substring/regex identifying Loki workloads/objects")
@@ -64,9 +64,9 @@ func ciWaitHarborCmd() *cobra.Command {
 			"pass --registry-only; rejecting it would break those instances on image bump\n" +
 			"alone. They go once `llz upgrade` has carried the new call site everywhere.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIWaitHarbor(harborURL, registryOnly))
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runCIWaitHarbor(harborURL, registryOnly)
 		},
 	}
 	c.Flags().StringVar(&harborURL, "harbor-url", os.Getenv("HARBOR_URL"), "accepted and ignored (vendored-workflow compatibility)")
@@ -83,7 +83,11 @@ type lokiPod struct {
 	status   health.PodStatus
 }
 
-func runCIAssertLoki(nameMatch string, settle, interval time.Duration) int {
+// runCIAssertLoki returns nil when Loki is bootstrapped and an error otherwise
+// (cobra exits 1 on it). The ::error:: annotation is still written directly —
+// GitHub parses an annotation only at the start of a line, and a returned error
+// reaches stderr behind main.go's "llz: " prefix.
+func runCIAssertLoki(nameMatch string, settle, interval time.Duration) error {
 	fmt.Println("## Loki bootstrap assertion")
 
 	// Poll the two gating conditions for a settle budget. lokiBootstrapped reads the
@@ -128,10 +132,10 @@ func runCIAssertLoki(nameMatch string, settle, interval time.Duration) int {
 
 	if !ok {
 		fmt.Fprintln(os.Stderr, "::error::Loki is not bootstrapped")
-		return 1
+		return fmt.Errorf("Loki is not bootstrapped")
 	}
 	fmt.Println("Loki is bootstrapped.")
-	return 0
+	return nil
 }
 
 // lokiBootstrapped evaluates the two gating conditions — Loki workloads exist and
@@ -241,14 +245,14 @@ func lokiConfigText(match string) string {
 //
 // The harborURL / registryOnly parameters are vestigial and ignored; see the
 // command's help for why they are still accepted.
-func runCIWaitHarbor(_ string, _ bool) int {
+func runCIWaitHarbor(_ string, _ bool) error {
 	for _, d := range health.HarborRegistryDeployments() {
-		if harborRollout("deployment/"+d) != nil {
-			return 1
+		if err := harborRollout("deployment/" + d); err != nil {
+			return fmt.Errorf("harbor-registry rollout did not complete (deployment/%s): %w", d, err)
 		}
 	}
 	fmt.Println("harbor-registry rolled out.")
-	return 0
+	return nil
 }
 
 // harborRollout runs `kubectl -n harbor rollout status <ref> --timeout=2m`,

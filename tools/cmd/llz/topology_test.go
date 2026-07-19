@@ -67,13 +67,13 @@ func TestReadTopologyAndHelpers(t *testing.T) {
 	if got := byRole(deps, roleActive); !reflect.DeepEqual(got, []string{"east"}) {
 		t.Errorf("byRole(active) = %v, want [east]", got)
 	}
-	if peer, ok := peerOf(deps, "west"); !ok || peer != "east" {
-		t.Errorf("peerOf(west) = %q,%v, want east,true", peer, ok)
+	if peer, ok, err := peerOf(deps, "west"); err != nil || !ok || peer != "east" {
+		t.Errorf("peerOf(west) = %q,%v,%v, want east,true,nil", peer, ok, err)
 	}
-	if peer, ok := peerOf(deps, "east"); !ok || peer != "west" {
-		t.Errorf("peerOf(east) = %q,%v, want west,true", peer, ok)
+	if peer, ok, err := peerOf(deps, "east"); err != nil || !ok || peer != "west" {
+		t.Errorf("peerOf(east) = %q,%v,%v, want west,true,nil", peer, ok, err)
 	}
-	if _, ok := peerOf(deps, "solo"); ok {
+	if _, ok, err := peerOf(deps, "solo"); ok || err != nil {
 		t.Error("peerOf(solo) ok=true, want false (standalone has no peer)")
 	}
 }
@@ -88,6 +88,46 @@ func TestReadTopologyDefaultsStandalone(t *testing.T) {
 	}
 	if len(deps) != 1 || deps[0].haRole != roleStandalone || deps[0].haGroup != "" {
 		t.Errorf("default = %+v, want standalone/empty", deps[0])
+	}
+}
+
+// peerOf must refuse to guess: it used to return the first other group member,
+// so a group with two standbys resolved `llz env peer` to an arbitrary cluster —
+// the value that tells CI which cluster to seed Harbor creds from.
+func TestPeerOfRejectsAmbiguousGroup(t *testing.T) {
+	deps := []deployment{
+		{"east", roleActive, "g1"},
+		{"west", roleStandby, "g1"},
+		{"cent", roleStandby, "g1"},
+	}
+	_, ok, err := peerOf(deps, "east")
+	if err == nil {
+		t.Fatal("peerOf resolved an ambiguous group, want error")
+	}
+	if ok {
+		t.Error("ok = true on an ambiguous group, want false")
+	}
+	if !strings.Contains(err.Error(), "more than one peer") {
+		t.Errorf("error = %v, want the ambiguous-group message", err)
+	}
+}
+
+// The half-formed pair must keep working. `llz env add` writes an HA pair one
+// half at a time (scaffold.go defers the render and says so), and `llz env
+// resolve` runs for every deployment at the head of the OpenBao bootstrap job —
+// so enforcing the whole-set contract at read time would fail bootstrap for
+// every cluster in the repo, including unrelated standalone ones.
+func TestReadTopologyToleratesHalfAddedPair(t *testing.T) {
+	dir := haInstance(t, map[string][2]string{"east": {roleActive, "g1"}})
+	deps, err := readTopology(dir)
+	if err != nil {
+		t.Fatalf("readTopology rejected a half-added HA pair: %v", err)
+	}
+	if len(deps) != 1 || deps[0].haRole != roleActive {
+		t.Fatalf("deps = %+v, want the one active", deps)
+	}
+	if _, ok, err := peerOf(deps, "east"); err != nil || ok {
+		t.Errorf("peerOf = (ok %v, err %v), want (false, nil) — no peer yet, but not an error", ok, err)
 	}
 }
 

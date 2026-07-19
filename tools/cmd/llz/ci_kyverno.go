@@ -24,10 +24,8 @@ package main
 // the env parsing and webhook-race classification are pure functions.
 
 import (
-	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -84,30 +82,13 @@ func runCIApplyKyvernoPolicy() error {
 		return err
 	}
 
-	kubeconfig, err := os.CreateTemp("", "llz-kyverno-kubeconfig-*")
+	kubeconfig, cleanup, err := writeTempKubeconfig("llz-kyverno-kubeconfig-*", []byte(o.kubeconfigRaw))
 	if err != nil {
-		return fmt.Errorf("create kubeconfig tempfile: %w", err)
+		return err
 	}
-	defer os.Remove(kubeconfig.Name())
-	if _, err := kubeconfig.WriteString(o.kubeconfigRaw); err != nil {
-		kubeconfig.Close()
-		return fmt.Errorf("write kubeconfig: %w", err)
-	}
-	kubeconfig.Close()
+	defer cleanup()
 
-	deps := kyvernoDeps{
-		kubectl: func(args ...string) (string, bool) {
-			cmd := exec.Command("kubectl", args...)
-			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig.Name())
-			var buf bytes.Buffer
-			cmd.Stdout, cmd.Stderr = &buf, &buf
-			err := cmd.Run()
-			return buf.String(), err == nil
-		},
-		now:   time.Now,
-		sleep: time.Sleep,
-	}
-	return applyKyvernoPolicy(o, deps)
+	return applyKyvernoPolicy(o, kyvernoDeps(newAplGateDepsFor(kubeconfig)))
 }
 
 func kyvernoOptsFromEnv(getenv func(string) string) (kyvernoPolicyOpts, error) {
@@ -142,13 +123,6 @@ func kyvernoOptsFromEnv(getenv func(string) string) (kyvernoPolicyOpts, error) {
 	return o, nil
 }
 
-func envOrDefault(getenv func(string) string, key, def string) string {
-	if v := getenv(key); v != "" {
-		return v
-	}
-	return def
-}
-
 func envSecondsOrDefault(getenv func(string) string, key string, def int) (int, error) {
 	v := getenv(key)
 	if v == "" {
@@ -176,7 +150,7 @@ func isKyvernoWebhookRace(out string) bool { return kyvernoWebhookRaceRE.MatchSt
 func applyKyvernoPolicy(o kyvernoPolicyOpts, d kyvernoDeps) error {
 	if o.waitForKyverno {
 		// Poll until the CRD exists AND the admission controller is Available.
-		ready := pollUntil(d, o.waitTimeout, func() bool {
+		ready := pollUntil(d.now, d.sleep, o.waitTimeout, 5*time.Second, func() bool {
 			if _, ok := d.kubectl("get", "crd", "clusterpolicies.kyverno.io"); !ok {
 				return false
 			}
@@ -233,7 +207,7 @@ func applyKyvernoPolicy(o kyvernoPolicyOpts, d kyvernoDeps) error {
 // and optionally roll the consumer. Best-effort — never returns an error.
 func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d kyvernoDeps) {
 	ns := o.retrofitNamespace
-	present := pollUntil(d, o.retrofitWait, func() bool {
+	present := pollUntil(d.now, d.sleep, o.retrofitWait, 5*time.Second, func() bool {
 		_, ok := d.kubectl("-n", ns, "get", "configmap", o.retrofitConfigMap)
 		return ok
 	})
@@ -252,22 +226,6 @@ func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d kyvernoDeps) {
 		if _, ok := d.kubectl("-n", ns, "rollout", "restart", "deploy/"+o.retrofitRollout); ok {
 			notice(fmt.Sprintf("retrofit: rolled %s/deploy/%s to reload the mutated config.", ns, o.retrofitRollout))
 		}
-	}
-}
-
-// pollUntil calls cond immediately then every 5s until it returns true or the
-// timeout elapses (mirrors the bash `until … sleep 5` loops). now/sleep are
-// injected so tests run without real waiting.
-func pollUntil(d kyvernoDeps, timeout time.Duration, cond func() bool) bool {
-	deadline := d.now().Add(timeout)
-	for {
-		if cond() {
-			return true
-		}
-		if !d.now().Before(deadline) {
-			return false
-		}
-		d.sleep(5 * time.Second)
 	}
 }
 

@@ -84,25 +84,6 @@ func TestGithubSlug(t *testing.T) {
 	}
 }
 
-func TestGhFineGrainedPackagesURL(t *testing.T) {
-	raw := ghFineGrainedPackagesURL("tok-name", "my-org")
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatalf("not a valid URL: %v", err)
-	}
-	if u.Host != "github.com" || u.Path != "/settings/personal-access-tokens/new" {
-		t.Errorf("unexpected host/path: %q", raw)
-	}
-	q := u.Query()
-	if q.Get("name") != "tok-name" || q.Get("target_name") != "my-org" || q.Get("expires_in") != "90" {
-		t.Errorf("unexpected query: %v", q)
-	}
-	// owner omitted -> no target_name.
-	if q2 := mustQuery(t, ghFineGrainedPackagesURL("n", "")); q2.Has("target_name") {
-		t.Errorf("empty owner should omit target_name, got %v", q2)
-	}
-}
-
 func TestGhFineGrainedDispatchURL(t *testing.T) {
 	u, err := url.Parse(ghFineGrainedDispatchURL("llz-e2e-dispatch", "my-org"))
 	if err != nil {
@@ -135,22 +116,6 @@ func mustQuery(t *testing.T, raw string) url.Values {
 	return u.Query()
 }
 
-func TestHclList(t *testing.T) {
-	cases := map[string]string{
-		"a,b,c":   `["a", "b", "c"]`,
-		"a, b ,c": `["a", "b", "c"]`, // trims whitespace
-		"a,,c":    `["a", "c"]`,      // drops empties
-		"":        `[]`,
-		"  ,  ":   `[]`,
-		"solo":    `["solo"]`,
-	}
-	for in, want := range cases {
-		if got := hclList(in); got != want {
-			t.Errorf("hclList(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestIndent(t *testing.T) {
 	if got := indent("a\nb", "  "); got != "  a\n  b" {
 		t.Errorf("indent = %q, want '  a\\n  b'", got)
@@ -181,9 +146,6 @@ func TestOrHelpers(t *testing.T) {
 	}
 	if !strings.HasPrefix(orNone(""), "(none") || orNone("x") != "x" {
 		t.Error("orNone wrong")
-	}
-	if !strings.Contains(orUnset("", "here"), "here") || orUnset("v", "here") != "v" {
-		t.Error("orUnset wrong")
 	}
 }
 

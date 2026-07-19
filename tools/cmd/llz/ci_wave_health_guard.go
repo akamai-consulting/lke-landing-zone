@@ -27,12 +27,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // waveHealthKindRule describes why a kind is safe at a negative sync wave.
@@ -162,8 +160,16 @@ func runCIWaveHealthGuard(root string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", valuesPath, err)
 	}
-	findings, err := collectWaveHealthFindings(platformTreeDirs(root), string(valuesRaw))
+	dirs := platformTreeDirs(root)
+	findings, examined, err := collectWaveHealthFindings(dirs, string(valuesRaw))
 	if err != nil {
+		return err
+	}
+	// This guard used to DISCARD the examined count: with its trees absent or
+	// moved it walked zero files, found zero negative-wave kinds, and printed the
+	// same green as a full clean run — the PR #142 wedge class silently unpoliced.
+	// Its three siblings gated on requireCorpus; this one did not.
+	if err := requireCorpus("wave-health-guard", examined, dirs); err != nil {
 		return err
 	}
 	failed := false
@@ -190,46 +196,27 @@ func runCIWaveHealthGuard(root string) error {
 
 // collectWaveHealthFindings walks the given dirs and classifies every
 // negative-wave resource against waveHealthAllowedKinds + the values overrides.
-func collectWaveHealthFindings(dirs []string, values string) ([]waveHealthFinding, error) {
+// It also returns how many manifest files were read, which the caller must gate
+// on (requireCorpus) — an empty corpus is a failure, not a pass.
+func collectWaveHealthFindings(dirs []string, values string) ([]waveHealthFinding, int, error) {
 	var findings []waveHealthFinding
 	// walkManifests also brings the missing-directory tolerance this guard alone
 	// lacked — it used to hard-error on a layout its three siblings skipped — and
 	// the *.yml extension it alone would have ignored.
-	if _, err := walkManifests(dirs, func(path string, raw []byte) error {
-		for _, doc := range splitWaveHealthDocs(string(raw)) {
+	examined, err := walkManifests(dirs, func(path string, raw []byte) error {
+		for _, doc := range decodeDocs(string(raw), func(d waveHealthDoc) bool { return d.Kind != "" }) {
 			f, ok := classifyWaveHealthDoc(path, doc, values)
 			if ok {
 				findings = append(findings, f)
 			}
 		}
 		return nil
-	}); err != nil {
-		return nil, err
-	}
-	sort.Slice(findings, func(i, j int) bool {
-		if findings[i].file != findings[j].file {
-			return findings[i].file < findings[j].file
-		}
-		return findings[i].name < findings[j].name
 	})
-	return findings, nil
-}
-
-// splitWaveHealthDocs parses a multi-doc YAML file, skipping docs that fail to
-// parse (kustomize patches etc. are not this guard's concern).
-func splitWaveHealthDocs(raw string) []waveHealthDoc {
-	var docs []waveHealthDoc
-	dec := yaml.NewDecoder(strings.NewReader(raw))
-	for {
-		var d waveHealthDoc
-		if err := dec.Decode(&d); err != nil {
-			break
-		}
-		if d.Kind != "" {
-			docs = append(docs, d)
-		}
+	if err != nil {
+		return nil, examined, err
 	}
-	return docs
+	sortGuardFindings(findings, func(f waveHealthFinding) (string, string) { return f.file, f.name })
+	return findings, examined, nil
 }
 
 // classifyWaveHealthDoc returns a finding for docs at negative sync waves;

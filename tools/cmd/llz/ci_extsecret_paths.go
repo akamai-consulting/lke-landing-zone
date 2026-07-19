@@ -25,7 +25,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -88,22 +87,21 @@ var (
 )
 
 // collectExternalSecretRefs returns {(remoteRef.key, property): [file, …]} from
-// every *.yaml under apl-values/ and the rendered chart output, skipping
+// every YAML manifest under apl-values/ and the rendered chart output, skipping
 // vendored chart subtrees (/charts/).
-func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int) {
+func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int, error) {
 	refs := map[esRef][]string{}
-	var sources []string
-	for _, dir := range []string{filepath.Join(root, "apl-values"), filepath.Join(root, filepath.FromSlash(renderDir))} {
-		_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d == nil || d.IsDir() {
-				return nil
-			}
-			if strings.HasSuffix(p, ".yaml") {
-				sources = append(sources, p)
-			}
-			return nil
-		})
-	}
+	// collectManifestPaths is the walk the tree-scanning guards share; it also
+	// matches *.yml, which this hand-rolled copy dropped — an ExternalSecret saved
+	// with that extension was invisible to the whole cross-validation.
+	//
+	// The walk error is returned, not dropped: requireCorpus only asserts
+	// examined > 0, so a walk that broke PARTWAY still yields a non-empty corpus
+	// and would pass the gate having validated only the files it reached.
+	sources, walkErr := collectManifestPaths([]string{
+		filepath.Join(root, "apl-values"),
+		filepath.Join(root, filepath.FromSlash(renderDir)),
+	})
 	examined := 0
 	for _, f := range sources {
 		if strings.Contains(filepath.ToSlash(f), "/charts/") {
@@ -133,7 +131,7 @@ func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int)
 		}
 	}
 	// examined counts files actually READ (post /charts/ filter), not files found.
-	return refs, examined
+	return refs, examined, walkErr
 }
 
 var (
@@ -419,7 +417,10 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// scanned so this works in the template repo and in a populated instance.
 	renderDir := firstNonEmpty(os.Getenv("RENDER_DIR"), "rendered")
 	esDirs := []string{filepath.Join(root, "apl-values"), filepath.Join(root, filepath.FromSlash(renderDir))}
-	refs, examined := collectExternalSecretRefs(root, renderDir)
+	refs, examined, walkErr := collectExternalSecretRefs(root, renderDir)
+	if walkErr != nil {
+		return fmt.Errorf("externalsecret-paths: scanning manifests: %w", walkErr)
+	}
 	// The walk discarded its error (`_ = filepath.WalkDir`), so an absent
 	// apl-values/ AND an unrendered chart tree both yielded zero sources, zero
 	// refs, and a clean pass — the guard would vouch for ExternalSecret paths it
@@ -581,38 +582,36 @@ func esParseRefreshInterval(s string) (time.Duration, error) {
 // propagation bound anyway.
 func checkESRefreshIntervals(root string, w io.Writer) int {
 	errors := 0
-	for _, dir := range platformTreeDirs(root) {
-		_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d == nil || d.IsDir() || !strings.HasSuffix(p, ".yaml") {
-				return nil
+	// The shared walk (*.yaml AND *.yml, absent dirs skipped): a PushSecret saved
+	// as *.yml was exempt from the propagation bound under the hand-rolled copy.
+	if _, walkErr := walkManifests(platformTreeDirs(root), func(p string, b []byte) error {
+		for _, doc := range strings.Split(string(b), "\n---") {
+			if !esKindRx.MatchString(doc) {
+				continue
 			}
-			b, rerr := os.ReadFile(p)
-			if rerr != nil {
-				return nil
+			m := esRefreshIntervalRx.FindStringSubmatch(doc)
+			if m == nil {
+				fmt.Fprintf(w, "::error file=%s::ExternalSecret/PushSecret declares no refreshInterval — set one ≤ %s (or \"0\" for a one-shot generator); see docs/designs/secrets-before-apps.md\n", p, esMaxRefreshInterval)
+				errors++
+				continue
 			}
-			for _, doc := range strings.Split(string(b), "\n---") {
-				if !esKindRx.MatchString(doc) {
-					continue
-				}
-				m := esRefreshIntervalRx.FindStringSubmatch(doc)
-				if m == nil {
-					fmt.Fprintf(w, "::error file=%s::ExternalSecret/PushSecret declares no refreshInterval — set one ≤ %s (or \"0\" for a one-shot generator); see docs/designs/secrets-before-apps.md\n", p, esMaxRefreshInterval)
-					errors++
-					continue
-				}
-				dur, perr := esParseRefreshInterval(m[1])
-				if perr != nil {
-					fmt.Fprintf(w, "::error file=%s::unparseable refreshInterval %q\n", p, m[1])
-					errors++
-					continue
-				}
-				if dur != 0 && dur > esMaxRefreshInterval {
-					fmt.Fprintf(w, "::error file=%s::refreshInterval %s exceeds the %s propagation bound (secrets-before-apps Phase 1) — a rotated credential would be served stale that long\n", p, m[1], esMaxRefreshInterval)
-					errors++
-				}
+			dur, perr := esParseRefreshInterval(m[1])
+			if perr != nil {
+				fmt.Fprintf(w, "::error file=%s::unparseable refreshInterval %q\n", p, m[1])
+				errors++
+				continue
 			}
-			return nil
-		})
+			if dur != 0 && dur > esMaxRefreshInterval {
+				fmt.Fprintf(w, "::error file=%s::refreshInterval %s exceeds the %s propagation bound (secrets-before-apps Phase 1) — a rotated credential would be served stale that long\n", p, m[1], esMaxRefreshInterval)
+				errors++
+			}
+		}
+		return nil
+	}); walkErr != nil {
+		// An aborted walk means part of the tree went unscanned; report it rather
+		// than emitting the clean "every ES bounds refreshInterval" line.
+		fmt.Fprintf(w, "::error::scanning the platform trees for refreshInterval bounds failed: %v\n", walkErr)
+		errors++
 	}
 	if errors == 0 {
 		fmt.Fprintf(w, "  ok: every platform ExternalSecret/PushSecret bounds refreshInterval ≤ %s (or one-shot 0)\n", esMaxRefreshInterval)

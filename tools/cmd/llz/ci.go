@@ -376,9 +376,9 @@ func runCITFImport(g globalOpts, region string, nonfatal bool) error {
 	if region == "" {
 		return fmt.Errorf("--region is required (the tfvars prefix, e.g. primary)")
 	}
-	token := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
-	if token == "" {
-		return fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) to a Linode PAT")
+	token, err := ciToken()
+	if err != nil {
+		return err
 	}
 
 	// tfvars file: prefer <region>.tfvars, fall back to the .example (mirrors the
@@ -687,7 +687,7 @@ func healFirewallCollision(g globalOpts, applyLog, varFile string, applyExit int
 	if fwAddr == "" {
 		return fmt.Errorf("firewall label collision detected but could not parse the resource address — original error stands (exit %d)", applyExit)
 	}
-	token := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("TF_VAR_linode_token"))
+	token := tfApplyLinodeToken()
 	if token == "" {
 		return fmt.Errorf("firewall collision but LINODE_TOKEN / TF_VAR_linode_token is unset — cannot look up the existing firewall (exit %d)", applyExit)
 	}
@@ -862,6 +862,17 @@ func ciToken() (string, error) {
 	return t, nil
 }
 
+// tfApplyLinodeToken reads the Linode PAT available on the terraform apply path.
+// Deliberately NOT ciToken: the apply step is handed its credential as
+// TF_VAR_linode_token (terraform's own variable plumbing), not LINODE_API_TOKEN,
+// so the fallback name differs and folding the two readers together would
+// silently change which variable wins in jobs that set more than one. Returns ""
+// when neither is set; the caller reports it, since the apply-path message
+// carries the terraform exit code.
+func tfApplyLinodeToken() string {
+	return firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("TF_VAR_linode_token"))
+}
+
 // ciDeleter returns a delete closure that honors --yes/--dry-run and tallies
 // outcomes, plus a finalize func that prints the summary and errors if any delete
 // failed. Mirrors the del/summary scaffolding in runReap.
@@ -894,6 +905,77 @@ func ciDeleter(ctx context.Context, g globalOpts, client *linode.Client) (func(p
 	return del, fin
 }
 
+// sweepOpts carries the per-resource wording and retry knobs for sweepUntilEmpty.
+// The wording is spelled out per resource rather than derived from one noun
+// because these lines are the destroy job's log surface — keep them identical to
+// what each sweep printed before.
+type sweepOpts struct {
+	cmd          string // prefixes the terminal error ("reap-volumes")
+	banner       string // per-attempt banner; " [attempt n/N] ===" is appended
+	singular     string // "Volume" — the retry line
+	plural       string // "Volumes" — the verify-error line
+	unit         string // "tracked Volume(s)" — the still-present lines
+	goneMsg      string // printed once the verified count reaches zero
+	attempts     int
+	retryDelay   int
+	requireEmpty bool
+}
+
+// sweepUntilEmpty runs a delete sweep and, under --require-empty, re-verifies
+// that the scoped set actually disappeared — retrying up to o.attempts times and
+// ultimately failing loudly so orphans cannot block the next apply's preflight.
+//
+// sweep performs one pass, deleting through the supplied del closure; an error
+// from it aborts the run, since a sweep that cannot enumerate has nothing to
+// converge on. count reports how many scoped resources remain, returning the -1
+// sentinel with an error when the list call fails. client is only used to build
+// the ciDeleter closure, so a sweep that deletes nothing never dereferences it.
+func sweepUntilEmpty(ctx context.Context, g globalOpts, client *linode.Client, o sweepOpts,
+	sweep func(del func(path, desc string)) error,
+	count func() (int, error)) error {
+	confirm := g.yes && !g.dryRun
+	if o.attempts < 1 {
+		o.attempts = 1
+	}
+
+	var lastErr error
+	remaining := -1
+	for attempt := 1; attempt <= o.attempts; attempt++ {
+		del, fin := ciDeleter(ctx, g, client)
+		fmt.Printf("%s [attempt %d/%d] ===\n", o.banner, attempt, o.attempts)
+		if err := sweep(del); err != nil {
+			return err
+		}
+		lastErr = fin()
+
+		// Without --require-empty (or in dry-run, where nothing was deleted)
+		// keep the historical single-pass best-effort behavior.
+		if !o.requireEmpty || !confirm {
+			return lastErr
+		}
+
+		var verr error
+		if remaining, verr = count(); verr != nil {
+			fmt.Fprintf(os.Stderr, "verify %s: %v\n", o.plural, verr)
+			remaining = -1
+		} else if remaining == 0 {
+			fmt.Println(o.goneMsg)
+			return lastErr
+		} else {
+			fmt.Printf("verify: %d %s still present after attempt %d/%d.\n", remaining, o.unit, attempt, o.attempts)
+		}
+		if attempt < o.attempts {
+			fmt.Printf("retrying the %s sweep in %ds...\n", o.singular, o.retryDelay)
+			time.Sleep(time.Duration(o.retryDelay) * time.Second)
+		}
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("%s: %s %s still present after %d attempt(s) — orphans remain; failing the destroy so they don't block the next apply's preflight",
+		o.cmd, firstNonEmpty(itoaOrUnknown(remaining), "some"), o.unit, o.attempts)
+}
+
 func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, waitDetach, attempts, retryDelay int, requireEmpty bool) error {
 	if region == "" && volumeIDs == "" {
 		return fmt.Errorf("--region and/or --volume-ids is required (refusing an unscoped Volume sweep)")
@@ -907,10 +989,6 @@ func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, wa
 	}
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
-	confirm := g.yes && !g.dryRun
-	if attempts < 1 {
-		attempts = 1
-	}
 
 	// Detach is a precondition of the SWEEP, not of each retry: the retries
 	// re-verify DELETION (countVolumesPresent), not detachment. Waiting inside the
@@ -928,43 +1006,22 @@ func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, wa
 		waitVolumesDetached(ctx, client, volumeIDs, waitDetach)
 	}
 
-	var lastErr error
-	remaining := -1
-	for attempt := 1; attempt <= attempts; attempt++ {
-		del, fin := ciDeleter(ctx, g, client)
-		fmt.Printf("=== orphan Volumes (region=%q volume-ids=%q tag=%q, label prefix pvc-, unattached) [attempt %d/%d] ===\n",
-			region, volumeIDs, tagMustInclude, attempt, attempts)
-		if err := reapVolumes(ctx, client, reapOpts{region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del); err != nil {
-			return err
-		}
-		lastErr = fin()
-
-		// Without --require-empty (or in dry-run, where nothing was deleted)
-		// keep the historical single-pass best-effort behavior.
-		if !requireEmpty || !confirm {
-			return lastErr
-		}
-
-		var verr error
-		if remaining, verr = countVolumesPresent(ctx, client, volumeIDs); verr != nil {
-			fmt.Fprintf(os.Stderr, "verify Volumes: %v\n", verr)
-			remaining = -1
-		} else if remaining == 0 {
-			fmt.Println("verified: all tracked Volumes are gone.")
-			return lastErr
-		} else {
-			fmt.Printf("verify: %d tracked Volume(s) still present after attempt %d/%d.\n", remaining, attempt, attempts)
-		}
-		if attempt < attempts {
-			fmt.Printf("retrying the Volume sweep in %ds...\n", retryDelay)
-			time.Sleep(time.Duration(retryDelay) * time.Second)
-		}
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("reap-volumes: %s tracked Volume(s) still present after %d attempt(s) — orphans remain; failing the destroy so they don't block the next apply's preflight",
-		firstNonEmpty(itoaOrUnknown(remaining), "some"), attempts)
+	return sweepUntilEmpty(ctx, g, client, sweepOpts{
+		cmd: "reap-volumes",
+		banner: fmt.Sprintf("=== orphan Volumes (region=%q volume-ids=%q tag=%q, label prefix pvc-, unattached)",
+			region, volumeIDs, tagMustInclude),
+		singular:     "Volume",
+		plural:       "Volumes",
+		unit:         "tracked Volume(s)",
+		goneMsg:      "verified: all tracked Volumes are gone.",
+		attempts:     attempts,
+		retryDelay:   retryDelay,
+		requireEmpty: requireEmpty,
+	}, func(del func(path, desc string)) error {
+		return reapVolumes(ctx, client, reapOpts{region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del)
+	}, func() (int, error) {
+		return countVolumesPresent(ctx, client, volumeIDs)
+	})
 }
 
 // countVolumesPresent reports how many of the tracked Volume ids still exist in
@@ -1060,10 +1117,6 @@ func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, re
 	}
 	client := linode.NewClient(token, 60*time.Second)
 	ctx := context.Background()
-	confirm := g.yes && !g.dryRun
-	if attempts < 1 {
-		attempts = 1
-	}
 
 	// Account-wide orphan sweep (cluster gone / 0-backend) — reuse reap's logic.
 	// There's no precise scoped set to converge on, so this stays single-pass.
@@ -1077,12 +1130,18 @@ func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, re
 	}
 
 	// Scoped sweep: only NodeBalancers carrying THIS cluster's CCM tag (lke<id>).
-	var lastErr error
-	remaining := -1
-	for attempt := 1; attempt <= attempts; attempt++ {
-		del, fin := ciDeleter(ctx, g, client)
-		fmt.Printf("=== orphan NodeBalancers — scoped to cluster %s (lke_cluster.id or CCM tag lke%s) [attempt %d/%d] ===\n",
-			clusterID, clusterID, attempt, attempts)
+	return sweepUntilEmpty(ctx, g, client, sweepOpts{
+		cmd: "reap-nodebalancers",
+		banner: fmt.Sprintf("=== orphan NodeBalancers — scoped to cluster %s (lke_cluster.id or CCM tag lke%s)",
+			clusterID, clusterID),
+		singular:     "NodeBalancer",
+		plural:       "NodeBalancers",
+		unit:         "cluster NodeBalancer(s)",
+		goneMsg:      "verified: the cluster's NodeBalancers are gone.",
+		attempts:     attempts,
+		retryDelay:   retryDelay,
+		requireEmpty: requireEmpty,
+	}, func(del func(path, desc string)) error {
 		nbs, err := client.ListNodeBalancers(ctx)
 		if err != nil {
 			return fmt.Errorf("list NodeBalancers: %w", err)
@@ -1100,32 +1159,10 @@ func runCIReapNodeBalancers(g globalOpts, clusterID, region string, attempts, re
 		if !matched {
 			fmt.Println("  none matched")
 		}
-		lastErr = fin()
-
-		if !requireEmpty || !confirm {
-			return lastErr
-		}
-
-		var verr error
-		if remaining, verr = countClusterNodeBalancersPresent(ctx, client, clusterID); verr != nil {
-			fmt.Fprintf(os.Stderr, "verify NodeBalancers: %v\n", verr)
-			remaining = -1
-		} else if remaining == 0 {
-			fmt.Println("verified: the cluster's NodeBalancers are gone.")
-			return lastErr
-		} else {
-			fmt.Printf("verify: %d cluster NodeBalancer(s) still present after attempt %d/%d.\n", remaining, attempt, attempts)
-		}
-		if attempt < attempts {
-			fmt.Printf("retrying the NodeBalancer sweep in %ds...\n", retryDelay)
-			time.Sleep(time.Duration(retryDelay) * time.Second)
-		}
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("reap-nodebalancers: %s cluster NodeBalancer(s) still present after %d attempt(s) — orphans remain; failing the destroy so they don't block the next apply's preflight",
-		firstNonEmpty(itoaOrUnknown(remaining), "some"), attempts)
+		return nil
+	}, func() (int, error) {
+		return countClusterNodeBalancersPresent(ctx, client, clusterID)
+	})
 }
 
 // countClusterNodeBalancersPresent reports how many NodeBalancers still carry

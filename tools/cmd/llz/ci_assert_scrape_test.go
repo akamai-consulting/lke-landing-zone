@@ -258,8 +258,8 @@ func TestRunAssertScrapeFailsClosedFast(t *testing.T) {
 			return []byte(`{"data":{"groups":[]}}`), nil
 		})
 	}
-	if code := runCIAssertScrapeTargets("ns/svc:9090", []string{"a/b"}, nil, 0, time.Second); code != 1 {
-		t.Errorf("expected exit 1 on a never-discovered monitor, got %d", code)
+	if err := runCIAssertScrapeTargets("ns/svc:9090", []string{"a/b"}, nil, 0, time.Second); err == nil {
+		t.Errorf("expected an error on a never-discovered monitor, got %v", err)
 	}
 }
 
@@ -275,8 +275,8 @@ func TestRunAssertScrapePassesWhenWired(t *testing.T) {
 			return []byte(`{"data":{"groups":[{"name":"g","rules":[]}]}}`), nil
 		})
 	}
-	if code := runCIAssertScrapeTargets("ns/svc:9090", []string{"n/m"}, []string{"g"}, 30*time.Second, time.Second); code != 0 {
-		t.Errorf("expected exit 0 on a wired cluster, got %d", code)
+	if err := runCIAssertScrapeTargets("ns/svc:9090", []string{"n/m"}, []string{"g"}, 30*time.Second, time.Second); err != nil {
+		t.Errorf("expected no error on a wired cluster, got %v", err)
 	}
 }
 
@@ -293,8 +293,8 @@ func TestRunAssertScrapeReportsDownAndMissing(t *testing.T) {
 			return []byte(`{"data":{"groups":[]}}`), nil // group "g" absent
 		})
 	}
-	if code := runCIAssertScrapeTargets("ns/svc:9090", []string{"n/m"}, []string{"g"}, 0, time.Second); code != 1 {
-		t.Errorf("expected exit 1 on down target + missing group, got %d", code)
+	if err := runCIAssertScrapeTargets("ns/svc:9090", []string{"n/m"}, []string{"g"}, 0, time.Second); err == nil {
+		t.Errorf("expected an error on down target + missing group, got %v", err)
 	}
 }
 
@@ -305,7 +305,7 @@ func TestRunAssertScrapeFailsOnUnreachable(t *testing.T) {
 	withPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
 		return errors.New("port-forward failed")
 	}
-	if code := runCIAssertScrapeTargets("ns/svc:9090", []string{"n/m"}, nil, 0, time.Second); code != 1 {
-		t.Errorf("expected exit 1 when Prometheus is unreachable, got %d", code)
+	if err := runCIAssertScrapeTargets("ns/svc:9090", []string{"n/m"}, nil, 0, time.Second); err == nil {
+		t.Errorf("expected an error when Prometheus is unreachable, got %v", err)
 	}
 }

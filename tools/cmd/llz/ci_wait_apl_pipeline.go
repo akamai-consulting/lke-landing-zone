@@ -50,7 +50,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -129,27 +128,13 @@ func runCIWaitAplPipeline() error {
 	if raw == "" {
 		return fmt.Errorf("KUBECONFIG_RAW must be set")
 	}
-	kubeconfig, err := os.CreateTemp("", "llz-apl-pipeline-kubeconfig-*")
+	kubeconfig, cleanup, err := writeTempKubeconfig("llz-apl-pipeline-kubeconfig-*", []byte(raw))
 	if err != nil {
-		return fmt.Errorf("create kubeconfig tempfile: %w", err)
+		return err
 	}
-	defer os.Remove(kubeconfig.Name())
-	if _, err := kubeconfig.WriteString(raw); err != nil {
-		kubeconfig.Close()
-		return fmt.Errorf("write kubeconfig: %w", err)
-	}
-	kubeconfig.Close()
+	defer cleanup()
 
-	d := aplGateDeps{
-		kubectl: func(args ...string) (string, bool) {
-			cmd := exec.Command("kubectl", args...)
-			cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig.Name())
-			return runCombined(cmd)
-		},
-		now:   time.Now,
-		sleep: time.Sleep,
-	}
-	return waitAplPipeline(aplPipelineStages(), d)
+	return waitAplPipeline(aplPipelineStages(), newAplGateDepsFor(kubeconfig))
 }
 
 func waitAplPipeline(stages []aplWaitStage, d aplGateDeps) error {
@@ -171,7 +156,9 @@ func waitForAplResource(d aplGateDeps, s aplWaitStage) error {
 	if s.namespace != "" {
 		nsArgs = []string{"-n", s.namespace}
 	}
-	if !pollAplExist(d, s.existBudget, func() bool {
+	// Poll for existence on a 10s cadence (mirrors the bash `until kubectl get …
+	// sleep 10` loop) before handing off to the condition wait.
+	if !pollUntil(d.now, d.sleep, s.existBudget, 10*time.Second, func() bool {
 		_, ok := d.kubectl(append(append([]string{}, nsArgs...), "get", s.resource)...)
 		return ok
 	}) {
@@ -191,21 +178,6 @@ func waitForAplResource(d aplGateDeps, s aplWaitStage) error {
 		return fmt.Errorf("%s did not reach %q within %s", s.resource, s.forClause, s.condTimeout)
 	}
 	return nil
-}
-
-// pollAplExist calls cond immediately, then every 10s until it returns true or
-// the budget elapses (mirrors the bash `until kubectl get … sleep 10` loop).
-func pollAplExist(d aplGateDeps, budget time.Duration, cond func() bool) bool {
-	deadline := d.now().Add(budget)
-	for {
-		if cond() {
-			return true
-		}
-		if !d.now().Before(deadline) {
-			return false
-		}
-		d.sleep(10 * time.Second)
-	}
 }
 
 // dumpAplOperatorDiagnostics prints apl-operator pods + recent operator logs to

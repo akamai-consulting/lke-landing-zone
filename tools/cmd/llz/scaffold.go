@@ -16,11 +16,9 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
@@ -63,8 +61,6 @@ func instanceLayout() (tfDir, aplDir, relPrefix string) {
 	}
 	return "terraform-iac-bootstrap", "apl-values", ""
 }
-
-const tplTfvars = "terraform.tfvars.example"
 
 var tfRoots = []string{"cluster", "object-storage"}
 
@@ -293,98 +289,11 @@ func first3(s string) string {
 
 func quote(s string) string { return `"` + s + `"` }
 
-func orUnset(v, where string) string {
-	if v == "" {
-		return "<unset — fill in " + where + ">"
-	}
-	return v
-}
-
-// hclList renders a comma-separated CIDR string as an HCL list literal.
-func hclList(csv string) string {
-	parts := strings.Split(csv, ",")
-	var out []string
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, quote(p))
-		}
-	}
-	return "[" + strings.Join(out, ", ") + "]"
-}
-
 // setHCLField replaces the first `^<key> ... = ...` line with `<key> = <value>`.
 // Matches the bash `replace_in_file "^<key> .*=.*"` line-rewrite.
 func setHCLField(content, key, value string) string {
 	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `\s*=.*$`)
 	return re.ReplaceAllString(content, key+" = "+value)
-}
-
-func editFile(path string, transform func(string) string) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(transform(string(b))), 0o644)
-}
-
-func copyFile(src, dst string) error {
-	b, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(dst, b, 0o644)
-}
-
-func copyTree(src, dst string) error {
-	return filepath.Walk(src, func(p string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		target := filepath.Join(dst, rel)
-		if fi.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		in, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fi.Mode())
-		if err != nil {
-			return err
-		}
-		defer out.Close()
-		_, err = io.Copy(out, in)
-		return err
-	})
-}
-
-func walkFiles(root string) []string {
-	var out []string
-	_ = filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
-		if err == nil && !fi.IsDir() {
-			out = append(out, p)
-		}
-		return nil
-	})
-	sort.Strings(out)
-	return out
-}
-
-func walkFilesRel(root string) []string {
-	var out []string
-	for _, p := range walkFiles(root) {
-		rel, _ := filepath.Rel(root, p)
-		out = append(out, rel)
-	}
-	return out
 }
 
 func tfvarsPaths(tfDir, env string) []string {
@@ -393,23 +302,4 @@ func tfvarsPaths(tfDir, env string) []string {
 		out = append(out, filepath.Join(tfDir, root, env+".tfvars"))
 	}
 	return out
-}
-
-// grepToken returns "path:line: text" hits for token across the overlay tree +
-// the listed tfvars files (best-effort; missing files are skipped).
-func grepToken(token, overlay string, extra []string) []string {
-	files := append(walkFiles(overlay), extra...)
-	var hits []string
-	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		for i, line := range strings.Split(string(b), "\n") {
-			if strings.Contains(line, token) {
-				hits = append(hits, fmt.Sprintf("%s:%d: %s", f, i+1, strings.TrimSpace(line)))
-			}
-		}
-	}
-	return hits
 }

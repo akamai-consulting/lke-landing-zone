@@ -110,10 +110,10 @@ func runOpenBaoLogin(g globalOpts, method, role, addr, mount, saTokenFile, expor
 // OpenBao's kubernetes auth method — the CI-agnostic in-cluster path.
 func kubernetesOpenBaoLogin(ctx context.Context, client *http.Client, addr, mount, role, saTokenFile string) (string, error) {
 	if mount == "" {
-		mount = envOrDefault(os.Getenv, "OPENBAO_KUBERNETES_MOUNT", "kubernetes")
+		mount = envOr("OPENBAO_KUBERNETES_MOUNT", "kubernetes")
 	}
 	if saTokenFile == "" {
-		saTokenFile = envOrDefault(os.Getenv, "SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
+		saTokenFile = envOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
 	}
 	jwt, err := os.ReadFile(saTokenFile)
 	if err != nil {

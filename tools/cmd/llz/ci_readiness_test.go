@@ -23,8 +23,8 @@ func TestRunCIAssertLoki(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	// settle=0 → single evaluation (no polling/sleep in the unit test).
-	if ec := runCIAssertLoki("loki", 0, 0); ec != 0 {
-		t.Errorf("bootstrapped Loki => exit %d, want 0", ec)
+	if err := runCIAssertLoki("loki", 0, 0); err != nil {
+		t.Errorf("bootstrapped Loki => err %v, want nil", err)
 	}
 
 	// No pods + filesystem config => fail (exit 1).
@@ -37,8 +37,8 @@ func TestRunCIAssertLoki(t *testing.T) {
 		}
 		return nil, errors.New("nope")
 	})
-	if ec := runCIAssertLoki("loki", 0, 0); ec != 1 {
-		t.Errorf("unbootstrapped Loki => exit %d, want 1", ec)
+	if err := runCIAssertLoki("loki", 0, 0); err == nil {
+		t.Errorf("unbootstrapped Loki => err %v, want non-nil", err)
 	}
 }
 
@@ -61,8 +61,8 @@ func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
 		return nil, nil // Argo CRD absent → non-gating block skipped
 	})
 	// Tiny interval so the retry is instant; settle large enough for attempt 2.
-	if ec := runCIAssertLoki("loki", 2*time.Second, time.Millisecond); ec != 0 {
-		t.Errorf("a first-attempt transient should be ridden out => exit %d, want 0 (calls=%d)", ec, n)
+	if err := runCIAssertLoki("loki", 2*time.Second, time.Millisecond); err != nil {
+		t.Errorf("a first-attempt transient should be ridden out => err %v, want nil (calls=%d)", err, n)
 	}
 }
 
@@ -79,17 +79,17 @@ func TestRunCIWaitHarbor(t *testing.T) {
 		url          string
 		registryOnly bool
 	}{{"", false}, {"", true}, {"https://harbor.example", false}, {"https://harbor.example", true}} {
-		if ec := runCIWaitHarbor(tc.url, tc.registryOnly); ec != 0 {
-			t.Errorf("rollout OK (url=%q registryOnly=%v) => exit %d, want 0", tc.url, tc.registryOnly, ec)
+		if err := runCIWaitHarbor(tc.url, tc.registryOnly); err != nil {
+			t.Errorf("rollout OK (url=%q registryOnly=%v) => err %v, want nil", tc.url, tc.registryOnly, err)
 		}
 	}
 
 	// A failing rollout fails the gate, again regardless of the vestigial args.
 	harborRollout = func(string) error { return errors.New("timed out") }
-	if ec := runCIWaitHarbor("", false); ec != 1 {
-		t.Errorf("rollout timeout => exit %d, want 1", ec)
+	if err := runCIWaitHarbor("", false); err == nil {
+		t.Errorf("rollout timeout => err %v, want non-nil", err)
 	}
-	if ec := runCIWaitHarbor("https://harbor.example", true); ec != 1 {
-		t.Errorf("rollout timeout (vestigial args set) => exit %d, want 1", ec)
+	if err := runCIWaitHarbor("https://harbor.example", true); err == nil {
+		t.Errorf("rollout timeout (vestigial args set) => err %v, want non-nil", err)
 	}
 }

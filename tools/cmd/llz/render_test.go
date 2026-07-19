@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -52,20 +53,30 @@ spec:
         objectStorage: { cluster: us-ord-7 }
 `
 
+// renderAndWrite drives the render exactly as `llz render` does — renderTargets
+// (the one definition of what a render produces) piped into writeTargets.
+func renderAndWrite(t *testing.T, lz *clusterspec.LandingZone, envs []string, tfDir, aplDir string, tfvarsOnly bool) {
+	t.Helper()
+	targets, err := renderTargets(lz, envs, tfDir, aplDir, tfvarsOnly)
+	if err != nil {
+		t.Fatalf("renderTargets: %v", err)
+	}
+	if err := writeTargets(targets, tfDir, "", false); err != nil {
+		t.Fatalf("writeTargets: %v", err)
+	}
+}
+
 func TestRenderEnvTfvars(t *testing.T) {
 	// The terraform.tfvars.example base now comes from the embedded tfroots package
-	// (it no longer ships in the instance); renderEnvTfvars only writes the per-env
-	// <env>.tfvars into tfDir.
-	tfDir := filepath.Join(t.TempDir(), "terraform-iac-bootstrap")
+	// (it no longer ships in the instance); the per-env <env>.tfvars land in tfDir.
+	root := t.TempDir()
+	tfDir := filepath.Join(root, "terraform-iac-bootstrap")
 
 	lz, err := clusterspec.Decode([]byte(renderSpec))
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	c := lz.Spec.Environments["prod"].Cluster
-	if err := renderEnvTfvars("prod", c, tfDir, "", false); err != nil {
-		t.Fatalf("renderEnvTfvars: %v", err)
-	}
+	renderAndWrite(t, lz, []string{"prod"}, tfDir, filepath.Join(root, "apl-values"), true)
 
 	read := func(root string) string {
 		b, err := os.ReadFile(filepath.Join(tfDir, root, "prod.tfvars"))
@@ -124,10 +135,7 @@ spec:
 		t.Fatal(err)
 	}
 
-	prod, _ := lz.Env("prod")
-	if err := renderManifest("prod", prod, lz.ValuesIdentity("prod"), aplDir, "", "", false); err != nil {
-		t.Fatalf("renderManifest: %v", err)
-	}
+	renderAndWrite(t, lz, []string{"prod"}, filepath.Join(root, "terraform-iac-bootstrap"), aplDir, false)
 
 	kust, err := os.ReadFile(filepath.Join(aplDir, "prod", "manifest", "kustomization.yaml"))
 	if err != nil {
@@ -177,6 +185,111 @@ spec:
 	}
 }
 
+// The write path, `--check` and `--diff` all consume renderTargets, so `--check`
+// covers EVERY target — including the tfvars it used to skip while `--diff` diffed
+// them (the two paths disagreed about what a render produces).
+func TestRenderTargetsDriveCheck_IncludingTfvars(t *testing.T) {
+	root := t.TempDir()
+	tfDir := filepath.Join(root, "terraform-iac-bootstrap")
+	aplDir := filepath.Join(root, "apl-values")
+
+	lz, err := clusterspec.Decode([]byte(renderSpec))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	renderAndWrite(t, lz, []string{"prod"}, tfDir, aplDir, false)
+
+	// The same predicate `llz render --check` uses: absence is drift only outside the
+	// gitignored terraform-iac-bootstrap build artifacts.
+	check := func() error {
+		targets, err := renderTargets(lz, []string{"prod"}, tfDir, aplDir, false)
+		if err != nil {
+			t.Fatalf("renderTargets: %v", err)
+		}
+		return reportDrift(targets, func(p string) bool {
+			return !strings.HasPrefix(p, tfDir+string(filepath.Separator))
+		})
+	}
+	// Freshly rendered → the check path sees no drift in ANY target.
+	if err := check(); err != nil {
+		t.Fatalf("expected no drift right after a render; got %v", err)
+	}
+	// Hand-edit a rendered tfvars → the check path now catches it (it used to look at
+	// the committed apl-values only).
+	tfvars := filepath.Join(tfDir, "cluster", "prod.tfvars")
+	if err := os.WriteFile(tfvars, []byte("hand-edited = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := check(); err == nil {
+		t.Error("expected --check to report drift on a hand-edited <env>.tfvars")
+	}
+	// But a MISSING build artifact is not drift — on a fresh checkout none of the
+	// gitignored tfvars/TF roots exist yet, and demanding them would fail every
+	// instance's check.
+	if err := os.RemoveAll(tfDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := check(); err != nil {
+		t.Errorf("un-rendered (gitignored) build artifacts must not count as drift; got %v", err)
+	}
+	// A missing COMMITTED apl-values file still is drift.
+	if err := os.Remove(filepath.Join(aplDir, "prod", "manifest", "kustomization.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := check(); err == nil {
+		t.Error("expected drift for a missing committed apl-values target")
+	}
+}
+
+func TestHasHCLKey(t *testing.T) {
+	content := "region = \"us-ord\"\nnode_count=3\n# commented = 1\n  indented = 2\nnode_countx = 9\n"
+	for _, k := range []string{"region", "node_count"} {
+		if !hasHCLKey(content, k) {
+			t.Errorf("hasHCLKey(%q) = false, want true", k)
+		}
+	}
+	// A commented-out key, an indented one, and a mere prefix of a longer key are all
+	// misses — the assignment must start the line (applyAssigns appends instead).
+	for _, k := range []string{"commented", "indented", "node_coun"} {
+		if hasHCLKey(content, k) {
+			t.Errorf("hasHCLKey(%q) = true, want false", k)
+		}
+	}
+}
+
+// lineDiff trims the common prefix before its m×k LCS matrix; the emitted hunks must
+// be byte-identical to what the untrimmed DP produced.
+func TestLineDiff_CommonPrefixTrimmed(t *testing.T) {
+	var oldB, newB strings.Builder
+	for i := range 200 {
+		fmt.Fprintf(&oldB, "line %d\n", i)
+		fmt.Fprintf(&newB, "line %d\n", i)
+	}
+	oldB.WriteString("tail-old\n")
+	newB.WriteString("tail-new\n")
+
+	d := lineDiff(oldB.String(), newB.String())
+	// The change and its context survive; the long identical run collapses to "…".
+	for _, want := range []string{"- tail-old", "+ tail-new", "line 199", "…"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("lineDiff missing %q:\n%s", want, d)
+		}
+	}
+	if strings.Contains(d, "line 100") {
+		t.Errorf("unchanged run beyond the context window should be collapsed:\n%s", d)
+	}
+	// The greedy backtrack breaks LCS ties toward deletions — locked in here because a
+	// common-SUFFIX trim would reorder this to "-a +x  x" (which is why we only trim
+	// the prefix).
+	if got, want := stripANSI(lineDiff("a\nx\n", "x\nx\n")), "- a\n  x\n+ x\n"; got != want {
+		t.Errorf("tie-break order changed:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
+
 // The instance-wide ACME contact moved from a shared-dns file-rewrite to a kustomize
 // patch in the manifest overlay (the shared dns tree is now fetched remotely and can't
 // be rewritten). committedTargets threads spec.dns.acmeEmail into RenderManifestKustomization,
@@ -208,11 +321,9 @@ func TestACMEEmailReachesManifestOverlay(t *testing.T) {
 }
 
 func TestRenderNetworks(t *testing.T) {
-	tfDir := filepath.Join(t.TempDir(), "terraform-iac-bootstrap")
-	if err := os.MkdirAll(filepath.Join(tfDir, "vpc"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	mustWrite(t, filepath.Join(tfDir, "vpc", tplTfvars), "vpc_label = \"x\"\nregion = \"x\"\n")
+	root := t.TempDir()
+	tfDir := filepath.Join(root, "terraform-iac-bootstrap")
+	aplDir := filepath.Join(root, "apl-values")
 
 	lz, err := clusterspec.Decode([]byte(`
 apiVersion: llz.akamai-consulting.io/v1alpha1
@@ -227,9 +338,7 @@ spec:
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if err := renderNetworks(lz, tfDir, "", false); err != nil {
-		t.Fatalf("renderNetworks: %v", err)
-	}
+	renderAndWrite(t, lz, nil, tfDir, aplDir, true)
 	for name, region := range map[string]string{"ord-shared": "us-ord", "sea-shared": "us-sea"} {
 		b, err := os.ReadFile(filepath.Join(tfDir, "vpc", name+".tfvars"))
 		if err != nil {
@@ -242,10 +351,16 @@ spec:
 		}
 	}
 
-	// No networks declared → nothing written (no vpc root needed).
+	// No networks declared → no vpc/<name>.tfvars target at all (no vpc root needed).
 	lz2, _ := clusterspec.Decode([]byte("apiVersion: llz.akamai-consulting.io/v1alpha1\nkind: LandingZone\nmetadata: { name: i }\nspec:\n  instance: { upstreamOrg: o, repo: o/i, forge: github, templateVersion: main }\n"))
-	if err := renderNetworks(lz2, tfDir, "", false); err != nil {
-		t.Fatalf("renderNetworks (empty): %v", err)
+	targets, err := renderTargets(lz2, nil, tfDir, aplDir, true)
+	if err != nil {
+		t.Fatalf("renderTargets (no networks): %v", err)
+	}
+	for p := range targets {
+		if strings.HasSuffix(p, ".tfvars") {
+			t.Errorf("no networks/envs declared, but %s is a render target", p)
+		}
 	}
 }
 

@@ -141,13 +141,43 @@ func TestDetectComponents(t *testing.T) {
 	}
 }
 
-func TestDetectComponentsNoneYieldsNilMap(t *testing.T) {
+// detectComponents always hands back a live map — callers (buildReport) fold the
+// CRD-derived components into it. Returning nil here panicked `import scan` on any
+// cluster with no recognized platform namespace but a recognized CRD.
+func TestDetectComponentsNoneYieldsEmptyNonNilMap(t *testing.T) {
 	_, components, warnings := detectComponents([]string{"team-demo", "kube-system"}, nil)
-	if components != nil {
-		t.Errorf("no platform apps → nil component map, got %v", components)
+	if components == nil {
+		t.Fatal("no platform apps → empty but non-nil component map, got nil")
+	}
+	if len(components) != 0 {
+		t.Errorf("no platform apps → empty component map, got %v", components)
 	}
 	if len(warnings) != 0 {
 		t.Errorf("no warnings expected, got %v", warnings)
+	}
+}
+
+// A foreign cluster with zero recognized platform namespaces but at least one
+// recognized CRD — the exact shape `import scan` exists to survey — used to panic
+// with "assignment to entry in nil map" folding the CRD components in.
+func TestBuildReportCRDComponentsWithNoPlatformNamespaces(t *testing.T) {
+	r := buildReport(reportInputs{
+		nsJSON:  `{"items":[{"metadata":{"name":"default"}}]}`,
+		crdJSON: `{"items":[{"metadata":{"name":"applications.argoproj.io"},"spec":{"group":"argoproj.io"}}]}`,
+	})
+	if !r.Platform.Components["argocd"] {
+		t.Errorf("CRD-implied component missing: components=%v", r.Platform.Components)
+	}
+	if len(r.Platform.Detected) != 0 {
+		t.Errorf("no platform namespaces → nothing detected, got %v", r.Platform.Detected)
+	}
+}
+
+// An empty component set still serializes as absent, not as an empty map.
+func TestBuildReportEmptyComponentsStayNil(t *testing.T) {
+	r := buildReport(reportInputs{nsJSON: `{"items":[{"metadata":{"name":"default"}}]}`})
+	if r.Platform.Components != nil {
+		t.Errorf("empty component set should be nil, got %v", r.Platform.Components)
 	}
 }
 

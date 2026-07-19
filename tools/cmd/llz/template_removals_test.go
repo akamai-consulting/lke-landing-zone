@@ -50,7 +50,7 @@ func TestApplyTemplateRemovals(t *testing.T) {
 		"terraform-iac-bootstrap/object-storage/lab.tfvars",        // untrack
 		"terraform-iac-bootstrap/cluster/terraform.tfvars.example", // keep (.example)
 		"terraform-iac-bootstrap/cluster/main.tf",                  // keep
-		"platform-apl/manifest/dns/old-webhook.yaml",         // delete
+		"platform-apl/manifest/dns/old-webhook.yaml",               // delete
 	}
 	for _, p := range tracked {
 		writeFile(t, filepath.Join(dir, p), "x\n")

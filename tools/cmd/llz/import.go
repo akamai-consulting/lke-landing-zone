@@ -455,24 +455,20 @@ type reportInputs struct {
 }
 
 // buildReport assembles the inventory from raw kubectl JSON. It is pure (no exec,
-// no filesystem) so the whole mapping is unit-tested from fixture JSON.
+// no filesystem) so the whole mapping is unit-tested from fixture JSON. The
+// section builders below own one report field each; buildReport only sequences
+// them and threads the few values two sections share.
 func buildReport(in reportInputs) importReport {
-	nodeCount, nodeType, region := parseNodes(in.nodesJSON)
-	pools := parseNodePools(in.nodesJSON)
-	namespaces := parseNamespaces(in.nsJSON)
+	namespaces := parseObjectNames(in.nsJSON)
 	workloads := parseWorkloads(in.workloadJSON)
 	pvcs := parsePVCs(in.pvcJSON)
-	secretsByNS := parseSecretCounts(in.secretJSON)
-	detected, components, warnings := detectComponents(namespaces, workloads)
 
+	detected, components, warnings := detectComponents(namespaces, workloads)
 	// Operators from installed CRDs corroborate (and extend) the namespace-based
 	// platform detection.
 	operators, crdComponents := parseCRDOperators(in.crdJSON)
 	for c := range crdComponents {
 		components[c] = true
-	}
-	if components != nil && len(components) == 0 {
-		components = nil
 	}
 
 	// Hosts come from several routing sources (APL routes via Istio, not Ingress).
@@ -482,39 +478,108 @@ func buildReport(in reportInputs) importReport {
 		parseCertDNSNames(in.certificateJSON),
 	)
 
-	// Per-namespace rollups for the team breakdown.
+	roll := buildTeams(in, namespaces, workloads, pvcs, hostsByNS)
+	cluster := buildCluster(in)
+	platform := buildPlatform(in, workloads, detected, components, operators)
+	storage := buildStorage(in, workloads)
+	security := buildSecurity(in, roll.networkPolicies)
+	dns := buildDNS(in, hostsByNS)
+
+	// Snapshot the LIVE-only components (namespace + CRD detection) before folding
+	// in the APL-declared ones, so the drift check below isn't circular.
+	liveComponents := map[string]bool{}
+	for k, v := range components {
+		liveComponents[k] = v
+	}
+	foldAplSignals(firstAplSignals(in.repos), &platform, &dns)
+	// An empty component set serializes as absent, not as an empty map. Decided
+	// once, here, so every producer above can append to a live map.
+	if len(platform.Components) == 0 {
+		platform.Components = nil
+	}
+
+	lbs := parseLoadBalancers(in.lbServiceJSON)
+	var repoPaths []string
+	for _, r := range in.repos {
+		repoPaths = append(repoPaths, r.Path)
+	}
+	warnings = append(warnings, repoDriftWarnings(cluster, detected, liveComponents, in.repos)...)
+
+	return importReport{
+		APIVersion: importReportAPIVersion,
+		Kind:       importReportKind,
+		Source:     importSource{Context: in.context, Repos: repoPaths},
+		Cluster:    cluster,
+		Platform:   platform,
+		DNS:        dns,
+		Network:    importNetwork{LoadBalancers: lbs},
+		Storage:    storage,
+		Security:   security,
+		Teams:      roll.teams,
+		Repos:      in.repos,
+		Warnings:   warnings,
+		Summary: importSummary{
+			Namespaces:    len(namespaces),
+			Workloads:     len(workloads),
+			Hosts:         roll.totalHosts,
+			LoadBalancers: len(lbs),
+			PVCs:          len(pvcs),
+			TotalStorage:  formatStorage(roll.totalBytes),
+			Secrets:       roll.totalSecrets,
+		},
+	}
+}
+
+// teamRollup is buildTeams' output: the per-team breakdown plus the cluster-wide
+// totals the summary and security sections reuse (so the per-namespace maps are
+// walked once).
+type teamRollup struct {
+	teams           []importTeam
+	totalHosts      int
+	totalBytes      int64
+	totalSecrets    int
+	networkPolicies int
+}
+
+// buildTeams rolls the per-namespace inventory up into the team breakdown. Only
+// APL/Otomi team namespaces become teams; the totals cover the whole cluster.
+func buildTeams(in reportInputs, namespaces []string, workloads []workload, pvcs []pvc, hostsByNS map[string][]string) teamRollup {
 	wlByNS := map[string]int{}
 	for _, w := range workloads {
 		wlByNS[w.Namespace]++
 	}
 	pvcCountByNS := map[string]int{}
 	pvcBytesByNS := map[string]int64{}
-	var totalBytes int64
+	var roll teamRollup
 	for _, p := range pvcs {
 		pvcCountByNS[p.Namespace]++
 		b := parseQuantityBytes(p.Size)
 		pvcBytesByNS[p.Namespace] += b
-		totalBytes += b
+		roll.totalBytes += b
+	}
+	secretsByNS := parseSecretCounts(in.secretJSON)
+	for _, n := range secretsByNS {
+		roll.totalSecrets += n
 	}
 	quotaByNS := parseResourceQuotas(in.resourceQuotaJSON)
 	imagesByNS := imagesByNamespace(workloads)
 	secretsRefByNS := parseSecretInventory(in.secretJSON)
+	// The plain per-namespace object counters, in report-field order.
 	cmByNS := countByNamespace(in.configMapJSON, skipNoiseConfigMap)
 	saByNS := countByNamespace(in.serviceAccountJSON, nil)
 	npByNS := countByNamespace(in.networkPolicyJSON, nil)
 	roleByNS := countByNamespace(in.roleJSON, nil)
 	rbByNS := countByNamespace(in.roleBindingJSON, nil)
+	roll.networkPolicies = totalCount(npByNS)
 
-	var teams []importTeam
-	var totalHosts int
 	for _, ns := range namespaces {
 		name, ok := teamFromNamespace(ns)
 		if !ok {
 			continue
 		}
 		hosts := dedupeSorted(hostsByNS[ns])
-		totalHosts += len(hosts)
-		teams = append(teams, importTeam{
+		roll.totalHosts += len(hosts)
+		roll.teams = append(roll.teams, importTeam{
 			Name:            name,
 			Namespace:       ns,
 			Workloads:       wlByNS[ns],
@@ -532,24 +597,27 @@ func buildReport(in reportInputs) importReport {
 			ResourceQuota:   quotaByNS[ns],
 		})
 	}
-	sort.Slice(teams, func(i, j int) bool { return teams[i].Namespace < teams[j].Namespace })
+	sort.Slice(roll.teams, func(i, j int) bool { return roll.teams[i].Namespace < roll.teams[j].Namespace })
+	return roll
+}
 
-	var totalSecrets int
-	for _, n := range secretsByNS {
-		totalSecrets += n
-	}
-
-	cluster := importCluster{
+func buildCluster(in reportInputs) importCluster {
+	nodeCount, nodeType, region := parseNodes(in.nodesJSON)
+	return importCluster{
 		KubernetesVersion: parseServerVersion(in.versionJSON),
 		Region:            region,
 		NodeCount:         nodeCount,
 		NodeType:          nodeType,
-		NodePools:         pools,
+		NodePools:         parseNodePools(in.nodesJSON),
 		StorageClasses:    parseStorageClasses(in.storageClassJSON),
 	}
+}
 
+// buildPlatform pairs the caller's already-merged detection results (namespaces +
+// CRDs) with the image-tag version guesses and the Helm release inventory.
+func buildPlatform(in reportInputs, workloads []workload, detected []string, components map[string]bool, operators []string) importPlatform {
 	aplVersion, versions := parseImageVersions(workloads)
-	platform := importPlatform{
+	return importPlatform{
 		Detected:     detected,
 		Components:   components,
 		Operators:    operators,
@@ -557,87 +625,62 @@ func buildReport(in reportInputs) importReport {
 		Versions:     versions,
 		HelmReleases: parseHelmReleases(in.secretJSON),
 	}
+}
 
+// buildStorage assembles the data-migration plan: classified PVs plus the
+// databases (CNPG clusters and self-managed DB workloads) and their clients.
+func buildStorage(in reportInputs, workloads []workload) importStorage {
 	classifiedPVs, pvByClass := classifyVolumes(parsePVs(in.pvJSON), parsePVCConsumers(in.podJSON))
 	databases := append(parseCNPGClusters(in.cnpgJSON), detectDBWorkloads(workloads)...)
 	databases = attachDBClients(databases, parsePodSecretRefs(in.podJSON))
-	storage := importStorage{
+	return importStorage{
 		Volumes:         classifiedPVs,
 		VolumesByClass:  pvByClass,
-		SnapshotClasses: parseSnapshotClasses(in.snapshotClassJSON),
+		SnapshotClasses: parseObjectNames(in.snapshotClassJSON),
 		Databases:       databases,
 	}
-	security := importSecurity{
-		NetworkPolicies:       totalCount(npByNS),
+}
+
+// buildSecurity takes the NetworkPolicy total from the team rollup (already
+// counted there) and adds the Istio authorization/mTLS posture.
+func buildSecurity(in reportInputs, networkPolicies int) importSecurity {
+	return importSecurity{
+		NetworkPolicies:       networkPolicies,
 		AuthorizationPolicies: totalCount(countByNamespace(in.authzPolicyJSON, nil)),
 		MTLSModes:             parsePeerAuthModes(in.peerAuthJSON),
 	}
+}
 
+func buildDNS(in reportInputs, hostsByNS map[string][]string) importDNS {
 	allHosts := allHostValues(hostsByNS)
 	acmeEmail, solvers := parseClusterIssuers(in.clusterIssuerJSON)
-	dns := importDNS{
+	return importDNS{
 		DomainSuffix: commonDomainSuffix(allHosts),
 		Domains:      allHosts,
 		AcmeEmail:    acmeEmail,
 		Solvers:      solvers,
 	}
+}
 
-	// Snapshot the LIVE-only components (namespace + CRD detection) before folding
-	// in the APL-declared ones, so the drift check below isn't circular.
-	liveComponents := map[string]bool{}
-	for k, v := range components {
-		liveComponents[k] = v
+// foldAplSignals overlays the APL platform-values file, which is authoritative
+// for facts the cluster scan can only guess: the APL version, the domain suffix,
+// and which components are on. No-op when no apl-role repo was scanned.
+//
+// Precondition: platform.Components is non-nil (detectComponents guarantees it);
+// buildReport nils an empty set only after this fold.
+func foldAplSignals(apl *aplSignals, platform *importPlatform, dns *importDNS) {
+	if apl == nil {
+		return
 	}
-
-	// The APL platform-values file is authoritative for facts the cluster scan can
-	// only guess: the APL version, the domain suffix, and which components are on.
-	if apl := firstAplSignals(in.repos); apl != nil {
-		if apl.AplVersion != "" {
-			platform.AplVersion = apl.AplVersion // beats the image-tag guess
-		}
-		if apl.DomainSuffix != "" {
-			dns.DomainSuffix = apl.DomainSuffix // fills the gap when hosts share no common suffix
-			dns.Domains = dedupeSorted(append(dns.Domains, apl.DomainSuffix))
-		}
-		for c := range aplComponentsFromApps(apl.EnabledApps) {
-			if platform.Components == nil {
-				platform.Components = map[string]bool{}
-			}
-			platform.Components[c] = true
-		}
+	if apl.AplVersion != "" {
+		platform.AplVersion = apl.AplVersion // beats the image-tag guess
 	}
-
-	lbs := parseLoadBalancers(in.lbServiceJSON)
-	network := importNetwork{LoadBalancers: lbs}
-
-	var repoPaths []string
-	for _, r := range in.repos {
-		repoPaths = append(repoPaths, r.Path)
+	if apl.DomainSuffix != "" {
+		dns.DomainSuffix = apl.DomainSuffix // fills the gap when hosts share no common suffix
+		dns.Domains = dedupeSorted(append(dns.Domains, apl.DomainSuffix))
 	}
-	warnings = append(warnings, repoDriftWarnings(cluster, detected, liveComponents, in.repos)...)
-
-	return importReport{
-		APIVersion: importReportAPIVersion,
-		Kind:       importReportKind,
-		Source:     importSource{Context: in.context, Repos: repoPaths},
-		Cluster:    cluster,
-		Platform:   platform,
-		DNS:        dns,
-		Network:    network,
-		Storage:    storage,
-		Security:   security,
-		Teams:      teams,
-		Repos:      in.repos,
-		Warnings:   warnings,
-		Summary: importSummary{
-			Namespaces:    len(namespaces),
-			Workloads:     len(workloads),
-			Hosts:         totalHosts,
-			LoadBalancers: len(lbs),
-			PVCs:          len(pvcs),
-			TotalStorage:  formatStorage(totalBytes),
-			Secrets:       totalSecrets,
-		},
+	for c := range aplComponentsFromApps(apl.EnabledApps) {
+		platform.Components[c] = true
 	}
 }
 
@@ -696,6 +739,40 @@ func repoDriftWarnings(cluster importCluster, liveDetected []string, liveCompone
 
 // ── kubectl JSON parsers (pure) ──────────────────────────────────────────────
 
+// k8sObjectMeta is the metadata subset the scan parsers read from a
+// `kubectl get … -o json` list item. Cluster-scoped kinds simply leave
+// Namespace empty.
+type k8sObjectMeta struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+}
+
+// k8sObjectList is a kubectl list read for object metadata alone. Parsers that
+// also need spec/type fields declare their own item shape (embedding
+// k8sObjectMeta) rather than reusing this.
+type k8sObjectList struct {
+	Items []struct {
+		Metadata k8sObjectMeta `json:"metadata"`
+	} `json:"items"`
+}
+
+// parseObjectNames returns the sorted object names from a kubectl list — the
+// shared body of the namespace and VolumeSnapshotClass scans.
+func parseObjectNames(js string) []string {
+	var d k8sObjectList
+	if json.Unmarshal([]byte(js), &d) != nil {
+		return nil
+	}
+	var out []string
+	for _, it := range d.Items {
+		if it.Metadata.Name != "" {
+			out = append(out, it.Metadata.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func parseServerVersion(js string) string {
 	var d struct {
 		ServerVersion struct {
@@ -734,27 +811,6 @@ func parseNodes(js string) (count int, nodeType, region string) {
 		}
 	}
 	return len(d.Items), mostCommon(types), mostCommon(regions)
-}
-
-func parseNamespaces(js string) []string {
-	var d struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if json.Unmarshal([]byte(js), &d) != nil {
-		return nil
-	}
-	var out []string
-	for _, it := range d.Items {
-		if it.Metadata.Name != "" {
-			out = append(out, it.Metadata.Name)
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 type workload struct {
@@ -885,14 +941,7 @@ func parsePVCs(js string) []pvc {
 // service-account tokens and Helm release bookkeeping that would drown out the
 // real credential footprint. Secret VALUES are never read.
 func parseSecretCounts(js string) map[string]int {
-	var d struct {
-		Items []struct {
-			Metadata struct {
-				Namespace string `json:"namespace"`
-			} `json:"metadata"`
-			Type string `json:"type"`
-		} `json:"items"`
-	}
+	var d secretList
 	if json.Unmarshal([]byte(js), &d) != nil {
 		return nil
 	}
@@ -962,9 +1011,8 @@ func detectComponents(namespaces []string, _ []workload) (detected []string, com
 	if seen["keycloak"] {
 		warnings = append(warnings, "Keycloak/IDP detected — re-establish the realm + users (or wire an external IDP) on the new cluster")
 	}
-	if components == nil || len(components) == 0 {
-		components = nil
-	}
+	// Always a non-nil map: callers fold further components into it. buildReport
+	// nils an empty set once, at the end, so it serializes as absent.
 	return detected, components, warnings
 }
 

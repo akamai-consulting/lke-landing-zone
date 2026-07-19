@@ -22,7 +22,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -47,19 +46,7 @@ func ciAssertArgoAppCmd() *cobra.Command {
 			"cause). Uses kubectl with the ambient KUBECONFIG.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			d := aplGateDeps{
-				kubectl: func(args ...string) (string, bool) {
-					// runCombined runs before reading the buffer; the old
-					// `return buf.String(), c.Run()==nil` evaluated buf.String()
-					// first (left-to-right) and returned empty output.
-					c := exec.Command("kubectl", args...)
-					c.Env = os.Environ()
-					return runCombined(c)
-				},
-				now:   time.Now,
-				sleep: time.Sleep,
-			}
-			return assertArgoApp(d, namespace, app, parent, time.Duration(within)*time.Second)
+			return assertArgoApp(newAplGateDeps(), namespace, app, parent, time.Duration(within)*time.Second)
 		},
 	}
 	cmd.Flags().StringVar(&app, "app", "", "Application that must appear (required)")

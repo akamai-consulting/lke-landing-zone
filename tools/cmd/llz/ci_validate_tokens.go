@@ -58,9 +58,9 @@ func ciValidateTokensCmd() *cobra.Command {
 			"nothing is invalid, 1 when a probed credential is INVALID (unless\n" +
 			"--fail-on-invalid=false). The local counterpart is `llz doctor`.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIValidateTokens(failOnInvalid))
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runCIValidateTokens(failOnInvalid)
 		},
 	}
 	c.Flags().BoolVar(&failOnInvalid, "fail-on-invalid", true,
@@ -68,7 +68,11 @@ func ciValidateTokensCmd() *cobra.Command {
 	return c
 }
 
-func runCIValidateTokens(failOnInvalid bool) int {
+// runCIValidateTokens returns nil when nothing blocking is invalid and an error
+// otherwise (cobra exits 1 on it). The ::error:: annotation stays a direct
+// write: GitHub parses an annotation only at the start of a line, and a returned
+// error reaches stderr behind main.go's "llz: " prefix.
+func runCIValidateTokens(failOnInvalid bool) error {
 	now := time.Now()
 	ghcrUser := os.Getenv("GHCR_USERNAME")
 
@@ -112,7 +116,7 @@ func runCIValidateTokens(failOnInvalid bool) int {
 	fmt.Printf("\nprobed %d credential(s): %d blocking-invalid, %d optional-invalid.\n", probed, blockingInvalid, optionalInvalid)
 	if blockingInvalid > 0 && failOnInvalid {
 		fmt.Fprintf(os.Stderr, "::error::%d REQUIRED pipeline credential(s) are invalid — rotate them before this run proceeds.\n", blockingInvalid)
-		return 1
+		return fmt.Errorf("%d REQUIRED pipeline credential(s) are invalid — rotate them before this run proceeds", blockingInvalid)
 	}
-	return 0
+	return nil
 }

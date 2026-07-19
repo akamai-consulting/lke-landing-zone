@@ -98,9 +98,9 @@ func runCIDestroyUnwedge(region string) error {
 // <region>.tfvars label via the Linode API. found=false means no live cluster
 // (already reaped) → the caller skips, best-effort. Seamed for tests.
 var unwedgeResolveKubeconfigFn = func(region string) (b64 string, found bool, err error) {
-	token := firstNonEmpty(os.Getenv("LINODE_TOKEN"), os.Getenv("LINODE_API_TOKEN"))
-	if token == "" {
-		return "", false, fmt.Errorf("set LINODE_TOKEN (or LINODE_API_TOKEN) so --region can resolve the cluster kubeconfig by label")
+	token, err := ciToken()
+	if err != nil {
+		return "", false, fmt.Errorf("%w — needed so --region can resolve the cluster kubeconfig by label", err)
 	}
 	varFile := region + ".tfvars"
 	if _, err := os.Stat(varFile); err != nil {
@@ -140,7 +140,8 @@ func resolveUnwedgeKubeconfig(region string) (path string, cleanup func(), skip 
 		if derr != nil {
 			return "", nil, false, fmt.Errorf("KUBECONFIG_B64 is not valid base64: %w", derr)
 		}
-		return writeTempKubeconfig(raw)
+		path, cleanup, werr := writeTempKubeconfig(unwedgeKubeconfigPattern, raw)
+		return path, cleanup, false, werr
 	}
 	if kc := os.Getenv("KUBECONFIG"); kc != "" {
 		return kc, nil, false, nil
@@ -159,24 +160,13 @@ func resolveUnwedgeKubeconfig(region string) (path string, cleanup func(), skip 
 	if stub {
 		return "", nil, true, nil // no kubeconfig material — skip
 	}
-	return writeTempKubeconfig(raw)
+	path, cleanup, werr := writeTempKubeconfig(unwedgeKubeconfigPattern, raw)
+	return path, cleanup, false, werr
 }
 
-// writeTempKubeconfig writes raw kubeconfig bytes to a 0600 tempfile and returns
-// its path + a remove cleanup.
-func writeTempKubeconfig(raw []byte) (string, func(), bool, error) {
-	f, err := os.CreateTemp("", "llz-unwedge-kubeconfig-*")
-	if err != nil {
-		return "", nil, false, fmt.Errorf("create kubeconfig tempfile: %w", err)
-	}
-	if _, err := f.Write(raw); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", nil, false, fmt.Errorf("write kubeconfig: %w", err)
-	}
-	f.Close()
-	return f.Name(), func() { os.Remove(f.Name()) }, false, nil
-}
+// unwedgeKubeconfigPattern names the tempfile writeTempKubeconfig (ci_shared.go)
+// spills this verb's kubeconfig into.
+const unwedgeKubeconfigPattern = "llz-unwedge-kubeconfig-*"
 
 // argoFinalizerKinds carry resources-finalizer.argocd.argoproj.io; cnpgFinalizerKinds
 // carry cnpg.io finalizers. Both are stripped cluster-wide so their namespaces

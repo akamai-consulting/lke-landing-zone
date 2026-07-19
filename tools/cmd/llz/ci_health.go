@@ -21,8 +21,8 @@ import (
 // healthNamespaces are the namespaces this repo touches — iterated for the
 // per-namespace checks (workloads, NetworkPolicies, Services, Leases).
 //
-// Every loop over this list gates on `if !kExists("get","ns",ns) { continue }`,
-// so a name that no longer exists is not an error — it is a SILENT SKIP. Three
+// Every loop over this list gates on `if !inv.nsExists[ns] { continue }`, so a
+// name that no longer exists is not an error — it is a SILENT SKIP. Three
 // entries had gone stale when the platform namespaces were llz- prefixed
 // ("openbao", "observability", "cert-automation"), which meant the OpenBao,
 // observability, and cert-automation namespaces were never inspected at all:
@@ -71,6 +71,13 @@ func ciHealthCmd() *cobra.Command {
 				}
 				return nil // exit 0
 			}
+			// DELIBERATE os.Exit, not a returned error: every code in the
+			// convergence contract is load-bearing and callers DISTINGUISH them.
+			// `llz ci converge` (runConverge → health.ConvergeStep) branches on
+			// 0 converged / 1 hard-failed / 2 in-progress (keep polling) /
+			// 3 apiserver unreachable (retry without spending a hard strike).
+			// Returning an error would collapse 2 and 3 into cobra's exit 1 and
+			// turn every transient into an immediate hard failure.
 			os.Exit(code)
 			return nil
 		},
@@ -92,9 +99,9 @@ func ciConvergeCmd() *cobra.Command {
 			"unreachable -> re-run after --retry-delay against the budget without spending\n" +
 			"a hard strike (a blip can't trip the twice-in-a-row abort).",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runConverge(budget, interval, retryDelay))
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runConverge(budget, interval, retryDelay)
 		},
 	}
 	c.Flags().IntVar(&budget, "budget", 1800, "total elapsed-time budget in seconds")
@@ -134,23 +141,6 @@ func convergeSleep(interval, elapsed time.Duration) time.Duration {
 	return 0
 }
 
-// lastHealthNonOK holds the Pending+Failed labels from the most recent
-// healthExitCode call, so runConverge can report the convergence long pole.
-var lastHealthNonOK []string
-
-// lastHealthRedisAuthSplit records whether the most recent scan saw a repo-
-// server↔argocd-redis auth split (WRONGPASS/NOAUTH). runConverge reads it to
-// self-heal by restarting argocd-redis once; a full scan always assigns it
-// (cleared on the unreachable/pre-bootstrap early returns), so it never carries
-// a stale value across polls.
-var lastHealthRedisAuthSplit bool
-
-// lastHealthAnnotationWedge records whether the most recent scan saw an Argo app
-// sync fail on the 256KB metadata.annotations limit. runConverge reads it to
-// self-heal by stripping the oversized CRD annotation once; like the redis flag a
-// full scan always assigns it, so it never carries a stale value across polls.
-var lastHealthAnnotationWedge bool
-
 // longPoleCandidates returns the labels keeping a report in-progress (Pending +
 // Failed). Pure — the report's tolerated categories (Drift/Deferred) are excluded
 // because they do not hold up convergence.
@@ -182,7 +172,14 @@ func reportConvergeLongPole(prevNonOK []string, prevAttempt int) {
 	}
 }
 
-func runConverge(budget, interval, retryDelay int) int {
+// runConverge polls `health` to a verdict. Unlike `health` itself, converge has
+// only a BOOLEAN outcome — converged or not — so it returns nil/error and lets
+// cobra own the exit-1. (It still CONSUMES health's full 0/1/2/3 contract
+// internally via health.ConvergeStep; only its own result is binary.) The
+// ::error:: annotations stay direct stderr writes: GitHub parses an annotation
+// only at the start of a line, and a returned error is printed behind main.go's
+// "llz: " prefix.
+func runConverge(budget, interval, retryDelay int) error {
 	deadline := time.Now().Add(time.Duration(budget) * time.Second)
 	st := newConvergeState()
 	// The converge loop itself is the retry for the phase1 probes — a transient
@@ -205,8 +202,8 @@ func runConverge(budget, interval, retryDelay int) int {
 	for attempt := 1; ; attempt++ {
 		fmt.Fprintf(os.Stderr, "::notice::convergence poll attempt %d\n", attempt)
 		pollStart := time.Now()
-		step := health.ConvergeStep(healthExitCodeState(st))
-		nonOK := lastHealthNonOK
+		res := healthExitCodeState(st)
+		step := health.ConvergeStep(res.code)
 		pollDur := time.Since(pollStart)
 		// Self-heal a repo-server↔argocd-redis auth split. The redis pod bakes its
 		// --requirepass from the argocd-redis Secret at pod start and never re-reads
@@ -219,7 +216,7 @@ func runConverge(budget, interval, retryDelay int) int {
 		// budget still bounds the poll and we fail as before (no worse than not trying).
 		// This complements the bootstrap workflow's one-shot pre-converge realign,
 		// which misses a split that only surfaces during this wait.
-		if lastHealthRedisAuthSplit && !redisRealigned {
+		if res.redisAuthSplit && !redisRealigned {
 			redisRealigned = true
 			realignArgocdRedis()
 		}
@@ -231,7 +228,7 @@ func runConverge(budget, interval, retryDelay int) int {
 		// (SSA never writes it) unwedges the apply. Once per run; if it doesn't clear,
 		// the budget still bounds the poll. Mirrors the bootstrap's proactive step 1b
 		// for a wedge that only surfaces during this wait.
-		if lastHealthAnnotationWedge && !crdAnnotationsStripped {
+		if res.annotationWedge && !crdAnnotationsStripped {
 			crdAnnotationsStripped = true
 			fmt.Fprintln(os.Stderr, "::warning::an Argo sync hit the 256KB annotation limit — stripping oversized CRD last-applied-configuration annotations")
 			stripOversizedCRDLastApplied(kubectlBoolViaExec)
@@ -241,20 +238,20 @@ func runConverge(budget, interval, retryDelay int) int {
 			// Every poll is a full health scan (no memoized skips), so the DONE
 			// verdict already rests on a complete pass — no confirm needed.
 			reportConvergeLongPole(prevNonOK, prevAttempt)
-			return 0
+			return nil
 		case health.ConvergePoll:
-			prevNonOK, prevAttempt = nonOK, attempt
+			prevNonOK, prevAttempt = res.nonOK, attempt
 			if time.Now().After(deadline) {
 				fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the cluster still in-progress.\n", budget)
-				return 1
+				return fmt.Errorf("budget of %ds exhausted with the cluster still in-progress", budget)
 			}
 			time.Sleep(convergeSleep(time.Duration(interval)*time.Second, pollDur))
 		case health.ConvergeRetryHard:
 			fmt.Fprintf(os.Stderr, "::warning::hard failure reported — re-checking after %ds to absorb transients.\n", retryDelay)
 			time.Sleep(time.Duration(retryDelay) * time.Second)
-			if health.ConvergeStep(healthExitCodeState(st)) == health.ConvergeRetryHard {
+			if health.ConvergeStep(healthExitCodeState(st).code) == health.ConvergeRetryHard {
 				fmt.Fprintln(os.Stderr, "::error::cluster hard-failed twice in a row — operator intervention required.")
-				return 1
+				return fmt.Errorf("cluster hard-failed twice in a row — operator intervention required")
 			}
 			// recovered to converged/in-progress — keep polling
 		case health.ConvergeUnreachable:
@@ -265,13 +262,13 @@ func runConverge(budget, interval, retryDelay int) int {
 			// genuinely unreachable cluster simply exhausts the budget below.
 			if time.Now().After(deadline) {
 				fmt.Fprintf(os.Stderr, "::error::budget of %ds exhausted with the apiserver still unreachable — check KUBECONFIG and cluster reachability.\n", budget)
-				return 1
+				return fmt.Errorf("budget of %ds exhausted with the apiserver still unreachable — check KUBECONFIG and cluster reachability", budget)
 			}
 			fmt.Fprintf(os.Stderr, "::warning::apiserver unreachable — transient; re-checking after %ds (not counted as a hard failure).\n", retryDelay)
 			time.Sleep(time.Duration(retryDelay) * time.Second)
 		default:
 			fmt.Fprintln(os.Stderr, "::error::health check returned an exit code outside the 0/1/2/3 contract.")
-			return 1
+			return fmt.Errorf("health check returned an exit code outside the 0/1/2/3 contract")
 		}
 	}
 }
@@ -297,32 +294,62 @@ func realignArgocdRedis() {
 
 // ── health orchestrator ──────────────────────────────────────────────────────
 
+// healthResult is one health scan's verdict plus the signals runConverge acts on.
+// These were three package globals ("last…") that the scan assigned at its tail
+// and the converge loop read immediately after — an invariant ("a full scan
+// always assigns them, so they never go stale") that had to be re-established by
+// prose on every early-return path. Returning them makes the invariant structural:
+// every return builds a complete result.
+type healthResult struct {
+	code int
+	// nonOK is the scan's Pending+Failed labels — the convergence long pole.
+	nonOK []string
+	// redisAuthSplit: a repo-server↔argocd-redis auth split (WRONGPASS/NOAUTH) was
+	// seen; runConverge self-heals by restarting argocd-redis once.
+	redisAuthSplit bool
+	// annotationWedge: an Argo app sync failed on the 256KB metadata.annotations
+	// limit; runConverge self-heals by stripping the oversized CRD annotation once.
+	annotationWedge bool
+}
+
 // healthExitCode runs every check against $KUBECONFIG, prints the report, and
 // returns the convergence-contract exit code (0/2/1).
-func healthExitCode() int { return healthExitCodeState(nil) }
+func healthExitCode() int { return healthExitCodeState(nil).code }
 
 // healthExitCodeState is healthExitCode with optional converge state: nil for a
 // one-shot `llz ci health`, non-nil inside `llz ci converge`, where the only
 // carried fact is phase1Done (so the phase1 probes resolve once per run, not per
 // poll). Every poll runs the full set of checks below.
-func healthExitCodeState(st *convergeState) int {
-	lastHealthRedisAuthSplit = false  // set true only by a full scan that sees the split
-	lastHealthAnnotationWedge = false // ditto for the annotation-limit wedge
+func healthExitCodeState(st *convergeState) healthResult {
 	if !kubectlReachable() {
 		// Exit 3 (not 1): an unreachable apiserver is an infrastructure transient,
 		// not a cluster hard-failure. The converge loop retries it against the
 		// budget instead of counting it as a hard strike (see runConverge).
 		fmt.Fprintln(os.Stderr, "::error::kubectl cannot reach the apiserver — check KUBECONFIG and cluster reachability.")
-		return 3
+		return healthResult{code: 3}
 	}
 
+	inv := scanCRDs()
+
 	// Phase 0: pre-bootstrap (Argo CRD / platform-bootstrap App not present yet)
-	// is in-progress, not converged — poll.
-	if !kExists("get", "crd", "applications.argoproj.io") ||
+	// is in-progress, not converged — poll. Gated on the CRD list alone, before
+	// the namespace fetch: a pre-bootstrap cluster is polled every interval for
+	// the whole apl-core helmfile run, and it has nothing for the per-namespace
+	// sections to look at yet.
+	if !inv.crds["applications.argoproj.io"] ||
 		!kExists("-n", "argocd", "get", "application", "platform-bootstrap") {
 		fmt.Println(bold("== pre-bootstrap phase detected — apl-core helmfile likely still running =="))
 		fmt.Printf("  %s applications.argoproj.io CRD or platform-bootstrap Application not yet present\n", cyan("PENDING"))
-		return 2
+		return healthResult{code: 2}
+	}
+
+	if !inv.addNamespaces() {
+		// Exit 3, same as an unreachable apiserver: kubectlReachable() has already
+		// passed, so a failed namespace list is a transient, not a verdict. Reading
+		// it as "no namespaces exist" would skip every per-namespace section and
+		// report a broken cluster as converged.
+		fmt.Fprintln(os.Stderr, "::error::kubectl could not list namespaces — treating as an apiserver transient, not an empty cluster.")
+		return healthResult{code: 3}
 	}
 	// Phase 1: cluster-bootstrap ran but bootstrap-openbao has not completed yet.
 	// Historically this was keyed only on cert-manager/platform-app-ca being absent,
@@ -342,39 +369,31 @@ func healthExitCodeState(st *convergeState) int {
 
 	var r health.Report
 	checkNodes(&r)
-	checkNamespaces(&r)
+	checkNamespaces(&r, inv)
 	checkAPIServices(&r)
-	checkRequiredCRDs(&r)
+	checkRequiredCRDs(&r, inv)
 	checkStorageClasses(&r)
 	checkFirewallBootstrap(&r)
 	checkOpenBao(&r, phase1)
 	checkReadyResources(&r, phase1)
 	checkWebhooks(&r)
-	checkAppProjects(&r)
-	checkLeases(&r)
+	checkAppProjects(&r, inv)
+	checkLeases(&r, inv)
 	checkArgoApps(&r, phase1)
-	checkWorkloads(&r, phase1)
+	checkWorkloads(&r, inv, phase1)
 	checkPVCs(&r)
 	checkPVs(&r)
-	checkNetworkPolicies(&r)
+	checkNetworkPolicies(&r, inv)
 	checkJobs(&r, phase1)
-	checkCronWorkflows(&r)
-	checkServices(&r, phase1)
+	checkCronWorkflows(&r, inv)
+	checkServices(&r, inv, phase1)
 	checkPDBs(&r, phase1)
 	checkIngresses(&r, phase1)
-	checkWorkflows(&r, phase1)
-	checkStuckFinalizers(&r)
+	checkWorkflows(&r, inv, phase1)
+	checkStuckFinalizers(&r, inv)
 	checkPods(&r, phase1)
 
 	printHealthSummary(&r)
-
-	// Capture the still-converging set for the converge long-pole report (Tier-3
-	// instrumentation): Pending + Failed are the categories that keep the cluster
-	// in-progress (Drift/Deferred are tolerated-as-converged), so they are the
-	// candidates for "last thing to go healthy".
-	lastHealthNonOK = longPoleCandidates(&r)
-	lastHealthRedisAuthSplit = r.RedisAuthSplit
-	lastHealthAnnotationWedge = r.AnnotationLimitWedge
 
 	// In phase1 the support plane is still installing (apl-core's CRDs, webhook
 	// Services, and endpoints land in later helmfile phases), so a hard-fail here
@@ -385,7 +404,16 @@ func healthExitCodeState(st *convergeState) int {
 	if phase1 && code != r.ExitCode() {
 		fmt.Println(bold("== phase1 (support plane still installing) — hard failures above are treated as in-progress; converge will keep polling =="))
 	}
-	return code
+	return healthResult{
+		code: code,
+		// The still-converging set for the converge long-pole report (Tier-3
+		// instrumentation): Pending + Failed are the categories that keep the
+		// cluster in-progress (Drift/Deferred are tolerated-as-converged), so they
+		// are the candidates for "last thing to go healthy".
+		nonOK:           longPoleCandidates(&r),
+		redisAuthSplit:  r.RedisAuthSplit,
+		annotationWedge: r.AnnotationLimitWedge,
+	}
 }
 
 func printHealthSummary(r *health.Report) {
@@ -488,45 +516,144 @@ func openBaoClusterSecretStoreReady() bool {
 // section is a no-op rather than a false failure). Routes through the execOutput
 // seam so the section orchestrators are unit-testable with stubbed kubectl JSON.
 func kItems(args ...string) []json.RawMessage {
+	items, _ := kItemsOK(args...)
+	return items
+}
+
+// kItemsOK is kItems with the call's success reported separately. Most sections
+// cannot act on the difference and use kItems, but a caller whose ABSENT result
+// would silently skip work must not read a failed call as "there are none" —
+// see scanInventory.
+func kItemsOK(args ...string) ([]json.RawMessage, bool) {
 	out, err := execOutput("kubectl", append(args, "-o", "json")...)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var body struct {
 		Items []json.RawMessage `json:"items"`
 	}
 	if json.Unmarshal(out, &body) != nil {
-		return nil
+		return nil, false
 	}
-	return body.Items
+	return body.Items, true
+}
+
+// kList runs `kubectl get <args> -o json` and decodes its .items[] into T,
+// silently dropping any item that does not decode. It is kItems for the common
+// case — every section below wants typed items, not raw JSON — so the
+// unmarshal-and-continue loop lives here once instead of in each of them. Same
+// failure posture as kItems: an errored or unparseable call yields no items, so
+// the section is a no-op rather than a false failure.
+func kList[T any](args ...string) []T { return decodeItems[T](kItems(args...)) }
+
+// decodeItems decodes already-fetched .items[] into T, dropping what does not
+// decode. Split from kList so a caller that needed kItemsOK's success flag can
+// still get typed items without a second fetch.
+func decodeItems[T any](raws []json.RawMessage) []T {
+	out := make([]T, 0, len(raws))
+	for _, raw := range raws {
+		var v T
+		if json.Unmarshal(raw, &v) != nil {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// clusterInventory is one scan's snapshot of the two cluster-wide name lists the
+// sections consult over and over: which CRDs are installed, and which namespaces
+// exist. Each of those questions used to be its own kubectl process — ~21 for the
+// required-CRD section, up to 9 more for the stuck-finalizer kinds, plus one
+// namespace probe per namespace per per-namespace section (workloads,
+// NetworkPolicies, Services, Leases) — roughly 60 spawns a pass, the bulk of the
+// "tens of seconds of kubectl round-trips" convergeSleep exists to absorb. Two
+// list calls answer all of them with the same semantics the per-name probes had:
+// a name absent from the list — or a list that failed outright — reads as "not
+// present", exactly as a failed `kubectl get <kind> <name>` did.
+type clusterInventory struct {
+	crds     map[string]bool
+	nsExists map[string]bool
+	// namespaces is the same namespace list with .status.phase, so checkNamespaces
+	// reuses the fetch it was already paying for instead of adding a second one.
+	namespaces []namespaceItem
+}
+
+// The namespace list is fetched with its success reported, because a failed call
+// here would FAIL OPEN. checkLeases/checkWorkloads/checkNetworkPolicies/
+// checkServices are all skip-if-absent: they consult nsExists and quietly do
+// nothing for a namespace that is not there. Collapsing nine independent
+// `get ns <name>` probes into one list means one dropped call empties nsExists
+// and silently removes ALL FOUR sections from the pass — a hard-failed workload
+// would report converged. The old per-name probes needed nine simultaneous
+// failures to lose the same coverage.
+//
+// So an errored namespace list is not data: ok=false, and the caller returns
+// exit 3 (apiserver transient) so converge retries against its budget rather
+// than banking a false green. The CRD list needs no such handling — a failed one
+// empties inv.crds, which trips the phase-0 gate into exit 2 and short-circuits
+// before any CRD-driven section runs.
+// scanCRDs takes the first of the two list calls. A failed one empties inv.crds,
+// which trips the phase-0 gate into exit 2 — loud enough, and the same posture
+// the per-name CRD probes had, since that same CRD gated phase-0 by name before.
+func scanCRDs() *clusterInventory {
+	inv := &clusterInventory{crds: map[string]bool{}, nsExists: map[string]bool{}}
+	for _, crd := range kList[meta]("get", "crd") {
+		inv.crds[crd.Metadata.Name] = true
+	}
+	return inv
+}
+
+// addNamespaces takes the second, and reports whether the call actually
+// succeeded. Called after the phase-0 gate so a pre-bootstrap poll — which has
+// no namespaces worth listing — does not pay for it every interval.
+func (inv *clusterInventory) addNamespaces() bool {
+	raw, ok := kItemsOK("get", "ns")
+	if !ok {
+		return false
+	}
+	inv.namespaces = decodeItems[namespaceItem](raw)
+	for _, ns := range inv.namespaces {
+		inv.nsExists[ns.Metadata.Name] = true
+	}
+	return true
+}
+
+// scanInventory is both halves, for callers that want the whole snapshot.
+func scanInventory() (*clusterInventory, bool) {
+	inv := scanCRDs()
+	return inv, inv.addNamespaces()
+}
+
+// catStyles renders a health category's report label: the fixed-width text and
+// the severity tint (which degrades to plain off a TTY — color.go). A package
+// table rather than a per-call map literal: record fires once per node, CRD, app,
+// workload, pod, PVC and Service — hundreds of times a scan, every interval under
+// converge. An unknown category falls through to a blank, uncolored label.
+var catStyles = map[health.Category]struct {
+	label string
+	color func(string) string
+}{
+	health.CatOK:       {"OK", green},
+	health.CatWarn:     {"WARN", yellow},
+	health.CatFail:     {"FAIL", red},
+	health.CatPending:  {"PENDING", cyan},
+	health.CatDeferred: {"DEFERRED", cyan},
+	health.CatDrift:    {"DRIFT", yellow},
 }
 
 // record prints a labeled line for a finding and routes it into the report
 // (CatOK/CatWarn print but never affect the verdict).
 func record(r *health.Report, cat health.Category, msg string) {
-	label := map[health.Category]string{
-		health.CatOK: "OK", health.CatWarn: "WARN", health.CatFail: "FAIL",
-		health.CatPending: "PENDING", health.CatDeferred: "DEFERRED", health.CatDrift: "DRIFT",
-	}[cat]
+	style := catStyles[cat]
 	// Pad to the fixed column on the PLAIN label, then color — the ANSI escapes are
 	// zero-width, so the columns stay aligned (color.go).
-	fmt.Printf("  %s %s\n", catColor(cat, fmt.Sprintf("%-8s", label)), msg)
-	r.Add(cat, msg)
-}
-
-// catColor tints a health-category label by severity, degrading to plain off a TTY.
-func catColor(cat health.Category, s string) string {
-	switch cat {
-	case health.CatOK:
-		return green(s)
-	case health.CatFail:
-		return red(s)
-	case health.CatWarn, health.CatDrift:
-		return yellow(s)
-	case health.CatPending, health.CatDeferred:
-		return cyan(s)
+	label := fmt.Sprintf("%-8s", style.label)
+	if style.color != nil {
+		label = style.color(label)
 	}
-	return s
+	fmt.Printf("  %s %s\n", label, msg)
+	r.Add(cat, msg)
 }
 
 func hdr(s string) { fmt.Printf("\n%s\n", bold("== "+s+" ==")) }
@@ -546,11 +673,7 @@ type meta struct {
 
 func checkNodes(r *health.Report) {
 	hdr("node health")
-	for _, raw := range kItems("get", "nodes") {
-		var n health.Node
-		if json.Unmarshal(raw, &n) != nil {
-			continue
-		}
+	for _, n := range kList[health.Node]("get", "nodes") {
 		ok, ready, mem, disk, pid := health.NodeHealthy(n)
 		if ok {
 			record(r, health.CatOK, fmt.Sprintf("Node %s (Ready, no pressure)", n.Name()))
@@ -567,21 +690,21 @@ func checkNodes(r *health.Report) {
 	}
 }
 
-func checkNamespaces(r *health.Report) {
+// namespaceItem is a namespace with the phase checkNamespaces judges; the same
+// fetch also backs clusterInventory.nsExists.
+type namespaceItem struct {
+	meta
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
+func checkNamespaces(r *health.Report, inv *clusterInventory) {
 	hdr("namespaces (stuck Terminating)")
 	stuck := false
-	for _, raw := range kItems("get", "ns") {
-		var m struct {
-			meta
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(raw, &m) != nil {
-			continue
-		}
-		if health.NamespaceTerminating(m.Status.Phase) {
-			record(r, health.CatFail, fmt.Sprintf("Namespace %s stuck Terminating (check .spec.finalizers and stuck CRs)", m.Metadata.Name))
+	for _, ns := range inv.namespaces {
+		if health.NamespaceTerminating(ns.Status.Phase) {
+			record(r, health.CatFail, fmt.Sprintf("Namespace %s stuck Terminating (check .spec.finalizers and stuck CRs)", ns.Metadata.Name))
 			stuck = true
 		}
 	}
@@ -592,21 +715,17 @@ func checkNamespaces(r *health.Report) {
 
 func checkAPIServices(r *health.Report) {
 	hdr("APIService availability")
-	for _, raw := range kItems("get", "apiservices") {
-		var a health.APIService
-		if json.Unmarshal(raw, &a) != nil {
-			continue
-		}
+	for _, a := range kList[health.APIService]("get", "apiservices") {
 		if bad, msg := health.APIServiceUnavailable(a); bad {
 			record(r, health.CatFail, fmt.Sprintf("APIService %s not Available — %s", a.Metadata.Name, msg))
 		}
 	}
 }
 
-func checkRequiredCRDs(r *health.Report) {
+func checkRequiredCRDs(r *health.Report, inv *clusterInventory) {
 	hdr("required CRDs")
 	for _, crd := range health.RequiredCRDs() {
-		if kExists("get", "crd", crd) {
+		if inv.crds[crd] {
 			record(r, health.CatOK, "CRD "+crd+" installed")
 		} else {
 			record(r, health.CatFail, "CRD "+crd+" missing — owning ArgoCD Application has not installed it")
@@ -623,13 +742,7 @@ func checkStorageClasses(r *health.Report) {
 			record(r, health.CatFail, "StorageClass "+sc+" missing")
 		}
 	}
-	var classes []health.StorageClass
-	for _, raw := range kItems("get", "storageclass") {
-		var c health.StorageClass
-		if json.Unmarshal(raw, &c) == nil {
-			classes = append(classes, c)
-		}
-	}
+	classes := kList[health.StorageClass]("get", "storageclass")
 	switch def := health.DefaultStorageClasses(classes); len(def) {
 	case 1:
 		record(r, health.CatOK, "exactly one default StorageClass ("+def[0]+")")
@@ -716,11 +829,7 @@ type readyResourceItem struct {
 
 func readyKind(r *health.Report, kind string, getArgs []string, namespaced bool, phase1Pending func(key string) bool, extDep []health.DepEntry) {
 	hdr(kind + "s")
-	for _, raw := range kItems(getArgs...) {
-		var it readyResourceItem
-		if json.Unmarshal(raw, &it) != nil {
-			continue
-		}
+	for _, it := range kList[readyResourceItem](getArgs...) {
 		key := it.Metadata.Name
 		if namespaced {
 			key = it.Metadata.Namespace + "/" + it.Metadata.Name
@@ -733,11 +842,7 @@ func readyKind(r *health.Report, kind string, getArgs []string, namespaced bool,
 
 func certRequests(r *health.Report, phase1 bool) {
 	hdr("CertificateRequests")
-	for _, raw := range kItems("get", "certificaterequests.cert-manager.io", "-A") {
-		var it readyResourceItem
-		if json.Unmarshal(raw, &it) != nil {
-			continue
-		}
+	for _, it := range kList[readyResourceItem]("get", "certificaterequests.cert-manager.io", "-A") {
 		key := it.Metadata.Namespace + "/" + it.Metadata.Name
 		status, reason, msg := health.FindReady(it.Status.Conditions)
 		p1 := phase1 && health.MatchPrefix(key, health.Phase1PendingCerts())
@@ -790,27 +895,26 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 	}
 }
 
+// webhookConfigItem is a Validating/MutatingWebhookConfiguration reduced to the
+// Service backends whose endpoints decide whether the webhook can be served.
+type webhookConfigItem struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Webhooks []struct {
+		ClientConfig struct {
+			Service *struct {
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"service"`
+		} `json:"clientConfig"`
+	} `json:"webhooks"`
+}
+
 func checkWebhooks(r *health.Report) {
 	hdr("admission webhooks (Validating + Mutating)")
-	type webhookCfg struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Webhooks []struct {
-			ClientConfig struct {
-				Service *struct {
-					Namespace string `json:"namespace"`
-					Name      string `json:"name"`
-				} `json:"service"`
-			} `json:"clientConfig"`
-		} `json:"webhooks"`
-	}
 	for _, kind := range []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"} {
-		for _, raw := range kItems("get", kind) {
-			var cfg webhookCfg
-			if json.Unmarshal(raw, &cfg) != nil {
-				continue
-			}
+		for _, cfg := range kList[webhookConfigItem]("get", kind) {
 			for _, wh := range cfg.Webhooks {
 				if wh.ClientConfig.Service == nil {
 					continue
@@ -828,9 +932,9 @@ func checkWebhooks(r *health.Report) {
 	}
 }
 
-func checkAppProjects(r *health.Report) {
+func checkAppProjects(r *health.Report, inv *clusterInventory) {
 	hdr("ArgoCD AppProjects")
-	if !kExists("get", "crd", "appprojects.argoproj.io") {
+	if !inv.crds["appprojects.argoproj.io"] {
 		return
 	}
 	// platform-support is the only per-domain AppProject the support-plane
@@ -844,26 +948,29 @@ func checkAppProjects(r *health.Report) {
 	}
 }
 
-func checkLeases(r *health.Report) {
+// leaseItem is a coordination Lease reduced to the renewal fields
+// health.LeaseStale judges.
+type leaseItem struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		HolderIdentity       string `json:"holderIdentity"`
+		LeaseDurationSeconds int    `json:"leaseDurationSeconds"`
+		RenewTime            string `json:"renewTime"`
+	} `json:"spec"`
+}
+
+func checkLeases(r *health.Report, inv *clusterInventory) {
 	hdr("controller Lease freshness")
 	now := time.Now()
 	stale := false
 	for _, ns := range []string{"argocd", "cert-manager", "external-secrets", "cert-automation", "openbao", "kube-system"} {
-		if !kExists("get", "ns", ns) {
+		if !inv.nsExists[ns] {
 			continue
 		}
-		for _, raw := range kItems("-n", ns, "get", "leases.coordination.k8s.io") {
-			var it struct {
-				Metadata struct {
-					Name string `json:"name"`
-				} `json:"metadata"`
-				Spec struct {
-					HolderIdentity       string `json:"holderIdentity"`
-					LeaseDurationSeconds int    `json:"leaseDurationSeconds"`
-					RenewTime            string `json:"renewTime"`
-				} `json:"spec"`
-			}
-			if json.Unmarshal(raw, &it) != nil || it.Spec.RenewTime == "" {
+		for _, it := range kList[leaseItem]("-n", ns, "get", "leases.coordination.k8s.io") {
+			if it.Spec.RenewTime == "" {
 				continue
 			}
 			renew, err := time.Parse(time.RFC3339, it.Spec.RenewTime)
@@ -905,80 +1012,83 @@ func checkArgoApps(r *health.Report, phase1 bool) {
 	}
 }
 
-func checkWorkloads(r *health.Report, phase1 bool) {
+// deploymentItem / statefulSetItem / daemonSetItem are the replica counts the
+// workload classifiers judge.
+type deploymentItem struct {
+	meta
+	Spec struct {
+		Replicas int `json:"replicas"`
+	} `json:"spec"`
+	Status struct {
+		ReadyReplicas int                `json:"readyReplicas"`
+		Conditions    []health.Condition `json:"conditions"`
+	} `json:"status"`
+}
+
+type statefulSetItem struct {
+	meta
+	Spec struct {
+		Replicas int `json:"replicas"`
+	} `json:"spec"`
+	Status struct {
+		ReadyReplicas int `json:"readyReplicas"`
+	} `json:"status"`
+}
+
+type daemonSetItem struct {
+	meta
+	Status struct {
+		DesiredNumberScheduled int `json:"desiredNumberScheduled"`
+		NumberReady            int `json:"numberReady"`
+		UpdatedNumberScheduled int `json:"updatedNumberScheduled"`
+		NumberMisscheduled     int `json:"numberMisscheduled"`
+	} `json:"status"`
+}
+
+func checkWorkloads(r *health.Report, inv *clusterInventory, phase1 bool) {
 	hdr("Deployments / StatefulSets / DaemonSets")
 	for _, ns := range healthNamespaces {
-		if !kExists("get", "ns", ns) {
+		if !inv.nsExists[ns] {
 			continue
 		}
-		for _, raw := range kItems("-n", ns, "get", "deploy") {
-			var d struct {
-				meta
-				Spec struct {
-					Replicas int `json:"replicas"`
-				} `json:"spec"`
-				Status struct {
-					ReadyReplicas int                `json:"readyReplicas"`
-					Conditions    []health.Condition `json:"conditions"`
-				} `json:"status"`
-			}
-			if json.Unmarshal(raw, &d) != nil {
-				continue
-			}
+		for _, d := range kList[deploymentItem]("-n", ns, "get", "deploy") {
 			preason, pmsg := progressingCondition(d.Status.Conditions)
 			cat, msg := health.ClassifyWorkload("Deployment", ns, d.Metadata.Name, d.Spec.Replicas, d.Status.ReadyReplicas, preason, pmsg, phase1)
 			record(r, cat, msg)
 		}
-		for _, raw := range kItems("-n", ns, "get", "sts") {
-			var s struct {
-				meta
-				Spec struct {
-					Replicas int `json:"replicas"`
-				} `json:"spec"`
-				Status struct {
-					ReadyReplicas int `json:"readyReplicas"`
-				} `json:"status"`
-			}
-			if json.Unmarshal(raw, &s) != nil {
-				continue
-			}
+		for _, s := range kList[statefulSetItem]("-n", ns, "get", "sts") {
 			cat, msg := health.ClassifyWorkload("StatefulSet", ns, s.Metadata.Name, s.Spec.Replicas, s.Status.ReadyReplicas, "", "", phase1)
 			record(r, cat, msg)
 		}
-		for _, raw := range kItems("-n", ns, "get", "ds") {
-			var ds struct {
-				meta
-				Status struct {
-					DesiredNumberScheduled int `json:"desiredNumberScheduled"`
-					NumberReady            int `json:"numberReady"`
-					UpdatedNumberScheduled int `json:"updatedNumberScheduled"`
-					NumberMisscheduled     int `json:"numberMisscheduled"`
-				} `json:"status"`
-			}
-			if json.Unmarshal(raw, &ds) != nil {
-				continue
-			}
+		for _, ds := range kList[daemonSetItem]("-n", ns, "get", "ds") {
 			cat, msg := health.ClassifyDaemonSet(ns, ds.Metadata.Name, ds.Status.DesiredNumberScheduled, ds.Status.NumberReady, ds.Status.UpdatedNumberScheduled, ds.Status.NumberMisscheduled)
 			record(r, cat, msg)
 		}
 	}
 }
 
+// pvcItem / pvItem are the binding phase (and requested class) the storage
+// classifiers judge.
+type pvcItem struct {
+	meta
+	Spec struct {
+		StorageClassName string `json:"storageClassName"`
+	} `json:"spec"`
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
+type pvItem struct {
+	meta
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
 func checkPVCs(r *health.Report) {
 	hdr("PersistentVolumeClaim binding")
-	for _, raw := range kItems("get", "pvc", "-A") {
-		var p struct {
-			meta
-			Spec struct {
-				StorageClassName string `json:"storageClassName"`
-			} `json:"spec"`
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(raw, &p) != nil {
-			continue
-		}
+	for _, p := range kList[pvcItem]("get", "pvc", "-A") {
 		cat, msg := health.ClassifyPVC(p.Metadata.Namespace, p.Metadata.Name, p.Status.Phase, p.Spec.StorageClassName)
 		record(r, cat, msg)
 	}
@@ -987,16 +1097,7 @@ func checkPVCs(r *health.Report) {
 func checkPVs(r *health.Report) {
 	hdr("PersistentVolume hygiene")
 	released := 0
-	for _, raw := range kItems("get", "pv") {
-		var p struct {
-			meta
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(raw, &p) != nil {
-			continue
-		}
+	for _, p := range kList[pvItem]("get", "pv") {
 		switch health.ClassifyPVPhase(p.Status.Phase) {
 		case health.CatFail:
 			record(r, health.CatFail, fmt.Sprintf("PV %s %s — provisioner/CSI issue; dependent PVC will stay Pending", p.Metadata.Name, p.Status.Phase))
@@ -1015,10 +1116,10 @@ func checkPVs(r *health.Report) {
 	}
 }
 
-func checkNetworkPolicies(r *health.Report) {
+func checkNetworkPolicies(r *health.Report, inv *clusterInventory) {
 	hdr("NetworkPolicy presence per namespace")
 	for _, ns := range healthNamespaces {
-		if !kExists("get", "ns", ns) || health.NetpolExemptNamespace(ns) {
+		if !inv.nsExists[ns] || health.NetpolExemptNamespace(ns) {
 			continue
 		}
 		cat, msg := health.ClassifyNamespaceNetpol(ns, len(kItems("-n", ns, "get", "networkpolicies")))
@@ -1026,29 +1127,26 @@ func checkNetworkPolicies(r *health.Report) {
 	}
 }
 
+type jobItem struct {
+	Metadata struct {
+		Namespace         string            `json:"namespace"`
+		Name              string            `json:"name"`
+		CreationTimestamp string            `json:"creationTimestamp"`
+		OwnerReferences   []health.OwnerRef `json:"ownerReferences"`
+	} `json:"metadata"`
+	Status struct {
+		Succeeded  int                `json:"succeeded"`
+		Failed     int                `json:"failed"`
+		Active     int                `json:"active"`
+		Conditions []health.Condition `json:"conditions"`
+	} `json:"status"`
+}
+
 func checkJobs(r *health.Report, phase1 bool) {
 	hdr("Jobs (failed or stuck)")
-	type jobItem struct {
-		Metadata struct {
-			Namespace         string            `json:"namespace"`
-			Name              string            `json:"name"`
-			CreationTimestamp string            `json:"creationTimestamp"`
-			OwnerReferences   []health.OwnerRef `json:"ownerReferences"`
-		} `json:"metadata"`
-		Status struct {
-			Succeeded  int                `json:"succeeded"`
-			Failed     int                `json:"failed"`
-			Active     int                `json:"active"`
-			Conditions []health.Condition `json:"conditions"`
-		} `json:"status"`
-	}
 	var items []jobItem
 	var runs []health.JobRun
-	for _, raw := range kItems("get", "jobs", "-A") {
-		var j jobItem
-		if json.Unmarshal(raw, &j) != nil {
-			continue
-		}
+	for _, j := range kList[jobItem]("get", "jobs", "-A") {
 		// Ephemeral e2e exercise Jobs (e.g. broad-pat-rotator-e2e) are judged by
 		// their own assert step; a Failed one lingering from a prior run on a
 		// reused cluster must not gate convergence. Same rationale as the Workflow
@@ -1092,26 +1190,26 @@ func checkJobs(r *health.Report, phase1 bool) {
 	}
 }
 
-func checkCronWorkflows(r *health.Report) {
+// cronWorkflowItem is a CronWorkflow reduced to the submission/schedule state
+// health.ClassifyCronWorkflow judges.
+type cronWorkflowItem struct {
+	meta
+	Spec struct {
+		Suspend bool `json:"suspend"`
+	} `json:"spec"`
+	Status struct {
+		Conditions        []health.Condition `json:"conditions"`
+		LastScheduledTime string             `json:"lastScheduledTime"`
+	} `json:"status"`
+}
+
+func checkCronWorkflows(r *health.Report, inv *clusterInventory) {
 	hdr("CronWorkflows")
-	if !kExists("get", "crd", "cronworkflows.argoproj.io") {
+	if !inv.crds["cronworkflows.argoproj.io"] {
 		return
 	}
 	now := time.Now()
-	for _, raw := range kItems("get", "cronworkflows.argoproj.io", "-A") {
-		var cw struct {
-			meta
-			Spec struct {
-				Suspend bool `json:"suspend"`
-			} `json:"spec"`
-			Status struct {
-				Conditions        []health.Condition `json:"conditions"`
-				LastScheduledTime string             `json:"lastScheduledTime"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(raw, &cw) != nil {
-			continue
-		}
+	for _, cw := range kList[cronWorkflowItem]("get", "cronworkflows.argoproj.io", "-A") {
 		key := cw.Metadata.Namespace + "/" + cw.Metadata.Name
 		submissionErr := ""
 		for _, c := range cw.Status.Conditions {
@@ -1130,21 +1228,24 @@ func checkCronWorkflows(r *health.Report) {
 	}
 }
 
-func checkServices(r *health.Report, phase1 bool) {
+// serviceItem carries the two fields that decide whether a Service is expected
+// to have endpoints at all (ExternalName and headless Services are not).
+type serviceItem struct {
+	meta
+	Spec struct {
+		Type      string `json:"type"`
+		ClusterIP string `json:"clusterIP"`
+	} `json:"spec"`
+}
+
+func checkServices(r *health.Report, inv *clusterInventory, phase1 bool) {
 	hdr("Service endpoints (repo namespaces)")
 	for _, ns := range healthNamespaces {
-		if !kExists("get", "ns", ns) {
+		if !inv.nsExists[ns] {
 			continue
 		}
-		for _, raw := range kItems("-n", ns, "get", "svc") {
-			var s struct {
-				meta
-				Spec struct {
-					Type      string `json:"type"`
-					ClusterIP string `json:"clusterIP"`
-				} `json:"spec"`
-			}
-			if json.Unmarshal(raw, &s) != nil || s.Spec.Type == "ExternalName" || s.Spec.ClusterIP == "None" {
+		for _, s := range kList[serviceItem]("-n", ns, "get", "svc") {
+			if s.Spec.Type == "ExternalName" || s.Spec.ClusterIP == "None" {
 				continue
 			}
 			key := ns + "/" + s.Metadata.Name
@@ -1157,21 +1258,20 @@ func checkServices(r *health.Report, phase1 bool) {
 	}
 }
 
+// pdbItem is a PodDisruptionBudget's healthy/allowed counts.
+type pdbItem struct {
+	meta
+	Status struct {
+		CurrentHealthy     int `json:"currentHealthy"`
+		DesiredHealthy     int `json:"desiredHealthy"`
+		DisruptionsAllowed int `json:"disruptionsAllowed"`
+		ExpectedPods       int `json:"expectedPods"`
+	} `json:"status"`
+}
+
 func checkPDBs(r *health.Report, phase1 bool) {
 	hdr("PodDisruptionBudgets")
-	for _, raw := range kItems("get", "pdb", "-A") {
-		var p struct {
-			meta
-			Status struct {
-				CurrentHealthy     int `json:"currentHealthy"`
-				DesiredHealthy     int `json:"desiredHealthy"`
-				DisruptionsAllowed int `json:"disruptionsAllowed"`
-				ExpectedPods       int `json:"expectedPods"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(raw, &p) != nil {
-			continue
-		}
+	for _, p := range kList[pdbItem]("get", "pdb", "-A") {
 		key := p.Metadata.Namespace + "/" + p.Metadata.Name
 		cat, msg := health.ClassifyPDB(key, p.Status.CurrentHealthy, p.Status.DesiredHealthy, p.Status.DisruptionsAllowed, p.Status.ExpectedPods, phase1)
 		if cat != health.CatOK {
@@ -1180,41 +1280,39 @@ func checkPDBs(r *health.Report, phase1 bool) {
 	}
 }
 
+// ingressItem is an Ingress reduced to its load-balancer address count.
+type ingressItem struct {
+	meta
+	Status struct {
+		LoadBalancer struct {
+			Ingress []json.RawMessage `json:"ingress"`
+		} `json:"loadBalancer"`
+	} `json:"status"`
+}
+
 func checkIngresses(r *health.Report, phase1 bool) {
 	hdr("Ingress addresses")
-	for _, raw := range kItems("get", "ingress", "-A") {
-		var ing struct {
-			meta
-			Status struct {
-				LoadBalancer struct {
-					Ingress []json.RawMessage `json:"ingress"`
-				} `json:"loadBalancer"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(raw, &ing) != nil {
-			continue
-		}
+	for _, ing := range kList[ingressItem]("get", "ingress", "-A") {
 		key := ing.Metadata.Namespace + "/" + ing.Metadata.Name
 		cat, msg := health.ClassifyIngress(key, len(ing.Status.LoadBalancer.Ingress), phase1)
 		record(r, cat, msg)
 	}
 }
 
-func checkWorkflows(r *health.Report, phase1 bool) {
+// workflowItem is an Argo Workflow reduced to its phase.
+type workflowItem struct {
+	meta
+	Status struct {
+		Phase string `json:"phase"`
+	} `json:"status"`
+}
+
+func checkWorkflows(r *health.Report, inv *clusterInventory, phase1 bool) {
 	hdr("Argo Workflows (recent Failed / Error)")
-	if !kExists("get", "crd", "workflows.argoproj.io") {
+	if !inv.crds["workflows.argoproj.io"] {
 		return
 	}
-	for _, raw := range kItems("get", "workflows.argoproj.io", "-A") {
-		var wf struct {
-			meta
-			Status struct {
-				Phase string `json:"phase"`
-			} `json:"status"`
-		}
-		if json.Unmarshal(raw, &wf) != nil {
-			continue
-		}
+	for _, wf := range kList[workflowItem]("get", "workflows.argoproj.io", "-A") {
 		key := wf.Metadata.Namespace + "/" + wf.Metadata.Name
 		if cat, msg := health.ClassifyWorkflowPhase(key, wf.Status.Phase, phase1); cat != health.CatOK {
 			record(r, cat, msg)
@@ -1222,14 +1320,14 @@ func checkWorkflows(r *health.Report, phase1 bool) {
 	}
 }
 
-func checkStuckFinalizers(r *health.Report) {
+func checkStuckFinalizers(r *health.Report, inv *clusterInventory) {
 	hdr("stuck-finalizer deletions")
 	now := time.Now()
 	found := false
 	for _, spec := range health.StuckResourceKinds() {
 		parts := strings.SplitN(spec, "|", 2)
 		kind, scope := parts[0], parts[1]
-		if kind != "pv" && kind != "pvc" && !kExists("get", "crd", kind) {
+		if kind != "pv" && kind != "pvc" && !inv.crds[kind] {
 			continue
 		}
 		args := []string{"get"}
@@ -1237,9 +1335,8 @@ func checkStuckFinalizers(r *health.Report) {
 			args = append(args, "-A")
 		}
 		args = append(args, kind)
-		for _, raw := range kItems(args...) {
-			var m meta
-			if json.Unmarshal(raw, &m) != nil || m.Metadata.DeletionTimestamp == "" {
+		for _, m := range kList[meta](args...) {
+			if m.Metadata.DeletionTimestamp == "" {
 				continue
 			}
 			del, err := time.Parse(time.RFC3339, m.Metadata.DeletionTimestamp)
@@ -1261,21 +1358,21 @@ func checkStuckFinalizers(r *health.Report) {
 	}
 }
 
+// podItem is a Pod reduced to the owner references that decide whether it is a
+// steady-state workload at all, plus the status the pod predicates judge.
+type podItem struct {
+	Metadata struct {
+		Namespace       string            `json:"namespace"`
+		Name            string            `json:"name"`
+		OwnerReferences []health.OwnerRef `json:"ownerReferences"`
+	} `json:"metadata"`
+	Status health.PodStatus `json:"status"`
+}
+
 func checkPods(r *health.Report, phase1 bool) {
 	hdr("unhealthy pods (all namespaces)")
 	bad := false
-	for _, raw := range kItems("get", "pods", "-A") {
-		var p struct {
-			Metadata struct {
-				Namespace       string            `json:"namespace"`
-				Name            string            `json:"name"`
-				OwnerReferences []health.OwnerRef `json:"ownerReferences"`
-			} `json:"metadata"`
-			Status health.PodStatus `json:"status"`
-		}
-		if json.Unmarshal(raw, &p) != nil {
-			continue
-		}
+	for _, p := range kList[podItem]("get", "pods", "-A") {
 		// Job/CronJob pods are ephemeral and self-completing — their health is
 		// the Job section's (checkJobs/ClassifyJob), not this steady-state
 		// workload gate. Skip them so a short-lived CronJob pod caught
@@ -1332,14 +1429,8 @@ func progressingCondition(conds []health.Condition) (reason, message string) {
 
 // countReadyEndpoints sums ready endpoints across a Service's EndpointSlices.
 func countReadyEndpoints(ns, svc string) int {
-	var slices []health.EndpointSlice
-	for _, raw := range kItems("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc) {
-		var s health.EndpointSlice
-		if json.Unmarshal(raw, &s) == nil {
-			slices = append(slices, s)
-		}
-	}
-	return health.CountReadyEndpoints(slices)
+	return health.CountReadyEndpoints(
+		kList[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc))
 }
 
 // kJSONPath runs a kubectl get with a -o jsonpath=... arg and returns trimmed stdout.

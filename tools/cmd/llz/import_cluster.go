@@ -375,20 +375,20 @@ func crdGroupOperator(group string) string {
 
 // parseCRDOperators returns the friendly operator names and the LLZ components
 // implied by the installed CustomResourceDefinitions.
+// The component map is always non-nil (an empty set means "no CRD implied a
+// toggle"); buildReport decides once whether the merged set serializes as absent.
 func parseCRDOperators(js string) (operators []string, components map[string]bool) {
 	var d struct {
 		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
+			Metadata k8sObjectMeta `json:"metadata"`
+			Spec     struct {
 				Group string `json:"group"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
 	components = map[string]bool{}
 	if json.Unmarshal([]byte(js), &d) != nil {
-		return nil, nil
+		return nil, components
 	}
 	opSet := map[string]bool{}
 	for _, it := range d.Items {
@@ -398,9 +398,6 @@ func parseCRDOperators(js string) (operators []string, components map[string]boo
 		if c, ok := crdComponentByName[it.Metadata.Name]; ok {
 			components[c] = true
 		}
-	}
-	if len(components) == 0 {
-		components = nil
 	}
 	return sortedSetKeys(opSet), components
 }

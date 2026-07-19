@@ -18,10 +18,14 @@ package main
 // with five copies, the next divergence is a matter of time.
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // manifestExts are the extensions a Kubernetes manifest may use. Both, always —
@@ -69,6 +73,26 @@ func walkManifests(dirs []string, fn func(path string, raw []byte) error) (exami
 	return examined, nil
 }
 
+// collectManifestPaths returns the sorted paths of every YAML manifest under the
+// given dirs — walkManifests for the callers that want the file LIST rather than
+// the contents. Same rules: absent dirs are skipped, templates/ is skipped, both
+// extensions match.
+//
+// On error it returns the paths found SO FAR alongside it, never a bare nil. A
+// caller that drops the error must not also be handed an empty slice: the guards
+// read "no files" as the clean skip-or-succeed case, so returning nil on an
+// unreadable subtree would turn a partial scan into a silent green — the walk
+// aborting is exactly when the corpus looks emptiest.
+func collectManifestPaths(dirs []string) ([]string, error) {
+	var paths []string
+	_, err := walkManifests(dirs, func(path string, _ []byte) error {
+		paths = append(paths, path)
+		return nil
+	})
+	sort.Strings(paths)
+	return paths, err
+}
+
 // hasManifestExt reports whether path carries a YAML manifest extension.
 func hasManifestExt(path string) bool {
 	for _, ext := range manifestExts {
@@ -77,4 +101,49 @@ func hasManifestExt(path string) bool {
 		}
 	}
 	return false
+}
+
+// decodeDocs decodes every document of a multi-doc YAML file into T, returning
+// the ones keep accepts. The guards each carried their own byte-identical copy
+// of this loop, one per doc type.
+//
+// A document whose SHAPE does not match T (a kustomize patch, a CRD whose field
+// collides with the guard's minimal struct) is skipped and the file keeps being
+// read — which is what every copy's comment claimed ("skipping docs that fail to
+// parse") but only the argocd-rendered-apps copy did: the other four broke out of
+// the file entirely, so one odd document hid every manifest after it in the same
+// file. Any other decode error (EOF, or a syntax error the parser cannot resume
+// from) ends the file.
+func decodeDocs[T any](raw string, keep func(T) bool) []T {
+	var docs []T
+	dec := yaml.NewDecoder(strings.NewReader(raw))
+	for {
+		var d T
+		if err := dec.Decode(&d); err != nil {
+			// A yaml.TypeError means this document parsed but did not fit T; the
+			// decoder is still positioned to read the next one.
+			var typeErr *yaml.TypeError
+			if errors.As(err, &typeErr) {
+				continue
+			}
+			break
+		}
+		if keep(d) {
+			docs = append(docs, d)
+		}
+	}
+	return docs
+}
+
+// sortGuardFindings orders findings by file, then by a per-guard secondary key,
+// so a guard's annotations come out in a stable order regardless of walk order.
+func sortGuardFindings[T any](findings []T, key func(T) (file, secondary string)) {
+	sort.Slice(findings, func(i, j int) bool {
+		fi, si := key(findings[i])
+		fj, sj := key(findings[j])
+		if fi != fj {
+			return fi < fj
+		}
+		return si < sj
+	})
 }

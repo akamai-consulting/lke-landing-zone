@@ -480,6 +480,14 @@ jobs:
           go-version-file: tools/go.mod
           cache-dependency-path: tools/go.sum
 
+      # gofmt + vet. `make lint` runs these, but no CI job invokes plain `make
+      # lint` — the workflows call the decomposed lint-k8s / lint-tf / coverage
+      # entrypoints, none of which reach fmt-check or vet. So both were
+      # unenforced, and four files had already drifted out of gofmt. Runs before
+      # the test step: formatting is the cheapest thing to fail on.
+      - name: gofmt + go vet
+        run: make fmt-check vet
+
       - name: Test + enforce per-package coverage thresholds
         run: make coverage
 

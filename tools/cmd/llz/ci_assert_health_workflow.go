@@ -51,10 +51,10 @@ func ciAssertHealthWorkflowCmd() *cobra.Command {
 			"on an absent template, for ad-hoc runs outside an instance checkout.\n\n" +
 			"Exit 0 succeeded/skipped, 1 on Failed/Error/timeout.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
-			os.Exit(runCIAssertHealthWorkflow(region, namespace, template,
-				time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second))
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runCIAssertHealthWorkflow(region, namespace, template,
+				time.Duration(timeout)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
 	c.Flags().StringVar(&region, "region", "", "deployment whose spec decides if the component is expected (empty falls back to skipping on an absent WorkflowTemplate)")
@@ -167,7 +167,11 @@ var submitHealthWorkflowFn = func(namespace, manifest string) ([]byte, error) {
 	return cmd.Output()
 }
 
-func runCIAssertHealthWorkflow(region, namespace, template string, timeout, interval time.Duration) int {
+// runCIAssertHealthWorkflow returns nil on Succeeded/skipped and an error on
+// Failed/Error/timeout (cobra exits 1 on it). The ::error:: / ::notice::
+// annotations stay as direct writes: GitHub parses an annotation only at the
+// start of a line, and a returned error reaches stderr behind main.go's "llz: ".
+func runCIAssertHealthWorkflow(region, namespace, template string, timeout, interval time.Duration) error {
 	// Whether to skip is a question about the SPEC, not the cluster. Anchoring it
 	// to the cluster made the gate unfalsifiable: the e2e explicitly enables
 	// clusterHealthWorkflow, so a WorkflowTemplate that never synced — a render
@@ -179,10 +183,10 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 		if expected {
 			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: WorkflowTemplate %s/%s is MISSING but %s. The component did not deploy — check the Argo app that owns it and whether admission denied the CR.\n",
 				namespace, template, why)
-			return 1
+			return fmt.Errorf("assert-health-workflow: WorkflowTemplate %s/%s is MISSING but %s", namespace, template, why)
 		}
 		fmt.Printf("::notice::assert-health-workflow: WorkflowTemplate %s/%s not found and %s; skipping.\n", namespace, template, why)
-		return 0
+		return nil
 	}
 
 	// Reap any prior e2e probe Workflows first: on a REUSED cluster a Failed one
@@ -194,12 +198,12 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 		out, err := submitHealthWorkflowFn(namespace, healthWorkflowManifest(template, namespace))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: could not submit Workflow from %s/%s: %v\n", namespace, template, err)
-			return 1
+			return fmt.Errorf("assert-health-workflow: could not submit Workflow from %s/%s: %w", namespace, template, err)
 		}
 		name, ok := createdWorkflowName(out)
 		if !ok {
 			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: submitted Workflow but could not read its name from the create response\n")
-			return 1
+			return fmt.Errorf("assert-health-workflow: submitted Workflow but could not read its name from the create response")
 		}
 		fmt.Printf("assert-health-workflow: submitted Workflow %s/%s from WorkflowTemplate %s (attempt %d/%d); waiting up to %s for it to Succeed…\n",
 			namespace, name, template, attempt, healthRetryAttempts, timeout)
@@ -207,7 +211,7 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 		switch waitHealthWorkflow(namespace, name, timeout, interval) {
 		case healthOK:
 			fmt.Printf("assert-health-workflow: Workflow %s/%s Succeeded.\n", namespace, name)
-			return 0
+			return nil
 		case healthFailed:
 			// A failed run whose own verdict is "0 hard-failed, N in-progress" is a
 			// cluster MID-SETTLE (e.g. the argocd-redis WRONGPASS flap right after an
@@ -224,11 +228,11 @@ func runCIAssertHealthWorkflow(region, namespace, template string, timeout, inte
 			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: Workflow %s/%s failed (not Succeeded).\n", namespace, name)
 			fmt.Fprintln(os.Stderr, logs)
 			fmt.Fprint(os.Stderr, execCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
-			return 1
+			return fmt.Errorf("assert-health-workflow: Workflow %s/%s failed (not Succeeded)", namespace, name)
 		case healthTimeout:
 			fmt.Fprintf(os.Stderr, "::error::assert-health-workflow: Workflow %s/%s did not reach a terminal phase within %s.\n", namespace, name, timeout)
 			fmt.Fprint(os.Stderr, execCombined("kubectl", "-n", namespace, "get", "workflow", name, "-o", "yaml"))
-			return 1
+			return fmt.Errorf("assert-health-workflow: Workflow %s/%s did not reach a terminal phase within %s", namespace, name, timeout)
 		}
 	}
 }

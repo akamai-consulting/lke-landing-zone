@@ -15,7 +15,6 @@ package main
 import (
 	"context"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -55,12 +54,4 @@ type patTarget struct {
 type credLister interface {
 	ListProfileTokens(ctx context.Context) ([]map[string]any, error)
 	ListObjectStorageKeys(ctx context.Context) ([]map[string]any, error)
-}
-
-// envOr returns the environment value for key, or def when unset/empty.
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }

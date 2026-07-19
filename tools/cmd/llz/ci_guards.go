@@ -25,25 +25,31 @@ func ciRequireSecretCmd() *cobra.Command {
 			"--hint line, which should say where the secret comes from) and exits 1 when\n" +
 			"empty; prints \"<var-name>: present.\" otherwise.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			os.Exit(runCIRequireSecret(args[0], os.Getenv(args[0]), hint, os.Stdout, os.Stderr))
-			return nil
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			return runCIRequireSecret(args[0], os.Getenv(args[0]), hint, os.Stdout, os.Stderr)
 		},
 	}
 	c.Flags().StringVar(&hint, "hint", "", "remediation line appended to the error annotation (where the secret comes from)")
 	return c
 }
 
-func runCIRequireSecret(name, value, hint string, out, errOut io.Writer) int {
+// runCIRequireSecret returns nil when the secret is present and an error when it
+// is not — cobra turns that into the exit-1 the workflows gate on. The
+// ::error:: annotations are still WRITTEN here (not folded into the returned
+// error): GitHub only parses an annotation command at the START of a line, and
+// the returned error reaches stderr behind main.go's "llz: " prefix, which would
+// destroy it.
+func runCIRequireSecret(name, value, hint string, out, errOut io.Writer) error {
 	if value == "" {
 		fmt.Fprintf(errOut, "::error::%s is not set.\n", name)
 		if hint != "" {
 			fmt.Fprintf(errOut, "::error::%s\n", hint)
 		}
-		return 1
+		return fmt.Errorf("%s is not set", name)
 	}
 	fmt.Fprintf(out, "%s: present.\n", name)
-	return 0
+	return nil
 }
 
 func ciAssertDestroyConfirmCmd() *cobra.Command {
@@ -54,19 +60,19 @@ func ciAssertDestroyConfirmCmd() *cobra.Command {
 			"token required before any terraform destroy: the caller must have typed the\n" +
 			"full 'destroy:<region>:<module>' token, which prevents accidental destroys.",
 		Args: cobra.ExactArgs(3),
-		RunE: func(_ *cobra.Command, args []string) error {
-			os.Exit(runCIAssertDestroyConfirm(args[0], args[1], args[2], os.Stderr))
-			return nil
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
+			return runCIAssertDestroyConfirm(args[0], args[1], args[2], os.Stderr)
 		},
 	}
 	return c
 }
 
-func runCIAssertDestroyConfirm(region, module, confirm string, errOut io.Writer) int {
+func runCIAssertDestroyConfirm(region, module, confirm string, errOut io.Writer) error {
 	expected := fmt.Sprintf("destroy:%s:%s", region, module)
 	if confirm != expected {
 		fmt.Fprintf(errOut, "::error::Set confirm_destroy to '%s' to proceed.\n", expected)
-		return 1
+		return fmt.Errorf("set confirm_destroy to %q to proceed", expected)
 	}
-	return 0
+	return nil
 }

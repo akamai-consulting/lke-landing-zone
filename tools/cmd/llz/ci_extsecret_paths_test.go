@@ -44,20 +44,27 @@ spec:
 func TestCollectExternalSecretRefs(t *testing.T) {
 	root := t.TempDir()
 	fixWrite(t, root, "apl-values/env/secrets.yaml", esFixtureExternalSecret)
-	// Rendered chart output is scanned too (only *.yaml, never /charts/ subtrees).
-	fixWrite(t, root, "rendered/llz/templates/es.yaml",
+	// Rendered chart output is scanned too — one flat file per chart, the shape
+	// template-scripts/ci/render-charts.sh emits ("$RENDER_DIR/$name.yaml") —
+	// never /charts/ subtrees, which hold vendored upstream charts.
+	fixWrite(t, root, "rendered/llz-platform.yaml",
 		"kind: ExternalSecret\n  remoteRef:\n    key: harbor/admin\n    property: password\n")
 	fixWrite(t, root, "rendered/llz/charts/dep/es.yaml",
 		"kind: ExternalSecret\n  remoteRef:\n    key: vendored/skipme\n")
 	fixWrite(t, root, "apl-values/env/not-an-es.yaml", "kind: ConfigMap\n  remoteRef:\n    key: nope\n")
+	// *.yml IS scanned. This scan matched only ".yaml", so an ExternalSecret saved
+	// with the other YAML extension was invisible to the whole cross-validation —
+	// its remoteRefs unchecked against the seeding and the bao-configure policy.
+	// It now shares walkManifests with the other tree-scanning guards.
 	fixWrite(t, root, "apl-values/env/wrong-ext.yml", esFixtureExternalSecret)
 
-	refs, _ := collectExternalSecretRefs(root, "rendered")
+	refs, _, _ := collectExternalSecretRefs(root, "rendered")
+	bothExts := []string{"apl-values/env/secrets.yaml", "apl-values/env/wrong-ext.yml"}
 	want := map[esRef][]string{}
-	want[esRef{key: "grafana/admin", prop: "user", hasProp: true}] = []string{"apl-values/env/secrets.yaml"}
-	want[esRef{key: "grafana/admin", prop: "password", hasProp: true}] = []string{"apl-values/env/secrets.yaml"}
-	want[esRef{key: "otel/ingress"}] = []string{"apl-values/env/secrets.yaml"}
-	want[esRef{key: "harbor/admin", prop: "password", hasProp: true}] = []string{"rendered/llz/templates/es.yaml"}
+	want[esRef{key: "grafana/admin", prop: "user", hasProp: true}] = bothExts
+	want[esRef{key: "grafana/admin", prop: "password", hasProp: true}] = bothExts
+	want[esRef{key: "otel/ingress"}] = bothExts
+	want[esRef{key: "harbor/admin", prop: "password", hasProp: true}] = []string{"rendered/llz-platform.yaml"}
 	if !reflect.DeepEqual(refs, want) {
 		t.Errorf("refs = %#v\nwant %#v", refs, want)
 	}
