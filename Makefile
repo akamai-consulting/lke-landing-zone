@@ -244,12 +244,30 @@ k8s-validate: render-charts
 # the native port of the former template-scripts/linting-and-validation/
 # check-prometheus-rule-crds.py; uses the PATH llz when present (the CI images
 # bake it), else builds from source.
-prom-rules-check:
-	@if command -v llz >/dev/null 2>&1; then \
-		llz ci check-prom-rules; \
+# LLZ_CI — invoke one `llz ci <verb>`. Nine targets stamped out this same
+# if/else, and getting it wrong is not cosmetic: the two branches had already
+# drifted (most pass --root, prom-rules passes --rules-dir instead) and, worse,
+# the PATH branch silently wins on a workstation where `llz` is whatever you
+# last installed — so a guard can report a pass that says nothing about your
+# working tree.
+#
+#   $(1) verb + the flags that read the same from either branch
+#   $(2) flags needed ONLY when running from $(GO_DIR) (re-basing relative paths)
+#
+# PATH-first is right for CI: the ci-kubernetes / ci-terraform images bake llz
+# and carry no Go toolchain, so `go run` cannot fire there at all. Set
+# LLZ_FORCE_SOURCE=1 to invert it and always build from source — what you want
+# locally the moment you have touched tools/. `make chart-guards` sets it.
+define LLZ_CI
+	@if [ -z "$$LLZ_FORCE_SOURCE" ] && command -v llz >/dev/null 2>&1; then \
+		llz ci $(1); \
 	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci check-prom-rules --rules-dir ../platform-apl/components/observability/prometheus-rules; \
+		cd $(GO_DIR) && go run ./cmd/llz ci $(1) $(2); \
 	fi
+endef
+
+prom-rules-check:
+	$(call LLZ_CI,check-prom-rules,--rules-dir ../platform-apl/components/observability/prometheus-rules)
 
 helm-repos:
 	$(RETRY) helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
@@ -310,12 +328,9 @@ placeholder-lint: render-charts
 # externalsecret-paths-check: `llz ci externalsecret-paths` (the native port of
 # the former validate-externalsecret-paths.py). Uses the PATH llz when present
 # (the CI images bake it); otherwise builds from source via the Go toolchain.
+externalsecret-paths-check: export RENDER_DIR := $(RENDER_DIR)
 externalsecret-paths-check: render-charts
-	@if command -v llz >/dev/null 2>&1; then \
-		RENDER_DIR=$(RENDER_DIR) llz ci externalsecret-paths; \
-	else \
-		cd $(GO_DIR) && RENDER_DIR=$(RENDER_DIR) go run ./cmd/llz ci externalsecret-paths --root ..; \
-	fi
+	$(call LLZ_CI,externalsecret-paths,--root ..)
 
 # wave-health-guard: `llz ci wave-health-guard` — the PR #142 wedge-class gate.
 # Argo sync waves gate on per-resource health; a health-checked kind at a
@@ -324,11 +339,7 @@ externalsecret-paths-check: render-charts
 # platform-apl/manifest/ + platform-apl/components/ must be health-inert or
 # backed by a resource.customizations.health override in apl-values/values.yaml.
 wave-health-guard:
-	@if command -v llz >/dev/null 2>&1; then \
-		llz ci wave-health-guard; \
-	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci wave-health-guard --root ..; \
-	fi
+	$(call LLZ_CI,wave-health-guard,--root ..)
 
 # wave-dependency-guard: `llz ci wave-dependency-guard` — the #163 wedge-class gate.
 # Argo sync waves gate on per-resource health, so a Deployment/StatefulSet/DaemonSet
@@ -338,11 +349,7 @@ wave-health-guard:
 # loki's wave-5 object-store secrets down). A workload's wave must exceed the wave
 # of every ExternalSecret whose Secret it hard-depends on (optional refs exempt).
 wave-dependency-guard:
-	@if command -v llz >/dev/null 2>&1; then \
-		llz ci wave-dependency-guard; \
-	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci wave-dependency-guard --root ..; \
-	fi
+	$(call LLZ_CI,wave-dependency-guard,--root ..)
 
 # mesh-egress-guard: `llz ci mesh-egress-guard` — the harbor-reconciler mesh class.
 # apl-core runs platform namespaces (harbor) under Istio STRICT mTLS; a pod OUTSIDE
@@ -351,11 +358,7 @@ wave-dependency-guard:
 # different namespace — the batch-5 harbor reconciler's mistake, caught at PR time
 # instead of two ~50-minute e2e cycles.
 mesh-egress-guard:
-	@if command -v llz >/dev/null 2>&1; then \
-		llz ci mesh-egress-guard; \
-	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci mesh-egress-guard --root ..; \
-	fi
+	$(call LLZ_CI,mesh-egress-guard,--root ..)
 
 # monitoring-label-guard: `llz ci monitoring-label-guard` — the #175 day-2-blind
 # class. apl-core's Prometheus selects ServiceMonitors / PodMonitors /
@@ -366,11 +369,7 @@ mesh-egress-guard:
 # rendered chart output too (the openbao ServiceMonitor is a chart template), so
 # it depends on render-charts.
 monitoring-label-guard: render-charts
-	@if command -v llz >/dev/null 2>&1; then \
-		llz ci monitoring-label-guard; \
-	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci monitoring-label-guard --root ../platform-apl --root ../rendered; \
-	fi
+	$(call LLZ_CI,monitoring-label-guard,--root ..)
 
 # untestable-loc-check: the design-principle gate. Fails when inline workflow
 # bash / shell / python logic exceeds the budget in .untestable-budget.yaml —
@@ -378,11 +377,7 @@ monitoring-label-guard: render-charts
 # untestable shell into CI. Pure Go + a config file, so it runs anywhere (no
 # rendered charts needed). Budgets ratchet DOWN as code is converted.
 untestable-loc-check:
-	@if command -v llz >/dev/null 2>&1; then \
-		llz ci untestable-loc; \
-	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci untestable-loc --root ..; \
-	fi
+	$(call LLZ_CI,untestable-loc,--root ..)
 
 # chart-guards: the two halves of "I changed a chart" — run them together.
 # Bumping a Chart.yaml version is only half the job: the bump leaves every Argo
@@ -392,18 +387,14 @@ untestable-loc-check:
 # re-run until clean. CI runs both in the same job ("Charts bump version and
 # pins stay aligned"); this is the local equivalent.
 #
-# Deliberately invokes the CLI from SOURCE instead of depending on the
-# chart-version-guard / chart-pin-guard targets. Those try `command -v llz`
-# first, which on a workstation is whatever binary you last installed — running
-# a months-old llz against today's working tree, and reporting a pass that means
-# nothing. That is the exact failure this target exists to prevent, so it cannot
-# inherit it. CI is unaffected either way: it calls `llz ci ...` directly with a
-# binary built in the same job, never through these targets.
-chart-guards:
-	@echo "── chart-version-guard (from source, base=$(CHART_GUARD_BASE))"
-	@cd $(GO_DIR) && go run ./cmd/llz ci chart-version-guard --root .. --base $(CHART_GUARD_BASE)
-	@echo "── chart-pin-guard (from source)"
-	@cd $(GO_DIR) && go run ./cmd/llz ci chart-pin-guard --root ..
+# Runs both from SOURCE via LLZ_FORCE_SOURCE. The default PATH-first resolution
+# in LLZ_CI is right for CI but wrong here: on a workstation `llz` is whatever
+# binary you last installed, so the guards would run months-old code against
+# today's working tree and report a pass that means nothing. That is the exact
+# failure this target exists to prevent, so it opts out. CI is unaffected — it
+# calls `llz ci ...` directly with a binary built in the same job.
+chart-guards: export LLZ_FORCE_SOURCE := 1
+chart-guards: chart-version-guard chart-pin-guard
 
 # chart-pin-guard: assert every Argo CD first-party chart pin (apl-values
 # targetRevision + llz-argo-bootstrap-apps component version) matches the chart's
@@ -412,11 +403,7 @@ chart-guards:
 # support-plane app (llz-openbao namespace never created) and times out the
 # OpenBao bootstrap. Decision logic is unit-tested Go; this is thin glue.
 chart-pin-guard:
-	@if command -v llz >/dev/null 2>&1; then \
-		llz ci chart-pin-guard; \
-	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci chart-pin-guard --root ..; \
-	fi
+	$(call LLZ_CI,chart-pin-guard,--root ..)
 
 # chart-version-guard: assert every chart whose directory changed vs the base ref
 # bumped its Chart.yaml `version:`. publish-charts.yml publishes immutably (it only
@@ -428,11 +415,7 @@ chart-pin-guard:
 # logic is unit-tested Go; this is thin glue.
 CHART_GUARD_BASE ?= origin/main
 chart-version-guard:
-	@if command -v llz >/dev/null 2>&1; then \
-		llz ci chart-version-guard --base $(CHART_GUARD_BASE); \
-	else \
-		cd $(GO_DIR) && go run ./cmd/llz ci chart-version-guard --root .. --base $(CHART_GUARD_BASE); \
-	fi
+	$(call LLZ_CI,chart-version-guard --base $(CHART_GUARD_BASE),--root ..)
 
 helm-dep-lock-check:
 	cd $(GO_DIR) && go run ./cmd/llz ci chart-lock-drift --root .. $(OPENBAO_CHART)
