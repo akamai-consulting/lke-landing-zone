@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -375,7 +376,8 @@ func resolveTemplateRef() string {
 // kustomize `images:` transformer overrides it. Priority mirrors resolveTemplateRef:
 //  1. $LLZ_IMAGE_REF — release-e2e exports the signed sha image for the commit under
 //     test (ghcr.io/…/llz:sha-<SHA>); take the tag after the last ':';
-//  2. .copier-answers.yml llz_version — a real instance pins to its release tag;
+//  2. .copier-answers.yml llz_version — a real instance pins to its release tag or
+//     the commit it was rendered from, mapped to a PUBLISHED tag by llzImageTagFor;
 //  3. "latest".
 func resolveLLZImageTag() string {
 	if r := strings.TrimSpace(os.Getenv("LLZ_IMAGE_REF")); r != "" {
@@ -386,11 +388,43 @@ func resolveLLZImageTag() string {
 	}
 	if a, _ := readAnswers("."); a != nil {
 		if v := strings.TrimSpace(a.Version); v != "" {
-			return v
+			return llzImageTagFor(v)
 		}
 	}
 	return "latest"
 }
+
+// llzImageTagFor maps a pinned template version (.copier-answers.yml llz_version)
+// onto a tag the llz image actually publishes. Only three tag forms ever exist:
+// build-images.yml pushes :latest and :sha-<40-hex> on every main push, and
+// llz-release.yml retags that commit's sha- image as :vX.Y.Z when a release is
+// promoted. llz_version is NOT one of those forms — it is a raw commit sha or a
+// semver tag — so returning it verbatim rendered an image reference that does not
+// resolve (ghcr.io/…/llz:<sha> and :v0.0.28 both 404), pinning the reconciler,
+// harbor-provisioner and broad-pat-rotator to an ImagePullBackOff. release-e2e
+// masked it by exporting $LLZ_IMAGE_REF, which short-circuits above.
+//
+// A value that matches no published form (a branch name like "main", or an
+// abbreviated sha — :sha-<short> is never pushed) falls back to :latest: running
+// a slightly newer image beats rendering one that cannot be pulled at all.
+func llzImageTagFor(v string) string {
+	switch {
+	case rawCommitSHA.MatchString(v):
+		return "sha-" + v
+	case releaseSemver.MatchString(v):
+		return v
+	default:
+		return "latest"
+	}
+}
+
+var (
+	// The full 40-hex form build-images.yml tags as sha-<SHA>. Abbreviated shas are
+	// deliberately excluded — no matching tag is ever pushed for them.
+	rawCommitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	// vX.Y.Z, optionally with a pre-release/build suffix (v0.0.29-rc.1).
+	releaseSemver = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+)
 
 // repoOwnerName reduces a values-repo URL (https://github.com/<owner>/<name>.git) to
 // the <owner>/<name> form the harbor provisioner's GH_REPO env wants.
