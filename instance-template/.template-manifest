@@ -29,6 +29,12 @@ managed  .template-manifest
 # Declares paths `llz upgrade` removes after a copier update (copier never deletes
 # files the template drops). Template-owned — overwritten on update.
 managed  .template-removals
+# Digests of the vendored .github/ surface, written by `llz ci workflows-fresh
+# --write`. `llz lint` recomputes them offline so a hand-edited (and therefore
+# doomed — see `managed`) workflow body fails CI instead of being silently
+# overwritten on the next upgrade. Ships with the files it covers, so it is
+# template-owned too.
+managed  .template-workflows.lock
 # Composite actions are VENDORED into every instance (.github/actions/) so the
 # reusable llz-* workflow bodies reference them locally (./.github/actions/<name>)
 # with no cross-repo fetch — this is what lets an instance run self-contained on an
@@ -92,12 +98,21 @@ managed  apl-values/README.md
 managed  apl-values/values.yaml
 
 # ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─
-# Workflows: the caller stubs carry instance-local pins (instance_repo,
-# template-ref, the renovate depName) + any dispatch defaults you tune. The
-# vendored llz-*.yml bodies are token-free but ship VERBATIM (no comment-strip —
-# see copier.yml _tasks), so this 3-way merge is clean for them: the instance
-# copy matches the render unless an operator deliberately edited it.
+# Workflow CALLER STUBS (terraform.yml, promote.yml, …) carry instance-local pins
+# (instance_repo, template-ref, the renovate depName) + any dispatch defaults you
+# tune — 2-9 copier substitutions each — so they genuinely need the 3-way merge.
 merge    .github/workflows/**
+# The vendored llz-*.yml REUSABLE BODIES are a different animal: every one of them
+# is token-free (verified: no copier substitution appears in any llz-*.yml), so an
+# instance's copy is byte-identical to the render unless it was hand-edited. Ship them
+# `managed` so `llz upgrade` overwrites them from a clean render of the target
+# version instead of 3-way-merging ~4k lines of YAML per bump. That is what makes a
+# large body change (e.g. moving maintainer rationale out of the vendored YAML) land
+# as a clean overwrite rather than a merge that can strand conflict markers in
+# 1000-line workflow files — the gsap-apl v0.0.24 failure mode. Operators must not
+# hand-edit these; `llz ci workflows-fresh` fails CI when one drifts.
+# (Last-match-wins, so this MUST stay after the `merge .github/workflows/**` above.)
+managed  .github/workflows/llz-*.yml
 # GitLab CI flavor: the parallel pipeline files a GitLab instance `include:`s from
 # the template — same fork-local include/image refs as the GitHub workflows.
 merge    gitlab-ci/**

@@ -308,12 +308,37 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 	if err != nil {
 		return err
 	}
+	// Copier has exactly one update strategy — re-render + 3-way merge — but the
+	// manifest declares three (managed / merge / owned). Capture the `owned` files
+	// BEFORE copier runs so we can put them back after; `managed` files are then
+	// overwritten from a clean render of the target ref. Without this the classes
+	// are documentation only and copier merges everything alike.
+	//
+	// Degrade gracefully: a pre-manifest instance (or one whose manifest failed to
+	// parse) still upgrades exactly as it did before, just without class enforcement.
+	policy, policyErr := loadTemplateManifest("")
+	var owned upgradeSnapshot
+	if policyErr != nil {
+		fmt.Fprintf(os.Stderr, "%s no usable .template-manifest (%v) — upgrading without manifest-class enforcement\n", yellow("!"), policyErr)
+	} else {
+		if owned, err = snapshotUpgradeOwned(policy); err != nil {
+			return fmt.Errorf("snapshot owned files: %w", err)
+		}
+		defer owned.cleanup()
+	}
 	if err := run(g, copierUpdateArgv(ref)...); err != nil {
 		return fmt.Errorf("copier update: %w", err)
+	}
+	if policyErr == nil {
+		if err := applyUpgradeManifestPolicy(g, ref, owned); err != nil {
+			return fmt.Errorf("apply manifest policy: %w", err)
+		}
 	}
 	// copier update never deletes a file the template dropped between versions, so
 	// apply the template's declared removals (.template-removals) ourselves — now
 	// up to date from the copier update above. Honors --dry-run internally.
+	// Runs AFTER the manifest policy: a removed file is absent from the clean render,
+	// so the overwrite pass can't resurrect it, but the ordering makes that explicit.
 	if err := applyTemplateRemovals(g); err != nil {
 		return fmt.Errorf("apply template removals: %w", err)
 	}
