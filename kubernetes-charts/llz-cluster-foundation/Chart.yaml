@@ -50,7 +50,7 @@ type: application
 #         platform-apl/ layout the custom-gitops-layout branch moved to (a template
 #         comment in network-policies.yaml; behavior unchanged, bumped so the guard
 #         republishes the corrected artifact).
-version: 0.1.11
+version: 0.1.12
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"
