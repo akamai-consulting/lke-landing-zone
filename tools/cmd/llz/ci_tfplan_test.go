@@ -300,3 +300,54 @@ func TestTFPlanRunFnRealExec(t *testing.T) {
 		t.Errorf("stderr not combined: got %q", got)
 	}
 }
+
+// A plan that exits 0 but could not apply a `moved` block must FAIL the command:
+// terraform has planned to destroy the source object, and when both addresses
+// alias the same cloud resource that destroy is real. This is the gate for the
+// akamai/gsap-apl node-firewall incident (run 29701131691).
+func TestCITFPlanFailsOnUnresolvedMoveConflict(t *testing.T) {
+	dir := t.TempDir()
+	tee := filepath.Join(dir, "plan.txt")
+	t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(dir, "summary.md"))
+
+	stubTFPlan(t, func(w io.Writer, _ []string) error {
+		_, _ = io.WriteString(w, `Plan: 3 to add, 0 to change, 1 to destroy.
+
+Warning: Unresolved resource instance address changes
+
+adjustments did not succeed due to existing objects already at the intended
+addresses:
+  - module.cluster.module.node_firewall.linode_firewall.this could not move to module.cluster.linode_firewall.this
+
+Terraform has planned to destroy these objects.
+`)
+		return nil // terraform exits 0 — the diagnostic is only a WARNING
+	})
+
+	err := execTFPlan(t, "--out", tee, "--title", "Cluster plan")
+	if err == nil {
+		t.Fatal("want tf-plan to fail on an unresolved `moved` conflict, got nil")
+	}
+	for _, want := range []string{
+		"module.cluster.module.node_firewall.linode_firewall.this",
+		"module.cluster.linode_firewall.this",
+		"terraform state rm",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q:\n%s", want, err)
+		}
+	}
+}
+
+// The gate must not fire on a clean plan — that would break every apply.
+func TestCITFPlanCleanPlanStillSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(dir, "summary.md"))
+	stubTFPlan(t, func(w io.Writer, _ []string) error {
+		_, _ = io.WriteString(w, "Plan: 3 to add, 0 to change, 0 to destroy.\n")
+		return nil
+	})
+	if err := execTFPlan(t, "--out", filepath.Join(dir, "plan.txt"), "--title", "Cluster plan"); err != nil {
+		t.Fatalf("clean plan must succeed: %v", err)
+	}
+}

@@ -83,6 +83,29 @@ func runCITFPlan(out, title string, lines int, tfFlags []string) error {
 	if planErr != nil {
 		return fmt.Errorf("tf-plan: terraform plan %s: %w", strings.Join(tfFlags, " "), planErr)
 	}
+
+	// A plan that could not apply a `moved` block exits 0 with only a WARNING, but
+	// terraform has planned to DESTROY the object at the source address. When both
+	// addresses alias the same cloud object that destroy deletes it for real — see
+	// tf.UnresolvedMoveConflicts for the incident this gates. Always a bug in an
+	// automated pipeline, so fail here (seconds) instead of mid-apply (after the
+	// 20-30 minute cluster create).
+	if conflicts, found := tf.UnresolvedMoveConflicts(buf.String()); found && len(conflicts) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "tf-plan: terraform could not apply %d `moved` migration(s) — it has planned to DESTROY the source object(s):\n", len(conflicts))
+		for _, c := range conflicts {
+			fmt.Fprintf(&b, "    %s\n      could not move to %s (destination already occupied)\n", c.From, c.To)
+		}
+		b.WriteString("  If both addresses refer to the SAME cloud object (e.g. `llz ci tf-import` adopted it\n")
+		b.WriteString("  at the destination while the source entry was still in state), applying this plan\n")
+		b.WriteString("  DELETES that live object. Reconcile state before re-planning, e.g.:\n")
+		for _, c := range conflicts {
+			fmt.Fprintf(&b, "    terraform state rm '%s'\n", c.From)
+		}
+		fmt.Fprintf(os.Stderr, "::error::%s\n", strings.ReplaceAll(strings.TrimSpace(b.String()), "\n", " "))
+		return fmt.Errorf("%s", strings.TrimSuffix(b.String(), "\n"))
+	}
+
 	return appendGHAFile("GITHUB_STEP_SUMMARY", strings.TrimSuffix(tfPlanSummary(title, buf.String(), lines), "\n"))
 }
 
