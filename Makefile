@@ -396,6 +396,14 @@ untestable-loc-check:
 chart-guards: export LLZ_FORCE_SOURCE := 1
 chart-guards: chart-version-guard chart-pin-guard
 
+# cosign-subject-guard: assert every Kyverno keyless `subject:` that names a
+# GitHub Actions workflow still resolves to a workflow that exists. Keyless
+# signing derives the cert subject from the workflow PATH, so renaming the
+# signing workflow silently invalidates every signature the policy accepts —
+# and that surfaces as pods failing admission in downstream clusters, not here.
+cosign-subject-guard:
+	cd $(GO_DIR) && go run ./cmd/llz ci cosign-subject-guard --root ..
+
 # chart-pin-guard: assert every Argo CD first-party chart pin (apl-values
 # targetRevision + llz-argo-bootstrap-apps component version) matches the chart's
 # local kubernetes-charts/<chart>/Chart.yaml version. A pin the registry never
@@ -460,6 +468,7 @@ actions-lint:
 # TF_IMAGE) and added explicitly to the local all-checks run.
 LINT_K8S := k8s-lint k8s-validate wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard placeholder-lint \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
+            cosign-subject-guard \
             helm-lint-charts helm-lint-real-values \
             helm-dep-lock-check
 LINT_TF := tf-lint checkov tf-validate-roots

@@ -11,8 +11,16 @@
 #
 # SCOPE — deliberately narrow.
 # Only `ghcr.io/<upstream_org>/llz` is matched. That is the one first-party image
-# that runs IN the cluster (the Linode credential-rotator CronJob,
-# components/linodeCredRotator/.../cronjob.yaml). apl-core, Linode, and other
+# that runs IN the cluster — but it is NOT a single CronJob. Four workloads pull
+# it, so this policy gates all four:
+#   - components/llzReconciler/llz-reconciler/deployment.yaml  (every watch lane)
+#   - components/broadPatRotator/broad-pat-rotator/cronjob.yaml
+#   - components/harbor/harbor-robot-provisioner/cronjob.yaml
+#   - components/clusterHealthWorkflow/.../workflowtemplate.yaml
+# This block previously described the scope as one Linode credential-rotator
+# CronJob at components/linodeCredRotator/, a component that no longer exists —
+# which badly understated what a verification failure takes down. apl-core,
+# Linode, and other
 # upstream images are NOT signed by us, so verifying them here would brick the
 # cluster. verifyImages only checks images whose ref matches imageReferences;
 # pods with no matching image skip the rule, so a broad `kinds: [Pod]` match is

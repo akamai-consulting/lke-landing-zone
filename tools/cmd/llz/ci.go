@@ -225,6 +225,7 @@ func ciCmd() *cobra.Command {
 	// Chart.yaml version, or Argo pulls a tag the registry never received and the
 	// support-plane app silently never syncs (llz-openbao namespace never created).
 	c.AddCommand(ciChartPinGuardCmd())
+	c.AddCommand(ciCosignSubjectGuardCmd())
 	// Runtime companion: a pinned first-party chart version must actually EXIST in
 	// the OCI registry, or Argo 404s the pull on a feature-branch e2e (bumped-but-
 	// unpublished chart) and the OpenBao bootstrap dies on the missing llz-openbao ns.
