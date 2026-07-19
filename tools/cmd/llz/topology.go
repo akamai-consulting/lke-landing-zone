@@ -54,12 +54,23 @@ func hclStringField(body, field string) (string, bool) {
 // present — the source of truth, so `llz env role`/`peer` stay correct even when
 // the committed tfvars lag a spec edit — and falls back to <tfDir>/cluster/*.tfvars
 // otherwise (reusing listDeployments' name discovery so the set is identical).
+// Both paths validate before returning: validateTopology is peerOf's
+// precondition, not decoration. peerOf returns the FIRST other member of the
+// group, so a group holding two standbys (or three members) silently resolves to
+// an arbitrary peer — and `llz env peer` is what tells CI which cluster to seed
+// Harbor creds from and exchange CAs with, so an arbitrary answer there seeds
+// from the wrong cluster. validateHAFlags cannot catch this: it runs at
+// `llz env add` and sees one env, never the cross-deployment pairing.
 func readTopology(tfDir string) ([]deployment, error) {
 	if lz, present, err := loadSpec(); present {
 		if err != nil {
 			return nil, err
 		}
-		return topologyFromSpec(lz), nil
+		deps := topologyFromSpec(lz)
+		if err := validateTopology(deps); err != nil {
+			return nil, err
+		}
+		return deps, nil
 	}
 	names, err := listDeployments(tfDir)
 	if err != nil {
@@ -77,6 +88,9 @@ func readTopology(tfDir string) ([]deployment, error) {
 		}
 		group, _ := hclStringField(string(body), "ha_group")
 		deps = append(deps, deployment{name: name, haRole: role, haGroup: group})
+	}
+	if err := validateTopology(deps); err != nil {
+		return nil, err
 	}
 	return deps, nil
 }

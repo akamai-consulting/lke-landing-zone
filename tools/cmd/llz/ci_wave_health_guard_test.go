@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,14 +47,14 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-18"
 `)
-	got, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	got, _, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || !got[0].allowed {
 		t.Fatalf("NetworkPolicy with override present: want 1 allowed finding, got %+v", got)
 	}
-	got, err = collectWaveHealthFindings([]string{dir}, "# no overrides")
+	got, _, err = collectWaveHealthFindings([]string{dir}, "# no overrides")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "-5"
 `
 	dir := writeWaveGuardFixture(t, "cert.yaml", negative)
-	got, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	got, _, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ metadata:
 `,
 	} {
 		dir := writeWaveGuardFixture(t, "cert.yaml", doc)
-		got, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+		got, _, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,7 +124,7 @@ metadata:
     argocd.argoproj.io/hook: PostSync
 `
 	dir := writeWaveGuardFixture(t, "job.yaml", hookJob)
-	got, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	got, _, err := collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +143,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "-9"
 `
 	dir = writeWaveGuardFixture(t, "job.yaml", plainJob)
-	got, err = collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
+	got, _, err = collectWaveHealthFindings([]string{dir}, waveGuardValuesAllOverrides)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +176,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-15"
 `)
-	got, err := collectWaveHealthFindings([]string{dir}, "# no overrides needed")
+	got, _, err := collectWaveHealthFindings([]string{dir}, "# no overrides needed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,6 +187,55 @@ metadata:
 		if !f.allowed {
 			t.Errorf("%s should be allowed without overrides: %+v", f.groupKind, f)
 		}
+	}
+}
+
+// An empty corpus must FAIL, not pass. The guard used to call walkManifests and
+// throw the examined count away, so with its trees absent or moved it walked zero
+// files, classified zero negative-wave kinds, and printed the same "every
+// negative-wave kind is health-safe" green as a full clean run — the PR #142 wedge
+// class unpoliced by a guard that reported success. Its three siblings all gated on
+// requireCorpus; this one did not.
+func TestWaveHealthGuardFailsOnEmptyCorpus(t *testing.T) {
+	// A root with an apl-values/values.yaml (so the guard gets past the values
+	// read) but no platform-apl tree at all: nothing to examine.
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "apl-values"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "apl-values", "values.yaml"),
+		[]byte(waveGuardValuesAllOverrides), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, examined, err := collectWaveHealthFindings(platformTreeDirs(root), waveGuardValuesAllOverrides)
+	if err != nil {
+		t.Fatalf("an absent tree is skipped, not a walk error: %v", err)
+	}
+	if len(findings) != 0 || examined != 0 {
+		t.Fatalf("empty corpus: want 0 findings / 0 examined, got %d / %d", len(findings), examined)
+	}
+
+	err = runCIWaveHealthGuard(root)
+	if err == nil {
+		t.Fatal("wave-health-guard passed with an EMPTY corpus — a guard that examined nothing must not report the same green as one that examined everything")
+	}
+	if !strings.Contains(err.Error(), "examined 0 manifest files") {
+		t.Fatalf("want the requireCorpus failure, got: %v", err)
+	}
+
+	// Control: the same root WITH one manifest gets past the corpus gate (it fails
+	// on the unvetted kind instead), so the gate keys off the corpus being empty
+	// and not off some other property of the temp layout.
+	p := filepath.Join(root, "platform-apl", "manifest", "cert.yaml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("kind: ConfigMap\nmetadata:\n  name: c\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCIWaveHealthGuard(root); err != nil {
+		t.Fatalf("one health-inert manifest is a non-empty corpus and must pass: %v", err)
 	}
 }
 

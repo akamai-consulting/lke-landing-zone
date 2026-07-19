@@ -91,6 +91,23 @@ func TestReadTopologyDefaultsStandalone(t *testing.T) {
 	}
 }
 
+// readTopology must enforce the pairing contract, not just expose it: peerOf
+// returns the first other group member, so two standbys in one group would
+// resolve `llz env peer` to an arbitrary cluster instead of failing. The rule was
+// written but never wired into readTopology; this pins the wire-up.
+func TestReadTopologyRejectsBrokenPairing(t *testing.T) {
+	dir := haInstance(t, map[string][2]string{
+		"east": {roleActive, "g1"},
+		"west": {roleStandby, "g1"},
+		"cent": {roleStandby, "g1"}, // second standby — peerOf would pick one at random
+	})
+	if _, err := readTopology(dir); err == nil {
+		t.Fatal("readTopology accepted a group with two standbys, want error")
+	} else if !strings.Contains(err.Error(), "exactly one active and one standby") {
+		t.Errorf("error = %v, want the pairing-contract message", err)
+	}
+}
+
 func TestValidateTopology(t *testing.T) {
 	good := []deployment{
 		{"a", roleActive, "g1"}, {"b", roleStandby, "g1"}, {"solo", roleStandalone, ""},

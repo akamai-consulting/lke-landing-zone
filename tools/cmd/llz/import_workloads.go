@@ -29,16 +29,17 @@ type secretRef struct {
 // service-account tokens and Helm release bookkeeping. Values are never read —
 // this is the checklist of credentials to re-seed in OpenBao/ESO on the new
 // cluster.
+// secretList is a `kubectl get secrets -o json` list read for metadata + type
+// only — never data. Shared by parseSecretCounts and parseSecretInventory.
+type secretList struct {
+	Items []struct {
+		Metadata k8sObjectMeta `json:"metadata"`
+		Type     string        `json:"type"`
+	} `json:"items"`
+}
+
 func parseSecretInventory(js string) map[string][]secretRef {
-	var d struct {
-		Items []struct {
-			Metadata struct {
-				Name      string `json:"name"`
-				Namespace string `json:"namespace"`
-			} `json:"metadata"`
-			Type string `json:"type"`
-		} `json:"items"`
-	}
+	var d secretList
 	if json.Unmarshal([]byte(js), &d) != nil {
 		return nil
 	}
@@ -78,14 +79,7 @@ func imagesByNamespace(workloads []workload) map[string][]string {
 // NetworkPolicies, Roles, RoleBindings). skip is consulted on each item's name to
 // drop noise (e.g. the kube-root-ca.crt ConfigMap); pass nil to count all.
 func countByNamespace(js string, skip func(name string) bool) map[string]int {
-	var d struct {
-		Items []struct {
-			Metadata struct {
-				Name      string `json:"name"`
-				Namespace string `json:"namespace"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
+	var d k8sObjectList
 	if json.Unmarshal([]byte(js), &d) != nil {
 		return nil
 	}
@@ -462,43 +456,29 @@ var dbEngineByImage = []struct{ sub, engine string }{
 	{"redis", "redis"},
 }
 
+// dbEngineForImages returns the engine of the FIRST image that looks like a
+// database, or "" when none do — one engine per workload, first match wins.
+func dbEngineForImages(images []string) string {
+	for _, img := range images {
+		name := strings.ToLower(imageName(img))
+		for _, m := range dbEngineByImage {
+			if strings.Contains(name, m.sub) {
+				return m.engine
+			}
+		}
+	}
+	return ""
+}
+
 // detectDBWorkloads flags running workloads whose image looks like a database —
 // the stateful stores a CNPG scan would miss (self-managed DBs).
 func detectDBWorkloads(workloads []workload) []dbInfo {
 	var out []dbInfo
 	for _, w := range workloads {
-		for _, img := range w.Images {
-			name := strings.ToLower(imageName(img))
-			for _, m := range dbEngineByImage {
-				if strings.Contains(name, m.sub) {
-					out = append(out, dbInfo{Namespace: w.Namespace, Name: w.Name, Kind: "workload", Engine: m.engine})
-					goto next
-				}
-			}
-		}
-	next:
-	}
-	return out
-}
-
-func parseSnapshotClasses(js string) []string {
-	var d struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		} `json:"items"`
-	}
-	if json.Unmarshal([]byte(js), &d) != nil {
-		return nil
-	}
-	var out []string
-	for _, it := range d.Items {
-		if it.Metadata.Name != "" {
-			out = append(out, it.Metadata.Name)
+		if engine := dbEngineForImages(w.Images); engine != "" {
+			out = append(out, dbInfo{Namespace: w.Namespace, Name: w.Name, Kind: "workload", Engine: engine})
 		}
 	}
-	sort.Strings(out)
 	return out
 }
 

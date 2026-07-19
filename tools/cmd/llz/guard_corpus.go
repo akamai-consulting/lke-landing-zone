@@ -18,8 +18,14 @@ package main
 // so there is no layout where an empty corpus is legitimate. It always means the
 // tree was not rendered or the paths moved — both of which should be loud.
 //
-// Three guards already fail closed this way (argocd-rendered-apps, check-coverage,
-// wave-health-guard); this is that behavior, shared.
+// Two guards already fail closed this way (argocd-rendered-apps, check-coverage);
+// this is that behavior, shared.
+//
+// This comment used to name wave-health-guard as a third — it was not one. That
+// guard called walkManifests and DISCARDED the examined count, so it was the one
+// tree-scanning guard that still passed on an empty corpus, which is precisely
+// the hole this file exists to close. It now calls requireCorpus like its
+// siblings (see TestWaveHealthGuardFailsOnEmptyCorpus).
 
 import (
 	"fmt"
