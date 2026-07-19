@@ -82,8 +82,30 @@ jobs:
   # catches a cluster whose operator has not wired an Alertmanager receiver
   # (spec.alerting.receivers: [none]) and re-proves the probe path itself. Still
   # on-demand via workflow_dispatch.
-  openbao-health:
-    name: OpenBao Health (${{ matrix.region }})
+  # ── Weekly cluster checks — ONE job, four checks ─────────────────────────────
+  # Was four separate jobs (openbao-health, loki-objkey-rotation-health,
+  # certmanager-health, wave-health-vap), each on the same weekly cron and each
+  # paying its own container-init + checkout + kubeconfig fetch + control-plane
+  # ACL open/revoke. Folding them saves three of those cycles per region per
+  # week, and — the part that matters more than runner minutes — it makes three
+  # fewer read-modify-write mutations of the SHARED LKE-E ACL object, which four
+  # concurrent jobs were racing on every week.
+  #
+  # FAILURE SEMANTICS ARE PRESERVED EXACTLY, per check, because they were NOT
+  # uniform across the four jobs (an audit that proposed this fold assumed they
+  # were — they differ, and folding naively would have either silenced a real
+  # gate or made three warn-only checks newly fatal):
+  #
+  #   openbao-health          job-level continue-on-error  →  step-level, warn-only
+  #   certmanager-health      job-level continue-on-error  →  step-level, warn-only
+  #   wave-health-vap         job-level continue-on-error  →  step-level, warn-only
+  #   loki-objkey-rotation    NO continue-on-error (a GATE) →  no step-level either
+  #
+  # The gate runs LAST so that a genuine SLA breach fails the job without
+  # skipping the three warn-only checks ahead of it. The cleanup + ACL revoke
+  # below are if: always(), so they still run when it fails.
+  weekly-cluster-checks:
+    name: Weekly cluster checks (${{ matrix.region }})
     needs: discover
     runs-on: ubuntu-latest
     container:
@@ -91,9 +113,7 @@ jobs:
     permissions:
       contents: read
     environment: infra-${{ matrix.region }}
-    timeout-minutes: 15
-    continue-on-error: true
-    # Weekly Sunday 02:00 UTC (or on demand) — see the DEMOTED note above.
+    timeout-minutes: 20
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
     strategy:
       fail-fast: false
@@ -106,11 +126,6 @@ jobs:
     steps:
       - name: Checkout the instance (TF roots)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
-      # LKE-E control-plane ACL so the kubectl checks below are permitted
-      # (revoked at job end), and install llz. allow-missing — these checks
-      # tolerate a torn-down cluster: the ACL open + llz install are skipped
-      # internally and the check steps gate on the `available` output.
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
@@ -123,12 +138,30 @@ jobs:
           region:                ${{ matrix.region }}
           allow-missing:         'true'
 
-      # Native port of the inline seal-status + ESO readiness shell — the seal
-      # classification (ParseBaoStatus/ClassifyBaoSeal) and Ready-condition checks
-      # are unit-tested in internal/health. Warning-only.
       - name: Check OpenBao seal + ESO readiness
         if: steps.kubeconfig.outputs.available == 'true'
+        continue-on-error: true
         run: llz ci health-openbao
+
+      - name: Check cert-manager Certificate readiness
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        continue-on-error: true
+        run: llz ci health-certmanager
+
+      # tee -a, not tee. As its own job this truncated $GITHUB_STEP_SUMMARY, which
+      # was harmless only because nothing else in that job wrote to it. Sharing a
+      # job with three other checks makes that a live bug: it would clobber
+      # whatever the steps above had written.
+      - name: Assert the wave-health guard VAP is bound and enforcing
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        continue-on-error: true
+        run: llz ci assert-wave-health-vap | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # THE GATE — deliberately no continue-on-error, and last.
+      - name: Check secret/loki/object-store age
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        run: llz ci health-loki-objkey-rotation
+
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f "$HOME/.kube/config"
@@ -141,14 +174,7 @@ jobs:
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
           region:       ${{ matrix.region }}
 
-  # ── LKE-E lke-admin rotation SLA ─────────────────────────────────────────────
-  # Runs daily (06:00 UTC). On LKE-Enterprise the only sanctioned rotation is
-  # lke-admin-token (see .github/workflows/secret-rotation.yml). This is the
-  # SLA backstop: it reads the newest lke-admin-token Secret's age and warns if
-  # rotation is overdue, so a silently-failing rotation workflow is surfaced
-  # before the 90-day Critical SLA is breached. Same alerting surface as the
-  # other rotation-health checks (no kube-state-metrics secret-age metric exists in
-  # this Prometheus, so a PrometheusRule would never fire — this is the alert).
+
   lke-admin-rotation-health:
     name: lke-admin Rotation SLA (${{ matrix.region }})
     needs: discover
@@ -297,77 +323,6 @@ jobs:
   # object-storage keys — so the daily hosted-runner probe is redundant. Weekly
   # stays as belt-and-suspenders (covers a receiver-less cluster + re-proves the
   # probe path). Still on-demand via workflow_dispatch.
-  loki-objkey-rotation-health:
-    name: Loki OBJ Key SLA (${{ matrix.region }})
-    needs: discover
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    permissions:
-      contents: read
-    environment: infra-${{ matrix.region }}
-    timeout-minutes: 15
-    # Weekly Sunday 02:00 UTC (or on demand) — see the DEMOTED note above.
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
-    strategy:
-      fail-fast: false
-      matrix:
-        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
-    env:
-      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
-      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
-      REGION:              ${{ matrix.region }}
-      OPENBAO_ROOT_TOKEN:  ${{ secrets.OPENBAO_ROOT_TOKEN }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
-      # LKE-E control-plane ACL so the kubectl checks below are permitted
-      # (revoked at job end), and install llz (the `openbao exec` passthrough
-      # the SLA check reads through). allow-missing — these checks tolerate a
-      # torn-down cluster: the ACL open + llz install are skipped internally and
-      # the check steps gate on the `available` output.
-      - name: Cluster access (kubeconfig + runner ACL + llz)
-        id: kubeconfig
-        uses: ./.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          kubeconfig-path:       $HOME/.kube/config
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ matrix.region }}
-          allow-missing:         'true'
-
-      # Native port — secret/loki/object-store age vs SLA is health.ClassifyRotationAge;
-      # read via kubectl exec bao (OPENBAO_ROOT_TOKEN).
-      - name: Check secret/loki/object-store age
-        if: steps.kubeconfig.outputs.available == 'true'
-        run: llz ci health-loki-objkey-rotation
-      - name: Cleanup kubeconfig
-        if: always()
-        run: rm -f "$HOME/.kube/config"
-
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ matrix.region }}
-
-  # (The former gh-pat-expiry-health + linode-pat-expiry-health probe jobs were
-  # replaced by the credential-single-pane job above: their measurement moved into
-  # `llz ci token-inventory` (which feeds the cluster) and their status reporting is
-  # now `llz ci alert-eval` reading the cluster. The gh-pat-expiry / cred-audit CLI
-  # commands remain for manual use.)
-
-  # ── PrometheusRule health ────────────────────────────────────────────────────
-  # Runs daily (06:00 UTC). Verifies:
-  #   • Expected PrometheusRule CRs are present in the llz-observability namespace
-  #   • Prometheus has actually loaded them (no rule groups with lastError set)
-  # Warning-only (continue-on-error). A missing or errored rule group means
-  # alerting is silently broken — this surfaces it before an incident would.
   prometheusrule-health:
     name: PrometheusRule Health (${{ matrix.region }})
     needs: discover
@@ -485,142 +440,6 @@ jobs:
   # runner probe is redundant. Weekly stays as belt-and-suspenders (covers a
   # receiver-less cluster + re-proves the probe path). Still on-demand via
   # workflow_dispatch.
-  certmanager-health:
-    name: cert-manager Certificate Health (${{ matrix.region }})
-    needs: discover
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    permissions:
-      contents: read
-    environment: infra-${{ matrix.region }}
-    timeout-minutes: 15
-    continue-on-error: true
-    # Weekly Sunday 02:00 UTC (or on demand) — see the DEMOTED note above.
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
-    strategy:
-      fail-fast: false
-      matrix:
-        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
-    env:
-      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
-      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
-      REGION:              ${{ matrix.region }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # Fetch the kubeconfig, open this hosted-runner's dynamic egress IP in the
-      # LKE-E control-plane ACL so the kubectl checks below are permitted
-      # (revoked at job end), and install llz. allow-missing — these checks
-      # tolerate a torn-down cluster: the ACL open + llz install are skipped
-      # internally and the check steps gate on the `available` output.
-      - name: Cluster access (kubeconfig + runner ACL + llz)
-        id: kubeconfig
-        uses: ./.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          kubeconfig-path:       $HOME/.kube/config
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ matrix.region }}
-          allow-missing:         'true'
-
-      # Native port — every Certificate's Ready condition via health.FindReady. Warn-only.
-      - name: Check cert-manager Certificate readiness
-        if: steps.kubeconfig.outputs.available == 'true'
-        run: llz ci health-certmanager
-      - name: Cleanup kubeconfig
-        if: always()
-        run: rm -f "$HOME/.kube/config"
-
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ matrix.region }}
-
-  # ── Wave-health guard enforcement canary ─────────────────────────────────────
-  # Runtime counterpart to the static `wave-health-guard` (PR-time, git tree): assert
-  # the llz-wave-health-guard ValidatingAdmissionPolicy is still BOUND and ENFORCING,
-  # by server-dry-running a Deployment at sync-wave -5 and requiring the guard's own
-  # denial. That binding is what makes the static guard's PR-time verdict hold against
-  # non-CI write paths (apl-operator writebacks, direct kubectl/SSA) — so an operator
-  # writeback or a bad sync that drops the policy/binding is the drift worth catching
-  # here. Warning-only (continue-on-error): a finding annotates the job summary but
-  # does not block other scheduled work.
-  #
-  # This replaced a full live negative-wave ENUMERATION that re-applied the VAP's own
-  # decision to every resource it found. With validationActions: [Deny], a resource
-  # that enumeration could flag can never have been admitted — its findings were empty
-  # by construction, and its only real signal was "the policy isn't enforcing", which
-  # this asserts directly (one round-trip vs ~45s of api-resources sweeping).
-  wave-health-vap:
-    name: Wave-health Guard Enforcement (${{ matrix.region }})
-    needs: discover
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ vars.TF_IMAGE }}
-    permissions:
-      contents: read
-    environment: infra-${{ matrix.region }}
-    timeout-minutes: 15
-    continue-on-error: true
-    # Weekly Sunday 02:00 UTC (or on demand). The check itself is now ~1 round-trip,
-    # but the job cycle around it (checkout + container + kubeconfig/ACL) is not — and
-    # a policy binding does not silently vanish on a daily cadence.
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * 0'
-    strategy:
-      fail-fast: false
-      matrix:
-        region: ${{ fromJSON(needs.discover.outputs.deployments) }}
-    env:
-      TF_STATE_BUCKET:     ${{ vars.TF_STATE_BUCKET }}
-      AWS_ENDPOINT_URL_S3: ${{ vars.TF_STATE_ENDPOINT }}
-      REGION:              ${{ matrix.region }}
-    steps:
-      - name: Checkout the instance (TF roots)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Cluster access (kubeconfig + runner ACL + llz)
-        id: kubeconfig
-        uses: ./.github/actions/cluster-access
-        with:
-          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
-          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
-          github-token:          ${{ github.token }}
-          kubeconfig-path:       $HOME/.kube/config
-          linode-token:          ${{ secrets.LINODE_API_TOKEN }}
-          region:                ${{ matrix.region }}
-          allow-missing:         'true'
-
-      - name: Assert the wave-health guard VAP is bound and enforcing
-        if: steps.kubeconfig.outputs.available == 'true'
-        run: llz ci assert-wave-health-vap | tee "$GITHUB_STEP_SUMMARY"
-      - name: Cleanup kubeconfig
-        if: always()
-        run: rm -f "$HOME/.kube/config"
-
-      - name: Revoke control-plane ACL for this runner
-        if: always()
-        uses: ./.github/actions/lke-runner-acl
-        with:
-          mode:         revoke
-          linode-token: ${{ secrets.LINODE_API_TOKEN }}
-          region:       ${{ matrix.region }}
-
-  # ── Template drift report ────────────────────────────────────────────────────
-  # Runs monthly (1st @ 07:00 UTC) and on demand. Reports how far this instance
-  # has fallen behind the LLZ template it was generated from: `llz drift` reads
-  # the committed .template-version (written by `llz env add` / `llz upgrade`)
-  # and compares it to the template branch head. Report-only by default — it
-  # annotates + writes a job summary but does not fail; pass drift_strict: true
-  # on the dispatch to gate. Unlike the other jobs this one compares against
-  # `drift_branch` (the moving head being measured), NOT `template-ref` (the
-  # pinned tag) — comparing against the pin would always read zero drift. Runs
-  # in TF_IMAGE like the sibling jobs so the baked `llz` is on PATH (no template
-  # checkout, no Go toolchain).
   template-drift:
     name: Template drift
     runs-on: ubuntu-latest
