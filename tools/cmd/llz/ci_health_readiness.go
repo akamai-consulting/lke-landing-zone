@@ -82,11 +82,18 @@ func runHealthOpenbao() error {
 
 	// ── ESO ClusterSecretStore + ExternalSecrets ──
 	summary = append(summary, "", fmt.Sprintf("### ESO ClusterSecretStore — %s", reg), "")
-	css := kJSONPath("-n", esoNamespace, "get", "clustersecretstores.external-secrets.io", "openbao", "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
-	if css == "True" {
+	css, cssAnswered := kJSONPathOK("-n", esoNamespace, "get", "clustersecretstores.external-secrets.io", "openbao", "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+	switch {
+	case css == "True":
 		fmt.Printf("ClusterSecretStore openbao (%s): Ready\n", reg)
 		summary = append(summary, "- ClusterSecretStore `openbao`: Ready")
-	} else {
+	case !cssAnswered:
+		// Same distinction the exec probe above already draws: an unreadable store
+		// is not a NotFound, and reporting it as one sends the operator to ESO logs
+		// and OpenBao connectivity for what is an apiserver-read failure.
+		fmt.Fprintf(os.Stderr, "::warning::ClusterSecretStore openbao (%s) could not be read — state unknown (apiserver read failed after retries), NOT evidence the store is missing\n", reg)
+		summary = append(summary, "- **ClusterSecretStore `openbao`: UNKNOWN** — the read failed; check apiserver reachability before suspecting ESO")
+	default:
 		if css == "" {
 			css = "NotFound"
 		}
@@ -95,7 +102,8 @@ func runHealthOpenbao() error {
 	}
 
 	var unhealthy []string
-	for _, raw := range kItems("get", "externalsecrets.external-secrets.io", "-A") {
+	esRaw, esAnswered := kItemsOK("get", "externalsecrets.external-secrets.io", "-A")
+	for _, raw := range esRaw {
 		var it readyResourceItem
 		if json.Unmarshal(raw, &it) != nil {
 			continue
@@ -107,11 +115,18 @@ func runHealthOpenbao() error {
 			unhealthy = append(unhealthy, line)
 		}
 	}
-	if len(unhealthy) > 0 {
+	switch {
+	case len(unhealthy) > 0:
 		summary = append(summary, "", "**Unhealthy ExternalSecrets:**", "```")
 		summary = append(summary, unhealthy...)
 		summary = append(summary, "```")
-	} else {
+	case !esAnswered:
+		// An empty list from a failed read would otherwise print "All ExternalSecrets
+		// Ready" — the report is identical whether every secret is healthy or none
+		// were examined.
+		fmt.Fprintf(os.Stderr, "::warning::Could not list ExternalSecrets (%s) — health unknown, not 'all Ready'\n", reg)
+		summary = append(summary, "- **ExternalSecrets: UNKNOWN** — the list call failed; nothing was examined")
+	default:
 		fmt.Printf("All ExternalSecrets Ready on %s.\n", reg)
 		summary = append(summary, "- All ExternalSecrets: Ready")
 	}

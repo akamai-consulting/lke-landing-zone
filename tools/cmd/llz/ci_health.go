@@ -182,15 +182,15 @@ func reportConvergeLongPole(prevNonOK []string, prevAttempt int) {
 func runConverge(budget, interval, retryDelay int) error {
 	deadline := time.Now().Add(time.Duration(budget) * time.Second)
 	st := newConvergeState()
-	// The converge loop itself is the retry for the phase1 probes — a transient
-	// blip misread on one poll is corrected ~interval later (and a false "still
-	// phase1" only downgrades hard-fails to keep-polling, never the reverse). So
-	// don't also pay the probes' internal 3×3s retry pauses on every poll.
-	// (Restored on return so one-shot `llz ci health` semantics — and tests —
-	// keep the retrying probes.)
-	prevProbeRetries := phase1ProbeRetries
-	phase1ProbeRetries = 1
-	defer func() { phase1ProbeRetries = prevProbeRetries }()
+	// The converge loop itself is the retry for the cluster probes — a transient
+	// blip misread on one poll is corrected ~interval later, and a probe that
+	// cannot be answered now records CatPending (kubectl_probe.go), which keeps
+	// polling rather than resolving. So don't also pay every probe's internal
+	// 3×3s retry pauses on every poll. (Restored on return so one-shot
+	// `llz ci health` semantics — and tests — keep the retrying probes.)
+	prevProbeRetries := probeRetries
+	probeRetries = 1
+	defer func() { probeRetries = prevProbeRetries }()
 	// Long-pole tracking (Tier-3 instrumentation): remember which apps/resources
 	// were still not-OK on the most recent in-progress poll, so on convergence we
 	// can report what was the LAST thing to go healthy — confirming the tail's
@@ -451,48 +451,22 @@ func kubectlReachable() bool {
 	return err == nil
 }
 
-// kExists reports whether `kubectl <args>` exits 0.
-func kExists(args ...string) bool { _, err := execOutput("kubectl", args...); return err == nil }
-
-// phase1ProbeRetries / phase1ProbeDelay bound secretPresentWithRetry's retry
-// loop. A package var so tests can zero the delay.
-var (
-	phase1ProbeRetries = 3
-	phase1ProbeDelay   = 3 * time.Second
-)
-
-// secretPresentWithRetry reports whether `kubectl <args>` (an existence probe)
-// succeeds on any of a few attempts. kExists collapses every non-zero exit to
-// "missing", so a transient API/ACL blip looks identical to a genuine NotFound;
-// retrying lets a one-off blip recover (present wins) while a real absence still
-// fails every attempt. Used for the phase1 platform-app-ca probe, where a false
-// "absent" would mislabel the cluster phase.
-func secretPresentWithRetry(args ...string) bool {
-	for attempt := 0; attempt < phase1ProbeRetries; attempt++ {
-		if kExists(args...) {
-			return true
-		}
-		if attempt < phase1ProbeRetries-1 {
-			time.Sleep(phase1ProbeDelay)
-		}
-	}
-	return false
-}
-
 func phase1OpenBaoBootstrapPending() bool {
-	if secretPresentWithRetry("-n", "cert-manager", "get", "secret", "platform-app-ca") {
+	// kExists retries an unanswerable probe (kubectl_probe.go), so a transient
+	// API/ACL blip no longer reads as a missing CA and mislabels the phase.
+	if kExists("-n", "cert-manager", "get", "secret", "platform-app-ca") {
 		return false
 	}
 	return !openBaoClusterSecretStoreReadyWithRetry()
 }
 
 func openBaoClusterSecretStoreReadyWithRetry() bool {
-	for attempt := 0; attempt < phase1ProbeRetries; attempt++ {
+	for attempt := 0; attempt < probeRetries; attempt++ {
 		if openBaoClusterSecretStoreReady() {
 			return true
 		}
-		if attempt < phase1ProbeRetries-1 {
-			time.Sleep(phase1ProbeDelay)
+		if attempt < probeRetries-1 {
+			time.Sleep(probeDelay)
 		}
 	}
 	return false
@@ -511,54 +485,20 @@ func openBaoClusterSecretStoreReady() bool {
 	return status == "True"
 }
 
-// kItems runs `kubectl get <args> -o json` and returns its .items[] as raw
-// messages, or nil on any error (a missing/unreachable resource => empty, so the
-// section is a no-op rather than a false failure). Routes through the execOutput
-// seam so the section orchestrators are unit-testable with stubbed kubectl JSON.
-func kItems(args ...string) []json.RawMessage {
-	items, _ := kItemsOK(args...)
+// sectionItems fetches a section's corpus and, when the cluster did not answer,
+// records an inconclusive finding instead of letting the section iterate an
+// empty list and report green. This is requireCorpus for cluster probes: a
+// section that had nothing to check otherwise prints the same clean run as one
+// that checked everything. CatPending (not CatFail) because converge's poll loop
+// should re-ask — an unreadable cluster is not converged, but it is also not
+// proof of a broken one; the budget decides.
+func sectionItems[T any](r *health.Report, kind string, args ...string) []T {
+	items, ok := kListOK[T](args...)
+	if !ok {
+		record(r, health.CatPending, "could not list "+kind+" — cluster read failed after retries; treating as inconclusive rather than 'none found'")
+		return nil
+	}
 	return items
-}
-
-// kItemsOK is kItems with the call's success reported separately. Most sections
-// cannot act on the difference and use kItems, but a caller whose ABSENT result
-// would silently skip work must not read a failed call as "there are none" —
-// see scanInventory.
-func kItemsOK(args ...string) ([]json.RawMessage, bool) {
-	out, err := execOutput("kubectl", append(args, "-o", "json")...)
-	if err != nil {
-		return nil, false
-	}
-	var body struct {
-		Items []json.RawMessage `json:"items"`
-	}
-	if json.Unmarshal(out, &body) != nil {
-		return nil, false
-	}
-	return body.Items, true
-}
-
-// kList runs `kubectl get <args> -o json` and decodes its .items[] into T,
-// silently dropping any item that does not decode. It is kItems for the common
-// case — every section below wants typed items, not raw JSON — so the
-// unmarshal-and-continue loop lives here once instead of in each of them. Same
-// failure posture as kItems: an errored or unparseable call yields no items, so
-// the section is a no-op rather than a false failure.
-func kList[T any](args ...string) []T { return decodeItems[T](kItems(args...)) }
-
-// decodeItems decodes already-fetched .items[] into T, dropping what does not
-// decode. Split from kList so a caller that needed kItemsOK's success flag can
-// still get typed items without a second fetch.
-func decodeItems[T any](raws []json.RawMessage) []T {
-	out := make([]T, 0, len(raws))
-	for _, raw := range raws {
-		var v T
-		if json.Unmarshal(raw, &v) != nil {
-			continue
-		}
-		out = append(out, v)
-	}
-	return out
 }
 
 // clusterInventory is one scan's snapshot of the two cluster-wide name lists the
@@ -715,7 +655,7 @@ func checkNamespaces(r *health.Report, inv *clusterInventory) {
 
 func checkAPIServices(r *health.Report) {
 	hdr("APIService availability")
-	for _, a := range kList[health.APIService]("get", "apiservices") {
+	for _, a := range sectionItems[health.APIService](r, "APIServices", "get", "apiservices") {
 		if bad, msg := health.APIServiceUnavailable(a); bad {
 			record(r, health.CatFail, fmt.Sprintf("APIService %s not Available — %s", a.Metadata.Name, msg))
 		}
@@ -772,8 +712,16 @@ func checkFirewallBootstrap(r *health.Report) {
 	// (Before the cidrFirewall component, `llz ci bootstrap-cloud-firewall`
 	// seeded the ConfigMap unconditionally on every apply, so its absence WAS a
 	// bootstrap failure; now the ConfigMap only exists where the component runs.)
-	if !kExists("-n", "kube-system", "get", "deployment", firewallDeploymentName) &&
-		!kExists("-n", "kube-system", "get", "configmap", firewallConfigMapName) {
+	// This is the one branch where absence means "pass the whole section", so it
+	// is the one that must not accept an unanswerable probe as absence: a blip on
+	// both reads would skip every firewall check with an OK.
+	depExists, depAnswered := kExistsOK("-n", "kube-system", "get", "deployment", firewallDeploymentName)
+	cmExists, cmAnswered := kExistsOK("-n", "kube-system", "get", "configmap", firewallConfigMapName)
+	if !depAnswered || !cmAnswered {
+		record(r, health.CatPending, "could not read kube-system firewall-controller Deployment/ConfigMap — cannot tell 'component disabled' from 'unreadable cluster'")
+		return
+	}
+	if !depExists && !cmExists {
 		record(r, health.CatOK, "firewall-controller not installed (cidrFirewall component disabled) — skipped")
 		return
 	}
@@ -829,7 +777,7 @@ type readyResourceItem struct {
 
 func readyKind(r *health.Report, kind string, getArgs []string, namespaced bool, phase1Pending func(key string) bool, extDep []health.DepEntry) {
 	hdr(kind + "s")
-	for _, it := range kList[readyResourceItem](getArgs...) {
+	for _, it := range sectionItems[readyResourceItem](r, kind+"s", getArgs...) {
 		key := it.Metadata.Name
 		if namespaced {
 			key = it.Metadata.Namespace + "/" + it.Metadata.Name
@@ -842,7 +790,7 @@ func readyKind(r *health.Report, kind string, getArgs []string, namespaced bool,
 
 func certRequests(r *health.Report, phase1 bool) {
 	hdr("CertificateRequests")
-	for _, it := range kList[readyResourceItem]("get", "certificaterequests.cert-manager.io", "-A") {
+	for _, it := range sectionItems[readyResourceItem](r, "CertificateRequests", "get", "certificaterequests.cert-manager.io", "-A") {
 		key := it.Metadata.Namespace + "/" + it.Metadata.Name
 		status, reason, msg := health.FindReady(it.Status.Conditions)
 		p1 := phase1 && health.MatchPrefix(key, health.Phase1PendingCerts())
@@ -853,7 +801,14 @@ func certRequests(r *health.Report, phase1 bool) {
 
 func checkOpenBao(r *health.Report, phase1 bool) {
 	hdr("openbao seal / HA")
-	replicas, err := strconv.Atoi(strings.TrimSpace(kJSONPath("-n", openbaoNamespace, "get", "sts", "platform-openbao", "-o", "jsonpath={.spec.replicas}")))
+	// A CatWarn skip never affects the verdict, so an unreadable STS would retire
+	// the entire seal check silently — demand an actual answer before skipping.
+	specReplicas, answered := kJSONPathOK("-n", openbaoNamespace, "get", "sts", "platform-openbao", "-o", "jsonpath={.spec.replicas}")
+	if !answered {
+		record(r, health.CatPending, "could not read openbao/platform-openbao StatefulSet — seal check inconclusive")
+		return
+	}
+	replicas, err := strconv.Atoi(strings.TrimSpace(specReplicas))
 	if err != nil || replicas == 0 {
 		record(r, health.CatWarn, "OpenBao StatefulSet not present — skipping seal check")
 		return
@@ -914,7 +869,7 @@ type webhookConfigItem struct {
 func checkWebhooks(r *health.Report) {
 	hdr("admission webhooks (Validating + Mutating)")
 	for _, kind := range []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"} {
-		for _, cfg := range kList[webhookConfigItem]("get", kind) {
+		for _, cfg := range sectionItems[webhookConfigItem](r, kind, "get", kind) {
 			for _, wh := range cfg.Webhooks {
 				if wh.ClientConfig.Service == nil {
 					continue
@@ -1431,13 +1386,4 @@ func progressingCondition(conds []health.Condition) (reason, message string) {
 func countReadyEndpoints(ns, svc string) int {
 	return health.CountReadyEndpoints(
 		kList[health.EndpointSlice]("-n", ns, "get", "endpointslices", "-l", "kubernetes.io/service-name="+svc))
-}
-
-// kJSONPath runs a kubectl get with a -o jsonpath=... arg and returns trimmed stdout.
-func kJSONPath(args ...string) string {
-	out, err := execOutput("kubectl", args...)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
