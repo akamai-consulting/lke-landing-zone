@@ -89,12 +89,16 @@ var (
 // collectExternalSecretRefs returns {(remoteRef.key, property): [file, …]} from
 // every YAML manifest under apl-values/ and the rendered chart output, skipping
 // vendored chart subtrees (/charts/).
-func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int) {
+func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int, error) {
 	refs := map[esRef][]string{}
 	// collectManifestPaths is the walk the tree-scanning guards share; it also
 	// matches *.yml, which this hand-rolled copy dropped — an ExternalSecret saved
 	// with that extension was invisible to the whole cross-validation.
-	sources, _ := collectManifestPaths([]string{
+	//
+	// The walk error is returned, not dropped: requireCorpus only asserts
+	// examined > 0, so a walk that broke PARTWAY still yields a non-empty corpus
+	// and would pass the gate having validated only the files it reached.
+	sources, walkErr := collectManifestPaths([]string{
 		filepath.Join(root, "apl-values"),
 		filepath.Join(root, filepath.FromSlash(renderDir)),
 	})
@@ -127,7 +131,7 @@ func collectExternalSecretRefs(root, renderDir string) (map[esRef][]string, int)
 		}
 	}
 	// examined counts files actually READ (post /charts/ filter), not files found.
-	return refs, examined
+	return refs, examined, walkErr
 }
 
 var (
@@ -413,7 +417,10 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 	// scanned so this works in the template repo and in a populated instance.
 	renderDir := firstNonEmpty(os.Getenv("RENDER_DIR"), "rendered")
 	esDirs := []string{filepath.Join(root, "apl-values"), filepath.Join(root, filepath.FromSlash(renderDir))}
-	refs, examined := collectExternalSecretRefs(root, renderDir)
+	refs, examined, walkErr := collectExternalSecretRefs(root, renderDir)
+	if walkErr != nil {
+		return fmt.Errorf("externalsecret-paths: scanning manifests: %w", walkErr)
+	}
 	// The walk discarded its error (`_ = filepath.WalkDir`), so an absent
 	// apl-values/ AND an unrendered chart tree both yielded zero sources, zero
 	// refs, and a clean pass — the guard would vouch for ExternalSecret paths it

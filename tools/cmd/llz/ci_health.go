@@ -329,15 +329,27 @@ func healthExitCodeState(st *convergeState) healthResult {
 		return healthResult{code: 3}
 	}
 
-	inv := scanInventory()
+	inv := scanCRDs()
 
 	// Phase 0: pre-bootstrap (Argo CRD / platform-bootstrap App not present yet)
-	// is in-progress, not converged — poll.
+	// is in-progress, not converged — poll. Gated on the CRD list alone, before
+	// the namespace fetch: a pre-bootstrap cluster is polled every interval for
+	// the whole apl-core helmfile run, and it has nothing for the per-namespace
+	// sections to look at yet.
 	if !inv.crds["applications.argoproj.io"] ||
 		!kExists("-n", "argocd", "get", "application", "platform-bootstrap") {
 		fmt.Println(bold("== pre-bootstrap phase detected — apl-core helmfile likely still running =="))
 		fmt.Printf("  %s applications.argoproj.io CRD or platform-bootstrap Application not yet present\n", cyan("PENDING"))
 		return healthResult{code: 2}
+	}
+
+	if !inv.addNamespaces() {
+		// Exit 3, same as an unreachable apiserver: kubectlReachable() has already
+		// passed, so a failed namespace list is a transient, not a verdict. Reading
+		// it as "no namespaces exist" would skip every per-namespace section and
+		// report a broken cluster as converged.
+		fmt.Fprintln(os.Stderr, "::error::kubectl could not list namespaces — treating as an apiserver transient, not an empty cluster.")
+		return healthResult{code: 3}
 	}
 	// Phase 1: cluster-bootstrap ran but bootstrap-openbao has not completed yet.
 	// Historically this was keyed only on cert-manager/platform-app-ca being absent,
@@ -504,17 +516,26 @@ func openBaoClusterSecretStoreReady() bool {
 // section is a no-op rather than a false failure). Routes through the execOutput
 // seam so the section orchestrators are unit-testable with stubbed kubectl JSON.
 func kItems(args ...string) []json.RawMessage {
+	items, _ := kItemsOK(args...)
+	return items
+}
+
+// kItemsOK is kItems with the call's success reported separately. Most sections
+// cannot act on the difference and use kItems, but a caller whose ABSENT result
+// would silently skip work must not read a failed call as "there are none" —
+// see scanInventory.
+func kItemsOK(args ...string) ([]json.RawMessage, bool) {
 	out, err := execOutput("kubectl", append(args, "-o", "json")...)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var body struct {
 		Items []json.RawMessage `json:"items"`
 	}
 	if json.Unmarshal(out, &body) != nil {
-		return nil
+		return nil, false
 	}
-	return body.Items
+	return body.Items, true
 }
 
 // kList runs `kubectl get <args> -o json` and decodes its .items[] into T,
@@ -523,8 +544,12 @@ func kItems(args ...string) []json.RawMessage {
 // unmarshal-and-continue loop lives here once instead of in each of them. Same
 // failure posture as kItems: an errored or unparseable call yields no items, so
 // the section is a no-op rather than a false failure.
-func kList[T any](args ...string) []T {
-	raws := kItems(args...)
+func kList[T any](args ...string) []T { return decodeItems[T](kItems(args...)) }
+
+// decodeItems decodes already-fetched .items[] into T, dropping what does not
+// decode. Split from kList so a caller that needed kItemsOK's success flag can
+// still get typed items without a second fetch.
+func decodeItems[T any](raws []json.RawMessage) []T {
 	out := make([]T, 0, len(raws))
 	for _, raw := range raws {
 		var v T
@@ -554,19 +579,50 @@ type clusterInventory struct {
 	namespaces []namespaceItem
 }
 
-func scanInventory() *clusterInventory {
-	inv := &clusterInventory{
-		crds:       map[string]bool{},
-		nsExists:   map[string]bool{},
-		namespaces: kList[namespaceItem]("get", "ns"),
-	}
+// The namespace list is fetched with its success reported, because a failed call
+// here would FAIL OPEN. checkLeases/checkWorkloads/checkNetworkPolicies/
+// checkServices are all skip-if-absent: they consult nsExists and quietly do
+// nothing for a namespace that is not there. Collapsing nine independent
+// `get ns <name>` probes into one list means one dropped call empties nsExists
+// and silently removes ALL FOUR sections from the pass — a hard-failed workload
+// would report converged. The old per-name probes needed nine simultaneous
+// failures to lose the same coverage.
+//
+// So an errored namespace list is not data: ok=false, and the caller returns
+// exit 3 (apiserver transient) so converge retries against its budget rather
+// than banking a false green. The CRD list needs no such handling — a failed one
+// empties inv.crds, which trips the phase-0 gate into exit 2 and short-circuits
+// before any CRD-driven section runs.
+// scanCRDs takes the first of the two list calls. A failed one empties inv.crds,
+// which trips the phase-0 gate into exit 2 — loud enough, and the same posture
+// the per-name CRD probes had, since that same CRD gated phase-0 by name before.
+func scanCRDs() *clusterInventory {
+	inv := &clusterInventory{crds: map[string]bool{}, nsExists: map[string]bool{}}
 	for _, crd := range kList[meta]("get", "crd") {
 		inv.crds[crd.Metadata.Name] = true
 	}
+	return inv
+}
+
+// addNamespaces takes the second, and reports whether the call actually
+// succeeded. Called after the phase-0 gate so a pre-bootstrap poll — which has
+// no namespaces worth listing — does not pay for it every interval.
+func (inv *clusterInventory) addNamespaces() bool {
+	raw, ok := kItemsOK("get", "ns")
+	if !ok {
+		return false
+	}
+	inv.namespaces = decodeItems[namespaceItem](raw)
 	for _, ns := range inv.namespaces {
 		inv.nsExists[ns.Metadata.Name] = true
 	}
-	return inv
+	return true
+}
+
+// scanInventory is both halves, for callers that want the whole snapshot.
+func scanInventory() (*clusterInventory, bool) {
+	inv := scanCRDs()
+	return inv, inv.addNamespaces()
 }
 
 // catStyles renders a health category's report label: the fixed-width text and

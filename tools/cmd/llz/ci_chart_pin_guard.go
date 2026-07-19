@@ -193,7 +193,6 @@ func loadLocalChartVersions(root string) (map[string]string, error) {
 // matches, so nested `name:` fields are not picked up.
 func chartName(chartYAML string) string { return chartScalar(chartYAML, "name:") }
 
-
 // countFirstPartyPins counts the pins across all files that reference a chart
 // present in local — the denominator for the success message (third-party pins
 // are not "checked" by this guard).

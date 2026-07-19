@@ -422,6 +422,25 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		fmt.Printf("  (no %s/ tree in this repo — nothing to check)\n", clusterspec.CustomRoot)
 	}
 
+	// HA pairing. peerOf refuses to guess for the deployment it is ASKED about,
+	// but nothing else checks the tree as a whole — and a group with two actives
+	// still yields exactly one peer, so it slips past peerOf while making the
+	// active/standby roles meaningless. doctor is the right place for the
+	// whole-set rule: it reports, so a half-added pair (the expected state between
+	// the two `llz env add` calls) is surfaced without failing anything.
+	fmt.Println("\n" + bold("HA topology:"))
+	if deps, terr := readTopology(tfDir); terr != nil {
+		report("read cluster topology", false)
+		errs = append(errs, terr)
+	} else if len(haMembers(deps)) == 0 {
+		fmt.Println("  (no HA pair declared — nothing to check)")
+	} else if verr := validateTopology(deps); verr != nil {
+		report("active/standby pairing", false)
+		fmt.Printf("     %s\n", verr)
+	} else {
+		report("active/standby pairing", true)
+	}
+
 	// Opt-in SSH host reachability + known_hosts freshness (an SSH-based GitOps
 	// source path). Runs only when --ssh-host is given so it adds no noise.
 	if sshHost != "" {

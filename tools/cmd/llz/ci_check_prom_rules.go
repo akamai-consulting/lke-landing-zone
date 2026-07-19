@@ -111,12 +111,12 @@ func checkRuleCRD(path string) error {
 // guards, which also picks up *.yml — a PrometheusRule saved with that extension
 // used to be skipped silently, i.e. never promtool-validated.
 //
-// A walk error yields no files, which the caller reports as the skip-clean
-// "nothing to validate" case — it has already stat'd the directory, so the only
-// way here is an unreadable subtree.
-func walkPromRuleFiles(dir string) []string {
-	files, _ := collectManifestPaths([]string{dir})
-	return files
+// A walk error is REPORTED, not swallowed. The caller reads "no files" as the
+// skip-clean "nothing to validate" case, so an unreadable subtree that aborted
+// the walk would be indistinguishable from an absent rules dir — a real
+// PrometheusRule would go unvalidated and the guard would still print success.
+func walkPromRuleFiles(dir string) ([]string, error) {
+	return collectManifestPaths([]string{dir})
 }
 
 // runCICheckPromRules validates the explicit file args, or — when none are
@@ -133,7 +133,13 @@ func runCICheckPromRules(rulesDir string, files []string, w io.Writer) error {
 			fmt.Fprintf(w, "check-prom-rules: no PrometheusRule manifests (%s absent) — skipping\n", rulesDir)
 			return nil
 		}
-		files = walkPromRuleFiles(rulesDir)
+		walked, walkErr := walkPromRuleFiles(rulesDir)
+		if walkErr != nil {
+			// Not the skip case: the dir exists and the walk broke partway, so an
+			// empty or short list means "could not read", not "nothing to check".
+			return fmt.Errorf("check-prom-rules: scanning %s: %w", rulesDir, walkErr)
+		}
+		files = walked
 		if len(files) == 0 {
 			fmt.Fprintf(w, "check-prom-rules: no YAML manifests under %s — skipping\n", rulesDir)
 			return nil

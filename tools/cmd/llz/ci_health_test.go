@@ -90,7 +90,7 @@ func TestScanInventory(t *testing.T) {
 		}
 		return nil, errors.New("nope")
 	})
-	inv := scanInventory()
+	inv, _ := scanInventory()
 	if !inv.crds["applications.argoproj.io"] || inv.crds["absent.example.io"] {
 		t.Errorf("crds = %v", inv.crds)
 	}
@@ -103,9 +103,79 @@ func TestScanInventory(t *testing.T) {
 
 	// Both lists failing => everything reads absent, never present.
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("refused") })
-	empty := scanInventory()
+	empty, ok := scanInventory()
 	if len(empty.crds) != 0 || len(empty.nsExists) != 0 {
 		t.Errorf("a failed list must yield no names, got %v / %v", empty.crds, empty.nsExists)
+	}
+	if ok {
+		t.Error("scanInventory reported ok on a failed namespace list")
+	}
+}
+
+// mustInventory is scanInventory for the section tests, which stub a working
+// cluster and only care about the maps.
+func mustInventory(t *testing.T) *clusterInventory {
+	t.Helper()
+	inv, _ := scanInventory()
+	return inv
+}
+
+// A failed namespace list must NOT read as "no namespaces exist". Every
+// per-namespace section is skip-if-absent, so an empty nsExists silently removes
+// checkLeases/checkWorkloads/checkNetworkPolicies/checkServices from the pass.
+// One list call now carries the coverage nine per-name probes used to, so a
+// dropped call has to fail loud (exit 3, the apiserver-transient code that
+// converge retries) rather than be read as data.
+//
+// What this test pins is that contract: the same cluster must not report a
+// SOFTER verdict because a list call was dropped. It does not reproduce the
+// full exit-0 false-green — that needs a stub clean enough that the broken
+// Deployment is the only finding, and this harness has other sections failing
+// on its empty stubs. Without the fix here the verdict is 1 instead of 3; in a
+// clean cluster it is 0, which is the case that actually ships a broken cluster.
+func TestNamespaceListFailureIsTransientNotEmpty(t *testing.T) {
+	// A cluster whose ONLY fault is one Deployment, so the verdict hinges purely
+	// on whether the per-namespace sections ran. Every required CRD is present and
+	// every namespace exists, so nothing else can fail the pass.
+	broken := `{"metadata":{"name":"broken","namespace":"argocd"},"spec":{"replicas":3},"status":{"readyReplicas":0}}`
+	var crds []string
+	for _, name := range health.RequiredCRDs() {
+		crds = append(crds, `{"metadata":{"name":"`+name+`"}}`)
+	}
+	var nss []string
+	for _, name := range healthNamespaces {
+		nss = append(nss, `{"metadata":{"name":"`+name+`"},"status":{"phase":"Active"}}`)
+	}
+	serve := func(nsOK bool) func(string) ([]byte, error) {
+		return func(a string) ([]byte, error) {
+			switch {
+			case a == "get ns -o json":
+				if !nsOK {
+					return nil, errors.New("konnectivity blip")
+				}
+				return items(nss...), nil
+			case a == "get crd -o json":
+				return items(crds...), nil
+			case strings.Contains(a, "get deploy"):
+				return items(broken), nil
+			case strings.Contains(a, "get application "), strings.Contains(a, "get clustersecretstore"):
+				return []byte(`{"status":{"health":{"status":"Healthy"},"sync":{"status":"Synced"}}}`), nil
+			}
+			return items(), nil
+		}
+	}
+
+	withKubectl(t, serve(true))
+	healthy := healthExitCodeState(nil)
+
+	withKubectl(t, serve(false))
+	blipped := healthExitCodeState(nil)
+
+	if blipped.code == 0 {
+		t.Fatalf("a dropped namespace list reported converged (exit 0); the same cluster with the list working reported %d", healthy.code)
+	}
+	if blipped.code != 3 {
+		t.Errorf("code = %d, want 3 (apiserver transient — converge retries without a hard strike)", blipped.code)
 	}
 }
 
@@ -138,7 +208,7 @@ func TestCheckNamespaces(t *testing.T) {
 		), nil
 	})
 	var r health.Report
-	checkNamespaces(&r, scanInventory())
+	checkNamespaces(&r, mustInventory(t))
 	if len(r.Failed) != 1 || !strings.Contains(r.Failed[0], "stuck") {
 		t.Errorf("checkNamespaces = %v, want 1 stuck", r.Failed)
 	}
@@ -171,7 +241,7 @@ func TestCheckRequiredCRDsAndStorageClasses(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	var r health.Report
-	checkRequiredCRDs(&r, scanInventory())
+	checkRequiredCRDs(&r, mustInventory(t))
 	// all but applications.argoproj.io are absent => many fails.
 	if len(r.Failed) < 10 {
 		t.Errorf("checkRequiredCRDs failures = %d, want most CRDs missing", len(r.Failed))
@@ -303,7 +373,7 @@ func TestCheckWorkloads(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	var r health.Report
-	checkWorkloads(&r, scanInventory(), false)
+	checkWorkloads(&r, mustInventory(t), false)
 	if len(r.Failed) != 1 {
 		t.Errorf("checkWorkloads = %v, want 1 (the 1/2 deploy)", r.Failed)
 	}
@@ -363,7 +433,7 @@ func TestCheckJobsAndWorkflows(t *testing.T) {
 	})
 	var r health.Report
 	checkJobs(&r, false)
-	checkWorkflows(&r, scanInventory(), false)
+	checkWorkflows(&r, mustInventory(t), false)
 	if len(r.Failed) != 2 {
 		t.Errorf("jobs+workflows = %v, want 2", r.Failed)
 	}
@@ -573,6 +643,10 @@ func TestHealthExitCodeStatePhase1ResolvedOnce(t *testing.T) {
 			return nil, nil
 		case a == "get crd -o json":
 			return items(`{"metadata":{"name":"applications.argoproj.io"}}`), nil
+		case a == "get ns -o json":
+			// An EMPTY list, not an error: a failed namespace list is an apiserver
+			// transient (exit 3) and would short-circuit before phase1 is reached.
+			return items(), nil
 		case a == "-n cert-manager get secret platform-app-ca":
 			probes++
 			return nil, nil // present → phase1 over

@@ -58,7 +58,7 @@ func TestCollectExternalSecretRefs(t *testing.T) {
 	// It now shares walkManifests with the other tree-scanning guards.
 	fixWrite(t, root, "apl-values/env/wrong-ext.yml", esFixtureExternalSecret)
 
-	refs, _ := collectExternalSecretRefs(root, "rendered")
+	refs, _, _ := collectExternalSecretRefs(root, "rendered")
 	bothExts := []string{"apl-values/env/secrets.yaml", "apl-values/env/wrong-ext.yml"}
 	want := map[esRef][]string{}
 	want[esRef{key: "grafana/admin", prop: "user", hasProp: true}] = bothExts

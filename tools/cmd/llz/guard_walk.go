@@ -77,16 +77,20 @@ func walkManifests(dirs []string, fn func(path string, raw []byte) error) (exami
 // given dirs — walkManifests for the callers that want the file LIST rather than
 // the contents. Same rules: absent dirs are skipped, templates/ is skipped, both
 // extensions match.
+//
+// On error it returns the paths found SO FAR alongside it, never a bare nil. A
+// caller that drops the error must not also be handed an empty slice: the guards
+// read "no files" as the clean skip-or-succeed case, so returning nil on an
+// unreadable subtree would turn a partial scan into a silent green — the walk
+// aborting is exactly when the corpus looks emptiest.
 func collectManifestPaths(dirs []string) ([]string, error) {
 	var paths []string
-	if _, err := walkManifests(dirs, func(path string, _ []byte) error {
+	_, err := walkManifests(dirs, func(path string, _ []byte) error {
 		paths = append(paths, path)
 		return nil
-	}); err != nil {
-		return nil, err
-	}
+	})
 	sort.Strings(paths)
-	return paths, nil
+	return paths, err
 }
 
 // hasManifestExt reports whether path carries a YAML manifest extension.
