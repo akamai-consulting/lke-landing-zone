@@ -40,11 +40,16 @@ import (
 //go:embed manifests/block-storage-class.yaml
 var blockStorageClassYAML []byte
 
-// defaultAplChartVersion is the apl-core baseline this LLZ release tracks. On a
-// managed cluster Linode owns the apl-core version, so bootstrap does not consume
-// it; it survives as the single baseline other tooling asserts against
-// (ci_assert_apl_version.go). Bump in lockstep when raising the platform baseline.
-const defaultAplChartVersion = "6.0.0"
+// defaultAplChartVersion is the apl-core chart version an instance deploys when
+// neither --apl-chart-version nor spec.cluster.bootstrap.aplChartVersion (an
+// OPTIONAL field) is set. It is an alias for the single baseline the spec
+// package owns — the same constant `llz validate` gates explicit pins against,
+// so the fallback and the gate can never disagree. Bump it there.
+//
+// On a managed cluster Linode owns the apl-core version, so bootstrap does not
+// consume this; it survives as the baseline other tooling asserts against
+// (ci_assert_apl_version.go).
+const defaultAplChartVersion = clusterspec.BaselineAplChartVersion
 
 // bootstrapValuePlaceholders is the SECRETS-ONLY set of ${...} tokens a committed
 // apl-values file may still carry after `llz render`. It remains the single source

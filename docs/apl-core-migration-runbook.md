@@ -31,9 +31,17 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       Gateway gets TLS.
 - [ ] **Verify the apl chart version** — run
       `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`
-      and update `spec.cluster.bootstrap.aplChartVersion` in each
-      `environments/<env>.yaml` to match.
-      The current pin is the GA `6.0.0` release. If you are upgrading
+      and reconcile it with the spec. The version an environment deploys is
+      `spec.cluster.bootstrap.aplChartVersion` in `environments/<env>.yaml`
+      (the retired `cluster-bootstrap/<env>.tfvars` no longer feeds anything —
+      see [ADR 0002](adr/0002-thin-terraform-native-bootstrap.md)). The field is
+      OPTIONAL: omit it and the environment tracks the llz baseline
+      (`clusterspec.BaselineAplChartVersion`, currently `6.0.0`) automatically —
+      **this is the recommended setting** unless you need a deliberate pin.
+      An explicit pin OVERRIDES the baseline and does not move when llz is
+      upgraded, so `llz validate` fails any pin a full major behind the baseline
+      (set `LLZ_ALLOW_APL_CHART_MAJOR_DRIFT=1` to stage an upgrade deliberately).
+      If you are upgrading
       an existing 5.x cluster (rather than cutting over a fresh one), read the
       [apl-core v6 migration design](designs/apl-core-v6-migration.md) first — it
       covers the breaking changes (ESO becomes a core app, Gitea→git-server,

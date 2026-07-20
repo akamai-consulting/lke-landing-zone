@@ -9,8 +9,8 @@ package main
 //
 // It deliberately renders the migration TARGET versions, not the source's: the
 // source APL/k8s versions describe the platform being left behind. apl-core pins
-// to 5.0.0; k8s is left at the template default and flagged (a +lke version must
-// be valid in the account).
+// to the platform baseline (clusterspec.BaselineAplChartVersion); k8s is left at
+// the template default and flagged (a +lke version must be valid in the account).
 
 import (
 	"fmt"
@@ -25,7 +25,11 @@ import (
 	sigyaml "sigs.k8s.io/yaml"
 )
 
-const importInitAplChartVersion = "5.0.0" // migration target (see file header)
+// importInitAplChartVersion is the apl-core version an imported site is
+// scaffolded onto — the migration TARGET, not the source's (see file header).
+// It tracks the platform baseline: a hardcoded pin here silently scaffolds new
+// instances a major behind whenever the baseline moves.
+const importInitAplChartVersion = clusterspec.BaselineAplChartVersion
 
 type importInitOpts struct {
 	report string

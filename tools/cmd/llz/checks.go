@@ -350,6 +350,9 @@ func runValidate(g globalOpts) error {
 			}
 			return fmt.Errorf("invalid LandingZone spec")
 		}
+		for _, w := range lz.AplChartVersionWarnings() {
+			fmt.Fprintf(os.Stderr, "spec: warning: %s\n", w)
+		}
 		fmt.Fprintln(os.Stderr, "spec: ok")
 	}
 	for _, step := range []func(globalOpts) error{stepTFValidate, stepCheckov} {

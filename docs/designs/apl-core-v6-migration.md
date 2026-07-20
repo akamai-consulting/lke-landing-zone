@@ -252,10 +252,14 @@ instance, hold past-lab promotion until the lab-validation checklist passes.
 1. `copier update` each instance repo to pull the template changes.
 2. Bump the sha-pinned e2e `TF_IMAGE` if the llz contract changed (see the
    `e2e TF_IMAGE coupling` note).
-3. Per-cluster **in-place upgrade**, not fresh install: bump `apl_chart_version`
-   in the cluster's `cluster-bootstrap/<env>.tfvars` → `terraform apply` →
-   `helm_release.apl` upgrades apl-operator → its helmfile re-converges the
-   platform. Watch apl-operator logs for the helmfile pipeline.
+3. Per-cluster **in-place upgrade**, not fresh install: the lever is
+   `spec.cluster.bootstrap.aplChartVersion` in `environments/<env>.yaml` — bump it
+   (or DELETE it, so the env tracks the llz baseline) → re-dispatch the apply →
+   `llz ci bootstrap-cluster`'s idempotent `helm upgrade --install` upgrades
+   apl-operator → its helmfile re-converges the platform. Watch apl-operator logs
+   for the helmfile pipeline. (The old `cluster-bootstrap/<env>.tfvars` +
+   `terraform apply` path was retired with the TF workspace — see
+   [ADR 0002](../adr/0002-thin-terraform-native-bootstrap.md).)
 4. Promote lab → staging → primary → secondary, one production region at a time
    (per the [apl-core-migration-runbook](../apl-core-migration-runbook.md)).
 

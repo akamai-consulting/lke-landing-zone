@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 func initFixture() importReport {
@@ -53,8 +55,10 @@ func TestReportToEnvAddOpts(t *testing.T) {
 	if o.nodeType != "g8-dedicated-16-4" || o.nodeCount != "4" { // largest pool
 		t.Errorf("nodeType=%q count=%q", o.nodeType, o.nodeCount)
 	}
-	if o.aplChartVersion != "5.0.0" {
-		t.Errorf("aplChartVersion=%q, want the migration target 5.0.0", o.aplChartVersion)
+	// The migration target tracks the platform baseline, so this assertion moves
+	// with it rather than pinning a literal that silently goes stale.
+	if o.aplChartVersion != clusterspec.BaselineAplChartVersion {
+		t.Errorf("aplChartVersion=%q, want the baseline migration target %s", o.aplChartVersion, clusterspec.BaselineAplChartVersion)
 	}
 	if o.k8sVersion != "" { // must NOT copy the source v1.35.5
 		t.Errorf("k8sVersion should be left unset, got %q", o.k8sVersion)
@@ -90,7 +94,7 @@ func TestEnabledComponentAssignments(t *testing.T) {
 func TestBuildMigrationTodo(t *testing.T) {
 	md := buildMigrationTodo(initFixture(), "prod")
 	mustContain := []string{
-		"apl-core 5.0.0",                       // target version stated
+		"apl-core " + clusterspec.BaselineAplChartVersion, // target version stated
 		"v4.14.1",                              // source version
 		"k8s_version",                          // the leave-default flag
 		"apiServerAllowCIDRs",                  // runner CIDRs manual
