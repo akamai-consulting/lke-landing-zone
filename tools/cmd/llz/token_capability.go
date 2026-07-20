@@ -56,6 +56,45 @@ var ghCapabilityProbe = func(api, token, path string) (int, error) {
 	return resp.StatusCode, nil
 }
 
+// gitRefsProbe performs the git smart-HTTP ref-discovery handshake — the FIRST
+// request any `git clone`/`git fetch`/`ls-remote` makes, and the one Argo CD's
+// repo-server makes when it computes an Application's target state. It is a
+// plain GET, read-only, and transfers no objects.
+//
+// This exists because the REST API and the git endpoint are different doors with
+// different locks. A PAT can pass every api.github.com probe and still be refused
+// at github.com/<repo>.git — SAML SSO not authorized for the org, an IP
+// allowlist, or a fine-grained PAT without Contents. The failure text this is
+// built to catch is Argo's verbatim:
+//
+//	gitops-global — ComparisonError: failed to generate manifest: rpc error:
+//	  code = Unknown desc = failed to list refs: authentication required: Unauthorized
+//
+// "failed to list refs" IS this request failing. Probing it in preflight asks
+// the server the identical question ~40 minutes earlier.
+//
+// Username is the `x-access-token` convention authedGitURL already uses: GitHub
+// ignores it for a PAT, but the Basic header must carry something.
+var gitRefsProbe = func(server, token, path string) (int, error) {
+	url := strings.TrimRight(server, "/") + path
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.SetBasicAuth("x-access-token", token)
+	// Git clients send this; without it GitHub answers the "dumb" protocol and
+	// the status stops reflecting what a real clone would see.
+	req.Header.Set("User-Agent", "git/2.43.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err // unreachable — code 0
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
 type capabilityStatus int
 
 const (
@@ -72,19 +111,30 @@ type capabilityResult struct {
 	detail string
 }
 
+// capTransport selects WHICH door the probe knocks on. The two are not
+// interchangeable: a credential authorized at one can be refused at the other,
+// which is the whole reason capGit exists alongside capREST.
+type capTransport int
+
+const (
+	capREST capTransport = iota // GET {GITHUB_API}{path}, PAT in an Authorization header
+	capGit                      // GET {GITHUB_SERVER_URL}{path}, git smart-HTTP + Basic auth
+)
+
 // capabilityCheck binds a credential to the read-only probe that proves it can
 // perform its required operation.
 //
-// `path` builds the API path from the ambient CI env and returns a skip reason
-// instead when the context isn't there — a missing GH_REPO/REGION means we can't
-// construct the probe, which is NOT the token's fault and must never fail a run.
-// `hint` is the remediation printed on denial; keep it in lockstep with the
+// `path` builds the request path from the ambient CI env and returns a skip
+// reason instead when the context isn't there — a missing GH_REPO/REGION means we
+// can't construct the probe, which is NOT the token's fault and must never fail a
+// run. `hint` is the remediation printed on denial; keep it in lockstep with the
 // matching `llz ci require-secret --hint` text in the workflows.
 type capabilityCheck struct {
-	token string
-	op    string
-	path  func() (path string, skip string)
-	hint  string
+	token     string
+	op        string
+	transport capTransport
+	path      func() (path string, skip string)
+	hint      string
 }
 
 // capabilityChecks lists every credential whose SCOPE (not just validity) is
@@ -115,6 +165,35 @@ var capabilityChecks = []capabilityCheck{
 			"The PAT owner must additionally be an Environment admin on infra-<region>. Without this, " +
 			"`llz ci bao-seed-seal-key` cannot persist OPENBAO_SEAL_KEY and the deployment is left unsealable",
 	},
+	{
+		token:     "APL_VALUES_REPO_TOKEN",
+		op:        "fetch the values repo over git (what Argo CD's repo-server does)",
+		transport: capGit,
+		// Ref discovery: the first request of every clone/fetch/ls-remote, and the
+		// one whose failure Argo reports as "failed to list refs". Read-only — it
+		// negotiates refs and stops, transferring no objects.
+		//
+		// This is a NECESSARY condition for the token's job, not a sufficient one:
+		// apl-operator PUSHES its rendered values tree, which needs Contents:WRITE,
+		// and no read-only probe can prove write without writing. A token that
+		// fails here certainly cannot push; one that passes might still lack write.
+		// That asymmetry is deliberate — the alternative is inferring write from
+		// `permissions.push` on the repo object, which is wrong in both directions.
+		path: func() (string, string) {
+			repo := os.Getenv("GH_REPO")
+			if repo == "" {
+				return "", "GH_REPO unset — cannot build the values-repo fetch probe"
+			}
+			return "/" + repo + ".git/info/refs?service=git-upload-pack", ""
+		},
+		hint: "fine-grained PAT needs Contents: write on this repo, and must be authorized for the org's " +
+			"SAML SSO if one is enforced — the git endpoint (github.com) rejects independently of the REST API " +
+			"(api.github.com), so a token that passes every other preflight can still be refused here. This " +
+			"credential becomes apl-core's otomi.git.password, which apl-operator pushes the values tree with " +
+			"and which reaches Argo CD as its values-repo credential; without a working fetch every gitops-* " +
+			"Application ComparisonErrors with \"failed to list refs: authentication required\" and the whole " +
+			"external-secrets/cert chain behind it never installs",
+	},
 }
 
 // classifyCapabilityStatus maps a probe status to an authorization verdict.
@@ -135,7 +214,12 @@ func classifyCapabilityStatus(code int, op string) (capabilityStatus, string) {
 	case code == 403:
 		return capDenied, fmt.Sprintf("authenticates, but is NOT authorized to %s (HTTP 403) — the token is under-scoped, not expired", op)
 	case code == 401:
-		return capDenied, fmt.Sprintf("auth rejected (HTTP 401) — cannot %s; rotate the token", op)
+		// NOT "rotate it": capability is only asked of a credential whose validity
+		// probe already passed, so the token is live. A 401 here means this
+		// particular door refuses it — the git endpoint's answer for a PAT lacking
+		// the repo's Contents permission or unauthorized for an SSO-enforced org.
+		return capDenied, fmt.Sprintf("auth rejected (HTTP 401) — the token is live but not accepted to %s "+
+			"(missing permission, or SAML SSO not authorized); re-scope or SSO-authorize it, don't rotate it", op)
 	case code == 404:
 		return capUnknown, fmt.Sprintf("HTTP 404 probing %q — either the target does not exist yet or this token cannot see it; could not verify", op)
 	default:
@@ -150,7 +234,14 @@ func probeCapability(c capabilityCheck, token string) capabilityResult {
 	if skip != "" {
 		return capabilityResult{c.token, capSkipped, skip}
 	}
-	code, err := ghCapabilityProbe(envOr("GITHUB_API", "https://api.github.com"), token, path)
+	var code int
+	var err error
+	switch c.transport {
+	case capGit:
+		code, err = gitRefsProbe(envOr("GITHUB_SERVER_URL", "https://github.com"), token, path)
+	default:
+		code, err = ghCapabilityProbe(envOr("GITHUB_API", "https://api.github.com"), token, path)
+	}
 	if err != nil {
 		code = 0
 	}

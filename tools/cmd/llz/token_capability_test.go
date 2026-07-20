@@ -138,3 +138,106 @@ func TestSecretsWritePATURLRequestsEnvironments(t *testing.T) {
 		t.Errorf("pre-fill should keep actions=write (workflow dispatch); got %q", u)
 	}
 }
+
+// capCheckFor looks a check up by credential name. Tests must not index
+// capabilityChecks positionally — the order is presentation, not contract, and a
+// new entry would silently repoint an existing assertion at the wrong probe.
+func capCheckFor(t *testing.T, name string) capabilityCheck {
+	t.Helper()
+	for _, c := range capabilityChecks {
+		if c.token == name {
+			return c
+		}
+	}
+	t.Fatalf("no capability check registered for %q", name)
+	return capabilityCheck{}
+}
+
+// TestValuesRepoProbeIsGitRefDiscovery pins the values-repo check to the git
+// smart-HTTP ref-discovery request — the exact call whose failure Argo CD
+// reports as "failed to list refs: authentication required: Unauthorized". If
+// this drifts to a REST path it stops testing the door that actually failed:
+// api.github.com and github.com authorize independently, and the scar case is a
+// token that passes the former and is refused by the latter.
+func TestValuesRepoProbeIsGitRefDiscovery(t *testing.T) {
+	origGit, origREST := gitRefsProbe, ghCapabilityProbe
+	t.Cleanup(func() { gitRefsProbe, ghCapabilityProbe = origGit, origREST })
+
+	var gotServer, gotPath string
+	gitRefsProbe = func(server, _, path string) (int, error) {
+		gotServer, gotPath = server, path
+		return 200, nil
+	}
+	ghCapabilityProbe = func(_, _, _ string) (int, error) {
+		t.Error("values-repo check must not use the REST transport")
+		return 200, nil
+	}
+
+	t.Setenv("GH_REPO", "acme/platform")
+	t.Setenv("GITHUB_SERVER_URL", "")
+	cr := probeCapability(capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok")
+
+	const wantPath = "/acme/platform.git/info/refs?service=git-upload-pack"
+	if gotPath != wantPath {
+		t.Errorf("probed %q, want %q", gotPath, wantPath)
+	}
+	if gotServer != "https://github.com" {
+		t.Errorf("server = %q, want the git host (NOT api.github.com)", gotServer)
+	}
+	if cr.status != capOK {
+		t.Errorf("200 → status %v, want capOK", cr.status)
+	}
+}
+
+// TestValuesRepoProbeDeniesOnUnauthorized covers the failure this check was
+// built for: GitHub answers ref discovery with 401 when the credential is
+// refused for the repo. That must BLOCK — it is the same refusal Argo hits ~40
+// minutes later, by which point the cluster, apl-core and the Argo bridge are up
+// and a human unwinds the mess by hand.
+func TestValuesRepoProbeDeniesOnUnauthorized(t *testing.T) {
+	orig := gitRefsProbe
+	t.Cleanup(func() { gitRefsProbe = orig })
+	gitRefsProbe = func(_, _, _ string) (int, error) { return 401, nil }
+
+	t.Setenv("GH_REPO", "acme/platform")
+	cr := probeCapability(capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok")
+	if cr.status != capDenied {
+		t.Fatalf("401 → status %v, want capDenied", cr.status)
+	}
+	// A live-but-refused token needs re-scoping. "Rotate it" is the wrong advice
+	// and burns an operator's afternoon minting a replacement with the same gap.
+	if strings.Contains(cr.detail, "rotate the token") {
+		t.Errorf("401 detail must not prescribe rotation; got %q", cr.detail)
+	}
+}
+
+// TestValuesRepoProbeSkipsWithoutRepo — no GH_REPO, no probe. Missing context is
+// never the token's fault and must not fail a run.
+func TestValuesRepoProbeSkipsWithoutRepo(t *testing.T) {
+	orig := gitRefsProbe
+	t.Cleanup(func() { gitRefsProbe = orig })
+	called := false
+	gitRefsProbe = func(_, _, _ string) (int, error) { called = true; return 200, nil }
+
+	t.Setenv("GH_REPO", "")
+	if cr := probeCapability(capCheckFor(t, "APL_VALUES_REPO_TOKEN"), "tok"); cr.status != capSkipped {
+		t.Errorf("status = %v, want capSkipped", cr.status)
+	}
+	if called {
+		t.Error("probed without the context to build a path")
+	}
+}
+
+// TestValuesRepoHintNamesSSO guards the remediation against collapsing to
+// "needs Contents: write". That alone is incomplete: an SSO-enforced org refuses
+// an unauthorized PAT at the git endpoint no matter how it is scoped, and an
+// operator who only re-checks the permission toggle finds nothing wrong.
+func TestValuesRepoHintNamesSSO(t *testing.T) {
+	h := capabilityHint("APL_VALUES_REPO_TOKEN")
+	if !strings.Contains(h, "Contents: write") {
+		t.Errorf("hint must name the Contents permission; got %q", h)
+	}
+	if !strings.Contains(h, "SAML SSO") {
+		t.Errorf("hint must name SSO authorization as the other cause; got %q", h)
+	}
+}
