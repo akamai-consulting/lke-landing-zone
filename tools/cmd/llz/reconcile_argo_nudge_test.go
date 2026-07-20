@@ -152,3 +152,28 @@ func TestTransientComparisonErrorApp(t *testing.T) {
 		t.Error("an app with no ComparisonError must not be nudged")
 	}
 }
+
+// TestGitAuthErrorIsNotNudged — a credential the remote rejected is the one
+// git-fetch failure a hard refresh provably cannot recover. Two of
+// transientFetchError's patterns ("failed to list refs", "could not read") match
+// an auth refusal, so without the explicit guard the nudge lane re-asks the same
+// rejected question every poll for the whole convergence budget.
+func TestGitAuthErrorIsNotNudged(t *testing.T) {
+	for _, msg := range []string{
+		"failed to list refs: authentication required: Unauthorized",
+		"could not read Username for 'https://github.com': terminal prompts disabled",
+	} {
+		if transientFetchError(msg) {
+			t.Errorf("auth refusal must not be nudged as transient: %q", msg)
+		}
+	}
+	// The flakes it exists for must still nudge.
+	for _, msg := range []string{
+		"failed to list refs: dial tcp 140.82.113.4:443: i/o timeout",
+		"failed to list refs: repository not found",
+	} {
+		if !transientFetchError(msg) {
+			t.Errorf("genuine transient must still nudge: %q", msg)
+		}
+	}
+}

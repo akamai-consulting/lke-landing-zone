@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/spf13/cobra"
 )
 
@@ -57,6 +58,14 @@ func ciAssertArgoAppCmd() *cobra.Command {
 	return cmd
 }
 
+// gitAuthGrace is how long a git-auth ComparisonError must PERSIST before this
+// gate calls it terminal. It exists to absorb one specific race and no other: the
+// argocd repo Secret is delivered by an ExternalSecret, so an Application that
+// reconciles before it lands can report an auth failure that clears itself. Two
+// minutes is comfortably longer than that gap and still ~1/10th of the budget a
+// rejected credential used to burn.
+const gitAuthGrace = 2 * time.Minute
+
 // assertArgoApp polls (10s cadence, immediate first probe) until app exists,
 // the parent operation is terminally Failed/Error, or the deadline passes.
 //
@@ -70,7 +79,7 @@ func ciAssertArgoAppCmd() *cobra.Command {
 // error) is left alone and surfaces at the deadline as before.
 func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Duration) error {
 	deadline := d.now().Add(within)
-	var lastRefresh time.Time
+	var lastRefresh, firstGitAuth time.Time
 	for {
 		if _, ok := d.kubectl("-n", namespace, "get", "application.argoproj.io", app); ok {
 			fmt.Printf("Application %s exists — proceeding to the pod wait.\n", app)
@@ -81,11 +90,36 @@ func assertArgoApp(d aplGateDeps, namespace, app, parent string, within time.Dur
 			fmt.Fprintf(os.Stderr, "::error::Application %s does not exist and %s's sync is terminally %s — nothing will create it without intervention. operationState: %s | %s\n", app, parent, phase, msg, argoParentDiag(d, namespace, parent))
 			return fmt.Errorf("%s sync terminally %s before %s was created", parent, phase, app)
 		}
+		cerr := argoComparisonError(d, namespace, parent)
+		// A git-auth refusal is terminal for the same reason it vetoes the phase1
+		// downgrade in healthExitCodeState: the remote answered, and nothing in the
+		// bootstrap re-mints the credential. Without this the loop merely stops
+		// NUDGING (transientFetchError now excludes auth) and still sleeps out the
+		// whole window — trading one flavour of dead time for another.
+		//
+		// Held for gitAuthGrace before aborting, because this gate runs early enough
+		// to race the argocd repo Secret's arrival: the Secret comes from an
+		// ExternalSecret, and an Application that reconciles in the gap can report an
+		// auth failure that a later poll clears on its own. A refusal that outlives
+		// the grace is the real thing — the remote has now said no twice, minutes
+		// apart. ("repository not found", the other cold-start shape, is excluded
+		// from IsGitAuthError entirely and still rides the transient path.)
+		if health.IsGitAuthError(cerr) {
+			if firstGitAuth.IsZero() {
+				firstGitAuth = d.now()
+				fmt.Printf("→ %s reports a git-auth failure — holding %s to rule out the repo-Secret race: %s\n", parent, gitAuthGrace, firstLine(cerr))
+			} else if d.now().Sub(firstGitAuth) >= gitAuthGrace {
+				fmt.Fprintf(os.Stderr, "::error::Application %s does not exist and %s cannot authenticate to the source repo after %s — TERMINAL, polling will not fix a rejected credential. Check APL_VALUES_REPO_TOKEN → otomi.git.password → the argocd repo Secret (it arrives via an ExternalSecret, so it stays empty if external-secrets never installed). ComparisonError: %s | %s\n", app, parent, gitAuthGrace, cerr, argoParentDiag(d, namespace, parent))
+				return fmt.Errorf("%s cannot authenticate to the source repo (terminal) before %s was created", parent, app)
+			}
+		} else {
+			firstGitAuth = time.Time{}
+		}
 		// Force a re-fetch when the parent is wedged on a transient git-fetch flake.
 		// Throttled to 20s (a failed fetch returns fast, so a fresh refresh each cycle
 		// is safe, but don't hammer): the previous fetch already failed by the time the
 		// ComparisonError is visible, so we're kicking a new attempt, not interrupting one.
-		if cerr := argoComparisonError(d, namespace, parent); transientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
+		if transientFetchError(cerr) && d.now().Sub(lastRefresh) >= 20*time.Second {
 			d.kubectl("-n", namespace, "annotate", "application.argoproj.io", parent, "argocd.argoproj.io/refresh=hard", "--overwrite")
 			fmt.Printf("→ %s wedged on a transient fetch error — forced a hard refresh to re-fetch: %s\n", parent, firstLine(cerr))
 			lastRefresh = d.now()
@@ -151,8 +185,15 @@ func argoComparisonError(d aplGateDeps, namespace, parent string) string {
 // remote-base fetch), which a hard refresh reliably recovers. A real manifest error
 // (bad kind, invalid yaml, missing field) matches none of these and is left to fail
 // the gate, so recovery never masks a genuine break.
+//
+// An AUTH refusal is excluded up front, because two of the patterns below —
+// "failed to list refs" and "could not read" — match it, and it is the one
+// git-fetch failure a hard refresh provably cannot recover: the remote answered,
+// the answer was "no", and refreshing asks the identical question again. Before
+// this guard, a values-repo credential Argo could not use was re-nudged every
+// poll for the full convergence budget.
 func transientFetchError(msg string) bool {
-	if msg == "" {
+	if msg == "" || health.IsGitAuthError(msg) {
 		return false
 	}
 	m := strings.ToLower(msg)

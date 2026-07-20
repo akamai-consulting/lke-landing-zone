@@ -126,6 +126,59 @@ func TestAssertArgoAppNonTransientComparisonErrorNotRefreshed(t *testing.T) {
 	}
 }
 
+// A git-auth ComparisonError that OUTLIVES the grace is terminal: the gate must
+// abort well before the deadline and must never have nudged (a hard refresh
+// re-asks a question the remote already answered).
+func TestAssertArgoAppGitAuthIsTerminalAfterGrace(t *testing.T) {
+	refreshed := false
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "annotate") && strings.Contains(joined, "refresh=hard"):
+			refreshed = true
+			return "", true
+		case strings.Contains(joined, "get application.argoproj.io platform-openbao"):
+			return "", false // never appears
+		case strings.Contains(joined, "ComparisonError"):
+			return "failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = failed to list refs: authentication required: Unauthorized", true
+		default:
+			return "\t", true
+		}
+	})
+	// Deadline far beyond the grace, so a "not created within" verdict would prove
+	// it burned the window instead of aborting.
+	err := assertArgoApp(d, "argocd", "platform-openbao", "platform-bootstrap", 30*time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "cannot authenticate to the source repo") {
+		t.Fatalf("want terminal git-auth error, got %v", err)
+	}
+	if refreshed {
+		t.Fatal("a git-auth refusal must NOT trigger a hard refresh — the remote already answered")
+	}
+}
+
+// ...but a git-auth error that clears inside the grace must NOT abort: the argocd
+// repo Secret arrives via an ExternalSecret, and an Application reconciling in
+// that gap can report an auth failure it recovers from on its own.
+func TestAssertArgoAppGitAuthWithinGraceRecovers(t *testing.T) {
+	cycle := 0
+	d, _ := assertArgoAppDeps(t, func(_ int, args []string) (string, bool) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "get application.argoproj.io platform-openbao"):
+			cycle++
+			// Appears once the repo Secret lands — inside gitAuthGrace (2m @ 10s/cycle).
+			return "", cycle > 4
+		case strings.Contains(joined, "ComparisonError"):
+			return "failed to list refs: authentication required: Unauthorized", true
+		default:
+			return "\t", true
+		}
+	})
+	if err := assertArgoApp(d, "argocd", "platform-openbao", "platform-bootstrap", 30*time.Minute); err != nil {
+		t.Fatalf("a git-auth error that clears inside the grace must not abort: %v", err)
+	}
+}
+
 func TestTransientFetchError(t *testing.T) {
 	for _, m := range []string{
 		"failed to list refs: repository not found",

@@ -400,9 +400,21 @@ func healthExitCodeState(st *convergeState) healthResult {
 	// is "not yet installed", not terminal — downgrade it to in-progress so
 	// converge keeps polling until the cluster advances past phase1 instead of
 	// aborting on still-installing infra. See health.PhaseAwareExitCode.
-	code := health.PhaseAwareExitCode(r.ExitCode(), phase1)
-	if phase1 && code != r.ExitCode() {
+	//
+	// The downgrade is vetoed by a git-auth failure. Its premise — "not yet
+	// installed" — does not hold for a credential the remote has already rejected:
+	// no later helmfile phase mints one, so every extra poll is dead time. gsap-apl
+	// run 29709276389 burned its whole 1200s budget exactly this way, then reported
+	// "budget exhausted with the cluster still in-progress" for a cluster that was
+	// not progressing at all.
+	demotePhase1 := phase1 && !r.GitAuthFailure
+	code := health.PhaseAwareExitCode(r.ExitCode(), demotePhase1)
+	switch {
+	case demotePhase1 && code != r.ExitCode():
 		fmt.Println(bold("== phase1 (support plane still installing) — hard failures above are treated as in-progress; converge will keep polling =="))
+	case phase1 && r.GitAuthFailure:
+		fmt.Println(bold("== phase1, but NOT downgrading: Argo CD is being refused by the git remote — polling cannot fix a rejected credential =="))
+		fmt.Fprintln(os.Stderr, "::error::Argo CD cannot authenticate to the source repo. This is terminal — check the values-repo credential (APL_VALUES_REPO_TOKEN → otomi.git.password → the argocd repo Secret) rather than re-running.")
 	}
 	return healthResult{
 		code: code,
@@ -997,6 +1009,12 @@ func checkArgoApps(r *health.Report, phase1 bool) {
 		// once rather than poll to budget exhaustion on a self-inflicted deadlock.
 		if health.IsRepoServerCacheAuthError(a.SpecErr) {
 			r.RedisAuthSplit = true
+		}
+		// The git remote refusing Argo's credential is the opposite case: terminal,
+		// not transient. Flag it so phase1 can't downgrade it to in-progress and
+		// send the gate off to poll a question the remote has already answered.
+		if health.IsGitAuthError(a.SpecErr) {
+			r.GitAuthFailure = true
 		}
 		// A sync that failed on the 256KB metadata.annotations limit (an oversized
 		// client-side last-applied-configuration on a CRD) wedges every apply to

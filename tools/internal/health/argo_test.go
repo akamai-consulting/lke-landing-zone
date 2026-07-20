@@ -1,6 +1,9 @@
 package health
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMatchPrefix(t *testing.T) {
 	items := []string{"openbao/platform-openbao", "harbor/harbor-core"}
@@ -146,5 +149,79 @@ func TestReportAddRouting(t *testing.T) {
 	r.Add(CatDrift, "dr")
 	if len(r.Failed) != 1 || len(r.Pending) != 1 || len(r.Deferred) != 1 || len(r.Drift) != 1 {
 		t.Errorf("routing wrong: %+v", r)
+	}
+}
+
+// TestIsGitAuthError separates the three ways an Argo ComparisonError can mention
+// a failed fetch. Only one of them is terminal, and conflating them is expensive
+// in both directions: calling a flake terminal aborts a recoverable run, calling
+// a credential refusal transient polls until the budget dies.
+func TestIsGitAuthError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		// The verbatim message from gsap-apl run 29709276389.
+		{"argo 401 on ref discovery",
+			"Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = failed to list refs: authentication required: Unauthorized", true},
+		{"basic-auth rejection", "failed to list refs: invalid username or password", true},
+		{"no credential at all", "could not read Username for 'https://github.com': terminal prompts disabled", true},
+		{"ssh key refused", "ssh: handshake failed: ssh: unable to authenticate", true},
+		{"token without write", "write access to repository not granted", true},
+
+		// Redis's NOAUTH contains "authentication required" verbatim but is the
+		// transient cache split, self-healed by restarting argocd-redis. Claiming it
+		// as terminal would abort a run that repairs itself.
+		{"redis NOAUTH is not git auth", "failed to list refs: NOAUTH Authentication required.", false},
+		{"redis WRONGPASS is not git auth", "failed to list refs: WRONGPASS invalid username-password pair or user is disabled.", false},
+
+		// Genuine flakes and real manifest faults stay out.
+		{"network flake", "failed to list refs: dial tcp: i/o timeout", false},
+		{"repo not found is ambiguous", "failed to list refs: repository not found", false},
+		{"manifest fault", "Failed to compare desired state: is missing required field kind", false},
+		{"empty", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsGitAuthError(tc.msg); got != tc.want {
+				t.Errorf("IsGitAuthError(%q) = %v, want %v", tc.msg, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClassifyArgoApp_GitAuthIsTerminal pins the classification and its guidance.
+// The message must tell an operator where to look, because the failure surfaces on
+// gitops-global while the actual fault is a credential three hops upstream.
+func TestClassifyArgoApp_GitAuthIsTerminal(t *testing.T) {
+	a := ArgoApp{
+		Name: "gitops-global", Sync: "Unknown", Health: "Healthy", Automated: true,
+		SpecErr: "failed to list refs: authentication required: Unauthorized",
+	}
+	// phase1 must not soften it — the phase says nothing about credentials.
+	for _, phase1 := range []bool{false, true} {
+		cat, msg := ClassifyArgoApp(a, phase1)
+		if cat != CatFail {
+			t.Errorf("phase1=%v: category = %v, want CatFail", phase1, cat)
+		}
+		if !strings.Contains(msg, "TERMINAL") {
+			t.Errorf("phase1=%v: message must mark the failure terminal; got %q", phase1, msg)
+		}
+		if !strings.Contains(msg, "APL_VALUES_REPO_TOKEN") {
+			t.Errorf("phase1=%v: message must name the credential to check; got %q", phase1, msg)
+		}
+	}
+}
+
+// TestClassifyArgoApp_RedisSplitStillPolls guards the ordering: the Redis case is
+// tested before the git case, so a WRONGPASS/NOAUTH split keeps its self-healing
+// pending verdict rather than being reclassified as a terminal git refusal.
+func TestClassifyArgoApp_RedisSplitStillPolls(t *testing.T) {
+	a := ArgoApp{
+		Name: "llz-harbor", Sync: "Unknown", Health: "Healthy", Automated: true,
+		SpecErr: "failed to list refs: NOAUTH Authentication required.",
+	}
+	if cat, msg := ClassifyArgoApp(a, false); cat != CatPending {
+		t.Errorf("category = %v (%s), want CatPending — the redis split self-heals", cat, msg)
 	}
 }

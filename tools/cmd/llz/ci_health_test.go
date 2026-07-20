@@ -742,3 +742,34 @@ func TestLongPoleCandidatesAndReport(t *testing.T) {
 		t.Error("no long-pole should not write a summary section")
 	}
 }
+
+// A git-auth ComparisonError must hard-fail AND raise GitAuthFailure, which is
+// what vetoes the phase1 downgrade. Without the veto this exact Application —
+// gsap-apl run 29709276389's gitops-global — read as "in-progress" for 1200s and
+// then reported a budget exhaustion for a cluster that was never progressing.
+func TestCheckArgoAppsGitAuthFailure(t *testing.T) {
+	withKubectl(t, func(a string) ([]byte, error) {
+		if a != "-n argocd get applications.argoproj.io -o json" {
+			return nil, errors.New("nope")
+		}
+		return items(
+			`{"metadata":{"name":"gitops-global"},"spec":{"syncPolicy":{"automated":{}}},"status":{"sync":{"status":"Unknown"},"health":{"status":"Healthy"},"conditions":[{"type":"ComparisonError","message":"failed to list refs: authentication required: Unauthorized"}]}}`,
+		), nil
+	})
+	var r health.Report
+	checkArgoApps(&r, true) // phase1 — the state the real run was in
+	if !r.GitAuthFailure {
+		t.Error("checkArgoApps did not set GitAuthFailure on a git-auth ComparisonError")
+	}
+	if r.RedisAuthSplit {
+		t.Error("a git refusal is not the redis cache split; restarting redis would do nothing")
+	}
+	if len(r.Failed) != 1 {
+		t.Errorf("git auth refusal must hard-fail; got failed %v", r.Failed)
+	}
+	// The veto itself: with the flag set, a hard fail must survive as exit 1
+	// rather than being softened to the in-progress code converge polls on.
+	if got := health.PhaseAwareExitCode(1, true && !r.GitAuthFailure); got != 1 {
+		t.Errorf("phase1 downgraded a git-auth hard fail to %d; want it to stay 1 (terminal)", got)
+	}
+}

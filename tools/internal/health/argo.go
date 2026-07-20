@@ -63,6 +63,21 @@ func ClassifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 		if IsRepoServerCacheAuthError(a.SpecErr) {
 			return CatPending, label + " — argocd-redis cache auth (repo-server↔redis password split); transient, polling"
 		}
+		// A GIT auth refusal, by contrast, is terminal. Argo is being told "no" by
+		// the remote for the credential it holds; polling cannot change the answer,
+		// and nothing in the bootstrap re-mints that credential. Saying so here —
+		// rather than letting it ride as a generic CatFail that phase1 then
+		// downgrades to in-progress — is what stops the gate from spending its
+		// entire budget on a question already answered. Checked AFTER the Redis case
+		// because Redis's NOAUTH message is literally "NOAUTH Authentication
+		// required." and would otherwise match.
+		if IsGitAuthError(a.SpecErr) {
+			return CatFail, label + " — " + a.SpecErr +
+				"  ⇒ TERMINAL: Argo CD cannot authenticate to the source repo. Polling will not fix this. " +
+				"Check the values-repo credential (APL_VALUES_REPO_TOKEN → otomi.git.password → the argocd " +
+				"repo Secret), and that the repo Secret actually materialized — it arrives via an ExternalSecret, " +
+				"so it stays empty if external-secrets never installed."
+		}
 		return CatFail, label + " — " + a.SpecErr
 	}
 	if a.Sync == "Synced" && a.Health == "Healthy" {
@@ -100,6 +115,50 @@ func ClassifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 // spec fault.
 func IsRepoServerCacheAuthError(specErr string) bool {
 	return strings.Contains(specErr, "WRONGPASS") || strings.Contains(specErr, "NOAUTH")
+}
+
+// IsGitAuthError reports whether a ComparisonError message is the git remote
+// refusing Argo's credential — as opposed to a network flake, a manifest fault,
+// or the Redis cache split above.
+//
+// The distinction is the whole point. gsap-apl run 29709276389 spent its entire
+// 1200s convergence budget polling this:
+//
+//	gitops-global (Unknown/Healthy) — ComparisonError: failed to list refs:
+//	  authentication required: Unauthorized
+//
+// Nothing about that resolves by waiting. The remote answered, the answer was
+// "no", and it will keep being "no" until an operator fixes the credential. Every
+// other failure in that run — external-secrets CRDs absent, apl-sops-secrets
+// missing, apl-operator in CreateContainerConfigError, Harbor's registry down —
+// was downstream of it, so 20 minutes of polling bought nothing but a longer log.
+//
+// Deliberately NOT matched: "repository not found" (a private repo returns it to
+// a credential that cannot see it, but so does a genuinely wrong repoURL, and the
+// two are indistinguishable from the message alone) and bare "403" (Argo wraps
+// several unrelated upstream 403s). Both stay generic failures. Callers must test
+// IsRepoServerCacheAuthError FIRST — Redis's NOAUTH text contains "authentication
+// required" and is transient, the exact opposite verdict.
+func IsGitAuthError(specErr string) bool {
+	if specErr == "" || IsRepoServerCacheAuthError(specErr) {
+		return false
+	}
+	m := strings.ToLower(specErr)
+	for _, p := range []string{
+		"authentication required",                // go-git's 401 on ref discovery
+		"invalid username or password",           // git-over-HTTPS credential rejection
+		"authentication failed",                  // generic transport refusal
+		"could not read username",                // no credential at all, prompts disabled
+		"terminal prompts disabled",              // ditto
+		"ssh: handshake failed",                  // key-based remote rejecting the key
+		"permission denied (publickey",           // ditto
+		"write access to repository not granted", // valid token, insufficient scope
+	} {
+		if strings.Contains(m, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsAnnotationLimitError reports whether a sync/operation error message carries
