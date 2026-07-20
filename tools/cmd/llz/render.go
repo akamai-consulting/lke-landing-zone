@@ -148,6 +148,9 @@ func runRender(g globalOpts, env string, tfvarsOnly, check, diff bool) error {
 		}
 		return fmt.Errorf("invalid LandingZone spec")
 	}
+	for _, w := range lz.AplChartVersionWarnings() {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+	}
 
 	envs := lz.EnvNames()
 	if env != "" {

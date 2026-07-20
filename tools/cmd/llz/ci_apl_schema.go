@@ -34,6 +34,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 )
 
@@ -69,15 +70,16 @@ func ciAplSchemaValidateCmd() *cobra.Command {
 			"secrets-only runtime placeholders `llz ci bootstrap-cluster` fills (else the\n" +
 			"bootstrap can't fill it — the ${apl_values_repo_url} class); (2) the values\n" +
 			"pass apl-core's chart schema via `helm template apl/apl`, pinned to\n" +
-			"--chart-version. The schema check self-skips (--skip-schema, no helm on PATH,\n" +
-			"or no --chart-version); the var-contract check always runs.",
+			"--chart-version (omitted → the platform baseline, which is what an env with\n" +
+			"no spec pin deploys). The schema check self-skips only on --skip-schema or\n" +
+			"no helm on PATH; the var-contract check always runs.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runValidateAplValues(valuesPath, chartVersion, skipSchema)
 		},
 	}
 	cmd.Flags().StringVar(&valuesPath, "values", "", "path to the rendered apl-values values.yaml (required)")
-	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "apl-core chart version to pin the schema check (from spec.cluster.bootstrap.aplChartVersion)")
+	cmd.Flags().StringVar(&chartVersion, "chart-version", "", "apl-core chart version to pin the schema check (from spec.cluster.bootstrap.aplChartVersion; default: the platform baseline)")
 	cmd.Flags().BoolVar(&skipSchema, "skip-schema", false, "skip the helm schema check (var-contract only)")
 	_ = cmd.MarkFlagRequired("values")
 	return cmd
@@ -106,10 +108,11 @@ func runValidateAplValues(valuesPath, chartVersion string, skipSchema bool) erro
 		fmt.Println("schema check skipped (no helm on PATH)")
 		return nil
 	}
-	if chartVersion == "" {
-		fmt.Println("schema check skipped (no --chart-version — pass spec.cluster.bootstrap.aplChartVersion to enable)")
-		return nil
-	}
+	// An omitted --chart-version resolves to the platform baseline rather than
+	// skipping: an env with no spec pin DEPLOYS the baseline (bootstrap-cluster
+	// resolves it the same way), so skipping here validated the values against
+	// nothing while the cluster still got a real chart.
+	chartVersion = clusterspec.EffectiveAplChartVersion(chartVersion)
 	return validateAplSchema(string(valuesRaw), chartVersion)
 }
 

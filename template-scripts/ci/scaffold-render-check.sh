@@ -138,8 +138,12 @@ done
 # without helm or a chart version; the var-contract half always runs.
 step "Validate apl-values (runtime-placeholder var-contract + apl-core schema)"
 if [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
-  # Best-effort chart version from the scaffolded spec; empty → schema self-skips.
-  CHART_VER="$(grep -hoE 'aplChartVersion:[[:space:]]*["'"'"']?[0-9]+\.[0-9]+\.[0-9]+' "$ENV_YAML" "$LZ" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  # Best-effort chart version from the scaffolded spec; empty → the Go side
+  # resolves the llz baseline (what an unpinned env actually deploys), so the
+  # schema check runs either way. The leading `[[:space:]]*` anchor keeps a
+  # COMMENTED-OUT `# aplChartVersion: 6.0.0` (the example's default state) from
+  # being read as a real pin.
+  CHART_VER="$(grep -hoE '^[[:space:]]*aplChartVersion:[[:space:]]*["'"'"']?[0-9]+\.[0-9]+\.[0-9]+' "$ENV_YAML" "$LZ" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
   "$LLZ" ci validate-apl-values \
     --values "$GEN_OVERLAY/values.yaml" \
     --chart-version "$CHART_VER" \
