@@ -297,6 +297,17 @@ jobs:
             --hint "Fine-grained PAT (github.com) scoped to this repo with Actions: write + Environments: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
           [ "$FAIL" -eq 0 ]
 
+      # The template is apl-core-6.x-only: the v6 migration dropped the
+      # `apl-sops-secrets` placeholder (5.x mounts it optional:false -> apl-operator
+      # CreateContainerConfigError) and retired the self-managed ESO (5.x bundles
+      # none -> no external-secrets at all). Both are silent until the cluster is up,
+      # then surface ~2h in as CreateContainerConfigError pods and an exhausted
+      # converge budget. `llz import init` still pins 5.0.0 as its migration target,
+      # so an imported instance hits this by default — check the spec pin here,
+      # before the ~15-min cluster apply.
+      - name: Pre-flight — apl-core chart version is supported
+        run: llz ci assert-apl-version --env "$REGION"
+
       # Resolved from the spec, so no rendered tfvars are needed here. Empty =>
       # dedicated VPC, created by the cluster apply itself — nothing to do.
       - name: Resolve shared VPC for this deployment
