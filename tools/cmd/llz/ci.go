@@ -40,6 +40,7 @@ func ciCmd() *cobra.Command {
 	}
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFOutputCmd(), ciTFDestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
 		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
+		ciAssertAplVersionCmd(),
 		// BREAK-GLASS (deliberately callerless — see the note at the bottom of this
 		// function): bao-status, bao-init and bao-regen-root are the manual handles
 		// for a wedged bao-ensure-ready. No workflow calls them, BY DESIGN.

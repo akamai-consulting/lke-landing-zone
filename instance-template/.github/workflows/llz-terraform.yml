@@ -294,8 +294,52 @@ jobs:
           llz ci require-secret APL_VALUES_REPO_TOKEN \
             --hint "Fine-grained GitHub PAT (Contents: write) for github.com/${{ inputs.instance_repo }}.git — apl-core's otomi.git.password + the argocd repo Secrets render empty without it; apl-operator can't push and Argo can't clone." || FAIL=1
           llz ci require-secret OPENBAO_SECRETS_WRITE_TOKEN \
-            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions + Secrets: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
+            --hint "Fine-grained PAT (github.com) scoped to this repo with Actions: write + Environments: write — used by bootstrap-openbao (GitHub-token seeds + recovery-key/root-token persistence) and the destroy-time GH-secret cleanup." || FAIL=1
           [ "$FAIL" -eq 0 ]
+
+      # PRESENCE (above) is not VALIDITY, and neither is AUTHORIZATION. A token
+      # that is set, live, and under-scoped passes the check above and still fails
+      # the run — which is exactly what happened: an OPENBAO_SECRETS_WRITE_TOKEN
+      # without Environments: write 403'd on the seal-key write six minutes after
+      # the cluster came up, and a values-repo credential Argo CD could not fetch
+      # with left every gitops-* Application ComparisonErrored ~40 minutes in.
+      #
+      # bootstrap-openbao runs the same probe, but it `needs: apply-cluster` — so
+      # there it lands AFTER the ~15-min cluster apply, and its own comment about
+      # failing "in seconds" was only ever true of a standalone dispatch. Probing
+      # here, in the first job, is what makes that claim true for the pipeline.
+      # It costs a few HTTP round-trips and is not gated on ACTION: a `plan` that
+      # would apply with a dead credential should say so now.
+      #
+      # GH_REPO is what the authorization probes build their paths from (the
+      # environment-secret public-key endpoint, the values-repo ref discovery);
+      # without it they skip rather than fail, which would quietly return this
+      # step to a validity-only check.
+      - name: Pre-flight — probe credential validity + scope (fail fast on a dead or under-scoped token)
+        env:
+          GH_REPO:                     ${{ inputs.instance_repo }}
+          LINODE_API_TOKEN:            ${{ secrets.LINODE_API_TOKEN }}
+          LINODE_DNS_TOKEN:            ${{ secrets.LINODE_DNS_TOKEN }}
+          APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+          OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
+          GHCR_READ_TOKEN:             ${{ secrets.GHCR_READ_TOKEN }}
+          GHCR_USERNAME:               ${{ vars.GHCR_USERNAME }}
+          TF_STATE_ACCESS_KEY:         ${{ secrets.TF_STATE_ACCESS_KEY }}
+          TF_STATE_SECRET_KEY:         ${{ secrets.TF_STATE_SECRET_KEY }}
+          TF_STATE_ENDPOINT:           ${{ vars.TF_STATE_ENDPOINT }}
+          TF_STATE_BUCKET:             ${{ vars.TF_STATE_BUCKET }}
+        run: llz ci validate-tokens
+
+      # The template is apl-core-6.x-only: the v6 migration dropped the
+      # `apl-sops-secrets` placeholder (5.x mounts it optional:false -> apl-operator
+      # CreateContainerConfigError) and retired the self-managed ESO (5.x bundles
+      # none -> no external-secrets at all). Both are silent until the cluster is up,
+      # then surface ~2h in as CreateContainerConfigError pods and an exhausted
+      # converge budget. `llz import init` still pins 5.0.0 as its migration target,
+      # so an imported instance hits this by default — check the spec pin here,
+      # before the ~15-min cluster apply.
+      - name: Pre-flight — apl-core chart version is supported
+        run: llz ci assert-apl-version --env "$REGION"
 
       # Resolved from the spec, so no rendered tfvars are needed here. Empty =>
       # dedicated VPC, created by the cluster apply itself — nothing to do.
