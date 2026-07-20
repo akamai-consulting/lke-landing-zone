@@ -67,6 +67,18 @@ type Report struct {
 	// the unaggregated list reads like several unrelated component faults.
 	// See health.IsTunnelBlocked.
 	TunnelDown bool
+
+	// GitAuthFailure is set when at least one Argo Application ComparisonErrors
+	// because the git remote refused its credential. It is the ODD ONE OUT among
+	// the flags above: those three mark transient conditions that classify as
+	// Pending, this one marks a terminal condition, and its job is to VETO the
+	// phase1 hard-fail downgrade.
+	//
+	// phase1 demotes failures on the premise that the support plane is merely
+	// "still installing". That premise is false here — no helmfile phase mints a
+	// git credential — so the demotion turns a knowable abort into a full budget
+	// of polling. See health.IsGitAuthError and healthExitCode.
+	GitAuthFailure bool
 }
 
 // AddFail records a hard failure (a required component the reconciler can't fix).

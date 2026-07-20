@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/spf13/cobra"
 )
 
@@ -151,8 +152,15 @@ func argoComparisonError(d aplGateDeps, namespace, parent string) string {
 // remote-base fetch), which a hard refresh reliably recovers. A real manifest error
 // (bad kind, invalid yaml, missing field) matches none of these and is left to fail
 // the gate, so recovery never masks a genuine break.
+//
+// An AUTH refusal is excluded up front, because two of the patterns below —
+// "failed to list refs" and "could not read" — match it, and it is the one
+// git-fetch failure a hard refresh provably cannot recover: the remote answered,
+// the answer was "no", and refreshing asks the identical question again. Before
+// this guard, a values-repo credential Argo could not use was re-nudged every
+// poll for the full convergence budget.
 func transientFetchError(msg string) bool {
-	if msg == "" {
+	if msg == "" || health.IsGitAuthError(msg) {
 		return false
 	}
 	m := strings.ToLower(msg)
