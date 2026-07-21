@@ -5,10 +5,14 @@
 into every customer instance by copier**, alongside the composite actions it calls,
 so the job runs self-contained with no cross-repo checkout. An instance ships a
 ~65-line caller stub (`breakglass-openbao.yml`) that owns the `workflow_dispatch`
-trigger surface and vendors this body; the OpenBao verbs (`llz ci bao-regen-root`,
-`llz ci bao-status`, `llz openbao exec`) are baked into `vars.TF_IMAGE`. See
+trigger surface and vendors this body. The whole break-glass flow — validate,
+revoke/rotate/regenerate, and RSA-OAEP-encrypt — is **one unit-tested Go verb**,
+`llz ci bao-breakglass` (`tools/cmd/llz/ci_bao_breakglass.go`, itself layered on
+`llz ci bao-regen-root`); it and `llz ci bao-status` are baked into `vars.TF_IMAGE`,
+so the reusable is just cluster-access + that one verb + artifact upload. See
 `docs/adr/0003-vendor-actions-and-bodies-into-instances.md` for the
-surface-reduction pattern.
+surface-reduction pattern, and `template-scripts/AGENTS.md` for the
+logic-belongs-in-tested-Go principle the `.untestable-budget.yaml` gate enforces.
 
 Because the YAML is copied into instances where it can never be updated in place,
 long-form maintainer archaeology lives here in the template repo; the inline
@@ -34,7 +38,7 @@ by hand. This workflow packages the safe path.
 
 ## The three actions
 
-One body, gated on `inputs.action`:
+One verb (`llz ci bao-breakglass --action …`), branched on `--action`:
 
 - **generate** — `llz ci bao-regen-root`, then encrypt-and-deliver. `bao-regen-root`
   validates the loaded `OPENBAO_ROOT_TOKEN`; on a normal cluster that stored value is
@@ -56,20 +60,34 @@ A root token is full admin. GitHub Actions run logs (and job summaries) are read
 by anyone with Actions access to the instance repo, and `::add-mask::` only filters
 console output — it does not make a summary safe to share. So the operator supplies an
 RSA **public** key (`recipient_pubkey_b64`, base64 of the PEM) and the token is
-returned RSA-OAEP/SHA-256 encrypted; only ciphertext ever leaves the job. The
-plaintext is also written to `infra-<region>::OPENBAO_ROOT_TOKEN` by `bao-regen-root`
-(write-only in the UI), which the `revoke` action later deletes.
+returned RSA-OAEP/SHA-256 encrypted; only ciphertext ever leaves the job (a base64
+`root-token.b64` artifact + a job-summary block). The plaintext is also written to
+`infra-<region>::OPENBAO_ROOT_TOKEN` by `bao-regen-root` (write-only in the UI), which
+the `revoke` action later deletes.
 
-### Why openssl, not age/gpg
+### Why RSA-OAEP, and why the crypto is in Go (not openssl)
 
-`openssl` is guaranteed present in `vars.TF_IMAGE` (it does TLS); `age` and `gpg` are
-not. A break-glass tool must have the fewest possible dependencies at the moment you
-need it, so encryption uses `openssl pkeyutl` with no install step and no network
-fetch. The token is short (< 96 bytes), well under the RSA-OAEP single-block limit for
-a ≥ 2048-bit key, so there is no hybrid-encryption envelope to manage. If a future
+Encryption runs in `llz ci bao-breakglass` via Go's `crypto/rsa.EncryptOAEP` (SHA-256
+for both the label hash and MGF1) — so the parsing, the private-key/too-small-key
+rejections, and the round-trip are **unit-tested** (`ci_bao_breakglass_test.go`)
+rather than an untested inline `openssl pkeyutl` heredoc that would spend
+`.untestable-budget.yaml`. The **decrypt** recipe printed to the summary is plain
+`openssl pkeyutl -decrypt -pkeyopt rsa_oaep_md:sha256`, guaranteed present on the
+operator's machine (openssl does TLS) — no `age`/`gpg` dependency at the moment you
+need it. The token is short (< 96 bytes), well under the RSA-OAEP single-block limit
+for a ≥ 2048-bit key, so there is no hybrid-encryption envelope to manage. If a future
 maintainer wants SSH-key recipients (reusing operators' existing `~/.ssh` keys), age
-would be the natural switch — at the cost of shipping/pinning the `age` binary into
-the image or the job.
+would be the natural switch — at the cost of shipping/pinning the `age` binary.
+
+### Why one process, not one step per action
+
+The verb does the whole flow in a single process, which is not just tidiness: it reads
+the effective root token straight from its own `os.Getenv` immediately after
+regeneration. The earlier step-per-action shape had to hand the regenerated token
+between steps through `$GITHUB_ENV` — and a static job/step-level `env:` binding of
+`OPENBAO_ROOT_TOKEN` is re-applied over that hand-off for every later step, silently
+**shadowing** the regenerated value so the encrypt step would deliver the *stale*
+(usually revoked) stored token. In one process there is no hand-off to shadow.
 
 ## Concurrency: shares the bootstrap group on purpose
 
@@ -103,9 +121,9 @@ rejects undeclared inputs.
 ### `action` typed as string
 
 `workflow_call` has no `choice` input type, so the reusable declares `action` as
-`string` and the "Validate inputs" step re-checks it. The caller's
-`workflow_dispatch` input IS a `choice`, so the operator-facing surface is still a
-dropdown.
+`string` and `llz ci bao-breakglass` re-checks it (rejecting anything but
+generate/rotate/revoke). The caller's `workflow_dispatch` input IS a `choice`, so the
+operator-facing surface is still a dropdown.
 
 ### Secrets are all `required: false`
 

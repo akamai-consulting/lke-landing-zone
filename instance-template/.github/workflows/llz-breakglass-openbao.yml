@@ -7,17 +7,20 @@ name: llz-breakglass-openbao (reusable)
 #
 # Fronts the recovery quorum for one deployment. A root token is ephemeral (bootstrap
 # mints, uses, and REVOKES it); the recovery keys survive and authorize
-# `operator generate-root`. This exposes that as three operator actions:
-#   generate  regenerate a root token via `llz ci bao-regen-root`, return it ENCRYPTED
+# `operator generate-root`. The whole flow is ONE unit-tested Go verb —
+# `llz ci bao-breakglass` (tools/cmd/llz/ci_bao_breakglass.go) — not inline shell,
+# exposing three operator actions:
+#   generate  regenerate a root token via the quorum, return it ENCRYPTED
 #   rotate    revoke the current root token first, then regenerate + return a fresh one
 #   revoke    revoke the current root token and delete infra-<region>::OPENBAO_ROOT_TOKEN
 #
 # SECURITY MODEL: a root token is full admin, and run logs are readable by anyone
 # with Actions access. The token is NEVER printed in the clear — the operator supplies
-# an RSA public key and the token is returned RSA-OAEP-encrypted (openssl, which is
-# baked into vars.TF_IMAGE — no extra dependency when you need this most). The plaintext
-# also lands in infra-<region>::OPENBAO_ROOT_TOKEN (write-only in the UI, written by
-# bao-regen-root); the `revoke` action removes it.
+# an RSA public key and the token is returned RSA-OAEP/SHA-256-encrypted (Go crypto/rsa;
+# the decrypt recipe in the job summary is plain `openssl`, baked into vars.TF_IMAGE —
+# no extra dependency when you need this most). The plaintext also lands in
+# infra-<region>::OPENBAO_ROOT_TOKEN (write-only in the UI, written by the quorum
+# regenerate); the `revoke` action removes it.
 #
 # OpenBao root tokens have NO TTL — they do not self-expire. Lifecycle is manual;
 # that is what `revoke`/`rotate` are for.
@@ -107,14 +110,12 @@ jobs:
       # bao-regen-root's env-secret write + the revoke delete.
       GH_REPO: ${{ inputs.instance_repo }}
       GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-      # NOTE: OPENBAO_ROOT_TOKEN is deliberately NOT set at job level. bao-regen-root
-      # appends the regenerated token to $GITHUB_ENV, but a static job-level `env`
-      # binding is re-applied on top of the process env for EVERY later step, so it
-      # would SHADOW that $GITHUB_ENV write — the encrypt step would then deliver the
-      # stale (usually revoked) stored value instead of the fresh token. Same reason
-      # llz-bootstrap-openbao.yml scopes OPENBAO_ROOT_TOKEN to the ensure STEP only.
-      # The baseline stored token is instead injected per-step where it is consumed
-      # BEFORE regeneration (the revoke + regenerate steps below).
+      # Baseline root token (usually the REVOKED value from the last bootstrap).
+      # `llz ci bao-breakglass` runs the whole flow in ONE process, so it reads the
+      # effective token from its own os.Getenv right after regeneration — there is no
+      # cross-step $GITHUB_ENV hand-off for a static job-level `env` to shadow, unlike
+      # the multi-step bootstrap reusable.
+      OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
       # The generate-root quorum keys (names bao-regen-root reads via os.Getenv).
       RECOVERY_K1: ${{ secrets.OPENBAO_RECOVERY_KEY_1 }}
       RECOVERY_K2: ${{ secrets.OPENBAO_RECOVERY_KEY_2 }}
@@ -126,29 +127,6 @@ jobs:
     steps:
       - name: Checkout the instance (tfvars + composite actions)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Validate inputs
-        run: |
-          set -euo pipefail
-          case "${ACTION}" in
-            generate|rotate|revoke) ;;
-            *) echo "::error::unknown action '${ACTION}' (expected generate | rotate | revoke)"; exit 1 ;;
-          esac
-          if [ "${ACTION}" != "revoke" ]; then
-            if [ -z "${RECIPIENT_PUBKEY_B64:-}" ]; then
-              echo "::error::recipient_pubkey_b64 is required for action=${ACTION}. Provide base64 of your RSA public-key PEM, no newlines (see the workflow header)."
-              exit 1
-            fi
-            # Decode + validate the recipient key up front so we fail BEFORE burning
-            # a quorum regeneration on a bad key.
-            printf '%s' "${RECIPIENT_PUBKEY_B64}" | base64 -d > "$RUNNER_TEMP/bg-pub.pem" 2>/dev/null || {
-              echo "::error::recipient_pubkey_b64 is not valid base64."; exit 1; }
-            if grep -q 'PRIVATE KEY' "$RUNNER_TEMP/bg-pub.pem"; then
-              echo "::error::That is a PRIVATE key. Paste the PUBLIC key half (bg-pub.pem)."; exit 1
-            fi
-            openssl pkey -pubin -in "$RUNNER_TEMP/bg-pub.pem" -noout 2>/dev/null || {
-              echo "::error::recipient_pubkey_b64 did not decode to a valid PEM public key."; exit 1; }
-          fi
 
       # Kubeconfig (from TF state) + open this runner's egress IP in the LKE-E
       # control-plane ACL. Revoked in the always() step at the tail.
@@ -167,106 +145,17 @@ jobs:
       - name: Probe OpenBao seal state
         run: llz ci bao-status || true
 
-      # ── revoke / rotate: kill the CURRENT root token first ─────────────────────
-      # Must precede regeneration for rotate: regenerating while the old token were
-      # still valid would leave a live, untracked root credential behind (the exact
-      # anti-pattern bao-regen-root guards against). Revokes -self, i.e. whatever
-      # OPENBAO_ROOT_TOKEN currently holds (the infra-<region> stored value).
-      - name: Revoke current root token
-        if: inputs.action == 'revoke' || inputs.action == 'rotate'
-        env:
-          # Baseline stored token to revoke — injected here (not job-level) so it
-          # cannot shadow the regenerated $GITHUB_ENV value in the encrypt step.
-          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-        run: |
-          set -uo pipefail
-          if [ -z "${OPENBAO_ROOT_TOKEN:-}" ]; then
-            echo "No OPENBAO_ROOT_TOKEN stored on infra-${REGION} — nothing to revoke."
-            exit 0
-          fi
-          if llz openbao exec -- token revoke -self; then
-            echo "Current root token revoked."
-          else
-            echo "::warning::token revoke -self failed — the stored token may already be dead. Continuing."
-          fi
-
-      # ── revoke: delete the stored secret so no live root lingers in GitHub ─────
-      - name: Delete stored root-token secret
-        if: inputs.action == 'revoke'
-        run: |
-          set -uo pipefail
-          if gh secret delete OPENBAO_ROOT_TOKEN --env "infra-${REGION}"; then
-            echo "Deleted infra-${REGION}::OPENBAO_ROOT_TOKEN."
-          else
-            echo "::warning::Could not delete infra-${REGION}::OPENBAO_ROOT_TOKEN (already absent, or the OPENBAO_SECRETS_WRITE_TOKEN PAT lacks Environments admin). Verify it is gone manually."
-          fi
-          {
-            echo "## OpenBao break-glass — revoke (${REGION})"
-            echo ""
-            echo "Current root token revoked and \`infra-${REGION}::OPENBAO_ROOT_TOKEN\` deleted."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # ── generate / rotate: regenerate a root token via the recovery quorum ─────
-      # For rotate the token loaded above is now revoked, so bao-regen-root takes the
-      # regenerate branch. It appends the fresh token to $GITHUB_ENV (masked) and
-      # writes it to infra-<region>::OPENBAO_ROOT_TOKEN. The baseline stored token is
-      # injected here (not job-level) so it never shadows that $GITHUB_ENV write in
-      # the encrypt step.
-      - name: Regenerate root token (quorum)
-        if: inputs.action == 'generate' || inputs.action == 'rotate'
-        env:
-          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-        run: llz ci bao-regen-root --region "$REGION"
-
-      # ── generate / rotate: encrypt the token to the operator's key + deliver ───
-      # Resolve the effective token WITHOUT letting the stored value shadow the
-      # regenerated one: $OPENBAO_ROOT_TOKEN is unset in this step's static env, so
-      # on the regen path it carries the fresh value bao-regen-root wrote to
-      # $GITHUB_ENV. On the skip-regen path (stored token still valid, generate only)
-      # $GITHUB_ENV holds nothing, so we fall back to the stored secret — exposed
-      # under a DISTINCT name (STORED_ROOT_TOKEN) precisely so it can't shadow the
-      # $GITHUB_ENV write. The token is short, so a single RSA-OAEP block covers it
-      # (no hybrid needed); the ciphertext is safe to print.
-      - name: Encrypt + deliver root token
-        if: inputs.action == 'generate' || inputs.action == 'rotate'
-        env:
-          STORED_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
-        run: |
-          set -euo pipefail
-          TOKEN="${OPENBAO_ROOT_TOKEN:-${STORED_ROOT_TOKEN:-}}"
-          if [ -z "${TOKEN}" ]; then
-            echo "::error::No root token to deliver — regeneration produced nothing and no valid stored token was found."
-            exit 1
-          fi
-          # Defensive: the skip-regeneration path does not mask the loaded token.
-          echo "::add-mask::${TOKEN}"
-
-          if ! printf '%s' "${TOKEN}" \
-              | openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/bg-pub.pem" \
-                  -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
-                  -out "$RUNNER_TEMP/root-token.bin" 2>"$RUNNER_TEMP/enc.err"; then
-            echo "::error::RSA-OAEP encryption failed: $(tr '\n' ' ' <"$RUNNER_TEMP/enc.err"). Is the key >= 2048-bit?"
-            exit 1
-          fi
-          base64 < "$RUNNER_TEMP/root-token.bin" | tr -d '\n' > "$RUNNER_TEMP/root-token.b64"
-          CIPHER="$(cat "$RUNNER_TEMP/root-token.b64")"
-          {
-            echo "## OpenBao break-glass root token — ${REGION} (${ACTION})"
-            echo ""
-            echo "Encrypted to your RSA public key (RSA-OAEP / SHA-256). Decrypt locally with your OFFLINE private key:"
-            echo ""
-            echo '```bash'
-            echo "cat > root-token.b64 <<'CIPHER_EOF'"
-            echo "${CIPHER}"
-            echo "CIPHER_EOF"
-            echo "base64 -d root-token.b64 \\"
-            echo "  | openssl pkeyutl -decrypt -inkey bg-priv.pem \\"
-            echo "      -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256; echo"
-            echo '```'
-            echo ""
-            echo "> The plaintext token is ALSO live in \`infra-${REGION}\` :: \`OPENBAO_ROOT_TOKEN\` (write-only in the UI)."
-            echo "> Root tokens do NOT expire. When the incident is over, re-run with **action=revoke** to kill it and delete that secret."
-          } >> "$GITHUB_STEP_SUMMARY"
+      # The whole break-glass flow — validate inputs, (revoke/rotate) kill the
+      # current root token, (revoke) delete the stored secret, (generate/rotate)
+      # regenerate via the quorum and RSA-OAEP-encrypt the token to the operator's
+      # key — is ONE unit-tested Go verb (tools/cmd/llz/ci_bao_breakglass.go), not
+      # inline shell. Running it in a single process is also what lets it read the
+      # regenerated token straight from its own env (no cross-step $GITHUB_ENV
+      # hand-off for a static `env:` to shadow). It writes the ciphertext to
+      # $RUNNER_TEMP/root-token.b64 (uploaded below) and the decrypt recipe to the
+      # job summary; the token is never printed in the clear.
+      - name: Break-glass (${{ inputs.action }})
+        run: llz ci bao-breakglass --region "$REGION" --action "$ACTION" --recipient-pubkey-b64 "$RECIPIENT_PUBKEY_B64"
 
       # Ciphertext-only artifact as a reliable fallback to the job summary. Safe to
       # store: it is useless without the operator's offline private key.

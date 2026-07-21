@@ -231,9 +231,10 @@ For the common incident case — "I need a working root token right now" — dis
 the `breakglass-openbao.yml` workflow (thin caller for the reusable
 `llz-breakglass-openbao.yml`, both vendored into the instance) instead of running
 the raw verbs by hand. It is the operator front-end to the recovery quorum: it opens
-cluster access, runs `llz ci bao-regen-root`, and returns the token **encrypted to
-your key** (a root token is full admin, and run logs are readable by anyone with
-Actions access — so it is never printed in the clear). Maintainer rationale:
+cluster access and runs `llz ci bao-breakglass`, which regenerates via the quorum and
+returns the token **encrypted to your key** (a root token is full admin, and run logs
+are readable by anyone with Actions access — so it is never printed in the clear).
+Maintainer rationale:
 [`docs/workflows/llz-breakglass-openbao.md`](../workflows/llz-breakglass-openbao.md).
 
 **OpenBao root tokens have no TTL** — they do not self-expire. Lifecycle is manual;
