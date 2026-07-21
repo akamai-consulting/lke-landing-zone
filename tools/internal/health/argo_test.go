@@ -69,6 +69,14 @@ func TestClassifyArgoApp(t *testing.T) {
 		{"real comparison error still fails (no redis code)", ArgoApp{Name: "platform-foo", Sync: "Unknown", Health: "Healthy", SpecErr: "ComparisonError: rpc error: repository not found", Automated: true}, false, CatFail},
 		{"annotation-limit sync error -> pending (transient, self-heal)", ArgoApp{Name: "kyverno-kyverno", Sync: "OutOfSync", Health: "Degraded", OpErr: `error when patching "/dev/shm/x": CustomResourceDefinition.apiextensions.k8s.io "clusterpolicies.kyverno.io" is invalid: metadata.annotations: Too long: may not be more than 262144 bytes`, Automated: true}, false, CatPending},
 		{"deferred still wins over annotation-limit", ArgoApp{Name: "external-dns-external-dns", Sync: "OutOfSync", Health: "Degraded", OpErr: "metadata.annotations: Too long", Automated: true}, false, CatDeferred},
+		// instance-custom escape hatch: gating states are remapped to CatInstance
+		// (reported, non-gating) so operator-owned manifests can't fail the platform.
+		{"instance-custom fail -> instance (not fail)", ArgoApp{Name: "instance-custom-team-gsap", Sync: "OutOfSync", Health: "Missing", SpecErr: `ComparisonError: no matches for kind "ExternalSecret" in version "external-secrets.io/v1beta1"`, Automated: true}, false, CatInstance},
+		{"instance-custom unhealthy -> instance", ArgoApp{Name: "instance-custom-istio-system", Sync: "OutOfSync", Health: "Degraded", Automated: true}, false, CatInstance},
+		{"instance-custom pending -> instance (does not pin poll loop)", ArgoApp{Name: "instance-custom-crossplane-system", Sync: "OutOfSync", Health: "Missing", Automated: false}, false, CatInstance},
+		{"instance-custom healthy -> OK (unchanged)", ArgoApp{Name: "instance-custom-team-gsap", Sync: "Synced", Health: "Healthy", Automated: true}, false, CatOK},
+		{"instance-custom drift -> drift (unchanged, already non-gating)", ArgoApp{Name: "instance-custom-team-gsap", Sync: "OutOfSync", Health: "Healthy", Automated: true}, false, CatDrift},
+		{"bare 'instance-custom' (no trailing hyphen) is NOT remapped", ArgoApp{Name: "instance-custom", Sync: "OutOfSync", Health: "Degraded", Automated: true}, false, CatFail},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

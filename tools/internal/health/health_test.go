@@ -19,6 +19,8 @@ func TestVerdictAndExitCode(t *testing.T) {
 		{"failed dominates pending", Report{Failed: []string{"crashloop"}, Pending: []string{"issuing"}}, HardFailed, 1},
 		{"failed dominates deferred", Report{Failed: []string{"x"}, Deferred: []string{"y"}}, HardFailed, 1},
 		{"pending dominates deferred", Report{Pending: []string{"p"}, Deferred: []string{"d"}}, InProgress, 2},
+		{"instance only -> converged", Report{Instance: []string{"instance-custom-team-gsap broken"}}, Converged, 0},
+		{"instance does not gate: fail still dominates", Report{Failed: []string{"platform"}, Instance: []string{"custom"}}, HardFailed, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

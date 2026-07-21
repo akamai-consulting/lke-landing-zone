@@ -30,9 +30,10 @@ func paint(code, s string) string {
 	return "\033[" + code + "m" + s + "\033[0m"
 }
 
-func green(s string) string  { return paint("32", s) }
-func yellow(s string) string { return paint("33", s) }
-func red(s string) string    { return paint("31", s) }
-func cyan(s string) string   { return paint("36", s) }
-func bold(s string) string   { return paint("1", s) }
-func dim(s string) string    { return paint("90", s) } // bright-black: de-emphasized hint text
+func green(s string) string   { return paint("32", s) }
+func yellow(s string) string  { return paint("33", s) }
+func red(s string) string     { return paint("31", s) }
+func cyan(s string) string    { return paint("36", s) }
+func magenta(s string) string { return paint("35", s) } // instance-owned (escape-hatch) findings — distinct from the platform categories
+func bold(s string) string    { return paint("1", s) }
+func dim(s string) string     { return paint("90", s) } // bright-black: de-emphasized hint text
