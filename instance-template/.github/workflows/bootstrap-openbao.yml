@@ -47,11 +47,15 @@ on:
 permissions:
   contents: read
 
-# Serialize re-bootstraps of the same region so two runs cannot race on the
-# same KV mount or the same root token.
-concurrency:
-  group: openbao-bootstrap-${{ inputs.region }}
-  cancel-in-progress: false
+# NO workflow-level `concurrency` here, on purpose. Serialization of re-bootstraps
+# (so two runs can't race the same KV mount / root token) is owned by the reusable
+# llz-bootstrap-openbao.yml, whose own `concurrency: openbao-bootstrap-<region>`
+# gates EVERY invocation — this stub and terraform.yml's bootstrap-openbao job alike.
+# Repeating that SAME group on this top-level caller DEADLOCKS: GitHub cancels the
+# run at startup with "a deadlock was detected for concurrency group
+# 'openbao-bootstrap-<region>' between a top level workflow and 'call'" (the parent
+# holds the group its own `call` job then needs). A caller must never share a
+# concurrency group with the reusable it calls.
 
 jobs:
   call:
