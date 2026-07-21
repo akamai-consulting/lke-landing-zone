@@ -107,10 +107,14 @@ jobs:
       # bao-regen-root's env-secret write + the revoke delete.
       GH_REPO: ${{ inputs.instance_repo }}
       GH_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
-      # Baseline root token (usually the REVOKED value from the last bootstrap).
-      # bao-regen-root validates it and regenerates when it is dead; on regen it
-      # appends the fresh value to $GITHUB_ENV, which overrides this for later steps.
-      OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
+      # NOTE: OPENBAO_ROOT_TOKEN is deliberately NOT set at job level. bao-regen-root
+      # appends the regenerated token to $GITHUB_ENV, but a static job-level `env`
+      # binding is re-applied on top of the process env for EVERY later step, so it
+      # would SHADOW that $GITHUB_ENV write — the encrypt step would then deliver the
+      # stale (usually revoked) stored value instead of the fresh token. Same reason
+      # llz-bootstrap-openbao.yml scopes OPENBAO_ROOT_TOKEN to the ensure STEP only.
+      # The baseline stored token is instead injected per-step where it is consumed
+      # BEFORE regeneration (the revoke + regenerate steps below).
       # The generate-root quorum keys (names bao-regen-root reads via os.Getenv).
       RECOVERY_K1: ${{ secrets.OPENBAO_RECOVERY_KEY_1 }}
       RECOVERY_K2: ${{ secrets.OPENBAO_RECOVERY_KEY_2 }}
@@ -170,6 +174,10 @@ jobs:
       # OPENBAO_ROOT_TOKEN currently holds (the infra-<region> stored value).
       - name: Revoke current root token
         if: inputs.action == 'revoke' || inputs.action == 'rotate'
+        env:
+          # Baseline stored token to revoke — injected here (not job-level) so it
+          # cannot shadow the regenerated $GITHUB_ENV value in the encrypt step.
+          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
         run: |
           set -uo pipefail
           if [ -z "${OPENBAO_ROOT_TOKEN:-}" ]; then
@@ -201,28 +209,39 @@ jobs:
       # ── generate / rotate: regenerate a root token via the recovery quorum ─────
       # For rotate the token loaded above is now revoked, so bao-regen-root takes the
       # regenerate branch. It appends the fresh token to $GITHUB_ENV (masked) and
-      # writes it to infra-<region>::OPENBAO_ROOT_TOKEN.
+      # writes it to infra-<region>::OPENBAO_ROOT_TOKEN. The baseline stored token is
+      # injected here (not job-level) so it never shadows that $GITHUB_ENV write in
+      # the encrypt step.
       - name: Regenerate root token (quorum)
         if: inputs.action == 'generate' || inputs.action == 'rotate'
+        env:
+          OPENBAO_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
         run: llz ci bao-regen-root --region "$REGION"
 
       # ── generate / rotate: encrypt the token to the operator's key + deliver ───
-      # $OPENBAO_ROOT_TOKEN here is the fresh value ($GITHUB_ENV override) after a
-      # regen, or the still-valid stored value if bao-regen-root skipped. Either way
-      # it is the current usable root token. The token is short, so a single RSA-OAEP
-      # block covers it (no hybrid needed); the ciphertext is safe to print.
+      # Resolve the effective token WITHOUT letting the stored value shadow the
+      # regenerated one: $OPENBAO_ROOT_TOKEN is unset in this step's static env, so
+      # on the regen path it carries the fresh value bao-regen-root wrote to
+      # $GITHUB_ENV. On the skip-regen path (stored token still valid, generate only)
+      # $GITHUB_ENV holds nothing, so we fall back to the stored secret — exposed
+      # under a DISTINCT name (STORED_ROOT_TOKEN) precisely so it can't shadow the
+      # $GITHUB_ENV write. The token is short, so a single RSA-OAEP block covers it
+      # (no hybrid needed); the ciphertext is safe to print.
       - name: Encrypt + deliver root token
         if: inputs.action == 'generate' || inputs.action == 'rotate'
+        env:
+          STORED_ROOT_TOKEN: ${{ secrets.OPENBAO_ROOT_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${OPENBAO_ROOT_TOKEN:-}" ]; then
+          TOKEN="${OPENBAO_ROOT_TOKEN:-${STORED_ROOT_TOKEN:-}}"
+          if [ -z "${TOKEN}" ]; then
             echo "::error::No root token to deliver — regeneration produced nothing and no valid stored token was found."
             exit 1
           fi
           # Defensive: the skip-regeneration path does not mask the loaded token.
-          echo "::add-mask::${OPENBAO_ROOT_TOKEN}"
+          echo "::add-mask::${TOKEN}"
 
-          if ! printf '%s' "${OPENBAO_ROOT_TOKEN}" \
+          if ! printf '%s' "${TOKEN}" \
               | openssl pkeyutl -encrypt -pubin -inkey "$RUNNER_TEMP/bg-pub.pem" \
                   -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
                   -out "$RUNNER_TEMP/root-token.bin" 2>"$RUNNER_TEMP/enc.err"; then
