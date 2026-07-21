@@ -389,7 +389,14 @@ func openbaoCmd() *cobra.Command {
 			"single-writes a standalone deployment (when no standby is configured).\n" +
 			"Auth + addresses come from OPENBAO_ADDR_{ACTIVE,STANDBY} and\n" +
 			"OPENBAO_TOKEN_{ACTIVE,STANDBY} (or OPENBAO_TOKEN); OPENBAO_NAMESPACE is\n" +
-			"optional. Distinct from `llz secrets` (which manages GitHub secrets).",
+			"optional.\n" +
+			"\n" +
+			"When OPENBAO_ADDR_ACTIVE is unset on a standalone deployment, get/set open\n" +
+			"an ephemeral `kubectl port-forward` to the leader pod in the cluster your\n" +
+			"kubectl context points at (TLS verify skipped on the loopback tunnel) — so\n" +
+			"a plain `llz openbao get/set` with just a token Just Works, no address to\n" +
+			"wire. Set OPENBAO_ADDR_ACTIVE to override. Distinct from `llz secrets`\n" +
+			"(which manages GitHub secrets).",
 	}
 	// `exec` is a thin pass-through to `bao` inside the cluster. SetInterspersed
 	// (false) makes cobra STOP flag-parsing at the first positional (the bao
