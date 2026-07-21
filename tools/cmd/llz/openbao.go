@@ -59,8 +59,9 @@ func openbaoClient(role string) (*openbao.Client, error) {
 }
 
 // portForwardOpenbaoFn opens an ephemeral kubectl port-forward to the OpenBao
-// leader pod and returns the local https base URL plus a teardown func. A package
-// var so tests can seam it (mirrors withPrometheus in prom_query.go).
+// pod-0 (writes/reads request-forward to the raft leader) and returns the local
+// https base URL plus a teardown func. A package var so tests can seam it
+// (mirrors withPrometheus in prom_query.go).
 var portForwardOpenbaoFn = portForwardOpenbao
 
 // openbaoClientForward is openbaoClient plus the auto port-forward default. It
@@ -99,11 +100,17 @@ func openbaoClientForward(role string) (*openbao.Client, func(), error) {
 	return c, cleanup, nil
 }
 
-// portForwardOpenbao runs `kubectl port-forward` to the OpenBao leader pod on a
+// portForwardOpenbao runs `kubectl port-forward` to OpenBao pod-0 on a
 // kubectl-chosen local port (":0"), waits for it to be announced + the tunnel to
 // warm up, and returns the https base URL and a kill/reap teardown.
 func portForwardOpenbao() (string, func(), error) {
 	cmd := exec.Command("kubectl", "port-forward", "-n", openbaoNS, "pod/"+rootOpenbaoPod, ":8200")
+	// Surface kubectl's own stderr live: without this the common failure modes
+	// (wrong kube-context, pod-0 absent, RBAC-denied on pods/portforward) are
+	// swallowed and the operator only sees an opaque establish timeout. kubectl
+	// writes "Forwarding from…"/"Handling connection…" to stdout, so stderr
+	// carries errors alone — no normal-path noise.
+	cmd.Stderr = os.Stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", nil, err
