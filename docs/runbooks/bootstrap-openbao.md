@@ -225,6 +225,78 @@ Two more in the same category, listed so nobody mistakes them for dead code:
 
 ---
 
+## Break-glass root token (workflow) — `breakglass-openbao.yml`
+
+For the common incident case — "I need a working root token right now" — dispatch
+the `breakglass-openbao.yml` workflow (thin caller for the reusable
+`llz-breakglass-openbao.yml`, both vendored into the instance) instead of running
+the raw verbs by hand. It is the operator front-end to the recovery quorum: it opens
+cluster access, runs `llz ci bao-regen-root`, and returns the token **encrypted to
+your key** (a root token is full admin, and run logs are readable by anyone with
+Actions access — so it is never printed in the clear). Maintainer rationale:
+[`docs/workflows/llz-breakglass-openbao.md`](../workflows/llz-breakglass-openbao.md).
+
+**OpenBao root tokens have no TTL** — they do not self-expire. Lifecycle is manual;
+that is what the `revoke` / `rotate` actions are for.
+
+### Actions
+
+| `action` | Effect |
+|---|---|
+| `generate` | Regenerate a root token from the quorum and return it (encrypted). |
+| `rotate` | Revoke the current root token *first* (so no untracked live root is left behind), then mint and return a fresh one. |
+| `revoke` | Revoke the current root token and delete `infra-<env>::OPENBAO_ROOT_TOKEN`. Cleanup after you are done. |
+
+### One-time: create your break-glass keypair
+
+Keep the private half **offline** (never in GitHub). Any RSA key ≥ 2048-bit works.
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out bg-priv.pem
+openssl rsa -pubout -in bg-priv.pem -out bg-pub.pem
+base64 < bg-pub.pem | tr -d '\n'      # paste THIS as recipient_pubkey_b64
+```
+
+### Get a token
+
+```bash
+gh workflow run breakglass-openbao.yml \
+  --field region=<env> \
+  --field action=generate \
+  --field recipient_pubkey_b64="$(base64 < bg-pub.pem | tr -d '\n')"
+```
+
+The run's **job summary** (and a 1-day `openbao-root-token-<env>-encrypted`
+artifact) contains only ciphertext. Decrypt locally with your offline key:
+
+```bash
+base64 -d root-token.b64 \
+  | openssl pkeyutl -decrypt -inkey bg-priv.pem \
+      -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256; echo
+```
+
+### When the incident is over
+
+```bash
+gh workflow run breakglass-openbao.yml --field region=<env> --field action=revoke
+```
+
+### Requirements / notes
+
+- The cluster must be **up and auto-unsealed** (`generate-root` requires an unsealed
+  leader). If pods are sealed, fix the seal key first — see *Re-seal recovery* above.
+- Uses the existing `infra-<env>` secrets: `OPENBAO_RECOVERY_KEY_1/2/3` (the quorum),
+  `OPENBAO_SECRETS_WRITE_TOKEN` (writes/deletes the `OPENBAO_ROOT_TOKEN` env secret),
+  `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY`, and `LINODE_API_TOKEN`. No
+  `OPENBAO_SEAL_KEY` is needed (that is only for a namespace/data rebuild).
+- It shares the `openbao-bootstrap-<env>` concurrency group, so it cannot run
+  concurrently with a real bootstrap of the same deployment.
+- The generated token is also live in `infra-<env>::OPENBAO_ROOT_TOKEN` (write-only
+  in the UI). `revoke` removes it; a plain `generate` leaves it in place for a
+  follow-up re-configure run if you want one.
+
+---
+
 ## See also
 
 - [`docs/secrets.md`](../secrets.md) — full secrets operations guide, dual-write rotation, query examples
