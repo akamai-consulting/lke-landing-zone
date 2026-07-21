@@ -62,7 +62,7 @@ func ciAssertInstanceCustomCmd() *cobra.Command {
 	cmd.Flags().StringVar(&appSet, "appset", "instance-custom",
 		"the ApplicationSet whose status explains a generated App that never appeared")
 	cmd.Flags().IntVar(&within, "within", 300,
-		"seconds to wait for the App to appear AND reach Synced+Healthy (converge already gates it healthy, so this is margin)")
+		"seconds to wait for the App to appear AND reach Synced+Healthy — the sole wait for the escape hatch: converge reports instance-custom apps but no longer gates on them (CatInstance is non-fatal), so this deadline must cover full generate+sync, not just margin")
 	return cmd
 }
 
