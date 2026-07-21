@@ -49,6 +49,10 @@ managed  .github/actions/**
 managed  .tflintrc.hcl
 managed  .checkov.yaml
 managed  .gitleaks.toml
+# Claude Code project settings shipped to every instance — currently just
+# includeCoAuthoredBy: false, so Claude Code never records itself as a co-author
+# on an instance's commits/PRs. Template-owned so the policy can't drift per fork.
+managed  .claude/settings.json
 # .gitignore is safety-critical — it keeps the .llz/ credential cache (Linode/GitHub
 # PATs, OBJ keys) and Terraform state out of git. Template-owned so the ignore can't
 # silently drift out of an instance; extend local ignores via .git/info/exclude.
