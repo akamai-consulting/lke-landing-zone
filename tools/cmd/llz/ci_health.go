@@ -142,8 +142,8 @@ func convergeSleep(interval, elapsed time.Duration) time.Duration {
 }
 
 // longPoleCandidates returns the labels keeping a report in-progress (Pending +
-// Failed). Pure — the report's tolerated categories (Drift/Deferred) are excluded
-// because they do not hold up convergence.
+// Failed). Pure — the report's tolerated categories (Drift/Deferred/Instance) are
+// excluded because they do not hold up convergence.
 func longPoleCandidates(r *health.Report) []string {
 	out := make([]string, 0, len(r.Pending)+len(r.Failed))
 	out = append(out, r.Pending...)
@@ -439,6 +439,9 @@ func printHealthSummary(r *health.Report) {
 	for _, c := range r.Pending {
 		fmt.Println("  " + cyan("pending: ") + " " + c)
 	}
+	for _, c := range r.Instance {
+		fmt.Println("  " + magenta("instance:") + " " + c)
+	}
 	for _, c := range r.Failed {
 		fmt.Println("  " + red("FAILED:  ") + " " + c)
 	}
@@ -456,9 +459,14 @@ func printHealthSummary(r *health.Report) {
 	case health.InProgress:
 		fmt.Println(yellow("Cluster is still converging — re-run after a backoff."))
 	default:
-		if len(r.Deferred) > 0 {
+		switch {
+		case len(r.Deferred) > 0 && len(r.Instance) > 0:
+			fmt.Printf("%s %s\n", green("✓"), fmt.Sprintf("Platform converged — %d operator-deferred + %d instance-owned item(s) remain (neither gates the platform).", len(r.Deferred), len(r.Instance)))
+		case len(r.Instance) > 0:
+			fmt.Printf("%s %s\n", green("✓"), fmt.Sprintf("Platform converged — %d instance-owned item(s) remain (operator-owned escape hatch; does not gate the platform).", len(r.Instance)))
+		case len(r.Deferred) > 0:
 			fmt.Printf("%s %s\n", green("✓"), fmt.Sprintf("Cluster converged — %d operator-deferred item(s) remain, platform healthy.", len(r.Deferred)))
-		} else {
+		default:
 			fmt.Printf("%s Cluster converged.\n", green("✓"))
 		}
 	}
@@ -600,6 +608,7 @@ var catStyles = map[health.Category]struct {
 	health.CatPending:  {"PENDING", cyan},
 	health.CatDeferred: {"DEFERRED", cyan},
 	health.CatDrift:    {"DRIFT", yellow},
+	health.CatInstance: {"INSTANCE", magenta},
 }
 
 // record prints a labeled line for a finding and routes it into the report
