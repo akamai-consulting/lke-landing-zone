@@ -75,6 +75,11 @@ func ensureLandingZone(specRoot string) (instanceName string, created bool, err 
 	k8s := orElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.33.6+lke7")
 	nodeType := orElse(tfvarsExampleValue("cluster", "node_type"), "g8-dedicated-8-4")
 	nodeCount := orElse(tfvarsExampleValue("cluster", "node_count"), "5")
+	// The default OpenBao team, chosen at `llz new` (copier openbao_team question);
+	// the built-in platform team when unset. Written as an explicit spec.teams so
+	// a NEW instance gets a non-root write path out of the box (there is no
+	// load-time default — existing instances opt in via the retrofit runbook).
+	team := orElse(a.OpenbaoTeam, clusterspec.DefaultTeamName)
 
 	lz := fmt.Sprintf(`# LandingZone spec — created by `+"`llz env add`"+`. The single source for this
 # instance: edit it (+ one environments/<env>.yaml per deployment), then
@@ -90,6 +95,13 @@ spec:
     repo: %s
     forge: github
     templateVersion: %s
+  # Team-scoped OpenBao WRITE access (non-root), chosen at `+"`llz new`"+`. Each entry
+  # becomes a native apl-core team (namespace + Keycloak group/role team-<name>) and
+  # a <name>-writer policy; operators use `+"`llz openbao login --team <name>`"+`, then
+  # `+"`llz openbao set`"+`. Add more teams here. See docs/runbooks/openbao-team-login.md.
+  teams:
+    - name: %s
+      openbaoSubtree: secret/%s
   # Instance-wide DNS/cert config rendered into every env's overlay. Uncomment +
   # set to fill the cert-manager DNS-01 issuer's ACME email from the spec (else
   # it stays a REPLACE_PER_ENV placeholder you fill by hand).
@@ -107,7 +119,7 @@ spec:
       k8sVersion: %s
       nodePool: { type: %s, count: %s }
 `, clusterspec.APIVersion, clusterspec.Kind, instanceName,
-		upstreamOrg, repo, version, k8s, nodeType, nodeCount)
+		upstreamOrg, repo, version, team, team, k8s, nodeType, nodeCount)
 
 	if err := os.WriteFile(lzPath, []byte(lz), 0o644); err != nil {
 		return instanceName, false, err
