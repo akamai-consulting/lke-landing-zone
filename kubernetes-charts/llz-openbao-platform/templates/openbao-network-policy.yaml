@@ -98,4 +98,17 @@ spec:
       ports:
         - port: 80
           protocol: TCP
+    {{- if .Values.platform.networkPolicy.keycloakNamespace }}
+    # apl-core Keycloak (:8080 http): the `keycloak` OIDC auth mount fetches the
+    # realm JWKS to validate team-login id_tokens. Keycloak is not meshed, so this
+    # is a direct L4 allow; the mount MUST target the internal jwks_url (the public
+    # URL hairpins) — see `llz ci bao-configure` (keycloakTeamSteps).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.platform.networkPolicy.keycloakNamespace }}
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- end }}
 {{- end }}

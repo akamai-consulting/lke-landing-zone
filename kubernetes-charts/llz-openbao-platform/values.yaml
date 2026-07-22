@@ -100,6 +100,17 @@ platform:
         name: broad-pat-rotator
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
     observabilityNamespace: llz-observability
+    # Namespace of apl-core's Keycloak. OpenBao's `keycloak` OIDC auth mount
+    # (team-scoped writes) fetches the realm JWKS from Keycloak's INTERNAL http
+    # service (:8080) to validate team-login id_tokens — the public
+    # keycloak.<domain> URL is unreachable in-cluster (resolves to the cluster's
+    # own LB IP → hairpin, unsupported on LKE-E). Keycloak is not meshed, so this
+    # is a plain L4 allow. Defaults to `keycloak`, so the egress is rendered on
+    # EVERY instance (it's a benign L4 allow to one platform namespace on :8080).
+    # Set it empty to drop the rule on an instance with no spec.teams (the OpenBao
+    # `keycloak` OIDC mount — the only user of this egress — exists only when teams
+    # are declared).
+    keycloakNamespace: keycloak
 
   # Prometheus ServiceMonitor for OpenBao's /v1/sys/metrics endpoint. In the
   # source chart this rendered only when the release was named `platform-prom`
