@@ -48,8 +48,9 @@ func ciCmd() *cobra.Command {
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd(),
 		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
-		// ensure the device-flow client).
-		ciKeycloakConfigureCmd())
+		// ensure the device-flow client); team-login-smoke stays a manual operator check.
+		ciKeycloakConfigureCmd(),
+		ciTeamLoginSmokeCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
 	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciAssertHealthWorkflowCmd(), ciValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
