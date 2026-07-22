@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,7 +181,7 @@ func TestRunCIBaoBreakglassRevoke(t *testing.T) {
 // revoke tolerates a missing stored token and a delete failure — it must not
 // leave the cleanup half-done nor hard-fail the run.
 func TestRunCIBaoBreakglassRevokeNoTokenDeleteFails(t *testing.T) {
-	os.Unsetenv("OPENBAO_ROOT_TOKEN")
+	t.Setenv("OPENBAO_ROOT_TOKEN", "") // empty = no token, and auto-restored (no leak into later tests)
 	t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(t.TempDir(), "s"))
 	withBaoExec(t, func(string, string, string, ...string) (string, string, error) {
 		t.Error("no token means nothing to revoke — exec must not run")
@@ -242,5 +243,115 @@ func TestRunCIBaoBreakglassDryRun(t *testing.T) {
 	})
 	if err := runCIBaoBreakglass(globalOpts{dryRun: true}, "primary", "generate", b64); err != nil {
 		t.Errorf("dry-run generate = %v, want nil", err)
+	}
+}
+
+// quorumRegenExec returns a fake baoExecFn that drives the full generate-root
+// quorum flow (dead lookup → cancel/init/3 keys → decode) and mints `newRoot`.
+// `revoke` handling + call-order are recorded via the closures.
+func quorumRegenExec(t *testing.T, newRoot string, onRevoke func(token string), onRegenInit func()) func(string, string, string, ...string) (string, string, error) {
+	keys := 0
+	return func(pod, token, stdin string, args ...string) (string, string, error) {
+		cmd := strings.Join(args, " ")
+		switch {
+		case cmd == "token revoke -self":
+			if onRevoke != nil {
+				onRevoke(token)
+			}
+			return "", "", nil
+		case args[0] == "status":
+			return `{"initialized":true,"sealed":false}`, "", nil
+		case args[0] == "token" && len(args) > 1 && args[1] == "lookup":
+			return "", "Code: 403. * permission denied", errors.New("exit status 2") // revoked → regen
+		case strings.Contains(cmd, "-cancel"):
+			return "", "", nil
+		case strings.Contains(cmd, "-init"):
+			if onRegenInit != nil {
+				onRegenInit()
+			}
+			return `{"nonce":"n-1","otp":"otp-1"}`, "", nil
+		case strings.Contains(cmd, "-nonce=n-1"):
+			keys++
+			if keys == 3 {
+				return fmt.Sprintf(`{"complete":true,"progress":3,"required":3,"encoded_token":"enc-%s"}`, strings.TrimSpace(stdin)), "", nil
+			}
+			return fmt.Sprintf(`{"complete":false,"progress":%d,"required":3}`, keys), "", nil
+		case strings.Contains(cmd, "-decode=enc-k3"):
+			return fmt.Sprintf(`{"token":%q}`, newRoot), "", nil
+		}
+		t.Errorf("unexpected exec %v", args)
+		return "", "", errors.New("unexpected")
+	}
+}
+
+func setBreakglassEnv(t *testing.T, storedToken string) (tmp string) {
+	t.Setenv("OPENBAO_ROOT_TOKEN", storedToken)
+	t.Setenv("RECOVERY_K1", "k1")
+	t.Setenv("RECOVERY_K2", "k2")
+	t.Setenv("RECOVERY_K3", "k3")
+	tmp = t.TempDir()
+	t.Setenv("RUNNER_TEMP", tmp)
+	t.Setenv("GITHUB_ENV", filepath.Join(tmp, "env"))
+	t.Setenv("GITHUB_STEP_SUMMARY", filepath.Join(tmp, "summary"))
+	return tmp
+}
+
+func decryptDelivered(t *testing.T, tmp string, priv *rsa.PrivateKey) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(tmp, "root-token.b64"))
+	if err != nil {
+		t.Fatalf("ciphertext file missing: %v", err)
+	}
+	ct, _ := base64.StdEncoding.DecodeString(string(raw))
+	plain, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, priv, ct, nil)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v", err)
+	}
+	return string(plain)
+}
+
+// TestRunCIBaoBreakglassGenerateRegenPath: generate with a REVOKED stored token
+// runs the quorum and delivers the FRESHLY regenerated token — the os.Getenv
+// freshness property (no $GITHUB_ENV shadowing), which the skip-path test can't cover.
+func TestRunCIBaoBreakglassGenerateRegenPath(t *testing.T) {
+	b64, priv := rsaPubB64(t, 2048)
+	tmp := setBreakglassEnv(t, "s.revoked")
+	withBaoExec(t, quorumRegenExec(t, "s.newroot", nil, nil))
+	withGHSetSecret(t, nil)
+
+	if err := runCIBaoBreakglass(globalOpts{}, "primary", "generate", b64); err != nil {
+		t.Fatal(err)
+	}
+	if got := decryptDelivered(t, tmp, priv); got != "s.newroot" {
+		t.Errorf("delivered %q, want the freshly regenerated s.newroot (not the stale s.revoked)", got)
+	}
+}
+
+// TestRunCIBaoBreakglassRotate: rotate must REVOKE before regenerating (load-bearing
+// ordering — else a live untracked root lingers), and deliver the fresh token.
+func TestRunCIBaoBreakglassRotate(t *testing.T) {
+	b64, priv := rsaPubB64(t, 2048)
+	tmp := setBreakglassEnv(t, "s.old-root")
+	seq, revokeAt, regenInitAt := 0, 0, 0
+	withBaoExec(t, quorumRegenExec(t, "s.newroot",
+		func(token string) {
+			seq++
+			revokeAt = seq
+			if token != "s.old-root" {
+				t.Errorf("revoke used token %q, want the stored old root", token)
+			}
+		},
+		func() { seq++; regenInitAt = seq },
+	))
+	withGHSetSecret(t, nil)
+
+	if err := runCIBaoBreakglass(globalOpts{}, "primary", "rotate", b64); err != nil {
+		t.Fatal(err)
+	}
+	if revokeAt == 0 || regenInitAt == 0 || revokeAt > regenInitAt {
+		t.Errorf("rotate must REVOKE (seq %d) before regenerating (seq %d)", revokeAt, regenInitAt)
+	}
+	if got := decryptDelivered(t, tmp, priv); got != "s.newroot" {
+		t.Errorf("rotate delivered %q, want fresh s.newroot", got)
 	}
 }

@@ -16,11 +16,17 @@ name: llz-breakglass-openbao (reusable)
 #
 # SECURITY MODEL: a root token is full admin, and run logs are readable by anyone
 # with Actions access. The token is NEVER printed in the clear — the operator supplies
-# an RSA public key and the token is returned RSA-OAEP/SHA-256-encrypted (Go crypto/rsa;
-# the decrypt recipe in the job summary is plain `openssl`, baked into vars.TF_IMAGE —
-# no extra dependency when you need this most). The plaintext also lands in
-# infra-<region>::OPENBAO_ROOT_TOKEN (write-only in the UI, written by the quorum
-# regenerate); the `revoke` action removes it.
+# an RSA public key and the token is returned RSA-OAEP/SHA-256-encrypted (Go crypto/rsa
+# in-job). The DECRYPT recipe in the job summary is plain `openssl pkeyutl` run on the
+# OPERATOR'S OWN machine (openssl ships everywhere — it does TLS — so there is no
+# age/gpg dependency the moment you need this most; nothing decrypts in CI). The
+# plaintext also lands in infra-<region>::OPENBAO_ROOT_TOKEN (write-only in the UI,
+# written by the quorum regenerate); the `revoke` action removes it.
+#
+# PREREQUISITE — this workflow hands a full-admin token to whoever dispatches it (the
+# encryption stops LOG readers, not the dispatcher). Every infra-<region> Environment
+# MUST carry protection rules (required reviewers) or a compromised write-scope
+# account = cluster root. See docs/workflows/llz-breakglass-openbao.md.
 #
 # OpenBao root tokens have NO TTL — they do not self-expire. Lifecycle is manual;
 # that is what `revoke`/`rotate` are for.

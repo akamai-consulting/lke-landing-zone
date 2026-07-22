@@ -166,8 +166,20 @@ func breakglassDeleteStored(region string) error {
 	return appendGHAFile("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("## OpenBao break-glass — revoke (%s)", region),
 		"",
+		breakglassActorLine(),
+		"",
 		fmt.Sprintf("Current root token revoked and `%s::OPENBAO_ROOT_TOKEN` deleted.", ghEnv),
 	)
+}
+
+// breakglassActorLine records the dispatching GitHub actor in the job summary, so
+// the audit trail (WHO invoked break-glass) sits next to the delivered ciphertext.
+func breakglassActorLine() string {
+	actor := os.Getenv("GITHUB_ACTOR")
+	if actor == "" {
+		actor = "unknown"
+	}
+	return fmt.Sprintf("Dispatched by **@%s**.", actor)
 }
 
 // breakglassEncryptAndDeliver RSA-OAEP/SHA-256-encrypts the token to the
@@ -195,6 +207,8 @@ func breakglassEncryptAndDeliver(region, action string, recipient *rsa.PublicKey
 
 	return appendGHAFile("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("## OpenBao break-glass root token — %s (%s)", region, action),
+		"",
+		breakglassActorLine(),
 		"",
 		"Encrypted to your RSA public key (RSA-OAEP / SHA-256). Decrypt locally with your OFFLINE private key:",
 		"",

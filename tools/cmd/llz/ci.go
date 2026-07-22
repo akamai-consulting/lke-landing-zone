@@ -41,9 +41,9 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciTFImportCmd(), ciTFApplyCmd(), ciTFPlanCmd(), ciTFOutputCmd(), ciTFDestroyCmd(), ciReapVolumesCmd(), ciReapNodeBalancersCmd(), ciReapObjKeysCmd(),
 		ciPreflightCmd(), ciVerifyObjectStorageCmd(), ciHealthCmd(), ciHealthInClusterCmd(), ciConvergeCmd(),
 		ciAssertAplVersionCmd(),
-		// BREAK-GLASS (deliberately callerless — see the note at the bottom of this
-		// function): bao-status, bao-init and bao-regen-root are the manual handles
-		// for a wedged bao-ensure-ready. No workflow calls them, BY DESIGN.
+		// BREAK-GLASS: bao-init / bao-regen-root are manual handles for a wedged
+		// bao-ensure-ready (still callerless). bao-status + bao-breakglass ARE now
+		// invoked — by the operator-dispatched llz-breakglass-openbao.yml workflow.
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
 		ciBaoBreakglassCmd(),
@@ -91,10 +91,11 @@ func ciCmd() *cobra.Command {
 	// terraform init, the S3 backend, or git auth — the things most likely to be
 	// broken when an operator needs a kubeconfig by hand.
 	c.AddCommand(ciRunnerACLCmd(), ciFetchKubeconfigCmd(), ciFetchKubeconfigStateCmd())
-	// ── BREAK-GLASS VERBS: deliberately callerless ───────────────────────────
-	// bao-status, bao-init, bao-regen-root, fetch-kubeconfig (the API variant) and
-	// openbao-login have ZERO workflow callers on purpose. They are the manual
-	// handles an operator reaches for during an incident — documented in
+	// ── BREAK-GLASS VERBS ────────────────────────────────────────────────────
+	// bao-init, bao-regen-root, fetch-kubeconfig (the API variant) and openbao-login
+	// have ZERO workflow callers on purpose — the manual handles an operator reaches
+	// for during an incident. (bao-status + bao-breakglass ARE now dispatched by the
+	// operator-triggered llz-breakglass-openbao.yml.) Documented in
 	// docs/runbooks/bootstrap-openbao.md ("Break-glass handles").
 	//
 	// They therefore look identical to dead code to any "0 callers" scan, and one

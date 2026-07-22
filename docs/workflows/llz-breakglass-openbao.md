@@ -36,6 +36,23 @@ That is fine as a last resort but has sharp edges: getting cluster access + the 
 open, feeding the quorum, and — most dangerously — moving a live root token around
 by hand. This workflow packages the safe path.
 
+## ⚠️ Required prerequisite: protect the `infra-<region>` environments
+
+This workflow converts **"can dispatch this workflow and pass the `infra-<region>`
+environment gate"** into **"receives a full-admin OpenBao root token, encrypted to a
+public key the dispatcher themselves supplies."** The encryption defends against
+*log readers* — NOT against the dispatcher. Before this workflow existed, no CI path
+ever handed a root token to a human (bootstrap minted, used, and revoked it in-job);
+this one does, deliberately.
+
+So the hard requirement: **every `infra-*` GitHub Environment MUST have protection
+rules — at minimum required reviewers** (Settings → Environments → `infra-<region>` →
+Required reviewers). Without them, any identity that can trigger a `workflow_dispatch`
+(a leaked write-scope PAT, a compromised account) can mint cluster root with a clean,
+quiet exfiltration path. The job summary records the dispatching `github.actor` next
+to the ciphertext so delivery and audit trail live in one place — but that is a
+*record*, not a *control*; the environment reviewers are the control.
+
 ## The three actions
 
 One verb (`llz ci bao-breakglass --action …`), branched on `--action`:
@@ -50,6 +67,12 @@ One verb (`llz ci bao-breakglass --action …`), branched on `--action`:
   lookup precisely so a flaky exec never mints a second, untracked root while the
   first stays live. Revoking first makes the subsequent lookup a definite "revoked",
   so the regenerate branch is taken cleanly.
+  **Mid-incident, prefer `generate`.** `rotate` is the riskier verb: because it
+  revokes before regenerating, a regen failure *after* the revoke (a wrong quorum
+  key, an exec flake) leaves you with **no live root token** until a later successful
+  `generate`. That's the correct trade-off — better than leaking an untracked live
+  root — but `generate` (which never revokes) is the safe default when you just need
+  a token in hand; use `rotate` only when deliberately cycling a possibly-exposed one.
 - **revoke** — `token revoke -self` against the stored token, then
   `gh secret delete OPENBAO_ROOT_TOKEN --env infra-<region>`. This is the cleanup
   half; root tokens have **no TTL**, so nothing expires them on its own.
