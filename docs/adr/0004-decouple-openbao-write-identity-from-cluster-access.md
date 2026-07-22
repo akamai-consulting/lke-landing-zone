@@ -77,3 +77,31 @@ Alternatives considered and rejected:
   `ci bao-configure` consumes, and that Phase 2's RBAC generator will reuse.
 - The managed-apiserver-OIDC question is documented as the explicit gate for
   Phase 2; nothing in Phase 1 is blocked on it.
+
+## Implementation notes (as-built — Phase 1 shipped in #300)
+
+The decision above stands; three specifics evolved during implementation and
+review, and the shipped code is authoritative where it diverges:
+
+- **Teams reuse apl-core's native teams, not a bespoke Keycloak group.**
+  Declaring a `spec.teams` entry makes `llz render` emit a `teamConfig.<name>`
+  overlay so apl-core provisions the team (namespace + realm group + realm role
+  **`team-<name>`** + a `groups`-claim mapper). The OpenBao role therefore binds
+  on the `groups` value `team-<name>` (not a bare team name). Consequently the
+  spec surface is just `{name, openbaoSubtree}` — the `keycloakGroup` field in
+  the design's first sketch was dropped (the group is deterministic).
+- **The `keycloak` mount validates via the internal JWKS, not the public
+  discovery URL.** `oidc_discovery_url = https://keycloak.<domainSuffix>/…`
+  hairpins on LKE-E (the public host resolves to the cluster's own LB IP), so the
+  mount is configured with `jwks_url` (Keycloak's in-cluster http service) +
+  `bound_issuer` (the public issuer, matching the token `iss`), plus
+  `skip_jwks_validation=true` so the config write doesn't eagerly fetch before
+  Keycloak has converged. An egress NetworkPolicy allows openbao → keycloak.
+- **Tokens are audience-bound.** The role sets `bound_audiences=[llz]` and
+  `keycloak-configure` stamps an `aud:llz` mapper on the login client, so only a
+  token deliberately minted for OpenBao login is accepted — not any otomi-realm
+  id_token that merely carries the `groups` claim.
+
+See [`tools/cmd/llz/ci_openbao_configure.go`](../../tools/cmd/llz/ci_openbao_configure.go),
+[`tools/cmd/llz/ci_keycloak_configure.go`](../../tools/cmd/llz/ci_keycloak_configure.go),
+and [`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md).
