@@ -16,6 +16,7 @@ f772a287fd02520db476d161e315829c9d97a449d0ec8abcdf124b9f9f945d50  .github/action
 63cc847e17693d9005b57c24ccb570cdfd92aec45fb2c7c38b686f70153ec416  .github/actions/lke-runner-acl/action.yml
 4a52fe3874cb3801d03ccb4991866a253fd7285fcb39177e6beb79e62a2f88d9  .github/actions/terraform-init/action.yml
 8eb149a0f7366d4c2f55f3697d8e8381a7287284e8865b66bf691d126445d34a  .github/workflows/llz-bootstrap-openbao.yml
+c58e298a446eaafb557a888c440a05445db7b85d13c8fe104dc63b3fed761290  .github/workflows/llz-breakglass-openbao.yml
 62c0a4f3f4f4ee126c46707e5a2f935d7484fefd54eefed5530d429ac28fb99c  .github/workflows/llz-cluster-health.yml
 4eec66a2f7026ee45a99dc94a754930e8f1977c7c4fbaebb26bba15aa593b790  .github/workflows/llz-discover-deployments.yml
 ac4af954f22f72f5666263b1e3e0d27236c56b6465f9d37eaf0ef30d91682e88  .github/workflows/llz-scheduled-checks.yml
