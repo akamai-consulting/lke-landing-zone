@@ -1,0 +1,68 @@
+name: Break-glass OpenBao root token
+
+# Thin caller for the LOCAL reusable llz-breakglass-openbao.yml — the full body
+# (quorum regenerate, encrypted delivery, revoke) and the composite actions it
+# calls are copier-delivered into THIS repo (vendored, ADR 0003); the llz CLI is
+# baked into vars.TF_IMAGE. The reusable checks this instance back out (its
+# terraform-iac-bootstrap TF state) to reach the cluster.
+# ADOPTERS: nothing to repoint — every `uses:` is a repo-local ./ path, and
+# `llz upgrade` re-pins template-ref with each template release.
+#
+# WHAT THIS IS FOR: a root token is ephemeral by design — bootstrap-openbao mints
+# one, uses it, and REVOKES it (credential hygiene). The recovery quorum
+# (OPENBAO_RECOVERY_KEY_1/2/3, held as infra-<deployment> env secrets) survives and
+# authorizes `operator generate-root`. This is the operator front-end to that
+# quorum: regenerate a usable root token for an incident, hand it back ENCRYPTED,
+# and give a clean way to kill it after. See docs/runbooks/bootstrap-openbao.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        # NOTE: input name kept as `region` for parity with bootstrap-openbao.yml
+        # and the infra-<deployment> Environment names. The value is really a
+        # *deployment*. Free-form string (deployments are dynamic via `llz env add`).
+        description: 'Deployment to act on, e.g. primary | secondary | staging | lab | e2e (must have an infra-<deployment> Environment)'
+        required: true
+        type: string
+      action:
+        description: >
+          generate = mint/return a root token from the recovery quorum.
+          rotate   = revoke the current root token first, then mint a fresh one.
+          revoke   = kill the current root token and delete the infra-<deployment> secret (cleanup).
+        required: true
+        type: choice
+        options:
+          - generate
+          - rotate
+          - revoke
+        default: generate
+      recipient_pubkey_b64:
+        description: >
+          REQUIRED for generate/rotate. base64 of your RSA PUBLIC key PEM
+          (`base64 < bg-pub.pem | tr -d '\n'`); key must be >= 2048-bit. Ignored for revoke.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# NO workflow-level `concurrency` here, on purpose — same rule as bootstrap-openbao.yml.
+# Serialization is owned by the reusable llz-breakglass-openbao.yml, whose
+# `concurrency: openbao-bootstrap-<region>` group it SHARES with the bootstrap
+# reusable so a break-glass regen can never race a real bootstrap of the same
+# deployment (both drive the generate-root quorum on pod-0). Repeating that group on
+# this top-level caller would DEADLOCK (the parent would hold the group its own
+# `call` job then needs) — a caller must never share a group with the reusable it calls.
+
+jobs:
+  call:
+    uses: ./.github/workflows/llz-breakglass-openbao.yml
+    with:
+      region:               ${{ inputs.region }}
+      action:               ${{ inputs.action }}
+      recipient_pubkey_b64: ${{ inputs.recipient_pubkey_b64 }}
+      instance_repo:        <@ instance_repo @>
+      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
+      template-ref:         <@ llz_version @>
+    secrets: inherit
