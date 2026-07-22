@@ -1,8 +1,10 @@
 # Design: team-scoped credentials — retire the shared admin kubeconfig and root-for-writes
 
-**Status:** Proposed. Phase 1 (Keycloak → OpenBao write identity) is buildable
-now with no LKE-E control-plane dependency; Phase 2 (scoped kube credentials) is
-gated on an open LKE-Enterprise feasibility question (see *Open question*).
+**Status:** Phase 1 **shipped** in #300 (Keycloak → OpenBao write identity, no
+LKE-E control-plane dependency); Phase 2 (scoped kube credentials) remains
+proposed, gated on an open LKE-Enterprise feasibility question (see *Open
+question*). Where the as-built Phase 1 diverges from the sketch below, see
+**As-built** at the end — the shipped code is authoritative.
 
 Related: [`docs/adr/0004-decouple-openbao-write-identity-from-cluster-access.md`](../adr/0004-decouple-openbao-write-identity-from-cluster-access.md),
 [`docs/runbooks/lke-admin-rotation.md`](../runbooks/lke-admin-rotation.md),
@@ -136,9 +138,14 @@ minimal declaration so team → group → secret-subtree is one source of truth 
 spec:
   teams:
     - name: gsap
-      keycloakGroup: gsap          # defaults to name
       openbaoSubtree: secret/gsap  # → gsap-writer policy on secret/data/gsap/*
 ```
+
+> **As-built:** the surface is just `{name, openbaoSubtree}` — there is no
+> `keycloakGroup` field. Teams reuse apl-core's **native** teams: `llz render`
+> emits a `teamConfig.<name>` overlay and apl-core provisions the group + realm
+> role **`team-<name>`**, which is what the OpenBao role binds on. See *As-built*
+> at the end.
 
 ## Open question (decides Phase 2, blocks nothing in Phase 1)
 
@@ -157,3 +164,35 @@ either way.
   on the same Keycloak-group identity.
 - Giving OpenBao an external ingress — out of scope; the port-forward transport
   stays.
+
+## As-built (Phase 1, shipped in #300)
+
+The Phase 1 sketch above is preserved as the design record; the shipped code
+diverges in these specifics (the code is authoritative):
+
+- **Mount name is `keycloak`**, not `oidc-keycloak` — so operators hit
+  `auth/keycloak/login` and `llz openbao login` targets that mount.
+- **Validated via internal JWKS, not the public discovery URL.**
+  `oidc_discovery_url = https://keycloak.<domainSuffix>/…` hairpins on LKE-E (the
+  public host resolves to the cluster's own LB IP), so the mount uses `jwks_url`
+  (Keycloak's in-cluster http service) + `bound_issuer` (the public issuer,
+  matching the token `iss`), plus `skip_jwks_validation=true` so the config write
+  doesn't eagerly fetch before Keycloak converges. An egress NetworkPolicy allows
+  openbao → keycloak.
+- **Teams reuse apl-core's native teams.** No bespoke Keycloak group/mapper:
+  `llz render` emits `teamConfig.<name>` and apl-core provisions the group +
+  realm role **`team-<name>`** + the `groups`-claim mapper. The OpenBao role
+  binds on the `groups` value `team-<name>` (not a bare `gsap`), and the spec
+  drops `keycloakGroup` (§ *Spec surface*).
+- **`llz ci keycloak-configure`** ensures the one thing apl-core doesn't — a
+  public device-flow `llz` client with the `openid` scope + an `aud:llz` mapper —
+  and the OpenBao role sets **`bound_audiences=[llz]`**, so only a token minted
+  for OpenBao login is accepted (not any otomi-realm id_token carrying `groups`).
+- **New-clusters-only default.** `llz new` scaffolds a `platform` team (the
+  `openbao_team` question); there is no load-time default, so existing instances
+  are byte-identical until they opt in via the retrofit runbook.
+
+Reference: [`ci_openbao_configure.go`](../../tools/cmd/llz/ci_openbao_configure.go),
+[`ci_keycloak_configure.go`](../../tools/cmd/llz/ci_keycloak_configure.go),
+[`openbao_login.go`](../../tools/cmd/llz/openbao_login.go),
+[`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md).
