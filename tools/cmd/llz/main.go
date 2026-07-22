@@ -426,9 +426,35 @@ func openbaoCmd() *cobra.Command {
 			RunE:  func(_ *cobra.Command, a []string) error { return runOpenbaoSet(gopts, a[0], a[1:]) },
 		},
 		execCmd,
+		openbaoLoginCmd(),
 		regenRootCmd(),
 	)
 	return s
+}
+
+func openbaoLoginCmd() *cobra.Command {
+	var o openbaoLoginOpts
+	c := &cobra.Command{
+		Use:   "login --team <name>",
+		Short: "mint a team-scoped OpenBao token via Keycloak OIDC (no root token)",
+		Long: "Human-operator auth for team-scoped writes. Runs an OAuth 2.0 Device\n" +
+			"Authorization Grant against the APL Keycloak realm, then swaps the id_token\n" +
+			"for a short-lived OpenBao token via the `keycloak` jwt mount (provisioned by\n" +
+			"`llz ci bao-configure` from spec.teams). The token carries only the team's\n" +
+			"`<name>-writer` policy, so `llz openbao set` no longer needs the root token.\n" +
+			"Prints `export OPENBAO_TOKEN=…` to stdout — load it with:\n" +
+			"  eval \"$(llz openbao login --team <name>)\"\n" +
+			"The issuer is derived from the region's cluster.bootstrap.domainSuffix (the\n" +
+			"otomi realm); pass --issuer to override. See docs/designs/team-scoped-credentials.md.",
+		Args: cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error { return runOpenbaoLogin(o) },
+	}
+	f := c.Flags()
+	f.StringVar(&o.team, "team", "", "team name == OpenBao keycloak role == spec.teams entry (required)")
+	f.StringVar(&o.region, "region", "", "spec env whose domainSuffix derives the Keycloak issuer (optional if the spec has one env)")
+	f.StringVar(&o.issuer, "issuer", "", "Keycloak realm issuer URL override (e.g. https://keycloak.<domain>/realms/otomi)")
+	f.StringVar(&o.clientID, "client-id", "", "Keycloak OIDC device-flow client id (default: $OPENBAO_OIDC_CLIENT_ID or 'llz')")
+	return c
 }
 
 func regenRootCmd() *cobra.Command {
