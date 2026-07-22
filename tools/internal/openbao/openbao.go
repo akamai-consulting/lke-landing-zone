@@ -132,6 +132,16 @@ func JWTLogin(ctx context.Context, httpClient *http.Client, addr, role, jwt stri
 		" — check the role's bound_claims/bound_audiences match this repo (llz ci bao-configure)")
 }
 
+// OIDCLogin exchanges a human's Keycloak (OIDC) id_token for an OpenBao client
+// token via a jwt-shaped auth method at `mount` (`llz ci bao-configure` mounts
+// the Keycloak one at `keycloak`). It is the human-operator counterpart to
+// JWTLogin, used by `llz openbao login` so day-2 secret writes no longer need
+// the root token; the issued token carries the team's `<name>-writer` policy.
+func OIDCLogin(ctx context.Context, httpClient *http.Client, addr, mount, role, jwt string) (string, error) {
+	return authLogin(ctx, httpClient, addr, mount, "oidc auth login", role, jwt,
+		" — check the role's bound_claims (groups) match your Keycloak group (llz ci bao-configure)")
+}
+
 // DataPath turns an operator KV path (secret/app/keys) into the KV v2 data API
 // path (secret/data/app/keys). MetadataPath does the metadata equivalent.
 func DataPath(p string) string     { return strings.Replace(p, "secret/", "secret/data/", 1) }

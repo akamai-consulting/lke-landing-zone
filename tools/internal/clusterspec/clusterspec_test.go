@@ -86,6 +86,27 @@ spec:
 	}
 }
 
+func TestDefaults_TeamsNotDefaulted(t *testing.T) {
+	// New-clusters-only: Defaults() must NOT inject a team, so an existing instance
+	// that never declared spec.teams stays team-less (no surprise team provisioned
+	// on upgrade — the default is authored at `llz new` scaffold time instead).
+	lz := mustDecode(t, validSpec)
+	if len(lz.Spec.Teams) != 0 {
+		t.Fatalf("Defaults() must not inject teams (new-clusters-only), got %+v", lz.Spec.Teams)
+	}
+	// A declared team is untouched + validates.
+	lz2 := mustDecode(t, validSpec+`  teams:
+    - name: gsap
+      openbaoSubtree: secret/gsap
+`)
+	if len(lz2.Spec.Teams) != 1 || lz2.Spec.Teams[0].Name != "gsap" {
+		t.Errorf("declared teams should pass through untouched, got %+v", lz2.Spec.Teams)
+	}
+	if errs := lz2.Validate(); len(errs) != 0 {
+		t.Errorf("declared team must validate, got %v", errs)
+	}
+}
+
 func TestDefaults_PartialComponentsPreserveExplicitFalse(t *testing.T) {
 	const y = validSpec
 	lz := mustDecode(t, y+`      components:

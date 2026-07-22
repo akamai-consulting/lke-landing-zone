@@ -69,7 +69,42 @@ type Spec struct {
 	// model: the loader populates it from the environments/<env>.yaml files (one
 	// ClusterDefinition each). Authoring it inline in landingzone.yaml is rejected.
 	Environments map[string]Environment `json:"environments,omitempty"`
+	// Teams declares APL teams — groups of human operators — that get scoped
+	// OpenBao WRITE access via Keycloak-group OIDC, so day-2 secret writes no
+	// longer need the root token. `llz ci bao-configure` renders each into a
+	// `<name>-writer` policy (create/update/read on <openbaoSubtree>/*) plus a
+	// `keycloak` JWT-auth role bound to the team's Keycloak group; operators mint
+	// a short-lived token with `llz openbao login`. Instance-wide (the same teams
+	// exist on every cluster). See docs/designs/team-scoped-credentials.md.
+	Teams []Team `json:"teams,omitempty"`
 }
+
+// Team is an APL team: a group of human operators granted scoped OpenBao write
+// access. Each team maps to a NATIVE apl-core team — `llz render` emits a
+// `teamConfig.<name>` entry into the apl-values overlay, and apl-core provisions
+// the matching Keycloak realm group + realm role `team-<name>` (plus the team
+// namespace) declaratively. bao-configure then binds a `<name>-writer` OpenBao
+// role on the `groups` OIDC claim value `team-<name>`; operators mint a
+// short-lived token with `llz openbao login`. The same identity is the intended
+// basis for scoped cluster RBAC in a later phase (see #299 / ADR 0004).
+type Team struct {
+	// Name identifies the team; it is the apl-core team id (rendered into
+	// teamConfig.<name>), names the OpenBao policy (`<name>-writer`) and the
+	// `keycloak` auth role, and — prefixed `team-` — the Keycloak realm role the
+	// role binds on. Lowercase kebab (an RFC1123-style name).
+	Name string `json:"name"`
+	// OpenbaoSubtree is the KV v2 path prefix the team may write, e.g.
+	// "secret/gsap" grants create/update/read on secret/data/gsap/* and
+	// secret/metadata/gsap/*. Must begin with "secret/".
+	OpenbaoSubtree string `json:"openbaoSubtree"`
+}
+
+// AplRole is the Keycloak realm role (and same-named group) apl-core provisions
+// for this team: "team-<name>". It is the value that lands in the OIDC `groups`
+// claim (a realm-role mapper apl-core ships on the default `openid` client scope)
+// and thus the value the OpenBao keycloak role binds on. See
+// linode/apl-tasks realm-factory.ts (createGroups / mapTeamsToRoles).
+func (t Team) AplRole() string { return "team-" + t.Name }
 
 // DNS is the instance-wide DNS/cert config rendered into the shared apl-values tree.
 type DNS struct {

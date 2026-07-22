@@ -251,6 +251,26 @@ them (on the env or in `spec.defaults`); omit them and the
 `landingzone.yaml` set a baseline inherited by every environment; a per-env value
 overrides it field-by-field (see [Layout](#layout)).
 
+**Team-scoped OpenBao writes (`spec.teams`, instance-wide).** Each entry —
+`{name, openbaoSubtree}` — gives a group of human operators scoped, **non-root**
+WRITE access to OpenBao: `llz render` emits a `teamConfig.<name>` into the
+apl-values overlay (apl-core provisions the native team — a namespace + the
+Keycloak realm group/role `team-<name>`), `llz ci bao-configure` writes a
+`<name>-writer` policy (`create/update/read` on `<openbaoSubtree>/*`) + a
+`keycloak` OIDC role bound on the `groups` claim value `team-<name>`, and
+operators mint a short-lived token with `llz openbao login --team <name>`.
+`name` is lowercase kebab and **may not** be `admin`, `platform-admin`, or
+`all-teams-admin` (apl-core owns those); `openbaoSubtree` must be a plain path
+prefix under `secret/` (no glob, no trailing `/`) and **may not** sit inside a
+platform-owned namespace (`secret/{linode,harbor,grafana,loki,otel,alerts,infra,cert-automation}`),
+so a team can't grant itself write on a system credential like the Linode PAT. **New clusters** get one team
+scaffolded automatically: `llz new` writes a `spec.teams` entry from the
+`openbao_team` question (default **`platform`** → `secret/platform`), so a
+non-root write path exists out of the box. **Existing clusters** are left
+untouched — there is no load-time default — and opt in by adding a team here (the
+retrofit path). Full walkthrough:
+[docs/runbooks/openbao-team-login.md](runbooks/openbao-team-login.md).
+
 **Identity + platform are spec-owned in `values.yaml`.** For a spec instance,
 `llz render` writes the cluster identity and apl-core global flags straight into
 each env's `values.yaml` — resolving the `${cluster_name}`/`${cluster_domain}`

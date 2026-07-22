@@ -47,6 +47,118 @@ func (lz *LandingZone) Validate() []error {
 	errs = append(errs, validateNetworks(lz)...)
 	errs = append(errs, validateHAVPCCIDRs(lz)...)
 	errs = append(errs, validateAlerting(lz.Spec.Alerting)...)
+	errs = append(errs, validateTeams(lz.Spec.Teams)...)
+	return errs
+}
+
+// validateTeams checks spec.teams: each team needs a kebab name (it is the
+// apl-core team id — rendered into teamConfig.<name> — and names the OpenBao
+// policy + auth role + the `team-<name>` Keycloak role the role binds on) and an
+// openbaoSubtree under the KV v2 `secret/` mount. Names must be unique, so two
+// teams can't collide on the same apl team / policy / role.
+// reservedTeamNames are the team ids apl-core provisions itself (createGroups in
+// linode/apl-tasks): the platform teams `admin` (special-cased in apl's import
+// path), plus the admin roles `platform-admin` and `all-teams-admin`. A spec team
+// of the same name would collide with apl's own management, so they're rejected.
+var reservedTeamNames = map[string]bool{
+	"admin":           true,
+	"platform-admin":  true,
+	"all-teams-admin": true,
+}
+
+// systemSecretNamespaces are the top-level secret/ namespaces the PLATFORM owns —
+// seeded at bootstrap and read/written by the platform-ci, ESO-pusher, rotator,
+// and harbor/linode roles. A team's openbaoSubtree may not carve space inside
+// them: a team scoped to e.g. `secret/linode` would grant itself write on the
+// Linode API token + broad-PAT (secret/data/linode/*), a privilege escalation.
+// KEEP IN SYNC with the policy paths in tools/cmd/llz/ci_openbao_configure.go
+// (policyPlatformCI et al.) — the guarded set is the union of their top segments.
+// SystemSecretNamespaces is EXPORTED so a cmd/llz test can assert it stays a
+// superset of the platform policy paths (drift = a team-claimable escalation).
+var SystemSecretNamespaces = map[string]bool{
+	"alerts":          true,
+	"cert-automation": true,
+	"grafana":         true,
+	"harbor":          true,
+	"infra":           true,
+	"linode":          true,
+	"loki":            true,
+	"otel":            true,
+}
+
+// openbaoSubtreeRe pins the CANONICAL shape of a team's openbaoSubtree: the
+// `secret/` mount followed by one or more lowercase kebab segments. It rejects
+// the non-canonical forms that would otherwise slip past subtreeNamespace's
+// first-segment guard and produce a broken (or, if OpenBao ever normalized paths,
+// dangerous) policy: empty segments (`secret//linode`), `.`/`..` traversal
+// (`secret/../linode`), whitespace (`secret/linode `), and uppercase/unicode.
+var openbaoSubtreeRe = regexp.MustCompile(`^secret/[a-z0-9]([a-z0-9-]*[a-z0-9])?(/[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
+
+// subtreeNamespace returns the first path segment under secret/ (e.g.
+// "secret/linode/foo" → "linode"). Assumes the "secret/" prefix is present.
+func subtreeNamespace(subtree string) string {
+	rest := strings.TrimPrefix(subtree, "secret/")
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		return rest[:i]
+	}
+	return rest
+}
+
+// ValidateTeams exposes the spec.teams checks so a command that reads teams via
+// LoadInstance — which does NOT run Validate (only render.go does) — can gate on
+// them before building OpenBao policies from an unvalidated subtree. See
+// runCIBaoConfigure.
+func ValidateTeams(teams []Team) []error { return validateTeams(teams) }
+
+func validateTeams(teams []Team) []error {
+	var errs []error
+	seenName := map[string]bool{}
+	for i, t := range teams {
+		if t.Name == "" {
+			errs = append(errs, fmt.Errorf("teams[%d].name is required", i))
+		} else if err := validate.EnvName(t.Name); err != nil {
+			errs = append(errs, fmt.Errorf("teams[%d].name: %w", i, err))
+		} else if strings.HasSuffix(t.Name, "-") {
+			// EnvName permits a trailing hyphen, but the name becomes the Keycloak
+			// group AND the k8s namespace `team-<name>` — an RFC1123 label may not
+			// end in '-', so apl-core team/namespace creation would fail.
+			errs = append(errs, fmt.Errorf("teams[%d].name %q must not end with '-' (it becomes the k8s namespace team-%s, which must be a valid RFC1123 label)", i, t.Name, t.Name))
+		} else if reservedTeamNames[t.Name] {
+			// apl-core always ships these groups/roles (and special-cases `admin`);
+			// a spec team of the same name would double-manage apl's own team. Bind
+			// to them via a differently-named team + matching Keycloak group if you
+			// really mean to grant that group write.
+			errs = append(errs, fmt.Errorf("teams[%d].name %q is reserved — apl-core owns this built-in team/group; pick another name", i, t.Name))
+		}
+		if seenName[t.Name] && t.Name != "" {
+			errs = append(errs, fmt.Errorf("teams: duplicate name %q", t.Name))
+		}
+		seenName[t.Name] = true
+		switch {
+		case t.OpenbaoSubtree == "":
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree is required (e.g. secret/%s)", i, t.Name, t.Name))
+		case !strings.HasPrefix(t.OpenbaoSubtree, "secret/"):
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree %q must begin with 'secret/' (the KV v2 mount)", i, t.Name, t.OpenbaoSubtree))
+		case strings.Contains(t.OpenbaoSubtree, "*"):
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree %q must be a plain path prefix, not a glob (the '/*' is added by the policy)", i, t.Name, t.OpenbaoSubtree))
+		case strings.HasSuffix(t.OpenbaoSubtree, "/"):
+			// bao-configure appends "/*" to <subtree>; a trailing slash would make
+			// the policy path "secret/data/<x>//*", which matches nothing — so the
+			// team would silently get NO write access despite a "successful"
+			// bootstrap. Reject it (this also rejects the bare "secret/" mount).
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree %q must not end with '/' (name a scoped path under the mount, e.g. secret/%s — the policy appends '/*'; this also rejects the bare 'secret/' whole-mount)", i, t.Name, t.OpenbaoSubtree, t.Name))
+		case SystemSecretNamespaces[subtreeNamespace(t.OpenbaoSubtree)]:
+			// Least privilege: a team may not scope over a platform-owned namespace
+			// (else it could grant itself write on system credentials like the Linode
+			// PAT). Reached only for an otherwise-valid secret/<ns>[/…] subtree.
+			ns := subtreeNamespace(t.OpenbaoSubtree)
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree %q is inside the platform-owned secret/%s namespace — pick a team-specific subtree (e.g. secret/%s)", i, t.Name, t.OpenbaoSubtree, ns, t.Name))
+		case !openbaoSubtreeRe.MatchString(t.OpenbaoSubtree):
+			// Catch-all for non-canonical paths the specific cases above miss —
+			// empty/'.'/'..' segments, consecutive slashes, whitespace, uppercase.
+			errs = append(errs, fmt.Errorf("teams[%d] (%s): openbaoSubtree %q must be secret/<segment>[/<segment>…] with lowercase kebab segments (a-z, 0-9, -) — no empty, '.'/'..', or whitespace segments", i, t.Name, t.OpenbaoSubtree))
+		}
+	}
 	return errs
 }
 

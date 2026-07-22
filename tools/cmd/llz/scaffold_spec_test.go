@@ -22,7 +22,7 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(".copier-answers.yml", "upstream_org: akamai-consulting\ninstance_repo: my-org/platform-support\nllz_version: v0.4.0\n")
+	write(".copier-answers.yml", "upstream_org: akamai-consulting\ninstance_repo: my-org/platform-support\nllz_version: v0.4.0\nopenbao_team: ops\n")
 	write("terraform-iac-bootstrap/cluster/terraform.tfvars.example",
 		"cluster_label = \"x\"\nk8s_version = \"v1.33.6+lke7\"\nnode_type  = \"g8-dedicated-8-4\"\nnode_count = 5\n")
 
@@ -74,6 +74,12 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 	}
 	if c.HA.Role != "standalone" {
 		t.Errorf("ha.role = %q, want standalone default", c.HA.Role)
+	}
+	// The copier openbao_team answer becomes spec.teams[0] (secret/<name>), so the
+	// operator's chosen team — not the hardcoded platform default — is authored.
+	if len(lz.Spec.Teams) != 1 || lz.Spec.Teams[0].Name != "ops" ||
+		lz.Spec.Teams[0].OpenbaoSubtree != "secret/ops" {
+		t.Errorf("spec.teams from copier answer = %+v, want ops/secret/ops", lz.Spec.Teams)
 	}
 }
 

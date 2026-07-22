@@ -59,6 +59,20 @@ spec:
   #     channel: platform-alerts          # non-critical (default mon-apl)
   #     channelCrit: platform-alerts-crit # critical (default mon-apl-crit)
 
+  # ── Team-scoped OpenBao writes (optional) ──────────────────────────────────
+  # Human-operator WRITE access to OpenBao scoped by APL/Keycloak team identity,
+  # so day-2 secret writes never need the root token. `llz new` scaffolds one
+  # team for you (the `openbao_team` question, default `platform`); an existing
+  # instance opts in by adding a team here. Each entry becomes a native apl-core
+  # team (namespace + Keycloak group/role team-<name>) plus a <name>-writer
+  # OpenBao policy; operators mint a short-lived token with
+  # `llz openbao login --team <name>` and then `llz openbao set`. After render,
+  # add users to the team-<name> Keycloak group. Name may not be `admin`,
+  # `platform-admin`, or `all-teams-admin`. See docs/runbooks/openbao-team-login.md.
+  teams:
+    - name: platform                  # apl team id → Keycloak role team-platform
+      openbaoSubtree: secret/platform # → write on secret/data/platform/*
+
   # ── Shared VPCs (optional — most instances leave this out) ──────────────────
   # By default every env gets its OWN DEDICATED VPC (own state, fully isolated) —
   # the safest posture, and what you get by leaving `networks` out entirely.

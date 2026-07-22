@@ -16,6 +16,10 @@ type answers struct {
 	UpstreamOrg  string `json:"upstream_org"`
 	InstanceRepo string `json:"instance_repo"`
 	Version      string `json:"llz_version"`
+	// OpenbaoTeam is the copier-chosen default team name (spec.teams[0]) — the
+	// operators who get scoped non-root OpenBao writes. Empty on pre-question
+	// instances; ensureLandingZone falls back to "platform".
+	OpenbaoTeam string `json:"openbao_team"`
 }
 
 // readAnswers loads .copier-answers.yml from dir (use "." for the current

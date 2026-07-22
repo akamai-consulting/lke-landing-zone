@@ -69,6 +69,11 @@ type ValuesIdentity struct {
 	AlertReceivers        []string // alerts.receivers
 	AlertSlackChannel     string   // alerts.slack.channel
 	AlertSlackChannelCrit string   // alerts.slack.channelCrit
+
+	// Teams (spec.teams, instance-wide) → a teamConfig.<name> entry in the
+	// apl-values overlay. apl-core provisions the native team (namespace + the
+	// Keycloak `team-<name>` group/role the OpenBao keycloak role binds on).
+	Teams []Team
 }
 
 // objectStoreWiring returns the Loki/Harbor bucket names + S3 endpoint/region for
@@ -154,6 +159,8 @@ func (lz *LandingZone) ValuesIdentity(env string) ValuesIdentity {
 		AlertReceivers:        lz.Spec.Alerting.Receivers,
 		AlertSlackChannel:     lz.Spec.Alerting.Slack.Channel,
 		AlertSlackChannelCrit: lz.Spec.Alerting.Slack.ChannelCrit,
+
+		Teams: lz.Spec.Teams,
 	}
 }
 
@@ -256,6 +263,13 @@ func RenderValues(base []byte, components map[string]ComponentToggle, id ValuesI
 		setStr(dig(alerts, "slack", "channelCrit"), id.AlertSlackChannelCrit)
 	}
 
+	// spec.teams → teamConfig.<name> (the ONE place this render invents structure,
+	// vs. the never-invent scalar patches above — teams are a spec-owned structural
+	// input apl-core turns into the native team + Keycloak team-<name> group/role).
+	// No teams (an instance that never declared spec.teams) → the block is never
+	// created, so a team-less instance's values.yaml is unchanged.
+	applyTeamConfig(root, id.Teams)
+
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2) // match the hand-authored values.yaml
@@ -339,6 +353,44 @@ func mapValue(m *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
+}
+
+// applyTeamConfig ensures a teamConfig.<name>.settings.id entry exists for each
+// spec.teams entry, creating the teamConfig block only when at least one team is
+// declared — so a team-less values.yaml is byte-identical to the un-rendered
+// base. It ADDS missing teams only; an
+// existing teamConfig.<name> (a human/apl-enriched entry) is left untouched, so
+// re-render is idempotent and non-destructive. apl-core reads teamConfig to
+// provision the native team (namespace + Keycloak group/role team-<name>).
+func applyTeamConfig(root *yaml.Node, teams []Team) {
+	if len(teams) == 0 {
+		return
+	}
+	tc := mapValue(root, "teamConfig")
+	if tc != nil && tc.Kind != yaml.MappingNode {
+		// A malformed base (teamConfig: null/scalar/seq) — reset the value node to
+		// an empty map IN PLACE so we don't append a duplicate teamConfig key.
+		tc.Kind, tc.Tag, tc.Value, tc.Content = yaml.MappingNode, "!!map", "", nil
+	}
+	if tc == nil {
+		tc = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "teamConfig"}, tc)
+	}
+	for _, t := range teams {
+		if mapValue(tc, t.Name) != nil {
+			continue // respect an already-authored entry
+		}
+		// { settings: { id: <name> } } — the minimal valid apl-core team.
+		idScalar := func(v string) *yaml.Node {
+			return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v}
+		}
+		settings := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map",
+			Content: []*yaml.Node{idScalar("id"), idScalar(t.Name)}}
+		team := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map",
+			Content: []*yaml.Node{idScalar("settings"), settings}}
+		tc.Content = append(tc.Content, idScalar(t.Name), team)
+	}
 }
 
 func boolString(b bool) string {

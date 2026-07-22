@@ -149,6 +149,25 @@ instance_repo:
     repo URLs, `gh` CLI targeting, and the SSH deploy-key wiring.
   default: your-org/your-instance-repo
 
+openbao_team:
+  type: str
+  help: >-
+    Name of this instance's default OpenBao "team" — the group of human operators
+    who get scoped, non-root WRITE access to secrets under secret/<name>/ via their
+    Keycloak identity (`llz openbao login --team <name>`, then `llz openbao set`).
+    It becomes a native apl-core team (namespace + Keycloak group/role team-<name>)
+    and a <name>-writer OpenBao policy. Keep "platform" for a platform-operators
+    team, or name it after your app team; add more teams later in landingzone.yaml.
+    Lowercase kebab (a-z, 0-9, -).
+  default: platform
+  # Uses the custom _envops delimiters (<% %> blocks, <@ @> vars), not stock Jinja.
+  validator: >-
+    <% if not openbao_team | regex_search('^[a-z]([a-z0-9-]*[a-z0-9])?$') or openbao_team | length > 31 %>openbao_team
+    must be lowercase kebab, start AND end alphanumeric (no trailing hyphen), max 31
+    chars — it names an apl-core team, the k8s namespace team-<name>, and an OpenBao
+    policy/role. Got "<@ openbao_team @>".<% elif openbao_team in ['admin', 'platform-admin', 'all-teams-admin'] %>openbao_team
+    "<@ openbao_team @>" is reserved — apl-core owns that built-in team; pick another name.<% endif %>
+
 llz_version:
   type: str
   help: >-

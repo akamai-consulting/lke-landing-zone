@@ -7,10 +7,12 @@ package main
 // re-configure runs are safe. Part of the openbao CI family (ci_openbao.go).
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/spf13/cobra"
 )
@@ -137,7 +139,7 @@ type baoConfigStep struct {
 // GitHub-OIDC (JWT) auth method + a repo-bound role are appended so CI can
 // authenticate with a short-lived OIDC token instead of a long-lived AppRole
 // secret_id stashed in GitHub Actions secrets.
-func baoConfigureSteps(ghRepo string) []baoConfigStep {
+func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) []baoConfigStep {
 	steps := []baoConfigStep{
 		{desc: "enable KV v2 at secret/", args: []string{"secrets", "enable", "-version=2", "-path=secret", "kv"}},
 		{desc: "enable kubernetes auth", args: []string{"auth", "enable", "kubernetes"}},
@@ -296,7 +298,137 @@ func baoConfigureSteps(ghRepo string) []baoConfigStep {
 			jwtRole("secret-propagator", "secret-propagator"),
 		)
 	}
+
+	// Keycloak-group OIDC — a SECOND jwt auth mount (path `keycloak`, distinct
+	// from the GitHub-OIDC `jwt` mount above) that lets human operators mint a
+	// short-lived, team-scoped WRITE token instead of reconstituting root. Each
+	// spec.teams entry becomes a `<name>-writer` policy + a role bound on the
+	// apl-core realm role `team-<name>`. Appended only when a realm issuer is known
+	// (derived from the env's domainSuffix) AND teams are declared; otherwise
+	// omitted, so a domain-less or team-less instance is unchanged.
+	steps = append(steps, keycloakTeamSteps(keycloakIssuer, teams)...)
 	return steps
+}
+
+// keycloakRoleBody is the JSON body for a `keycloak` jwt-auth role. bound_claims
+// is a map (the CLI rejects key=value for map fields), so — like the GitHub-OIDC
+// role — the body is written over stdin as JSON. groups is the Keycloak realm
+// group claim; user_claim=sub attributes each write to the operator.
+type keycloakRoleBody struct {
+	RoleType  string `json:"role_type"`
+	UserClaim string `json:"user_claim"`
+	// BoundAudiences pins the token `aud` to the llz OIDC client, so ONLY tokens
+	// deliberately minted for OpenBao login (the device-flow `llz` client + the
+	// smoke direct-grant client, both stamped with this aud by an audience mapper)
+	// are accepted — not an arbitrary id_token from another realm client (Grafana,
+	// Harbor, the console) that merely carries the `groups` claim.
+	BoundAudiences []string          `json:"bound_audiences"`
+	BoundClaims    map[string]string `json:"bound_claims"`
+	TokenPolicies  []string          `json:"token_policies"`
+	TokenTTL       string            `json:"token_ttl"`
+	TokenMaxTTL    string            `json:"token_max_ttl"`
+}
+
+// keycloakInternalJWKS is Keycloak's realm JWKS on its INTERNAL http service —
+// the URL OpenBao (in-cluster) can actually reach to validate team-login tokens
+// (the public keycloak.<domain> URL hairpins off the cluster's own LB). The
+// service name is apl-core v6's Keycloak.X chart (`keycloak-keycloakx-http`) in
+// the `keycloak` namespace; the realm is `otomi`. The egress allow is in
+// kubernetes-charts/llz-openbao-platform (platform.networkPolicy.keycloakNamespace).
+const keycloakInternalJWKS = "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/realms/otomi/protocol/openid-connect/certs"
+
+// keycloakTeamSteps builds the `keycloak` auth mount + per-team policy/role
+// steps. Pure (spec → step table) so it is unit-tested without a cluster. Returns
+// nil when there is no issuer or no team, so the configure sequence is unchanged
+// on instances that declare neither.
+func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep {
+	if issuer == "" || len(teams) == 0 {
+		return nil
+	}
+	steps := []baoConfigStep{
+		// Non-fatal enable (tolerates already-enabled on re-runs), like the other
+		// auth enables. `-path=keycloak` keeps it separate from the CI `jwt` mount.
+		{desc: "enable jwt (OIDC) auth at keycloak/",
+			args: []string{"auth", "enable", "-path=keycloak", "jwt"}},
+		// Validate id_tokens using Keycloak's INTERNAL JWKS (reachable in-cluster)
+		// while binding the PUBLIC issuer (the token's `iss`). We deliberately do
+		// NOT use oidc_discovery_url=<public issuer>: in-cluster OpenBao can't reach
+		// the public keycloak.<domain> URL (it resolves to the cluster's own LB IP →
+		// hairpin, unsupported on LKE-E), so key fetch would time out. jwks_url +
+		// bound_issuer also sidesteps the discovery issuer-match check (the internal
+		// URL's host differs from the public `iss`). The netpol allowing this egress
+		// is in kubernetes-charts/llz-openbao-platform (keycloakNamespace).
+		//
+		// skip_jwks_validation=true: OpenBao 2.5.0 EAGERLY fetches jwks_url at
+		// config-write time (fails the write if unreachable). At bootstrap-openbao
+		// time Keycloak has not converged yet (the bootstrap gate waits on Argo/
+		// Kyverno/cert-manager, not Keycloak), so an eager fetch would fail and wedge
+		// this fatal step → the whole bao-configure job. We validate keys LAZILY at
+		// first login instead, by which point Keycloak (and the internal JWKS) is up.
+		// The signature is still verified on every login; this only defers the fetch.
+		{desc: "configure keycloak auth (internal jwks_url + public bound_issuer)", fatal: true,
+			args: []string{"write", "auth/keycloak/config",
+				"jwks_url=" + keycloakInternalJWKS, "bound_issuer=" + issuer,
+				"skip_jwks_validation=true"}},
+	}
+	for _, t := range teams {
+		policy := t.Name + "-writer"
+		// secret/<sub> → secret/data/<sub> (writes) + secret/metadata/<sub> (list).
+		data := strings.Replace(t.OpenbaoSubtree, "secret/", "secret/data/", 1)
+		meta := strings.Replace(t.OpenbaoSubtree, "secret/", "secret/metadata/", 1)
+		hcl := fmt.Sprintf(
+			"path %q { capabilities = [\"create\", \"update\", \"read\"] }\n"+
+				"path %q { capabilities = [\"read\", \"list\"] }\n",
+			data+"/*", meta+"/*")
+		body, _ := json.Marshal(keycloakRoleBody{
+			RoleType: "jwt",
+			// Only accept tokens minted for the llz OIDC client (device flow + the
+			// e2e smoke client, both audience-mapped to this id in keycloak-configure).
+			BoundAudiences: []string{keycloakDeviceClientID},
+			UserClaim:      "sub",
+			// Bind on the apl-core realm role `team-<name>` — the value apl-core's
+			// default groups claim (a realm-role mapper on the `openid` client
+			// scope) carries for a member of the native `team-<name>` group. We do
+			// NOT create this group/role: `llz render` declares the team in
+			// teamConfig and apl-core provisions it. See clusterspec.Team.AplRole.
+			BoundClaims:   map[string]string{"groups": t.AplRole()},
+			TokenPolicies: []string{policy},
+			TokenTTL:      "15m",
+			TokenMaxTTL:   "30m",
+		})
+		steps = append(steps,
+			baoConfigStep{desc: "write policy " + policy, fatal: true, stdin: hcl,
+				args: []string{"policy", "write", policy, "-"}},
+			baoConfigStep{desc: "write keycloak role " + t.Name, fatal: true, stdin: string(body),
+				args: []string{"write", "auth/keycloak/role/" + t.Name, "-"}},
+		)
+	}
+	return steps
+}
+
+// keycloakIssuerFor derives the OpenBao OIDC discovery URL (the Keycloak `otomi`
+// realm issuer) from a region's domainSuffix, or "" when the spec can't be
+// loaded, the region is unknown, or no domainSuffix is set. Empty → the Keycloak
+// team steps are skipped (with a warning at the call site).
+func keycloakIssuerFor(region string) string {
+	lz, err := clusterspec.LoadInstance(".")
+	if err != nil {
+		return ""
+	}
+	e, ok := lz.Env(region)
+	if !ok || e.Cluster.Bootstrap.DomainSuffix == "" {
+		return ""
+	}
+	return "https://keycloak." + e.Cluster.Bootstrap.DomainSuffix + "/realms/otomi"
+}
+
+// specTeams returns spec.teams, or nil when the spec can't be loaded.
+func specTeams() []clusterspec.Team {
+	lz, err := clusterspec.LoadInstance(".")
+	if err != nil {
+		return nil
+	}
+	return lz.Spec.Teams
 }
 
 // auditFileDeviceActive reports whether `bao audit list` shows the file/
@@ -347,9 +479,25 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	if ghRepo == "" {
 		fmt.Fprintln(os.Stderr, "::warning::GITHUB_REPOSITORY unset — skipping GitHub-OIDC (jwt) auth setup; the CI in-cluster-PAT rotation (llz ci rotate-incluster-pat) stays unavailable until re-run with GITHUB_REPOSITORY set.")
 	}
+	// Keycloak-group OIDC for human team writes (spec.teams). The issuer is
+	// derived from this region's domainSuffix; skip (with a warning) when teams
+	// are declared but no issuer can be formed, so a misconfigured domain doesn't
+	// silently drop the team roles.
+	teams := specTeams()
+	// LoadInstance (which specTeams uses) does NOT run Validate — only render does.
+	// Gate here so a spec that reached this cluster without a render pass can't make
+	// us build OpenBao policies from an unvalidated/unsafe subtree.
+	if errs := clusterspec.ValidateTeams(teams); len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "::warning::spec.teams failed validation (%v) — skipping the keycloak team auth setup; fix the spec and re-run `llz ci bao-configure`.\n", errs)
+		teams = nil
+	}
+	keycloakIssuer := keycloakIssuerFor(region)
+	if len(teams) > 0 && keycloakIssuer == "" {
+		fmt.Fprintf(os.Stderr, "::warning::spec.teams declares %d team(s) but no Keycloak issuer could be derived for region %q (spec unreadable or cluster.bootstrap.domainSuffix unset) — skipping the keycloak team auth setup.\n", len(teams), region)
+	}
 	if g.dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) would preflight the root token and apply the configure sequence:")
-		for _, s := range baoConfigureSteps(ghRepo) {
+		for _, s := range baoConfigureSteps(ghRepo, keycloakIssuer, teams) {
 			fmt.Fprintf(os.Stderr, "    bao %s\n", strings.Join(s.args, " "))
 		}
 		return nil
@@ -383,7 +531,7 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	}
 	fmt.Printf("OPENBAO_ROOT_TOKEN preflight on %s OK — proceeding.\n", region)
 
-	for _, step := range baoConfigureSteps(ghRepo) {
+	for _, step := range baoConfigureSteps(ghRepo, keycloakIssuer, teams) {
 		out, errOut, err := baoExecFn(pod, token, step.stdin, step.args...)
 		if err != nil {
 			if step.fatal {

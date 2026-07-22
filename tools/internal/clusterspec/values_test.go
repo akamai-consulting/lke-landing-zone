@@ -140,6 +140,73 @@ func TestRenderValues_GiteaDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestRenderValues_TeamConfig(t *testing.T) {
+	const base = `apps:
+  harbor:
+    enabled: true
+`
+	// No teams → the block is never invented (team-less instance unchanged).
+	out, err := RenderValues([]byte(base), nil, ValuesIdentity{})
+	if err != nil {
+		t.Fatalf("RenderValues: %v", err)
+	}
+	if strings.Contains(string(out), "teamConfig") {
+		t.Errorf("no teams must not create a teamConfig block:\n%s", out)
+	}
+
+	// Teams → teamConfig.<name>.settings.id == <name>, one entry each.
+	id := ValuesIdentity{Teams: []Team{{Name: "gsap"}, {Name: "web"}}}
+	out, err = RenderValues([]byte(base), nil, id)
+	if err != nil {
+		t.Fatalf("RenderValues teams: %v", err)
+	}
+	type teamDoc struct {
+		TeamConfig map[string]struct {
+			Settings struct {
+				ID string `yaml:"id"`
+			} `yaml:"settings"`
+		} `yaml:"teamConfig"`
+	}
+	var doc teamDoc
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("unmarshal rendered: %v\n%s", err, out)
+	}
+	if len(doc.TeamConfig) != 2 {
+		t.Fatalf("want 2 teamConfig entries, got %d:\n%s", len(doc.TeamConfig), out)
+	}
+	for _, name := range []string{"gsap", "web"} {
+		if doc.TeamConfig[name].Settings.ID != name {
+			t.Errorf("teamConfig.%s.settings.id = %q, want %s:\n%s", name, doc.TeamConfig[name].Settings.ID, name, out)
+		}
+	}
+
+	// Re-render is idempotent AND preserves an already-authored entry (never
+	// clobbers a human/apl-enriched team). Hand-author a richer gsap, re-render.
+	const authored = `apps:
+  harbor:
+    enabled: true
+teamConfig:
+  gsap:
+    settings:
+      id: gsap
+      selfService:
+        service: [ingress]
+`
+	out, err = RenderValues([]byte(authored), nil, ValuesIdentity{Teams: []Team{{Name: "gsap"}, {Name: "web"}}})
+	if err != nil {
+		t.Fatalf("RenderValues authored: %v", err)
+	}
+	if !strings.Contains(string(out), "ingress") {
+		t.Errorf("authored teamConfig.gsap was clobbered; want the selfService kept:\n%s", out)
+	}
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("unmarshal authored: %v", err)
+	}
+	if _, ok := doc.TeamConfig["web"]; !ok || len(doc.TeamConfig) != 2 {
+		t.Errorf("want gsap (authored) + web (added), got %v:\n%s", doc.TeamConfig, out)
+	}
+}
+
 func TestRenderValues_Sizing(t *testing.T) {
 	const base = `apps:
   prometheus:
@@ -404,6 +471,70 @@ alerts:
 
 // TestValidateAlerting pins the spec surface: slack|none only, no mixing
 // none with a real channel, and channel overrides require the slack receiver.
+func TestValidateTeams(t *testing.T) {
+	cases := []struct {
+		name    string
+		teams   []Team
+		wantErr string // "" = valid
+	}{
+		{"unset is valid", nil, ""},
+		{"one team is valid", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap"}}, ""},
+		{"two teams are valid", []Team{
+			{Name: "gsap", OpenbaoSubtree: "secret/gsap"},
+			{Name: "web", OpenbaoSubtree: "secret/web"},
+		}, ""},
+		{"missing name", []Team{{OpenbaoSubtree: "secret/gsap"}}, "name is required"},
+		{"bad name", []Team{{Name: "Gsap Team", OpenbaoSubtree: "secret/gsap"}}, "name"},
+		{"reserved name admin", []Team{{Name: "admin", OpenbaoSubtree: "secret/admin"}}, "reserved"},
+		{"reserved name platform-admin", []Team{{Name: "platform-admin", OpenbaoSubtree: "secret/pa"}}, "reserved"},
+		{"trailing-hyphen name rejected", []Team{{Name: "foo-", OpenbaoSubtree: "secret/foo"}}, "must not end with '-'"},
+		{"system namespace linode rejected", []Team{{Name: "x", OpenbaoSubtree: "secret/linode"}}, "platform-owned"},
+		{"system namespace nested harbor rejected", []Team{{Name: "y", OpenbaoSubtree: "secret/harbor/robots"}}, "platform-owned"},
+		{"non-system namespace ok", []Team{{Name: "zapp", OpenbaoSubtree: "secret/zapp"}}, ""},
+		{"nested path ok", []Team{{Name: "zapp", OpenbaoSubtree: "secret/zapp/build"}}, ""},
+		{"double slash rejected", []Team{{Name: "xteam", OpenbaoSubtree: "secret//linode"}}, "lowercase kebab"},
+		{"dotdot traversal rejected", []Team{{Name: "xteam", OpenbaoSubtree: "secret/../linode"}}, "lowercase kebab"},
+		{"trailing space rejected", []Team{{Name: "xteam", OpenbaoSubtree: "secret/linodex "}}, "lowercase kebab"},
+		{"uppercase rejected", []Team{{Name: "xteam", OpenbaoSubtree: "secret/Zapp"}}, "lowercase kebab"},
+		{"linode-lookalike allowed", []Team{{Name: "xteam", OpenbaoSubtree: "secret/linodex"}}, ""},
+		{"missing subtree", []Team{{Name: "gsap"}}, "openbaoSubtree is required"},
+		{"subtree not under secret/", []Team{{Name: "gsap", OpenbaoSubtree: "kv/gsap"}}, "must begin with 'secret/'"},
+		{"glob subtree rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap/*"}}, "not a glob"},
+		{"trailing-slash subtree rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap/"}}, "must not end with '/'"},
+		{"bare secret/ mount rejected", []Team{{Name: "gsap", OpenbaoSubtree: "secret/"}}, "must not end with '/'"},
+		{"duplicate name", []Team{
+			{Name: "gsap", OpenbaoSubtree: "secret/gsap"},
+			{Name: "gsap", OpenbaoSubtree: "secret/other"},
+		}, "duplicate name"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := validateTeams(tc.teams)
+			if tc.wantErr == "" {
+				if len(errs) != 0 {
+					t.Fatalf("want valid, got %v", errs)
+				}
+				return
+			}
+			found := false
+			for _, e := range errs {
+				if strings.Contains(e.Error(), tc.wantErr) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, errs)
+			}
+		})
+	}
+}
+
+func TestTeamAplRole(t *testing.T) {
+	if r := (Team{Name: "gsap"}).AplRole(); r != "team-gsap" {
+		t.Errorf("AplRole() = %q, want team-gsap (the apl-core realm role/group)", r)
+	}
+}
+
 func TestValidateAlerting(t *testing.T) {
 	cases := []struct {
 		name    string

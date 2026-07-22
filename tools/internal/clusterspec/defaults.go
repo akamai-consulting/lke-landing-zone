@@ -1,10 +1,20 @@
 package clusterspec
 
+// DefaultTeamName is the team `llz new` scaffolds by default (the copier
+// openbao_team question / ensureLandingZone fallback): a `platform` operators
+// team scoped to secret/platform. It is authored into a NEW instance's
+// landingzone.yaml at scaffold time — deliberately NOT a load-time default, so an
+// existing instance that never declared spec.teams is left byte-identical (no
+// surprise team provisioned on upgrade). Existing instances opt in via the
+// retrofit path in docs/runbooks/openbao-team-login.md.
+const DefaultTeamName = "platform"
+
 // Defaults fills the derived/implied fields so the renderer and validator see a
 // complete spec. It is idempotent. Defaults are deliberately minimal — fields
 // the author omits and that have a sensible tfvars-example default (the two
 // control-plane bools, autoscaler) are left nil so the renderer leaves the
-// example value untouched rather than forcing a zero.
+// example value untouched rather than forcing a zero. spec.teams is NOT
+// defaulted here (new-clusters-only — see DefaultTeamName / ensureLandingZone).
 func (lz *LandingZone) Defaults() {
 	for name, env := range lz.Spec.Environments {
 		// domainSuffix defaults to "<env>.internal" (mirrors scaffold.go's

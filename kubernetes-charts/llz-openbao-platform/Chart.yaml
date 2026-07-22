@@ -74,7 +74,13 @@ type: application
 #         missing llz-pat-rotator/broad-pat-rotator allowedClientPods entry added in
 #         0.1.19, and a Bootstrap section that predated static-key auto-unseal (0.1.10)
 #         and cited a workflow path that does not exist.
-version: 0.1.21
+# 0.1.22: add an egress NetworkPolicy rule letting OpenBao reach Keycloak's
+#         internal HTTP (keycloak-keycloakx-http.keycloak:8080) so the team
+#         keycloak/jwt auth mount can fetch the realm JWKS at login. Without this
+#         the openbao namespace's default-deny egress L4-blocks the fetch and
+#         team OIDC logins time out. (values.yaml keycloakEgress + the netpol
+#         template.) Must ship together with the openbao.yaml Argo targetRevision.
+version: 0.1.22
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:
