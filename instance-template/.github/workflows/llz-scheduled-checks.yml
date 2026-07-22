@@ -112,6 +112,17 @@ jobs:
         if: always() && steps.kubeconfig.outputs.available == 'true'
         run: llz ci assert-wave-health-vap | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Self-heal the team-OIDC device-flow client. keycloak-configure runs once at
+      # bootstrap; if that run raced ahead of apl-core's Keycloak convergence it
+      # warns + exits 0, leaving the `llz` client absent or missing the openid
+      # scope (login would 403). This weekly re-run reconciles it (idempotent,
+      # best-effort, no-op when spec.teams is empty) so a raced bootstrap heals
+      # without a manual step. See docs/runbooks/openbao-team-login.md.
+      - name: Reconcile Keycloak team device-flow client
+        if: always() && steps.kubeconfig.outputs.available == 'true'
+        continue-on-error: true
+        run: llz ci keycloak-configure --region "${{ matrix.region }}"
+
       # THE GATE — deliberately no continue-on-error, and last.
       - name: Check secret/loki/object-store age
         if: always() && steps.kubeconfig.outputs.available == 'true'

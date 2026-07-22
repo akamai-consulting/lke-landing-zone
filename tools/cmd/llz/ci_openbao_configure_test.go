@@ -5,12 +5,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 func TestBaoConfigureStepsShape(t *testing.T) {
-	steps := baoConfigureSteps("acme/platform")
+	steps := baoConfigureSteps("acme/platform", "", nil)
 	if len(steps) != 19 {
 		t.Fatalf("got %d steps, want 19 (15 base + 4 GitHub-OIDC: jwt enable, jwt config, 2 roles)", len(steps))
 	}
@@ -23,7 +26,7 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 		}
 	}
 	// A repo-less configure omits the GitHub-OIDC steps entirely.
-	if n := len(baoConfigureSteps("")); n != 15 {
+	if n := len(baoConfigureSteps("", "", nil)); n != 15 {
 		t.Errorf("no-repo configure should omit JWT steps: got %d, want 15", n)
 	}
 	// SECURITY: every jwt role must pin to the instance repo + owner audience.
@@ -84,7 +87,7 @@ func TestBaoConfigureStepsShape(t *testing.T) {
 // the reconciler can't reach mesh-protected harbor-core from the llz-reconciler namespace.
 func TestReconcilerRoleBindsDrivingPolicies(t *testing.T) {
 	var reconcilerFound, harborRoleFound bool
-	for _, s := range baoConfigureSteps("acme/platform") {
+	for _, s := range baoConfigureSteps("acme/platform", "", nil) {
 		if len(s.args) < 2 || s.args[0] != "write" {
 			continue
 		}
@@ -125,7 +128,7 @@ func TestReconcilerRoleBindsDrivingPolicies(t *testing.T) {
 // fail incidentally) so a regression to key=value args trips a clear message.
 func TestBaoConfigureJWTBoundClaimsIsMap(t *testing.T) {
 	roles := 0
-	for _, s := range baoConfigureSteps("acme/platform") {
+	for _, s := range baoConfigureSteps("acme/platform", "", nil) {
 		if !(len(s.args) >= 2 && s.args[0] == "write" && strings.HasPrefix(s.args[1], "auth/jwt/role/")) {
 			continue
 		}
@@ -193,6 +196,99 @@ func TestPolicyDocuments(t *testing.T) {
 		if strings.Contains(policyESOPusher, forbidden) {
 			t.Errorf("eso-pusher policy is over-scoped: contains %q", forbidden)
 		}
+	}
+}
+
+// TestKeycloakTeamSteps covers the Phase-1 human-operator write path: a second
+// jwt auth mount at keycloak/ + a per-team `<name>-writer` policy and a role
+// bound to the team's Keycloak group. See docs/designs/team-scoped-credentials.md.
+func TestKeycloakTeamSteps(t *testing.T) {
+	issuer := "https://keycloak.example/realms/otomi"
+	// No issuer or no teams → no steps, so a domain-less or team-less instance is
+	// byte-identical to before.
+	if s := keycloakTeamSteps("", []clusterspec.Team{{Name: "gsap", OpenbaoSubtree: "secret/gsap"}}); s != nil {
+		t.Errorf("no issuer must yield no steps, got %d", len(s))
+	}
+	if s := keycloakTeamSteps(issuer, nil); s != nil {
+		t.Errorf("no teams must yield no steps, got %d", len(s))
+	}
+
+	teams := []clusterspec.Team{
+		{Name: "gsap", OpenbaoSubtree: "secret/gsap"},
+		{Name: "web", OpenbaoSubtree: "secret/web"},
+	}
+	steps := keycloakTeamSteps(issuer, teams)
+	if len(steps) != 6 { // enable + config + (policy+role)*2
+		t.Fatalf("got %d steps, want 6", len(steps))
+	}
+	// The mount `enable` is the only non-fatal step (matches the bash `|| true`).
+	if steps[0].fatal || len(steps[0].args) < 2 || steps[0].args[1] != "enable" ||
+		!strings.Contains(strings.Join(steps[0].args, " "), "-path=keycloak") {
+		t.Errorf("step0 must be the non-fatal `auth enable -path=keycloak`, got %+v", steps[0])
+	}
+	// The mount validates via the INTERNAL jwks_url (reachable in-cluster) while
+	// binding the PUBLIC issuer — NOT oidc_discovery_url (which hairpins).
+	step1 := strings.Join(steps[1].args, " ")
+	if steps[1].args[1] != "auth/keycloak/config" ||
+		!strings.Contains(step1, "jwks_url="+keycloakInternalJWKS) ||
+		!strings.Contains(step1, "bound_issuer="+issuer) {
+		t.Errorf("step1 must configure jwks_url (internal) + bound_issuer (public), got %v", steps[1].args)
+	}
+	if strings.Contains(step1, "oidc_discovery_url") {
+		t.Errorf("step1 must NOT use oidc_discovery_url (the public URL hairpins in-cluster): %v", steps[1].args)
+	}
+
+	rolePolicy := map[string]string{}
+	roleGroup := map[string]string{}
+	policyDoc := map[string]string{}
+	for _, s := range steps[2:] {
+		if !s.fatal {
+			t.Errorf("team step %q must be fatal", s.desc)
+		}
+		switch {
+		case s.args[0] == "policy" && s.args[1] == "write":
+			if s.args[len(s.args)-1] != "-" || s.stdin == "" {
+				t.Errorf("policy %s must be written over stdin", s.args[2])
+			}
+			policyDoc[s.args[2]] = s.stdin
+		case s.args[0] == "write" && strings.HasPrefix(s.args[1], "auth/keycloak/role/"):
+			var body keycloakRoleBody
+			if err := json.Unmarshal([]byte(s.stdin), &body); err != nil {
+				t.Fatalf("role %s body not JSON: %v", s.args[1], err)
+			}
+			name := strings.TrimPrefix(s.args[1], "auth/keycloak/role/")
+			if len(body.TokenPolicies) == 1 {
+				rolePolicy[name] = body.TokenPolicies[0]
+			}
+			roleGroup[name] = body.BoundClaims["groups"]
+			if body.UserClaim != "sub" {
+				t.Errorf("role %s user_claim = %q, want sub (attribution)", name, body.UserClaim)
+			}
+			// The role MUST pin the audience to the llz client, or any realm token
+			// carrying the groups claim (Grafana/Harbor/console) would be accepted.
+			if len(body.BoundAudiences) != 1 || body.BoundAudiences[0] != keycloakDeviceClientID {
+				t.Errorf("role %s bound_audiences = %v, want [%s] (audience-confusion guard)", name, body.BoundAudiences, keycloakDeviceClientID)
+			}
+		}
+	}
+	if rolePolicy["gsap"] != "gsap-writer" || rolePolicy["web"] != "web-writer" {
+		t.Errorf("role→policy = %v, want gsap->gsap-writer, web->web-writer", rolePolicy)
+	}
+	// The role binds on the apl-core realm role team-<name> (the value apl-core's
+	// default groups claim carries), NOT the bare team name.
+	if roleGroup["gsap"] != "team-gsap" || roleGroup["web"] != "team-web" {
+		t.Errorf("role→group = %v, want gsap->team-gsap, web->team-web", roleGroup)
+	}
+	// The writer policy grants create/update on data/* and read+list on metadata/*.
+	if !strings.Contains(policyDoc["gsap-writer"], `path "secret/data/gsap/*" { capabilities = ["create", "update", "read"] }`) {
+		t.Errorf("gsap-writer policy missing data write path:\n%s", policyDoc["gsap-writer"])
+	}
+	if !strings.Contains(policyDoc["gsap-writer"], `path "secret/metadata/gsap/*" { capabilities = ["read", "list"] }`) {
+		t.Errorf("gsap-writer policy missing metadata path:\n%s", policyDoc["gsap-writer"])
+	}
+	// SCOPING: gsap's policy must not reach into another team's subtree.
+	if strings.Contains(policyDoc["gsap-writer"], "web") {
+		t.Errorf("gsap-writer policy leaks into the web subtree:\n%s", policyDoc["gsap-writer"])
 	}
 }
 
@@ -347,5 +443,40 @@ func TestRunCIBaoConfigureMissingAuditDeviceWarnsNotFails(t *testing.T) {
 	b, _ := os.ReadFile(envFile)
 	if string(b) != "BOOTSTRAP_ERRORS=true\n" {
 		t.Errorf("GITHUB_ENV = %q, want BOOTSTRAP_ERRORS=true", b)
+	}
+}
+
+// TestSystemSecretNamespacesCoverPolicyPaths pins the team-subtree security
+// boundary: clusterspec.SystemSecretNamespaces (the denylist a team openbaoSubtree
+// may not carve into) MUST cover every top segment of the platform OpenBao
+// policies here. If a new platform secret namespace is added to a policy without
+// adding it to the denylist, a team could scope `secret/<ns>` and self-grant write
+// on platform credentials — this test fails the moment that drift is introduced.
+func TestSystemSecretNamespacesCoverPolicyPaths(t *testing.T) {
+	policies := []string{
+		policyPlatformCI, policySecretPropagator, policyESOPusher,
+		policyLinodeRotator, policyHarborProvisioner, policyReconcilerRead,
+		policyBroadPATRotator,
+	}
+	// Guard against a NEW `const policy… =` being added without extending the list
+	// above (which would leave its paths unchecked).
+	src, err := os.ReadFile("ci_openbao_configure.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	// Match DECLARATIONS (`const policyX =`), not literal occurrences, so a comment
+	// mentioning "const policy" can't skew the count.
+	declRe := regexp.MustCompile(`(?m)^const policy[A-Za-z]+ =`)
+	if n := len(declRe.FindAllString(string(src), -1)); n != len(policies) {
+		t.Fatalf("found %d `const policy… =` declarations but this test lists %d — add the new policy to `policies` so its secret paths are drift-checked", n, len(policies))
+	}
+	re := regexp.MustCompile(`secret/(?:data|metadata)/([a-z0-9-]+)/`)
+	for _, p := range policies {
+		for _, m := range re.FindAllStringSubmatch(p, -1) {
+			ns := m[1]
+			if !clusterspec.SystemSecretNamespaces[ns] {
+				t.Errorf("platform policy path secret/.../%s/ is NOT in clusterspec.SystemSecretNamespaces — a team could claim secret/%s and self-grant platform write; add %q to the denylist in clusterspec/validate.go", ns, ns, ns)
+			}
+		}
 	}
 }

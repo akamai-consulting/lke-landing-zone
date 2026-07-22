@@ -46,7 +46,10 @@ func ciCmd() *cobra.Command {
 		// for a wedged bao-ensure-ready. No workflow calls them, BY DESIGN.
 		ciBaoStatusCmd(),
 		ciBaoInitCmd(), ciBaoRegenRootCmd(), ciBaoConfigureCmd(), ciBaoEnsureReadyCmd(),
-		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd())
+		ciExtractOpenbaoCACmd(), ciNudgeArgoCmd(), ciProvisionPeerCACmd(),
+		// keycloak-configure IS workflow-driven (bootstrap-openbao + scheduled-checks
+		// ensure the device-flow client).
+		ciKeycloakConfigureCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
 	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciAssertHealthWorkflowCmd(), ciValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the

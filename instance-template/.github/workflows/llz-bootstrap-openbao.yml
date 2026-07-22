@@ -376,6 +376,19 @@ jobs:
         if: steps.ensure.outputs.available == 'true'
         run: llz ci bao-configure --region "$REGION"
 
+      # ── Configure: Keycloak device-flow client for team-scoped writes ─────────
+      # The realm half of the team-scoped-credentials path (bao-configure owns the
+      # OpenBao half above). apl-core provisions the per-team group/role (team-<name>)
+      # + the `groups` claim from the rendered teamConfig, so this ensures ONLY the
+      # one thing apl-core doesn't: a public device-flow OIDC client (llz) carrying
+      # the openid scope, so operators can `llz openbao login`. Best-effort (any
+      # Keycloak failure warns + exits 0), so it never wedges the bootstrap. Reads
+      # the admin creds from the in-cluster keycloak/platform-admin-credentials Secret.
+      - name: Configure Keycloak device-flow client
+        if: steps.ensure.outputs.available == 'true'
+        continue-on-error: true
+        run: llz ci keycloak-configure --region "$REGION"
+
       # ── Seed: generic OpenBao KV bootstrap paths (data-driven) ─────────────────
       # One step runs every generic seed from the bootstrapSeeds() table in
       # tools/cmd/llz/ci_bao_seed_all.go — add new seeds THERE, not as steps here.
