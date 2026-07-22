@@ -100,6 +100,10 @@ func runCIBaoBreakglass(g globalOpts, region, action, pubkeyB64 string) error {
 		return nil
 	}
 
+	// Snapshot the pre-revoke token so rotate can prove it produced a FRESH one
+	// (see the redelivery guard below). Empty on a first-ever run.
+	preRotateToken := os.Getenv("OPENBAO_ROOT_TOKEN")
+
 	// ── revoke / rotate: kill the CURRENT root token first ──────────────────────
 	// For rotate this must precede regeneration: regenerating while the old token
 	// were still valid would leave a live, untracked root behind — the exact
@@ -131,6 +135,19 @@ func runCIBaoBreakglass(g globalOpts, region, action, pubkeyB64 string) error {
 	if token == "" {
 		return fmt.Errorf("no root token to deliver — regeneration produced nothing and no valid stored token was found")
 	}
+
+	// Rotate redelivery guard: rotate MUST hand back a freshly-minted token. If
+	// regen took the "still valid — skipping regeneration" branch, the token is
+	// unchanged — which for rotate means the revoke above did not actually take
+	// (a swallowed `token revoke -self` failure while the token was still live).
+	// Redelivering the un-rotated (possibly compromised) token silently defeats
+	// the entire point of rotate, so fail loudly instead. generate/first-run are
+	// exempt (preRotateToken empty, or an intended no-op refresh on generate).
+	if action == "rotate" && preRotateToken != "" && token == preRotateToken {
+		return fmt.Errorf("rotate did not produce a fresh root token — the prior token is still valid, " +
+			"so the revoke did not take (transient `token revoke -self` failure). Refusing to redeliver the " +
+			"un-rotated token; re-run once OpenBao is reachable")
+	}
 	maskGHA(token)
 
 	return breakglassEncryptAndDeliver(region, action, recipient, token)
@@ -158,17 +175,24 @@ func breakglassRevokeCurrent(region string) {
 // warning), then a job-summary line.
 func breakglassDeleteStored(region string) error {
 	ghEnv := "infra-" + region
+	deleted := true
 	if err := ghDeleteSecretFn("OPENBAO_ROOT_TOKEN", ghEnv); err != nil {
+		deleted = false
 		fmt.Printf("::warning::Could not delete %s::OPENBAO_ROOT_TOKEN (already absent, or the OPENBAO_SECRETS_WRITE_TOKEN PAT lacks Environments admin). Verify it is gone manually: %v\n", ghEnv, err)
 	} else {
 		fmt.Printf("Deleted %s::OPENBAO_ROOT_TOKEN.\n", ghEnv)
+	}
+	// Report honestly: don't claim the secret was deleted when the delete warned.
+	outcome := fmt.Sprintf("Current root token revoked and `%s::OPENBAO_ROOT_TOKEN` deleted.", ghEnv)
+	if !deleted {
+		outcome = fmt.Sprintf("Current root token revoked. ⚠️ Could NOT delete `%s::OPENBAO_ROOT_TOKEN` — verify it is gone manually (see the warning above).", ghEnv)
 	}
 	return appendGHAFile("GITHUB_STEP_SUMMARY",
 		fmt.Sprintf("## OpenBao break-glass — revoke (%s)", region),
 		"",
 		breakglassActorLine(),
 		"",
-		fmt.Sprintf("Current root token revoked and `%s::OPENBAO_ROOT_TOKEN` deleted.", ghEnv),
+		outcome,
 	)
 }
 

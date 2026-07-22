@@ -355,3 +355,35 @@ func TestRunCIBaoBreakglassRotate(t *testing.T) {
 		t.Errorf("rotate delivered %q, want fresh s.newroot", got)
 	}
 }
+
+// TestRunCIBaoBreakglassRotateRefusesRedelivery: if the revoke silently fails
+// (transient exec error) while the stored token is STILL live, regen's lookup
+// succeeds and takes the "valid — skipping regeneration" branch, leaving the
+// token unchanged. Rotate must NOT redeliver that un-rotated (possibly
+// compromised) token — it must fail loudly.
+func TestRunCIBaoBreakglassRotateRefusesRedelivery(t *testing.T) {
+	b64, _ := rsaPubB64(t, 2048)
+	setBreakglassEnv(t, "s.old-root")
+	withBaoExec(t, func(pod, token, stdin string, args ...string) (string, string, error) {
+		cmd := strings.Join(args, " ")
+		switch {
+		case cmd == "token revoke -self":
+			return "", "connection reset", errors.New("exit status 1") // transient — swallowed as a warning
+		case args[0] == "status":
+			return `{"initialized":true,"sealed":false}`, "", nil
+		case args[0] == "token" && len(args) > 1 && args[1] == "lookup":
+			return `{"data":{"id":"s.old-root"}}`, "", nil // STILL VALID → regen skips
+		}
+		t.Errorf("unexpected exec %v (regen must not run once the token looks valid)", args)
+		return "", "", errors.New("unexpected")
+	})
+	withGHSetSecret(t, nil)
+
+	err := runCIBaoBreakglass(globalOpts{}, "primary", "rotate", b64)
+	if err == nil {
+		t.Fatal("rotate must FAIL when the token is unchanged (revoke did not take), not redeliver it")
+	}
+	if !strings.Contains(err.Error(), "did not produce a fresh root token") {
+		t.Errorf("want the redelivery-guard error, got %v", err)
+	}
+}
