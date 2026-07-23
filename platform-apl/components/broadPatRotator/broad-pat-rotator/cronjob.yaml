@@ -33,6 +33,10 @@ spec:
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
+          # Batch pod — keep out of the istio mesh (a never-exiting sidecar would stop
+          # the Job completing; managed clusters may have injection on for this ns).
+          annotations:
+            sidecar.istio.io/inject: "false"
           labels:
             app.kubernetes.io/name: broad-pat-rotator
         spec:

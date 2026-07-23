@@ -640,6 +640,11 @@ spec:
   activeDeadlineSeconds: 660
   ttlSecondsAfterFinished: 180
   template:
+    metadata:
+      annotations:
+        # Batch pod — keep it out of the istio mesh (apl-operator may have injection on;
+        # an injected proxy never exits, so the Job would never complete).
+        sidecar.istio.io/inject: "false"
     spec:
       restartPolicy: Never
       containers:
