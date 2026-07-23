@@ -571,8 +571,10 @@ const (
 	aplMigrateJobNS   = "apl-operator"
 	aplMigrateJobName = "llz-apl-values-migrate"
 	aplMigrateImage   = "alpine/git:latest"
-	aplMigrateBudget  = 6 * time.Minute
-	aplMigrateTick    = 5 * time.Second
+	// Generous budget: the Job waits (in-script) for apl-core to finish initializing its
+	// values repo and push the branch before it can clone (a fresh managed cluster races).
+	aplMigrateBudget = 13 * time.Minute
+	aplMigrateTick   = 10 * time.Second
 )
 
 // migrateAplValuesToGitHub runs the values-repo migration as an in-cluster Job: clone
@@ -635,7 +637,7 @@ metadata:
   namespace: %[2]s
 spec:
   backoffLimit: 1
-  activeDeadlineSeconds: 300
+  activeDeadlineSeconds: 660
   ttlSecondsAfterFinished: 180
   template:
     spec:
@@ -647,6 +649,14 @@ spec:
         args:
         - |
           set -e
+          echo "waiting for apl-core's values repo branch $SRC_BRANCH (apl-core may still be initializing)..."
+          i=0
+          until git ls-remote --heads "$SRC_URL" "$SRC_BRANCH" | grep -q "refs/heads/$SRC_BRANCH"; do
+            i=$((i+1))
+            if [ "$i" -gt 48 ]; then echo "values repo branch $SRC_BRANCH never appeared (apl-core not ready); heads present:" >&2; git ls-remote --heads "$SRC_URL" >&2 || true; exit 1; fi
+            echo "  not ready (attempt $i); sleeping 10s..."
+            sleep 10
+          done
           echo "cloning apl-core values repo (branch $SRC_BRANCH)..."
           git clone --depth 1 --branch "$SRC_BRANCH" "$SRC_URL" /w
           mkdir -p /w/env/apps
