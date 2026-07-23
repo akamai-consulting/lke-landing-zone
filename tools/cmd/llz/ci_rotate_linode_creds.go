@@ -111,7 +111,36 @@ func buildRotationTable(region, objCluster string) []credEntry {
 				return harborRegistryS3Fields(region, objCluster, access, secret)
 			},
 		},
+		{
+			// The BROAD platform object-storage key for MANAGED App Platform. The
+			// platform obj settings (env/settings/obj.yaml `AplObjectStorage`,
+			// provider.type=linode) use ONE key for ALL app buckets, unlike the two
+			// per-app keys above. Scope it to every provisioned bucket so apl-core's
+			// obj-consuming apps (loki, harbor, …) all authenticate with it. Seeded at
+			// secret/obj/platform; the obj-secrets ExternalSecret projects the secret
+			// half into apl-secrets/obj-secrets (property provider_linode_secretAccessKey),
+			// and the reconciler fills obj.yaml.accessKeyId from AWS_ACCESS_KEY_ID.
+			name: "obj-platform", kind: credKindObjKey, label: "platform-obj-" + region,
+			objCluster: objCluster,
+			buckets: []string{
+				"platform-loki-chunks-" + region,
+				"platform-loki-ruler-" + region,
+				"platform-loki-admin-" + region,
+				"platform-harbor-registry-" + region,
+			},
+			permissions: "read_write",
+			baoPath:     "secret/obj/platform", presentField: "AWS_ACCESS_KEY_ID",
+			fields: func(access, secret string) map[string]string { return objPlatformFields(access, secret) },
+		},
 	}
+}
+
+// objPlatformFields is the secret/obj/platform field set — the broad managed
+// object-storage key. AWS_ACCESS_KEY_ID is the (non-sensitive) key id the reconciler
+// writes into env/settings/obj.yaml plaintext; AWS_SECRET_ACCESS_KEY is projected into
+// apl-secrets/obj-secrets by the obj-secrets ExternalSecret (never committed to git).
+func objPlatformFields(access, secret string) map[string]string {
+	return map[string]string{"AWS_ACCESS_KEY_ID": access, "AWS_SECRET_ACCESS_KEY": secret}
 }
 
 // lokiObjectStoreFields is the secret/loki/object-store field set (the env-var
