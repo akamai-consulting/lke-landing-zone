@@ -79,10 +79,19 @@ func smokeTargets(region, teamFlag string) (base, team, subtree string, err erro
 		}
 	}
 	env, ok := lz.Env(region)
-	if !ok || env.Cluster.Bootstrap.DomainSuffix == "" {
-		return "", "", "", fmt.Errorf("region %q has no cluster.bootstrap.domainSuffix — can't form the public Keycloak URL", region)
+	if !ok {
+		return "", "", "", fmt.Errorf("region %q not found in the spec", region)
 	}
-	return "https://keycloak." + env.Cluster.Bootstrap.DomainSuffix, pick.Name, pick.OpenbaoSubtree, nil
+	domain := env.Cluster.Bootstrap.DomainSuffix
+	if domain == "" && env.Cluster.Bootstrap.ManagedAppPlatform {
+		// Managed App Platform: Linode owns the domain (no spec domainSuffix); the
+		// smoke test runs against the live cluster, so discover it from apl-core.
+		domain = discoverManagedDomain()
+	}
+	if domain == "" {
+		return "", "", "", fmt.Errorf("region %q has no cluster.bootstrap.domainSuffix (and no managed domain could be discovered) — can't form the public Keycloak URL", region)
+	}
+	return "https://keycloak." + domain, pick.Name, pick.OpenbaoSubtree, nil
 }
 
 func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {

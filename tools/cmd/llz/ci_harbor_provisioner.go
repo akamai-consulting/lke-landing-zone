@@ -136,6 +136,25 @@ func runCIHarborProvisioner() error {
 		return fmt.Errorf("harbor project create failed (HTTP %d): %s", status, body)
 	}
 
+	// registry_host resolution. HARBOR_HOST (render-injected harbor.<domainSuffix>)
+	// wins when set — the self-install path. On a Managed App Platform cluster the
+	// spec has no domainSuffix and render has no cluster access, so HARBOR_HOST is
+	// empty; ask Harbor for its own external registry host (ground truth). Harbor is
+	// confirmed reachable here (the project ensure above just succeeded).
+	if registryHost == "" {
+		discovered, err := h.systemInfoRegistryHost()
+		if err != nil {
+			fmt.Printf("HARBOR_HOST unset and harbor systeminfo unavailable (%v) — retrying next tick.\n", err)
+			return nil
+		}
+		if discovered == "" {
+			fmt.Println("HARBOR_HOST unset and harbor systeminfo returned no registry_url — retrying next tick.")
+			return nil
+		}
+		registryHost = discovered
+		fmt.Printf("HARBOR_HOST unset — discovered registry host %q from Harbor systeminfo (managed App Platform).\n", registryHost)
+	}
+
 	for _, spec := range []harborRobotSpec{
 		{
 			payload:    newHarborRobotPayload("ci-firewall-controller", "push", "pull", "delete"),

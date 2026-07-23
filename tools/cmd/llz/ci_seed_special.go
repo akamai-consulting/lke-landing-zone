@@ -91,14 +91,27 @@ func runCIResolveHarborURL(region string) error {
 		return fmt.Errorf("resolve harbor url: %w", err)
 	}
 	e, ok := lz.Env(region)
-	domain := e.Cluster.Bootstrap.DomainSuffix
+	domain := ""
+	if ok {
+		domain = e.Cluster.Bootstrap.DomainSuffix
+		if domain == "" && e.Cluster.Bootstrap.ManagedAppPlatform {
+			// Managed App Platform: Linode owns the lke<id>.akamai-apl.net domain and
+			// the spec has no domainSuffix, but managed apl-core serves Harbor at
+			// harbor.<managed-domain>. Discover the domain from apl-core in-cluster.
+			// Requires cluster access (this preflight runs with the bootstrap
+			// kubeconfig); degrades to the HARBOR_URL-override path when unreachable.
+			if domain = discoverManagedDomain(); domain != "" {
+				fmt.Printf("managed App Platform: discovered domain %s from apl-core in-cluster.\n", domain)
+			}
+		}
+	}
 	if !ok || domain == "" {
 		if override != "" {
 			// An override with no spec to check it against: usable, but say so.
 			fmt.Printf("HARBOR_URL: %s (from vars.HARBOR_URL; no domainSuffix in the spec to cross-check).\n", override)
 			return nil
 		}
-		fmt.Fprintf(os.Stderr, "::error::HARBOR_URL is unset and spec.environments.%s.cluster.bootstrap.domainSuffix is empty. Set the vars.HARBOR_URL variable, or fill the spec field.\n", region)
+		fmt.Fprintf(os.Stderr, "::error::HARBOR_URL is unset and spec.environments.%s.cluster.bootstrap.domainSuffix is empty (and no managed domain could be discovered). Set the vars.HARBOR_URL variable, or fill the spec field.\n", region)
 		return fmt.Errorf("domainSuffix not found in the spec for env %s", region)
 	}
 	derived := clusterspec.HarborHost(domain)

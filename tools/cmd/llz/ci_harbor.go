@@ -160,6 +160,47 @@ func (h *harborAPI) post(path, payload string) (status int, body string, err err
 	return resp.StatusCode, strings.TrimSpace(string(b)), nil
 }
 
+// systemInfoRegistryHost asks Harbor for its OWN external registry host via
+// GET /api/v2.0/systeminfo (the `registry_url` field — the host `docker
+// push`/`pull` and buildah target). That is Harbor's ground truth for the value
+// stored in OpenBao as registry_host, so on a Managed App Platform cluster —
+// where LLZ can't bake harbor.<domainSuffix> at render time (no spec domainSuffix,
+// no cluster access) — the in-cluster provisioner reads it straight from Harbor
+// instead of a render-injected HARBOR_HOST. Returns "" (nil error) when the field
+// is empty. Uses admin basic auth (systeminfo is public, but this is harmless).
+func (h *harborAPI) systemInfoRegistryHost() (string, error) {
+	req, err := http.NewRequest(http.MethodGet, h.baseURL+"/api/v2.0/systeminfo", nil)
+	if err != nil {
+		return "", err
+	}
+	req.SetBasicAuth("admin", h.adminPass)
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("harbor systeminfo HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var info struct {
+		RegistryURL string `json:"registry_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", fmt.Errorf("decode harbor systeminfo: %w", err)
+	}
+	return harborRegistryHostFromURL(info.RegistryURL), nil
+}
+
+// harborRegistryHostFromURL normalizes Harbor's registry_url to a bare host —
+// strips any scheme and trailing slash. Pure; unit-tested.
+func harborRegistryHostFromURL(u string) string {
+	s := strings.TrimSpace(u)
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	return strings.TrimRight(s, "/")
+}
+
 // Robot create payloads MUST include `duration` in Harbor 2.x — `-1` = never
 // expires. Without it the API returns HTTP 400 BAD_REQUEST: "duration must be
 // either -1(Never) or a positive integer". An earlier version of the script
