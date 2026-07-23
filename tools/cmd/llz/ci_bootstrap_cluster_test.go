@@ -193,7 +193,16 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 				return "", true
 			},
 			apply: func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
-			now:   time.Now, sleep: func(time.Duration) {},
+			// configureManagedApl runs when a token is set: ls-remote reports the branch
+			// present (skip the seed dance) and helm succeeds.
+			git: func(args ...string) (string, bool) {
+				if strings.Contains(strings.Join(args, " "), "ls-remote") {
+					return "abc123\trefs/heads/apl-primary", true
+				}
+				return "", true
+			},
+			helm: func(...string) (string, bool) { return "", true },
+			now:  time.Now, sleep: func(time.Duration) {},
 		}
 		if err := bootstrapCluster(o, d); err != nil {
 			t.Fatalf("bootstrapCluster: %v", err)
@@ -221,6 +230,57 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 	// Without a token (public repo): no repository Secret for the instance repo.
 	if s := repoSecret(run("")); s != "" {
 		t.Errorf("no token → must apply no instance-repo Secret; got:\n%s", s)
+	}
+}
+
+// TestConfigureManagedApl: seeds the apl-<env> branch when absent and helm-upgrades
+// the managed apl release pointing otomi.git at github + enabling the default apps.
+func TestConfigureManagedApl(t *testing.T) {
+	o := bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance", instanceRepoToken: "test-repo-token"}
+	var helmArgs []string
+	var pushed bool
+	d := bootstrapDeps{
+		git: func(args ...string) (string, bool) {
+			line := strings.Join(args, " ")
+			if strings.Contains(line, "ls-remote") {
+				return "", true // branch absent → seed it
+			}
+			if strings.Contains(line, "push") {
+				pushed = true
+			}
+			return "", true
+		},
+		helm: func(args ...string) (string, bool) { helmArgs = args; return "", true },
+	}
+	if err := configureManagedApl(o, d); err != nil {
+		t.Fatalf("configureManagedApl: %v", err)
+	}
+	if !pushed {
+		t.Error("absent apl-<env> branch must be seeded (git push)")
+	}
+	joined := strings.Join(helmArgs, " ")
+	for _, want := range []string{
+		"upgrade apl apl", "--reuse-values",
+		"otomi.git.repoUrl=https://github.com/acme/instance.git",
+		"otomi.git.branch=apl-primary", "otomi.git.password=test-repo-token",
+		"apps.harbor.enabled=true", "apps.loki.enabled=true",
+		"apps.grafana.enabled=true", "apps.kyverno.enabled=true",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("helm upgrade missing %q; got: %s", want, joined)
+		}
+	}
+	// No token → skip entirely (no helm/git).
+	var ran bool
+	d2 := bootstrapDeps{
+		git:  func(...string) (string, bool) { ran = true; return "", true },
+		helm: func(...string) (string, bool) { ran = true; return "", true },
+	}
+	if err := configureManagedApl(bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance"}, d2); err != nil {
+		t.Fatalf("configureManagedApl (no token): %v", err)
+	}
+	if ran {
+		t.Error("no APL_VALUES_REPO_TOKEN → configureManagedApl must skip (no git/helm)")
 	}
 }
 

@@ -37,16 +37,19 @@ spec:
       # owns apl-core + the lke<id>.akamai-apl.net domain/DNS/cert; LLZ layers its
       # extras as Argo apps. `managedAppPlatform: true` is MANDATORY (validation
       # rejects a self-install spec) — set it here once and every env inherits it.
-      # Managed installs only a MINIMAL core — the OPTIONAL apps beyond the core LLZ
-      # platform (harbor, loki, grafana, …) are enabled by the operator in the App
-      # Platform Console; declare them in `managedApps` so LLZ layers its matching
-      # extras only for apps that exist. The LLZ-necessary platform (OpenBao,
-      # external-secrets, reconciler, PAT rotator) is ALWAYS on and needs no
-      # declaration. Do NOT set cluster.bootstrap.domainSuffix (Linode owns the
-      # domain — LLZ discovers it in-cluster). See docs/adr/0005-managed-app-platform.md.
+      # Managed installs only a MINIMAL core. LLZ enables the OPTIONAL apps it needs
+      # in apl-core AT BOOTSTRAP (default `managedApps: [harbor, loki, grafana, kyverno]`)
+      # — apl-core installs them, and LLZ layers its matching extras (harbor
+      # robot-provisioner, observability glue, the Kyverno image-signature policy) on
+      # top. Override `managedApps` to narrow/extend the set; the matching extra emits
+      # IFF its app is in the list, so a narrowed list never wedges converge. The
+      # LLZ-necessary platform (OpenBao, external-secrets, reconciler, PAT rotator) is
+      # ALWAYS on and needs no declaration. Do NOT set cluster.bootstrap.domainSuffix
+      # (Linode owns the domain — LLZ discovers it in-cluster). See
+      # docs/adr/0005-managed-app-platform.md and docs/adr/0006-managed-default-apps.md.
       bootstrap:
         managedAppPlatform: true
-        # managedApps: [harbor, loki, grafana]
+        # managedApps: [harbor, loki, grafana, kyverno]   # the default; override to narrow/extend
     # apl-core global feature flags (otomi.*), rendered into every env's
     # values.yaml. Both optional — shown here with their defaults.
     platform:

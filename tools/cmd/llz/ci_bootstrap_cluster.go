@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -82,15 +83,21 @@ type bootstrapClusterOpts struct {
 	// platform-bootstrap Application's source). APL_VALUES_REPO_TOKEN; empty = public
 	// repo, no repository Secret applied.
 	instanceRepoToken string
+	// managedApps are the optional apl-core apps LLZ enables in apl-core at bootstrap
+	// (ADR 0006); from spec.cluster.bootstrap.managedApps (defaulted to the LLZ set).
+	managedApps []string
 }
 
 // bootstrapDeps are the seams the flow drives. kubectl runs one read/wait
 // invocation (KUBECONFIG wired) returning combined output + exit-0; apply pipes a
-// manifest to `kubectl apply --server-side`; now/sleep make the deadline loops
-// testable.
+// manifest to `kubectl apply --server-side`; helm runs one helm invocation (the
+// managed BYO-Git + default-apps `helm upgrade`); git talks to the remote values
+// repo (the apl-<env> branch seed); now/sleep make the deadline loops testable.
 type bootstrapDeps struct {
 	kubectl func(args ...string) (string, bool)
 	apply   func(stdinYAML, fieldManager string, force bool) (string, bool)
+	helm    func(args ...string) (string, bool)
+	git     func(args ...string) (string, bool)
 	now     func() time.Time
 	sleep   func(time.Duration)
 }
@@ -153,15 +160,17 @@ func runBootstrapCluster(f bootstrapFlags) error {
 		// Linode's gitea on managed, not this repo).
 		instanceRepoToken: os.Getenv("APL_VALUES_REPO_TOKEN"),
 	}
-	// apps-repo-revision defaults from the spec, then "main".
-	if o.appsRepoRevision == "" {
-		if lz, present, err := loadSpec(); present && err == nil {
-			if e, ok := lz.Env(o.env); ok {
+	// apps-repo-revision + managedApps come from the spec (Defaults() populates
+	// managedApps to the LLZ set on managed).
+	if lz, present, err := loadSpec(); present && err == nil {
+		if e, ok := lz.Env(o.env); ok {
+			if o.appsRepoRevision == "" {
 				o.appsRepoRevision = e.Cluster.Bootstrap.AppsRepoRevision
 			}
-		} else if err != nil {
-			return fmt.Errorf("load spec for apps-repo-revision default: %w", err)
+			o.managedApps = e.Cluster.Bootstrap.ManagedApps
 		}
+	} else if err != nil {
+		return fmt.Errorf("load spec for apps-repo-revision/managedApps: %w", err)
 	}
 	o.appsRepoRevision = firstNonEmpty(o.appsRepoRevision, "main")
 
@@ -200,6 +209,17 @@ func newBootstrapDeps(kubeconfigPath string) bootstrapDeps {
 			}
 			cmd.Stdin = strings.NewReader(stdinYAML)
 			return runCombined(cmd)
+		},
+		helm: func(args ...string) (string, bool) {
+			cmd := exec.Command("helm", args...)
+			if kubeconfigPath != "" {
+				cmd.Env = envWithKubeconfig(kubeconfigPath)
+			}
+			return runCombined(cmd)
+		},
+		git: func(args ...string) (string, bool) {
+			// git talks to the remote values repo, NOT the cluster — no kubeconfig.
+			return runCombined(exec.Command("git", args...))
 		},
 		now:   time.Now,
 		sleep: time.Sleep,
@@ -253,6 +273,15 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 
 	if err := waitManagedArgoReady(d); err != nil {
 		return err
+	}
+
+	// Point the managed apl-core at LLZ's github values branch (BYO Git) and enable the
+	// default apps (harbor/loki/grafana/kyverno) so apl-core INSTALLS them and LLZ's
+	// extras layer on apl-core's own installs. See ADR 0006. Best-effort: on failure it
+	// warns rather than aborting the bridge (the extras that need a default app degrade
+	// instead of wedging; kyverno-dependent imageSignature stays render-gated as backup).
+	if err := configureManagedApl(o, d); err != nil {
+		warn(fmt.Sprintf("managed apl-core BYO-Git + default-apps config failed (%v) — the Argo bridge still applies; apps that need apl-core installs (harbor/loki/grafana/kyverno) may not converge until this succeeds.", err))
 	}
 
 	// Instance-repo credential (private-repo path; empty token = public, skip). ArgoCD
@@ -437,4 +466,111 @@ func manifestName(obj map[string]any) string {
 		return fmt.Sprint(md["name"])
 	}
 	return ""
+}
+
+// configureManagedApl points the Linode-installed apl-core at LLZ's github values
+// branch (App Platform "BYO Git") and enables the default apps, via a chart-driven
+// `helm upgrade --reuse-values` — so the chart regenerates apl-secrets/apl-git-config
+// and flips apps.<name>.enabled by its own logic (no reverse-engineering of the
+// Secret keys / values-repo layout). apl-operator reloads the git config at runtime
+// and reconciles the enabled apps onto the cluster.
+//
+// Needs APL_VALUES_REPO_TOKEN (Contents:write on the instance repo) to (a) seed the
+// apl-<env> branch apl-operator pulls and (b) authenticate the git push. Empty token
+// → skip (a public/unconfigured instance; the caller degrades rather than wedging).
+func configureManagedApl(o bootstrapClusterOpts, d bootstrapDeps) error {
+	if o.instanceRepoToken == "" {
+		fmt.Fprintln(os.Stderr, "APL_VALUES_REPO_TOKEN unset — skipping the managed apl-core BYO-Git + default-apps configuration.")
+		return nil
+	}
+	repoURL := "https://github.com/" + o.instanceRepo + ".git"
+	branch := "apl-" + o.env
+	apps := o.managedApps
+	if len(apps) == 0 {
+		apps = clusterspec.DefaultManagedApps
+	}
+
+	// 1. Seed the apl-<env> branch. apl-core v6's apl-operator PULLS otomi.git.branch
+	//    and deadlocks on a missing ref (it never self-creates), so prime it.
+	if err := ensureAplValuesBranch(d, o, repoURL, branch); err != nil {
+		return err
+	}
+
+	// 2. Chart-driven helm upgrade: flip otomi.git → github + enable the default apps.
+	//    --reuse-values keeps Linode's install values and overrides only these; the
+	//    version is pinned to the platform baseline so the chart itself is not moved.
+	args := []string{
+		"upgrade", "apl", "apl",
+		"--repo", aplChartRepo, "--version", defaultAplChartVersion,
+		"--namespace", "apl-operator", "--reuse-values",
+		"--wait", "--timeout", "600s",
+		"--set", "otomi.git.repoUrl=" + repoURL,
+		"--set", "otomi.git.user=x-access-token",
+		"--set", "otomi.git.password=" + o.instanceRepoToken,
+		"--set", "otomi.git.branch=" + branch,
+	}
+	for _, app := range apps {
+		args = append(args, "--set", "apps."+app+".enabled=true")
+	}
+	if out, ok := d.helm(args...); !ok {
+		fmt.Fprint(os.Stderr, redactSecret(out, o.instanceRepoToken))
+		return fmt.Errorf("helm upgrade apl (BYO-Git + apps: %s) — is the managed apl release named 'apl' in apl-operator and helm-upgradeable?", strings.Join(apps, ","))
+	}
+	fmt.Fprintf(os.Stderr, "✓ managed apl-core pointed at %s (branch %s) + apps enabled (%s).\n", repoURL, branch, strings.Join(apps, ", "))
+	return nil
+}
+
+// ensureAplValuesBranch creates the apl-<env> values branch on the instance repo
+// when it does not exist (an empty orphan commit apl-operator then bootstraps onto).
+// Idempotent: an existing branch is left untouched. A push failure surfaces LOUD and
+// EARLY here — naming the token — instead of as an opaque converge timeout downstream.
+func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, branch string) error {
+	authURL := authedGitURL(repoURL, o.instanceRepoToken)
+	tok := o.instanceRepoToken
+	ref := "refs/heads/" + branch
+	if out, ok := d.git("ls-remote", authURL, ref); ok && strings.TrimSpace(out) != "" {
+		fmt.Printf("apl values branch %q already exists on %s.\n", branch, repoURL)
+		return nil
+	}
+	fmt.Printf("apl values branch %q absent on %s — seeding an empty orphan branch for apl-operator to bootstrap...\n", branch, repoURL)
+	tmp, err := os.MkdirTemp("", "llz-apl-branch-*")
+	if err != nil {
+		return fmt.Errorf("mktemp for apl-values seed: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+	if out, ok := d.git("init", "--initial-branch", branch, tmp); !ok {
+		return fmt.Errorf("init apl-values seed repo: %s", redactSecret(out, tok))
+	}
+	if out, ok := d.git("-C", tmp,
+		"-c", "user.name=llz-bootstrap", "-c", "user.email=llz-bootstrap@noreply.local",
+		"commit", "--allow-empty", "-m", "chore: seed "+branch+" for apl-operator (llz ci bootstrap-cluster)"); !ok {
+		return fmt.Errorf("create seed commit for %q: %s", branch, redactSecret(out, tok))
+	}
+	if out, ok := d.git("-C", tmp, "push", authURL, "HEAD:refs/heads/"+branch); !ok {
+		return fmt.Errorf("push apl-values branch %q to %s — does APL_VALUES_REPO_TOKEN have Contents:write? git: %s",
+			branch, repoURL, redactSecret(out, tok))
+	}
+	fmt.Printf("seeded apl-values branch %q on %s.\n", branch, repoURL)
+	return nil
+}
+
+// authedGitURL injects an x-access-token basic-auth credential into an https git URL
+// so ls-remote/push reach a PRIVATE instance repo. Non-https URLs (or an empty token)
+// are returned unchanged. The result carries a secret and must never be logged.
+func authedGitURL(rawURL, token string) string {
+	const p = "https://"
+	if token == "" || !strings.HasPrefix(rawURL, p) {
+		return rawURL
+	}
+	return p + "x-access-token:" + token + "@" + strings.TrimPrefix(rawURL, p)
+}
+
+// redactSecret masks a token wherever it appears in command output (git can echo a
+// credential-bearing URL in errors), so nothing prints it to the CI log.
+func redactSecret(s, secret string) string {
+	s = strings.TrimSpace(s)
+	if secret == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, secret, "***")
 }

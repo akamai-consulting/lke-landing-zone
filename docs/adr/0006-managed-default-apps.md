@@ -1,6 +1,6 @@
 # ADR 0006 — Managed default apps: enable apl-core's harbor/loki/grafana/kyverno via the values branch; layer LLZ extras on the managed installs
 
-Status: **Proposed / in progress** (driven by the PR #306 managed-only pivot + the live-convergence e2e)
+Status: **Accepted / implemented** in PR #306 (driven by the managed-only pivot + the live-convergence e2e). Render/bootstrap wiring landed + unit-covered; the helm-upgrade retain + app-install is under e2e validation on the managed release.
 Date: 2026-07-22
 Relates: [ADR 0005](0005-managed-app-platform.md) (the managed pivot). Supersedes 0005's "managedApps is operator opt-in" framing.
 
@@ -24,7 +24,7 @@ Concretely:
 
 1. **Enable the apps in apl-core's config**, so apl-core (apl-operator) installs them itself. apl-core reconciles its config from a **git values branch** — and (per the standing requirement, see Open Question 1) LLZ keeps managed apl-core pointed at a **github.com values branch it controls** (via `APL_VALUES_REPO_TOKEN`, Contents:write), NOT the in-cluster gitea default. So enabling an app = **committing `apps.<name>.enabled: true` to that branch** → apl-operator installs it. This is the self-install values-push model applied to managed; no apl-api JWT dance, no gitea-admin credential.
 2. **Use apl-core's installs.** LLZ ships only the glue (ExternalSecrets, the harbor robot-provisioner, the image-signature ClusterPolicy) — never its own harbor/loki/grafana/kyverno chart.
-3. **Drop the per-app opt-in gating.** With the apps default-on, the `ManagedConditionalOn` gating (PR #306) collapses: the `harbor`, `observability`, and `imageSignature` components emit **always** on managed. `imageSignature` (the Kyverno ClusterPolicy) is safe again because Kyverno's CRD is now guaranteed present.
+3. **Keep the per-app gating, but couple it to `managedApps` (which is now default-on), not to operator opt-in.** The `ManagedConditionalOn` gate stays — the `harbor`/`observability`/`imageSignature` components emit IFF their app is in `managedApps` — but `managedApps` now defaults to `[harbor, loki, grafana, kyverno]`, so a default spec emits all three extras. The gate is no longer "wait for a human to opt in in the Console"; it's "emit the extra exactly when LLZ enabled the underlying app." This is strictly safer than dropping the gate outright: an operator who NARROWS `managedApps` (e.g. drops kyverno) automatically suppresses the matching extra (imageSignature) instead of wedging converge on a missing CRD. `imageSignature` (the Kyverno ClusterPolicy) is safe in the default case because Kyverno's CRD is guaranteed present. The gate and the `configureManagedApl` helm-enable read the SAME list, so they can never disagree.
 4. **Ordering is absorbed by Argo.** LLZ commits `apps.*.enabled` early; apl-operator installs the apps (CRDs land) over the following minutes; the LLZ extras that reference those CRDs are `SkipDryRunOnMissingResource=true` with the load-bearing retry budget (40 @ 90s), so they converge once the CRDs appear rather than hard-failing.
 
 `spec.cluster.bootstrap.managedApps` is retained as the **declarative set of apps LLZ enables** (defaulting to `[harbor, loki, grafana, kyverno]`), no longer an operator opt-in — LLZ reconciles apl-core to it, and the `llz-reconciler` can re-assert it against Console drift.
@@ -40,12 +40,12 @@ apl-core's config is Git-as-database (apl-api commits to it; apl-operator reconc
 
 Path A is preferred because it reuses the credential + push LLZ already performs and avoids coupling to apl-api's runtime auth. LLZ already reads apl-core's config in-cluster today (`discoverKeycloakIssuerFromCluster` reads the `otomi/otomi-api` ConfigMap's `SSO_ISSUER`), so the read side is proven; this adds the write side via git.
 
-## Implementation sketch
+## Implementation (as landed in #306)
 
-- `llz ci enable-managed-apps --region <env>` (or fold into the existing render/commit): ensure `apps.<name>.enabled: true` for each of `managedApps` (default `[harbor, loki, grafana, kyverno]`) on the apl-core values branch; idempotent (a no-op when already set).
-- Wire it into the managed `llz-bootstrap-openbao.yml` path, after apl-core's config repo is reachable, before the converge gate.
-- Registry: drop `ManagedConditionalOn` on `harbor`/`observability`/`imageSignature` (they become always-on on managed); keep `imageSignature`'s file under `platform-apl/components/` for cosign-subject-guard.
-- Graceful degradation: if the enable-commit fails, warn and keep `imageSignature` gated OFF (don't wedge) — the PR #306 conditional behavior is the safe fallback.
+- **`configureManagedApl(o, d)`** in `llz ci bootstrap-cluster` (best-effort, after `waitManagedArgoReady`): seeds the `apl-<env>` github branch if absent (`ensureAplValuesBranch`), then a single `helm upgrade apl apl --repo <aplChartRepo> --version <defaultAplChartVersion> -n apl-operator --reuse-values --wait --set otomi.git.repoUrl=<instance repo>,otomi.git.user=x-access-token,otomi.git.password=<APL_VALUES_REPO_TOKEN>,otomi.git.branch=apl-<env> --set apps.<app>.enabled=true` (one per `managedApps`). `--reuse-values` preserves Linode's managed release; the chart regenerates `apl-secrets/apl-git-config` (BYO Git) + flips the app toggles by construction. Idempotent (helm no-ops when already at that state).
+- The app list is `o.managedApps`, populated in `runBootstrapCluster` from `spec.cluster.bootstrap.managedApps` (which `Defaults()` fills to `clusterspec.DefaultManagedApps = [harbor, loki, grafana, kyverno]`), with a fallback to `DefaultManagedApps` if empty.
+- Registry: `ManagedConditionalOn` on `harbor`/`observability`/`imageSignature` is **retained** and reads `managedApps`; with the default set all three emit. `imageSignature`'s file stays under `platform-apl/components/imageSignature/` for cosign-subject-guard.
+- Graceful degradation: `configureManagedApl` is called best-effort (warn, don't fail the bootstrap) — if the helm-enable fails, the render-side gate still only emitted extras for the declared apps, so a partial failure degrades rather than wedges.
 
 ## Open questions
 
