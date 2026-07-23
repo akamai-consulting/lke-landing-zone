@@ -149,3 +149,9 @@ variable "github_runner_ipv6_cidrs" {
   type        = list(string)
   default     = []
 }
+
+variable "apl_enabled" {
+  description = "Enable Linode managed App Platform (apl_enabled). See ADR 0005 / spec cluster.bootstrap.managedAppPlatform."
+  type        = bool
+  default     = false
+}

@@ -38,6 +38,7 @@ spec:
       k8sVersion: v1.33.6+lke7
       nodePool: { type: g8-dedicated-8-4, count: 5 }
       controlPlane: { highAvailability: true, auditLogsEnabled: true }
+      bootstrap: { managedAppPlatform: true }
 `
 
 const splitProd = `
@@ -98,8 +99,11 @@ func TestLoadSplit_InheritanceAndValidate(t *testing.T) {
 	if prod.ControlPlane.HighAvailability == nil || !*prod.ControlPlane.HighAvailability {
 		t.Errorf("prod controlPlane.highAvailability should inherit true")
 	}
-	if got := lz.Spec.Environments["prod"].Cluster.Bootstrap.DomainSuffix; got != "prod.internal" {
-		t.Errorf("prod domainSuffix default = %q, want prod.internal", got)
+	if got := lz.Spec.Environments["prod"].Cluster.Bootstrap.DomainSuffix; got != "" {
+		t.Errorf("domainSuffix must not be defaulted on managed, got %q", got)
+	}
+	if !lz.Spec.Environments["prod"].Cluster.Bootstrap.ManagedAppPlatform {
+		t.Error("managedAppPlatform set in shared defaults must inherit to prod")
 	}
 
 	// staging overrides count, inherits type.
@@ -188,6 +192,7 @@ spec:
       k8sVersion: v1.33.6+lke7
       nodePool: { type: g8-dedicated-8-4, count: 5 }
       controlPlane: { highAvailability: true, auditLogsEnabled: true }
+      bootstrap: { managedAppPlatform: true }
   environments:
     prod:
       cluster:
@@ -249,5 +254,38 @@ func TestMergeCluster_Precedence(t *testing.T) {
 	}
 	if g := mergeCluster(base, Cluster{Network: ClusterNetwork{SubnetCIDR: "10.8.0.0/13"}}).Network.SubnetCIDR; g != "10.8.0.0/13" {
 		t.Errorf("set subnetCIDR should win, got %q", g)
+	}
+}
+
+// TestMergeCluster_ManagedFieldsInherit guards the exact drop bug: managedAppPlatform
+// / managedApps set only in the shared defaults (spec.defaults.cluster.bootstrap,
+// the placement landingzone.yaml.example documents) must reach the merged env.
+func TestMergeCluster_ManagedFieldsInherit(t *testing.T) {
+	base := Cluster{Bootstrap: Bootstrap{ManagedAppPlatform: true, ManagedApps: []string{"harbor", "grafana"}}}
+	// Env sets nothing managed-related → both must inherit from the defaults layer.
+	got := mergeCluster(base, Cluster{Bootstrap: Bootstrap{Name: "apl"}})
+	if !got.Bootstrap.ManagedAppPlatform {
+		t.Error("managedAppPlatform set in shared defaults was DROPPED — self-install/apl_enabled=false trap")
+	}
+	if !reflect.DeepEqual(got.Bootstrap.ManagedApps, []string{"harbor", "grafana"}) {
+		t.Errorf("managedApps should inherit from defaults, got %v", got.Bootstrap.ManagedApps)
+	}
+	// Per-env managedApps wins; managedAppPlatform stays true (opt-in inheritance).
+	got2 := mergeCluster(base, Cluster{Bootstrap: Bootstrap{ManagedApps: []string{"loki"}}})
+	if !reflect.DeepEqual(got2.Bootstrap.ManagedApps, []string{"loki"}) {
+		t.Errorf("per-env managedApps should win, got %v", got2.Bootstrap.ManagedApps)
+	}
+}
+
+// TestDefaults_NeverInjectsDomainSuffix guards the render-deadlock: on the managed
+// platform Linode owns the domain and validateEnv rejects a non-empty domainSuffix,
+// so Defaults() must never inject one (it would make every spec un-renderable).
+func TestDefaults_NeverInjectsDomainSuffix(t *testing.T) {
+	lz := &LandingZone{Spec: Spec{Environments: map[string]Environment{
+		"probe": {Cluster: Cluster{Bootstrap: Bootstrap{ManagedAppPlatform: true}}},
+	}}}
+	lz.Defaults()
+	if got := lz.Spec.Environments["probe"].Cluster.Bootstrap.DomainSuffix; got != "" {
+		t.Errorf("domainSuffix must stay empty, got %q (validateEnv would reject it)", got)
 	}
 }

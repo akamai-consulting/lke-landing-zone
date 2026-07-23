@@ -32,6 +32,21 @@ spec:
     cluster:
       k8sVersion: v1.33.6+lke7   # an LKE-E +lke version available in your Linode account
       nodePool: { type: g8-dedicated-8-4, count: 5 }
+      # ── Managed App Platform (REQUIRED) ──────────────────────────────────────
+      # LLZ runs exclusively on Linode's MANAGED App Platform (apl_enabled). Linode
+      # owns apl-core + the lke<id>.akamai-apl.net domain/DNS/cert; LLZ layers its
+      # extras as Argo apps. `managedAppPlatform: true` is MANDATORY (validation
+      # rejects a self-install spec) — set it here once and every env inherits it.
+      # Managed installs only a MINIMAL core — the OPTIONAL apps beyond the core LLZ
+      # platform (harbor, loki, grafana, …) are enabled by the operator in the App
+      # Platform Console; declare them in `managedApps` so LLZ layers its matching
+      # extras only for apps that exist. The LLZ-necessary platform (OpenBao,
+      # external-secrets, reconciler, PAT rotator) is ALWAYS on and needs no
+      # declaration. Do NOT set cluster.bootstrap.domainSuffix (Linode owns the
+      # domain — LLZ discovers it in-cluster). See docs/adr/0005-managed-app-platform.md.
+      bootstrap:
+        managedAppPlatform: true
+        # managedApps: [harbor, loki, grafana]
     # apl-core global feature flags (otomi.*), rendered into every env's
     # values.yaml. Both optional — shown here with their defaults.
     platform:

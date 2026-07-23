@@ -126,7 +126,7 @@ func TestWriteEnvDefinition(t *testing.T) {
 		runnerIPv4CIDRs: "1.2.3.4/32",
 		objCluster:      "us-ord-1",
 	}
-	if err := writeEnvDefinition(path, "prod", o, "myinst", "prod.example.com"); err != nil {
+	if err := writeEnvDefinition(path, "prod", o, "myinst"); err != nil {
 		t.Fatalf("writeEnvDefinition: %v", err)
 	}
 	b, err := os.ReadFile(path)
@@ -144,17 +144,21 @@ func TestWriteEnvDefinition(t *testing.T) {
 		"group: pair-1",
 		"promotionRank: 2",
 		"name: myinst-prod",
-		"domainSuffix: prod.example.com",
 		"cluster: us-ord-1",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("env definition missing %q:\n%s", want, s)
 		}
 	}
+	// On the managed platform Linode owns the domain — the env must NOT author a
+	// domainSuffix (managedAppPlatform is inherited from spec.defaults).
+	if strings.Contains(s, "domainSuffix") {
+		t.Errorf("env definition must NOT author domainSuffix (managed owns the domain):\n%s", s)
+	}
 
 	// Minimal opts: optional blocks omitted, role defaults to standalone.
 	min := filepath.Join(t.TempDir(), "dev.yaml")
-	if err := writeEnvDefinition(min, "dev", envAddOpts{region: "us-iad", objCluster: "us-iad-1"}, "myinst", "dev.example.com"); err != nil {
+	if err := writeEnvDefinition(min, "dev", envAddOpts{region: "us-iad", objCluster: "us-iad-1"}, "myinst"); err != nil {
 		t.Fatal(err)
 	}
 	mb, _ := os.ReadFile(min)

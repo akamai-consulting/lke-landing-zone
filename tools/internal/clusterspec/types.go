@@ -299,6 +299,38 @@ type Bootstrap struct {
 	AplChartVersion  string    `json:"aplChartVersion,omitempty"`  // apl_chart_version
 	AplValues        AplValues `json:"aplValues,omitempty"`        // apl_values_repo_*
 	AppsRepoRevision string    `json:"appsRepoRevision,omitempty"` // apps_repo_revision
+	// ManagedAppPlatform pivots this cluster from LLZ self-installing apl-core to
+	// Linode's MANAGED App Platform: it sets linode_lke_cluster.apl_enabled=true
+	// (Linode installs+manages apl-core AND provisions the lke<id>.akamai-apl.net
+	// domain + DNS + wildcard cert), and `llz ci bootstrap-cluster` SKIPS its own
+	// apl-core install (Linode owns it) and instead LAYERS LLZ's extras as Argo apps.
+	// The full managed path (domain/issuer discovery, extras layering, DNS/cert
+	// ownership, the managed render component filter) is implemented across ADR
+	// 0005 phases 1-4 — see docs/adr/0005-managed-app-platform.md. Default false =
+	// self-install (unchanged).
+	ManagedAppPlatform bool `json:"managedAppPlatform,omitempty"` // apl_enabled
+	// ManagedApps lists the OPTIONAL apl-core apps the operator enabled via the
+	// managed App Platform Console (e.g. harbor, loki, grafana). Managed apl-core
+	// installs only a MINIMAL core, so on a managed cluster `llz render` layers
+	// LLZ's CONDITIONAL extras (harbor robot-provisioner, observability glue) ONLY
+	// for the apps named here — it cannot discover them (render runs in CI with no
+	// cluster access). The always-on LLZ platform (OpenBao, external-secrets store,
+	// reconciler, PAT rotator) needs no declaration and is emitted regardless.
+	// Ignored on self-install clusters (component toggles drive those). See
+	// docs/adr/0005-managed-app-platform.md.
+	ManagedApps []string `json:"managedApps,omitempty"`
+}
+
+// ManagedAppEnabled reports whether the given optional apl-core app is declared
+// enabled on this cluster — the gate for a component with ManagedConditionalOn set
+// (see Component.EmitOnManaged).
+func (b Bootstrap) ManagedAppEnabled(app string) bool {
+	for _, a := range b.ManagedApps {
+		if a == app {
+			return true
+		}
+	}
+	return false
 }
 
 // AplValuesBranch is the values-repo branch apl-operator commits its rendered env/
