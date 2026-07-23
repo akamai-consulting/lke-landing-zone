@@ -43,13 +43,14 @@ spec:
   policyTypes:
     - Egress
   egress:
+    # DNS. kube-system by NAMESPACE only, NOT a `k8s-app: kube-dns` podSelector:
+    # LKE-Enterprise / managed CoreDNS is labeled app.kubernetes.io/name=coredns, so a
+    # kube-dns podSelector matches nothing and every lookup times out. Only DNS listens
+    # on :53 in kube-system, so a namespace-scoped :53 grant is correct and safe.
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
       ports:
         - { port: 53, protocol: UDP }
         - { port: 53, protocol: TCP }
