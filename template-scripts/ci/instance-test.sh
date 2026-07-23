@@ -144,12 +144,17 @@ else
   ( cd "$INSTANCE" && git init -q && git add -A && git commit -qm scaffold >/dev/null 2>&1 || true
     "$LLZ" env add itest --region us-ord --obj-cluster us-ord-1 >/dev/null ) \
     || fail "llz env add failed inside the rendered instance"
+  # No per-env apl-core values.yaml on the managed platform — Linode owns apl-core
+  # values; `llz render` emits only the manifest/ tree + tfvars.
   for p in \
     "terraform-iac-bootstrap/cluster/itest.tfvars" \
     "terraform-iac-bootstrap/object-storage/itest.tfvars" \
-    "apl-values/itest/values.yaml"; do
+    "apl-values/itest/manifest/env-revision-configmap.yaml"; do
     if [[ -e "$INSTANCE/$p" ]]; then echo "  ok   env add -> $p"; else fail "env add did not create $p"; fi
   done
+  if [[ -e "$INSTANCE/apl-values/itest/values.yaml" ]]; then
+    fail "env add emitted an apl-core values.yaml — managed apl-core owns its own values"
+  fi
   # The generated env must carry no surviving 'your-env' value (comments aside).
   if grep -rnH "your-env" "$INSTANCE"/terraform-iac-bootstrap/*/itest.tfvars 2>/dev/null | grep -vE ':[0-9]+:[[:space:]]*#'; then
     fail "env add left an unfilled 'your-env' value above"

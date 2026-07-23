@@ -117,7 +117,7 @@ spec:
         region: us-ord
         k8sVersion: v1.33.6+lke7
         nodePool: { type: t, count: 3 }
-        bootstrap: { name: platform-prod }
+        bootstrap: { name: platform-prod, managedAppPlatform: true, managedApps: [loki] }
         objectStorage: { cluster: us-ord-1 }
       components:
         harbor: { enabled: false }
@@ -125,13 +125,7 @@ spec:
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// The values.yaml base lets renderManifest exercise the apl-core backend too —
-	// including the spec-owned identity write.
 	if err := os.MkdirAll(aplDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(aplDir, "values.yaml"), []byte(
-		"cluster:\n  name: ${cluster_name}\n  domainSuffix: ${cluster_domain}\napps:\n  harbor: { enabled: true }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,17 +153,10 @@ spec:
 		t.Errorf("carved observability source root missing/wrong (err=%v):\n%s", err, obsKust)
 	}
 
-	// The apl-core backend rendered the spec identity into values.yaml (the
-	// templatefile hop is gone) and flipped harbor off.
-	vals, err := os.ReadFile(filepath.Join(aplDir, "prod", "values.yaml"))
-	if err != nil {
-		t.Fatalf("read values.yaml: %v", err)
-	}
-	if !strings.Contains(string(vals), "name: platform-prod") || strings.Contains(string(vals), "${cluster_name}") {
-		t.Errorf("values.yaml identity not rendered from spec:\n%s", vals)
-	}
-	if !strings.Contains(string(vals), "enabled: false") {
-		t.Errorf("values.yaml harbor not flipped off:\n%s", vals)
+	// apl-core values.yaml is NOT rendered on the managed platform (apl-core owns its
+	// own values; the platform-bootstrap App syncs only the manifest/ tree).
+	if _, err := os.Stat(filepath.Join(aplDir, "prod", "values.yaml")); err == nil {
+		t.Error("managed render must NOT emit an apl-core values.yaml (Linode owns apl-core values)")
 	}
 
 	// Freshly rendered → no drift.
@@ -289,36 +276,6 @@ func TestLineDiff_CommonPrefixTrimmed(t *testing.T) {
 var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
-
-// The instance-wide ACME contact moved from a shared-dns file-rewrite to a kustomize
-// patch in the manifest overlay (the shared dns tree is now fetched remotely and can't
-// be rewritten). committedTargets threads spec.dns.acmeEmail into RenderManifestKustomization,
-// which emits the ClusterIssuer patch — asserted directly in clusterspec's
-// TestRenderManifestKustomization_RemoteRefs. Here we just confirm the wiring: a set
-// email reaches the committed manifest kustomization; an unset one emits no patch.
-func TestACMEEmailReachesManifestOverlay(t *testing.T) {
-	e := clusterspec.Environment{}
-	id := clusterspec.ValuesIdentity{ClusterName: "x"}
-	with, err := committedTargets("prod", e, id, t.TempDir(), "ops@example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var kust string
-	for p, c := range with {
-		if strings.HasSuffix(p, "manifest/kustomization.yaml") {
-			kust = c
-		}
-	}
-	if !strings.Contains(kust, "value: ops@example.com") || !strings.Contains(kust, "kind: ClusterIssuer") {
-		t.Errorf("set acmeEmail should reach the manifest overlay as a ClusterIssuer patch:\n%s", kust)
-	}
-	without, _ := committedTargets("prod", e, id, t.TempDir(), "")
-	for p, c := range without {
-		if strings.HasSuffix(p, "manifest/kustomization.yaml") && strings.Contains(c, "/spec/acme/email") {
-			t.Errorf("unset acmeEmail must emit no ClusterIssuer patch:\n%s", c)
-		}
-	}
-}
 
 func TestRenderNetworks(t *testing.T) {
 	root := t.TempDir()

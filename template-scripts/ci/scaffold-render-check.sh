@@ -115,38 +115,24 @@ else
   echo "none (comments excluded)."
 fi
 
-# ── 3. Per-env files `llz ci bootstrap-cluster` reads ─────────────────────────
-# Mirrors tools/cmd/llz/ci_bootstrap_cluster.go: it renders values.yaml and reads
-# manifest/env-revision-configmap.yaml. Keep in sync if those reads change.
+# ── 3. Per-env files the platform-bootstrap Application syncs ─────────────────
+# LLZ runs on the managed platform: apl-core (Linode) owns its own values.yaml, so
+# `llz render` emits NO apl-core values.yaml — only the manifest/ tree the
+# platform-bootstrap Application syncs. env-revision-configmap.yaml is the one
+# per-env marker the bootstrap flow reads.
 step "Check required per-env files exist"
 REQUIRED=(
-  "$GEN_OVERLAY/values.yaml"
   "$GEN_OVERLAY/manifest/env-revision-configmap.yaml"
 )
 for f in "${REQUIRED[@]}"; do
   if [[ -f "$f" ]]; then echo "ok   ${f#"$ROOT"/}"; else fail "missing required per-env file: ${f#"$ROOT"/}"; fi
 done
-
-# ── 4+5. runtime-placeholder var-contract + apl-core schema (unit-tested Go) ───
-# `llz ci validate-apl-values` owns both checks (the logic lives in tested Go —
-# ci_apl_schema.go — so this stays thin glue): (4) every unescaped ${...} left in
-# the rendered values is one of the secrets-only runtime placeholders
-# `llz ci bootstrap-cluster` fills (the ${apl_values_repo_url} class that failed a
-# 2026-07-02 apply); (5) the values pass apl-core's chart schema via
-# `helm template apl/apl`, pinned to the spec's aplChartVersion (the v6
-# `apps.loki: adminPassword is required` class). The schema half self-skips
-# without helm or a chart version; the var-contract half always runs.
-step "Validate apl-values (runtime-placeholder var-contract + apl-core schema)"
+# The apl-core values.yaml must NOT be emitted on the managed platform.
 if [[ -f "$GEN_OVERLAY/values.yaml" ]]; then
-  # Best-effort chart version from the scaffolded spec; empty → schema self-skips.
-  CHART_VER="$(grep -hoE 'aplChartVersion:[[:space:]]*["'"'"']?[0-9]+\.[0-9]+\.[0-9]+' "$ENV_YAML" "$LZ" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
-  "$LLZ" ci validate-apl-values \
-    --values "$GEN_OVERLAY/values.yaml" \
-    --chart-version "$CHART_VER" \
-    || fail "apl-values validation failed (see above) — fix before it fails at helm_release apl in Release-E2E"
+  fail "unexpected apl-core values.yaml at ${GEN_OVERLAY#"$ROOT"/}/values.yaml — managed apl-core owns its own values; LLZ must not render one"
 fi
 
-# ── 6. kustomize-build every rendered overlay (Argo's load-restrictor) ────────
+# ── 4. kustomize-build every rendered overlay (Argo's load-restrictor) ────────
 # The blast-radius decomposition renders per-env apps/<name>/ source roots that pull
 # in the shared kustomize Component three levels up + env patches. The render-golden
 # Go tests assert STRINGS; only an actual kustomize build proves Argo can materialize

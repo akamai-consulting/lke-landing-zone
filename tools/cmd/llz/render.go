@@ -293,7 +293,7 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		if tfvarsOnly {
 			continue
 		}
-		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
 		if err != nil {
 			return nil, fmt.Errorf("render %s manifests: %w", name, err)
 		}
@@ -435,7 +435,16 @@ func repoOwnerName(repoURL string) string {
 	return s
 }
 
-func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir, acmeEmail string) (map[string]string, error) {
+func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
+	// Make the ADR's KNOWN-INCOMPLETE managed-observability caveat DISCOVERABLE at
+	// render time, not just documented: declaring `loki` emits the observability
+	// extras, but the grafana-admin/otel-bearer generated-secrets they pair with are
+	// not carried on managed yet. Likely harmless (otel bearer optional, grafana-admin
+	// apl-core's) but unproven — warn so it's a known limitation, not a surprise.
+	if clusterspec.ComponentEnabled(e.Components, "observability") &&
+		e.Cluster.Bootstrap.ManagedAppEnabled("loki") {
+		fmt.Fprintf(os.Stderr, "::warning::environments.%s: managedApps enables observability, but managed observability is KNOWN-INCOMPLETE — its grafana-admin/otel-bearer generated-secrets are not carried yet (see docs/adr/0005-managed-app-platform.md). Validate live before relying on it.\n", env)
+	}
 	manifest := filepath.Join(aplDir, env, "manifest")
 	// Template ref the shared apl-values tree is fetched at (see RenderManifestKustomization):
 	// the version this instance tracks, so an instance references the byte-identical manifest
@@ -456,7 +465,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		// THIN overlay over the shared base + per-component kustomize Components —
 		// the shared, token-free resources are fetched from the template repo at `ref`;
 		// only per-env + per-instance pieces are carried locally.
-		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref, acmeEmail, imageTag),
+		filepath.Join(manifest, "kustomization.yaml"): clusterspec.RenderManifestKustomization(e.Components, ref, e.Cluster.Bootstrap),
 		// per-env local-config marker the bootstrap-cluster env-revision precondition reads.
 		filepath.Join(manifest, "env-revision-configmap.yaml"): clusterspec.RenderEnvRevision(revision),
 		// The operator escape-hatch ApplicationSet, render-emitted locally with this
@@ -480,6 +489,11 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		if c.CarvedApp == nil || !clusterspec.ComponentEnabled(e.Components, c.Name) {
 			continue
 		}
+		// Managed apl-core: drop/gate carved components the same way the manifest
+		// overlay does (skip apl-core-owned, gate conditional on managedApps).
+		if !c.EmitOnManaged(e.Cluster.Bootstrap) {
+			continue
+		}
 		appsDir := filepath.Join(aplDir, env, "apps", c.Name)
 		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
 		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref, imageTag)
@@ -487,16 +501,10 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 			targets[path] = content
 		}
 	}
-	// apl-core backend: apps.<key>.enabled + the spec-owned identity/platform keys
-	// patched into the shared values.yaml base. Skipped (not an error) for instances
-	// without the shared overlay.
-	if base, err := os.ReadFile(filepath.Join(aplDir, "values.yaml")); err == nil {
-		rendered, err := clusterspec.RenderValues(base, e.Components, id)
-		if err != nil {
-			return nil, fmt.Errorf("render values.yaml: %w", err)
-		}
-		targets[filepath.Join(aplDir, env, "values.yaml")] = string(rendered)
-	}
+	// apl-core values.yaml is NOT rendered: LLZ runs exclusively on Linode's MANAGED
+	// App Platform, where apl-core owns its own values (apl-api + in-cluster gitea) and
+	// LLZ never pushes an overlay — the platform-bootstrap Application syncs only the
+	// manifest/ tree. See docs/adr/0005-managed-app-platform.md.
 	return targets, nil
 }
 
@@ -545,7 +553,7 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 	targets := map[string]string{}
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.DNS.AcmeEmail)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
 		if err != nil {
 			return err
 		}

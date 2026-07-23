@@ -101,21 +101,18 @@ func sharedManifestRef(ref string) string {
 	return RemoteBase("manifest", ref)
 }
 
-// clusterHealthWorkflowName / clusterHealthWorkflowTemplate identify the Argo
-// WorkflowTemplate whose container image the kustomize images: transformer cannot
-// reach (a CRD field) — so RenderManifestKustomization retags it with a JSON6902
-// patch instead, letting the component tree ship a token-free :latest base ref.
-const (
-	clusterHealthWorkflowName     = "clusterHealthWorkflow"
-	clusterHealthWorkflowTemplate = "llz-cluster-health"
-)
-
-func RenderManifestKustomization(components map[string]ComponentToggle, ref, acmeEmail, imageTag string) string {
+func RenderManifestKustomization(components map[string]ComponentToggle, ref string, boot Bootstrap) string {
 	var dirs []string       // plain component dirs, referenced under components:
 	var carvedApps []string // carved App CR filenames, referenced under resources:
 	var patches []Patch     // patches from plain components only
 	for _, c := range Components {
 		if c.Mandatory || !ComponentEnabled(components, c.Name) {
+			continue
+		}
+		// LLZ runs on managed apl-core: emit only the components LLZ owns — drop the
+		// apl-core-owned ones (ManagedSkip) and gate the conditional ones on the
+		// operator-declared managedApps. See Component.EmitOnManaged / ADR 0005.
+		if !c.EmitOnManaged(boot) {
 			continue
 		}
 		if c.CarvedApp != nil {
@@ -144,12 +141,7 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref, acm
 			b.WriteString("  - " + componentRef(d, "../../../../platform-apl/components/", ref) + "\n")
 		}
 	}
-	// clusterHealthWorkflow's llz image lives in an Argo WorkflowTemplate (a CRD the
-	// images: transformer can't retag), so — now that its component ships a token-free
-	// :latest base — retag it here with a JSON6902 patch when it's enabled and this
-	// instance/e2e resolved an image tag.
-	retagHealth := imageTag != "" && ComponentEnabled(components, clusterHealthWorkflowName)
-	if len(patches) > 0 || acmeEmail != "" || retagHealth {
+	if len(patches) > 0 {
 		b.WriteString("\npatches:\n")
 		for _, p := range patches {
 			b.WriteString("  - path: " + p.Path + "\n")
@@ -158,21 +150,6 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref, acm
 			b.WriteString("      version: " + p.Version + "\n")
 			b.WriteString("      kind: " + p.Kind + "\n")
 			b.WriteString("      name: " + p.Name + "\n")
-		}
-		// Instance-wide ACME contact: the shared letsencrypt ClusterIssuers ship
-		// email: "" (a valid contact-less registration); when spec.dns.acmeEmail is
-		// set, patch it onto BOTH issuers in place (target by kind — no per-name
-		// entry). This replaces the former file-rewrite, which can't reach the now-
-		// remote dns tree. Unset → no patch (email: "" stands).
-		if acmeEmail != "" {
-			b.WriteString("  - target:\n      group: cert-manager.io\n      kind: ClusterIssuer\n")
-			b.WriteString("    patch: |-\n      - op: replace\n        path: /spec/acme/email\n        value: " + acmeEmail + "\n")
-		}
-		// Retag the health WorkflowTemplate's container image (a CRD field the images:
-		// transformer can't reach) to this instance/e2e llz image.
-		if retagHealth {
-			b.WriteString("  - target:\n      group: argoproj.io\n      version: v1alpha1\n      kind: WorkflowTemplate\n      name: " + clusterHealthWorkflowTemplate + "\n")
-			b.WriteString("    patch: |-\n      - op: replace\n        path: /spec/templates/0/container/image\n        value: " + llzImageName + ":" + imageTag + "\n")
 		}
 	}
 	return b.String()

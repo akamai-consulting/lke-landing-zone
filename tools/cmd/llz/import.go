@@ -973,7 +973,7 @@ var platformSignals = []struct {
 	{"monitoring", "monitoring", "observability"},
 	{"kyverno", "kyverno", "policyEngine"},
 	{"trivy", "trivy", "imageScanning"},
-	{"cert-manager", "cert-manager", "certManager"},
+	{"cert-manager", "cert-manager", "certManagerBootstrapCA"},
 	{"external-secrets", "external-secrets", "externalSecrets"},
 	{"argo-workflows", "argo-workflows", "argoWorkflows"},
 	{"argo-events", "argo-events", "argoEvents"},

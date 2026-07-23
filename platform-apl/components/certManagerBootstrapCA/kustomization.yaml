@@ -1,0 +1,9 @@
+# spec.components.certManagerBootstrapCA → this kustomize Component. The self-signed
+# CA ClusterIssuer (openbao-ca) the llz-openbao-platform chart hard-requires via
+# issuerRef. LLZ-owned and always needed (incl. on managed apl-core, which does NOT
+# provide it — only its own custom-ca). Split out of the former `certManager`
+# component so managed clusters keep the CA but drop cert-automation. Template-managed.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - openbao-bootstrap-ca.yaml

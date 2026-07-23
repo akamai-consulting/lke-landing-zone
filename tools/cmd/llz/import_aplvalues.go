@@ -116,7 +116,7 @@ var aplAppComponent = map[string]string{
 	"kyverno":          "policyEngine",
 	"trivy":            "imageScanning",
 	"gitea":            "gitea",
-	"cert-manager":     "certManager",
+	"cert-manager":     "certManagerBootstrapCA",
 	"external-secrets": "externalSecrets",
 	"argocd":           "argocd",
 }
