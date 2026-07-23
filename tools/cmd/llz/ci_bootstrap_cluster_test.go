@@ -325,6 +325,8 @@ func TestAplMigrateManifestsValidYAML(t *testing.T) {
 func TestBasicAuthGitURL(t *testing.T) {
 	cases := []struct{ raw, user, secret, want string }{
 		{"http://git-server.git-server.svc/otomi/values.git", "otomi-admin", "pw", "http://otomi-admin:pw@git-server.git-server.svc/otomi/values.git"},
+		// a generated password with reserved chars must be percent-encoded, not corrupt the URL.
+		{"http://git-server.git-server.svc/otomi/values.git", "otomi-admin", "k2qaZ3gPS&PPlRnrnES6z", "http://otomi-admin:k2qaZ3gPS%26PPlRnrnES6z@git-server.git-server.svc/otomi/values.git"},
 		{"https://github.com/acme/instance.git", "x-access-token", "tok", "https://x-access-token:tok@github.com/acme/instance.git"},
 		{"https://github.com/acme/instance.git", "", "tok", "https://x-access-token:tok@github.com/acme/instance.git"},
 		{"http://git-server/x.git", "u", "", "http://git-server/x.git"},

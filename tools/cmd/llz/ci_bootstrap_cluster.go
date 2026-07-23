@@ -26,6 +26,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -583,7 +584,9 @@ const (
 func migrateAplValuesToGitHub(d bootstrapDeps, cur aplGitConfig, githubURL, branch string, apps []string, tok string) error {
 	srcAuth := basicAuthGitURL(cur.repoURL, cur.username, cur.password)
 	dstAuth := basicAuthGitURL(githubURL, "x-access-token", tok)
-	secrets := []string{tok, cur.password}
+	// Redact the raw creds AND the full authed URLs (git echoes the percent-encoded URL
+	// on error, where the raw password substring won't match).
+	secrets := []string{tok, cur.password, srcAuth, dstAuth}
 	del := func() {
 		d.kubectl("-n", aplMigrateJobNS, "delete", "job", aplMigrateJobName, "--ignore-not-found")
 		d.kubectl("-n", aplMigrateJobNS, "delete", "secret", aplMigrateJobName, "--ignore-not-found")
@@ -704,18 +707,30 @@ func aplAppEnableManifest(app string) string {
 // basicAuthGitURL injects a user:secret credential into an http(s) git URL so clone/push
 // reach a private remote. The in-cluster values repo (git-server.<ns>.svc) is HTTP, the
 // github instance repo HTTPS — both need the credential embedded (git has no tty to
-// prompt in a Job/CI). An empty secret or a non-http(s) URL is returned unchanged. The
-// result carries a secret and must never be logged.
+// prompt in a Job/CI). The userinfo is percent-encoded via net/url so a generated
+// password with reserved chars (&, /, @, :) can't corrupt the URL ("Bad hostname").
+// An empty secret or a non-http(s)/unparseable URL is returned unchanged. The result
+// carries a secret and must never be logged.
 func basicAuthGitURL(rawURL, user, secret string) string {
+	if secret == "" {
+		return rawURL
+	}
 	if user == "" {
 		user = "x-access-token"
 	}
-	for _, p := range []string{"https://", "http://"} {
-		if secret != "" && strings.HasPrefix(rawURL, p) {
-			return p + user + ":" + secret + "@" + strings.TrimPrefix(rawURL, p)
-		}
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return rawURL
 	}
-	return rawURL
+	// Percent-encode the userinfo like encodeURIComponent (Go's url.UserPassword leaves
+	// sub-delims such as & unescaped, which curl/git reject as a "Bad hostname"). Fix
+	// QueryEscape's space→+ to %20 for correct userinfo.
+	enc := func(s string) string { return strings.ReplaceAll(url.QueryEscape(s), "+", "%20") }
+	rest := u.Host + u.EscapedPath()
+	if u.RawQuery != "" {
+		rest += "?" + u.RawQuery
+	}
+	return u.Scheme + "://" + enc(user) + ":" + enc(secret) + "@" + rest
 }
 
 // redactSecrets masks each non-empty secret wherever it appears in command output.
