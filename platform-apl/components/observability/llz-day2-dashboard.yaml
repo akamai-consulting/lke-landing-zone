@@ -18,7 +18,12 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "10"
   labels:
+    # Two grafana dashboard-sidecar conventions, so the dashboard merges on BOTH
+    # stacks: self-install's kube-prometheus-stack watches `grafana_dashboard: "1"`;
+    # managed App Platform's Grafana sidecar watches `release: grafana-dashboards`
+    # (LABEL=release/LABEL_VALUE=grafana-dashboards, NAMESPACE=ALL). Carry both.
     grafana_dashboard: "1"
+    release: grafana-dashboards
     app.kubernetes.io/part-of: platform
 data:
   llz-day2.json: |
