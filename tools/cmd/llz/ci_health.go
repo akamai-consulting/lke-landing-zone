@@ -710,6 +710,19 @@ func checkRequiredCRDs(r *health.Report, inv *clusterInventory) {
 			record(r, health.CatFail, "CRD "+crd+" missing — owning ArgoCD Application has not installed it")
 		}
 	}
+	// CRDs from OPTIONAL/ManagedSkip components (argo-workflows / argo-events) are
+	// required ONLY when their owning Application is deployed. On managed (argo skipped)
+	// or a self-install that never opted in, the app is absent → the CRD is not expected.
+	for crd, app := range health.ConditionalCRDs() {
+		switch {
+		case inv.crds[crd]:
+			record(r, health.CatOK, "CRD "+crd+" installed")
+		case kExists("-n", "argocd", "get", "application", app):
+			record(r, health.CatFail, "CRD "+crd+" missing — owning ArgoCD Application "+app+" has not installed it")
+		default:
+			record(r, health.CatOK, "CRD "+crd+" not required ("+app+" Application not deployed)")
+		}
+	}
 }
 
 func checkStorageClasses(r *health.Report) {
@@ -1140,11 +1153,21 @@ func checkPVs(r *health.Report) {
 
 func checkNetworkPolicies(r *health.Report, inv *clusterInventory) {
 	hdr("NetworkPolicy presence per namespace")
+	// LLZ's cluster-foundation Application owns the per-namespace default-deny
+	// NetworkPolicies. It is ManagedSkip, so on a managed cluster apl-core owns network
+	// policy its own way and LLZ applies none — a namespace with no LLZ NPs is then not a
+	// failure. Gate the hard-fail on cluster-foundation actually being deployed (self-
+	// install); namespaces that DO carry their own NPs still pass either way.
+	ownsNetpols := kExists("-n", "argocd", "get", "application", "cluster-foundation")
 	for _, ns := range healthNamespaces {
 		if !inv.nsExists[ns] || health.NetpolExemptNamespace(ns) {
 			continue
 		}
 		cat, msg := health.ClassifyNamespaceNetpol(ns, len(kItems("-n", ns, "get", "networkpolicies")))
+		if cat == health.CatFail && !ownsNetpols {
+			record(r, health.CatOK, fmt.Sprintf("Namespace %s NetworkPolicy check skipped (cluster-foundation not deployed — apl-core owns NPs on managed)", ns))
+			continue
+		}
 		record(r, cat, msg)
 	}
 }

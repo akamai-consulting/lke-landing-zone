@@ -117,8 +117,9 @@ func APIServiceUnavailable(a APIService) (bad bool, msg string) {
 
 // ── Required CRDs (0d) ───────────────────────────────────────────────────────
 
-// RequiredCRDs are the CRDs this repo depends on; a missing one means its owning
-// ArgoCD Application never installed it.
+// RequiredCRDs are the CRDs this repo ALWAYS depends on; a missing one means its
+// owning ArgoCD Application never installed it. CRDs owned by OPTIONAL/ManagedSkip
+// components (argo-workflows / argo-events) are NOT here — see ConditionalCRDs.
 func RequiredCRDs() []string {
 	return []string{
 		"applications.argoproj.io",
@@ -135,15 +136,27 @@ func RequiredCRDs() []string {
 		// anywhere. Requiring it hard-failed convergence for a CRD nothing needs.
 		"clustersecretstores.external-secrets.io",
 		"secretstores.external-secrets.io",
-		"workflows.argoproj.io",
-		"workflowtemplates.argoproj.io",
-		"cronworkflows.argoproj.io",
-		"eventbus.argoproj.io",
-		"eventsources.argoproj.io",
-		"sensors.argoproj.io",
 		"gateways.networking.istio.io",
 		"virtualservices.networking.istio.io",
 		"prometheusrules.monitoring.coreos.com",
+	}
+}
+
+// ConditionalCRDs maps a CRD to the ArgoCD Application (in the argocd namespace) that
+// owns it, for CRDs from OPTIONAL components. The argo-workflows/argo-events components
+// are DefaultDisabled/ManagedSkip, so these CRDs are absent unless their app is deployed
+// (an opt-in self-install, or managed with argo in managedApps). The health check only
+// requires each CRD when its owning Application is present — so a managed cluster (argo
+// skipped) and a self-install that never opted in both pass, while a deployed-but-broken
+// argo app still hard-fails on its missing CRD.
+func ConditionalCRDs() map[string]string {
+	return map[string]string{
+		"workflows.argoproj.io":         "argo-workflows",
+		"workflowtemplates.argoproj.io": "argo-workflows",
+		"cronworkflows.argoproj.io":     "argo-workflows",
+		"eventbus.argoproj.io":          "argo-events",
+		"eventsources.argoproj.io":      "argo-events",
+		"sensors.argoproj.io":           "argo-events",
 	}
 }
 
