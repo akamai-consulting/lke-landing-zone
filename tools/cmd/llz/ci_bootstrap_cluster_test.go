@@ -276,11 +276,12 @@ func TestConfigureManagedApl(t *testing.T) {
 			t.Errorf("migration manifests missing %q", want)
 		}
 	}
-	if !strings.Contains(all, "git-server.git-server.svc") {
-		t.Error("SRC_URL must target the in-cluster values repo (git-server)")
+	// SRC_URL must embed the in-cluster gitea creds (http:// — git can't prompt in a Job).
+	if !strings.Contains(all, "http://otomi-admin:gitea-pw@git-server.git-server.svc") {
+		t.Errorf("SRC_URL must embed http creds for the in-cluster values repo; manifests:\n%s", all)
 	}
-	if !strings.Contains(all, "github.com/acme/instance.git") {
-		t.Error("DST_URL must target the github instance repo")
+	if !strings.Contains(all, "x-access-token:test-repo-token@github.com/acme/instance.git") {
+		t.Error("DST_URL must embed the github token")
 	}
 	// After the Job, the BYO-Git Secret is repointed at the github branch.
 	for _, want := range []string{`"repoUrl":"https://github.com/acme/instance.git"`, `"branch":"apl-primary"`, `"username":"x-access-token"`} {
@@ -315,6 +316,23 @@ func TestAplMigrateManifestsValidYAML(t *testing.T) {
 		var obj map[string]any
 		if err := yaml.Unmarshal([]byte(m), &obj); err != nil {
 			t.Errorf("%s manifest is not valid YAML: %v\n%s", name, err, m)
+		}
+	}
+}
+
+// TestBasicAuthGitURL: creds embed for BOTH http (in-cluster git-server) and https
+// (github); empty secret or non-http(s) is unchanged.
+func TestBasicAuthGitURL(t *testing.T) {
+	cases := []struct{ raw, user, secret, want string }{
+		{"http://git-server.git-server.svc/otomi/values.git", "otomi-admin", "pw", "http://otomi-admin:pw@git-server.git-server.svc/otomi/values.git"},
+		{"https://github.com/acme/instance.git", "x-access-token", "tok", "https://x-access-token:tok@github.com/acme/instance.git"},
+		{"https://github.com/acme/instance.git", "", "tok", "https://x-access-token:tok@github.com/acme/instance.git"},
+		{"http://git-server/x.git", "u", "", "http://git-server/x.git"},
+		{"git@github.com:acme/x.git", "u", "s", "git@github.com:acme/x.git"},
+	}
+	for _, c := range cases {
+		if got := basicAuthGitURL(c.raw, c.user, c.secret); got != c.want {
+			t.Errorf("basicAuthGitURL(%q,%q,secret)=%q want %q", c.raw, c.user, got, c.want)
 		}
 	}
 }

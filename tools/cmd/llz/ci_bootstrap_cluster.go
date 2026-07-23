@@ -659,6 +659,8 @@ spec:
           git push --force "$DST_URL" "HEAD:refs/heads/$DST_BRANCH"
           echo "apl-values migration complete."
         env:
+        - name: GIT_TERMINAL_PROMPT
+          value: "0"
         - name: SRC_BRANCH
           value: %[4]s
         - name: DST_BRANCH
@@ -699,18 +701,21 @@ func aplAppEnableManifest(app string) string {
 	return "kind: AplApp\nmetadata:\n  name: " + app + "\nspec:\n  enabled: true\n"
 }
 
-// basicAuthGitURL injects a user:secret credential into an https git URL so clone/push
-// reach a private remote. Non-https URLs (or an empty secret) are returned unchanged.
-// The result carries a secret and must never be logged.
+// basicAuthGitURL injects a user:secret credential into an http(s) git URL so clone/push
+// reach a private remote. The in-cluster values repo (git-server.<ns>.svc) is HTTP, the
+// github instance repo HTTPS — both need the credential embedded (git has no tty to
+// prompt in a Job/CI). An empty secret or a non-http(s) URL is returned unchanged. The
+// result carries a secret and must never be logged.
 func basicAuthGitURL(rawURL, user, secret string) string {
-	const p = "https://"
-	if secret == "" || !strings.HasPrefix(rawURL, p) {
-		return rawURL
-	}
 	if user == "" {
 		user = "x-access-token"
 	}
-	return p + user + ":" + secret + "@" + strings.TrimPrefix(rawURL, p)
+	for _, p := range []string{"https://", "http://"} {
+		if secret != "" && strings.HasPrefix(rawURL, p) {
+			return p + user + ":" + secret + "@" + strings.TrimPrefix(rawURL, p)
+		}
+	}
+	return rawURL
 }
 
 // redactSecrets masks each non-empty secret wherever it appears in command output.
