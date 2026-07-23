@@ -666,8 +666,13 @@ spec:
           cd /w
           git config user.email pipeline@cluster.local
           git config user.name llz-bootstrap
+          # Orphan commit: a single self-contained snapshot of the full tree. Avoids the
+          # shallow-clone push error ("did not receive expected object") and matches the
+          # LLZ-owned-branch-superseded-each-bootstrap semantics (history is irrelevant —
+          # apl-operator reset --hard's to the tip).
+          git checkout --orphan llz-managed
           git add -A
-          git commit --allow-empty -m "llz: enable managed apps + point apl-core at github"
+          git commit -m "llz: enable managed apps + point apl-core at github"
           echo "force-pushing full values tree to github branch $DST_BRANCH..."
           git push --force "$DST_URL" "HEAD:refs/heads/$DST_BRANCH"
           echo "apl-values migration complete."
