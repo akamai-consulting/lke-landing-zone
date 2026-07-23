@@ -135,7 +135,7 @@ func TestParseCRDOperators(t *testing.T) {
 	if !reflect.DeepEqual(ops, wantOps) {
 		t.Errorf("operators=%v, want %v", ops, wantOps)
 	}
-	wantComps := map[string]bool{"certManager": true, "argoWorkflows": true, "argocd": true}
+	wantComps := map[string]bool{"certManagerBootstrapCA": true, "argoWorkflows": true, "argocd": true}
 	if !reflect.DeepEqual(comps, wantComps) {
 		t.Errorf("components=%v, want %v", comps, wantComps)
 	}

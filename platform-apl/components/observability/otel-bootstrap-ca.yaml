@@ -1,6 +1,6 @@
 # Dedicated, self-signed cert-manager CA for the OTel Collector's serving TLS
 # (`platform-otel-collector-tls`). Mirrors the openbao-bootstrap-ca pattern
-# (components/certManager/openbao-bootstrap-ca.yaml) — a CA that lives ENTIRELY
+# (components/certManagerBootstrapCA/openbao-bootstrap-ca.yaml) — a CA that lives ENTIRELY
 # in cert-manager, so the serving cert can issue on a cold bootstrap with no
 # dependency on apl-core's custom-ca being ready.
 #

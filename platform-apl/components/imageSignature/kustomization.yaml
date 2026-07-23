@@ -1,0 +1,16 @@
+# spec.components.imageSignature → this kustomize Component: LLZ's supply-chain
+# control, the verify-llz-image-signature Kyverno ClusterPolicy that gates the
+# first-party ghcr.io/akamai-consulting/llz image (reconciler / PAT-rotator /
+# harbor-provisioner) at admission.
+#
+# CONDITIONAL on managed apl-core: it needs Kyverno (the ClusterPolicy CRD), which
+# the managed minimal core does NOT install — Kyverno is opt-in via the App Platform
+# Console. So `llz render` emits this ONLY when the operator declares `kyverno` in
+# cluster.bootstrap.managedApps; otherwise a ClusterPolicy with no CRD would wedge
+# platform-bootstrap ("no matches for kind ClusterPolicy"). The file stays here so
+# cosign-subject-guard keeps verifying its keyless subject pin regardless of
+# emission. Template-managed — edit upstream.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - kyverno-verify-llz-image-signature.yaml
