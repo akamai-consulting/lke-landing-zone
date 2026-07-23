@@ -13,7 +13,7 @@ output "harbor_registry_bucket" {
 }
 
 output "s3_endpoint" {
-  description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster (which is the Linode-OBJ region code like 'us-ord-1') so destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
+  description = "S3-compatible endpoint URL for this region's Object Storage. Derived from var.obj_cluster (the full endpoint host, e.g. 'us-ord-10' → E3), which the buckets above are pinned to via endpoint_type — so this host actually serves them, and destroy-time bucket drain in .github/workflows/terraform.yml can target the correct endpoint without re-reading the tfvars."
   value       = "https://${var.obj_cluster}.linodeobjects.com"
 }
 
