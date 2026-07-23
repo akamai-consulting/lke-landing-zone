@@ -220,10 +220,12 @@ block changes only the components you name — an explicit `enabled: false` stic
 unmentioned components default on. `enabled` is tri-state: omitting it (a tune-only
 toggle, see below) inherits the default rather than reading as a disable. The set:
 `argocd` (mandatory), `clusterFoundation` (mandatory), `externalSecrets`,
-`certManager`, `openbao` (requires `externalSecrets` + `certManager`),
+`certManagerBootstrapCA`, `openbao` (requires `externalSecrets` + `certManagerBootstrapCA`),
 `argoWorkflows`, `argoEvents`, `observability`, `harbor`,
 `policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
 `cidrFirewall`, `broadPatRotator`, `llzReconciler`, `clusterHealthWorkflow`.
+On the managed platform many of these are apl-core's (Linode-owned) and are not
+emitted by `llz render` — see docs/adr/0005-managed-app-platform.md.
 (There is no `volumeLabeler` — it was retired into the `volume-labels` lane of
 `llz reconcile` — and no `dns` component. `Validate` rejects unknown keys, so
 naming either is a hard spec error.)
