@@ -24,43 +24,6 @@ func base64Auth(username, token string) string {
 // module's `lke-landing-zone.akamai.io/managed-by-bootstrap: "true"`).
 const managedByBootstrapLabel = "lke-landing-zone.akamai.io/managed-by-bootstrap"
 
-// aplOperatorNamespaceManifest — the apl-operator namespace pre-tagged with the
-// three Helm ownership markers so the chart's 00-namespace.yaml adopts it
-// instead of colliding on install.
-func aplOperatorNamespaceManifest() map[string]any {
-	return map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Namespace",
-		"metadata": map[string]any{
-			"name": "apl-operator",
-			"labels": map[string]any{
-				managedByBootstrapLabel:        "true",
-				"app.kubernetes.io/managed-by": "Helm",
-			},
-			"annotations": map[string]any{
-				"meta.helm.sh/release-name":      "apl",
-				"meta.helm.sh/release-namespace": "apl-operator",
-			},
-		},
-	}
-}
-
-// argocdNamespaceManifest — the argocd namespace, stamped with the apl-core
-// `name=<ns>` convention label its NetworkPolicies select on.
-func argocdNamespaceManifest() map[string]any {
-	return map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Namespace",
-		"metadata": map[string]any{
-			"name": "argocd",
-			"labels": map[string]any{
-				"name":                  "argocd",
-				managedByBootstrapLabel: "true",
-			},
-		},
-	}
-}
-
 // llzOpenbaoNamespaceManifest — the llz-openbao namespace, pre-created so the
 // bootstrap-openbao seal-key seed lands immediately instead of waiting ~40s for
 // the llz-cluster-foundation Argo app (wave -20) to create it (measured: the
@@ -135,6 +98,40 @@ func ghcrPullSecretManifest(o bootstrapClusterOpts) map[string]any {
 		"type": "kubernetes.io/dockerconfigjson",
 		"stringData": map[string]any{
 			".dockerconfigjson": string(dockerconfig),
+		},
+	}
+}
+
+// instanceRepoArgoSecretManifest — the ArgoCD repository Secret that authenticates
+// to the PRIVATE instance repo over HTTPS so the platform-bootstrap Application can
+// list refs + pull apl-values/<env>/manifest. Only created when a token is set (a
+// public instance repo needs none).
+//
+// This is load-bearing ONLY on managed apl-core: on self-install apl-core's own
+// ArgoCD carried the instance-repo credential via otomi.git.password (the values
+// repo IS the instance repo), so platform-bootstrap rode on it. On managed,
+// apl-core's otomi.git points at Linode's in-cluster gitea — NOT the instance repo
+// — so nothing else provides this credential, and without it platform-bootstrap
+// dead-ends on "authentication required: Repository not found", never deploying its
+// OpenBao child (the exact convergence deadlock). x-access-token:<PAT> is the same
+// basic-auth `llz` already uses for the values repo (see authedGitURL).
+func instanceRepoArgoSecretManifest(o bootstrapClusterOpts) map[string]any {
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata": map[string]any{
+			"name":      "instance-repo",
+			"namespace": "argocd",
+			"labels": map[string]any{
+				"argocd.argoproj.io/secret-type": "repository",
+			},
+		},
+		"type": "Opaque",
+		"stringData": map[string]any{
+			"type":     "git",
+			"url":      "https://github.com/" + o.instanceRepo + ".git",
+			"username": "x-access-token",
+			"password": o.instanceRepoToken,
 		},
 	}
 }
@@ -253,31 +250,4 @@ func argoRetry() map[string]any {
 			"maxDuration": "90s",
 		},
 	}
-}
-
-// bootstrapNextSteps is the post-apply operator checklist (ported from the
-// workspace's outputs.tf next_steps), with the deployment name filled in.
-func bootstrapNextSteps(env string) string {
-	return `
-── Post-apply checklist ────────────────────────────────────────────────
-
-Apl-core is installed. The apl-operator drives the helmfile pipeline
-which installs ~40 components over 10–15 minutes; downstream readiness
-is observed via Argo CD, not this command.
-
-1. Watch the apl-operator log:
-
-     kubectl -n apl-operator logs -l app.kubernetes.io/name=apl-operator -f
-
-2. Confirm Argo CD has reconciled the in-repo manifest/ tree:
-
-     kubectl -n argocd get applications
-
-3. Once OpenBao pods are Running, bootstrap OpenBao:
-
-     .github/workflows/bootstrap-openbao.yml → workflow_dispatch
-     region: ` + env + `
-
-────────────────────────────────────────────────────────────────────────
-`
 }

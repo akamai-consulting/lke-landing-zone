@@ -1,20 +1,17 @@
 package main
 
 import (
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
 
-// ── runCapture (the production exec seam) ────────────────────────────────────
+// ── runCombined (the production exec seam) ───────────────────────────────────
 
 // Regression: `return buf.String(), cmd.Run() == nil` evaluates left-to-right,
-// snapshotting the buffer BEFORE the command runs — every kubectl/helm call
-// returned "" on the e2e bootstrap (misread as an empty kubeconfig). runCapture
+// snapshotting the buffer BEFORE the command runs — every kubectl call
+// returned "" on the e2e bootstrap (misread as an empty kubeconfig). runCombined
 // must return the output the run itself produced, on success AND failure.
 func TestRunCombined_OutputAfterRun(t *testing.T) {
 	out, ok := runCombined(exec.Command("sh", "-c", "echo to-stdout; echo to-stderr >&2"))
@@ -34,262 +31,13 @@ func TestRunCombined_OutputAfterRun(t *testing.T) {
 	}
 }
 
-// ── injectRuntimeValues ──────────────────────────────────────────────────────
-
-func TestInjectRuntimeValues_FillsAllFour(t *testing.T) {
-	raw := "repo: ${apl_values_repo_password}\n" +
-		"dns: ${linode_dns_token}\n" +
-		"resolver: \"${coredns_cluster_ip}\"\n" +
-		"adminPassword: ${loki_admin_password}\n"
-	got, err := injectRuntimeValues(raw, map[string]string{
-		"apl_values_repo_password": "PAT",
-		"linode_dns_token":         "DNS",
-		"coredns_cluster_ip":       "10.0.0.10",
-		"loki_admin_password":      "pw20",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	for _, want := range []string{"repo: PAT", "dns: DNS", `resolver: "10.0.0.10"`, "adminPassword: pw20"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "${") {
-		t.Errorf("a placeholder survived:\n%s", got)
-	}
-}
-
-func TestInjectRuntimeValues_ErrorsOnUnknownPlaceholder(t *testing.T) {
-	// The apl_values_repo_url class of stale placeholder — must hard-fail.
-	raw := "url: ${apl_values_repo_url}\npw: ${loki_admin_password}\n"
-	_, err := injectRuntimeValues(raw, map[string]string{
-		"apl_values_repo_password": "x",
-		"linode_dns_token":         "x",
-		"coredns_cluster_ip":       "x",
-		"loki_admin_password":      "x",
-	})
-	if err == nil {
-		t.Fatal("expected an error for the unknown ${apl_values_repo_url} placeholder")
-	}
-	if !strings.Contains(err.Error(), "apl_values_repo_url") {
-		t.Errorf("error should name the offending placeholder, got: %v", err)
-	}
-}
-
-func TestInjectRuntimeValues_DeEscapesDollarDollar(t *testing.T) {
-	// The values file names its placeholders as $${x} in comments; those are
-	// literals that must de-escape to ${x} and NOT trigger the unknown-var guard.
-	raw := "# fills $${loki_admin_password}, $${apl_values_repo_password}\n" +
-		"adminPassword: ${loki_admin_password}\n"
-	got, err := injectRuntimeValues(raw, map[string]string{
-		"apl_values_repo_password": "PAT",
-		"linode_dns_token":         "DNS",
-		"coredns_cluster_ip":       "IP",
-		"loki_admin_password":      "pw",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(got, "# fills ${loki_admin_password}, ${apl_values_repo_password}") {
-		t.Errorf("escaped comment placeholders not de-escaped to literals:\n%s", got)
-	}
-	if !strings.Contains(got, "adminPassword: pw") {
-		t.Errorf("real placeholder not filled:\n%s", got)
-	}
-}
-
-// ── assertEnvRevision ────────────────────────────────────────────────────────
-
-func writeTemp(t *testing.T, name, content string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
-	return p
-}
-
-func TestAssertEnvRevision(t *testing.T) {
-	cases := []struct {
-		name    string
-		content string
-		want    string
-		wantErr bool
-	}{
-		{"match-plain", "data:\n  revision: main\n", "main", false},
-		{"match-quoted", "data:\n  revision: \"feat/x\"\n", "feat/x", false},
-		{"match-single-quoted", "data:\n  revision: 'feat/x'\n", "feat/x", false},
-		{"match-whitespace", "data:\n  revision:    main   \n", "main", false},
-		{"mismatch", "data:\n  revision: main\n", "feat/x", true},
-		{"unparseable", "data:\n  nope: here\n", "main", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			p := writeTemp(t, "env-revision-configmap.yaml", c.content)
-			err := assertEnvRevision(p, c.want)
-			if c.wantErr && err == nil {
-				t.Fatalf("expected error, got nil")
-			}
-			if !c.wantErr && err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
-func TestAssertEnvRevision_MissingFile(t *testing.T) {
-	if err := assertEnvRevision(filepath.Join(t.TempDir(), "nope.yaml"), "main"); err == nil {
-		t.Fatal("expected an error for a missing configmap file")
-	}
-}
-
-// ── readCoreDNSClusterIP ─────────────────────────────────────────────────────
-
-// dnsServicesJSON mimics `kubectl get services -n kube-system -o json` on LKE-E:
-// the DNS Service (port 53) plus the sibling metrics Service (port 9153).
-const dnsServicesJSON = `{"items":[
-  {"metadata":{"name":"coredns"},"spec":{"clusterIP":"10.3.192.10","ports":[{"port":53},{"port":53}]}},
-  {"metadata":{"name":"workload-coredns-metrics"},"spec":{"clusterIP":"10.3.200.6","ports":[{"port":9153}]}}
-]}`
-
-func TestDnsClusterIPFromServicesJSON(t *testing.T) {
-	if got := dnsClusterIPFromServicesJSON(dnsServicesJSON); got != "10.3.192.10" {
-		t.Errorf("port-53 Service ClusterIP = %q, want 10.3.192.10 (must exclude the :9153 metrics svc)", got)
-	}
-	if got := dnsClusterIPFromServicesJSON(`{"items":[]}`); got != "" {
-		t.Errorf("no services: got %q want empty", got)
-	}
-	if got := dnsClusterIPFromServicesJSON("not json"); got != "" {
-		t.Errorf("garbage: got %q want empty", got)
-	}
-	// Headless DNS (clusterIP None) is not usable.
-	if got := dnsClusterIPFromServicesJSON(`{"items":[{"spec":{"clusterIP":"None","ports":[{"port":53}]}}]}`); got != "" {
-		t.Errorf("headless: got %q want empty", got)
-	}
-}
-
-func TestReadCoreDNSClusterIP(t *testing.T) {
-	// Zero the budget so the miss cases try once then give up (no real waiting).
-	orig := coreDNSReadBudget
-	coreDNSReadBudget = 0
-	t.Cleanup(func() { coreDNSReadBudget = orig })
-
-	cases := []struct {
-		name string
-		out  string
-		ok   bool
-		want string
-	}{
-		{"resolves-from-json", dnsServicesJSON, true, "10.3.192.10"},
-		{"empty-list-non-fatal", `{"items":[]}`, true, ""}, // NON-FATAL: warns + returns ""
-		{"kubectl-fails-non-fatal", "", false, ""},         // NON-FATAL
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			d := bootstrapDeps{
-				kubectl: func(_ ...string) (string, bool) { return c.out, c.ok },
-				now:     time.Now,
-				sleep:   func(time.Duration) {},
-			}
-			if got := readCoreDNSClusterIP(d); got != c.want {
-				t.Errorf("got %q want %q", got, c.want)
-			}
-		})
-	}
-}
-
-// The Flux-managed CoreDNS can lag: the first list has no port-53 Service (or no
-// ClusterIP), so the loop must retry until it appears.
-func TestReadCoreDNSClusterIP_RetriesUntilAssigned(t *testing.T) {
-	orig := coreDNSReadBudget
-	coreDNSReadBudget = time.Minute
-	t.Cleanup(func() { coreDNSReadBudget = orig })
-
-	calls := 0
-	d := bootstrapDeps{
-		kubectl: func(_ ...string) (string, bool) {
-			calls++
-			if calls < 2 {
-				return `{"items":[]}`, true // no DNS Service yet
-			}
-			return dnsServicesJSON, true
-		},
-		now:   time.Now,
-		sleep: func(time.Duration) {},
-	}
-	if got := readCoreDNSClusterIP(d); got != "10.3.192.10" {
-		t.Errorf("got %q want 10.3.192.10", got)
-	}
-	if calls < 2 {
-		t.Errorf("expected a retry (>=2 calls), got %d", calls)
-	}
-}
-
-// ── existingLokiPassword (first-install vs upgrade) ───────────────────────────
-
-func TestExistingLokiPassword(t *testing.T) {
-	cases := []struct {
-		name    string
-		out     string
-		ok      bool
-		want    string
-		wantErr bool
-	}{
-		// helm SAYS there is no release: first install, generate a password.
-		{"first-install-no-release", "Error: release: not found\n", false, "", false},
-		{"upgrade-reuses", "apps:\n  loki:\n    adminPassword: abc123XYZ\n", true, "abc123XYZ", false},
-		{"ignores-null", "apps:\n  loki:\n    adminPassword: null\n", true, "", false},
-		{"ignores-unfilled-placeholder", "apps:\n  loki:\n    adminPassword: ${loki_admin_password}\n", true, "", false},
-		// The bug: a transient failure is not "no release". Returning "" here made
-		// the caller mint a fresh password, which diffed the rendered values, which
-		// rolled apl-operator with a ROTATED Loki admin password — silently.
-		{"unreadable-refuses-to-rotate", "Error: Kubernetes cluster unreachable: i/o timeout\n", false, "", true},
-		{"empty-output-failure-refuses", "", false, "", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			d := bootstrapDeps{helm: func(_ ...string) (string, bool) { return c.out, c.ok }}
-			got, err := existingLokiPassword(d)
-			if (err != nil) != c.wantErr {
-				t.Fatalf("err = %v, wantErr %v", err, c.wantErr)
-			}
-			if got != c.want {
-				t.Errorf("got %q want %q", got, c.want)
-			}
-			if c.wantErr && !strings.Contains(err.Error(), "ROTATE") {
-				t.Errorf("the error must say what it is protecting: %v", err)
-			}
-		})
-	}
-}
-
-// TestDefaultAplChartVersion guards the e2e-critical fallback: spec.cluster.
-// bootstrap.aplChartVersion is OPTIONAL, and the release-e2e instance (env add
-// --region --obj-cluster only) never sets it. The retired cluster-bootstrap
-// terraform.tfvars.example pinned apl_chart_version = "6.0.0" as the default, so
-// bootstrap-cluster must fall back to that same value or the whole e2e fails at
-// the helm install with "apl chart version unresolved".
+// TestDefaultAplChartVersion pins the platform baseline other tooling asserts
+// against (ci_assert_apl_version.go). On a managed cluster Linode owns the
+// apl-core version, so bootstrap does not consume this — but the constant is still
+// the single baseline; bump it deliberately, in lockstep with the platform.
 func TestDefaultAplChartVersion(t *testing.T) {
 	if defaultAplChartVersion != "6.0.0" {
-		t.Errorf("defaultAplChartVersion = %q, want \"6.0.0\" (the retired tfvars.example default) — bump deliberately, in lockstep with the platform baseline", defaultAplChartVersion)
-	}
-	// The final resolution is firstNonEmpty(flag, spec, default): an unset flag +
-	// unset spec must resolve to the baked default, never "".
-	if got := firstNonEmpty("", "", defaultAplChartVersion); got == "" {
-		t.Fatal("chart-version resolution must never be empty when the default is set")
-	}
-}
-
-func TestGenLokiPassword(t *testing.T) {
-	pw := genLokiPassword()
-	if len(pw) != 20 {
-		t.Fatalf("want 20 chars, got %d (%q)", len(pw), pw)
-	}
-	for _, r := range pw {
-		if !strings.ContainsRune(lokiPasswordAlphabet, r) {
-			t.Fatalf("non-alphanumeric char %q in %q", r, pw)
-		}
+		t.Errorf("defaultAplChartVersion = %q, want \"6.0.0\" — bump deliberately, in lockstep with the platform baseline", defaultAplChartVersion)
 	}
 }
 
@@ -339,705 +87,10 @@ func TestManifestBuilders(t *testing.T) {
 	}
 }
 
-// ── bootstrapCluster: ordering + happy path ──────────────────────────────────
-
-// recorder is a concurrency-safe ordered call log for the bootstrap flow.
-type recorder struct {
-	mu    sync.Mutex
-	calls []string
-}
-
-func (r *recorder) add(s string) {
-	r.mu.Lock()
-	r.calls = append(r.calls, s)
-	r.mu.Unlock()
-}
-
-func (r *recorder) snapshot() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.calls...)
-}
-
-func (r *recorder) indexOf(substr string) int {
-	for i, c := range r.snapshot() {
-		if strings.Contains(c, substr) {
-			return i
-		}
-	}
-	return -1
-}
-
-// bootstrapTestOpts writes the two on-disk inputs (values + env-revision) and
-// returns opts pointing at them.
-func bootstrapTestOpts(t *testing.T, revision string) bootstrapClusterOpts {
-	t.Helper()
-	dir := t.TempDir()
-	valuesPath := filepath.Join(dir, "values.yaml")
-	if err := os.WriteFile(valuesPath, []byte(
-		"apps:\n  loki:\n    adminPassword: ${loki_admin_password}\n    gateway:\n      resolver: \"${coredns_cluster_ip}\"\n"+
-			"otomi:\n  git:\n    password: ${apl_values_repo_password}\n    repoUrl: https://github.com/acme/inst.git\n    branch: apl-primary\n"+
-			"dns:\n  provider:\n    linode:\n      apiToken: ${linode_dns_token}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	revPath := filepath.Join(dir, "env-revision-configmap.yaml")
-	if err := os.WriteFile(revPath, []byte("data:\n  revision: "+revision+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return bootstrapClusterOpts{
-		env:                "primary",
-		aplChartVersion:    "6.1.2",
-		appsRepoRevision:   revision,
-		instanceRepo:       "acme/inst",
-		upstreamOrg:        "akamai-consulting",
-		templateRef:        "main",
-		valuesPath:         valuesPath,
-		envRevisionPath:    revPath,
-		aplValuesRepoToken: "PAT",
-		linodeDNSToken:     "DNS",
-	}
-}
-
-func TestBootstrapCluster_HappyPathOrdering(t *testing.T) {
-	o := bootstrapTestOpts(t, "main")
-	rec := &recorder{}
-
-	d := bootstrapDeps{
-		kubectl: func(args ...string) (string, bool) {
-			line := strings.Join(args, " ")
-			rec.add("kubectl " + line)
-			if strings.Contains(line, "get services") && strings.Contains(line, "json") {
-				return dnsServicesJSON, true
-			}
-			// kyverno policy apply (applyKyvernoPolicy uses kubectl apply -f <path>)
-			if len(args) > 0 && args[0] == "apply" {
-				return "", true
-			}
-			// gate existence + waits, kyverno readiness → all succeed immediately.
-			return "", true
-		},
-		apply: func(_ string, fieldManager string, _ bool) (string, bool) {
-			rec.add("apply-inline")
-			return "", true
-		},
-		helm: func(args ...string) (string, bool) {
-			line := strings.Join(args, " ")
-			rec.add("helm " + line)
-			if len(args) > 1 && args[0] == "get" {
-				return "Error: release: not found\n", false // helm's own words for "no release yet"
-			}
-			return "", true
-		},
-		git: func(args ...string) (string, bool) {
-			rec.add("git " + args[0])
-			return "deadbeefsha\trefs/heads/apl-primary", true
-		},
-		now:         time.Now,
-		sleep:       func(time.Duration) {},
-		genPassword: func() string { return "generated-pw-20chars" },
-	}
-
-	if err := bootstrapCluster(o, d); err != nil {
-		t.Fatalf("bootstrapCluster: %v", err)
-	}
-
-	calls := rec.snapshot()
-	// coredns read is first; helm upgrade uses the pinned version; a helm install
-	// happened after the namespace/SC applies; the bridge applies happen last.
-	if rec.indexOf("get services") != 0 {
-		t.Errorf("coredns read should be first, got calls:\n%s", strings.Join(calls, "\n"))
-	}
-	if rec.indexOf("upgrade --install apl") < 0 {
-		t.Errorf("expected a helm upgrade --install; calls:\n%s", strings.Join(calls, "\n"))
-	}
-	// The values-branch ensure MUST run BEFORE the helm install: apl-operator's
-	// installer phase (started by the chart) is the only phase that bootstraps the
-	// full env values into the branch — install-before-branch wedges the cluster
-	// (installation completed, branch empty, every reconcile crashing).
-	if gi, hi := rec.indexOf("git ls-remote"), rec.indexOf("upgrade --install apl"); gi < 0 || gi > hi {
-		t.Errorf("values-branch ensure (git ls-remote, idx %d) must precede the helm install (idx %d); calls:\n%s", gi, hi, strings.Join(calls, "\n"))
-	}
-	// The three inline SSA namespaces (apl-operator, argocd, llz-openbao) + SC come before helm; the 3 bridge applies come after the gate.
-	firstApply := rec.indexOf("apply-inline")
-	helmIdx := rec.indexOf("upgrade --install apl")
-	if firstApply < 0 || helmIdx < 0 || firstApply > helmIdx {
-		t.Errorf("expected namespace/SC applies before helm install (firstApply=%d helm=%d)", firstApply, helmIdx)
-	}
-	// helm upgrade must carry the pinned version.
-	if rec.indexOf("--version 6.1.2") < 0 {
-		t.Errorf("helm upgrade missing --version 6.1.2; calls:\n%s", strings.Join(calls, "\n"))
-	}
-}
-
-// TestBootstrapCluster_BridgeAppliesForceConflicts guards the reused-/migrated-
-// cluster SSA fix: the Argo bridge (AppProject + platform-bootstrap Application +
-// llz-secret-store Application) MUST apply with --force-conflicts. The old
-// cluster-bootstrap TF applied these with the kubectl provider's default field
-// manager "kubectl"; our manager is "cluster-bootstrap-tf", and llz-secret-store's
-// targetRevision is the template-ref SHA (changes every push) — so a plain SSA
-// conflicts on .spec.source.targetRevision and the bootstrap dies at the last step
-// (observed on e2e cluster 632033). Every bridge apply carrying an argoproj.io
-// object must set force=true.
-func TestBootstrapCluster_BridgeAppliesForceConflicts(t *testing.T) {
-	o := bootstrapTestOpts(t, "main")
-
-	type applyCall struct {
-		yaml  string
-		force bool
-	}
-	var mu sync.Mutex
-	var applies []applyCall
-
-	d := bootstrapDeps{
-		kubectl: func(args ...string) (string, bool) {
-			line := strings.Join(args, " ")
-			if strings.Contains(line, "get services") && strings.Contains(line, "json") {
-				return dnsServicesJSON, true
-			}
-			return "", true
-		},
-		apply: func(yaml, _ string, force bool) (string, bool) {
-			mu.Lock()
-			applies = append(applies, applyCall{yaml, force})
-			mu.Unlock()
-			return "", true
-		},
-		helm: func(args ...string) (string, bool) {
-			if len(args) > 1 && args[0] == "get" {
-				return "Error: release: not found\n", false // helm's own words for "no release yet"
-			}
-			return "", true
-		},
-		git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
-		now:         time.Now,
-		sleep:       func(time.Duration) {},
-		genPassword: func() string { return "generated-pw-20chars" },
-	}
-
-	if err := bootstrapCluster(o, d); err != nil {
-		t.Fatalf("bootstrapCluster: %v", err)
-	}
-
-	// Every apply of an argoproj.io object (the bridge AppProject + Applications)
-	// must have forced conflicts.
-	sawBridge := false
-	for _, c := range applies {
-		if !strings.Contains(c.yaml, "argoproj.io") {
-			continue
-		}
-		sawBridge = true
-		if !c.force {
-			t.Errorf("bridge apply did not force conflicts (would die on a reused/migrated cluster):\n%s", c.yaml)
-		}
-	}
-	if !sawBridge {
-		t.Fatal("no argoproj.io bridge object was applied — the Argo bridge never ran")
-	}
-}
-
-// TestHelmInstallApl_SkipsWhenAlreadyAtTargetVersion is the reused-cluster safety
-// guard: when apl is already `deployed` at the target chart version, helmInstallApl
-// must NOT run `helm upgrade`. Re-asserting the release rolls apl-operator, resets
-// its 10-15m helmfile clock, and (under branch-isolation) delays the apl-<env>
-// branch push the gitops-* Apps need — timing out the convergence gate on a reused
-// cluster.
-func TestHelmInstallApl_SkipsWhenAlreadyAtTargetVersion(t *testing.T) {
-	o := bootstrapClusterOpts{aplChartVersion: "6.0.0"}
-	upgraded := false
-	d := bootstrapDeps{
-		helm: func(args ...string) (string, bool) {
-			switch args[0] {
-			case "list":
-				return `[{"name":"apl","chart":"apl-6.0.0","status":"deployed"}]`, true
-			case "get": // get values -o yaml — same values, different formatting/order
-				return "b: 2\na: 1\n", true
-			case "upgrade":
-				upgraded = true
-			}
-			return "", true
-		},
-	}
-	if _, err := helmInstallApl(d, o, "a: 1\nb: 2\n"); err != nil {
-		t.Fatalf("helmInstallApl: %v", err)
-	}
-	if upgraded {
-		t.Error("must NOT helm upgrade when apl is already deployed at the target version with identical values (rolls apl-operator on a reused cluster)")
-	}
-
-	// Same version but CHANGED values → must upgrade (a values-only fix like the
-	// loki memberlist publishNotReadyAddresses change has to reach the operator).
-	upgraded = false
-	d.helm = func(args ...string) (string, bool) {
-		switch args[0] {
-		case "list":
-			return `[{"name":"apl","chart":"apl-6.0.0","status":"deployed"}]`, true
-		case "get":
-			return "a: 1\n", true
-		case "upgrade":
-			upgraded = true
-		}
-		return "", true
-	}
-	if _, err := helmInstallApl(d, o, "a: 1\nb: 2\n"); err != nil {
-		t.Fatalf("helmInstallApl(values changed): %v", err)
-	}
-	if !upgraded {
-		t.Error("same version + CHANGED values must upgrade — a values-only change would otherwise never reach apl-operator on a reused cluster")
-	}
-
-	// Same version, values unreadable → bias to skip (don't roll on a blip).
-	upgraded = false
-	d.helm = func(args ...string) (string, bool) {
-		switch args[0] {
-		case "list":
-			return `[{"name":"apl","chart":"apl-6.0.0","status":"deployed"}]`, true
-		case "get":
-			return "Error: release: not found\n", false
-		case "upgrade":
-			upgraded = true
-		}
-		return "", true
-	}
-	if _, err := helmInstallApl(d, o, "a: 1\n"); err != nil {
-		t.Fatalf("helmInstallApl(values unreadable): %v", err)
-	}
-	if upgraded {
-		t.Error("unreadable current values must bias to SKIP, not roll apl-operator")
-	}
-}
-
-// TestHelmInstallApl_UpgradesWhenNeeded covers the cases that MUST still install/
-// upgrade: no release, a different deployed version (the spec-driven upgrade path),
-// and a non-`deployed` status (a half-applied prior run that must self-heal).
-func TestHelmInstallApl_UpgradesWhenNeeded(t *testing.T) {
-	cases := []struct{ name, list string }{
-		{"absent", `[]`},
-		{"version mismatch (spec bump)", `[{"name":"apl","chart":"apl-5.9.0","status":"deployed"}]`},
-		{"pending state self-heals", `[{"name":"apl","chart":"apl-6.0.0","status":"pending-upgrade"}]`},
-		{"unparseable list output", `not json`},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			o := bootstrapClusterOpts{aplChartVersion: "6.0.0"}
-			upgraded := false
-			d := bootstrapDeps{
-				helm: func(args ...string) (string, bool) {
-					switch args[0] {
-					case "list":
-						return tc.list, true
-					case "upgrade":
-						upgraded = true
-					}
-					return "", true
-				},
-			}
-			if _, err := helmInstallApl(d, o, "rendered-values"); err != nil {
-				t.Fatalf("helmInstallApl: %v", err)
-			}
-			if !upgraded {
-				t.Errorf("%s: expected helm upgrade to run", tc.name)
-			}
-		})
-	}
-}
-
-// ── apl-values branch-readiness wait ─────────────────────────────────────────
-
-func TestAplValuesGitCoords(t *testing.T) {
-	rendered := "otomi:\n  git:\n    repoUrl: https://github.com/acme/inst.git\n    branch: apl-e2e\n    password: secret\n"
-	repo, branch := aplValuesGitCoords(rendered)
-	if repo != "https://github.com/acme/inst.git" || branch != "apl-e2e" {
-		t.Fatalf("coords = (%q,%q)", repo, branch)
-	}
-	// Absent otomi.git → empty (caller skips the wait), never a panic.
-	if r, b := aplValuesGitCoords("apps:\n  loki: {}\n"); r != "" || b != "" {
-		t.Errorf("absent coords = (%q,%q), want empty", r, b)
-	}
-	if r, b := aplValuesGitCoords("not: [valid"); r != "" || b != "" {
-		t.Errorf("unparseable coords = (%q,%q), want empty", r, b)
-	}
-}
-
-func TestAuthedGitURL(t *testing.T) {
-	if got := authedGitURL("https://github.com/acme/inst.git", "PAT"); got != "https://x-access-token:PAT@github.com/acme/inst.git" {
-		t.Errorf("authedGitURL = %q", got)
-	}
-	// No token / non-https → unchanged.
-	if got := authedGitURL("https://github.com/acme/inst.git", ""); got != "https://github.com/acme/inst.git" {
-		t.Errorf("no-token URL changed: %q", got)
-	}
-	if got := authedGitURL("git@github.com:acme/inst.git", "PAT"); got != "git@github.com:acme/inst.git" {
-		t.Errorf("non-https URL changed: %q", got)
-	}
-}
-
-func TestEnsureAplValuesBranch(t *testing.T) {
-	o := bootstrapClusterOpts{aplValuesRepoToken: "PAT"}
-
-	// No coords → clean skip, never touches git.
-	called := false
-	d := bootstrapDeps{git: func(_ ...string) (string, bool) { called = true; return "", true }}
-	if seedSHA, err := ensureAplValuesBranch(d, o, "", ""); err != nil || called || seedSHA != "" {
-		t.Fatalf("empty coords should skip: err=%v called=%v", err, called)
-	}
-
-	// git subcommand, skipping global flag pairs (`-C <dir>`, `-c <kv>`).
-	gitSub := func(args []string) string {
-		for i := 0; i < len(args); {
-			switch args[i] {
-			case "-C", "-c":
-				i += 2
-			default:
-				return args[i]
-			}
-		}
-		return ""
-	}
-
-	// Branch exists AND this cluster has apl-core history (REUSED cluster: its
-	// sealing key still decrypts the branch) → no clone/push, authed URL used.
-	var lsURL, lsRef string
-	created := false
-	d.git = func(args ...string) (string, bool) {
-		switch gitSub(args) {
-		case "ls-remote":
-			lsURL, lsRef = args[1], args[2]
-			return "abc123\trefs/heads/apl-e2e", true // present
-		case "clone", "checkout", "push":
-			created = true
-		}
-		return "", true
-	}
-	d.kubectl = func(args ...string) (string, bool) { return "completed", true } // apl-installation-status: completed
-	if seedSHA, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seedSHA != "" {
-		t.Fatalf("existing branch on a reused cluster should be a no-op (seedSHA=%q): %v", seedSHA, err)
-	}
-	if created {
-		t.Error("must NOT create a branch that already exists on a reused cluster")
-	}
-	if lsURL != "https://x-access-token:PAT@github.com/acme/inst.git" || lsRef != "refs/heads/apl-e2e" {
-		t.Errorf("ls-remote called with (%q,%q)", lsURL, lsRef)
-	}
-
-	// Branch exists BUT this cluster has NO apl-core history (a destroy+recreate:
-	// the branch's SealedSecrets are sealed with a key this fresh cluster lacks) →
-	// RESET: force-push an empty orphan branch and return a seedSHA so the installer
-	// re-arm + populate-wait re-bootstrap it.
-	var reseq []string
-	var forcePushed bool
-	d.git = func(args ...string) (string, bool) {
-		sub := gitSub(args)
-		reseq = append(reseq, sub)
-		if sub == "ls-remote" {
-			return "abc123\trefs/heads/apl-e2e", true // present
-		}
-		if sub == "push" && strings.Contains(strings.Join(args, " "), "--force") {
-			forcePushed = true
-		}
-		return "", true
-	}
-	d.kubectl = func(args ...string) (string, bool) { return "NotFound", false } // apl-installation-status absent (fresh cluster)
-	if seedSHA, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seedSHA == "" {
-		t.Fatalf("orphaned branch on a fresh cluster must be RESET (seedSHA=%q): %v", seedSHA, err)
-	}
-	if !forcePushed {
-		t.Errorf("reset must force-push the empty orphan over the orphaned branch; seq=%v", reseq)
-	}
-	if strings.Join(reseq, ",") != "ls-remote,init,commit,push,rev-parse" {
-		t.Errorf("reset sequence = %v, want ls-remote,init,commit,push,rev-parse", reseq)
-	}
-
-	// Branch exists AND a MID-INSTALL cluster (apl-installation-status present but
-	// status != "completed" — wedged, never finished sealing against a reconcilable
-	// branch) → also RESET, so a stuck cluster self-heals without a destroy+recreate.
-	forcePushed = false
-	d.git = func(args ...string) (string, bool) {
-		sub := gitSub(args)
-		if sub == "ls-remote" {
-			return "abc123\trefs/heads/apl-e2e", true // present
-		}
-		if sub == "push" && strings.Contains(strings.Join(args, " "), "--force") {
-			forcePushed = true
-		}
-		return "", true
-	}
-	d.kubectl = func(args ...string) (string, bool) { return "in-progress", true } // wedged mid-install
-	if seedSHA, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seedSHA == "" {
-		t.Fatalf("orphaned branch on a mid-install cluster must be RESET (seedSHA=%q): %v", seedSHA, err)
-	}
-	if !forcePushed {
-		t.Error("a non-'completed' install status must reset the branch (self-heal a mid-install wedge)")
-	}
-
-	// Branch absent → seed an EMPTY orphan branch: init → empty commit → push.
-	// (NOT a clone of the default branch: apl-operator applies the branch content
-	// as its otomi env repo, and an instance-repo copy crashes its derived-values
-	// template — the customRootCA e2e failure.)
-	var seq []string
-	var pushArgs []string
-	d.git = func(args ...string) (string, bool) {
-		sub := gitSub(args)
-		seq = append(seq, sub)
-		if sub == "push" {
-			pushArgs = args
-		}
-		if sub == "commit" && !strings.Contains(strings.Join(args, " "), "--allow-empty") {
-			t.Errorf("seed commit must be --allow-empty (no content!), got %v", args)
-		}
-		return "", true // ls-remote empty = absent; rest succeed
-	}
-	if seedSHA, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e"); err != nil || seedSHA == "" {
-		t.Fatalf("absent branch should be seeded (seedSHA=%q): %v", seedSHA, err)
-	}
-	if strings.Join(seq, ",") != "ls-remote,init,commit,push,rev-parse" {
-		t.Errorf("seed sequence = %v, want ls-remote,init,commit,push,rev-parse (EMPTY orphan seed + sha capture)", seq)
-	}
-	if !strings.Contains(strings.Join(pushArgs, " "), "HEAD:refs/heads/apl-e2e") {
-		t.Errorf("push must target refs/heads/apl-e2e, got %v", pushArgs)
-	}
-
-	// A push failure surfaces LOUD, names the token, and does NOT leak the secret.
-	d.git = func(args ...string) (string, bool) {
-		switch gitSub(args) {
-		case "ls-remote":
-			return "", true // absent
-		case "push":
-			return "remote: Permission denied to https://x-access-token:PAT@github.com/acme/inst.git", false
-		}
-		return "", true
-	}
-	_, err := ensureAplValuesBranch(d, o, "https://github.com/acme/inst.git", "apl-e2e")
-	if err == nil || !strings.Contains(err.Error(), "Contents:write") {
-		t.Errorf("expected a loud push error naming the token, got %v", err)
-	}
-	if err != nil && strings.Contains(err.Error(), "PAT") {
-		t.Errorf("push error leaked the token: %v", err)
-	}
-}
-
-// TestBootstrapCluster_ReseededBranchReArmsInstaller guards the reused-cluster
-// composition: when the values branch had to be RE-seeded (a fresh instantiate
-// deleted it) AND the helm install was skipped (apl already deployed), the
-// running operator is reconcile-only (apl-installation-status: completed) and
-// can never repopulate the empty branch — bootstrap-cluster must re-arm the
-// installer (patch status→pending + rollout restart). Without both conditions
-// the reset must NOT run.
-func TestBootstrapCluster_ReseededBranchReArmsInstaller(t *testing.T) {
-	run := func(branchExists, deployed, valuesChanged bool) (patched, restarted bool) {
-		o := bootstrapTestOpts(t, "main")
-		gitPushed := false
-		d := bootstrapDeps{
-			kubectl: func(args ...string) (string, bool) {
-				line := strings.Join(args, " ")
-				if strings.Contains(line, "get services") && strings.Contains(line, "json") {
-					return dnsServicesJSON, true
-				}
-				if strings.Contains(line, "get configmap apl-installation-status") {
-					if deployed {
-						return "completed", true // reused cluster: installer done → reconcile-only
-					}
-					return "", false // fresh cluster: no status cm yet
-				}
-				if strings.Contains(line, "patch configmap apl-installation-status") {
-					patched = true
-				}
-				if strings.Contains(line, "rollout restart deployment/apl-operator") {
-					restarted = true
-				}
-				return "", true
-			},
-			apply: func(_, _ string, _ bool) (string, bool) { return "", true },
-			helm: func(args ...string) (string, bool) {
-				if args[0] == "list" && deployed {
-					return `[{"name":"apl","chart":"apl-6.1.2","status":"deployed"}]`, true
-				}
-				if args[0] == "list" {
-					return `[]`, true
-				}
-				if args[0] == "get" && strings.Contains(strings.Join(args, " "), "-o yaml") {
-					if valuesChanged {
-						return "stale: true\n", true // differs from the render → upgrade
-					}
-					return "", false // unreadable → bias to skip (values treated as equal)
-				}
-				if args[0] == "get" {
-					// existingLokiPassword probe: helm's own "no release yet".
-					return "Error: release: not found\n", false
-				}
-				return "", true
-			},
-			git: func(args ...string) (string, bool) {
-				sub := args[0]
-				if sub == "-C" { // git -C <dir> [-c k=v]... <subcmd>
-					for j := 0; j < len(args); {
-						if args[j] == "-C" || args[j] == "-c" {
-							j += 2
-							continue
-						}
-						sub = args[j]
-						break
-					}
-				}
-				switch sub {
-				case "ls-remote":
-					if branchExists {
-						return "abc\trefs/heads/apl-primary", true
-					}
-					if gitPushed {
-						// post-seed: the ref resolves and (fake) moves past the seed sha,
-						// standing in for the operator's env push — the populated-wait exits.
-						return "operatorsha\trefs/heads/apl-primary", true
-					}
-					return "", true // absent → seed path
-				case "push":
-					gitPushed = true
-				case "rev-parse":
-					return "seedsha", true
-				}
-				return "", true
-			},
-			now:         time.Now,
-			sleep:       func(time.Duration) {},
-			genPassword: func() string { return "pw" },
-		}
-		if err := bootstrapCluster(o, d); err != nil {
-			t.Fatalf("bootstrapCluster(branchExists=%v deployed=%v): %v", branchExists, deployed, err)
-		}
-		return patched, restarted
-	}
-
-	// Re-seeded + install skipped → MUST re-arm.
-	if p, r := run(false, true, false); !p || !r {
-		t.Errorf("reseeded+skipped: patched=%v restarted=%v, want both true", p, r)
-	}
-	// Fresh install (seeded but helm installed) → installer status probe answers
-	// not-found → the reset no-ops on its own.
-	if p, r := run(false, false, false); p || r {
-		t.Errorf("seeded+fresh-install: patched=%v restarted=%v, want both false", p, r)
-	}
-	// Reused cluster, branch intact, values unchanged → nothing to fix, no reset.
-	if p, r := run(true, true, false); p || r {
-		t.Errorf("existing-branch+skipped: patched=%v restarted=%v, want both false", p, r)
-	}
-	// Reused cluster, branch intact, VALUES CHANGED (case 3: downstream instance
-	// re-apply with a rotated token / new shared values) → the upgrade alone does
-	// not make reconcile-mode ingest VALUES_INPUT — the installer must be re-armed
-	// so the change propagates deterministically.
-	if p, r := run(true, true, true); !p || !r {
-		t.Errorf("existing-branch+values-upgrade: patched=%v restarted=%v, want both true", p, r)
-	}
-}
-
-// TestBootstrapCluster_KyvernoRacesAheadOfGate is the key regression guard: the
-// Kyverno policy applies must be dispatched CONCURRENTLY with the readiness gate,
-// not serialized after it. The fake blocks the gate's first stage (argo CRD
-// existence) until a Kyverno policy has been applied; if the flow ever serializes
-// the gate before the policies, the gate blocks forever and this test times out.
-func TestBootstrapCluster_KyvernoRacesAheadOfGate(t *testing.T) {
-	o := bootstrapTestOpts(t, "main")
-	rec := &recorder{}
-
-	kyvernoApplied := make(chan struct{})
-	var once sync.Once
-	markApplied := func() { once.Do(func() { close(kyvernoApplied) }) }
-
-	d := bootstrapDeps{
-		kubectl: func(args ...string) (string, bool) {
-			line := strings.Join(args, " ")
-			if strings.Contains(line, "get services") && strings.Contains(line, "json") {
-				return dnsServicesJSON, true
-			}
-			if len(args) > 0 && args[0] == "apply" {
-				// kyverno policy apply
-				rec.add("kyverno-apply")
-				markApplied()
-				return "", true
-			}
-			// The gate's first existence check is on applications.argoproj.io and is
-			// unique to the gate (Kyverno never references it). Block it until a
-			// Kyverno policy applies — proving the two run concurrently.
-			if strings.Contains(line, "applications.argoproj.io") {
-				<-kyvernoApplied
-			}
-			return "", true
-		},
-		apply: func(_ string, _ string, _ bool) (string, bool) { return "", true },
-		helm: func(args ...string) (string, bool) {
-			if len(args) > 1 && args[0] == "get" {
-				return "Error: release: not found\n", false
-			}
-			return "", true
-		},
-		git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
-		now:         time.Now,
-		sleep:       func(time.Duration) {},
-		genPassword: func() string { return "pw" },
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- bootstrapCluster(o, d) }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("bootstrapCluster: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("bootstrapCluster deadlocked — the Kyverno policies were serialized AFTER the readiness gate instead of racing ahead of it (fidelity regression)")
-	}
-	if rec.indexOf("kyverno-apply") < 0 {
-		t.Fatal("no Kyverno policy was applied")
-	}
-}
-
-// TestBootstrapCluster_GHCRSecretsGatedOnToken asserts the optional GHCR secrets
-// are applied only when a token is present (the count-guard port).
-func TestBootstrapCluster_GHCRSecretsGatedOnToken(t *testing.T) {
-	countApplies := func(o bootstrapClusterOpts) int {
-		applies := 0
-		var mu sync.Mutex
-		d := bootstrapDeps{
-			kubectl: func(args ...string) (string, bool) {
-				if strings.Contains(strings.Join(args, " "), "get services") && strings.Contains(strings.Join(args, " "), "json") {
-					return dnsServicesJSON, true
-				}
-				return "", true
-			},
-			apply: func(stdinYAML, _ string, _ bool) (string, bool) {
-				if strings.Contains(stdinYAML, "ghcr") {
-					mu.Lock()
-					applies++
-					mu.Unlock()
-				}
-				return "", true
-			},
-			helm:        func(_ ...string) (string, bool) { return "", true },
-			git:         func(_ ...string) (string, bool) { return "deadbeefsha\trefs/heads/apl-primary", true },
-			now:         time.Now,
-			sleep:       func(time.Duration) {},
-			genPassword: func() string { return "pw" },
-		}
-		if err := bootstrapCluster(o, d); err != nil {
-			t.Fatalf("bootstrapCluster: %v", err)
-		}
-		return applies
-	}
-
-	noToken := bootstrapTestOpts(t, "main")
-	if got := countApplies(noToken); got != 0 {
-		t.Errorf("no GHCR token: want 0 ghcr applies, got %d", got)
-	}
-	withToken := bootstrapTestOpts(t, "main")
-	withToken.ghcrToken = "ghp_x"
-	withToken.ghcrUsername = "bot"
-	if got := countApplies(withToken); got != 2 {
-		t.Errorf("with GHCR token: want 2 ghcr applies (repo + pull secret), got %d", got)
-	}
-}
-
-// TestLlzOpenbaoNamespaceManifest: the pre-created OpenBao namespace matches
-// llz-cluster-foundation's namespaces.yaml (restricted PSS + monitoring) so
-// Argo adopts it via SSA, and carries the bootstrap marker like its siblings.
-// Pre-creating it is what removes the ~40s seal-key namespace-wait.
+// TestLlzOpenbaoNamespaceManifest — the managed bootstrap pre-creates the
+// llz-openbao namespace (managed apl-core does not) with the restricted PSS +
+// monitoring labels and the bootstrap marker, so the OpenBao seal-key seed lands
+// without waiting on a namespace that would otherwise never be created.
 func TestLlzOpenbaoNamespaceManifest(t *testing.T) {
 	m := llzOpenbaoNamespaceManifest()
 	if m["kind"] != "Namespace" {
@@ -1056,5 +109,199 @@ func TestLlzOpenbaoNamespaceManifest(t *testing.T) {
 		if labels[k] != want {
 			t.Errorf("label %s = %v, want %s", k, labels[k], want)
 		}
+	}
+}
+
+// TestBootstrapCluster_AppliesOnlyBridge asserts the managed path layers EXACTLY
+// the three Argo bridge manifests (plus the SC + namespace) onto the managed
+// ArgoCD — and, structurally, has no helm/git seam to self-install with, since
+// Linode owns apl-core. See ADR 0005 option A.
+func TestBootstrapCluster_AppliesOnlyBridge(t *testing.T) {
+	o := bootstrapClusterOpts{
+		env: "primary", instanceRepo: "acme/instance",
+		upstreamOrg: "akamai-consulting", templateRef: "abc123",
+		appsRepoRevision: "main",
+	}
+	var applied, mgrs []string
+	d := bootstrapDeps{
+		kubectl: func(args ...string) (string, bool) {
+			line := strings.Join(args, " ")
+			if strings.Contains(line, "crd applications.argoproj.io") {
+				return "applications.argoproj.io", true
+			}
+			if strings.Contains(line, "deploy argocd-server") {
+				return "1", true // availableReplicas
+			}
+			return "", true
+		},
+		apply: func(y, mgr string, _ bool) (string, bool) {
+			applied = append(applied, y)
+			mgrs = append(mgrs, mgr)
+			return "", true
+		},
+		now:   time.Now,
+		sleep: func(time.Duration) {},
+	}
+	if err := bootstrapCluster(o, d); err != nil {
+		t.Fatalf("bootstrapCluster: %v", err)
+	}
+	// Separate the bridge manifests from the block-storage-retain SC + namespace apply.
+	var bridge []string
+	for _, y := range applied {
+		if strings.Contains(y, "kind: StorageClass") || strings.Contains(y, "kind: Namespace") {
+			continue
+		}
+		bridge = append(bridge, y)
+	}
+	if len(bridge) != 3 {
+		t.Fatalf("want 3 bridge applies (AppProject + 2 Applications), got %d", len(bridge))
+	}
+	joined := strings.Join(bridge, "\n---\n")
+	for _, want := range []string{"kind: AppProject", "platform-bootstrap", "llz-secret-store", "apl-values/primary/manifest"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("bridge manifests missing %q; got:\n%s", want, joined)
+		}
+	}
+	for _, m := range mgrs {
+		if m != "llz-managed-bridge" {
+			t.Errorf("field manager = %q, want llz-managed-bridge", m)
+		}
+	}
+}
+
+// TestBootstrapCluster_AppliesInstanceRepoSecret: with APL_VALUES_REPO_TOKEN set,
+// the managed path applies an ArgoCD repository Secret for the private instance repo
+// (breaking the platform-bootstrap "authentication required" deadlock on managed);
+// with no token it applies none (public-repo path).
+func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
+	run := func(token string) []string {
+		o := bootstrapClusterOpts{
+			env: "primary", instanceRepo: "acme/instance",
+			upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main",
+			instanceRepoToken: token,
+		}
+		var applied []string
+		d := bootstrapDeps{
+			kubectl: func(args ...string) (string, bool) {
+				line := strings.Join(args, " ")
+				if strings.Contains(line, "crd applications.argoproj.io") {
+					return "applications.argoproj.io", true
+				}
+				if strings.Contains(line, "deploy argocd-server") {
+					return "1", true
+				}
+				return "", true
+			},
+			apply: func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
+			now:   time.Now, sleep: func(time.Duration) {},
+		}
+		if err := bootstrapCluster(o, d); err != nil {
+			t.Fatalf("bootstrapCluster: %v", err)
+		}
+		return applied
+	}
+	repoSecret := func(applied []string) string {
+		for _, y := range applied {
+			if strings.Contains(y, "secret-type: repository") && strings.Contains(y, "acme/instance") {
+				return y
+			}
+		}
+		return ""
+	}
+	// With a token: the repository Secret is applied with the token as password.
+	sec := repoSecret(run("test-repo-token"))
+	if sec == "" {
+		t.Fatal("managed path with APL_VALUES_REPO_TOKEN must apply an instance-repo repository Secret")
+	}
+	for _, want := range []string{"type: git", "url: https://github.com/acme/instance.git", "password: test-repo-token"} {
+		if !strings.Contains(sec, want) {
+			t.Errorf("instance-repo Secret missing %q:\n%s", want, sec)
+		}
+	}
+	// Without a token (public repo): no repository Secret for the instance repo.
+	if s := repoSecret(run("")); s != "" {
+		t.Errorf("no token → must apply no instance-repo Secret; got:\n%s", s)
+	}
+}
+
+// TestWaitManagedArgoReady_Timeout: when managed ArgoCD never comes up, the wait
+// returns a diagnostic error rather than hanging (budget enforced via the clock seam).
+func TestWaitManagedArgoReady_Timeout(t *testing.T) {
+	base := time.Unix(0, 0)
+	d := bootstrapDeps{
+		kubectl: func(_ ...string) (string, bool) { return "", false }, // never ready
+		now: func() time.Time {
+			cur := base
+			base = base.Add(20 * time.Minute) // second read is past the 15m budget
+			return cur
+		},
+		sleep: func(time.Duration) {},
+	}
+	if err := waitManagedArgoReady(d); err == nil {
+		t.Fatal("expected a timeout error when ArgoCD never becomes ready")
+	}
+}
+
+// TestManagedBlockStorageClassYAML: the managed variant keeps the class name +
+// Linode-CSI provisioner but drops the is-default annotation (managed apl-core
+// owns the cluster-default; a second default would race it).
+func TestManagedBlockStorageClassYAML(t *testing.T) {
+	out, err := managedBlockStorageClassYAML()
+	if err != nil {
+		t.Fatalf("managedBlockStorageClassYAML: %v", err)
+	}
+	if !strings.Contains(out, "name: block-storage-retain") {
+		t.Errorf("lost the class name; got:\n%s", out)
+	}
+	if !strings.Contains(out, "linodebs.csi.linode.com") {
+		t.Errorf("lost the CSI provisioner; got:\n%s", out)
+	}
+	if strings.Contains(out, "is-default-class") {
+		t.Errorf("managed SC must NOT be marked default; got:\n%s", out)
+	}
+	// Retain policy (the whole point of the -retain class) must survive.
+	if !strings.Contains(out, "Retain") {
+		t.Errorf("lost Retain reclaim policy; got:\n%s", out)
+	}
+}
+
+// TestBootstrapCluster_AppliesStorageClass: the managed path applies the
+// non-default block-storage-retain SC + the llz-openbao namespace before the bridge.
+func TestBootstrapCluster_AppliesStorageClass(t *testing.T) {
+	o := bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance", upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main"}
+	var sawSC, sawOpenbaoNS bool
+	d := bootstrapDeps{
+		kubectl: func(args ...string) (string, bool) {
+			line := strings.Join(args, " ")
+			if strings.Contains(line, "crd applications.argoproj.io") {
+				return "applications.argoproj.io", true
+			}
+			if strings.Contains(line, "deploy argocd-server") {
+				return "1", true
+			}
+			return "", true
+		},
+		apply: func(y, _ string, _ bool) (string, bool) {
+			if strings.Contains(y, "kind: Namespace") && strings.Contains(y, "llz-openbao") {
+				sawOpenbaoNS = true
+			}
+			if strings.Contains(y, "block-storage-retain") && strings.Contains(y, "StorageClass") {
+				sawSC = true
+				if strings.Contains(y, "is-default-class") {
+					t.Errorf("managed SC applied AS DEFAULT — must be non-default")
+				}
+			}
+			return "", true
+		},
+		now: time.Now, sleep: func(time.Duration) {},
+	}
+	if err := bootstrapCluster(o, d); err != nil {
+		t.Fatalf("bootstrapCluster: %v", err)
+	}
+	if !sawOpenbaoNS {
+		t.Error("managed path did not apply the llz-openbao Namespace — the OpenBao extra (CreateNamespace=false) would never sync")
+	}
+	if !sawSC {
+		t.Error("managed path did not apply the block-storage-retain StorageClass")
 	}
 }

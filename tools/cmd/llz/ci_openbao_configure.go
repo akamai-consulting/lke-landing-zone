@@ -406,20 +406,76 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 	return steps
 }
 
-// keycloakIssuerFor derives the OpenBao OIDC discovery URL (the Keycloak `otomi`
-// realm issuer) from a region's domainSuffix, or "" when the spec can't be
-// loaded, the region is unknown, or no domainSuffix is set. Empty → the Keycloak
-// team steps are skipped (with a warning at the call site).
+// keycloakIssuerFor resolves the OpenBao OIDC discovery URL (the Keycloak
+// `otomi` realm issuer). On a self-installed cluster it derives from the env's
+// domainSuffix. On a Linode Managed App Platform cluster (managedAppPlatform:
+// true) Linode owns the lke<id>.akamai-apl.net domain and the spec has no
+// domainSuffix, so we discover apl-core's own issuer in-cluster from the
+// otomi/otomi-api ConfigMap (its SSO_ISSUER key). Returns "" when nothing can be
+// resolved — the Keycloak team steps are then skipped (with a warning at the
+// call site).
 func keycloakIssuerFor(region string) string {
 	lz, err := clusterspec.LoadInstance(".")
 	if err != nil {
 		return ""
 	}
 	e, ok := lz.Env(region)
-	if !ok || e.Cluster.Bootstrap.DomainSuffix == "" {
+	if !ok {
 		return ""
 	}
-	return "https://keycloak." + e.Cluster.Bootstrap.DomainSuffix + "/realms/otomi"
+	// Managed App Platform: Linode owns the domain and the spec should carry no
+	// domainSuffix. Bind ONLY to the in-cluster-discovered issuer — NEVER fall back
+	// to a spec domainSuffix, which on managed could be a stale/wrong value (the
+	// gsap incident) and would silently bind OpenBao to the wrong Keycloak. An empty
+	// result safely skips the team steps (with a warning at the call site).
+	if e.Cluster.Bootstrap.ManagedAppPlatform {
+		return discoverKeycloakIssuerFromCluster()
+	}
+	if e.Cluster.Bootstrap.DomainSuffix != "" {
+		return "https://keycloak." + e.Cluster.Bootstrap.DomainSuffix + "/realms/otomi"
+	}
+	return ""
+}
+
+// discoverKeycloakIssuerFromCluster reads apl-core's own SSO_ISSUER from the
+// otomi/otomi-api ConfigMap — the source of truth on a Managed App Platform
+// cluster (e.g. https://keycloak.lke634445.akamai-apl.net/realms/otomi). Returns
+// "" when the ConfigMap/key is absent or the cluster is unreachable (kubectl
+// runs with the bootstrap kubeconfig, so this is available at configure time).
+func discoverKeycloakIssuerFromCluster() string {
+	out, err := kubectlOut("-n", "otomi", "get", "cm", "otomi-api",
+		"-o", "jsonpath={.data.SSO_ISSUER}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// discoverManagedDomain returns the Managed App Platform domain suffix
+// (lke<clusterID>.akamai-apl.net) discovered from apl-core's own in-cluster
+// config, or "" when unavailable. It reuses the Keycloak realm issuer that
+// discoverKeycloakIssuerFromCluster reads from the otomi/otomi-api ConfigMap and
+// strips it down to the bare domain. This is the single runtime source of truth
+// on a managed cluster, where Linode owns the domain and the spec has no
+// domainSuffix. (The platform HTTPRoute hostnames — console.<domain>,
+// harbor.<domain> — are an equivalent source; the issuer is reused here to keep
+// one discovery read.)
+func discoverManagedDomain() string {
+	return managedDomainFromIssuer(discoverKeycloakIssuerFromCluster())
+}
+
+// managedDomainFromIssuer extracts the bare domain suffix from a Keycloak realm
+// issuer URL of the form https://keycloak.<domain>/realms/otomi. Pure and
+// unit-tested; returns "" for anything that doesn't match that shape.
+func managedDomainFromIssuer(issuer string) string {
+	s, ok := strings.CutPrefix(issuer, "https://keycloak.")
+	if !ok {
+		return ""
+	}
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		s = s[:i]
+	}
+	return s
 }
 
 // specTeams returns spec.teams, or nil when the spec can't be loaded.
@@ -429,6 +485,67 @@ func specTeams() []clusterspec.Team {
 		return nil
 	}
 	return lz.Spec.Teams
+}
+
+// regionIsManaged reports whether this region is a Managed App Platform cluster.
+func regionIsManaged(region string) bool {
+	lz, err := clusterspec.LoadInstance(".")
+	if err != nil {
+		return false
+	}
+	e, ok := lz.Env(region)
+	return ok && e.Cluster.Bootstrap.ManagedAppPlatform
+}
+
+// managedTeamsPreflight guards the Keycloak team-OIDC setup on a MANAGED cluster.
+// On managed, LLZ cannot create teams (Linode owns apl-core's values) — the
+// operator creates them in the App Platform Console, which provisions the
+// team-<name> namespace AND the Keycloak group the OpenBao role binds on. So a
+// team the OpenBao role would bind to may not exist yet. Verify each declared
+// team's namespace (the reliable, admin-cred-free proxy for "the team exists")
+// and drop (with a loud, actionable warning) any that isn't there — so we never
+// create an OpenBao role bound to a nonexistent group. Self-install is unchanged
+// (llz render declares teamConfig and apl-core provisions the team).
+func managedTeamsPreflight(region string, teams []clusterspec.Team) ([]clusterspec.Team, error) {
+	return filterManagedTeams(regionIsManaged(region), teams, namespaceStatus)
+}
+
+// namespaceStatus reports whether a namespace exists, and whether that answer is
+// DEFINITE. `kubectl get namespace <ns> --ignore-not-found -o name` exits 0 with
+// EMPTY output for a genuine NotFound and 0 with `namespace/<ns>` when it exists;
+// any other (non-nil) error is a transient/systemic failure (API unreachable, RBAC,
+// throttle) whose answer is NOT definite — so the caller must not read it as "missing".
+func namespaceStatus(ns string) (exists, definite bool) {
+	out, err := kubectlOut("get", "namespace", ns, "--ignore-not-found", "-o", "name")
+	if err != nil {
+		return false, false
+	}
+	return strings.TrimSpace(out) != "", true
+}
+
+// filterManagedTeams is the pure core of managedTeamsPreflight (unit-tested):
+// self-install passes teams through; managed keeps only teams whose team-<name>
+// namespace DEFINITELY exists, warning about the definitely-missing ones. A team
+// whose existence can't be determined (transient kubectl failure) aborts with an
+// error rather than being silently dropped — dropping it would under-provision team
+// credentials while the command still exits 0.
+func filterManagedTeams(managed bool, teams []clusterspec.Team, nsStatus func(string) (exists, definite bool)) ([]clusterspec.Team, error) {
+	if !managed {
+		return teams, nil
+	}
+	var ready []clusterspec.Team
+	for _, t := range teams {
+		exists, definite := nsStatus("team-" + t.Name)
+		if !definite {
+			return nil, fmt.Errorf("managed App Platform: could not determine whether team %q exists (kubectl get namespace team-%s failed) — refusing to silently drop teams on a transient failure; check cluster access and re-run `llz ci bao-configure`", t.Name, t.Name)
+		}
+		if !exists {
+			fmt.Fprintf(os.Stderr, "::warning::managed App Platform: team %q has no team-%s namespace — create the team in the App Platform Console (Platform → Teams) first so its Keycloak group team-%s is provisioned, then re-run `llz ci bao-configure`. Skipping its OpenBao Keycloak role for now.\n", t.Name, t.Name, t.Name)
+			continue
+		}
+		ready = append(ready, t)
+	}
+	return ready, nil
 }
 
 // auditFileDeviceActive reports whether `bao audit list` shows the file/
@@ -490,6 +607,18 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 	if errs := clusterspec.ValidateTeams(teams); len(errs) > 0 {
 		fmt.Fprintf(os.Stderr, "::warning::spec.teams failed validation (%v) — skipping the keycloak team auth setup; fix the spec and re-run `llz ci bao-configure`.\n", errs)
 		teams = nil
+	}
+	// Managed App Platform: only bind OpenBao to teams whose Keycloak group actually
+	// exists (created by the operator in the Console). Drops not-yet-created teams
+	// with an actionable warning instead of binding to a nonexistent group. Skipped
+	// on --dry-run: it needs live cluster access and would show a cluster-FILTERED
+	// plan; dry-run prints the full intended plan (managed filtering happens at apply).
+	if !g.dryRun {
+		filtered, err := managedTeamsPreflight(region, teams)
+		if err != nil {
+			return err
+		}
+		teams = filtered
 	}
 	keycloakIssuer := keycloakIssuerFor(region)
 	if len(teams) > 0 && keycloakIssuer == "" {
