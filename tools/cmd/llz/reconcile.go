@@ -59,6 +59,9 @@ func reconcileCmd() *cobra.Command {
 			"  --reconcile-es-store-recovery force-sync ExternalSecrets/PushSecrets when\n" +
 			"                             the openbao ClusterSecretStore goes Ready\n" +
 			"                             (supersedes the CI nudge's force-sync half)\n" +
+			"  --reconcile-apl-overlay    git-sync the apl-overlay (obj storage + app toggles)\n" +
+			"                             onto apl-<env> with ff-retry (needs GH_REPO,\n" +
+			"                             APL_VALUES_REPO_TOKEN, REGION, OpenBao)\n" +
 			"Runs from the slim distroless image with an in-pod ServiceAccount. Terminates\n" +
 			"gracefully on SIGTERM.",
 		Args: cobra.NoArgs,
@@ -90,6 +93,8 @@ func reconcileCmd() *cobra.Command {
 				scDemoteName:        o.scDemoteName,
 				reconcileESRecovery: o.reconcileESRecovery,
 				esRecoveryResync:    time.Duration(o.esRecoveryResync) * time.Second,
+				reconcileAplOverlay: o.reconcileAplOverlay,
+				aplOverlayInterval:  time.Duration(o.aplOverlayInterval) * time.Second,
 			})
 		},
 	}
@@ -116,6 +121,8 @@ func reconcileCmd() *cobra.Command {
 	f.StringVar(&o.scDemoteName, "sc-demote-name", defaultDemoteSC, "the StorageClass to keep non-default (LKE's Flux-promoted retain class)")
 	f.BoolVar(&o.reconcileESRecovery, "reconcile-es-store-recovery", false, "enable the ES store-recovery watch reconciler: force-sync ExternalSecrets/PushSecrets when the openbao ClusterSecretStore goes Ready (default off)")
 	f.IntVar(&o.esRecoveryResync, "es-store-recovery-resync", 300, "resync-floor seconds for the es-store-recovery reconciler (the store watch drives immediacy)")
+	f.BoolVar(&o.reconcileAplOverlay, "reconcile-apl-overlay", false, "enable the apl-overlay git-sync reconciler (obj storage + app toggles → apl-<env>, ff-retry; needs GH_REPO, APL_VALUES_REPO_TOKEN, REGION, OpenBao)")
+	f.IntVar(&o.aplOverlayInterval, "apl-overlay-interval", 300, "seconds between apl-overlay git-sync passes")
 	return c
 }
 
@@ -144,6 +151,8 @@ type reconcileFlags struct {
 	scDemoteName        string
 	reconcileESRecovery bool
 	esRecoveryResync    int
+	reconcileAplOverlay bool
+	aplOverlayInterval  int
 }
 
 type reconcileOpts struct {
@@ -169,6 +178,8 @@ type reconcileOpts struct {
 	tokensInterval      time.Duration
 	reconcileESRecovery bool
 	esRecoveryResync    time.Duration
+	reconcileAplOverlay bool
+	aplOverlayInterval  time.Duration
 }
 
 // openbaoBootstrapGrace wraps the read-only openbao-gauges sample so an
@@ -198,7 +209,7 @@ func openbaoBootstrapGrace(sample func(context.Context) error) func(context.Cont
 func (o reconcileOpts) drivingEnabled() bool {
 	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolLabels ||
 		o.reconcileSCDemote || o.reconcileLinodeCred || o.reconcileHarbor ||
-		o.reconcileESRecovery
+		o.reconcileESRecovery || o.reconcileAplOverlay
 }
 
 // nodeGetter is the slice of the kube client the observe sampler needs.
@@ -471,6 +482,17 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// Read-only (re-exposes the token-inventory ConfigMap), so NOT gated —
 			// every replica may read the ConfigMap harmlessly.
 			run: func(ctx context.Context) error { return sampleTokenInventory(ctx, client, reg) },
+		})
+	}
+	if o.reconcileAplOverlay {
+		recs = append(recs, reconciler{
+			name:     "apl-overlay",
+			interval: o.aplOverlayInterval,
+			// Git-syncs the apl-overlay onto apl-<env> with ff-retry. WRITES (to git),
+			// so leader-gated — a single writer cooperating with apl-operator's pushes.
+			// No kube watch: the source is a remote git repo, so it resyncs on the
+			// interval. Reads GH_REPO/APL_VALUES_REPO_TOKEN/REGION + OpenBao from env.
+			run: gate(func(ctx context.Context) error { return reconcileAplOverlay(ctx, reg) }),
 		})
 	}
 	return recs
