@@ -87,8 +87,8 @@ func TestValuesIdentity(t *testing.T) {
 	if id.ClusterName != "platform-primary" {
 		t.Errorf("ClusterName = %q, want platform-primary", id.ClusterName)
 	}
-	if id.DomainSuffix != "primary.example.com" {
-		t.Errorf("DomainSuffix = %q, want primary.example.com", id.DomainSuffix)
+	if id.DomainSuffix != "" {
+		t.Errorf("DomainSuffix = %q, want \"\" (managed: Linode owns the domain)", id.DomainSuffix)
 	}
 	if !id.ExternalDNS || id.ExternalIDP { // spec defaults: DNS on, IDP off
 		t.Errorf("platform flags = (dns:%v idp:%v), want (true,false)", id.ExternalDNS, id.ExternalIDP)

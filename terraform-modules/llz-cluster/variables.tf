@@ -99,3 +99,16 @@ variable "nodebalancer_cidr" {
   type        = string
   default     = "192.168.255.0/24"
 }
+
+variable "apl_enabled" {
+  description = <<-EOT
+    Enable Linode's MANAGED App Platform on this cluster (linode_lke_cluster.apl_enabled,
+    v4beta/enterprise only). When true, Linode installs+manages apl-core AND provisions
+    the lke<clusterID>.akamai-apl.net domain + DNS + wildcard cert. `llz ci bootstrap-cluster`
+    then SKIPS its own apl-core install. Default false = LLZ self-installs apl-core (unchanged).
+    ForceNew: this is fixed at cluster creation; flipping it recreates the cluster.
+    See docs/adr/0005-managed-app-platform.md.
+  EOT
+  type        = bool
+  default     = false
+}

@@ -83,6 +83,29 @@ func TestClusterTFVars_MinimalOmitsOptionals(t *testing.T) {
 	}
 }
 
+// apl_enabled (managed App Platform, ADR 0005) is ALWAYS emitted — false by
+// default (self-install), true when spec.cluster.bootstrap.managedAppPlatform.
+func TestClusterTFVars_APLEnabled(t *testing.T) {
+	var c Cluster
+	c.ClusterLabel, c.Region, c.K8sVersion = "l", "r", "v"
+	c.NodePool.Type, c.NodePool.Count = "t", 1
+	find := func(cl Cluster) string {
+		for _, a := range ClusterTFVars(cl) {
+			if a.Key == "apl_enabled" {
+				return a.Val
+			}
+		}
+		return "<absent>"
+	}
+	if got := find(c); got != "false" {
+		t.Errorf("default apl_enabled = %q, want false (self-install)", got)
+	}
+	c.Bootstrap.ManagedAppPlatform = true
+	if got := find(c); got != "true" {
+		t.Errorf("managedAppPlatform → apl_enabled = %q, want true", got)
+	}
+}
+
 func TestObjectStorageTFVars(t *testing.T) {
 	full := assignKeys(ObjectStorageTFVars("prod", fullCluster()))
 	for _, k := range []string{"region_suffix", "obj_cluster"} {

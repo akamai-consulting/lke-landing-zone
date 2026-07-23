@@ -47,12 +47,29 @@ spec:
 
     bootstrap:                                     # → apl-core bootstrap inputs (llz ci bootstrap-cluster)
       name: platform-prod-web                      # → cluster.name (apl-core identity)
-      domainSuffix: web.prod.example.com           # → cluster.domainSuffix + dns.domainFilters
-      aplChartVersion: 6.0.0                       # → apl_chart_version (optional)
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git
         revision: main
       appsRepoRevision: main                       # optional
+
+      # ── Managed App Platform (REQUIRED) ──────────────────────────────────────
+      # LLZ runs exclusively on Linode's MANAGED App Platform (apl_enabled): Linode
+      # installs+manages apl-core AND provisions the lke<id>.akamai-apl.net domain +
+      # DNS + wildcard cert; `llz ci bootstrap-cluster` only LAYERS LLZ's extras as
+      # Argo apps. `managedAppPlatform: true` is mandatory (validation rejects a
+      # self-install spec), and you must NOT set domainSuffix (Linode owns the
+      # domain — LLZ discovers it in-cluster). Usually set once in
+      # spec.defaults.cluster.bootstrap and inherited; shown here for clarity.
+      # See docs/adr/0005-managed-app-platform.md.
+      managedAppPlatform: true
+      #
+      # Managed apl-core installs only a MINIMAL core; the OPTIONAL apps (harbor,
+      # loki, grafana, …) are enabled by the operator in the App Platform Console.
+      # Declare the ones you enabled so LLZ layers its matching extras (harbor
+      # robot-provisioner, observability glue) ONLY for apps that exist — render
+      # can't discover them. The always-on LLZ platform (OpenBao, external-secrets
+      # store, reconciler, PAT rotator) is emitted regardless and needs no entry.
+      # managedApps: [harbor, loki, grafana]
 
     objectStorage:                                 # → object-storage/<env>.tfvars
       cluster: us-ord-1                             # → obj_cluster (region-local OBJ)

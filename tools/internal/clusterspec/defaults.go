@@ -17,11 +17,11 @@ const DefaultTeamName = "platform"
 // defaulted here (new-clusters-only — see DefaultTeamName / ensureLandingZone).
 func (lz *LandingZone) Defaults() {
 	for name, env := range lz.Spec.Environments {
-		// domainSuffix defaults to "<env>.internal" (mirrors scaffold.go's
-		// clusterDomain default in runEnvAdd).
-		if env.Cluster.Bootstrap.DomainSuffix == "" {
-			env.Cluster.Bootstrap.DomainSuffix = name + ".internal"
-		}
+		// domainSuffix is NOT defaulted: LLZ runs exclusively on Linode's MANAGED App
+		// Platform, where Linode owns the lke<id>.akamai-apl.net domain (LLZ discovers
+		// it in-cluster) and validateEnv REJECTS a non-empty domainSuffix. Defaulting
+		// it would make every spec un-renderable.
+		//
 		// Components default to all-enabled, except the DefaultDisabled ones (gitea,
 		// cidrFirewall, broadPatRotator, clusterHealthWorkflow).
 		// A nil/empty map gets the full default set; a partial map only fills in

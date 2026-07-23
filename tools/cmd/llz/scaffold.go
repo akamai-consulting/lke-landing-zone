@@ -142,7 +142,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	}
 
 	// ── 2. environments/<env>.yaml (the ClusterDefinition from the flags) ─────
-	if err := writeEnvDefinition(envFile, name, o, instanceName, clusterDomain); err != nil {
+	if err := writeEnvDefinition(envFile, name, o, instanceName); err != nil {
 		return fmt.Errorf("write %s: %w", envFile, err)
 	}
 	fmt.Printf("  %s  %s\n", green("created"), envFile)
