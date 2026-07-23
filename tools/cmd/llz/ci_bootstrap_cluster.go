@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -90,15 +89,13 @@ type bootstrapClusterOpts struct {
 	managedApps []string
 }
 
-// bootstrapDeps are the seams the flow drives. kubectl runs one read/wait/patch
+// bootstrapDeps are the seams the flow drives. kubectl runs one read/wait/patch/logs
 // invocation (KUBECONFIG wired) returning combined output + exit-0; apply pipes a
-// manifest to `kubectl apply --server-side`; git clones/pushes the apl-core values
-// repo (the BYO-Git migration to the apl-<env> github branch); now/sleep make the
-// deadline loops testable.
+// manifest to `kubectl apply --server-side` (used for the bridge + the in-cluster
+// apl-values migration Job); now/sleep make the deadline loops testable.
 type bootstrapDeps struct {
 	kubectl func(args ...string) (string, bool)
 	apply   func(stdinYAML, fieldManager string, force bool) (string, bool)
-	git     func(args ...string) (string, bool)
 	now     func() time.Time
 	sleep   func(time.Duration)
 }
@@ -210,10 +207,6 @@ func newBootstrapDeps(kubeconfigPath string) bootstrapDeps {
 			}
 			cmd.Stdin = strings.NewReader(stdinYAML)
 			return runCombined(cmd)
-		},
-		git: func(args ...string) (string, bool) {
-			// git talks to the remote values repo, NOT the cluster — no kubeconfig.
-			return runCombined(exec.Command("git", args...))
 		},
 		now:   time.Now,
 		sleep: time.Sleep,
@@ -569,49 +562,120 @@ func readAplGitConfig(d bootstrapDeps) (aplGitConfig, error) {
 	return c, nil
 }
 
-// migrateAplValuesToGitHub clones apl-core's CURRENT values tree, layers an AplApp
-// enable file per app under env/apps/, and pushes the whole tree to the github
-// apl-<env> branch (force — this branch is LLZ-owned, superseded every bootstrap).
+// migration Job coordinates. The apl-core values repo (git-server.<ns>.svc) is only
+// reachable from INSIDE the cluster and is SOPS-encrypted at rest, so the clone/push
+// must run in-cluster (a kubectl-cp of the operator pod's ENV_DIR would leak the
+// decrypted tree). alpine/git carries git + /bin/sh (busybox).
+const (
+	aplMigrateJobNS   = "apl-operator"
+	aplMigrateJobName = "llz-apl-values-migrate"
+	aplMigrateImage   = "alpine/git:latest"
+	aplMigrateBudget  = 6 * time.Minute
+	aplMigrateTick    = 5 * time.Second
+)
+
+// migrateAplValuesToGitHub runs the values-repo migration as an in-cluster Job: clone
+// apl-core's current (encrypted, in-cluster) tree, layer an env/apps/<name>.yaml AplApp
+// enable file per app, and FORCE-PUSH the COMPLETE tree to the github apl-<env> branch.
+// The full tree, pushed BEFORE the caller repoints the Secret, is what makes the switch
+// wipe-safe: the operator's per-poll `git reset --hard origin/<branch>` then adopts a
+// complete+toggled tree instead of deleting tracked files (a partial branch would wipe).
 func migrateAplValuesToGitHub(d bootstrapDeps, cur aplGitConfig, githubURL, branch string, apps []string, tok string) error {
-	tmp, err := os.MkdirTemp("", "llz-apl-values-*")
-	if err != nil {
-		return fmt.Errorf("mktemp for apl-values migration: %w", err)
-	}
-	defer os.RemoveAll(tmp)
-
 	srcAuth := basicAuthGitURL(cur.repoURL, cur.username, cur.password)
-	secrets := []string{tok, cur.password}
-	if out, ok := d.git("clone", "--depth", "1", "--branch", cur.branch, srcAuth, tmp); !ok {
-		return fmt.Errorf("clone apl-core values tree from its current remote (branch %s): %s", cur.branch, redactSecrets(out, secrets))
-	}
-
-	// Layer the app-enable files onto the cloned tree. env/apps/<name>.yaml, kind
-	// AplApp, spec.enabled:true — the operator keys the app off the FILENAME and reads
-	// data.spec, so both the path and the spec wrapper are load-bearing.
-	appsDir := filepath.Join(tmp, "env", "apps")
-	if err := os.MkdirAll(appsDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir env/apps: %w", err)
-	}
-	for _, app := range apps {
-		if err := os.WriteFile(filepath.Join(appsDir, app+".yaml"), []byte(aplAppEnableManifest(app)), 0o644); err != nil {
-			return fmt.Errorf("write env/apps/%s.yaml: %w", app, err)
-		}
-	}
-
-	if out, ok := d.git("-C", tmp, "add", "-A"); !ok {
-		return fmt.Errorf("git add apl-values: %s", redactSecrets(out, secrets))
-	}
-	if out, ok := d.git("-C", tmp,
-		"-c", "user.name=llz-bootstrap", "-c", "user.email=llz-bootstrap@noreply.local",
-		"commit", "--allow-empty", "-m", "chore(llz): enable managed apps ["+strings.Join(apps, ",")+"] + point apl-core at github"); !ok {
-		return fmt.Errorf("git commit apl-values: %s", redactSecrets(out, secrets))
-	}
 	dstAuth := basicAuthGitURL(githubURL, "x-access-token", tok)
-	if out, ok := d.git("-C", tmp, "push", "--force", dstAuth, "HEAD:refs/heads/"+branch); !ok {
-		return fmt.Errorf("push apl-values to %s (branch %s) — does APL_VALUES_REPO_TOKEN have Contents:write? %s",
-			githubURL, branch, redactSecrets(out, secrets))
+	secrets := []string{tok, cur.password}
+	del := func() {
+		d.kubectl("-n", aplMigrateJobNS, "delete", "job", aplMigrateJobName, "--ignore-not-found")
+		d.kubectl("-n", aplMigrateJobNS, "delete", "secret", aplMigrateJobName, "--ignore-not-found")
 	}
-	return nil
+	del() // clear any prior run so the Job template is not immutable-conflicted
+	if out, ok := d.apply(aplMigrateSecretManifest(srcAuth, dstAuth), "llz-managed-bridge", false); !ok {
+		return fmt.Errorf("apply apl-values migration Secret: %s", redactSecrets(out, secrets))
+	}
+	if out, ok := d.apply(aplMigrateJobManifest(cur.branch, branch, apps), "llz-managed-bridge", false); !ok {
+		del()
+		return fmt.Errorf("apply apl-values migration Job: %s", redactSecrets(out, secrets))
+	}
+	defer del()
+
+	deadline := d.now().Add(aplMigrateBudget)
+	for d.now().Before(deadline) {
+		if s, _ := d.kubectl("-n", aplMigrateJobNS, "get", "job", aplMigrateJobName, "-o", "jsonpath={.status.succeeded}"); strings.TrimSpace(s) == "1" {
+			return nil
+		}
+		if f, _ := d.kubectl("-n", aplMigrateJobNS, "get", "job", aplMigrateJobName, "-o", "jsonpath={.status.failed}"); f != "" && strings.TrimSpace(f) != "0" {
+			logs, _ := d.kubectl("-n", aplMigrateJobNS, "logs", "job/"+aplMigrateJobName, "--tail=40")
+			return fmt.Errorf("apl-values migration Job failed: %s", redactSecrets(logs, secrets))
+		}
+		d.sleep(aplMigrateTick)
+	}
+	return fmt.Errorf("apl-values migration Job did not complete within %s", aplMigrateBudget)
+}
+
+// aplMigrateSecretManifest holds the credential-bearing clone/push URLs (kept out of
+// the Job spec / logs — the Job pulls them via envFrom).
+func aplMigrateSecretManifest(srcAuth, dstAuth string) string {
+	return "apiVersion: v1\nkind: Secret\n" +
+		"metadata:\n  name: " + aplMigrateJobName + "\n  namespace: " + aplMigrateJobNS + "\n" +
+		"type: Opaque\nstringData:\n" +
+		"  SRC_URL: " + yamlSingleQuote(srcAuth) + "\n" +
+		"  DST_URL: " + yamlSingleQuote(dstAuth) + "\n"
+}
+
+// aplMigrateJobManifest builds the migration Job. The inline script's env/apps/<app>.yaml
+// format MUST match aplAppEnableManifest (kind AplApp, spec.enabled:true).
+func aplMigrateJobManifest(srcBranch, dstBranch string, apps []string) string {
+	return fmt.Sprintf(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 180
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migrate
+        image: %[3]s
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          echo "cloning apl-core values repo (branch $SRC_BRANCH)..."
+          git clone --depth 1 --branch "$SRC_BRANCH" "$SRC_URL" /w
+          mkdir -p /w/env/apps
+          for a in $APPS; do
+            printf 'kind: AplApp\nmetadata:\n  name: %%s\nspec:\n  enabled: true\n' "$a" > "/w/env/apps/$a.yaml"
+          done
+          cd /w
+          git config user.email pipeline@cluster.local
+          git config user.name llz-bootstrap
+          git add -A
+          git commit --allow-empty -m "llz: enable managed apps + point apl-core at github"
+          echo "force-pushing full values tree to github branch $DST_BRANCH..."
+          git push --force "$DST_URL" "HEAD:refs/heads/$DST_BRANCH"
+          echo "apl-values migration complete."
+        env:
+        - name: SRC_BRANCH
+          value: %[4]s
+        - name: DST_BRANCH
+          value: %[5]s
+        - name: APPS
+          value: %[6]s
+        envFrom:
+        - secretRef:
+            name: %[1]s
+`, aplMigrateJobName, aplMigrateJobNS, aplMigrateImage,
+		yamlSingleQuote(srcBranch), yamlSingleQuote(dstBranch), yamlSingleQuote(strings.Join(apps, " ")))
+}
+
+// yamlSingleQuote wraps a scalar in single quotes (doubling any embedded quote) so
+// URL/branch values with :/@ can't be mis-parsed as YAML.
+func yamlSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 // patchAplGitConfig repoints apl-core at the github branch by merge-patching the
