@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"sigs.k8s.io/yaml"
 )
 
 // ── runCombined (the production exec seam) ───────────────────────────────────
@@ -193,7 +196,10 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 				return "", true
 			},
 			apply: func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
-			now:   time.Now, sleep: func(time.Duration) {},
+			// configureManagedApl runs when a token is set; the kubectl stub above
+			// returns no apl-git-config repoUrl, so it warns-and-continues (best-effort)
+			// without reaching the migration Job — this test only asserts the bridge.
+			now: time.Now, sleep: func(time.Duration) {},
 		}
 		if err := bootstrapCluster(o, d); err != nil {
 			t.Fatalf("bootstrapCluster: %v", err)
@@ -221,6 +227,125 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 	// Without a token (public repo): no repository Secret for the instance repo.
 	if s := repoSecret(run("")); s != "" {
 		t.Errorf("no token → must apply no instance-repo Secret; got:\n%s", s)
+	}
+}
+
+// TestConfigureManagedApl: reads apl-core's current (in-cluster Gitea) BYO-Git Secret,
+// applies an in-cluster migration Job (clone → AplApp enable files → force-push the full
+// tree to the github apl-<env> branch), waits for it, then patches apl-secrets/apl-git-config
+// to repoint apl-core at github. No helm, no runner-side git.
+func TestConfigureManagedApl(t *testing.T) {
+	o := bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance", instanceRepoToken: "test-repo-token"}
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	var applied []string
+	var patched string
+	d := bootstrapDeps{
+		kubectl: func(args ...string) (string, bool) {
+			line := strings.Join(args, " ")
+			switch {
+			case strings.Contains(line, "get secret apl-git-config") && strings.Contains(line, "data.repoUrl"):
+				return b64("http://git-server.git-server.svc.cluster.local/otomi/values.git"), true
+			case strings.Contains(line, "get secret apl-git-config") && strings.Contains(line, "data.branch"):
+				return b64("main"), true
+			case strings.Contains(line, "get secret apl-git-config") && strings.Contains(line, "data.username"):
+				return b64("otomi-admin"), true
+			case strings.Contains(line, "get secret apl-git-config") && strings.Contains(line, "data.password"):
+				return b64("gitea-pw"), true
+			case strings.Contains(line, "get job") && strings.Contains(line, "status.succeeded"):
+				return "1", true // migration Job completed
+			case strings.Contains(line, "patch secret apl-git-config"):
+				patched = line
+				return "", true
+			}
+			return "", true
+		},
+		apply: func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
+		now:   time.Now, sleep: func(time.Duration) {},
+	}
+	if err := configureManagedApl(o, d); err != nil {
+		t.Fatalf("configureManagedApl: %v", err)
+	}
+	all := strings.Join(applied, "\n---\n")
+	// A migration Secret (credential-bearing clone/push URLs) + a Job (enable + push).
+	for _, want := range []string{
+		"kind: Secret", "SRC_URL:", "DST_URL:",
+		"kind: Job", "llz-apl-values-migrate", "alpine/git",
+		"name: APPS", "harbor loki grafana kyverno", "name: DST_BRANCH", "'apl-primary'",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("migration manifests missing %q", want)
+		}
+	}
+	// SRC_URL must embed the in-cluster gitea creds (http:// — git can't prompt in a Job).
+	if !strings.Contains(all, "http://otomi-admin:gitea-pw@git-server.git-server.svc") {
+		t.Errorf("SRC_URL must embed http creds for the in-cluster values repo; manifests:\n%s", all)
+	}
+	if !strings.Contains(all, "x-access-token:test-repo-token@github.com/acme/instance.git") {
+		t.Error("DST_URL must embed the github token")
+	}
+	// After the Job, the BYO-Git Secret is repointed at the github branch.
+	for _, want := range []string{`"repoUrl":"https://github.com/acme/instance.git"`, `"branch":"apl-primary"`, `"username":"x-access-token"`} {
+		if !strings.Contains(patched, want) {
+			t.Errorf("apl-git-config patch missing %q; got %q", want, patched)
+		}
+	}
+	// No token → skip entirely (no kubectl/apply).
+	var ran bool
+	d2 := bootstrapDeps{
+		kubectl: func(...string) (string, bool) { ran = true; return "", true },
+		apply:   func(_, _ string, _ bool) (string, bool) { ran = true; return "", true },
+	}
+	if err := configureManagedApl(bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance"}, d2); err != nil {
+		t.Fatalf("configureManagedApl (no token): %v", err)
+	}
+	if ran {
+		t.Error("no APL_VALUES_REPO_TOKEN → configureManagedApl must skip (no kubectl/apply)")
+	}
+}
+
+// TestAplMigrateManifestsValidYAML: the migration Secret + Job render as valid YAML
+// (guards the Job's block-scalar script indentation + single-quote escaping).
+func TestAplMigrateManifestsValidYAML(t *testing.T) {
+	manifests := map[string]string{
+		"secret": aplMigrateSecretManifest(
+			"http://otomi-admin:pw@git-server.git-server.svc.cluster.local/otomi/values.git",
+			"https://x-access-token:tok@github.com/acme/instance.git"),
+		"job": aplMigrateJobManifest("main", "apl-primary", []string{"harbor", "loki", "grafana", "kyverno"}),
+	}
+	for name, m := range manifests {
+		var obj map[string]any
+		if err := yaml.Unmarshal([]byte(m), &obj); err != nil {
+			t.Errorf("%s manifest is not valid YAML: %v\n%s", name, err, m)
+		}
+	}
+}
+
+// TestBasicAuthGitURL: creds embed for BOTH http (in-cluster git-server) and https
+// (github); empty secret or non-http(s) is unchanged.
+func TestBasicAuthGitURL(t *testing.T) {
+	cases := []struct{ raw, user, secret, want string }{
+		{"http://git-server.git-server.svc/otomi/values.git", "otomi-admin", "pw", "http://otomi-admin:pw@git-server.git-server.svc/otomi/values.git"},
+		// a generated password with reserved chars must be percent-encoded, not corrupt the URL.
+		{"http://git-server.git-server.svc/otomi/values.git", "otomi-admin", "k2qaZ3gPS&PPlRnrnES6z", "http://otomi-admin:k2qaZ3gPS%26PPlRnrnES6z@git-server.git-server.svc/otomi/values.git"},
+		{"https://github.com/acme/instance.git", "x-access-token", "tok", "https://x-access-token:tok@github.com/acme/instance.git"},
+		{"https://github.com/acme/instance.git", "", "tok", "https://x-access-token:tok@github.com/acme/instance.git"},
+		{"http://git-server/x.git", "u", "", "http://git-server/x.git"},
+		{"git@github.com:acme/x.git", "u", "s", "git@github.com:acme/x.git"},
+	}
+	for _, c := range cases {
+		if got := basicAuthGitURL(c.raw, c.user, c.secret); got != c.want {
+			t.Errorf("basicAuthGitURL(%q,%q,secret)=%q want %q", c.raw, c.user, got, c.want)
+		}
+	}
+}
+
+// TestAplAppEnableManifest: the enable file is a valid AplApp whose spec enables the app.
+func TestAplAppEnableManifest(t *testing.T) {
+	got := aplAppEnableManifest("harbor")
+	for _, want := range []string{"kind: AplApp", "name: harbor", "enabled: true"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("aplAppEnableManifest missing %q:\n%s", want, got)
+		}
 	}
 }
 

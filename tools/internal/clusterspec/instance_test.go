@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -287,5 +288,34 @@ func TestDefaults_NeverInjectsDomainSuffix(t *testing.T) {
 	lz.Defaults()
 	if got := lz.Spec.Environments["probe"].Cluster.Bootstrap.DomainSuffix; got != "" {
 		t.Errorf("domainSuffix must stay empty, got %q (validateEnv would reject it)", got)
+	}
+}
+
+// TestDefaults_ManagedApps: a managed spec that omits managedApps gets the LLZ
+// default set (ADR 0006), and that default makes every conditional LLZ extra
+// (harbor/observability/imageSignature) emit on managed. An explicit list is
+// respected verbatim so an operator can narrow it.
+func TestDefaults_ManagedApps(t *testing.T) {
+	lz := &LandingZone{Spec: Spec{Environments: map[string]Environment{
+		"probe": {Cluster: Cluster{Bootstrap: Bootstrap{ManagedAppPlatform: true}}},
+	}}}
+	lz.Defaults()
+	b := lz.Spec.Environments["probe"].Cluster.Bootstrap
+	if strings.Join(b.ManagedApps, ",") != strings.Join(DefaultManagedApps, ",") {
+		t.Fatalf("managedApps default = %v, want %v", b.ManagedApps, DefaultManagedApps)
+	}
+	for _, name := range []string{"harbor", "observability", "imageSignature"} {
+		if !comp(t, name).EmitOnManaged(b) {
+			t.Errorf("%s must emit on managed under the default managedApps set", name)
+		}
+	}
+
+	// An explicit list is respected (not overwritten with the default).
+	narrow := &LandingZone{Spec: Spec{Environments: map[string]Environment{
+		"probe": {Cluster: Cluster{Bootstrap: Bootstrap{ManagedAppPlatform: true, ManagedApps: []string{"loki"}}}},
+	}}}
+	narrow.Defaults()
+	if got := narrow.Spec.Environments["probe"].Cluster.Bootstrap.ManagedApps; strings.Join(got, ",") != "loki" {
+		t.Errorf("explicit managedApps must be respected, got %v", got)
 	}
 }
