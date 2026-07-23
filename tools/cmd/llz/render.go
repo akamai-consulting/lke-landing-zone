@@ -436,15 +436,13 @@ func repoOwnerName(repoURL string) string {
 }
 
 func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
-	// Make the ADR's KNOWN-INCOMPLETE managed-observability caveat DISCOVERABLE at
-	// render time, not just documented: declaring `loki` emits the observability
-	// extras, but the grafana-admin/otel-bearer generated-secrets they pair with are
-	// not carried on managed yet. Likely harmless (otel bearer optional, grafana-admin
-	// apl-core's) but unproven — warn so it's a known limitation, not a surprise.
-	if clusterspec.ComponentEnabled(e.Components, "observability") &&
-		e.Cluster.Bootstrap.ManagedAppEnabled("loki") {
-		fmt.Fprintf(os.Stderr, "::warning::environments.%s: managedApps enables observability, but managed observability is KNOWN-INCOMPLETE — its grafana-admin/otel-bearer generated-secrets are not carried yet (see docs/adr/0005-managed-app-platform.md). Validate live before relying on it.\n", env)
-	}
+	// Managed observability's grafana-admin/otel-bearer generated-secrets are not
+	// carried by LLZ on managed, but that is now proven harmless rather than a
+	// render-time caveat: the ADR-0005 "validate live before relying on it" gate
+	// has been satisfied — the full observability stack (grafana, prometheus,
+	// loki→S3) converges Synced+Healthy on a managed cluster without them, because
+	// grafana-admin is apl-core's own and the otel ingress bearer is optional. So
+	// the previous ::warning:: here is retired; see docs/adr/0005-managed-app-platform.md.
 	manifest := filepath.Join(aplDir, env, "manifest")
 	// Template ref the shared apl-values tree is fetched at (see RenderManifestKustomization):
 	// the version this instance tracks, so an instance references the byte-identical manifest

@@ -250,14 +250,18 @@ are ABSENT** (opt-in via the console). So the managed LLZ extras split into thre
    (AppProjects + wave-health admission + OpenBao CA chain + carved extras) with NO cluster-foundation / letsencrypt /
    cert-automation. Live convergence (ArgoCD syncing a rendered managed instance) is the final gate.
 
-   **KNOWN-INCOMPLETE — managed observability (`managedApps: [loki]`):** the `observability` tier-2 component is wired
-   (it emits on managed when `loki` is declared), but the `generated-secrets/` it pairs with (grafana-admin, otel
-   ingress bearer) are NOT carried on managed — the managed base variant excludes them and they have not yet moved into
-   the observability component. So declaring `loki` today emits the observability extras (loki S3 ExternalSecret, otel
-   collector, prometheus rules) while those two self-generated secrets are absent; on managed the otel bearer is
-   optional (commented out) and grafana-admin is apl-core's, so this is likely harmless, but it is unproven. Treat
-   managed observability as a follow-up: either move `generated-secrets/` into the observability component (finish it)
-   or gate its emission until they move. `managedApps: [harbor]` (the fully-built path) is unaffected.
+   **RESOLVED (live-validated harmless) — managed observability (`managedApps: [loki]`):** the `observability` tier-2
+   component is wired (it emits on managed when `loki` is declared), but the `generated-secrets/` it pairs with
+   (grafana-admin, otel ingress bearer) are NOT carried on managed — the managed base variant excludes them and they
+   have not moved into the observability component. So declaring `loki` emits the observability extras (loki S3
+   ExternalSecret, otel collector, prometheus rules) while those two self-generated secrets are absent; on managed the
+   otel bearer is optional (commented out) and grafana-admin is apl-core's. This was previously flagged UNPROVEN with a
+   render-time `::warning::`. It is now **proven harmless on a live managed cluster**: the full observability stack —
+   grafana, prometheus, and loki backed by S3 (the apl-overlay obj chain) — converges **Synced + Healthy** in ArgoCD
+   without the LLZ-carried secrets, confirming grafana-admin is supplied by apl-core and the otel bearer is genuinely
+   optional. The render-time warning is therefore **retired**. Carrying `generated-secrets/` into the observability
+   component remains an OPTIONAL tidy-up (not a correctness gap); `managedApps: [harbor]` (the fully-built path) is
+   unaffected.
 
    **Live convergence is a BLOCKING follow-up, not a nice-to-have.** Everything above is unit- + render- + apply-
    validated ("renders and applies cleanly, coexists with apl-core"), but a pushed rendered managed instance reaching
