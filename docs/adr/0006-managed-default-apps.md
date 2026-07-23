@@ -1,6 +1,6 @@
 # ADR 0006 — Managed default apps: enable apl-core's harbor/loki/grafana/kyverno via the values branch; layer LLZ extras on the managed installs
 
-Status: **Accepted / implemented** in PR #306 (driven by the managed-only pivot + the live-convergence e2e). Render/bootstrap wiring landed + unit-covered; the helm-upgrade retain + app-install is under e2e validation on the managed release.
+Status: **Accepted; mechanism CORRECTED after e2e + apl-core source audit** (PR #306). Render/bootstrap wiring landed + unit-covered. The first delivery (a chart-driven `helm upgrade`) was **e2e-disproven** — a managed cluster has no customer-`helm`-upgradeable `apl` release (`"apl" has no deployed releases`), and app-enablement does not flow through chart values post-install. Replaced with the supported mechanism: **BYO-Git Secret patch + values-repo migration** (see Implementation). App-install on managed is under e2e re-validation.
 Date: 2026-07-22
 Relates: [ADR 0005](0005-managed-app-platform.md) (the managed pivot). Supersedes 0005's "managedApps is operator opt-in" framing.
 
@@ -24,28 +24,45 @@ Concretely:
 
 1. **Enable the apps in apl-core's config**, so apl-core (apl-operator) installs them itself. apl-core reconciles its config from a **git values branch** — and (per the standing requirement, see Open Question 1) LLZ keeps managed apl-core pointed at a **github.com values branch it controls** (via `APL_VALUES_REPO_TOKEN`, Contents:write), NOT the in-cluster gitea default. So enabling an app = **committing `apps.<name>.enabled: true` to that branch** → apl-operator installs it. This is the self-install values-push model applied to managed; no apl-api JWT dance, no gitea-admin credential.
 2. **Use apl-core's installs.** LLZ ships only the glue (ExternalSecrets, the harbor robot-provisioner, the image-signature ClusterPolicy) — never its own harbor/loki/grafana/kyverno chart.
-3. **Keep the per-app gating, but couple it to `managedApps` (which is now default-on), not to operator opt-in.** The `ManagedConditionalOn` gate stays — the `harbor`/`observability`/`imageSignature` components emit IFF their app is in `managedApps` — but `managedApps` now defaults to `[harbor, loki, grafana, kyverno]`, so a default spec emits all three extras. The gate is no longer "wait for a human to opt in in the Console"; it's "emit the extra exactly when LLZ enabled the underlying app." This is strictly safer than dropping the gate outright: an operator who NARROWS `managedApps` (e.g. drops kyverno) automatically suppresses the matching extra (imageSignature) instead of wedging converge on a missing CRD. `imageSignature` (the Kyverno ClusterPolicy) is safe in the default case because Kyverno's CRD is guaranteed present. The gate and the `configureManagedApl` helm-enable read the SAME list, so they can never disagree.
+3. **Keep the per-app gating, but couple it to `managedApps` (which is now default-on), not to operator opt-in.** The `ManagedConditionalOn` gate stays — the `harbor`/`observability`/`imageSignature` components emit IFF their app is in `managedApps` — but `managedApps` now defaults to `[harbor, loki, grafana, kyverno]`, so a default spec emits all three extras. The gate is no longer "wait for a human to opt in in the Console"; it's "emit the extra exactly when LLZ enabled the underlying app." This is strictly safer than dropping the gate outright: an operator who NARROWS `managedApps` (e.g. drops kyverno) automatically suppresses the matching extra (imageSignature) instead of wedging converge on a missing CRD. `imageSignature` (the Kyverno ClusterPolicy) is safe in the default case because Kyverno's CRD is guaranteed present. The gate and the `configureManagedApl` app-enable read the SAME list, so they can never disagree.
 4. **Ordering is absorbed by Argo.** LLZ commits `apps.*.enabled` early; apl-operator installs the apps (CRDs land) over the following minutes; the LLZ extras that reference those CRDs are `SkipDryRunOnMissingResource=true` with the load-bearing retry budget (40 @ 90s), so they converge once the CRDs appear rather than hard-failing.
 
 `spec.cluster.bootstrap.managedApps` is retained as the **declarative set of apps LLZ enables** (defaulting to `[harbor, loki, grafana, kyverno]`), no longer an operator opt-in — LLZ reconciles apl-core to it, and the `llz-reconciler` can re-assert it against Console drift.
 
-## Mechanism: writing `apps.<name>.enabled`
+## Mechanism: repoint git + write `apps.<name>.enabled` (corrected)
 
-apl-core's config is Git-as-database (apl-api commits to it; apl-operator reconciles from it). Two write-paths were evaluated:
+apl-core's config is Git-as-database (apl-api/Console commits to it; apl-operator reconciles from it). Write-paths evaluated:
 
 | Path | How | Verdict |
 |---|---|---|
-| **A — commit to the github.com values branch** (CHOSEN) | LLZ writes `apps.<name>.enabled: true` into the values tree on the github branch apl-core is pointed at, using `APL_VALUES_REPO_TOKEN`. apl-operator reconciles. | Simple auth (a git push LLZ already does), no new secret, no coupling to apl-api's runtime API. Requires apl-core to be pointed at a github branch (Open Q1). |
-| **B — drive apl-api (the Console's path)** | `PUT`/`PATCH` the settings/apps endpoint on `apl-api` (`otomi` ns). | apl-api is OpenAPI-first (`src/openapi/*.yaml` in linode/apl-api), **JWT-authenticated** (`Authorization` + `Auth-Group` headers), Git-as-DB. The JWT (normally minted by an oauth2/Keycloak login) is the blocker for automation in-cluster. Kept as the fallback if Path A's github-branch pointing proves infeasible. |
+| ~~**helm upgrade --reuse-values --set otomi.git.\*,apps.\*.enabled**~~ | Re-point + enable apps by upgrading the installed `apl` chart. | **REJECTED — e2e-disproven.** A managed (`apl_enabled`) cluster has **no customer-`helm`-visible `apl` release** (`Error: UPGRADE FAILED: "apl" has no deployed releases`; managed upgrades are a Console button). And per apl-core source, chart values (`VALUES_INPUT`) are read **only at first-install bootstrap** — post-install the operator reconciles app state **exclusively from the git values repo**, so `--set apps.*.enabled` is a no-op even where a release exists. |
+| **A — BYO-Git Secret patch + values-repo migration** (CHOSEN) | Patch `apl-secrets/apl-git-config` (bare keys) to repoint apl-core at the github `apl-<env>` branch, having first pushed apl-core's current values tree there **with** an `env/apps/<name>.yaml` enable file per app. | Supported (BYO Git; the Secret is re-read every reconcile → runtime `git remote set-url`, no restart). App-enablement lands as real values-repo state the operator honors. No helm, no apl-api JWT. |
+| **B — drive apl-api (the Console's path)** | `PUT`/`PATCH` the settings/apps endpoint on `apl-api` (`otomi` ns). | JWT-authenticated (Keycloak login); the JWT is the automation blocker. Fallback only. |
 
-Path A is preferred because it reuses the credential + push LLZ already performs and avoids coupling to apl-api's runtime auth. LLZ already reads apl-core's config in-cluster today (`discoverKeycloakIssuerFromCluster` reads the `otomi/otomi-api` ConfigMap's `SSO_ISSUER`), so the read side is proven; this adds the write side via git.
+**Why the migration (not just a Secret patch):** the operator does `git reset --hard origin/<branch>` on every poll (`git-repository.ts`). Repointing at a branch that held **only** app-toggle files would **wipe** apl-core's entire config. So LLZ clones apl-core's current (Gitea) tree, layers the enable files on, and force-pushes the **complete** tree to the github branch — the same "push existing values history" the Console's BYO-Git wizard performs — *then* flips the Secret.
 
-## Implementation (as landed in #306)
+**App-enable file shape (source-verified against apl-core):** `env/apps/<name>.yaml`, keyed off the **filename**, contents:
+```yaml
+kind: AplApp
+metadata:
+  name: <name>
+spec:
+  enabled: true
+```
+`loadValues()` globs `env/apps/*.yaml` into the aggregate `values-repo.yaml`; `spec` becomes `apps.<name>`. Schema-valid for the default set (harbor has no app-level `required`; loki's `adminPassword` is an `x-secret`, stripped from `required` before validation). The operator's write-back preserves `enabled: true`.
 
-- **`configureManagedApl(o, d)`** in `llz ci bootstrap-cluster` (best-effort, after `waitManagedArgoReady`): seeds the `apl-<env>` github branch if absent (`ensureAplValuesBranch`), then a single `helm upgrade apl apl --repo <aplChartRepo> --version <defaultAplChartVersion> -n apl-operator --reuse-values --wait --set otomi.git.repoUrl=<instance repo>,otomi.git.user=x-access-token,otomi.git.password=<APL_VALUES_REPO_TOKEN>,otomi.git.branch=apl-<env> --set apps.<app>.enabled=true` (one per `managedApps`). `--reuse-values` preserves Linode's managed release; the chart regenerates `apl-secrets/apl-git-config` (BYO Git) + flips the app toggles by construction. Idempotent (helm no-ops when already at that state).
-- The app list is `o.managedApps`, populated in `runBootstrapCluster` from `spec.cluster.bootstrap.managedApps` (which `Defaults()` fills to `clusterspec.DefaultManagedApps = [harbor, loki, grafana, kyverno]`), with a fallback to `DefaultManagedApps` if empty.
-- Registry: `ManagedConditionalOn` on `harbor`/`observability`/`imageSignature` is **retained** and reads `managedApps`; with the default set all three emit. `imageSignature`'s file stays under `platform-apl/components/imageSignature/` for cosign-subject-guard.
-- Graceful degradation: `configureManagedApl` is called best-effort (warn, don't fail the bootstrap) — if the helm-enable fails, the render-side gate still only emitted extras for the declared apps, so a partial failure degrades rather than wedges.
+## Implementation (corrected, in #306)
+
+- **`configureManagedApl(o, d)`** in `llz ci bootstrap-cluster` (best-effort, after `waitManagedArgoReady`):
+  1. `readAplGitConfig` — read the current `apl-secrets/apl-git-config` Secret (base64 `.data`, **bare** keys) for apl-core's present (Gitea) coordinates.
+  2. `migrateAplValuesToGitHub` — clone that tree, write `env/apps/<name>.yaml` for each `managedApp`, and **force-push the whole tree** to the github `apl-<env>` branch (`x-access-token:<APL_VALUES_REPO_TOKEN>` basic auth).
+  3. `patchAplGitConfig` — merge-patch `apl-secrets/apl-git-config` `stringData` → `{repoUrl: github, branch: apl-<env>, username: x-access-token, password: <token>}` (bare keys, **`username` not `user`** — the `otomi.git.user` values-comment is a doc bug; every consumer uses `username`). The operator reloads it next poll, `git remote set-url`s to github, hard-resets to our complete+toggled tree, and installs the apps.
+- The app list is `o.managedApps`, populated in `runBootstrapCluster` from `spec.cluster.bootstrap.managedApps` (which `Defaults()` fills to `clusterspec.DefaultManagedApps = [harbor, loki, grafana, kyverno]`), fallback to `DefaultManagedApps`.
+- Registry: `ManagedConditionalOn` on `harbor`/`observability`/`imageSignature` reads `managedApps`; with the default set all three emit. `imageSignature`'s file stays under `platform-apl/components/imageSignature/` for cosign-subject-guard.
+- `verify.go` reads the BYO-Git repoUrl from the **Secret** `apl-secrets/apl-git-config` (base64), NOT a ConfigMap in `apl-operator` (that earlier check was a wrong-kind/wrong-namespace no-op).
+- Graceful degradation: best-effort (warn, don't fail the bootstrap). A failure leaves apl-core on Gitea with the default minimal apps; the render-side gate still emitted `imageSignature` (kyverno declared), so this is the one path that can still wedge — mitigated by the Argo `SkipDryRunOnMissingResource` + retry budget once the app-enable eventually succeeds.
+
+**Live-validation status:** the migration's one field-unknown is whether the Gitea remote in `apl-git-config` is reachable from the CI runner (public portal URL vs in-cluster Service). Under e2e re-validation; if in-cluster-only, the clone/push must run from within the cluster (a Job) or via apl-api (Path B).
 
 ## Open questions
 

@@ -24,9 +24,11 @@ package main
 import (
 	"bytes"
 	_ "embed"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -88,15 +90,14 @@ type bootstrapClusterOpts struct {
 	managedApps []string
 }
 
-// bootstrapDeps are the seams the flow drives. kubectl runs one read/wait
+// bootstrapDeps are the seams the flow drives. kubectl runs one read/wait/patch
 // invocation (KUBECONFIG wired) returning combined output + exit-0; apply pipes a
-// manifest to `kubectl apply --server-side`; helm runs one helm invocation (the
-// managed BYO-Git + default-apps `helm upgrade`); git talks to the remote values
-// repo (the apl-<env> branch seed); now/sleep make the deadline loops testable.
+// manifest to `kubectl apply --server-side`; git clones/pushes the apl-core values
+// repo (the BYO-Git migration to the apl-<env> github branch); now/sleep make the
+// deadline loops testable.
 type bootstrapDeps struct {
 	kubectl func(args ...string) (string, bool)
 	apply   func(stdinYAML, fieldManager string, force bool) (string, bool)
-	helm    func(args ...string) (string, bool)
 	git     func(args ...string) (string, bool)
 	now     func() time.Time
 	sleep   func(time.Duration)
@@ -208,13 +209,6 @@ func newBootstrapDeps(kubeconfigPath string) bootstrapDeps {
 				cmd.Env = envWithKubeconfig(kubeconfigPath)
 			}
 			cmd.Stdin = strings.NewReader(stdinYAML)
-			return runCombined(cmd)
-		},
-		helm: func(args ...string) (string, bool) {
-			cmd := exec.Command("helm", args...)
-			if kubeconfigPath != "" {
-				cmd.Env = envWithKubeconfig(kubeconfigPath)
-			}
 			return runCombined(cmd)
 		},
 		git: func(args ...string) (string, bool) {
@@ -468,101 +462,202 @@ func manifestName(obj map[string]any) string {
 	return ""
 }
 
+// aplGitConfig is App Platform's "BYO Git" config, stored (BARE keys, not otomi.git.*)
+// in the Secret apl-secrets/apl-git-config. apl-operator re-reads this Secret on EVERY
+// reconcile poll (reloadGitCredentials → git remote set-url), so patching it repoints
+// apl-core's values repo at runtime with no pod restart and no helm.
+type aplGitConfig struct {
+	repoURL, branch, username, password string
+}
+
+const (
+	aplGitSecretName = "apl-git-config"
+	aplGitSecretNS   = "apl-secrets"
+)
+
 // configureManagedApl points the Linode-installed apl-core at LLZ's github values
-// branch (App Platform "BYO Git") and enables the default apps, via a chart-driven
-// `helm upgrade --reuse-values` — so the chart regenerates apl-secrets/apl-git-config
-// and flips apps.<name>.enabled by its own logic (no reverse-engineering of the
-// Secret keys / values-repo layout). apl-operator reloads the git config at runtime
-// and reconciles the enabled apps onto the cluster.
+// branch (App Platform "BYO Git") and enables the default apps — the SUPPORTED way,
+// NOT via helm. A managed cluster has no customer-`helm`-upgradeable `apl` release
+// (helm upgrade → "apl has no deployed releases"), and app-enablement flows through
+// the git VALUES REPO the operator reconciles, not chart values (which are read only
+// at first-install bootstrap). See docs/adr/0006-managed-default-apps.md.
 //
-// Needs APL_VALUES_REPO_TOKEN (Contents:write on the instance repo) to (a) seed the
-// apl-<env> branch apl-operator pulls and (b) authenticate the git push. Empty token
-// → skip (a public/unconfigured instance; the caller degrades rather than wedging).
+// Mechanism (all source-verified against linode/apl-core):
+//  1. Read apl-core's CURRENT git remote from apl-secrets/apl-git-config (Gitea).
+//  2. Migrate: clone that tree, drop an `env/apps/<name>.yaml` AplApp enable file for
+//     each managed app, and push the WHOLE tree to the github apl-<env> branch. The
+//     complete tree matters: the operator does `git reset --hard origin/<branch>` each
+//     poll, so a partial branch (toggles only) would WIPE apl-core's config. This
+//     replicates the Console's "push existing values history" BYO-Git migration step.
+//  3. Patch apl-secrets/apl-git-config → the github coords. The operator reloads it,
+//     `git remote set-url`s to github, hard-resets to our complete+toggled tree, and
+//     reconciles the apps on.
+//
+// Needs APL_VALUES_REPO_TOKEN (Contents:write on the instance repo). Empty token →
+// skip. Best-effort at the call site (a failure warns; the Argo bridge still applies).
 func configureManagedApl(o bootstrapClusterOpts, d bootstrapDeps) error {
 	if o.instanceRepoToken == "" {
 		fmt.Fprintln(os.Stderr, "APL_VALUES_REPO_TOKEN unset — skipping the managed apl-core BYO-Git + default-apps configuration.")
 		return nil
 	}
-	repoURL := "https://github.com/" + o.instanceRepo + ".git"
+	githubURL := "https://github.com/" + o.instanceRepo + ".git"
 	branch := "apl-" + o.env
 	apps := o.managedApps
 	if len(apps) == 0 {
 		apps = clusterspec.DefaultManagedApps
 	}
+	tok := o.instanceRepoToken
 
-	// 1. Seed the apl-<env> branch. apl-core v6's apl-operator PULLS otomi.git.branch
-	//    and deadlocks on a missing ref (it never self-creates), so prime it.
-	if err := ensureAplValuesBranch(d, o, repoURL, branch); err != nil {
+	// 1. Read apl-core's current values-repo coordinates (the Gitea default on managed).
+	cur, err := readAplGitConfig(d)
+	if err != nil {
 		return err
 	}
 
-	// 2. Chart-driven helm upgrade: flip otomi.git → github + enable the default apps.
-	//    --reuse-values keeps Linode's install values and overrides only these; the
-	//    version is pinned to the platform baseline so the chart itself is not moved.
-	args := []string{
-		"upgrade", "apl", "apl",
-		"--repo", aplChartRepo, "--version", defaultAplChartVersion,
-		"--namespace", "apl-operator", "--reuse-values",
-		"--wait", "--timeout", "600s",
-		"--set", "otomi.git.repoUrl=" + repoURL,
-		"--set", "otomi.git.user=x-access-token",
-		"--set", "otomi.git.password=" + o.instanceRepoToken,
-		"--set", "otomi.git.branch=" + branch,
+	// 2. Migrate the current tree → github apl-<env>, layering the app-enable files on.
+	if err := migrateAplValuesToGitHub(d, cur, githubURL, branch, apps, tok); err != nil {
+		return err
 	}
-	for _, app := range apps {
-		args = append(args, "--set", "apps."+app+".enabled=true")
+
+	// 3. Repoint apl-core at the github branch by patching the BYO-Git Secret.
+	if err := patchAplGitConfig(d, githubURL, branch, tok); err != nil {
+		return err
 	}
-	if out, ok := d.helm(args...); !ok {
-		fmt.Fprint(os.Stderr, redactSecret(out, o.instanceRepoToken))
-		return fmt.Errorf("helm upgrade apl (BYO-Git + apps: %s) — is the managed apl release named 'apl' in apl-operator and helm-upgradeable?", strings.Join(apps, ","))
-	}
-	fmt.Fprintf(os.Stderr, "✓ managed apl-core pointed at %s (branch %s) + apps enabled (%s).\n", repoURL, branch, strings.Join(apps, ", "))
+
+	fmt.Fprintf(os.Stderr, "✓ managed apl-core repointed at %s (branch %s) + apps enabled (%s).\n", githubURL, branch, strings.Join(apps, ", "))
 	return nil
 }
 
-// ensureAplValuesBranch creates the apl-<env> values branch on the instance repo
-// when it does not exist (an empty orphan commit apl-operator then bootstraps onto).
-// Idempotent: an existing branch is left untouched. A push failure surfaces LOUD and
-// EARLY here — naming the token — instead of as an opaque converge timeout downstream.
-func ensureAplValuesBranch(d bootstrapDeps, o bootstrapClusterOpts, repoURL, branch string) error {
-	authURL := authedGitURL(repoURL, o.instanceRepoToken)
-	tok := o.instanceRepoToken
-	ref := "refs/heads/" + branch
-	if out, ok := d.git("ls-remote", authURL, ref); ok && strings.TrimSpace(out) != "" {
-		fmt.Printf("apl values branch %q already exists on %s.\n", branch, repoURL)
-		return nil
+// readAplGitConfig reads the current apl-secrets/apl-git-config Secret (base64 .data,
+// BARE keys) so the migration can clone apl-core's existing (Gitea) values tree.
+func readAplGitConfig(d bootstrapDeps) (aplGitConfig, error) {
+	get := func(key string) (string, error) {
+		out, ok := d.kubectl("-n", aplGitSecretNS, "get", "secret", aplGitSecretName,
+			"-o", "jsonpath={.data."+key+"}")
+		if !ok {
+			return "", fmt.Errorf("read %s/%s: is apl-core installed? %s", aplGitSecretNS, aplGitSecretName, strings.TrimSpace(out))
+		}
+		if strings.TrimSpace(out) == "" {
+			return "", nil
+		}
+		dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+		if err != nil {
+			return "", fmt.Errorf("decode %s.%s: %w", aplGitSecretName, key, err)
+		}
+		return string(dec), nil
 	}
-	fmt.Printf("apl values branch %q absent on %s — seeding an empty orphan branch for apl-operator to bootstrap...\n", branch, repoURL)
-	tmp, err := os.MkdirTemp("", "llz-apl-branch-*")
+	var c aplGitConfig
+	var err error
+	if c.repoURL, err = get("repoUrl"); err != nil {
+		return c, err
+	}
+	if c.branch, err = get("branch"); err != nil {
+		return c, err
+	}
+	if c.username, err = get("username"); err != nil {
+		return c, err
+	}
+	if c.password, err = get("password"); err != nil {
+		return c, err
+	}
+	if c.repoURL == "" {
+		return c, fmt.Errorf("%s/%s has no repoUrl — apl-core not yet BYO-Git-configured", aplGitSecretNS, aplGitSecretName)
+	}
+	if c.branch == "" {
+		c.branch = "main"
+	}
+	return c, nil
+}
+
+// migrateAplValuesToGitHub clones apl-core's CURRENT values tree, layers an AplApp
+// enable file per app under env/apps/, and pushes the whole tree to the github
+// apl-<env> branch (force — this branch is LLZ-owned, superseded every bootstrap).
+func migrateAplValuesToGitHub(d bootstrapDeps, cur aplGitConfig, githubURL, branch string, apps []string, tok string) error {
+	tmp, err := os.MkdirTemp("", "llz-apl-values-*")
 	if err != nil {
-		return fmt.Errorf("mktemp for apl-values seed: %w", err)
+		return fmt.Errorf("mktemp for apl-values migration: %w", err)
 	}
 	defer os.RemoveAll(tmp)
-	if out, ok := d.git("init", "--initial-branch", branch, tmp); !ok {
-		return fmt.Errorf("init apl-values seed repo: %s", redactSecret(out, tok))
+
+	srcAuth := basicAuthGitURL(cur.repoURL, cur.username, cur.password)
+	secrets := []string{tok, cur.password}
+	if out, ok := d.git("clone", "--depth", "1", "--branch", cur.branch, srcAuth, tmp); !ok {
+		return fmt.Errorf("clone apl-core values tree from its current remote (branch %s): %s", cur.branch, redactSecrets(out, secrets))
+	}
+
+	// Layer the app-enable files onto the cloned tree. env/apps/<name>.yaml, kind
+	// AplApp, spec.enabled:true — the operator keys the app off the FILENAME and reads
+	// data.spec, so both the path and the spec wrapper are load-bearing.
+	appsDir := filepath.Join(tmp, "env", "apps")
+	if err := os.MkdirAll(appsDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir env/apps: %w", err)
+	}
+	for _, app := range apps {
+		if err := os.WriteFile(filepath.Join(appsDir, app+".yaml"), []byte(aplAppEnableManifest(app)), 0o644); err != nil {
+			return fmt.Errorf("write env/apps/%s.yaml: %w", app, err)
+		}
+	}
+
+	if out, ok := d.git("-C", tmp, "add", "-A"); !ok {
+		return fmt.Errorf("git add apl-values: %s", redactSecrets(out, secrets))
 	}
 	if out, ok := d.git("-C", tmp,
 		"-c", "user.name=llz-bootstrap", "-c", "user.email=llz-bootstrap@noreply.local",
-		"commit", "--allow-empty", "-m", "chore: seed "+branch+" for apl-operator (llz ci bootstrap-cluster)"); !ok {
-		return fmt.Errorf("create seed commit for %q: %s", branch, redactSecret(out, tok))
+		"commit", "--allow-empty", "-m", "chore(llz): enable managed apps ["+strings.Join(apps, ",")+"] + point apl-core at github"); !ok {
+		return fmt.Errorf("git commit apl-values: %s", redactSecrets(out, secrets))
 	}
-	if out, ok := d.git("-C", tmp, "push", authURL, "HEAD:refs/heads/"+branch); !ok {
-		return fmt.Errorf("push apl-values branch %q to %s — does APL_VALUES_REPO_TOKEN have Contents:write? git: %s",
-			branch, repoURL, redactSecret(out, tok))
+	dstAuth := basicAuthGitURL(githubURL, "x-access-token", tok)
+	if out, ok := d.git("-C", tmp, "push", "--force", dstAuth, "HEAD:refs/heads/"+branch); !ok {
+		return fmt.Errorf("push apl-values to %s (branch %s) — does APL_VALUES_REPO_TOKEN have Contents:write? %s",
+			githubURL, branch, redactSecrets(out, secrets))
 	}
-	fmt.Printf("seeded apl-values branch %q on %s.\n", branch, repoURL)
 	return nil
 }
 
-// authedGitURL injects an x-access-token basic-auth credential into an https git URL
-// so ls-remote/push reach a PRIVATE instance repo. Non-https URLs (or an empty token)
-// are returned unchanged. The result carries a secret and must never be logged.
-func authedGitURL(rawURL, token string) string {
+// patchAplGitConfig repoints apl-core at the github branch by merge-patching the
+// BYO-Git Secret's stringData (preserving unrelated keys). username=x-access-token +
+// the PAT is the same basic-auth pair the migration push used.
+func patchAplGitConfig(d bootstrapDeps, githubURL, branch, tok string) error {
+	patch := fmt.Sprintf(`{"stringData":{"repoUrl":%q,"branch":%q,"username":"x-access-token","password":%q}}`,
+		githubURL, branch, tok)
+	if out, ok := d.kubectl("-n", aplGitSecretNS, "patch", "secret", aplGitSecretName,
+		"--type=merge", "-p", patch); !ok {
+		return fmt.Errorf("patch %s/%s to github coords: %s", aplGitSecretNS, aplGitSecretName, redactSecret(strings.TrimSpace(out), tok))
+	}
+	return nil
+}
+
+// aplAppEnableManifest is the minimal apl-core values-repo file that enables an app:
+// an AplApp manifest whose spec becomes apps.<name> in the merged values. Schema-valid
+// for the LLZ default set (harbor has no app-level required; loki's adminPassword is an
+// x-secret, stripped from `required` before validation).
+func aplAppEnableManifest(app string) string {
+	return "kind: AplApp\nmetadata:\n  name: " + app + "\nspec:\n  enabled: true\n"
+}
+
+// basicAuthGitURL injects a user:secret credential into an https git URL so clone/push
+// reach a private remote. Non-https URLs (or an empty secret) are returned unchanged.
+// The result carries a secret and must never be logged.
+func basicAuthGitURL(rawURL, user, secret string) string {
 	const p = "https://"
-	if token == "" || !strings.HasPrefix(rawURL, p) {
+	if secret == "" || !strings.HasPrefix(rawURL, p) {
 		return rawURL
 	}
-	return p + "x-access-token:" + token + "@" + strings.TrimPrefix(rawURL, p)
+	if user == "" {
+		user = "x-access-token"
+	}
+	return p + user + ":" + secret + "@" + strings.TrimPrefix(rawURL, p)
+}
+
+// redactSecrets masks each non-empty secret wherever it appears in command output.
+func redactSecrets(s string, secrets []string) string {
+	s = strings.TrimSpace(s)
+	for _, sec := range secrets {
+		if sec != "" {
+			s = strings.ReplaceAll(s, sec, "***")
+		}
+	}
+	return s
 }
 
 // redactSecret masks a token wherever it appears in command output (git can echo a

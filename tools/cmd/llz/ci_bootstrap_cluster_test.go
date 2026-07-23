@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/base64"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -193,16 +196,11 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 				return "", true
 			},
 			apply: func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
-			// configureManagedApl runs when a token is set: ls-remote reports the branch
-			// present (skip the seed dance) and helm succeeds.
-			git: func(args ...string) (string, bool) {
-				if strings.Contains(strings.Join(args, " "), "ls-remote") {
-					return "abc123\trefs/heads/apl-primary", true
-				}
-				return "", true
-			},
-			helm: func(...string) (string, bool) { return "", true },
-			now:  time.Now, sleep: func(time.Duration) {},
+			// configureManagedApl runs when a token is set; the kubectl stub above
+			// returns no apl-git-config repoUrl, so it warns-and-continues (best-effort)
+			// without reaching the git migration — this test only asserts the bridge.
+			git: func(...string) (string, bool) { return "", true },
+			now: time.Now, sleep: func(time.Duration) {},
 		}
 		if err := bootstrapCluster(o, d); err != nil {
 			t.Fatalf("bootstrapCluster: %v", err)
@@ -233,54 +231,92 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 	}
 }
 
-// TestConfigureManagedApl: seeds the apl-<env> branch when absent and helm-upgrades
-// the managed apl release pointing otomi.git at github + enabling the default apps.
+// TestConfigureManagedApl: reads apl-core's current (Gitea) BYO-Git Secret, migrates
+// the values tree to the github apl-<env> branch with an AplApp enable file per default
+// app, and patches apl-secrets/apl-git-config to repoint apl-core at github. No helm.
 func TestConfigureManagedApl(t *testing.T) {
 	o := bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance", instanceRepoToken: "test-repo-token"}
-	var helmArgs []string
-	var pushed bool
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	var patched, forcePush string
+	var cloneDir string
+	var appFiles []string
 	d := bootstrapDeps{
-		git: func(args ...string) (string, bool) {
+		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
-			if strings.Contains(line, "ls-remote") {
-				return "", true // branch absent → seed it
-			}
-			if strings.Contains(line, "push") {
-				pushed = true
+			switch {
+			case strings.Contains(line, "get secret apl-git-config") && strings.Contains(line, "data.repoUrl"):
+				return b64("https://gitea.internal/otomi/values.git"), true
+			case strings.Contains(line, "get secret apl-git-config") && strings.Contains(line, "data.branch"):
+				return b64("main"), true
+			case strings.Contains(line, "get secret apl-git-config") && strings.Contains(line, "data.username"):
+				return b64("otomi-admin"), true
+			case strings.Contains(line, "get secret apl-git-config") && strings.Contains(line, "data.password"):
+				return b64("gitea-pw"), true
+			case strings.Contains(line, "patch secret apl-git-config"):
+				patched = line
+				return "", true
 			}
 			return "", true
 		},
-		helm: func(args ...string) (string, bool) { helmArgs = args; return "", true },
+		git: func(args ...string) (string, bool) {
+			line := strings.Join(args, " ")
+			if strings.Contains(line, "clone") { // last arg is the real temp clone dir
+				cloneDir = args[len(args)-1]
+			}
+			if strings.Contains(line, "add") && cloneDir != "" { // read the enable files just written
+				if ents, err := os.ReadDir(filepath.Join(cloneDir, "env", "apps")); err == nil {
+					for _, e := range ents {
+						appFiles = append(appFiles, e.Name())
+					}
+				}
+			}
+			if strings.Contains(line, "push") && strings.Contains(line, "--force") {
+				forcePush = line
+			}
+			return "", true
+		},
 	}
 	if err := configureManagedApl(o, d); err != nil {
 		t.Fatalf("configureManagedApl: %v", err)
 	}
-	if !pushed {
-		t.Error("absent apl-<env> branch must be seeded (git push)")
-	}
-	joined := strings.Join(helmArgs, " ")
-	for _, want := range []string{
-		"upgrade apl apl", "--reuse-values",
-		"otomi.git.repoUrl=https://github.com/acme/instance.git",
-		"otomi.git.branch=apl-primary", "otomi.git.password=test-repo-token",
-		"apps.harbor.enabled=true", "apps.loki.enabled=true",
-		"apps.grafana.enabled=true", "apps.kyverno.enabled=true",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("helm upgrade missing %q; got: %s", want, joined)
+	// An AplApp enable file per default app, keyed by filename.
+	for _, f := range []string{"harbor.yaml", "loki.yaml", "grafana.yaml", "kyverno.yaml"} {
+		if !containsStr(appFiles, f) {
+			t.Errorf("migration must write env/apps/%s; got %v", f, appFiles)
 		}
 	}
-	// No token → skip entirely (no helm/git).
+	if !strings.Contains(forcePush, "apl-primary") {
+		t.Errorf("migration must force-push to the apl-primary branch; got %q", forcePush)
+	}
+	// The BYO-Git Secret is repointed at the github branch (not helm, not otomi.git.*).
+	for _, want := range []string{
+		`"repoUrl":"https://github.com/acme/instance.git"`, `"branch":"apl-primary"`, `"username":"x-access-token"`,
+	} {
+		if !strings.Contains(patched, want) {
+			t.Errorf("apl-git-config patch missing %q; got %q", want, patched)
+		}
+	}
+	// No token → skip entirely (no kubectl/git).
 	var ran bool
 	d2 := bootstrapDeps{
-		git:  func(...string) (string, bool) { ran = true; return "", true },
-		helm: func(...string) (string, bool) { ran = true; return "", true },
+		kubectl: func(...string) (string, bool) { ran = true; return "", true },
+		git:     func(...string) (string, bool) { ran = true; return "", true },
 	}
 	if err := configureManagedApl(bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance"}, d2); err != nil {
 		t.Fatalf("configureManagedApl (no token): %v", err)
 	}
 	if ran {
-		t.Error("no APL_VALUES_REPO_TOKEN → configureManagedApl must skip (no git/helm)")
+		t.Error("no APL_VALUES_REPO_TOKEN → configureManagedApl must skip (no kubectl/git)")
+	}
+}
+
+// TestAplAppEnableManifest: the enable file is a valid AplApp whose spec enables the app.
+func TestAplAppEnableManifest(t *testing.T) {
+	got := aplAppEnableManifest("harbor")
+	for _, want := range []string{"kind: AplApp", "name: harbor", "enabled: true"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("aplAppEnableManifest missing %q:\n%s", want, got)
+		}
 	}
 }
 
