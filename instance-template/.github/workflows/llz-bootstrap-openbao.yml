@@ -400,6 +400,9 @@ jobs:
         env:
           OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+          # apl-values repo Contents:write PAT → secret/infra/apl-values-repo-token
+          # (the apl-values-repo-token ExternalSecret the llz-reconciler consumes).
+          APL_VALUES_REPO_TOKEN: ${{ secrets.APL_VALUES_REPO_TOKEN }}
         run: llz ci bao-seed-all --region "$REGION"
 
       # ── Mint + seed: object-storage keys (Loki + Harbor registry) ──────────────

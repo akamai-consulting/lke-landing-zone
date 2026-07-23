@@ -103,8 +103,9 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	}
 	writeTFVars(t, dir, "object-storage", "primary", `obj_cluster = "us-ord-1"`)
 
-	// Fresh bootstrap: both objkey paths absent → two mints + two seeds carrying
-	// the complete field sets + rotated_at; the DNS PAT entry is never minted here.
+	// Fresh bootstrap: all objkey paths absent → three mints + three seeds carrying
+	// the complete field sets + rotated_at (loki + harbor + the consolidated
+	// obj-platform key); the DNS PAT entry is never minted here.
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent
 	if err := runCIMintBootstrapObjkeys("primary"); err != nil {
 		t.Fatal(err)

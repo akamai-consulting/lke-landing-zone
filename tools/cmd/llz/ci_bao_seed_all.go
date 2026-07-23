@@ -66,6 +66,17 @@ func bootstrapSeeds(region string) []baoSeedOpts {
 			onMissing:    "skip",
 			missingNotes: []string{"OPENBAO_SECRETS_WRITE_TOKEN not set — skipping secret/cert-automation/github-token."},
 		},
+		// apl-values repo Contents:write PAT (the same APL_VALUES_REPO_TOKEN the
+		// bootstrap already require-secrets and uses for the managed BYO-Git config)
+		// for the apl-values-repo-token ExternalSecret the llz-reconciler consumes to
+		// git-sync the apl-overlay onto apl-<env>. property `token`, under secret/infra/
+		// so the openbao store policy that already covers github-dispatch-token applies.
+		{
+			path:         "secret/infra/apl-values-repo-token",
+			fieldSpecs:   []string{"token=env:APL_VALUES_REPO_TOKEN"},
+			onMissing:    "skip",
+			missingNotes: []string{"APL_VALUES_REPO_TOKEN not set — skipping secret/infra/apl-values-repo-token (apl-overlay reconciler no-ops until it appears)."},
+		},
 		// secret/linode/api-token is NO LONGER seeded here (and no longer holds
 		// the broad provisioning PAT): `llz ci mint-bootstrap-pat` mints the
 		// NARROW in-cluster PAT via the Linode API and seeds the path directly

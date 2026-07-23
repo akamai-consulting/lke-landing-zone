@@ -26,6 +26,7 @@ path "secret/data/harbor/admin"                 { capabilities = ["read"] }
 path "secret/data/harbor/pull-robot"            { capabilities = ["read"] }
 path "secret/data/harbor/registry-s3"           { capabilities = ["read"] }
 path "secret/data/harbor/robot"                 { capabilities = ["read"] }
+path "secret/data/infra/apl-values-repo-token"  { capabilities = ["read"] }
 path "secret/data/infra/github-dispatch-token"  { capabilities = ["read"] }
 path "secret/data/linode/api-token"             { capabilities = ["read"] }
 path "secret/data/linode/broad-pat"             { capabilities = ["read"] }
@@ -42,6 +43,7 @@ path "secret/metadata/harbor/docker-config"         { capabilities = ["read", "l
 path "secret/metadata/harbor/pull-robot"            { capabilities = ["read", "list"] }
 path "secret/metadata/harbor/registry-s3"           { capabilities = ["read", "list"] }
 path "secret/metadata/harbor/robot"                 { capabilities = ["read", "list"] }
+path "secret/metadata/infra/apl-values-repo-token"  { capabilities = ["read", "list"] }
 path "secret/metadata/infra/github-dispatch-token"  { capabilities = ["read", "list"] }
 path "secret/metadata/linode/api-token"             { capabilities = ["read", "list"] }
 path "secret/metadata/linode/broad-pat"             { capabilities = ["read", "list"] }
@@ -108,13 +110,18 @@ path "secret/metadata/harbor/robot"      { capabilities = ["read"] }
 path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 `
 
-// reconciler-read: metadata-ONLY read on the two in-cluster-rotated object-storage
-// key paths, for the in-cluster llz reconciler's credential-age gauges
-// (--reconcile-openbao-gauges). It reads updated_time to compute rotation age; it
-// never needs the secret data, so this grants no secret/data access — strictly
-// less than linode-rotator. Mapped to the `reconciler` k8s-auth role below.
+// reconciler-read: metadata read on the in-cluster-rotated object-storage key
+// paths for the credential-age gauges (--reconcile-openbao-gauges), PLUS a DATA
+// read on the consolidated obj credential (secret/obj/platform) for the
+// apl-overlay reconciler (--reconcile-apl-overlay), which fills accessKeyId/
+// secretAccessKey into apl-core's native obj values before git-syncing them onto
+// apl-<env>. The data read is scoped to that ONE consolidated path — not the
+// per-app loki/harbor keys, which the reconciler never needs the data of. Mapped
+// to the `reconciler` k8s-auth role below. See docs/designs/apl-overlay-obj-native.md.
 const policyReconcilerRead = `path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
 path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
+path "secret/data/obj/platform"     { capabilities = ["read"] }
+path "secret/metadata/obj/platform" { capabilities = ["read"] }
 `
 
 // broad-pat-rotator: read/write on EXACTLY the broad-PAT path the in-cluster

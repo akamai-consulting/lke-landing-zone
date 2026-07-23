@@ -17,6 +17,7 @@ func TestBootstrapSeedsTable(t *testing.T) {
 	wantPaths := []string{
 		"secret/infra/github-dispatch-token",
 		"secret/cert-automation/github-token",
+		"secret/infra/apl-values-repo-token",
 	}
 	if len(seeds) != len(wantPaths) {
 		t.Fatalf("bootstrapSeeds returned %d entries, want %d", len(seeds), len(wantPaths))

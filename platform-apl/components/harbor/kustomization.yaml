@@ -3,7 +3,6 @@
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:
-  - harbor-registry-s3-externalsecret.yaml
   # Mirrors Harbor's Helm-generated admin password into OpenBao (replaces the
   # imperative secret/harbor/admin bao-seed). See harbor-admin-push.yaml.
   - harbor-admin-push.yaml

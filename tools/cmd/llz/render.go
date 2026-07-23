@@ -502,9 +502,27 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		}
 	}
 	// apl-core values.yaml is NOT rendered: LLZ runs exclusively on Linode's MANAGED
-	// App Platform, where apl-core owns its own values (apl-api + in-cluster gitea) and
-	// LLZ never pushes an overlay — the platform-bootstrap Application syncs only the
-	// manifest/ tree. See docs/adr/0005-managed-app-platform.md.
+	// App Platform, where apl-core owns its own values (apl-api + in-cluster gitea).
+	// The platform-bootstrap Application syncs only the manifest/ tree. See
+	// docs/adr/0005-managed-app-platform.md.
+	//
+	// The apl-OVERLAY is the exception and the deliberate complement to that stance:
+	// a SEPARATE, secret-free source of truth for apl-core's NATIVE obj storage +
+	// app toggles that the in-cluster apl-overlay reconciler merges (_shared + <env>),
+	// fills the accessKeyId into from OpenBao, and git-syncs onto the apl-<env> branch
+	// (the obj secretAccessKey never transits git — ESO delivers it into obj-secrets).
+	// It targets env/settings/*.yaml on apl-<env>, NOT the values.yaml Linode owns, so
+	// the two writers never collide. The _shared base is deterministic (no spec input)
+	// but rendered from the same functions so `render --check` keeps it in lockstep with
+	// the code. See docs/designs/apl-overlay-obj-native.md.
+	shared := filepath.Join(aplDir, "_shared", "apl-overlay")
+	targets[filepath.Join(shared, clusterspec.OverlayObjFile)] = clusterspec.RenderObjOverlayShared()
+	targets[filepath.Join(shared, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayShared()
+	overlay := filepath.Join(aplDir, env, "apl-overlay")
+	if obj := clusterspec.RenderObjOverlayEnv(env, e.Cluster.ObjectStorage.Cluster); obj != "" {
+		targets[filepath.Join(overlay, clusterspec.OverlayObjFile)] = obj
+	}
+	targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Components)
 	return targets, nil
 }
 
@@ -533,7 +551,7 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 	case "llzReconciler":
 		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds); REGION is
 		// the env name and OBJ_CLUSTER the object-storage cluster.
-		content["llz-reconciler-env-patch.yaml"] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster)
+		content["llz-reconciler-env-patch.yaml"] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster, ghRepo)
 	}
 	for _, p := range c.Patches {
 		if body, ok := content[p.Path]; ok {

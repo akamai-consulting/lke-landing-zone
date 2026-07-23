@@ -184,7 +184,6 @@ var Components = []Component{
 		Name:        "observability",
 		AplCoreApps: []string{"prometheus", "alertmanager", "grafana", "loki", "otel"},
 		ManifestResources: []string{
-			"observability/loki-object-store-externalsecret.yaml",
 			"observability/otel-bootstrap-ca.yaml",
 			"observability/otel-collector.yaml",
 			"observability/prometheus-rules/openbao-alerts.yaml",
@@ -214,7 +213,6 @@ var Components = []Component{
 		Name:        "harbor",
 		AplCoreApps: []string{"harbor"},
 		ManifestResources: []string{
-			"harbor/harbor-registry-s3-externalsecret.yaml",
 			"harbor/harbor-admin-push.yaml",
 			"harbor/harbor-robot-provisioner",
 		},
