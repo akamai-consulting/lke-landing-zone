@@ -367,31 +367,10 @@ func TestWaitManagedArgoReady_Timeout(t *testing.T) {
 	}
 }
 
-// TestManagedBlockStorageClassYAML: the managed variant keeps the class name +
-// Linode-CSI provisioner but drops the is-default annotation (managed apl-core
-// owns the cluster-default; a second default would race it).
-func TestManagedBlockStorageClassYAML(t *testing.T) {
-	out, err := managedBlockStorageClassYAML()
-	if err != nil {
-		t.Fatalf("managedBlockStorageClassYAML: %v", err)
-	}
-	if !strings.Contains(out, "name: block-storage-retain") {
-		t.Errorf("lost the class name; got:\n%s", out)
-	}
-	if !strings.Contains(out, "linodebs.csi.linode.com") {
-		t.Errorf("lost the CSI provisioner; got:\n%s", out)
-	}
-	if strings.Contains(out, "is-default-class") {
-		t.Errorf("managed SC must NOT be marked default; got:\n%s", out)
-	}
-	// Retain policy (the whole point of the -retain class) must survive.
-	if !strings.Contains(out, "Retain") {
-		t.Errorf("lost Retain reclaim policy; got:\n%s", out)
-	}
-}
-
-// TestBootstrapCluster_AppliesStorageClass: the managed path applies the
-// non-default block-storage-retain SC + the llz-openbao namespace before the bridge.
+// TestBootstrapCluster_AppliesStorageClass: the managed path applies the DEFAULT
+// block-storage-retain SC + the llz-openbao namespace before the bridge. It is the
+// cluster default (llzReconciler sc-demote keeps LKE's class non-default); managed
+// leaves no default of its own, so without this PVCs without a class stay Pending.
 func TestBootstrapCluster_AppliesStorageClass(t *testing.T) {
 	o := bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance", upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main"}
 	var sawSC, sawOpenbaoNS bool
@@ -412,8 +391,8 @@ func TestBootstrapCluster_AppliesStorageClass(t *testing.T) {
 			}
 			if strings.Contains(y, "block-storage-retain") && strings.Contains(y, "StorageClass") {
 				sawSC = true
-				if strings.Contains(y, "is-default-class") {
-					t.Errorf("managed SC applied AS DEFAULT — must be non-default")
+				if !strings.Contains(y, `is-default-class: "true"`) {
+					t.Errorf("managed block-storage-retain SC must be applied AS the cluster default:\n%s", y)
 				}
 			}
 			return "", true
