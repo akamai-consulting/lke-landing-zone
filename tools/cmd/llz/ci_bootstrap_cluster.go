@@ -248,12 +248,15 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		return fmt.Errorf("apply managed block-storage-retain StorageClass")
 	}
 
-	// llz-openbao namespace. The OpenBao component is CreateNamespace=false and ships
-	// no namespace.yaml, and managed apl-core does not create it, so without this the
-	// OpenBao Application can never sync and the downstream bootstrap-openbao seal-key
-	// seed times out on `namespaces "llz-openbao" not found`.
-	if err := applyManifest(d, llzOpenbaoNamespaceManifest(), "llz-managed-bridge", true); err != nil {
-		return err
+	// LLZ-owned namespaces (llz-openbao, llz-observability) that cluster-foundation
+	// creates on self-install but managed does not. Their carved apps are
+	// CreateNamespace=false, so without this the apps never sync (OpenBao seal-key seed
+	// times out; observability's dashboards + loki-object-store ExternalSecret + otel
+	// stay OutOfSync).
+	for _, ns := range managedLLZNamespaces {
+		if err := applyManifest(d, llzNamespaceManifest(ns), "llz-managed-bridge", true); err != nil {
+			return err
+		}
 	}
 
 	if err := waitManagedArgoReady(d); err != nil {

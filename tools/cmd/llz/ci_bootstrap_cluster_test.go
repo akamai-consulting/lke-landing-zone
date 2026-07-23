@@ -91,17 +91,21 @@ func TestManifestBuilders(t *testing.T) {
 }
 
 // TestLlzOpenbaoNamespaceManifest — the managed bootstrap pre-creates the
-// llz-openbao namespace (managed apl-core does not) with the restricted PSS +
-// monitoring labels and the bootstrap marker, so the OpenBao seal-key seed lands
-// without waiting on a namespace that would otherwise never be created.
-func TestLlzOpenbaoNamespaceManifest(t *testing.T) {
-	m := llzOpenbaoNamespaceManifest()
+// LLZ namespaces (managed apl-core does not) with the restricted PSS + monitoring
+// labels and the bootstrap marker, so the carved apps (CreateNamespace=false) sync
+// without waiting on a namespace that would otherwise never be created. llz-observability
+// is included so its dashboards + loki-object-store ExternalSecret can land.
+func TestLlzNamespaceManifest(t *testing.T) {
+	if want := []string{"llz-openbao", "llz-observability"}; strings.Join(managedLLZNamespaces, ",") != strings.Join(want, ",") {
+		t.Fatalf("managedLLZNamespaces = %v, want %v", managedLLZNamespaces, want)
+	}
+	m := llzNamespaceManifest("llz-observability")
 	if m["kind"] != "Namespace" {
 		t.Fatalf("kind = %v, want Namespace", m["kind"])
 	}
 	meta := m["metadata"].(map[string]any)
-	if meta["name"] != "llz-openbao" {
-		t.Errorf("name = %v, want llz-openbao", meta["name"])
+	if meta["name"] != "llz-observability" {
+		t.Errorf("name = %v, want llz-observability", meta["name"])
 	}
 	labels := meta["labels"].(map[string]any)
 	for k, want := range map[string]string{

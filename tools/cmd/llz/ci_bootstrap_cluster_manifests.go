@@ -24,22 +24,32 @@ func base64Auth(username, token string) string {
 // module's `lke-landing-zone.akamai.io/managed-by-bootstrap: "true"`).
 const managedByBootstrapLabel = "lke-landing-zone.akamai.io/managed-by-bootstrap"
 
-// llzOpenbaoNamespaceManifest — the llz-openbao namespace, pre-created so the
-// bootstrap-openbao seal-key seed lands immediately instead of waiting ~40s for
-// the llz-cluster-foundation Argo app (wave -20) to create it (measured: the
-// seal-key step spent 43 of its 44s purely on this wait — e2e timing artifacts,
-// run 29651276573). Same SSA pre-create + Argo adoption pattern as the argocd /
-// apl-operator namespaces above. Stamped restricted-PSS + monitoring to match
-// llz-cluster-foundation's namespaces.yaml so Argo's later SSA is a clean adopt
-// (the PSS *-version labels land when the chart syncs; enforce=restricted alone
-// already restricts at the latest version until then). The seal-key step keeps
-// its own namespace-wait as the safety net if this ever doesn't run.
-func llzOpenbaoNamespaceManifest() map[string]any {
+// managedLLZNamespaces are the LLZ-owned namespaces that llz-cluster-foundation
+// creates on self-install but that are NOT created on managed (cluster-foundation is
+// ManagedSkip). Their carved Argo apps are CreateNamespace=false, so without a
+// pre-create the app can never sync:
+//   - llz-openbao   — the OpenBao app; bootstrap-openbao's seal-key seed times out on
+//     `namespaces "llz-openbao" not found` otherwise.
+//   - llz-observability — the observability app (custom Grafana dashboards, the
+//     loki-object-store ExternalSecret, otel collector, PrometheusRules); every one of
+//     its resources sits OutOfSync until the namespace exists, so the LLZ dashboards
+//     never reach apl-core's Grafana and Loki's object-store creds never sync.
+//
+// (llz-reconciler / llz-pat-rotator ARE created by their own component manifests, so
+// they are not listed here.)
+var managedLLZNamespaces = []string{"llz-openbao", "llz-observability"}
+
+// llzNamespaceManifest — a pre-created LLZ namespace. Same SSA pre-create + Argo
+// adoption pattern as the argocd / apl-operator namespaces above. Stamped restricted-PSS
+// + monitoring to match llz-cluster-foundation's namespaces.yaml so Argo's later SSA is a
+// clean adopt (the PSS *-version labels land when the chart syncs; enforce=restricted
+// alone already restricts at the latest version until then).
+func llzNamespaceManifest(name string) map[string]any {
 	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Namespace",
 		"metadata": map[string]any{
-			"name": "llz-openbao",
+			"name": name,
 			"labels": map[string]any{
 				"monitoring":                         "enabled",
 				"pod-security.kubernetes.io/enforce": "restricted",
