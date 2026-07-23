@@ -111,6 +111,30 @@ func buildRotationTable(region, objCluster string) []credEntry {
 				return harborRegistryS3Fields(region, objCluster, access, secret)
 			},
 		},
+		{
+			// The CONSOLIDATED platform obj key (apl-core native obj's one-cred model).
+			// The apl-overlay reconciler reads {access_key_id, secret_access_key} from
+			// here and fills them into apl-core's obj.provider.linode values before
+			// git-syncing onto apl-<env>. Spans every bucket apl-core native obj points
+			// at (the existing Loki chunks/ruler/admin + Harbor registry buckets — see
+			// clusterspec.RenderObjOverlayEnv). The two per-app keys above STAY for now
+			// (Loki/Harbor still consume their existing ESO Secrets until the lab-gated
+			// native-obj flip); this is the forward credential. See
+			// docs/designs/apl-overlay-obj-native.md.
+			name: "obj-platform", kind: credKindObjKey, label: "platform-obj-" + region,
+			objCluster: objCluster,
+			buckets: []string{
+				"platform-loki-chunks-" + region,
+				"platform-loki-ruler-" + region,
+				"platform-loki-admin-" + region,
+				"platform-harbor-registry-" + region,
+			},
+			permissions: "read_write",
+			baoPath:     "secret/obj/platform", presentField: "access_key_id",
+			fields: func(access, secret string) map[string]string {
+				return map[string]string{"access_key_id": access, "secret_access_key": secret}
+			},
+		},
 	}
 }
 

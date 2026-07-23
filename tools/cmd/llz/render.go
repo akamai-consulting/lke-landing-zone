@@ -496,6 +496,22 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 			return nil, fmt.Errorf("render values.yaml: %w", err)
 		}
 		targets[filepath.Join(aplDir, env, "values.yaml")] = string(rendered)
+
+		// apl-overlay: the spec-owned, secret-free source of truth for apl-core's
+		// NATIVE obj storage + app toggles, which the in-cluster apl-overlay
+		// reconciler merges (_shared + <env>), fills from OpenBao, and git-syncs onto
+		// apl-<env>. Gated on the apl-core backend (same _shared/values.yaml marker).
+		// The _shared base is deterministic (no spec input) but rendered from the same
+		// functions so `render --check` keeps it in lockstep with the code. See
+		// docs/designs/apl-overlay-obj-native.md.
+		shared := filepath.Join(aplDir, "_shared", "apl-overlay")
+		targets[filepath.Join(shared, clusterspec.OverlayObjFile)] = clusterspec.RenderObjOverlayShared()
+		targets[filepath.Join(shared, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayShared()
+		overlay := filepath.Join(aplDir, env, "apl-overlay")
+		if obj := clusterspec.RenderObjOverlayEnv(env, e.Cluster.ObjectStorage.Cluster); obj != "" {
+			targets[filepath.Join(overlay, clusterspec.OverlayObjFile)] = obj
+		}
+		targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Components)
 	}
 	return targets, nil
 }
@@ -525,7 +541,7 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 	case "llzReconciler":
 		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds); REGION is
 		// the env name and OBJ_CLUSTER the object-storage cluster.
-		content["llz-reconciler-env-patch.yaml"] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster)
+		content["llz-reconciler-env-patch.yaml"] = clusterspec.RenderReconcilerEnvPatch(first3(env), env, e.Cluster.ObjectStorage.Cluster, ghRepo)
 	}
 	for _, p := range c.Patches {
 		if body, ok := content[p.Path]; ok {

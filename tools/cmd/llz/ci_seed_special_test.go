@@ -103,26 +103,28 @@ func TestRunCIMintBootstrapObjkeys(t *testing.T) {
 	}
 	writeTFVars(t, dir, "object-storage", "primary", `obj_cluster = "us-ord-1"`)
 
-	// Fresh bootstrap: both objkey paths absent → two mints + two seeds carrying
-	// the complete field sets + rotated_at; the DNS PAT entry is never minted here.
+	// Fresh bootstrap: all objkey paths absent → three mints + three seeds carrying
+	// the complete field sets + rotated_at (loki + harbor + the consolidated
+	// obj-platform key); the DNS PAT entry is never minted here.
 	puts := stubBaoSeedKV(t, "", "") // every `kv get` reports absent
 	if err := runCIMintBootstrapObjkeys("primary"); err != nil {
 		t.Fatal(err)
 	}
-	if stub.objCreates != 2 {
-		t.Fatalf("objkey mints = %d, want 2 (loki + harbor; never the DNS PAT)", stub.objCreates)
+	if stub.objCreates != 3 {
+		t.Fatalf("objkey mints = %d, want 3 (loki + harbor + obj-platform; never the DNS PAT)", stub.objCreates)
 	}
 	if stub.patCreates != 0 {
 		t.Errorf("PAT mints = %d, want 0", stub.patCreates)
 	}
-	if len(*puts) != 2 {
-		t.Fatalf("want two kv puts, got %d: %v", len(*puts), *puts)
+	if len(*puts) != 3 {
+		t.Fatalf("want three kv puts, got %d: %v", len(*puts), *puts)
 	}
 	rotatedAt := strconv.FormatInt(fixedNow.Unix(), 10)
 	wantPuts := []string{
 		"kv put secret/loki/object-store AWS_ACCESS_KEY_ID=AK AWS_SECRET_ACCESS_KEY=SK rotated_at=" + rotatedAt,
 		"kv put secret/harbor/registry-s3 access_key_id=AK bucket_name=platform-harbor-registry-primary " +
 			"endpoint=https://us-ord-1.linodeobjects.com region=us-ord-1 rotated_at=" + rotatedAt + " secret_access_key=SK",
+		"kv put secret/obj/platform access_key_id=AK rotated_at=" + rotatedAt + " secret_access_key=SK",
 	}
 	for i, want := range wantPuts {
 		if got := strings.Join((*puts)[i], " "); got != want {

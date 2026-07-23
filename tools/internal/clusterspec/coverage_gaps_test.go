@@ -246,12 +246,13 @@ func errsString(errs []error) string {
 }
 
 func TestRenderReconcilerEnvPatch(t *testing.T) {
-	out := RenderReconcilerEnvPatch("exa", "example", "us-ord-1")
+	out := RenderReconcilerEnvPatch("exa", "example", "us-ord-1", "acme/instance")
 	for _, want := range []string{
 		"kind: Deployment", "name: llz-reconciler", "name: reconcile",
 		"REGION_SHORT", `value: "exa"`, // volume-labels
 		"REGION", `value: "example"`, // linode-creds
 		"OBJ_CLUSTER", `value: "us-ord-1"`,
+		"GH_REPO", `value: "acme/instance"`, // apl-overlay
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("RenderReconcilerEnvPatch missing %q:\n%s", want, out)

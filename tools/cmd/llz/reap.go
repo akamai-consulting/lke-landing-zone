@@ -306,7 +306,7 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 // in lockstep with buildRotationTable so a mint-label change can't silently orphan
 // the reaper (the exact failure that let 76 keys pile up to the account cap).
 func envObjKeyLabels(env string) []string {
-	return []string{"platform-loki-" + env, "platform-harbor-registry-" + env}
+	return []string{"platform-loki-" + env, "platform-harbor-registry-" + env, "platform-obj-" + env}
 }
 
 // reapEnvObjKeys deletes the Object Storage keys minted for env — the loki +

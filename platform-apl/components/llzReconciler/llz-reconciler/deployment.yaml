@@ -98,6 +98,15 @@ spec:
             # force-sync half does from CI (secrets-before-apps Phase 2; the CI
             # half stays until Phase 3 validates this lane end-to-end).
             - --reconcile-es-store-recovery
+            # apl-overlay: git-sync the apl-core-native obj storage + app toggles
+            # onto apl-<env> with ff-retry (leader-gated; replaces the config
+            # force-push). Reads the overlay from the primary repo over the GitHub
+            # API, fills the obj cred from OpenBao secret/obj/platform, and overlays
+            # only its owned files onto the machine branch. Safe-by-construction: a
+            # no-op until apl-operator has bootstrapped apl-<env> and the obj key is
+            # seeded. Runtime consumption is lab-gated — see
+            # docs/designs/apl-overlay-obj-native.md.
+            - --reconcile-apl-overlay
           env:
             # Leader-election identity + Lease namespace (downward API). Only used
             # when a driving reconciler is enabled; harmless otherwise.
@@ -132,6 +141,20 @@ spec:
               value: "REPLACE_ME"
             - name: OBJ_CLUSTER
               value: "REPLACE_ME"
+            # apl-overlay reconciler: the instance repo slug (owner/name) it reads
+            # the overlay from + git-syncs onto apl-<env>. Per-env, filled by
+            # llz-reconciler-env-patch.yaml (llz render), same as REGION.
+            - name: GH_REPO
+              value: "REPLACE_ME"
+            # apl-overlay reconciler: the Contents:write PAT that authorizes the
+            # git-data pushes onto apl-<env>. ESO-synced (apl-values-repo-token
+            # ExternalSecret) from OpenBao secret/infra/apl-values-repo-token — the
+            # same token apl-core's otomi.git uses.
+            - name: APL_VALUES_REPO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: apl-values-repo-token
+                  key: token
             # OpenBao serving cert is signed by its private CA; in-cluster writers
             # connect insecure (traffic stays on the pod network), matching the
             # linodeCredRotator CronJob's posture.

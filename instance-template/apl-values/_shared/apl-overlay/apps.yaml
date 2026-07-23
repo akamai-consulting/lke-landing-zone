@@ -1,0 +1,13 @@
+apps:
+  knative:
+    enabled: false
+  kserve:
+    enabled: false
+  kubeflow-pipelines:
+    enabled: false
+  linode-cfw:
+    enabled: false
+  rabbitmq:
+    enabled: false
+  tekton:
+    enabled: false

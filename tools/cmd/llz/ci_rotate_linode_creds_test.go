@@ -78,8 +78,8 @@ func TestIdsByLabel(t *testing.T) {
 
 func TestBuildRotationTable(t *testing.T) {
 	table := buildRotationTable("primary", "us-ord-1")
-	if len(table) != 2 {
-		t.Fatalf("table has %d entries, want 2", len(table))
+	if len(table) != 3 {
+		t.Fatalf("table has %d entries, want 3", len(table))
 	}
 	byName := map[string]credEntry{}
 	for _, e := range table {
@@ -108,6 +108,19 @@ func TestBuildRotationTable(t *testing.T) {
 		if f[k] == "" {
 			t.Errorf("harbor fields missing %s: %v", k, f)
 		}
+	}
+
+	// The consolidated obj-platform key spans every bucket apl-core native obj
+	// points at (the Loki chunks/ruler/admin + Harbor registry buckets) and carries
+	// the {access_key_id, secret_access_key} the apl-overlay reconciler reads.
+	obj := byName["obj-platform"]
+	wantObjBuckets := "platform-loki-chunks-primary,platform-loki-ruler-primary,platform-loki-admin-primary,platform-harbor-registry-primary"
+	if obj.kind != credKindObjKey || obj.baoPath != "secret/obj/platform" || strings.Join(obj.buckets, ",") != wantObjBuckets {
+		t.Errorf("obj-platform entry = %+v (want buckets %s)", obj, wantObjBuckets)
+	}
+	of := obj.fields("AK", "SK")
+	if of["access_key_id"] != "AK" || of["secret_access_key"] != "SK" {
+		t.Errorf("obj-platform fields = %v", of)
 	}
 }
 
@@ -200,6 +213,7 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		bao := &stubBao{data: map[string]map[string]string{
 			"secret/loki/object-store":  {"rotated_at": recent},
 			"secret/harbor/registry-s3": {"rotated_at": recent},
+			"secret/obj/platform":       {"rotated_at": recent},
 		}}
 		withRotatorStubs(t, lc, bao, now)
 		if err := runRotateLinodeCreds(context.Background(), true); err != nil {
