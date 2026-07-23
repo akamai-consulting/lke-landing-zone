@@ -48,7 +48,12 @@ spec:
     bootstrap:                                     # → apl-core bootstrap inputs (llz ci bootstrap-cluster)
       name: platform-prod-web                      # → cluster.name (apl-core identity)
       domainSuffix: web.prod.example.com           # → cluster.domainSuffix + dns.domainFilters
-      aplChartVersion: 6.0.0                       # → apl_chart_version (optional)
+      # aplChartVersion is OPTIONAL and best left unset: omitted, this env tracks
+      # the llz release's apl-core baseline and moves forward with `copier update`.
+      # An explicit pin OVERRIDES that baseline and will NOT move when llz is
+      # upgraded — `llz validate` blocks a pin a full major behind (see
+      # docs/apl-core-migration-runbook.md). Uncomment only for a deliberate pin.
+      # aplChartVersion: 6.0.0
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git
         revision: main

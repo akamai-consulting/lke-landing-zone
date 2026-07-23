@@ -303,6 +303,12 @@ func validateEnv(name string, env Environment) []error {
 	if c.Bootstrap.Name == "" {
 		errs = append(errs, prefix("cluster.bootstrap.name is required"))
 	}
+	// aplChartVersion is optional (omitted → the baseline), but an explicit pin
+	// silently OVERRIDES the baseline, so a stale one survives an llz upgrade
+	// unnoticed. Gate it against the version this release targets.
+	if err := aplChartVersionError(name, c.Bootstrap.AplChartVersion); err != nil {
+		errs = append(errs, err)
+	}
 	if err := validate.HATopology(c.HA.Role, c.HA.Group, "cluster.ha.role", "cluster.ha.group"); err != nil {
 		errs = append(errs, prefix("%v", err))
 	}

@@ -94,6 +94,9 @@ func runEnvReadiness(env string) error {
 			}
 			return fmt.Errorf("%d spec problem(s) — fix landingzone.yaml / environments/<env>.yaml, then re-run", len(errs))
 		}
+		for _, w := range lz.AplChartVersionWarnings() {
+			fmt.Printf("  %s %s\n", yellow("!"), w)
+		}
 		if _, ok := lz.Env(env); ok {
 			specDriven = true
 			if err := checkManifestDrift(lz, aplDir, []string{env}); err != nil {

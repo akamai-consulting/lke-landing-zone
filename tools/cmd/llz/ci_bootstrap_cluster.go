@@ -52,6 +52,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 )
@@ -67,11 +68,10 @@ var kyvernoSCDefaultDemoteYAML []byte
 
 // defaultAplChartVersion is the apl-core chart version an instance deploys when
 // neither --apl-chart-version nor spec.cluster.bootstrap.aplChartVersion (an
-// OPTIONAL field) is set. It mirrors the pinned default the retired
-// cluster-bootstrap terraform.tfvars.example carried (apl_chart_version =
-// "6.0.0"), so removing that workspace did not silently change what deploys.
-// Bump this in lockstep when upgrading the platform's baseline apl-core.
-const defaultAplChartVersion = "6.0.0"
+// OPTIONAL field) is set. It is an alias for the single baseline the spec
+// package owns — the same constant `llz validate` gates explicit pins against,
+// so the fallback and the gate can never disagree. Bump it there.
+const defaultAplChartVersion = clusterspec.BaselineAplChartVersion
 
 // bootstrapValuePlaceholders is the SECRETS-ONLY set of ${...} tokens the
 // committed apl-values/<env>/values.yaml still carries after `llz render`

@@ -103,7 +103,7 @@ spec:
     bootstrap:                                    # → apl-core values (llz ci bootstrap-cluster)
       name: platform-prod                         # → cluster_name
       domainSuffix: prod.example.com              # → cluster_domain
-      aplChartVersion: 6.0.0                      # → apl_chart_version
+      aplChartVersion: 6.0.0                      # OPTIONAL — omit to track the llz baseline
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git  # → apl_values_repo_url
         revision: main                            # → apl_values_repo_revision
