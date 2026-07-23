@@ -373,6 +373,7 @@ func healthExitCodeState(st *convergeState) healthResult {
 	checkAPIServices(&r)
 	checkRequiredCRDs(&r, inv)
 	checkStorageClasses(&r)
+	checkLokiObjStorage(&r, phase1)
 	checkFirewallBootstrap(&r)
 	checkOpenBao(&r, phase1)
 	checkReadyResources(&r, phase1)
@@ -753,6 +754,41 @@ func checkStorageClasses(r *health.Report) {
 		// reconcile_sc_demote.go + the leader-election re-fire in reconcile.go.
 		record(r, health.CatPending, fmt.Sprintf("%d default StorageClasses (%s) — non-deterministic; awaiting sc-demote reconciler", len(def), strings.Join(def, ",")))
 	}
+}
+
+// checkLokiObjStorage gates convergence on the apl-overlay obj chain. On managed
+// apl-core the llz-reconciler pushes the AplObjectStorage CR onto apl-<env>,
+// apl-operator applies it, and Loki re-renders onto S3 — a reconciler→apl-operator→
+// restart chain that is EVENTUAL and legitimately slower than a one-shot check, so
+// Loki-on-S3 belongs in the convergence contract (poll), NOT in a post-converge
+// assertion that races it (the very flake this fixes: assert-loki checked before the
+// chain settled). The in-progress message doubles as the diagnostic — it names WHERE
+// the chain is, so a genuine stall is self-explaining on budget exhaustion.
+//
+// Only gates when obj is actually configured for THIS deployment: LLZ materializes
+// apl-secrets/obj-secrets from OpenBao iff the obj credential is seeded. Absent →
+// filesystem Loki is intentional (no objectStorage.cluster) → nothing to await.
+// Skipped in phase1 (Loki/apl-secrets not installed yet).
+func checkLokiObjStorage(r *health.Report, phase1 bool) {
+	if phase1 || !kExists("get", "secret", "obj-secrets", "-n", "apl-secrets") {
+		return
+	}
+	hdr("apl-overlay obj storage (Loki S3)")
+	cfg := lokiConfigText("loki")
+	if strings.TrimSpace(cfg) == "" {
+		record(r, health.CatOK, "Loki not deployed — no obj overlay to await")
+		return
+	}
+	if health.LokiConfigUsesS3(cfg) {
+		record(r, health.CatOK, "Loki config references S3 — apl-overlay obj converged")
+		return
+	}
+	// Not S3 yet — POLL (CatPending), and report which chain stage is outstanding.
+	stage := "reconciler push / apl-operator apply pending — loki-s3-linode-credentials not built yet"
+	if kExists("get", "secret", "loki-s3-linode-credentials", "-n", "monitoring") {
+		stage = "creds built (loki-s3-linode-credentials present) — Loki re-rendering/restarting onto S3"
+	}
+	record(r, health.CatPending, "apl-overlay: Loki not yet S3-backed — "+stage+" (obj chain settling; check llz-reconciler llz_apl_overlay_synced)")
 }
 
 func checkFirewallBootstrap(r *health.Report) {
