@@ -233,30 +233,30 @@ const (
 func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	fmt.Fprintln(os.Stderr, "→ managed App Platform (apl_enabled): Linode owns apl-core; layering LLZ's extras as separate Argo Applications.")
 
-	// block-storage-retain StorageClass. The extras (OpenBao raft PVC, etc.)
-	// reference it BY NAME, but managed apl-core doesn't create it — its default is
-	// `linode-block-storage-retain`. Apply LLZ's class (same Linode-CSI provisioner,
-	// encryption + Retain) as a NON-default class: the named PVCs bind, and we do
-	// NOT create a second cluster-default (that would race managed apl-core's own
-	// default).
-	scYAML, err := managedBlockStorageClassYAML()
-	if err != nil {
-		return fmt.Errorf("prepare managed block-storage-retain StorageClass: %w", err)
-	}
+	// block-storage-retain StorageClass. The extras (OpenBao raft PVC, etc.) reference
+	// it BY NAME, and managed apl-core doesn't create it. Apply LLZ's class (same
+	// Linode-CSI provisioner, encryption + Retain) as the cluster DEFAULT — same as
+	// self-install. Managed leaves NO default of its own (apl-core relies on LKE's
+	// `linode-block-storage-retain`, which the always-on llzReconciler sc-demote pass
+	// then demotes), so without this a managed cluster ends up with NO default
+	// StorageClass and PVCs without an explicit class stay Pending. Making this the
+	// default also lands new apl-core app PVCs on encrypted+Retain storage directly.
 	// force=false: LLZ is the sole owner of this class and re-applies it under the
-	// same field manager, so there's no cross-manager conflict to force through. If a
-	// future re-bootstrap ever picks up a different field manager on it, switch to true.
-	if out, ok := d.apply(scYAML, "llz-managed-bridge", false); !ok {
+	// same field manager, so there's no cross-manager conflict to force through.
+	if out, ok := d.apply(string(blockStorageClassYAML), "llz-managed-bridge", false); !ok {
 		fmt.Fprint(os.Stderr, out)
 		return fmt.Errorf("apply managed block-storage-retain StorageClass")
 	}
 
-	// llz-openbao namespace. The OpenBao component is CreateNamespace=false and ships
-	// no namespace.yaml, and managed apl-core does not create it, so without this the
-	// OpenBao Application can never sync and the downstream bootstrap-openbao seal-key
-	// seed times out on `namespaces "llz-openbao" not found`.
-	if err := applyManifest(d, llzOpenbaoNamespaceManifest(), "llz-managed-bridge", true); err != nil {
-		return err
+	// LLZ-owned namespaces (llz-openbao, llz-observability) that cluster-foundation
+	// creates on self-install but managed does not. Their carved apps are
+	// CreateNamespace=false, so without this the apps never sync (OpenBao seal-key seed
+	// times out; observability's dashboards + loki-object-store ExternalSecret + otel
+	// stay OutOfSync).
+	for _, ns := range managedLLZNamespaces {
+		if err := applyManifest(d, llzNamespaceManifest(ns), "llz-managed-bridge", true); err != nil {
+			return err
+		}
 	}
 
 	if err := waitManagedArgoReady(d); err != nil {
@@ -341,36 +341,11 @@ func waitManagedArgoReady(d bootstrapDeps) error {
 	}
 }
 
-// managedBlockStorageClassYAML returns the embedded block-storage-retain
-// StorageClass with the `storageclass.kubernetes.io/is-default-class` annotation
-// stripped, so applying it on a managed cluster adds the named class WITHOUT
-// creating a second cluster-default (managed apl-core already owns the default).
-// Comments are dropped in the round-trip; the resource semantics are preserved.
-func managedBlockStorageClassYAML() (string, error) {
-	var m map[string]any
-	if err := yaml.Unmarshal(blockStorageClassYAML, &m); err != nil {
-		return "", fmt.Errorf("unmarshal block-storage-class: %w", err)
-	}
-	if meta, ok := m["metadata"].(map[string]any); ok {
-		if ann, ok := meta["annotations"].(map[string]any); ok {
-			delete(ann, "storageclass.kubernetes.io/is-default-class")
-			if len(ann) == 0 {
-				delete(meta, "annotations")
-			}
-		}
-	}
-	out, err := yaml.Marshal(m)
-	if err != nil {
-		return "", fmt.Errorf("marshal managed block-storage-class: %w", err)
-	}
-	return string(out), nil
-}
-
 // dryRunBootstrap prints the intended actions without touching the cluster — the
 // operator-facing replacement for `terraform plan` on this layer.
 func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	fmt.Printf("→ (dry-run) bootstrap-cluster (managed App Platform / apl_enabled) env=%s kubeconfig=%s\n", o.env, kubeconfigPath)
-	fmt.Printf("  0. kubectl apply --server-side block-storage-retain StorageClass (NON-default; managed keeps its own default)\n")
+	fmt.Printf("  0. kubectl apply --server-side block-storage-retain StorageClass (cluster DEFAULT; llzReconciler sc-demote keeps LKE's linode-block-storage-retain non-default)\n")
 	fmt.Printf("  0b. kubectl apply --server-side llz-openbao Namespace (OpenBao is CreateNamespace=false; managed apl-core does not create it)\n")
 	fmt.Printf("  1. wait for managed ArgoCD (Application CRD + argocd-server available)\n")
 	if o.instanceRepoToken != "" {
@@ -640,6 +615,11 @@ spec:
   activeDeadlineSeconds: 660
   ttlSecondsAfterFinished: 180
   template:
+    metadata:
+      annotations:
+        # Batch pod — keep it out of the istio mesh (apl-operator may have injection on;
+        # an injected proxy never exits, so the Job would never complete).
+        sidecar.istio.io/inject: "false"
     spec:
       restartPolicy: Never
       containers:

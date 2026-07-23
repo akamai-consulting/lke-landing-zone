@@ -12,14 +12,15 @@ spec:
       app.kubernetes.io/name: llz-cluster-health
   policyTypes: [Egress]
   egress:
-    # DNS resolution against kube-dns.
+    # DNS. Match kube-system by NAMESPACE only, NOT a `k8s-app: kube-dns`
+    # podSelector: LKE-Enterprise / managed CoreDNS is labeled differently
+    # (app.kubernetes.io/name=coredns), so a kube-dns podSelector matches nothing and
+    # every lookup times out. Only DNS listens on :53 in kube-system, so a
+    # namespace-scoped :53 grant is both correct and safe.
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
       ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
