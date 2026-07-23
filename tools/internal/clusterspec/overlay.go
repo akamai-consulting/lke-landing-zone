@@ -27,16 +27,19 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// The credential placeholders the committed overlay carries in place of the real
-// obj key. The apl-overlay reconciler is the ONLY filler — it substitutes these
-// with the values read from OpenBao secret/obj/platform before overlaying onto
-// apl-<env>. They never resolve on main, so no secret is ever committed. The
-// ${...} shape matches the repo's placeholder idiom; FillObjPlaceholders (not
-// templatefile) is what replaces them.
-const (
-	ObjAccessKeyIDPlaceholder     = "${obj_access_key_id}"
-	ObjSecretAccessKeyPlaceholder = "${obj_secret_access_key}"
-)
+// The accessKeyId placeholder the committed overlay carries in place of the real
+// (rotated) obj access-key ID. The apl-overlay reconciler is the ONLY filler — it
+// substitutes this with the value read from OpenBao secret/obj/platform before
+// overlaying onto apl-<env>. It never resolves on main, so nothing but a
+// placeholder is committed there. The ${...} shape matches the repo's placeholder
+// idiom; FillObjPlaceholders (not templatefile) is what replaces it.
+//
+// The secretAccessKey is DELIBERATELY not a placeholder and never touches git:
+// the overlay leaves it blank (an empty x-secret apl-core seals nothing for) and
+// ESO materializes the real value straight into the `obj-secrets` Secret from
+// OpenBao (the openbao ClusterSecretStore → obj-secrets ExternalSecret). See
+// platform-apl/components/observability/obj-secrets-externalsecret.yaml.
+const ObjAccessKeyIDPlaceholder = "${obj_access_key_id}"
 
 // Owned overlay file basenames (relative to an apl-overlay/ dir). The reconciler
 // maps each onto a path in the apl-<env> values tree (aplOverlayTargets, in
@@ -80,24 +83,30 @@ type objProvider struct {
 }
 
 type objLinode struct {
-	Region          string            `yaml:"region,omitempty"`
-	AccessKeyID     string            `yaml:"accessKeyId,omitempty"`
-	SecretAccessKey string            `yaml:"secretAccessKey,omitempty"`
+	Region      string `yaml:"region,omitempty"`
+	AccessKeyID string `yaml:"accessKeyId,omitempty"`
+	// *string so the _shared base can emit an EXPLICIT empty `secretAccessKey: ""`
+	// (blank x-secret → apl-core seals nothing; ESO supplies the real value) while
+	// the per-env override omits the field entirely (nil). The secret never lands
+	// in git — see ObjAccessKeyIDPlaceholder's comment.
+	SecretAccessKey *string           `yaml:"secretAccessKey,omitempty"`
 	Buckets         map[string]string `yaml:"buckets,omitempty"`
 }
 
 // RenderObjOverlayShared is the instance-wide obj.yaml base: showWizard off,
-// provider linode, and the credential placeholders the reconciler fills. No
-// region/buckets (those are per-env).
+// provider linode, the accessKeyId placeholder the reconciler fills, and a blank
+// secretAccessKey (ESO delivers the real secret out-of-band). No region/buckets
+// (those are per-env).
 func RenderObjOverlayShared() string {
 	off := false
+	blank := ""
 	return marshalYAML(objOverlayDoc{Obj: objBlock{
 		ShowWizard: &off,
 		Provider: objProvider{
 			Type: "linode",
 			Linode: objLinode{
 				AccessKeyID:     ObjAccessKeyIDPlaceholder,
-				SecretAccessKey: ObjSecretAccessKeyPlaceholder,
+				SecretAccessKey: &blank,
 			},
 		},
 	}})
@@ -184,20 +193,17 @@ func MergeOverlay(shared, env []byte) ([]byte, error) {
 	return marshalMap(mergeMaps(base, over)), nil
 }
 
-// FillObjPlaceholders substitutes the committed credential placeholders with the
-// live values read from OpenBao. Operates on bytes (a rendered/merged overlay) so
-// the reconciler need not re-parse — the placeholders are unique tokens. Empty
-// inputs are left as the placeholder (nothing to fill), so a missing OpenBao read
-// never writes an empty credential.
-func FillObjPlaceholders(overlay []byte, accessKeyID, secretAccessKey string) []byte {
-	out := overlay
-	if accessKeyID != "" {
-		out = bytes.ReplaceAll(out, []byte(ObjAccessKeyIDPlaceholder), []byte(accessKeyID))
+// FillObjPlaceholders substitutes the committed accessKeyId placeholder with the
+// live value read from OpenBao. Operates on bytes (a rendered/merged overlay) so
+// the reconciler need not re-parse — the placeholder is a unique token. An empty
+// input is left as the placeholder (nothing to fill), so a missing OpenBao read
+// never writes an empty accessKeyId. The secretAccessKey is intentionally NOT
+// handled here — it never transits git; ESO writes it into obj-secrets directly.
+func FillObjPlaceholders(overlay []byte, accessKeyID string) []byte {
+	if accessKeyID == "" {
+		return overlay
 	}
-	if secretAccessKey != "" {
-		out = bytes.ReplaceAll(out, []byte(ObjSecretAccessKeyPlaceholder), []byte(secretAccessKey))
-	}
-	return out
+	return bytes.ReplaceAll(overlay, []byte(ObjAccessKeyIDPlaceholder), []byte(accessKeyID))
 }
 
 // mergeMaps recursively merges over onto base (over wins). Nested maps merge;

@@ -22,7 +22,7 @@ func setAplOverlayEnv(t *testing.T) {
 }
 
 // fakeOverlaySeams installs read/commit/creds fakes and restores them.
-func fakeOverlaySeams(t *testing.T, read func(path string) string, creds func() (string, string, bool, error), commit func(files map[string]string, branch string) (string, bool, error)) {
+func fakeOverlaySeams(t *testing.T, read func(path string) string, creds func() (string, bool, error), commit func(files map[string]string, branch string) (string, bool, error)) {
 	t.Helper()
 	origRead, origCommit, origCreds := aplOverlayReadFileFn, aplOverlayCommitFn, aplOverlayObjCredsFn
 	t.Cleanup(func() { aplOverlayReadFileFn, aplOverlayCommitFn, aplOverlayObjCredsFn = origRead, origCommit, origCreds })
@@ -31,7 +31,7 @@ func fakeOverlaySeams(t *testing.T, read func(path string) string, creds func() 
 		c := read(path)
 		return c, c != "", nil
 	}
-	aplOverlayObjCredsFn = func(_ context.Context, _ string) (string, string, bool, error) { return creds() }
+	aplOverlayObjCredsFn = func(_ context.Context, _ string) (string, bool, error) { return creds() }
 	aplOverlayCommitFn = func(_ context.Context, _ *http.Client, _, _, branch string, files map[string]string, _ string, _ int) (string, bool, error) {
 		return commit(files, branch)
 	}
@@ -49,7 +49,7 @@ func TestReconcileAplOverlay_FillsAndOverlays(t *testing.T) {
 	var gotBranch string
 	fakeOverlaySeams(t,
 		func(p string) string { return shared[p] },
-		func() (string, string, bool, error) { return "AKID", "SECRET", true, nil },
+		func() (string, bool, error) { return "AKID", true, nil },
 		func(files map[string]string, branch string) (string, bool, error) {
 			gotFiles, gotBranch = files, branch
 			return "newsha", true, nil
@@ -72,13 +72,19 @@ func TestReconcileAplOverlay_FillsAndOverlays(t *testing.T) {
 	if _, ok := gotFiles[appsTree]; !ok {
 		t.Errorf("apps target %q not in overlay files", appsTree)
 	}
-	// The obj credential was filled (placeholders gone, real values in) and the
-	// merged env region/buckets are present.
-	if strings.Contains(obj, clusterspec.ObjAccessKeyIDPlaceholder) || strings.Contains(obj, clusterspec.ObjSecretAccessKeyPlaceholder) {
-		t.Errorf("obj.yaml still has placeholders after fill:\n%s", obj)
+	// The accessKeyId placeholder was filled from OpenBao; the merged env
+	// region/buckets are present.
+	if strings.Contains(obj, clusterspec.ObjAccessKeyIDPlaceholder) {
+		t.Errorf("obj.yaml still has the accessKeyId placeholder after fill:\n%s", obj)
 	}
-	if !strings.Contains(obj, "AKID") || !strings.Contains(obj, "SECRET") {
-		t.Errorf("obj.yaml missing filled creds:\n%s", obj)
+	if !strings.Contains(obj, "AKID") {
+		t.Errorf("obj.yaml missing filled accessKeyId:\n%s", obj)
+	}
+	// The secret NEVER transits git: the overlay carries a blank secretAccessKey
+	// and ESO supplies the real value out-of-band. Guard against any regression
+	// that re-introduces secret-filling into the committed overlay.
+	if !strings.Contains(obj, `secretAccessKey: ""`) {
+		t.Errorf("obj.yaml must carry a BLANK secretAccessKey (ESO owns the secret):\n%s", obj)
 	}
 	if !strings.Contains(obj, "us-ord-1") || !strings.Contains(obj, "platform-loki-chunks-primary") {
 		t.Errorf("obj.yaml missing merged env region/buckets:\n%s", obj)
@@ -98,7 +104,7 @@ func TestReconcileAplOverlay_SkipsObjWhenCredMissing(t *testing.T) {
 	var gotFiles map[string]string
 	fakeOverlaySeams(t,
 		func(p string) string { return shared[p] },
-		func() (string, string, bool, error) { return "", "", false, nil }, // not seeded
+		func() (string, bool, error) { return "", false, nil }, // not seeded
 		func(files map[string]string, _ string) (string, bool, error) { gotFiles = files; return "sha", true, nil },
 	)
 	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
@@ -123,7 +129,7 @@ func TestReconcileAplOverlay_MissingBranchIsNoOp(t *testing.T) {
 			}
 			return ""
 		},
-		func() (string, string, bool, error) { return "AKID", "SECRET", true, nil },
+		func() (string, bool, error) { return "AKID", true, nil },
 		func(map[string]string, string) (string, bool, error) { return "", false, errGHRefNotFound },
 	)
 	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {

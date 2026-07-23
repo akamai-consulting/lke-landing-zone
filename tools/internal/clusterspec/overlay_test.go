@@ -38,8 +38,11 @@ func TestRenderObjOverlayShared(t *testing.T) {
 	if got, _ := digStr(t, y, "obj", "provider", "linode", "accessKeyId"); got != ObjAccessKeyIDPlaceholder {
 		t.Errorf("accessKeyId = %q, want placeholder %q", got, ObjAccessKeyIDPlaceholder)
 	}
-	if got, _ := digStr(t, y, "obj", "provider", "linode", "secretAccessKey"); got != ObjSecretAccessKeyPlaceholder {
-		t.Errorf("secretAccessKey = %q, want placeholder", got)
+	// secretAccessKey is BLANK by design — the secret never transits git; ESO
+	// supplies the real value into obj-secrets. Must be present (so apl-core sees
+	// an empty x-secret) but empty.
+	if got, ok := digStr(t, y, "obj", "provider", "linode", "secretAccessKey"); !ok || got != "" {
+		t.Errorf("secretAccessKey = %q (present=%v), want present and empty", got, ok)
 	}
 	// showWizard must be the literal boolean false, not the string "false".
 	if !strings.Contains(y, "showWizard: false") {
@@ -162,20 +165,21 @@ func TestMergeOverlay_EmptyLayers(t *testing.T) {
 
 func TestFillObjPlaceholders(t *testing.T) {
 	merged, _ := MergeOverlay([]byte(RenderObjOverlayShared()), []byte(RenderObjOverlayEnv("primary", "us-ord-1")))
-	filled := FillObjPlaceholders(merged, "AKID123", "SEKRET456")
+	filled := FillObjPlaceholders(merged, "AKID123")
 	y := string(filled)
-	if strings.Contains(y, ObjAccessKeyIDPlaceholder) || strings.Contains(y, ObjSecretAccessKeyPlaceholder) {
-		t.Errorf("placeholders must be gone after fill:\n%s", y)
+	if strings.Contains(y, ObjAccessKeyIDPlaceholder) {
+		t.Errorf("accessKeyId placeholder must be gone after fill:\n%s", y)
 	}
 	if got, _ := digStr(t, y, "obj", "provider", "linode", "accessKeyId"); got != "AKID123" {
 		t.Errorf("accessKeyId = %q, want AKID123", got)
 	}
-	if got, _ := digStr(t, y, "obj", "provider", "linode", "secretAccessKey"); got != "SEKRET456" {
-		t.Errorf("secretAccessKey = %q, want SEKRET456", got)
+	// The secret is never filled into git: secretAccessKey stays blank regardless.
+	if got, ok := digStr(t, y, "obj", "provider", "linode", "secretAccessKey"); !ok || got != "" {
+		t.Errorf("secretAccessKey = %q (present=%v), want present and empty", got, ok)
 	}
-	// An empty read must NOT blank the credential — the placeholder stays.
-	partial := FillObjPlaceholders(merged, "AKID123", "")
-	if !strings.Contains(string(partial), ObjSecretAccessKeyPlaceholder) {
-		t.Error("empty secret must leave the placeholder, not an empty value")
+	// An empty accessKeyId read must NOT blank the identifier — the placeholder stays.
+	partial := FillObjPlaceholders(merged, "")
+	if !strings.Contains(string(partial), ObjAccessKeyIDPlaceholder) {
+		t.Error("empty accessKeyId must leave the placeholder, not an empty value")
 	}
 }

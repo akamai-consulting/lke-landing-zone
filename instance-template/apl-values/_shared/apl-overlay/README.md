@@ -11,8 +11,10 @@ the landing zone drives into apl-core's *native* values:
 
 - `obj.yaml` — the apl-core `obj:` object-storage block (`provider.type: linode`,
   region, `buckets.{loki,harbor}`, `showWizard: false`). The `_shared` copy
-  carries the `${obj_access_key_id}` / `${obj_secret_access_key}` **placeholders**;
-  the per-env copy carries the region + bucket names.
+  carries the `${obj_access_key_id}` **placeholder** (the reconciler fills it from
+  OpenBao) and a **blank** `secretAccessKey` — the secret never transits git; ESO
+  writes the real value into the `obj-secrets` Secret from OpenBao. The per-env
+  copy carries the region + bucket names.
 - `apps.yaml` — the `apps.<name>.enabled` toggles (the "AplApp" fragment). The
   `_shared` copy carries the statically-disabled apps; the per-env copy carries
   the component-driven toggles.

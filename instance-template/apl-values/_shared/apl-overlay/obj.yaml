@@ -4,4 +4,4 @@ obj:
     type: linode
     linode:
       accessKeyId: ${obj_access_key_id}
-      secretAccessKey: ${obj_secret_access_key}
+      secretAccessKey: ""

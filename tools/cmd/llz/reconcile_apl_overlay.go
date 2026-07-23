@@ -33,10 +33,10 @@ import (
 // mirror the harbor-registry-s3 field naming.
 const objPlatformPath = "secret/obj/platform"
 
-const (
-	objCredAccessField = "access_key_id"
-	objCredSecretField = "secret_access_key"
-)
+// Only the access-key ID is read here — it is a non-secret identifier the overlay
+// carries in git (apl-core treats it as a settings field). The secret_access_key
+// deliberately never transits this path: ESO writes it into obj-secrets directly.
+const objCredAccessField = "access_key_id"
 
 // aplOverlayTargets maps each rendered overlay file to the path in the apl-<env>
 // values tree apl-core reads as config input.
@@ -149,18 +149,19 @@ func reconcileAplOverlay(ctx context.Context, reg *metrics.Registry) error {
 			continue // nothing authored for this file
 		}
 		if base == clusterspec.OverlayObjFile {
-			ak, sk, ok, err := aplOverlayObjCredsFn(ctx, cfg.openbaoAddr)
+			ak, ok, err := aplOverlayObjCredsFn(ctx, cfg.openbaoAddr)
 			if err != nil {
 				return fmt.Errorf("read %s from OpenBao: %w", objPlatformPath, err)
 			}
 			if !ok {
-				// Credential not seeded yet — NEVER overlay the literal placeholder
+				// accessKeyId not seeded yet — NEVER overlay the literal placeholder
 				// onto the machine branch (it would push a broken obj cred to
-				// apl-core). Skip obj.yaml this pass; apps.yaml still syncs.
+				// apl-core). Skip obj.yaml this pass; apps.yaml still syncs. (The
+				// secretAccessKey is ESO's job, not checked here.)
 				fmt.Printf("apl-overlay: %s not seeded in OpenBao yet — skipping obj.yaml this pass\n", objPlatformPath)
 				continue
 			}
-			merged = clusterspec.FillObjPlaceholders(merged, ak, sk)
+			merged = clusterspec.FillObjPlaceholders(merged, ak)
 		}
 		files[aplOverlayTargets[base]] = string(merged)
 	}
@@ -187,31 +188,29 @@ func reconcileAplOverlay(ctx context.Context, reg *metrics.Registry) error {
 	return nil
 }
 
-// readObjPlatformCreds reads the consolidated obj credential (access + secret key)
-// from OpenBao secret/obj/platform via the reconciler's Kubernetes-auth role.
-// Returns ok=false (not an error) when the path/fields are not seeded yet.
-func readObjPlatformCreds(ctx context.Context, addr string) (accessKeyID, secretAccessKey string, ok bool, err error) {
+// readObjPlatformCreds reads the obj access-key ID (a non-secret identifier) from
+// OpenBao secret/obj/platform via the reconciler's Kubernetes-auth role. Returns
+// ok=false (not an error) when the path/field is not seeded yet. The paired
+// secret_access_key is NOT read here — it never transits the git overlay; ESO
+// delivers it into the obj-secrets Secret from the same OpenBao path.
+func readObjPlatformCreds(ctx context.Context, addr string) (accessKeyID string, ok bool, err error) {
 	jwt, err := openbaoJWTFn()
 	if err != nil {
-		return "", "", false, err
+		return "", false, err
 	}
 	tok, err := openbaoLoginFn(ctx, addr, jwt)
 	if err != nil {
-		return "", "", false, err
+		return "", false, err
 	}
 	c := openbaoGetClientFn(addr, tok)
 	ak, ok, err := c.Get(ctx, objPlatformPath, objCredAccessField)
 	if err != nil || !ok {
-		return "", "", false, err
+		return "", false, err
 	}
-	sk, ok, err := c.Get(ctx, objPlatformPath, objCredSecretField)
-	if err != nil || !ok {
-		return "", "", false, err
+	if ak == "" {
+		return "", false, nil
 	}
-	if ak == "" || sk == "" {
-		return "", "", false, nil
-	}
-	return ak, sk, true, nil
+	return ak, true, nil
 }
 
 func sharedOverlayPath(base string) string { return "apl-values/_shared/apl-overlay/" + base }
