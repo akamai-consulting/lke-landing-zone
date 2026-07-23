@@ -813,13 +813,28 @@ func checkFirewallBootstrap(r *health.Report) {
 		record(r, health.CatOK, "firewall-controller not installed (cidrFirewall component disabled) — skipped")
 		return
 	}
-	exists := kExists("-n", "kube-system", "get", "secret", "linode")
-	token := ""
-	if exists {
-		token = kJSONPath("-n", "kube-system", "get", "secret", "linode", "-o", "jsonpath={.data.token}")
+	// The kube-system/linode Secret is the CONTROLLER's token — mounted as env
+	// LINODE_TOKEN by the llz-linode-cidr-firewall Deployment. The in-cluster
+	// self-discovery (reconciler --reconcile-cidr-firewall, which retired the
+	// `bootstrap-cloud-firewall` CI seed) authenticates with its OWN ESO-synced
+	// linode-api-token and writes the ConfigMap WITHOUT ever seeding this Secret.
+	// So the token is required only where the controller Deployment is actually
+	// present (the private chart). On instances where the self-discovery ran but
+	// the controller is absent (public adopters / e2e — private chart unavailable)
+	// the ConfigMap exists yet the token is consumed by nothing: gate the
+	// assertion on depExists, not cmExists, so a self-discovery-only cluster does
+	// not hard-fail on a Secret no workload reads.
+	if depExists {
+		exists := kExists("-n", "kube-system", "get", "secret", "linode")
+		token := ""
+		if exists {
+			token = kJSONPath("-n", "kube-system", "get", "secret", "linode", "-o", "jsonpath={.data.token}")
+		}
+		cat, msg := health.ClassifyFirewallToken(exists, token)
+		record(r, cat, msg)
+	} else {
+		record(r, health.CatOK, "firewall-controller Deployment absent — self-discovery ConfigMap only; kube-system/linode token not required")
 	}
-	cat, msg := health.ClassifyFirewallToken(exists, token)
-	record(r, cat, msg)
 
 	// firewallConfigMapName (ci_firewall.go) is the single source of truth for the
 	// ConfigMap name the private chart renders (<fullname>-config =

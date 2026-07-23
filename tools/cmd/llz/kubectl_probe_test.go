@@ -162,3 +162,31 @@ func TestCheckFirewallBootstrapDoesNotSkipOnUnreadable(t *testing.T) {
 		t.Errorf("cidrFirewall disabled should skip clean: pending=%v failed=%v", r.Pending, r.Failed)
 	}
 }
+
+// TestCheckFirewallBootstrapSelfDiscoveryNoController pins the depExists-gating:
+// when the in-cluster self-discovery has written the ConfigMap but the private
+// controller Deployment is absent (public adopters / e2e), the kube-system/linode
+// token Secret is consumed by nothing, so its absence must NOT hard-fail.
+func TestCheckFirewallBootstrapSelfDiscoveryNoController(t *testing.T) {
+	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
+		a := strings.Join(args, " ")
+		switch {
+		case strings.Contains(a, "deployment"):
+			return nil, errors.New("NotFound") // controller Deployment absent
+		case strings.Contains(a, "configmap"):
+			return []byte("llz-linode-cidr-firewall-config"), nil // self-discovery ConfigMap present
+		case strings.Contains(a, "secret"):
+			return nil, errors.New("NotFound") // token Secret never seeded
+		default:
+			return nil, errors.New("NotFound")
+		}
+	})
+	r := &health.Report{}
+	checkFirewallBootstrap(r)
+	if len(r.Failed) != 0 {
+		t.Errorf("self-discovery ConfigMap without the controller Deployment must not hard-fail on the missing token: failed=%v", r.Failed)
+	}
+	if len(r.Pending) != 0 {
+		t.Errorf("controller-absent cluster is a clean pass, not pending: pending=%v", r.Pending)
+	}
+}
