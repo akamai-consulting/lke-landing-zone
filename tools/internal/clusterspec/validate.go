@@ -83,6 +83,7 @@ var SystemSecretNamespaces = map[string]bool{
 	"infra":           true,
 	"linode":          true,
 	"loki":            true,
+	"obj":             true,
 	"otel":            true,
 }
 

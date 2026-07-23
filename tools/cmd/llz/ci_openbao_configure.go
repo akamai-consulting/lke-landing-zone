@@ -31,6 +31,7 @@ path "secret/data/linode/api-token"             { capabilities = ["read"] }
 path "secret/data/linode/broad-pat"             { capabilities = ["read"] }
 path "secret/data/linode/cloud-firewall"        { capabilities = ["read"] }
 path "secret/data/loki/object-store"            { capabilities = ["read"] }
+path "secret/data/obj/platform"                 { capabilities = ["read"] }
 path "secret/data/otel/ingress"                 { capabilities = ["read"] }
 
 path "secret/metadata/alerts/webhooks"              { capabilities = ["read", "list"] }
@@ -46,6 +47,7 @@ path "secret/metadata/linode/api-token"             { capabilities = ["read", "l
 path "secret/metadata/linode/broad-pat"             { capabilities = ["read", "list"] }
 path "secret/metadata/linode/cloud-firewall"        { capabilities = ["read", "list"] }
 path "secret/metadata/loki/object-store"            { capabilities = ["read", "list"] }
+path "secret/metadata/obj/platform"                 { capabilities = ["read", "list"] }
 path "secret/metadata/otel/ingress"                 { capabilities = ["read", "list"] }
 `
 
@@ -88,8 +90,10 @@ path "secret/metadata/harbor/admin"  { capabilities = ["create", "update", "read
 // Kubernetes-auth role below. See docs/designs/linode-credential-rotator.md.
 const policyLinodeRotator = `path "secret/data/loki/object-store"  { capabilities = ["create", "update", "read"] }
 path "secret/data/harbor/registry-s3" { capabilities = ["create", "update", "read"] }
+path "secret/data/obj/platform"       { capabilities = ["create", "update", "read"] }
 path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
 path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
+path "secret/metadata/obj/platform"       { capabilities = ["read"] }
 `
 
 // harbor-provisioner: read/write on exactly the two robot-credential paths the

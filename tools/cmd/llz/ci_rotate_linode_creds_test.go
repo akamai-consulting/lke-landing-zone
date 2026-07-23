@@ -78,8 +78,8 @@ func TestIdsByLabel(t *testing.T) {
 
 func TestBuildRotationTable(t *testing.T) {
 	table := buildRotationTable("primary", "us-ord-1")
-	if len(table) != 2 {
-		t.Fatalf("table has %d entries, want 2", len(table))
+	if len(table) != 3 {
+		t.Fatalf("table has %d entries, want 3", len(table))
 	}
 	byName := map[string]credEntry{}
 	for _, e := range table {
@@ -108,6 +108,17 @@ func TestBuildRotationTable(t *testing.T) {
 		if f[k] == "" {
 			t.Errorf("harbor fields missing %s: %v", k, f)
 		}
+	}
+
+	// The broad managed platform-obj key: seeded at secret/obj/platform, scoped to
+	// every provisioned bucket (loki chunks/ruler/admin + harbor), AWS_* fields.
+	obj := byName["obj-platform"]
+	wantObjBuckets := "platform-loki-chunks-primary,platform-loki-ruler-primary,platform-loki-admin-primary,platform-harbor-registry-primary"
+	if obj.kind != credKindObjKey || obj.baoPath != "secret/obj/platform" || strings.Join(obj.buckets, ",") != wantObjBuckets {
+		t.Errorf("obj-platform entry = %+v (want buckets %s)", obj, wantObjBuckets)
+	}
+	if of := obj.fields("AK", "SK"); of["AWS_ACCESS_KEY_ID"] != "AK" || of["AWS_SECRET_ACCESS_KEY"] != "SK" {
+		t.Errorf("obj-platform fields = %v", of)
 	}
 }
 
@@ -200,6 +211,7 @@ func TestRunRotateLinodeCreds(t *testing.T) {
 		bao := &stubBao{data: map[string]map[string]string{
 			"secret/loki/object-store":  {"rotated_at": recent},
 			"secret/harbor/registry-s3": {"rotated_at": recent},
+			"secret/obj/platform":       {"rotated_at": recent},
 		}}
 		withRotatorStubs(t, lc, bao, now)
 		if err := runRotateLinodeCreds(context.Background(), true); err != nil {
