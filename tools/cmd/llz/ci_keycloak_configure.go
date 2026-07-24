@@ -376,19 +376,19 @@ func runCIKeycloakConfigure(g globalOpts, region string) error {
 		return nil
 	}
 
-	base, cleanup, err := portForwardKeycloakFn()
-	if err != nil {
-		warnKeycloakSkip(region, fmt.Errorf("port-forward to %s/%s: %w", keycloakNS, keycloakPod, err))
-		return nil
-	}
-	defer cleanup()
-
+	// Readiness gate: keycloak-configure runs early in bootstrap and can outrun
+	// apl-core bringing Keycloak up, so wait for the server to be serving before
+	// giving up — retry the port-forward + master-token exchange (a successful
+	// admin token IS the "Keycloak is up" signal) until it works or the budget
+	// expires. Bounded + best-effort: a persistently-down Keycloak still warns +
+	// exits 0, and a re-run finishes the wiring.
 	hc := &http.Client{Timeout: 20 * time.Second}
-	token, err := keycloakAdminToken(hc, base, user, pass)
+	base, token, cleanup, err := keycloakConnect(hc, user, pass, keycloakSleepFn)
 	if err != nil {
 		warnKeycloakSkip(region, err)
 		return nil
 	}
+	defer cleanup()
 	k := &kcClient{hc: hc, base: base, token: token, realm: keycloakRealm}
 
 	// Ordering guard: wait for apl-core to converge the `openid` client scope
@@ -406,6 +406,33 @@ func runCIKeycloakConfigure(g globalOpts, region string) error {
 	}
 	fmt.Printf("Keycloak client %q ready (public device flow, openid scope) — operators can `llz openbao login --team <name>`.\n", keycloakDeviceClientID)
 	return nil
+}
+
+// keycloakConnect port-forwards to Keycloak and master-realm direct-grants an
+// admin token, retrying the pair until it succeeds or the ~5m keycloakScope budget
+// expires. keycloak-configure runs early in bootstrap, ahead of apl-core bringing
+// Keycloak up, so a single attempt would skip on a not-yet-ready server — a
+// successful admin token is the readiness signal. Returns the live port-forward's
+// base URL + admin token + its cleanup (a no-op cleanup on failure). Best-effort:
+// the caller warns + exits 0 on a persistent failure.
+func keycloakConnect(hc *http.Client, user, pass string, sleep func(time.Duration)) (base, token string, cleanup func(), err error) {
+	for i := 0; i < keycloakScopeAttempts; i++ {
+		b, c, e := portForwardKeycloakFn()
+		if e == nil {
+			tok, te := keycloakAdminToken(hc, b, user, pass)
+			if te == nil {
+				return b, tok, c, nil
+			}
+			c() // server not serving yet — drop this port-forward and retry
+			err = te
+		} else {
+			err = e
+		}
+		if i < keycloakScopeAttempts-1 {
+			sleep(keycloakScopeInterval)
+		}
+	}
+	return "", "", func() {}, fmt.Errorf("keycloak %s/%s did not become ready after ~%s (%w) — apl-core Keycloak has not converged; re-run `llz ci keycloak-configure` once it is up", keycloakNS, keycloakPod, time.Duration(keycloakScopeAttempts)*keycloakScopeInterval, err)
 }
 
 func warnKeycloakSkip(region string, err error) {
