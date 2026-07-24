@@ -105,9 +105,9 @@ func aplOverlayConfigFromEnv() (aplOverlayConfig, error) {
 		// transient not-yet-synced state the caller no-ops on, not a misconfig.
 		token:        inclusterAplValuesRepoToken(),
 		env:          os.Getenv("REGION"),
-		sourceBranch: orEnvDefault("APL_VALUES_SOURCE_BRANCH", "main"),
+		sourceBranch: envOr("APL_VALUES_SOURCE_BRANCH", "main"),
 		targetBranch: os.Getenv("APL_VALUES_BRANCH"),
-		openbaoAddr:  orEnvDefault("OPENBAO_ADDR", defaultOpenBaoAddr),
+		openbaoAddr:  envOr("OPENBAO_ADDR", defaultOpenBaoAddr),
 	}
 	// GH_REPO/REGION are render-time static — their absence is a genuine misconfig.
 	// The token is ESO-synced and handled as a no-op below, not here.
@@ -120,13 +120,6 @@ func aplOverlayConfigFromEnv() (aplOverlayConfig, error) {
 		c.targetBranch = "apl-" + c.env
 	}
 	return c, nil
-}
-
-func orEnvDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }
 
 // reconcileAplOverlay runs one sync pass: read → fill → merge → overlay. It is
