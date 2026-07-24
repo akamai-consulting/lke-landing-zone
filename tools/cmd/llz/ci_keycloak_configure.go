@@ -38,7 +38,17 @@ const (
 	// keycloakDeviceClientID is the public OIDC client `llz openbao login` uses;
 	// overridable there via --client-id / OPENBAO_OIDC_CLIENT_ID.
 	keycloakDeviceClientID = "llz"
-	keycloakAdminSecret    = "platform-admin-credentials"
+	// keycloakAdminSecret holds the MASTER-realm admin creds (keycloakAdminToken
+	// direct-grants against /realms/master with client admin-cli). On managed
+	// apl-core that is `keycloak-initial-admin` — the secret the Keycloak.X
+	// StatefulSet consumes as KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD. The old
+	// `platform-admin-credentials` was a self-installed-era name that NOTHING
+	// provisions on managed, so keycloak-configure read empty creds and
+	// warnKeycloakSkip'd every run — leaving the device-flow client uncreated and
+	// team-OIDC OpenBao login silently unavailable. (The otomi-realm portal login
+	// `platform-admin-initial-credentials` is a DIFFERENT secret and cannot
+	// master-realm direct-grant.)
+	keycloakAdminSecret = "keycloak-initial-admin"
 )
 
 // Bootstrap ordering guard: how long keycloak-configure waits for apl-core to
