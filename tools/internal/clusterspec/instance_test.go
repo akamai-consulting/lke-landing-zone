@@ -305,7 +305,7 @@ func TestDefaults_ManagedApps(t *testing.T) {
 		t.Fatalf("managedApps default = %v, want %v", b.ManagedApps, DefaultManagedApps)
 	}
 	for _, name := range []string{"harbor", "observability", "imageSignature"} {
-		if !comp(t, name).EmitOnManaged(b) {
+		if !comp(t, name).EmitOnManaged(b, nil) {
 			t.Errorf("%s must emit on managed under the default managedApps set", name)
 		}
 	}

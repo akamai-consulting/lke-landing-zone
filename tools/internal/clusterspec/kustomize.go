@@ -112,7 +112,7 @@ func RenderManifestKustomization(components map[string]ComponentToggle, ref stri
 		// LLZ runs on managed apl-core: emit only the components LLZ owns — drop the
 		// apl-core-owned ones (ManagedSkip) and gate the conditional ones on the
 		// operator-declared managedApps. See Component.EmitOnManaged / ADR 0005.
-		if !c.EmitOnManaged(boot) {
+		if !c.EmitOnManaged(boot, components) {
 			continue
 		}
 		if c.CarvedApp != nil {

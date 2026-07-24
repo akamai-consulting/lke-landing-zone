@@ -30,36 +30,52 @@ func TestBootstrapManagedAppEnabled(t *testing.T) {
 	}
 }
 
-// TestEmitOnManaged: ManagedSkip components never emit; conditional components
-// emit only when their gating apl-core app is declared; everything else emits.
+// TestEmitOnManaged: ManagedSkip components never emit; components conditional on
+// an apl-core app emit only when it is declared; components conditional on a
+// sibling LLZ component emit only when that consumer is enabled; everything else
+// emits.
 func TestEmitOnManaged(t *testing.T) {
 	withHarbor := Bootstrap{ManagedApps: []string{"harbor"}}
 	none := Bootstrap{}
 
 	// Skip components (apl-core owns them on managed) never emit.
-	for _, name := range []string{"clusterFoundation", "argoWorkflows", "argoEvents", "gitea", "policyEngine", "imageScanning", "clusterHealthWorkflow"} {
-		if comp(t, name).EmitOnManaged(withHarbor) {
+	for _, name := range []string{"clusterFoundation", "argoEvents", "gitea", "policyEngine", "imageScanning"} {
+		if comp(t, name).EmitOnManaged(withHarbor, nil) {
 			t.Errorf("%s (ManagedSkip) must never emit on managed", name)
 		}
 	}
 	// Always-on LLZ components emit regardless of declared apps.
 	for _, name := range []string{"openbao", "externalSecrets", "certManagerBootstrapCA", "llzReconciler", "broadPatRotator"} {
-		if !comp(t, name).EmitOnManaged(none) {
+		if !comp(t, name).EmitOnManaged(none, nil) {
 			t.Errorf("%s (always) must emit on managed", name)
 		}
 	}
 	// Conditional components gate on the declared apl-core app.
-	if !comp(t, "harbor").EmitOnManaged(withHarbor) {
+	if !comp(t, "harbor").EmitOnManaged(withHarbor, nil) {
 		t.Error("harbor must emit when harbor is declared")
 	}
-	if comp(t, "harbor").EmitOnManaged(none) {
+	if comp(t, "harbor").EmitOnManaged(none, nil) {
 		t.Error("harbor must NOT emit when harbor is not declared")
 	}
-	if comp(t, "observability").EmitOnManaged(withHarbor) {
+	if comp(t, "observability").EmitOnManaged(withHarbor, nil) {
 		t.Error("observability (conditional on loki) must NOT emit when only harbor declared")
 	}
-	if !comp(t, "observability").EmitOnManaged(Bootstrap{ManagedApps: []string{"loki"}}) {
+	if !comp(t, "observability").EmitOnManaged(Bootstrap{ManagedApps: []string{"loki"}}, nil) {
 		t.Error("observability must emit when loki is declared")
+	}
+
+	// Consumer-gated components (argoWorkflows) emit on managed only when their
+	// consumer (clusterHealthWorkflow) is enabled — not on a default cluster.
+	chwOn := map[string]ComponentToggle{"clusterHealthWorkflow": {Enabled: boolPtr(true)}}
+	if comp(t, "argoWorkflows").EmitOnManaged(none, nil) {
+		t.Error("argoWorkflows must NOT emit on managed when clusterHealthWorkflow is disabled (default)")
+	}
+	if !comp(t, "argoWorkflows").EmitOnManaged(none, chwOn) {
+		t.Error("argoWorkflows must emit on managed when clusterHealthWorkflow is enabled")
+	}
+	// clusterHealthWorkflow is no longer ManagedSkip: enabled → emits.
+	if !comp(t, "clusterHealthWorkflow").EmitOnManaged(none, chwOn) {
+		t.Error("clusterHealthWorkflow must emit on managed when enabled")
 	}
 }
 

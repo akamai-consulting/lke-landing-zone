@@ -60,18 +60,31 @@ type Component struct {
 	// render` has no cluster access to discover which optional apps are enabled, so a
 	// conditional component emits ONLY when its gating app is declared. Empty = always.
 	ManagedConditionalOn string
+	// ManagedConditionalOnComponent names a SIBLING LLZ component whose enablement
+	// gates this one on managed: it emits ONLY when that consumer is enabled. Used
+	// for a support app that exists solely to back another component (argoWorkflows
+	// backs clusterHealthWorkflow; on managed cert-automation is apl-core's, so
+	// clusterHealthWorkflow is its only consumer) so it is not installed on managed
+	// clusters that don't run the consumer. Empty = not consumer-gated.
+	ManagedConditionalOnComponent string
 }
 
 // EmitOnManaged reports whether `llz render` should emit this component. A
-// ManagedSkip component never emits (apl-core owns the concern); a conditional
-// component emits only when its gating apl-core app is declared in
-// bootstrap.managedApps; everything else always emits.
-func (c Component) EmitOnManaged(b Bootstrap) bool {
+// ManagedSkip component never emits (apl-core owns the concern); a component
+// conditional on an apl-core app emits only when that app is declared in
+// bootstrap.managedApps; a component conditional on a sibling LLZ component emits
+// only when that consumer is enabled (via `enabled`); everything else always
+// emits. `enabled` is the env's component toggles (the same map ComponentEnabled
+// reads) and is consulted only for the sibling-component case.
+func (c Component) EmitOnManaged(b Bootstrap, enabled map[string]ComponentToggle) bool {
 	if c.ManagedSkip {
 		return false
 	}
 	if c.ManagedConditionalOn != "" {
 		return b.ManagedAppEnabled(c.ManagedConditionalOn)
+	}
+	if c.ManagedConditionalOnComponent != "" {
+		return ComponentEnabled(enabled, c.ManagedConditionalOnComponent)
 	}
 	return true
 }
@@ -135,12 +148,15 @@ var Components = []Component{
 		CarvedApp: &CarvedApp{AppName: "llz-externalsecrets", AppWave: -10, Namespace: "external-secrets"},
 	},
 	{
-		// LLZ-provided from argo-helm; its only consumers (cert-automation,
-		// clusterHealthWorkflow) are apl-core's / skipped on managed → skip.
-		Name:              "argoWorkflows",
-		ManifestResources: []string{"argo-workflows/network-policies.yaml"},
-		ArgoApps:          []string{"applications/argo-workflows.yaml"},
-		ManagedSkip:       true,
+		// LLZ-provided from argo-helm — ships the Workflow CRDs + controller that
+		// back its consumers (cert-automation, clusterHealthWorkflow). On managed
+		// cert-automation is apl-core's, so clusterHealthWorkflow is the only
+		// consumer; consumer-gate on it so argo-workflows installs only where the
+		// health RUN-path actually runs, not on every managed cluster.
+		Name:                          "argoWorkflows",
+		ManifestResources:             []string{"argo-workflows/network-policies.yaml"},
+		ArgoApps:                      []string{"applications/argo-workflows.yaml"},
+		ManagedConditionalOnComponent: "clusterHealthWorkflow",
 	},
 	{
 		// Exists only to feed cert-automation's EventBus/Sensor CRDs — no consumer on
@@ -352,9 +368,10 @@ var Components = []Component{
 		DependsOn:         []string{"argoWorkflows"},
 		ManifestResources: []string{"llz-cluster-health-workflow"},
 		DefaultDisabled:   true,
-		// Runs an Argo WorkflowTemplate needing the argoWorkflows controller (skipped
-		// on managed) — no runner, so skip. Managed apl-core has its own health/status.
-		ManagedSkip: true,
+		// Runs an Argo WorkflowTemplate on the argoWorkflows controller. When an env
+		// opts in it emits on managed too — argoWorkflows follows it via
+		// ManagedConditionalOnComponent — so managed clusters get the same day-2
+		// health RUN-path. Default-disabled, so off unless explicitly enabled.
 	},
 }
 

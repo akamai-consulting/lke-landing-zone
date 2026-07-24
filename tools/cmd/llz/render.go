@@ -491,7 +491,7 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		}
 		// Managed apl-core: drop/gate carved components the same way the manifest
 		// overlay does (skip apl-core-owned, gate conditional on managedApps).
-		if !c.EmitOnManaged(e.Cluster.Bootstrap) {
+		if !c.EmitOnManaged(e.Cluster.Bootstrap, e.Components) {
 			continue
 		}
 		appsDir := filepath.Join(aplDir, env, "apps", c.Name)
