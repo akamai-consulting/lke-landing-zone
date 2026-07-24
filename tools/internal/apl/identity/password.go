@@ -1,9 +1,9 @@
-package main
+package identity
 
-// users_password.go — the random temporary-password generator for `llz users add`.
-// The default onboarding flow mints a one-time password the user must change at
-// first login, so it need only be strong + satisfy a typical Keycloak password
-// policy (one of each class), not memorable.
+// password.go — the random temporary-password generator for onboarding. The
+// default flow mints a one-time password the user must change at first login, so
+// it need only be strong + satisfy a typical Keycloak password policy (one of
+// each class), not memorable.
 
 import (
 	"crypto/rand"
@@ -18,12 +18,12 @@ const (
 	pwLen     = 20
 )
 
-// randomPassword returns a cryptographically-random password of pwLen runes that
+// RandomPassword returns a cryptographically-random password of pwLen runes that
 // contains at least one lower, upper, digit, and special character (so it clears
 // a default Keycloak password policy). It seeds the four guaranteed classes, fills
 // the rest from the full alphabet, then shuffles so the guaranteed characters are
 // not in fixed positions.
-func randomPassword() string {
+func RandomPassword() string {
 	classes := []string{pwLower, pwUpper, pwDigit, pwSpecial}
 	all := pwLower + pwUpper + pwDigit + pwSpecial
 
