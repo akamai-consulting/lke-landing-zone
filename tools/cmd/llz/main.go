@@ -66,7 +66,7 @@ func newRootCmd() *cobra.Command {
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), specCmd(), networkCmd(), componentsCmd(),
 		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
-		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), versionCmd(), selfUpdateCmd(),
+		reapCmd(), openbaoCmd(), usersCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), versionCmd(), selfUpdateCmd(),
 	)
 
 	// Group the adopter-facing commands in `llz --help` so the front door is
@@ -81,7 +81,7 @@ func newRootCmd() *cobra.Command {
 		"new": "spec", "env": "spec", "spec": "spec", "network": "spec", "components": "spec", "render": "spec", "import": "spec",
 		"tokens": "build", "secrets": "build", "doctor": "build", "validate": "build",
 		"build": "build", "up": "build", "status": "build",
-		"upgrade": "day2", "drift": "day2", "credentials": "day2", "openbao": "day2",
+		"upgrade": "day2", "drift": "day2", "credentials": "day2", "openbao": "day2", "users": "day2",
 		"verify": "day2", "reap": "day2", "reconcile": "day2", "self-update": "day2",
 	}
 	for _, c := range root.Commands() {
