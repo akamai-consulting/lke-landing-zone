@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"net/http"
-	"strings"
 	"testing"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 )
+
+// These cover the cmd/llz WRAPPER: the env contract and the ESO-synced-token gate.
+// The sync orchestration is tested in internal/apl/overlay against a fake Repo.
 
 // setAplOverlayEnv sets the minimal env contract and restores it via t.Setenv.
 func setAplOverlayEnv(t *testing.T) {
@@ -19,141 +19,6 @@ func setAplOverlayEnv(t *testing.T) {
 	t.Setenv("APL_VALUES_SOURCE_BRANCH", "main")
 	// leave APL_VALUES_BRANCH unset → defaults to apl-primary
 	t.Setenv("APL_VALUES_BRANCH", "")
-}
-
-// fakeOverlaySeams installs read/commit/creds fakes and restores them.
-func fakeOverlaySeams(t *testing.T, read func(path string) string, creds func() (string, bool, error), commit func(files map[string]string, branch string) (string, bool, error)) {
-	t.Helper()
-	origRead, origCommit, origCreds := aplOverlayReadFileFn, aplOverlayCommitFn, aplOverlayObjCredsFn
-	t.Cleanup(func() {
-		aplOverlayReadFileFn, aplOverlayCommitFn, aplOverlayObjCredsFn = origRead, origCommit, origCreds
-	})
-
-	aplOverlayReadFileFn = func(_ context.Context, _ *http.Client, _, _, _, path string) (string, bool, error) {
-		c := read(path)
-		return c, c != "", nil
-	}
-	aplOverlayObjCredsFn = func(_ context.Context, _ string) (string, bool, error) { return creds() }
-	aplOverlayCommitFn = func(_ context.Context, _ *http.Client, _, _, branch string, files map[string]string, _ string, _ int) (string, bool, error) {
-		return commit(files, branch)
-	}
-}
-
-func TestReconcileAplOverlay_FillsAndOverlays(t *testing.T) {
-	setAplOverlayEnv(t)
-	shared := map[string]string{
-		sharedOverlayPath(clusterspec.OverlayObjFile):         clusterspec.RenderObjOverlayShared(),
-		envOverlayPath("primary", clusterspec.OverlayObjFile): clusterspec.RenderObjOverlayEnv("primary", "us-ord-1"),
-		// apps SOURCE: LLZ wants knative OFF. (bare apps: map — LLZ's desired-state input)
-		sharedOverlayPath(clusterspec.OverlayAppsFile):         "apps:\n  knative:\n    enabled: false\n",
-		envOverlayPath("primary", clusterspec.OverlayAppsFile): "",
-		// apl-operator's CURRENT per-app CR on the TARGET branch: enabled + owned config.
-		aplAppTarget("knative"): "kind: AplApp\nmetadata:\n  name: knative\nspec:\n  enabled: true\n  resources:\n    foo: bar\n",
-	}
-	var gotFiles map[string]string
-	var gotBranch string
-	fakeOverlaySeams(t,
-		func(p string) string { return shared[p] },
-		func() (string, bool, error) { return "AKID", true, nil },
-		func(files map[string]string, branch string) (string, bool, error) {
-			gotFiles, gotBranch = files, branch
-			return "newsha", true, nil
-		},
-	)
-
-	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
-		t.Fatalf("reconcileAplOverlay: %v", err)
-	}
-	if gotBranch != "apl-primary" {
-		t.Errorf("target branch = %q, want apl-primary (defaulted from REGION)", gotBranch)
-	}
-	obj, ok := gotFiles[aplOverlayTargets[clusterspec.OverlayObjFile]]
-	if !ok {
-		t.Fatalf("obj target not in overlay files: %v", keysOf(gotFiles))
-	}
-	// apps fanned out to the per-app AplApp CR: enabled flipped to LLZ's desired value,
-	// apl-operator's owned config (resources) key-level-preserved.
-	knative, ok := gotFiles[aplAppTarget("knative")]
-	if !ok {
-		t.Fatalf("per-app target %q not in overlay files: %v", aplAppTarget("knative"), keysOf(gotFiles))
-	}
-	if !strings.Contains(knative, "enabled: false") {
-		t.Errorf("knative.yaml must have enabled flipped to false:\n%s", knative)
-	}
-	if !strings.Contains(knative, "foo: bar") {
-		t.Errorf("knative.yaml must preserve apl-operator's owned config (resources):\n%s", knative)
-	}
-	// The accessKeyId placeholder was filled from OpenBao; the merged env
-	// region/buckets are present.
-	if strings.Contains(obj, clusterspec.ObjAccessKeyIDPlaceholder) {
-		t.Errorf("obj.yaml still has the accessKeyId placeholder after fill:\n%s", obj)
-	}
-	if !strings.Contains(obj, "AKID") {
-		t.Errorf("obj.yaml missing filled accessKeyId:\n%s", obj)
-	}
-	// The secret NEVER transits git: apl-core reads secretAccessKey from the
-	// obj-secrets Secret via ESO, so it is ABSENT from the settings overlay
-	// entirely. Guard against any regression that re-introduces it.
-	if strings.Contains(obj, "secretAccessKey") {
-		t.Errorf("obj.yaml must NOT carry secretAccessKey (ESO owns it):\n%s", obj)
-	}
-	// It is apl-core's AplObjectStorage settings CR, not a bare obj: map.
-	if !strings.Contains(obj, "kind: AplObjectStorage") {
-		t.Errorf("obj.yaml must be the AplObjectStorage CR:\n%s", obj)
-	}
-	if !strings.Contains(obj, "us-ord-1") || !strings.Contains(obj, "platform-loki-chunks-primary") {
-		t.Errorf("obj.yaml missing merged env region/buckets:\n%s", obj)
-	}
-}
-
-// When the obj credential is not seeded, obj.yaml is SKIPPED (never push a
-// placeholder) but the app toggles still sync (they carry no secret).
-func TestReconcileAplOverlay_SkipsObjWhenCredMissing(t *testing.T) {
-	setAplOverlayEnv(t)
-	shared := map[string]string{
-		sharedOverlayPath(clusterspec.OverlayObjFile):          clusterspec.RenderObjOverlayShared(),
-		envOverlayPath("primary", clusterspec.OverlayObjFile):  clusterspec.RenderObjOverlayEnv("primary", "us-ord-1"),
-		sharedOverlayPath(clusterspec.OverlayAppsFile):         "apps:\n  knative:\n    enabled: false\n",
-		envOverlayPath("primary", clusterspec.OverlayAppsFile): "",
-		aplAppTarget("knative"):                                "kind: AplApp\nmetadata:\n  name: knative\nspec:\n  enabled: true\n",
-	}
-	var gotFiles map[string]string
-	fakeOverlaySeams(t,
-		func(p string) string { return shared[p] },
-		func() (string, bool, error) { return "", false, nil }, // not seeded
-		func(files map[string]string, _ string) (string, bool, error) {
-			gotFiles = files
-			return "sha", true, nil
-		},
-	)
-	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
-		t.Fatalf("reconcileAplOverlay: %v", err)
-	}
-	if _, ok := gotFiles[aplOverlayTargets[clusterspec.OverlayObjFile]]; ok {
-		t.Error("obj.yaml must be skipped when the credential is not seeded (no placeholder push)")
-	}
-	if _, ok := gotFiles[aplAppTarget("knative")]; !ok {
-		t.Error("app toggles must still sync when the obj credential is missing")
-	}
-}
-
-// A missing apl-<env> branch (apl-operator not bootstrapped yet) is a no-op, not
-// an error.
-func TestReconcileAplOverlay_MissingBranchIsNoOp(t *testing.T) {
-	setAplOverlayEnv(t)
-	fakeOverlaySeams(t,
-		func(p string) string {
-			if strings.HasSuffix(p, clusterspec.OverlayAppsFile) {
-				return clusterspec.RenderAppsOverlayShared()
-			}
-			return ""
-		},
-		func() (string, bool, error) { return "AKID", true, nil },
-		func(map[string]string, string) (string, bool, error) { return "", false, errGHRefNotFound },
-	)
-	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
-		t.Errorf("missing target branch must be a no-op, got: %v", err)
-	}
 }
 
 // Missing render-time-static env (GH_REPO/REGION) → a loud misconfiguration error.
@@ -176,76 +41,5 @@ func TestReconcileAplOverlay_MissingTokenIsNoOp(t *testing.T) {
 	t.Cleanup(func() { aplValuesRepoTokenFile = orig })
 	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
 		t.Errorf("unsynced token must be a no-op, got: %v", err)
-	}
-}
-
-func keysOf(m map[string]string) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
-}
-
-// TestReconcileAplOverlay_ProvisionsTeamsWhenAbsent: a declared team whose apl-core
-// CRs are absent on the target branch gets them created, so apl-operator provisions
-// the namespace + Keycloak group + realm role.
-func TestReconcileAplOverlay_ProvisionsTeamsWhenAbsent(t *testing.T) {
-	setAplOverlayEnv(t)
-	src := map[string]string{
-		envOverlayPath("primary", clusterspec.OverlayTeamsFile):          clusterspec.RenderTeamsManifest([]clusterspec.Team{{Name: "platform"}}),
-		envTeamPath("primary", "platform", clusterspec.TeamSettingsFile): clusterspec.RenderTeamSettings("platform"),
-		envTeamPath("primary", "platform", clusterspec.TeamAppsFile):     clusterspec.RenderTeamApps("platform"),
-		// target env/teams/platform/* is ABSENT (not in map → read returns not-found)
-	}
-	var gotFiles map[string]string
-	fakeOverlaySeams(t,
-		func(p string) string { return src[p] },
-		func() (string, bool, error) { return "", false, nil }, // obj cred unseeded → obj skipped
-		func(files map[string]string, _ string) (string, bool, error) {
-			gotFiles = files
-			return "sha", true, nil
-		},
-	)
-	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
-		t.Fatalf("reconcileAplOverlay: %v", err)
-	}
-	for _, f := range []string{clusterspec.TeamSettingsFile, clusterspec.TeamAppsFile} {
-		if _, ok := gotFiles[aplTeamTarget("platform", f)]; !ok {
-			t.Errorf("team CR %s must be created on the target branch: files=%v", aplTeamTarget("platform", f), keysOf(gotFiles))
-		}
-	}
-	if !strings.Contains(gotFiles[aplTeamTarget("platform", clusterspec.TeamSettingsFile)], "AplTeamSettingSet") {
-		t.Error("provisioned settings.yaml must be the AplTeamSettingSet CR")
-	}
-}
-
-// TestReconcileAplOverlay_NeverClobbersExistingTeam: once the team CRs exist on the
-// target branch (apl-core / the console owns them — members, quota), the reconciler
-// leaves them untouched.
-func TestReconcileAplOverlay_NeverClobbersExistingTeam(t *testing.T) {
-	setAplOverlayEnv(t)
-	src := map[string]string{
-		envOverlayPath("primary", clusterspec.OverlayTeamsFile):          clusterspec.RenderTeamsManifest([]clusterspec.Team{{Name: "platform"}}),
-		envTeamPath("primary", "platform", clusterspec.TeamSettingsFile): clusterspec.RenderTeamSettings("platform"),
-		envTeamPath("primary", "platform", clusterspec.TeamAppsFile):     clusterspec.RenderTeamApps("platform"),
-		// target ALREADY has the team, with console-owned edits (a member):
-		aplTeamTarget("platform", clusterspec.TeamSettingsFile): "kind: AplTeamSettingSet\nmetadata:\n  name: platform\nspec:\n  members:\n    - alice\n",
-		aplTeamTarget("platform", clusterspec.TeamAppsFile):     "kind: AplTeamTool\nmetadata:\n  name: platform\nspec: {}\n",
-	}
-	var gotFiles map[string]string
-	fakeOverlaySeams(t,
-		func(p string) string { return src[p] },
-		func() (string, bool, error) { return "", false, nil },
-		func(files map[string]string, _ string) (string, bool, error) {
-			gotFiles = files
-			return "sha", true, nil
-		},
-	)
-	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
-		t.Fatalf("reconcileAplOverlay: %v", err)
-	}
-	if _, ok := gotFiles[aplTeamTarget("platform", clusterspec.TeamSettingsFile)]; ok {
-		t.Error("an existing team's settings.yaml must NOT be overwritten (apl-core/console owns it)")
 	}
 }
