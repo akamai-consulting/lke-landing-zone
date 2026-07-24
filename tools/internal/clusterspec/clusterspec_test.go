@@ -402,12 +402,6 @@ func TestClusterTFVars_Golden(t *testing.T) {
 func TestObjTFVars_InjectEnvName(t *testing.T) {
 	lz := mustDecode(t, validSpec)
 	c := lz.Spec.Environments["primary"].Cluster
-	// The cluster name lives in the render identity (values.yaml), not a tfvar —
-	// the former cluster-bootstrap tfvars (deployment/apl_values_env/cluster_name)
-	// were retired with the workspace; `llz ci bootstrap-cluster` reads the spec.
-	if id := lz.ValuesIdentity("primary"); id.ClusterName != "platform-primary" {
-		t.Errorf("ValuesIdentity.ClusterName = %q, want platform-primary", id.ClusterName)
-	}
 	o := assignMap(ObjectStorageTFVars("primary", c))
 	if o["region_suffix"] != `"primary"` || o["obj_cluster"] != `"us-ord-1"` {
 		t.Errorf("object-storage mapping mismatch; got %v", o)

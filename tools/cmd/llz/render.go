@@ -250,8 +250,8 @@ func writeTargets(targets map[string]string, tfDir, relPrefix string, dryRun boo
 // committed apl-values and silently skipped every tfvars target that --diff
 // covered).
 //
-// Nothing here touches the filesystem except to READ the committed values.yaml
-// base, so it is safe on the write-nothing paths.
+// Nothing here touches the filesystem to write, so it is safe on the
+// write-nothing paths.
 func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir string, tfvarsOnly bool) (map[string]string, error) {
 	targets := map[string]string{}
 
@@ -342,9 +342,9 @@ func untrackRenderedTfvars(relPrefix string) {
 // renders to, as {path → content}: the THIN manifest overlay (resources: the shared
 // platform-apl/manifest base + the carved Application CRs; components: the enabled plain
 // component dirs), the per-env env-revision marker, each enabled carved component's
-// App CR + apps/<name>/ source root (kustomization + per-env patches), and — when an
-// apl-values/values.yaml base is present — the values.yaml with
-// apps.<key>.enabled + identity patched (the apl-core backend).
+// App CR + apps/<name>/ source root (kustomization + per-env patches), and the
+// apl-overlay tree (obj storage + app toggles the apl-overlay reconciler syncs onto
+// apl-<env>). apl-core's own values.yaml is NOT rendered — Linode owns it on managed.
 // resolveTemplateRef returns the ref the shared apl-values tree is fetched at
 // (the remote refs RenderManifestKustomization emits). Priority:
 //  1. $LLZ_TEMPLATE_REF — set by automation that renders OUTSIDE an instance:

@@ -83,15 +83,9 @@ func TestLandingZoneEnv(t *testing.T) {
 
 func TestValuesIdentity(t *testing.T) {
 	lz := mustDecode(t, validSpec)
-	id := lz.ValuesIdentity("primary")
-	if id.ClusterName != "platform-primary" {
-		t.Errorf("ClusterName = %q, want platform-primary", id.ClusterName)
-	}
-	if id.DomainSuffix != "" {
-		t.Errorf("DomainSuffix = %q, want \"\" (managed: Linode owns the domain)", id.DomainSuffix)
-	}
-	if !id.ExternalDNS || id.ExternalIDP { // spec defaults: DNS on, IDP off
-		t.Errorf("platform flags = (dns:%v idp:%v), want (true,false)", id.ExternalDNS, id.ExternalIDP)
+	// The values-repo URL resolves from the spec (defaulting to the instance repo).
+	if id := lz.ValuesIdentity("primary"); id.RepoURL == "" {
+		t.Error("ValuesIdentity.RepoURL should resolve from the spec, got empty")
 	}
 }
 

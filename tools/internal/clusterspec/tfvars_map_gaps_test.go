@@ -1,13 +1,10 @@
 package clusterspec
 
-// Coverage for the optional-field branches of the spec→tfvars mappers and the
-// YAML scalar setters: a fully-populated Cluster emits every optional key, a
-// minimal one emits none, and the setters no-op on a nil/absent node.
+// Coverage for the optional-field branches of the spec→tfvars mappers: a
+// fully-populated Cluster emits every optional key, a minimal one emits none.
 
 import (
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
 func assignKeys(as []Assign) map[string]string {
@@ -126,42 +123,5 @@ func TestObjectStorageTFVars(t *testing.T) {
 	}
 	if _, ok := min["obj_cluster"]; ok {
 		t.Error("obj_cluster should be omitted when unset")
-	}
-}
-
-func TestScalarSettersNilNoOp(t *testing.T) {
-	// nil node → no-op, no panic.
-	setBool(nil, true)
-	setInt(nil, 7)
-
-	// A real scalar node gets overwritten with the typed literal.
-	n := &yaml.Node{Kind: yaml.ScalarNode, Value: "old"}
-	setBool(n, true)
-	if n.Tag != "!!bool" || n.Value != "true" {
-		t.Errorf("setBool = (%q,%q)", n.Tag, n.Value)
-	}
-	setInt(n, 42)
-	if n.Tag != "!!int" || n.Value != "42" {
-		t.Errorf("setInt = (%q,%q)", n.Tag, n.Value)
-	}
-}
-
-func TestMapValue(t *testing.T) {
-	if mapValue(nil, "k") != nil {
-		t.Error("mapValue(nil) should be nil")
-	}
-	scalar := &yaml.Node{Kind: yaml.ScalarNode, Value: "x"}
-	if mapValue(scalar, "k") != nil {
-		t.Error("mapValue(non-mapping) should be nil")
-	}
-	m := &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
-		{Kind: yaml.ScalarNode, Value: "k"},
-		{Kind: yaml.ScalarNode, Value: "v"},
-	}}
-	if got := mapValue(m, "k"); got == nil || got.Value != "v" {
-		t.Errorf("mapValue(k) = %v", got)
-	}
-	if mapValue(m, "absent") != nil {
-		t.Error("mapValue(absent) should be nil")
 	}
 }
