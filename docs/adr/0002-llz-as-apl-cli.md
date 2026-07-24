@@ -135,7 +135,7 @@ llz apl                         # APL layer — cloud-agnostic, talks to a runni
   team   add | list | login     # ← llz env(team bits) + team-login-smoke   (otomi teams)
   user   add                    # HOMED here; top-level `llz users` retired    (Keycloak users)
   app    enable | disable | list# ← llz components                         (otomi apps/components)
-  values set | render | validate| show
+  values set | render | validate| show   # render + validate WIRED; set/show later
                                 # ← llz render + reconcile-apl-overlay + validate-apl-values
   secret get | set | list       # ← read surface over llz openbao / secrets (defer to APL ESO where it fits)
   status                        # ← llz status + verify (platform health)
@@ -188,8 +188,8 @@ keep.
 |---|---|---|
 | `users` → `apl user` | **Align (done)** | Extracted to `internal/apl/identity` (Phase 1) and **retired from the top level** — `apl user` is its sole home. First realized disposition. |
 | `components` | **Align** | `apl app` — otomi apps/components |
-| `render` | **Align** | `apl values render` — the front door; provider-specific bits stay behind the provider layer |
-| `validate` (`validate-apl-values`) | **Align** | `apl values validate` |
+| `render` | **Align (done)** | Wired as `apl values render` — the front door; provider-specific bits stay behind the provider layer. (Top-level `llz render` still exists, not yet retired.) |
+| `validate` (`validate-apl-values`) | **Align (done)** | Wired as `apl values validate` — surfaced from `llz ci validate-apl-values` as a first-class values command |
 | `status` | **Align** | `apl status` |
 | `doctor` | **Align** | `apl doctor` |
 | `env` | **Split** | env-as-APL-env → `apl` env selector; `vpc`/`peer`/`role` → keep (fleet) |
