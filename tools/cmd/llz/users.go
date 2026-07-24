@@ -1,9 +1,11 @@
 package main
 
-// users.go — `llz users add` (also `llz apl user add`), the operator command that
-// onboards a human into APL by creating a Keycloak user in the `otomi` realm and
-// granting them team membership (the `team-<name>` role apl-core provisions)
-// and/or the APL platform-admin role (`team-admin`).
+// users.go — `llz apl user add`, the operator command that onboards a human into
+// APL by creating a Keycloak user in the `otomi` realm and granting them team
+// membership (the `team-<name>` role apl-core provisions) and/or the APL
+// platform-admin role (`team-admin`). Lives only under the `apl` front door — the
+// top-level `llz users` alias was retired (ADR 0002 Appendix B: users is an
+// APL-domain op).
 //
 // The onboarding DOMAIN — validate roles, create/find the user, grant roles +
 // groups, invite — lives in internal/apl/identity (ADR 0002 Phase 1). This file
@@ -53,10 +55,13 @@ type usersAddOpts struct {
 	region    string
 }
 
-func usersCmd() *cobra.Command {
+// aplUserCmd is `llz apl user` — the sole home of APL user management, reached as
+// a leaf of the `apl` front door (aplCmd). Formerly the top-level `llz users`;
+// retired there per ADR 0002 Appendix B (users → apl user).
+func aplUserCmd() *cobra.Command {
 	s := &cobra.Command{
-		Use:   "users",
-		Short: "manage APL (Keycloak) users",
+		Use:   "user",
+		Short: "onboard & manage App Platform (Keycloak) users",
 		Long: "Create and manage the human users of the APL platform — Keycloak users in\n" +
 			"the `otomi` realm. `add` onboards a user and grants them team membership\n" +
 			"(the team-<name> role apl-core provisions from spec.teams) and/or the APL\n" +

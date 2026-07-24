@@ -133,7 +133,7 @@ keep their current names and grouping.
 ```
 llz apl                         # APL layer — cloud-agnostic, talks to a running APL
   team   add | list | login     # ← llz env(team bits) + team-login-smoke   (otomi teams)
-  user   add                    # ← llz users add                          (Keycloak users)
+  user   add                    # HOMED here; top-level `llz users` retired    (Keycloak users)
   app    enable | disable | list# ← llz components                         (otomi apps/components)
   values set | render | validate| show
                                 # ← llz render + reconcile-apl-overlay + validate-apl-values
@@ -186,7 +186,7 @@ keep.
 
 | Current (top-level) | Disposition | Destination / note |
 |---|---|---|
-| `users` | **Align** | `apl user` — Keycloak users (PR #315 work); strongest align |
+| `users` → `apl user` | **Align (done)** | Extracted to `internal/apl/identity` (Phase 1) and **retired from the top level** — `apl user` is its sole home. First realized disposition. |
 | `components` | **Align** | `apl app` — otomi apps/components |
 | `render` | **Align** | `apl values render` — the front door; provider-specific bits stay behind the provider layer |
 | `validate` (`validate-apl-values`) | **Align** | `apl values validate` |
