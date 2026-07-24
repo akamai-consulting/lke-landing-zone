@@ -61,28 +61,16 @@ type ghTreeEntry struct {
 func ghReadFileNative(ctx context.Context, client *http.Client, token, repo, ref, path string) (content string, found bool, err error) {
 	u := fmt.Sprintf("%s/repos/%s/contents/%s?ref=%s",
 		ghAPIBase, repo, path, url.QueryEscape(ref))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return "", false, err
-	}
-	ghAuthHeaders(req, token)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return "", false, nil
-	}
-	if err := ghCheck2xx(resp, token, "read file "+path); err != nil {
-		return "", false, err
-	}
 	var body struct {
 		Content  string `json:"content"`
 		Encoding string `json:"encoding"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	notFound, err := ghGetJSON(ctx, client, token, u, "read file "+path, &body)
+	if err != nil {
 		return "", false, err
+	}
+	if notFound {
+		return "", false, nil
 	}
 	if body.Encoding != "base64" {
 		return "", false, fmt.Errorf("read file %s: unexpected encoding %q", path, body.Encoding)
@@ -100,29 +88,17 @@ func ghReadFileNative(ctx context.Context, client *http.Client, token, repo, ref
 // on the ref returns errGHRefNotFound so a missing branch is distinguishable.
 func ghGetBranchHeadNative(ctx context.Context, client *http.Client, token, repo, branch string) (commitSHA, treeSHA string, err error) {
 	refURL := fmt.Sprintf("%s/repos/%s/git/ref/heads/%s", ghAPIBase, repo, branch)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, refURL, nil)
-	if err != nil {
-		return "", "", err
-	}
-	ghAuthHeaders(req, token)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return "", "", fmt.Errorf("branch %q: %w", branch, errGHRefNotFound)
-	}
-	if err := ghCheck2xx(resp, token, "get ref heads/"+branch); err != nil {
-		return "", "", err
-	}
 	var ref struct {
 		Object struct {
 			SHA string `json:"sha"`
 		} `json:"object"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&ref); err != nil {
+	notFound, err := ghGetJSON(ctx, client, token, refURL, "get ref heads/"+branch, &ref)
+	if err != nil {
 		return "", "", err
+	}
+	if notFound {
+		return "", "", fmt.Errorf("branch %q: %w", branch, errGHRefNotFound)
 	}
 	commitSHA = ref.Object.SHA
 	if commitSHA == "" {
@@ -130,26 +106,17 @@ func ghGetBranchHeadNative(ctx context.Context, client *http.Client, token, repo
 	}
 
 	commitURL := fmt.Sprintf("%s/repos/%s/git/commits/%s", ghAPIBase, repo, commitSHA)
-	creq, err := http.NewRequestWithContext(ctx, http.MethodGet, commitURL, nil)
-	if err != nil {
-		return "", "", err
-	}
-	ghAuthHeaders(creq, token)
-	cresp, err := client.Do(creq)
-	if err != nil {
-		return "", "", err
-	}
-	defer cresp.Body.Close()
-	if err := ghCheck2xx(cresp, token, "get commit "+commitSHA); err != nil {
-		return "", "", err
-	}
 	var commit struct {
 		Tree struct {
 			SHA string `json:"sha"`
 		} `json:"tree"`
 	}
-	if err := json.NewDecoder(cresp.Body).Decode(&commit); err != nil {
+	notFound, err = ghGetJSON(ctx, client, token, commitURL, "get commit "+commitSHA, &commit)
+	if err != nil {
 		return "", "", err
+	}
+	if notFound {
+		return "", "", fmt.Errorf("get commit %s: not found", commitSHA)
 	}
 	if commit.Tree.SHA == "" {
 		return "", "", fmt.Errorf("get commit %s: response missing tree.sha", commitSHA)
@@ -318,6 +285,33 @@ func ghPostForSHA(ctx context.Context, client *http.Client, token, u string, bod
 		return "", fmt.Errorf("%s: response missing .sha", what)
 	}
 	return r.SHA, nil
+}
+
+// ghGetJSON GETs a git-data/Contents endpoint, checks 2xx, and decodes the JSON
+// body into out. A 404 returns notFound=true with err=nil (and no decode) so a
+// caller can treat a missing ref/file as a normal outcome; every other non-2xx is
+// an error. The GET twin of ghPostForSHA.
+func ghGetJSON(ctx context.Context, client *http.Client, token, u, what string, out any) (notFound bool, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false, err
+	}
+	ghAuthHeaders(req, token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return true, nil
+	}
+	if err := ghCheck2xx(resp, token, what); err != nil {
+		return false, err
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // ghCheck2xx returns nil for a 2xx response, otherwise an error carrying the
