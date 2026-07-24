@@ -396,7 +396,13 @@ func openbaoCmd() *cobra.Command {
 			"kubectl context points at (TLS verify skipped on the loopback tunnel) — so\n" +
 			"a plain `llz openbao get/set` with just a token Just Works, no address to\n" +
 			"wire. Set OPENBAO_ADDR_ACTIVE to override. Distinct from `llz secrets`\n" +
-			"(which manages GitHub secrets).",
+			"(which manages GitHub secrets).\n" +
+			"\n" +
+			"CREDENTIALS — prefer a team-scoped token over root. For day-2 get/set, run\n" +
+			"`eval \"$(llz openbao login --team <name>)\"` to mint a short-lived,\n" +
+			"attributed, least-privilege OPENBAO_TOKEN via Keycloak OIDC — no root token.\n" +
+			"The root token (OPENBAO_ROOT_TOKEN) is reserved for `exec` (auth/policy\n" +
+			"admin) and break-glass; get/set/exec warn when they fall back to it.",
 	}
 	// `exec` is a thin pass-through to `bao` inside the cluster. SetInterspersed
 	// (false) makes cobra STOP flag-parsing at the first positional (the bao
