@@ -170,6 +170,14 @@ func reconcileAplOverlay(ctx context.Context, reg *metrics.Registry) error {
 		return err
 	}
 
+	// teams — CREATE each spec.teams team's apl-core CRs at env/teams/<name>/ when
+	// absent, so apl-operator provisions the namespace + Keycloak group + realm role
+	// team-<name> that bao-configure and team-OIDC login need. Never clobbers a team
+	// apl-core / the App Platform Console already owns.
+	if err := teamOverlayFiles(ctx, client, cfg, files); err != nil {
+		return err
+	}
+
 	if len(files) == 0 {
 		return nil // nothing to sync
 	}
@@ -238,6 +246,53 @@ func readMergedOverlay(ctx context.Context, client *http.Client, cfg aplOverlayC
 }
 
 func sharedOverlayPath(base string) string { return "apl-values/_shared/apl-overlay/" + base }
+
+// aplTeamTarget is a team CR's path under apl-core's env/teams/<name>/ on the
+// machine branch; envTeamPath is the same CR in LLZ's committed per-env overlay.
+func aplTeamTarget(name, file string) string { return "env/teams/" + name + "/" + file }
+func envTeamPath(env, name, file string) string {
+	return "apl-values/" + env + "/apl-overlay/teams/" + name + "/" + file
+}
+
+// teamOverlayFiles reads LLZ's per-env teams manifest and, for each declared team,
+// adds its apl-core CRs (settings.yaml + apps.yaml) to files ONLY when they are
+// absent on the target branch — a CREATE-if-absent. LLZ bootstraps the team so
+// apl-operator provisions its namespace + Keycloak group + realm role team-<name>;
+// once it exists apl-core / the App Platform Console owns it (members, quota), so
+// the reconciler never overwrites it. A missing manifest (no spec.teams) is a
+// clean no-op.
+func teamOverlayFiles(ctx context.Context, client *http.Client, cfg aplOverlayConfig, files map[string]string) error {
+	manifest, found, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.sourceBranch, envOverlayPath(cfg.env, clusterspec.OverlayTeamsFile))
+	if err != nil {
+		return fmt.Errorf("read teams manifest: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	names, err := clusterspec.TeamNames([]byte(manifest))
+	if err != nil {
+		return fmt.Errorf("parse teams manifest: %w", err)
+	}
+	sort.Strings(names) // deterministic push order
+	for _, name := range names {
+		for _, file := range []string{clusterspec.TeamSettingsFile, clusterspec.TeamAppsFile} {
+			target := aplTeamTarget(name, file)
+			if _, exists, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.targetBranch, target); err != nil {
+				return fmt.Errorf("read target %s: %w", target, err)
+			} else if exists {
+				continue // apl-core / the console owns the team now — never clobber
+			}
+			src, srcFound, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.sourceBranch, envTeamPath(cfg.env, name, file))
+			if err != nil {
+				return fmt.Errorf("read source %s: %w", envTeamPath(cfg.env, name, file), err)
+			}
+			if srcFound {
+				files[target] = src
+			}
+		}
+	}
+	return nil
+}
 func envOverlayPath(env, base string) string {
 	return "apl-values/" + env + "/apl-overlay/" + base
 }

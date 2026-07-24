@@ -293,7 +293,7 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		if tfvarsOnly {
 			continue
 		}
-		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams)
 		if err != nil {
 			return nil, fmt.Errorf("render %s manifests: %w", name, err)
 		}
@@ -435,7 +435,7 @@ func repoOwnerName(repoURL string) string {
 	return s
 }
 
-func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string) (map[string]string, error) {
+func committedTargets(env string, e clusterspec.Environment, id clusterspec.ValuesIdentity, aplDir string, teams []clusterspec.Team) (map[string]string, error) {
 	// Managed observability's grafana-admin/otel-bearer generated-secrets are not
 	// carried by LLZ on managed, but that is now proven harmless rather than a
 	// render-time caveat: the ADR-0005 "validate live before relying on it" gate
@@ -521,6 +521,23 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		targets[filepath.Join(overlay, clusterspec.OverlayObjFile)] = obj
 	}
 	targets[filepath.Join(overlay, clusterspec.OverlayAppsFile)] = clusterspec.RenderAppsOverlayEnv(e.Components)
+
+	// Team declarations (spec.teams) — restore managed team provisioning that
+	// ADR-0005 dropped with values.yaml: emit each team's apl-core CRs
+	// (AplTeamSettingSet + AplTeamTool) that the apl-overlay reconciler git-syncs
+	// onto apl-<env> at env/teams/<name>/, where apl-operator provisions the
+	// namespace + Keycloak group + realm role team-<name> that bao-configure and
+	// team-OIDC login need. Purely spec-derived (no spec-independent base), so it
+	// rides the per-env overlay — generated at `llz env add` like the per-env obj
+	// layer, NOT the fixed spec-independent _shared base. See overlay_teams.go.
+	if len(teams) > 0 {
+		targets[filepath.Join(overlay, clusterspec.OverlayTeamsFile)] = clusterspec.RenderTeamsManifest(teams)
+		for _, t := range teams {
+			td := filepath.Join(overlay, "teams", t.Name)
+			targets[filepath.Join(td, clusterspec.TeamSettingsFile)] = clusterspec.RenderTeamSettings(t.Name)
+			targets[filepath.Join(td, clusterspec.TeamAppsFile)] = clusterspec.RenderTeamApps(t.Name)
+		}
+	}
 	return targets, nil
 }
 
@@ -569,7 +586,7 @@ func checkManifestDrift(lz *clusterspec.LandingZone, aplDir string, envs []strin
 	targets := map[string]string{}
 	for _, name := range envs {
 		e, _ := lz.Env(name)
-		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir)
+		ct, err := committedTargets(name, e, lz.ValuesIdentity(name), aplDir, lz.Spec.Teams)
 		if err != nil {
 			return err
 		}

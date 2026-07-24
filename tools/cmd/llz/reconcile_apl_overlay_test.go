@@ -186,3 +186,66 @@ func keysOf(m map[string]string) []string {
 	}
 	return ks
 }
+
+// TestReconcileAplOverlay_ProvisionsTeamsWhenAbsent: a declared team whose apl-core
+// CRs are absent on the target branch gets them created, so apl-operator provisions
+// the namespace + Keycloak group + realm role.
+func TestReconcileAplOverlay_ProvisionsTeamsWhenAbsent(t *testing.T) {
+	setAplOverlayEnv(t)
+	src := map[string]string{
+		envOverlayPath("primary", clusterspec.OverlayTeamsFile):          clusterspec.RenderTeamsManifest([]clusterspec.Team{{Name: "platform"}}),
+		envTeamPath("primary", "platform", clusterspec.TeamSettingsFile): clusterspec.RenderTeamSettings("platform"),
+		envTeamPath("primary", "platform", clusterspec.TeamAppsFile):     clusterspec.RenderTeamApps("platform"),
+		// target env/teams/platform/* is ABSENT (not in map → read returns not-found)
+	}
+	var gotFiles map[string]string
+	fakeOverlaySeams(t,
+		func(p string) string { return src[p] },
+		func() (string, bool, error) { return "", false, nil }, // obj cred unseeded → obj skipped
+		func(files map[string]string, _ string) (string, bool, error) {
+			gotFiles = files
+			return "sha", true, nil
+		},
+	)
+	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
+		t.Fatalf("reconcileAplOverlay: %v", err)
+	}
+	for _, f := range []string{clusterspec.TeamSettingsFile, clusterspec.TeamAppsFile} {
+		if _, ok := gotFiles[aplTeamTarget("platform", f)]; !ok {
+			t.Errorf("team CR %s must be created on the target branch: files=%v", aplTeamTarget("platform", f), keysOf(gotFiles))
+		}
+	}
+	if !strings.Contains(gotFiles[aplTeamTarget("platform", clusterspec.TeamSettingsFile)], "AplTeamSettingSet") {
+		t.Error("provisioned settings.yaml must be the AplTeamSettingSet CR")
+	}
+}
+
+// TestReconcileAplOverlay_NeverClobbersExistingTeam: once the team CRs exist on the
+// target branch (apl-core / the console owns them — members, quota), the reconciler
+// leaves them untouched.
+func TestReconcileAplOverlay_NeverClobbersExistingTeam(t *testing.T) {
+	setAplOverlayEnv(t)
+	src := map[string]string{
+		envOverlayPath("primary", clusterspec.OverlayTeamsFile):          clusterspec.RenderTeamsManifest([]clusterspec.Team{{Name: "platform"}}),
+		envTeamPath("primary", "platform", clusterspec.TeamSettingsFile): clusterspec.RenderTeamSettings("platform"),
+		envTeamPath("primary", "platform", clusterspec.TeamAppsFile):     clusterspec.RenderTeamApps("platform"),
+		// target ALREADY has the team, with console-owned edits (a member):
+		aplTeamTarget("platform", clusterspec.TeamSettingsFile): "kind: AplTeamSettingSet\nmetadata:\n  name: platform\nspec:\n  members:\n    - alice\n",
+		aplTeamTarget("platform", clusterspec.TeamAppsFile):     "kind: AplTeamTool\nmetadata:\n  name: platform\nspec: {}\n",
+	}
+	var gotFiles map[string]string
+	fakeOverlaySeams(t,
+		func(p string) string { return src[p] },
+		func() (string, bool, error) { return "", false, nil },
+		func(files map[string]string, _ string) (string, bool, error) {
+			gotFiles = files
+			return "sha", true, nil
+		},
+	)
+	if err := reconcileAplOverlay(context.Background(), metrics.NewRegistry()); err != nil {
+		t.Fatalf("reconcileAplOverlay: %v", err)
+	}
+	if _, ok := gotFiles[aplTeamTarget("platform", clusterspec.TeamSettingsFile)]; ok {
+		t.Error("an existing team's settings.yaml must NOT be overwritten (apl-core/console owns it)")
+	}
+}
