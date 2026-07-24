@@ -616,13 +616,17 @@ jobs:
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
           lane wave-vap          llz ci assert-wave-health-vap
           lane instance-custom   llz ci assert-instance-custom
+          # Team-scoped OpenBao write path (spec.teams → apl-core team → Keycloak
+          # group/role → OpenBao keycloak role → <name>-writer policy). No-op when no
+          # teams are declared. Uses the PUBLIC Keycloak URL (post-converge DNS/cert).
+          lane team-write        llz ci team-login-smoke --region "$REGION"
           # Report-only lanes (|| true): diagnostics, not gates. They join the fan-out
           # because they are read-only and were costing serial time after it.
           lane metric-surface    bash -c 'llz ci prom-metrics --match "^(loki_|cortex_|otelcol_|harbor_)" || true'
           lane alert-eval        bash -c 'llz ci alert-eval || true'
           wait
           fail=0
-          for n in loki scrape-reconciler health-workflow broad-pat wave-vap instance-custom metric-surface alert-eval; do
+          for n in loki scrape-reconciler health-workflow broad-pat wave-vap instance-custom team-write metric-surface alert-eval; do
             rc="$(cat "${dir}/${n}.rc" 2>/dev/null || echo 1)"
             echo "::group::assert ${n} (rc=${rc})"
             cat "${dir}/${n}.log" 2>/dev/null || true

@@ -61,7 +61,7 @@ func aplAppTarget(app string) string { return "env/apps/" + app + ".yaml" }
 // aplOverlayCommitMessage is the commit subject for the reconciler's overlay
 // pushes onto apl-<env> — distinct from apl-operator's "otomi commit" so the two
 // writers' history is legible.
-const aplOverlayCommitMessage = "chore(llz): sync apl-overlay (obj storage + app toggles) [ci skip]"
+const aplOverlayCommitMessage = "chore(llz): sync apl-overlay (obj storage + app toggles + teams) [ci skip]"
 
 // aplOverlayMaxAttempts bounds the fast-forward retry loop against apl-operator's
 // concurrent reconcile pushes.

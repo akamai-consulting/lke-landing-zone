@@ -98,6 +98,12 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
+	// No teams declared → nothing to validate. A clean no-op (like keycloak-configure
+	// / bao-configure) so the e2e team-write gate passes for teamless instances.
+	if len(specTeams()) == 0 {
+		fmt.Println("No spec.teams declared — nothing to validate (team-login smoke skipped).")
+		return nil
+	}
 	base, team, subtree, err := smokeTargets(region, teamFlag)
 	if err != nil {
 		return err
@@ -120,9 +126,6 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	gid, err := k.findGroupID(group)
 	if err != nil {
 		return fmt.Errorf("look up group %s: %w", group, err)
-	}
-	if gid == "" {
-		return fmt.Errorf("keycloak group %q not found — apl-core has not provisioned team %q yet", group, team)
 	}
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -161,8 +164,23 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 		}
 		fmt.Fprintf(os.Stderr, "  torn down test user %s\n", username)
 	}()
-	if err := k.addUserToGroup(uid, gid); err != nil {
-		return fmt.Errorf("add user to %s: %w", group, err)
+	// Grant the team's realm role — the source of the groups:[team-<name>] claim the
+	// OpenBao role binds on. apl-core normally grants it via the team-<name> GROUP,
+	// but that group is created LAZILY on the first onboarded member (the App
+	// Platform Console), so a freshly-provisioned team has the ROLE but no group yet.
+	// Use the group when it exists (exercises the real group→role→claim path);
+	// otherwise grant the realm role directly — the realm-role→groups mapper keys off
+	// the ROLE, not the group, so both yield the identical claim (verified live). This
+	// lets the smoke validate a team before anyone is onboarded.
+	if gid != "" {
+		if err := k.addUserToGroup(uid, gid); err != nil {
+			return fmt.Errorf("add user to %s: %w", group, err)
+		}
+	} else {
+		if err := k.addRealmRoleToUser(uid, group); err != nil {
+			return fmt.Errorf("grant realm role %s: %w", group, err)
+		}
+		fmt.Printf("  team-%s group not provisioned yet (created lazily on first onboarded member) — granted realm role %s directly\n", team, group)
 	}
 
 	// Mint the id_token (browser-free stand-in for the device flow) and prove it
@@ -297,10 +315,19 @@ func (k *kcClient) ensureDirectGrantClient(clientID string) (string, error) {
 // createSmokeUser makes an enabled realm user with an inline non-temporary
 // password, returning its id.
 func (k *kcClient) createSmokeUser(username, password string) (string, error) {
+	// Fully set the user up so the direct-grant login isn't blocked by the realm's
+	// DEFAULT required actions (VERIFY_EMAIL / UPDATE_PASSWORD / UPDATE_PROFILE /
+	// CONFIGURE_TOTP) — those surface as "Account is not fully set up" at token time.
+	// emailVerified + a profile (names) satisfy the profile/email checks; an explicit
+	// empty requiredActions overrides the realm defaults; the credential is permanent.
 	body := map[string]any{
-		"username": username,
-		"email":    username + "@llz-smoke.invalid",
-		"enabled":  true,
+		"username":        username,
+		"email":           username + "@llz-smoke.invalid",
+		"emailVerified":   true,
+		"firstName":       "LLZ",
+		"lastName":        "Smoke",
+		"enabled":         true,
+		"requiredActions": []string{},
 		"credentials": []map[string]any{
 			{"type": "password", "value": password, "temporary": false},
 		},
@@ -328,6 +355,35 @@ func (k *kcClient) addUserToGroup(userID, groupID string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("add user to group: HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
+	}
+	return nil
+}
+
+// addRealmRoleToUser grants the named realm role to the user — the direct-grant
+// equivalent of team-<name> group membership for the groups claim, used when the
+// team's group is not provisioned yet (a fresh team before its first member).
+func (k *kcClient) addRealmRoleToUser(userID, roleName string) error {
+	// The role representation (id + name) POST body role-mappings/realm requires.
+	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/roles/"+url.PathEscape(roleName), nil)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		return fmt.Errorf("realm role %q not found — apl-core has not provisioned the team role yet", roleName)
+	}
+	var role struct{ ID, Name string }
+	if err := decodeJSON(resp, &role); err != nil {
+		return err
+	}
+	pr, err := k.do(http.MethodPost, "/admin/realms/"+k.realm+"/users/"+userID+"/role-mappings/realm",
+		[]map[string]string{{"id": role.ID, "name": role.Name}})
+	if err != nil {
+		return err
+	}
+	defer pr.Body.Close()
+	if pr.StatusCode != http.StatusNoContent && pr.StatusCode != http.StatusOK {
+		return fmt.Errorf("assign realm role %s: HTTP %d: %s", roleName, pr.StatusCode, readSnippet(pr.Body))
 	}
 	return nil
 }
