@@ -17,7 +17,7 @@ package clusterspec
 // (buckets.loki / buckets.harbor), NOT the landing zone's three Loki buckets
 // (chunks/ruler/admin). Adopting native obj therefore consolidates Loki to a
 // single bucket; that live flip is lab-gated (see the design doc). The names here
-// mirror the "<label_prefix>-<app>-<env>" convention objectStoreWiring uses.
+// follow the llz-object-storage module's "<label_prefix>-<app>-<env>" convention.
 
 import (
 	"bytes"
@@ -125,7 +125,7 @@ func RenderObjOverlayShared() string {
 
 // RenderObjOverlayEnv is a deployment's per-env obj.yaml override: the object-storage
 // region (the OBJ cluster id) and the loki/harbor bucket names, derived from the spec
-// exactly as objectStoreWiring derives them. It deep-merges onto the _shared CR (same
+// per the llz-object-storage module's naming. It deep-merges onto the _shared CR (same
 // kind/metadata; spec.provider.linode gains region+buckets). Empty when the env
 // declares no object-storage cluster (nothing to point at).
 func RenderObjOverlayEnv(env, objCluster string) string {
@@ -151,8 +151,8 @@ func RenderObjOverlayEnv(env, objCluster string) string {
 	})
 }
 
-// objLabelPrefix mirrors the llz-object-storage module's label_prefix default
-// (also hard-coded in objectStoreWiring — change both in lockstep).
+// objLabelPrefix mirrors the llz-object-storage module's label_prefix default —
+// keep in lockstep with the module if that default changes.
 const objLabelPrefix = "platform"
 
 // appsOverlayDoc marshals the apps.<name>.enabled toggle fragment.
