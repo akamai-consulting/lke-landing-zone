@@ -48,6 +48,45 @@ type Component struct {
 	CarvedApp *CarvedApp
 	// DefaultDisabled components default to enabled:false.
 	DefaultDisabled bool
+	// ManagedSkip drops this component from `llz render`. LLZ runs exclusively on
+	// Linode's MANAGED App Platform (apl_enabled), where apl-core owns the cluster
+	// foundation, DNS/public-cert issuance, gitea, kyverno/trivy, and its own
+	// argo-workflows/events — so those components carry no LLZ manifest backend and
+	// must not be emitted.
+	ManagedSkip bool
+	// ManagedConditionalOn names the OPTIONAL apl-core app (enabled by the operator in
+	// the App Platform Console and declared in spec.cluster.bootstrap.managedApps) this
+	// component layers onto. Managed apl-core installs only a minimal core, and `llz
+	// render` has no cluster access to discover which optional apps are enabled, so a
+	// conditional component emits ONLY when its gating app is declared. Empty = always.
+	ManagedConditionalOn string
+	// ManagedConditionalOnComponent names a SIBLING LLZ component whose enablement
+	// gates this one on managed: it emits ONLY when that consumer is enabled. Used
+	// for a support app that exists solely to back another component (argoWorkflows
+	// backs clusterHealthWorkflow; on managed cert-automation is apl-core's, so
+	// clusterHealthWorkflow is its only consumer) so it is not installed on managed
+	// clusters that don't run the consumer. Empty = not consumer-gated.
+	ManagedConditionalOnComponent string
+}
+
+// EmitOnManaged reports whether `llz render` should emit this component. A
+// ManagedSkip component never emits (apl-core owns the concern); a component
+// conditional on an apl-core app emits only when that app is declared in
+// bootstrap.managedApps; a component conditional on a sibling LLZ component emits
+// only when that consumer is enabled (via `enabled`); everything else always
+// emits. `enabled` is the env's component toggles (the same map ComponentEnabled
+// reads) and is consulted only for the sibling-component case.
+func (c Component) EmitOnManaged(b Bootstrap, enabled map[string]ComponentToggle) bool {
+	if c.ManagedSkip {
+		return false
+	}
+	if c.ManagedConditionalOn != "" {
+		return b.ManagedAppEnabled(c.ManagedConditionalOn)
+	}
+	if c.ManagedConditionalOnComponent != "" {
+		return ComponentEnabled(enabled, c.ManagedConditionalOnComponent)
+	}
+	return true
 }
 
 // Patch is one kustomize strategic-merge/JSON patch entry (path + target).
@@ -87,9 +126,10 @@ var Components = []Component{
 		ArgoApps:          []string{"platform-support-project.yaml"},
 	},
 	{
-		Name:      "clusterFoundation",
-		Mandatory: true, // wave -20: namespaces, default-deny NPs, CoreDNS, storage
-		ArgoApps:  []string{"applications/cluster-foundation.yaml"},
+		Name:        "clusterFoundation",
+		Mandatory:   true, // apl-core's on managed: namespaces, default-deny NPs, CoreDNS, storage
+		ArgoApps:    []string{"applications/cluster-foundation.yaml"},
+		ManagedSkip: true,
 	},
 	{
 		Name: "externalSecrets",
@@ -108,23 +148,47 @@ var Components = []Component{
 		CarvedApp: &CarvedApp{AppName: "llz-externalsecrets", AppWave: -10, Namespace: "external-secrets"},
 	},
 	{
-		Name:              "argoWorkflows",
-		ManifestResources: []string{"argo-workflows/network-policies.yaml"},
-		ArgoApps:          []string{"applications/argo-workflows.yaml"},
+		// LLZ-provided from argo-helm — ships the Workflow CRDs + controller that
+		// back its consumers (cert-automation, clusterHealthWorkflow). On managed
+		// cert-automation is apl-core's, so clusterHealthWorkflow is the only
+		// consumer; consumer-gate on it so argo-workflows installs only where the
+		// health RUN-path actually runs, not on every managed cluster.
+		Name:                          "argoWorkflows",
+		ManifestResources:             []string{"argo-workflows/network-policies.yaml"},
+		ArgoApps:                      []string{"applications/argo-workflows.yaml"},
+		ManagedConditionalOnComponent: "clusterHealthWorkflow",
 	},
 	{
+		// Exists only to feed cert-automation's EventBus/Sensor CRDs — no consumer on
+		// managed → skip.
 		Name:              "argoEvents",
 		ManifestResources: []string{"argo-events/network-policies.yaml"},
 		ArgoApps:          []string{"applications/argo-events.yaml"},
+		ManagedSkip:       true,
 	},
 	{
-		Name:              "certManager",
-		ManifestResources: []string{"cert-manager/openbao-bootstrap-ca.yaml"},
-		ArgoApps:          []string{"applications/cert-automation.yaml"},
+		// The self-signed CA ClusterIssuer (openbao-ca) the llz-openbao-platform
+		// chart hard-requires via issuerRef. LLZ-owned, always needed — managed
+		// apl-core does NOT provide it (only its own custom-ca). apl-core owns the
+		// letsencrypt/DNS-01 public wildcard cert, so LLZ ships only this bootstrap CA.
+		Name:              "certManagerBootstrapCA",
+		ManifestResources: []string{"openbao-bootstrap-ca.yaml"},
+	},
+	{
+		// LLZ's supply-chain control: the verify-llz-image-signature Kyverno
+		// ClusterPolicy that gates the first-party llz image at admission. It needs
+		// Kyverno (the ClusterPolicy CRD), which the managed minimal core does NOT
+		// install — Kyverno is opt-in via the Console — so this emits ONLY when the
+		// operator declared `kyverno` in managedApps (else the CRD-less ClusterPolicy
+		// would wedge platform-bootstrap). cosign-subject-guard verifies its subject
+		// pin regardless of emission (the file lives under components/).
+		Name:                 "imageSignature",
+		ManifestResources:    []string{"kyverno-verify-llz-image-signature.yaml"},
+		ManagedConditionalOn: "kyverno",
 	},
 	{
 		Name:              "openbao",
-		DependsOn:         []string{"externalSecrets", "certManager"},
+		DependsOn:         []string{"externalSecrets", "certManagerBootstrapCA"},
 		ManifestResources: []string{"openbao/openbao-cert-watcher.yaml"},
 		ArgoApps: []string{
 			"applications/openbao.yaml",
@@ -136,7 +200,6 @@ var Components = []Component{
 		Name:        "observability",
 		AplCoreApps: []string{"prometheus", "alertmanager", "grafana", "loki", "otel"},
 		ManifestResources: []string{
-			"observability/loki-object-store-externalsecret.yaml",
 			"observability/otel-bootstrap-ca.yaml",
 			"observability/otel-collector.yaml",
 			"observability/prometheus-rules/openbao-alerts.yaml",
@@ -155,12 +218,17 @@ var Components = []Component{
 		// first carve (PR-A). Its content spans waves -16..10; the App wave floors
 		// them and lands after externalSecrets.
 		CarvedApp: &CarvedApp{AppName: "llz-observability", AppWave: -5, Namespace: "llz-observability"},
+		// Its loki S3 ExternalSecret + otel-collector + prometheus glue need apl-core's
+		// observability stack (loki/grafana/prometheus), which is opt-in on managed —
+		// emit only when the operator declared `loki`. KNOWN-INCOMPLETE: the
+		// grafana-admin/otel-bearer generated-secrets it pairs with are not carried yet
+		// (see docs/adr/0005-managed-app-platform.md); `llz render` warns at render time.
+		ManagedConditionalOn: "loki",
 	},
 	{
 		Name:        "harbor",
 		AplCoreApps: []string{"harbor"},
 		ManifestResources: []string{
-			"harbor/harbor-registry-s3-externalsecret.yaml",
 			"harbor/harbor-admin-push.yaml",
 			"harbor/harbor-robot-provisioner",
 		},
@@ -177,16 +245,21 @@ var Components = []Component{
 		// its own App wave keeps the robot-provisioner CronJob + mesh NetworkPolicy
 		// off platform-bootstrap's fate.
 		CarvedApp: &CarvedApp{AppName: "llz-harbor", AppWave: 5, Namespace: "harbor"},
+		// The robot-provisioner + registry-s3 ExternalSecret need apl-core's harbor,
+		// which is opt-in on managed — emit only when the operator declared `harbor`.
+		ManagedConditionalOn: "harbor",
 	},
 	{
-		// apl-core policy engine (Kyverno + policy-reporter). apl-core-only.
+		// apl-core policy engine (Kyverno + policy-reporter). apl-core-only → skip on managed.
 		Name:        "policyEngine",
 		AplCoreApps: []string{"kyverno", "policy-reporter"},
+		ManagedSkip: true,
 	},
 	{
-		// apl-core image scanning (Trivy). apl-core-only.
+		// apl-core image scanning (Trivy). apl-core-only → skip on managed.
 		Name:        "imageScanning",
 		AplCoreApps: []string{"trivy"},
+		ManagedSkip: true,
 	},
 	{
 		// In-cluster Gitea — apl-core-only. Disabled by default on apl-core v6:
@@ -200,6 +273,7 @@ var Components = []Component{
 		Name:            "gitea",
 		AplCoreApps:     []string{"gitea"},
 		DefaultDisabled: true,
+		ManagedSkip:     true, // managed apl-core runs its own in-cluster gitea
 	},
 	{
 		// Support glue for the Akamai-internal llz-linode-cidr-firewall
@@ -294,6 +368,10 @@ var Components = []Component{
 		DependsOn:         []string{"argoWorkflows"},
 		ManifestResources: []string{"llz-cluster-health-workflow"},
 		DefaultDisabled:   true,
+		// Runs an Argo WorkflowTemplate on the argoWorkflows controller. When an env
+		// opts in it emits on managed too — argoWorkflows follows it via
+		// ManagedConditionalOnComponent — so managed clusters get the same day-2
+		// health RUN-path. Default-disabled, so off unless explicitly enabled.
 	},
 }
 

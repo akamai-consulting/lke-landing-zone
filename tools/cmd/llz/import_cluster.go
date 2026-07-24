@@ -336,7 +336,7 @@ var crdComponentByName = map[string]string{
 	"workflows.argoproj.io":                       "argoWorkflows",
 	"sensors.argoproj.io":                         "argoEvents",
 	"eventsources.argoproj.io":                    "argoEvents",
-	"certificates.cert-manager.io":                "certManager",
+	"certificates.cert-manager.io":                "certManagerBootstrapCA",
 	"clusterpolicies.kyverno.io":                  "policyEngine",
 	"policies.kyverno.io":                         "policyEngine",
 	"externalsecrets.external-secrets.io":         "externalSecrets",

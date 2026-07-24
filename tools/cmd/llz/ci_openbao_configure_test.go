@@ -480,3 +480,91 @@ func TestSystemSecretNamespacesCoverPolicyPaths(t *testing.T) {
 		}
 	}
 }
+
+// TestDiscoverKeycloakIssuerFromCluster covers the Managed App Platform issuer
+// discovery: it reads otomi/otomi-api's SSO_ISSUER (trimmed) and yields "" on
+// any kubectl error, so keycloakIssuerFor cleanly falls through when unreachable.
+func TestDiscoverKeycloakIssuerFromCluster(t *testing.T) {
+	var gotArgs []string
+	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
+		if name != "kubectl" {
+			t.Errorf("shelled out to %q, want kubectl", name)
+		}
+		gotArgs = args
+		return []byte("https://keycloak.lke634445.akamai-apl.net/realms/otomi\n"), nil
+	})
+	got := discoverKeycloakIssuerFromCluster()
+	if want := "https://keycloak.lke634445.akamai-apl.net/realms/otomi"; got != want {
+		t.Errorf("issuer = %q, want %q (trimmed)", got, want)
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "-n otomi") || !strings.Contains(joined, "otomi-api") ||
+		!strings.Contains(joined, "SSO_ISSUER") {
+		t.Errorf("read the wrong object: %v", gotArgs)
+	}
+
+	// kubectl error → empty (issuer unresolvable → team steps skipped upstream).
+	withExecOutput(t, func(string, ...string) ([]byte, error) { return nil, errors.New("no cluster") })
+	if got := discoverKeycloakIssuerFromCluster(); got != "" {
+		t.Errorf("on error = %q, want empty", got)
+	}
+}
+
+// TestManagedDomainFromIssuer covers the pure parse that turns apl-core's Keycloak
+// realm issuer into the bare Managed App Platform domain suffix.
+func TestManagedDomainFromIssuer(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://keycloak.lke634487.akamai-apl.net/realms/otomi", "lke634487.akamai-apl.net"},
+		{"https://keycloak.lke1.akamai-apl.net/realms/otomi/", "lke1.akamai-apl.net"},
+		{"https://keycloak.example.com", "example.com"}, // no path is fine
+		{"", ""},
+		{"https://console.lke1.akamai-apl.net/realms/otomi", ""}, // not the keycloak host
+		{"http://keycloak.lke1.akamai-apl.net/realms/otomi", ""}, // must be https
+		{"keycloak.lke1.akamai-apl.net", ""},                     // no scheme
+	}
+	for _, c := range cases {
+		if got := managedDomainFromIssuer(c.in); got != c.want {
+			t.Errorf("managedDomainFromIssuer(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestFilterManagedTeams: self-install passes through; managed keeps only teams
+// whose team-<name> namespace exists.
+func TestFilterManagedTeams(t *testing.T) {
+	teams := []clusterspec.Team{{Name: "platform"}, {Name: "data"}, {Name: "web"}}
+	definite := func(exists bool) func(string) (bool, bool) {
+		return func(string) (bool, bool) { return exists, true }
+	}
+
+	// Self-install: unchanged regardless of namespaces.
+	got, err := filterManagedTeams(false, teams, definite(false))
+	if err != nil || len(got) != 3 {
+		t.Errorf("self-install must pass all teams through, got %d (err %v)", len(got), err)
+	}
+
+	// Managed: only teams whose team-<name> namespace DEFINITELY exists survive.
+	exists := map[string]bool{"team-platform": true, "team-web": true} // no team-data
+	got, err = filterManagedTeams(true, teams, func(ns string) (bool, bool) { return exists[ns], true })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("managed should keep 2 teams (platform, web), got %d", len(got))
+	}
+	for _, tm := range got {
+		if tm.Name == "data" {
+			t.Error("team 'data' (no namespace) must be dropped on managed")
+		}
+	}
+
+	// Managed with none created → empty (all dropped, warned).
+	if got, err := filterManagedTeams(true, teams, definite(false)); err != nil || len(got) != 0 {
+		t.Errorf("managed with no team namespaces should drop all, got %d (err %v)", len(got), err)
+	}
+
+	// A NON-definite result (transient kubectl failure) must ABORT, not drop teams.
+	if _, err := filterManagedTeams(true, teams, func(string) (bool, bool) { return false, false }); err == nil {
+		t.Error("a transient kubectl failure must return an error, not silently drop teams")
+	}
+}

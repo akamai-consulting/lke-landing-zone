@@ -46,6 +46,13 @@ spec:
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
+          # Keep this batch pod OUT of the istio mesh. On a managed (App Platform)
+          # cluster the harbor namespace has sidecar injection on by default; an
+          # injected proxy with holdApplicationUntilProxyStarts blocks the `provision`
+          # container until the sidecar is ready (and a never-exiting sidecar stops the
+          # Job completing). A provisioner that only calls the Harbor API needs no mesh.
+          annotations:
+            sidecar.istio.io/inject: "false"
           # Static label so the NetworkPolicy can podSelector-match it.
           labels:
             app.kubernetes.io/name: harbor-robot-provisioner

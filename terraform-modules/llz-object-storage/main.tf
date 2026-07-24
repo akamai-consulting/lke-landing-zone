@@ -22,19 +22,36 @@
 # force_destroy attribute; if it lands, replace the drain step + this
 # comment with the native flag.
 
-# The Linode API now REJECTS the deprecated `cluster` argument on bucket
-# creation ([400] cluster is not valid) — buckets must be placed by `region`,
-# which is the cluster id with the trailing `-N` ordinal stripped (the
-# provider's own deprecation notice gives the mapping: cluster `us-mia-1` →
-# region `us-mia`). var.obj_cluster stays the canonical input because the S3
-# endpoint hostname still uses the full cluster id — see the s3_endpoint output.
+# The Linode API REJECTS the deprecated `cluster` argument on bucket creation
+# ([400] cluster is not valid) — a bucket is placed by `region` (the cluster id
+# with the trailing `-N` ordinal stripped: `us-ord-10` → `us-ord`).
+#
+# BUT a region can expose SEVERAL endpoints of different generations, and a
+# bucket is PINNED to the one it is created against — reachable there and
+# NOWHERE else (a request for the same bucket at a sibling endpoint 404s
+# NoSuchBucket). The endpoint types (techdocs.akamai.com/cloud-computing/docs/
+# endpoint-types): E0/E1 legacy, E2/E3 standard/gen-2. Crucially the hostname
+# ordinal does NOT encode the type — Chicago has BOTH `us-ord-1` (E1) and
+# `us-ord-10` (E3). So placing by `region` ALONE lands the bucket on the
+# region's DEFAULT (gen-1 / E1 = `us-ord-1`), while every consumer derives its
+# S3 host from the full var.obj_cluster (`us-ord-10.linodeobjects.com`) — a
+# split that silently breaks Loki/Harbor with NoSuchBucket even though the API
+# lists the bucket as present.
+#
+# Fix: pin each bucket to the requested endpoint by passing `s3_endpoint`
+# (a first-class create input — linodego ObjectStorageBucketCreateOptions.
+# S3Endpoint, surfaced by the provider as an Optional/ForceNew attribute), so
+# the full obj_cluster host is honoured end to end. No endpoint_type lookup
+# needed: s3_endpoint names the exact host and a wrong one fails loudly at apply.
 locals {
-  obj_region = replace(var.obj_cluster, "/-[0-9]+$/", "")
+  obj_region  = replace(var.obj_cluster, "/-[0-9]+$/", "")
+  s3_endpoint = "${var.obj_cluster}.linodeobjects.com"
 }
 
 resource "linode_object_storage_bucket" "harbor_registry" {
-  region = local.obj_region
-  label  = "${var.label_prefix}-harbor-registry-${var.region_suffix}"
+  region      = local.obj_region
+  s3_endpoint = local.s3_endpoint
+  label       = "${var.label_prefix}-harbor-registry-${var.region_suffix}"
 }
 
 # ── Loki object-storage buckets ───────────────────────────────────────────────
@@ -42,18 +59,21 @@ resource "linode_object_storage_bucket" "harbor_registry" {
 # secondary override in loki-values-secondary.yaml). All buckets are private.
 
 resource "linode_object_storage_bucket" "loki_chunks" {
-  region = local.obj_region
-  label  = "${var.label_prefix}-loki-chunks-${var.region_suffix}"
+  region      = local.obj_region
+  s3_endpoint = local.s3_endpoint
+  label       = "${var.label_prefix}-loki-chunks-${var.region_suffix}"
 }
 
 resource "linode_object_storage_bucket" "loki_ruler" {
-  region = local.obj_region
-  label  = "${var.label_prefix}-loki-ruler-${var.region_suffix}"
+  region      = local.obj_region
+  s3_endpoint = local.s3_endpoint
+  label       = "${var.label_prefix}-loki-ruler-${var.region_suffix}"
 }
 
 resource "linode_object_storage_bucket" "loki_admin" {
-  region = local.obj_region
-  label  = "${var.label_prefix}-loki-admin-${var.region_suffix}"
+  region      = local.obj_region
+  s3_endpoint = local.s3_endpoint
+  label       = "${var.label_prefix}-loki-admin-${var.region_suffix}"
 }
 
 # NOTE — the gitea_backup bucket + key + outputs were removed in the

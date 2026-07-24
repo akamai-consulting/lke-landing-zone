@@ -334,8 +334,8 @@ jobs:
             --namespace kyverno --create-namespace \
             --version "$KYVERNO_HELM_VERSION" \
             --wait --timeout 5m
-          echo "Applying platform-apl/manifest/kyverno-policies against the validate-policy webhook..."
-          kubectl kustomize platform-apl/manifest/kyverno-policies \
+          echo "Applying platform-apl/components/imageSignature against the validate-policy webhook..."
+          kubectl kustomize platform-apl/components/imageSignature \
             | kubectl apply --server-side=true -f -
 
 

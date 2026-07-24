@@ -83,6 +83,7 @@ var SystemSecretNamespaces = map[string]bool{
 	"infra":           true,
 	"linode":          true,
 	"loki":            true,
+	"obj":             true,
 	"otel":            true,
 }
 
@@ -296,12 +297,35 @@ func validateEnv(name string, env Environment) []error {
 	}
 	if c.NodePool.Type == "" {
 		errs = append(errs, prefix("cluster.nodePool.type is required"))
+	} else if strings.HasPrefix(c.NodePool.Type, "g6-") || strings.HasPrefix(c.NodePool.Type, "g5-") {
+		// LKE-E (the only tier LLZ provisions) needs enterprise node types
+		// (g8-dedicated-*, or g7-premium-*). A standard g5/g6 type is accepted by
+		// the Linode API but the pool then NEVER provisions nodes (empty pool, no
+		// error) — a silent, hours-wasting stall. Fail loud here instead.
+		errs = append(errs, prefix("cluster.nodePool.type %q is a standard-tier type — LKE-E requires an enterprise type like g8-dedicated-8-4 (standard g5/g6 types are accepted by the API but never provision nodes)", c.NodePool.Type))
 	}
 	if c.NodePool.Count <= 0 {
 		errs = append(errs, prefix("cluster.nodePool.count must be > 0"))
 	}
 	if c.Bootstrap.Name == "" {
 		errs = append(errs, prefix("cluster.bootstrap.name is required"))
+	}
+	// Managed App Platform is MANDATORY: LLZ never self-installs apl-core — every
+	// cluster is a Linode MANAGED App Platform cluster (linode_lke_cluster.apl_enabled
+	// = true), so Terraform installs apl-core and provisions the akamai-apl.net domain.
+	if !c.Bootstrap.ManagedAppPlatform {
+		errs = append(errs, prefix("cluster.bootstrap.managedAppPlatform must be true — LLZ installs apl-core exclusively via Linode's MANAGED App Platform (apl_enabled); it never self-installs. See docs/adr/0005-managed-app-platform.md"))
+	}
+	if c.Bootstrap.DomainSuffix != "" {
+		errs = append(errs, prefix("cluster.bootstrap.domainSuffix must NOT be set — Linode owns the lke<id>.akamai-apl.net domain (LLZ discovers it in-cluster); a stale value would misroute the Keycloak issuer/harbor URL"))
+	}
+	// managedApps gate the CONDITIONAL LLZ extras by EXACT string match, so a
+	// typo/whitespace (e.g. "Harbor", "loki ") silently drops the matching extra.
+	// Enforce the app-name format so that fails loud instead.
+	for _, app := range c.Bootstrap.ManagedApps {
+		if err := validate.EnvName(app); err != nil {
+			errs = append(errs, prefix("cluster.bootstrap.managedApps entry %q is malformed (%v) — it must be a lowercase apl-core app name (e.g. harbor, loki, grafana)", app, err))
+		}
 	}
 	if err := validate.HATopology(c.HA.Role, c.HA.Group, "cluster.ha.role", "cluster.ha.group"); err != nil {
 		errs = append(errs, prefix("%v", err))
@@ -421,6 +445,15 @@ func validateComponents(env string, components map[string]ComponentToggle) []err
 
 	for _, n := range names {
 		if !KnownComponent(n) {
+			if n == "certManager" || n == "certAutomation" {
+				// Migration aid: the former `certManager` component became
+				// `certManagerBootstrapCA` (the OpenBao CA, always on). Its
+				// letsencrypt/DNS-01 automation (`certAutomation`) is apl-core's on the
+				// managed platform and no longer an LLZ component. A stale spec
+				// referencing either gets an actionable message, not a bare "unknown".
+				errs = append(errs, fmt.Errorf("environments.%s.components.%s no longer exists — rename it to `certManagerBootstrapCA` (the OpenBao CA); letsencrypt/DNS-01 (the former certAutomation) is apl-core's on the MANAGED platform and is not an LLZ component", env, n))
+				continue
+			}
 			errs = append(errs, fmt.Errorf("environments.%s.components.%s: unknown component (known: %s)", env, n, knownComponentList()))
 			continue
 		}

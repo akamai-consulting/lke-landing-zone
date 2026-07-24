@@ -234,3 +234,21 @@ func TestBaoKVPutDefaultImpl(t *testing.T) {
 		t.Errorf("err = %v, want missing-token refusal", err)
 	}
 }
+
+// TestHarborRegistryHostFromURL covers normalizing Harbor's systeminfo
+// registry_url to a bare host — the managed-cluster registry_host discovery.
+func TestHarborRegistryHostFromURL(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"harbor.lke634487.akamai-apl.net", "harbor.lke634487.akamai-apl.net"},
+		{"https://harbor.lke634487.akamai-apl.net", "harbor.lke634487.akamai-apl.net"},
+		{"https://harbor.example.com/", "harbor.example.com"},
+		{"http://harbor.example.com", "harbor.example.com"},
+		{"  harbor.example.com  ", "harbor.example.com"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := harborRegistryHostFromURL(c.in); got != c.want {
+			t.Errorf("harborRegistryHostFromURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

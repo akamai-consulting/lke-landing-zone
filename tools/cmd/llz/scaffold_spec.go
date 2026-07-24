@@ -118,6 +118,12 @@ spec:
     cluster:
       k8sVersion: %s
       nodePool: { type: %s, count: %s }
+      # LLZ runs exclusively on Linode's MANAGED App Platform (apl_enabled): Linode
+      # installs+manages apl-core and provisions the lke<id>.akamai-apl.net domain +
+      # DNS + wildcard cert. Do NOT set cluster.bootstrap.domainSuffix (Linode owns
+      # the domain). Declare optional apl-core apps you enable in the Console via
+      # cluster.bootstrap.managedApps (e.g. [harbor, loki]). See docs/adr/0005.
+      bootstrap: { managedAppPlatform: true }
 `, clusterspec.APIVersion, clusterspec.Kind, instanceName,
 		upstreamOrg, repo, version, team, team, k8s, nodeType, nodeCount)
 
@@ -131,7 +137,7 @@ spec:
 // identity the flags don't carry (clusterLabel, bootstrap.name) is derived from
 // the instance name; unset optional fields are omitted so they inherit
 // spec.defaults. k8sVersion/nodePool are written only when overridden by a flag.
-func writeEnvDefinition(path, name string, o envAddOpts, instanceName, clusterDomain string) error {
+func writeEnvDefinition(path, name string, o envAddOpts, instanceName string) error {
 	label := instanceName + "-" + name
 	role := orElse(o.haRole, "standalone")
 
@@ -186,7 +192,9 @@ spec:
 	}
 	b.WriteString("    bootstrap:\n")
 	fmt.Fprintf(&b, "      name: %s\n", label)
-	fmt.Fprintf(&b, "      domainSuffix: %s\n", clusterDomain)
+	// domainSuffix is NOT authored: managedAppPlatform (inherited from spec.defaults)
+	// means Linode owns the lke<id>.akamai-apl.net domain; validateEnv rejects a
+	// non-empty domainSuffix. See docs/adr/0005-managed-app-platform.md.
 	if o.aplChartVersion != "" {
 		fmt.Fprintf(&b, "      aplChartVersion: %s\n", o.aplChartVersion)
 	}

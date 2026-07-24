@@ -53,6 +53,13 @@ func mergeCluster(base, over Cluster) Cluster {
 
 	out.Bootstrap.Name = pickStr(base.Bootstrap.Name, over.Bootstrap.Name)
 	out.Bootstrap.DomainSuffix = pickStr(base.Bootstrap.DomainSuffix, over.Bootstrap.DomainSuffix)
+	// managedAppPlatform (required true — every LLZ cluster is a Linode MANAGED App
+	// Platform cluster) inherits from the shared defaults like every other Bootstrap
+	// field: a `true` set once under spec.defaults.cluster.bootstrap propagates to
+	// every env (a plain bool can't distinguish "explicitly false" from "unset", so
+	// this is opt-in inheritance — which matches an instance-wide, non-per-env pivot).
+	out.Bootstrap.ManagedAppPlatform = base.Bootstrap.ManagedAppPlatform || over.Bootstrap.ManagedAppPlatform
+	out.Bootstrap.ManagedApps = pickSlice(base.Bootstrap.ManagedApps, over.Bootstrap.ManagedApps)
 	out.Bootstrap.AplChartVersion = pickStr(base.Bootstrap.AplChartVersion, over.Bootstrap.AplChartVersion)
 	out.Bootstrap.AppsRepoRevision = pickStr(base.Bootstrap.AppsRepoRevision, over.Bootstrap.AppsRepoRevision)
 	out.Bootstrap.AplValues.RepoURL = pickStr(base.Bootstrap.AplValues.RepoURL, over.Bootstrap.AplValues.RepoURL)

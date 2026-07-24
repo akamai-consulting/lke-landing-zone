@@ -86,9 +86,16 @@ func runVerify(g globalOpts, o verifyOpts) error {
 		}
 	}
 
-	// 5. apl-operator git-config points at the external HTTPS repo.
+	// 5. apl-operator git-config points at the external HTTPS repo. App Platform "BYO
+	//    Git" stores this in the Secret apl-secrets/apl-git-config with BARE keys
+	//    (repoUrl, not otomi.git.repoUrl) — NOT a ConfigMap in apl-operator. Its .data
+	//    is base64, so decode.
 	v.section("5. apl-operator apl-git-config repoUrl")
-	repoURL, _ := kubectlOut("-n", "apl-operator", "get", "cm", "apl-git-config", "-o", "jsonpath={.data.repoUrl}")
+	repoURLB64, _ := kubectlOut("-n", "apl-secrets", "get", "secret", "apl-git-config", "-o", "jsonpath={.data.repoUrl}")
+	repoURL := repoURLB64
+	if dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(repoURLB64)); err == nil {
+		repoURL = string(dec)
+	}
 	switch {
 	case strings.TrimSpace(repoURL) == "":
 		v.fail("apl-git-config not found or has no repoUrl")

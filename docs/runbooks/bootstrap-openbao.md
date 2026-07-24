@@ -141,7 +141,7 @@ for the pods to self-unseal, then exits without re-configuring or re-seeding.
 
 ### Cold bootstrap: the cert-rotation reseal is auto-healed
 
-On a fresh cluster, cert-manager issues `openbao-tls` before OpenBao starts, signed by the stable self-signed `openbao-ca` ClusterIssuer (`platform-apl/components/certManager/openbao-bootstrap-ca.yaml`). There is no workflow-side cert seed (the old `llz ci gen-bootstrap-tls` seed was retired), and the serving CA never changes — the only rotation left is the ~80-day *leaf* renewal under that same CA.
+On a fresh cluster, cert-manager issues `openbao-tls` before OpenBao starts, signed by the stable self-signed `openbao-ca` ClusterIssuer (`platform-apl/components/certManagerBootstrapCA/openbao-bootstrap-ca.yaml`). There is no workflow-side cert seed (the old `llz ci gen-bootstrap-tls` seed was retired), and the serving CA never changes — the only rotation left is the ~80-day *leaf* renewal under that same CA.
 
 The `openbao-cert-watcher` Deployment (`platform-apl/components/openbao/openbao-cert-watcher.yaml`) detects that leaf renewal and deletes the 3 OpenBao pods so they reload the new cert. The pods restart and **auto-unseal themselves** from the static seal key within seconds — no operator action and no re-dispatch needed.
 

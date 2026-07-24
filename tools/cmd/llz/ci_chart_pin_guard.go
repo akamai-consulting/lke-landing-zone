@@ -35,11 +35,10 @@ import (
 // manifests, and the app-of-apps generator's component list. All pin chart
 // versions that must track kubernetes-charts/.
 //
-// platform-apl was MISSING here, and it holds 3 of the repo's 5 first-party
-// pins (manifest/applications/cluster-foundation.yaml,
-// components/openbao/openbao.yaml, components/certManager/cert-automation.yaml).
+// platform-apl was MISSING here, and it holds the repo's first-party pins
+// (manifest/applications/cluster-foundation.yaml, components/openbao/openbao.yaml).
 // The guard reported "2 first-party chart pin(s) match" and read as full
-// coverage while 3 pins could drift from their Chart.yaml unwatched — a pin the
+// coverage while pins could drift from their Chart.yaml unwatched — a pin the
 // registry never received 404s at Argo sync time, which is the exact failure
 // this guard exists to prevent.
 var chartPinScanRoots = []string{"platform-apl", "instance-template", "kubernetes-charts"}

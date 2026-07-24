@@ -31,7 +31,7 @@ spec:
         ha: { role: standalone }
         bootstrap:
           name: platform-primary
-          domainSuffix: primary.example.com
+          managedAppPlatform: true
         objectStorage: { cluster: us-ord-1 }
 `
 
@@ -52,8 +52,8 @@ func TestDecodeAndValidate_OK(t *testing.T) {
 }
 
 func TestDefaults_ComponentsAndDomain(t *testing.T) {
-	// A spec env with no components and no domainSuffix should get the full
-	// default component set and the <env>.internal domain.
+	// A spec env with no components should get the full default component set. On the
+	// managed platform domainSuffix is NEVER defaulted (Linode owns the domain).
 	const y = `
 apiVersion: llz.akamai-consulting.io/v1alpha1
 kind: LandingZone
@@ -67,13 +67,13 @@ spec:
         region: us-sea
         k8sVersion: v1.33.6+lke7
         nodePool: { type: g8-dedicated-8-4, count: 3 }
-        bootstrap: { name: platform-lab }
+        bootstrap: { name: platform-lab, managedAppPlatform: true }
         objectStorage: { cluster: us-sea-1 }
 `
 	lz := mustDecode(t, y)
 	env := lz.Spec.Environments["lab"]
-	if got := env.Cluster.Bootstrap.DomainSuffix; got != "lab.internal" {
-		t.Errorf("domainSuffix default = %q, want lab.internal", got)
+	if got := env.Cluster.Bootstrap.DomainSuffix; got != "" {
+		t.Errorf("domainSuffix must not be defaulted on managed, got %q", got)
 	}
 	if !ComponentEnabled(env.Components, "openbao") {
 		t.Error("openbao component should default enabled")
@@ -157,7 +157,7 @@ spec:
         region: us-ord
         k8sVersion: v1.33.6+lke7
         nodePool: { type: t, count: 3 }
-        bootstrap: { name: c }
+        bootstrap: { name: c, managedAppPlatform: true }
         objectStorage: { cluster: us-ord-1 }
       components:
         observability: { retention: 30d }
@@ -273,7 +273,7 @@ spec:
         k8sVersion: v1.33.6+lke7
         nodePool: { type: t, count: 3 }
         ha: { role: active, group: prod }` + net(cidrA) + `
-        bootstrap: { name: platform-east }
+        bootstrap: { name: platform-east, managedAppPlatform: true }
         objectStorage: { cluster: us-ord-1 }
     west:
       cluster:
@@ -282,7 +282,7 @@ spec:
         k8sVersion: v1.33.6+lke7
         nodePool: { type: t, count: 3 }
         ha: { role: standby, group: prod }` + net(cidrB) + `
-        bootstrap: { name: platform-west }
+        bootstrap: { name: platform-west, managedAppPlatform: true }
         objectStorage: { cluster: us-sea-1 }
 `
 }
@@ -325,7 +325,7 @@ spec:
         k8sVersion: v1.33.6+lke7
         nodePool: { type: t, count: 3 }
         network: { vpc: ord, subnetCIDR: %s }
-        bootstrap: { name: platform-web }
+        bootstrap: { name: platform-web, managedAppPlatform: true }
         objectStorage: { cluster: us-ord-1 }
     api:
       cluster:
@@ -334,7 +334,7 @@ spec:
         k8sVersion: v1.33.6+lke7
         nodePool: { type: t, count: 3 }
         network: { vpc: %s, subnetCIDR: %s }
-        bootstrap: { name: platform-api }
+        bootstrap: { name: platform-api, managedAppPlatform: true }
         objectStorage: { cluster: us-ord-1 }
 `
 	// distinct subnets sharing one VPC → clean.

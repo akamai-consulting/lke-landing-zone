@@ -50,10 +50,11 @@ func ciMintBootstrapObjkeysCmd() *cobra.Command {
 	var region string
 	c := &cobra.Command{
 		Use:   "mint-bootstrap-objkeys",
-		Short: "mint the first Loki/Harbor object-storage keys and seed them into OpenBao",
+		Short: "mint the first Loki/Harbor/platform-obj object-storage keys and seed them into OpenBao",
 		Long: "Bootstrap-time twin of the in-cluster rotator: mints the region's scoped\n" +
-			"object-storage keys (Loki chunks/ruler/admin, Harbor registry) via the Linode\n" +
-			"API and seeds secret/loki/object-store + secret/harbor/registry-s3 in one\n" +
+			"object-storage keys (Loki chunks/ruler/admin, Harbor registry, and the broad\n" +
+			"managed platform-obj key spanning all buckets) via the Linode API and seeds\n" +
+			"secret/loki/object-store + secret/harbor/registry-s3 + secret/obj/platform in one\n" +
 			"step — no Terraform-minted keys, no LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub\n" +
 			"secrets, no stash/reseed relay. Idempotent: already-seeded paths are\n" +
 			"skipped (a rotator-minted key is never clobbered). Seeds carry rotated_at\n" +

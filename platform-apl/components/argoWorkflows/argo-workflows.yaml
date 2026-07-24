@@ -29,6 +29,10 @@ spec:
           workflowNamespaces:
             - llz-openbao
             - llz-cert-automation
+            # The clusterHealthWorkflow health WorkflowTemplate + its submitted
+            # Workflows live here; the controller must manage this namespace for the
+            # `llz ci assert-health-workflow` RUN-path (and any day-2 health jobs).
+            - llz-argo-workflows
         workflow:
           serviceAccount:
             create: true

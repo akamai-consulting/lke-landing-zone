@@ -37,6 +37,10 @@ func ClusterTFVars(c Cluster) []Assign {
 	}
 	add("node_type", hclStr(c.NodePool.Type))
 	add("node_count", strconv.Itoa(c.NodePool.Count))
+	// Managed App Platform: apl_enabled=true makes Linode install+manage apl-core
+	// and provision the akamai-apl.net domain. Always emitted (false = self-install,
+	// the default). See Bootstrap.ManagedAppPlatform / ADR 0005.
+	add("apl_enabled", hclBool(c.Bootstrap.ManagedAppPlatform))
 	if c.NodePool.AutoscalerEnabled != nil {
 		add("autoscaler_enabled", hclBool(*c.NodePool.AutoscalerEnabled))
 	}

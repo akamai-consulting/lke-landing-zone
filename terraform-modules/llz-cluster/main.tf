@@ -52,6 +52,9 @@ resource "linode_lke_cluster" "this" {
   k8s_version = var.k8s_version
   tier        = "enterprise"
   tags        = var.tags
+  # Managed App Platform (Linode installs+manages apl-core + provisions the
+  # akamai-apl.net domain). ForceNew. See ADR 0005 / var.apl_enabled.
+  apl_enabled = var.apl_enabled
   # Bind the cluster to OUR VPC. Both vpc_id and subnet_id must be set together:
   # passing subnet_id alone (vpc_id omitted) does NOT attach this VPC — LKE-E
   # silently provisions its own "lke<clusterID>" VPC instead, leaving the

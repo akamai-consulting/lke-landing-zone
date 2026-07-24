@@ -44,6 +44,7 @@ module "cluster" {
 
   control_plane_high_availability  = var.control_plane_high_availability
   control_plane_audit_logs_enabled = var.control_plane_audit_logs_enabled
+  apl_enabled                      = var.apl_enabled
 
   firewall_label           = var.firewall_label
   github_runner_ipv4_cidrs = var.github_runner_ipv4_cidrs

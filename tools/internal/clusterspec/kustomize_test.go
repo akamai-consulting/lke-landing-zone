@@ -14,8 +14,15 @@ func allOn() map[string]ComponentToggle {
 	return m
 }
 
+// managedBoot enables the conditional apl-core apps (harbor, loki) so the
+// conditional LLZ extras (harbor, observability) emit — LLZ runs exclusively on
+// managed apl-core, so every render is a managed render.
+func managedBoot() Bootstrap {
+	return Bootstrap{ManagedAppPlatform: true, ManagedApps: []string{"harbor", "loki"}}
+}
+
 func TestRenderManifestKustomization(t *testing.T) {
-	out := RenderManifestKustomization(allOn(), "", "", "")
+	out := RenderManifestKustomization(allOn(), "", managedBoot())
 	// Thin overlay: the shared base + a health-inert Application CR under resources:
 	// for each enabled CARVED component (blast-radius decomposition) + a components:
 	// list of the remaining plain component dirs.
@@ -24,29 +31,34 @@ func TestRenderManifestKustomization(t *testing.T) {
 		"- ../../../../platform-apl/manifest",
 		// carved components → App CRs under resources:, NOT components: dirs
 		"- llz-externalsecrets.yaml",
-		"- llz-observability.yaml",
-		"- llz-harbor.yaml",
+		"- llz-observability.yaml", // conditional on loki (declared)
+		"- llz-harbor.yaml",        // conditional on harbor (declared)
 		"- llz-reconciler.yaml",
 		// plain (non-carved) components stay as components: dirs
 		"- ../../../../platform-apl/components/openbao",
-		"- ../../../../platform-apl/components/certManager",
+		"- ../../../../platform-apl/components/certManagerBootstrapCA",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("thin overlay missing %q:\n%s", want, out)
 		}
 	}
-	// Carved components no longer appear as components: dirs, and their per-env
-	// patches move into their own App source root — so the manifest overlay carries
-	// NO patches: section (every patch-bearing component is carved).
+	// Carved components no longer appear as components: dirs (their per-env patches
+	// move into their own App source root); the apl-core-owned components are skipped
+	// on managed entirely; and certAutomation no longer exists.
 	for _, absent := range []string{
 		"- ../../../../platform-apl/components/externalSecrets",
 		"- ../../../../platform-apl/components/observability",
 		"- ../../../../platform-apl/components/harbor",
 		"- ../../../../platform-apl/components/llzReconciler",
 		"patches:", "llz-reconciler-env-patch.yaml",
+		// apl-core owns these on managed → skipped:
+		"components/argoWorkflows", "components/argoEvents", "components/gitea",
+		"components/policyEngine", "components/imageScanning",
+		// removed component:
+		"certAutomation", "cert-automation",
 	} {
 		if strings.Contains(out, absent) {
-			t.Errorf("carved component leaked %q into the manifest overlay:\n%s", absent, out)
+			t.Errorf("manifest overlay must NOT contain %q:\n%s", absent, out)
 		}
 	}
 	// Mandatory components (argocd, clusterFoundation) live in the base — never in
@@ -57,22 +69,31 @@ func TestRenderManifestKustomization(t *testing.T) {
 	// Disabling harbor drops its carved App CR (and only it).
 	off := allOn()
 	off["harbor"] = ComponentToggle{Enabled: boolPtr(false)}
-	dropped := RenderManifestKustomization(off, "", "", "")
+	dropped := RenderManifestKustomization(off, "", managedBoot())
 	if strings.Contains(dropped, "llz-harbor.yaml") {
 		t.Error("disabled harbor should drop its carved App CR")
 	}
 	if !strings.Contains(dropped, "llz-observability.yaml") {
 		t.Error("disabling harbor must not drop sibling carved Apps")
 	}
+	// A conditional component is gated on its declared apl-core app: with only harbor
+	// declared, observability (conditional on loki) does not emit.
+	onlyHarbor := RenderManifestKustomization(allOn(), "", Bootstrap{ManagedAppPlatform: true, ManagedApps: []string{"harbor"}})
+	if strings.Contains(onlyHarbor, "llz-observability.yaml") {
+		t.Errorf("observability must NOT emit when only harbor is declared:\n%s", onlyHarbor)
+	}
+	if !strings.Contains(onlyHarbor, "llz-harbor.yaml") {
+		t.Errorf("harbor must emit when harbor is declared:\n%s", onlyHarbor)
+	}
 }
 
 func TestRenderManifestKustomization_RemoteRefs(t *testing.T) {
 	const ref = "v9.9.9"
-	out := RenderManifestKustomization(allOn(), ref, "", "")
+	out := RenderManifestKustomization(allOn(), ref, managedBoot())
 	// Token-free plain components are fetched from the template repo at the pinned ref.
 	for _, want := range []string{
 		"- github.com/akamai-consulting/lke-landing-zone//platform-apl/components/openbao?ref=v9.9.9&timeout=80",
-		"- github.com/akamai-consulting/lke-landing-zone//platform-apl/components/certManager?ref=v9.9.9&timeout=80",
+		"- github.com/akamai-consulting/lke-landing-zone//platform-apl/components/certManagerBootstrapCA?ref=v9.9.9&timeout=80",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("remote ref missing %q:\n%s", want, out)
@@ -83,8 +104,8 @@ func TestRenderManifestKustomization_RemoteRefs(t *testing.T) {
 	if strings.Contains(out, "?ref=v9.9.9\n") || !strings.Contains(out, "&timeout=80") {
 		t.Errorf("every remote ref must carry &timeout=80:\n%s", out)
 	}
-	// The shared platform-apl/manifest base is fetched remotely too (Phase 1); its per-
-	// instance instance-custom ApplicationSet is split OUT and stays a local resource.
+	// The shared platform-apl/manifest base is fetched remotely too; its per-instance
+	// instance-custom ApplicationSet is split OUT and stays a local resource.
 	if !strings.Contains(out, "- github.com/akamai-consulting/lke-landing-zone//platform-apl/manifest?ref=v9.9.9") {
 		t.Errorf("shared base should be a remote ref:\n%s", out)
 	}
@@ -92,23 +113,12 @@ func TestRenderManifestKustomization_RemoteRefs(t *testing.T) {
 		t.Errorf("instance-custom ApplicationSet must stay a local resource:\n%s", out)
 	}
 	// An empty ref keeps everything local (drift-check default / no instance context).
-	local := RenderManifestKustomization(allOn(), "", "", "")
+	local := RenderManifestKustomization(allOn(), "", managedBoot())
 	if strings.Contains(local, "github.com/akamai-consulting") {
 		t.Errorf("empty ref must stay fully local:\n%s", local)
 	}
 	if !strings.Contains(local, "- ../../../../platform-apl/manifest") || !strings.Contains(local, "- ../../../../platform-apl/components/openbao") {
 		t.Errorf("empty ref should reference the base + components locally:\n%s", local)
-	}
-	// spec.dns.acmeEmail set → an inline ClusterIssuer patch carries the contact
-	// (the shared dns tree ships email: "" and is now remote, so it can't be rewritten).
-	withEmail := RenderManifestKustomization(allOn(), ref, "ops@example.com", "")
-	for _, want := range []string{"kind: ClusterIssuer", "path: /spec/acme/email", "value: ops@example.com"} {
-		if !strings.Contains(withEmail, want) {
-			t.Errorf("acmeEmail patch missing %q:\n%s", want, withEmail)
-		}
-	}
-	if strings.Contains(out, "/spec/acme/email") {
-		t.Errorf("unset acmeEmail must emit no ClusterIssuer patch:\n%s", out)
 	}
 }
 
@@ -135,37 +145,6 @@ func TestRenderCarvedAppKustomization_RemoteRefs(t *testing.T) {
 	// A component that doesn't run the llz image (observability) gets no images: block.
 	if strings.Contains(RenderCarvedAppKustomization(obs, ref, "sha-abc123"), "images:") {
 		t.Errorf("observability should not get an llz images: transformer")
-	}
-}
-
-// clusterHealthWorkflow is a PLAIN (non-carved) component fetched remotely from
-// platform-apl; its Argo WorkflowTemplate image (a CRD the images: transformer can't
-// reach) is retagged by a JSON6902 patch in the manifest overlay when it's enabled
-// and an image tag is resolved.
-func TestRenderManifestKustomization_HealthWorkflowRetag(t *testing.T) {
-	comps := allOn()
-	comps["clusterHealthWorkflow"] = ComponentToggle{Enabled: boolPtr(true)}
-	out := RenderManifestKustomization(comps, "v9.9.9", "", "sha-abc123")
-	for _, want := range []string{
-		"- github.com/akamai-consulting/lke-landing-zone//platform-apl/components/clusterHealthWorkflow?ref=v9.9.9",
-		"kind: WorkflowTemplate",
-		"name: llz-cluster-health",
-		"path: /spec/templates/0/container/image",
-		"value: ghcr.io/akamai-consulting/llz:sha-abc123",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("health retag missing %q:\n%s", want, out)
-		}
-	}
-	// No image tag → no retag patch (the component still ships :latest remotely).
-	if noTag := RenderManifestKustomization(comps, "v9.9.9", "", ""); strings.Contains(noTag, "/spec/templates/0/container/image") {
-		t.Errorf("no imageTag must emit no WorkflowTemplate retag:\n%s", noTag)
-	}
-	// Disabled → no retag even with an image tag.
-	off := allOn()
-	off["clusterHealthWorkflow"] = ComponentToggle{Enabled: boolPtr(false)}
-	if strings.Contains(RenderManifestKustomization(off, "v9.9.9", "", "sha-abc123"), "WorkflowTemplate") {
-		t.Error("disabled clusterHealthWorkflow must emit no retag patch")
 	}
 }
 

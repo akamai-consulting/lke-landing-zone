@@ -32,6 +32,7 @@ const (
 var credPaths = []struct{ path, cred string }{
 	{"secret/loki/object-store", "loki-object-store"},
 	{"secret/harbor/registry-s3", "harbor-registry-s3"},
+	{"secret/obj/platform", "obj-platform"},
 }
 
 // openbaoProbe is the slice of the OpenBao client the sampler needs.

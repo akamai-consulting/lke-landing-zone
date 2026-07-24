@@ -43,7 +43,7 @@ func TestEnvAddSpecAuthoring(t *testing.T) {
 	envFile := filepath.Join(dir, "environments", "lab.yaml")
 	if err := writeEnvDefinition(envFile, "lab",
 		envAddOpts{region: "us-sea", objCluster: "us-sea-1", nodeCount: "3"},
-		name, "lab.internal"); err != nil {
+		name); err != nil {
 		t.Fatalf("writeEnvDefinition: %v", err)
 	}
 

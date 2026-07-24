@@ -70,3 +70,7 @@ autoscaler_enabled = false
 # override the 3/6 default (spec: cluster.nodePool.autoscalerMin/autoscalerMax).
 # autoscaler_min = 3
 # autoscaler_max = 6
+
+# Managed App Platform: true → Linode installs+manages apl-core + provisions the
+# akamai-apl.net domain (bootstrap-cluster skips its own apl-core install). ADR 0005.
+apl_enabled = true

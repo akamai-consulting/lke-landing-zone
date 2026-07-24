@@ -12,7 +12,7 @@ variable "region_suffix" {
 }
 
 variable "obj_cluster" {
-  description = "Linode Object Storage cluster identifier for bucket placement (e.g. us-ord-1, us-sea-1). Run `linode-cli object-storage clusters-list` to list available clusters."
+  description = "Linode Object Storage endpoint host prefix (e.g. us-ord-1, us-ord-10) — the full endpoint identity, NOT just the region. Buckets are placed in region replace(obj_cluster, -N) and pinned to the endpoint whose S3 host is <obj_cluster>.linodeobjects.com (resolved to its endpoint_type: us-ord-1→E1, us-ord-10→E3), so consumers that derive their S3 host from this value reach the buckets. A region can expose several endpoints of different generations (E0/E1 legacy, E2/E3 standard) and a bucket is reachable ONLY at the one it was created against. Run `linode-cli object-storage endpoints-list` to list endpoints + types."
   type        = string
 }
 

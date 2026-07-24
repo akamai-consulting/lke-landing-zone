@@ -373,6 +373,7 @@ func healthExitCodeState(st *convergeState) healthResult {
 	checkAPIServices(&r)
 	checkRequiredCRDs(&r, inv)
 	checkStorageClasses(&r)
+	checkLokiObjStorage(&r, phase1)
 	checkFirewallBootstrap(&r)
 	checkOpenBao(&r, phase1)
 	checkReadyResources(&r, phase1)
@@ -710,6 +711,19 @@ func checkRequiredCRDs(r *health.Report, inv *clusterInventory) {
 			record(r, health.CatFail, "CRD "+crd+" missing — owning ArgoCD Application has not installed it")
 		}
 	}
+	// CRDs from OPTIONAL/ManagedSkip components (argo-workflows / argo-events) are
+	// required ONLY when their owning Application is deployed. On managed (argo skipped)
+	// or a self-install that never opted in, the app is absent → the CRD is not expected.
+	for crd, app := range health.ConditionalCRDs() {
+		switch {
+		case inv.crds[crd]:
+			record(r, health.CatOK, "CRD "+crd+" installed")
+		case kExists("-n", "argocd", "get", "application", app):
+			record(r, health.CatFail, "CRD "+crd+" missing — owning ArgoCD Application "+app+" has not installed it")
+		default:
+			record(r, health.CatOK, "CRD "+crd+" not required ("+app+" Application not deployed)")
+		}
+	}
 }
 
 func checkStorageClasses(r *health.Report) {
@@ -742,6 +756,41 @@ func checkStorageClasses(r *health.Report) {
 	}
 }
 
+// checkLokiObjStorage gates convergence on the apl-overlay obj chain. On managed
+// apl-core the llz-reconciler pushes the AplObjectStorage CR onto apl-<env>,
+// apl-operator applies it, and Loki re-renders onto S3 — a reconciler→apl-operator→
+// restart chain that is EVENTUAL and legitimately slower than a one-shot check, so
+// Loki-on-S3 belongs in the convergence contract (poll), NOT in a post-converge
+// assertion that races it (the very flake this fixes: assert-loki checked before the
+// chain settled). The in-progress message doubles as the diagnostic — it names WHERE
+// the chain is, so a genuine stall is self-explaining on budget exhaustion.
+//
+// Only gates when obj is actually configured for THIS deployment: LLZ materializes
+// apl-secrets/obj-secrets from OpenBao iff the obj credential is seeded. Absent →
+// filesystem Loki is intentional (no objectStorage.cluster) → nothing to await.
+// Skipped in phase1 (Loki/apl-secrets not installed yet).
+func checkLokiObjStorage(r *health.Report, phase1 bool) {
+	if phase1 || !kExists("get", "secret", "obj-secrets", "-n", "apl-secrets") {
+		return
+	}
+	hdr("apl-overlay obj storage (Loki S3)")
+	cfg := lokiConfigText("loki")
+	if strings.TrimSpace(cfg) == "" {
+		record(r, health.CatOK, "Loki not deployed — no obj overlay to await")
+		return
+	}
+	if health.LokiConfigUsesS3(cfg) {
+		record(r, health.CatOK, "Loki config references S3 — apl-overlay obj converged")
+		return
+	}
+	// Not S3 yet — POLL (CatPending), and report which chain stage is outstanding.
+	stage := "reconciler push / apl-operator apply pending — loki-s3-linode-credentials not built yet"
+	if kExists("get", "secret", "loki-s3-linode-credentials", "-n", "monitoring") {
+		stage = "creds built (loki-s3-linode-credentials present) — Loki re-rendering/restarting onto S3"
+	}
+	record(r, health.CatPending, "apl-overlay: Loki not yet S3-backed — "+stage+" (obj chain settling; check llz-reconciler llz_apl_overlay_synced)")
+}
+
 func checkFirewallBootstrap(r *health.Report) {
 	hdr("cloud-firewall bootstrap (kube-system)")
 	// The firewall controller is optional (the private llz-linode-cidr-firewall
@@ -764,13 +813,28 @@ func checkFirewallBootstrap(r *health.Report) {
 		record(r, health.CatOK, "firewall-controller not installed (cidrFirewall component disabled) — skipped")
 		return
 	}
-	exists := kExists("-n", "kube-system", "get", "secret", "linode")
-	token := ""
-	if exists {
-		token = kJSONPath("-n", "kube-system", "get", "secret", "linode", "-o", "jsonpath={.data.token}")
+	// The kube-system/linode Secret is the CONTROLLER's token — mounted as env
+	// LINODE_TOKEN by the llz-linode-cidr-firewall Deployment. The in-cluster
+	// self-discovery (reconciler --reconcile-cidr-firewall, which retired the
+	// `bootstrap-cloud-firewall` CI seed) authenticates with its OWN ESO-synced
+	// linode-api-token and writes the ConfigMap WITHOUT ever seeding this Secret.
+	// So the token is required only where the controller Deployment is actually
+	// present (the private chart). On instances where the self-discovery ran but
+	// the controller is absent (public adopters / e2e — private chart unavailable)
+	// the ConfigMap exists yet the token is consumed by nothing: gate the
+	// assertion on depExists, not cmExists, so a self-discovery-only cluster does
+	// not hard-fail on a Secret no workload reads.
+	if depExists {
+		exists := kExists("-n", "kube-system", "get", "secret", "linode")
+		token := ""
+		if exists {
+			token = kJSONPath("-n", "kube-system", "get", "secret", "linode", "-o", "jsonpath={.data.token}")
+		}
+		cat, msg := health.ClassifyFirewallToken(exists, token)
+		record(r, cat, msg)
+	} else {
+		record(r, health.CatOK, "firewall-controller Deployment absent — self-discovery ConfigMap only; kube-system/linode token not required")
 	}
-	cat, msg := health.ClassifyFirewallToken(exists, token)
-	record(r, cat, msg)
 
 	// firewallConfigMapName (ci_firewall.go) is the single source of truth for the
 	// ConfigMap name the private chart renders (<fullname>-config =
@@ -1140,11 +1204,21 @@ func checkPVs(r *health.Report) {
 
 func checkNetworkPolicies(r *health.Report, inv *clusterInventory) {
 	hdr("NetworkPolicy presence per namespace")
+	// LLZ's cluster-foundation Application owns the per-namespace default-deny
+	// NetworkPolicies. It is ManagedSkip, so on a managed cluster apl-core owns network
+	// policy its own way and LLZ applies none — a namespace with no LLZ NPs is then not a
+	// failure. Gate the hard-fail on cluster-foundation actually being deployed (self-
+	// install); namespaces that DO carry their own NPs still pass either way.
+	ownsNetpols := kExists("-n", "argocd", "get", "application", "cluster-foundation")
 	for _, ns := range healthNamespaces {
 		if !inv.nsExists[ns] || health.NetpolExemptNamespace(ns) {
 			continue
 		}
 		cat, msg := health.ClassifyNamespaceNetpol(ns, len(kItems("-n", ns, "get", "networkpolicies")))
+		if cat == health.CatFail && !ownsNetpols {
+			record(r, health.CatOK, fmt.Sprintf("Namespace %s NetworkPolicy check skipped (cluster-foundation not deployed — apl-core owns NPs on managed)", ns))
+			continue
+		}
 		record(r, cat, msg)
 	}
 }
