@@ -1,0 +1,27 @@
+# llz-argo-workflows namespace — Argo-owned.
+#
+# Home for the argo-workflows controller + server (argo-workflows.yaml, argo-helm)
+# and the clusterHealthWorkflow WorkflowTemplate + its submitted Workflows. The
+# argo-workflows Application is CreateNamespace=false and every consumer resource
+# (network policies, WorkflowTemplate, RBAC) is namespaced here, so the namespace
+# MUST exist first — without it Argo dry-run fails "namespaces llz-argo-workflows
+# not found", a child ComparisonError that stalls the whole app-of-apps. Every
+# other namespace-owning component in the tree ships this same wave -20 Namespace;
+# argoWorkflows lacked one because it was ManagedSkip and never rendered on managed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llz-argo-workflows
+  annotations:
+    # -20, ahead of the network policies + WorkflowTemplate that live in it and the
+    # wave -15 argo-workflows Application that installs INTO it.
+    argocd.argoproj.io/sync-wave: "-20"
+  labels:
+    # baseline (not restricted): this namespace hosts the third-party argo-helm
+    # controller/server pods whose chart defaults are not guaranteed restricted-
+    # compliant (no seccompProfile by default). The health workflow pod IS
+    # restricted-compliant on its own securityContext. audit/warn stay at restricted
+    # so a future tightening (configuring the chart securityContext) is visible.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
