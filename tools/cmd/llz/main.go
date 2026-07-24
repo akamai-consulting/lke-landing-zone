@@ -67,17 +67,20 @@ func newRootCmd() *cobra.Command {
 		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
 		reapCmd(), openbaoCmd(), usersCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), versionCmd(), selfUpdateCmd(),
+		aplCmd(),
 	)
 
 	// Group the adopter-facing commands in `llz --help` so the front door is
 	// legible; CI/plumbing (ci, lint, fmt, hooks, …) falls under "Additional
 	// Commands". Groups must be registered before a command references them.
 	root.AddGroup(
+		&cobra.Group{ID: "apl", Title: "App Platform (front door — ADR 0002, Phase 0):"},
 		&cobra.Group{ID: "spec", Title: "Author & deploy (the LandingZone spec):"},
 		&cobra.Group{ID: "build", Title: "Provision, build & operate:"},
 		&cobra.Group{ID: "day2", Title: "Day-2 & maintenance:"},
 	)
 	groupOf := map[string]string{
+		"apl": "apl",
 		"new": "spec", "env": "spec", "spec": "spec", "network": "spec", "components": "spec", "render": "spec", "import": "spec",
 		"tokens": "build", "secrets": "build", "doctor": "build", "validate": "build",
 		"build": "build", "up": "build", "status": "build",
