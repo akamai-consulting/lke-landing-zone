@@ -88,6 +88,13 @@ id_token for a token carrying only `gsap-writer`. The write is **attributed**
 no root, no broad token. A token that tries to write outside its subtree gets a
 403.
 
+> **The CLI steers you here.** `llz openbao get/set/exec` print a warning to
+> stderr whenever they fall back to `OPENBAO_ROOT_TOKEN`, pointing back at
+> `llz openbao login --team`. Root still works (it is reserved for `exec`
+> auth/policy admin and break-glass), so this is a nudge, not a block. For
+> genuine root-only automation with no team identity, set `OPENBAO_ALLOW_ROOT=1`
+> to silence it.
+
 ## Validate the whole chain (browser-free smoke)
 
 `llz ci team-login-smoke --region <region> [--team <name>]` validates the entire

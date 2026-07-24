@@ -53,7 +53,7 @@ func openbaoClient(role string) (*openbao.Client, error) {
 		return nil, fmt.Errorf("OPENBAO_ADDR_%s is not set", strings.ToUpper(role))
 	}
 	if token == "" {
-		return nil, fmt.Errorf("OPENBAO_TOKEN_%s (or OPENBAO_TOKEN) is not set", strings.ToUpper(role))
+		return nil, fmt.Errorf("OPENBAO_TOKEN_%s (or OPENBAO_TOKEN) is not set — mint a team-scoped token with `eval \"$(llz openbao login --team <name>)\"`", strings.ToUpper(role))
 	}
 	return openbao.New(addr, token, os.Getenv("OPENBAO_NAMESPACE"), 30*time.Second), nil
 }
@@ -86,10 +86,18 @@ func openbaoClientForward(role string) (*openbao.Client, func(), error) {
 	}
 	// The port-forward supplies the address, never the token. Accept
 	// OPENBAO_ROOT_TOKEN too: `llz openbao regen-root` → export it → seed is the
-	// documented operator flow, so it should work with no extra env.
-	token := firstNonEmpty(os.Getenv("OPENBAO_TOKEN_ACTIVE"), os.Getenv("OPENBAO_TOKEN"), os.Getenv("OPENBAO_ROOT_TOKEN"))
+	// documented operator flow, so it should work with no extra env — but a
+	// team-scoped token (`llz openbao login --team`) is preferred for day-2
+	// reads/writes, so warn when only the root token is present.
+	token := firstNonEmpty(os.Getenv("OPENBAO_TOKEN_ACTIVE"), os.Getenv("OPENBAO_TOKEN"))
 	if token == "" {
-		return nil, noop, fmt.Errorf("no OpenBao token in env: set OPENBAO_TOKEN (or OPENBAO_ROOT_TOKEN) — auto port-forward supplies the address but not the token")
+		if rt := os.Getenv("OPENBAO_ROOT_TOKEN"); rt != "" {
+			warnRootToken()
+			token = rt
+		}
+	}
+	if token == "" {
+		return nil, noop, fmt.Errorf("no OpenBao token in env: set OPENBAO_TOKEN from `eval \"$(llz openbao login --team <name>)\"` (team-scoped, preferred) or export OPENBAO_ROOT_TOKEN — auto port-forward supplies the address but not the token")
 	}
 	addr, cleanup, err := portForwardOpenbaoFn()
 	if err != nil {
@@ -158,6 +166,21 @@ func warmUpOpenbao(base string) error {
 // standbyConfigured reports whether a standby cluster is addressable — i.e. this
 // is an HA pair, not a standalone deployment.
 func standbyConfigured() bool { return os.Getenv("OPENBAO_ADDR_STANDBY") != "" }
+
+// warnRootToken nudges an operator who supplied the OpenBao root token toward the
+// team-scoped `llz openbao login` path. Root still works — this is a warning, not
+// a block — but day-2 secret access should use a short-lived, attributed,
+// least-privilege team token instead. Written to stderr so it never pollutes the
+// value `get` prints to stdout, and suppressed when OPENBAO_ALLOW_ROOT is set (an
+// escape hatch for genuine root-only automation that has no team identity).
+func warnRootToken() {
+	if os.Getenv("OPENBAO_ALLOW_ROOT") != "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "⚠ using the OpenBao ROOT token — prefer a team-scoped token for day-2 secret access:")
+	fmt.Fprintln(os.Stderr, "    eval \"$(llz openbao login --team <name>)\"   # short-lived, attributed, least-privilege")
+	fmt.Fprintln(os.Stderr, "  (set OPENBAO_ALLOW_ROOT=1 to silence this for root-only automation)")
+}
 
 // maskGHA emits ::add-mask:: for a value when running in GitHub Actions.
 func maskGHA(v string) {
@@ -277,6 +300,10 @@ func runOpenbaoExec(g globalOpts, args []string) error {
 	if token == "" {
 		return fmt.Errorf("OPENBAO_ROOT_TOKEN must be set (an OpenBao root/admin token for the cluster kubectl points at)")
 	}
+	// `exec` is genuinely root-only (auth/policy admin), but remind the operator
+	// that day-2 secret reads/writes do NOT need root — `llz openbao get/set`
+	// with a team-scoped token from `llz openbao login` cover those.
+	warnRootToken()
 	if g.dryRun {
 		fmt.Fprintln(os.Stderr, "→ (dry-run) kubectl "+shellQuote(baoExecArgv(rootOpenbaoPod, "$OPENBAO_ROOT_TOKEN", args)))
 		return nil

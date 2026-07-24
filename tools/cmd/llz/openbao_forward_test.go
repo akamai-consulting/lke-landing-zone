@@ -1,7 +1,10 @@
 package main
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
 // clearOpenbaoEnv blanks every OPENBAO_* var openbaoClientForward reads so a test
@@ -66,13 +69,59 @@ func TestOpenbaoClientForward_RootTokenAccepted(t *testing.T) {
 	t.Setenv("OPENBAO_ROOT_TOKEN", "s.root") // the regen-root operator flow
 	called := seamForward(t, "https://127.0.0.1:34567", nil)
 
-	if _, cleanup, err := openbaoClientForward(roleActive); err != nil {
-		t.Fatalf("openbaoClientForward with OPENBAO_ROOT_TOKEN only = %v, want ok", err)
-	} else {
+	var cleanup func()
+	stderr := captureStderr(t, func() {
+		var err error
+		var c *openbao.Client
+		if c, cleanup, err = openbaoClientForward(roleActive); err != nil {
+			t.Fatalf("openbaoClientForward with OPENBAO_ROOT_TOKEN only = %v, want ok", err)
+		}
+		_ = c
+	})
+	if cleanup != nil {
 		defer cleanup()
 	}
 	if !*called {
 		t.Error("OPENBAO_ROOT_TOKEN should satisfy the token requirement for auto-forward")
+	}
+	// Root works, but the operator must be nudged toward `llz openbao login`.
+	if !strings.Contains(stderr, "ROOT token") || !strings.Contains(stderr, "llz openbao login") {
+		t.Errorf("falling back to OPENBAO_ROOT_TOKEN should warn + steer to login; stderr = %q", stderr)
+	}
+}
+
+func TestOpenbaoClientForward_TeamTokenNoWarn(t *testing.T) {
+	clearOpenbaoEnv(t)
+	t.Setenv("OPENBAO_TOKEN", "s.team") // a team-scoped token from `llz openbao login`
+	seamForward(t, "https://127.0.0.1:34567", nil)
+
+	var cleanup func()
+	stderr := captureStderr(t, func() {
+		_, cleanup, _ = openbaoClientForward(roleActive)
+	})
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if strings.Contains(stderr, "ROOT token") {
+		t.Errorf("a team-scoped OPENBAO_TOKEN must not trigger the root-token warning; stderr = %q", stderr)
+	}
+}
+
+func TestOpenbaoClientForward_AllowRootSilencesWarn(t *testing.T) {
+	clearOpenbaoEnv(t)
+	t.Setenv("OPENBAO_ROOT_TOKEN", "s.root")
+	t.Setenv("OPENBAO_ALLOW_ROOT", "1") // escape hatch for root-only automation
+	seamForward(t, "https://127.0.0.1:34567", nil)
+
+	var cleanup func()
+	stderr := captureStderr(t, func() {
+		_, cleanup, _ = openbaoClientForward(roleActive)
+	})
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if strings.Contains(stderr, "ROOT token") {
+		t.Errorf("OPENBAO_ALLOW_ROOT should silence the root-token warning; stderr = %q", stderr)
 	}
 }
 
