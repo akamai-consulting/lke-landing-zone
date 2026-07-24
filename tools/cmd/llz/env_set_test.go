@@ -125,13 +125,12 @@ func TestHaGroupMissingRole(t *testing.T) {
 // #4: committedTargets renders the letsencrypt issuer with the spec ACME email,
 // and omits it entirely when no email is set.
 // committedTargets emits only the THIN per-env files (overlay + env-revision +
-// region patch + values) — the manifests themselves live in the shared base.
+// region patch + apl-overlay) — the manifests themselves live in the shared base.
 func TestCommittedTargets(t *testing.T) {
 	chdirTempDir(t)
-	writeFileMkdir(t, filepath.Join("apl-values", "values.yaml"), "apps:\n  harbor: { enabled: true }\n")
 	e := clusterspec.Environment{Components: map[string]clusterspec.ComponentToggle{}} // all default-enabled
 
-	targets, err := committedTargets("lab", e, clusterspec.ValuesIdentity{ClusterName: "x"}, "apl-values")
+	targets, err := committedTargets("lab", e, clusterspec.ValuesIdentity{}, "apl-values")
 	if err != nil {
 		t.Fatal(err)
 	}
