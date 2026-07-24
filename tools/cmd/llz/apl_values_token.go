@@ -11,24 +11,14 @@ package main
 // resolves the token lazily per pass: env first (tests/CI), then the mounted file,
 // which kubelet refreshes (~1m) on Secret create/rotate.
 
-import (
-	"os"
-	"strings"
-)
-
 // aplValuesRepoTokenFile is where the Deployment mounts the optional
 // apl-values-repo-token Secret volume. Package var so tests can point it at a fixture.
 var aplValuesRepoTokenFile = "/var/run/secrets/llz/apl-values-repo-token/token"
 
 // inclusterAplValuesRepoToken resolves the apl-overlay push token:
 // APL_VALUES_REPO_TOKEN env (tests/CI), else the optional Secret volume, else ""
-// (not yet synced — the apl-overlay pass no-ops until it appears).
+// (not yet synced — the apl-overlay pass no-ops until it appears). Shares the
+// linode resolver's lazy env-then-file logic (inclusterToken).
 func inclusterAplValuesRepoToken() string {
-	if t := os.Getenv("APL_VALUES_REPO_TOKEN"); t != "" {
-		return t
-	}
-	if b, err := os.ReadFile(aplValuesRepoTokenFile); err == nil {
-		return strings.TrimSpace(string(b))
-	}
-	return ""
+	return inclusterToken("APL_VALUES_REPO_TOKEN", aplValuesRepoTokenFile)
 }

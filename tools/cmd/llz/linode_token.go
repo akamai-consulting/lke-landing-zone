@@ -25,10 +25,18 @@ var linodeTokenFile = "/var/run/secrets/llz/linode-api-token/token"
 // else the optional Secret volume, else "" (not yet synced — callers no-op or
 // error per their contract).
 func inclusterLinodeToken() string {
-	if t := os.Getenv("LINODE_TOKEN"); t != "" {
+	return inclusterToken("LINODE_TOKEN", linodeTokenFile)
+}
+
+// inclusterToken is the shared secrets-before-apps token resolver: the named env
+// var first (CronJob/CI compatibility), else the optional Secret volume mounted at
+// file (kubelet-refreshed on rotate), else "" (not yet synced). Backs both the
+// linode and apl-values-repo resolvers.
+func inclusterToken(envVar, file string) string {
+	if t := os.Getenv(envVar); t != "" {
 		return t
 	}
-	if b, err := os.ReadFile(linodeTokenFile); err == nil {
+	if b, err := os.ReadFile(file); err == nil {
 		return strings.TrimSpace(string(b))
 	}
 	return ""
