@@ -18,6 +18,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,6 +126,12 @@ func keycloakAdminToken(hc *http.Client, base, user, pass string) (string, error
 		return "", fmt.Errorf("keycloak admin token: %w", err)
 	}
 	defer resp.Body.Close()
+	// 401/403 is a PERMANENT auth failure (wrong/disabled admin) — flag it so the
+	// readiness retry fails fast instead of masking it as a not-ready timeout. Other
+	// non-200s (5xx, 404 during realm import) are treated as transient (retryable).
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", fmt.Errorf("%w: HTTP %d: %s", errKeycloakAuthDenied, resp.StatusCode, readSnippet(resp.Body))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("keycloak admin token: HTTP %d: %s", resp.StatusCode, readSnippet(resp.Body))
 	}
@@ -415,6 +422,12 @@ func runCIKeycloakConfigure(g globalOpts, region string) error {
 // successful admin token is the readiness signal. Returns the live port-forward's
 // base URL + admin token + its cleanup (a no-op cleanup on failure). Best-effort:
 // the caller warns + exits 0 on a persistent failure.
+// errKeycloakAuthDenied marks a PERMANENT admin-token failure (401/403: wrong or
+// disabled master admin) so keycloakConnect fails fast rather than retrying it as
+// a transient not-ready condition (which would burn the ~5m budget and misreport
+// a credential problem as a readiness timeout).
+var errKeycloakAuthDenied = errors.New("keycloak admin auth denied")
+
 func keycloakConnect(hc *http.Client, user, pass string, sleep func(time.Duration)) (base, token string, cleanup func(), err error) {
 	for i := 0; i < keycloakScopeAttempts; i++ {
 		b, c, e := portForwardKeycloakFn()
@@ -423,8 +436,11 @@ func keycloakConnect(hc *http.Client, user, pass string, sleep func(time.Duratio
 			if te == nil {
 				return b, tok, c, nil
 			}
-			c() // server not serving yet — drop this port-forward and retry
-			err = te
+			c() // this port-forward is done
+			if errors.Is(te, errKeycloakAuthDenied) {
+				return "", "", func() {}, fmt.Errorf("keycloak admin creds rejected (check %s/%s) — not a readiness problem: %w", keycloakNS, keycloakAdminSecret, te)
+			}
+			err = te // transient (5xx / not-ready) — retry
 		} else {
 			err = e
 		}

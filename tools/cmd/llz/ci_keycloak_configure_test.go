@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -285,6 +286,36 @@ func TestKeycloakConnect_Timeout(t *testing.T) {
 	_, _, _, err := keycloakConnect(&http.Client{}, "u", "p", func(time.Duration) {})
 	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Errorf("persistent failure must time out with an actionable error, got %v", err)
+	}
+}
+
+// TestKeycloakConnect_FailsFastOnAuthDenied: a 401 from the token endpoint is a
+// permanent credential failure (wrong/disabled admin), so keycloakConnect returns
+// immediately with an actionable error instead of retrying it as a not-ready
+// timeout that would mask the real problem.
+func TestKeycloakConnect_FailsFastOnAuthDenied(t *testing.T) {
+	var tokenCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/realms/master/protocol/openid-connect/token") {
+			tokenCalls++
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	orig := portForwardKeycloakFn
+	portForwardKeycloakFn = func() (string, func(), error) { return srv.URL, func() {}, nil }
+	defer func() { portForwardKeycloakFn = orig }()
+	defer withScopeWait(30)() // generous budget — the point is we DON'T consume it
+
+	_, _, _, err := keycloakConnect(srv.Client(), "u", "p", func(time.Duration) {})
+	if err == nil || !errors.Is(err, errKeycloakAuthDenied) {
+		t.Fatalf("401 must fail fast with errKeycloakAuthDenied, got %v", err)
+	}
+	if tokenCalls != 1 {
+		t.Errorf("auth-denied must not retry: got %d token calls, want 1", tokenCalls)
 	}
 }
 
