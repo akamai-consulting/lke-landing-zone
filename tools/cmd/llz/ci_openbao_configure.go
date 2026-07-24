@@ -498,67 +498,6 @@ func specTeams() []clusterspec.Team {
 	return lz.Spec.Teams
 }
 
-// regionIsManaged reports whether this region is a Managed App Platform cluster.
-func regionIsManaged(region string) bool {
-	lz, err := clusterspec.LoadInstance(".")
-	if err != nil {
-		return false
-	}
-	e, ok := lz.Env(region)
-	return ok && e.Cluster.Bootstrap.ManagedAppPlatform
-}
-
-// managedTeamsPreflight guards the Keycloak team-OIDC setup on a MANAGED cluster.
-// On managed, LLZ cannot create teams (Linode owns apl-core's values) — the
-// operator creates them in the App Platform Console, which provisions the
-// team-<name> namespace AND the Keycloak group the OpenBao role binds on. So a
-// team the OpenBao role would bind to may not exist yet. Verify each declared
-// team's namespace (the reliable, admin-cred-free proxy for "the team exists")
-// and drop (with a loud, actionable warning) any that isn't there — so we never
-// create an OpenBao role bound to a nonexistent group. Self-install is unchanged
-// (llz render declares teamConfig and apl-core provisions the team).
-func managedTeamsPreflight(region string, teams []clusterspec.Team) ([]clusterspec.Team, error) {
-	return filterManagedTeams(regionIsManaged(region), teams, namespaceStatus)
-}
-
-// namespaceStatus reports whether a namespace exists, and whether that answer is
-// DEFINITE. `kubectl get namespace <ns> --ignore-not-found -o name` exits 0 with
-// EMPTY output for a genuine NotFound and 0 with `namespace/<ns>` when it exists;
-// any other (non-nil) error is a transient/systemic failure (API unreachable, RBAC,
-// throttle) whose answer is NOT definite — so the caller must not read it as "missing".
-func namespaceStatus(ns string) (exists, definite bool) {
-	out, err := kubectlOut("get", "namespace", ns, "--ignore-not-found", "-o", "name")
-	if err != nil {
-		return false, false
-	}
-	return strings.TrimSpace(out) != "", true
-}
-
-// filterManagedTeams is the pure core of managedTeamsPreflight (unit-tested):
-// self-install passes teams through; managed keeps only teams whose team-<name>
-// namespace DEFINITELY exists, warning about the definitely-missing ones. A team
-// whose existence can't be determined (transient kubectl failure) aborts with an
-// error rather than being silently dropped — dropping it would under-provision team
-// credentials while the command still exits 0.
-func filterManagedTeams(managed bool, teams []clusterspec.Team, nsStatus func(string) (exists, definite bool)) ([]clusterspec.Team, error) {
-	if !managed {
-		return teams, nil
-	}
-	var ready []clusterspec.Team
-	for _, t := range teams {
-		exists, definite := nsStatus("team-" + t.Name)
-		if !definite {
-			return nil, fmt.Errorf("managed App Platform: could not determine whether team %q exists (kubectl get namespace team-%s failed) — refusing to silently drop teams on a transient failure; check cluster access and re-run `llz ci bao-configure`", t.Name, t.Name)
-		}
-		if !exists {
-			fmt.Fprintf(os.Stderr, "::warning::managed App Platform: team %q has no team-%s namespace — create the team in the App Platform Console (Platform → Teams) first so its Keycloak group team-%s is provisioned, then re-run `llz ci bao-configure`. Skipping its OpenBao Keycloak role for now.\n", t.Name, t.Name, t.Name)
-			continue
-		}
-		ready = append(ready, t)
-	}
-	return ready, nil
-}
-
 // auditFileDeviceActive reports whether `bao audit list` shows the file/
 // device. The device is enabled DECLARATIVELY by the chart values (the
 // `audit "file" { … }` block in server.ha.raft.config) — OpenBao 2.5.0
@@ -619,18 +558,16 @@ func runCIBaoConfigure(g globalOpts, region string) error {
 		fmt.Fprintf(os.Stderr, "::warning::spec.teams failed validation (%v) — skipping the keycloak team auth setup; fix the spec and re-run `llz ci bao-configure`.\n", errs)
 		teams = nil
 	}
-	// Managed App Platform: only bind OpenBao to teams whose Keycloak group actually
-	// exists (created by the operator in the Console). Drops not-yet-created teams
-	// with an actionable warning instead of binding to a nonexistent group. Skipped
-	// on --dry-run: it needs live cluster access and would show a cluster-FILTERED
-	// plan; dry-run prints the full intended plan (managed filtering happens at apply).
-	if !g.dryRun {
-		filtered, err := managedTeamsPreflight(region, teams)
-		if err != nil {
-			return err
-		}
-		teams = filtered
-	}
+	// Create the OpenBao role/policy for EVERY declared team — no cluster-state
+	// filtering. This used to drop teams whose team-<name> namespace didn't exist
+	// yet, because on managed "LLZ cannot create teams"; but `llz render` +
+	// the apl-overlay reconciler now DO provision them (feat/managed-team-
+	// provisioning), and that runs during convergence — AFTER this one-shot
+	// bootstrap step. Filtering here would permanently skip the role (bao-configure
+	// never re-runs) and team login would never work. The role only declares a
+	// `groups: team-<name>` claim binding; OpenBao validates it at LOGIN, not at
+	// creation, so a role whose group is still being provisioned is inert and
+	// harmless. Order-independent with the reconciler.
 	keycloakIssuer := keycloakIssuerFor(region)
 	if len(teams) > 0 && keycloakIssuer == "" {
 		fmt.Fprintf(os.Stderr, "::warning::spec.teams declares %d team(s) but no Keycloak issuer could be derived for region %q (spec unreadable or cluster.bootstrap.domainSuffix unset) — skipping the keycloak team auth setup.\n", len(teams), region)
