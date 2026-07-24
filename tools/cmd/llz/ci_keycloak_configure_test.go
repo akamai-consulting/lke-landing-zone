@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -232,6 +234,88 @@ func TestRunCIKeycloakConfigure_Guards(t *testing.T) {
 	// No spec in the test cwd → specTeams() is empty → clean no-op (not a failure).
 	if err := runCIKeycloakConfigure(globalOpts{}, "primary"); err != nil {
 		t.Errorf("no-teams run must be a clean no-op, got %v", err)
+	}
+}
+
+// TestKeycloakConnect_RetriesUntilServing: keycloak-configure can run before
+// apl-core has Keycloak serving, so keycloakConnect retries the port-forward +
+// admin-token exchange until the server answers instead of skipping on the first 503.
+func TestKeycloakConnect_RetriesUntilServing(t *testing.T) {
+	var tokenCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/realms/master/protocol/openid-connect/token") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		tokenCalls++
+		if tokenCalls < 3 { // server not serving yet on the first two attempts
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"adm.tok"}`))
+	}))
+	defer srv.Close()
+
+	orig := portForwardKeycloakFn
+	portForwardKeycloakFn = func() (string, func(), error) { return srv.URL, func() {}, nil }
+	defer func() { portForwardKeycloakFn = orig }()
+	defer withScopeWait(5)()
+
+	base, token, cleanup, err := keycloakConnect(srv.Client(), "u", "p", func(time.Duration) {})
+	defer cleanup()
+	if err != nil {
+		t.Fatalf("connect should succeed once the server answers: %v", err)
+	}
+	if token != "adm.tok" || base != srv.URL {
+		t.Errorf("got base=%q token=%q, want %q / adm.tok", base, token, srv.URL)
+	}
+	if tokenCalls < 3 {
+		t.Errorf("expected retries until the server answered, got %d token calls", tokenCalls)
+	}
+}
+
+// TestKeycloakConnect_Timeout: a persistently-unreachable Keycloak (port-forward
+// never opens) times out with an actionable error — the caller then warns + exits 0.
+func TestKeycloakConnect_Timeout(t *testing.T) {
+	orig := portForwardKeycloakFn
+	portForwardKeycloakFn = func() (string, func(), error) { return "", func() {}, fmt.Errorf("pod not found") }
+	defer func() { portForwardKeycloakFn = orig }()
+	defer withScopeWait(3)()
+
+	_, _, _, err := keycloakConnect(&http.Client{}, "u", "p", func(time.Duration) {})
+	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
+		t.Errorf("persistent failure must time out with an actionable error, got %v", err)
+	}
+}
+
+// TestKeycloakConnect_FailsFastOnAuthDenied: a 401 from the token endpoint is a
+// permanent credential failure (wrong/disabled admin), so keycloakConnect returns
+// immediately with an actionable error instead of retrying it as a not-ready
+// timeout that would mask the real problem.
+func TestKeycloakConnect_FailsFastOnAuthDenied(t *testing.T) {
+	var tokenCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/realms/master/protocol/openid-connect/token") {
+			tokenCalls++
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	orig := portForwardKeycloakFn
+	portForwardKeycloakFn = func() (string, func(), error) { return srv.URL, func() {}, nil }
+	defer func() { portForwardKeycloakFn = orig }()
+	defer withScopeWait(30)() // generous budget — the point is we DON'T consume it
+
+	_, _, _, err := keycloakConnect(srv.Client(), "u", "p", func(time.Duration) {})
+	if err == nil || !errors.Is(err, errKeycloakAuthDenied) {
+		t.Fatalf("401 must fail fast with errKeycloakAuthDenied, got %v", err)
+	}
+	if tokenCalls != 1 {
+		t.Errorf("auth-denied must not retry: got %d token calls, want 1", tokenCalls)
 	}
 }
 
