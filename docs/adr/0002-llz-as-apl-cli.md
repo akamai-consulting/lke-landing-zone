@@ -137,7 +137,8 @@ llz apl                         # APL layer — cloud-agnostic, talks to a runni
   app    enable | disable | list# ← llz components                         (otomi apps/components)
   values set | render | validate| show   # render + validate WIRED; set/show later
                                 # ← llz render + reconcile-apl-overlay + validate-apl-values
-  secret get | set | list       # ← read surface over llz openbao / secrets (defer to APL ESO where it fits)
+  openbao get|set|exec|login    # WIRED — platform secret store (OpenBao KV). NO unified `apl secret`:
+                                #   the two backends stay distinct; GitHub secrets remain `llz secrets`.
   status                        # ← llz status + verify (platform health)
   doctor                        # ← llz doctor + drift + verify           (APL-scoped health)
 
@@ -195,8 +196,8 @@ keep.
 | `env` | **Split** | env-as-APL-env → `apl` env selector; `vpc`/`peer`/`role` → keep (fleet) |
 | `spec` | **Split** | APL portion → otomi schema (align); `spec.landingZone.*` → keep |
 | `import` | **Split** | `import aplvalues` → align; `import cluster`/`linode` → keep |
-| `secrets` | **Split** | `apl secret` read/write surface (align) over provider-layer internals |
-| `openbao` | **Split** | `apl secret`/identity surface (align); static-seal / bao-seed internals → keep |
+| `secrets` | **Keep** | GitHub build-time secrets — provider/CI plumbing, stays `llz secrets`, **out of `apl`**. (Decision: no unified `apl secret` — the two secret backends stay distinct.) |
+| `openbao` | **Align (done)** | Surfaced as `apl openbao` — the platform runtime secret store (OpenBao KV). static-seal / bao-seed internals → keep as CI plumbing. |
 | `reconcile` | **Split** | `reconcile-apl-overlay` → `apl values set` (align); sc-demote / openbao / tokens backstops → keep |
 | `verify` | **Split** | `verify-object-storage` etc. → `apl doctor` (align); provider verifies → keep |
 | `drift` | **Split** | APL config drift → `apl doctor`; provider/TF drift → keep |
