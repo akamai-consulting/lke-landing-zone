@@ -146,17 +146,9 @@ func reconcileAplOverlay(ctx context.Context, reg *metrics.Registry) error {
 
 	// obj.yaml — LLZ owns the whole AplObjectStorage settings CR: merge the _shared +
 	// per-env source, fill accessKeyId from OpenBao, and write env/settings/obj.yaml.
-	objShared, _, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.sourceBranch, sharedOverlayPath(clusterspec.OverlayObjFile))
+	objMerged, err := readMergedOverlay(ctx, client, cfg, clusterspec.OverlayObjFile)
 	if err != nil {
-		return fmt.Errorf("read _shared obj overlay: %w", err)
-	}
-	objEnv, _, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.sourceBranch, envOverlayPath(cfg.env, clusterspec.OverlayObjFile))
-	if err != nil {
-		return fmt.Errorf("read %s obj overlay: %w", cfg.env, err)
-	}
-	objMerged, err := clusterspec.MergeOverlay([]byte(objShared), []byte(objEnv))
-	if err != nil {
-		return fmt.Errorf("merge obj overlay: %w", err)
+		return err
 	}
 	if len(bytes.TrimSpace(objMerged)) > 0 {
 		ak, ok, err := aplOverlayObjCredsFn(ctx, cfg.openbaoAddr)
@@ -226,6 +218,25 @@ func readObjPlatformCreds(ctx context.Context, addr string) (accessKeyID string,
 	return ak, true, nil
 }
 
+// readMergedOverlay reads the _shared + <env> layers of one overlay file (base,
+// e.g. OverlayObjFile) from the source branch and deep-merges them (env wins) —
+// the read→read→merge sequence the obj and apps passes share.
+func readMergedOverlay(ctx context.Context, client *http.Client, cfg aplOverlayConfig, base string) ([]byte, error) {
+	shared, _, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.sourceBranch, sharedOverlayPath(base))
+	if err != nil {
+		return nil, fmt.Errorf("read _shared %s overlay: %w", base, err)
+	}
+	envLayer, _, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.sourceBranch, envOverlayPath(cfg.env, base))
+	if err != nil {
+		return nil, fmt.Errorf("read %s %s overlay: %w", cfg.env, base, err)
+	}
+	merged, err := clusterspec.MergeOverlay([]byte(shared), []byte(envLayer))
+	if err != nil {
+		return nil, fmt.Errorf("merge %s overlay: %w", base, err)
+	}
+	return merged, nil
+}
+
 func sharedOverlayPath(base string) string { return "apl-values/_shared/apl-overlay/" + base }
 func envOverlayPath(env, base string) string {
 	return "apl-values/" + env + "/apl-overlay/" + base
@@ -238,17 +249,9 @@ func envOverlayPath(env, base string) string {
 // app already at the desired enabled is skipped (SetAppEnabled's semantic no-op), so the
 // reconciler never churns against apl-operator's re-populated/re-formatted file.
 func appOverlayFiles(ctx context.Context, client *http.Client, cfg aplOverlayConfig, files map[string]string) error {
-	shared, _, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.sourceBranch, sharedOverlayPath(clusterspec.OverlayAppsFile))
+	merged, err := readMergedOverlay(ctx, client, cfg, clusterspec.OverlayAppsFile)
 	if err != nil {
-		return fmt.Errorf("read _shared apps overlay: %w", err)
-	}
-	envLayer, _, err := aplOverlayReadFileFn(ctx, client, cfg.token, cfg.repo, cfg.sourceBranch, envOverlayPath(cfg.env, clusterspec.OverlayAppsFile))
-	if err != nil {
-		return fmt.Errorf("read %s apps overlay: %w", cfg.env, err)
-	}
-	merged, err := clusterspec.MergeOverlay([]byte(shared), []byte(envLayer))
-	if err != nil {
-		return fmt.Errorf("merge apps overlay: %w", err)
+		return err
 	}
 	toggles, err := clusterspec.AppToggles(merged)
 	if err != nil {
