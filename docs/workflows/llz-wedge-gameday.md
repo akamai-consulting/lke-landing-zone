@@ -37,13 +37,6 @@ after an e2e provision with `keep_cluster=true`.
 
 ## Inputs and secrets
 
-### `template-ref`
-
-The template release the instance is rendered from — `llz upgrade` re-pins it.
-It is **unused by this workflow's jobs** (everything resolves locally, from the
-vendored copy). It is declared only because the caller stub passes it and
-`workflow_call` rejects undeclared inputs.
-
 ### Defaults
 
 `target-app` defaults to `llz-observability` and `externalsecret` to

@@ -9,22 +9,17 @@ import (
 
 // The vendored-body form every ADR-0003 instance renders (see localTerraformUses)
 // and the legacy cross-repo pin an older instance still carries.
-const (
-	testDepName    = "akamai-consulting/lke-landing-zone"
-	testLegacyUses = "akamai-consulting/lke-landing-zone/.github/workflows/llz-terraform.yml@v1.2.3"
-)
+const testLegacyUses = "akamai-consulting/lke-landing-zone/.github/workflows/llz-terraform.yml@v1.2.3"
 
 func testCaller() promoCaller {
-	return promoCaller{uses: localTerraformUses, instanceRepo: "myorg/my-instance", templateRef: "v1.2.3", depName: testDepName}
+	return promoCaller{uses: localTerraformUses, instanceRepo: "myorg/my-instance"}
 }
 
 // testStub renders the minimal caller-stub YAML callerFromWorkflow parses, in the
 // same shape the copier-delivered terraform.yml has.
 func testStub(uses string) string {
 	return "jobs:\n  call:\n    uses: " + uses + "\n    with:\n" +
-		"      instance_repo: myorg/my-instance\n" +
-		"      # renovate: datasource=github-tags depName=" + testDepName + "\n" +
-		"      template-ref: v1.2.3\n"
+		"      instance_repo: myorg/my-instance\n"
 }
 
 func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {
@@ -59,13 +54,15 @@ func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {
 		t.Errorf("prod must `needs: staging`")
 	}
 
-	// Each stage calls the vendored local body and carries the preserved pin +
-	// the apply selectors.
+	// Each stage calls the vendored local body and carries the apply selectors.
 	if strings.Count(out, "uses: "+localTerraformUses) != 3 {
 		t.Errorf("expected the local vendored-body uses: on all 3 stages")
 	}
-	if strings.Count(out, "depName="+testDepName) != 3 {
-		t.Errorf("renovate depName annotation not rendered on every stage")
+	// The template pin is resolved at runtime (pinnedTemplateRef), so a stage must
+	// NOT carry a template-ref input — that is what made every upgrade churn
+	// promote.yml three times over.
+	if strings.Contains(out, "template-ref") {
+		t.Errorf("promote stages must not render a template-ref input:\n%s", out)
 	}
 	if strings.Count(out, "instance_repo: myorg/my-instance") != 3 {
 		t.Errorf("instance_repo not rendered on every stage")
@@ -87,27 +84,25 @@ func TestRenderPromoteWorkflowChainsNeeds(t *testing.T) {
 func TestCallerFromWorkflow(t *testing.T) {
 	dir := t.TempDir()
 
-	// The ADR-0003 local form: uses is the vendored body; the pin is
-	// instance_repo + template-ref + the renovate depName annotation.
+	// The ADR-0003 local form: uses is the vendored body, plus instance_repo.
 	local := filepath.Join(dir, "terraform.yml")
 	mustWrite(t, local, testStub(localTerraformUses))
 	c, ok := callerFromWorkflow(local)
 	if !ok {
 		t.Fatal("expected ok for a rendered local-uses caller stub")
 	}
-	if c.uses != localTerraformUses || c.instanceRepo != "myorg/my-instance" || c.templateRef != "v1.2.3" || c.depName != testDepName {
+	if c.uses != localTerraformUses || c.instanceRepo != "myorg/my-instance" {
 		t.Errorf("extracted %+v", c)
 	}
 
-	// A legacy instance's cross-repo pin is preserved verbatim; its depName is
-	// derived from the uses: org even without a renovate annotation.
+	// A legacy instance's cross-repo pin is preserved verbatim.
 	legacy := filepath.Join(dir, "legacy.yml")
-	mustWrite(t, legacy, "jobs:\n  call:\n    uses: "+testLegacyUses+"\n    with:\n      instance_repo: myorg/my-instance\n      template-ref: v1.2.3\n")
+	mustWrite(t, legacy, "jobs:\n  call:\n    uses: "+testLegacyUses+"\n    with:\n      instance_repo: myorg/my-instance\n")
 	c, ok = callerFromWorkflow(legacy)
 	if !ok {
 		t.Fatal("expected ok for a legacy cross-repo caller stub")
 	}
-	if c.uses != testLegacyUses || c.depName != testDepName {
+	if c.uses != testLegacyUses {
 		t.Errorf("legacy extracted %+v", c)
 	}
 
@@ -120,19 +115,13 @@ func TestCallerFromWorkflow(t *testing.T) {
 		t.Errorf("copier-token template must not be accepted as a concrete caller")
 	}
 	tokLocal := filepath.Join(dir, "tmpl-local.yml")
-	mustWrite(t, tokLocal, "jobs:\n  call:\n    uses: "+localTerraformUses+"\n    with:\n      instance_repo: <@ instance_repo @>\n      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone\n      template-ref: <@ llz_version @>\n")
+	mustWrite(t, tokLocal, "jobs:\n  call:\n    uses: "+localTerraformUses+"\n    with:\n      instance_repo: <@ instance_repo @>\n")
 	if _, ok := callerFromWorkflow(tokLocal); ok {
 		t.Errorf("un-rendered local-uses template must not be accepted as a concrete caller")
 	}
 
 	if _, ok := callerFromWorkflow(filepath.Join(dir, "absent.yml")); ok {
 		t.Errorf("absent file must return ok=false")
-	}
-}
-
-func TestDepNameFromUses(t *testing.T) {
-	if got := depNameFromUses(testLegacyUses); got != testDepName {
-		t.Errorf("depNameFromUses = %q", got)
 	}
 }
 

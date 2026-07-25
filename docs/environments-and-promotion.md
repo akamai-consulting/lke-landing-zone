@@ -175,10 +175,10 @@ llz env pipeline --check    # CI gate: exit non-zero if promote.yml has drifted 
 
 Wire `llz env pipeline --check` into the instance's CI as the "did you
 regenerate?" guard so a tfvars rank edit can't silently diverge from the workflow.
-The caller pin (`instance_repo` + `template-ref`) is **preserved** from the file
-already on disk (or lifted from the sibling `terraform.yml`), so a template
-version bump (`llz upgrade` re-pins `template-ref`) is *not* treated as drift —
-only a rank change is.
+The caller boilerplate (`instance_repo`) is **preserved** from the file already
+on disk (or lifted from the sibling `terraform.yml`), and the stages carry no
+template pin at all — so a template version bump is *not* treated as drift, and
+does not rewrite this file. Only a rank change does.
 
 Start a rollout with **Run workflow** on the Promote action (or `gh workflow run
 promote.yml`). It walks `dev → staging → prod`, pausing at each protected

@@ -233,9 +233,9 @@ this and tells you to fix `--org` or fork first.)
 --push`, so the remote repo exists and `llz tokens`/`doctor` work against it
 immediately. It does **not** ask for credentials — that's `llz tokens` (§4).
 
-> **The instance pins to the `llz` version you installed.** `llz new` renders the
-> scaffold's Terraform-module `?ref=` and reusable-workflow `uses:@`/`template-ref:`
-> pins to this CLI's own version — no version to hardcode; pass `--ref vX.Y.Z` only
+> **The instance pins to the `llz` version you installed.** `llz new` records this
+> CLI's own version as the instance's `llz_version` and renders the scaffold's
+> Terraform-module `?ref=` pins from it — no version to hardcode; pass `--ref vX.Y.Z` only
 > to pin to a different release. Everything inside the scaffold is repointed to your
 > fork by Copier — the only by-hand repoints are the published `kubernetes-charts/`
 > values that live outside the scaffold ([adopter-guide §5](adopter-guide.md#5-org-literals-to-repoint-to-your-fork)).
@@ -520,9 +520,9 @@ Runs `copier update` (3-way merge — your local edits survive; conflicts appear
 then re-stamps `.template-version`. With no `--ref` it uses **this `llz` binary's
 own version**, so the upgrade path is: `llz self-update` to the release you want,
 then `llz upgrade`. Because the scaffold's first-party pins are rendered from
-`llz_version`, the same `copier update` **re-pins the Terraform-module `?ref=`,
-`uses:@`, and `template-ref:` refs in lockstep** — there is no separate version
-bump for them. Ownership follows `.template-manifest`;
+`llz_version`, the same `copier update` **re-pins the Terraform-module `?ref=`
+refs in lockstep** — there is no separate version bump for them, and nothing in
+`.github/workflows/` carries a version to bump at all. Ownership follows `.template-manifest`;
 `terraform-iac-bootstrap/*/.terraform.lock.hcl` files are seeded once and never re-touched.
 
 Check how far behind you are any time:

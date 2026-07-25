@@ -65,8 +65,8 @@ for:
   (`helpers:pinGitHubActionDigests`) and kept current automatically.
 
 The **first-party LLZ pins are NOT Renovate-managed**: the Terraform module
-`?ref=`, the reusable-workflow `uses:@`, and `template-ref:` are rendered from the
-copier `llz_version` and move in lockstep. You adopt a new umbrella release by
+`?ref=` is rendered from the copier `llz_version`, and everything else in CI
+reads that same answer at runtime, so they move in lockstep by construction. You adopt a new umbrella release by
 `llz self-update` (get the new CLI) then `llz upgrade` (re-renders every first-party
 pin to that version) — the CLI is the version anchor. Renovate is deliberately
 disabled on these so it never races `llz upgrade` (the `enabled: false` rule in
@@ -211,8 +211,8 @@ merge / owned);
 once and never re-touched (`_skip_if_exists` in `copier.yml`). This is the clean
 counterpart to the **versioned-artifact** track (Renovate bumps the
 independently-versioned OCI charts + external action digests — §2): `llz upgrade`
-moves the *scaffold and the first-party LLZ pins* (module `?ref=`, workflow
-`uses:@`/`template-ref:`, rendered from `llz_version` in lockstep), while Renovate
+moves the *scaffold and the first-party LLZ pins* (module `?ref=`, rendered from
+`llz_version`, which is also the pin CI reads), while Renovate
 moves the *independently-versioned charts + actions*.
 
 ### Local checks (`llz` + git hooks)

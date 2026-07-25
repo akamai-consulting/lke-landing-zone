@@ -74,13 +74,6 @@ same rationale applies to `APL_VALUES_REPO_TOKEN`.
 
 Refs: `github/docs#44458`, `actions/runner#1490`.
 
-### `inputs.template-ref`
-
-The template release this instance is rendered from; `llz upgrade` re-pins it.
-Consumed by the `assert-image-fresh` preflight (cross-checked against the `llz`
-baked into `vars.TF_IMAGE` — no template-repo fetch) and forwarded to
-`llz-bootstrap-openbao`.
-
 ### `concurrency`
 
 `cancel-in-progress: false` — never cancel in-flight infra changes; a partial
@@ -207,12 +200,14 @@ guards ad-hoc concurrent builds.
 `apply-vpc` is the first job `apply-cluster` depends on, so failing here aborts
 **before** the ~15-minute cluster apply. Two cheap fail-fast checks live here:
 
-1. **Image/template skew** (`Pre-flight — ci-terraform image matches
-   template-ref`). The instance pins `TF_IMAGE` (baked `llz`) and `template-ref`
-   independently. When the image lags, the checked-out workflow calls `llz`
-   commands/flags the baked binary lacks, surfacing far downstream as a cryptic
-   "unknown flag" or a silently no-op'd gate. `llz ci assert-image-fresh` asserts
-   they match.
+1. **Image/template skew** (`Pre-flight — ci-terraform image matches the
+   instance's template pin`). The instance pins `TF_IMAGE` (baked `llz`)
+   separately from its template pin. When the image lags, the checked-out
+   workflow calls `llz` commands/flags the baked binary lacks, surfacing far
+   downstream as a cryptic "unknown flag" or a silently no-op'd gate. `llz ci
+   assert-image-fresh` asserts they match, reading the pin from the instance's
+   own `.copier-answers.yml` — there is no third, hand-maintained copy of it to
+   skew.
 
 2. **Env secrets** (`Pre-flight — verify infra-<region> env secrets`) that the
    cluster-bootstrap apply needs: `APL_VALUES_REPO_TOKEN` and

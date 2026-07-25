@@ -7,13 +7,8 @@ name: llz-scheduled-checks (reusable)
 on:
   workflow_call:
     inputs:
-      template-ref:
-        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
-        required: false
-        type: string
-        default: main
       drift_branch:
-        description: 'Template branch the monthly template-drift job compares .template-version against (NOT template-ref — drift measures distance to the moving branch head).'
+        description: 'Template branch the monthly template-drift job compares the instance pin against (drift measures distance to the moving branch head).'
         required: false
         type: string
         default: main

@@ -13,8 +13,8 @@ same commit:
 
 - the Terraform modules (`terraform-modules/*`), consumed as `git::?ref=vX.Y.Z`;
 - the reusable workflows (`.github/workflows/llz-*.yml`) + their composite
-  actions and the `llz` CLI built from the template checkout, consumed by an
-  instance as `uses: …@vX.Y.Z` + `template-ref: vX.Y.Z`;
+  actions and the `llz` CLI built from the template checkout, vendored into an
+  instance by copier at `vX.Y.Z`;
 - the `llz` CLI release binaries (attached to the release by `llz-release.yml`);
 - the `firewall-controller` image (tagged `:vX.Y.Z` by `firewall-controller.yml`).
 
@@ -98,9 +98,9 @@ That fires `release: released` — the human promotion **is the approval click**
 ## How instances pin — the CLI is the version anchor
 
 The template **never hardcodes a version**. `instance-template/`'s first-party
-references are copier placeholders — `?ref=<@ llz_version @>`,
-`uses:@<@ llz_version @>`, `template-ref: <@ llz_version @>`. The concrete version
-is injected at scaffold/upgrade time by `llz`:
+references are copier placeholders — `?ref=<@ llz_version @>` and the
+`llz_version` answer itself. The concrete version is injected at scaffold/upgrade
+time by `llz`:
 
 - `llz new` runs `copier copy --vcs-ref <ref> --data llz_version=<ref>`, and
 - `llz upgrade` runs `copier update --vcs-ref <ref> --data llz_version=<ref>`,

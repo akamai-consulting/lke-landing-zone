@@ -116,10 +116,6 @@ never transit GitHub.
 
 ### Inputs worth explaining
 
-* **`template-ref`** — the template release this instance is rendered from;
-  `llz upgrade` re-pins it. Unused by this workflow's jobs (everything resolves
-  locally); declared only because the caller stub passes it and `workflow_call`
-  rejects undeclared inputs.
 * **`assert_loki`** — default false for normal instances. The release-e2e gate sets it
   true so the check runs inside the converge that already holds cluster access,
   instead of a separate `validate` pass dispatching `cluster-health.yml`.

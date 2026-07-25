@@ -22,18 +22,11 @@ debugging aids.
 
 ## Inputs and secrets
 
-### `template-ref`
-
-The template release the instance is rendered from — `llz upgrade` re-pins it.
-It is **unused by this workflow's jobs** (everything resolves locally, from the
-vendored copy). It is declared only because the caller stub passes it and
-`workflow_call` rejects undeclared inputs.
-
 ### `drift_branch`
 
-Deliberately distinct from `template-ref`: drift measures distance to the
-*moving branch head*, not to the pinned release the instance was rendered from.
-Comparing against `template-ref` would always report zero drift.
+Deliberately distinct from the instance's template pin: drift measures distance
+to the *moving branch head*, not to the pinned release the instance was rendered
+from. Comparing against the pin would always report zero drift.
 
 ### `APL_VALUES_REPO_TOKEN`
 

@@ -11,16 +11,17 @@ package main
 // no self-dispatch loop to reinvent.
 //
 // The reusable body is vendored into the instance (ADR 0003), so the `uses:` is
-// the LOCAL ./.github/workflows/llz-terraform.yml — no org, no @<ref>. The pin
-// that remains (instance_repo, template-ref, and the renovate depName annotated
-// on template-ref) is NOT regenerated from the ranks — it is PRESERVED from the
-// file already on disk (or, on a fresh instance, lifted from the sibling
-// terraform.yml caller stub, or finally derived from .copier-answers.yml +
-// .template-version). A legacy instance whose stubs still carry a cross-repo
+// the LOCAL ./.github/workflows/llz-terraform.yml — no org, no @<ref>. The only
+// caller boilerplate left (instance_repo) is NOT regenerated from the ranks — it
+// is PRESERVED from the file already on disk (or, on a fresh instance, lifted
+// from the sibling terraform.yml caller stub, or finally read from
+// .copier-answers.yml). A legacy instance whose stubs still carry a cross-repo
 // `uses:@<ref>` keeps that form verbatim (it has no vendored body to point at),
 // so a template-version bump never shows up as pipeline "drift"; only a
 // promotion_rank change does, which is exactly what `llz env pipeline --check`
-// gates in CI.
+// gates in CI. Stages carry no template-ref: the ref is read at runtime from the
+// instance's own pin (see pinnedTemplateRef), so promote.yml no longer churns on
+// every upgrade.
 
 import (
 	"fmt"
@@ -36,22 +37,17 @@ import (
 const localTerraformUses = "./.github/workflows/llz-terraform.yml"
 
 // promoCaller is the caller-stub boilerplate shared by every promote stage: which
-// reusable workflow to call, the instance repo, the template-ref input, and the
-// renovate depName annotated on it. Reused verbatim across stages so promote.yml
-// calls exactly what terraform.yml does.
+// reusable workflow to call and the instance repo. Reused verbatim across stages
+// so promote.yml calls exactly what terraform.yml does.
 type promoCaller struct {
 	uses         string // ./.github/workflows/llz-terraform.yml (legacy instances: <org>/lke-landing-zone/…@<ref>)
 	instanceRepo string
-	templateRef  string
-	depName      string // <org>/lke-landing-zone — the `# renovate:` depName for the template-ref pin
 }
 
 var (
 	reUsesLocal   = regexp.MustCompile(`(?m)^\s*uses:\s*(\./\.github/workflows/llz-terraform\.yml)\s*$`)
 	reUsesCross   = regexp.MustCompile(`(?m)^\s*uses:\s*(\S+/lke-landing-zone/\.github/workflows/llz-terraform\.yml@\S+)`)
 	reInstanceErr = regexp.MustCompile(`(?m)^\s*instance_repo:\s*(\S+)`)
-	reTemplateRef = regexp.MustCompile(`(?m)^\s*template-ref:\s*(\S+)`)
-	reDepName     = regexp.MustCompile(`(?m)^\s*#\s*renovate:\s*datasource=github-tags\s+depName=(\S+)`)
 )
 
 // callerFromWorkflow extracts the pin from an existing rendered caller stub
@@ -76,17 +72,9 @@ func callerFromWorkflow(path string) (promoCaller, bool) {
 	if m := reInstanceErr.FindStringSubmatch(s); m != nil {
 		c.instanceRepo = m[1]
 	}
-	if m := reTemplateRef.FindStringSubmatch(s); m != nil {
-		c.templateRef = m[1]
-	}
-	if m := reDepName.FindStringSubmatch(s); m != nil {
-		c.depName = m[1]
-	} else if c.uses != localTerraformUses {
-		c.depName = depNameFromUses(c.uses) // legacy pin carries the org in uses:
-	}
 	// A local `uses:` is a literal that exists in the un-rendered template too, so
 	// it no longer proves the stub is rendered — reject leftover copier tokens.
-	if strings.Contains(c.instanceRepo, "<@") || strings.Contains(c.templateRef, "<@") || strings.Contains(c.depName, "<@") {
+	if strings.Contains(c.instanceRepo, "<@") {
 		return promoCaller{}, false
 	}
 	return c, true
@@ -94,9 +82,9 @@ func callerFromWorkflow(path string) (promoCaller, bool) {
 
 // resolveCaller finds the pin to render with. Preference order, each a fallback
 // for the previous being absent/unrendered:
-//  1. the existing promote.yml  — preserve its pin (Renovate may have bumped it).
+//  1. the existing promote.yml  — preserve what it calls.
 //  2. the sibling terraform.yml — a fresh instance has this rendered already.
-//  3. .copier-answers.yml (upstream_org + instance_repo) + .template-version ref.
+//  3. .copier-answers.yml (instance_repo).
 func resolveCaller(workflowsDir string) (promoCaller, error) {
 	if c, ok := callerFromWorkflow(filepath.Join(workflowsDir, "promote.yml")); ok {
 		return c, nil
@@ -105,15 +93,12 @@ func resolveCaller(workflowsDir string) (promoCaller, error) {
 		return c, nil
 	}
 	a, _ := readAnswers(".")
-	ref := templateRefFromStamp()
-	if a == nil || a.UpstreamOrg == "" || a.InstanceRepo == "" || ref == "" {
-		return promoCaller{}, fmt.Errorf("cannot determine the caller pin: no rendered promote.yml/terraform.yml to copy it from, and .copier-answers.yml/.template-version are incomplete")
+	if a == nil || a.InstanceRepo == "" {
+		return promoCaller{}, fmt.Errorf("cannot determine the caller: no rendered promote.yml/terraform.yml to copy it from, and .copier-answers.yml has no instance_repo")
 	}
 	return promoCaller{
 		uses:         localTerraformUses, // the vendored body (ADR 0003)
 		instanceRepo: a.InstanceRepo,
-		templateRef:  ref,
-		depName:      a.UpstreamOrg + "/lke-landing-zone",
 	}, nil
 }
 
@@ -190,10 +175,6 @@ jobs:
 		b.WriteString(fmt.Sprintf("    uses: %s\n", c.uses))
 		b.WriteString("    with:\n")
 		b.WriteString(fmt.Sprintf("      instance_repo: %s\n", c.instanceRepo))
-		if c.depName != "" {
-			b.WriteString("      # renovate: datasource=github-tags depName=" + c.depName + "\n")
-		}
-		b.WriteString(fmt.Sprintf("      template-ref: %s\n", c.templateRef))
 		b.WriteString("      action: apply\n")
 		b.WriteString("      module: ${{ inputs.module || 'all' }}\n")
 		b.WriteString(fmt.Sprintf("      region: %s\n", s.name))
@@ -203,22 +184,6 @@ jobs:
 		}
 	}
 	return b.String()
-}
-
-// depNameFromUses turns a LEGACY cross-repo `uses:` value into the <org>/<repo>
-// slug Renovate tracks (mirrors the `# renovate:` comment terraform.yml carries on
-// template-ref). Only meaningful for the cross-repo form — a local `./` uses
-// carries no org; its depName comes from the annotation or .copier-answers.yml.
-func depNameFromUses(uses string) string {
-	// <org>/lke-landing-zone/.github/workflows/llz-terraform.yml@<ref>
-	path := uses
-	if i := strings.Index(path, "@"); i >= 0 {
-		path = path[:i]
-	}
-	if i := strings.Index(path, "/.github/"); i >= 0 {
-		path = path[:i]
-	}
-	return path
 }
 
 // promoteWorkflowPath returns where promote.yml lives for the detected layout, and

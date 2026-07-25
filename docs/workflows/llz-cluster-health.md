@@ -31,13 +31,6 @@ differ only by flags:
 
 ## Inputs and secrets
 
-### `template-ref`
-
-The template release the instance is rendered from — `llz upgrade` re-pins it.
-It is **unused by this workflow's jobs** (everything resolves locally, from the
-vendored copy). It is declared only because the caller stub passes it and
-`workflow_call` rejects undeclared inputs.
-
 ### `vars` and secrets resolution
 
 `vars.TF_IMAGE`, `vars.TF_STATE_BUCKET` and `vars.TF_STATE_ENDPOINT` resolve

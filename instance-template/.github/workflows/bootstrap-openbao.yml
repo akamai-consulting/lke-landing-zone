@@ -6,7 +6,7 @@ name: Bootstrap OpenBao
 # ADR 0003); the llz CLI is baked into vars.TF_IMAGE. The reusable checks this
 # instance back out (its terraform-iac-bootstrap TF state).
 # ADOPTERS: nothing to repoint — every `uses:` is a repo-local ./ path, and
-# `llz upgrade` re-pins template-ref with each template release.
+# `llz upgrade` re-renders the vendored body with each template release.
 #
 # Operators dispatch this directly. The terraform.yml pipeline reaches OpenBao
 # bootstrap through llz-terraform's own bootstrap-openbao job (which calls
@@ -69,6 +69,4 @@ jobs:
       reprovision_ca_only:      ${{ inputs.reprovision_ca_only || false }}
       preserve_root_on_failure: ${{ inputs.preserve_root_on_failure || false }}
       instance_repo:            <@ instance_repo @>
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref:             <@ llz_version @>
     secrets: inherit

@@ -125,7 +125,7 @@ func ciBootstrapClusterCmd() *cobra.Command {
 	fl.StringVar(&f.appsRepoRevision, "apps-repo-revision", "", "bootstrap Application targetRevision (default: spec, then main)")
 	fl.StringVar(&f.instanceRepo, "instance-repo", "", "owner/name of the instance repo (bootstrap App source) (required)")
 	fl.StringVar(&f.upstreamOrg, "upstream-org", "akamai-consulting", "template repo org (llz-secret-store App source + AppProject sourceRepos)")
-	fl.StringVar(&f.templateRef, "template-ref", "main", "template repo ref for the llz-secret-store Application")
+	fl.StringVar(&f.templateRef, "template-ref", "", "template repo ref for the llz-secret-store Application (default: the instance's pin, then main)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "print the intended actions without touching the cluster")
 	return c
 }
@@ -146,7 +146,7 @@ func runBootstrapCluster(f bootstrapFlags) error {
 		env:              f.env,
 		instanceRepo:     f.instanceRepo,
 		upstreamOrg:      firstNonEmpty(f.upstreamOrg, "akamai-consulting"),
-		templateRef:      firstNonEmpty(f.templateRef, "main"),
+		templateRef:      firstNonEmpty(f.templateRef, pinnedTemplateRef(), "main"),
 		appsRepoRevision: f.appsRepoRevision,
 		// A PRIVATE fork keeping its first-party OCI charts/images private needs the
 		// GHCR repo + pull secrets in the argocd namespace (empty token = public path,

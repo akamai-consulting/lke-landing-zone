@@ -9,9 +9,6 @@ name: Wedge game-day (blast-radius containment proof)
 #
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
 # copier-delivered into this repo, so `secrets: inherit` is same-repo (#201).
-# template-ref records the template release this instance is rendered from —
-# `llz upgrade` re-pins it (renovate.json disables the first-party pin on purpose
-# so the two never race).
 
 on:
   workflow_dispatch:
@@ -42,6 +39,4 @@ jobs:
       region: ${{ inputs.region }}
       target-app: ${{ inputs.target-app }}
       externalsecret: ${{ inputs.externalsecret }}
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref: <@ llz_version @>
     secrets: inherit

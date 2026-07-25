@@ -28,11 +28,6 @@ on:
         required: false
         type: boolean
         default: false
-      template-ref:
-        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
-        required: false
-        type: string
-        default: main
     secrets:
       TF_STATE_ACCESS_KEY:
         required: true

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sigs.k8s.io/yaml"
 )
@@ -20,6 +21,28 @@ type answers struct {
 	// operators who get scoped non-root OpenBao writes. Empty on pre-question
 	// instances; ensureLandingZone falls back to "platform".
 	OpenbaoTeam string `json:"openbao_team"`
+}
+
+// pinnedTemplateRef resolves the template release THIS instance is rendered from,
+// read at runtime out of the instance checkout rather than passed in. It is the
+// single source for the pin, so nothing downstream can skew from it: the workflows
+// used to carry a `template-ref:` input rendered into every caller stub, which made
+// the same fact editable in nine places and let TF_IMAGE drift against it silently.
+//
+// copier's .copier-answers.yml is the authority (`llz upgrade` rewrites it through
+// copier itself); .template-version is a legacy fallback for an instance that has
+// not upgraded past the stamp yet. "" when neither is present — callers that need a
+// concrete ref default to "main".
+func pinnedTemplateRef() string {
+	if a, _ := readAnswers("."); a != nil {
+		if r := strings.TrimSpace(a.Version); r != "" {
+			return r
+		}
+		if r := strings.TrimSpace(a.Commit); r != "" {
+			return r
+		}
+	}
+	return templateRefFromStamp()
 }
 
 // readAnswers loads .copier-answers.yml from dir (use "." for the current
