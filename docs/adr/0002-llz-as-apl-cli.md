@@ -134,7 +134,7 @@ keep their current names and grouping.
 llz apl                         # APL layer — cloud-agnostic, talks to a running APL
   team   add | list | login     # ← llz env(team bits) + team-login-smoke   (otomi teams)
   user   add                    # HOMED here; top-level `llz users` retired    (Keycloak users)
-  app    enable | disable | list# ← llz components                         (otomi apps/components)
+  app    enable | disable | list# WIRED — enable/disable edit env spec + re-render (otomi apps)
   values set | render | validate| show   # render + validate WIRED; set/show later
                                 # ← llz render + reconcile-apl-overlay + validate-apl-values
   openbao get|set|exec|login    # WIRED — platform secret store (OpenBao KV). NO unified `apl secret`:
@@ -188,7 +188,7 @@ keep.
 | Current (top-level) | Disposition | Destination / note |
 |---|---|---|
 | `users` → `apl user` | **Align (done)** | Extracted to `internal/apl/identity` (Phase 1) and **retired from the top level** — `apl user` is its sole home. First realized disposition. |
-| `components` | **Align** | `apl app` — otomi apps/components |
+| `components` | **Align (done)** | `apl app` — `list` (registry) + `enable`/`disable <app> --env` (edit env spec + re-render, the GitOps source). `llz components` stays as the top-level list. |
 | `render` | **Align (done)** | Wired as `apl values render` — the front door; provider-specific bits stay behind the provider layer. (Top-level `llz render` still exists, not yet retired.) |
 | `validate` (`validate-apl-values`) | **Align (done)** | Wired as `apl values validate` — surfaced from `llz ci validate-apl-values` as a first-class values command |
 | `status` | **Align** | `apl status` |
