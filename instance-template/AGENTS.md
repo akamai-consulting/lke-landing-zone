@@ -3,8 +3,9 @@
 Canonical instructions for AI agents and contributors working in **this
 instance repo** — an LKE Landing Zone deployment scaffolded from
 [`<@ upstream_org @>/lke-landing-zone`](https://github.com/<@ upstream_org @>/lke-landing-zone)
-and driven by the **`llz`** CLI. Pinned to template release **`<@ llz_version @>`**
-([`.template-version`](.template-version)).
+and driven by the **`llz`** CLI. The template release this instance pins to is
+recorded in [`.copier-answers.yml`](.copier-answers.yml) (`llz_version`) — read it
+there rather than restating it here, so prose can't drift from the pin.
 
 > **Canonical agent guidance.** This file is discovered directly by Claude Code,
 > Codex CLI, and Gemini CLI. Edit this file only — do not duplicate its content
