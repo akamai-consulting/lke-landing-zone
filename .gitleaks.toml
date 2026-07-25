@@ -72,3 +72,18 @@ id           = "managed-apps-openbao-key-ref"
 description  = "openbaoKey is a vault path reference, not a secret"
 regexTarget  = "match"
 regexes      = ['''openbaoKey:\s*\S+''']
+
+# SealedSecret `encryptedData` is ciphertext — sealed to the cluster's public key
+# precisely so it CAN be committed — but gitleaks' generic-api-key heuristic sees
+# `password: <long opaque string>`. Scoped to the ciphertext itself, not a path:
+# kubeseal's envelope is base64 starting with `Ag`, and a 200+ char run of it is
+# not a shape a real credential takes; a `paths` glob would OR-allowlist whole
+# files and hide a genuine leak pasted alongside.
+# (Kept in sync with instance-template/.gitleaks.toml, where it is load-bearing:
+# the instance pre-commit hook scans all history on all refs, so an apl-values
+# branch full of sealed secrets blocks every commit in the repo.)
+[[allowlists]]
+id           = "sealed-secret-ciphertext"
+description  = "SealedSecret encryptedData is asymmetrically encrypted by design"
+regexTarget  = "secret"
+regexes      = ['''^Ag[A-Za-z0-9+/]{200,}={0,2}$''']
