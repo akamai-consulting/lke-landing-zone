@@ -18,7 +18,11 @@ package main
 // template. That makes a content-free version bump touch exactly one file by
 // construction, not by luck.
 //
-// Template-repo only: an instance has no instance-template/, so the check skips.
+// It runs on BOTH sides of the delivery. In the template repo it stops a version
+// from being re-rendered into the scaffold. In an instance it catches the same
+// strings having actually landed — which is not hypothetical: gsap-apl's v0.0.33
+// upgrade left 27 permalinks pinned at v0.0.32 because the delivery ran with an
+// llz predating the fix, and nothing in the instance's own CI objected.
 
 import (
 	"fmt"
@@ -75,14 +79,38 @@ var churnGuardRoots = []string{
 	"docs/playbooks",
 }
 
-// stepUpgradeChurnGuard fails the lint gate when a banned pattern reappears in the
-// delivered surface. Skips outside a template-repo checkout.
+// churnGuardInstanceRoots is the same surface as it lands INSIDE an instance: the
+// vendored workflows plus the locally-kept docs. docs/README.md is deliberately
+// absent — it carries the one pinned pointer, which is the whole point of it.
+var churnGuardInstanceRoots = []string{
+	".github/workflows",
+	"docs/quickstart.md",
+	"docs/runbooks",
+	"docs/playbooks",
+}
+
+// churnGuardScope picks the delivered surface for the checkout we are standing in:
+// the template repo (identified by instance-template/), an instance (identified by
+// copier's answers file), or neither — in which case there is nothing to guard.
+func churnGuardScope() (roots []string, instance bool) {
+	if fi, err := os.Stat("instance-template"); err == nil && fi.IsDir() {
+		return churnGuardRoots, false
+	}
+	if _, err := os.Stat(".copier-answers.yml"); err == nil {
+		return churnGuardInstanceRoots, true
+	}
+	return nil, false
+}
+
+// stepUpgradeChurnGuard fails the lint gate when a banned pattern is present in the
+// delivered surface — about to ship it (template repo) or carrying it (instance).
 func stepUpgradeChurnGuard(_ globalOpts) error {
-	if fi, err := os.Stat("instance-template"); err != nil || !fi.IsDir() {
-		return nil // an instance checkout (or not the template repo) — nothing to guard
+	roots, instance := churnGuardScope()
+	if roots == nil {
+		return nil // neither a template repo nor an instance — nothing to guard
 	}
 	var hits []string
-	for _, root := range churnGuardRoots {
+	for _, root := range roots {
 		err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
 				return nil //nolint:nilerr // a missing optional root is not this check's concern
@@ -111,6 +139,11 @@ func stepUpgradeChurnGuard(_ globalOpts) error {
 		fmt.Fprintf(os.Stderr, "upgrade-churn guard: %d version reference(s) in the DELIVERED surface:\n", len(hits))
 		for _, h := range hits {
 			fmt.Fprintf(os.Stderr, "  • %s\n", h)
+		}
+		if instance {
+			return fmt.Errorf("this instance must carry no version outside .copier-answers.yml and the " +
+				"docs/README.md pointer — these are stale strings from a delivery run by an older llz; " +
+				"`llz self-update` then re-run `llz upgrade` to re-deliver them")
 		}
 		return fmt.Errorf("the delivered scaffold must carry no version — each of these adds a line to " +
 			"EVERY instance's upgrade diff, every release, for no functional change")

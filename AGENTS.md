@@ -79,7 +79,10 @@ load-bearing.
   deliver-docs`, not stored. `llz lint`'s upgrade-churn guard enforces this: adding a
   version reference to the delivered surface fails the gate, because it would add a
   line to every instance's upgrade diff on every release forever. Restating the pin
-  in prose counts too — link to `.copier-answers.yml` instead.
+  in prose counts too — link to `.copier-answers.yml` instead. The guard runs on
+  both sides of the delivery: in an instance checkout it scans the vendored
+  workflows and kept docs, so a stale string that an older `llz` actually delivered
+  is caught there too rather than sitting unnoticed release after release.
 - **A release is two human steps, gated by e2e.** (1) Publish a **pre-release**
   `vX.Y.Z` → fires `release: prereleased` → `release-e2e.yml` stands up a real
   cluster. The pre-release tag is ignored by `llz self-update`/`new`, and no

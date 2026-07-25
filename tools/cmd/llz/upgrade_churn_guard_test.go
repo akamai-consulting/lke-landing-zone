@@ -84,13 +84,53 @@ func TestUpgradeChurnGuardAllowsProseVersions(t *testing.T) {
 	}
 }
 
-// An instance checkout has no instance-template/ — the guard is a template-repo
-// gate and must not fire (or error) there.
-func TestUpgradeChurnGuardSkipsOutsideTemplateRepo(t *testing.T) {
+// Neither a template repo (no instance-template/) nor an instance (no copier
+// answers) — the guard has no delivered surface to look at and must not fire.
+func TestUpgradeChurnGuardSkipsOutsideBothCheckouts(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "README.md"), "an instance pinned at v0.0.32\n")
 	t.Chdir(dir)
 	if err := stepUpgradeChurnGuard(globalOpts{}); err != nil {
-		t.Fatalf("must skip outside a template-repo checkout: %v", err)
+		t.Fatalf("must skip outside a template-repo or instance checkout: %v", err)
+	}
+}
+
+// instanceChurnFixture lays out a minimal INSTANCE checkout: copier's answers file
+// (what identifies it), the pinned docs pointer, and a delivered doc.
+func instanceChurnFixture(t *testing.T, quickstart string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, ".copier-answers.yml"), "_commit: v0.0.33\nllz_version: v0.0.33\n")
+	mustWrite(t, filepath.Join(dir, "docs", "README.md"),
+		"> https://github.com/akamai-consulting/lke-landing-zone/tree/v0.0.33/docs\n")
+	mustWrite(t, filepath.Join(dir, "docs", "quickstart.md"), quickstart)
+	t.Chdir(dir)
+}
+
+// The failure this actually shipped: docs delivered by an older llz keep permalinks
+// pinned to the PREVIOUS release, so they drift further behind the pointer on every
+// upgrade. The instance's own `llz lint` is the only thing standing over that file.
+func TestUpgradeChurnGuardCatchesStaleDeliveryInInstance(t *testing.T) {
+	instanceChurnFixture(t,
+		"[secrets](https://github.com/akamai-consulting/lke-landing-zone/blob/v0.0.32/docs/secrets.md)\n")
+	err := stepUpgradeChurnGuard(globalOpts{})
+	if err == nil {
+		t.Fatal("expected the guard to fail on a stale delivered permalink")
+	}
+	if !strings.Contains(err.Error(), "older llz") {
+		t.Errorf("the instance-side error should point at re-delivery, got: %v", err)
+	}
+}
+
+// docs/README.md is the ONE file allowed to pin — the guard must not turn the
+// deliberate exception into a lint failure.
+func TestUpgradeChurnGuardAllowsThePinnedPointerInInstance(t *testing.T) {
+	instanceChurnFixture(t,
+		"[secrets](https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md)\n")
+	if err := stepUpgradeChurnGuard(globalOpts{}); err != nil {
+		t.Fatalf("a correctly delivered instance must pass: %v", err)
 	}
 }
