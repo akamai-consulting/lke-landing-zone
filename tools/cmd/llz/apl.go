@@ -5,23 +5,30 @@ import "github.com/spf13/cobra"
 // aplCmd is the APL-layer front door (ADR 0002 — "one binary, two altitudes"): a
 // noun-verb subtree that speaks App Platform's domain model. `user` is HOMED here
 // (its top-level `llz users` alias was retired) and `values` groups the apl-values
-// commands; `app`/`status`/`doctor`/`verify` still DELEGATE to their existing
-// top-level command, re-labeled to App Platform vocabulary (components→app). The
-// tree grows (`apl values set/show`, `apl secret`, `apl team`) in later phases.
-// See ADR 0002 Appendix A/B.
+// commands; `app`/`openbao`/`status`/`doctor`/`verify` still DELEGATE to their
+// existing top-level command, re-labeled to App Platform vocabulary
+// (components→app). The tree grows (`apl values set/show`, `apl team`) in later
+// phases. See ADR 0002 Appendix A/B.
+//
+// Secrets are deliberately NOT unified under an `apl secret` verb: the two stores
+// are distinct backends and stay distinct (ADR 0002 Appendix B). The platform
+// runtime secret store — OpenBao KV — is surfaced here as `apl openbao`; GitHub
+// build-time secrets remain `llz secrets` (provider/CI plumbing), out of `apl`.
 func aplCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "apl",
-		Short: "App Platform layer: users, apps, values & platform health (ADR 0002)",
+		Short: "App Platform layer: users, apps, values, secrets & platform health (ADR 0002)",
 		Long: "The APL-layer front door (ADR 0002, \"one binary, two altitudes\").\n\n" +
-			"`apl user` onboards platform users and `apl values` renders/validates the\n" +
-			"App Platform values; the remaining leaves delegate to their existing\n" +
-			"top-level equivalents and move down into internal/apl in later phases.",
+			"`apl user` onboards platform users, `apl values` renders/validates the\n" +
+			"App Platform values, and `apl openbao` reaches the platform secret store;\n" +
+			"the remaining leaves delegate to their existing top-level equivalents and\n" +
+			"move down into internal/apl in later phases.",
 	}
 	c.AddCommand(
 		aplUserCmd(), // apl user — onboarding (retired from the top level)
 		renamed(componentsCmd(), "app", "enable/disable App Platform apps (components)"),
 		aplValuesCmd(), // apl values — render | validate the apl-values
+		openbaoCmd(),   // apl openbao — platform secret store (OpenBao KV); GitHub secrets stay `llz secrets`
 		statusCmd(),    // apl status — platform health
 		doctorCmd(),    // apl doctor — APL-scoped readiness
 		verifyCmd(),    // apl verify — platform verification
