@@ -71,6 +71,15 @@ load-bearing.
   CI reads the pin from `.copier-answers.yml` at runtime), and the `llz` CLI
   binaries — all at the same commit. (Helm charts are the
   exception: independently versioned via `Chart.yaml`, see below.)
+- **The delivered scaffold carries no version at all.** `instance-template/` and
+  the delivered docs contain zero `<@ llz_version @>` tokens: the pin lives once in
+  `.copier-answers.yml`, and everything reads it at runtime (`pinnedTemplateRef()`),
+  so a content-free version bump changes exactly that one file. The single
+  deliberate exception — the pinned docs pointer — is *generated* by `llz ci
+  deliver-docs`, not stored. `llz lint`'s upgrade-churn guard enforces this: adding a
+  version reference to the delivered surface fails the gate, because it would add a
+  line to every instance's upgrade diff on every release forever. Restating the pin
+  in prose counts too — link to `.copier-answers.yml` instead.
 - **A release is two human steps, gated by e2e.** (1) Publish a **pre-release**
   `vX.Y.Z` → fires `release: prereleased` → `release-e2e.yml` stands up a real
   cluster. The pre-release tag is ignored by `llz self-update`/`new`, and no
