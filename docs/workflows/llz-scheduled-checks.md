@@ -235,10 +235,10 @@ monthly cron (`0 7 1 * *`) rather than the daily/weekly ones, and it needs no
 `environment:` — it touches no cluster and no per-region secrets, only the
 instance checkout and github.com.
 
-### Step: Compare .template-version against the template head
+### Step: Compare the instance's template pin against the template head
 
-The instance is checked out at the workspace root; its `.template-version` is
-what gets compared.
+The instance is checked out at the workspace root; the pin recorded in its
+`.copier-answers.yml` is what gets compared.
 
 `llz drift` resolves the template head via `git ls-remote`, which needs auth when
 the template repo is private — hence the `GH_TOKEN` env var and the

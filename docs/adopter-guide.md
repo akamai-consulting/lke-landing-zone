@@ -86,8 +86,10 @@ apl_chart_version = "6.0.0"
 ```
 
 Renovate keeps the *published artifacts* current. For the **copied** scaffolding
-(workflows, overlays), `llz env add` / `llz upgrade` stamp a committed
-`.template-version` recording the template repo/ref/commit you generated from.
+(workflows, overlays), the template repo/ref you generated from is recorded once,
+by copier, in `.copier-answers.yml` — `llz drift` and CI both read it there. (LLZ
+used to write a second copy to a committed `.template-version`; `llz upgrade`
+deletes that orphan.)
 
 `llz upgrade` also applies `.template-removals` after the `copier update` —
 `copier` never deletes a file the template dropped between versions, so the

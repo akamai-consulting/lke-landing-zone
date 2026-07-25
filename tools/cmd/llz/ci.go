@@ -260,8 +260,6 @@ func ciCmd() *cobra.Command {
 	// Vendored-CI drift guard: the `managed` .github/ surface is overwritten by
 	// `llz upgrade`, so a local edit is silently lost — fail CI instead.
 	c.AddCommand(ciWorkflowsFreshCmd())
-	// Template provenance stamp (former template-scripts/stamp-template-version.sh).
-	c.AddCommand(ciStampTemplateVersionCmd())
 	return c
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,10 +34,10 @@ func TestValidateOBJCluster(t *testing.T) {
 	}
 }
 
-func TestStampTemplateVersion(t *testing.T) {
+// Provenance is DERIVED, never stamped to disk: with no .copier-answers.yml the
+// repo falls back to the default and HEAD/describe come from git.
+func TestResolveTemplateVersionFallsBackToGit(t *testing.T) {
 	chdirTemp(t)
-	// No .copier-answers.yml, and the remotes resolve to nothing, so the repo
-	// falls back to the default; HEAD/describe come from the stub.
 	withExecOutput(t, func(_ string, args ...string) ([]byte, error) {
 		j := strings.Join(args, " ")
 		switch {
@@ -51,74 +50,48 @@ func TestStampTemplateVersion(t *testing.T) {
 		}
 	})
 
-	captureStdout(t, func() {
-		if err := stampTemplateVersion("dev"); err != nil {
-			t.Fatalf("stampTemplateVersion: %v", err)
-		}
-	})
-
-	b, err := os.ReadFile(".template-version")
-	if err != nil {
-		t.Fatalf("read .template-version: %v", err)
-	}
-	var tv templateVersion
-	if err := json.Unmarshal(b, &tv); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if tv.Env != "dev" || tv.Schema != 1 || tv.Generator != "llz" {
-		t.Errorf("stamped meta wrong: %+v", tv)
+	tv := resolveTemplateVersion()
+	if tv.Schema != 1 || tv.Generator != "llz" {
+		t.Errorf("resolved meta wrong: %+v", tv)
 	}
 	if tv.TemplateRepo != defaultTemplateRepo {
 		t.Errorf("TemplateRepo = %q, want default %q", tv.TemplateRepo, defaultTemplateRepo)
 	}
-	if tv.TemplateSHA != "deadbeefcafe1234" {
-		t.Errorf("TemplateSHA = %q, want the stubbed HEAD", tv.TemplateSHA)
+	if tv.TemplateSHA != "deadbeefcafe1234" || tv.TemplateRef != "v1.2.3" {
+		t.Errorf("git fallback not used: %+v", tv)
+	}
+	if _, err := os.Stat(".template-version"); !os.IsNotExist(err) {
+		t.Errorf("resolving provenance must not write a stamp file; stat err = %v", err)
 	}
 }
 
-func TestStampTemplateVersionWithOptions(t *testing.T) {
+// copier's answers are the authority when present — no git calls needed.
+func TestResolveTemplateVersionFromAnswers(t *testing.T) {
 	chdirTemp(t)
 	withExecOutput(t, func(_ string, _ ...string) ([]byte, error) {
 		return []byte("unexpected-git-call\n"), nil
 	})
+	mustWrite(t, ".copier-answers.yml", "_commit: 1234567890abcdef\n_src_path: gh:akamai-consulting/lke-landing-zone\nllz_version: v9.9.9\n")
 
-	captureStdout(t, func() {
-		if err := stampTemplateVersionWithOptions(stampTemplateVersionOptions{
-			Repo: "https://github.com/akamai-consulting/lke-landing-zone.git",
-			Ref:  "feature/ref",
-			SHA:  "1234567890abcdef",
-			Env:  "e2e",
-			Now:  "2026-07-07T12:00:00Z",
-		}); err != nil {
-			t.Fatalf("stampTemplateVersionWithOptions: %v", err)
-		}
-	})
-
-	b, err := os.ReadFile(".template-version")
-	if err != nil {
-		t.Fatalf("read .template-version: %v", err)
-	}
-	var tv templateVersion
-	if err := json.Unmarshal(b, &tv); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	tv := resolveTemplateVersion()
 	if tv.TemplateRepo != defaultTemplateRepo {
 		t.Errorf("TemplateRepo = %q, want %q", tv.TemplateRepo, defaultTemplateRepo)
 	}
-	if tv.TemplateRef != "feature/ref" || tv.TemplateSHA != "1234567890abcdef" || tv.Env != "e2e" || tv.StampedAt != "2026-07-07T12:00:00Z" {
-		t.Errorf("stamped options not honored: %+v", tv)
+	if tv.TemplateSHA != "1234567890abcdef" || tv.TemplateRef != "v9.9.9" {
+		t.Errorf("answers not honored: %+v", tv)
 	}
 }
 
-func TestStampTemplateVersionCommandWiring(t *testing.T) {
-	c := ciStampTemplateVersionCmd()
-	for _, flag := range []string{"repo", "ref", "sha", "env", "now"} {
-		if c.Flags().Lookup(flag) == nil {
-			t.Fatalf("missing --%s flag", flag)
-		}
-	}
-	if err := c.Args(c, []string{"extra"}); err == nil {
-		t.Fatal("stamp-template-version accepted positional args")
+// A not-yet-upgraded instance still carrying the retired stamp keeps working:
+// the legacy file fills what the answers cannot.
+func TestResolveTemplateVersionFallsBackToLegacyStamp(t *testing.T) {
+	chdirTemp(t)
+	withExecOutput(t, func(_ string, _ ...string) ([]byte, error) { return []byte(""), nil })
+	mustWrite(t, ".template-version", `{"schema":1,"template_repo":"myorg/lke-landing-zone","template_ref":"v0.0.27","template_sha":"abc1234567"}`)
+
+	tv := resolveTemplateVersion()
+	if tv.TemplateRepo != "myorg/lke-landing-zone" || tv.TemplateRef != "v0.0.27" || tv.TemplateSHA != "abc1234567" {
+		t.Errorf("legacy stamp not honored: %+v", tv)
 	}
 }
 

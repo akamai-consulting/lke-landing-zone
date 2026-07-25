@@ -363,11 +363,12 @@ jobs:
     timeout-minutes: 10
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 7 1 * *'
     steps:
-      # Instance at the workspace root — its .template-version is what we compare.
+      # Instance at the workspace root — the pin in its .copier-answers.yml is
+      # what we compare.
       - name: Checkout the instance
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Compare .template-version against the template head
+      - name: Compare the instance's template pin against the template head
         env:
           # `llz drift` resolves the head via `git ls-remote`, which needs auth
           # when the template repo is private (hence the insteadOf rewrite).

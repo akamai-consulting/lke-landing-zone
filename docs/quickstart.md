@@ -517,8 +517,8 @@ llz upgrade --ref v0.2.0
 
 Runs `copier update` (3-way merge — your local edits survive; conflicts appear as
 `.rej`/merge markers only where you changed a line the template also changed),
-then re-stamps `.template-version`. With no `--ref` it uses **this `llz` binary's
-own version**, so the upgrade path is: `llz self-update` to the release you want,
+which rewrites `.copier-answers.yml` — the one place the pin is recorded. With
+no `--ref` it uses **this `llz` binary's own version**, so the upgrade path is: `llz self-update` to the release you want,
 then `llz upgrade`. Because the scaffold's first-party pins are rendered from
 `llz_version`, the same `copier update` **re-pins the Terraform-module `?ref=`
 refs in lockstep** — there is no separate version bump for them, and nothing in
@@ -528,7 +528,7 @@ refs in lockstep** — there is no separate version bump for them, and nothing i
 Check how far behind you are any time:
 
 ```bash
-llz drift           # compares .template-version against the template head
+llz drift           # compares your recorded pin against the template head
 ```
 
 The **Scheduled Checks** workflow runs the same check monthly (its

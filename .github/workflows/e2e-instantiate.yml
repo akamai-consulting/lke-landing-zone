@@ -384,11 +384,9 @@ jobs:
           git checkout -q -b main
           git config user.name  "llz-release-e2e[bot]"
           git config user.email "llz-release-e2e@users.noreply.github.com"
-          # Record which template commit this instance was generated from (drift
-          # provenance). cwd is now a git repo, so the stamp lands here.
-          "${GITHUB_WORKSPACE}/bin/llz" ci stamp-template-version \
-            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" \
-            --ref "${GITHUB_REF_NAME}" --env "${E2E_ENV}"
+          # No provenance stamp to write: the minimal .copier-answers.yml hoisted
+          # above already records which template commit this instance came from,
+          # and that is what `llz drift` reads.
           git add -A
           git commit -q -m "e2e: instantiate ${GITHUB_REPOSITORY}@${GITHUB_SHA::8} (${GITHUB_REF_NAME})"
           HEAD_SHA="$(git rev-parse HEAD)"

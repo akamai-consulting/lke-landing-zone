@@ -282,9 +282,10 @@ func upgradeCmd() *cobra.Command {
 	var ref string
 	var commit bool
 	c := &cobra.Command{
-		Use: "upgrade", Short: "copier update + re-stamp the template version (conflict-gated, summarized, optionally committed)",
-		Long: "Updates the instance from its pinned template: `copier update` + apply the\n" +
-			"template's declared file removals + re-stamp .template-version. Then gates on\n" +
+		Use: "upgrade", Short: "copier update to a new template release (conflict-gated, summarized, optionally committed)",
+		Long: "Updates the instance from its pinned template: `copier update` (which\n" +
+			"re-records the pin in .copier-answers.yml) + apply the template's declared\n" +
+			"file removals. Then gates on\n" +
 			"leftover merge-conflict markers (fails loudly instead of shipping them), prints\n" +
 			"a one-view summary of the churn, and — with --commit — records it as a single\n" +
 			"labeled `chore(template): upgrade vX -> vY` commit so you review one diff.",
@@ -306,7 +307,7 @@ func driftCmd() *cobra.Command {
 		RunE:  func(_ *cobra.Command, _ []string) error { return runDrift(branch, repoURL, strict) },
 	}
 	c.Flags().StringVar(&branch, "branch", "main", "template branch to compare against")
-	c.Flags().StringVar(&repoURL, "repo-url", "", "override the fetch URL (default: derived from .template-version)")
+	c.Flags().StringVar(&repoURL, "repo-url", "", "override the fetch URL (default: derived from .copier-answers.yml)")
 	c.Flags().BoolVar(&strict, "strict", false, "exit non-zero when the instance is behind")
 	return c
 }

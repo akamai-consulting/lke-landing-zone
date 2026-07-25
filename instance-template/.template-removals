@@ -25,3 +25,10 @@
 # the switch. `llz render` keeps regenerating them; terraform.tfvars.example stays
 # tracked (it ends in .example, so `[a-z]*.tfvars` does not match it).
 untrack  terraform-iac-bootstrap/*/[a-z]*.tfvars
+
+# The provenance stamp is retired: copier's .copier-answers.yml (_src_path +
+# _commit) already records which template ref an instance came from, and `llz
+# drift` reads it there now. The second copy only churned (template_ref +
+# template_sha + a stamped_at that moved on every render) and could disagree with
+# copier's own answers after an aborted upgrade. Delete the orphan.
+delete   .template-version

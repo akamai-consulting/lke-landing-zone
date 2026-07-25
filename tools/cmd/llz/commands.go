@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -298,7 +297,7 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 }
 
 func runUpgrade(g globalOpts, ref string, commit bool) error {
-	oldRef := currentTemplateRef() // "" if the instance has no .template-version yet
+	oldRef := currentTemplateRef() // "" if this is not an instance checkout yet
 
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
 	// lockstep with the template code (a bare `copier update` would float the code
@@ -342,19 +341,12 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 	if err := applyTemplateRemovals(g); err != nil {
 		return fmt.Errorf("apply template removals: %w", err)
 	}
-	// Re-stamp natively: an instance carries no template-scripts/ to shell out to.
 	if g.dryRun {
-		fmt.Fprintln(os.Stderr, "→ (dry-run) stamp .template-version")
 		return nil
 	}
-	// Snapshot the stamp before overwriting it: the conflict gate below can still
-	// abort the upgrade, and a .template-version naming a ref the tree has not
-	// actually reached is a lie every later `llz upgrade` / drift report reads as
-	// truth. Restored on that path.
-	priorStamp, hadPriorStamp := readTemplateVersionFile()
-	if err := stampTemplateVersion(""); err != nil {
-		return fmt.Errorf("stamp template version: %w", err)
-	}
+	// No provenance re-stamp: copier's `update` already rewrote .copier-answers.yml
+	// (_commit + llz_version), which IS the record — see stamp.go. That also retires
+	// the stamp/rollback dance this used to need around the conflict gate below.
 	newRef := currentTemplateRef()
 
 	// ── Lever 1: make the upgrade reviewable + safe ──────────────────────────
@@ -362,17 +354,11 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 	// invalid YAML far downstream (the gsap-apl incident). Fail loudly here BEFORE
 	// the operator commits, instead of relying on `llz lint` to catch it later.
 	if bad := upgradeConflictFiles(); len(bad) > 0 {
-		// Roll the stamp back to what it said before this attempt. The tree is still
-		// at the OLD template version until the markers are resolved, so the recorded
-		// version must say so — otherwise an aborted upgrade leaves the instance
-		// claiming a ref it never reached, and the next run computes its diff from
-		// the wrong base.
-		restoreTemplateVersionFile(priorStamp, hadPriorStamp)
 		fmt.Fprintf(os.Stderr, "\n%s copier update left merge-conflict markers in %d file(s):\n", red("✗"), len(bad))
 		for _, f := range bad {
 			fmt.Fprintf(os.Stderr, "    %s\n", f)
 		}
-		return fmt.Errorf("resolve the conflict marker(s) above, then re-run `llz upgrade` — the upgrade is NOT complete (.template-version left at the previous ref)")
+		return fmt.Errorf("resolve the conflict marker(s) above, then commit — the working tree is at %s but is NOT yet valid", newRef)
 	}
 
 	// One place to see what the upgrade touched, so a big managed-file churn is a
@@ -389,46 +375,13 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 	return nil
 }
 
-// readTemplateVersionFile returns the raw .template-version bytes and whether the
-// file existed, so an aborted upgrade can put the stamp back byte-for-byte rather
-// than re-deriving it (a re-stamp would rewrite stamped_at and could pick up a
-// different ref than the one actually recorded).
-func readTemplateVersionFile() ([]byte, bool) {
-	b, err := os.ReadFile(".template-version")
-	if err != nil {
-		return nil, false
-	}
-	return b, true
-}
-
-// restoreTemplateVersionFile undoes a stamp written earlier in this upgrade. An
-// instance that had no stamp before (first upgrade of a pre-stamp repo) gets the
-// file removed again, so the abort leaves no trace either way. Best-effort: the
-// caller is already returning an error, and a failure to restore must not mask it
-// — but it is surfaced, since a stale stamp silently misreports the instance.
-func restoreTemplateVersionFile(prior []byte, had bool) {
-	var err error
-	if had {
-		err = os.WriteFile(".template-version", prior, 0o644)
-	} else if err = os.Remove(".template-version"); os.IsNotExist(err) {
-		err = nil
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s could not restore .template-version (it may name a ref this tree has not reached): %v\n", yellow("!"), err)
-	}
-}
-
-// currentTemplateRef reads the recorded template ref from .template-version
-// (falling back to the short SHA), "" when absent/unreadable.
+// currentTemplateRef reads the ref this checkout is pinned to (copier's answers,
+// see stamp.go), falling back to the short SHA. "" outside an instance.
 func currentTemplateRef() string {
-	b, err := os.ReadFile(".template-version")
-	if err != nil {
-		return ""
+	if ref := pinnedTemplateRef(); ref != "" {
+		return ref
 	}
-	var tv templateVersion
-	if json.Unmarshal(b, &tv) != nil {
-		return ""
-	}
+	tv := resolveTemplateVersion()
 	if tv.TemplateRef != "" {
 		return tv.TemplateRef
 	}

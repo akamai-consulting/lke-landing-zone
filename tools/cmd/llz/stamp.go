@@ -1,27 +1,33 @@
 package main
 
-// stamp.go ports template-scripts/stamp-template-version.sh into llz so the
-// operator path (`llz env add`, `llz upgrade`) and template-repo CI can record
-// `.template-version` without carrying a scripts/ tree.
+// stamp.go resolves an instance's template PROVENANCE — which template repo/ref/
+// commit it was generated from — for `llz drift` (and the Scheduled Checks
+// template-drift job that runs it).
 //
-// `.template-version` is the provenance `llz drift` (and the Scheduled Checks
-// template-drift job, which runs it) reads to report how far behind the template
-// an instance has fallen. In an instance the best provenance is
-// .copier-answers.yml (_src_path + _commit, written by copier); we fall back to
-// git remotes/HEAD when those are absent (a template-repo checkout).
+// This used to write a committed `.template-version` file. It no longer does.
+// The provenance was already recorded by copier in `.copier-answers.yml`
+// (_src_path + _commit), so the stamp was a second copy of a fact llz did not
+// own, and it churned on every upgrade (template_ref + template_sha + a
+// stamped_at that moved even when nothing else did). Worse, the two could
+// disagree: on an upgrade aborted by merge-conflict markers, llz rolled ITS
+// stamp back to the old ref while copier's answers file — the one copier
+// actually reads to compute the next update — stayed at the new one.
+//
+// So provenance is now DERIVED, never stored: .copier-answers.yml first, then
+// git remotes/HEAD (a template-repo checkout), then the legacy .template-version
+// of an instance that has not upgraded past it yet.
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
-	"time"
-
-	"github.com/spf13/cobra"
 )
 
 const defaultTemplateRepo = "akamai-consulting/lke-landing-zone"
 
+// templateVersion is the resolved provenance `llz drift` reports on. It keeps the
+// legacy .template-version JSON field names so a not-yet-upgraded instance's
+// stamp still unmarshals into it.
 type templateVersion struct {
 	Schema       int    `json:"schema"`
 	TemplateRepo string `json:"template_repo"`
@@ -32,64 +38,28 @@ type templateVersion struct {
 	Env          string `json:"env"`
 }
 
-type stampTemplateVersionOptions struct {
-	Repo string
-	Ref  string
-	SHA  string
-	Env  string
-	Now  string
-}
+// resolveTemplateVersion derives where this checkout came from. Pure resolution —
+// it writes nothing. Order: copier's answers (the authority for an instance), then
+// git remotes/HEAD (a template-repo checkout), then the legacy stamp.
+func resolveTemplateVersion() templateVersion {
+	tv := templateVersion{Schema: 1, Generator: "llz"}
 
-func ciStampTemplateVersionCmd() *cobra.Command {
-	var opts stampTemplateVersionOptions
-	c := &cobra.Command{
-		Use:   "stamp-template-version",
-		Short: "write .template-version provenance for an instance checkout",
-		Long: "Writes .template-version in the current repository, recording the template\n" +
-			"repo/ref/commit an instance was generated from. With no explicit flags it\n" +
-			"uses the same inference path as llz env add / llz upgrade; CI callers can\n" +
-			"pass --repo/--ref/--sha for a throwaway instance render.",
-		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return stampTemplateVersionWithOptions(opts) },
+	if a, _ := readAnswers("."); a != nil {
+		tv.TemplateRepo = normalizeTemplateRepo(a.SrcPath)
+		tv.TemplateSHA = a.Commit
+		tv.TemplateRef = firstNonEmpty(a.Version, a.Commit)
 	}
-	c.Flags().StringVar(&opts.Repo, "repo", "", "template repo owner/name or URL (default: copier answers, upstream/origin remote, or akamai-consulting/lke-landing-zone)")
-	c.Flags().StringVar(&opts.Ref, "ref", "", "template ref to record (default: git describe --tags --always, else current branch)")
-	c.Flags().StringVar(&opts.SHA, "sha", "", "template commit SHA to record (default: git rev-parse HEAD)")
-	c.Flags().StringVar(&opts.Env, "env", "", "deployment name to record informationally")
-	c.Flags().StringVar(&opts.Now, "now", "", "timestamp override for reproducible tests (default: current UTC RFC3339 without fractional seconds)")
-	return c
-}
-
-// stampTemplateVersion writes .template-version at the repo root, recording which
-// template repo/ref/commit this instance was generated from. env is recorded
-// informationally; if empty, the env from an existing stamp is preserved.
-func stampTemplateVersion(env string) error {
-	return stampTemplateVersionWithOptions(stampTemplateVersionOptions{Env: env})
-}
-
-func stampTemplateVersionWithOptions(opts stampTemplateVersionOptions) error {
-	tv := templateVersion{Schema: 1, Generator: "llz", Env: opts.Env}
-
-	if opts.Repo != "" {
-		tv.TemplateRepo = normalizeTemplateRepo(opts.Repo)
-	}
-	if opts.SHA != "" {
-		tv.TemplateSHA = opts.SHA
-	}
-	if opts.Ref != "" {
-		tv.TemplateRef = opts.Ref
-	}
-
+	// A legacy instance still carrying the retired stamp: use it to fill any gap,
+	// so `llz drift` keeps working there right up until `llz upgrade` deletes it.
 	if tv.TemplateRepo == "" || tv.TemplateSHA == "" || tv.TemplateRef == "" {
-		if a, _ := readAnswers("."); a != nil {
-			if tv.TemplateRepo == "" {
-				tv.TemplateRepo = normalizeTemplateRepo(a.SrcPath)
-			}
-			if tv.TemplateSHA == "" {
-				tv.TemplateSHA = a.Commit
-			}
-			if tv.TemplateRef == "" {
-				tv.TemplateRef = a.Commit
+		if b, err := os.ReadFile(".template-version"); err == nil {
+			var prev templateVersion
+			if json.Unmarshal(b, &prev) == nil {
+				tv.TemplateRepo = firstNonEmpty(tv.TemplateRepo, prev.TemplateRepo)
+				tv.TemplateSHA = firstNonEmpty(tv.TemplateSHA, prev.TemplateSHA)
+				tv.TemplateRef = firstNonEmpty(tv.TemplateRef, prev.TemplateRef)
+				tv.StampedAt = prev.StampedAt
+				tv.Env = prev.Env
 			}
 		}
 	}
@@ -112,30 +82,7 @@ func stampTemplateVersionWithOptions(opts stampTemplateVersionOptions) error {
 			tv.TemplateRef = gitOut("rev-parse", "--abbrev-ref", "HEAD")
 		}
 	}
-	// Preserve the first-seen env when none was passed.
-	if tv.Env == "" {
-		if b, err := os.ReadFile(".template-version"); err == nil {
-			var prev templateVersion
-			if json.Unmarshal(b, &prev) == nil {
-				tv.Env = prev.Env
-			}
-		}
-	}
-	if opts.Now != "" {
-		tv.StampedAt = opts.Now
-	} else {
-		tv.StampedAt = time.Now().UTC().Format("2006-01-02T15:04:05Z")
-	}
-
-	b, err := json.MarshalIndent(tv, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(".template-version", append(b, '\n'), 0o644); err != nil {
-		return err
-	}
-	fmt.Printf("Stamped .template-version: %s @ %s (%.8s)\n", tv.TemplateRepo, tv.TemplateRef, tv.TemplateSHA)
-	return nil
+	return tv
 }
 
 // normalizeTemplateRepo turns a copier _src_path / git remote into an owner/repo
