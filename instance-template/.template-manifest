@@ -101,9 +101,19 @@ managed  apl-values/README.md
 managed  apl-values/values.yaml
 
 # ── merge: template logic carrying fork-local tokens (org / registry / bucket) ─
-# Workflow CALLER STUBS (terraform.yml, promote.yml, …) carry instance-local pins
-# (instance_repo, template-ref, the renovate depName) + any dispatch defaults you
-# tune — 2-9 copier substitutions each — so they genuinely need the 3-way merge.
+# Workflow CALLER STUBS (terraform.yml, promote.yml, …) are `merge` for TWO reasons,
+# and only one of them is still about tokens: they own the dispatch/trigger surface
+# an operator may legitimately tune (cron schedules, dispatch defaults), and some
+# carry `instance_repo`.
+#
+# The token count is now much lower than it was: retiring the `template-ref:` input
+# (and the renovate depName annotated on it) took every stub from 2-9 copier
+# substitutions down to ONE — `instance_repo` — and to ZERO for cluster-health.yml,
+# scheduled-checks.yml and wedge-gameday.yml. Those three are token-free template
+# logic held in `merge` purely for the trigger-surface affordance, so a hand-edit
+# there survives upgrades silently (they are outside the `workflows-fresh` digest
+# gate, which covers only the `managed` llz-*.yml + actions). If that affordance is
+# ever dropped, they belong in `managed` with the bodies.
 merge    .github/workflows/**
 # The vendored llz-*.yml REUSABLE BODIES are a different animal: every one of them
 # is token-free (verified: no copier substitution appears in any llz-*.yml), so an

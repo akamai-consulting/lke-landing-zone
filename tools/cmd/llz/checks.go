@@ -325,7 +325,7 @@ func stepCheckov(g globalOpts) error {
 // runLint is the fast pre-commit gate (also called by `llz precommit`).
 func runLint(g globalOpts) error {
 	for _, step := range []func(globalOpts) error{
-		stepConflictMarkers, stepVendoredFresh, stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
+		stepConflictMarkers, stepVendoredFresh, stepUpgradeChurnGuard, stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
 	} {
 		if err := step(g); err != nil {
 			return err
