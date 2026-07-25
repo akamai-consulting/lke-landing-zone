@@ -4,27 +4,46 @@ import "github.com/spf13/cobra"
 
 // aplCmd is the APL-layer front door (ADR 0002 — "one binary, two altitudes"): a
 // noun-verb subtree that speaks App Platform's domain model. `user` is HOMED here
-// — its top-level `llz users` alias was retired (ADR 0002 Appendix B). The other
-// leaves still DELEGATE to their existing top-level command, re-labeled to App
-// Platform vocabulary (components→app); those implementations move down into
-// internal/apl, and the tree grows (`apl values`, `apl secret`, `apl team`), in
-// later phases. See ADR 0002 Appendix A/B.
+// (its top-level `llz users` alias was retired) and `values` groups the apl-values
+// commands; `app`/`status`/`doctor`/`verify` still DELEGATE to their existing
+// top-level command, re-labeled to App Platform vocabulary (components→app). The
+// tree grows (`apl values set/show`, `apl secret`, `apl team`) in later phases.
+// See ADR 0002 Appendix A/B.
 func aplCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "apl",
 		Short: "App Platform layer: users, apps, values & platform health (ADR 0002)",
 		Long: "The APL-layer front door (ADR 0002, \"one binary, two altitudes\").\n\n" +
-			"`apl user` is the sole home of user onboarding; the remaining leaves\n" +
-			"delegate to their existing top-level equivalents and move down into\n" +
-			"internal/apl in later phases.",
+			"`apl user` onboards platform users and `apl values` renders/validates the\n" +
+			"App Platform values; the remaining leaves delegate to their existing\n" +
+			"top-level equivalents and move down into internal/apl in later phases.",
 	}
 	c.AddCommand(
 		aplUserCmd(), // apl user — onboarding (retired from the top level)
 		renamed(componentsCmd(), "app", "enable/disable App Platform apps (components)"),
-		renderCmd(), // apl render — the values front door
-		statusCmd(), // apl status — platform health
-		doctorCmd(), // apl doctor — APL-scoped readiness
-		verifyCmd(), // apl verify — platform verification
+		aplValuesCmd(), // apl values — render | validate the apl-values
+		statusCmd(),    // apl status — platform health
+		doctorCmd(),    // apl doctor — APL-scoped readiness
+		verifyCmd(),    // apl verify — platform verification
+	)
+	return c
+}
+
+// aplValuesCmd is `llz apl values` — author & check the App Platform values
+// (apl-values): `render` reconciles the LandingZone spec into the values/overlay
+// tree, `validate` runs the offline apl-values var-contract + apl-core schema
+// check (surfaced from `llz ci validate-apl-values` as a first-class values
+// command). The ADR's target grows `set` and `show` here in later phases
+// (Appendix A). Both leaves delegate to the existing top-level implementations.
+func aplValuesCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "values",
+		Short: "author & check the App Platform values (apl-values): render, validate",
+	}
+	c.AddCommand(
+		renderCmd(), // apl values render — spec → values/overlay tree
+		renamed(ciAplSchemaValidateCmd(), "validate",
+			"offline apl-values var-contract + apl-core schema check (no cluster)"),
 	)
 	return c
 }
