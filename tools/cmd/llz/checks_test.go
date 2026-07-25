@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -146,4 +147,52 @@ func chdir(t *testing.T, dir string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(prev) })
+}
+
+// stepRenderFresh must be silent outside an instance — the template repo has no
+// LandingZone spec of its own, and lint runs there on every commit.
+func TestStepRenderFreshSkipsWithoutASpec(t *testing.T) {
+	chdir(t, t.TempDir())
+	if err := stepRenderFresh(gopts); err != nil {
+		t.Fatalf("no spec present must skip, got: %v", err)
+	}
+}
+
+// The gap this closes: `llz render --check` existed but nothing an instance runs
+// called it, so committed apl-values could lag the pin indefinitely (one instance
+// was three releases behind, changing what ArgoCD actually deployed). A spec whose
+// committed output is missing must now fail the lint gate.
+func TestStepRenderFreshCatchesStaleCommittedOutput(t *testing.T) {
+	dir := t.TempDir()
+	spec := `apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: LandingZone
+metadata:
+  name: t
+spec:
+  instance:
+    upstreamOrg: akamai-consulting
+    repo: o/t
+    forge: github
+  environments:
+    prod:
+      cluster:
+        clusterLabel: t-prod
+        region: us-ord
+        k8sVersion: v1.33.6+lke7
+        nodePool: { type: g8-dedicated-8-4, count: 3 }
+        bootstrap: { name: t-prod, managedAppPlatform: true }
+`
+	if err := os.WriteFile(filepath.Join(dir, "landingzone.yaml"), []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+	// Nothing rendered yet, so every committed apl-values target is missing — the
+	// same shape as output left behind by an older pin.
+	err := stepRenderFresh(gopts)
+	if err == nil {
+		t.Fatal("expected stale/absent committed render output to fail lint")
+	}
+	if !strings.Contains(err.Error(), "llz render") {
+		t.Errorf("the failure should tell the operator how to fix it, got: %v", err)
+	}
 }

@@ -76,7 +76,8 @@ spec:
     upstreamOrg: akamai-consulting         # → copier upstream_org (template source org)
     repo: my-org/platform-support          # → instance_repo (<owner>/<name>)
     forge: github                          # → forge_flavor (github | github-enterprise | gitlab)
-    templateVersion: v0.4.0                # → llz_version (pinned release, or "main")
+                                           # (the template pin is NOT here — it lives in
+                                           #  .copier-answers.yml, see below)
   defaults:                                # inherited by every ClusterDefinition
     cluster:
       k8sVersion: v1.33.6+lke7             # → k8s_version
@@ -176,7 +177,6 @@ spec:
     upstreamOrg: akamai-consulting
     repo: my-org/lab-instance
     forge: github
-    templateVersion: main
 ```
 
 ```yaml
@@ -196,10 +196,17 @@ spec:
 
 ## Field reference
 
-**Required:** `landingzone.yaml`'s `spec.instance.{upstreamOrg,repo,forge,templateVersion}`,
+**Required:** `landingzone.yaml`'s `spec.instance.{upstreamOrg,repo,forge}`,
 and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 `cluster.{clusterLabel,region,k8sVersion}`, `cluster.nodePool.{type,count}`,
 `cluster.bootstrap.name`.
+
+**Deprecated: `spec.instance.templateVersion`.** Accepted and ignored — leave it or
+delete it, nothing reads it. The template pin lives once in `.copier-answers.yml`
+(`llz_version`), which `llz upgrade` maintains and `llz render` resolves the shared
+`platform-apl` refs from. The spec copy was never read and nothing re-stamped it on
+upgrade, so it only drifted: one live instance sat at `v0.0.31` while every other pin
+in the repo said `v0.0.34`.
 
 **Components — one toggle, two backends.** `spec.components.<name>` is the single
 "what's deployed" switch. Each component routes to whichever backend(s) deliver it:

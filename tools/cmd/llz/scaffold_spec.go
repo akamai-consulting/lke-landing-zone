@@ -71,7 +71,8 @@ func ensureLandingZone(specRoot string) (instanceName string, created bool, err 
 	}
 	upstreamOrg := orElse(a.UpstreamOrg, "akamai-consulting")
 	repo := orElse(a.InstanceRepo, instanceName+"/"+instanceName)
-	version := orElse(orElse(a.Version, a.Commit), "main")
+	// No templateVersion here on purpose: the pin is copier's, and a scaffolded copy
+	// of it in the spec only went stale (see Instance.TemplateVersion).
 	k8s := orElse(tfvarsExampleValue("cluster", "k8s_version"), "v1.33.6+lke7")
 	nodeType := orElse(tfvarsExampleValue("cluster", "node_type"), "g8-dedicated-8-4")
 	nodeCount := orElse(tfvarsExampleValue("cluster", "node_count"), "5")
@@ -94,7 +95,6 @@ spec:
     upstreamOrg: %s
     repo: %s
     forge: github
-    templateVersion: %s
   # Team-scoped OpenBao WRITE access (non-root), chosen at `+"`llz new`"+`. Each entry
   # becomes a native apl-core team (namespace + Keycloak group/role team-<name>) and
   # a <name>-writer policy; operators use `+"`llz openbao login --team <name>`"+`, then
@@ -125,7 +125,7 @@ spec:
       # cluster.bootstrap.managedApps (e.g. [harbor, loki]). See docs/adr/0005.
       bootstrap: { managedAppPlatform: true }
 `, clusterspec.APIVersion, clusterspec.Kind, instanceName,
-		upstreamOrg, repo, version, team, team, k8s, nodeType, nodeCount)
+		upstreamOrg, repo, team, team, k8s, nodeType, nodeCount)
 
 	if err := os.WriteFile(lzPath, []byte(lz), 0o644); err != nil {
 		return instanceName, false, err

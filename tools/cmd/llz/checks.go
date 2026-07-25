@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/spf13/cobra"
 )
 
@@ -243,6 +244,29 @@ func stepVendoredFresh(_ globalOpts) error {
 	return runWorkflowsFresh("", false, io.Discard, os.Stderr)
 }
 
+// stepRenderFresh fails the lint gate when the COMMITTED render output no longer
+// matches what the spec renders — `llz render --check`, which existed but was
+// wired into nothing an instance runs.
+//
+// That gap is not theoretical. The shared platform-apl tree is fetched at the
+// instance's pin (resolveTemplateRef reads .copier-answers.yml), so every upgrade
+// silently invalidates the committed apl-values kustomizations until someone
+// re-renders — and nothing said so. A live instance ran three releases behind:
+// ArgoCD was fetching v0.0.31 manifests under a v0.0.34 instance, which is a
+// difference in what is DEPLOYED, not just what is checked in.
+//
+// Skips outside an instance (the template repo has no spec of its own).
+func stepRenderFresh(g globalOpts) error {
+	tfDir, _, _ := instanceLayout()
+	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
+		return nil // no LandingZone spec — nothing renders here
+	}
+	if err := runRender(g, "", false, true, false); err != nil {
+		return fmt.Errorf("committed render output is stale (`llz render` to refresh): %w", err)
+	}
+	return nil
+}
+
 // stepConflictMarkers fails the lint gate if any git-tracked text file carries a
 // committed merge-conflict marker. A botched `copier update` / `llz upgrade`
 // 3-way merge can leave these in place (e.g. an instance's kustomization.yaml),
@@ -325,7 +349,8 @@ func stepCheckov(g globalOpts) error {
 // runLint is the fast pre-commit gate (also called by `llz precommit`).
 func runLint(g globalOpts) error {
 	for _, step := range []func(globalOpts) error{
-		stepConflictMarkers, stepVendoredFresh, stepUpgradeChurnGuard, stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
+		stepConflictMarkers, stepVendoredFresh, stepUpgradeChurnGuard, stepRenderFresh,
+		stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
 	} {
 		if err := step(g); err != nil {
 			return err

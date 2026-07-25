@@ -150,10 +150,20 @@ func TestCidrsOverlap(t *testing.T) {
 func TestValidateInstance_Errors(t *testing.T) {
 	errs := validateInstance(Instance{}) // everything empty + invalid forge
 	joined := errsString(errs)
-	for _, want := range []string{"upstreamOrg is required", "repo is required", "templateVersion is required"} {
+	for _, want := range []string{"upstreamOrg is required", "repo is required"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("validateInstance missing %q in: %s", want, joined)
 		}
+	}
+	// templateVersion is deprecated and ignored: absent must not be an error, and
+	// a stale value present in an existing spec must not be one either.
+	if strings.Contains(joined, "templateVersion") {
+		t.Errorf("templateVersion must no longer be validated: %s", joined)
+	}
+	if errs := validateInstance(Instance{
+		UpstreamOrg: "akamai-consulting", Repo: "o/r", Forge: "github", TemplateVersion: "v0.0.1",
+	}); len(errs) > 0 {
+		t.Errorf("a spec carrying the deprecated field must still validate: %v", errs)
 	}
 }
 
