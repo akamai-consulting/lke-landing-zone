@@ -41,11 +41,6 @@ on:
         description: "This instance's GitHub repo (<owner>/<name>) for `gh` targeting."
         required: true
         type: string
-      template-ref:
-        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Unused by this workflow''s jobs (everything resolves locally); declared only because the caller stub passes it and workflow_call rejects undeclared inputs.'
-        required: false
-        type: string
-        default: main
       assert_loki:
         description: 'After converge, also assert Loki is bootstrapped + S3-backed (`llz ci assert-loki`) in the bootstrap job. Default false (normal instances); the release-e2e gate sets it true so the check runs inside the converge that already holds cluster access, instead of a separate validate pass dispatching cluster-health.yml.'
         required: false
@@ -285,8 +280,7 @@ jobs:
           llz ci bootstrap-cluster \
             --env "${REGION}" \
             --apps-repo-revision "${APPS_REPO_REVISION}" \
-            --instance-repo "${{ inputs.instance_repo }}" \
-            --template-ref "${{ inputs.template-ref }}"
+            --instance-repo "${{ inputs.instance_repo }}"
           llz ci phase-mark foundation-ready
 
       # The full-pool assert deferred from the split gate above: --tfvars reads

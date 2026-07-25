@@ -36,7 +36,7 @@ name: Promote (dev → staging → prod)
 #     automatically and the human gate sits BETWEEN stages. Add a
 #     deployment-branch policy ("Selected branches: main") so only main promotes.
 #   • Nothing to repoint: every stage calls the repo-local vendored body
-#     (./.github/workflows/llz-terraform.yml); `llz upgrade` re-pins template-ref.
+#     (./.github/workflows/llz-terraform.yml), re-rendered by `llz upgrade`.
 
 on:
   workflow_dispatch:
@@ -77,8 +77,6 @@ jobs:
     uses: ./.github/workflows/llz-terraform.yml
     with:
       instance_repo: <@ instance_repo @>
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref: <@ llz_version @>
       action: apply
       module: ${{ inputs.module || 'all' }}
       region: dev
@@ -94,8 +92,6 @@ jobs:
     uses: ./.github/workflows/llz-terraform.yml
     with:
       instance_repo: <@ instance_repo @>
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref: <@ llz_version @>
       action: apply
       module: ${{ inputs.module || 'all' }}
       region: staging
@@ -110,8 +106,6 @@ jobs:
     uses: ./.github/workflows/llz-terraform.yml
     with:
       instance_repo: <@ instance_repo @>
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref: <@ llz_version @>
       action: apply
       module: ${{ inputs.module || 'all' }}
       region: prod

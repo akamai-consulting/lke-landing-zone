@@ -28,12 +28,13 @@ GitHub Actions-side helpers + tooling install. Don't run these from a workstatio
 - `install-syft.sh` / `install-trivy.sh` — pinned SBOM/scanner installers
 - `sbom-kubernetes.sh` — extracts images from cluster state and runs `syft` on each
 
-> Rendered-app, Chart.lock, template-manifest validation, and template-version
-> stamping moved into the unit-tested `llz` CLI:
+> Rendered-app, Chart.lock, and template-manifest validation moved into the
+> unit-tested `llz` CLI:
 > `llz ci argocd-rendered-apps` (duplicate Helm parameter names) and
 > `llz ci chart-lock-drift` (Chart.lock vs Chart.yaml dependencies), and
-> `llz ci template-manifest` (`.template-manifest` coverage + classification), and
-> `llz ci stamp-template-version` (`.template-version` provenance). The Go
+> `llz ci template-manifest` (`.template-manifest` coverage + classification).
+> (Template-version stamping was retired outright — provenance is derived from
+> `.copier-answers.yml`, not stored.) The Go
 > per-package coverage floor (`llz ci check-coverage`) likewise replaced
 > `ci/check-go-coverage.sh`. The PrometheusRule promtool gate moved too:
 > `llz ci check-prom-rules` replaced `check-prometheus-rule-crds.py`, retiring

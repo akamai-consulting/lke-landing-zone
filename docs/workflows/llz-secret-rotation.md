@@ -75,12 +75,6 @@ collapsed — merging the jobs would make the environment reference ambiguous.
 
 ## `workflow_call` interface
 
-### `inputs.template-ref`
-
-The template release this instance is rendered from — `llz upgrade` re-pins it.
-Unused by this workflow's jobs (everything resolves locally); declared only
-because the caller stub passes it and `workflow_call` rejects undeclared inputs.
-
 ### `secrets:` — all `required: false`
 
 `TF_STATE_*` / `LINODE_API_TOKEN` are `infra-<env>` **environment** secrets,

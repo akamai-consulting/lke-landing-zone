@@ -82,8 +82,6 @@ jobs:
     uses: ./.github/workflows/llz-terraform.yml
     with:
       instance_repo: <@ instance_repo @>
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref: <@ llz_version @>
       # Forward the workflow_dispatch selectors so the reusable can read them via
       # `inputs` (github.event.inputs does not cross the workflow_call boundary).
       # Empty on push/PR, which leaves the action-gated jobs skipped.

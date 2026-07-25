@@ -1,15 +1,14 @@
 package main
 
 // drift.go is the template-drift check (formerly template-scripts/
-// check-template-drift.sh, now retired). It reads the committed
-// .template-version (written by stampTemplateVersion / `llz env add` / `llz
-// upgrade`), resolves the template repo's current branch head, and reports
-// whether the instance is behind. Report-only by default; --strict exits 1 on
-// drift so a scheduled job can gate. The Scheduled Checks template-drift job
-// runs this via the llz baked into TF_IMAGE.
+// check-template-drift.sh, now retired). It resolves this instance's provenance
+// (resolveTemplateVersion — copier's .copier-answers.yml, no committed stamp),
+// resolves the template repo's current branch head, and reports whether the
+// instance is behind. Report-only by default; --strict exits 1 on drift so a
+// scheduled job can gate. The Scheduled Checks template-drift job runs this via
+// the llz baked into TF_IMAGE.
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -19,16 +18,9 @@ func runDrift(branch, repoURL string, strict bool) error {
 	if branch == "" {
 		branch = "main"
 	}
-	b, err := os.ReadFile(".template-version")
-	if err != nil {
-		return fmt.Errorf("no .template-version found — run `llz env add` or `llz upgrade` first")
-	}
-	var tv templateVersion
-	if err := json.Unmarshal(b, &tv); err != nil {
-		return fmt.Errorf("malformed .template-version: %w", err)
-	}
+	tv := resolveTemplateVersion()
 	if tv.TemplateRepo == "" || tv.TemplateSHA == "" {
-		return fmt.Errorf("malformed .template-version (missing template_repo/template_sha)")
+		return fmt.Errorf("cannot determine this instance's template provenance — run from an instance checkout (one with .copier-answers.yml, written by `llz new`)")
 	}
 
 	slug := githubSlug(tv.TemplateRepo)
@@ -127,7 +119,6 @@ func emitDriftSummary(tv templateVersion, branch, latest, behind, status string)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "## Template drift — %s\n\n", tv.TemplateRepo)
 	sb.WriteString("| Field | Value |\n|---|---|\n")
-	fmt.Fprintf(&sb, "| Instance stamped at | %s |\n", firstNonEmpty(tv.StampedAt, "unknown"))
 	fmt.Fprintf(&sb, "| Instance template ref | `%s` (%s) |\n", tv.TemplateRef, short(tv.TemplateSHA))
 	fmt.Fprintf(&sb, "| Template %s head | %s |\n", branch, short(latest))
 	if behind != "" {

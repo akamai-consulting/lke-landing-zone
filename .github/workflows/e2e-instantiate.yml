@@ -329,20 +329,10 @@ jobs:
             | xargs -0 -r sed -i -E \
                 -e "s#(/lke-landing-zone/\.github/workflows/llz-[A-Za-z0-9_-]+\.yml)@[^[:space:]]+#\1@${GITHUB_SHA}#g" \
                 -e "s#(//terraform-modules/llz-[A-Za-z0-9_-]+\?ref=)[^\"]+#\1${GITHUB_SHA}#g"
-          # Repoint the caller stubs' `template-ref: <value>` to the SHA under test.
-          # REQUIRE a value ([[:space:]]+ then a non-space, non-`$` char) so this
-          # matches ONLY the concrete-value form the caller stubs carry. It must NOT
-          # touch: (a) the bare `template-ref:` INPUT-DEFINITION key in the vendored
-          # reusables (whose value is the nested description/required/type/default on
-          # the following lines — the old `[[:space:]]*.*` matched it, collapsing it to
-          # `template-ref:<sha>` and orphaning its children → "invalid workflow file"),
-          # nor (b) llz-terraform.yml's `template-ref:` FORWARD line, which passes the
-          # caller's `inputs.template-ref` GitHub expression through to the nested
-          # bootstrap-openbao call — that value starts with a `$`, so excluding a leading
-          # `$` from the first value char leaves the expression intact. (Now that the
-          # bodies are vendored INTO the instance, this sed runs over them too; rewriting
-          # the forward to a literal SHA would be equivalent in e2e but wrong in general.)
-          sed -i -E "s/^([[:space:]]*template-ref:[[:space:]]+)[^[:space:]$].*/\1${GITHUB_SHA}/" .github/workflows/*.yml
+          # NOTE: the caller stubs used to carry a `template-ref:` input that needed
+          # repointing here. They no longer do — every consumer reads the pin from
+          # .copier-answers.yml (llz_version, rendered to the SHA under test above),
+          # so the instance is pinned to this commit by that one line.
           # Fail loudly if any token survived — a silent miss = a broken instance push.
           if grep -rnE '<@|@>' . ; then
             echo "::error::unrendered copier token(s) survived the e2e render pass"
@@ -394,11 +384,9 @@ jobs:
           git checkout -q -b main
           git config user.name  "llz-release-e2e[bot]"
           git config user.email "llz-release-e2e@users.noreply.github.com"
-          # Record which template commit this instance was generated from (drift
-          # provenance). cwd is now a git repo, so the stamp lands here.
-          "${GITHUB_WORKSPACE}/bin/llz" ci stamp-template-version \
-            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}" \
-            --ref "${GITHUB_REF_NAME}" --env "${E2E_ENV}"
+          # No provenance stamp to write: the minimal .copier-answers.yml hoisted
+          # above already records which template commit this instance came from,
+          # and that is what `llz drift` reads.
           git add -A
           git commit -q -m "e2e: instantiate ${GITHUB_REPOSITORY}@${GITHUB_SHA::8} (${GITHUB_REF_NAME})"
           HEAD_SHA="$(git rev-parse HEAD)"

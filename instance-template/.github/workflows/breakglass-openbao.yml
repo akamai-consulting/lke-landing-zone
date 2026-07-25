@@ -6,7 +6,7 @@ name: Break-glass OpenBao root token
 # baked into vars.TF_IMAGE. The reusable checks this instance back out (its
 # terraform-iac-bootstrap TF state) to reach the cluster.
 # ADOPTERS: nothing to repoint — every `uses:` is a repo-local ./ path, and
-# `llz upgrade` re-pins template-ref with each template release.
+# `llz upgrade` re-renders the vendored body with each template release.
 #
 # WHAT THIS IS FOR: a root token is ephemeral by design — bootstrap-openbao mints
 # one, uses it, and REVOKES it (credential hygiene). The recovery quorum
@@ -63,6 +63,4 @@ jobs:
       action:               ${{ inputs.action }}
       recipient_pubkey_b64: ${{ inputs.recipient_pubkey_b64 }}
       instance_repo:        <@ instance_repo @>
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref:         <@ llz_version @>
     secrets: inherit

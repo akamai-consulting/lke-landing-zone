@@ -66,9 +66,10 @@ load-bearing.
 
 - The whole landing zone versions in **lockstep under one bare SemVer tag
   `vX.Y.Z`**: the Terraform modules (`git::?ref=vX.Y.Z`), the reusable workflows +
-  scaffold (`template-ref:` — the reusable-workflow bodies are referenced by
-  repo-local `./` paths per ADR 0003, so there is no cross-repo `uses:@` to pin),
-  and the `llz` CLI binaries — all at the same commit. (Helm charts are the
+  scaffold (the bodies are referenced by repo-local `./` paths per ADR 0003, so
+  there is no cross-repo `uses:@` to pin, and no `template-ref:` input either —
+  CI reads the pin from `.copier-answers.yml` at runtime), and the `llz` CLI
+  binaries — all at the same commit. (Helm charts are the
   exception: independently versioned via `Chart.yaml`, see below.)
 - **A release is two human steps, gated by e2e.** (1) Publish a **pre-release**
   `vX.Y.Z` → fires `release: prereleased` → `release-e2e.yml` stands up a real

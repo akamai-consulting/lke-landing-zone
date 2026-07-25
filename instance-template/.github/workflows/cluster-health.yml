@@ -19,9 +19,6 @@ name: Cluster health (diagnostic + E2E validate)
 #
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
 # copier-delivered into this repo, so `secrets: inherit` is same-repo (#201).
-# template-ref records the template release this instance is rendered from —
-# `llz upgrade` re-pins it (renovate.json disables the first-party pin on purpose
-# so the two never race).
 
 on:
   workflow_dispatch:
@@ -56,8 +53,7 @@ permissions:
 jobs:
   call:
     # Local reusable — the body ships in this repo and is re-rendered by
-    # `llz upgrade` (template-ref records the release; llz upgrade re-pins it),
-    # so updates arrive as reviewable template-version PRs — see
+    # `llz upgrade`, so updates arrive as reviewable template-version PRs — see
     # terraform-modules/RELEASING.md §"Template-repo releases".
     # ADOPTERS: no fork needed — local reusable, `secrets: inherit` is same-repo (#201).
     uses: ./.github/workflows/llz-cluster-health.yml
@@ -66,6 +62,4 @@ jobs:
       verbose: ${{ inputs.verbose }}
       fail-on-unhealthy: ${{ inputs.fail-on-unhealthy }}
       assert-loki: ${{ inputs.assert-loki }}
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref: <@ llz_version @>
     secrets: inherit

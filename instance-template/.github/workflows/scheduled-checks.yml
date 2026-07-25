@@ -8,9 +8,6 @@ name: Scheduled Checks
 # weekly + daily + monthly crons.
 # ADOPTERS: no fork needed for secrets — the reusable ./.github/workflows/llz-*.yml is
 # copier-delivered into this repo, so `secrets: inherit` is same-repo (#201).
-# template-ref records the template release this instance is rendered from —
-# `llz upgrade` re-pins it (renovate.json disables the first-party pin on purpose
-# so the two never race).
 
 on:
   schedule:
@@ -48,6 +45,4 @@ jobs:
     with:
       drift_branch: ${{ inputs.drift_branch || 'main' }}
       drift_strict: ${{ inputs.drift_strict || false }}
-      # renovate: datasource=github-tags depName=<@ upstream_org @>/lke-landing-zone
-      template-ref: <@ llz_version @>
     secrets: inherit

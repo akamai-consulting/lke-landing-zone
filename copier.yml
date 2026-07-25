@@ -172,8 +172,9 @@ llz_version:
   type: str
   help: >-
     The landing-zone release this instance pins to — the git tag rendered into the
-    Terraform module `?ref=` sources and the reusable-workflow `uses:@` /
-    `template-ref:` refs, so a scaffold references the very release it was cut from.
+    Terraform module `?ref=` sources, so a scaffold references the very release it
+    was cut from. It is also the ONE place the pin is recorded for CI: the
+    workflows carry no `template-ref:` input, they read this answer at runtime.
     Normally set automatically by `llz new` / `llz upgrade` to a published release
     (the CLI is the version anchor; a dev build resolves the latest tag). For a
     manual `copier copy`, pass `-d llz_version=vX.Y.Z` to pin a release.

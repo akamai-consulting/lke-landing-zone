@@ -14,6 +14,17 @@ package main
 // It operates on an ALREADY-COPIED docs dir: the caller `cp -a`s the template's
 // full docs/, then this prunes to the keep-set and writes docs/README.md pointing
 // at the rest. Idempotent.
+//
+// VERSION PINNING, DELIBERATELY IN ONE PLACE: docs/README.md's pointer is pinned
+// to the instance's template release, because that is the tree an operator browses
+// to read the docs matching the code they run. The cross-doc links inside the kept
+// files are NOT pinned — they track `main`. Pinning them meant every kept doc that
+// merely mentioned secrets.md churned on every upgrade (27 of the 45 version-string
+// lines in a real v0.0.31 → v0.0.32 diff), for a set of docs that is `managed` in
+// .template-manifest and so is overwritten wholesale anyway — pure review noise
+// with no merge value. The version-matched docs are the ones delivered LOCALLY
+// (quickstart + runbooks + playbooks); what floats is the referenced set, where
+// current is usually what you want and the pinned tree is one line away.
 
 import (
 	"fmt"
@@ -75,9 +86,9 @@ func runDeliverDocs(dir, org, ref string) error {
 		return fmt.Errorf("write docs/README.md: %w", err)
 	}
 	// Kept docs still link to now-referenced ones (e.g. quickstart → secrets.md).
-	// Rewrite those dead relative links to the versioned template URL so they stay
-	// clickable; links to docs that ARE still present stay relative.
-	if err := repointReferencedLinks(dir, org, ref); err != nil {
+	// Rewrite those dead relative links to the template URL so they stay clickable;
+	// links to docs that ARE still present stay relative.
+	if err := repointReferencedLinks(dir, org); err != nil {
 		return fmt.Errorf("repoint doc links: %w", err)
 	}
 	sort.Strings(removed)
@@ -114,6 +125,10 @@ instance so it never drifts from the code you run:
 
 It is *referenced* rather than copied in to keep this instance small. `+"`llz upgrade`"+`
 re-pins this pointer to your new template version.
+
+The links to those docs from inside the local pages point at the template's
+`+"`main`"+` — current, but possibly ahead of the release you run. This pointer is
+the version-matched copy; read it here when the difference matters.
 `, url)
 }
 
@@ -124,15 +139,16 @@ func plural(n int, one, many string) string {
 	return many
 }
 
+// referencedDocsBranch is the branch the cross-doc links point at. Kept OUT of the
+// version pin on purpose — see the pinning note at the top of this file.
+const referencedDocsBranch = "main"
+
 // repointReferencedLinks rewrites, in every kept .md, the relative links that
-// point to a doc no longer present (a referenced one) so they target the
-// versioned template URL. Links to still-present docs stay relative.
-func repointReferencedLinks(dir, org, ref string) error {
+// point to a doc no longer present (a referenced one) so they target the template
+// URL. Links to still-present docs stay relative.
+func repointReferencedLinks(dir, org string) error {
 	if org == "" {
 		org = "akamai-consulting"
-	}
-	if ref == "" {
-		ref = "main"
 	}
 	present := map[string]bool{}
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
@@ -156,7 +172,7 @@ func repointReferencedLinks(dir, org, ref string) error {
 		if fileDir == "." {
 			fileDir = ""
 		}
-		if out := rewriteDocLinks(string(data), fileDir, present, org, ref); out != string(data) {
+		if out := rewriteDocLinks(string(data), fileDir, present, org); out != string(data) {
 			return os.WriteFile(p, []byte(out), 0o644)
 		}
 		return nil
@@ -166,10 +182,11 @@ func repointReferencedLinks(dir, org, ref string) error {
 var mdLinkRe = regexp.MustCompile(`\]\(([^)]+)\)`)
 
 // rewriteDocLinks repoints markdown links to referenced (now-absent) .md docs to
-// the template URL. fileDir is the linking file's dir relative to docs/; present
-// is the set of paths (relative to docs/) still delivered locally. Pure.
-func rewriteDocLinks(content, fileDir string, present map[string]bool, org, ref string) string {
-	base := fmt.Sprintf("https://github.com/%s/lke-landing-zone/blob/%s/docs", org, ref)
+// the template URL at referencedDocsBranch. fileDir is the linking file's dir
+// relative to docs/; present is the set of paths (relative to docs/) still
+// delivered locally. Pure.
+func rewriteDocLinks(content, fileDir string, present map[string]bool, org string) string {
+	base := fmt.Sprintf("https://github.com/%s/lke-landing-zone/blob/%s/docs", org, referencedDocsBranch)
 	return mdLinkRe.ReplaceAllStringFunc(content, func(m string) string {
 		target := m[2 : len(m)-1] // strip "](" … ")"
 		if !strings.Contains(target, ".md") ||

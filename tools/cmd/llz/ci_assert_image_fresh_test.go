@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestRunAssertImageFresh(t *testing.T) {
@@ -21,7 +23,7 @@ func TestRunAssertImageFresh(t *testing.T) {
 		{"release tag matches", "v1.2.3", "v1.2.3", ""},
 		{"release tag mismatch", "v1.2.3", "v1.2.4", "image/template skew"},
 		{"release vs sha skips", "v1.2.3", sha, ""},
-		{"empty ref errors", "dev-" + sha, "", "--template-ref is required"},
+		{"unresolvable ref errors", "dev-" + sha, "", "cannot resolve the template ref"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,10 +43,16 @@ func TestRunAssertImageFresh(t *testing.T) {
 
 func TestAssertImageFreshCmdWiring(t *testing.T) {
 	c := ciAssertImageFreshCmd()
-	if c.Use != "assert-image-fresh --template-ref <ref>" {
+	if c.Use != "assert-image-fresh" {
 		t.Errorf("Use = %q", c.Use)
 	}
-	if c.Flags().Lookup("template-ref") == nil {
-		t.Error("missing --template-ref flag")
+	// The flag survives as an escape hatch, but must NOT be required: the workflow
+	// now runs the verb bare and the ref comes from the instance's own pin.
+	f := c.Flags().Lookup("template-ref")
+	if f == nil {
+		t.Fatal("missing --template-ref override flag")
+	}
+	if a := f.Annotations[cobra.BashCompOneRequiredFlag]; len(a) > 0 && a[0] == "true" {
+		t.Error("--template-ref must not be required — the pin is resolved from the instance")
 	}
 }

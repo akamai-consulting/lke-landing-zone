@@ -3,8 +3,8 @@
 An **LKE Landing Zone** instance — a converging LKE-Enterprise + Akamai App
 Platform (apl-core) cluster, scaffolded from
 [`<@ upstream_org @>/lke-landing-zone`](https://github.com/<@ upstream_org @>/lke-landing-zone)
-and driven by the **`llz`** CLI. Pinned to template release **`<@ llz_version @>`**
-([`.template-version`](.template-version)).
+and driven by the **`llz`** CLI. The template release this instance pins to is
+recorded in [`.copier-answers.yml`](.copier-answers.yml) (`llz_version`).
 
 > **The spec is the source of truth.** You edit `landingzone.yaml` +
 > `environments/<env>.yaml`; `llz render` reconciles them into the per-deployment
@@ -71,7 +71,9 @@ The always-current source of these docs lives upstream:
 
 ## Staying current
 
-This instance pins to template release **`<@ llz_version @>`**. Two independent tracks:
+Your pinned template release is the `llz_version` in
+[`.copier-answers.yml`](.copier-answers.yml); `llz drift` reports how far behind
+the template head it is. Two independent tracks:
 
 ```bash
 llz self-update      # get the new CLI first (the version anchor)

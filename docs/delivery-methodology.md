@@ -99,8 +99,8 @@ org/cluster identity is variabilized.
 release, with the pre-commit gate armed and CI credentials provisioned.
 
 `llz new` runs the Copier scaffold and sets `llz_version` to the binary's own
-version, so the instance pins module `?ref=`, workflow `uses:@`, and `template-ref:`
-to exactly the release the CLI came from — the lockstep that makes "the CLI is the
+version, so the instance pins module `?ref=` — and every CI consumer that reads
+that answer — to exactly the release the CLI came from — the lockstep that makes "the CLI is the
 version anchor" true from the first commit. `llz tokens` runs the credential wizard
 and seeds the `TF_VAR_*` / GHCR secrets CI will read.
 
@@ -203,8 +203,8 @@ tracks upstream without manual diffing and without drift accumulating silently.
 Two tracks keep an instance current, and the methodology keeps them deliberately
 **separate so they never race**:
 
-- **First-party LLZ pins** (module `?ref=`, reusable-workflow `uses:@`,
-  `template-ref:`, and the copied scaffold) move in lockstep via
+- **First-party LLZ pins** (module `?ref=`, the `llz_version` answer CI reads,
+  and the copied scaffold) move in lockstep via
   `llz self-update` (get the new CLI) then `llz upgrade --ref vX.Y.Z` (Copier
   update + re-pin). Copier merges only the delta, so local edits survive and
   conflicts surface only where you edited a line upstream also changed.

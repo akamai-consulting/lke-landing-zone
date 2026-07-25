@@ -134,13 +134,6 @@ the repo directly instead of shelling to git — which fails on "dubious ownersh
 the container's checkout dir. `bao-regen-root`'s env-secret write and the `revoke`
 delete both need it.
 
-### `template-ref`
-
-The template release the instance is rendered from — `llz upgrade` re-pins it. It is
-**unused by this workflow's jobs** (everything resolves locally, from the vendored
-copy). It is declared only because the caller stub passes it and `workflow_call`
-rejects undeclared inputs.
-
 ### `action` typed as string
 
 `workflow_call` has no `choice` input type, so the reusable declares `action` as

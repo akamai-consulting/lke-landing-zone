@@ -165,7 +165,5 @@ owned    terraform-iac-bootstrap/**/[a-z]*.tfvars
 # `copier update` never touches them.
 owned    .llz/commands.yaml
 owned    .githooks/pre-commit.local
-# Template provenance stamp (written by llz env add / llz upgrade / llz ci stamp-template-version).
-owned    .template-version
 # Copier answer tracker (rendered + maintained by `copier copy`/`copier update`).
 owned    .copier-answers.yml

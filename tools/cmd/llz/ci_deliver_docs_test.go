@@ -68,10 +68,11 @@ func TestRewriteDocLinks(t *testing.T) {
 	in := "See [secrets](secrets.md), [a runbook](runbooks/bootstrap.md#step), " +
 		"[design](designs/reconciler.md), [arch](../docs/x.md), " +
 		"[home](https://example.com), [anchor](#top)."
-	out := rewriteDocLinks(in, "", present, "myorg", "v9")
+	out := rewriteDocLinks(in, "", present, "myorg")
 
-	// Referenced .md → template URL (anchor preserved).
-	if !strings.Contains(out, "](https://github.com/myorg/lke-landing-zone/blob/v9/docs/secrets.md)") {
+	// Referenced .md → template URL at main (NOT the instance's pinned version —
+	// pinning these is what made every upgrade churn every kept doc).
+	if !strings.Contains(out, "](https://github.com/myorg/lke-landing-zone/blob/main/docs/secrets.md)") {
 		t.Errorf("secrets.md not repointed:\n%s", out)
 	}
 	if !strings.Contains(out, "docs/designs/reconciler.md)") {
@@ -91,5 +92,63 @@ func TestDocsPointerDefaults(t *testing.T) {
 	p := docsPointer("", "")
 	if !strings.Contains(p, "github.com/akamai-consulting/lke-landing-zone/tree/main/docs") {
 		t.Errorf("default pointer wrong:\n%s", p)
+	}
+}
+
+// The pinned tree pointer and the unpinned cross-doc links are the whole point of
+// the split: an upgrade must move docs/README.md and NOTHING else under docs/.
+func TestDeliverDocsPinsOnlyThePointer(t *testing.T) {
+	dir := t.TempDir()
+	write := func(p, c string) {
+		full := filepath.Join(dir, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("quickstart.md", "See [secrets](secrets.md) and [alerting](alerting.md).")
+	write("runbooks/recover.md", "See [the guide](../adopter-guide.md).")
+	write("secrets.md", "reference")
+	write("alerting.md", "reference")
+	write("adopter-guide.md", "reference")
+
+	if err := runDeliverDocs(dir, "myorg", "v1.2.3"); err != nil {
+		t.Fatalf("runDeliverDocs: %v", err)
+	}
+	snapshot := func(p string) string {
+		b, err := os.ReadFile(filepath.Join(dir, p))
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		return string(b)
+	}
+	kept := []string{"quickstart.md", "runbooks/recover.md"}
+	before := map[string]string{}
+	for _, p := range kept {
+		before[p] = snapshot(p)
+		if strings.Contains(before[p], "v1.2.3") {
+			t.Errorf("%s carries the version pin — it will churn on every upgrade:\n%s", p, before[p])
+		}
+		if !strings.Contains(before[p], "/blob/main/docs/") {
+			t.Errorf("%s links not repointed to the template:\n%s", p, before[p])
+		}
+	}
+	if !strings.Contains(snapshot("README.md"), "tree/v1.2.3/docs") {
+		t.Error("the pointer must stay pinned to the instance's template release")
+	}
+
+	// Re-deliver at the NEXT version: only the pointer moves.
+	if err := runDeliverDocs(dir, "myorg", "v1.2.4"); err != nil {
+		t.Fatalf("re-deliver: %v", err)
+	}
+	for _, p := range kept {
+		if got := snapshot(p); got != before[p] {
+			t.Errorf("%s changed across a version bump:\n--- before\n%s\n--- after\n%s", p, before[p], got)
+		}
+	}
+	if !strings.Contains(snapshot("README.md"), "tree/v1.2.4/docs") {
+		t.Error("the pointer did not re-pin to the new version")
 	}
 }

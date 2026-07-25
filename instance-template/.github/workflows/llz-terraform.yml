@@ -18,11 +18,6 @@ on:
         description: "This instance's GitHub repo (<owner>/<name>) — used in operator-facing messages + forwarded to llz-bootstrap-openbao."
         required: true
         type: string
-      template-ref:
-        description: 'The template release this instance is rendered from — `llz upgrade` re-pins it. Consumed by the assert-image-fresh preflight (cross-checked against the llz baked into vars.TF_IMAGE — no template-repo fetch) and forwarded to llz-bootstrap-openbao.'
-        required: false
-        type: string
-        default: main
       # The plan/apply/destroy selectors — see the TRAP note at the top of the
       # file. Empty strings on push/PR.
       action:
@@ -277,10 +272,11 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # ── Front-loaded preflights ────────────────────────────────────────────────
       # This is the first job apply-cluster depends on, so these cheap checks fail
-      # BEFORE the ~15-min cluster apply. TF_IMAGE (baked llz) and template-ref are
-      # pinned independently; skew shows up far downstream as "unknown flag".
-      - name: Pre-flight — ci-terraform image matches template-ref
-        run: llz ci assert-image-fresh --template-ref "${{ inputs.template-ref }}"
+      # BEFORE the ~15-min cluster apply. TF_IMAGE (baked llz) and the instance's
+      # template pin move independently; skew shows up far downstream as "unknown
+      # flag". The preflight reads the pin out of the checkout above.
+      - name: Pre-flight — ci-terraform image matches the instance's template pin
+        run: llz ci assert-image-fresh
 
       # Validated here rather than in cluster-bootstrap (which runs AFTER the
       # 15-min cluster apply) so a missing token fails in seconds.
@@ -495,7 +491,6 @@ jobs:
     with:
       region: ${{ inputs.region }}
       instance_repo: ${{ inputs.instance_repo }}
-      template-ref: ${{ inputs.template-ref }}
       assert_loki: ${{ inputs.assert_loki }}
       bootstrap_cluster: true
     # Forwards repo + environment-scoped secrets; the callee declares the same

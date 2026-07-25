@@ -2,14 +2,18 @@ package main
 
 // ci_assert_image_fresh.go implements `llz ci assert-image-fresh` — a fast
 // preflight that fails LOUD when the ci-terraform image's baked `llz` is older
-// than the workflow's checked-out template-ref.
+// than the template ref the instance pins.
 //
-// WHY: the e2e instance pins TF_IMAGE (the container whose baked llz the jobs
-// run) and template-ref (the TF roots + workflow source) INDEPENDENTLY, so they
+// WHY: an instance pins TF_IMAGE (the container whose baked llz the jobs run)
+// separately from its template pin (the TF roots + workflow source), so they
 // drift. When the image lags, the checked-out workflow calls llz subcommands/
 // flags the baked binary doesn't have — surfacing as a silent no-op readiness
 // gate (the AppProject CRD race in PR #86) or a cryptic "unknown flag" ~20 min
 // into a run. This guard turns that into a clear failure at the FIRST job.
+//
+// The ref is read from the instance's own .copier-answers.yml rather than passed
+// in as a workflow input: a hand-maintained input is a third pin that can skew
+// from the other two, which is the very failure this guard exists to catch.
 
 import (
 	"fmt"
@@ -27,27 +31,28 @@ var hexSHARe = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 func ciAssertImageFreshCmd() *cobra.Command {
 	var templateRef string
 	c := &cobra.Command{
-		Use:   "assert-image-fresh --template-ref <ref>",
-		Short: "fail if the baked llz is older than the workflow's template-ref (image/source skew guard)",
+		Use:   "assert-image-fresh",
+		Short: "fail if the baked llz is older than the instance's pinned template ref (image/source skew guard)",
 		Long: "Compares the ci-terraform image's baked llz build (main.version, stamped\n" +
-			"`dev-<github.sha>` for dev images or a release tag) against the workflow's\n" +
-			"--template-ref. A dev image's SHA must match the template-ref SHA; a release\n" +
-			"image's tag must equal the template-ref. On mismatch it FAILS with an\n" +
-			"actionable message (republish ci-terraform / re-pin TF_IMAGE). When it cannot\n" +
+			"`dev-<github.sha>` for dev images or a release tag) against the ref this\n" +
+			"instance pins (.copier-answers.yml). A dev image's SHA must match the pinned\n" +
+			"SHA; a release image's tag must equal the pinned tag. On mismatch it FAILS with\n" +
+			"an actionable message (republish ci-terraform / re-pin TF_IMAGE). When it cannot\n" +
 			"compare (unstamped local build, or a tag-vs-SHA pair) it warns and passes —\n" +
 			"this never blocks a legitimately-matched or unverifiable run.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runAssertImageFresh(version, templateRef) },
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return runAssertImageFresh(version, firstNonEmpty(templateRef, pinnedTemplateRef()))
+		},
 	}
-	c.Flags().StringVar(&templateRef, "template-ref", "", "the ref/SHA the workflow checked the template out at (compared to the baked llz build)")
-	_ = c.MarkFlagRequired("template-ref")
+	c.Flags().StringVar(&templateRef, "template-ref", "", "override the ref compared against the baked llz build (default: the instance's pin)")
 	return c
 }
 
 func runAssertImageFresh(bakedVersion, templateRef string) error {
 	templateRef = strings.TrimSpace(templateRef)
 	if templateRef == "" {
-		return fmt.Errorf("--template-ref is required")
+		return fmt.Errorf("cannot resolve the template ref to compare against: no .copier-answers.yml in the working directory (run from an instance checkout, or pass --template-ref)")
 	}
 	baked := strings.TrimSpace(bakedVersion)
 	if baked == "" || baked == "dev" {
@@ -92,7 +97,7 @@ func shaPrefixMatch(a, b string) bool {
 }
 
 func imageSkewError(baked, templateRef string) error {
-	return fmt.Errorf("image/template skew: the ci-terraform image's baked llz is %q but the workflow checked out template-ref %q.\n"+
+	return fmt.Errorf("image/template skew: the ci-terraform image's baked llz is %q but this instance pins template ref %q.\n"+
 		"  The baked binary lacks any llz command/flag added after its build, so this run will fail later with a cryptic\n"+
 		"  'unknown flag'/'unknown command' or a silently no-op'd gate. Fix: republish ci-terraform at %s (build-images.yml)\n"+
 		"  and re-pin the instance's TF_IMAGE to ghcr.io/<org>/ci-terraform:sha-%s, OR run at a template-ref matching the image.",

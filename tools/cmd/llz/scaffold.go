@@ -174,10 +174,9 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 		}
 	}
 
-	// ── 5. provenance stamp + promotion pipeline (best-effort) ───────────────
-	if err := stampTemplateVersion(name); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not write .template-version (%v)\n", err)
-	}
+	// ── 5. promotion pipeline (best-effort) ─────────────────────────────────
+	// No provenance stamp is written: copier's .copier-answers.yml already records
+	// it (see stamp.go), and a second copy only churned and drifted.
 	if _, err := syncPromoteWorkflow(tfDir, relPrefix, false); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not regenerate promote.yml (%v) — run `llz env pipeline` once the pin is resolvable\n", err)
 	}
@@ -198,7 +197,7 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	// `env add` produces all of this as UNTRACKED files, so a "remember to commit"
 	// reminder routinely left them behind and the GitHub repo empty — commit them
 	// here, in a real instance only (the in-template dev layout commits nothing).
-	gen := existingPaths([]string{lzPath, envFile, ".template-version", filepath.Join(aplDir, name)})
+	gen := existingPaths([]string{lzPath, envFile, filepath.Join(aplDir, name)})
 	if relPrefix == "" && commitFiles(gen, "llz env add "+name) {
 		fmt.Printf("\n%s committed the spec + overlay — %s to publish (CI renders tfvars + builds from the pushed tree).\n",
 			green("✓"), cyan("git push"))
