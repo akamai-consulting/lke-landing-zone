@@ -175,10 +175,9 @@ type VPC struct {
 	Region string `json:"region"`
 }
 
-// Instance mirrors copier.yml's questions (upstream_org, instance_repo,
-// llz_version) plus the git-forge the instance is hosted on. The renderer feeds
-// upstreamOrg/repo/templateVersion to copier as -d data; Forge selects the
-// internal/forge behavior (see docs/designs/forge-abstraction.md).
+// Instance mirrors copier.yml's questions (upstream_org, instance_repo) plus the
+// git-forge the instance is hosted on. Forge selects the internal/forge behavior
+// (see docs/designs/forge-abstraction.md).
 type Instance struct {
 	UpstreamOrg string `json:"upstreamOrg"`
 	Repo        string `json:"repo"`
@@ -186,8 +185,18 @@ type Instance struct {
 	// recognition (validateInstance) and for end-to-end support
 	// (forge.Supported) — the latter rejects a forge that is reserved but not
 	// yet wired, rather than silently ignoring it.
-	Forge           string `json:"forge"`
-	TemplateVersion string `json:"templateVersion"`
+	Forge string `json:"forge"`
+	// TemplateVersion is DEPRECATED and ignored. The template pin lives once, in
+	// copier's .copier-answers.yml; the renderer resolves it there
+	// (resolveTemplateRef) and never read this field. Nothing re-stamped it on
+	// upgrade either, so it was stale by construction — a live instance sat at
+	// v0.0.31 while everything else in the repo said v0.0.34, which is exactly
+	// the drift the version-churn work (PR #323) removed everywhere else.
+	//
+	// The field is RETAINED, not deleted: the spec decodes with UnmarshalStrict,
+	// so removing it would reject every existing landingzone.yaml. It is accepted
+	// and ignored; `llz new` no longer writes it.
+	TemplateVersion string `json:"templateVersion,omitempty"`
 }
 
 // Environment is one deployment: its cluster definition plus the component toggles

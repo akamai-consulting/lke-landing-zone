@@ -23,8 +23,8 @@ spec:
     upstreamOrg: REPLACE_UPSTREAM_ORG    # template source org. e.g. akamai-consulting
     repo: REPLACE_OWNER/REPLACE_REPO     # <owner>/<name>. e.g. acme/acme-platform
     forge: github                        # github-only on this template (other forges reserved)
-    templateVersion: REPLACE_LLZ_VERSION # pinned llz release tag (see `llz version` /
-                                         # the template repo's releases), or "main"
+    # No template version here: the pin lives once, in .copier-answers.yml
+    # (llz_version), which `llz upgrade` maintains and `llz render` reads.
 
   # ── Shared defaults (optional) ─────────────────────────────────────────────
   # Inherited by every environment; a per-env value overrides field-by-field.

@@ -264,9 +264,9 @@ func validateInstance(in Instance) []error {
 	if in.Repo == "" {
 		errs = append(errs, fmt.Errorf("spec.instance.repo is required (<owner>/<name>)"))
 	}
-	if in.TemplateVersion == "" {
-		errs = append(errs, fmt.Errorf("spec.instance.templateVersion is required (the pinned llz release, or 'main')"))
-	}
+	// spec.instance.templateVersion is deliberately NOT validated: it is deprecated
+	// and ignored (see Instance.TemplateVersion). Requiring a value the renderer
+	// never reads only guaranteed a second, stale copy of the pin.
 	if err := validate.Forge(in.Forge); err != nil {
 		errs = append(errs, fmt.Errorf("spec.instance.%w", err))
 	} else if err := forge.Supported(forge.Flavor(in.Forge)); err != nil {

@@ -278,6 +278,15 @@ jobs:
       - name: Pre-flight — ci-terraform image matches the instance's template pin
         run: llz ci assert-image-fresh
 
+      # The COMMITTED apl-values tree is what ArgoCD syncs, and its kustomize refs
+      # are rendered from the instance's pin — so an upgrade invalidates them until
+      # someone re-renders. Nothing used to say so: a live instance ran three
+      # releases behind (v0.0.31 manifests under a v0.0.34 instance), a difference
+      # in what is DEPLOYED. `llz render --check` existed all along; it just was
+      # not wired to anything. Cheap, no credentials, reads the checkout above.
+      - name: Pre-flight — committed apl-values match the spec + pin
+        run: llz render --check
+
       # Validated here rather than in cluster-bootstrap (which runs AFTER the
       # 15-min cluster apply) so a missing token fails in seconds.
       - name: Pre-flight — verify infra-${{ env.REGION }} env secrets

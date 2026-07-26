@@ -181,11 +181,21 @@ func repointReferencedLinks(dir, org string) error {
 
 var mdLinkRe = regexp.MustCompile(`\]\(([^)]+)\)`)
 
+// pinnedDocsPermalinkRe matches a cross-doc permalink already pinned to a concrete
+// release — what an older llz wrote back when the ref was rendered into the links.
+// Those are absolute, so the relative-link rewrite below skips them: without this,
+// an instance delivered before the pin left the links keeps them forever, drifting
+// further behind its own pointer with every upgrade (gsap-apl carried 27 stale
+// v0.0.32 links into its v0.0.33 delivery).
+var pinnedDocsPermalinkRe = regexp.MustCompile(`(github\.com/[^/\s)]+/lke-landing-zone/blob/)v\d+\.\d+\.\d+(/docs/)`)
+
 // rewriteDocLinks repoints markdown links to referenced (now-absent) .md docs to
-// the template URL at referencedDocsBranch. fileDir is the linking file's dir
-// relative to docs/; present is the set of paths (relative to docs/) still
-// delivered locally. Pure.
+// the template URL at referencedDocsBranch, and normalises any already-absolute
+// permalink an older delivery left pinned to a release. fileDir is the linking
+// file's dir relative to docs/; present is the set of paths (relative to docs/)
+// still delivered locally. Pure.
 func rewriteDocLinks(content, fileDir string, present map[string]bool, org string) string {
+	content = pinnedDocsPermalinkRe.ReplaceAllString(content, "${1}"+referencedDocsBranch+"${2}")
 	base := fmt.Sprintf("https://github.com/%s/lke-landing-zone/blob/%s/docs", org, referencedDocsBranch)
 	return mdLinkRe.ReplaceAllStringFunc(content, func(m string) string {
 		target := m[2 : len(m)-1] // strip "](" … ")"

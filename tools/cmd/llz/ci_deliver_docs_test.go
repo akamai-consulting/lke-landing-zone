@@ -152,3 +152,46 @@ func TestDeliverDocsPinsOnlyThePointer(t *testing.T) {
 		t.Error("the pointer did not re-pin to the new version")
 	}
 }
+
+// An instance delivered by an older llz carries cross-doc links pinned to whatever
+// release was current then. Those are absolute, so the relative-link rewrite skips
+// them and they stay stale forever (gsap-apl: 27 of them, one release behind its own
+// pointer). Re-delivery must heal them.
+func TestDeliverDocsHealsPermalinksLeftPinnedByAnOlderDelivery(t *testing.T) {
+	dir := t.TempDir()
+	write := func(p, c string) {
+		full := filepath.Join(dir, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("quickstart.md",
+		"See [secrets](https://github.com/myorg/lke-landing-zone/blob/v0.0.32/docs/secrets.md).\n")
+	write("runbooks/recover.md",
+		"See [the guide](https://github.com/myorg/lke-landing-zone/blob/v0.0.32/docs/adopter-guide.md#6-bootstrap-order).\n")
+
+	if err := runDeliverDocs(dir, "myorg", "v0.0.33"); err != nil {
+		t.Fatalf("runDeliverDocs: %v", err)
+	}
+	for _, p := range []string{"quickstart.md", "runbooks/recover.md"} {
+		b, err := os.ReadFile(filepath.Join(dir, p))
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		got := string(b)
+		if strings.Contains(got, "/blob/v0.0.32/") {
+			t.Errorf("%s kept the stale pin: %s", p, got)
+		}
+		if !strings.Contains(got, "/blob/main/docs/") {
+			t.Errorf("%s was not healed to the tracking branch: %s", p, got)
+		}
+	}
+	// Healing must not smuggle the NEW version into the links either.
+	b, _ := os.ReadFile(filepath.Join(dir, "quickstart.md"))
+	if strings.Contains(string(b), "v0.0.33") {
+		t.Errorf("healing re-pinned the link instead of floating it: %s", b)
+	}
+}
