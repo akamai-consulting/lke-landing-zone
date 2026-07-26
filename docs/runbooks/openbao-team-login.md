@@ -51,12 +51,34 @@ default on upgrade — new clusters get theirs at `llz new`). Declare a team in
 `landingzone.yaml` (steps below use `gsap`); an already-bootstrapped cluster
 revoked its root token, so:
 
+> **Getting a root token — you almost certainly DON'T hold the recovery keys.**
+> The steps marked *needs root* below assume one. A bootstrapped cluster has
+> **revoked** its root token, and the recovery keys that regenerate it are **not**
+> distributed to operators — they're stored in the `infra-<region>` GitHub
+> environment (`OPENBAO_RECOVERY_KEY_1..3`) and printed once to the bootstrap job
+> summary. So unless you personally kept 3 of the 5 keys offline, use the
+> **break-glass workflow**, which reconstitutes root from that stored quorum with
+> no operator-held keys:
+>
+> ```bash
+> openssl genrsa -out bg.key 4096 && openssl rsa -in bg.key -pubout -out bg.pub
+> gh workflow run breakglass-openbao.yml -R <owner>/<instance> \
+>   -f region=<region> -f action=generate \
+>   -f recipient_pubkey_b64="$(base64 < bg.pub | tr -d '\n')"
+> # decrypt the returned ciphertext with bg.key → export OPENBAO_ROOT_TOKEN=<it>
+> ```
+>
+> `llz openbao regen-root <region>` is the alternative **only if you already hold
+> the keys** (it reads them from your terminal — it does not fetch them). Revoke
+> when done: `llz ci bao-breakglass --region <region> --action revoke`. Full
+> lifecycle: [bootstrap-openbao.md](bootstrap-openbao.md) → "Break-glass root token".
+
 ```bash
 # 1. Declare the team (above), then render + commit so apl-core makes team-<name>:
 llz render && git commit -am "feat: add gsap team" && git push   # apl-core converges the group/role
 
 # 2. OpenBao side (needs root) + the device-flow client:
-export OPENBAO_ROOT_TOKEN=<root>     # llz openbao regen-root <region> if revoked
+export OPENBAO_ROOT_TOKEN=<root>     # get root: see "Getting a root token" above (break-glass)
 llz ci bao-configure --region <region>       # keycloak mount + gsap-writer policy + role
 llz ci keycloak-configure --region <region>  # public device-flow `llz` client
 ```
@@ -129,7 +151,7 @@ persist). Members keep mintable scoped write access until you tear it down expli
 To fully offboard team `<name>` (needs the root token):
 
 ```bash
-export OPENBAO_ROOT_TOKEN=<root>   # llz openbao regen-root <region> if revoked
+export OPENBAO_ROOT_TOKEN=<root>   # get root: break-glass (see "Getting a root token" above)
 # 1. OpenBao: remove the login role + the writer policy.
 bao delete   auth/keycloak/role/<name>
 bao policy delete <name>-writer
