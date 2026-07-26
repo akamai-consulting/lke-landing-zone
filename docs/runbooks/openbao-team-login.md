@@ -153,10 +153,14 @@ identity side. Until step 1 runs, offboarding is incomplete.
 
 - **`login` says the realm lacks a device endpoint** — the device-flow client
   isn't enabled, or `--client-id` is wrong.
-- **`oidc auth login … returned no client_token` / 403** — the id_token's
-  `groups` claim doesn't carry **`team-<name>`** (user not in the `team-<name>`
-  group, or the team never converged in apl-core). Confirm group membership and
-  that `teamConfig.<name>` rendered + apl-core created the group/role.
+- **`oidc auth login … returned no client_token` / 403** (or `claim "groups"
+  does not match any associated bound claim values`) — the id_token's `groups`
+  claim carries neither **`team-<name>`** nor **`team-admin`** (the account is not
+  in the `team-<name>` group and is not an APL platform-admin, or the team never
+  converged in apl-core). Grant the account the team with
+  `llz apl user add --email <addr> --team <name> --yes` (or `--admin` for the
+  all-teams platform-admin role), and confirm `teamConfig.<name>` rendered +
+  apl-core created the group/role.
 - **`no device_authorization_endpoint` via discovery** — check the issuer
   (`--issuer https://keycloak.<domain>/realms/otomi`) resolves and is reachable.
 - **the exchange hangs / `no client_token` even though the browser login worked**

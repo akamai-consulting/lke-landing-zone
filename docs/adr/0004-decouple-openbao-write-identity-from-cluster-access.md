@@ -87,9 +87,13 @@ review, and the shipped code is authoritative where it diverges:
   Declaring a `spec.teams` entry makes `llz render` emit a `teamConfig.<name>`
   overlay so apl-core provisions the team (namespace + realm group + realm role
   **`team-<name>`** + a `groups`-claim mapper). The OpenBao role therefore binds
-  on the `groups` value `team-<name>` (not a bare team name). Consequently the
-  spec surface is just `{name, openbaoSubtree}` — the `keycloakGroup` field in
-  the design's first sketch was dropped (the group is deterministic).
+  on the `groups` value `team-<name>` (not a bare team name) — **and additionally
+  on `team-admin`**, apl-core's all-teams platform-admin role, so a platform admin
+  can obtain any team's writer token without being enrolled in every team's group
+  (matching the console/kubectl reach a platform-admin already has). OpenBao
+  matches a bound-claim list as "any-of". Consequently the spec surface is just
+  `{name, openbaoSubtree}` — the `keycloakGroup` field in the design's first
+  sketch was dropped (the group is deterministic).
 - **The `keycloak` mount validates via the internal JWKS, not the public
   discovery URL.** `oidc_discovery_url = https://keycloak.<domainSuffix>/…`
   hairpins on LKE-E (the public host resolves to the cluster's own LB IP), so the

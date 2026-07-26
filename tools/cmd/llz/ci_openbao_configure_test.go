@@ -239,7 +239,7 @@ func TestKeycloakTeamSteps(t *testing.T) {
 	}
 
 	rolePolicy := map[string]string{}
-	roleGroup := map[string]string{}
+	roleGroup := map[string][]string{}
 	policyDoc := map[string]string{}
 	for _, s := range steps[2:] {
 		if !s.fatal {
@@ -275,9 +275,17 @@ func TestKeycloakTeamSteps(t *testing.T) {
 		t.Errorf("role→policy = %v, want gsap->gsap-writer, web->web-writer", rolePolicy)
 	}
 	// The role binds on the apl-core realm role team-<name> (the value apl-core's
-	// default groups claim carries), NOT the bare team name.
-	if roleGroup["gsap"] != "team-gsap" || roleGroup["web"] != "team-web" {
-		t.Errorf("role→group = %v, want gsap->team-gsap, web->team-web", roleGroup)
+	// default groups claim carries), NOT the bare team name — AND on team-admin,
+	// so the all-teams platform admin can write any team's subtree.
+	wantGroups := map[string][]string{
+		"gsap": {"team-gsap", "team-admin"},
+		"web":  {"team-web", "team-admin"},
+	}
+	for name, want := range wantGroups {
+		got := roleGroup[name]
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("role %s → groups = %v, want %v (team role + platform-admin)", name, got, want)
+		}
 	}
 	// The writer policy grants create/update on data/* and read+list on metadata/*.
 	if !strings.Contains(policyDoc["gsap-writer"], `path "secret/data/gsap/*" { capabilities = ["create", "update", "read"] }`) {

@@ -4,7 +4,9 @@ package main
 // the team-scoped OpenBao write path, browser-free. It exercises the exact chain
 // that is otherwise only E2E-gated: apl-core provisions the `team-<name>` group +
 // realm role → a member's OIDC token carries `groups: [team-<name>]` → OpenBao's
-// `keycloak` role binds it → the `<name>-writer` policy scopes the write.
+// `keycloak` role binds it → the `<name>-writer` policy scopes the write. It also
+// covers the platform-admin path — a token carrying only `team-admin` (not the
+// team group) must mint the same writer token, since the role binds that group too.
 //
 // It does NOT drive the device-flow browser (that UX is generic OAuth 2.0 device
 // grant, already httptest-covered). Instead it mints the same id_token via a
@@ -29,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
@@ -43,7 +46,9 @@ func ciTeamLoginSmokeCmd() *cobra.Command {
 			"throwaway Keycloak user in the team-<name> group, mints an id_token via a\n" +
 			"direct-grant client (the same groups claim the device flow would carry),\n" +
 			"exchanges it at OpenBao's keycloak mount, then asserts a write to the team's\n" +
-			"subtree SUCCEEDS and a write outside it is DENIED (403). Tears down the user +\n" +
+			"subtree SUCCEEDS and a write outside it is DENIED (403). Also asserts the\n" +
+			"platform-admin path: a user carrying only team-admin (not the team group)\n" +
+			"can likewise mint the team's writer token and write. Tears down the users +\n" +
 			"client. Meant for the e2e lane (needs cluster access + a converged apl-core\n" +
 			"Keycloak). See docs/runbooks/openbao-team-login.md.",
 		Args: cobra.NoArgs,
@@ -225,8 +230,87 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	}
 	fmt.Printf("✓ out-of-subtree write to %s correctly denied\n", outPath)
 
-	fmt.Printf("SMOKE PASS: team %q — device-identity login → scoped write OK, out-of-subtree denied.\n", team)
+	// ── Admin path: a platform-admin carries the all-teams realm role team-admin
+	// (identity.PlatformAdminRole), NOT the team's own group. The OpenBao role now
+	// binds groups on {team-<name>, team-admin}, so an admin must ALSO be able to
+	// mint this team's writer token and write its subtree WITHOUT being enrolled in
+	// team-<name>. Prove it end-to-end. Skipped only if the built-in role is absent
+	// (an unconverged realm), mirroring the team-role fallback above.
+	adminRole := identity.PlatformAdminRole
+	if ok, err := k.realmRoleExists(adminRole); err != nil {
+		return fmt.Errorf("look up realm role %s: %w", adminRole, err)
+	} else if !ok {
+		fmt.Printf("  %s realm role absent (unconverged realm) — admin-path check skipped\n", adminRole)
+	} else {
+		aSuffix := fmt.Sprintf("%d", time.Now().UnixNano())
+		aUser := "llz-smoke-admin-" + aSuffix
+		aPass := "Smoke-" + aSuffix + "-Aa1!"
+		aUID, err := k.createSmokeUser(aUser, aPass)
+		if err != nil {
+			return fmt.Errorf("create admin test user: %w", err)
+		}
+		defer func() {
+			disabled := k.disableUser(aUID) == nil
+			if err := k.deleteUser(aUID); err != nil {
+				state := "DISABLED"
+				if !disabled {
+					state = "still-ENABLED"
+				}
+				fmt.Fprintf(os.Stderr, "::error::failed to delete admin smoke user %s (id %s): %v — a %s holder of realm role %s is orphaned; delete it manually\n", aUser, aUID, err, state, adminRole)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "  torn down admin test user %s\n", aUser)
+		}()
+		if err := k.addRealmRoleToUser(aUID, adminRole); err != nil {
+			return fmt.Errorf("grant realm role %s: %w", adminRole, err)
+		}
+		aIDToken, err := k.passwordGrant(clientID, aUser, aPass)
+		if err != nil {
+			return fmt.Errorf("admin password grant: %w", err)
+		}
+		aGroups, err := decodeJWTGroups(aIDToken)
+		if err != nil {
+			return fmt.Errorf("decode admin id_token: %w", err)
+		}
+		if !containsString(aGroups, adminRole) {
+			return fmt.Errorf("admin id_token groups %v does not contain %q — apl does not emit the platform-admin role into the groups claim, so the team-admin bound-claim can never match", aGroups, adminRole)
+		}
+		if containsString(aGroups, group) {
+			return fmt.Errorf("admin test user unexpectedly carries %q — it must validate the admin path via %q alone", group, adminRole)
+		}
+		fmt.Printf("✓ admin id_token carries groups=%v (has %s, not %s)\n", aGroups, adminRole, group)
+
+		aOBTok, err := openbao.OIDCLogin(ctx, openbao.HTTPClientInsecure(30*time.Second), addr, "keycloak", team, aIDToken)
+		if err != nil {
+			return fmt.Errorf("admin openbao oidc login (role %s) must SUCCEED via %s but did not — the team role does not accept the platform-admin group: %w", team, adminRole, err)
+		}
+		aOBC := openbao.NewWithClient(addr, aOBTok, "", openbao.HTTPClientInsecure(30*time.Second))
+		aPath := subtree + "/_llz_smoke_admin_" + aSuffix
+		if err := aOBC.Write(ctx, aPath, map[string]string{"ok": "1"}); err != nil {
+			return fmt.Errorf("EXPECTED platform-admin write to %s to SUCCEED via %s, got: %w", aPath, adminRole, err)
+		}
+		fmt.Printf("✓ platform-admin (%s) wrote %s without team-%s membership\n", adminRole, aPath, team)
+	}
+
+	fmt.Printf("SMOKE PASS: team %q — device-identity login → scoped write OK, out-of-subtree denied, platform-admin write OK.\n", team)
 	return nil
+}
+
+// realmRoleExists reports whether an EXACT realm role name is present in the realm.
+func (k *kcClient) realmRoleExists(name string) (bool, error) {
+	resp, err := k.do(http.MethodGet, "/admin/realms/"+k.realm+"/roles/"+url.PathEscape(name), nil)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("look up realm role %s: HTTP %d: %s", name, resp.StatusCode, readSnippet(resp.Body))
+	}
 }
 
 func isDenied(err error) bool {
