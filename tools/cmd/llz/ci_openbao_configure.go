@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/spf13/cobra"
@@ -333,11 +334,15 @@ type keycloakRoleBody struct {
 	// smoke direct-grant client, both stamped with this aud by an audience mapper)
 	// are accepted — not an arbitrary id_token from another realm client (Grafana,
 	// Harbor, the console) that merely carries the `groups` claim.
-	BoundAudiences []string          `json:"bound_audiences"`
-	BoundClaims    map[string]string `json:"bound_claims"`
-	TokenPolicies  []string          `json:"token_policies"`
-	TokenTTL       string            `json:"token_ttl"`
-	TokenMaxTTL    string            `json:"token_max_ttl"`
+	BoundAudiences []string `json:"bound_audiences"`
+	// BoundClaims values are LISTS so a claim can accept ANY of several values
+	// (OpenBao matches a bound list against the token claim as membership). The
+	// team roles use this to accept the team's own group OR the all-teams
+	// platform-admin group — see keycloakTeamSteps.
+	BoundClaims   map[string][]string `json:"bound_claims"`
+	TokenPolicies []string            `json:"token_policies"`
+	TokenTTL      string              `json:"token_ttl"`
+	TokenMaxTTL   string              `json:"token_max_ttl"`
 }
 
 // keycloakInternalJWKS is Keycloak's realm JWKS on its INTERNAL http service —
@@ -397,12 +402,16 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 			// e2e smoke client, both audience-mapped to this id in keycloak-configure).
 			BoundAudiences: []string{keycloakDeviceClientID},
 			UserClaim:      "sub",
-			// Bind on the apl-core realm role `team-<name>` — the value apl-core's
-			// default groups claim (a realm-role mapper on the `openid` client
-			// scope) carries for a member of the native `team-<name>` group. We do
-			// NOT create this group/role: `llz render` declares the team in
-			// teamConfig and apl-core provisions it. See clusterspec.Team.AplRole.
-			BoundClaims:   map[string]string{"groups": t.AplRole()},
+			// Accept a token whose `groups` claim carries EITHER the team's own
+			// apl-core realm role `team-<name>` OR the all-teams platform-admin role
+			// `team-admin` (identity.PlatformAdminRole). The team role is what a
+			// plain team member carries; team-admin is what the APL platform admin
+			// carries — and a platform admin must be able to write ANY team's
+			// subtree (matching its console/kubectl reach) without being enrolled in
+			// every team's group. OpenBao treats a bound list as "match any". We do
+			// NOT create these group/roles: `llz render` declares the team and
+			// apl-core provisions team-<name>; team-admin is apl-core built-in.
+			BoundClaims:   map[string][]string{"groups": {t.AplRole(), identity.PlatformAdminRole}},
 			TokenPolicies: []string{policy},
 			TokenTTL:      "15m",
 			TokenMaxTTL:   "30m",
