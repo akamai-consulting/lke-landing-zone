@@ -143,3 +143,27 @@ func TestIsDenied(t *testing.T) {
 		}
 	}
 }
+
+// TestRealmRoleExists gates the admin-path skip: team-admin present → check runs,
+// absent (unconverged realm) → skipped, not a hard error.
+func TestRealmRoleExists(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/admin/realms/otomi/roles/team-admin":
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "role-1", "name": "team-admin"})
+		case "/admin/realms/otomi/roles/team-missing":
+			http.Error(w, "not found", http.StatusNotFound)
+		default:
+			http.Error(w, "unexpected", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+	k := &kcClient{hc: srv.Client(), base: srv.URL, token: "adm.tok", realm: "otomi"}
+
+	if ok, err := k.realmRoleExists("team-admin"); err != nil || !ok {
+		t.Errorf("realmRoleExists(team-admin) = (%v, %v), want (true, nil)", ok, err)
+	}
+	if ok, err := k.realmRoleExists("team-missing"); err != nil || ok {
+		t.Errorf("realmRoleExists(team-missing) = (%v, %v), want (false, nil)", ok, err)
+	}
+}
