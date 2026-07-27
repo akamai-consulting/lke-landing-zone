@@ -156,15 +156,12 @@ func TestIsDeclaredAPIVersion(t *testing.T) {
 	}
 }
 
-// droppedAPIRepo builds a throwaway git repo holding files, adds them, and cds in.
-func droppedAPIRepo(t *testing.T, files map[string]string) {
+// droppedAPITree materializes files in a throwaway dir and cds in. Deliberately no
+// git: the scan is a filesystem walk, because the Kubernetes lint job runs inside a
+// container where git against the mounted checkout fails.
+func droppedAPITree(t *testing.T, files map[string]string) {
 	t.Helper()
 	dir := t.TempDir()
-	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
-		if _, err := gitOutput(dir, args...); err != nil {
-			t.Fatalf("git %v: %v", args, err)
-		}
-	}
 	for name, body := range files {
 		p := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -174,17 +171,11 @@ func droppedAPIRepo(t *testing.T, files map[string]string) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := gitOutput(dir, "add", "-A"); err != nil {
-		t.Fatal(err)
-	}
 	chdir(t, dir)
 }
 
 func TestStepDroppedAPIVersionsClean(t *testing.T) {
-	if _, err := execLookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
-	droppedAPIRepo(t, map[string]string{
+	droppedAPITree(t, map[string]string{
 		// Already migrated to v1.
 		"kubernetes-charts/managed-apps/chart/templates/es.yaml": "apiVersion: external-secrets.io/v1\nkind: ExternalSecret\n",
 		// A changelog PROSE mention of the dropped version is not a declaration.
@@ -193,16 +184,16 @@ func TestStepDroppedAPIVersionsClean(t *testing.T) {
 		"platform-apl/components/harbor/push.yaml": "apiVersion: external-secrets.io/v1alpha1\nkind: PushSecret\n",
 		// A tree nobody ships from stays out of scope even on the dropped version.
 		"docs/designs/example.yaml": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n",
+		// A VENDORED subchart `helm dep build` unpacked during the same lint run is
+		// upstream content, not ours to gate — skipped even on the dropped version.
+		"kubernetes-charts/llz-openbao-platform/charts/openbao/templates/es.yaml": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n",
 	})
 	if err := stepDroppedAPIVersions(gopts); err != nil {
-		t.Fatalf("migrated manifests + prose mention + served v1alpha1 + out-of-scope docs/ should pass: %v", err)
+		t.Fatalf("migrated manifests + prose mention + served v1alpha1 + out-of-scope docs/ + vendored subchart should pass: %v", err)
 	}
 }
 
 func TestStepDroppedAPIVersionsFlagsEveryScannedTree(t *testing.T) {
-	if _, err := execLookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
 	// Each scanned tree must trip independently: the operator-owned escape hatch,
 	// the scaffold copy the template ships, the first-party charts, and the SHARED
 	// platform-apl/ tree — the one no CRD-aware gate covers (k8s-lint/k8s-validate
@@ -215,11 +206,33 @@ func TestStepDroppedAPIVersionsFlagsEveryScannedTree(t *testing.T) {
 		"platform-apl/components/cidrFirewall/llz-cidr-firewall/externalsecret.yaml",
 	} {
 		t.Run(f, func(t *testing.T) {
-			droppedAPIRepo(t, map[string]string{f: "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n"})
+			droppedAPITree(t, map[string]string{f: "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n"})
 			if err := stepDroppedAPIVersions(gopts); err == nil {
 				t.Errorf("expected failure: %s declares external-secrets.io/v1beta1", f)
 			}
 		})
+	}
+}
+
+// TestCIDroppedAPIVersionsNoGit is the regression for the CI break: the Kubernetes
+// lint job runs inside the ci-kubernetes container, where git against the mounted
+// checkout fails. A git-backed scan reported "not a git repo" and failed the gate
+// on a perfectly clean tree, so the scan must not consult git at all.
+func TestCIDroppedAPIVersionsNoGit(t *testing.T) {
+	dir := t.TempDir() // no `git init` — deliberately not a repo
+	p := filepath.Join(dir, "platform-apl/components/x/externalsecret.yaml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("apiVersion: external-secrets.io/v1\nkind: ExternalSecret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCIDroppedAPIVersions(dir); err != nil {
+		t.Fatalf("clean tree outside a git repo must pass, got: %v", err)
+	}
+	// The empty-corpus guard still has to bite, or a moved tree passes silently.
+	if err := runCIDroppedAPIVersions(t.TempDir()); err == nil {
+		t.Error("expected failure: no manifests examined at all (trees moved)")
 	}
 }
 

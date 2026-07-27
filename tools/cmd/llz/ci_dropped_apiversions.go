@@ -14,6 +14,10 @@ package main
 // Unlike the pre-commit step this REFUSES an empty corpus: it runs in the template
 // repo, where platform-apl/ and kubernetes-charts/ always hold YAML, so examining
 // nothing means the trees moved and the guard has been silently inert.
+//
+// The scan walks the filesystem rather than `git ls-files`: this job runs inside the
+// ci-kubernetes container, where git against the mounted checkout fails, which took
+// the whole gate down the first time round. See manifestYAMLFiles.
 
 import (
 	"fmt"
@@ -26,7 +30,7 @@ func ciDroppedAPIVersionsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dropped-apiversions",
 		Short: "no manifest may declare an apiVersion apl-core's bundled operators no longer serve",
-		Long: "Fails if any git-tracked YAML under the scanned manifest trees declares an\n" +
+		Long: "Fails if any YAML under the scanned manifest trees declares an\n" +
 			"apiVersion a converged apl-core dependency no longer serves (see droppedAPIs\n" +
 			"in checks.go). Such a manifest cannot apply — it surfaces only as an opaque\n" +
 			"Argo SyncFailed (\"no matches for kind … in version …\") at deploy time.\n\n" +
@@ -44,13 +48,9 @@ func ciDroppedAPIVersionsCmd() *cobra.Command {
 }
 
 func runCIDroppedAPIVersions(root string) error {
-	hits, examined, inRepo, err := scanDroppedAPIVersions(root)
+	hits, examined, err := scanDroppedAPIVersions(root)
 	if err != nil {
 		return err
-	}
-	if !inRepo {
-		return fmt.Errorf("dropped-apiversions: %q is not a git repo — the scan is git-tracked-file based, "+
-			"so there is nothing to check and passing would be a false green", root)
 	}
 	if err := requireCorpus("dropped-apiversions", examined, scannedManifestTrees); err != nil {
 		return err

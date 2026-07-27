@@ -396,7 +396,8 @@ monitoring-label-guard: render-charts
 # k8s-validate and the kind dry-run all read $(RENDER_DIR), built from
 # kubernetes-charts/*/ only. That blind spot is how llz-cidr-firewall's
 # ExternalSecret shipped on external-secrets.io/v1beta1 after apl-core v6 stopped
-# serving it. Git-tracked scan, so no render dependency.
+# serving it. Filesystem walk (this job runs in the ci-kubernetes container, where
+# git against the mounted checkout fails), so no render dependency.
 dropped-apiversions-check:
 	$(call LLZ_CI,dropped-apiversions,--root ..)
 

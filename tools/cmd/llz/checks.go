@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -379,39 +380,69 @@ func isDeclaredAPIVersion(line, api string) bool {
 	return strings.Trim(v, `"'`) == api
 }
 
-func underAnyPrefix(path string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	return false
-}
-
 type droppedAPIHit struct{ loc, api, since, fix string }
 
-// scanDroppedAPIVersions walks git-tracked YAML under scannedManifestTrees, rooted
-// at root (""/"." = cwd), for any apiVersion in droppedAPIs. inRepo is false when
-// root is not a git repo — the only legitimate skip; examined counts the files
-// actually read so a caller can refuse to pass on an empty corpus.
-func scanDroppedAPIVersions(root string) (hits []droppedAPIHit, examined int, inRepo bool, err error) {
-	out, err := gitOutput(root, "ls-files")
-	if err != nil {
-		if _, repoErr := gitOutput(root, "rev-parse", "--git-dir"); repoErr != nil {
-			return nil, 0, false, nil
+// manifestYAMLFiles returns every .yaml/.yml path under scannedManifestTrees,
+// rooted at root. Paths are returned root-relative with forward slashes.
+//
+// Filesystem walk, deliberately NOT a `git ls-files` scan. The Kubernetes lint job
+// runs inside the ci-kubernetes container, where git against the mounted checkout
+// fails — a git-based scan reports "not a git repo" and takes the whole gate down
+// with it. Every sibling manifest guard walks the filesystem for the same reason.
+//
+// A tree that does not exist is skipped, not an error: an instance repo has no
+// platform-apl/ (it fetches that tree remotely) and the template has no
+// kubernetes-custom/ at its root.
+//
+// Vendored subchart directories (kubernetes-charts/<chart>/charts/, which `helm dep
+// build` populates during the same lint run) are skipped — upstream chart templates
+// are not ours to gate and would false-positive.
+func manifestYAMLFiles(root string) ([]string, error) {
+	var out []string
+	for _, tree := range scannedManifestTrees {
+		base := filepath.Join(root, filepath.FromSlash(tree))
+		err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if os.IsNotExist(err) {
+					return fs.SkipDir // tree absent in this layout
+				}
+				return err
+			}
+			if d.IsDir() {
+				if n := d.Name(); n == ".git" || (n == "charts" && p != base) {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") {
+				rel, relErr := filepath.Rel(root, p)
+				if relErr != nil {
+					rel = p
+				}
+				out = append(out, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("scan %s: %w", tree, err)
 		}
-		return nil, 0, true, fmt.Errorf("dropped-apiVersion scan: this IS a git repo but `git ls-files` failed, "+
-			"so nothing was scanned — refusing to report clean: %w", err)
 	}
-	for _, f := range strings.Split(out, "\n") {
-		f = strings.TrimSpace(f)
-		if f == "" || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml")) {
-			continue
-		}
-		if !underAnyPrefix(f, scannedManifestTrees) {
-			continue
-		}
-		data, readErr := os.ReadFile(filepath.Join(root, f))
+	return out, nil
+}
+
+// scanDroppedAPIVersions looks for any droppedAPIs apiVersion in the manifest trees
+// rooted at root (""/"." = cwd). examined counts the files actually read, so a
+// caller can refuse to pass on an empty corpus.
+func scanDroppedAPIVersions(root string) (hits []droppedAPIHit, examined int, err error) {
+	if root == "" {
+		root = "."
+	}
+	files, err := manifestYAMLFiles(root)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, f := range files {
+		data, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
 		if readErr != nil {
 			continue // race with a delete / unreadable — not this check's concern
 		}
@@ -424,7 +455,7 @@ func scanDroppedAPIVersions(root string) (hits []droppedAPIHit, examined int, in
 			}
 		}
 	}
-	return hits, examined, true, nil
+	return hits, examined, nil
 }
 
 // reportDroppedAPIVersions prints hits and returns the gate error, or nil if clean.
@@ -446,20 +477,15 @@ func reportDroppedAPIVersions(hits []droppedAPIHit) error {
 }
 
 // stepDroppedAPIVersions fails when a manifest under scannedManifestTrees declares
-// an apiVersion the cluster no longer serves (see droppedAPIs). Same git-tracked
-// scan shape as stepConflictMarkers, narrowed to those trees' YAML.
+// an apiVersion the cluster no longer serves (see droppedAPIs).
 //
 // Tolerates an empty corpus: an instance repo legitimately has no platform-apl/ and
 // may have no custom YAML at all. The CI face (`llz ci dropped-apiversions`) runs in
 // the template, where empty means the trees moved — and refuses to pass on it.
 func stepDroppedAPIVersions(_ globalOpts) error {
-	hits, _, inRepo, err := scanDroppedAPIVersions("")
+	hits, _, err := scanDroppedAPIVersions("")
 	if err != nil {
 		return err
-	}
-	if !inRepo {
-		fmt.Fprintln(os.Stderr, "  skip: not a git repo (dropped-apiVersion scan)")
-		return nil
 	}
 	return reportDroppedAPIVersions(hits)
 }
