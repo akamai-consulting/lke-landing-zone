@@ -12,7 +12,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/spf13/cobra"
@@ -353,6 +352,15 @@ type keycloakRoleBody struct {
 // kubernetes-charts/llz-openbao-platform (platform.networkPolicy.keycloakNamespace).
 const keycloakInternalJWKS = "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/realms/otomi/protocol/openid-connect/certs"
 
+// aplPlatformAdminRole is apl-core's built-in all-teams platform-admin realm role
+// — the value its groups-claim mapper emits for the default admin user(s)
+// (`otomi-admin`, `platform-admin@<domain>`). Verified live: their `groups` claim
+// is exactly `["platform-admin"]`. Each team's keycloak role binds this alongside
+// `team-<name>` so a platform admin can mint any team's writer token without being
+// enrolled in that team's group. Distinct from `identity.PlatformAdminRole`
+// ("team-admin", the apl admin *team* role that `llz apl user add --admin` grants).
+const aplPlatformAdminRole = "platform-admin"
+
 // keycloakTeamSteps builds the `keycloak` auth mount + per-team policy/role
 // steps. Pure (spec → step table) so it is unit-tested without a cluster. Returns
 // nil when there is no issuer or no team, so the configure sequence is unchanged
@@ -403,15 +411,23 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 			BoundAudiences: []string{keycloakDeviceClientID},
 			UserClaim:      "sub",
 			// Accept a token whose `groups` claim carries EITHER the team's own
-			// apl-core realm role `team-<name>` OR the all-teams platform-admin role
-			// `team-admin` (identity.PlatformAdminRole). The team role is what a
-			// plain team member carries; team-admin is what the APL platform admin
-			// carries — and a platform admin must be able to write ANY team's
+			// apl-core realm role `team-<name>` OR apl-core's built-in all-teams
+			// admin role `platform-admin` (aplPlatformAdminRole). The team role is
+			// what a plain team member carries; `platform-admin` is what the built-in
+			// APL platform admin (otomi-admin, and any `platform-admin@<domain>` user)
+			// carries — verified live: the default admin's groups claim is exactly
+			// `["platform-admin"]`. A platform admin must be able to write ANY team's
 			// subtree (matching its console/kubectl reach) without being enrolled in
 			// every team's group. OpenBao treats a bound list as "match any". We do
 			// NOT create these group/roles: `llz render` declares the team and
-			// apl-core provisions team-<name>; team-admin is apl-core built-in.
-			BoundClaims:   map[string][]string{"groups": {t.AplRole(), identity.PlatformAdminRole}},
+			// apl-core provisions `team-<name>`; `platform-admin` is apl-core built-in.
+			//
+			// NOTE: this is `platform-admin`, NOT `team-admin`. `team-admin` is the
+			// apl-core built-in *admin team's* own role (excluded from user teams in
+			// import.go); the default platform admin is NOT in it. `identity.
+			// PlatformAdminRole` ("team-admin", what `llz apl user add --admin`
+			// grants) is a separate, narrower concept — do not conflate them here.
+			BoundClaims:   map[string][]string{"groups": {t.AplRole(), aplPlatformAdminRole}},
 			TokenPolicies: []string{policy},
 			TokenTTL:      "15m",
 			TokenMaxTTL:   "30m",

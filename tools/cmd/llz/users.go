@@ -85,7 +85,11 @@ func usersAddCmd() *cobra.Command {
 			"  --team <name>   grant membership of an APL team — the team-<name> realm\n" +
 			"                  role (repeatable). The team must already exist (declared\n" +
 			"                  in spec.teams and rendered, or created in the APL console).\n" +
-			"  --admin         grant the APL platform-admin role (" + identity.PlatformAdminRole + ").\n" +
+			"  --admin         grant apl-core's built-in admin TEAM role\n" +
+			"                  (" + identity.PlatformAdminRole + "). Note this is NOT the `platform-admin`\n" +
+			"                  role the built-in otomi-admin account carries, so it does\n" +
+			"                  not currently confer `llz openbao login --team <name>` —\n" +
+			"                  use --team for that. See docs/runbooks/openbao-team-login.md.\n" +
 			"\n" +
 			"Onboarding:\n" +
 			"  default         generate a random TEMPORARY password, print it (masked in\n" +
@@ -105,7 +109,7 @@ func usersAddCmd() *cobra.Command {
 	f.StringVar(&o.firstName, "first-name", "", "user's given name")
 	f.StringVar(&o.lastName, "last-name", "", "user's family name")
 	f.StringArrayVar(&o.teams, "team", nil, "grant membership of an APL team (the team-<name> role); repeatable")
-	f.BoolVar(&o.admin, "admin", false, "grant the APL platform-admin role ("+identity.PlatformAdminRole+")")
+	f.BoolVar(&o.admin, "admin", false, "grant apl-core's built-in admin team role ("+identity.PlatformAdminRole+"); not the `platform-admin` role, see --help")
 	f.BoolVar(&o.invite, "invite", false, "email the user a set-password link instead of printing a temporary password (needs realm SMTP)")
 	f.StringVar(&o.region, "region", "", "region whose domain gives the console URL shown on success (optional)")
 	return c
