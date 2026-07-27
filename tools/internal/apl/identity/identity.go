@@ -17,21 +17,20 @@ import (
 	"strings"
 )
 
-// PlatformAdminRole is the realm role `--admin` grants: apl-core's built-in admin
-// TEAM role in the otomi realm. It is not a spec.teams entry.
+// PlatformAdminRole is the realm role `--admin` grants: apl-core's built-in
+// all-teams admin role `platform-admin` in the otomi realm. It is not a spec.teams
+// entry.
 //
-// NOT the same thing as apl-core's built-in all-teams admin role `platform-admin`,
-// despite this name. The default admin accounts (`otomi-admin`,
-// `platform-admin@<domain>`) carry `platform-admin` and are NOT in `team-admin` —
-// verified live, and the reason cmd/llz's OpenBao keycloak roles bind
-// `aplPlatformAdminRole` ("platform-admin") rather than this constant.
+// This is the role the default admin accounts (`otomi-admin`,
+// `platform-admin@<domain>`) carry (verified live), and the one cmd/llz's OpenBao
+// keycloak team roles bind (aplPlatformAdminRole). So a user created with `--admin`
+// can `llz openbao login --team <name>` and write any team's subtree, matching the
+// built-in admins' reach.
 //
-// Consequence, deliberately left standing for now: a user created with `--admin`
-// cannot `llz openbao login --team <name>`, because its groups claim carries
-// `team-admin`, which no keycloak role binds. Reconciling the two — most likely by
-// granting `platform-admin` here — is a follow-up; until then `--team <name>` is
-// the working grant. See docs/runbooks/openbao-team-login.md troubleshooting.
-const PlatformAdminRole = "team-admin"
+// It was `team-admin` (the apl admin *team* role) until this was reconciled: that
+// value carried a groups claim no keycloak role binds, so `--admin` users could
+// not log in. See docs/runbooks/openbao-team-login.md and git history.
+const PlatformAdminRole = "platform-admin"
 
 // Role is a Keycloak realm role (the subset role-mapping needs). JSON tags match
 // the admin REST wire form so an AdminAPI implementation can decode straight into

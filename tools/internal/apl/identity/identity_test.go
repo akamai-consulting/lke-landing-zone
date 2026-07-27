@@ -15,10 +15,11 @@ func TestDesiredRoles(t *testing.T) {
 		wantErr bool
 	}{
 		{"teams", []string{"platform", "gsap"}, false, []string{"team-platform", "team-gsap"}, false},
-		{"admin", nil, true, []string{"team-admin"}, false},
-		{"team+admin", []string{"platform"}, true, []string{"team-platform", "team-admin"}, false},
+		{"admin", nil, true, []string{"platform-admin"}, false},
+		{"team+admin", []string{"platform"}, true, []string{"team-platform", "platform-admin"}, false},
 		{"dedupe + trim", []string{"platform", " platform ", ""}, false, []string{"team-platform"}, false},
-		{"admin dupe of team-admin", []string{"admin"}, true, []string{"team-admin"}, false},
+		// --admin (platform-admin) and --team admin (team-admin) are DISTINCT roles now.
+		{"team admin + --admin are distinct", []string{"admin"}, true, []string{"team-admin", "platform-admin"}, false},
 		{"none", nil, false, nil, true},
 		{"blank teams only", []string{"", "  "}, false, nil, true},
 	}
