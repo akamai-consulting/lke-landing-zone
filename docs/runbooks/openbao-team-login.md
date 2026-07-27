@@ -180,9 +180,16 @@ identity side. Until step 1 runs, offboarding is incomplete.
   claim carries neither **`team-<name>`** nor **`platform-admin`** (the account is
   not in the `team-<name>` group and is not an APL platform-admin, or the team never
   converged in apl-core). Grant the account the team with
-  `llz apl user add --email <addr> --team <name> --yes` (or `--admin` for the
-  all-teams platform-admin role), and confirm `teamConfig.<name>` rendered +
-  apl-core created the group/role.
+  `llz apl user add --email <addr> --team <name> --yes`, and confirm
+  `teamConfig.<name>` rendered + apl-core created the group/role.
+
+  > **`--admin` does not grant this today.** `llz apl user add --admin` grants
+  > `team-admin` — apl-core's admin *team* role — while the keycloak mount binds
+  > `platform-admin`, the role the built-in `otomi-admin` /
+  > `platform-admin@<domain>` accounts carry. A `--admin` user therefore still hits
+  > this error on `llz openbao login`. Until the two are reconciled, either log in
+  > as a built-in platform admin or grant the account the team directly with
+  > `--team <name>`.
 - **`no device_authorization_endpoint` via discovery** — check the issuer
   (`--issuer https://keycloak.<domain>/realms/otomi`) resolves and is reachable.
 - **the exchange hangs / `no client_token` even though the browser login worked**
