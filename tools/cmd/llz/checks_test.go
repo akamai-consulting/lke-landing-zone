@@ -156,17 +156,16 @@ func TestIsDeclaredAPIVersion(t *testing.T) {
 	}
 }
 
-func TestStepDroppedAPIVersions(t *testing.T) {
-	if _, err := execLookPath("git"); err != nil {
-		t.Skip("git not installed")
-	}
+// droppedAPIRepo builds a throwaway git repo holding files, adds them, and cds in.
+func droppedAPIRepo(t *testing.T, files map[string]string) {
+	t.Helper()
 	dir := t.TempDir()
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
 		if _, err := gitOutput(dir, args...); err != nil {
 			t.Fatalf("git %v: %v", args, err)
 		}
 	}
-	mk := func(name, body string) {
+	for name, body := range files {
 		p := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -175,26 +174,52 @@ func TestStepDroppedAPIVersions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Owned tree already on v1 → clean. A changelog PROSE mention of v1beta1 → clean.
-	// A v1beta1 manifest in a TEMPLATE-managed tree (platform-apl/) is out of scope.
-	mk("kubernetes-charts/managed-apps/chart/templates/es.yaml", "apiVersion: external-secrets.io/v1\nkind: ExternalSecret\n")
-	mk("kubernetes-charts/managed-apps/chart/Chart.yaml", "# 0.1.6: bumped external-secrets.io/v1beta1 -> v1\nname: managed-apps\n")
-	mk("platform-apl/components/x/externalsecret.yaml", "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n")
 	if _, err := gitOutput(dir, "add", "-A"); err != nil {
 		t.Fatal(err)
 	}
 	chdir(t, dir)
-	if err := stepDroppedAPIVersions(gopts); err != nil {
-		t.Fatalf("clean owned tree + prose mention + out-of-scope platform-apl should pass: %v", err)
-	}
+}
 
-	// A v1beta1 manifest in an OWNED tree (kubernetes-custom/) must fail.
-	mk("kubernetes-custom/namespaces/team-x/es.yaml", "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n")
-	if _, err := gitOutput(dir, "add", "kubernetes-custom/namespaces/team-x/es.yaml"); err != nil {
-		t.Fatal(err)
+func TestStepDroppedAPIVersionsClean(t *testing.T) {
+	if _, err := execLookPath("git"); err != nil {
+		t.Skip("git not installed")
 	}
-	if err := stepDroppedAPIVersions(gopts); err == nil {
-		t.Fatal("expected failure: owned kubernetes-custom manifest on external-secrets.io/v1beta1")
+	droppedAPIRepo(t, map[string]string{
+		// Already migrated to v1.
+		"kubernetes-charts/managed-apps/chart/templates/es.yaml": "apiVersion: external-secrets.io/v1\nkind: ExternalSecret\n",
+		// A changelog PROSE mention of the dropped version is not a declaration.
+		"kubernetes-charts/managed-apps/chart/Chart.yaml": "# 0.1.6: bumped external-secrets.io/v1beta1 -> v1\nname: managed-apps\n",
+		// v1alpha1 is still served in 2.4.1 (PushSecret is v1alpha1-only) — not a hit.
+		"platform-apl/components/harbor/push.yaml": "apiVersion: external-secrets.io/v1alpha1\nkind: PushSecret\n",
+		// A tree nobody ships from stays out of scope even on the dropped version.
+		"docs/designs/example.yaml": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n",
+	})
+	if err := stepDroppedAPIVersions(gopts); err != nil {
+		t.Fatalf("migrated manifests + prose mention + served v1alpha1 + out-of-scope docs/ should pass: %v", err)
+	}
+}
+
+func TestStepDroppedAPIVersionsFlagsEveryScannedTree(t *testing.T) {
+	if _, err := execLookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	// Each scanned tree must trip independently: the operator-owned escape hatch,
+	// the scaffold copy the template ships, the first-party charts, and the SHARED
+	// platform-apl/ tree — the one no CRD-aware gate covers (k8s-lint/k8s-validate
+	// and the kind dry-run all read $RENDER_DIR, built from kubernetes-charts/*/
+	// only), which is how llz-cidr-firewall shipped on v1beta1.
+	for _, f := range []string{
+		"kubernetes-custom/namespaces/team-x/es.yaml",
+		"instance-template/kubernetes-custom/namespaces/team-x/es.yaml",
+		"kubernetes-charts/llz-thing/templates/es.yaml",
+		"platform-apl/components/cidrFirewall/llz-cidr-firewall/externalsecret.yaml",
+	} {
+		t.Run(f, func(t *testing.T) {
+			droppedAPIRepo(t, map[string]string{f: "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n"})
+			if err := stepDroppedAPIVersions(gopts); err == nil {
+				t.Errorf("expected failure: %s declares external-secrets.io/v1beta1", f)
+			}
+		})
 	}
 }
 
