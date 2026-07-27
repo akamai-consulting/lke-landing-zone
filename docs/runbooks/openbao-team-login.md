@@ -45,6 +45,17 @@ workflow then runs, in order:
   scope (which already emits the `groups` claim). Best-effort: a Keycloak failure
   warns and falls back to the manual step below; it never wedges the bootstrap.
 
+> **The read grant is not a confidentiality boundary between teams.** The writer
+> side is isolated per team (each `<name>-writer` is minted only for that team's
+> Keycloak group). The reader side is not: every `<name>-reader` hangs off the one
+> shared `eso` identity behind the cluster-scoped `openbao` ClusterSecretStore,
+> which carries no namespace `conditions` — so an `ExternalSecret` in *any*
+> namespace can pull *any* team's subtree, exactly as it already can pull
+> platform-ci's paths (`secret/harbor/admin`, `secret/linode/api-token`, …). Treat
+> a team subtree as readable by anyone who can create an ExternalSecret on the
+> cluster. Per-team read isolation needs a per-team SecretStore + OpenBao role (or
+> `conditions` on the store) — not in scope here.
+
 Skip to *Onboard a user*.
 
 ## Retrofit path (existing clusters): declare, render, then configure by hand
@@ -82,9 +93,20 @@ llz render && git commit -am "feat: add gsap team" && git push   # apl-core conv
 
 # 2. OpenBao side (needs root) + the device-flow client:
 export OPENBAO_ROOT_TOKEN=<root>     # get root: see "Getting a root token" above (break-glass)
-llz ci bao-configure --region <region>       # keycloak mount + gsap-writer policy + role
+llz ci bao-configure --region <region>       # keycloak mount + gsap-writer/-reader policies + role
 llz ci keycloak-configure --region <region>  # public device-flow `llz` client
 ```
+
+> **Step 2 is not automatic on an existing cluster.** `bao-configure` needs root,
+> and root is revoked at the end of every bootstrap — so it runs only on a cluster
+> bootstrap or a deliberate re-configure. `llz upgrade` does **not** run it, and
+> neither does the weekly scheduled-checks workflow (that re-runs
+> `keycloak-configure` only). To re-configure without a local root token, set
+> `OPENBAO_ROOT_TOKEN` as an `infra-<region>` environment secret (any value —
+> `bao-ensure-ready` regenerates via the stored recovery keys if it is stale),
+> dispatch `bootstrap-openbao.yml` for the region, then delete the secret again.
+> Until that runs, a newly declared team has **no** OpenBao role and **no** ESO
+> read grant: its `ExternalSecret`s 403.
 
 All idempotent. `bao-configure` is the only step that needs root. If
 `keycloak-configure` can't reach Keycloak, create the client by hand: a **public**
@@ -145,12 +167,13 @@ covered by unit tests).
 > with the root token (`bao kv metadata delete secret/<subtree>/_llz_smoke_<ts>`) if
 > they pile up.
 
-## Offboard a team (remove write access)
+## Offboard a team (remove write + ESO read access)
 
 Everything in this feature is **additive** — removing a team from `spec.teams` and
 re-rendering **revokes nothing** (the committed `teamConfig.<name>` round-trips, so
-apl-core keeps the Keycloak group; `bao-configure` only upserts, so the role + policy
-persist). Members keep mintable scoped write access until you tear it down explicitly.
+apl-core keeps the Keycloak group; `bao-configure` only upserts, so the role + policies
+persist). Members keep mintable scoped write access, **and ESO keeps its read grant on
+the subtree**, until you tear both down explicitly.
 To fully offboard team `<name>` (needs the root token):
 
 ```bash
@@ -158,6 +181,17 @@ export OPENBAO_ROOT_TOKEN=<root>   # get root: break-glass (see "Getting a root 
 # 1. OpenBao: remove the login role + the writer policy.
 bao delete   auth/keycloak/role/<name>
 bao policy delete <name>-writer
+# 1b. Detach the ESO READ grant, then delete the reader policy. Order matters: the
+#     `eso` k8s-auth role keeps a deleted policy in its list (a no-op grant that
+#     springs back to life if the name is ever re-created), and bao-configure does
+#     NOT re-derive the list on its own — it is one-shot and root-gated. Re-write
+#     the role with the remaining teams' readers (drop only <name>):
+bao read auth/kubernetes/role/eso                       # inspect the current list first
+bao write auth/kubernetes/role/eso \
+    bound_service_account_names=external-secrets \
+    bound_service_account_namespaces=external-secrets \
+    policies=platform-ci[,<other-team>-reader…] ttl=15m
+bao policy delete <name>-reader
 # 2. apl-core: HAND-DELETE the teamConfig.<name> entry from the committed
 #    apl-values/<env>/values.yaml (render only ADDS/preserves teamConfig — dropping the
 #    team from spec.teams stops it being re-added but removes NOTHING already committed).
@@ -166,8 +200,9 @@ bao policy delete <name>-writer
 # 3. Revoke the root token again when done (llz ci bao-breakglass --action revoke, or manually).
 ```
 
-Removing just the role+policy (step 1) is the immediate lockout; step 2 cleans up the
-identity side. Until step 1 runs, offboarding is incomplete.
+Steps 1 + 1b are the immediate lockout — 1 revokes human writes, 1b revokes ESO's
+read of the subtree; step 2 cleans up the identity side. Until 1 and 1b both run,
+offboarding is incomplete.
 
 > \* **E2E-gated:** that apl-core actually deletes a team when its `teamConfig` entry
 > disappears is unvalidated on self-installed apl-core (the same apl-core-shape

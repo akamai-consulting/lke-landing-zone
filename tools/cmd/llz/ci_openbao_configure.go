@@ -162,6 +162,24 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) 
 	// out of keycloakTeamSteps on purpose: ESO read must work even on an instance
 	// whose device-flow client isn't configured (no keycloak issuer), so it does
 	// NOT gate on the issuer the way the writer role does.
+	//
+	// SCOPE CAVEAT — the readers are per-team POLICIES on ONE shared IDENTITY. The
+	// `eso` role is the single controller identity behind the cluster-scoped
+	// `openbao` ClusterSecretStore, which carries no `conditions` (namespace
+	// selector), so any namespace that can create an ExternalSecret can read
+	// anything the role can read. Adding team subtrees to that pool therefore makes
+	// team A's secrets reachable from team B's namespace — exactly as platform-ci's
+	// paths (harbor/admin, linode/api-token, …) already are. Per-team CONFIDENTIALITY
+	// needs a per-team SecretStore + role, or `conditions` on the store; the write
+	// side stays properly isolated (each `<name>-writer` binds that team's own
+	// keycloak group). Do not read the per-team policy split as an isolation
+	// boundary at the ExternalSecret layer.
+	//
+	// LIFECYCLE — bao-configure is a one-shot bootstrap step (it needs root, which is
+	// revoked afterwards), so this list only reaches a cluster on a bootstrap run or
+	// a deliberate re-configure dispatch. Declaring a team later, or offboarding one,
+	// does NOT re-derive it: see docs/runbooks/openbao-team-login.md ("Retrofit …",
+	// "Offboard a team"), which owns the manual steps for both directions.
 	esoPolicies := []string{"platform-ci"}
 	var teamReaderSteps []baoConfigStep
 	for _, t := range teams {

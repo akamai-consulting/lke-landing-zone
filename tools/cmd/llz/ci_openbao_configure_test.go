@@ -350,7 +350,10 @@ func TestESOTeamReaderPolicies(t *testing.T) {
 	if strings.Contains(readerDoc["gsap-reader"], "create") || strings.Contains(readerDoc["gsap-reader"], "update") {
 		t.Errorf("gsap-reader must be read-only, got:\n%s", readerDoc["gsap-reader"])
 	}
-	// SCOPING: gsap's reader must not reach another team's subtree.
+	// SCOPING: each reader POLICY names only its own team's subtree. Note this is
+	// not per-team confidentiality at the ExternalSecret layer — every reader is
+	// attached to the one shared `eso` identity (see baoConfigureSteps' scope
+	// caveat); it asserts the policy generator doesn't over-grant.
 	if strings.Contains(readerDoc["gsap-reader"], "web") {
 		t.Errorf("gsap-reader leaks into the web subtree:\n%s", readerDoc["gsap-reader"])
 	}

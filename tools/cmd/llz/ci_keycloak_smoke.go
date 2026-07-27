@@ -363,8 +363,11 @@ const esoServiceAccount = "external-secrets"
 // OpenBao AS that ServiceAccount — the same identity ESO presents for the `eso`
 // Kubernetes-auth role. Requires serviceaccounts/token create on ns/sa (the
 // smoke already reads cluster secrets + port-forwards, so it runs privileged).
+// Routed through the package-wide execOutput seam (exec.go), like every other
+// output-capturing shell-out — this is not one of the interactive/stdin call
+// sites that deliberately keep calling os/exec directly.
 func mintServiceAccountToken(ns, sa string) (string, error) {
-	out, err := exec.Command("kubectl", "create", "token", sa, "-n", ns, "--duration=10m").Output()
+	out, err := execOutput("kubectl", "create", "token", sa, "-n", ns, "--duration=10m")
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			return "", fmt.Errorf("kubectl create token %s/%s: %s", ns, sa, strings.TrimSpace(string(ee.Stderr)))
