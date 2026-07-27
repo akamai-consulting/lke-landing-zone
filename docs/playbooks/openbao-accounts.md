@@ -13,7 +13,7 @@ OpenBao in this deployment has three auth methods enabled (`llz ci bao-configure
 | Method | Used by |
 |---|---|
 | **`token`** (root) | Operators for break-glass admin. Root token is **deleted** after bootstrap and re-issued via `bao operator generate-root` (requires 3 of 5 unseal-key holders) — see [`docs/secrets.md`](../secrets.md). |
-| **`kubernetes`** | ESO's `ClusterSecretStore openbao` authenticates by its in-cluster ServiceAccount token via the `eso` Kubernetes-auth role, bound to the read-only `platform-ci` policy. No long-lived credential is stored. |
+| **`kubernetes`** | ESO's `ClusterSecretStore openbao` authenticates by its in-cluster ServiceAccount token via the `eso` Kubernetes-auth role, bound to the read-only `platform-ci` policy **plus a `<name>-reader` policy for each declared `spec.teams` entry** (read on that team's `openbaoSubtree`), so ESO can sync team-written app secrets. No long-lived credential is stored. |
 | **`jwt`** (GitHub-OIDC) | The `secret-propagator` role, used by `llz ci rotate-incluster-pat` to write `secret/linode/api-token`. CI authenticates with the workflow's GitHub OIDC token — no static credential. |
 
 There is no LDAP, userpass, or AppRole. Humans use root tokens (emergency-only) or the operator-side dual-write scripts (`llz openbao set`, `llz openbao get`) which require a region-scoped operator token from `bao operator generate-root`.
@@ -68,7 +68,7 @@ Anything. Use root sparingly:
 
 ## Machine account — Kubernetes auth (recommended pattern)
 
-Use Kubernetes auth for any in-cluster workload that needs read access to OpenBao. The pod authenticates by its projected ServiceAccount token — there is no secret_id lifecycle to manage. ESO's `eso` role (bound to the read-only `platform-ci` policy) is the existing template.
+Use Kubernetes auth for any in-cluster workload that needs read access to OpenBao. The pod authenticates by its projected ServiceAccount token — there is no secret_id lifecycle to manage. ESO's `eso` role (bound to the read-only `platform-ci` policy, plus a `<name>-reader` policy per declared team so it can read each team's subtree) is the existing template.
 
 ### Adding a new Kubernetes-auth role
 

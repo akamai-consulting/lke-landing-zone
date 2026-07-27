@@ -151,6 +151,35 @@ type baoConfigStep struct {
 // authenticate with a short-lived OIDC token instead of a long-lived AppRole
 // secret_id stashed in GitHub Actions secrets.
 func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) []baoConfigStep {
+	// Team ESO read access — the missing half of the team-credentials feature.
+	// Each spec.teams entry gets a read-only `<name>-reader` policy on its
+	// openbaoSubtree, attached to the ESO `eso` k8s-auth role below. Without it a
+	// team can WRITE secret/<subtree>/* (the `<name>-writer` policy bound to the
+	// keycloak device-flow role) but no in-cluster workload could ever READ those
+	// secrets: the eso role otherwise carries only platform-ci, the fixed platform
+	// allowlist. So bao-configure grants ESO read on every declared team subtree,
+	// letting the `openbao` ClusterSecretStore sync team-written app secrets. Kept
+	// out of keycloakTeamSteps on purpose: ESO read must work even on an instance
+	// whose device-flow client isn't configured (no keycloak issuer), so it does
+	// NOT gate on the issuer the way the writer role does.
+	esoPolicies := []string{"platform-ci"}
+	var teamReaderSteps []baoConfigStep
+	for _, t := range teams {
+		reader := t.Name + "-reader"
+		esoPolicies = append(esoPolicies, reader)
+		// secret/<sub> → secret/data/<sub> (read) + secret/metadata/<sub> (read+list).
+		// Read-only, unlike the `<name>-writer` twin: ESO never writes app secrets.
+		data := strings.Replace(t.OpenbaoSubtree, "secret/", "secret/data/", 1)
+		meta := strings.Replace(t.OpenbaoSubtree, "secret/", "secret/metadata/", 1)
+		hcl := fmt.Sprintf(
+			"path %q { capabilities = [\"read\"] }\n"+
+				"path %q { capabilities = [\"read\", \"list\"] }\n",
+			data+"/*", meta+"/*")
+		teamReaderSteps = append(teamReaderSteps, baoConfigStep{
+			desc: "write policy " + reader, fatal: true, stdin: hcl,
+			args: []string{"policy", "write", reader, "-"}})
+	}
+
 	steps := []baoConfigStep{
 		{desc: "enable KV v2 at secret/", args: []string{"secrets", "enable", "-version=2", "-path=secret", "kv"}},
 		{desc: "enable kubernetes auth", args: []string{"auth", "enable", "kubernetes"}},
@@ -202,7 +231,10 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) 
 			args: []string{"write", "auth/kubernetes/role/eso",
 				"bound_service_account_names=external-secrets",
 				"bound_service_account_namespaces=external-secrets",
-				"policies=platform-ci", "ttl=15m"}},
+				// platform-ci (fixed platform allowlist) + one `<name>-reader` per
+				// declared team, so ESO can sync team-written app secrets. Just
+				// "platform-ci" when no teams are declared (esoPolicies computed above).
+				"policies=" + strings.Join(esoPolicies, ","), "ttl=15m"}},
 		// Second Kubernetes-auth role for the SAME ESO controller SA, mapped to the
 		// write-scoped eso-pusher policy. The `openbao-push` ClusterSecretStore
 		// selects this role (role: eso-pusher) so PushSecrets can write the two
@@ -260,6 +292,13 @@ func baoConfigureSteps(ghRepo, keycloakIssuer string, teams []clusterspec.Team) 
 		// role is wired for it. `llz ci openbao-login` is the auth primitive those
 		// jobs will use. See docs/designs/day2-incluster-health.md.
 	}
+
+	// Per-team `<name>-reader` policies (computed at the top of this func) — written
+	// so the `eso` role above can read each declared team's subtree. Empty when no
+	// teams are declared. Order relative to the eso role is immaterial: OpenBao lets
+	// a role reference a policy name that doesn't exist yet, and both reach their
+	// final state within this single bao-configure run.
+	steps = append(steps, teamReaderSteps...)
 
 	// GitHub Actions OIDC (JWT) auth — repo-bound roles that let a workflow log in
 	// with a short-lived, per-run OIDC token instead of a long-lived AppRole

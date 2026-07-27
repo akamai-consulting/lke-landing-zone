@@ -35,8 +35,11 @@ workflow then runs, in order:
 - **`llz ci bao-configure`** — a `keycloak` JWT/OIDC auth mount (issuer derived
   from the region's `cluster.bootstrap.domainSuffix` → the `otomi` realm), a
   `gsap-writer` policy, and a `keycloak` role bound on the OIDC `groups` claim
-  value **`team-gsap`** (the apl-core realm role). Uses the root token bootstrap
-  already holds — no manual root step.
+  value **`team-gsap`** (the apl-core realm role). It also writes a read-only
+  **`gsap-reader`** policy and attaches it to the ESO `eso` Kubernetes-auth role,
+  so the `openbao` ClusterSecretStore can **read** what the team writes — an
+  ExternalSecret pointing at `secret/gsap/*` resolves without any extra policy
+  wiring. Uses the root token bootstrap already holds — no manual root step.
 - **`llz ci keycloak-configure`** — the one realm object apl-core does *not*
   ship: a public **device-flow** client (`llz`) carrying the default `openid`
   scope (which already emits the `groups` claim). Best-effort: a Keycloak failure

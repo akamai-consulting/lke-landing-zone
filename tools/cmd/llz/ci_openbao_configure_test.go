@@ -302,6 +302,72 @@ func TestKeycloakTeamSteps(t *testing.T) {
 	}
 }
 
+// TestESOTeamReaderPolicies covers the read half of the team-credentials feature:
+// each spec.teams entry gets a read-only `<name>-reader` policy attached to the ESO
+// `eso` k8s-auth role, so the openbao ClusterSecretStore can sync team-written app
+// secrets. Unlike the writer role, this does NOT gate on a keycloak issuer.
+func TestESOTeamReaderPolicies(t *testing.T) {
+	teams := []clusterspec.Team{
+		{Name: "gsap", OpenbaoSubtree: "secret/gsap"},
+		{Name: "web", OpenbaoSubtree: "secret/web"},
+	}
+	// No keycloak issuer on purpose — the reader wiring must still be emitted.
+	steps := baoConfigureSteps("acme/platform", "", teams)
+
+	// role/eso EXACTLY — not role/eso-pusher, which shares the prefix.
+	esoRolePolicies := func(all []baoConfigStep) string {
+		for _, s := range all {
+			if len(s.args) >= 2 && s.args[0] == "write" && s.args[1] == "auth/kubernetes/role/eso" {
+				for _, a := range s.args {
+					if strings.HasPrefix(a, "policies=") {
+						return strings.TrimPrefix(a, "policies=")
+					}
+				}
+			}
+		}
+		return ""
+	}
+	esoPolicies := esoRolePolicies(steps)
+	readerDoc := map[string]string{}
+	for _, s := range steps {
+		if len(s.args) >= 3 && s.args[0] == "policy" && s.args[1] == "write" && strings.HasSuffix(s.args[2], "-reader") {
+			readerDoc[s.args[2]] = s.stdin
+		}
+	}
+
+	// The eso role carries platform-ci PLUS one reader per team, in declared order.
+	if esoPolicies != "platform-ci,gsap-reader,web-reader" {
+		t.Errorf("eso role policies = %q, want platform-ci,gsap-reader,web-reader", esoPolicies)
+	}
+	// Each reader policy grants READ (not write) on data/* + read,list on metadata/*.
+	if !strings.Contains(readerDoc["gsap-reader"], `path "secret/data/gsap/*" { capabilities = ["read"] }`) {
+		t.Errorf("gsap-reader missing data read path:\n%s", readerDoc["gsap-reader"])
+	}
+	if !strings.Contains(readerDoc["gsap-reader"], `path "secret/metadata/gsap/*" { capabilities = ["read", "list"] }`) {
+		t.Errorf("gsap-reader missing metadata path:\n%s", readerDoc["gsap-reader"])
+	}
+	// Read-only: ESO never writes app secrets — no create/update capability.
+	if strings.Contains(readerDoc["gsap-reader"], "create") || strings.Contains(readerDoc["gsap-reader"], "update") {
+		t.Errorf("gsap-reader must be read-only, got:\n%s", readerDoc["gsap-reader"])
+	}
+	// SCOPING: gsap's reader must not reach another team's subtree.
+	if strings.Contains(readerDoc["gsap-reader"], "web") {
+		t.Errorf("gsap-reader leaks into the web subtree:\n%s", readerDoc["gsap-reader"])
+	}
+
+	// No teams → eso role is exactly platform-ci and no reader policies emitted, so
+	// a team-less instance is byte-identical to before.
+	nilSteps := baoConfigureSteps("acme/platform", "", nil)
+	for _, s := range nilSteps {
+		if len(s.args) >= 3 && s.args[0] == "policy" && s.args[1] == "write" && strings.HasSuffix(s.args[2], "-reader") {
+			t.Errorf("team-less instance emitted a reader policy: %s", s.args[2])
+		}
+	}
+	if p := esoRolePolicies(nilSteps); p != "platform-ci" {
+		t.Errorf("team-less eso role policies = %q, want platform-ci", p)
+	}
+}
+
 func TestAuditFileDeviceActive(t *testing.T) {
 	active := "Path     Type    Description\n----     ----    -----------\nfile/    file    n/a\n"
 	if !auditFileDeviceActive(active) {
