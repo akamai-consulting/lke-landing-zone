@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"strings"
 	"time"
@@ -40,16 +41,18 @@ func ciTeamLoginSmokeCmd() *cobra.Command {
 	var region, team string
 	c := &cobra.Command{
 		Use:   "team-login-smoke",
-		Short: "e2e: validate the team-scoped OpenBao write path end-to-end (no browser)",
-		Long: "Browser-free end-to-end check of the team-scoped write path: provisions a\n" +
-			"throwaway Keycloak user in the team-<name> group, mints an id_token via a\n" +
+		Short: "e2e: validate the team-scoped OpenBao write + ESO read paths (no browser)",
+		Long: "Browser-free end-to-end check of the team-scoped credential paths: provisions\n" +
+			"a throwaway Keycloak user in the team-<name> group, mints an id_token via a\n" +
 			"direct-grant client (the same groups claim the device flow would carry),\n" +
 			"exchanges it at OpenBao's keycloak mount, then asserts a write to the team's\n" +
-			"subtree SUCCEEDS and a write outside it is DENIED (403). Also asserts the\n" +
+			"subtree SUCCEEDS and a write outside it is DENIED (403). Asserts the\n" +
 			"platform-admin path: a user carrying only platform-admin (not the team group)\n" +
-			"can likewise mint the team's writer token and write. Tears down the users +\n" +
-			"client. Meant for the e2e lane (needs cluster access + a converged apl-core\n" +
-			"Keycloak). See docs/runbooks/openbao-team-login.md.",
+			"can likewise mint the team's writer token and write. Finally asserts the READ\n" +
+			"half: the external-secrets SA, via the `eso` Kubernetes-auth role, can read\n" +
+			"the team-written key (the <team>-reader policy) but is denied an uncovered\n" +
+			"path. Tears down the users + client. Meant for the e2e lane (needs cluster\n" +
+			"access + a converged apl-core Keycloak). See docs/runbooks/openbao-team-login.md.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runTeamLoginSmoke(gopts, region, team) },
 	}
@@ -229,6 +232,46 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	}
 	fmt.Printf("✓ out-of-subtree write to %s correctly denied\n", outPath)
 
+	// ── Reader path: the ESO ClusterSecretStore consumes team secrets via the `eso`
+	// Kubernetes-auth role, which bao-configure binds to the read-only <team>-reader
+	// policy (issue #335). This is the READ half of the team-credentials feature —
+	// without it a team can write secrets nothing in-cluster can consume. Prove the
+	// binding end-to-end: mint the external-secrets controller SA token (the identity
+	// the eso role binds), log in as role `eso`, and assert it can READ the key the
+	// team just wrote, then is DENIED a path no policy grants.
+	saJWT, err := mintServiceAccountToken(esoNamespace, esoServiceAccount)
+	if err != nil {
+		return fmt.Errorf("mint %s/%s SA token for the eso-reader check: %w", esoNamespace, esoServiceAccount, err)
+	}
+	esoTok, err := openbao.KubernetesLogin(ctx, openbao.HTTPClientInsecure(30*time.Second), addr, "kubernetes", "eso", saJWT)
+	if err != nil {
+		return fmt.Errorf("openbao kubernetes login (role eso) failed — is the eso k8s-auth role configured + reachable? %w", err)
+	}
+	esoC := openbao.NewWithClient(addr, esoTok, "", openbao.HTTPClientInsecure(30*time.Second))
+	// %v, not %w, on err: the !ok / wrong-value branches reach here with a NIL err
+	// (Get reports an absent secret as ok=false, err=nil), and %w would render that
+	// as "%!w(<nil>)" in the one place an operator reads this — a red e2e lane.
+	if v, ok, err := esoC.Get(ctx, inPath, "ok"); err != nil || !ok || v != "1" {
+		return fmt.Errorf("EXPECTED the eso role to READ %s (the team-written key) via the %s-reader policy, got value=%q ok=%v err=%v — bao-configure did not grant ESO read on the team subtree", inPath, team, v, ok, err)
+	}
+	fmt.Printf("✓ eso role read %s (team subtree is ESO-readable)\n", inPath)
+
+	// A path under neither the team subtree nor platform-ci → must 403. (Not a
+	// platform-ci path: the eso role legitimately carries platform-ci too.) The
+	// leading '_' makes this unclaimable by construction: openbaoSubtreeRe pins team
+	// subtrees to lowercase-kebab segments, so no spec.teams entry can ever cover it.
+	//
+	// A NIL error here is a finding, not a pass: OpenBao checks the ACL before the
+	// backend, so an ungranted path 403s — it only 404s (ok=false, err=nil) once the
+	// token is ALLOWED to look and finds nothing. Either way the path was reachable.
+	denyPath := "secret/_llz_smoke_denied_" + suffix + "/x"
+	if _, _, err := esoC.Get(ctx, denyPath, "k"); err == nil {
+		return fmt.Errorf("SECURITY: the eso role was PERMITTED to read %s (no 403 — the read resolved, empty or not) but no policy grants it — the %s-reader scope is too broad", denyPath, team)
+	} else if !isDenied(err) {
+		return fmt.Errorf("read of %s by the eso role failed, but not with a 403/permission-denied: %w", denyPath, err)
+	}
+	fmt.Printf("✓ eso role denied %s (reader scoped to the team subtree + platform-ci)\n", denyPath)
+
 	// ── Admin path: apl-core's built-in platform admin carries the all-teams realm
 	// role `platform-admin` (aplPlatformAdminRole), NOT the team's own group. The
 	// OpenBao role now binds groups on {team-<name>, platform-admin}, so an admin
@@ -316,6 +359,31 @@ func (k *kcClient) realmRoleExists(name string) (bool, error) {
 func isDenied(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "403") || strings.Contains(s, "permission denied")
+}
+
+// esoServiceAccount is the External Secrets Operator controller ServiceAccount
+// (apl-core 6.x ships ESO in esoNamespace with a same-named SA). It is the
+// identity bao-configure's `eso` Kubernetes-auth role binds — see
+// ci_openbao_configure.go (bound_service_account_names=external-secrets).
+const esoServiceAccount = "external-secrets"
+
+// mintServiceAccountToken issues a short-lived token for ns/sa via the
+// TokenRequest API (kubectl create token), letting the smoke authenticate to
+// OpenBao AS that ServiceAccount — the same identity ESO presents for the `eso`
+// Kubernetes-auth role. Requires serviceaccounts/token create on ns/sa (the
+// smoke already reads cluster secrets + port-forwards, so it runs privileged).
+// Routed through the package-wide execOutput seam (exec.go), like every other
+// output-capturing shell-out — this is not one of the interactive/stdin call
+// sites that deliberately keep calling os/exec directly.
+func mintServiceAccountToken(ns, sa string) (string, error) {
+	out, err := execOutput("kubectl", "create", "token", sa, "-n", ns, "--duration=10m")
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("kubectl create token %s/%s: %s", ns, sa, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", fmt.Errorf("kubectl create token %s/%s: %w", ns, sa, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // decodeJWTGroups extracts the `groups` claim from a JWT's (unverified) payload.

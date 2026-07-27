@@ -267,7 +267,13 @@ apl-values overlay (apl-core provisions the native team — a namespace + the
 Keycloak realm group/role `team-<name>`), `llz ci bao-configure` writes a
 `<name>-writer` policy (`create/update/read` on `<openbaoSubtree>/*`) + a
 `keycloak` OIDC role bound on the `groups` claim value `team-<name>`, and
-operators mint a short-lived token with `llz openbao login --team <name>`.
+operators mint a short-lived token with `llz openbao login --team <name>`. So the
+subtree is also **consumable** in-cluster, `bao-configure` additionally writes a
+read-only `<name>-reader` policy and attaches it to ESO's `eso` Kubernetes-auth
+role — an `ExternalSecret` pointing at `<openbaoSubtree>/*` resolves through the
+`openbao` ClusterSecretStore with no extra wiring. That store is namespace-
+unconditioned, so the read grant is **not** a per-team confidentiality boundary
+(see [the runbook](runbooks/openbao-team-login.md)).
 `name` is lowercase kebab and **may not** be `admin`, `platform-admin`, or
 `all-teams-admin` (apl-core owns those); `openbaoSubtree` must be a plain path
 prefix under `secret/` (no glob, no trailing `/`) and **may not** sit inside a
