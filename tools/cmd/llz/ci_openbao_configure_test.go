@@ -275,11 +275,13 @@ func TestKeycloakTeamSteps(t *testing.T) {
 		t.Errorf("role→policy = %v, want gsap->gsap-writer, web->web-writer", rolePolicy)
 	}
 	// The role binds on the apl-core realm role team-<name> (the value apl-core's
-	// default groups claim carries), NOT the bare team name — AND on team-admin,
-	// so the all-teams platform admin can write any team's subtree.
+	// default groups claim carries), NOT the bare team name — AND on platform-admin,
+	// apl-core's built-in all-teams admin role, so a platform admin can write any
+	// team's subtree. (platform-admin, NOT team-admin: the default admin carries
+	// platform-admin; team-admin is the apl admin *team* role — see the bind comment.)
 	wantGroups := map[string][]string{
-		"gsap": {"team-gsap", "team-admin"},
-		"web":  {"team-web", "team-admin"},
+		"gsap": {"team-gsap", "platform-admin"},
+		"web":  {"team-web", "platform-admin"},
 	}
 	for name, want := range wantGroups {
 		got := roleGroup[name]

@@ -88,9 +88,10 @@ review, and the shipped code is authoritative where it diverges:
   overlay so apl-core provisions the team (namespace + realm group + realm role
   **`team-<name>`** + a `groups`-claim mapper). The OpenBao role therefore binds
   on the `groups` value `team-<name>` (not a bare team name) — **and additionally
-  on `team-admin`**, apl-core's all-teams platform-admin role, so a platform admin
-  can obtain any team's writer token without being enrolled in every team's group
-  (matching the console/kubectl reach a platform-admin already has). OpenBao
+  on `platform-admin`**, apl-core's built-in all-teams admin role (the value the
+  default `otomi-admin` / `platform-admin@<domain>` users carry, verified live), so
+  a platform admin can obtain any team's writer token without being enrolled in
+  every team's group (matching the console/kubectl reach it already has). OpenBao
   matches a bound-claim list as "any-of". Consequently the spec surface is just
   `{name, openbaoSubtree}` — the `keycloakGroup` field in the design's first
   sketch was dropped (the group is deterministic).

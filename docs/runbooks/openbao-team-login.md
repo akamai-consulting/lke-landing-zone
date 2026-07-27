@@ -177,8 +177,8 @@ identity side. Until step 1 runs, offboarding is incomplete.
   isn't enabled, or `--client-id` is wrong.
 - **`oidc auth login … returned no client_token` / 403** (or `claim "groups"
   does not match any associated bound claim values`) — the id_token's `groups`
-  claim carries neither **`team-<name>`** nor **`team-admin`** (the account is not
-  in the `team-<name>` group and is not an APL platform-admin, or the team never
+  claim carries neither **`team-<name>`** nor **`platform-admin`** (the account is
+  not in the `team-<name>` group and is not an APL platform-admin, or the team never
   converged in apl-core). Grant the account the team with
   `llz apl user add --email <addr> --team <name> --yes` (or `--admin` for the
   all-teams platform-admin role), and confirm `teamConfig.<name>` rendered +

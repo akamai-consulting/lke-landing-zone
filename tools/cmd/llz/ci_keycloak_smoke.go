@@ -5,8 +5,8 @@ package main
 // that is otherwise only E2E-gated: apl-core provisions the `team-<name>` group +
 // realm role → a member's OIDC token carries `groups: [team-<name>]` → OpenBao's
 // `keycloak` role binds it → the `<name>-writer` policy scopes the write. It also
-// covers the platform-admin path — a token carrying only `team-admin` (not the
-// team group) must mint the same writer token, since the role binds that group too.
+// covers the platform-admin path — a token carrying only `platform-admin` (not the
+// team group) must mint the same writer token, since the role binds that role too.
 //
 // It does NOT drive the device-flow browser (that UX is generic OAuth 2.0 device
 // grant, already httptest-covered). Instead it mints the same id_token via a
@@ -31,7 +31,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/akamai-consulting/lke-landing-zone/tools/internal/apl/identity"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 	"github.com/spf13/cobra"
@@ -47,7 +46,7 @@ func ciTeamLoginSmokeCmd() *cobra.Command {
 			"direct-grant client (the same groups claim the device flow would carry),\n" +
 			"exchanges it at OpenBao's keycloak mount, then asserts a write to the team's\n" +
 			"subtree SUCCEEDS and a write outside it is DENIED (403). Also asserts the\n" +
-			"platform-admin path: a user carrying only team-admin (not the team group)\n" +
+			"platform-admin path: a user carrying only platform-admin (not the team group)\n" +
 			"can likewise mint the team's writer token and write. Tears down the users +\n" +
 			"client. Meant for the e2e lane (needs cluster access + a converged apl-core\n" +
 			"Keycloak). See docs/runbooks/openbao-team-login.md.",
@@ -230,13 +229,14 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	}
 	fmt.Printf("✓ out-of-subtree write to %s correctly denied\n", outPath)
 
-	// ── Admin path: a platform-admin carries the all-teams realm role team-admin
-	// (identity.PlatformAdminRole), NOT the team's own group. The OpenBao role now
-	// binds groups on {team-<name>, team-admin}, so an admin must ALSO be able to
-	// mint this team's writer token and write its subtree WITHOUT being enrolled in
-	// team-<name>. Prove it end-to-end. Skipped only if the built-in role is absent
-	// (an unconverged realm), mirroring the team-role fallback above.
-	adminRole := identity.PlatformAdminRole
+	// ── Admin path: apl-core's built-in platform admin carries the all-teams realm
+	// role `platform-admin` (aplPlatformAdminRole), NOT the team's own group. The
+	// OpenBao role now binds groups on {team-<name>, platform-admin}, so an admin
+	// must ALSO be able to mint this team's writer token and write its subtree
+	// WITHOUT being enrolled in team-<name>. Prove it end-to-end. Skipped only if the
+	// built-in role is absent (an unconverged realm), mirroring the team-role
+	// fallback above.
+	adminRole := aplPlatformAdminRole
 	if ok, err := k.realmRoleExists(adminRole); err != nil {
 		return fmt.Errorf("look up realm role %s: %w", adminRole, err)
 	} else if !ok {
@@ -273,7 +273,7 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 			return fmt.Errorf("decode admin id_token: %w", err)
 		}
 		if !containsString(aGroups, adminRole) {
-			return fmt.Errorf("admin id_token groups %v does not contain %q — apl does not emit the platform-admin role into the groups claim, so the team-admin bound-claim can never match", aGroups, adminRole)
+			return fmt.Errorf("admin id_token groups %v does not contain %q — apl does not emit the platform-admin role into the groups claim, so the platform-admin bound-claim can never match", aGroups, adminRole)
 		}
 		if containsString(aGroups, group) {
 			return fmt.Errorf("admin test user unexpectedly carries %q — it must validate the admin path via %q alone", group, adminRole)
