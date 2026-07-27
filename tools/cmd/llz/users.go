@@ -3,7 +3,7 @@ package main
 // users.go — `llz apl user add`, the operator command that onboards a human into
 // APL by creating a Keycloak user in the `otomi` realm and granting them team
 // membership (the `team-<name>` role apl-core provisions) and/or the APL
-// platform-admin role (`team-admin`). Lives only under the `apl` front door — the
+// platform-admin role (`platform-admin`). Lives only under the `apl` front door — the
 // top-level `llz users` alias was retired (ADR 0002 Appendix B: users is an
 // APL-domain op).
 //

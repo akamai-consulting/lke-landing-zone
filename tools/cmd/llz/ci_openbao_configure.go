@@ -357,8 +357,10 @@ const keycloakInternalJWKS = "http://keycloak-keycloakx-http.keycloak.svc.cluste
 // (`otomi-admin`, `platform-admin@<domain>`). Verified live: their `groups` claim
 // is exactly `["platform-admin"]`. Each team's keycloak role binds this alongside
 // `team-<name>` so a platform admin can mint any team's writer token without being
-// enrolled in that team's group. Distinct from `identity.PlatformAdminRole`
-// ("team-admin", the apl admin *team* role that `llz apl user add --admin` grants).
+// enrolled in that team's group. `identity.PlatformAdminRole` — the role `llz apl
+// user add --admin` grants — now also resolves to "platform-admin", so `--admin`
+// users carry this exact role and can `llz openbao login --team` too (the two were
+// reconciled; before, `--admin` granted `team-admin`, which no role binds).
 const aplPlatformAdminRole = "platform-admin"
 
 // keycloakTeamSteps builds the `keycloak` auth mount + per-team policy/role
@@ -422,11 +424,11 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 			// NOT create these group/roles: `llz render` declares the team and
 			// apl-core provisions `team-<name>`; `platform-admin` is apl-core built-in.
 			//
-			// NOTE: this is `platform-admin`, NOT `team-admin`. `team-admin` is the
-			// apl-core built-in *admin team's* own role (excluded from user teams in
-			// import.go); the default platform admin is NOT in it. `identity.
-			// PlatformAdminRole` ("team-admin", what `llz apl user add --admin`
-			// grants) is a separate, narrower concept — do not conflate them here.
+			// NOTE: `platform-admin` is apl-core's built-in all-teams admin role — the
+			// role the default admins carry AND the one `llz apl user add --admin`
+			// grants (identity.PlatformAdminRole). It is NOT `team-admin`, the apl
+			// admin *team's* own role (excluded from user teams in import.go); the
+			// platform admin is not a member of that team.
 			BoundClaims:   map[string][]string{"groups": {t.AplRole(), aplPlatformAdminRole}},
 			TokenPolicies: []string{policy},
 			TokenTTL:      "15m",
