@@ -388,21 +388,21 @@ func underAnyPrefix(path string, prefixes []string) bool {
 	return false
 }
 
-// stepDroppedAPIVersions fails when a manifest under scannedManifestTrees declares
-// an apiVersion the cluster no longer serves (see droppedAPIs). Same git-tracked
-// scan shape as stepConflictMarkers, narrowed to those trees' YAML.
-func stepDroppedAPIVersions(_ globalOpts) error {
-	out, err := gitOutput("", "ls-files")
+type droppedAPIHit struct{ loc, api, since, fix string }
+
+// scanDroppedAPIVersions walks git-tracked YAML under scannedManifestTrees, rooted
+// at root (""/"." = cwd), for any apiVersion in droppedAPIs. inRepo is false when
+// root is not a git repo — the only legitimate skip; examined counts the files
+// actually read so a caller can refuse to pass on an empty corpus.
+func scanDroppedAPIVersions(root string) (hits []droppedAPIHit, examined int, inRepo bool, err error) {
+	out, err := gitOutput(root, "ls-files")
 	if err != nil {
-		if _, repoErr := gitOutput("", "rev-parse", "--git-dir"); repoErr != nil {
-			fmt.Fprintln(os.Stderr, "  skip: not a git repo (dropped-apiVersion scan)")
-			return nil
+		if _, repoErr := gitOutput(root, "rev-parse", "--git-dir"); repoErr != nil {
+			return nil, 0, false, nil
 		}
-		return fmt.Errorf("dropped-apiVersion scan: this IS a git repo but `git ls-files` failed, "+
+		return nil, 0, true, fmt.Errorf("dropped-apiVersion scan: this IS a git repo but `git ls-files` failed, "+
 			"so nothing was scanned — refusing to report clean: %w", err)
 	}
-	type hit struct{ loc, api, since, fix string }
-	var hits []hit
 	for _, f := range strings.Split(out, "\n") {
 		f = strings.TrimSpace(f)
 		if f == "" || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml")) {
@@ -411,28 +411,57 @@ func stepDroppedAPIVersions(_ globalOpts) error {
 		if !underAnyPrefix(f, scannedManifestTrees) {
 			continue
 		}
-		data, err := os.ReadFile(f)
-		if err != nil {
+		data, readErr := os.ReadFile(filepath.Join(root, f))
+		if readErr != nil {
 			continue // race with a delete / unreadable — not this check's concern
 		}
+		examined++
 		for i, ln := range strings.Split(string(data), "\n") {
 			for _, d := range droppedAPIs {
 				if isDeclaredAPIVersion(ln, d.apiVersion) {
-					hits = append(hits, hit{fmt.Sprintf("%s:%d", f, i+1), d.apiVersion, d.since, d.fix})
+					hits = append(hits, droppedAPIHit{fmt.Sprintf("%s:%d", f, i+1), d.apiVersion, d.since, d.fix})
 				}
 			}
 		}
 	}
-	if len(hits) > 0 {
-		fmt.Fprintf(os.Stderr, "dropped apiVersion(s) in %d location(s):\n", len(hits))
-		for _, h := range hits {
-			fmt.Fprintf(os.Stderr, "  • %s — %s no longer served since %s; %s\n", h.loc, h.api, h.since, h.fix)
-		}
-		return fmt.Errorf("manifest(s) declare an apiVersion the cluster no longer serves — they fail to " +
-			"apply (Argo SyncFailed at deploy). Migrate them by hand: `llz upgrade` does not rewrite " +
-			"operator-owned files, and no CRD-aware gate covers the shared platform-apl/ tree")
+	return hits, examined, true, nil
+}
+
+// reportDroppedAPIVersions prints hits and returns the gate error, or nil if clean.
+func reportDroppedAPIVersions(hits []droppedAPIHit) error {
+	if len(hits) == 0 {
+		return nil
 	}
-	return nil
+	fmt.Fprintf(os.Stderr, "dropped apiVersion(s) in %d location(s):\n", len(hits))
+	for _, h := range hits {
+		// ::error file=…:: so each lands as a PR annotation rather than being buried
+		// in log output, matching the other manifest guards.
+		fmt.Fprintf(os.Stderr, "::error file=%s::%s no longer served since %s; %s\n",
+			strings.SplitN(h.loc, ":", 2)[0], h.api, h.since, h.fix)
+		fmt.Fprintf(os.Stderr, "  • %s — %s no longer served since %s; %s\n", h.loc, h.api, h.since, h.fix)
+	}
+	return fmt.Errorf("manifest(s) declare an apiVersion the cluster no longer serves — they fail to " +
+		"apply (Argo SyncFailed at deploy). Migrate them by hand: `llz upgrade` does not rewrite " +
+		"operator-owned files, and no CRD-aware gate covers the shared platform-apl/ tree")
+}
+
+// stepDroppedAPIVersions fails when a manifest under scannedManifestTrees declares
+// an apiVersion the cluster no longer serves (see droppedAPIs). Same git-tracked
+// scan shape as stepConflictMarkers, narrowed to those trees' YAML.
+//
+// Tolerates an empty corpus: an instance repo legitimately has no platform-apl/ and
+// may have no custom YAML at all. The CI face (`llz ci dropped-apiversions`) runs in
+// the template, where empty means the trees moved — and refuses to pass on it.
+func stepDroppedAPIVersions(_ globalOpts) error {
+	hits, _, inRepo, err := scanDroppedAPIVersions("")
+	if err != nil {
+		return err
+	}
+	if !inRepo {
+		fmt.Fprintln(os.Stderr, "  skip: not a git repo (dropped-apiVersion scan)")
+		return nil
+	}
+	return reportDroppedAPIVersions(hits)
 }
 
 func stepTFValidate(g globalOpts) error {

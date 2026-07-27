@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard untestable-loc-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -79,6 +79,7 @@ help:
 	@echo "  wave-dependency-guard       a workload must sync AFTER the ExternalSecret it hard-depends on (#163 wedge class)"
 	@echo "  mesh-egress-guard           no NetworkPolicy egress to a STRICT-mesh namespace (harbor) from outside it"
 	@echo "  monitoring-label-guard      every ServiceMonitor/PodMonitor/PrometheusRule carries prometheus: system (#175 day-2-blind class)"
+	@echo "  dropped-apiversions-check  no manifest declares an apiVersion apl-core's operators no longer serve (#330 class)"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow linting"
 	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
@@ -387,6 +388,18 @@ mesh-egress-guard:
 monitoring-label-guard: render-charts
 	$(call LLZ_CI,monitoring-label-guard,--root ..)
 
+# dropped-apiversions-check: `llz ci dropped-apiversions` — no manifest may declare
+# an apiVersion apl-core's bundled operators no longer serve. `llz lint` runs the
+# same scan at pre-commit, but no CI job invokes `llz lint`, and a developer's
+# installed llz can lag the tree — so the gate needs its own CI entry point.
+# Covers platform-apl/, which nothing else validates against real CRDs: k8s-lint,
+# k8s-validate and the kind dry-run all read $(RENDER_DIR), built from
+# kubernetes-charts/*/ only. That blind spot is how llz-cidr-firewall's
+# ExternalSecret shipped on external-secrets.io/v1beta1 after apl-core v6 stopped
+# serving it. Git-tracked scan, so no render dependency.
+dropped-apiversions-check:
+	$(call LLZ_CI,dropped-apiversions,--root ..)
+
 # untestable-loc-check: the design-principle gate. Fails when inline workflow
 # bash / shell / python logic exceeds the budget in .untestable-budget.yaml —
 # the signal to convert logic into the unit-tested llz CLI rather than pile more
@@ -482,7 +495,7 @@ actions-lint:
 # targets share a render-charts prerequisite, so one $(MAKE) invocation renders
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
-LINT_K8S := k8s-lint k8s-validate wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard placeholder-guard \
+LINT_K8S := k8s-lint k8s-validate wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check placeholder-guard \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
             cosign-subject-guard \
             helm-lint-charts helm-lint-real-values \
