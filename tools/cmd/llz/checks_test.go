@@ -136,6 +136,106 @@ func TestStepConflictMarkers(t *testing.T) {
 	}
 }
 
+func TestIsDeclaredAPIVersion(t *testing.T) {
+	const api = "external-secrets.io/v1beta1"
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{"apiVersion: external-secrets.io/v1beta1", true},
+		{"  apiVersion: external-secrets.io/v1beta1", true},
+		{`apiVersion: "external-secrets.io/v1beta1"`, true},
+		{"apiVersion: external-secrets.io/v1beta1  # legacy", true},
+		{"apiVersion: external-secrets.io/v1", false},                  // already migrated
+		{"# bump apiVersion external-secrets.io/v1beta1 -> v1", false}, // prose/comment, not a key
+		{"  key: external-secrets.io/v1beta1", false},                  // some other key
+	} {
+		if got := isDeclaredAPIVersion(tc.line, api); got != tc.want {
+			t.Errorf("isDeclaredAPIVersion(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
+
+// droppedAPITree materializes files in a throwaway dir and cds in. Deliberately no
+// git: the scan is a filesystem walk, because the Kubernetes lint job runs inside a
+// container where git against the mounted checkout fails.
+func droppedAPITree(t *testing.T, files map[string]string) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chdir(t, dir)
+}
+
+func TestStepDroppedAPIVersionsClean(t *testing.T) {
+	droppedAPITree(t, map[string]string{
+		// Already migrated to v1.
+		"kubernetes-charts/managed-apps/chart/templates/es.yaml": "apiVersion: external-secrets.io/v1\nkind: ExternalSecret\n",
+		// A changelog PROSE mention of the dropped version is not a declaration.
+		"kubernetes-charts/managed-apps/chart/Chart.yaml": "# 0.1.6: bumped external-secrets.io/v1beta1 -> v1\nname: managed-apps\n",
+		// v1alpha1 is still served in 2.4.1 (PushSecret is v1alpha1-only) — not a hit.
+		"platform-apl/components/harbor/push.yaml": "apiVersion: external-secrets.io/v1alpha1\nkind: PushSecret\n",
+		// A tree nobody ships from stays out of scope even on the dropped version.
+		"docs/designs/example.yaml": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n",
+		// A VENDORED subchart `helm dep build` unpacked during the same lint run is
+		// upstream content, not ours to gate — skipped even on the dropped version.
+		"kubernetes-charts/llz-openbao-platform/charts/openbao/templates/es.yaml": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n",
+	})
+	if err := stepDroppedAPIVersions(gopts); err != nil {
+		t.Fatalf("migrated manifests + prose mention + served v1alpha1 + out-of-scope docs/ + vendored subchart should pass: %v", err)
+	}
+}
+
+func TestStepDroppedAPIVersionsFlagsEveryScannedTree(t *testing.T) {
+	// Each scanned tree must trip independently: the operator-owned escape hatch,
+	// the scaffold copy the template ships, the first-party charts, and the SHARED
+	// platform-apl/ tree — the one no CRD-aware gate covers (k8s-lint/k8s-validate
+	// and the kind dry-run all read $RENDER_DIR, built from kubernetes-charts/*/
+	// only), which is how llz-cidr-firewall shipped on v1beta1.
+	for _, f := range []string{
+		"kubernetes-custom/namespaces/team-x/es.yaml",
+		"instance-template/kubernetes-custom/namespaces/team-x/es.yaml",
+		"kubernetes-charts/llz-thing/templates/es.yaml",
+		"platform-apl/components/cidrFirewall/llz-cidr-firewall/externalsecret.yaml",
+	} {
+		t.Run(f, func(t *testing.T) {
+			droppedAPITree(t, map[string]string{f: "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n"})
+			if err := stepDroppedAPIVersions(gopts); err == nil {
+				t.Errorf("expected failure: %s declares external-secrets.io/v1beta1", f)
+			}
+		})
+	}
+}
+
+// TestCIDroppedAPIVersionsNoGit is the regression for the CI break: the Kubernetes
+// lint job runs inside the ci-kubernetes container, where git against the mounted
+// checkout fails. A git-backed scan reported "not a git repo" and failed the gate
+// on a perfectly clean tree, so the scan must not consult git at all.
+func TestCIDroppedAPIVersionsNoGit(t *testing.T) {
+	dir := t.TempDir() // no `git init` — deliberately not a repo
+	p := filepath.Join(dir, "platform-apl/components/x/externalsecret.yaml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("apiVersion: external-secrets.io/v1\nkind: ExternalSecret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCIDroppedAPIVersions(dir); err != nil {
+		t.Fatalf("clean tree outside a git repo must pass, got: %v", err)
+	}
+	// The empty-corpus guard still has to bite, or a moved tree passes silently.
+	if err := runCIDroppedAPIVersions(t.TempDir()); err == nil {
+		t.Error("expected failure: no manifests examined at all (trees moved)")
+	}
+}
+
 // chdir cds into dir for the duration of the test, restoring the cwd after.
 func chdir(t *testing.T, dir string) {
 	t.Helper()

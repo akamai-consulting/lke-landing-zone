@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,6 +318,178 @@ func stepConflictMarkers(_ globalOpts) error {
 	return nil
 }
 
+// droppedAPIs are apiVersions a converged apl-core dependency no longer serves, so
+// a manifest still declaring one fails to apply ("no matches for kind … in version
+// …") and surfaces only as an opaque Argo SyncFailed at deploy. Add an entry when a
+// dependency drops one.
+//
+// Verify `served: false` (not merely "a newer version exists") before adding a row
+// — a CRD commonly keeps an old version listed but unserved:
+//
+//	helm template eso external-secrets/external-secrets --version <v> --set crds.create=true |
+//	  yq 'select(.kind=="CustomResourceDefinition") | .spec.names.kind + " " +
+//	      .spec.versions[].name + " served=" + (.spec.versions[].served|tostring)'
+var droppedAPIs = []struct{ apiVersion, since, fix string }{
+	{
+		apiVersion: "external-secrets.io/v1beta1",
+		since:      "apl-core v6 (bundled external-secrets 2.4.1)",
+		fix:        "bump to external-secrets.io/v1 (drop-in for standard ExternalSecret specs)",
+	},
+	// NB: external-secrets.io/v1alpha1 is NOT dropped — PushSecret/ClusterPushSecret
+	// and the generators are v1alpha1-only in 2.4.1 (served, and the storage version).
+	// platform-apl/components/harbor/harbor-admin-push.yaml is correct as-is.
+}
+
+// scannedManifestTrees are the manifest roots the dropped-apiVersion guard walks.
+// Two classes, each uncovered by every other gate:
+//
+//   - Operator-OWNED escape hatches (kubernetes-custom/, kubernetes-charts/).
+//     `llz upgrade` deliberately never rewrites these, so a dependency's version
+//     drop leaves them stale until the operator migrates them by hand.
+//   - The template's own SHARED tree (platform-apl/). No CRD-aware gate reads it:
+//     k8s-lint, k8s-validate and the kind server-side dry-run all scan $RENDER_DIR,
+//     which render-charts.sh builds from kubernetes-charts/*/ ONLY. Every instance
+//     fetches platform-apl/ remotely (clusterspec's kustomize remoteBasePrefix), so
+//     one stale apiVersion here breaks every instance at once with nothing upstream
+//     to catch it — exactly how llz-cidr-firewall's ExternalSecret shipped on
+//     external-secrets.io/v1beta1.
+//
+// Prefixes are repo-root-relative and cover both layouts: an instance repo carries
+// kubernetes-custom/ at its root, the template carries the scaffold copy under
+// instance-template/.
+var scannedManifestTrees = []string{
+	"kubernetes-custom/",
+	"instance-template/kubernetes-custom/",
+	"kubernetes-charts/",
+	"platform-apl/",
+}
+
+// isDeclaredAPIVersion reports whether a YAML line declares `apiVersion: <api>`
+// (allowing indentation, quotes, and a trailing comment). It matches only a real
+// manifest key, so a prose/comment mention (e.g. a changelog "… v1beta1 → v1")
+// does not false-positive.
+func isDeclaredAPIVersion(line, api string) bool {
+	s := strings.TrimSpace(line)
+	if !strings.HasPrefix(s, "apiVersion:") {
+		return false
+	}
+	v := strings.TrimSpace(strings.TrimPrefix(s, "apiVersion:"))
+	if i := strings.Index(v, "#"); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	return strings.Trim(v, `"'`) == api
+}
+
+type droppedAPIHit struct{ loc, api, since, fix string }
+
+// manifestYAMLFiles returns every .yaml/.yml path under scannedManifestTrees,
+// rooted at root. Paths are returned root-relative with forward slashes.
+//
+// Filesystem walk, deliberately NOT a `git ls-files` scan. The Kubernetes lint job
+// runs inside the ci-kubernetes container, where git against the mounted checkout
+// fails — a git-based scan reports "not a git repo" and takes the whole gate down
+// with it. Every sibling manifest guard walks the filesystem for the same reason.
+//
+// A tree that does not exist is skipped, not an error: an instance repo has no
+// platform-apl/ (it fetches that tree remotely) and the template has no
+// kubernetes-custom/ at its root.
+//
+// Vendored subchart directories (kubernetes-charts/<chart>/charts/, which `helm dep
+// build` populates during the same lint run) are skipped — upstream chart templates
+// are not ours to gate and would false-positive.
+func manifestYAMLFiles(root string) ([]string, error) {
+	var out []string
+	for _, tree := range scannedManifestTrees {
+		base := filepath.Join(root, filepath.FromSlash(tree))
+		err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if os.IsNotExist(err) {
+					return fs.SkipDir // tree absent in this layout
+				}
+				return err
+			}
+			if d.IsDir() {
+				if n := d.Name(); n == ".git" || (n == "charts" && p != base) {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml") {
+				rel, relErr := filepath.Rel(root, p)
+				if relErr != nil {
+					rel = p
+				}
+				out = append(out, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("scan %s: %w", tree, err)
+		}
+	}
+	return out, nil
+}
+
+// scanDroppedAPIVersions looks for any droppedAPIs apiVersion in the manifest trees
+// rooted at root (""/"." = cwd). examined counts the files actually read, so a
+// caller can refuse to pass on an empty corpus.
+func scanDroppedAPIVersions(root string) (hits []droppedAPIHit, examined int, err error) {
+	if root == "" {
+		root = "."
+	}
+	files, err := manifestYAMLFiles(root)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, f := range files {
+		data, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(f)))
+		if readErr != nil {
+			continue // race with a delete / unreadable — not this check's concern
+		}
+		examined++
+		for i, ln := range strings.Split(string(data), "\n") {
+			for _, d := range droppedAPIs {
+				if isDeclaredAPIVersion(ln, d.apiVersion) {
+					hits = append(hits, droppedAPIHit{fmt.Sprintf("%s:%d", f, i+1), d.apiVersion, d.since, d.fix})
+				}
+			}
+		}
+	}
+	return hits, examined, nil
+}
+
+// reportDroppedAPIVersions prints hits and returns the gate error, or nil if clean.
+func reportDroppedAPIVersions(hits []droppedAPIHit) error {
+	if len(hits) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "dropped apiVersion(s) in %d location(s):\n", len(hits))
+	for _, h := range hits {
+		// ::error file=…:: so each lands as a PR annotation rather than being buried
+		// in log output, matching the other manifest guards.
+		fmt.Fprintf(os.Stderr, "::error file=%s::%s no longer served since %s; %s\n",
+			strings.SplitN(h.loc, ":", 2)[0], h.api, h.since, h.fix)
+		fmt.Fprintf(os.Stderr, "  • %s — %s no longer served since %s; %s\n", h.loc, h.api, h.since, h.fix)
+	}
+	return fmt.Errorf("manifest(s) declare an apiVersion the cluster no longer serves — they fail to " +
+		"apply (Argo SyncFailed at deploy). Migrate them by hand: `llz upgrade` does not rewrite " +
+		"operator-owned files, and no CRD-aware gate covers the shared platform-apl/ tree")
+}
+
+// stepDroppedAPIVersions fails when a manifest under scannedManifestTrees declares
+// an apiVersion the cluster no longer serves (see droppedAPIs).
+//
+// Tolerates an empty corpus: an instance repo legitimately has no platform-apl/ and
+// may have no custom YAML at all. The CI face (`llz ci dropped-apiversions`) runs in
+// the template, where empty means the trees moved — and refuses to pass on it.
+func stepDroppedAPIVersions(_ globalOpts) error {
+	hits, _, err := scanDroppedAPIVersions("")
+	if err != nil {
+		return err
+	}
+	return reportDroppedAPIVersions(hits)
+}
+
 func stepTFValidate(g globalOpts) error {
 	terraform := tool("terraform", "LLZ_TERRAFORM")
 	if !haveTool(terraform) {
@@ -349,7 +522,7 @@ func stepCheckov(g globalOpts) error {
 // runLint is the fast pre-commit gate (also called by `llz precommit`).
 func runLint(g globalOpts) error {
 	for _, step := range []func(globalOpts) error{
-		stepConflictMarkers, stepVendoredFresh, stepUpgradeChurnGuard, stepRenderFresh,
+		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, stepUpgradeChurnGuard, stepRenderFresh,
 		stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
 	} {
 		if err := step(g); err != nil {
