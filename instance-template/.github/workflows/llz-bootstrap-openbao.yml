@@ -610,9 +610,14 @@ jobs:
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
           lane wave-vap          llz ci assert-wave-health-vap
           lane instance-custom   llz ci assert-instance-custom
-          # Team-scoped OpenBao write path (spec.teams → apl-core team → Keycloak
-          # group/role → OpenBao keycloak role → <name>-writer policy). No-op when no
-          # teams are declared. Uses the PUBLIC Keycloak URL (post-converge DNS/cert).
+          # Team-scoped OpenBao credential path, BOTH halves. Write: spec.teams →
+          # apl-core team → Keycloak group/role → OpenBao keycloak role →
+          # <name>-writer policy. Read: the external-secrets SA → the `eso`
+          # Kubernetes-auth role → <name>-reader policy, i.e. what ESO's openbao
+          # ClusterSecretStore does when an ExternalSecret points at a team subtree.
+          # A red lane can therefore be a KEYCLOAK fault or a bao-configure policy
+          # fault — the log names which assertion tripped. No-op when no teams are
+          # declared. Uses the PUBLIC Keycloak URL (post-converge DNS/cert).
           lane team-write        llz ci team-login-smoke --region "$REGION"
           # Report-only lanes (|| true): diagnostics, not gates. They join the fan-out
           # because they are read-only and were costing serial time after it.

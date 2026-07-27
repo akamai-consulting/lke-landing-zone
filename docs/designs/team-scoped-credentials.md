@@ -1,10 +1,12 @@
 # Design: team-scoped credentials — retire the shared admin kubeconfig and root-for-writes
 
 **Status:** Phase 1 **shipped** in #300 (Keycloak → OpenBao write identity, no
-LKE-E control-plane dependency); Phase 2 (scoped kube credentials) remains
-proposed, gated on an open LKE-Enterprise feasibility question (see *Open
-question*). Where the as-built Phase 1 diverges from the sketch below, see
-**As-built** at the end — the shipped code is authoritative.
+LKE-E control-plane dependency), completed by #336, which added the **read** half
+the sketch below omits (ESO consuming what a team writes — see *The read half* at
+the end); Phase 2 (scoped kube credentials) remains proposed, gated on an open
+LKE-Enterprise feasibility question (see *Open question*). Where the as-built
+Phase 1 diverges from the sketch below, see **As-built** at the end — the shipped
+code is authoritative.
 
 Related: [`docs/adr/0004-decouple-openbao-write-identity-from-cluster-access.md`](../adr/0004-decouple-openbao-write-identity-from-cluster-access.md),
 [`docs/runbooks/lke-admin-rotation.md`](../runbooks/lke-admin-rotation.md),
@@ -196,3 +198,54 @@ Reference: [`ci_openbao_configure.go`](../../tools/cmd/llz/ci_openbao_configure.
 [`ci_keycloak_configure.go`](../../tools/cmd/llz/ci_keycloak_configure.go),
 [`openbao_login.go`](../../tools/cmd/llz/openbao_login.go),
 [`docs/runbooks/openbao-team-login.md`](../runbooks/openbao-team-login.md).
+
+## The read half (shipped in #336)
+
+Phase 1 as sketched — and as first shipped — was **write-only**. A team could
+write `secret/<subtree>/*` with an attributed, least-privilege token, but nothing
+in-cluster could consume it: ESO's `openbao` ClusterSecretStore authenticates as
+the `eso` Kubernetes-auth role, which carried only `platform-ci` — a fixed
+platform allowlist with no team coverage. Every ExternalSecret aimed at a
+team-written path 403'd, so the feature's actual use case (seed a credential as a
+team, consume it in a build or app) did not close.
+
+`bao-configure` now also writes a read-only **`<name>-reader`** policy per
+declared team and attaches it to the `eso` role
+(`policies=platform-ci,<team>-reader,…`):
+
+```hcl
+path "secret/data/<subtree>/*"     { capabilities = ["read"] }
+path "secret/metadata/<subtree>/*" { capabilities = ["read", "list"] }
+```
+
+Three properties worth keeping in mind when extending this:
+
+- **Read-only, unlike the writer twin** — ESO never writes app secrets (the
+  separate `eso-pusher` role owns the two generated push paths).
+- **Not gated on the Keycloak issuer.** ESO read must work on an instance whose
+  device-flow client was never configured, so the reader wiring sits in the main
+  step list, not `keycloakTeamSteps`. A team-less instance is byte-identical
+  (`policies=platform-ci`, no reader steps).
+- **Not a confidentiality boundary between teams.** Every reader hangs off the
+  ONE shared `eso` identity, and the ClusterSecretStore carries no namespace
+  `conditions` — so an ExternalSecret in any namespace resolves any team's
+  subtree, exactly as it already resolves platform-ci's paths. The **write** side
+  stays properly per-team (each `<name>-writer` is minted only for that team's
+  Keycloak group). Per-team read isolation would need a per-team SecretStore +
+  OpenBao role, or `conditions` on the store — deliberately not attempted here,
+  and the natural place to start if the *External app-team tenancy* non-goal above
+  is ever picked up.
+
+**Lifecycle caveat.** `bao-configure` needs root, and root is revoked at the end
+of every bootstrap, so the eso role's policy list is only ever re-derived on a
+cluster bootstrap or a deliberate re-configure dispatch — not by `llz upgrade`
+and not by the weekly scheduled-checks job. Declaring a team later, or
+offboarding one, therefore needs the manual steps in
+[the runbook](../runbooks/openbao-team-login.md); in particular, offboarding must
+re-write the eso role *before* deleting the reader policy, or ESO keeps a dormant
+grant on the ex-team's subtree.
+
+Covered by `TestESOTeamReaderPolicies` (policy HCL + role binding) and, live, by
+the `team-write` e2e lane — `llz ci team-login-smoke` mints the `external-secrets`
+SA token, logs in as the `eso` role, and asserts it can read the key the team just
+wrote while a path no policy covers still 403s.

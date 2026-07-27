@@ -248,16 +248,25 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 		return fmt.Errorf("openbao kubernetes login (role eso) failed — is the eso k8s-auth role configured + reachable? %w", err)
 	}
 	esoC := openbao.NewWithClient(addr, esoTok, "", openbao.HTTPClientInsecure(30*time.Second))
+	// %v, not %w, on err: the !ok / wrong-value branches reach here with a NIL err
+	// (Get reports an absent secret as ok=false, err=nil), and %w would render that
+	// as "%!w(<nil>)" in the one place an operator reads this — a red e2e lane.
 	if v, ok, err := esoC.Get(ctx, inPath, "ok"); err != nil || !ok || v != "1" {
-		return fmt.Errorf("EXPECTED the eso role to READ %s (the team-written key) via the %s-reader policy, got value=%q ok=%v err=%w — bao-configure did not grant ESO read on the team subtree", inPath, team, v, ok, err)
+		return fmt.Errorf("EXPECTED the eso role to READ %s (the team-written key) via the %s-reader policy, got value=%q ok=%v err=%v — bao-configure did not grant ESO read on the team subtree", inPath, team, v, ok, err)
 	}
 	fmt.Printf("✓ eso role read %s (team subtree is ESO-readable)\n", inPath)
 
 	// A path under neither the team subtree nor platform-ci → must 403. (Not a
-	// platform-ci path: the eso role legitimately carries platform-ci too.)
+	// platform-ci path: the eso role legitimately carries platform-ci too.) The
+	// leading '_' makes this unclaimable by construction: openbaoSubtreeRe pins team
+	// subtrees to lowercase-kebab segments, so no spec.teams entry can ever cover it.
+	//
+	// A NIL error here is a finding, not a pass: OpenBao checks the ACL before the
+	// backend, so an ungranted path 403s — it only 404s (ok=false, err=nil) once the
+	// token is ALLOWED to look and finds nothing. Either way the path was reachable.
 	denyPath := "secret/_llz_smoke_denied_" + suffix + "/x"
 	if _, _, err := esoC.Get(ctx, denyPath, "k"); err == nil {
-		return fmt.Errorf("SECURITY: the eso role READ %s but no policy grants it — the %s-reader scope is too broad", denyPath, team)
+		return fmt.Errorf("SECURITY: the eso role was PERMITTED to read %s (no 403 — the read resolved, empty or not) but no policy grants it — the %s-reader scope is too broad", denyPath, team)
 	} else if !isDenied(err) {
 		return fmt.Errorf("read of %s by the eso role failed, but not with a 403/permission-denied: %w", denyPath, err)
 	}
