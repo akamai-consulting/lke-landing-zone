@@ -279,6 +279,98 @@ func stepRenderFresh(g globalOpts) error {
 // skip" — so a corrupt index, a permissions problem, or git missing from PATH
 // silently passed a scan that exists precisely to stop silent breakage. Now the
 // two are told apart: no repo is a skip, a repo we cannot read is an error.
+// droppedAPIs are apiVersions a converged apl-core dependency no longer serves, so
+// a manifest still declaring one fails to apply ("no matches for kind … in version
+// …"). The operator-owned custom trees (ownedManifestTrees) are `owned` — `llz
+// upgrade` never rewrites them — so a dependency's version drop leaves them stale
+// until the operator migrates. This guard surfaces that at lint time instead of as
+// an opaque Argo SyncFailed at deploy. Add an entry when a dependency drops one.
+var droppedAPIs = []struct{ apiVersion, since, fix string }{
+	{
+		apiVersion: "external-secrets.io/v1beta1",
+		since:      "apl-core v6 (bundled external-secrets 2.4.1)",
+		fix:        "bump to external-secrets.io/v1 (drop-in for standard ExternalSecret specs)",
+	},
+}
+
+// ownedManifestTrees are the operator-owned manifest roots the dropped-apiVersion
+// guard scans — the escape-hatch custom content `llz upgrade` deliberately leaves
+// alone. Template-managed trees (apl-values/, platform-apl/) are the template's to
+// migrate and are covered upstream, so they are intentionally out of scope here.
+var ownedManifestTrees = []string{"kubernetes-custom/", "kubernetes-charts/"}
+
+// isDeclaredAPIVersion reports whether a YAML line declares `apiVersion: <api>`
+// (allowing indentation, quotes, and a trailing comment). It matches only a real
+// manifest key, so a prose/comment mention (e.g. a changelog "… v1beta1 → v1")
+// does not false-positive.
+func isDeclaredAPIVersion(line, api string) bool {
+	s := strings.TrimSpace(line)
+	if !strings.HasPrefix(s, "apiVersion:") {
+		return false
+	}
+	v := strings.TrimSpace(strings.TrimPrefix(s, "apiVersion:"))
+	if i := strings.Index(v, "#"); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	return strings.Trim(v, `"'`) == api
+}
+
+func underAnyPrefix(path string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// stepDroppedAPIVersions fails when an operator-owned manifest declares an
+// apiVersion the cluster no longer serves (see droppedAPIs). Same git-tracked scan
+// as stepConflictMarkers, scoped to ownedManifestTrees YAML.
+func stepDroppedAPIVersions(_ globalOpts) error {
+	out, err := gitOutput("", "ls-files")
+	if err != nil {
+		if _, repoErr := gitOutput("", "rev-parse", "--git-dir"); repoErr != nil {
+			fmt.Fprintln(os.Stderr, "  skip: not a git repo (dropped-apiVersion scan)")
+			return nil
+		}
+		return fmt.Errorf("dropped-apiVersion scan: this IS a git repo but `git ls-files` failed, "+
+			"so nothing was scanned — refusing to report clean: %w", err)
+	}
+	type hit struct{ loc, api, since, fix string }
+	var hits []hit
+	for _, f := range strings.Split(out, "\n") {
+		f = strings.TrimSpace(f)
+		if f == "" || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml")) {
+			continue
+		}
+		if !underAnyPrefix(f, ownedManifestTrees) {
+			continue
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue // race with a delete / unreadable — not this check's concern
+		}
+		for i, ln := range strings.Split(string(data), "\n") {
+			for _, d := range droppedAPIs {
+				if isDeclaredAPIVersion(ln, d.apiVersion) {
+					hits = append(hits, hit{fmt.Sprintf("%s:%d", f, i+1), d.apiVersion, d.since, d.fix})
+				}
+			}
+		}
+	}
+	if len(hits) > 0 {
+		fmt.Fprintf(os.Stderr, "dropped apiVersion(s) in operator-owned manifests (%d):\n", len(hits))
+		for _, h := range hits {
+			fmt.Fprintf(os.Stderr, "  • %s — %s no longer served since %s; %s\n", h.loc, h.api, h.since, h.fix)
+		}
+		return fmt.Errorf("owned manifest(s) declare an apiVersion the cluster no longer serves — " +
+			"they fail to apply (Argo SyncFailed). `llz upgrade` does not rewrite owned files " +
+			"(kubernetes-custom/, kubernetes-charts/), so migrate them by hand")
+	}
+	return nil
+}
+
 func stepConflictMarkers(_ globalOpts) error {
 	out, err := gitOutput("", "ls-files")
 	if err != nil {
@@ -349,7 +441,7 @@ func stepCheckov(g globalOpts) error {
 // runLint is the fast pre-commit gate (also called by `llz precommit`).
 func runLint(g globalOpts) error {
 	for _, step := range []func(globalOpts) error{
-		stepConflictMarkers, stepVendoredFresh, stepUpgradeChurnGuard, stepRenderFresh,
+		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, stepUpgradeChurnGuard, stepRenderFresh,
 		stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
 	} {
 		if err := step(g); err != nil {

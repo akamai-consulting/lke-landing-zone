@@ -136,6 +136,68 @@ func TestStepConflictMarkers(t *testing.T) {
 	}
 }
 
+func TestIsDeclaredAPIVersion(t *testing.T) {
+	const api = "external-secrets.io/v1beta1"
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{"apiVersion: external-secrets.io/v1beta1", true},
+		{"  apiVersion: external-secrets.io/v1beta1", true},
+		{`apiVersion: "external-secrets.io/v1beta1"`, true},
+		{"apiVersion: external-secrets.io/v1beta1  # legacy", true},
+		{"apiVersion: external-secrets.io/v1", false},                  // already migrated
+		{"# bump apiVersion external-secrets.io/v1beta1 -> v1", false}, // prose/comment, not a key
+		{"  key: external-secrets.io/v1beta1", false},                  // some other key
+	} {
+		if got := isDeclaredAPIVersion(tc.line, api); got != tc.want {
+			t.Errorf("isDeclaredAPIVersion(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
+
+func TestStepDroppedAPIVersions(t *testing.T) {
+	if _, err := execLookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
+		if _, err := gitOutput(dir, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	mk := func(name, body string) {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Owned tree already on v1 → clean. A changelog PROSE mention of v1beta1 → clean.
+	// A v1beta1 manifest in a TEMPLATE-managed tree (platform-apl/) is out of scope.
+	mk("kubernetes-charts/managed-apps/chart/templates/es.yaml", "apiVersion: external-secrets.io/v1\nkind: ExternalSecret\n")
+	mk("kubernetes-charts/managed-apps/chart/Chart.yaml", "# 0.1.6: bumped external-secrets.io/v1beta1 -> v1\nname: managed-apps\n")
+	mk("platform-apl/components/x/externalsecret.yaml", "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n")
+	if _, err := gitOutput(dir, "add", "-A"); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, dir)
+	if err := stepDroppedAPIVersions(gopts); err != nil {
+		t.Fatalf("clean owned tree + prose mention + out-of-scope platform-apl should pass: %v", err)
+	}
+
+	// A v1beta1 manifest in an OWNED tree (kubernetes-custom/) must fail.
+	mk("kubernetes-custom/namespaces/team-x/es.yaml", "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\n")
+	if _, err := gitOutput(dir, "add", "kubernetes-custom/namespaces/team-x/es.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	if err := stepDroppedAPIVersions(gopts); err == nil {
+		t.Fatal("expected failure: owned kubernetes-custom manifest on external-secrets.io/v1beta1")
+	}
+}
+
 // chdir cds into dir for the duration of the test, restoring the cwd after.
 func chdir(t *testing.T, dir string) {
 	t.Helper()
