@@ -117,7 +117,7 @@ jobs:
       # variables. (Owner must be lowercase for GHCR — true for org logins.)
       image: ${{ vars.KUBE_IMAGE || format('ghcr.io/{0}/ci-kubernetes:1.31.0', github.repository_owner) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Add /usr/local/bin to PATH
         run: echo "PATH=/usr/local/bin:${PATH}" >> "$GITHUB_ENV"
@@ -157,7 +157,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
@@ -359,7 +359,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Go (build llz — the scaffolder)
         uses: ./.github/actions/setup-llz
       - name: Install Helm (apl-core schema validation)
@@ -391,7 +391,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # git describe --tags (llz_version) + copier's `--vcs-ref HEAD` need the
           # full history + tags, not the default shallow clone.
@@ -430,7 +430,7 @@ jobs:
       # variables. (Owner must be lowercase for GHCR — true for org logins.)
       image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-terraform:1.9.8', github.repository_owner) }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go (source llz for template-manifest gate)
         uses: ./.github/actions/setup-llz
@@ -459,7 +459,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
         uses: ./.github/actions/setup-llz
