@@ -412,6 +412,44 @@ jobs:
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
         run: llz ci mint-bootstrap-objkeys --region "$REGION"
 
+      # ── Seed: Managed Postgres admin connections ────────────────────────────────
+      # The databases root provisions 0-n clusters; this copies each one's admin
+      # connection into secret/platform/db-admin/<name> so ESO can publish it to
+      # whatever carves per-app logical databases out of the cluster.
+      #
+      # Gated on the RENDERED tfvars rather than run unconditionally: seeding needs
+      # the databases root's terraform state, and initializing that root on the
+      # critical bootstrap path would add a failure mode for the majority of
+      # instances that declare no databases at all. The gate is exact —
+      # DatabasesTFVars omits the `databases` assignment entirely when the map is
+      # empty, so the line is present if and only if a cluster was declared. It is
+      # also safe to read the per-env file directly: `databases` is deliberately
+      # NOT inherited from spec.defaults.cluster (llz validate rejects it there),
+      # so the env's own tfvars is the whole truth.
+      - name: Detect declared database clusters
+        id: db
+        if: steps.ensure.outputs.available == 'true'
+        run: llz ci db-declared --region "$REGION"
+
+      - name: Terraform init — databases (for the admin seed)
+        if: steps.ensure.outputs.available == 'true' && steps.db.outputs.declared == 'true'
+        uses: ./.github/actions/terraform-init
+        with:
+          module: databases
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+
+      # Idempotent, and NOT a blind skip: unlike an object-storage key there is
+      # nothing to mint here — the credential is the provider's — so re-running
+      # updates a path whose password no longer matches the cluster (which is what
+      # a recreated cluster leaves behind) instead of stranding every consumer on
+      # a dead credential.
+      - name: Seed database admin connections
+        if: steps.ensure.outputs.available == 'true' && steps.db.outputs.declared == 'true'
+        working-directory: terraform-iac-bootstrap/databases
+        run: llz ci seed-db-admin --region "$REGION"
+
       # ── Mint + seed: the narrow in-cluster Linode PAT ───────────────────────────
       # Mints the NARROW in-cluster PAT (label llz-incluster-<region>) using the
       # broad PAT and seeds secret/linode/api-token. Every in-cluster Linode consumer

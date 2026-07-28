@@ -47,6 +47,10 @@ on:
         options:
           - cluster
           - object-storage
+          # 0-n Managed Postgres clusters (spec.cluster.databases). A deployment
+          # that declared none renders `databases = {}` and this applies cleanly
+          # while provisioning nothing, so it is safe to run on any deployment.
+          - databases
           - all
       region:
         # NOTE: input name kept as `region` for backwards compatibility with
@@ -63,7 +67,7 @@ on:
         required: true
         type: string
       confirm_destroy:
-        description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:object-storage'
+        description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:object-storage | destroy:<deployment>:databases'
         required: false
         type: string
       assert_loki:
