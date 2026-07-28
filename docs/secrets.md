@@ -217,7 +217,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `token-inventory` expiry measurement (alerts via `LLZToken*`) |
 | LKE admin kubeconfig | Cluster-admin credential | **Automated** — `secret-rotation.yml` (`lke-admin` scope), monthly; see [lke-admin-rotation.md](runbooks/lke-admin-rotation.md) |
 | `E2E_DISPATCH_TOKEN` | GitHub classic PAT for the e2e harness (template-repo scope) | **Manual** (template-repo admin) |
-| `TF_STATE_ENCRYPTION_PASSPHRASE` | Passphrase for OpenTofu native state+plan encryption (all four TF roots) | **Static by design** — rotating it means re-encrypting every state file (a `fallback` key-rollover, not a re-apply). **ESCROW OFFLINE**: losing it makes every state file unrecoverable. See [ADR 0007](adr/0007-terraform-state-encryption.md) |
+| `TF_STATE_ENCRYPTION_PASSPHRASE` | Passphrase for OpenTofu native state+plan encryption (all four TF roots). **REPO-level**, not `infra-<env>` | **Generated once** by `llz tokens` (never regenerated). **Static by design** — rotating it means re-encrypting every state file (a `fallback` key-rollover, not a re-apply). **ESCROW OFFLINE**: losing it makes every state file unrecoverable. See [ADR 0007](adr/0007-terraform-state-encryption.md) |
 
 **OpenBao KV v2 secrets** (`secret/…`):
 
@@ -245,6 +245,40 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `OPENBAO_ROOT_TOKEN` | Per bootstrap run | **Ephemeral** — revoked unconditionally at end of bootstrap; regenerated via recovery-key quorum |
 | `OPENBAO_SEAL_KEY` | Permanent | **Static by design** — a changed key bricks auto-unseal; escrow offline |
 | `OPENBAO_RECOVERY_KEY_1/2/3` | Permanent | **Static by design** — offline escrow; authorize `generate-root`/`rekey` quorum only |
+
+### Provisioning `TF_STATE_ENCRYPTION_PASSPHRASE`
+
+`llz tokens --env <env>` mints it. It is the only credential llz creates from
+entropy rather than prompting for or calling a provider API — there is nothing to
+create it with, and asking an operator to paste 32 random bytes invites a short or
+hand-typed value that `pbkdf2` accepts and the CI preflight then rejects.
+
+```bash
+llz tokens --env primary --yes     # generates it if absent, prints it ONCE, pushes it
+llz doctor --env primary           # shows it in the readiness table
+```
+
+Three properties worth knowing before running it:
+
+- **It is never regenerated.** Already set on the repo, or cached in
+  `.llz/secrets.env`? llz does nothing. A second value does not *rotate* anything —
+  the state files are still encrypted under the first one, and OpenTofu's
+  decryption failure is hard, with no fallback to plaintext.
+- **It is printed exactly once**, at generation, with an escrow banner. GitHub
+  stores secrets write-only, so that is the only moment the value is recoverable.
+  Escrow it offline, and **not** beside `TF_STATE_ACCESS_KEY` — whoever holds both
+  can read the state, which defeats the point.
+- **It is REPO-level, not `infra-<env>`.** The `vpc` root's state is shared across
+  the deployments attached to one network (`vpc/<network>/terraform.tfstate`), so a
+  per-env key would let one deployment encrypt a state file its peer cannot
+  decrypt. `llz` derives the scope from the requirements table, so `llz tokens`
+  pushes it with `gh secret set --repo` rather than `--env`.
+
+`llz doctor` validates the **shape** — length ≥ 16 (the `pbkdf2` floor) and the
+`[A-Za-z0-9+/=_-]` charset the `terraform-init` action enforces before
+interpolating it into HCL. It cannot validate that it is the **right** key:
+nothing can, until a decrypt is attempted. A wrong key surfaces as a hard
+decryption failure at the next plan.
 
 Scheduled verification of these lives in `scheduled-checks.yml` (daily `0 6 * * *`):
 Linode + GitHub PAT expiry audits (≤90-day policy, warn before expiry) and the

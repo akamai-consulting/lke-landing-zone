@@ -215,6 +215,20 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 		vars["KUBE_IMAGE"] = fmt.Sprintf("ghcr.io/%s/ci-kubernetes:%s", strings.ToLower(defaultTemplateOrg), ciKubernetesTag)
 	}
 
+	// ── State encryption passphrase (MINTED, not prompted) ───────────────────
+	// The only credential llz creates from entropy rather than a provider API.
+	// Guarded hard against a second mint: a replacement key cannot decrypt state
+	// written under the first one, so `configured` short-circuits everything.
+	minted, err := ensureStateEncryptionPassphrase(secrets, have(stateEncryptionSecret, true))
+	if err != nil {
+		return err
+	}
+	if minted {
+		for _, line := range stateEncryptionEscrowNotice(secrets[stateEncryptionSecret]) {
+			fmt.Println(line)
+		}
+	}
+
 	// ── Optional secrets ─────────────────────────────────────────────────────
 	// (CLOUD_FIREWALL_TOKEN was retired: the firewall-controller token is now
 	// ESO-synced from OpenBao's secret/linode/api-token via the cidrFirewall
@@ -459,7 +473,17 @@ func pushToRepo(g globalOpts, repo, env string, secrets, vars map[string]string,
 	}
 	var items []item
 	for _, k := range sortedKeys(secrets) {
-		items = append(items, item{[]string{"gh", "secret", "set", k, "--repo", repo, "--env", "infra-" + env}, secrets[k]})
+		// Scope comes from the requirements table, not from the name. Most secrets
+		// are infra-<env>-scoped; a REPO-level one pushed into an environment would
+		// resolve for that env's jobs and be absent everywhere else — which for
+		// TF_STATE_ENCRYPTION_PASSPHRASE means the shared `vpc` state gets encrypted
+		// by whichever deployment applies first and is then undecryptable by its
+		// peers.
+		argv := []string{"gh", "secret", "set", k, "--repo", repo}
+		if secretIsEnvScoped(k) {
+			argv = append(argv, "--env", "infra-"+env)
+		}
+		items = append(items, item{argv, secrets[k]})
 	}
 	for _, k := range sortedKeys(vars) {
 		if st.value(k) == vars[k] {

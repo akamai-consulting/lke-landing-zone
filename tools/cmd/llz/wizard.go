@@ -388,8 +388,12 @@ func pushSecrets(g globalOpts, env string) error {
 // default, so a bare `llz doctor` doesn't error on a scaffold that was never added.
 func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts string) error {
 	fmt.Println(bold("Tooling:"))
-	// terraform OR tofu satisfies the Terraform requirement.
-	reportEither("terraform", "tofu")
+	// tofu first: the landing zone runs OpenTofu and the CI image ships only
+	// `tofu` (ADR 0008). `terraform` still satisfies the check for adopters
+	// mid-migration, but it is no longer the name doctor leads with — reporting
+	// the legacy binary first is how a Terraform-only workstation looked
+	// "✓ satisfied" while CI ran something else.
+	reportEither("tofu", "terraform")
 	for _, t := range []string{"copier", "gh", "kubectl", "helm", "bao", "jq", "linode-cli"} {
 		report(t, lookable(t))
 	}

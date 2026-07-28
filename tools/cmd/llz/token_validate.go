@@ -145,6 +145,7 @@ const (
 	kindGitHub
 	kindGHCR
 	kindS3
+	kindPassphrase
 )
 
 func kindFor(name string) tokenKind {
@@ -157,6 +158,8 @@ func kindFor(name string) tokenKind {
 		return kindGHCR
 	case "TF_STATE_ACCESS_KEY", "TF_STATE_SECRET_KEY":
 		return kindS3
+	case stateEncryptionSecret:
+		return kindPassphrase
 	default:
 		return kindNone
 	}
@@ -188,6 +191,17 @@ func probeToken(name, value, ghcrUser string, now time.Time) tokenValidity {
 		return tokenValidity{name, s, d}
 	case kindS3:
 		return tokenValidity{name, vSkipped, "present — not probed (S3 keys need a bucket-scoped SigV4 request)"}
+	case kindPassphrase:
+		// Nothing to authenticate against — this key is never presented to a
+		// service. What CAN be wrong is its shape, and both failure modes are
+		// otherwise discovered inside a CI container: too short for pbkdf2, or
+		// carrying a character that would close the HCL string the terraform-init
+		// action interpolates it into. Check the same rules here so the operator
+		// sees it while still holding the value.
+		if err := validateStateEncryptionPassphrase(value); err != nil {
+			return tokenValidity{name, vInvalid, err.Error()}
+		}
+		return tokenValidity{name, vValid, "well-formed (length + charset match the terraform-init preflight) — NOT verifiable against any service; if it is the wrong key, state decryption fails at apply"}
 	default:
 		return tokenValidity{name, vSkipped, ""}
 	}
