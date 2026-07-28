@@ -51,6 +51,9 @@ on:
       # Presence is enforced at runtime by `llz ci require-secret`.
       TF_STATE_ENCRYPTION_PASSPHRASE:
         required: false
+      TF_STATE_ENCRYPTION_PASSPHRASE_OLD:
+        description: 'PREVIOUS state-encryption passphrase. Set ONLY during a rotation window (secret-rotation.yml scope=state-passphrase); empty in steady state. Adds an ENCRYPTED fallback so OpenTofu can read state written with the old key and rewrite it with the new one.'
+        required: false
       TF_STATE_ACCESS_KEY:
         required: false
       TF_STATE_SECRET_KEY:
@@ -157,6 +160,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Terraform validate — cluster
@@ -372,6 +378,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
       - name: Terraform plan — shared VPC
         if: steps.net.outputs.net != ''
@@ -436,6 +445,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
@@ -616,6 +628,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
@@ -666,6 +681,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
@@ -801,6 +819,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Terraform plan — object-storage
@@ -869,6 +890,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Terraform plan destroy — object-storage
@@ -913,6 +937,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       # The Linode provider has no force_destroy, so a non-empty bucket fails the
@@ -1072,6 +1099,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Terraform plan — databases
@@ -1124,6 +1154,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Terraform plan destroy — databases
@@ -1174,6 +1207,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       - name: Terraform destroy — databases

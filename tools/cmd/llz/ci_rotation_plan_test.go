@@ -153,13 +153,14 @@ func TestRunCIRotationPlanWritesOutputsAndSummary(t *testing.T) {
 		"run-lke-admin=true", "run-pat-create=false", "regions=[\"primary\"]",
 		"pat-apply=false", "tf-state-revoke-apply=false",
 		"run-db-admin=false", "db-admin-apply=false",
+		"run-state-passphrase=false", "state-passphrase-apply=false",
 	} {
 		if !strings.Contains(string(got), want+"\n") {
 			t.Errorf("GITHUB_OUTPUT missing %q:\n%s", want, got)
 		}
 	}
-	if lines := strings.Count(string(got), "\n"); lines != 13 {
-		t.Errorf("GITHUB_OUTPUT has %d lines, want all 13 outputs exactly once", lines)
+	if lines := strings.Count(string(got), "\n"); lines != 15 {
+		t.Errorf("GITHUB_OUTPUT has %d lines, want all 15 outputs exactly once", lines)
 	}
 	summary, _ := os.ReadFile(sum)
 	for _, want := range []string{"Emergency rotation requested", "`lke-admin`", "@octocat"} {
@@ -181,5 +182,50 @@ func TestRunCIRotationPlanWritesOutputsAndSummary(t *testing.T) {
 	// Routing refusals surface as errors (the step must fail).
 	if err := runCIRotationPlan(rotationInputs{Event: "workflow_dispatch", Reason: ""}); err == nil {
 		t.Error("blank reason must fail the step")
+	}
+}
+
+// state-passphrase re-keys every state file in the instance, so it is
+// dispatch-only, confirmation-gated, fans out across every deployment, and — like
+// db-admin — must NOT be reachable from `all` or any schedule. A cron that
+// re-keys state unattended is the failure this pins against.
+func TestRouteStatePassphrase(t *testing.T) {
+	base := rotationInputs{
+		Event: "workflow_dispatch", Scope: "state-passphrase", Reason: "quarterly",
+		Deployments: `["primary","secondary"]`,
+	}
+
+	if _, err := routeRotation(base); err == nil {
+		t.Error("missing confirmation must fail")
+	}
+
+	in := base
+	in.Confirm = "rotate:state-passphrase"
+	in.StatePassphraseApply = "true"
+	p, err := routeRotation(in)
+	if err != nil {
+		t.Fatalf("routeRotation: %v", err)
+	}
+	if !p.RunStatePassphrase || !p.StatePassphraseApply {
+		t.Errorf("scope should run armed, got run=%v apply=%v", p.RunStatePassphrase, p.StatePassphraseApply)
+	}
+	if p.Regions != `["primary","secondary"]` {
+		t.Errorf("regions = %s, want every deployment (a partial rollover strands roots)", p.Regions)
+	}
+	// Dry-run by default: unarmed unless explicitly asked for.
+	in.StatePassphraseApply = ""
+	if p, _ := routeRotation(in); p.StatePassphraseApply {
+		t.Error("must default to dry-run")
+	}
+
+	// Never reachable except by its own scope.
+	for _, other := range []rotationInputs{
+		{Event: "workflow_dispatch", Scope: "all", Reason: "r", Confirm: "rotate:all"},
+		{Event: "schedule", Cron: cronMonthlyRotate},
+		{Event: "schedule", Cron: cronDailyRevoke},
+	} {
+		if p, _ := routeRotation(other); p.RunStatePassphrase {
+			t.Errorf("scope=%q cron=%q must not re-key state", other.Scope, other.Cron)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 )
@@ -38,7 +39,7 @@ func TestSampleTokenInventoryExposesGauges(t *testing.T) {
 		},
 	}
 	reg := metrics.NewRegistry()
-	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm, status: 200}, reg); err != nil {
+	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm, status: 200}, reg, time.Unix(1_800_000_000, 0)); err != nil {
 		t.Fatal(err)
 	}
 	out := metricsDump(t, reg)
@@ -64,7 +65,7 @@ func TestSampleTokenInventoryExposesGauges(t *testing.T) {
 // A 404 (the writer job hasn't run yet) is a clean no-op, not an error.
 func TestSampleTokenInventoryAbsentIsNoOp(t *testing.T) {
 	reg := metrics.NewRegistry()
-	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: nil, status: 404}, reg); err != nil {
+	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: nil, status: 404}, reg, time.Unix(1_800_000_000, 0)); err != nil {
 		t.Fatalf("404 should be a no-op, got %v", err)
 	}
 	if strings.Contains(metricsDump(t, reg), "llz_token_") {
@@ -76,7 +77,7 @@ func TestSampleTokenInventoryAbsentIsNoOp(t *testing.T) {
 func TestSampleTokenInventoryEmptyIsNoOp(t *testing.T) {
 	reg := metrics.NewRegistry()
 	cm := map[string]any{"data": map[string]any{}}
-	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm, status: 200}, reg); err != nil {
+	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm, status: 200}, reg, time.Unix(1_800_000_000, 0)); err != nil {
 		t.Fatalf("empty ConfigMap should be a no-op, got %v", err)
 	}
 }

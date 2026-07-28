@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -233,6 +234,101 @@ func TestGHTargetsFromEnvKeepsUnsetRequiredPATs(t *testing.T) {
 	for _, e := range gatherGitHubTokens(got, time.Unix(1_800_000_000, 0), 90, 14) {
 		if e.State != tokenStateUnknown {
 			t.Errorf("%s unset: state = %q, want %q", e.Name, e.State, tokenStateUnknown)
+		}
+	}
+}
+
+// The state-backend credentials have no expiry to read and cannot live in
+// OpenBao (circular — OpenBao runs inside the cluster whose state they guard),
+// so their only age signal is the GitHub secret's WRITE time. See ADR 0009.
+func TestGatherSecretAgesRecordsWriteTime(t *testing.T) {
+	got := gatherSecretAges("infra-primary", func(env, name string) (string, bool, error) {
+		if env == "infra-primary" {
+			return "2026-05-01T10:00:00Z", true, nil
+		}
+		return "", false, nil
+	})
+	if len(got) != len(ghSecretTargets) {
+		t.Fatalf("got %d entries, want %d", len(got), len(ghSecretTargets))
+	}
+	for _, e := range got {
+		if e.UpdatedAt != "2026-05-01T10:00:00Z" || e.State != tokenStateOK || e.Scope != "infra-primary" {
+			t.Errorf("%s: got %+v", e.Name, e)
+		}
+	}
+}
+
+// An ABSENT secret must be reported as unknown, not dropped. This is the property
+// the OpenBao age sampler cannot provide — there a 404 means "not seeded yet" and
+// is skipped, so a never-written credential looks exactly like a healthy one.
+// Here the API distinguishes them, so a missing state-backend credential stays
+// visible rather than silently absent.
+func TestGatherSecretAgesReportsAbsentAsUnknown(t *testing.T) {
+	got := gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
+		return "", false, nil
+	})
+	if len(got) != len(ghSecretTargets) {
+		t.Fatalf("absent secrets must still be reported, got %d", len(got))
+	}
+	for _, e := range got {
+		if e.State != tokenStateUnknown || e.UpdatedAt != "" {
+			t.Errorf("%s: want unknown with no timestamp, got %+v", e.Name, e)
+		}
+	}
+}
+
+// Env scope is tried first, then repo — an instance may hold either.
+func TestGatherSecretAgesFallsBackToRepoScope(t *testing.T) {
+	got := gatherSecretAges("infra-primary", func(env, name string) (string, bool, error) {
+		if env == "" {
+			return "2026-01-02T03:04:05Z", true, nil
+		}
+		return "", false, nil // not in the environment scope
+	})
+	for _, e := range got {
+		if e.Scope != "repo" || e.UpdatedAt == "" {
+			t.Errorf("%s: want the repo-scope hit, got %+v", e.Name, e)
+		}
+	}
+}
+
+// A probe error must not lose the other providers' entries — the inventory is
+// best-effort per source, and a wholesale funnel break is covered by
+// LLZTokenInventoryStale rather than by failing the job.
+func TestGatherSecretAgesToleratesProbeErrors(t *testing.T) {
+	got := gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
+		return "", false, errors.New("403")
+	})
+	if len(got) != len(ghSecretTargets) {
+		t.Fatalf("probe errors must not drop entries, got %d", len(got))
+	}
+	for _, e := range got {
+		if e.State != tokenStateUnknown {
+			t.Errorf("%s: an unreadable secret is unknown, not ok", e.Name)
+		}
+	}
+}
+
+func TestSecretScopeForRegion(t *testing.T) {
+	if got := secretScopeForRegion("primary"); got != "infra-primary" {
+		t.Errorf("got %q, want infra-primary", got)
+	}
+	if got := secretScopeForRegion("  "); got != "" {
+		t.Errorf("blank region should mean repo scope, got %q", got)
+	}
+}
+
+// The class strings on ghSecretTargets are literals (the credClass* constants
+// ship with the credential-coverage PR). Pin the vocabulary so a typo cannot
+// publish a class no alert rule matches — which would be silently inert.
+func TestGHSecretTargetClassesAreKnown(t *testing.T) {
+	known := map[string]bool{
+		"automated": true, "on-demand": true, "generate-once": true,
+		"tracks-source": true, "static": true,
+	}
+	for _, tgt := range ghSecretTargets {
+		if !known[tgt.class] {
+			t.Errorf("%s has class %q, which no alert rule matches", tgt.name, tgt.class)
 		}
 	}
 }
