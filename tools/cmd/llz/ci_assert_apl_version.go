@@ -30,9 +30,15 @@ import (
 )
 
 // minSupportedAplChartVersion is the oldest apl-core chart the landing zone still
-// supports. Bump it in lockstep with any change that assumes newer apl-core
-// behaviour (see the file header for the two v6-only assumptions this guards).
-const minSupportedAplChartVersion = "6.0.0"
+// supports. It is DERIVED from the baseline rather than restated: the two were
+// separate 6.0.0 literals that had to be bumped together, with nothing saying so —
+// the same one-fact-two-records shape that let the template pins skew.
+//
+// Deliberately an alias, not a merge. The floor and the target are distinct ideas
+// and may legitimately diverge (supporting 6.0.0 while targeting 6.2.0); when that
+// day comes, give this its own literal again and the split is explicit rather than
+// accidental. Until then there is exactly one place to bump.
+const minSupportedAplChartVersion = defaultAplChartVersion
 
 func ciAssertAplVersionCmd() *cobra.Command {
 	var env string

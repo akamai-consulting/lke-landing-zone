@@ -8,9 +8,16 @@ package main
 // cannot map from a scan (secret values, data, IDP, workload redeploy).
 //
 // It deliberately renders the migration TARGET versions, not the source's: the
-// source APL/k8s versions describe the platform being left behind. apl-core pins
-// to 5.0.0; k8s is left at the template default and flagged (a +lke version must
-// be valid in the account).
+// source APL/k8s versions describe the platform being left behind. k8s is left at
+// the template default and flagged (a +lke version must be valid in the account).
+//
+// The apl-core target tracks the platform baseline (defaultAplChartVersion) rather
+// than a literal of its own. It used to pin 5.0.0, which stopped being a target the
+// moment the baseline moved to 6.x: `llz ci assert-apl-version` refuses anything
+// below the floor, so every imported instance was scaffolded DEAD ON ARRIVAL and
+// only a hand-edit got it to plan. That guard's own header documented the wart
+// ("`llz import init` still pins 5.0.0 ... so any IMPORTED instance reaches this by
+// default") — this fixes the cause instead of describing it.
 
 import (
 	"fmt"
@@ -25,7 +32,9 @@ import (
 	sigyaml "sigs.k8s.io/yaml"
 )
 
-const importInitAplChartVersion = "5.0.0" // migration target (see file header)
+// importInitAplChartVersion is the apl-core version `llz import init` scaffolds:
+// the platform baseline, so an imported instance is born on a SUPPORTED chart.
+const importInitAplChartVersion = defaultAplChartVersion
 
 type importInitOpts struct {
 	report string

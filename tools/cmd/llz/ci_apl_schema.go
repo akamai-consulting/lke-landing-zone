@@ -69,8 +69,9 @@ func ciAplSchemaValidateCmd() *cobra.Command {
 			"secrets-only runtime placeholders `llz ci bootstrap-cluster` fills (else the\n" +
 			"bootstrap can't fill it — the ${apl_values_repo_url} class); (2) the values\n" +
 			"pass apl-core's chart schema via `helm template apl/apl`, pinned to\n" +
-			"--chart-version. The schema check self-skips (--skip-schema, no helm on PATH,\n" +
-			"or no --chart-version); the var-contract check always runs.",
+			"--chart-version — or, when that is omitted, to the baseline an unpinned env\n" +
+			"actually deploys. The schema check self-skips only on --skip-schema or no helm\n" +
+			"on PATH; the var-contract check always runs.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runValidateAplValues(valuesPath, chartVersion, skipSchema)
@@ -106,9 +107,16 @@ func runValidateAplValues(valuesPath, chartVersion string, skipSchema bool) erro
 		fmt.Println("schema check skipped (no helm on PATH)")
 		return nil
 	}
+	// An absent --chart-version used to SKIP this check. That inverted the gate for
+	// the commonest case: spec.cluster.bootstrap.aplChartVersion is optional, so an
+	// env that never pinned one had its values validated against nothing at all
+	// while a real chart deployed. Fall back to the baseline the rest of the
+	// toolchain resolves (assert-apl-version's default) — which is exactly the
+	// version an unpinned env runs, so the check now covers the default path
+	// instead of quietly abandoning it.
 	if chartVersion == "" {
-		fmt.Println("schema check skipped (no --chart-version — pass spec.cluster.bootstrap.aplChartVersion to enable)")
-		return nil
+		chartVersion = defaultAplChartVersion
+		fmt.Printf("no --chart-version — validating against the baseline apl-core %s (an unpinned env deploys this)\n", chartVersion)
 	}
 	return validateAplSchema(string(valuesRaw), chartVersion)
 }

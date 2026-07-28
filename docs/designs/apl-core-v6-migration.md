@@ -252,10 +252,16 @@ instance, hold past-lab promotion until the lab-validation checklist passes.
 1. `copier update` each instance repo to pull the template changes.
 2. Bump the sha-pinned e2e `TF_IMAGE` if the llz contract changed (see the
    `e2e TF_IMAGE coupling` note).
-3. Per-cluster **in-place upgrade**, not fresh install: bump `apl_chart_version`
-   in the cluster's `cluster-bootstrap/<env>.tfvars` → `terraform apply` →
-   `helm_release.apl` upgrades apl-operator → its helmfile re-converges the
-   platform. Watch apl-operator logs for the helmfile pipeline.
+3. Per-cluster **in-place upgrade**, not fresh install.
+
+   > **This step is historical.** It described bumping `apl_chart_version` in the
+   > cluster's `cluster-bootstrap/<env>.tfvars` and running `terraform apply` so
+   > `helm_release.apl` upgraded apl-operator. That path is doubly retired: the
+   > `cluster-bootstrap` TF workspace was replaced by `llz ci bootstrap-cluster`
+   > (ADR 0002), and the managed App Platform pivot means **LLZ no longer installs
+   > apl-core at all** — Linode owns the deployed chart version, and bootstrap only
+   > layers LLZ's extras onto it. There is no operator-side lever here to pull;
+   > following this step would have edited a file that feeds nothing.
 4. Promote lab → staging → primary → secondary, one production region at a time
    (per the [apl-core-migration-runbook](../apl-core-migration-runbook.md)).
 
