@@ -80,7 +80,10 @@ type: application
 #         the openbao namespace's default-deny egress L4-blocks the fetch and
 #         team OIDC logins time out. (values.yaml keycloakEgress + the netpol
 #         template.) Must ship together with the openbao.yaml Argo targetRevision.
-version: 0.1.22
+# 0.1.23: add values.schema.json — root-strict, so a typo'd top-level key is
+#        REJECTED AT RENDER instead of silently activating nothing. Nested
+#        objects stay permissive; no rendered change for valid values.
+version: 0.1.23
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

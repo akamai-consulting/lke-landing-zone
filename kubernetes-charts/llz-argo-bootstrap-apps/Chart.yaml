@@ -52,7 +52,11 @@ type: application
 #         sync-order rationale (its bootstrap Application was removed in 0.1.14;
 #         apl-core 6.x ships ESO itself, as the README already said further down).
 #         Mirrors the doc-only bump of llz-cert-automation 0.1.8→0.1.9.
-version: 0.1.22
+# 0.1.23: add values.schema.json — root-strict, so a typo'd top-level key is
+#        REJECTED AT RENDER instead of silently activating nothing. Nested
+#        objects stay permissive; no rendered change for valid values.
+#        Also re-pins llz-cluster-foundation 0.1.14 + llz-cert-automation 0.1.10.
+version: 0.1.23
 # appVersion is nominal here — this chart renders Argo CD CRs and pins no
 # single upstream image; it tracks the bootstrap layout, not a binary.
 appVersion: "0.1.0"
