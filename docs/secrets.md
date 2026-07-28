@@ -225,9 +225,9 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `secret/linode/api-token` | **Narrow in-cluster PAT** (`llz-incluster-<region>`: domains/object_storage/volumes rw, linodes/vpc ro, firewall rw) — read by volume-labeler, the cred-rotator (minting cred), cidr-firewall, and the DNS consumers via the `dns-rotating-token` policy | **Automated** — first minted by `mint-bootstrap-pat` at bootstrap; re-minted monthly per region by `secret-rotation.yml` → `rotate-incluster-pat` (GitHub-OIDC `secret-propagator` role), 7-day-grace drain |
 | `secret/loki/object-store` | Loki Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/harbor/registry-s3` | Harbor registry Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
-| `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |
-| `secret/otel/ingress` | OTel ingress bearer token | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |
-| `secret/harbor/admin` | Harbor admin password | **Tracks Harbor** — ESO PushSecret mirrors Harbor's Helm-generated Secret (`Replace`) via `eso-pusher` role |
+| `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role. Age-tracked (`class="generate-once"`); see below |
+| `secret/otel/ingress` | OTel ingress bearer token | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role. Age-tracked (`class="generate-once"`); see below |
+| `secret/harbor/admin` | Harbor admin password | **Tracks Harbor** — ESO PushSecret mirrors Harbor's Helm-generated Secret (`Replace`) via `eso-pusher` role. Age-tracked (`class="tracks-source"`); see below |
 | `secret/harbor/robot` | Harbor CI robot (push/pull/delete) | **Static** — bootstrap seed; re-seed to rotate |
 | `secret/harbor/pull-robot` | Harbor pull-only robot (the credential an imagePullSecret is built from — LLZ does not build one for you) | **Static** — bootstrap seed; re-seed to rotate |
 | `secret/harbor/docker-config` | buildah `dockerconfigjson` | **Derived** — rendered in-cluster by ESO from `harbor/robot`; follows the robot creds (not seeded/stored) |
@@ -249,6 +249,32 @@ Scheduled verification of these lives in `scheduled-checks.yml` (daily `0 6 * * 
 Linode + GitHub PAT expiry audits (≤90-day policy, warn before expiry) and the
 in-cluster rotation-SLA age checks. `secret-rotation.yml` carries the automated and
 on-demand rotation jobs.
+
+#### Credential-age coverage and the rotation class
+
+The `--reconcile-openbao-gauges` lane reads KV-v2 `updated_time` for every path in
+`credPaths` ([`reconcile_openbao.go`](../tools/cmd/llz/reconcile_openbao.go)) and
+publishes `llz_credential_age_days{cred, class}`. The `class` label is what makes
+the coverage honest — it separates "a rotator is late" from "nothing rotates this":
+
+| `class` | Meaning | Alerting |
+|---------|---------|----------|
+| `automated` | A rotator resets it on a cadence (`linodeCredRotator`, ~80d). | `LLZCredentialRotationOverdue` at 90d, **warning** |
+| `generate-once` | Written once by an ESO PushSecret Password generator (`IfNotExists`) and never again. | `LLZCredentialNeverRotated` at 365d, **info** |
+| `tracks-source` | Mirrors a source of truth outside OpenBao; its age describes the source. | `LLZCredentialNeverRotated` at 365d, **info** |
+
+Only `automated` is on the 90-day SLA rule. Putting the other two classes on it
+would produce an alert that fires on day 91 and can never be cleared by any
+automation — permanent noise. They get a yearly info-level nudge instead, and they
+are shown on their own panel in the credential single-pane dashboard so the gap is
+visible rather than silently absent.
+
+> **Adding a path to `credPaths` is a two-file change.** Every entry also needs a
+> `secret/metadata/<path>` read in `policyReconcilerRead`
+> ([`ci_openbao_configure.go`](../tools/cmd/llz/ci_openbao_configure.go)). The
+> sampler treats only a 404 as "not seeded yet"; a 403 is fatal and fails the whole
+> pass, taking the seal gauge and every other credential's age down with it.
+> `TestCredPathsAreGrantedInReconcilerPolicy` pins the pair together.
 
 ## Writing / rotating secrets — dual-write
 

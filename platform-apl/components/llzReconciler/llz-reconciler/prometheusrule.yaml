@@ -210,7 +210,14 @@ spec:
         - alert: LLZCredentialRotationOverdue
           # A credential in OpenBao has not rotated within its SLA. 90d matches the
           # rotation-SLA the daily loki-objkey-rotation-health check enforced.
-          expr: max by (cred) (llz_credential_age_days{namespace="llz-reconciler"}) > 90
+          #
+          # SCOPED to class="automated" — the only class with a rotator behind it
+          # (linodeCredRotator, ~80d threshold), so the only class whose age this
+          # alert can ask to be brought back down. The generate-once and
+          # tracks-source paths publish a real age too, but nothing will ever reset
+          # it; alerting on them would fire on day 91 and stay firing forever.
+          # Their (much weaker) statement is LLZCredentialNeverRotated below.
+          expr: max by (cred) (llz_credential_age_days{namespace="llz-reconciler", class="automated"}) > 90
           for: 1h
           labels:
             severity: warning
@@ -219,6 +226,24 @@ spec:
             summary: 'credential {{ $labels.cred }} rotation is overdue'
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
             description: '{{ $labels.cred }} was last rotated {{ $value }} days ago (SLA 90d).'
+        - alert: LLZCredentialNeverRotated
+          # The honest half of the coverage the class label buys. These credentials
+          # (grafana/admin, otel/ingress — generate-once; harbor/admin — mirrors
+          # Harbor) have NO rotation automation at all, so this is not "a rotator is
+          # late", it is "a year has passed and this password is the one that was
+          # generated at bootstrap". INFO, not warning: there is no runbook step
+          # that clears it short of building rotation or re-seeding by hand, and it
+          # must not sit in the same bucket as an actionable page. 365d, not 90d,
+          # for the same reason — a yearly nudge, not a standing red.
+          expr: max by (cred, class) (llz_credential_age_days{namespace="llz-reconciler", class=~"generate-once|tracks-source"}) > 365
+          for: 24h
+          labels:
+            severity: info
+            service: llz-reconciler
+          annotations:
+            summary: 'credential {{ $labels.cred }} has never been rotated'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
+            description: '{{ $labels.cred }} (class {{ $labels.class }}) is {{ $value }} days old and has no rotation automation. Re-seed it by hand, or accept the age deliberately.'
         - alert: LLZReconcilerNoLeader
           # The llz_reconcile_leader gauge is published only when a driving
           # reconciler is enabled (leader election is running). If it exists and no
