@@ -582,3 +582,4 @@ versioned charts + external actions*.
 - [OpenBao bootstrap runbook](runbooks/bootstrap-openbao.md) — full secret inventory + recovery modes
 - [Secrets operations guide](secrets.md) — dual-write rotation, CI read path, failover
 - [Operator onboarding](playbooks/operator-onboarding.md) — day-2 operations
+- [Run your first workload](playbooks/first-workload.md) — the step *after* the platform converges: your own app on it
