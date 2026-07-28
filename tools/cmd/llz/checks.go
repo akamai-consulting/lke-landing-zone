@@ -522,7 +522,8 @@ func stepCheckov(g globalOpts) error {
 // runLint is the fast pre-commit gate (also called by `llz precommit`).
 func runLint(g globalOpts) error {
 	for _, step := range []func(globalOpts) error{
-		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, stepUpgradeChurnGuard, stepRenderFresh,
+		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, stepUpgradeChurnGuard,
+		stepPinCoherence, stepRenderFresh,
 		stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
 	} {
 		if err := step(g); err != nil {
@@ -623,6 +624,7 @@ func checkCmd() *cobra.Command {
 	}{
 		{"conflict-markers", "fail on committed merge-conflict markers", stepConflictMarkers},
 		{"vendored-fresh", "fail when a vendored .github/ file drifts from the template", stepVendoredFresh},
+		{"pin-coherence", "fail when .copier-answers.yml's _commit and llz_version name different releases", stepPinCoherence},
 		{"fmt-check", "tofu fmt -check (no writes)", stepFmtCheck},
 		{"tf-lint", "tflint each terraform/ root", stepTFLint},
 		{"actions-lint", "actionlint the instance workflows", stepActionsLint},
