@@ -237,6 +237,49 @@ func TestValidateDatabases(t *testing.T) {
 	}
 }
 
+// TestValidateDatabaseDefaults pins the merge.go/validate.go pair: databases is
+// NOT inherited from spec.defaults, so setting it there must be a loud error
+// rather than the silent no-op it would otherwise be (Defaults embeds a Cluster,
+// so the field is syntactically settable but mergeCluster never reads it).
+//
+// The control assertion is the one that would catch a well-meaning "fix": if
+// someone adds a pick for Databases to mergeCluster without deleting the
+// validator, this test still passes but the second half starts contradicting
+// itself — so it asserts the non-inheritance directly.
+func TestValidateDatabaseDefaults(t *testing.T) {
+	env := Environment{Cluster: Cluster{ClusterLabel: "c", Region: "us-ord"}}
+
+	// Absent from defaults: no finding.
+	clean := &LandingZone{Spec: Spec{Environments: map[string]Environment{"lab": env}}}
+	if errs := validateDatabaseDefaults(clean); len(errs) > 0 {
+		t.Errorf("no defaults.databases must be silent, got: %v", errs)
+	}
+
+	lz := &LandingZone{Spec: Spec{
+		Defaults: Defaults{Cluster: Cluster{Databases: Databases{
+			"shared":    {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
+			"analytics": {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
+		}}},
+		Environments: map[string]Environment{"lab": env},
+	}}
+	joined := errsString(validateDatabaseDefaults(lz))
+	if !strings.Contains(joined, "spec.defaults.cluster.databases is not inherited") {
+		t.Errorf("defaults.databases must be rejected, got: %s", joined)
+	}
+	// Names the offending keys, sorted, so the operator knows what to move.
+	if !strings.Contains(joined, "analytics, shared") {
+		t.Errorf("the error must name the entries in sorted order, got: %s", joined)
+	}
+
+	// The behaviour the error EXISTS to cover: inheritance really does drop it.
+	// If this ever starts inheriting, the validator above became wrong.
+	lz.applyInheritance()
+	if got := lz.Spec.Environments["lab"].Cluster.Databases; len(got) != 0 {
+		t.Errorf("databases must not inherit from spec.defaults (see mergeCluster), got %d entries — "+
+			"if that changed deliberately, validateDatabaseDefaults must go with it", len(got))
+	}
+}
+
 // wedgeEnv is a minimal-but-valid Environment for exercising the branch-collision
 // guard in isolation — every OTHER required field is filled so the only finding under
 // test is the branch one.

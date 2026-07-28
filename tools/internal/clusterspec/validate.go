@@ -43,6 +43,7 @@ func (lz *LandingZone) Validate() []error {
 	for _, name := range lz.EnvNames() {
 		errs = append(errs, validateEnv(name, lz.Spec.Environments[name])...)
 	}
+	errs = append(errs, validateDatabaseDefaults(lz)...)
 	errs = append(errs, validateHAGroups(lz)...)
 	errs = append(errs, validateNetworks(lz)...)
 	errs = append(errs, validateHAVPCCIDRs(lz)...)
@@ -361,6 +362,37 @@ func validateEnv(name string, env Environment) []error {
 	errs = append(errs, validateDatabases(c)...)
 	errs = append(errs, validateComponents(name, env.Components)...)
 	return errs
+}
+
+// validateDatabaseDefaults rejects spec.defaults.cluster.databases.
+//
+// Defaults embeds a Cluster, so the field is SYNTACTICALLY available there and an
+// operator will reasonably try to put a shared database under it. mergeCluster
+// does not merge it (deliberately — see below), so without this check the block
+// is accepted, ignored, and no database is ever provisioned: a silent no-op, the
+// worst outcome of the three.
+//
+// Not merged rather than merged, because the fields that IDENTIFY a cluster are
+// vpcId/subnetId, and those are per-environment by construction — each env
+// normally has its own VPC, and a VPC cannot span regions. Inheriting one env's
+// vpcId into another would attach a second env's database to the first env's
+// network, or fail at apply against a VPC in the wrong region. There is no
+// meaningful instance-wide default here to inherit, so the honest answer is to
+// refuse rather than to guess.
+//
+// The exception — two envs deliberately sharing one VPC via spec.networks — is
+// exactly the case where writing the block out per env costs three lines and
+// makes the sharing visible at the point it happens.
+func validateDatabaseDefaults(lz *LandingZone) []error {
+	if len(lz.Spec.Defaults.Cluster.Databases) == 0 {
+		return nil
+	}
+	return []error{fmt.Errorf(
+		"spec.defaults.cluster.databases is not inherited and must not be set (found %d entry/entries: %s) — "+
+			"declare databases per environment under environments.<env>.cluster.databases. "+
+			"A database's vpcId/subnetId are per-environment by construction (a VPC cannot span regions), so there is "+
+			"no instance-wide default to inherit; sharing one here would attach one env's database to another env's network",
+		len(lz.Spec.Defaults.Cluster.Databases), strings.Join(sortedKeys(lz.Spec.Defaults.Cluster.Databases), ", "))}
 }
 
 // validateDatabases checks spec.cluster.databases — 0-n VPC-attached Managed

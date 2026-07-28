@@ -81,6 +81,29 @@ spec:
 `region_suffix` is always the env name (like object storage). `vpc_id`/`subnet_id`/
 `cluster_size` render as HCL numbers.
 
+### Per-environment only — `spec.defaults` is refused
+
+Unlike `objectStorage`, `databases` is **not** inherited from
+`spec.defaults.cluster`, and `llz validate` rejects the block there rather than
+ignoring it.
+
+The fields that identify a cluster are `vpcId`/`subnetId`, and those are
+per-environment by construction: each env normally has its own VPC, and a VPC
+cannot span regions. An inherited `vpcId` would attach one env's database to
+another env's network, or fail at apply against a VPC in the wrong region. There
+is no instance-wide default worth having, so the honest answer is to refuse
+rather than to guess.
+
+`Defaults` embeds a `Cluster`, so the field stays *syntactically* settable under
+`spec.defaults` — which is exactly why the check exists. Without it the block is
+accepted, silently dropped by `mergeCluster`, and no database is ever
+provisioned. The validator and the omission in `mergeCluster` are a pair; neither
+should be changed alone.
+
+The exception — two envs deliberately sharing one VPC via `spec.networks` — is
+the case where writing the block per env costs three lines and makes the sharing
+visible at the point it happens.
+
 ### The key is identity, in three places at once
 
 `databases` is a **map**, not a list, and the key is load-bearing. `<name>` is
