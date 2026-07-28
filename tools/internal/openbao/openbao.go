@@ -45,12 +45,20 @@ func NewWithClient(addr, token, namespace string, httpClient *http.Client) *Clie
 	}
 }
 
-// HTTPClientInsecure builds an *http.Client that skips TLS verification — the
-// established in-cluster posture for OpenBao access (every `baoExec` call uses
-// VAULT_SKIP_VERIFY=true), since distributing OpenBao's private CA into each
-// consumer namespace needs a reflector this platform doesn't ship. Pod→OpenBao
-// traffic stays on the cluster pod network. Prefer HTTPClientWithCA where the CA
-// is mounted.
+// HTTPClientInsecure builds an *http.Client that skips TLS verification. It
+// remains the transport for the loopback cases where there is nothing to verify
+// — the `kubectl port-forward` tunnel `llz openbao get/set/login` open to
+// 127.0.0.1, and every `baoExec` (VAULT_SKIP_VERIFY=true) that runs INSIDE the
+// OpenBao pod.
+//
+// It is NO LONGER the default for pod→OpenBao traffic. The old rationale
+// ("distributing OpenBao's private CA into each consumer namespace needs a
+// reflector this platform doesn't ship") is obsolete: each consumer namespace
+// now issues its own bundle from the `openbao-ca` ClusterIssuer
+// (platform-apl/components/*/openbao-ca-bundle.yaml), and cert-manager writes
+// `ca.crt` onto the resulting Secret. In-cluster callers select their transport
+// via inClusterBaoHTTPClient(), which prefers HTTPClientWithCA and requires an
+// explicit OPENBAO_SKIP_VERIFY=true to land here.
 func HTTPClientInsecure(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
@@ -282,6 +290,46 @@ func (c *Client) MetadataUpdatedTime(ctx context.Context, path string) (time.Tim
 		return time.Time{}, false, fmt.Errorf("parse updated_time %q: %w", out.Data.UpdatedTime, err)
 	}
 	return t, true, nil
+}
+
+// MetadataList returns the immediate child keys of a KV v2 collection path (the
+// LIST verb on secret/metadata/<path>), for the callers whose credential names
+// are declared per deployment rather than fixed in code — the Managed Postgres
+// admin paths under secret/infra/db-admin. ok=false on 404, which KV v2
+// returns for an empty or never-written collection; that is "nothing declared
+// here", not an error.
+//
+// Only leaf keys are returned. KV v2 marks a nested collection with a trailing
+// slash, and nothing under this platform's listed collections nests, so a
+// trailing-slash entry would be a folder the caller cannot read metadata for —
+// skipped rather than passed on to become a spurious 403.
+func (c *Client) MetadataList(ctx context.Context, path string) ([]string, bool, error) {
+	resp, err := c.do(ctx, "LIST", MetadataPath(path), nil)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, false, fmt.Errorf("list %s: HTTP %d: %s", path, resp.StatusCode, respBody(resp))
+	}
+	var out struct {
+		Data struct {
+			Keys []string `json:"keys"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, false, fmt.Errorf("parse list %s: %w", path, err)
+	}
+	keys := make([]string, 0, len(out.Data.Keys))
+	for _, k := range out.Data.Keys {
+		if !strings.HasSuffix(k, "/") {
+			keys = append(keys, k)
+		}
+	}
+	return keys, true, nil
 }
 
 // Write POSTs {data: <pairs>} to secret/data/<path>, creating a new version.

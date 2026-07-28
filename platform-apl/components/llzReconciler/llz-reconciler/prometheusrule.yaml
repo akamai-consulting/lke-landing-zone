@@ -211,13 +211,24 @@ spec:
           # A credential in OpenBao has not rotated within its SLA. 90d matches the
           # rotation-SLA the daily loki-objkey-rotation-health check enforced.
           #
-          # SCOPED to class="automated" — the only class with a rotator behind it
-          # (linodeCredRotator, ~80d threshold), so the only class whose age this
-          # alert can ask to be brought back down. The generate-once and
-          # tracks-source paths publish a real age too, but nothing will ever reset
-          # it; alerting on them would fire on day 91 and stay firing forever.
-          # Their (much weaker) statement is LLZCredentialNeverRotated below.
-          expr: max by (cred) (llz_credential_age_days{namespace="llz-reconciler", class="automated"}) > 90
+          # SCOPED to the classes whose age something can actually bring back down:
+          #   automated  — a rotator resets it on a cadence (linodeCredRotator,
+          #                ~80d; rotate-incluster-pat, monthly). A breach here
+          #                means the ROTATOR is broken.
+          #   on-demand  — a rotation path exists but an OPERATOR triggers it
+          #                (rotate-db-admin; the opt-in cloud-firewall token is
+          #                re-seeded by hand). A breach means nobody ran it.
+          # Both are actionable, which is the test for whether an alert should
+          # fire at all; the remedy differs, so the description branches on class.
+          #
+          # generate-once / tracks-source / static publish a real age too, but
+          # nothing will ever reset them; alerting on those would fire on day 91
+          # and stay firing forever. Their (much weaker) statement is
+          # LLZCredentialNeverRotated below.
+          #
+          # `by (cred, class)` — class must survive the aggregation or the
+          # description below cannot tell an operator which remedy applies.
+          expr: max by (cred, class) (llz_credential_age_days{namespace="llz-reconciler", class=~"automated|on-demand"}) > 90
           for: 1h
           labels:
             severity: warning
@@ -225,17 +236,19 @@ spec:
           annotations:
             summary: 'credential {{ $labels.cred }} rotation is overdue'
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
-            description: '{{ $labels.cred }} was last rotated {{ $value }} days ago (SLA 90d).'
+            description: '{{ $labels.cred }} was last rotated {{ $value }} days ago (SLA 90d). {{ if eq $labels.class "on-demand" }}Rotation is operator-triggered — no schedule will clear this. {{ if match "^db-admin-" $labels.cred }}Dispatch secret-rotation.yml with scope=db-admin; it resets the password IN PLACE with no overlap window, so consumers break until ESO re-syncs — read the runbook first.{{ else }}Re-seed it with `llz openbao set` (see the runbook for this credential''s scope).{{ end }}{{ else }}A rotator owns this path, so it is LATE rather than un-run: check the llz-reconciler linode-creds lane and the secret-rotation.yml schedule.{{ end }}'
         - alert: LLZCredentialNeverRotated
           # The honest half of the coverage the class label buys. These credentials
           # (grafana/admin, otel/ingress — generate-once; harbor/admin — mirrors
-          # Harbor) have NO rotation automation at all, so this is not "a rotator is
-          # late", it is "a year has passed and this password is the one that was
-          # generated at bootstrap". INFO, not warning: there is no runbook step
-          # that clears it short of building rotation or re-seeding by hand, and it
-          # must not sit in the same bucket as an actionable page. 365d, not 90d,
-          # for the same reason — a yearly nudge, not a standing red.
-          expr: max by (cred, class) (llz_credential_age_days{namespace="llz-reconciler", class=~"generate-once|tracks-source"}) > 365
+          # Harbor; the Harbor robots, both GitHub-PAT copies, the Slack webhook and
+          # the Managed Postgres admin creds — static) have NO rotation automation at
+          # all, so this is not "a rotator is late", it is "a year has passed and this
+          # password is the one that was generated at bootstrap". INFO, not warning:
+          # there is no runbook step that clears it short of building rotation or
+          # re-seeding by hand, and it must not sit in the same bucket as an
+          # actionable page. 365d, not 90d, for the same reason — a yearly nudge, not
+          # a standing red.
+          expr: max by (cred, class) (llz_credential_age_days{namespace="llz-reconciler", class=~"generate-once|tracks-source|static"}) > 365
           for: 24h
           labels:
             severity: info

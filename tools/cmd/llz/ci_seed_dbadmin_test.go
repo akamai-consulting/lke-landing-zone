@@ -87,11 +87,11 @@ func TestSeedDBAdminSeedsEveryClusterUnderItsOwnPath(t *testing.T) {
 	}
 
 	// Sorted, not Go map order — the command must be byte-stable across runs.
-	if want := []string{"secret/platform/db-admin/analytics", "secret/platform/db-admin/shared"}; !equalStrs(h.writeOrder, want) {
+	if want := []string{"secret/infra/db-admin/analytics", "secret/infra/db-admin/shared"}; !equalStrs(h.writeOrder, want) {
 		t.Errorf("write order = %v, want sorted %v", h.writeOrder, want)
 	}
 
-	got := h.writes["secret/platform/db-admin/shared"]
+	got := h.writes["secret/infra/db-admin/shared"]
 	for field, want := range map[string]string{
 		"endpoint":   "shared.vpc.internal",
 		"port":       "5432",
@@ -108,7 +108,7 @@ func TestSeedDBAdminSeedsEveryClusterUnderItsOwnPath(t *testing.T) {
 
 	// The whole point of reading ONE output: a cluster's endpoint can never be
 	// paired with a sibling's password.
-	if a := h.writes["secret/platform/db-admin/analytics"]; a["endpoint"] != "analytics.vpc.internal" || a["password"] != "pw-analytics" {
+	if a := h.writes["secret/infra/db-admin/analytics"]; a["endpoint"] != "analytics.vpc.internal" || a["password"] != "pw-analytics" {
 		t.Errorf("analytics entry crossed with another cluster: %v", a)
 	}
 }
@@ -143,8 +143,8 @@ func TestSeedDBAdminIsANoOpWithoutClusters(t *testing.T) {
 // identity instead of on the password prevents.
 func TestSeedDBAdminLeavesALiveCredentialAlone(t *testing.T) {
 	h := newSeedDBAdminHarness(t, connectionsOutput(twoClusterConnections), map[string]string{
-		"secret/platform/db-admin/shared":    "shared.vpc.internal",
-		"secret/platform/db-admin/analytics": "analytics.vpc.internal",
+		"secret/infra/db-admin/shared":    "shared.vpc.internal",
+		"secret/infra/db-admin/analytics": "analytics.vpc.internal",
 	})
 	if err := runCISeedDBAdmin("prod"); err != nil {
 		t.Fatalf("seed-db-admin: %v", err)
@@ -160,16 +160,16 @@ func TestSeedDBAdminLeavesALiveCredentialAlone(t *testing.T) {
 // strand every consumer on a credential for a dead cluster.
 func TestSeedDBAdminReseedsARecreatedCluster(t *testing.T) {
 	h := newSeedDBAdminHarness(t, connectionsOutput(twoClusterConnections), map[string]string{
-		"secret/platform/db-admin/shared":    "shared-OLD.vpc.internal",
-		"secret/platform/db-admin/analytics": "analytics.vpc.internal",
+		"secret/infra/db-admin/shared":    "shared-OLD.vpc.internal",
+		"secret/infra/db-admin/analytics": "analytics.vpc.internal",
 	})
 	if err := runCISeedDBAdmin("prod"); err != nil {
 		t.Fatalf("seed-db-admin: %v", err)
 	}
-	if len(h.writes) != 1 || h.writes["secret/platform/db-admin/shared"]["password"] != "pw-shared" {
+	if len(h.writes) != 1 || h.writes["secret/infra/db-admin/shared"]["password"] != "pw-shared" {
 		t.Fatalf("expected only the recreated cluster to be re-seeded, got %v", h.writes)
 	}
-	if h.writes["secret/platform/db-admin/shared"]["endpoint"] != "shared.vpc.internal" {
+	if h.writes["secret/infra/db-admin/shared"]["endpoint"] != "shared.vpc.internal" {
 		t.Error("the re-seeded path must point at the new cluster")
 	}
 }

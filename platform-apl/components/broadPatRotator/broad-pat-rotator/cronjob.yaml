@@ -10,7 +10,8 @@
 # BROAD_PAT_DEPLOYMENTS lists every deployment whose infra-<d> LINODE_API_TOKEN secret
 # gets the new value.
 #
-# OPENBAO_SKIP_VERIFY=true matches the established in-cluster posture (as harbor/reconciler).
+# OpenBao TLS is VERIFIED via the namespace's openbao-ca-bundle Certificate
+# (OPENBAO_CA_FILE); OPENBAO_SKIP_VERIFY is the cold-start fallback only.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -80,6 +81,14 @@ spec:
                   value: "7"
                 - name: OPENBAO_ADDR
                   value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
+                # Verify OpenBao's TLS: `ca.crt` from the openbao-ca-bundle Certificate
+                # issued into this namespace (openbao-ca-bundle.yaml). Takes
+                # precedence over OPENBAO_SKIP_VERIFY below, which stays as the
+                # documented fallback for the window before the Secret exists —
+                # inClusterBaoHTTPClient() requires one or the other to be set, so
+                # an unset environment can never silently mean unverified TLS.
+                - name: OPENBAO_CA_FILE
+                  value: /etc/openbao-ca/ca.crt
                 - name: OPENBAO_SKIP_VERIFY
                   value: "true"
                 - name: OPENBAO_KUBERNETES_ROLE
@@ -96,6 +105,14 @@ spec:
                 seccompProfile: { type: RuntimeDefault }
               volumeMounts:
                 - { name: tmp, mountPath: /tmp }
+                - { name: openbao-ca, mountPath: /etc/openbao-ca, readOnly: true }
           volumes:
+            # optional: the CA bundle Secret appears once cert-manager issues the
+            # leaf. Absent -> the pod still starts and falls back to
+            # OPENBAO_SKIP_VERIFY rather than wedging in ContainerCreating.
+            - name: openbao-ca
+              secret:
+                secretName: openbao-ca-bundle
+                optional: true
             - name: tmp
               emptyDir: { medium: Memory, sizeLimit: 16Mi }

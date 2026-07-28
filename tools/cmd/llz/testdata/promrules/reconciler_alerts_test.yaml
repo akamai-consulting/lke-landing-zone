@@ -156,17 +156,18 @@ tests:
         exp_alerts: []
 
   # The rotation-class split. Every credential in the gauge set publishes a real
-  # age, but only class="automated" has a rotator that can bring that age back
-  # down. This pins the consequence: widening credPaths to cover the platform
-  # credentials must NOT turn LLZCredentialRotationOverdue into a rule that fires
-  # forever on paths nothing rotates.
+  # age, but only the classes something can actually bring back down are
+  # alertable. This pins the consequence twice over: widening credPaths must NOT
+  # turn LLZCredentialRotationOverdue into a rule that fires forever on paths
+  # nothing rotates — AND the operator-triggered class must not be silently
+  # exempted from the rule that asks a human to act.
   #
   # 2m interval, 26h of samples. The spacing has to stay inside Prometheus'
   # 5m lookback or the series goes stale BETWEEN samples, which resolves the
   # alert and restarts its `for` clock — an hourly series can never satisfy
   # for:1h, let alone the for:24h rule.
   - interval: 2m
-    name: rotation-overdue fires only for credentials something actually rotates
+    name: rotation-overdue fires only for credentials something can act on
     input_series:
       # Automated + overdue: a rotator exists and is late. This is the real page.
       - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="loki-object-store",class="automated"}'
@@ -174,29 +175,71 @@ tests:
       # Automated + inside SLA: silent.
       - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="obj-platform",class="automated"}'
         values: "10x780"
+      # ON-DEMAND + overdue: rotation exists but is operator-triggered. Must fire
+      # — classing this `static` would exempt the highest-value credential in the
+      # deployment from the only actionable alert.
+      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="db-admin-shared",class="on-demand"}'
+        values: "120x780"
+      # ON-DEMAND but NOT db-admin: the opt-in cloud-firewall token, re-seeded by
+      # hand. Same class, DIFFERENT remedy — pins that the description branches on
+      # the credential and doesn't hand this operator the db-admin dispatch.
+      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="linode-cloud-firewall",class="on-demand"}'
+        values: "150x780"
       # Generate-once, well past 90d but under a year: the old unscoped rule
       # would have paged here every day forever.
       - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="grafana-admin",class="generate-once"}'
+        values: "200x780"
+      # Static bootstrap seed, past 90d: NOT on the SLA rule — re-seeding by hand
+      # is the only remedy, so a warning would never clear.
+      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="harbor-robot",class="static"}'
         values: "200x780"
       # Tracks-source, past a year: only the info-level never-rotated rule.
       - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="harbor-admin",class="tracks-source"}'
         values: "400x780"
     alert_rule_test:
-      # Only the automated+overdue credential. grafana-admin at 200d and
-      # harbor-admin at 400d are deliberately absent from this list.
+      # Exactly the two actionable ones. grafana-admin (200d generate-once),
+      # harbor-robot (200d static) and harbor-admin (400d tracks-source) are
+      # deliberately absent — nothing would clear them.
       - eval_time: 2h
         alertname: LLZCredentialRotationOverdue
         exp_alerts:
+          # on-demand: the description must send the operator to the DISPATCH,
+          # and must carry the no-overlap-window warning — running it blind
+          # breaks every consumer until ESO re-syncs.
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+              cred: db-admin-shared
+              class: on-demand
+            exp_annotations:
+              summary: credential db-admin-shared rotation is overdue
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
+              description: 'db-admin-shared was last rotated 120 days ago (SLA 90d). Rotation is operator-triggered — no schedule will clear this. Dispatch secret-rotation.yml with scope=db-admin; it resets the password IN PLACE with no overlap window, so consumers break until ESO re-syncs — read the runbook first.'
+          # Same class, different credential: the SAME rule must produce the
+          # re-seed remedy here, not the db-admin dispatch.
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+              cred: linode-cloud-firewall
+              class: on-demand
+            exp_annotations:
+              summary: credential linode-cloud-firewall rotation is overdue
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
+              description: 'linode-cloud-firewall was last rotated 150 days ago (SLA 90d). Rotation is operator-triggered — no schedule will clear this. Re-seed it with `llz openbao set` (see the runbook for this credential''s scope).'
+          # automated: the remedy is the opposite — the rotator is late, not un-run.
           - exp_labels:
               severity: warning
               service: llz-reconciler
               cred: loki-object-store
+              class: automated
             exp_annotations:
               summary: credential loki-object-store rotation is overdue
               runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
-              description: loki-object-store was last rotated 95 days ago (SLA 90d).
+              description: 'loki-object-store was last rotated 95 days ago (SLA 90d). A rotator owns this path, so it is LATE rather than un-run: check the llz-reconciler linode-creds lane and the secret-rotation.yml schedule.'
       # 24h+ in, the year-old unrotatable credential surfaces as info — and the
-      # 200d generate-once one still does not, because it is under 365d.
+      # 200d ones still do not, because they are under 365d. The on-demand series
+      # must NOT appear here: it is already covered by the actionable rule above,
+      # and double-alerting one credential trains people to ignore both.
       - eval_time: 25h
         alertname: LLZCredentialNeverRotated
         exp_alerts:

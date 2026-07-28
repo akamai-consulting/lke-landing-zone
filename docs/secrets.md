@@ -223,19 +223,54 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 
 | Path | What it holds | Rotation method |
 |------|---------------|-----------------|
-| `secret/linode/api-token` | **Narrow in-cluster PAT** (`llz-incluster-<region>`: domains/object_storage/volumes rw, linodes/vpc ro, firewall rw) — read by volume-labeler, the cred-rotator (minting cred), cidr-firewall, and the DNS consumers via the `dns-rotating-token` policy | **Automated** — first minted by `mint-bootstrap-pat` at bootstrap; re-minted monthly per region by `secret-rotation.yml` → `rotate-incluster-pat` (GitHub-OIDC `secret-propagator` role), 7-day-grace drain |
+| `secret/linode/api-token` | **Narrow in-cluster PAT** (`llz-incluster-<region>`: domains/object_storage/volumes rw, linodes/vpc ro, firewall rw) — read by volume-labeler, the cred-rotator (minting cred), cidr-firewall, and the DNS consumers via the `dns-rotating-token` policy | **Automated** — first minted by `mint-bootstrap-pat` at bootstrap; re-minted monthly per region by `secret-rotation.yml` → `rotate-incluster-pat` (GitHub-OIDC `secret-propagator` role), 7-day-grace drain. Age-tracked (`class="automated"`) — on the 90-day SLA, so a stalled rotation workflow alerts |
+| `secret/linode/broad-pat` | **Broad account `read_write` PAT** — the provisioning credential the `broadPatRotator` CronJob owns; the highest-privilege Linode credential the platform holds | **Automated** in-cluster — `broadPatRotator` (weekly check, `ROTATE_AFTER_DAYS`), mint→verify→write→drain. Age-tracked (`class="automated"`) on the 90d SLA; its *expiry* is separately visible via the token-inventory's Linode enumeration |
+| `secret/linode/cloud-firewall` | **Opt-in** least-privilege firewall token (`linodes:ro` + `vpcs:ro` + `firewall:rw`) for the cidr-firewall controller + discover CronJob. Most instances never seed it and read `linode/api-token` instead | **On-demand** — operator-seeded and re-seeded by hand (`llz openbao set`), documented ≤90-day policy. Age-tracked (`class="on-demand"`) when seeded; an unseeded instance 404s and publishes nothing |
 | `secret/loki/object-store` | Loki Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/harbor/registry-s3` | Harbor registry Object Storage keys | **Automated** in-cluster — `linodeCredRotator` (~80-day threshold) |
 | `secret/grafana/admin` | Grafana admin password | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role. Age-tracked (`class="generate-once"`); see below |
 | `secret/otel/ingress` | OTel ingress bearer token | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role. Age-tracked (`class="generate-once"`); see below |
 | `secret/harbor/admin` | Harbor admin password | **Tracks Harbor** — ESO PushSecret mirrors Harbor's Helm-generated Secret (`Replace`) via `eso-pusher` role. Age-tracked (`class="tracks-source"`); see below |
-| `secret/harbor/robot` | Harbor CI robot (push/pull/delete) | **Static** — bootstrap seed; re-seed to rotate |
-| `secret/harbor/pull-robot` | Harbor pull-only robot (the credential an imagePullSecret is built from — LLZ does not build one for you) | **Static** — bootstrap seed; re-seed to rotate |
+| `secret/harbor/robot` | Harbor CI robot (push/pull/delete) | **Static** — bootstrap seed; re-seed to rotate. Age-tracked (`class="static"`) |
+| `secret/harbor/pull-robot` | Harbor pull-only robot (the credential an imagePullSecret is built from — LLZ does not build one for you) | **Static** — bootstrap seed; re-seed to rotate. Age-tracked (`class="static"`) |
 | `secret/harbor/docker-config` | buildah `dockerconfigjson` | **Derived** — rendered in-cluster by ESO from `harbor/robot`; follows the robot creds (not seeded/stored) |
-| `secret/cert-automation/github-token` | cert-automation Argo Workflow token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
-| `secret/infra/github-dispatch-token` | harbor-ready PostSync dispatch token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
-| `secret/alerts/webhooks` | Alertmanager Slack webhook URL (`slack_url`) — mounted via the Kyverno-repointed `alertmanager-credentials` ExternalSecret | **Manual** — operator seeds/rotates via `llz openbao set alerts/webhooks slack_url=…` (only needed when `spec.alerting.receivers` includes slack; see [alerting.md](alerting.md)) |
-| `secret/platform/db-admin/<name>` | Managed Postgres admin connection (`akmadmin`) — endpoint, port, username, password, ca, sslmode | **On-demand** — seeded by `llz ci seed-db-admin`; rotated via `secret-rotation.yml` scope `db-admin` (`llz ci rotate-db-admin`). NOT scheduled and NOT in `all` — see below |
+| `secret/cert-automation/github-token` | cert-automation Argo Workflow token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; re-seed when that PAT rotates. Age-tracked (`class="static"`) — a climbing age here is the signal that the source PAT was rotated and this copy was not |
+| `secret/infra/github-dispatch-token` | harbor-ready PostSync dispatch token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; re-seed when that PAT rotates. Age-tracked (`class="static"`) — same drift signal as above |
+| `secret/infra/apl-values-repo-token` | OpenBao copy of `APL_VALUES_REPO_TOKEN` — apl-core's `otomi.git` + the argocd repo Secrets read it through ESO | **Static** — bootstrap seed (best-effort, on-missing skip); re-seed when that PAT rotates. Age-tracked (`class="static"`) — the third copy of the same drift signal |
+| `secret/alerts/webhooks` | Alertmanager Slack webhook URL (`slack_url`) — mounted via the Kyverno-repointed `alertmanager-credentials` ExternalSecret | **Manual** — operator seeds/rotates via `llz openbao set alerts/webhooks slack_url=…` (only needed when `spec.alerting.receivers` includes slack; see [alerting.md](alerting.md)). Age-tracked (`class="static"`) when seeded |
+| `secret/infra/db-admin/<name>` | Managed Postgres admin connection (`akmadmin`) — endpoint, port, username, password, ca, sslmode | **On-demand** — seeded by `llz ci seed-db-admin`; rotated via `secret-rotation.yml` scope `db-admin` (`llz ci rotate-db-admin`). NOT scheduled and NOT in `all`. Age-tracked (`class="on-demand"`) via LIST discovery, not a literal path — see below |
+
+> **Path moved — `secret/platform/db-admin/` → `secret/infra/db-admin/`.** The old
+> location sat *inside* the default team's writable subtree: `llz new` scaffolds
+> `openbao_team: platform` → `openbaoSubtree: secret/platform`, which produces a
+> `platform-writer` policy with `create/update/read` on `secret/data/platform/*`.
+> Every database admin password was therefore readable and writable by that team's
+> human operators. `infra` is a reserved (non-team-claimable) namespace, so the
+> credential is now out of reach of any `spec.teams` subtree.
+>
+> **Migrating a deployed instance:** re-run `bootstrap-openbao.yml` (its
+> `seed-db-admin` step re-reads the databases root's Terraform output and writes
+> the new path — the credential is unchanged, only its location), then purge the
+> stale copy and its version history:
+>
+> ```bash
+> llz openbao exec -- kv metadata delete secret/platform/db-admin/<name>
+> ```
+>
+> Use `kv metadata delete`, not `kv delete`: the latter soft-deletes the current
+> version only, leaving the password recoverable from history by anyone with the
+> team's `read` grant — which is the exposure this move exists to close. Until you
+> purge it, the old path remains readable by the team.
+>
+> Nothing the landing zone ships reads either path: `llz ci seed-db-admin` and
+> `llz ci rotate-db-admin` both authenticate with `OPENBAO_ROOT_TOKEN` from CI,
+> the reconciler holds metadata-only, and `platform-ci` (the ESO
+> ClusterSecretStore's policy) grants db-admin nothing. **Check your own
+> workloads before purging, though:** on a default-scaffolded instance the
+> `platform-reader` policy covered `secret/data/platform/*`, so an app-team
+> `ExternalSecret` pointing at the old path *would* have resolved. If you have
+> one, repoint it — and treat that as having handed the database admin
+> credential to an app workload, which is what this move prevents.
 
 **OpenBao runtime auth & seal/recovery material:**
 
@@ -261,15 +296,45 @@ the coverage honest — it separates "a rotator is late" from "nothing rotates t
 
 | `class` | Meaning | Alerting |
 |---------|---------|----------|
-| `automated` | A rotator resets it on a cadence (`linodeCredRotator`, ~80d). | `LLZCredentialRotationOverdue` at 90d, **warning** |
+| `automated` | A rotator resets it on a cadence (`linodeCredRotator` ~80d; `rotate-incluster-pat` monthly). A breach means the **rotator** is broken. | `LLZCredentialRotationOverdue` at 90d, **warning** |
+| `on-demand` | A rotation path exists but an **operator** triggers it — the Managed Postgres admin credential via `secret-rotation.yml` scope `db-admin`, and the opt-in `linode/cloud-firewall` token re-seeded by hand with `llz openbao set`. The alert's remedy text branches on the credential, since those are different commands. A breach means **nobody ran it**. | `LLZCredentialRotationOverdue` at 90d, **warning** |
 | `generate-once` | Written once by an ESO PushSecret Password generator (`IfNotExists`) and never again. | `LLZCredentialNeverRotated` at 365d, **info** |
 | `tracks-source` | Mirrors a source of truth outside OpenBao; its age describes the source. | `LLZCredentialNeverRotated` at 365d, **info** |
+| `static` | Seeded once by bootstrap or by an operator; nothing automated ever touches it. Re-seeding is the only thing that lowers the age. | `LLZCredentialNeverRotated` at 365d, **info** |
 
-Only `automated` is on the 90-day SLA rule. Putting the other two classes on it
-would produce an alert that fires on day 91 and can never be cleared by any
-automation — permanent noise. They get a yearly info-level nudge instead, and they
-are shown on their own panel in the credential single-pane dashboard so the gap is
-visible rather than silently absent.
+`automated` and `on-demand` are on the 90-day SLA rule — the test is whether the
+age is **actionable**, not whether a cron owns it. The remedies differ (fix the
+rotator vs. dispatch the workflow), so the alert description branches on the
+class rather than pretending they are the same problem.
+
+Classing the DB admin credential `static` would have been the tempting mistake:
+accurate before `llz ci rotate-db-admin` existed, and afterwards it would have
+given the highest-value credential in the deployment a yearly *info* nudge and
+exempted it from the only rule that asks a human to act.
+
+Putting the remaining classes on the 90d rule would
+produce an alert that fires on day 91 and can never be cleared by any automation —
+permanent noise. They get a yearly info-level nudge instead, and they are shown on
+their own panel in the credential single-pane dashboard so the gap is visible
+rather than silently absent.
+
+`static` is the class that closes the last coverage hole: the rotation legend in
+the inventory above has always had a **static** row, but the metric taxonomy did
+not, so those paths published *no series at all*. A credential with no rotation is
+a deliberate posture; a credential with no **series** is an invisible one, and the
+two are indistinguishable on a dashboard. Every path in the inventory now carries
+an age gauge.
+
+**Managed Postgres admin paths are discovered, not declared.**
+`secret/infra/db-admin/<name>` is named per declared database cluster, so it
+cannot be a literal in `credPaths`. The sampler LISTs
+`secret/metadata/infra/db-admin` each pass and tracks whatever it finds — a
+cluster added later is covered with no code change, and a deployment with no
+databases lists nothing and publishes nothing. This is the one grant in
+`policyReconcilerRead` that is a prefix rather than an enumeration
+(`secret/metadata/infra/db-admin/*`, read) plus the `list` on the collection.
+Both are metadata-only: the admin password under `secret/data/infra/db-admin/*`
+is granted to nothing, and `TestDBAdminGrantsInReconcilerPolicy` pins that.
 
 > **Adding a path to `credPaths` is a two-file change.** Every entry also needs a
 > `secret/metadata/<path>` read in `policyReconcilerRead`
@@ -280,7 +345,7 @@ visible rather than silently absent.
 
 ### Database admin credentials — why rotation is on-demand only
 
-`secret/platform/db-admin/<name>` holds the `akmadmin` credential for each Linode
+`secret/infra/db-admin/<name>` holds the `akmadmin` credential for each Linode
 Managed PostgreSQL cluster the `databases` root provisions
 ([shared-managed-postgres.md](designs/shared-managed-postgres.md)). It is the
 highest-value credential in the deployment — it owns every logical database
@@ -426,6 +491,49 @@ If the primary region is down:
 This template intentionally does not support "write to secondary only during primary
 outage" — that would create drift the moment primary returns, and there is no
 automated reconciliation.
+
+## In-cluster TLS to OpenBao
+
+OpenBao's serving cert is signed by the private `openbao-ca` ClusterIssuer (see
+[Unseal automation](#unseal-automation) and
+`platform-apl/components/certManagerBootstrapCA/`), so the system trust bundle
+cannot verify it. Every in-cluster caller therefore needs that CA locally, and
+until it had one, all of them skipped verification.
+
+**How the CA gets there.** Each consumer namespace issues its own
+`openbao-ca-bundle` Certificate from the same cluster-scoped `openbao-ca`
+ClusterIssuer. The leaf is disposable — nothing serves on it; it exists only
+because cert-manager stamps `ca.crt` onto the Secret of every certificate it
+issues from a CA issuer. That yields the bundle with no secret-reflector, no
+Kyverno clone rule on a bootstrap-critical path, and no cross-namespace RBAC.
+The Secret is mounted at `/etc/openbao-ca` and named by `OPENBAO_CA_FILE`.
+
+Wired for the three workloads that hold an OpenBao token:
+
+| Workload | Namespace |
+|----------|-----------|
+| `llz-reconciler` Deployment | `llz-reconciler` |
+| `harbor-robot-provisioner` CronJob | `harbor` |
+| `broad-pat-rotator` CronJob | `llz-pat-rotator` |
+
+**The contract.** `inClusterBaoHTTPClient()`
+([`openbao_k8s_login.go`](../tools/cmd/llz/openbao_k8s_login.go)) is the single
+place the transport is chosen:
+
+1. `OPENBAO_CA_FILE` set → verify against that bundle.
+2. else `OPENBAO_SKIP_VERIFY=true` → unverified (the cold-start fallback, kept
+   because the bundle mount is `optional:` and a pod may start before
+   cert-manager has issued it).
+3. else → **error**. An unset environment must never silently mean unverified
+   TLS; that default is how the skip became universal in the first place.
+
+`TestInClusterOpenBaoConsumersVerifyTLS` pins all three workloads to the full
+chain (Certificate exists → registered in its kustomization → mounted → named by
+`OPENBAO_CA_FILE`), so the posture cannot regress by deleting one line.
+
+`HTTPClientInsecure` is still correct for the cases with nothing to verify: the
+`kubectl port-forward` loopback tunnel `llz openbao get/set/login` opens to
+127.0.0.1, and `baoExec`, which runs inside the OpenBao pod itself.
 
 ## Audit logging
 

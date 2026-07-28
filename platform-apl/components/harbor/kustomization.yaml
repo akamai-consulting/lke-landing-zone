@@ -12,3 +12,6 @@ resources:
   - harbor-robot-provisioner/externalsecret.yaml
   - harbor-robot-provisioner/cronjob.yaml
   - harbor-robot-provisioner/network-policy.yaml
+  # OpenBao CA bundle for this namespace, so the provisioner verifies OpenBao's
+  # TLS instead of skipping it. See harbor-robot-provisioner/openbao-ca-bundle.yaml.
+  - harbor-robot-provisioner/openbao-ca-bundle.yaml

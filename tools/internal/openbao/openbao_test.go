@@ -218,3 +218,69 @@ func TestDualWriteRefusesWhenPriorVersionUnreadable(t *testing.T) {
 		t.Errorf("token = %v, want the untouched v2", got)
 	}
 }
+
+// MetadataList backs the reconciler's discovery of the per-deployment Managed
+// Postgres admin paths, whose names are declared in tfvars rather than in code.
+func TestMetadataListLeafKeysOnly(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			// A trailing-slash entry is a nested COLLECTION, not a secret: reading
+			// its metadata would 403 and fail the whole sampler pass, so it must
+			// not be handed back as if it were a credential.
+			"data": map[string]any{"keys": []string{"analytics", "nested/", "shared"}},
+		}); err != nil {
+			t.Errorf("encode: %v", err)
+		}
+	}))
+	defer srv.Close()
+
+	keys, ok, err := New(srv.URL, "tok", "", 5*time.Second).
+		MetadataList(context.Background(), "secret/infra/db-admin")
+	if err != nil || !ok {
+		t.Fatalf("MetadataList = (%v, %v, %v), want keys with ok", keys, ok, err)
+	}
+	if gotMethod != "LIST" {
+		t.Errorf("method = %s, want LIST", gotMethod)
+	}
+	if want := "/v1/secret/metadata/infra/db-admin"; gotPath != want {
+		t.Errorf("path = %s, want %s", gotPath, want)
+	}
+	if strings.Join(keys, ",") != "analytics,shared" {
+		t.Errorf("keys = %v, want the two leaf keys only", keys)
+	}
+}
+
+// KV v2 404s a collection that was never written. For db-admin that is the
+// ordinary "this deployment declares no databases" case — ok=false, NOT an
+// error, because the sampler turns any error into up=0 for the whole lane.
+func TestMetadataListAbsentCollection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	keys, ok, err := New(srv.URL, "tok", "", 5*time.Second).
+		MetadataList(context.Background(), "secret/infra/db-admin")
+	if err != nil {
+		t.Fatalf("404 must not be an error, got %v", err)
+	}
+	if ok || len(keys) != 0 {
+		t.Errorf("MetadataList = (%v, %v), want no keys and ok=false", keys, ok)
+	}
+}
+
+// A 403 (the shape of a missing policy grant) MUST surface as an error so the
+// lane goes up=0 loudly rather than silently reporting zero databases.
+func TestMetadataListForbiddenIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "permission denied", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	if _, ok, err := New(srv.URL, "tok", "", 5*time.Second).
+		MetadataList(context.Background(), "secret/infra/db-admin"); err == nil || ok {
+		t.Errorf("MetadataList on 403 = (ok=%v, err=%v), want an error", ok, err)
+	}
+}

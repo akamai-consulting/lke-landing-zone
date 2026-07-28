@@ -8,4 +8,5 @@ resources:
   - serviceaccount.yaml
   - network-policy.yaml
   - externalsecret.yaml
+  - openbao-ca-bundle.yaml
   - cronjob.yaml

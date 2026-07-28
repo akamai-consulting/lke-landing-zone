@@ -3,7 +3,7 @@ package main
 // ci_seed_dbadmin.go implements `llz ci seed-db-admin` — the OpenBao half of the
 // `databases` root (docs/designs/shared-managed-postgres.md). The root provisions
 // 0-n VPC-attached Linode Managed PostgreSQL clusters; this copies each cluster's
-// admin connection from Terraform state into secret/platform/db-admin/<name>, so
+// admin connection from Terraform state into secret/infra/db-admin/<name>, so
 // ESO can publish it to the consumer that carves per-app logical databases out of
 // the cluster (Crossplane provider-sql, in the first instance).
 //
@@ -35,7 +35,7 @@ import (
 // The cluster NAME is the discriminator, not the username: Linode fixes the admin
 // user to `akmadmin` on every Managed Postgres, so with 0-n clusters the username
 // no longer says which cluster you are holding.
-const dbAdminSeedRoot = "secret/platform/db-admin/"
+const dbAdminSeedRoot = "secret/infra/db-admin/"
 
 // dbAdminSSLMode is seeded alongside the connection because the consumer must not
 // have to know it. `require` is the floor: the endpoint is VPC-internal but the
@@ -64,7 +64,7 @@ func ciSeedDBAdminCmd() *cobra.Command {
 		Use:   "seed-db-admin",
 		Short: "seed each Managed Postgres cluster's admin connection into OpenBao",
 		Long: "Reads the `databases` root's single `connections` output (a map keyed by\n" +
-			"cluster name) and writes one secret/platform/db-admin/<name> per entry —\n" +
+			"cluster name) and writes one secret/infra/db-admin/<name> per entry —\n" +
 			"endpoint, port, username, password, ca, sslmode. Reading ONE output keeps a\n" +
 			"cluster's endpoint and password from ever being paired across clusters.\n\n" +
 			"A no-op when the map is empty, so it runs unconditionally on a deployment\n" +

@@ -123,7 +123,7 @@ func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, 
 	return h
 }
 
-// seededDBSecret is a complete secret/platform/db-admin/<name>, `age` days old.
+// seededDBSecret is a complete secret/infra/db-admin/<name>, `age` days old.
 func seededDBSecret(path string, ageDays int, now time.Time, password string) map[string]string {
 	stamp := now.Add(-time.Duration(ageDays) * 24 * time.Hour).Unix()
 	return map[string]string{
@@ -255,7 +255,7 @@ func TestRotateDBAdminPostResetFailuresAreLoud(t *testing.T) {
 		}, "empty password"},
 		{"openbao write fails", func(_ *fakeDBAPI, h *rotateDBHarness) {
 			h.putErr = errors.New("sealed")
-		}, "write secret/platform/db-admin/shared"},
+		}, "write secret/infra/db-admin/shared"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

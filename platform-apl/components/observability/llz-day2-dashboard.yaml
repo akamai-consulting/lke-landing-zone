@@ -103,7 +103,7 @@ data:
         },
         {
           "id": 8, "title": "Credential age (days)", "type": "timeseries",
-          "description": "All classes. Only class=automated has a rotator and is alertable (LLZCredentialRotationOverdue); generate-once/tracks-source series only ever climb. The dedicated breakdown is the 'LLZ Credentials — single pane' dashboard.",
+          "description": "All classes. automated + on-demand are alertable (LLZCredentialRotationOverdue) — something can lower their age; generate-once/tracks-source/static only ever climb. The dedicated breakdown is the 'LLZ Credentials — single pane' dashboard.",
           "gridPos": { "h": 7, "w": 12, "x": 12, "y": 11 },
           "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "targets": [ { "expr": "llz_credential_age_days{namespace=\"llz-reconciler\"}", "legendFormat": "{{ cred }} ({{ class }})" } ],
