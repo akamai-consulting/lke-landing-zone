@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           ALL='[
-            {"key":"terraform","image":"ci-terraform","target":"ci-terraform","version":"1.9.8"},
+            {"key":"terraform","image":"ci-terraform","target":"ci-terraform","version":"1.12.5"},
             {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.31.0"},
             {"key":"devcontainer","image":"devcontainer","target":"devcontainer","version":""},
             {"key":"llz","image":"llz","target":"llz","version":""}
