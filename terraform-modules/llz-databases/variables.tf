@@ -1,3 +1,17 @@
+variable "name" {
+  description = "Name of THIS database cluster within the deployment — the discriminator that lets one deployment run 0-n clusters. Becomes the middle segment of the label: \"<label_prefix>-<name>-<region_suffix>\". Use \"postgres\" for a deployment's single shared cluster; name additional ones for what they serve (e.g. \"analytics\"). Changing it renames the cluster, which the provider does in place."
+  type        = string
+  default     = "postgres"
+
+  validation {
+    # The label is "<prefix>-<name>-<suffix>" and Linode labels are alphanumeric
+    # plus dash/underscore, so a name carrying anything else produces a rejected
+    # label at apply time — after the plan looked fine. Catch it at plan.
+    condition     = can(regex("^[a-z][a-z0-9-]{0,30}$", var.name))
+    error_message = "name must be lowercase alphanumeric/dash, starting with a letter, at most 31 chars (e.g. postgres, analytics, tenant-db)."
+  }
+}
+
 variable "region_suffix" {
   description = "Deployment suffix appended to the database label — the lowercase deployment/env name (e.g. primary, secondary, staging, lab, e2e, or an adopter's own env). Despite the name this is the deployment discriminator, not strictly a geographic region; it must match the cluster workspace deployment. Environments are created dynamically, so this is validated by format, not a fixed list."
   type        = string
@@ -62,7 +76,7 @@ variable "public_access" {
 
 # Org/deployment identity — override per sibling deployment so two deployments
 # don't collide on the global database label. Matches the object-storage module's
-# label_prefix convention; the label becomes "<label_prefix>-postgres-<suffix>".
+# label_prefix convention; the label becomes "<label_prefix>-<name>-<suffix>".
 variable "label_prefix" {
   description = "Prefix for the database label. Org/deployment identity — override per sibling deployment so labels don't collide."
   type        = string

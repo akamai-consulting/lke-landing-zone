@@ -1,34 +1,49 @@
 # Re-export the module outputs so `llz ci seed-db-admin` (and operators) can read
-# the admin connection from `terraform output` after apply. root_password + ca_cert
-# are sensitive and never printed in plan/apply logs.
-output "database_id" {
-  description = "Linode Managed Database ID."
-  value       = module.databases.database_id
+# the admin connections from `terraform output` after apply.
+#
+# Every output is a MAP KEYED BY CLUSTER NAME, because this root provisions 0-n
+# clusters. An empty `databases` variable yields empty maps, not an error — which
+# is what lets the seed command run unconditionally on a deployment that declared
+# no databases and simply find nothing to seed.
+
+output "database_ids" {
+  description = "Linode Managed Database ID per cluster name."
+  value       = { for name, db in module.databases : name => db.database_id }
 }
 
-output "host" {
-  description = "Primary (VPC-internal) connection host. Seeded to secret/platform/db-admin as `endpoint`."
-  value       = module.databases.host
+output "labels" {
+  description = "Provisioned cluster label per cluster name (\"<label_prefix>-<name>-<region_suffix>\")."
+  value       = { for name, db in module.databases : name => db.label }
 }
 
-output "port" {
-  description = "Connection port. Seeded as `port`."
-  value       = module.databases.port
+output "hosts" {
+  description = "Primary (VPC-internal) connection host per cluster name."
+  value       = { for name, db in module.databases : name => db.host }
 }
 
-output "root_username" {
-  description = "Admin username. Seeded as `username`."
-  value       = module.databases.root_username
+output "ports" {
+  description = "Connection port per cluster name."
+  value       = { for name, db in module.databases : name => db.port }
 }
 
-output "root_password" {
-  description = "Admin password. Seeded as `password`."
-  value       = module.databases.root_password
+# The one `llz ci seed-db-admin` reads: a single `terraform output -json
+# connections` carries everything secret/platform/db-admin/<name> needs, so the
+# seed is one read per apply rather than one per field per cluster — and it
+# cannot pair a host with the wrong cluster's password.
+#
+# Marked sensitive because it CONTAINS sensitive members (root_username is
+# provider-marked sensitive, plus the password and CA); Terraform would reject it
+# unmarked. `terraform output -json connections` still reads it in full.
+output "connections" {
+  description = "Full admin connection per cluster name — { endpoint, port, username, password, ca }. Seeded to secret/platform/db-admin/<name>. `ca` is base64-encoded: decode before writing it to a trust file."
   sensitive   = true
-}
-
-output "ca_cert" {
-  description = "Base64-encoded server CA. Seeded as `ca`."
-  value       = module.databases.ca_cert
-  sensitive   = true
+  value = {
+    for name, db in module.databases : name => {
+      endpoint = db.host
+      port     = db.port
+      username = db.root_username
+      password = db.root_password
+      ca       = db.ca_cert
+    }
+  }
 }

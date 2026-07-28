@@ -11,7 +11,7 @@ the platform apps — is bootstrapped by `llz`, not by Terraform (see
 |---|---|
 | [`llz-cluster`](llz-cluster/) | VPC + subnet + node Cloud Firewall + LKE-E cluster (no node pool) |
 | [`llz-object-storage`](llz-object-storage/) | Linode OBJ buckets for registry/log storage (buckets only — no keys) |
-| [`llz-databases`](llz-databases/) | Shared VPC-attached Linode Managed PostgreSQL (admin creds seeded to OpenBao at bootstrap) |
+| [`llz-databases`](llz-databases/) | One VPC-attached Linode Managed PostgreSQL cluster (admin creds seeded to OpenBao at bootstrap). The `databases` root `for_each`es it for 0-n clusters per deployment |
 
 The node firewall used to be a separate `llz-node-firewall` module and the node
 pool an `llz-pool` module. Both were single-consumer wrappers and are now inlined

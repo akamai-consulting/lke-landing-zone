@@ -1,8 +1,9 @@
-# databases — the shared, VPC-attached Linode Managed Postgres for this
-# deployment. Downstream app platforms carve per-app logical DBs + roles out of
-# it (e.g. Crossplane provider-sql), reaching it over the VPC. The admin
-# credentials are seeded into OpenBao at secret/platform/db-admin by
-# `llz ci seed-db-admin` at bootstrap — never committed.
+# databases — the VPC-attached Linode Managed PostgreSQL clusters for this
+# deployment: zero, one, or several. Downstream app platforms carve per-app
+# logical DBs + roles out of a cluster (e.g. Crossplane provider-sql), reaching
+# it over the VPC. The admin credentials are seeded into OpenBao at
+# `secret/platform/db-admin/<name>` by `llz ci seed-db-admin` at bootstrap —
+# never committed.
 #
 #   terraform apply -var-file=<env>.tfvars
 #
@@ -14,20 +15,45 @@
 # Deployment suffix — must match the matching cluster deployment.
 region_suffix = "your-env"
 
-# Linode region (geographic) — MUST match the region of the VPC below.
-region = "us-ord"
-
-# VPC + subnet to attach the database to (VPC-only, no public endpoint).
-# Typically the same VPC the LKE cluster attaches to (the vpc/ root's outputs).
-#   linode-cli vpcs list        # find the VPC id
-#   linode-cli vpcs subnets-list <vpc_id>
-vpc_id    = 0
-subnet_id = 0
-
-# Engine + sizing (optional — sensible production defaults in the module).
-engine_version = "16"
-db_type        = "g6-dedicated-2"
-cluster_size   = 2
+# The clusters, keyed by name. The key is both the label segment
+# ("platform-<name>-<region_suffix>") and the state address
+# (module.databases["<name>"]), so adding or removing one leaves the others
+# untouched.
+#
+# EMPTY IS THE DEFAULT AND A VALID DEPLOYMENT: apply provisions nothing. That is
+# how `databases` stays opt-in — `llz render` writes this file for every env
+# whether or not the instance wants a database.
+#
+# Per entry:
+#   region         (required) Linode geographic region — MUST match the VPC's region.
+#   vpc_id         (required) VPC to attach to; VPC-only, no public endpoint.
+#                            Typically the same VPC the LKE cluster attaches to.
+#   subnet_id      (required) Subnet within vpc_id.
+#                              linode-cli vpcs list
+#                              linode-cli vpcs subnets-list <vpc_id>
+#   engine_version (optional, "16") Major PostgreSQL version. When MIGRATING data
+#                            in, set at least the source's major version —
+#                            pg_restore is forward-compatible only.
+#   db_type        (optional, "g6-dedicated-2") linode-cli databases types
+#   cluster_size   (optional, 2) 1 = single node, 2/3 = HA with standbys.
+#
+# Example — one shared cluster plus a separately-sized one:
+#
+#   databases = {
+#     shared = {
+#       region    = "us-ord"
+#       vpc_id    = 575244
+#       subnet_id = 12345
+#     }
+#     analytics = {
+#       region       = "us-ord"
+#       vpc_id       = 575244
+#       subnet_id    = 12345
+#       db_type      = "g6-dedicated-8"
+#       cluster_size = 1
+#     }
+#   }
+databases = {}
 
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
 #   TF_VAR_linode_token   Linode account API token (databases:read_write)

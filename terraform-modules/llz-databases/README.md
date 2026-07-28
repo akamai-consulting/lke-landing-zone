@@ -1,20 +1,46 @@
 # llz-databases
 
-A reusable Terraform module that provisions **one shared, VPC-attached Linode
-Managed PostgreSQL cluster** per deployment. Downstream application platforms
-carve per-app logical databases + roles out of this single cluster (e.g. with
-Crossplane `provider-sql`), reaching it **over the VPC** — the cluster has no
-public endpoint.
+A reusable Terraform module that provisions **one VPC-attached Linode Managed
+PostgreSQL cluster**. Downstream application platforms carve per-app logical
+databases + roles out of a cluster (e.g. with Crossplane `provider-sql`),
+reaching it **over the VPC** — the cluster has no public endpoint.
 
 It is the database analog of [`llz-object-storage`](../llz-object-storage): the
 embedded `databases` root (`tools/internal/tfroots/roots/databases`) is a thin
-consumer, and a sibling system team can provision the same cluster by calling
+consumer, and a sibling system team can provision the same clusters by calling
 this module with their own `label_prefix` + VPC.
 
 The admin credentials this module outputs are seeded into OpenBao at
-`secret/platform/db-admin` by `llz ci seed-db-admin` at bootstrap (never in
+`secret/platform/db-admin/<name>` by `llz ci seed-db-admin` at bootstrap (never in
 Terraform-committed state visible to operators; `root_password`/`ca_cert` are
 `sensitive`).
+
+## One cluster per module call — the 0-n fan-out is the caller's
+
+A deployment may want **zero** clusters (the common case), one shared cluster, or
+several — e.g. a shared tenant DB plus a separately-sized one for an app with its
+own version or IOPS needs. This module is deliberately singular; the `databases`
+root does the fan-out:
+
+```hcl
+module "databases" {
+  source   = "…//terraform-modules/llz-databases?ref=<tag>"
+  for_each = var.databases          # map(object({ … })), default {}
+
+  name          = each.key
+  region_suffix = var.region_suffix
+  region        = each.value.region
+  vpc_id        = each.value.vpc_id
+  subnet_id     = each.value.subnet_id
+  # …
+}
+```
+
+Keying on the **name** rather than a list position is what makes a cluster's
+identity stable: the key is simultaneously its label segment, its state address
+(`module.databases["shared"]`), and its OpenBao path, so adding or removing one
+cluster never re-plans its siblings. Under a list, deleting the first of three
+would shift the other two onto each other's state.
 
 ## Why the `_v2` resource
 
@@ -26,6 +52,7 @@ Terraform-committed state visible to operators; `root_password`/`ca_cert` are
 
 | Name | Type | Default | Description |
 |---|---|---|---|
+| `name` | string | `"postgres"` | This cluster's name within the deployment — the 0-n discriminator, and the middle label segment. Format-validated. |
 | `region_suffix` | string | — | Deployment/env discriminator (e.g. `primary`); appended to the label. Format-validated; rejects `your-env`. |
 | `region` | string | — | Linode geographic region (e.g. `us-ord`). **Must match the VPC's region.** |
 | `vpc_id` | number | — | VPC to attach (restrict) the database to. |
@@ -37,19 +64,28 @@ Terraform-committed state visible to operators; `root_password`/`ca_cert` are
 | `label_prefix` | string | `"platform"` | Label prefix (org/deployment identity). |
 | `maintenance` | object | Sun 08:00 UTC, 1h | Weekly patch window. |
 
+The label is `"<label_prefix>-<name>-<region_suffix>"` — e.g.
+`platform-shared-primary`.
+
 ## Outputs
 
 | Name | Sensitive | Description |
 |---|---|---|
 | `database_id` | no | Linode Managed Database ID. |
 | `label` | no | Cluster label. |
-| `host` | no | Primary (VPC-internal) host → `db-admin.endpoint`. |
+| `host` | no | Primary (VPC-internal) host → `db-admin/<name>.endpoint`. |
 | `host_standby` | no | Standby host (HA). |
-| `port` | no | → `db-admin.port`. |
-| `root_username` | no | → `db-admin.username`. |
-| `root_password` | **yes** | → `db-admin.password`. |
-| `ca_cert` | **yes** | Base64 CA → `db-admin.ca`. |
+| `port` | no | → `db-admin/<name>.port`. |
+| `root_username` | **yes** | → `db-admin/<name>.username`. Provider-marked sensitive. |
+| `root_password` | **yes** | → `db-admin/<name>.password`. |
+| `ca_cert` | **yes** | Base64 CA → `db-admin/<name>.ca`. |
 | `engine_version` | no | Provisioned engine version. |
+
+The **root** re-exports these as maps keyed by cluster name (`hosts`, `ports`,
+`database_ids`, `labels`) plus one sensitive `connections` map holding the full
+`{ endpoint, port, username, password, ca }` per cluster — the single read
+`llz ci seed-db-admin` needs, so it cannot pair one cluster's host with another's
+password.
 
 ## Requirements
 

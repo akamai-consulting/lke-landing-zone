@@ -4,6 +4,7 @@ package clusterspec
 // fully-populated Cluster emits every optional key, a minimal one emits none.
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -126,44 +127,65 @@ func TestObjectStorageTFVars(t *testing.T) {
 	}
 }
 
-// TestDatabasesTFVars pins the two shapes that matter for an OPT-IN root.
+// TestDatabasesTFVars pins the three shapes that matter for an OPT-IN, 0-n root:
+// zero clusters, one, and several.
 //
-// Unconfigured is the common case and the load-bearing one: `llz render` writes a
+// ZERO is the common case and the load-bearing one: `llz render` writes a
 // databases/<env>.tfvars for every env whether or not the instance wants a
-// database, so the stub must carry region_suffix and NOTHING else. Emitting an
-// empty vpc_id/subnet_id (0) instead of omitting them would hand the root a
-// syntactically valid tfvars naming VPC 0 — an apply against the wrong thing
-// rather than a loud "you never configured this".
+// database, so the stub must carry region_suffix and NOTHING else. Omitting the
+// `databases` assignment leaves the example's `databases = {}` in place, and the
+// root then applies cleanly and provisions nothing. Emitting an empty-but-present
+// entry instead would hand the root a syntactically valid tfvars naming VPC 0 —
+// an apply against the wrong thing rather than a clean no-op.
 func TestDatabasesTFVars(t *testing.T) {
-	var c Cluster
-	c.Databases = Databases{
-		Region: "us-ord", VPCID: 575244, SubnetID: 12345,
-		EngineVersion: "16", Type: "g6-dedicated-2", ClusterSize: 2,
-	}
-	full := assignKeys(DatabasesTFVars("prod", c))
-	for k, want := range map[string]string{
-		"region_suffix":  `"prod"`,
-		"region":         `"us-ord"`,
-		"engine_version": `"16"`,
-		"db_type":        `"g6-dedicated-2"`,
-		// HCL numbers — unquoted, or the number-typed variables reject them.
-		"vpc_id":       "575244",
-		"subnet_id":    "12345",
-		"cluster_size": "2",
-	} {
-		if got := full[k]; got != want {
-			t.Errorf("DatabasesTFVars(full)[%q] = %q, want %q", k, got, want)
-		}
-	}
-
-	// Unconfigured (no spec.cluster.databases): the stub, region_suffix only.
-	min := assignKeys(DatabasesTFVars("dev", Cluster{}))
-	if got := min["region_suffix"]; got != `"dev"` {
+	// Zero clusters — the stub: region_suffix only, no `databases` key at all.
+	stub := assignKeys(DatabasesTFVars("dev", Cluster{}))
+	if got := stub["region_suffix"]; got != `"dev"` {
 		t.Errorf("region_suffix must always be emitted, got %q", got)
 	}
-	for _, k := range []string{"region", "vpc_id", "subnet_id", "engine_version", "db_type", "cluster_size"} {
-		if _, ok := min[k]; ok {
-			t.Errorf("%q must be omitted when the spec does not configure databases", k)
-		}
+	if _, ok := stub["databases"]; ok {
+		t.Error("`databases` must be omitted when the spec declares no clusters, so the example's `databases = {}` stands")
+	}
+
+	// One cluster, fully specified.
+	var c Cluster
+	c.Databases = Databases{"shared": {
+		Region: "us-ord", VPCID: 575244, SubnetID: 12345,
+		EngineVersion: "16", Type: "g6-dedicated-2", ClusterSize: 2,
+	}}
+	one := assignKeys(DatabasesTFVars("prod", c))
+	if got := one["region_suffix"]; got != `"prod"` {
+		t.Errorf("region_suffix = %q, want %q", got, `"prod"`)
+	}
+	// HCL numbers are unquoted, or the number-typed object attributes reject them.
+	want := "{\n" +
+		"\"shared\" = {\n" +
+		"region = \"us-ord\"\n" +
+		"vpc_id = 575244\n" +
+		"subnet_id = 12345\n" +
+		"engine_version = \"16\"\n" +
+		"db_type = \"g6-dedicated-2\"\n" +
+		"cluster_size = 2\n" +
+		"}\n}"
+	if got := one["databases"]; got != want {
+		t.Errorf("DatabasesTFVars(one)[\"databases\"] =\n%s\nwant\n%s", got, want)
+	}
+
+	// Several clusters: keys SORTED (Go map order is randomized, and `llz render
+	// --check` compares bytes — unsorted output would report drift every run), and
+	// the unset optional fields omitted so the root's optional() defaults own them.
+	c.Databases = Databases{
+		"shared":    {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
+		"analytics": {Region: "us-ord", VPCID: 575244, SubnetID: 12345, ClusterSize: 1},
+	}
+	many := assignKeys(DatabasesTFVars("prod", c))["databases"]
+	if a, s := strings.Index(many, `"analytics"`), strings.Index(many, `"shared"`); a < 0 || s < 0 || a > s {
+		t.Errorf("databases entries must be sorted by name for a byte-stable re-render, got:\n%s", many)
+	}
+	if strings.Contains(many, "engine_version") || strings.Contains(many, "db_type") {
+		t.Errorf("unset optional fields must be omitted so the root's optional() defaults apply, got:\n%s", many)
+	}
+	if strings.Count(many, "cluster_size") != 1 {
+		t.Errorf("cluster_size must be emitted only for the entry that sets it, got:\n%s", many)
 	}
 }

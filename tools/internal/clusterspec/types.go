@@ -373,14 +373,13 @@ type AplValues struct {
 	Username string `json:"username,omitempty"` // apl_values_repo_username
 }
 
-// Databases configures the shared, VPC-attached Linode Managed Postgres for a
-// deployment (databases/<env>.tfvars → terraform-modules/llz-databases). Opt-in:
-// leave it empty and the databases root is simply never applied. When set, the
-// admin credentials are seeded to secret/platform/db-admin by
-// `llz ci seed-db-admin` at bootstrap. VPCID/SubnetID must name a VPC/subnet in
-// Region (a database can only attach to a VPC in its own region — typically the
-// cluster's own VPC).
-type Databases struct {
+// Database configures ONE VPC-attached Linode Managed PostgreSQL cluster
+// (one entry of spec.cluster.databases → one module.databases["<name>"] in the
+// databases root). Its admin credentials are seeded to
+// secret/platform/db-admin/<name> by `llz ci seed-db-admin` at bootstrap.
+// VPCID/SubnetID must name a VPC/subnet in Region — a database can only attach
+// to a VPC in its own region, typically the cluster's own VPC.
+type Database struct {
 	Region        string `json:"region,omitempty"`        // region (geographic — must match the VPC's region)
 	VPCID         int    `json:"vpcId,omitempty"`         // vpc_id
 	SubnetID      int    `json:"subnetId,omitempty"`      // subnet_id
@@ -388,6 +387,18 @@ type Databases struct {
 	Type          string `json:"type,omitempty"`          // db_type (e.g. g6-dedicated-2)
 	ClusterSize   int    `json:"clusterSize,omitempty"`   // cluster_size (1 single, 2/3 HA)
 }
+
+// Databases is a deployment's database clusters keyed by name — 0-n of them.
+// Opt-in and empty by default: no entries means the databases root applies
+// cleanly and provisions nothing, so no separate enabled flag is needed.
+//
+// A MAP, matching spec.networks, not a list. The key is the cluster's identity
+// in three places at once — the middle segment of its Linode label
+// ("platform-<name>-<env>"), its Terraform state address, and its OpenBao path
+// — so a cluster keeps all three when siblings are added or removed. Under a
+// list, identity would be the position, and deleting the first of three
+// clusters would silently re-plan the other two onto each other's state.
+type Databases map[string]Database
 
 type ObjectStorage struct {
 	Cluster string `json:"cluster"` // obj_cluster

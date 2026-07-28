@@ -358,7 +358,51 @@ func validateEnv(name string, env Environment) []error {
 			c.Bootstrap.AplValues.Revision, c.Bootstrap.AppsRepoRevision, aplBranch, name, appsRev))
 	}
 
+	errs = append(errs, validateDatabases(c)...)
 	errs = append(errs, validateComponents(name, env.Components)...)
+	return errs
+}
+
+// validateDatabases checks spec.cluster.databases — 0-n VPC-attached Managed
+// Postgres clusters keyed by name. Zero entries is valid and is the common case.
+//
+// The key is validated because it is not a label an operator picked for readability:
+// it becomes the middle segment of the Linode cluster label
+// ("platform-<name>-<env>"), the Terraform state address (module.databases["<name>"])
+// and the OpenBao path (secret/platform/db-admin/<name>). A key the Linode API
+// rejects fails at APPLY — after `terraform plan` looked clean and after any
+// sibling clusters in the same apply have already been created.
+//
+// The mirrored field checks (region/vpcId/subnetId/clusterSize) exist here as well
+// as in the root's variable validation so `llz validate` catches them at spec-edit
+// time, without a Linode token or a plan.
+func validateDatabases(c Cluster) []error {
+	var errs []error
+	for _, name := range sortedKeys(c.Databases) {
+		d := c.Databases[name]
+		if err := validate.EnvName(name); err != nil {
+			errs = append(errs, fmt.Errorf("cluster.databases key %q is malformed (%v) — it becomes the Linode label segment, the Terraform state address and the OpenBao path, so it must be lowercase alphanumeric/dash (e.g. shared, analytics)", name, err))
+		}
+		if d.Region == "" {
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.region is required — a database can only attach to a VPC in its own region", name))
+		} else if c.Region != "" && d.Region != c.Region {
+			// Not fatal on its own (a deployment may deliberately place a database
+			// in another region), but it CANNOT then attach to the cluster's VPC,
+			// which is the only VPC an instance normally has. Almost always a typo.
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.region %q differs from cluster.region %q — the database can only attach to a VPC in its own region, so vpcId must name a VPC in %s", name, d.Region, c.Region, d.Region))
+		}
+		if d.VPCID <= 0 {
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.vpcId is required and must be > 0 (`linode-cli vpcs list`) — the database is VPC-only, with no public endpoint", name))
+		}
+		if d.SubnetID <= 0 {
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.subnetId is required and must be > 0 (`linode-cli vpcs subnets-list %d`)", name, d.VPCID))
+		}
+		switch d.ClusterSize {
+		case 0, 1, 2, 3: // 0 == unset, leaving the root's default of 2
+		default:
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.clusterSize must be 1 (single node) or 2/3 (HA with standbys), got %d", name, d.ClusterSize))
+		}
+	}
 	return errs
 }
 

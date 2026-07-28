@@ -1,6 +1,7 @@
 package clusterspec
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -98,35 +99,62 @@ func NetworkTFVars(name string, v VPC) []Assign {
 }
 
 // DatabasesTFVars maps spec.cluster.databases onto databases/<env>.tfvars. Like
-// object storage, region_suffix is always the env name; the remaining fields are
-// emitted only when the spec provides them (an unconfigured instance's tfvars is
-// a harmless stub the databases root is simply never applied against).
-// vpc_id/subnet_id/cluster_size are HCL numbers (unquoted).
+// object storage, region_suffix is always the env name. The clusters themselves
+// render as ONE assignment — `databases = { "<name>" = { … } }` — because the
+// root fans out with `for_each = var.databases`; see hclDatabases.
+//
+// With no clusters declared, only region_suffix is emitted, which leaves the
+// example's `databases = {}` in place: the root applies and provisions nothing.
+// That is the 0 in 0-n, and it is why `databases` needs no enabled flag.
 func DatabasesTFVars(env string, c Cluster) []Assign {
-	var a []Assign
-	add := func(k, v string) { a = append(a, Assign{k, v}) }
-
-	add("region_suffix", hclStr(env))
-	d := c.Databases
-	if d.Region != "" {
-		add("region", hclStr(d.Region))
-	}
-	if d.VPCID != 0 {
-		add("vpc_id", strconv.Itoa(d.VPCID))
-	}
-	if d.SubnetID != 0 {
-		add("subnet_id", strconv.Itoa(d.SubnetID))
-	}
-	if d.EngineVersion != "" {
-		add("engine_version", hclStr(d.EngineVersion))
-	}
-	if d.Type != "" {
-		add("db_type", hclStr(d.Type))
-	}
-	if d.ClusterSize != 0 {
-		add("cluster_size", strconv.Itoa(d.ClusterSize))
+	a := []Assign{{"region_suffix", hclStr(env)}}
+	if len(c.Databases) > 0 {
+		a = append(a, Assign{"databases", hclDatabases(c.Databases)})
 	}
 	return a
+}
+
+// hclDatabases formats spec.cluster.databases as an HCL map of objects matching
+// the root's `map(object({…}))`. Keys are sorted so a re-render of an unchanged
+// spec is byte-identical — Go map iteration is randomized, and `llz render
+// --check` compares bytes, so unsorted output would report drift on every run.
+//
+// Required attributes (region/vpc_id/subnet_id) are always written, including
+// their zero values: the root's own validation rejects vpc_id 0 with a message
+// naming the fix, which beats a missing-attribute error naming a tfvars file the
+// operator never wrote. The optional ones are omitted unless the spec sets them,
+// so the root's `optional(…, default)` stays the single source of the defaults.
+//
+// Output is deliberately un-aligned; renderTfvars pipes the result through
+// `tofu fmt`, which owns the `=` alignment the instance's fmt-check enforces.
+func hclDatabases(dbs Databases) string {
+	names := make([]string, 0, len(dbs))
+	for n := range dbs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var b strings.Builder
+	b.WriteString("{\n")
+	for _, n := range names {
+		d := dbs[n]
+		b.WriteString(hclStr(n) + " = {\n")
+		b.WriteString("region = " + hclStr(d.Region) + "\n")
+		b.WriteString("vpc_id = " + strconv.Itoa(d.VPCID) + "\n")
+		b.WriteString("subnet_id = " + strconv.Itoa(d.SubnetID) + "\n")
+		if d.EngineVersion != "" {
+			b.WriteString("engine_version = " + hclStr(d.EngineVersion) + "\n")
+		}
+		if d.Type != "" {
+			b.WriteString("db_type = " + hclStr(d.Type) + "\n")
+		}
+		if d.ClusterSize != 0 {
+			b.WriteString("cluster_size = " + strconv.Itoa(d.ClusterSize) + "\n")
+		}
+		b.WriteString("}\n")
+	}
+	b.WriteString("}")
+	return b.String()
 }
 
 // ObjectStorageTFVars maps spec.cluster.objectStorage onto object-storage/<env>.tfvars.

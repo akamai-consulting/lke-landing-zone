@@ -1,4 +1,4 @@
-# Design: shared VPC-attached Managed Postgres (`llz-databases`)
+# Design: VPC-attached Managed Postgres (`llz-databases`)
 
 > Status: in progress. Terraform module + embedded root + `llz render` wiring
 > landed; the OpenBao seed command and CI workflow jobs are the remaining wiring
@@ -8,31 +8,54 @@
 
 ## What it provides
 
-One shared Linode Managed PostgreSQL cluster per deployment, **inside the cluster
-VPC** (no public endpoint). Downstream application platforms (e.g. a Crossplane
-`provider-sql` layer) carve per-app logical databases + roles out of it, reaching
-it over the private network. The cluster's admin credentials are seeded into
-OpenBao at `secret/platform/db-admin` so ESO can publish them to the consumers.
+**Zero, one, or several** Linode Managed PostgreSQL clusters per deployment, each
+**inside the cluster VPC** (no public endpoint). Downstream application platforms
+(e.g. a Crossplane `provider-sql` layer) carve per-app logical databases + roles
+out of a cluster, reaching it over the private network. Each cluster's admin
+credentials are seeded into OpenBao at `secret/platform/db-admin/<name>` so ESO
+can publish them to the consumers.
 
-Opt-in: an instance that declares no `spec.cluster.databases` config simply never
-applies the `databases` root.
+Opt-in, and the opt-in needs no flag: an instance that declares no
+`spec.cluster.databases` entries renders `databases = {}`, and the root applies
+cleanly while provisioning nothing.
+
+### Why 0-n and not one shared cluster
+
+One shared cluster is the expected shape and the recommended default — logical
+databases inside it are nearly free, and a second cluster is a second bill, a
+second maintenance window and a second admin credential to rotate. But "exactly
+one" is the wrong thing to hard-code, because the cases that break it are real:
+
+- an app pinned to a **different major version** than the shared cluster,
+- a workload whose IOPS or memory profile warrants its **own node type**, so a
+  noisy tenant cannot starve the rest,
+- a **compliance boundary** that must not share a Postgres instance,
+- and the **migration window itself** — cutting from an old cluster to a new one
+  (see below) means both exist at once, which "one per deployment" cannot express.
+
+So the spec is a map and the root is a `for_each`. A deployment that wants one
+cluster writes one entry; the cost of the general case is a single map level.
 
 ## Shape (mirrors `llz-object-storage`)
 
 ```
-spec.cluster.databases         →  llz render  →  databases/<env>.tfvars
-  (region, vpcId, subnetId,                         │
-   engineVersion, type,                             ▼
-   clusterSize)                    terraform-modules/llz-databases
-                                     (linode_database_postgresql_v2,
-                                      private_network = { vpc_id, subnet_id,
-                                                          public_access = false })
-                                                     │  outputs (host/port/user/pass/ca)
-                                                     ▼
-                                     llz ci seed-db-admin  →  secret/platform/db-admin
+spec.cluster.databases           →  llz render  →  databases/<env>.tfvars
+  <name>:                                             │   databases = { <name> = { … } }
+    region, vpcId, subnetId,                          ▼
+    engineVersion, type,            databases root: for_each = var.databases
+    clusterSize                                       │
+                                                      ▼  (one module call per cluster)
+                                    terraform-modules/llz-databases
+                                      (linode_database_postgresql_v2,
+                                       private_network = { vpc_id, subnet_id,
+                                                           public_access = false })
+                                                      │  outputs, keyed by <name>
+                                                      ▼
+                                    llz ci seed-db-admin
+                                      → secret/platform/db-admin/<name>
 ```
 
-Spec example:
+Spec example — one shared cluster plus a separately-sized one:
 
 ```yaml
 spec:
@@ -40,16 +63,42 @@ spec:
     primary:
       cluster:
         databases:
-          region: us-ord      # MUST match the VPC's region
-          vpcId: 575244       # typically the cluster's own VPC
-          subnetId: 12345
-          engineVersion: "16"
-          type: g6-dedicated-2
-          clusterSize: 2      # HA
+          shared:
+            region: us-ord      # MUST match the VPC's region
+            vpcId: 575244       # typically the cluster's own VPC
+            subnetId: 12345
+            engineVersion: "16"
+            type: g6-dedicated-2
+            clusterSize: 2      # HA
+          analytics:
+            region: us-ord
+            vpcId: 575244
+            subnetId: 12345
+            type: g6-dedicated-8
+            clusterSize: 1
 ```
 
 `region_suffix` is always the env name (like object storage). `vpc_id`/`subnet_id`/
 `cluster_size` render as HCL numbers.
+
+### The key is identity, in three places at once
+
+`databases` is a **map**, not a list, and the key is load-bearing. `<name>` is
+simultaneously:
+
+1. the middle segment of the Linode label — `platform-<name>-<env>`,
+2. the Terraform state address — `module.databases["<name>"]`, and
+3. the OpenBao path — `secret/platform/db-admin/<name>`.
+
+That is what makes adding or removing a cluster safe: the survivors keep all three.
+Under a list, identity would be the position, so deleting the first of three
+entries would re-plan the other two onto each other's state — a destroy/recreate of
+two production databases from a one-line spec edit.
+
+It also means the key is not free-form prose. `llz validate` enforces the
+lowercase-alphanumeric-dash shape at spec-edit time, and the module re-checks it,
+because the Linode API rejects a bad label at **apply** — after the plan looked
+clean and after any sibling clusters in the same apply were already created.
 
 ### Why `_v2` / VPC
 
@@ -86,7 +135,10 @@ they are properties of the **Aiven-backed** platform Linode runs, not of Postgre
 4. **The admin username is fixed** (`akmadmin`) and the provider marks it
    sensitive — which is why this module's `root_username` output carries
    `sensitive = true`. `terraform output -json` still reads it, so
-   `llz ci seed-db-admin` is unaffected.
+   `llz ci seed-db-admin` is unaffected. Note this is the *same* username on every
+   cluster: with 0-n clusters the username no longer identifies which one you are
+   connected to, so the discriminator is the OpenBao path (`db-admin/<name>`) and
+   the endpoint, not the credential.
 
 Points 1–3 are consumer-side, so they belong to whatever layer carves the logical
 databases — but they are recorded here because this is the doc someone reads
@@ -100,10 +152,16 @@ any TF state. Two paths:
 
 **A. Greenfield + data migration (recommended).** Linode does **not** support
 attaching an existing Managed DB to a VPC in place, and the VPC path provisions on
-a different platform/network. So:
-1. Apply the `databases` root → a new VPC-attached cluster (`platform-postgres-<env>`).
-   **Set `engineVersion` to at least the source cluster's major version.**
-   `gsap-postgres` runs **pg 18.4** and this module defaults to **`"16"`**, so
+a different platform/network. The 0-n shape matters here: the old and new clusters
+**coexist** for the length of the migration, as two entries under
+`spec.cluster.databases`, and the cutover is the deletion of one entry. Under a
+one-cluster-per-deployment model there was nowhere to put the target.
+
+1. Add a second entry — say `shared` — and apply the `databases` root. It
+   provisions `platform-shared-<env>` alongside the old cluster and leaves any
+   other entry untouched (separate `for_each` keys, separate state addresses).
+   **Set its `engineVersion` to at least the source cluster's major version.**
+   `gsap-postgres` runs **pg 18.4** and the module defaults to **`"16"`**, so
    taking the default here provisions a target two majors OLDER than the source —
    and `pg_restore` from an 18 dump into a 16 server is not supported. It fails at
    restore time, after the new cluster is already provisioned and paid for.
@@ -111,19 +169,24 @@ a different platform/network. So:
 2. `pg_dump` from `gsap-postgres` (public, over TLS) → `pg_restore` into the new
    cluster from a bastion/job **inside the VPC** (the new cluster has no public IP).
    (Downstream logical DBs are Crossplane-provisioned and small; or dump per-app.)
-3. Re-seed `secret/platform/db-admin` with the new cluster's admin creds
+3. Seed `secret/platform/db-admin/shared` with the new cluster's admin creds
    (`llz ci seed-db-admin`), force-sync ESO, let Crossplane re-provision per-app
-   DBs/roles against the new endpoint.
+   DBs/roles against the new endpoint. The old cluster's own
+   `db-admin/<name>` stays intact, so a rollback is a consumer-side pointer change
+   rather than a re-seed.
 4. Cut consumers over (they read the endpoint from `gsap-db-endpoint`, which the
-   ESO re-seed updates), verify, then delete 490457.
+   ESO re-seed updates), verify, then remove the old entry from the spec — the
+   apply destroys only that cluster — and delete 490457 if it was never imported.
 
 **B. Import (only if staying public).** `terraform import` 490457 into the
-`databases` root — but this keeps the public endpoint and defeats the feature's
-purpose; not recommended. Note the root deliberately does **not** expose
-`public_access`: the module defaults it to `false` and the root never overrides,
-so VPC-only is not a setting an instance can drift off. Taking this path means
-first adding the variable to the root and threading it through — a visible,
-reviewable change, which is the point.
+`databases` root as `module.databases["<name>"].linode_database_postgresql_v2.this`
+— but this keeps the public endpoint and defeats the feature's purpose; not
+recommended. Note the root deliberately does **not** expose `public_access` (nor
+`label_prefix`, nor `maintenance`): the module defaults `public_access` to `false`
+and the root never overrides it, so VPC-only is not a setting an instance can
+drift off. Taking this path means first adding the field to the root's
+`map(object({…}))` and threading it through — a visible, reviewable change, which
+is the point.
 
 The cutover is a deliberate, scheduled data migration — not a GitOps side effect.
 Downstream `Database`/`Role`/`Grant` CRs are `deletionPolicy: Orphan`, so they
@@ -132,16 +195,22 @@ survive the endpoint change; only the admin secret + endpoint move.
 ## Remaining work (this branch)
 
 - `tools/cmd/llz/ci_seed_dbadmin.go` — `llz ci seed-db-admin --region`: read the
-  `databases` root's TF outputs (host/port/root_username/root_password/ca_cert),
-  write `secret/platform/db-admin` (keys `endpoint/port/username/password/ca`,
-  `sslmode=require`), idempotent via a `presentField` + `rotated_at` stamp (mirror
-  `ci_mint_objkeys.go`); register in `ci.go`.
+  `databases` root's single `connections` output (a map keyed by cluster name,
+  each `{ endpoint, port, username, password, ca }`) and write one
+  `secret/platform/db-admin/<name>` per entry, adding `sslmode=require`;
+  idempotent via a `presentField` + `rotated_at` stamp (mirror
+  `ci_mint_objkeys.go`); register in `ci.go`. It must be a **no-op on an empty
+  map**, so it can run unconditionally on a deployment that declared no databases.
+  Deleting a cluster from the spec does not delete its OpenBao path — decide
+  whether the command prunes orphans or leaves that to an operator.
 - Workflow: `apply-databases` / `plan-destroy-databases` / `destroy-databases` jobs
   in `llz-terraform.yml` (clone the object-storage jobs, `module: databases`); add
   `databases` to the `terraform.yml` module choice; add a "Seed DB admin" step to
   `llz-bootstrap-openbao.yml` (`needs: apply-databases`).
-- `scaffold_spec.go` — emit a `databases:` block in scaffolded specs.
-- `validate.go` — validate `databases` (region required when vpcId/subnetId set;
-  cluster_size ∈ {1,2,3}).
+- `scaffold_spec.go` — emit a commented-out `databases:` block in scaffolded specs
+  (commented, because zero clusters is the correct default).
 - `docs/landing-zone-spec.md` / `docs/workflows/llz-terraform.md` — document the
   new spec fields + jobs.
+Done on this branch: `validate.go` now checks `spec.cluster.databases` (key
+format, required region/vpcId/subnetId, region-vs-cluster.region mismatch,
+`clusterSize ∈ {1,2,3}`).
