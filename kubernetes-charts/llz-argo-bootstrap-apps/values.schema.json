@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "llz-argo-bootstrap-apps values",
+  "description": "Root-strict schema: every top-level key is declared, so a typo (e.g. `componets:`) is REJECTED AT RENDER instead of silently activating nothing. Nested objects stay permissive on purpose — the value here is catching the silent no-op, not freezing every knob. Add nested constraints only where a wrong value is as silent as a wrong key.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "type": "object",
+      "description": "Helm global values, propagated to subcharts (chartsRegistry, etc.)."
+    },
+    "defaultSyncPolicy": {
+      "type": "object",
+      "description": "syncPolicy applied to any component that does not override it."
+    },
+    "finalizer": {
+      "type": "boolean",
+      "description": "Add the Argo resources-finalizer to generated Applications."
+    },
+    "revisionHistoryLimit": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "appProject": {
+      "type": "object",
+      "description": "The AppProject this chart generates."
+    },
+    "components": {
+      "type": "array",
+      "description": "The Applications to generate, one entry per component.",
+      "items": { "type": "object" }
+    }
+  }
+}
