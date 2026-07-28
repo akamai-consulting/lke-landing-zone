@@ -133,8 +133,9 @@ func runEnvReadiness(env string) error {
 			// A spec-driven env renders its tfvars on demand (they are gitignored
 			// build artifacts), so an absent <env>.tfvars is normal, not a finding —
 			// the spec was already validated above. Legacy/manual instances still
-			// flag a genuinely missing tfvars.
-			if strings.HasSuffix(f, ".tfvars") && !specDriven {
+			// flag a genuinely missing tfvars — except for an OPT-IN root, which an
+			// instance may deliberately never apply (see optionalTFRoots).
+			if strings.HasSuffix(f, ".tfvars") && !specDriven && !optionalTFVars(f) {
 				fmt.Printf("  %s  %s %s\n", red("✗ missing"), f, dim("— run `llz env add "+env+"`"))
 				missing++
 			}

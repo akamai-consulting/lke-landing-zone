@@ -4,6 +4,7 @@ package clusterspec
 // fully-populated Cluster emits every optional key, a minimal one emits none.
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -123,5 +124,72 @@ func TestObjectStorageTFVars(t *testing.T) {
 	}
 	if _, ok := min["obj_cluster"]; ok {
 		t.Error("obj_cluster should be omitted when unset")
+	}
+}
+
+// TestDatabasesTFVars pins the three shapes that matter for an OPT-IN, 0-n root:
+// zero clusters, one, and several.
+//
+// ZERO is the common case and the load-bearing one: `llz render` writes a
+// databases/<env>.tfvars for every env whether or not the instance wants a
+// database, so the stub must carry region_suffix and NOTHING else. Omitting the
+// `databases` assignment leaves the example's `databases = {}` in place, and the
+// root then applies cleanly and provisions nothing. Emitting an empty-but-present
+// entry instead would hand the root a syntactically valid tfvars naming VPC 0 —
+// an apply against the wrong thing rather than a clean no-op.
+func TestDatabasesTFVars(t *testing.T) {
+	// Zero clusters — the stub: region_suffix only, no `databases` key at all.
+	stub := assignKeys(DatabasesTFVars("dev", Cluster{}))
+	if got := stub["region_suffix"]; got != `"dev"` {
+		t.Errorf("region_suffix must always be emitted, got %q", got)
+	}
+	if _, ok := stub["databases"]; ok {
+		t.Error("`databases` must be omitted when the spec declares no clusters, so the example's `databases = {}` stands")
+	}
+
+	// One cluster, fully specified.
+	var c Cluster
+	c.Databases = Databases{"shared": {
+		Region: "us-ord", VPCID: 575244, SubnetID: 12345,
+		EngineVersion: "16", Type: "g6-dedicated-2", ClusterSize: 2,
+	}}
+	one := assignKeys(DatabasesTFVars("prod", c))
+	if got := one["region_suffix"]; got != `"prod"` {
+		t.Errorf("region_suffix = %q, want %q", got, `"prod"`)
+	}
+	// HCL numbers are unquoted, or the number-typed object attributes reject them.
+	// Already `tofu fmt`-clean: two-space indent per level and `=` padded to the
+	// longest key in the block. hclDatabases formats itself rather than leaning on
+	// renderTfvars' `tofu fmt` pipe, because fmtHCL is a pass-through when no
+	// tofu/terraform binary exists — the CI container has neither.
+	want := "{\n" +
+		"  \"shared\" = {\n" +
+		"    region         = \"us-ord\"\n" +
+		"    vpc_id         = 575244\n" +
+		"    subnet_id      = 12345\n" +
+		"    engine_version = \"16\"\n" +
+		"    db_type        = \"g6-dedicated-2\"\n" +
+		"    cluster_size   = 2\n" +
+		"  }\n}"
+	if got := one["databases"]; got != want {
+		t.Errorf("DatabasesTFVars(one)[\"databases\"] =\n%s\nwant\n%s", got, want)
+	}
+
+	// Several clusters: keys SORTED (Go map order is randomized, and `llz render
+	// --check` compares bytes — unsorted output would report drift every run), and
+	// the unset optional fields omitted so the root's optional() defaults own them.
+	c.Databases = Databases{
+		"shared":    {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
+		"analytics": {Region: "us-ord", VPCID: 575244, SubnetID: 12345, ClusterSize: 1},
+	}
+	many := assignKeys(DatabasesTFVars("prod", c))["databases"]
+	if a, s := strings.Index(many, `"analytics"`), strings.Index(many, `"shared"`); a < 0 || s < 0 || a > s {
+		t.Errorf("databases entries must be sorted by name for a byte-stable re-render, got:\n%s", many)
+	}
+	if strings.Contains(many, "engine_version") || strings.Contains(many, "db_type") {
+		t.Errorf("unset optional fields must be omitted so the root's optional() defaults apply, got:\n%s", many)
+	}
+	if strings.Count(many, "cluster_size") != 1 {
+		t.Errorf("cluster_size must be emitted only for the entry that sets it, got:\n%s", many)
 	}
 }

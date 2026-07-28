@@ -1,6 +1,7 @@
 package clusterspec
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -95,6 +96,96 @@ func NetworkTFVars(name string, v VPC) []Assign {
 		{"vpc_label", hclStr(name)},
 		{"region", hclStr(v.Region)},
 	}
+}
+
+// DatabasesTFVars maps spec.cluster.databases onto databases/<env>.tfvars. Like
+// object storage, region_suffix is always the env name. The clusters themselves
+// render as ONE assignment — `databases = { "<name>" = { … } }` — because the
+// root fans out with `for_each = var.databases`; see hclDatabases.
+//
+// With no clusters declared, only region_suffix is emitted, which leaves the
+// example's `databases = {}` in place: the root applies and provisions nothing.
+// That is the 0 in 0-n, and it is why `databases` needs no enabled flag.
+func DatabasesTFVars(env string, c Cluster) []Assign {
+	a := []Assign{{"region_suffix", hclStr(env)}}
+	if len(c.Databases) > 0 {
+		a = append(a, Assign{"databases", hclDatabases(c.Databases)})
+	}
+	return a
+}
+
+// hclDatabases formats spec.cluster.databases as an HCL map of objects matching
+// the root's `map(object({…}))`. Keys are sorted so a re-render of an unchanged
+// spec is byte-identical — Go map iteration is randomized, and `llz render
+// --check` compares bytes, so unsorted output would report drift on every run.
+//
+// Required attributes (region/vpc_id/subnet_id) are always written, including
+// their zero values: the root's own validation rejects vpc_id 0 with a message
+// naming the fix, which beats a missing-attribute error naming a tfvars file the
+// operator never wrote. The optional ones are omitted unless the spec sets them,
+// so the root's `optional(…, default)` stays the single source of the defaults.
+//
+// The output is ALREADY `tofu fmt`-clean — two-space indent per level, `=` padded
+// to the longest key within each entry block — rather than relying on renderTfvars
+// to format it afterwards. renderTfvars pipes through `tofu fmt` only when a tofu
+// or terraform binary exists; fmtHCL is a pass-through when neither does, which is
+// the case in the CI container.
+//
+// What that buys is DETERMINISM, not gate-compliance: the rendered bytes are the
+// same on a machine with a formatter and one without, so a test can assert them
+// exactly (the first version of the cmd/llz test asserted the indentation `tofu
+// fmt` adds, and so passed on every dev machine and failed in CI).
+//
+// It does NOT prevent a pre-commit `tofu fmt -check` failure — an earlier draft of
+// this comment claimed it did, which was wrong. Rendered tfvars are gitignored
+// build artifacts, and terraform-iac-bootstrap/.gitignore says so explicitly and
+// for exactly this reason: "a rendered-but-unformatted tfvars can never trip the
+// pre-commit tofu fmt -check". The cluster and object-storage roots do render
+// unaligned without a formatter (setHCLField writes `key = value` with single
+// spaces, breaking the example's alignment) and that is accepted by design.
+func hclDatabases(dbs Databases) string {
+	names := make([]string, 0, len(dbs))
+	for n := range dbs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var b strings.Builder
+	b.WriteString("{\n")
+	for _, n := range names {
+		d := dbs[n]
+		// Required first (always emitted, zero values included), then the optionals
+		// the spec actually set — the root's optional(…) owns the rest.
+		attrs := [][2]string{
+			{"region", hclStr(d.Region)},
+			{"vpc_id", strconv.Itoa(d.VPCID)},
+			{"subnet_id", strconv.Itoa(d.SubnetID)},
+		}
+		if d.EngineVersion != "" {
+			attrs = append(attrs, [2]string{"engine_version", hclStr(d.EngineVersion)})
+		}
+		if d.Type != "" {
+			attrs = append(attrs, [2]string{"db_type", hclStr(d.Type)})
+		}
+		if d.ClusterSize != 0 {
+			attrs = append(attrs, [2]string{"cluster_size", strconv.Itoa(d.ClusterSize)})
+		}
+
+		width := 0
+		for _, kv := range attrs {
+			if len(kv[0]) > width {
+				width = len(kv[0])
+			}
+		}
+
+		b.WriteString("  " + hclStr(n) + " = {\n")
+		for _, kv := range attrs {
+			b.WriteString("    " + kv[0] + strings.Repeat(" ", width-len(kv[0])) + " = " + kv[1] + "\n")
+		}
+		b.WriteString("  }\n")
+	}
+	b.WriteString("}")
+	return b.String()
 }
 
 // ObjectStorageTFVars maps spec.cluster.objectStorage onto object-storage/<env>.tfvars.

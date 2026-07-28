@@ -43,6 +43,7 @@ func (lz *LandingZone) Validate() []error {
 	for _, name := range lz.EnvNames() {
 		errs = append(errs, validateEnv(name, lz.Spec.Environments[name])...)
 	}
+	errs = append(errs, validateDatabaseDefaults(lz)...)
 	errs = append(errs, validateHAGroups(lz)...)
 	errs = append(errs, validateNetworks(lz)...)
 	errs = append(errs, validateHAVPCCIDRs(lz)...)
@@ -358,7 +359,91 @@ func validateEnv(name string, env Environment) []error {
 			c.Bootstrap.AplValues.Revision, c.Bootstrap.AppsRepoRevision, aplBranch, name, appsRev))
 	}
 
+	errs = append(errs, validateDatabases(c)...)
 	errs = append(errs, validateComponents(name, env.Components)...)
+	return errs
+}
+
+// validateDatabaseDefaults rejects spec.defaults.cluster.databases.
+//
+// Defaults embeds a Cluster, so the field is SYNTACTICALLY available there and an
+// operator will reasonably try to put a shared database under it. mergeCluster
+// does not merge it (deliberately — see below), so without this check the block
+// is accepted, ignored, and no database is ever provisioned: a silent no-op, the
+// worst outcome of the three.
+//
+// Not merged rather than merged, because the fields that IDENTIFY a cluster are
+// vpcId/subnetId, and those are per-environment by construction — each env
+// normally has its own VPC, and a VPC cannot span regions. Inheriting one env's
+// vpcId into another would attach a second env's database to the first env's
+// network, or fail at apply against a VPC in the wrong region. There is no
+// meaningful instance-wide default here to inherit, so the honest answer is to
+// refuse rather than to guess.
+//
+// The exception — two envs deliberately sharing one VPC via spec.networks — is
+// exactly the case where writing the block out per env costs three lines and
+// makes the sharing visible at the point it happens.
+func validateDatabaseDefaults(lz *LandingZone) []error {
+	if len(lz.Spec.Defaults.Cluster.Databases) == 0 {
+		return nil
+	}
+	return []error{fmt.Errorf(
+		"spec.defaults.cluster.databases is not inherited and must not be set (found %d entry/entries: %s) — "+
+			"declare databases per environment under environments.<env>.cluster.databases. "+
+			"A database's vpcId/subnetId are per-environment by construction (a VPC cannot span regions), so there is "+
+			"no instance-wide default to inherit; sharing one here would attach one env's database to another env's network",
+		len(lz.Spec.Defaults.Cluster.Databases), strings.Join(sortedKeys(lz.Spec.Defaults.Cluster.Databases), ", "))}
+}
+
+// validateDatabases checks spec.cluster.databases — 0-n VPC-attached Managed
+// Postgres clusters keyed by name. Zero entries is valid and is the common case.
+//
+// The key is validated because it is not a label an operator picked for readability:
+// it becomes the middle segment of the Linode cluster label
+// ("platform-<name>-<env>"), the Terraform state address (module.databases["<name>"])
+// and the OpenBao path (secret/platform/db-admin/<name>). A key the Linode API
+// rejects fails at APPLY — after `terraform plan` looked clean and after any
+// sibling clusters in the same apply have already been created.
+//
+// The mirrored field checks (region/vpcId/subnetId/clusterSize) exist here as well
+// as in the root's variable validation so `llz validate` catches them at spec-edit
+// time, without a Linode token or a plan.
+func validateDatabases(c Cluster) []error {
+	var errs []error
+	for _, name := range sortedKeys(c.Databases) {
+		d := c.Databases[name]
+		if err := validate.EnvName(name); err != nil {
+			errs = append(errs, fmt.Errorf("cluster.databases key %q is malformed (%v) — it becomes the Linode label segment, the Terraform state address and the OpenBao path, so it must be lowercase alphanumeric/dash (e.g. shared, analytics)", name, err))
+		}
+		if d.Region == "" {
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.region is required — a database can only attach to a VPC in its own region", name))
+		} else if c.Region != "" && d.Region != c.Region {
+			// A VPC-only database in another region is UNREACHABLE from this cluster:
+			// it must attach to a VPC in its own region, and Linode VPCs do not span
+			// or peer across regions, so no workload here can route to it. Both ways
+			// of "resolving" the mismatch fail — pointing vpcId at a VPC in the
+			// cluster's region is rejected by the API at apply (VPC not in the
+			// database's region), and pointing it at one in the database's region
+			// applies cleanly and produces a database nothing can connect to.
+			//
+			// So the only real fix is to match the cluster's region, and the message
+			// must say that: an earlier wording told the operator to point vpcId at a
+			// VPC in the OTHER region, which would not have cleared this check (it
+			// compares regions, not the VPC) and would have built the unreachable one.
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.region %q differs from cluster.region %q — set it to %q. A database attaches only to a VPC in its own region, and Linode VPCs do not span regions, so a database in %s is unreachable from this cluster over the private network (and this root provisions no public endpoint)", name, d.Region, c.Region, c.Region, d.Region))
+		}
+		if d.VPCID <= 0 {
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.vpcId is required and must be > 0 (`linode-cli vpcs list`) — the database is VPC-only, with no public endpoint", name))
+		}
+		if d.SubnetID <= 0 {
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.subnetId is required and must be > 0 (`linode-cli vpcs subnets-list %d`)", name, d.VPCID))
+		}
+		switch d.ClusterSize {
+		case 0, 1, 2, 3: // 0 == unset, leaving the root's default of 2
+		default:
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.clusterSize must be 1 (single node) or 2/3 (HA with standbys), got %d", name, d.ClusterSize))
+		}
+	}
 	return errs
 }
 

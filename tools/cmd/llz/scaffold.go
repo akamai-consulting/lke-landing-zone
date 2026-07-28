@@ -62,7 +62,23 @@ func instanceLayout() (tfDir, aplDir, relPrefix string) {
 	return "terraform-iac-bootstrap", "apl-values", ""
 }
 
-var tfRoots = []string{"cluster", "object-storage"}
+var tfRoots = []string{"cluster", "object-storage", "databases"}
+
+// optionalTFRoots are roots an instance may legitimately never apply. `llz render`
+// still writes a tfvars stub for them (render is per-root, not per-opt-in), but a
+// MISSING one is not a defect — so readiness must not report it as such.
+//
+// This matters for legacy (pre-spec) instances: they never run `llz render`, their
+// hand-authored <env>.tfvars are the tracked source of truth, and readiness does
+// flag a genuinely missing one for them. Without this set, adding `databases` to
+// tfRoots would have every such instance reporting a blocking "missing
+// databases/<env>.tfvars — run llz env add" for a database they never asked for.
+var optionalTFRoots = map[string]bool{"databases": true}
+
+// optionalTFVars reports whether path is a tfvars belonging to an optional root.
+func optionalTFVars(path string) bool {
+	return optionalTFRoots[filepath.Base(filepath.Dir(path))]
+}
 
 // validateOBJCluster catches a value that isn't shaped like a Linode OBJ cluster
 // id. The shape rule lives in internal/validate (OBJClusterID) so the LandingZone
@@ -288,11 +304,22 @@ func first3(s string) string {
 
 func quote(s string) string { return `"` + s + `"` }
 
-// setHCLField replaces the first `^<key> ... = ...` line with `<key> = <value>`.
+// setHCLField replaces EVERY `^<key> ... = ...` line with `<key> = <value>` (the
+// doc said "the first" for years; the call has always been a ReplaceAll). Harmless
+// today — no embedded terraform.tfvars.example declares the same key twice at
+// column 0, which a test asserts — but two would both be rewritten into a
+// duplicate assignment, which HCL rejects as a redefined attribute.
 // Matches the bash `replace_in_file "^<key> .*=.*"` line-rewrite.
+//
+// ReplaceAllLiteral, NOT ReplaceAllString: the replacement is a rendered HCL value,
+// and ReplaceAllString EXPANDS `$name`/`${name}` in it. Every value here comes from
+// the spec, so a `$` in one was silently eaten rather than written — a Linode tag
+// `cost$1center` rendered as `"cost"`, and `owner${team}` as `"owner"`, tagging real
+// infrastructure wrong with no error (spec.cluster.tags is free-form, so nothing
+// upstream rejects it). No caller wants expansion; these are literals.
 func setHCLField(content, key, value string) string {
 	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `\s*=.*$`)
-	return re.ReplaceAllString(content, key+" = "+value)
+	return re.ReplaceAllLiteralString(content, key+" = "+value)
 }
 
 func tfvarsPaths(tfDir, env string) []string {

@@ -68,6 +68,18 @@ func mergeCluster(base, over Cluster) Cluster {
 
 	out.ObjectStorage.Cluster = pickStr(base.ObjectStorage.Cluster, over.ObjectStorage.Cluster)
 	out.ObjectStorage.KeyRotationDays = pickInt(base.ObjectStorage.KeyRotationDays, over.ObjectStorage.KeyRotationDays)
+
+	// Databases is deliberately NOT merged, unlike its opt-in sibling ObjectStorage
+	// above. The fields that identify a database cluster are vpcId/subnetId, and
+	// those are per-environment by construction — each env normally has its own VPC,
+	// and a VPC cannot span regions — so inheriting them would attach one env's
+	// database to another env's network, or fail at apply against a VPC in the wrong
+	// region. There is no instance-wide default worth having.
+	//
+	// Because Defaults embeds a Cluster the field is still SYNTACTICALLY settable
+	// under spec.defaults, where it would be silently ignored; validateDatabaseDefaults
+	// rejects it so that is a loud error rather than a no-op. Do not "fix" this by
+	// adding a pick here without deleting that check — the two are a pair.
 	return out
 }
 

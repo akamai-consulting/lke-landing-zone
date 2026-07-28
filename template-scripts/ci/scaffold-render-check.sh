@@ -60,9 +60,18 @@ fi
 FAILED=0
 
 INSTANCE="$ROOT/instance-template"
+# EVERY tfvars `llz env add` writes, or this script both under-checks and LEAKS:
+# the array drives the placeholder scan AND the on-exit cleanup, so a root missing
+# here leaves a scaffoldcheck.tfvars behind in the working tree after each run.
+# That debris is not harmless — the template-manifest gate walks the FILESYSTEM
+# (the CI container has no usable git), so leftover scaffold files make
+# `make template-manifest-check` fail locally while CI, on a clean checkout, passes.
+# Keep in step with tfRoots in tools/cmd/llz/scaffold.go, plus cluster-bootstrap.
 GEN_TFVARS=(
   "$INSTANCE/terraform-iac-bootstrap/cluster/$ENV_NAME.tfvars"
   "$INSTANCE/terraform-iac-bootstrap/object-storage/$ENV_NAME.tfvars"
+  "$INSTANCE/terraform-iac-bootstrap/databases/$ENV_NAME.tfvars"
+  "$INSTANCE/terraform-iac-bootstrap/cluster-bootstrap/$ENV_NAME.tfvars"
 )
 GEN_OVERLAY="$INSTANCE/apl-values/$ENV_NAME"
 ENV_YAML="$INSTANCE/environments/$ENV_NAME.yaml"   # spec ClusterDefinition `llz env add` authors
@@ -84,6 +93,20 @@ LZ_BAK=""; [[ -f "$LZ" ]] && { LZ_BAK="$(mktemp)"; cp "$LZ" "$LZ_BAK"; }
 
 cleanup() {
   rm -rf "${GEN_TFVARS[@]}" "$GEN_OVERLAY" "$ENV_YAML"
+  # `llz env add` also materializes each root's *.tf from the embedded tfroots
+  # package. They are gitignored, regenerated on demand, and were NOT being
+  # cleaned — so every run left ~6 files per root behind. That is what makes
+  # `make template-manifest-check` fail on a developer's machine while passing in
+  # CI: the gate walks the filesystem (the CI container has no usable git) and
+  # counts this debris as unclassified scaffold. Remove only *.tf — the
+  # .terraform.lock.hcl provider pins beside them ARE tracked.
+  #
+  # Iterate the root DIRECTORIES, not GEN_TFVARS: `vpc` is a root whose tfvars is
+  # per-NETWORK (vpc/<name>.tfvars), not per-env, so it never appears in
+  # GEN_TFVARS — and its six .tf files leaked from every run even after the
+  # per-root cleanup landed. Globbing the roots also means the next root added is
+  # cleaned without touching this script.
+  for d in "$INSTANCE"/terraform-iac-bootstrap/*/; do rm -f "$d"*.tf; done
   if [[ -n "$TV_BAK" ]]; then mv -f "$TV_BAK" "$TV"; else rm -f "$TV"; fi
   if [[ -n "$LZ_BAK" ]]; then mv -f "$LZ_BAK" "$LZ"; else rm -f "$LZ"; fi
 }
@@ -100,7 +123,7 @@ if ! out="$( ( cd "$ROOT" && "$LLZ" env add "$ENV_NAME" --region "$REGION" --obj
   fail "llz env add failed to scaffold '$ENV_NAME'"
   exit 1
 fi
-echo "scaffolded ${GEN_OVERLAY#"$ROOT"/} + 2 tfvars"
+echo "scaffolded ${GEN_OVERLAY#"$ROOT"/} + ${#GEN_TFVARS[@]} tfvars"
 
 # ── 2. No unfilled placeholders ──────────────────────────────────────────────
 step "Check for leftover 'your-env' placeholders"

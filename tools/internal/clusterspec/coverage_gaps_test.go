@@ -186,6 +186,100 @@ func TestValidateEnv_Errors(t *testing.T) {
 	}
 }
 
+// TestValidateDatabases covers spec.cluster.databases, the 0-n map. The first
+// assertion is the important one: an instance that declares no databases — the
+// common case — must produce no findings at all, or an opt-in feature becomes a
+// blocking one for every instance that never asked for it.
+func TestValidateDatabases(t *testing.T) {
+	base := Cluster{Region: "us-ord"}
+
+	if errs := validateDatabases(base); len(errs) > 0 {
+		t.Errorf("zero databases must be valid, got: %v", errs)
+	}
+
+	ok := base
+	ok.Databases = Databases{
+		"shared":    {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
+		"analytics": {Region: "us-ord", VPCID: 575244, SubnetID: 12345, ClusterSize: 3},
+	}
+	if errs := validateDatabases(ok); len(errs) > 0 {
+		t.Errorf("two well-formed clusters must be valid, got: %v", errs)
+	}
+
+	bad := base
+	bad.Databases = Databases{
+		// Malformed key: it becomes the Linode label segment, so the API rejects
+		// it at APPLY — after plan looked clean and siblings were already created.
+		"Shared DB": {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
+		// Region mismatch against cluster.region: it cannot attach to the
+		// cluster's VPC, which is the only VPC an instance normally has.
+		"elsewhere": {Region: "eu-west", VPCID: 575244, SubnetID: 12345},
+		// The unscaffolded shape — 0 is a valid-looking id pointing at nothing.
+		"unset": {Region: "us-ord"},
+		"sized": {Region: "us-ord", VPCID: 1, SubnetID: 1, ClusterSize: 4},
+	}
+	joined := errsString(validateDatabases(bad))
+	for _, want := range []string{
+		`key "Shared DB" is malformed`,
+		`cluster.databases.elsewhere.region "eu-west" differs from cluster.region "us-ord" — set it to "us-ord"`,
+		"cluster.databases.unset.vpcId is required",
+		"cluster.databases.unset.subnetId is required",
+		"cluster.databases.sized.clusterSize must be 1",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("validateDatabases missing %q in: %s", want, joined)
+		}
+	}
+	// clusterSize 0 means UNSET, which must leave the root's default of 2 alone
+	// rather than being reported as out of range.
+	if strings.Contains(joined, "cluster.databases.unset.clusterSize") {
+		t.Errorf("an unset clusterSize must not be a finding: %s", joined)
+	}
+}
+
+// TestValidateDatabaseDefaults pins the merge.go/validate.go pair: databases is
+// NOT inherited from spec.defaults, so setting it there must be a loud error
+// rather than the silent no-op it would otherwise be (Defaults embeds a Cluster,
+// so the field is syntactically settable but mergeCluster never reads it).
+//
+// The control assertion is the one that would catch a well-meaning "fix": if
+// someone adds a pick for Databases to mergeCluster without deleting the
+// validator, this test still passes but the second half starts contradicting
+// itself — so it asserts the non-inheritance directly.
+func TestValidateDatabaseDefaults(t *testing.T) {
+	env := Environment{Cluster: Cluster{ClusterLabel: "c", Region: "us-ord"}}
+
+	// Absent from defaults: no finding.
+	clean := &LandingZone{Spec: Spec{Environments: map[string]Environment{"lab": env}}}
+	if errs := validateDatabaseDefaults(clean); len(errs) > 0 {
+		t.Errorf("no defaults.databases must be silent, got: %v", errs)
+	}
+
+	lz := &LandingZone{Spec: Spec{
+		Defaults: Defaults{Cluster: Cluster{Databases: Databases{
+			"shared":    {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
+			"analytics": {Region: "us-ord", VPCID: 575244, SubnetID: 12345},
+		}}},
+		Environments: map[string]Environment{"lab": env},
+	}}
+	joined := errsString(validateDatabaseDefaults(lz))
+	if !strings.Contains(joined, "spec.defaults.cluster.databases is not inherited") {
+		t.Errorf("defaults.databases must be rejected, got: %s", joined)
+	}
+	// Names the offending keys, sorted, so the operator knows what to move.
+	if !strings.Contains(joined, "analytics, shared") {
+		t.Errorf("the error must name the entries in sorted order, got: %s", joined)
+	}
+
+	// The behaviour the error EXISTS to cover: inheritance really does drop it.
+	// If this ever starts inheriting, the validator above became wrong.
+	lz.applyInheritance()
+	if got := lz.Spec.Environments["lab"].Cluster.Databases; len(got) != 0 {
+		t.Errorf("databases must not inherit from spec.defaults (see mergeCluster), got %d entries — "+
+			"if that changed deliberately, validateDatabaseDefaults must go with it", len(got))
+	}
+}
+
 // wedgeEnv is a minimal-but-valid Environment for exercising the branch-collision
 // guard in isolation — every OTHER required field is filled so the only finding under
 // test is the branch one.
