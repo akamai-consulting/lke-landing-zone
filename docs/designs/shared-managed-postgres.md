@@ -282,3 +282,65 @@ The bootstrap seed is gated on `llz ci db-declared`, which reads the rendered
 tfvars — exact, because `DatabasesTFVars` omits the `databases` assignment
 entirely when the map is empty. Without the gate, every instance that declares no
 databases would still initialize the root on the critical bootstrap path.
+
+## Admin-credential rotation, as built
+
+`llz ci rotate-db-admin` rotates `secret/platform/db-admin/<name>`. It is
+due-based (default 80d, under the 90d inventory SLA) and `--apply`-gated.
+
+**Why it is not shaped like the other rotators.** Every other rotator in this
+repo is mint → verify → swap → drain: mint a second credential, prove it works,
+publish it, then revoke the first. A bad mint can never break a consumer, because
+the old credential is live the whole time.
+
+That is unavailable here. Linode fixes the admin user to `akmadmin` and exposes
+exactly one mutation — `POST /v4/databases/postgresql/instances/{id}/credentials/reset`
+— which regenerates the password in place. There is no second credential, no
+overlap window, and no way to choose the new password. The old one dies the
+instant the platform applies the reset, before anything has been verified or
+persisted.
+
+So the invariant flips from *never break a consumer* (unattainable) to **never
+lose the new credential**, and the shape follows from that:
+
+- `--apply` arms the mutation; the default is a report, because the mutation is
+  irreversible and unattended.
+- The OpenBao write is the only thing between a reset and a locked-out database,
+  so a failed write is a loud error carrying the `linode-cli` command to re-read
+  the credential — never the credential itself, which would put a live admin
+  password in a CI log.
+- Rotation is sequential across clusters and stops at the first failure. A loop
+  that kept going would turn one lost credential into several.
+- The reset is asynchronous, so the command waits for the cluster to return to
+  `active` before re-reading. Credentials read mid-`updating` can be the pre-reset
+  pair, and storing those would stamp `rotated_at` on a credential that never
+  changed — hiding a stale password for another full window. A password that
+  comes back **unchanged** is treated as a failed rotation for the same reason.
+
+**The Terraform-state hazard.** `llz ci seed-db-admin` reconciles OpenBao *toward*
+state: if the stored password differs from the `connections` output, it overwrites
+OpenBao. Correct for its own job (a recreated cluster must not strand consumers on
+a dead credential), and actively dangerous after an out-of-band reset — state
+holds the OLD password, so a seed run against unrefreshed state would push the
+dead credential back over the live one.
+
+The rotator therefore runs `terraform apply -refresh-only` itself after a
+successful rotation, and a refresh failure **fails the run** even though the
+credential is safely in OpenBao — because the deployment is otherwise left in the
+one configuration where a routine seed silently undoes the rotation. The error
+says the credential is safe, so nobody "fixes" it by re-running the rotation and
+resetting the cluster a second time.
+
+**Scheduling.** Dispatch-only (`scope=db-admin`), and deliberately excluded from
+both the monthly cron and `scope=all`: an in-place reset with no overlap window
+breaks every live consumer until ESO re-syncs, which is an operator-chosen
+maintenance action rather than a cron's decision — and `rotate:all` must never
+quietly reset every production database. Age remains continuously visible through
+the credential inventory, so nothing goes unnoticed for want of a schedule.
+
+**Not yet proven live.** The rotator is unit-tested end to end against a faked
+Linode API (including every post-reset failure mode), but no cluster has been
+rotated for real — `gsap-postgres` is the first candidate. Two things to confirm
+on that run: that `status` returns to `active` before the new credential is
+servable (the wait assumes it does), and that a `-refresh-only` apply actually
+picks the new password up into state.

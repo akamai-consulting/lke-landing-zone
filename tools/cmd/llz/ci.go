@@ -141,7 +141,11 @@ func ciCmd() *cobra.Command {
 	// connection from TF state to secret/platform/db-admin/<name>. Unlike the
 	// object-storage keys above there is nothing to MINT — the credential is the
 	// provider's — so this is a copy, and re-running it heals a stale one.
-	c.AddCommand(ciSeedDBAdminCmd(), ciDBDeclaredCmd(), ciDBSummaryCmd())
+	// …and its rotation half. Unlike every other rotator here this one cannot
+	// mint-verify-swap — Linode offers only an in-place credential RESET on the
+	// fixed `akmadmin` user — so it is --apply-gated and refreshes TF state after,
+	// or seed-db-admin would reconcile the rotation away. See ci_rotate_dbadmin.go.
+	c.AddCommand(ciSeedDBAdminCmd(), ciDBDeclaredCmd(), ciDBSummaryCmd(), ciRotateDBAdminCmd())
 	// In-cluster rotation of the broad account:read_write Linode PAT (LINODE_API_TOKEN):
 	// mint -> seed OpenBao -> publish to each deployment's GitHub env secret (sealed box)
 	// -> revoke old. Runs in a dedicated CronJob, not the reconciler.

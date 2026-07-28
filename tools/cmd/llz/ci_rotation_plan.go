@@ -16,7 +16,8 @@ package main
 //   REGION       — dispatch input: deployment (lke-admin only)
 //   CONFIRM      — dispatch input: typed confirmation phrase
 //   REASON       — dispatch input: audit-log reason (required, non-blank)
-//   PAT_APPLY / REVOKE_APPLY / TF_STATE_APPLY / TF_STATE_REVOKE_APPLY
+//   PAT_APPLY / REVOKE_APPLY / TF_STATE_APPLY / TF_STATE_REVOKE_APPLY /
+//   DB_ADMIN_APPLY
 //                — dispatch inputs: arm the respective mutation ("true"/"false")
 //   ACTOR        — github.actor (summary attribution)
 //   DEPLOYMENTS  — JSON array of deployments from `llz env list` (discover job)
@@ -42,6 +43,7 @@ type rotationInputs struct {
 	Confirm, Reason, Actor           string
 	PATApply, RevokeApply            string
 	TFStateApply, TFStateRevokeApply string
+	DBAdminApply                     string
 	Deployments                      string // JSON array
 }
 
@@ -54,11 +56,13 @@ type rotationPlan struct {
 	RunPATRevoke        bool
 	RunTFStateCreate    bool
 	RunTFStateRevoke    bool
+	RunDBAdmin          bool
 	Regions             string // JSON array
 	PATApply            bool
 	RevokeApply         bool
 	TFStateApply        bool
 	TFStateRevokeApply  bool
+	DBAdminApply        bool
 	Note                string // human routing note (log + summary)
 }
 
@@ -91,6 +95,7 @@ func rotationInputsFromEnv() rotationInputs {
 		RevokeApply:        os.Getenv("REVOKE_APPLY"),
 		TFStateApply:       os.Getenv("TF_STATE_APPLY"),
 		TFStateRevokeApply: os.Getenv("TF_STATE_REVOKE_APPLY"),
+		DBAdminApply:       os.Getenv("DB_ADMIN_APPLY"),
 		Deployments:        os.Getenv("DEPLOYMENTS"),
 	}
 }
@@ -173,6 +178,23 @@ func routeRotation(in rotationInputs) (rotationPlan, error) {
 		}
 		p.RunTFStateRevoke = true
 		p.TFStateRevokeApply = armed(in.TFStateRevokeApply)
+	case "db-admin":
+		// DISPATCH-ONLY, and deliberately absent from both the monthly schedule
+		// and `all`. Linode offers no way to mint a second admin credential, so
+		// rotation is an in-place reset with NO overlap window: every consumer
+		// holding the old password is broken from the instant of the reset until
+		// ESO re-syncs the new one. That is an operator-chosen maintenance action
+		// on a production database, not something a cron should decide — and
+		// folding it into `all` would mean "rotate:all" quietly resets every
+		// database in the deployment. Age is still tracked continuously
+		// (llz_credential_age_days), so nothing goes unnoticed for want of a
+		// schedule. See docs/designs/shared-managed-postgres.md.
+		if err := requireConfirm("rotate:db-admin"); err != nil {
+			return p, err
+		}
+		p.RunDBAdmin = true
+		p.Regions = fmt.Sprintf("[%q]", in.Region)
+		p.DBAdminApply = armed(in.DBAdminApply)
 	case "all":
 		if err := requireConfirm("rotate:all"); err != nil {
 			return p, err
@@ -199,11 +221,13 @@ func (p rotationPlan) outputLines() []string {
 		"run-pat-revoke=" + b(p.RunPATRevoke),
 		"run-tf-state-create=" + b(p.RunTFStateCreate),
 		"run-tf-state-revoke=" + b(p.RunTFStateRevoke),
+		"run-db-admin=" + b(p.RunDBAdmin),
 		"regions=" + p.Regions,
 		"pat-apply=" + b(p.PATApply),
 		"revoke-apply=" + b(p.RevokeApply),
 		"tf-state-apply=" + b(p.TFStateApply),
 		"tf-state-revoke-apply=" + b(p.TFStateRevokeApply),
+		"db-admin-apply=" + b(p.DBAdminApply),
 	}
 }
 

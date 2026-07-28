@@ -56,6 +56,7 @@ func TestRouteRotationDispatchScopes(t *testing.T) {
 		"linode-pat-revoke":         "rotate:linode-pat-revoke",
 		"tf-state-key":              "rotate:tf-state-key",
 		"tf-state-key-revoke":       "rotate:tf-state-key-revoke",
+		"db-admin":                  "rotate:db-admin",
 		"all":                       "rotate:all",
 	} {
 		in := base
@@ -88,6 +89,17 @@ func TestRouteRotationDispatchScopes(t *testing.T) {
 		t.Errorf("unset PAT_APPLY must stay false: %+v", p)
 	}
 
+	// db-admin: scoped to the one region, armed only by DB_ADMIN_APPLY.
+	in = base
+	in.Scope, in.Confirm, in.DBAdminApply = "db-admin", "rotate:db-admin", "true"
+	if p, _ = routeRotation(in); !p.RunDBAdmin || !p.DBAdminApply || p.Regions != `["primary"]` {
+		t.Errorf("armed db-admin plan = %+v", p)
+	}
+	in.DBAdminApply = ""
+	if p, _ = routeRotation(in); p.DBAdminApply {
+		t.Errorf("unset DB_ADMIN_APPLY must stay false: %+v", p)
+	}
+
 	// all: everything except propagate-only, fanned over the deployments.
 	in = base
 	in.Scope, in.Confirm = "all", "rotate:all"
@@ -95,6 +107,19 @@ func TestRouteRotationDispatchScopes(t *testing.T) {
 	if !(p.RunLKEAdmin && p.RunPATCreate && p.RunPATRevoke && p.RunTFStateCreate && p.RunTFStateRevoke) ||
 		p.RunPATPropagateOnly || p.Regions != `["primary"]` {
 		t.Errorf("all plan = %+v", p)
+	}
+	// ...but NOT db-admin. Rotating it is an in-place reset with no overlap
+	// window, so "rotate:all" must never quietly reset a production database.
+	if p.RunDBAdmin {
+		t.Error("scope=all must NOT include db-admin — it would reset every database with no overlap window")
+	}
+
+	// Nor does any schedule. db-admin is dispatch-only by construction.
+	for _, cron := range []string{cronMonthlyRotate, cronDailyRevoke} {
+		sched := rotationInputs{Event: "schedule", Cron: cron, Deployments: `["primary"]`}
+		if sp, err := routeRotation(sched); err != nil || sp.RunDBAdmin {
+			t.Errorf("cron %s must not schedule db-admin: plan=%+v err=%v", cron, sp, err)
+		}
 	}
 
 	// Blank reason and unknown scope are refused.
@@ -127,13 +152,14 @@ func TestRunCIRotationPlanWritesOutputsAndSummary(t *testing.T) {
 	for _, want := range []string{
 		"run-lke-admin=true", "run-pat-create=false", "regions=[\"primary\"]",
 		"pat-apply=false", "tf-state-revoke-apply=false",
+		"run-db-admin=false", "db-admin-apply=false",
 	} {
 		if !strings.Contains(string(got), want+"\n") {
 			t.Errorf("GITHUB_OUTPUT missing %q:\n%s", want, got)
 		}
 	}
-	if lines := strings.Count(string(got), "\n"); lines != 11 {
-		t.Errorf("GITHUB_OUTPUT has %d lines, want all 11 outputs exactly once", lines)
+	if lines := strings.Count(string(got), "\n"); lines != 13 {
+		t.Errorf("GITHUB_OUTPUT has %d lines, want all 13 outputs exactly once", lines)
 	}
 	summary, _ := os.ReadFile(sum)
 	for _, want := range []string{"Emergency rotation requested", "`lke-admin`", "@octocat"} {

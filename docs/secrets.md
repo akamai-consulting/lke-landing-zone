@@ -235,6 +235,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `secret/cert-automation/github-token` | cert-automation Argo Workflow token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
 | `secret/infra/github-dispatch-token` | harbor-ready PostSync dispatch token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
 | `secret/alerts/webhooks` | Alertmanager Slack webhook URL (`slack_url`) — mounted via the Kyverno-repointed `alertmanager-credentials` ExternalSecret | **Manual** — operator seeds/rotates via `llz openbao set alerts/webhooks slack_url=…` (only needed when `spec.alerting.receivers` includes slack; see [alerting.md](alerting.md)) |
+| `secret/platform/db-admin/<name>` | Managed Postgres admin connection (`akmadmin`) — endpoint, port, username, password, ca, sslmode | **On-demand** — seeded by `llz ci seed-db-admin`; rotated via `secret-rotation.yml` scope `db-admin` (`llz ci rotate-db-admin`). NOT scheduled and NOT in `all` — see below |
 
 **OpenBao runtime auth & seal/recovery material:**
 
@@ -276,6 +277,45 @@ visible rather than silently absent.
 > sampler treats only a 404 as "not seeded yet"; a 403 is fatal and fails the whole
 > pass, taking the seal gauge and every other credential's age down with it.
 > `TestCredPathsAreGrantedInReconcilerPolicy` pins the pair together.
+
+### Database admin credentials — why rotation is on-demand only
+
+`secret/platform/db-admin/<name>` holds the `akmadmin` credential for each Linode
+Managed PostgreSQL cluster the `databases` root provisions
+([shared-managed-postgres.md](designs/shared-managed-postgres.md)). It is the
+highest-value credential in the deployment — it owns every logical database
+carved out of the cluster — and `llz ci rotate-db-admin` is its rotation path.
+
+It is the only rotator here that is **dispatch-only**, deliberately:
+
+- **Linode offers no way to mint a second admin credential.** The user is fixed
+  to `akmadmin`, and the sole mutation is `POST .../credentials/reset`, which
+  regenerates the password *in place*. Every other rotator in this repo is
+  mint → verify → swap → drain, so a bad mint can never break a consumer. Here
+  there is **no overlap window**: the old password dies at the reset, and every
+  consumer is broken until ESO re-syncs. That is an operator-chosen maintenance
+  action, not something a cron should decide.
+- **It is excluded from `scope=all`** for the same reason — `rotate:all` must not
+  quietly reset every production database in the deployment.
+- **The invariant flips.** Because the credential cannot be verified before it is
+  committed to, the rule is not "never break a consumer" (unattainable) but
+  "never LOSE the new credential". A failure after the reset is a loud error
+  carrying the `linode-cli` command to re-read the password by hand — never the
+  password itself.
+- **It refreshes Terraform state afterwards.** `llz ci seed-db-admin` reconciles
+  OpenBao *toward* state; after an out-of-band reset, state holds the old
+  password, so a seed run against unrefreshed state would push the dead
+  credential back over the live one. A failed refresh **fails the run** even
+  though the rotation itself succeeded, because that is exactly the configuration
+  in which a routine seed silently undoes it.
+
+Report-only is the default — run it that way first:
+
+```bash
+# db-admin-apply omitted → reports each cluster's credential age and what is due
+gh workflow run secret-rotation.yml -f scope=db-admin -f region=primary \
+  -f confirm=rotate:db-admin -f reason="quarterly rotation"
+```
 
 ## Writing / rotating secrets — dual-write
 
