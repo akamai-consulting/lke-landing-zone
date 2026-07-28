@@ -57,6 +57,8 @@ on:
       # statically at the call boundary, so it would fail the run before any job
       # enters `environment: infra-<region>`. Presence is preflighted at runtime by
       # `llz ci require-secret`. Full reasoning in the sidecar doc.
+      TF_STATE_ENCRYPTION_PASSPHRASE:
+        required: false
       TF_STATE_ACCESS_KEY:
         required: false
       TF_STATE_SECRET_KEY:
@@ -438,6 +440,7 @@ jobs:
           module: databases
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       # Idempotent, and NOT a blind skip: unlike an object-storage key there is

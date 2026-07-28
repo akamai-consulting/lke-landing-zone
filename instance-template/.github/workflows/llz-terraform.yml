@@ -49,6 +49,8 @@ on:
       # All `required: false` on purpose: these are environment-scoped secrets,
       # which cannot satisfy a workflow_call `secrets` contract at call time.
       # Presence is enforced at runtime by `llz ci require-secret`.
+      TF_STATE_ENCRYPTION_PASSPHRASE:
+        required: false
       TF_STATE_ACCESS_KEY:
         required: false
       TF_STATE_SECRET_KEY:
@@ -154,6 +156,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Terraform validate — cluster
@@ -368,6 +371,7 @@ jobs:
           state-key:             vpc/${{ steps.net.outputs.net }}/terraform.tfstate
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
       - name: Terraform plan — shared VPC
         if: steps.net.outputs.net != ''
@@ -431,6 +435,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
@@ -610,6 +615,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
@@ -659,6 +665,7 @@ jobs:
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Import VPC and subnet if not in state
@@ -793,6 +800,7 @@ jobs:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Terraform plan — object-storage
@@ -860,6 +868,7 @@ jobs:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Terraform plan destroy — object-storage
@@ -903,6 +912,7 @@ jobs:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       # The Linode provider has no force_destroy, so a non-empty bucket fails the
@@ -1061,6 +1071,7 @@ jobs:
           module: databases
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Terraform plan — databases
@@ -1112,6 +1123,7 @@ jobs:
           module: databases
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Terraform plan destroy — databases
@@ -1161,6 +1173,7 @@ jobs:
           module: databases
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           github-token:          ${{ github.token }}
 
       - name: Terraform destroy — databases

@@ -217,6 +217,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `token-inventory` expiry measurement (alerts via `LLZToken*`) |
 | LKE admin kubeconfig | Cluster-admin credential | **Automated** — `secret-rotation.yml` (`lke-admin` scope), monthly; see [lke-admin-rotation.md](runbooks/lke-admin-rotation.md) |
 | `E2E_DISPATCH_TOKEN` | GitHub classic PAT for the e2e harness (template-repo scope) | **Manual** (template-repo admin) |
+| `TF_STATE_ENCRYPTION_PASSPHRASE` | Passphrase for OpenTofu native state+plan encryption (all four TF roots) | **Static by design** — rotating it means re-encrypting every state file (a `fallback` key-rollover, not a re-apply). **ESCROW OFFLINE**: losing it makes every state file unrecoverable. See [ADR 0007](adr/0007-terraform-state-encryption.md) |
 
 **OpenBao KV v2 secrets** (`secret/…`):
 
