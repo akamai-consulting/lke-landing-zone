@@ -100,7 +100,13 @@ cleanup() {
   # CI: the gate walks the filesystem (the CI container has no usable git) and
   # counts this debris as unclassified scaffold. Remove only *.tf — the
   # .terraform.lock.hcl provider pins beside them ARE tracked.
-  for d in "${GEN_TFVARS[@]}"; do rm -f "$(dirname "$d")"/*.tf; done
+  #
+  # Iterate the root DIRECTORIES, not GEN_TFVARS: `vpc` is a root whose tfvars is
+  # per-NETWORK (vpc/<name>.tfvars), not per-env, so it never appears in
+  # GEN_TFVARS — and its six .tf files leaked from every run even after the
+  # per-root cleanup landed. Globbing the roots also means the next root added is
+  # cleaned without touching this script.
+  for d in "$INSTANCE"/terraform-iac-bootstrap/*/; do rm -f "$d"*.tf; done
   if [[ -n "$TV_BAK" ]]; then mv -f "$TV_BAK" "$TV"; else rm -f "$TV"; fi
   if [[ -n "$LZ_BAK" ]]; then mv -f "$LZ_BAK" "$LZ"; else rm -f "$LZ"; fi
 }
