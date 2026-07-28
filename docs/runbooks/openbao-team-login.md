@@ -135,6 +135,16 @@ id_token for a token carrying only `gsap-writer`. The write is **attributed**
 no root, no broad token. A token that tries to write outside its subtree gets a
 403.
 
+> **Issuer discovery + kubeconfig.** `login` derives the Keycloak issuer from the
+> region's `cluster.bootstrap.domainSuffix`; on a **Managed App Platform** instance
+> (no `domainSuffix`) it **discovers** the issuer in-cluster from `otomi/otomi-api`
+> (the same source `bao-configure` binds to), so **no `--issuer` is needed** — pass
+> `--issuer https://keycloak.<domain>/realms/otomi` only to override. Either way,
+> `login` needs kubectl reach to the target cluster (it port-forwards OpenBao for the
+> exchange): point `KUBECONFIG` at the cluster or it fails at `did not report a local
+> port`. The minted token lives 1h (max 8h) — long enough for a multi-seed sitting;
+> re-run `login` when it expires.
+
 > **The CLI steers you here.** `llz openbao get/set/exec` print a warning to
 > stderr whenever they fall back to `OPENBAO_ROOT_TOKEN`, pointing back at
 > `llz openbao login --team`. Root still works (it is reserved for `exec`
