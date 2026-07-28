@@ -86,15 +86,29 @@ variable "label_prefix" {
 # Weekly maintenance window (UTC). Managed Databases apply engine patches in this
 # window; pinning it keeps disruption predictable instead of provider-default.
 variable "maintenance" {
-  description = "Weekly maintenance window (UTC) for engine patching."
+  description = "Weekly maintenance window (UTC) for engine patching. day_of_week is the provider's NUMERIC day: 1 = Monday through 7 = Sunday."
   type = object({
-    day_of_week = string # e.g. "sunday"
+    # NUMERIC, not a day name: the provider's updates.day_of_week is a number
+    # (1 = Monday … 7 = Sunday). A string here type-checks fine under
+    # `tofu validate` — which does not check nested-attribute values against the
+    # provider schema — and then fails every `terraform plan` with
+    # "Inappropriate value for attribute \"updates\": a number is required".
+    day_of_week = number # 1 = Monday … 7 = Sunday
     hour_of_day = number # 0-23
     duration    = number # 1-3 hours
   })
   default = {
-    day_of_week = "sunday"
+    day_of_week = 7 # Sunday
     hour_of_day = 8
     duration    = 1
+  }
+
+  validation {
+    condition = (
+      var.maintenance.day_of_week >= 1 && var.maintenance.day_of_week <= 7 &&
+      var.maintenance.hour_of_day >= 0 && var.maintenance.hour_of_day <= 23 &&
+      var.maintenance.duration >= 1 && var.maintenance.duration <= 3
+    )
+    error_message = "maintenance needs day_of_week 1-7 (1 = Monday … 7 = Sunday), hour_of_day 0-23 and duration 1-3."
   }
 }

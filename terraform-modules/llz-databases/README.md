@@ -48,6 +48,11 @@ would shift the other two onto each other's state.
 `private_network` attachment that restricts the cluster to a VPC. Note its
 `private_network`/`updates` are nested **attributes** (`= { … }`), not blocks.
 
+Their nested values are **not** checked by `tofu validate` — only by `plan`. That
+is how `updates.day_of_week` shipped as the string `"sunday"` when the provider
+wants the number `7`: validate passed, every plan would have failed. `make
+tf-validate`/`tf-validate-roots` do not catch this class; a plan does.
+
 ## Inputs
 
 | Name | Type | Default | Description |
@@ -62,7 +67,7 @@ would shift the other two onto each other's state.
 | `db_type` | string | `"g6-dedicated-2"` | Linode Managed DB node type. |
 | `cluster_size` | number | `2` | `1` single, `2`/`3` HA (standbys). |
 | `label_prefix` | string | `"platform"` | Label prefix (org/deployment identity). |
-| `maintenance` | object | Sun 08:00 UTC, 1h | Weekly patch window. |
+| `maintenance` | object | day 7 (Sun) 08:00 UTC, 1h | Weekly patch window. `day_of_week` is **numeric**: 1 = Monday … 7 = Sunday. |
 
 The label is `"<label_prefix>-<name>-<region_suffix>"` — e.g.
 `platform-shared-primary`.

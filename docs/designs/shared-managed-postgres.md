@@ -107,6 +107,25 @@ clean and after any sibling clusters in the same apply were already created.
 Managed DB otherwise ships a public `g2a.akamaidb.net` endpoint (TLS-only, but
 internet-reachable). VPC-only matches the platform's security posture.
 
+### `tofu validate` does not check nested attribute values
+
+`private_network`/`updates` are nested **attributes**, and `validate` type-checks
+the assignment but not the nested values against the provider schema. `plan` does.
+The module shipped `updates.day_of_week = "sunday"` where the provider wants the
+number `7` (1 = Monday … 7 = Sunday): `make tf-validate` and `tf-validate-roots`
+both passed, and every `terraform plan` would have failed with *"Inappropriate
+value for attribute `updates`: a number is required"*. Neither gate covers this
+class — a plan against the released provider is what catches it.
+
+Two things that hid it, both worth remembering:
+
+- The repo's own gates run `validate`, never `plan` (a plan needs credentials).
+- A local `~/.terraformrc` **dev override** silently substitutes a working-copy
+  build of the linode provider for the released one, so a clean local run proves
+  nothing about the version CI resolves. This branch was already bitten once by
+  the same override (the `root_username` sensitivity). Verify with
+  `TF_CLI_CONFIG_FILE=/dev/null`.
+
 ## Consuming it: four things Linode Managed Postgres does differently
 
 This module hands over a cluster; a downstream layer (Crossplane `provider-sql`
@@ -211,6 +230,12 @@ survive the endpoint change; only the admin secret + endpoint move.
   (commented, because zero clusters is the correct default).
 - `docs/landing-zone-spec.md` / `docs/workflows/llz-terraform.md` — document the
   new spec fields + jobs.
+- **A `plan` in CI.** `validate` demonstrably does not cover nested attribute
+  values (see above), so the root's first real plan is currently an operator's.
+  A credential-less plan is not possible against the Linode provider, but the
+  e2e lane could plan the `databases` root with an empty `databases = {}` and a
+  real token to at least exercise provider schema binding.
+
 Done on this branch: `validate.go` now checks `spec.cluster.databases` (key
 format, required region/vpcId/subnetId, region-vs-cluster.region mismatch,
 `clusterSize ∈ {1,2,3}`).
