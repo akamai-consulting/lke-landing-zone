@@ -451,6 +451,12 @@ func runDoctor(repo, env string, admin, envExplicit bool, sshHost, knownHosts st
 		report("active/standby pairing", true)
 	}
 
+	// Ask the ACCOUNT whether it can build what the spec pins. Everything above
+	// this point is local or GitHub, so an unentitled Linode account or a retired
+	// `+lke` pin used to reach terraform apply unchallenged. Advisory only — it
+	// never touches errs. See doctor_linode.go.
+	reportLinodeAccount(specK8sVersions(env))
+
 	// Opt-in SSH host reachability + known_hosts freshness (an SSH-based GitOps
 	// source path). Runs only when --ssh-host is given so it adds no noise.
 	if sshHost != "" {
