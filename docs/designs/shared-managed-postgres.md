@@ -317,19 +317,33 @@ lose the new credential**, and the shape follows from that:
   changed — hiding a stale password for another full window. A password that
   comes back **unchanged** is treated as a failed rotation for the same reason.
 
-**The Terraform-state hazard.** `llz ci seed-db-admin` reconciles OpenBao *toward*
-state: if the stored password differs from the `connections` output, it overwrites
-OpenBao. Correct for its own job (a recreated cluster must not strand consumers on
-a dead credential), and actively dangerous after an out-of-band reset — state
-holds the OLD password, so a seed run against unrefreshed state would push the
-dead credential back over the live one.
+**Rotate-on-create, and why Terraform state stops mattering.** The password
+Terraform hands over is the *provisioning* credential. Bootstrap runs
+`llz ci rotate-db-admin --rotate-now --apply` immediately after
+`llz ci seed-db-admin`, so it is replaced within the same run that created it and
+the copy in Terraform state is dead on arrival.
 
-The rotator therefore runs `terraform apply -refresh-only` itself after a
-successful rotation, and a refresh failure **fails the run** even though the
-credential is safely in OpenBao — because the deployment is otherwise left in the
-one configuration where a routine seed silently undoes the rotation. The error
-says the credential is safe, so nobody "fixes" it by re-running the rotation and
-resetting the cluster a second time.
+That also removes a hazard the first cut had to defend against. `seed-db-admin`
+used to compare PASSWORDS and reconcile OpenBao toward state, so after an
+out-of-band reset a seed run would push the pre-rotation password back over the
+live one. The rotator therefore ended with a `terraform apply -refresh-only`.
+Both are gone: `seed-db-admin` now compares the cluster's **endpoint** — its
+identity — and leaves the credential of a path already pointing at this cluster
+completely alone. OpenBao is authoritative for the password and nothing consults
+state about it, so there is no race left to lose. Re-seeding happens in exactly
+two cases: the path does not exist, or it points at a *different* cluster (a
+recreate, which changes the endpoint).
+
+Dropping the refresh also drops a failure mode — a rotation that succeeded but
+reported failure because a state refresh could not take a lock.
+
+> **Honest limit.** This bounds how long the state copy is LIVE; it does not keep
+> a password out of state. `root_password` is a provider-computed attribute, so
+> any later `tofu plan`/`apply` refreshes it from the API and state re-acquires
+> the current password. Confidentiality of the file is a separate control —
+> [ADR 0007](../adr/0007-terraform-state-encryption.md) encrypts state at rest.
+> The two are complementary: encryption protects the file, rotate-on-create makes
+> sure the credential in it was never the only copy.
 
 **Scheduling.** Dispatch-only (`scope=db-admin`), and deliberately excluded from
 both the monthly cron and `scope=all`: an in-place reset with no overlap window
@@ -340,7 +354,8 @@ the credential inventory, so nothing goes unnoticed for want of a schedule.
 
 **Not yet proven live.** The rotator is unit-tested end to end against a faked
 Linode API (including every post-reset failure mode), but no cluster has been
-rotated for real — `gsap-postgres` is the first candidate. Two things to confirm
+rotated for real — `gsap-postgres` is the first candidate. One thing to confirm
 on that run: that `status` returns to `active` before the new credential is
-servable (the wait assumes it does), and that a `-refresh-only` apply actually
-picks the new password up into state.
+servable (the wait assumes it does). Watch the bootstrap rotate-on-create step
+too — it is the first place the assumption is exercised, and it runs immediately
+after a create, when the cluster may still be settling.

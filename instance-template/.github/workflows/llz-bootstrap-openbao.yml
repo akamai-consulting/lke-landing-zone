@@ -453,6 +453,23 @@ jobs:
         working-directory: terraform-iac-bootstrap/databases
         run: llz ci seed-db-admin --region "$REGION"
 
+      # ROTATE-ON-CREATE. The password Terraform just handed over is the
+      # PROVISIONING credential and it is sitting in Terraform state; this
+      # replaces it within the same run that created it, so the copy in state is
+      # dead on arrival. From here OpenBao is authoritative — seed-db-admin
+      # compares the cluster ENDPOINT, not the password, so re-running it will
+      # never push state's dead credential back over the live one.
+      #
+      # NOT gated on `continue-on-error`: a cluster whose admin password we reset
+      # but failed to store is the one outcome worse than not rotating, and the
+      # command's own error carries the linode-cli recovery command.
+      - name: Rotate the provisioning credential (rotate-on-create)
+        if: steps.ensure.outputs.available == 'true' && steps.db.outputs.declared == 'true'
+        working-directory: terraform-iac-bootstrap/databases
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci rotate-db-admin --region "$REGION" --rotate-now --apply
+
       # ── Mint + seed: the narrow in-cluster Linode PAT ───────────────────────────
       # Mints the NARROW in-cluster PAT (label llz-incluster-<region>) using the
       # broad PAT and seeds secret/linode/api-token. Every in-cluster Linode consumer

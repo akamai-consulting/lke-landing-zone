@@ -62,14 +62,12 @@ func (f *fakeDBAPI) PostgresCredentials(_ context.Context, _ uint64) (linode.DBC
 // path+field to its value, so a test can seed a complete secret, a partial one,
 // or none at all.
 type rotateDBHarness struct {
-	api        *fakeDBAPI
-	writes     map[string]map[string]string
-	stored     map[string]string // "<path>|<field>" → value
-	baoStderr  string
-	putErr     error
-	refreshErr error
-	refreshed  int
-	now        time.Time
+	api       *fakeDBAPI
+	writes    map[string]map[string]string
+	stored    map[string]string // "<path>|<field>" → value
+	baoStderr string
+	putErr    error
+	now       time.Time
 }
 
 func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, api *fakeDBAPI) *rotateDBHarness {
@@ -82,10 +80,10 @@ func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, 
 	}
 
 	prevTF, prevExec, prevPut := tfOutputRunFn, baoExecFn, baoKVPutFn
-	prevNow, prevClient, prevSleep, prevRefresh := dbAdminNow, dbAdminLinodeClient, dbAdminSleep, tfRefreshRunFn
+	prevNow, prevClient, prevSleep := dbAdminNow, dbAdminLinodeClient, dbAdminSleep
 	t.Cleanup(func() {
 		tfOutputRunFn, baoExecFn, baoKVPutFn = prevTF, prevExec, prevPut
-		dbAdminNow, dbAdminLinodeClient, dbAdminSleep, tfRefreshRunFn = prevNow, prevClient, prevSleep, prevRefresh
+		dbAdminNow, dbAdminLinodeClient, dbAdminSleep = prevNow, prevClient, prevSleep
 	})
 
 	t.Setenv("LINODE_TOKEN", "tok")
@@ -95,7 +93,6 @@ func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, 
 	dbAdminNow = func() time.Time { return h.now }
 	dbAdminSleep = func(time.Duration) {}
 	dbAdminLinodeClient = func(string) dbAdminAPI { return h.api }
-	tfRefreshRunFn = func() error { h.refreshed++; return h.refreshErr }
 
 	baoExecFn = func(_, _, _ string, args ...string) (string, string, error) {
 		if h.baoStderr != "" {
@@ -147,7 +144,7 @@ func TestRotateDBAdminSkipsWhenNotDue(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 10, now, "old-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", true, 80); err != nil {
+	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 0 {
@@ -155,9 +152,6 @@ func TestRotateDBAdminSkipsWhenNotDue(t *testing.T) {
 	}
 	if len(h.writes) != 0 {
 		t.Errorf("nothing should be written, got %v", h.writes)
-	}
-	if h.refreshed != 0 {
-		t.Error("no rotation happened, so state must not be refreshed")
 	}
 }
 
@@ -169,7 +163,7 @@ func TestRotateDBAdminReportOnlyDoesNotMutate(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", false, 80); err != nil {
+	if err := runCIRotateDBAdmin("prod", false, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 0 {
@@ -191,7 +185,7 @@ func TestRotateDBAdminRotatesAndCarriesFields(t *testing.T) {
 	}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
 
-	if err := runCIRotateDBAdmin("prod", true, 80); err != nil {
+	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 1 || api.resets[0] != 12345 {
@@ -218,9 +212,6 @@ func TestRotateDBAdminRotatesAndCarriesFields(t *testing.T) {
 	if got["rotated_at"] != strconv.FormatInt(now.Unix(), 10) {
 		t.Errorf("rotated_at = %q, want the current stamp %q", got["rotated_at"], strconv.FormatInt(now.Unix(), 10))
 	}
-	if h.refreshed != 1 {
-		t.Errorf("state refresh ran %d times, want 1", h.refreshed)
-	}
 }
 
 // A reset that leaves the password unchanged must NOT be recorded as a rotation:
@@ -234,7 +225,7 @@ func TestRotateDBAdminRefusesUnchangedPassword(t *testing.T) {
 	}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
 
-	err := runCIRotateDBAdmin("prod", true, 80)
+	err := runCIRotateDBAdmin("prod", true, false, 80)
 	if err == nil {
 		t.Fatal("an unchanged password after a reset must be an error")
 	}
@@ -272,7 +263,7 @@ func TestRotateDBAdminPostResetFailuresAreLoud(t *testing.T) {
 			h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
 			c.mutate(api, h)
 
-			err := runCIRotateDBAdmin("prod", true, 80)
+			err := runCIRotateDBAdmin("prod", true, false, 80)
 			if err == nil {
 				t.Fatal("want an error")
 			}
@@ -289,37 +280,7 @@ func TestRotateDBAdminPostResetFailuresAreLoud(t *testing.T) {
 			if strings.Contains(msg, "new-pw") {
 				t.Errorf("the error must NOT contain the credential itself: %v", err)
 			}
-			if h.refreshed != 0 {
-				t.Error("a failed rotation must not report success by refreshing state")
-			}
 		})
-	}
-}
-
-// The rotation succeeded and is durable, but leaving state stale arms
-// seed-db-admin to overwrite the live credential with the dead one — so the run
-// fails, loudly, rather than reporting a clean rotation.
-func TestRotateDBAdminFailsWhenStateRefreshFails(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	path := dbAdminSeedRoot + "shared"
-	api := &fakeDBAPI{statuses: []string{"active"}, creds: linode.DBCredentials{Username: "akmadmin", Password: "new-pw"}}
-	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 200, now, "old-pw"), api)
-	h.refreshErr = errors.New("backend locked")
-
-	err := runCIRotateDBAdmin("prod", true, 80)
-	if err == nil {
-		t.Fatal("a failed state refresh must fail the run")
-	}
-	if !strings.Contains(err.Error(), "seed-db-admin") {
-		t.Errorf("error must explain the seed-rollback hazard, got: %v", err)
-	}
-	// The credential IS safe — the error must say so, or an operator will "fix"
-	// it by re-running the rotation and reset the cluster a second time.
-	if !strings.Contains(err.Error(), "OpenBao holds the new credential") {
-		t.Errorf("error must state the credential is safe, got: %v", err)
-	}
-	if h.writes[path]["password"] != "new-pw" {
-		t.Error("the new credential should still have been persisted")
 	}
 }
 
@@ -327,9 +288,9 @@ func TestRotateDBAdminFailsWhenStateRefreshFails(t *testing.T) {
 // to use it against — refuse, and do it BEFORE the irreversible reset.
 func TestRotateDBAdminRefusesUnseededPath(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
-	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), map[string]string{}, api)
+	newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), map[string]string{}, api)
 
-	err := runCIRotateDBAdmin("prod", true, 80)
+	err := runCIRotateDBAdmin("prod", true, false, 80)
 	if err == nil {
 		t.Fatal("an unseeded path must not be rotated")
 	}
@@ -338,9 +299,6 @@ func TestRotateDBAdminRefusesUnseededPath(t *testing.T) {
 	}
 	if len(api.resets) != 0 {
 		t.Errorf("the refusal must happen BEFORE the reset, got resets %v", api.resets)
-	}
-	if h.refreshed != 0 {
-		t.Error("no state refresh on a refused rotation")
 	}
 }
 
@@ -351,7 +309,7 @@ func TestRotateDBAdminFailsClosedOnUnreadableBao(t *testing.T) {
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), map[string]string{}, api)
 	h.baoStderr = "Error making API request: connection refused"
 
-	err := runCIRotateDBAdmin("prod", true, 80)
+	err := runCIRotateDBAdmin("prod", true, false, 80)
 	if err == nil {
 		t.Fatal("an unreadable OpenBao must fail the run")
 	}
@@ -364,12 +322,12 @@ func TestRotateDBAdminFailsClosedOnUnreadableBao(t *testing.T) {
 // nothing, so it can sit unconditionally in a scheduled workflow.
 func TestRotateDBAdminNoDatabasesIsNoOp(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}}
-	h := newRotateDBHarness(t, `{}`, map[string]string{}, api)
+	newRotateDBHarness(t, `{}`, map[string]string{}, api)
 
-	if err := runCIRotateDBAdmin("prod", true, 80); err != nil {
+	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("a deployment with no databases must be a clean no-op: %v", err)
 	}
-	if len(api.resets) != 0 || h.refreshed != 0 {
+	if len(api.resets) != 0 {
 		t.Error("nothing should have happened")
 	}
 }
@@ -384,7 +342,7 @@ func TestRotateDBAdminMissingStampIsDue(t *testing.T) {
 	api := &fakeDBAPI{statuses: []string{"active"}, creds: linode.DBCredentials{Username: "akmadmin", Password: "new-pw"}}
 	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), stored, api)
 
-	if err := runCIRotateDBAdmin("prod", true, 80); err != nil {
+	if err := runCIRotateDBAdmin("prod", true, false, 80); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if len(api.resets) != 1 {
@@ -409,7 +367,7 @@ func TestRotateDBAdminTimesOutWaitingForActive(t *testing.T) {
 		return now.Add(time.Duration(calls) * dbAdminActiveTimeout)
 	}
 
-	err := runCIRotateDBAdmin("prod", true, 80)
+	err := runCIRotateDBAdmin("prod", true, false, 80)
 	if err == nil {
 		t.Fatal("a cluster that never returns to active must fail the run")
 	}
@@ -457,10 +415,51 @@ func TestParseDBIDs(t *testing.T) {
 }
 
 func TestRotateDBAdminRejectsBadFlags(t *testing.T) {
-	if err := runCIRotateDBAdmin("", true, 80); err == nil {
+	if err := runCIRotateDBAdmin("", true, false, 80); err == nil {
 		t.Error("--region is required")
 	}
-	if err := runCIRotateDBAdmin("prod", true, 0); err == nil {
+	if err := runCIRotateDBAdmin("prod", true, false, 0); err == nil {
 		t.Error("--rotate-after-days must be positive")
+	}
+}
+
+// rotate-on-create: --rotate-now ignores the age check entirely. Bootstrap uses
+// it to burn the PROVISIONING credential — the one Terraform just handed over
+// and is still holding in state — within the same run that created it.
+func TestRotateDBAdminRotateNowIgnoresAge(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	path := dbAdminSeedRoot + "shared"
+	// Freshly seeded: zero days old, nowhere near the 80d threshold.
+	api := &fakeDBAPI{statuses: []string{"active"}, creds: linode.DBCredentials{Username: "akmadmin", Password: "post-bootstrap-pw"}}
+	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 0, now, "provisioning-pw"), api)
+
+	if err := runCIRotateDBAdmin("prod", true, true, 80); err != nil {
+		t.Fatalf("rotate-now: %v", err)
+	}
+	if len(api.resets) != 1 {
+		t.Fatalf("--rotate-now must rotate a 0d-old credential, got resets %v", api.resets)
+	}
+	if got := h.writes[path]["password"]; got != "post-bootstrap-pw" {
+		t.Errorf("password = %q, want the post-rotation one", got)
+	}
+	// The provisioning credential Terraform holds in state is now dead.
+	if h.writes[path]["password"] == "provisioning-pw" {
+		t.Error("the provisioning credential must not survive rotate-on-create")
+	}
+}
+
+// --rotate-now still respects the --apply gate: it changes WHICH clusters are
+// due, not whether the irreversible reset is armed.
+func TestRotateDBAdminRotateNowStillNeedsApply(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	path := dbAdminSeedRoot + "shared"
+	api := &fakeDBAPI{statuses: []string{"active"}}
+	h := newRotateDBHarness(t, databaseIDsOutput(`{"shared":12345}`), seededDBSecret(path, 0, now, "provisioning-pw"), api)
+
+	if err := runCIRotateDBAdmin("prod", false, true, 80); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if len(api.resets) != 0 || len(h.writes) != 0 {
+		t.Error("--rotate-now without --apply must still be report-only")
 	}
 }

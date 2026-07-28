@@ -302,12 +302,18 @@ It is the only rotator here that is **dispatch-only**, deliberately:
   "never LOSE the new credential". A failure after the reset is a loud error
   carrying the `linode-cli` command to re-read the password by hand — never the
   password itself.
-- **It refreshes Terraform state afterwards.** `llz ci seed-db-admin` reconciles
-  OpenBao *toward* state; after an out-of-band reset, state holds the old
-  password, so a seed run against unrefreshed state would push the dead
-  credential back over the live one. A failed refresh **fails the run** even
-  though the rotation itself succeeded, because that is exactly the configuration
-  in which a routine seed silently undoes it.
+- **OpenBao is authoritative, not Terraform state.** `llz ci seed-db-admin`
+  compares the cluster's **endpoint** (its identity), never its password, so a
+  path already pointing at this cluster is left alone. It re-seeds only when the
+  path is absent or points at a *different* cluster (a recreate). That is what
+  makes an out-of-band reset safe: nothing reconciles the credential back toward
+  state.
+- **Rotate-on-create.** Bootstrap runs `rotate-db-admin --rotate-now --apply`
+  right after the seed, so the *provisioning* credential Terraform handed over —
+  the copy sitting in Terraform state — is replaced within the same run. This
+  bounds how long that copy is live; it does not keep a password out of state at
+  all (`root_password` is provider-computed, and any later apply refreshes it).
+  For the file itself, see [ADR 0007](adr/0007-terraform-state-encryption.md).
 
 Report-only is the default — run it that way first:
 

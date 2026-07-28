@@ -34,26 +34,35 @@ package main
 //   - Rotation is SEQUENTIAL across clusters and stops at the first failure. A
 //     loop that kept going would turn one lost credential into several.
 //
-// ── The Terraform-state hazard ───────────────────────────────────────────────
+// ── Rotate-on-create: why Terraform state stops mattering ───────────────────
 //
-// `llz ci seed-db-admin` reconciles OpenBao TOWARD Terraform state: if the
-// stored password differs from the state's `connections` output, it overwrites
-// OpenBao. That is correct for its own job (a recreated cluster must not strand
-// consumers on a dead credential) and actively dangerous here — after an
-// out-of-band reset, state holds the OLD password, so a seed run against
-// unrefreshed state would push the dead credential back over the live one.
+// The password Terraform hands over is the PROVISIONING credential. Bootstrap
+// runs this command with --rotate-now immediately after `llz ci seed-db-admin`,
+// so that credential is replaced within the same run that created it and the
+// copy sitting in Terraform state is dead on arrival.
 //
-// The rotator therefore refreshes state itself after a successful rotation, and
-// treats a refresh failure as a FAILED RUN even though the credential is safely
-// in OpenBao — because the deployment is left in the one configuration where a
-// routine seed silently undoes the rotation. See refreshTFState.
-
+// This used to end with a `terraform apply -refresh-only`, because
+// `seed-db-admin` compared PASSWORDS and reconciled OpenBao toward state — so a
+// seed run against unrefreshed state would push the pre-rotation password back
+// over the live one. That defence is gone because the hazard is gone:
+// seed-db-admin now compares the cluster's ENDPOINT, and leaves the credential
+// of a path already pointing at this cluster completely alone. OpenBao is
+// authoritative for the password; nothing consults state about it.
+//
+// Removing the refresh also removes a failure mode: a rotation that succeeded
+// but reported failure because a state refresh could not get a lock.
+//
+// HONEST LIMIT: this bounds how long the state copy is LIVE, not whether a
+// password is ever written to state. `root_password` is a provider-computed
+// attribute, so any later `tofu plan`/`apply` refreshes it from the API and
+// state re-acquires the current password. Confidentiality of the file itself is
+// a separate control — see docs/adr/0007-terraform-state-encryption.md.
+//
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,16 +89,6 @@ var (
 	dbAdminNow          = func() time.Time { return time.Now() }
 	dbAdminLinodeClient = func(token string) dbAdminAPI { return linode.NewClient(token, 60*time.Second) }
 	dbAdminSleep        = func(d time.Duration) { time.Sleep(d) }
-	// tfRefreshRunFn runs the state refresh in the databases root. Seamed so the
-	// tests exercise the post-rotation hazard handling without a real backend.
-	tfRefreshRunFn = func() error {
-		cmd := exec.Command("terraform", "apply", "-refresh-only", "-auto-approve", "-input=false")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-		}
-		return nil
-	}
 )
 
 // dbAdminAPI is the slice of the Linode client the rotator needs.
@@ -110,7 +109,7 @@ type dbAdminTarget struct {
 
 func ciRotateDBAdminCmd() *cobra.Command {
 	var region string
-	var apply bool
+	var apply, rotateNow bool
 	var afterDays int
 	c := &cobra.Command{
 		Use:   "rotate-db-admin",
@@ -125,20 +124,25 @@ func ciRotateDBAdminCmd() *cobra.Command {
 			"After a successful rotation the command refreshes Terraform state, because\n" +
 			"`llz ci seed-db-admin` reconciles OpenBao toward state and would otherwise push\n" +
 			"the pre-rotation password back over the live one.\n\n" +
+			"--rotate-now ignores the age check and rotates every seeded cluster. This is\n" +
+			"rotate-on-create: bootstrap runs it right after `llz ci seed-db-admin` so the\n" +
+			"PROVISIONING credential Terraform handed over — the one sitting in Terraform\n" +
+			"state — is replaced within the same run that created it.\n\n" +
 			"Run with the databases root as the working directory. Reads LINODE_TOKEN and\n" +
 			"OPENBAO_ROOT_TOKEN.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIRotateDBAdmin(region, apply, afterDays)
+			return runCIRotateDBAdmin(region, apply, rotateNow, afterDays)
 		},
 	}
+	c.Flags().BoolVar(&rotateNow, "rotate-now", false, "rotate every seeded cluster regardless of age (rotate-on-create; still requires --apply)")
 	c.Flags().StringVar(&region, "region", "", "deployment (spec env name) being rotated — labels the run summary (required)")
 	c.Flags().BoolVar(&apply, "apply", false, "arm the rotation; without it the command only reports what is due")
 	c.Flags().IntVar(&afterDays, "rotate-after-days", dbAdminRotateAfterDays, "rotate a credential older than this many days")
 	return c
 }
 
-func runCIRotateDBAdmin(region string, apply bool, afterDays int) error {
+func runCIRotateDBAdmin(region string, apply, rotateNow bool, afterDays int) error {
 	if region == "" {
 		return fmt.Errorf("--region is required")
 	}
@@ -146,7 +150,7 @@ func runCIRotateDBAdmin(region string, apply bool, afterDays int) error {
 		return fmt.Errorf("--rotate-after-days must be positive, got %d", afterDays)
 	}
 
-	targets, err := dbAdminTargets(afterDays)
+	targets, err := dbAdminTargets(afterDays, rotateNow)
 	if err != nil {
 		return err
 	}
@@ -192,11 +196,6 @@ func runCIRotateDBAdmin(region string, apply bool, afterDays int) error {
 		fmt.Printf("%s: rotated; %s updated.\n", t.name, t.path)
 	}
 
-	// The rotation is already durable in OpenBao at this point. This is about the
-	// NEXT seed run, not this one — see the file header.
-	if err := refreshTFState(rotated); err != nil {
-		return err
-	}
 	return appendGHAFile("GITHUB_STEP_SUMMARY", dbAdminRotateSummary(region, apply, afterDays, targets, rotated)...)
 }
 
@@ -320,25 +319,9 @@ func dbAdminLostCredentialErr(t dbAdminTarget, cause error) error {
 		t.name, cause, t.path, t.id, t.name)
 }
 
-// refreshTFState brings the databases root's state back in line with the live
-// credentials. See the file header for why a failure here fails the run.
-func refreshTFState(rotated []string) error {
-	if err := tfRefreshRunFn(); err != nil {
-		return fmt.Errorf("rotate-db-admin: rotated %s successfully, but the Terraform state refresh FAILED: %w\n\n"+
-			"  OpenBao holds the new credential and consumers are fine. The hazard is the NEXT\n"+
-			"  `llz ci seed-db-admin` run: state still holds the pre-rotation password, and the seed\n"+
-			"  reconciles OpenBao toward state — so it would overwrite the live credential with the\n"+
-			"  dead one and strand every consumer.\n\n"+
-			"  Run `terraform apply -refresh-only` in the databases root before the next apply.",
-			strings.Join(rotated, ", "), err)
-	}
-	fmt.Println("rotate-db-admin: Terraform state refreshed — seed-db-admin will not roll the rotation back.")
-	return nil
-}
-
 // dbAdminTargets builds the candidate list from the databases root's
 // `database_ids` output, joined against each path's rotated_at stamp.
-func dbAdminTargets(afterDays int) ([]dbAdminTarget, error) {
+func dbAdminTargets(afterDays int, rotateNow bool) ([]dbAdminTarget, error) {
 	raw, err := tfOutputRunFn()
 	if err != nil {
 		return nil, fmt.Errorf("rotate-db-admin: terraform output -json: %w", err)
@@ -369,7 +352,10 @@ func dbAdminTargets(afterDays int) ([]dbAdminTarget, error) {
 		}
 		if secs, err := strconv.ParseInt(strings.TrimSpace(stamp), 10, 64); err == nil && secs > 0 {
 			t.ageDays = int(now.Sub(time.Unix(secs, 0)).Hours() / 24)
-			t.due = t.ageDays >= afterDays
+			// --rotate-now is rotate-on-create: the age is real but irrelevant,
+			// because the point is to burn the provisioning credential, which is
+			// zero days old by construction.
+			t.due = rotateNow || t.ageDays >= afterDays
 		} else {
 			// No parseable stamp: either never seeded by a version that stamped, or
 			// hand-written. Treat as DUE — an unknown-age admin credential is the
@@ -424,7 +410,7 @@ func dbAdminRotateSummary(region string, apply bool, afterDays int, targets []db
 	switch {
 	case len(rotated) > 0:
 		lines = append(lines, fmt.Sprintf("**Rotated:** `%s`", strings.Join(rotated, "`, `")),
-			"", "Terraform state was refreshed so `llz ci seed-db-admin` cannot roll the rotation back.")
+			"", "OpenBao holds the live credential. `llz ci seed-db-admin` compares the cluster ENDPOINT, not the password, so it will not overwrite it.")
 	case !apply:
 		lines = append(lines, "_Report-only — re-run with `--apply` to rotate. The Linode API resets the admin password in place, so the rotation is irreversible and the old password stops working immediately._")
 	default:
