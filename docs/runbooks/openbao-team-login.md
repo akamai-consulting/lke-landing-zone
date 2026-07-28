@@ -107,6 +107,13 @@ llz ci keycloak-configure --region <region>  # public device-flow `llz` client
 > dispatch `bootstrap-openbao.yml` for the region, then delete the secret again.
 > Until that runs, a newly declared team has **no** OpenBao role and **no** ESO
 > read grant: its `ExternalSecret`s 403.
+>
+> The same applies to the **token lifetime**. The writer role's TTL is written by
+> `bao-configure`, so a cluster bootstrapped before it was raised to 1h/8h keeps
+> minting **15m/30m** tokens until a re-configure runs — an upgrade of the `llz`
+> binary alone changes nothing. If `login` tokens still expire mid-seed on an
+> existing cluster, that is what you are looking at; the re-configure above is the
+> fix. Check the live value with `bao read auth/keycloak/role/<team>`.
 
 All idempotent. `bao-configure` is the only step that needs root. If
 `keycloak-configure` can't reach Keycloak, create the client by hand: a **public**
