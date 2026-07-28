@@ -237,6 +237,16 @@ toggle, see below) inherits the default rather than reading as a disable. The se
 `cidrFirewall`, `broadPatRotator`, `llzReconciler`, `clusterHealthWorkflow`.
 On the managed platform many of these are apl-core's (Linode-owned) and are not
 emitted by `llz render` — see docs/adr/0005-managed-app-platform.md.
+
+> **`argoWorkflows` on managed is opt-in even though it is default-on elsewhere.**
+> It is a support component: on managed its only platform consumer is
+> `clusterHealthWorkflow`, so it emits when that is enabled — otherwise every managed
+> cluster would carry a workflow controller it never runs. If you want the Workflow
+> CRDs for **your own** workloads (a build pipeline under `kubernetes-custom/`, say),
+> name it directly — `argoWorkflows: { enabled: true }` — rather than switching on
+> `clusterHealthWorkflow` for its dependency side effect. Without either, your
+> `WorkflowTemplate` fails to sync with `WorkflowTemplate.argoproj.io "" not found`,
+> which names the CRD that is missing but not the reason.
 (There is no `volumeLabeler` — it was retired into the `volume-labels` lane of
 `llz reconcile` — and no `dns` component. `Validate` rejects unknown keys, so
 naming either is a hard spec error.)

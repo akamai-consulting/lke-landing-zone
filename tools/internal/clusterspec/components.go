@@ -61,11 +61,14 @@ type Component struct {
 	// conditional component emits ONLY when its gating app is declared. Empty = always.
 	ManagedConditionalOn string
 	// ManagedConditionalOnComponent names a SIBLING LLZ component whose enablement
-	// gates this one on managed: it emits ONLY when that consumer is enabled. Used
-	// for a support app that exists solely to back another component (argoWorkflows
-	// backs clusterHealthWorkflow; on managed cert-automation is apl-core's, so
+	// gates this one on managed: it emits when that consumer is enabled. Used for a
+	// support app that exists solely to back another component (argoWorkflows backs
+	// clusterHealthWorkflow; on managed cert-automation is apl-core's, so
 	// clusterHealthWorkflow is its only consumer) so it is not installed on managed
 	// clusters that don't run the consumer. Empty = not consumer-gated.
+	//
+	// The gate is a DEFAULT, not a lock: an operator who writes `enabled: true` for
+	// this component itself gets it regardless of the consumer (see EmitOnManaged).
 	ManagedConditionalOnComponent string
 }
 
@@ -73,9 +76,10 @@ type Component struct {
 // ManagedSkip component never emits (apl-core owns the concern); a component
 // conditional on an apl-core app emits only when that app is declared in
 // bootstrap.managedApps; a component conditional on a sibling LLZ component emits
-// only when that consumer is enabled (via `enabled`); everything else always
-// emits. `enabled` is the env's component toggles (the same map ComponentEnabled
-// reads) and is consulted only for the sibling-component case.
+// when that consumer is enabled (via `enabled`) OR when the operator asked for this
+// component itself; everything else always emits. `enabled` is the env's component
+// toggles (the same map ComponentEnabled reads) and is consulted only for the
+// sibling-component case.
 func (c Component) EmitOnManaged(b Bootstrap, enabled map[string]ComponentToggle) bool {
 	if c.ManagedSkip {
 		return false
@@ -84,9 +88,30 @@ func (c Component) EmitOnManaged(b Bootstrap, enabled map[string]ComponentToggle
 		return b.ManagedAppEnabled(c.ManagedConditionalOn)
 	}
 	if c.ManagedConditionalOnComponent != "" {
-		return ComponentEnabled(enabled, c.ManagedConditionalOnComponent)
+		// The consumer gate keeps a support app off managed clusters that don't need
+		// it — but it must not be the ONLY way in. An operator wanting Argo Workflows
+		// for their own workloads (managed-apps builds, say) had to enable
+		// clusterHealthWorkflow, a health-check component with no obvious relationship
+		// to builds, purely for its DependsOn. Nothing said so, and the failure was an
+		// opaque Argo `WorkflowTemplate.argoproj.io "" not found` from the missing CRD.
+		// So an EXPLICIT `enabled: true` on the support component itself also emits it.
+		// Explicit, not ComponentEnabled: argoWorkflows is default-enabled, so reusing
+		// ComponentEnabled here would emit it on every managed cluster and erase the
+		// gate — the toggle has to be one the AUTHOR wrote.
+		return ComponentEnabled(enabled, c.ManagedConditionalOnComponent) ||
+			explicitlyEnabled(enabled, c.Name)
 	}
 	return true
+}
+
+// explicitlyEnabled reports whether the operator WROTE `enabled: true` for this
+// component in spec.components, as distinct from it merely defaulting to enabled.
+// Reads ComponentToggle.Explicit, which Defaults() stamps before it fills the
+// built-ins over the author's nils — the *bool alone can't answer this after
+// defaulting, because by then every toggle carries a non-nil Enabled.
+func explicitlyEnabled(toggles map[string]ComponentToggle, name string) bool {
+	t, ok := toggles[name]
+	return ok && t.Explicit && t.Enabled != nil && *t.Enabled
 }
 
 // Patch is one kustomize strategic-merge/JSON patch entry (path + target).
@@ -153,6 +178,11 @@ var Components = []Component{
 		// cert-automation is apl-core's, so clusterHealthWorkflow is the only
 		// consumer; consumer-gate on it so argo-workflows installs only where the
 		// health RUN-path actually runs, not on every managed cluster.
+		//
+		// If you want the Workflow CRDs for your OWN workloads on a managed cluster
+		// (an app build pipeline in kubernetes-custom/, say), say so directly —
+		//   components: { argoWorkflows: { enabled: true } }
+		// — rather than enabling clusterHealthWorkflow for its DependsOn side effect.
 		Name:                          "argoWorkflows",
 		ManifestResources:             []string{"argo-workflows/network-policies.yaml"},
 		ArgoApps:                      []string{"applications/argo-workflows.yaml"},

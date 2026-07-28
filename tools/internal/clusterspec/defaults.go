@@ -49,12 +49,16 @@ func (lz *LandingZone) Defaults() {
 				env.Components[r.Name] = ComponentToggle{Enabled: boolPtr(!r.DefaultDisabled)}
 				continue
 			}
+			// This is the LAST point where "the author wrote enabled:" is still visible
+			// — the next line erases it by filling the built-in. Record it (see
+			// ComponentToggle.Explicit); EmitOnManaged needs the distinction.
+			t.Explicit = t.Enabled != nil
 			// A toggle that sets only sizing (Enabled nil) resolves to the built-in
 			// default so the rest of the pipeline sees a complete, non-nil state.
 			if t.Enabled == nil {
 				t.Enabled = boolPtr(!r.DefaultDisabled)
-				env.Components[r.Name] = t
 			}
+			env.Components[r.Name] = t
 		}
 		lz.Spec.Environments[name] = env
 	}
