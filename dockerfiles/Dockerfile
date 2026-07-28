@@ -20,7 +20,7 @@
 #
 # The tool ARGs in `toolbox` are the single source of truth for what goes INTO
 # the images. Two version-named image TAGS still restate a pin outside this file
-# and must be bumped with it — `ci-terraform:<TF_VERSION>` and
+# and must be bumped with it — `ci-tofu:<TOFU_VERSION>` and
 # `ci-kubernetes:<KUBECTL_VERSION>` in .github/workflows/build-images.yml, and the
 # same two literals as the `vars.TF_IMAGE`/`vars.KUBE_IMAGE` fallbacks in
 # .github/workflows/lint.yml. Nothing enforces that yet; a guard verb is the
@@ -58,7 +58,13 @@ FROM debian:bookworm-slim AS toolbox
 ARG TARGETARCH
 
 # ── the single source of truth for tool versions ──
+# TRANSITIONAL: both binaries ship for one release. TF_VERSION goes away with the
+# HashiCorp Terraform block below, once every caller has moved to `tofu`
+# (docs/adr/0008-opentofu-migration.md, step 2). The image stage is `ci-tofu`
+# from here on; build-images.yml also publishes it under the old `ci-terraform`
+# name for a deprecation window, so instances pinning that keep resolving.
 ARG TF_VERSION=1.9.8
+ARG TOFU_VERSION=1.12.5
 ARG TFLINT_VERSION=0.53.0
 ARG HELM_VERSION=3.17.3
 ARG KUBECTL_VERSION=1.31.0
@@ -94,6 +100,26 @@ RUN set -eux; \
     grep "${ZIP}" /tmp/SHA256SUMS | (cd /tmp && sha256sum --check --status); \
     unzip -q -o "/tmp/${ZIP}" terraform -d /out/bin; \
     chmod +x /out/bin/terraform; \
+    rm -f "/tmp/${ZIP}" /tmp/SHA256SUMS
+
+# OpenTofu (checksum-verified). Added ALONGSIDE terraform, deliberately: the
+# image tag is bumped in the same commit, so merging this publishes an image that
+# satisfies BOTH the current callers (which invoke `terraform`) and the ones the
+# migration commit switches to `tofu`. Removing terraform in that same commit
+# would break main between the two merges, and a caller-switch commit cannot go
+# green before an image containing tofu exists — that ordering is the whole
+# reason this is a separate step.
+#
+# Same SHA256SUMS shape as the HashiCorp releases (`<sha>  <file>`), so the
+# verification pattern above is reused unchanged.
+RUN set -eux; \
+    ZIP="tofu_${TOFU_VERSION}_linux_${TARGETARCH}.zip"; \
+    BASE="https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}"; \
+    curl -sSfL "${BASE}/${ZIP}" -o "/tmp/${ZIP}"; \
+    curl -sSfL "${BASE}/tofu_${TOFU_VERSION}_SHA256SUMS" -o /tmp/SHA256SUMS; \
+    grep "${ZIP}" /tmp/SHA256SUMS | (cd /tmp && sha256sum --check --status); \
+    unzip -q -o "/tmp/${ZIP}" tofu -d /out/bin; \
+    chmod +x /out/bin/tofu; \
     rm -f "/tmp/${ZIP}" /tmp/SHA256SUMS
 
 # tflint
@@ -229,12 +255,12 @@ RUN set -eux; \
     curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
       | bash -s -- "${ACTIONLINT_VERSION}" /out/bin
 
-# ── ci-terraform ──────────────────────────────────────────────────────────────
+# ── ci-tofu ───────────────────────────────────────────────────────────────────
 # Terraform/IaC CI image. Ships NO Go toolchain: `llz` is prebuilt in `gotools`
 # and baked onto PATH, so CI jobs never run a runtime `go build`. Its tag tracks
 # vars.TF_IMAGE, not the workflow template-ref — keep TF_IMAGE in step with the
 # template release the instance pins.
-FROM debian:bookworm-slim AS ci-terraform
+FROM debian:bookworm-slim AS ci-tofu
 
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
@@ -259,6 +285,7 @@ RUN apt-get update -qq && \
 RUN git config --system --add safe.directory '*'
 
 COPY --from=toolbox /out/bin/terraform /usr/local/bin/terraform
+COPY --from=toolbox /out/bin/tofu      /usr/local/bin/tofu
 COPY --from=toolbox /out/bin/tflint    /usr/local/bin/tflint
 COPY --from=toolbox /out/bin/helm      /usr/local/bin/helm
 COPY --from=toolbox /out/bin/kubectl   /usr/local/bin/kubectl
@@ -345,6 +372,7 @@ RUN apt-get update -qq && \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=toolbox /out/bin/terraform   /usr/local/bin/terraform
+COPY --from=toolbox /out/bin/tofu        /usr/local/bin/tofu
 COPY --from=toolbox /out/bin/tflint      /usr/local/bin/tflint
 COPY --from=toolbox /out/bin/helm        /usr/local/bin/helm
 COPY --from=toolbox /out/bin/kubectl     /usr/local/bin/kubectl
