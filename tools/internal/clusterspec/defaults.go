@@ -46,13 +46,21 @@ func (lz *LandingZone) Defaults() {
 		for _, r := range Components {
 			t, set := env.Components[r.Name]
 			if !set {
-				env.Components[r.Name] = ComponentToggle{Enabled: boolPtr(!r.DefaultDisabled)}
+				// Nobody wrote this one: Explicit is decided here as false, NOT left nil,
+				// so a second (idempotent) pass — which now finds the key present with a
+				// non-nil Enabled — does not mistake our own fill for the author's intent.
+				env.Components[r.Name] = ComponentToggle{
+					Enabled: boolPtr(!r.DefaultDisabled), Explicit: boolPtr(false),
+				}
 				continue
 			}
 			// This is the LAST point where "the author wrote enabled:" is still visible
-			// — the next line erases it by filling the built-in. Record it (see
-			// ComponentToggle.Explicit); EmitOnManaged needs the distinction.
-			t.Explicit = t.Enabled != nil
+			// — the fill below erases it. Record it (see ComponentToggle.Explicit);
+			// EmitOnManaged needs the distinction. Only when undecided: once a pass has
+			// answered, re-running Defaults must not re-answer from the filled state.
+			if t.Explicit == nil {
+				t.Explicit = boolPtr(t.Enabled != nil)
+			}
 			// A toggle that sets only sizing (Enabled nil) resolves to the built-in
 			// default so the rest of the pipeline sees a complete, non-nil state.
 			if t.Enabled == nil {

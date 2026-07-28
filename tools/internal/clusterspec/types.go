@@ -228,9 +228,16 @@ type ComponentToggle struct {
 	// every downstream reader sees a non-nil Enabled and can no longer tell "the
 	// operator asked for this" from "nobody said, so it defaulted on". Component
 	// EmitOnManaged is the reader that must distinguish the two — see its comment.
-	// A hand-built map in a test has Explicit false, which reads as "not stated": the
-	// conservative answer, and identical to today's behaviour.
-	Explicit bool `json:"-"`
+	//
+	// A POINTER, and that is load-bearing: Defaults() is documented idempotent, and
+	// after its first pass every Enabled is non-nil — so a plain bool would make the
+	// SECOND pass re-derive "the author wrote it" as true for every component,
+	// turning a re-run into a silent opt-in to everything the gate exists to hold
+	// back. nil means "not yet decided": the first pass decides, later passes leave
+	// it alone. nil also reads as "not stated" (see explicitlyEnabled), which is what
+	// a hand-built map in a test gets — the conservative answer, and identical to the
+	// behaviour before this field existed.
+	Explicit *bool `json:"-"`
 	// observability → apps.prometheus.*
 	Retention string `json:"retention,omitempty"` // prometheus.retention (e.g. 7d, 30d)
 	Storage   string `json:"storage,omitempty"`   // prometheus.storageSize (e.g. 10Gi)

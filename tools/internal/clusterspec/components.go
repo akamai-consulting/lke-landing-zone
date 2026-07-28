@@ -111,7 +111,7 @@ func (c Component) EmitOnManaged(b Bootstrap, enabled map[string]ComponentToggle
 // defaulting, because by then every toggle carries a non-nil Enabled.
 func explicitlyEnabled(toggles map[string]ComponentToggle, name string) bool {
 	t, ok := toggles[name]
-	return ok && t.Explicit && t.Enabled != nil && *t.Enabled
+	return ok && t.Explicit != nil && *t.Explicit && t.Enabled != nil && *t.Enabled
 }
 
 // Patch is one kustomize strategic-merge/JSON patch entry (path + target).
