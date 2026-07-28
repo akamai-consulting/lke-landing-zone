@@ -118,6 +118,27 @@ release by `llz self-update` then `llz upgrade` (or `-d llz_version=vX.Y.Z` for 
 manual `copier`). Charts are the exception — independently versioned and
 Renovate-managed in the instance.
 
+> **The two pin records must agree.** `.copier-answers.yml` carries the version
+> twice: `llz_version` (the answer above) and `_commit` (copier's own record of
+> the template state merged into the tree). Every reader prefers `llz_version`
+> (`pinnedTemplateRef`, `resolveTemplateRef`), so a `copier update` that does not
+> apply leaves an instance *deploying* the new release's shared `platform-apl`
+> manifests from the old release's scaffold — individually well-formed values, no
+> parse or render error, and it happened on a live instance (`_commit: v0.0.33` /
+> `llz_version: v0.0.34`). `llz lint` and `llz ci assert-image-fresh` now fail on
+> the mismatch (`pin_coherence.go`); the fix is to re-run the upgrade so copier
+> rewrites both.
+
+> **Why the in-cluster llz image tag is still written into each instance.** The
+> carved apps carry `images: newTag: vX.Y.Z` beside their `?ref=vX.Y.Z`, which
+> looks like a redundant second recording — but removing it means stamping the tag
+> into `platform-apl/` at the commit the tag will point at, which needs the version
+> *before* the tag exists. That is the pin-bump commit this section exists to avoid,
+> and it would leave `main` referencing the *previous* release's image (worse than
+> today's `:latest`, and silently wrong for anything e2e does not override). The
+> two lines per environment are the price of this contract. What was fixed instead
+> is the silence: an unmappable pin now warns at render time (`llzImageTagFor`).
+
 ## Internal module-to-module references
 
 There are none: the modules are independent, and each root composes them

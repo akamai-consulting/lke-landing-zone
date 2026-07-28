@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"io"
+	"os"
+	"strings"
+	"testing"
+)
 
 // llzImageTagFor must only ever emit a tag build-images.yml / llz-release.yml
 // actually publish: :latest, :sha-<40-hex>, or :vX.Y.Z. Returning llz_version
@@ -30,6 +35,51 @@ func TestLLZImageTagFor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := llzImageTagFor(tc.in); got != tc.want {
 				t.Errorf("llzImageTagFor(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The :latest fallback means the shared platform-apl manifests (fetched at the
+// pin) and the llz image that runs them come from different commits. That is
+// allowed — a branch-pinned dev instance needs it — but it must not be SILENT,
+// which is how the same skew shape went unnoticed for TF_IMAGE ↔ template-ref.
+func TestLLZImageTagForWarnsOnlyWhenUnmappable(t *testing.T) {
+	const sha = "13e8941a8fc04a8096c90695f7005626b4384b78"
+
+	capture := func(t *testing.T, in string) string {
+		t.Helper()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		orig := os.Stderr
+		os.Stderr = w
+		llzImageTagFor(in)
+		os.Stderr = orig
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		out, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+
+	t.Run("unmappable pin warns and names the pin", func(t *testing.T) {
+		out := capture(t, "feat/some-branch")
+		if !strings.Contains(out, "::warning::") || !strings.Contains(out, "feat/some-branch") {
+			t.Errorf("expected a warning naming the pin, got %q", out)
+		}
+	})
+
+	// A release tag and a full SHA both map to a published image, so there is no
+	// divergence to report — warning on them would train operators to ignore it.
+	for _, in := range []string{"v0.0.28", sha} {
+		t.Run("mapped pin is silent: "+in, func(t *testing.T) {
+			if out := capture(t, in); out != "" {
+				t.Errorf("expected no warning for %q, got %q", in, out)
 			}
 		})
 	}
