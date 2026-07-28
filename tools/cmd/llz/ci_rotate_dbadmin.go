@@ -102,7 +102,7 @@ type dbAdminAPI interface {
 type dbAdminTarget struct {
 	name    string // spec key — also the OpenBao path discriminator
 	id      uint64 // Linode Managed Database id
-	path    string // secret/platform/db-admin/<name>
+	path    string // secret/infra/db-admin/<name>
 	ageDays int    // -1 when rotated_at is absent/unparseable
 	due     bool
 }
@@ -115,7 +115,7 @@ func ciRotateDBAdminCmd() *cobra.Command {
 		Use:   "rotate-db-admin",
 		Short: "rotate the admin password on each Managed Postgres cluster (due-based)",
 		Long: "Rotates the `akmadmin` password on every Linode Managed PostgreSQL cluster in\n" +
-			"the deployment whose secret/platform/db-admin/<name> credential is older than\n" +
+			"the deployment whose secret/infra/db-admin/<name> credential is older than\n" +
 			"--rotate-after-days, and writes the replacement back to OpenBao.\n\n" +
 			"REPORT-ONLY unless --apply is passed. The Linode API offers only an in-place\n" +
 			"credential RESET — there is no second credential to verify before swapping, and\n" +
@@ -313,7 +313,7 @@ func dbAdminLostCredentialErr(t dbAdminTarget, cause error) error {
 		"  The credential in %s is now DEAD, and the live one exists only in Linode.\n"+
 		"  Recover it before anything else — every consumer of this cluster is broken until you do:\n\n"+
 		"    linode-cli databases postgresql-creds-view %d\n"+
-		"    llz openbao set platform/db-admin/%s password=<password> username=<username> rotated_at=$(date +%%s)\n\n"+
+		"    llz openbao set infra/db-admin/%s password=<password> username=<username> rotated_at=$(date +%%s)\n\n"+
 		"  (Re-running this command will NOT fix it: the stored credential is stale, so the\n"+
 		"  cluster would simply be reset again and the same window reopened.)",
 		t.name, cause, t.path, t.id, t.name)

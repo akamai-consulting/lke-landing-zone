@@ -607,3 +607,43 @@ func TestManagedDomainFromIssuer(t *testing.T) {
 		}
 	}
 }
+
+// The denylist guard above derives the protected set from the platform POLICIES,
+// which leaves a blind spot: a namespace that code WRITES but no policy names is
+// invisible to it. `secret/infra/db-admin/*` sat in exactly that gap — the
+// db-admin seeder wrote there from the start, yet `platform` was claimable by a
+// team (and so self-grantable to write) until a policy happened to reference it.
+//
+// This closes the class rather than the instance: every literal secret/ root
+// declared in cmd/llz must have its top segment reserved, whether or not any
+// policy mentions it.
+func TestSeedTargetsAreReservedNamespaces(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+	// `const x = "secret/<ns>/…"` — the shape every seed/sample root uses.
+	re := regexp.MustCompile(`(?m)^const [A-Za-z]+ = "secret/([a-z0-9-]+)/`)
+	seen := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+			seen++
+			if !clusterspec.SystemSecretNamespaces[m[1]] {
+				t.Errorf("%s declares a secret root under secret/%s/ but %q is NOT in clusterspec.SystemSecretNamespaces — a team could claim secret/%s and self-grant write on it; add it to the denylist in clusterspec/validate.go",
+					name, m[1], m[1], m[1])
+			}
+		}
+	}
+	// A regex that silently matches nothing would make this test vacuously green.
+	if seen == 0 {
+		t.Error("matched no `const … = \"secret/<ns>/…\"` declarations; the pattern has drifted from the code and this guard is inert")
+	}
+}

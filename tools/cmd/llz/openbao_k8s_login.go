@@ -33,23 +33,9 @@ func openInClusterBaoStore(ctx context.Context, defaultRole string) (baoStore, e
 	role := envOr("OPENBAO_KUBERNETES_ROLE", defaultRole)
 	saFile := envOr("SA_TOKEN_FILE", "/var/run/secrets/kubernetes.io/serviceaccount/token")
 
-	// TLS to OpenBao: mount the CA and set OPENBAO_CA_FILE to verify it; otherwise
-	// OPENBAO_SKIP_VERIFY=true falls back to the established in-cluster posture
-	// (every baoExec uses VAULT_SKIP_VERIFY) for pod→OpenBao traffic. Neither set
-	// is an error rather than a silent downgrade to unverified TLS.
-	var httpClient *http.Client
-	if caFile := os.Getenv("OPENBAO_CA_FILE"); caFile != "" {
-		caPEM, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read OPENBAO_CA_FILE: %w", err)
-		}
-		if httpClient, err = openbao.HTTPClientWithCA(caPEM, 30*time.Second); err != nil {
-			return nil, err
-		}
-	} else if cli.EnvBool("OPENBAO_SKIP_VERIFY", false) {
-		httpClient = openbao.HTTPClientInsecure(30 * time.Second)
-	} else {
-		return nil, fmt.Errorf("set OPENBAO_CA_FILE (mounted openbao CA) or OPENBAO_SKIP_VERIFY=true")
+	httpClient, err := inClusterBaoHTTPClient()
+	if err != nil {
+		return nil, err
 	}
 
 	jwt, err := os.ReadFile(saFile)
@@ -61,4 +47,33 @@ func openInClusterBaoStore(ctx context.Context, defaultRole string) (baoStore, e
 		return nil, err
 	}
 	return openbao.NewWithClient(addr, token, "", httpClient), nil
+}
+
+// inClusterBaoHTTPClient builds the pod→OpenBao transport from the TLS posture
+// the workload's manifest declares. It is the ONE place that decision lives.
+//
+// Mount the openbao CA and point OPENBAO_CA_FILE at it to verify OpenBao's
+// serving cert (the cert-manager `openbao-ca` ClusterIssuer signs it; each
+// consumer namespace issues its own bundle from that issuer — see
+// platform-apl/components/openbaoCABundle/). OPENBAO_SKIP_VERIFY=true is the
+// explicit opt-out. Setting NEITHER is an ERROR, deliberately: an unset
+// environment must not silently mean unverified TLS, which is how the skip
+// became universal in the first place.
+//
+// Extracted from openInClusterBaoStore so the reconciler's sampler lanes stop
+// hardcoding HTTPClientInsecure. Those lanes had no CA path at all, so mounting
+// a CA could not have changed their behaviour — the manifest would say
+// "verified" while the code ignored it.
+func inClusterBaoHTTPClient() (*http.Client, error) {
+	if caFile := os.Getenv("OPENBAO_CA_FILE"); caFile != "" {
+		caPEM, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read OPENBAO_CA_FILE: %w", err)
+		}
+		return openbao.HTTPClientWithCA(caPEM, 30*time.Second)
+	}
+	if cli.EnvBool("OPENBAO_SKIP_VERIFY", false) {
+		return openbao.HTTPClientInsecure(30 * time.Second), nil
+	}
+	return nil, fmt.Errorf("set OPENBAO_CA_FILE (the mounted openbao CA bundle) or OPENBAO_SKIP_VERIFY=true")
 }

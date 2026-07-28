@@ -88,6 +88,21 @@ var SystemSecretNamespaces = map[string]bool{
 	"otel":            true,
 }
 
+// `platform` is deliberately ABSENT above, and must stay absent: it is the
+// DEFAULT team subtree. `llz new` scaffolds `openbao_team: platform` →
+// `secret/platform`, and instance-template/kubernetes-custom/README.md documents
+// `llz openbao set secret/platform/<app> …` as the adopter's own app-secret path.
+// Reserving it would invalidate every existing instance's spec.
+//
+// That is exactly why the Managed Postgres admin credential MOVED out of the old
+// `secret/platform/db-admin/` to `secret/infra/db-admin/` (a reserved namespace):
+// it had been seeded INSIDE the default team's writable subtree, so the team's
+// human operators held create/update/read on every database admin password. The
+// denylist could not catch it because this list is drift-checked against the
+// platform POLICIES, and no policy named `secret/platform/…` — a path written by
+// code but absent from every policy was invisible to that check.
+// TestSeedTargetsAreReservedNamespaces closes that gap from the seed side.
+
 // openbaoSubtreeRe pins the CANONICAL shape of a team's openbaoSubtree: the
 // `secret/` mount followed by one or more lowercase kebab segments. It rejects
 // the non-canonical forms that would otherwise slip past subtreeNamespace's
@@ -401,7 +416,7 @@ func validateDatabaseDefaults(lz *LandingZone) []error {
 // The key is validated because it is not a label an operator picked for readability:
 // it becomes the middle segment of the Linode cluster label
 // ("platform-<name>-<env>"), the Terraform state address (module.databases["<name>"])
-// and the OpenBao path (secret/platform/db-admin/<name>). A key the Linode API
+// and the OpenBao path (secret/infra/db-admin/<name>). A key the Linode API
 // rejects fails at APPLY — after `terraform plan` looked clean and after any
 // sibling clusters in the same apply have already been created.
 //

@@ -396,7 +396,7 @@ type AplValues struct {
 // Database configures ONE VPC-attached Linode Managed PostgreSQL cluster
 // (one entry of spec.cluster.databases → one module.databases["<name>"] in the
 // databases root). Its admin credentials are seeded to
-// secret/platform/db-admin/<name> by `llz ci seed-db-admin` at bootstrap.
+// secret/infra/db-admin/<name> by `llz ci seed-db-admin` at bootstrap.
 // VPCID/SubnetID must name a VPC/subnet in Region — a database can only attach
 // to a VPC in its own region, typically the cluster's own VPC.
 type Database struct {

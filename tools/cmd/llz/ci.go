@@ -138,7 +138,7 @@ func ciCmd() *cobra.Command {
 	// CronJob, slim llz image) owns rotation after first boot.
 	c.AddCommand(ciMintBootstrapObjkeysCmd(), ciRotateLinodeCredsCmd(), ciTempObjkeyCmd())
 	// The databases root's OpenBao half: copy each Managed Postgres cluster's admin
-	// connection from TF state to secret/platform/db-admin/<name>. Unlike the
+	// connection from TF state to secret/infra/db-admin/<name>. Unlike the
 	// object-storage keys above there is nothing to MINT — the credential is the
 	// provider's — so this is a copy, and re-running it heals a stale one.
 	// …and its rotation half. Unlike every other rotator here this one cannot

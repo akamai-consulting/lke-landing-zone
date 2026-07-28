@@ -11,7 +11,7 @@ consumer, and a sibling system team can provision the same clusters by calling
 this module with their own `label_prefix` + VPC.
 
 The admin credentials this module outputs are seeded into OpenBao at
-`secret/platform/db-admin/<name>` by `llz ci seed-db-admin` at bootstrap (never in
+`secret/infra/db-admin/<name>` by `llz ci seed-db-admin` at bootstrap (never in
 Terraform-committed state visible to operators; `root_password`/`ca_cert` are
 `sensitive`).
 

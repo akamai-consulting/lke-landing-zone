@@ -10,6 +10,7 @@ resources:
   - rbac.yaml
   - network-policy.yaml
   - externalsecret.yaml
+  - openbao-ca-bundle.yaml
   - deployment.yaml
   - service.yaml
   - servicemonitor.yaml

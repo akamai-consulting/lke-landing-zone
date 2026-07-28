@@ -153,9 +153,15 @@ spec:
             # before the store serves. It is mounted as an optional volume below and
             # read lazily per pass (apl_values_token.go), same as linode-api-token —
             # so no wave inversion and rotations are picked up without a restart.
-            # OpenBao serving cert is signed by its private CA; in-cluster writers
-            # connect insecure (traffic stays on the pod network), matching the
-            # linodeCredRotator CronJob's posture.
+            # OpenBao's serving cert is signed by its private `openbao-ca` CA, so
+            # verifying it needs that CA in this namespace: openbao-ca-bundle.yaml
+            # issues a throwaway leaf from the same ClusterIssuer purely to obtain
+            # `ca.crt`. OPENBAO_CA_FILE takes precedence in inClusterBaoHTTPClient();
+            # OPENBAO_SKIP_VERIFY stays as the fallback for the window before the
+            # Secret exists, because that helper requires one of the two to be set
+            # and would otherwise hard-fail the openbao lanes on a cold start.
+            - name: OPENBAO_CA_FILE
+              value: /etc/openbao-ca/ca.crt
             - name: OPENBAO_SKIP_VERIFY
               value: "true"
             # linode-creds logs into OpenBao via Kubernetes auth. rotate-linode-creds
@@ -195,6 +201,9 @@ spec:
             - name: apl-values-repo-token
               mountPath: /var/run/secrets/llz/apl-values-repo-token
               readOnly: true
+            - name: openbao-ca
+              mountPath: /etc/openbao-ca
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
@@ -207,6 +216,12 @@ spec:
         - name: linode-api-token
           secret:
             secretName: linode-api-token
+            optional: true
+        # optional for the same reason: cert-manager issues the bundle at wave 0,
+        # and the pod's non-OpenBao lanes must not wait on it.
+        - name: openbao-ca
+          secret:
+            secretName: openbao-ca-bundle
             optional: true
         # Same optional-volume posture for the apl-overlay push token — the pod
         # goes Ready at wave 0 before the store serves; apl_values_token.go reads

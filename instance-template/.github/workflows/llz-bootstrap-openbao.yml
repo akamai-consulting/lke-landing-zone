@@ -416,7 +416,7 @@ jobs:
 
       # ── Seed: Managed Postgres admin connections ────────────────────────────────
       # The databases root provisions 0-n clusters; this copies each one's admin
-      # connection into secret/platform/db-admin/<name> so ESO can publish it to
+      # connection into secret/infra/db-admin/<name> so ESO can publish it to
       # whatever carves per-app logical databases out of the cluster.
       #
       # Gated on the RENDERED tfvars rather than run unconditionally: seeding needs

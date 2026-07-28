@@ -129,7 +129,7 @@ func dbApplySummary(region, labelsJSON string) []string {
 		"```",
 		"",
 		fmt.Sprintf("**Next step:** run `bootstrap-openbao.yml` → `%s` — its seed-db-admin step", region),
-		"writes each cluster's admin connection to `secret/platform/db-admin/<name>`.",
+		"writes each cluster's admin connection to `secret/infra/db-admin/<name>`.",
 	}
 }
 
@@ -142,7 +142,7 @@ func dbDestroyWarning() []string {
 		"> Linode retains no snapshot after the delete. Take a `pg_dump` first if",
 		"> anything in these clusters still matters.",
 		">",
-		"> The admin credential at `secret/platform/db-admin/<name>` is NOT removed",
+		"> The admin credential at `secret/infra/db-admin/<name>` is NOT removed",
 		"> by this destroy; reap it separately once the cluster is gone.",
 	}
 }

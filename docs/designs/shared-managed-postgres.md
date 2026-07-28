@@ -12,7 +12,7 @@
 **inside the cluster VPC** (no public endpoint). Downstream application platforms
 (e.g. a Crossplane `provider-sql` layer) carve per-app logical databases + roles
 out of a cluster, reaching it over the private network. Each cluster's admin
-credentials are seeded into OpenBao at `secret/platform/db-admin/<name>` so ESO
+credentials are seeded into OpenBao at `secret/infra/db-admin/<name>` so ESO
 can publish them to the consumers.
 
 Opt-in, and the opt-in needs no flag: an instance that declares no
@@ -52,7 +52,7 @@ spec.cluster.databases           →  llz render  →  databases/<env>.tfvars
                                                       │  outputs, keyed by <name>
                                                       ▼
                                     llz ci seed-db-admin
-                                      → secret/platform/db-admin/<name>
+                                      → secret/infra/db-admin/<name>
 ```
 
 Spec example — one shared cluster plus a separately-sized one:
@@ -111,7 +111,7 @@ simultaneously:
 
 1. the middle segment of the Linode label — `platform-<name>-<env>`,
 2. the Terraform state address — `module.databases["<name>"]`, and
-3. the OpenBao path — `secret/platform/db-admin/<name>`.
+3. the OpenBao path — `secret/infra/db-admin/<name>`.
 
 That is what makes adding or removing a cluster safe: the survivors keep all three.
 Under a list, identity would be the position, so deleting the first of three
@@ -211,7 +211,7 @@ one-cluster-per-deployment model there was nowhere to put the target.
 2. `pg_dump` from `gsap-postgres` (public, over TLS) → `pg_restore` into the new
    cluster from a bastion/job **inside the VPC** (the new cluster has no public IP).
    (Downstream logical DBs are Crossplane-provisioned and small; or dump per-app.)
-3. Seed `secret/platform/db-admin/shared` with the new cluster's admin creds
+3. Seed `secret/infra/db-admin/shared` with the new cluster's admin creds
    (`llz ci seed-db-admin`), force-sync ESO, let Crossplane re-provision per-app
    DBs/roles against the new endpoint. The old cluster's own
    `db-admin/<name>` stays intact, so a rollback is a consumer-side pointer change
@@ -254,7 +254,7 @@ format, required region/vpcId/subnetId, region-vs-cluster.region mismatch,
 
 `llz ci seed-db-admin` reads the root's single `connections` output and writes
 `endpoint`, `port`, `username`, `password`, `ca`, `sslmode=require` to
-`secret/platform/db-admin/<name>`, stamped with `rotated_at`. It is a no-op on an
+`secret/infra/db-admin/<name>`, stamped with `rotated_at`. It is a no-op on an
 empty map *and* on a state that has no `connections` output at all, so it is safe
 on a deployment that predates this root.
 
@@ -285,7 +285,7 @@ databases would still initialize the root on the critical bootstrap path.
 
 ## Admin-credential rotation, as built
 
-`llz ci rotate-db-admin` rotates `secret/platform/db-admin/<name>`. It is
+`llz ci rotate-db-admin` rotates `secret/infra/db-admin/<name>`. It is
 due-based (default 80d, under the 90d inventory SLA) and `--apply`-gated.
 
 **Why it is not shaped like the other rotators.** Every other rotator in this

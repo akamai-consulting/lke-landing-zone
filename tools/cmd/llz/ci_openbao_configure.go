@@ -123,6 +123,12 @@ path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 // The grant list and credPaths move together: the sampler treats a 403 as a hard
 // error (only a 404 is "not seeded yet"), so a path added to credPaths without a
 // line here takes down the whole openbao-gauges lane, not just its own series.
+//
+// Every grant below is METADATA-only (the one data read is the obj/platform
+// exception above). Metadata carries updated_time and version history — never
+// the secret value — so widening this list to cover the static bootstrap seeds
+// and the Managed Postgres admin paths does NOT give the reconciler the Harbor
+// robot password, either GitHub PAT, or any database credential.
 const policyReconcilerRead = `path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
 path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
 path "secret/data/obj/platform"     { capabilities = ["read"] }
@@ -130,6 +136,23 @@ path "secret/metadata/obj/platform" { capabilities = ["read"] }
 path "secret/metadata/grafana/admin" { capabilities = ["read"] }
 path "secret/metadata/otel/ingress"  { capabilities = ["read"] }
 path "secret/metadata/harbor/admin"  { capabilities = ["read"] }
+path "secret/metadata/linode/api-token" { capabilities = ["read"] }
+path "secret/metadata/linode/broad-pat" { capabilities = ["read"] }
+path "secret/metadata/linode/cloud-firewall" { capabilities = ["read"] }
+path "secret/metadata/infra/apl-values-repo-token" { capabilities = ["read"] }
+path "secret/metadata/harbor/robot"      { capabilities = ["read"] }
+path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
+path "secret/metadata/cert-automation/github-token" { capabilities = ["read"] }
+path "secret/metadata/infra/github-dispatch-token"  { capabilities = ["read"] }
+path "secret/metadata/alerts/webhooks"   { capabilities = ["read"] }
+# Managed Postgres admin credentials. The cluster names are declared per
+# deployment, so this is the one place the grant must be a prefix rather than an
+# enumeration: LIST the collection to discover the names, then read each one's
+# metadata. Both are still metadata-only — the admin password lives under
+# secret/data/infra/db-admin/*, which is granted to nothing here.
+path "secret/metadata/infra/db-admin" { capabilities = ["list"] }
+path "secret/metadata/infra/db-admin/" { capabilities = ["list"] }
+path "secret/metadata/infra/db-admin/*" { capabilities = ["read"] }
 `
 
 // broad-pat-rotator: read/write on EXACTLY the broad-PAT path the in-cluster

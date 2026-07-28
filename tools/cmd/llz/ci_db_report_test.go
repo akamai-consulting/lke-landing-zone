@@ -109,7 +109,7 @@ func TestDBApplySummaryDistinguishesProvisionedFromNone(t *testing.T) {
 		"Managed Postgres clusters provisioned (prod)",
 		"platform-shared-prod",
 		"bootstrap-openbao.yml",
-		"secret/platform/db-admin/<name>",
+		"secret/infra/db-admin/<name>",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary missing %q:\n%s", want, got)
