@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -151,4 +152,86 @@ func TestRunOpenbaoLogin_RequiresTeam(t *testing.T) {
 	if err := runOpenbaoLogin(openbaoLoginOpts{}); err == nil {
 		t.Error("login without --team must error")
 	}
+}
+
+// TestKeycloakIssuerForLogin covers the three ways the issuer is resolved. The
+// managed branch is the one worth pinning: it decides WHICH Keycloak an operator's
+// device login is sent at, and its safety property — never fall back to a spec
+// value on managed — is a deliberate choice that a refactor could quietly undo.
+func TestKeycloakIssuerForLogin(t *testing.T) {
+	const managedIssuer = "https://keycloak.lke635371.akamai-apl.net/realms/otomi"
+
+	// clusterDef already emits its own bootstrap:, so spell the env out here — the
+	// bootstrap block is exactly what these cases vary.
+	env := func(bootstrap string) string {
+		return `apiVersion: llz.akamai-consulting.io/v1alpha1
+kind: ClusterDefinition
+metadata: { name: prod }
+spec:
+  cluster:
+    clusterLabel: inst-prod
+    region: us-ord
+    objectStorage: { cluster: us-ord-1 }
+    bootstrap: { name: inst-prod, ` + bootstrap + ` }
+`
+	}
+
+	// Managed App Platform: no domainSuffix in the spec (Linode owns the domain), so
+	// the issuer comes from apl-core's own otomi/otomi-api SSO_ISSUER. This is what
+	// removes the hand-typed --issuer every managed login used to need.
+	t.Run("managed discovers from the cluster", func(t *testing.T) {
+		chdirTempDir(t)
+		writeSpecInstance(t, map[string]string{
+			"prod": env("managedAppPlatform: true"),
+		})
+		withKubectl(t, func(args string) ([]byte, error) {
+			if !strings.Contains(args, "otomi-api") {
+				return nil, fmt.Errorf("unexpected kubectl %q", args)
+			}
+			return []byte(managedIssuer + "\n"), nil
+		})
+		got, err := keycloakIssuerForLogin("prod")
+		if err != nil || got != managedIssuer {
+			t.Fatalf("managed issuer = (%q, %v), want (%q, nil)", got, err, managedIssuer)
+		}
+	})
+
+	// Discovery unavailable (kubeconfig not pointed at the cluster) must be a clear
+	// error, NOT a fall back to some spec-derived guess — sending a device login at
+	// the wrong Keycloak is the failure this guards.
+	t.Run("managed with no cluster reach errors", func(t *testing.T) {
+		chdirTempDir(t)
+		writeSpecInstance(t, map[string]string{
+			"prod": env("managedAppPlatform: true"),
+		})
+		withKubectl(t, func(string) ([]byte, error) { return nil, fmt.Errorf("no cluster") })
+		got, err := keycloakIssuerForLogin("prod")
+		if err == nil {
+			t.Fatalf("undiscoverable issuer must error, got %q", got)
+		}
+		if got != "" {
+			t.Errorf("no issuer may be returned alongside the error, got %q", got)
+		}
+		for _, want := range []string{"managedAppPlatform", "kubeconfig", "--issuer"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should mention %q — it is what the operator acts on", err, want)
+			}
+		}
+	})
+
+	// Self-install is untouched: derived from the spec, no cluster read at all.
+	t.Run("domainSuffix path takes no cluster read", func(t *testing.T) {
+		chdirTempDir(t)
+		writeSpecInstance(t, map[string]string{
+			"prod": env("domainSuffix: web.example.com"),
+		})
+		withKubectl(t, func(args string) ([]byte, error) {
+			t.Errorf("the domainSuffix path must not read the cluster (kubectl %q)", args)
+			return nil, fmt.Errorf("unreachable")
+		})
+		got, err := keycloakIssuerForLogin("prod")
+		if err != nil || got != "https://keycloak.web.example.com/realms/otomi" {
+			t.Fatalf("self-install issuer = (%q, %v)", got, err)
+		}
+	})
 }
