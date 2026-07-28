@@ -54,6 +54,47 @@ type tokenInventory struct {
 	Tokens  []tokenEntry `json:"tokens"`
 }
 
+// ghPATTargets declares the GitHub service PATs the inventory measures. It was
+// two hardcoded literals at the call site, which is why `E2E_DISPATCH_TOKEN` and
+// `GHCR_READ_TOKEN` — both real PATs with a readable expiry — were never on the
+// credential single pane at all.
+//
+// `optional` is the load-bearing field. gatherGitHubTokens classifies an unset
+// token as state=unknown rather than dropping it, which is exactly right for a
+// PAT every instance must have (its absence is a finding) and exactly wrong for
+// one most instances deliberately don't set: a stock instance would grow two
+// permanent `unknown` rows on the dashboard, and an inventory that always shows
+// unknowns is one nobody reads. Optional targets are therefore skipped when
+// unset, and measured identically when present.
+var ghPATTargets = []struct {
+	name     string // the env var, and the `token` label on the metric
+	optional bool
+}{
+	// Always expected: the two service PATs bootstrap and apl-core run on.
+	{name: "OPENBAO_SECRETS_WRITE_TOKEN"},
+	{name: "APL_VALUES_REPO_TOKEN"},
+	// Template-repo admin only — the e2e harness dispatch PAT. Absent on every
+	// adopter instance.
+	{name: "E2E_DISPATCH_TOKEN", optional: true},
+	// Only a PRIVATE fork/image needs a GHCR read credential; the first-party
+	// charts are public, so a stock instance leaves it empty by design.
+	{name: "GHCR_READ_TOKEN", optional: true},
+}
+
+// ghTargetsFromEnv resolves ghPATTargets against the process environment,
+// dropping optional targets whose secret is not set.
+func ghTargetsFromEnv(api string) []patTarget {
+	out := make([]patTarget, 0, len(ghPATTargets))
+	for _, t := range ghPATTargets {
+		v := os.Getenv(t.name)
+		if v == "" && t.optional {
+			continue
+		}
+		out = append(out, patTarget{name: t.name, api: api, token: v})
+	}
+	return out
+}
+
 func ciTokenInventoryCmd() *cobra.Command {
 	var namespace, name string
 	var maxDays, warnDays int
@@ -61,8 +102,9 @@ func ciTokenInventoryCmd() *cobra.Command {
 		Use:   "token-inventory",
 		Short: "measure CI-token expiry and emit the ConfigMap the reconciler re-exposes as metrics",
 		Long: "Writer half of the credential single-pane-of-glass. Measures the expiry of the\n" +
-			"external CI tokens this job holds — GitHub service PATs (OPENBAO_SECRETS_WRITE_TOKEN,\n" +
-			"APL_VALUES_REPO_TOKEN) via the token-expiration header, and every Linode account PAT\n" +
+			"external CI tokens this job holds — the GitHub service PATs in ghPATTargets\n" +
+			"(OPENBAO_SECRETS_WRITE_TOKEN, APL_VALUES_REPO_TOKEN, and E2E_DISPATCH_TOKEN /\n" +
+			"GHCR_READ_TOKEN when set) via the token-expiration header, and every Linode PAT\n" +
 			"via the Linode API — and emits a ConfigMap (metadata only, never a token value) to\n" +
 			"stdout. Pipe it to `kubectl apply -f -`; the in-cluster llz-reconciler re-exposes it\n" +
 			"as llz_token_expiry_timestamp_seconds so Prometheus alerts before expiry.",
@@ -73,10 +115,7 @@ func ciTokenInventoryCmd() *cobra.Command {
 			// reports the GitHub PATs.
 			linodeToken, _ := ciToken()
 			inv := buildTokenInventory(cmd.Context(), tokenInvDeps{
-				ghTargets: []patTarget{
-					{"OPENBAO_SECRETS_WRITE_TOKEN", envOr("GITHUB_API", "https://api.github.com"), os.Getenv("OPENBAO_SECRETS_WRITE_TOKEN")},
-					{"APL_VALUES_REPO_TOKEN", envOr("GITHUB_API", "https://api.github.com"), os.Getenv("APL_VALUES_REPO_TOKEN")},
-				},
+				ghTargets:   ghTargetsFromEnv(envOr("GITHUB_API", "https://api.github.com")),
 				linodeToken: linodeToken,
 				newLinode:   func(t string) credLister { return linode.NewClient(t, 30*time.Second) },
 				region:      os.Getenv("REGION"),

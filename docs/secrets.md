@@ -216,7 +216,8 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `OPENBAO_SECRETS_WRITE_TOKEN` | GitHub classic PAT (Actions + Secrets: write) | **Manual**; ≤90-day policy, daily `token-inventory` expiry measurement (alerts via `LLZToken*`) |
 | `APL_VALUES_REPO_TOKEN` | GitHub fine-grained PAT (Contents: write) | **Manual**; ≤90-day policy, daily `token-inventory` expiry measurement (alerts via `LLZToken*`) |
 | LKE admin kubeconfig | Cluster-admin credential | **Automated** — `secret-rotation.yml` (`lke-admin` scope), monthly; see [lke-admin-rotation.md](runbooks/lke-admin-rotation.md) |
-| `E2E_DISPATCH_TOKEN` | GitHub classic PAT for the e2e harness (template-repo scope) | **Manual** (template-repo admin) |
+| `E2E_DISPATCH_TOKEN` | GitHub classic PAT for the e2e harness (template-repo scope) | **Manual** (template-repo admin); ≤90-day policy, daily `token-inventory` expiry measurement when set (alerts via `LLZToken*`) |
+| `GHCR_READ_TOKEN` | GitHub `read:packages` PAT — **only** for a private fork/image; empty on a stock instance, since the first-party charts are public | **Manual**; ≤90-day policy, daily `token-inventory` expiry measurement when set. Unset → skipped entirely, not reported as `unknown` |
 | `TF_STATE_ENCRYPTION_PASSPHRASE` | Passphrase for OpenTofu native state+plan encryption (all four TF roots) | **Static by design** — rotating it means re-encrypting every state file (a `fallback` key-rollover, not a re-apply). **ESCROW OFFLINE**: losing it makes every state file unrecoverable. See [ADR 0007](adr/0007-terraform-state-encryption.md) |
 
 **OpenBao KV v2 secrets** (`secret/…`):

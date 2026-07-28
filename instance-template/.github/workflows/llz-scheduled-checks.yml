@@ -31,6 +31,12 @@ on:
       APL_VALUES_REPO_TOKEN:
         description: 'github.com fine-grained PAT (Contents: write) for apl-core otomi.git + the argocd repo Secrets. Checked for expiry by the credential single-pane job (token-inventory).'
         required: false
+      GHCR_READ_TOKEN:
+        description: 'GitHub read:packages PAT — ONLY for a private fork/image; empty on a stock instance (the first-party charts are public). Measured for expiry by token-inventory when set, skipped entirely when not.'
+        required: false
+      E2E_DISPATCH_TOKEN:
+        description: 'Classic PAT for the e2e harness (template-repo admin only; absent on adopter instances). Measured for expiry by token-inventory when set, skipped entirely when not.'
+        required: false
 
 permissions:
   contents: read
@@ -215,6 +221,10 @@ jobs:
       LINODE_TOKEN:                ${{ secrets.LINODE_API_TOKEN }}
       OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
       APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+      # Optional PATs: unset on a stock instance, in which case token-inventory
+      # drops them rather than reporting a permanent `unknown`.
+      GHCR_READ_TOKEN:             ${{ secrets.GHCR_READ_TOKEN }}
+      E2E_DISPATCH_TOKEN:          ${{ secrets.E2E_DISPATCH_TOKEN }}
       TF_STATE_BUCKET:             ${{ vars.TF_STATE_BUCKET }}
       AWS_ENDPOINT_URL_S3:         ${{ vars.TF_STATE_ENDPOINT }}
     steps:
