@@ -16,7 +16,7 @@ variable "region" {
 }
 
 variable "engine_version" {
-  description = "Major PostgreSQL engine version. Composed into the provider's engine_id as \"postgresql/<version>\" (e.g. \"16\")."
+  description = "Major PostgreSQL engine version. Composed into the provider's engine_id as \"postgresql/<version>\" (e.g. \"16\"). When MIGRATING data into this cluster, set it to at least the source cluster's major version — pg_restore is forward-compatible only, so a lower target fails at restore time, after the cluster is provisioned."
   type        = string
   default     = "16"
 }

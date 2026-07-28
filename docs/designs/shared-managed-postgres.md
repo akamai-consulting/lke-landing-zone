@@ -102,6 +102,12 @@ any TF state. Two paths:
 attaching an existing Managed DB to a VPC in place, and the VPC path provisions on
 a different platform/network. So:
 1. Apply the `databases` root → a new VPC-attached cluster (`platform-postgres-<env>`).
+   **Set `engineVersion` to at least the source cluster's major version.**
+   `gsap-postgres` runs **pg 18.4** and this module defaults to **`"16"`**, so
+   taking the default here provisions a target two majors OLDER than the source —
+   and `pg_restore` from an 18 dump into a 16 server is not supported. It fails at
+   restore time, after the new cluster is already provisioned and paid for.
+   Postgres dump/restore is forward-compatible only.
 2. `pg_dump` from `gsap-postgres` (public, over TLS) → `pg_restore` into the new
    cluster from a bastion/job **inside the VPC** (the new cluster has no public IP).
    (Downstream logical DBs are Crossplane-provisioned and small; or dump per-app.)
