@@ -281,7 +281,7 @@ func TestTFPlanRunFnRealExec(t *testing.T) {
 		t.Skip("fake-binary PATH trick needs a POSIX shell")
 	}
 	dir := t.TempDir()
-	fake := filepath.Join(dir, "terraform")
+	fake := filepath.Join(dir, "tofu")
 	script := "#!/bin/sh\necho \"argv: $@\"\necho \"err line\" >&2\n"
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)

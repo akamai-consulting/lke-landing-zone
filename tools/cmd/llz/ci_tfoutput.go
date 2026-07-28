@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -25,7 +24,7 @@ import (
 // Package var so tests stub the terraform exec. stderr is discarded — a
 // zero-output state prints a warning there that must not reach the value.
 var tfOutputRunFn = func() (string, error) {
-	cmd := exec.Command("terraform", "output", "-json")
+	cmd := tfCommand("output", "-json")
 	out, err := cmd.Output() // stdout only; stderr (the warning) dropped
 	return string(out), err
 }

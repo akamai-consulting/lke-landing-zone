@@ -58,12 +58,8 @@ FROM debian:bookworm-slim AS toolbox
 ARG TARGETARCH
 
 # ── the single source of truth for tool versions ──
-# TRANSITIONAL: both binaries ship for one release. TF_VERSION goes away with the
-# HashiCorp Terraform block below, once every caller has moved to `tofu`
-# (docs/adr/0008-opentofu-migration.md, step 2). The image stage is `ci-tofu`
-# from here on; build-images.yml also publishes it under the old `ci-terraform`
-# name for a deprecation window, so instances pinning that keep resolving.
-ARG TF_VERSION=1.9.8
+# OpenTofu, not HashiCorp Terraform — see docs/adr/0008-opentofu-migration.md.
+# Bumping this bumps the image tag (`ci-tofu:<TOFU_VERSION>`), same as before.
 ARG TOFU_VERSION=1.12.5
 ARG TFLINT_VERSION=0.53.0
 ARG HELM_VERSION=3.17.3
@@ -91,27 +87,11 @@ RUN apt-get update -qq && \
 
 WORKDIR /out/bin
 
-# Terraform (checksum-verified)
-RUN set -eux; \
-    ZIP="terraform_${TF_VERSION}_linux_${TARGETARCH}.zip"; \
-    BASE="https://releases.hashicorp.com/terraform/${TF_VERSION}"; \
-    curl -sSfL "${BASE}/${ZIP}" -o "/tmp/${ZIP}"; \
-    curl -sSfL "${BASE}/terraform_${TF_VERSION}_SHA256SUMS" -o /tmp/SHA256SUMS; \
-    grep "${ZIP}" /tmp/SHA256SUMS | (cd /tmp && sha256sum --check --status); \
-    unzip -q -o "/tmp/${ZIP}" terraform -d /out/bin; \
-    chmod +x /out/bin/terraform; \
-    rm -f "/tmp/${ZIP}" /tmp/SHA256SUMS
-
-# OpenTofu (checksum-verified). Added ALONGSIDE terraform, deliberately: the
-# image tag is bumped in the same commit, so merging this publishes an image that
-# satisfies BOTH the current callers (which invoke `terraform`) and the ones the
-# migration commit switches to `tofu`. Removing terraform in that same commit
-# would break main between the two merges, and a caller-switch commit cannot go
-# green before an image containing tofu exists — that ordering is the whole
-# reason this is a separate step.
-#
-# Same SHA256SUMS shape as the HashiCorp releases (`<sha>  <file>`), so the
-# verification pattern above is reused unchanged.
+# OpenTofu (checksum-verified). Installed as `tofu` and NOT symlinked to
+# `terraform`: a drop-in alias is exactly the ambiguity that let a local
+# `alias terraform=tofu` masquerade as CI for months. Anything still invoking
+# `terraform` now fails loudly, which is the safe direction — the command does
+# not run, so no state is written.
 RUN set -eux; \
     ZIP="tofu_${TOFU_VERSION}_linux_${TARGETARCH}.zip"; \
     BASE="https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}"; \
@@ -284,7 +264,6 @@ RUN apt-get update -qq && \
 # git-auth.sh; baked here so it holds regardless of step order.
 RUN git config --system --add safe.directory '*'
 
-COPY --from=toolbox /out/bin/terraform /usr/local/bin/terraform
 COPY --from=toolbox /out/bin/tofu      /usr/local/bin/tofu
 COPY --from=toolbox /out/bin/tflint    /usr/local/bin/tflint
 COPY --from=toolbox /out/bin/helm      /usr/local/bin/helm
@@ -371,7 +350,6 @@ RUN apt-get update -qq && \
       python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=toolbox /out/bin/terraform   /usr/local/bin/terraform
 COPY --from=toolbox /out/bin/tofu        /usr/local/bin/tofu
 COPY --from=toolbox /out/bin/tflint      /usr/local/bin/tflint
 COPY --from=toolbox /out/bin/helm        /usr/local/bin/helm

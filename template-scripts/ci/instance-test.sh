@@ -34,7 +34,7 @@
 # Usage: template-scripts/ci/instance-test.sh
 # Env:
 #   INSTANCE_TEST_DIR  build dir (default: .instance-test; gitignored)
-#   TF                 terraform binary (default: terraform, falling back to tofu)
+#   TF                 Terraform-family binary (default: tofu, falling back to terraform)
 #   SKIP_TF            set to 1 to skip the terraform validate stage (no TF binary)
 set -euo pipefail
 
@@ -47,10 +47,11 @@ BUILD="${INSTANCE_TEST_DIR:-.instance-test}"
 case "$BUILD" in /*) : ;; *) BUILD="$ROOT/$BUILD" ;; esac
 INSTANCE="$BUILD/instance"
 
-# terraform proper in CI; locally this repo usually has only tofu (the dev alias).
-# Default to `terraform` when neither is found — the validate stage below reports
-# the missing binary and skips rather than aborting the whole run.
-TF="$(detect_tf)"; TF="${TF:-terraform}"
+# tofu everywhere now (CI image and dev boxes alike). Default to `tofu` when
+# neither is found — the validate stage below reports the missing binary and
+# skips rather than aborting the whole run, and naming tofu points at the right
+# remedy.
+TF="$(detect_tf)"; TF="${TF:-tofu}"
 
 # `llz env add` is the scaffolder (built into the binary). Resolve it so we can
 # prove it works INSIDE a rendered instance (the instance carries no scripts/).

@@ -491,7 +491,7 @@ func stepDroppedAPIVersions(_ globalOpts) error {
 }
 
 func stepTFValidate(g globalOpts) error {
-	terraform := tool("terraform", "LLZ_TERRAFORM")
+	terraform := tool(tfBin(), "LLZ_TERRAFORM")
 	if !haveTool(terraform) {
 		return nil
 	}

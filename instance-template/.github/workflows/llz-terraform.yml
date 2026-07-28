@@ -158,7 +158,7 @@ jobs:
 
       - name: Terraform validate — cluster
         working-directory: terraform-iac-bootstrap/cluster
-        run: terraform validate
+        run: tofu validate
 
       - name: Import VPC and subnet if not in state
         working-directory: terraform-iac-bootstrap/cluster
@@ -372,11 +372,11 @@ jobs:
       - name: Terraform plan — shared VPC
         if: steps.net.outputs.net != ''
         working-directory: terraform-iac-bootstrap/vpc
-        run: terraform plan -var-file="${{ steps.net.outputs.net }}.tfvars"
+        run: tofu plan -var-file="${{ steps.net.outputs.net }}.tfvars"
       - name: Terraform apply — shared VPC
         if: steps.net.outputs.net != '' && env.ACTION == 'apply'
         working-directory: terraform-iac-bootstrap/vpc
-        run: terraform apply -auto-approve -var-file="${{ steps.net.outputs.net }}.tfvars"
+        run: tofu apply -auto-approve -var-file="${{ steps.net.outputs.net }}.tfvars"
 
   apply-cluster:
     name: Apply Cluster
@@ -804,7 +804,7 @@ jobs:
       - name: Terraform apply — object-storage
         if: env.ACTION == 'apply'
         working-directory: terraform-iac-bootstrap/object-storage
-        run: terraform apply -auto-approve tfplan.bin
+        run: tofu apply -auto-approve tfplan.bin
 
       # No credential-stash step here by design — see the sidecar doc.
       - name: Bucket summary
@@ -946,7 +946,7 @@ jobs:
           # empty state that leaks TF's "Warning: No outputs found" text into the
           # captured value, which then corrupts bucket names and endpoint URLs.
           # `-json` returns a clean `{}` instead.
-          OUTPUTS_JSON="$(terraform output -json 2>/dev/null || printf '{}')"
+          OUTPUTS_JSON="$(tofu output -json 2>/dev/null || printf '{}')"
 
           read_output() {
             printf '%s' "$OUTPUTS_JSON" | jq -r --arg k "$1" '.[$k].value // empty'
@@ -1072,7 +1072,7 @@ jobs:
       - name: Terraform apply — databases
         if: env.ACTION == 'apply'
         working-directory: terraform-iac-bootstrap/databases
-        run: terraform apply -auto-approve tfplan.bin
+        run: tofu apply -auto-approve tfplan.bin
 
       # The admin credentials are NOT seeded here: the OpenBao root token only
       # exists inside llz-bootstrap-openbao.yml's window, so `llz ci seed-db-admin`

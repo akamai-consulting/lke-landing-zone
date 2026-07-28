@@ -91,7 +91,7 @@ func withTeardown(t *testing.T, fake *fakeTeardownClient, tfvars string) (string
 func stubTerraformOutputs(t *testing.T, outputs map[string]string) {
 	t.Helper()
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
-		if name != "terraform" || len(args) != 4 || args[1] != "output" {
+		if name != tfBin() || len(args) != 4 || args[1] != "output" {
 			return nil, errors.New("unexpected command")
 		}
 		if v, ok := outputs[args[3]]; ok {

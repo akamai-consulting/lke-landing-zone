@@ -668,18 +668,20 @@ func renderTfvars(base string, assigns []clusterspec.Assign) string {
 	return fmtHCL(applyAssigns(base, assigns))
 }
 
-// fmtHCL pipes HCL through `tofu fmt` (or `terraform fmt`). Best-effort: with
-// neither binary present it returns content unchanged — render and render --check
-// both call it, so they stay consistent regardless.
+// fmtHCL pipes HCL through `tofu fmt`. Best-effort: with no binary present it
+// returns content unchanged — render and render --check both call it, so they
+// stay consistent regardless.
+//
+// Resolution goes through tfBin() rather than the open-coded tofu-then-terraform
+// probe this used to carry: it already had the right PREFERENCE, but as a second
+// copy of the policy it could drift from the one every other call site uses (and
+// it ignored $TF).
 func fmtHCL(content string) string {
-	bin := "tofu"
+	bin := tfBin()
 	if _, err := execLookPath(bin); err != nil {
-		if _, err := execLookPath("terraform"); err != nil {
-			return content
-		}
-		bin = "terraform"
+		return content
 	}
-	cmd := exec.Command(bin, "fmt", "-")
+	cmd := exec.Command(bin, "fmt", "-") // #nosec G204 -- bin resolved by tfBin()
 	cmd.Stdin = strings.NewReader(content)
 	out, err := cmd.Output()
 	if err != nil {

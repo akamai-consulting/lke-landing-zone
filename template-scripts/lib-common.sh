@@ -24,15 +24,26 @@ fail() { echo "::error::$1"; FAILED=1; }
 # `set -euo pipefail` line (as the template-scripts all do).
 usage() { sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//;p;}' "$0"; }
 
-# detect_tf — print the Terraform binary to use: an explicit $TF override if set,
-# else terraform, else tofu, else nothing. Callers decide what an empty result
-# means — hard error, graceful skip, or a default — so this handles detection
-# only, not the fallback policy (the three TF roots each want different
-# behaviour). CI lint containers ship only tofu (the OpenTofu dev alias).
+# detect_tf — print the Terraform-family binary to use: an explicit $TF override
+# if set, else tofu, else terraform, else nothing. Callers decide what an empty
+# result means — hard error, graceful skip, or a default — so this handles
+# detection only, not the fallback policy (the TF roots each want different
+# behaviour).
+#
+# tofu FIRST. The landing zone runs OpenTofu (docs/adr/0008-opentofu-migration.md)
+# and the CI image ships only `tofu`. This preference used to be inverted, which
+# is how the toolchain split hid: CI resolved HashiCorp Terraform from the image
+# while a developer with both installed resolved terraform too — and a developer
+# with only tofu silently tested something else entirely. Same order as llz's
+# tfBin() (tools/cmd/llz/tfbin.go) so a script and llz can never disagree about
+# which binary runs against a given state file.
+#
+# `terraform` stays as a FALLBACK for adopters mid-migration whose runners still
+# only have it.
 detect_tf() {
   if [[ -n "${TF:-}" ]]; then printf '%s' "$TF"; return 0; fi
-  if command -v terraform >/dev/null 2>&1; then printf 'terraform'; return 0; fi
   if command -v tofu >/dev/null 2>&1; then printf 'tofu'; return 0; fi
+  if command -v terraform >/dev/null 2>&1; then printf 'terraform'; return 0; fi
 }
 
 # install_release_tarball — download a release tarball, verify it against the

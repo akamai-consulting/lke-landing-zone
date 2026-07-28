@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -25,7 +24,7 @@ var tfPlanFlakeSettle = 30 * time.Second
 // tfPlanRunFn runs `terraform plan -no-color <flags...>` with stdout+stderr
 // combined into w. Package-level var so tests can stub the terraform exec.
 var tfPlanRunFn = func(w io.Writer, tfFlags []string) error {
-	cmd := exec.Command("terraform", append([]string{"plan", "-no-color"}, tfFlags...)...)
+	cmd := tfCommand(append([]string{"plan", "-no-color"}, tfFlags...)...)
 	cmd.Stdout = w
 	cmd.Stderr = w
 	return cmd.Run()

@@ -618,7 +618,7 @@ func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err 
 // or "" if the resource is not in state: `state show` of an absent address
 // exits non-zero, so the error path covers the not-in-state case.
 func tfStateID(addr string) string {
-	out, err := exec.Command("terraform", "state", "show", addr).Output()
+	out, err := tfCommand("state", "show", addr).Output()
 	if err != nil {
 		return ""
 	}
@@ -746,7 +746,7 @@ func healFirewallCollision(g globalOpts, applyLog, varFile string, applyExit int
 
 // runTF runs a terraform subcommand with inherited stdio.
 func runTF(args ...string) error {
-	cmd := exec.Command("terraform", args...)
+	cmd := tfCommand(args...)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 	return cmd.Run()
 }
