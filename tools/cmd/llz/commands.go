@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 )
 
@@ -296,7 +298,7 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 		"--private", "--source", dir, "--remote", "origin", "--push")
 }
 
-func runUpgrade(g globalOpts, ref string, commit bool) error {
+func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {
 	oldRef := currentTemplateRef() // "" if this is not an instance checkout yet
 
 	// Always resolve to a concrete ref so the instance's llz_version pins update in
@@ -361,8 +363,30 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 		return fmt.Errorf("resolve the conflict marker(s) above, then commit — the working tree is at %s but is NOT yet valid", newRef)
 	}
 
+	// ── Lever 2: re-render what the new pin invalidates ──────────────────────
+	// The pin copier just rewrote (.copier-answers.yml llz_version) is the value
+	// resolveTemplateRef feeds into every apl-values remote ref, so EVERY committed
+	// kustomization goes stale the moment copier finishes — deterministically, on
+	// every upgrade, with no operator judgment involved. Leaving it manual is not a
+	// nuisance but a correctness gap: `--commit` recorded a knowingly-stale render,
+	// and a live instance ran three releases behind on what ArgoCD DEPLOYS (see
+	// stepRenderFresh). Since that guard landed, the omission also makes `--commit`
+	// fail outright — the pre-commit hook runs `llz lint`, which now refuses the
+	// very commit this command is trying to make.
+	//
+	// AFTER the conflict gate on purpose: rendering over merge markers would bury
+	// the real failure under a parse error from a file the operator has to fix anyway.
+	if !noRender {
+		if err := renderAfterUpgrade(g); err != nil {
+			return err
+		}
+	}
+
 	// One place to see what the upgrade touched, so a big managed-file churn is a
 	// single reviewable summary rather than a scattered surprise at commit time.
+	// Runs after the re-render so the diffstat is the WHOLE upgrade — scaffold plus
+	// the apl-values churn the new pin implies — not the half an operator would
+	// then have to re-review.
 	printUpgradeSummary(oldRef, newRef)
 
 	// A single labeled commit so the operator reviews ONE diff and history reads
@@ -372,6 +396,30 @@ func runUpgrade(g globalOpts, ref string, commit bool) error {
 		return commitUpgrade(g, oldRef, newRef)
 	}
 	fmt.Fprintln(os.Stderr, dim("  (re-run with --commit to stage + commit this upgrade as one labeled commit)"))
+	return nil
+}
+
+// renderAfterUpgrade reconciles the spec into the artifacts the new pin
+// invalidated — the gitignored <env>.tfvars and the COMMITTED apl-values
+// kustomizations whose `?ref=` is the pin itself.
+//
+// No-op for a pre-spec instance, using the same InstancePresent guard
+// stepRenderFresh uses: there is no spec to render from, and an upgrade must
+// still work for an instance that has not adopted one.
+//
+// A render failure here leaves a tree that is genuinely half-upgraded — the
+// scaffold is at the new ref while apl-values still points at the old one — so it
+// says exactly that rather than surfacing the bare render error.
+func renderAfterUpgrade(g globalOpts) error {
+	tfDir, _, _ := instanceLayout()
+	if !clusterspec.InstancePresent(filepath.Dir(tfDir)) {
+		return nil
+	}
+	if err := runRender(g, "", false, false, false); err != nil {
+		return fmt.Errorf("the copier update applied cleanly, but re-rendering the spec failed — the scaffold is "+
+			"at the new ref while the committed apl-values still reference the OLD one, which is what ArgoCD would "+
+			"sync. Fix the problem below and run `llz render` before committing:\n%w", err)
+	}
 	return nil
 }
 

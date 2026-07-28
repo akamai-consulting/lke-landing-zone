@@ -525,6 +525,14 @@ refs in lockstep** — there is no separate version bump for them, and nothing i
 `.github/workflows/` carries a version to bump at all. Ownership follows `.template-manifest`;
 `terraform-iac-bootstrap/*/.terraform.lock.hcl` files are seeded once and never re-touched.
 
+It then **re-runs `llz render` for you**. The committed `apl-values/<env>/`
+kustomizations reference the shared platform tree at `?ref=<the pin>`, so the pin
+copier just rewrote leaves every one of them stale — on every upgrade, without
+exception. That is not a judgment call, so it is not a step you have to remember:
+skipping it would leave ArgoCD syncing the *old* release's manifests under a
+new-release instance. `--no-render` opts out if you want to inspect the raw
+`copier update` result first; you then owe the tree an `llz render`.
+
 Check how far behind you are any time:
 
 ```bash

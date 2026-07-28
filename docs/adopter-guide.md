@@ -199,9 +199,16 @@ commit. Later, inside the instance:
 
 ```bash
 llz upgrade --ref v0.2.0   # preferred: copier update + re-pin to v0.2.0 in lockstep
-# or, raw copier (re-pin the version yourself):
+# or, raw copier (re-pin the version yourself — then `llz render`, see below):
 copier update --trust --vcs-ref v0.2.0 -d llz_version=v0.2.0
 ```
+
+> **Prefer `llz upgrade` over raw `copier update`** for more than the re-pin. The
+> committed `apl-values/<env>/` kustomizations resolve `?ref=` from the pin, so
+> rewriting it invalidates them every time; `llz upgrade` re-runs `llz render`
+> after the update, and raw copier does not. Skip that render and ArgoCD keeps
+> syncing the previous release's shared manifests — a difference in what is
+> *deployed*, not just what is checked in.
 
 Copier re-renders the old and new template versions and applies only the delta,
 so your local edits survive — conflicts appear (as `.rej`/merge markers) **only**
