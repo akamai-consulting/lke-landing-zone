@@ -407,6 +407,15 @@ func resolveLLZImageTag() string {
 // A value that matches no published form (a branch name like "main", or an
 // abbreviated sha — :sha-<short> is never pushed) falls back to :latest: running
 // a slightly newer image beats rendering one that cannot be pulled at all.
+//
+// That fallback is deliberate, but it used to be SILENT, which made it a skew of
+// the same family as TF_IMAGE ↔ template-ref: the shared components are fetched
+// at the pin (RemoteBase) while the image they run is whatever :latest points at,
+// so the manifests and the binary reading them come from different commits with
+// nothing saying so. The copier validator only rejects ""/main/master/HEAD, so any
+// other branch name or a short SHA reaches here. Warn rather than fail — a hard
+// error would break `llz render` on a legitimately branch-pinned dev instance,
+// which is exactly the case the fallback exists to serve.
 func llzImageTagFor(v string) string {
 	switch {
 	case rawCommitSHA.MatchString(v):
@@ -414,6 +423,10 @@ func llzImageTagFor(v string) string {
 	case releaseSemver.MatchString(v):
 		return v
 	default:
+		fmt.Fprintf(os.Stderr, "::warning::llz render: template pin %q is neither a release tag nor a full commit SHA, "+
+			"so no llz image is published for it — the carved apps fall back to :latest while the shared platform-apl "+
+			"manifests are fetched at %q. Pin to a release (`llz upgrade --ref vX.Y.Z`) to keep the image and the "+
+			"manifests on one commit.\n", v, v)
 		return "latest"
 	}
 }

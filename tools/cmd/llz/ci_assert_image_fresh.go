@@ -42,6 +42,17 @@ func ciAssertImageFreshCmd() *cobra.Command {
 			"this never blocks a legitimately-matched or unverifiable run.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
+			// Check the pin against ITSELF before comparing it to the image. This
+			// guard is the instance's only CI-run reader of .copier-answers.yml, and
+			// `llz lint` does NOT run in an instance's CI (pre-commit + template CI
+			// only) — so without this call the skew reaches a cluster whenever the
+			// operator commits the upgrade with --no-verify. An explicit
+			// --template-ref overrides the pin, so there is nothing to hold to it.
+			if templateRef == "" {
+				if err := assertPinCoherence("."); err != nil {
+					return err
+				}
+			}
 			return runAssertImageFresh(version, firstNonEmpty(templateRef, pinnedTemplateRef()))
 		},
 	}
