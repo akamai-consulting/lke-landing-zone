@@ -128,6 +128,65 @@ argocd app manifests <app-name> --source git         # what should be deployed
 
 If the error is a Helm template failure, reproduce locally with `helm template` + the same values to debug — the repo's Helm-lint target catches most of these before they ship.
 
+### A throwing health check deadlocks the app against its own fix
+
+The variant that wastes the most time, because **merging the fix does nothing**.
+
+Argo evaluates a custom (Lua) health check for many resource kinds. If that check
+*throws* rather than returning a verdict — typically on a half-created resource
+whose status fields are `nil`, e.g. `cannot perform concat operation between string
+and nil` — the error aborts the **whole Application's comparison**. And `selfHeal`
+only ever runs *after* a successful comparison. So the app sits `OutOfSync` at the
+old revision, and the corrected manifest you just merged is never applied, because
+the broken resource prevents Argo from getting far enough to apply it.
+
+The tell is an app that stays `OutOfSync`/`Unknown` across several merges with a
+`ComparisonError` naming a Lua/health error rather than a render error.
+
+Break the loop by converging the **live** resource to what git already says, so its
+health check stops throwing and comparison can complete:
+
+```bash
+# 1. Patch the live resource to match the merged git value.
+kubectl patch <kind>/<name> --type=merge -p '{"spec":{...}}'   # the corrected value from git
+# 2. Watch it reach a state the health check can evaluate; the ComparisonError clears.
+kubectl get <kind>/<name> -w
+# 3. A sync that already terminated Failed does not auto-retry — kick one manual sync.
+kubectl -n argocd patch application <app> --type merge \
+  -p '{"operation":{"sync":{"revision":"HEAD","syncStrategy":{"apply":{}}}}}'
+```
+
+The patch is **convergent** — it matches git — so `selfHeal` will not fight it, and
+step 3 is a one-off rather than a new standing workaround.
+
+Observed downstream (gsap-apl) with a Crossplane `Provider` pointing at a package
+that 404s, but nothing about it is Crossplane-specific: any CRD with a custom health
+check can do this.
+
+### A path seeded after the store is Ready waits out ESO's backoff
+
+An `ExternalSecret` that has **never** synced retries with exponential backoff
+capping near **~16 minutes** — `refreshInterval` only applies *after* the first
+successful sync. So when you seed a missing OpenBao path by hand, the Secret does
+not appear promptly; it appears whenever the backoff next fires, and until then the
+consumer sits in `CreateContainerConfigError` or the CR in `ReconcileError`.
+
+The `llz-reconciler` es-store-recovery lane does **not** cover this case: it fires
+on the `openbao` ClusterSecretStore's Ready `False→True` transition, and here the
+store was healthy all along — only the *path* was missing. Nothing transitions, so
+nothing nudges.
+
+After seeding a path late, force the one reconcile rather than waiting:
+
+```bash
+kubectl -n <ns> annotate externalsecret <name> force-sync="$(date +%s)" --overwrite
+```
+
+This is an operator action during bring-up, not a pattern to automate: a controller
+that bumps `force-sync` on a timer is [anti-pattern #6](../designs/kube-native-reconciler.md).
+If you find yourself running it routinely, the real fix is seeding the path *before*
+the consumer syncs — see [secrets-before-apps](../designs/secrets-before-apps.md).
+
 ### AppProject missing / sync-wave violation
 
 Every `Application` and `AppProject` must carry `argocd.argoproj.io/sync-wave: "N"` (see the sync-wave + correctness rules in [`docs/architecture/convergence-contract.md`](../architecture/convergence-contract.md)). If a new manifest fails CI with a `llz ci argocd-rendered-apps` (which absorbed the former `sync-wave-lint`) error:
