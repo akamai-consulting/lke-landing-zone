@@ -488,8 +488,14 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 			// platform admin is not a member of that team.
 			BoundClaims:   map[string][]string{"groups": {t.AplRole(), aplPlatformAdminRole}},
 			TokenPolicies: []string{policy},
-			TokenTTL:      "15m",
-			TokenMaxTTL:   "30m",
+			// This is a HUMAN, device-login-gated writer token (not a machine
+			// k8s-auth role) — an operator often runs several `llz openbao set` seeds
+			// in one sitting. 15m/30m is machine-grade and expired mid-flow, forcing a
+			// full re-run of the browser device login. 1h/8h keeps an interactive
+			// session workable while still bounding a leaked token; scope is unchanged
+			// (only the team's <name>-writer policy).
+			TokenTTL:    "1h",
+			TokenMaxTTL: "8h",
 		})
 		steps = append(steps,
 			baoConfigStep{desc: "write policy " + policy, fatal: true, stdin: hcl,

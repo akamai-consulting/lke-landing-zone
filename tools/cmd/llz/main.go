@@ -458,7 +458,11 @@ func openbaoLoginCmd() *cobra.Command {
 			"Prints `export OPENBAO_TOKEN=…` to stdout — load it with:\n" +
 			"  eval \"$(llz openbao login --team <name>)\"\n" +
 			"The issuer is derived from the region's cluster.bootstrap.domainSuffix (the\n" +
-			"otomi realm); pass --issuer to override. See docs/designs/team-scoped-credentials.md.",
+			"otomi realm); on a Managed App Platform instance (no domainSuffix) it is\n" +
+			"discovered from the cluster (otomi/otomi-api), so no --issuer is needed —\n" +
+			"pass --issuer only to override. Requires kubectl reach to the target cluster\n" +
+			"(KUBECONFIG): it port-forwards OpenBao for the token exchange. See\n" +
+			"docs/designs/team-scoped-credentials.md.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runOpenbaoLogin(o) },
 	}

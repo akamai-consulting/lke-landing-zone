@@ -167,7 +167,7 @@ func readForwardPort(r io.Reader) (string, error) {
 	if err := sc.Err(); err != nil {
 		return "", err
 	}
-	return "", fmt.Errorf("kubectl port-forward did not report a local port")
+	return "", fmt.Errorf("kubectl port-forward did not report a local port — check your kube-context/KUBECONFIG points at the target cluster and you have pods/portforward RBAC")
 }
 
 // truncateForError keeps an error message readable when the body is an HTML error

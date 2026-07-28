@@ -107,6 +107,13 @@ llz ci keycloak-configure --region <region>  # public device-flow `llz` client
 > dispatch `bootstrap-openbao.yml` for the region, then delete the secret again.
 > Until that runs, a newly declared team has **no** OpenBao role and **no** ESO
 > read grant: its `ExternalSecret`s 403.
+>
+> The same applies to the **token lifetime**. The writer role's TTL is written by
+> `bao-configure`, so a cluster bootstrapped before it was raised to 1h/8h keeps
+> minting **15m/30m** tokens until a re-configure runs — an upgrade of the `llz`
+> binary alone changes nothing. If `login` tokens still expire mid-seed on an
+> existing cluster, that is what you are looking at; the re-configure above is the
+> fix. Check the live value with `bao read auth/keycloak/role/<team>`.
 
 All idempotent. `bao-configure` is the only step that needs root. If
 `keycloak-configure` can't reach Keycloak, create the client by hand: a **public**
@@ -134,6 +141,16 @@ id_token for a token carrying only `gsap-writer`. The write is **attributed**
 (the Keycloak `sub`) and **least-privilege** (the `secret/gsap/*` subtree only) —
 no root, no broad token. A token that tries to write outside its subtree gets a
 403.
+
+> **Issuer discovery + kubeconfig.** `login` derives the Keycloak issuer from the
+> region's `cluster.bootstrap.domainSuffix`; on a **Managed App Platform** instance
+> (no `domainSuffix`) it **discovers** the issuer in-cluster from `otomi/otomi-api`
+> (the same source `bao-configure` binds to), so **no `--issuer` is needed** — pass
+> `--issuer https://keycloak.<domain>/realms/otomi` only to override. Either way,
+> `login` needs kubectl reach to the target cluster (it port-forwards OpenBao for the
+> exchange): point `KUBECONFIG` at the cluster or it fails at `did not report a local
+> port`. The minted token lives 1h (max 8h) — long enough for a multi-seed sitting;
+> re-run `login` when it expires.
 
 > **The CLI steers you here.** `llz openbao get/set/exec` print a warning to
 > stderr whenever they fall back to `OPENBAO_ROOT_TOKEN`, pointing back at

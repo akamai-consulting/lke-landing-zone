@@ -85,8 +85,12 @@ whose policy/role sequence is already idempotent and root-driven at bootstrap:
    path "secret/metadata/gsap/*" { capabilities = ["read","list"] }
    ```
 3. **Role bound on the group claim**: `bound_claims = {"groups":"gsap"}`,
-   `user_claim = "sub"`, `token_ttl = 15m`, policy `gsap-writer`. A team's secret
-   subtree and its Keycloak group are declared together (see *Spec surface*).
+   `user_claim = "sub"`, `token_ttl = 1h` (max `8h`), policy `gsap-writer`. A team's
+   secret subtree and its Keycloak group are declared together (see *Spec surface*).
+   The TTL is human-scale, not machine-scale: this token is minted by an interactive
+   browser device login, and an operator running several `llz openbao set` seeds in
+   one sitting had a 15m token expire mid-flow and had to redo the whole login.
+   Scope is unchanged — still only the team's `<name>-writer` policy.
 4. **`llz openbao login`** — a Keycloak **device-code flow** (`keycloak.<suffix>`
    is externally reachable) → id_token → `auth/oidc-keycloak/login` on OpenBao,
    reached over the **existing auto port-forward** from PR #298 → caches a
