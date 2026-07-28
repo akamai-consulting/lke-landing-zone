@@ -64,6 +64,22 @@ func instanceLayout() (tfDir, aplDir, relPrefix string) {
 
 var tfRoots = []string{"cluster", "object-storage", "databases"}
 
+// optionalTFRoots are roots an instance may legitimately never apply. `llz render`
+// still writes a tfvars stub for them (render is per-root, not per-opt-in), but a
+// MISSING one is not a defect — so readiness must not report it as such.
+//
+// This matters for legacy (pre-spec) instances: they never run `llz render`, their
+// hand-authored <env>.tfvars are the tracked source of truth, and readiness does
+// flag a genuinely missing one for them. Without this set, adding `databases` to
+// tfRoots would have every such instance reporting a blocking "missing
+// databases/<env>.tfvars — run llz env add" for a database they never asked for.
+var optionalTFRoots = map[string]bool{"databases": true}
+
+// optionalTFVars reports whether path is a tfvars belonging to an optional root.
+func optionalTFVars(path string) bool {
+	return optionalTFRoots[filepath.Base(filepath.Dir(path))]
+}
+
 // validateOBJCluster catches a value that isn't shaped like a Linode OBJ cluster
 // id. The shape rule lives in internal/validate (OBJClusterID) so the LandingZone
 // spec validator reuses it.
