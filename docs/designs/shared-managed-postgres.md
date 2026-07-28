@@ -118,8 +118,12 @@ a different platform/network. So:
    ESO re-seed updates), verify, then delete 490457.
 
 **B. Import (only if staying public).** `terraform import` 490457 into the
-`databases` root and set `public_access=true` — but this keeps the public endpoint
-and defeats the feature's purpose; not recommended.
+`databases` root — but this keeps the public endpoint and defeats the feature's
+purpose; not recommended. Note the root deliberately does **not** expose
+`public_access`: the module defaults it to `false` and the root never overrides,
+so VPC-only is not a setting an instance can drift off. Taking this path means
+first adding the variable to the root and threading it through — a visible,
+reviewable change, which is the point.
 
 The cutover is a deliberate, scheduled data migration — not a GitOps side effect.
 Downstream `Database`/`Role`/`Grant` CRs are `deletionPolicy: Orphan`, so they
