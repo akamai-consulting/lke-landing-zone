@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 
 	"github.com/spf13/cobra"
 )
@@ -21,7 +20,7 @@ import (
 // tfDestroyRunFn runs `terraform <args...>` with output combined into w.
 // Package var so tests stub the terraform exec.
 var tfDestroyRunFn = func(w io.Writer, args ...string) error {
-	cmd := exec.Command("terraform", args...)
+	cmd := tfCommand(args...)
 	cmd.Stdout = w
 	cmd.Stderr = w
 	return cmd.Run()

@@ -184,11 +184,13 @@ func TestFetchKubeconfigState(t *testing.T) {
 	tfInitStream = func(args ...string) error { initArgs = args; return nil }
 	t.Cleanup(func() { tfInitStream = prevInit })
 
-	// The output extraction runs `terraform output -raw kubeconfig_raw` via
-	// os/exec directly; stub the terraform binary on PATH with a script.
+	// The output extraction runs `tofu output -raw kubeconfig_raw` via os/exec
+	// (through tfCommand); stub that binary on PATH with a script. The name must
+	// track tfBin()'s preference — a stub called `terraform` would simply be
+	// ignored in favour of a real tofu on the developer's PATH.
 	binDir := t.TempDir()
 	fake := "#!/bin/sh\nif [ \"$3\" = kubeconfig_raw ]; then printf 'apiVersion: v1'; fi\n"
-	if err := os.WriteFile(filepath.Join(binDir, "terraform"), []byte(fake), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, "tofu"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -210,7 +212,7 @@ func TestFetchKubeconfigState(t *testing.T) {
 
 	// Empty output: --allow-missing reports available=false; without it, error.
 	empty := "#!/bin/sh\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(binDir, "terraform"), []byte(empty), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, "tofu"), []byte(empty), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	ghOut := filepath.Join(t.TempDir(), "out")

@@ -52,7 +52,7 @@ A sorted JSON array of deployment names (one per
 
 ## Why `defaults.run.shell: bash`
 
-The List-deployments step runs inside the `ci-terraform` container and uses
+The List-deployments step runs inside the `ci-tofu` container and uses
 `set -o pipefail` (a bashism). Without this default, GitHub falls back to the
 container's `/bin/sh` (dash), which rejects `-o pipefail` ("Illegal option") and
 fails the job on **every** scheduled run — taking auto-unseal, scheduled-checks

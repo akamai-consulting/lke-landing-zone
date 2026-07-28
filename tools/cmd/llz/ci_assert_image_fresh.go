@@ -1,7 +1,7 @@
 package main
 
 // ci_assert_image_fresh.go implements `llz ci assert-image-fresh` — a fast
-// preflight that fails LOUD when the ci-terraform image's baked `llz` is older
+// preflight that fails LOUD when the ci-tofu image's baked `llz` is older
 // than the template ref the instance pins.
 //
 // WHY: an instance pins TF_IMAGE (the container whose baked llz the jobs run)
@@ -33,11 +33,11 @@ func ciAssertImageFreshCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "assert-image-fresh",
 		Short: "fail if the baked llz is older than the instance's pinned template ref (image/source skew guard)",
-		Long: "Compares the ci-terraform image's baked llz build (main.version, stamped\n" +
+		Long: "Compares the ci-tofu image's baked llz build (main.version, stamped\n" +
 			"`dev-<github.sha>` for dev images or a release tag) against the ref this\n" +
 			"instance pins (.copier-answers.yml). A dev image's SHA must match the pinned\n" +
 			"SHA; a release image's tag must equal the pinned tag. On mismatch it FAILS with\n" +
-			"an actionable message (republish ci-terraform / re-pin TF_IMAGE). When it cannot\n" +
+			"an actionable message (republish ci-tofu / re-pin TF_IMAGE). When it cannot\n" +
 			"compare (unstamped local build, or a tag-vs-SHA pair) it warns and passes —\n" +
 			"this never blocks a legitimately-matched or unverifiable run.",
 		Args: cobra.NoArgs,
@@ -108,9 +108,9 @@ func shaPrefixMatch(a, b string) bool {
 }
 
 func imageSkewError(baked, templateRef string) error {
-	return fmt.Errorf("image/template skew: the ci-terraform image's baked llz is %q but this instance pins template ref %q.\n"+
+	return fmt.Errorf("image/template skew: the ci-tofu image's baked llz is %q but this instance pins template ref %q.\n"+
 		"  The baked binary lacks any llz command/flag added after its build, so this run will fail later with a cryptic\n"+
-		"  'unknown flag'/'unknown command' or a silently no-op'd gate. Fix: republish ci-terraform at %s (build-images.yml)\n"+
-		"  and re-pin the instance's TF_IMAGE to ghcr.io/<org>/ci-terraform:sha-%s, OR run at a template-ref matching the image.",
+		"  'unknown flag'/'unknown command' or a silently no-op'd gate. Fix: republish ci-tofu at %s (build-images.yml)\n"+
+		"  and re-pin the instance's TF_IMAGE to ghcr.io/<org>/ci-tofu:sha-%s, OR run at a template-ref matching the image.",
 		baked, templateRef, templateRef, templateRef)
 }

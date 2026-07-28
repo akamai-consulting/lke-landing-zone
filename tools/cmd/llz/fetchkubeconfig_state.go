@@ -53,7 +53,7 @@ func ciFetchKubeconfigStateCmd() *cobra.Command {
 // tfInitStream runs `terraform init` with streamed output. A package var so
 // tests can record the backend config without a real backend.
 var tfInitStream = func(args ...string) error {
-	cmd := exec.Command("terraform", append([]string{"init"}, args...)...)
+	cmd := tfCommand(append([]string{"init"}, args...)...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
@@ -158,7 +158,7 @@ func runCIFetchKubeconfigState(region, output string, allowMissing bool) error {
 
 	// Capture stderr (don't discard it) so an empty result is explainable.
 	var stdout, stderr bytes.Buffer
-	cmd := exec.Command("terraform", "output", "-raw", "kubeconfig_raw")
+	cmd := tfCommand("output", "-raw", "kubeconfig_raw")
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	_ = cmd.Run()
 
@@ -215,7 +215,7 @@ func fetchKubeconfigStateDiagnostics(region, stateKey, bucket, outputStderr stri
 	fmt.Printf("::group::fetch-kubeconfig diagnostics — kubeconfig_raw empty for %s\n", region)
 	fmt.Printf("state key : %s\n", stateKey)
 	fmt.Printf("bucket    : %s\n", bucket)
-	if out, err := execOutput("terraform", "version"); err == nil {
+	if out, err := execOutput(tfBin(), "version"); err == nil {
 		lines := strings.SplitN(strings.TrimSpace(string(out)), "\n", 3)
 		for _, l := range lines[:min(2, len(lines))] {
 			fmt.Println(l)
@@ -229,7 +229,7 @@ func fetchKubeconfigStateDiagnostics(region, stateKey, bucket, outputStderr stri
 	}
 	fmt.Println("--- root output keys (json) ---")
 	keysListed := false
-	if out, err := execOutput("terraform", "output", "-json"); err == nil {
+	if out, err := execOutput(tfBin(), "output", "-json"); err == nil {
 		var outputs map[string]json.RawMessage
 		if json.Unmarshal(out, &outputs) == nil {
 			for k := range outputs {
@@ -243,7 +243,7 @@ func fetchKubeconfigStateDiagnostics(region, stateKey, bucket, outputStderr stri
 	}
 	fmt.Println("--- state resources (lke / kubeconfig) ---")
 	matched := false
-	if out, err := execOutput("terraform", "state", "list"); err == nil {
+	if out, err := execOutput(tfBin(), "state", "list"); err == nil {
 		for _, l := range strings.Split(string(out), "\n") {
 			lower := strings.ToLower(l)
 			if strings.Contains(lower, "lke") || strings.Contains(lower, "kubeconfig") {

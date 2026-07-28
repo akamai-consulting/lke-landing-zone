@@ -28,8 +28,12 @@ import (
 
 // CI image tags published by build-images.yml; TF_IMAGE/KUBE_IMAGE derive from
 // these + the template org.
+// A THIRD restatement of the image pin, beyond the two the Dockerfile header
+// names (build-images.yml's matrix and lint.yml's fallback). It was still on
+// 1.9.8 after both of those moved, which would have scaffolded new instances
+// onto a HashiCorp Terraform image while every caller invoked `tofu`.
 const (
-	ciTerraformTag  = "1.9.8"
+	ciTofuTag       = "1.12.5"
 	ciKubernetesTag = "1.31.0"
 )
 
@@ -205,7 +209,7 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 
 	// ── Computed vars ────────────────────────────────────────────────────────
 	if !have("TF_IMAGE", false) {
-		vars["TF_IMAGE"] = fmt.Sprintf("ghcr.io/%s/ci-terraform:%s", strings.ToLower(defaultTemplateOrg), ciTerraformTag)
+		vars["TF_IMAGE"] = fmt.Sprintf("ghcr.io/%s/ci-tofu:%s", strings.ToLower(defaultTemplateOrg), ciTofuTag)
 	}
 	if !have("KUBE_IMAGE", false) {
 		vars["KUBE_IMAGE"] = fmt.Sprintf("ghcr.io/%s/ci-kubernetes:%s", strings.ToLower(defaultTemplateOrg), ciKubernetesTag)

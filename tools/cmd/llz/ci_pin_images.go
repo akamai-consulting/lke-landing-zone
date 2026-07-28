@@ -30,11 +30,14 @@ import (
 // pinImage maps an instance repo variable to the ci image whose tag it pins.
 type pinImage struct {
 	Var  string // instance repo variable name (TF_IMAGE / KUBE_IMAGE)
-	Name string // ci image name under the GHCR owner (ci-terraform / ci-kubernetes)
+	Name string // ci image name under the GHCR owner (ci-tofu / ci-kubernetes)
 }
 
 var pinImages = []pinImage{
-	{Var: "TF_IMAGE", Name: "ci-terraform"},
+	// The VARIABLE keeps its name. TF_IMAGE is set in every adopter repo, so
+	// renaming it would break instances that this rename is meant not to break;
+	// only the image it points AT changed (ci-terraform -> ci-tofu).
+	{Var: "TF_IMAGE", Name: "ci-tofu"},
 	{Var: "KUBE_IMAGE", Name: "ci-kubernetes"},
 }
 
@@ -88,7 +91,7 @@ func ciPinInstanceImagesCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "pin-instance-images",
 		Short: "pin the e2e instance's TF_IMAGE/KUBE_IMAGE to this commit's ci images",
-		Long: "Points the instance repo's TF_IMAGE / KUBE_IMAGE variables at the ci-terraform\n" +
+		Long: "Points the instance repo's TF_IMAGE / KUBE_IMAGE variables at the ci-tofu\n" +
 			"/ ci-kubernetes images for --sha, so the baked llz binary can't drift from the\n" +
 			"rendered workflow. If this commit triggered a Build Container Images run, waits\n" +
 			"for its sha- image to publish and pins the exact sha; otherwise pins :latest\n" +

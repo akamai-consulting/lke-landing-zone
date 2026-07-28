@@ -210,7 +210,7 @@ environment via `gha-secret-deployments`.
 
 ### `container:`
 
-`llz` is baked into `TF_IMAGE` (`dockerfiles/Dockerfile`, `ci-terraform` target),
+`llz` is baked into `TF_IMAGE` (`dockerfiles/Dockerfile`, `ci-tofu` target),
 so the `linode-credentials` action needs no Go toolchain — it runs in `TF_IMAGE`.
 The same applies to `revoke-linode-pat`, `create-tf-state-key`, and
 `revoke-tf-state-key`.

@@ -83,7 +83,7 @@ to be stale, fix it in place rather than working around it.
 - **Install CLI tools with SHA-pinned marketplace setup actions** (version pinned
   from the `env:` block), not `curl | tar`. The real Docker login action is
   `docker/login-action` — `actions/docker-login-action` does **not** exist (it was
-  a GHE-mirror typo). Tools baked into the `ci-terraform`/`ci-kubernetes` images
+  a GHE-mirror typo). Tools baked into the `ci-tofu`/`ci-kubernetes` images
   don't need re-install in `container:` jobs.
 - **GHCR auth** for publish/CI workflows uses the built-in `GITHUB_TOKEN` +
   `permissions: packages: write|read`, namespace from `${GITHUB_REPOSITORY_OWNER,,}`.

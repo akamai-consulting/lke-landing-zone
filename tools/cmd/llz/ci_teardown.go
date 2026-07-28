@@ -265,7 +265,7 @@ func teardownLabels(region, tfDir string) (tf.Labels, error) {
 // tfOutputRaw returns `terraform -chdir=<dir> output -raw <name>`, "" when the
 // output is absent / state empty (the bash `2>/dev/null || true`).
 func tfOutputRaw(dir, name string) string {
-	out, err := execOutput("terraform", "-chdir="+dir, "output", "-raw", name)
+	out, err := execOutput(tfBin(), "-chdir="+dir, "output", "-raw", name)
 	if err != nil {
 		return ""
 	}

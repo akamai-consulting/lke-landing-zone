@@ -200,7 +200,7 @@ guards ad-hoc concurrent builds.
 `apply-vpc` is the first job `apply-cluster` depends on, so failing here aborts
 **before** the ~15-minute cluster apply. Two cheap fail-fast checks live here:
 
-1. **Image/template skew** (`Pre-flight — ci-terraform image matches the
+1. **Image/template skew** (`Pre-flight — ci-tofu image matches the
    instance's template pin`). The instance pins `TF_IMAGE` (baked `llz`)
    separately from its template pin. When the image lags, the checked-out
    workflow calls `llz` commands/flags the baked binary lacks, surfacing far
@@ -532,7 +532,7 @@ Resolution order: the exact `vpc_id` output first, then the
 `"<cluster_label>-vpc"` label, then — for the LKE-E auto VPC labeled `lke<id>`,
 which no output or BYO label names — the captured cluster id. `llz` reads that
 from the `LKE_CLUSTER_ID` env var `teardown-capture` exported, so **no new flag**
-is passed here: a stale baked `llz` (the ci-terraform image lags a `tools/` change
+is passed here: a stale baked `llz` (the ci-tofu image lags a `tools/` change
 until rebuilt) just ignores the env instead of dying on an "unknown flag". Retry
 rides out the async-release window.
 

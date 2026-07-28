@@ -26,7 +26,7 @@ flowchart LR
         direction TB
         TF["terraform-modules/<br/>llz-cluster · llz-object-storage"]
         CH["kubernetes-charts/<br/>first-party Helm charts"]
-        IMG["dockerfiles/<br/>ci-terraform · ci-kubernetes · devcontainer"]
+        IMG["dockerfiles/<br/>ci-tofu · ci-kubernetes · devcontainer"]
         CLI["tools/<br/>the llz CLI (Go)"]
         WF["reusable workflows<br/>+ instance-template/ scaffold"]
     end

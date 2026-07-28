@@ -15,7 +15,7 @@
 #
 # Usage: template-scripts/ci/instantiate-terraform.sh
 # Env:   TF_INSTANCE_DIR  build dir (default: .tf-instance)
-#        TF               terraform binary (default: terraform, falling back to tofu)
+#        TF               Terraform-family binary (default: tofu, falling back to terraform)
 set -euo pipefail
 
 # shellcheck source=template-scripts/lib-common.sh

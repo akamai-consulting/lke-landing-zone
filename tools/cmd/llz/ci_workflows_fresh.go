@@ -6,7 +6,7 @@ package main
 //
 // WHY A HASH LOCK AND NOT A RE-RENDER: the obvious check is "render the template
 // at the pinned ref and diff", but `copier` ships only in the devcontainer image —
-// the reusable workflows run in ci-terraform (vars.TF_IMAGE), which has no copier
+// the reusable workflows run in ci-tofu (vars.TF_IMAGE), which has no copier
 // and, on an air-gapped GHE, no route to the template repo either (ADR 0003). So
 // the template instead SHIPS the expected digests in .template-workflows.lock and
 // the guard recomputes them locally: no network, no Python, no template checkout.

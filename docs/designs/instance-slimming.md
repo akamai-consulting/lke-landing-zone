@@ -76,7 +76,7 @@ Lever 1 made the upgrade *reviewable*; this makes it *authoritative*.
   in `.template-workflows.lock`.
 
   It is a **hash lock, not a re-render**: `copier` exists only in the devcontainer
-  image, while the reusable workflows run in `ci-terraform` — and an air-gapped GHE
+  image, while the reusable workflows run in `ci-tofu` — and an air-gapped GHE
   has no route to the template repo anyway (ADR 0003). Digests work offline. This
   is sound only because the covered files are token-free, which is the same fact
   that lets them be `managed`; `--write` refuses to lock a token-bearing file, so
