@@ -68,12 +68,13 @@ func ciSeedDBAdminCmd() *cobra.Command {
 			"endpoint, port, username, password, ca, sslmode. Reading ONE output keeps a\n" +
 			"cluster's endpoint and password from ever being paired across clusters.\n\n" +
 			"A no-op when the map is empty, so it runs unconditionally on a deployment\n" +
-			"that declared no databases. Idempotent: a path whose fields already match is\n" +
-			"left alone; one that differs is UPDATED (a recreated cluster changes the\n" +
-			"password, and a stale credential would strand every consumer). Paths are\n" +
-			"never deleted — removing a cluster from the spec leaves its credential for\n" +
-			"an operator to reap, because the cluster usually still exists at that point\n" +
-			"and this is the only way back into it.\n\n" +
+			"that declared no databases. Idempotent, and it compares the cluster's\n" +
+			"ENDPOINT, not its password: OpenBao is authoritative for the credential once\n" +
+			"`llz ci rotate-db-admin` has run, so a path already pointing at this cluster\n" +
+			"is left completely alone. A path pointing at a DIFFERENT cluster (a recreate)\n" +
+			"is re-seeded. Paths are never deleted — removing a cluster from the spec\n" +
+			"leaves its credential for an operator to reap, because the cluster usually\n" +
+			"still exists at that point and this is the only way back into it.\n\n" +
 			"Run with the databases root as the working directory. Reads\n" +
 			"OPENBAO_ROOT_TOKEN.",
 		Args: cobra.NoArgs,
@@ -134,32 +135,51 @@ func runCISeedDBAdmin(region string) error {
 			"sslmode":  dbAdminSSLMode,
 		}
 
-		// Compare on the password alone: it is the field that changes when a
-		// cluster is recreated, and reading it is one call. An unreadable path is
-		// NOT an absent one — writing over a live credential we failed to read
-		// would be indistinguishable from a successful rotation, so fail closed.
-		existing, verdict := baoKVGetFieldOK(path, "password")
+		// Compare on the cluster's IDENTITY (endpoint), never on the password.
+		//
+		// This used to compare passwords and rewrite OpenBao whenever it differed
+		// from Terraform state. That made STATE the source of truth for the
+		// credential, which is wrong once anything rotates it: after `llz ci
+		// rotate-db-admin` resets the password out of band, state holds the old
+		// one, and a seed run would push that dead credential back over the live
+		// one and strand every consumer. (The rotator used to defend against this
+		// by refreshing state; comparing on identity removes the hazard at its
+		// source instead of racing it.)
+		//
+		// OpenBao is now authoritative for the password. Seeding is for two cases
+		// only: the path does not exist yet, or it belongs to a DIFFERENT cluster.
+		// The endpoint carries the cluster id, so a recreated cluster changes it —
+		// which is the case the old password comparison was really there to catch,
+		// and it catches it without ever second-guessing a live credential.
+		//
+		// An unreadable path is NOT an absent one — writing over a live credential
+		// we failed to read is indistinguishable from a successful rotation, so
+		// fail closed.
+		existingEndpoint, verdict := baoKVGetFieldOK(path, "endpoint")
 		if verdict == baoReadUnknown {
-			return errBaoReadUnknown(path, "password", "seed the admin credential for database cluster "+name)
+			return errBaoReadUnknown(path, "endpoint", "seed the admin credential for database cluster "+name)
 		}
 		switch {
-		case existing == "":
+		case existingEndpoint == "":
 			fields["rotated_at"] = stamp
 			if err := baoKVPutFn(path, fields); err != nil {
 				return fmt.Errorf("seed %s: %w", path, err)
 			}
 			seeded = append(seeded, name)
 			fmt.Printf("%s: seeded %s (%s).\n", name, path, c.Endpoint)
-		case existing != c.Password:
+		case existingEndpoint != c.Endpoint:
 			fields["rotated_at"] = stamp
 			if err := baoKVPutFn(path, fields); err != nil {
 				return fmt.Errorf("update %s: %w", path, err)
 			}
 			updated = append(updated, name)
-			fmt.Printf("%s: %s held a different password — updated to the current cluster credential.\n", name, path)
+			fmt.Printf("%s: %s pointed at a different cluster (%s -> %s) — re-seeded from the current one.\n",
+				name, path, existingEndpoint, c.Endpoint)
 		default:
+			// Same cluster. Whatever password OpenBao holds is the live one (the
+			// rotator owns it from here), so leave the secret completely alone.
 			unchanged = append(unchanged, name)
-			fmt.Printf("%s: %s already current — skipping.\n", name, path)
+			fmt.Printf("%s: %s already points at this cluster — leaving its credential alone.\n", name, path)
 		}
 	}
 

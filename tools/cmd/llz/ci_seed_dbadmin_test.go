@@ -15,13 +15,14 @@ func connectionsOutput(inner string) string {
 }
 
 // seedDBAdminHarness stubs every seam runCISeedDBAdmin touches and records the
-// OpenBao writes. seededPasswords maps a KV path to the password already stored
-// there ("" = unseeded); baoStderr, when set, is returned for every read so a
-// test can drive the fail-closed path.
+// OpenBao writes. seededEndpoints maps a KV path to the ENDPOINT already stored
+// there ("" = unseeded) — the identity field the command now compares on, since
+// OpenBao (not Terraform state) owns the password. baoStderr, when set, is
+// returned for every read so a test can drive the fail-closed path.
 type seedDBAdminHarness struct {
 	writes          map[string]map[string]string
 	writeOrder      []string
-	seededPasswords map[string]string
+	seededEndpoints map[string]string
 	baoStderr       string
 	putErr          error
 }
@@ -30,7 +31,7 @@ func newSeedDBAdminHarness(t *testing.T, outputs string, seeded map[string]strin
 	t.Helper()
 	h := &seedDBAdminHarness{
 		writes:          map[string]map[string]string{},
-		seededPasswords: seeded,
+		seededEndpoints: seeded,
 	}
 
 	prevTF, prevExec, prevPut, prevNow := tfOutputRunFn, baoExecFn, baoKVPutFn, seedDBAdminNow
@@ -45,10 +46,10 @@ func newSeedDBAdminHarness(t *testing.T, outputs string, seeded map[string]strin
 		if h.baoStderr != "" {
 			return "", h.baoStderr, errors.New("exit 2")
 		}
-		// kv get -field=password <path>
+		// kv get -field=endpoint <path>
 		if len(args) >= 4 && args[0] == "kv" && args[1] == "get" {
-			if pw := h.seededPasswords[args[3]]; pw != "" {
-				return pw + "\n", "", nil
+			if ep := h.seededEndpoints[args[3]]; ep != "" {
+				return ep + "\n", "", nil
 			}
 			return "", "No value found at " + args[3], errors.New("exit 2")
 		}
@@ -134,32 +135,42 @@ func TestSeedDBAdminIsANoOpWithoutClusters(t *testing.T) {
 	}
 }
 
-func TestSeedDBAdminSkipsAnAlreadyCurrentPath(t *testing.T) {
+// A path already pointing at THIS cluster is left completely alone — even
+// though the password OpenBao holds differs from the one in Terraform state.
+// That difference is the NORMAL steady state after rotate-on-create: state holds
+// the dead provisioning credential. Rewriting here would push it back over the
+// live one and strand every consumer, which is exactly what comparing on
+// identity instead of on the password prevents.
+func TestSeedDBAdminLeavesALiveCredentialAlone(t *testing.T) {
 	h := newSeedDBAdminHarness(t, connectionsOutput(twoClusterConnections), map[string]string{
-		"secret/platform/db-admin/shared":    "pw-shared",
-		"secret/platform/db-admin/analytics": "pw-analytics",
+		"secret/platform/db-admin/shared":    "shared.vpc.internal",
+		"secret/platform/db-admin/analytics": "analytics.vpc.internal",
 	})
 	if err := runCISeedDBAdmin("prod"); err != nil {
 		t.Fatalf("seed-db-admin: %v", err)
 	}
 	if len(h.writes) != 0 {
-		t.Errorf("an already-current path must not be rewritten, got %v", h.writeOrder)
+		t.Errorf("a path pointing at this cluster must not be rewritten (its password is the ROTATED one, not state's), got %v", h.writeOrder)
 	}
 }
 
-// A recreated cluster gets a new admin password. Blind-skipping a seeded path
-// (the mint-bootstrap-objkeys rule, which exists because re-MINTING orphans a
-// real key) would strand every consumer on a credential that no longer works.
-func TestSeedDBAdminUpdatesAStaleCredential(t *testing.T) {
+// A RECREATED cluster is the one case that still re-seeds. Its endpoint carries
+// the cluster id, so a destroy/create changes it — and the credential OpenBao
+// holds belongs to a database that no longer exists. Blind-skipping here would
+// strand every consumer on a credential for a dead cluster.
+func TestSeedDBAdminReseedsARecreatedCluster(t *testing.T) {
 	h := newSeedDBAdminHarness(t, connectionsOutput(twoClusterConnections), map[string]string{
-		"secret/platform/db-admin/shared":    "pw-from-the-destroyed-cluster",
-		"secret/platform/db-admin/analytics": "pw-analytics",
+		"secret/platform/db-admin/shared":    "shared-OLD.vpc.internal",
+		"secret/platform/db-admin/analytics": "analytics.vpc.internal",
 	})
 	if err := runCISeedDBAdmin("prod"); err != nil {
 		t.Fatalf("seed-db-admin: %v", err)
 	}
 	if len(h.writes) != 1 || h.writes["secret/platform/db-admin/shared"]["password"] != "pw-shared" {
-		t.Fatalf("expected only shared to be updated to the current password, got %v", h.writes)
+		t.Fatalf("expected only the recreated cluster to be re-seeded, got %v", h.writes)
+	}
+	if h.writes["secret/platform/db-admin/shared"]["endpoint"] != "shared.vpc.internal" {
+		t.Error("the re-seeded path must point at the new cluster")
 	}
 }
 
