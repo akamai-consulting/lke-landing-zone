@@ -45,6 +45,20 @@ to be stale, fix it in place rather than working around it.
 - **The product is out of scope — only the platform is reusable.** A sibling team's
   application workloads are the product, so they are *not* helmified here; the
   reusable unit is the platform that runs them.
+- **A map-valued default an operator may need to *clear* must be gated by a scalar.**
+  Helm coalescing merges maps **key-by-key** (lists, by contrast, replace wholesale),
+  so an override of `{}` re-inherits every default key, and while an explicit `null`
+  removes a key in a plain `-f` merge it does **not** survive every values pipeline —
+  an Argo `ApplicationSet` that merges per-app values over chart defaults coalesces
+  the key back. Downstream (gsap-apl) burned three iterations on this trying to clear
+  a `nodeSelector: {workload: builds}` that the cluster had no pool for: `{}` failed,
+  then `null` failed, and only a new `build.dedicatedPool: false` **boolean** — which
+  overrides cleanly through coalescing — actually dropped the selector. So when a
+  chart here ships a map default that some instance will legitimately not want
+  (`nodeSelector`, `tolerations`, `resources`, affinity), pair it with a scalar
+  toggle and template the map behind it. "Just override it with `{}`" is not a
+  supported answer, and it fails *silently* — the rendered manifest still carries
+  the default and the pod merely goes unschedulable.
 
 ## LKE-Enterprise constraints
 
@@ -180,6 +194,22 @@ default against, not something to "clean up." Version-specific notes (apl-core
   owned by Flux's `workload` HelmRelease, so annotation patches (e.g. demoting it
   from default) revert on Flux's ~10m reconcile. Fall back to per-chart
   `storageClassName:` overrides.
+- **Linode CSI intermittently loses a freshly-attached volume's device path.** The
+  pod stalls indefinitely in `Init`/mount with `Unable to find device path out of
+  attempted paths: …/linode-pvc-…` — *after* a **successful** attach, so the Linode
+  API and the `VolumeAttachment` both look healthy and only the kubelet log names
+  the fault. Observed downstream (gsap-apl) on plain `linode-block-storage` as well
+  as the encrypted default, with the node well under the attach limit (4 volumes),
+  so it is a CSI device-enumeration flake — **not** the dm-crypt/`encrypted=true`
+  class, not the reclaim policy, and not something chart config can make reliable.
+  There is no retry that fixes it: the volume never appears. The durable fix is to
+  **not put ephemeral data on block storage at all** — a build workspace, scratch
+  dir, or anything discarded with the pod belongs in an `emptyDir` (node-local, no
+  attach step, so the flake cannot apply — and it is faster). Reserve PVCs for state
+  that must outlive the pod. Note this cuts against the cluster default: LLZ
+  promotes the encrypted+tagged `block-storage-retain` to sole default
+  (llz-cluster-foundation `sc-default-patcher`), so an unqualified `volumeClaimTemplate`
+  in a *new* workload silently inherits block storage and this failure mode with it.
 
 ### OpenBao / ESO / cert rotation
 
@@ -213,6 +243,22 @@ default against, not something to "clean up." Version-specific notes (apl-core
   when `gitea-http` DNS isn't up yet; the operator loops on
   `waitTillGitRepoAvailable` forever and argocd/kyverno/cert-manager stay empty.
   Fix is a stage-0 self-heal restart in `apl_pipeline_ready`.
+- **Argo Workflows silently drops pod-spec fields newer than the k8s types it
+  vendors.** argo-workflows v3.5.11 vendors pre-1.30 API types, so
+  `securityContext.appArmorProfile` (a 1.30+ field) is stripped before the pod is
+  created — no validation error, no warning, and the admitted pod simply has no
+  `appArmorProfile`. Downstream (gsap-apl) this read as "the field had no effect":
+  rootless buildkit kept failing `rootlesskit: failed to share mount point: /:
+  permission denied`, because AppArmor mediates the `mount` that the already-set
+  `seccompProfile: Unconfined` does not cover. The workaround is the **legacy
+  annotation** — `container.apparmor.security.beta.kubernetes.io/<container>:
+  unconfined` on `podMetadata.annotations` — which Argo passes through verbatim and
+  k8s 1.33 still honours (`<container>` is `main` for an Argo step). **General rule:
+  when a pod field set through Argo Workflows appears to do nothing, diff the
+  *admitted* pod against your template before debugging the field's semantics — a
+  vendored-types gap looks exactly like a misconfigured value.** Same class as the
+  `apiVersion` drops the `droppedAPIs` guard covers, but on the writer side, so no
+  lint gate can see it.
 
 ### apl-core 5.0.0 integration quirks
 
