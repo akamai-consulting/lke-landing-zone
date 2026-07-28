@@ -509,6 +509,18 @@ func committedTargets(env string, e clusterspec.Environment, id clusterspec.Valu
 		targets[filepath.Join(manifest, c.CarvedApp.AppName+".yaml")] = clusterspec.RenderCarvedApp(c, env, id.RepoURL, revision)
 		targets[filepath.Join(appsDir, "kustomization.yaml")] = clusterspec.RenderCarvedAppKustomization(c, ref, imageTag)
 		for path, content := range carvedPatchTargets(c, appsDir, env, e, ghRepo) {
+			// Assert the SYNTHESIZED values before they can be committed. A derived
+			// value must be empty (a deliberate "unset" a discovery path handles) or
+			// well-formed — never malformed-but-non-empty, the one shape that defeats
+			// every `!= ""` guard downstream. See clusterspec/derived_values.go.
+			if errs := clusterspec.CheckDerivedEnvValues(content); len(errs) > 0 {
+				msg := make([]string, 0, len(errs))
+				for _, err := range errs {
+					msg = append(msg, "  • "+err.Error())
+				}
+				return nil, fmt.Errorf("render %s (env %s, component %s):\n%s",
+					filepath.Base(path), env, c.Name, strings.Join(msg, "\n"))
+			}
 			targets[path] = content
 		}
 	}
