@@ -137,6 +137,11 @@ func ciCmd() *cobra.Command {
 	// seed-harbor-registry-s3); the in-cluster rotator (linodeCredRotator
 	// CronJob, slim llz image) owns rotation after first boot.
 	c.AddCommand(ciMintBootstrapObjkeysCmd(), ciRotateLinodeCredsCmd(), ciTempObjkeyCmd())
+	// The databases root's OpenBao half: copy each Managed Postgres cluster's admin
+	// connection from TF state to secret/platform/db-admin/<name>. Unlike the
+	// object-storage keys above there is nothing to MINT — the credential is the
+	// provider's — so this is a copy, and re-running it heals a stale one.
+	c.AddCommand(ciSeedDBAdminCmd(), ciDBDeclaredCmd(), ciDBSummaryCmd())
 	// In-cluster rotation of the broad account:read_write Linode PAT (LINODE_API_TOKEN):
 	// mint -> seed OpenBao -> publish to each deployment's GitHub env secret (sealed box)
 	// -> revoke old. Runs in a dedicated CronJob, not the reconciler.

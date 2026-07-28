@@ -26,7 +26,7 @@ on:
         type: string
         default: ''
       module:
-        description: 'Target module: cluster | object-storage | all.'
+        description: 'Target module: cluster | object-storage | databases | all.'
         required: false
         type: string
         default: ''
@@ -1018,6 +1018,153 @@ jobs:
 
       - name: Terraform destroy — object-storage
         working-directory: terraform-iac-bootstrap/object-storage
+        env:
+          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          llz ci tf-destroy --var-file="${REGION}.tfvars"
+
+  apply-databases:
+    name: Apply Databases (${{ inputs.region }})
+    # Deliberately NOT run on module=cluster, unlike apply-object-storage. Buckets
+    # are a platform dependency every cluster needs, so that job rides along on a
+    # cluster rebuild; a Managed Postgres cluster is opt-in, BILLED, and takes
+    # ~15min to provision, so it must only ever be created when it was asked for.
+    # Safe on a deployment that declared none: `llz render` omits the `databases`
+    # assignment entirely, the root's default `{}` stands, and the apply is a no-op.
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.action == 'apply' || inputs.action == 'plan') &&
+      (inputs.module == 'databases' || inputs.module == 'all')
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    # Linode Managed Postgres provisioning is slow (HA clusters routinely take
+    # 15+ minutes to leave `provisioning`), and the resource waits for `active`.
+    timeout-minutes: 45
+    env:
+      REGION:                ${{ inputs.region }}
+      ACTION:                ${{ inputs.action }}
+      LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+    steps:
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Terraform init — databases
+        uses: ./.github/actions/terraform-init
+        with:
+          module: databases
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+
+      - name: Terraform plan — databases
+        working-directory: terraform-iac-bootstrap/databases
+        run: |
+          llz ci tf-plan --out plan.txt --title "Databases plan (${REGION})" --lines 40 \
+            -- -var-file="${REGION}.tfvars" -out=tfplan.bin
+
+      - name: Terraform apply — databases
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/databases
+        run: terraform apply -auto-approve tfplan.bin
+
+      # The admin credentials are NOT seeded here: the OpenBao root token only
+      # exists inside llz-bootstrap-openbao.yml's window, so `llz ci seed-db-admin`
+      # runs there. This summary is what tells the operator to go run it.
+      - name: Database summary
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/databases
+        run: llz ci db-summary --region "$REGION" --phase apply
+
+  plan-destroy-databases:
+    name: Plan DESTROY Databases (${{ inputs.region }})
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      (inputs.module == 'databases' || inputs.module == 'all')
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    env:
+      REGION:          ${{ inputs.region }}
+      CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+    steps:
+      # Checkout must precede the destroy-confirm gate — it supplies the TF roots
+      # and the confirm token.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "databases" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — databases
+        uses: ./.github/actions/terraform-init
+        with:
+          module: databases
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+
+      - name: Terraform plan destroy — databases
+        working-directory: terraform-iac-bootstrap/databases
+        env:
+          LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+        run: |
+          llz ci tf-plan --out destroy-plan.txt --title "Databases destroy plan (review before approving destroy job)" --lines 40 \
+            -- -destroy -var-file="${REGION}.tfvars"
+
+      # Unlike a bucket (drainable, and its contents are reproducible platform
+      # telemetry), a destroyed Managed Postgres takes the DATA with it and Linode
+      # keeps no snapshot on delete. Say so where the approver is looking.
+      - name: Data-loss warning
+        run: llz ci db-summary --region "$REGION" --phase destroy-plan
+
+  destroy-databases:
+    name: DESTROY Databases (${{ inputs.region }})
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      inputs.action == 'destroy' &&
+      (inputs.module == 'databases' || inputs.module == 'all')
+    needs: [plan-destroy-databases]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ vars.TF_IMAGE }}
+    environment: infra-${{ inputs.region }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      REGION:          ${{ inputs.region }}
+      CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+    steps:
+      # Checkout must precede the destroy-confirm gate — it supplies the TF roots
+      # and the confirm token.
+      - name: Checkout the instance (TF roots)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Validate destroy confirmation
+        run: llz ci assert-destroy-confirm "$REGION" "databases" "$CONFIRM_DESTROY"
+
+      - name: Terraform init — databases
+        uses: ./.github/actions/terraform-init
+        with:
+          module: databases
+          aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
+          github-token:          ${{ github.token }}
+
+      - name: Terraform destroy — databases
+        working-directory: terraform-iac-bootstrap/databases
         env:
           LINODE_TOKEN:          ${{ secrets.LINODE_API_TOKEN }}
           AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}

@@ -236,19 +236,6 @@ survive the endpoint change; only the admin secret + endpoint move.
 
 ## Remaining work (this branch)
 
-- `tools/cmd/llz/ci_seed_dbadmin.go` — `llz ci seed-db-admin --region`: read the
-  `databases` root's single `connections` output (a map keyed by cluster name,
-  each `{ endpoint, port, username, password, ca }`) and write one
-  `secret/platform/db-admin/<name>` per entry, adding `sslmode=require`;
-  idempotent via a `presentField` + `rotated_at` stamp (mirror
-  `ci_mint_objkeys.go`); register in `ci.go`. It must be a **no-op on an empty
-  map**, so it can run unconditionally on a deployment that declared no databases.
-  Deleting a cluster from the spec does not delete its OpenBao path — decide
-  whether the command prunes orphans or leaves that to an operator.
-- Workflow: `apply-databases` / `plan-destroy-databases` / `destroy-databases` jobs
-  in `llz-terraform.yml` (clone the object-storage jobs, `module: databases`); add
-  `databases` to the `terraform.yml` module choice; add a "Seed DB admin" step to
-  `llz-bootstrap-openbao.yml` (`needs: apply-databases`).
 - `scaffold_spec.go` — emit a commented-out `databases:` block in scaffolded specs
   (commented, because zero clusters is the correct default).
 - `docs/landing-zone-spec.md` / `docs/workflows/llz-terraform.md` — document the
@@ -262,3 +249,36 @@ survive the endpoint change; only the admin secret + endpoint move.
 Done on this branch: `validate.go` now checks `spec.cluster.databases` (key
 format, required region/vpcId/subnetId, region-vs-cluster.region mismatch,
 `clusterSize ∈ {1,2,3}`).
+
+### The seed + workflow wiring, as built
+
+`llz ci seed-db-admin` reads the root's single `connections` output and writes
+`endpoint`, `port`, `username`, `password`, `ca`, `sslmode=require` to
+`secret/platform/db-admin/<name>`, stamped with `rotated_at`. It is a no-op on an
+empty map *and* on a state that has no `connections` output at all, so it is safe
+on a deployment that predates this root.
+
+Two decisions the open questions above left:
+
+- **It updates a stale path; it does not blind-skip one.** `ci_mint_objkeys.go`
+  skips an already-seeded path because re-*minting* would orphan a live Linode
+  key. Nothing is minted here — the credential is the provider's — so the same
+  rule would strand every consumer on a dead credential after a cluster is
+  recreated. The command compares the stored password and rewrites only when it
+  differs. An *unreadable* path still fails closed: overwriting a live credential
+  we failed to read is indistinguishable from a successful rotation.
+- **It never prunes.** Removing a cluster from the spec leaves its OpenBao path.
+  At that moment the cluster usually still exists (the spec edit precedes the
+  destroy), and the admin credential is the only way back into it for a final
+  `pg_dump` — so deleting it automatically would destroy the escape hatch at
+  exactly the wrong time. The destroy-plan step says so where the approver reads.
+
+The workflow jobs mirror object-storage with one deliberate difference:
+`apply-databases` does **not** ride along on `module: cluster`. Buckets are a
+platform dependency every cluster needs; a Managed Postgres is opt-in, billed and
+slow to provision, so it is only ever created when it was asked for.
+
+The bootstrap seed is gated on `llz ci db-declared`, which reads the rendered
+tfvars — exact, because `DatabasesTFVars` omits the `databases` assignment
+entirely when the map is empty. Without the gate, every instance that declares no
+databases would still initialize the root on the critical bootstrap path.
