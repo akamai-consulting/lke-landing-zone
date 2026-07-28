@@ -1,0 +1,33 @@
+# databases — the shared, VPC-attached Linode Managed Postgres for this
+# deployment. Downstream app platforms carve per-app logical DBs + roles out of
+# it (e.g. Crossplane provider-sql), reaching it over the VPC. The admin
+# credentials are seeded into OpenBao at secret/platform/db-admin by
+# `llz ci seed-db-admin` at bootstrap — never committed.
+#
+#   terraform apply -var-file=<env>.tfvars
+#
+# Per-env separation is the backend state key (-backend-config at init), NOT a
+# terraform workspace.
+#
+# Copy to <env>.tfvars (lab | staging | primary | secondary | <your-env>).
+
+# Deployment suffix — must match the matching cluster deployment.
+region_suffix = "your-env"
+
+# Linode region (geographic) — MUST match the region of the VPC below.
+region = "us-ord"
+
+# VPC + subnet to attach the database to (VPC-only, no public endpoint).
+# Typically the same VPC the LKE cluster attaches to (the vpc/ root's outputs).
+#   linode-cli vpcs list        # find the VPC id
+#   linode-cli vpcs subnets-list <vpc_id>
+vpc_id    = 0
+subnet_id = 0
+
+# Engine + sizing (optional — sensible production defaults in the module).
+engine_version = "16"
+db_type        = "g6-dedicated-2"
+cluster_size   = 2
+
+# ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
+#   TF_VAR_linode_token   Linode account API token (databases:read_write)

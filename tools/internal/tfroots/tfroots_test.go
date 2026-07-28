@@ -10,7 +10,7 @@ import (
 // test-local expected data rather than read back from the package (which would
 // make the test echo the implementation). The former cluster-bootstrap root was
 // retired — its in-cluster bootstrap runs natively via `llz ci bootstrap-cluster`.
-var wantRoots = []string{"cluster", "object-storage", "vpc"}
+var wantRoots = []string{"cluster", "databases", "object-storage", "vpc"}
 
 // TestFilesProducesTokenFreeTF is the former TestRenderWritesTokenFreeTF,
 // retargeted at Files (the live API) after the write-to-disk Render half of this

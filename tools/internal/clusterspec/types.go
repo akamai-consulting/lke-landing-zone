@@ -252,6 +252,7 @@ type Cluster struct {
 	PromotionRank       int            `json:"promotionRank,omitempty"`       // promotion_rank
 	Bootstrap           Bootstrap      `json:"bootstrap"`                     // cluster-bootstrap/<env>.tfvars
 	ObjectStorage       ObjectStorage  `json:"objectStorage"`                 // object-storage/<env>.tfvars
+	Databases           Databases      `json:"databases,omitempty"`           // databases/<env>.tfvars
 }
 
 type NodePool struct {
@@ -370,6 +371,22 @@ type AplValues struct {
 	RepoURL  string `json:"repoURL,omitempty"`  // apl_values_repo_url
 	Revision string `json:"revision,omitempty"` // apl_values_repo_revision
 	Username string `json:"username,omitempty"` // apl_values_repo_username
+}
+
+// Databases configures the shared, VPC-attached Linode Managed Postgres for a
+// deployment (databases/<env>.tfvars → terraform-modules/llz-databases). Opt-in:
+// leave it empty and the databases root is simply never applied. When set, the
+// admin credentials are seeded to secret/platform/db-admin by
+// `llz ci seed-db-admin` at bootstrap. VPCID/SubnetID must name a VPC/subnet in
+// Region (a database can only attach to a VPC in its own region — typically the
+// cluster's own VPC).
+type Databases struct {
+	Region        string `json:"region,omitempty"`        // region (geographic — must match the VPC's region)
+	VPCID         int    `json:"vpcId,omitempty"`         // vpc_id
+	SubnetID      int    `json:"subnetId,omitempty"`      // subnet_id
+	EngineVersion string `json:"engineVersion,omitempty"` // engine_version (major, e.g. "16")
+	Type          string `json:"type,omitempty"`          // db_type (e.g. g6-dedicated-2)
+	ClusterSize   int    `json:"clusterSize,omitempty"`   // cluster_size (1 single, 2/3 HA)
 }
 
 type ObjectStorage struct {

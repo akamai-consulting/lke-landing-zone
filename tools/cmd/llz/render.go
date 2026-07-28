@@ -282,6 +282,7 @@ func renderTargets(lz *clusterspec.LandingZone, envs []string, tfDir, aplDir str
 		assigns := map[string][]clusterspec.Assign{
 			"cluster":        clusterspec.ClusterTFVars(e.Cluster),
 			"object-storage": clusterspec.ObjectStorageTFVars(name, e.Cluster),
+			"databases":      clusterspec.DatabasesTFVars(name, e.Cluster),
 		}
 		for _, root := range tfRoots {
 			base, err := tfrootExample(root)

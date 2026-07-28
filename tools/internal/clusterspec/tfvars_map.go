@@ -97,6 +97,38 @@ func NetworkTFVars(name string, v VPC) []Assign {
 	}
 }
 
+// DatabasesTFVars maps spec.cluster.databases onto databases/<env>.tfvars. Like
+// object storage, region_suffix is always the env name; the remaining fields are
+// emitted only when the spec provides them (an unconfigured instance's tfvars is
+// a harmless stub the databases root is simply never applied against).
+// vpc_id/subnet_id/cluster_size are HCL numbers (unquoted).
+func DatabasesTFVars(env string, c Cluster) []Assign {
+	var a []Assign
+	add := func(k, v string) { a = append(a, Assign{k, v}) }
+
+	add("region_suffix", hclStr(env))
+	d := c.Databases
+	if d.Region != "" {
+		add("region", hclStr(d.Region))
+	}
+	if d.VPCID != 0 {
+		add("vpc_id", strconv.Itoa(d.VPCID))
+	}
+	if d.SubnetID != 0 {
+		add("subnet_id", strconv.Itoa(d.SubnetID))
+	}
+	if d.EngineVersion != "" {
+		add("engine_version", hclStr(d.EngineVersion))
+	}
+	if d.Type != "" {
+		add("db_type", hclStr(d.Type))
+	}
+	if d.ClusterSize != 0 {
+		add("cluster_size", strconv.Itoa(d.ClusterSize))
+	}
+	return a
+}
+
 // ObjectStorageTFVars maps spec.cluster.objectStorage onto object-storage/<env>.tfvars.
 func ObjectStorageTFVars(env string, c Cluster) []Assign {
 	var a []Assign

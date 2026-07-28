@@ -62,7 +62,7 @@ func instanceLayout() (tfDir, aplDir, relPrefix string) {
 	return "terraform-iac-bootstrap", "apl-values", ""
 }
 
-var tfRoots = []string{"cluster", "object-storage"}
+var tfRoots = []string{"cluster", "object-storage", "databases"}
 
 // validateOBJCluster catches a value that isn't shaped like a Linode OBJ cluster
 // id. The shape rule lives in internal/validate (OBJClusterID) so the LandingZone
