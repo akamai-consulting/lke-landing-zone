@@ -165,3 +165,13 @@ Onboarding is complete when you've ticked every box in the checklist above AND y
 - An Argo CD sync of a non-trivial PR.
 
 If any of those haven't happened in your first 30 days, ask to be paired into one — these are the muscle-memory operations that the playbooks alone can't teach.
+
+---
+
+## Next: run something on it
+
+This checklist gets you *access to* the platform. Putting your own application on it
+is a different set of contracts — which Harbor project, why nothing hands your
+namespace an imagePullSecret, where an app's secrets have to live for External
+Secrets to read them. Those are walked end to end in
+[**Run your first workload**](first-workload.md).
