@@ -176,8 +176,15 @@ shellcheck:
 # per-env instance roots live under instance-template/terraform-iac-bootstrap/ and are
 # scaffolding (placeholders + git:: tags that resolve only after publishing), so
 # they are not linted here.
+# NOTE: this is an explicit list, not a terraform-modules/* glob, so a NEW module
+# is unguarded until it is added here — tf-fmt-check, tf-lint, tf-validate and
+# checkov all iterate it. llz-databases shipped needing a `sensitive = true` its
+# absence from this list hid (the provider marks root_username sensitive, which is
+# a hard validate error only when the module is validated AS a root — which is
+# exactly what tf-validate does). Add every new module.
 TF_DIRS := $(wildcard terraform-modules/llz-cluster \
-                      terraform-modules/llz-object-storage)
+                      terraform-modules/llz-object-storage \
+                      terraform-modules/llz-databases)
 
 tf-fmt:
 	@for d in $(TF_DIRS); do tofu fmt "$$d"; done

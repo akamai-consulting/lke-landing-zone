@@ -58,6 +58,40 @@ spec:
 Managed DB otherwise ships a public `g2a.akamaidb.net` endpoint (TLS-only, but
 internet-reachable). VPC-only matches the platform's security posture.
 
+## Consuming it: four things Linode Managed Postgres does differently
+
+This module hands over a cluster; a downstream layer (Crossplane `provider-sql`
+in gsap-apl's case) carves per-app databases out of it. Each of the following cost
+that build-out a debugging cycle, and none is guessable from the provider docs —
+they are properties of the **Aiven-backed** platform Linode runs, not of Postgres.
+
+1. **There is no `postgres` maintenance database.** The bootstrap DB is
+   **`defaultdb`**. `provider-sql`'s `ProviderConfig` defaults to connecting to
+   `postgres`, so it fails to connect at all until you set
+   `defaultDatabase: defaultdb`. The failure surfaces as a connection error against
+   a database name you never chose.
+
+2. **The app's role must OWN its database.** On PostgreSQL 15+ the `public` schema
+   is no longer writable by non-owners, so a database created by the admin user
+   (`akmadmin`) with only a database-level `GRANT ALL` to the app role still fails
+   the app's first `CREATE TABLE` with `permission denied for schema public`. Set
+   the database's `owner` to the app's own role — it then owns `public` via
+   `pg_database_owner`. That is also the right least-privilege line: each app fully
+   owns its schema and never touches the admin's.
+
+3. **The CA is base64-encoded.** `ca_cert` (seeded as `ca`) must be decoded before
+   it is written to a trust file. Connect with `sslmode=require` at minimum;
+   `verify-full` needs the decoded CA.
+
+4. **The admin username is fixed** (`akmadmin`) and the provider marks it
+   sensitive — which is why this module's `root_username` output carries
+   `sensitive = true`. `terraform output -json` still reads it, so
+   `llz ci seed-db-admin` is unaffected.
+
+Points 1–3 are consumer-side, so they belong to whatever layer carves the logical
+databases — but they are recorded here because this is the doc someone reads
+*before* building that layer.
+
 ## Migration: existing public cluster → VPC (gsap-apl `gsap-postgres`, id 490457)
 
 The live `gsap-postgres` cluster is **public, non-VPC**, Aiven-platform

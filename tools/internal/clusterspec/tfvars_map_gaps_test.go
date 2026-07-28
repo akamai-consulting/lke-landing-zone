@@ -125,3 +125,45 @@ func TestObjectStorageTFVars(t *testing.T) {
 		t.Error("obj_cluster should be omitted when unset")
 	}
 }
+
+// TestDatabasesTFVars pins the two shapes that matter for an OPT-IN root.
+//
+// Unconfigured is the common case and the load-bearing one: `llz render` writes a
+// databases/<env>.tfvars for every env whether or not the instance wants a
+// database, so the stub must carry region_suffix and NOTHING else. Emitting an
+// empty vpc_id/subnet_id (0) instead of omitting them would hand the root a
+// syntactically valid tfvars naming VPC 0 — an apply against the wrong thing
+// rather than a loud "you never configured this".
+func TestDatabasesTFVars(t *testing.T) {
+	var c Cluster
+	c.Databases = Databases{
+		Region: "us-ord", VPCID: 575244, SubnetID: 12345,
+		EngineVersion: "16", Type: "g6-dedicated-2", ClusterSize: 2,
+	}
+	full := assignKeys(DatabasesTFVars("prod", c))
+	for k, want := range map[string]string{
+		"region_suffix":  `"prod"`,
+		"region":         `"us-ord"`,
+		"engine_version": `"16"`,
+		"db_type":        `"g6-dedicated-2"`,
+		// HCL numbers — unquoted, or the number-typed variables reject them.
+		"vpc_id":       "575244",
+		"subnet_id":    "12345",
+		"cluster_size": "2",
+	} {
+		if got := full[k]; got != want {
+			t.Errorf("DatabasesTFVars(full)[%q] = %q, want %q", k, got, want)
+		}
+	}
+
+	// Unconfigured (no spec.cluster.databases): the stub, region_suffix only.
+	min := assignKeys(DatabasesTFVars("dev", Cluster{}))
+	if got := min["region_suffix"]; got != `"dev"` {
+		t.Errorf("region_suffix must always be emitted, got %q", got)
+	}
+	for _, k := range []string{"region", "vpc_id", "subnet_id", "engine_version", "db_type", "cluster_size"} {
+		if _, ok := min[k]; ok {
+			t.Errorf("%q must be omitted when the spec does not configure databases", k)
+		}
+	}
+}

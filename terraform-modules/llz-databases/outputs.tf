@@ -24,8 +24,14 @@ output "port" {
 }
 
 output "root_username" {
-  description = "Admin username. Seeded to secret/platform/db-admin as `username`."
+  description = "Admin username (`akmadmin` on the Aiven-backed platform). Seeded to secret/platform/db-admin as `username`."
   value       = linode_database_postgresql_v2.shared.root_username
+  # The provider marks root_username sensitive, so re-exporting it unmarked is a
+  # hard `tofu validate` error ("Output refers to sensitive values") whenever this
+  # module is validated as a root — which `make tf-validate` does. Not a secret in
+  # any real sense (it is a fixed platform username), but the annotation is
+  # required, and `terraform output -json` still reads it for `llz ci seed-db-admin`.
+  sensitive = true
 }
 
 output "root_password" {
