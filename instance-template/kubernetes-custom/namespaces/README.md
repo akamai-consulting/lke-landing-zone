@@ -12,6 +12,8 @@ namespaces/
     service.yaml
     networkpolicy.yaml
     externalsecret.yaml   # the openbao ClusterSecretStore is ready at wave 10
+                          #   — external-secrets.io/v1, key under a spec.teams
+                          #     subtree (see ../README.md "Secrets")
   argocd/                 # → your own Argo CD Application CRs live here
     my-helm-app.yaml
 ```

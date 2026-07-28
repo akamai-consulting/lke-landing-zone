@@ -57,6 +57,51 @@ namespaces, and the default-deny NetworkPolicies already being up.
   tag. The trade: there's no pin to roll back to, so that branch's PR review is the
   gate. Deliberate; see `docs/extending-llz.md` in the template repo.
 
+## Secrets: put them under a team subtree
+
+Your `ExternalSecret`s resolve through the platform's `openbao` ClusterSecretStore,
+whose read identity is **not** an all-of-OpenBao grant. It can read:
+
+- a fixed **platform** allowlist (`harbor/*`, `linode/*`, `infra/*`, … — LLZ's own
+  paths, and not yours to add to from here), plus
+- the subtree of **every team declared in `spec.teams`** (`openbaoSubtree`, e.g.
+  `secret/platform`), which `llz ci bao-configure` grants a reader policy on.
+
+So a `remoteRef.key` outside those — `myapp/db-password`, say — is a **403 at sync
+time**, not a missing-path error, and the Secret is simply never created. Downstream
+pods then sit in `CreateContainerConfigError` with nothing pointing back at OpenBao.
+Name your paths under a declared team's subtree and the grant already covers them:
+
+```yaml
+apiVersion: external-secrets.io/v1     # v1, NOT v1beta1 — apl-core v6's ESO
+kind: ExternalSecret                   # stopped serving v1beta1 (`llz lint` fails on it)
+metadata:
+  name: myapp
+  namespace: my-app
+spec:
+  secretStoreRef: { name: openbao, kind: ClusterSecretStore }
+  target: { name: myapp, creationPolicy: Owner }
+  data:
+    - secretKey: db-password
+      # secret/platform/* — the `platform` team's subtree, which ESO can read.
+      remoteRef: { key: platform/myapp, property: db-password }
+```
+
+Seed it with the team credential, not a root token:
+
+```console
+$ eval "$(llz openbao login --team platform)"
+$ llz openbao set secret/platform/myapp db-password=... --yes
+```
+
+Declaring a team **later** does not retroactively grant the reader policy — that
+needs a re-configure. See `docs/runbooks/openbao-team-login.md` ("Retrofit …").
+
+> **Confidentiality caveat:** the per-team reader policies sit on ONE shared ESO
+> identity, so any namespace's ExternalSecret can read any team's subtree. The
+> subtree split is about *reachability*, not isolation. The **write** side is
+> properly per-team (each `<name>-writer` binds that team's own Keycloak group).
+
 ## Helm / OCI charts
 
 Drop an Argo CD `Application` pointing at a chart into the right directory. It rides
