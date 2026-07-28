@@ -113,7 +113,7 @@ jobs:
           | Goal | Run |
           |---|---|
           | **Apply** a deployment | `llz build <env> --yes` (or `llz up <env> --yes`) |
-          | **Preview** a change | open a pull request → `terraform plan` runs per deployment |
+          | **Preview** a change | open a pull request → `tofu plan` runs per deployment |
 
           See `docs/quickstart.md` §4.
           SUMMARY
@@ -942,7 +942,7 @@ jobs:
           fi
           "$S5CMD" version
 
-          # Read ALL outputs as one JSON blob. NOT `terraform output -raw`: on
+          # Read ALL outputs as one JSON blob. NOT `tofu output -raw`: on
           # empty state that leaks TF's "Warning: No outputs found" text into the
           # captured value, which then corrupts bucket names and endpoint URLs.
           # `-json` returns a clean `{}` instead.

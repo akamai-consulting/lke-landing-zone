@@ -28,7 +28,7 @@ inputs:
   github-token:
     description: >
       Token used to fetch first-party git:: Terraform module sources that the
-      cluster root references (the kubeconfig fetch runs `terraform init`, which
+      cluster root references (the kubeconfig fetch runs `tofu init`, which
       clones those modules). Defaults to the workflow token; the first-party
       modules are public, so the default suffices.
     required: false
@@ -44,7 +44,7 @@ runs:
   steps:
     # The cluster root pulls its modules from
     #   git::ssh://git@<host>/<org>/<repo>.git//terraform-modules/<name>?ref=<tag>
-    # and the CI container has no SSH key, so `terraform init` below would fail
+    # and the CI container has no SSH key, so `tofu init` below would fail
     # with "Failed to download module". The shared git-auth script (trust paths +
     # rewrite SSH→HTTPS via github-token) fixes that; it is the same logic
     # terraform-init uses, sourced from one place.

@@ -56,7 +56,7 @@ runs:
     #   git::ssh://git@<host>/<org>/<repo>.git//terraform-modules/<name>?ref=<tag>
     # (the published, SemVer-tagged reuse units — see terraform-modules/RELEASING.md).
     # The CI container has no SSH key for <host> and the bind-mounted workspace
-    # trips git's dubious-ownership guard, so `terraform init`'s module clones
+    # trips git's dubious-ownership guard, so `tofu init`'s module clones
     # would fail. The shared git-auth script (trust paths + rewrite SSH→HTTPS)
     # fixes both; it lives once and is shared with fetch-kubeconfig.
     - name: Authenticate git for published module sources
