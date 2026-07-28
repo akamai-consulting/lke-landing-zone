@@ -428,7 +428,7 @@ jobs:
       # Fall back to the image build-images.yml publishes under this repo's owner
       # when TF_IMAGE isn't set, so CI works on a fresh fork with no repo
       # variables. (Owner must be lowercase for GHCR — true for org logins.)
-      image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-terraform:1.12.5', github.repository_owner) }}
+      image: ${{ vars.TF_IMAGE || format('ghcr.io/{0}/ci-tofu:1.12.5', github.repository_owner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

@@ -40,7 +40,7 @@ checks, so a fresh container reports green tooling out of the box:
 | `actionlint`, `shellcheck` | workflow + script linting |
 | `argo` | inspecting the cert-automation / OpenBao Argo workflows |
 
-Tool versions track the `ci-terraform` / `ci-kubernetes` images, so what passes
+Tool versions track the `ci-tofu` / `ci-kubernetes` images, so what passes
 locally passes in CI.
 
 `llz` is **built into the image** from the same template commit, so it's on your

@@ -42,7 +42,7 @@ flowchart LR
         direction TB
         TF["terraform-modules/<br/>cluster · object-storage"]
         CH["kubernetes-charts/<br/>first-party Helm charts"]
-        IMG["dockerfiles/<br/>ci-terraform · ci-kubernetes · devcontainer · llz"]
+        IMG["dockerfiles/<br/>ci-tofu · ci-kubernetes · devcontainer · llz"]
         CLI["tools/ — the llz CLI (Go)"]
         WF["reusable workflows + instance-template/ scaffold"]
     end
@@ -141,13 +141,13 @@ Multi-arch (amd64 + arm64) images built by
 [`.github/workflows/build-images.yml`](.github/workflows/build-images.yml)
 and pushed to `ghcr.io/akamai-consulting/*`. All of them are targets of the
 single [`dockerfiles/Dockerfile`](dockerfiles/Dockerfile) (`--target
-ci-terraform`, `ci-kubernetes`, `devcontainer`, `llz`), which builds the `llz`
+ci-tofu`, `ci-kubernetes`, `devcontainer`, `llz`), which builds the `llz`
 binary once and downloads each third-party CLI once from one set of version
 pins — so the images cannot drift from each other:
 
 | Image | Contents |
 |---|---|
-| `ghcr.io/akamai-consulting/ci-terraform` | Terraform + linters + the `llz` CI binary (built from `tools/`) |
+| `ghcr.io/akamai-consulting/ci-tofu` | Terraform + linters + the `llz` CI binary (built from `tools/`) |
 | `ghcr.io/akamai-consulting/ci-kubernetes` | `kubectl`, `helm`, kustomize, kube linters |
 | `ghcr.io/akamai-consulting/devcontainer` | Adopter-workstation image for an instance's [Dev Container](docs/devcontainer.md) — the full `llz doctor` toolchain (terraform, kubectl, helm, bao, copier, gh, linode-cli) + linters |
 | `ghcr.io/akamai-consulting/llz` | Distroless runtime carrying only the static `llz` binary — for in-cluster workloads (the credential-rotator CronJob) and the instance CI jobs |

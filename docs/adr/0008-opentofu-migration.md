@@ -7,7 +7,7 @@ Status: **accepted**.
 The repo has been running two different tools and calling them one thing.
 
 - **CI** ran HashiCorp Terraform **1.9.8**, installed by `dockerfiles/Dockerfile`
-  from `releases.hashicorp.com` into the `ci-terraform` image as
+  from `releases.hashicorp.com` into the `ci-terraform` image (now `ci-tofu`) as
   `/usr/local/bin/terraform`. No `tofu` binary was in that image.
 - **Everything else assumed OpenTofu.** The Makefile's `tf-fmt`/`tf-fmt-check`
   invoke `tofu` directly (and `tf-fmt-check` is deliberately excluded from
@@ -31,7 +31,7 @@ Terraform operation, not a degraded feature.
 ## Decision
 
 **Run OpenTofu 1.12.5 everywhere.** `dockerfiles/Dockerfile` installs it into the
-`ci-terraform` and `devcontainer` images as `tofu`.
+`ci-tofu` and `devcontainer` images as `tofu`.
 
 ### Installed as `tofu`, with no `terraform` symlink
 
@@ -80,8 +80,29 @@ actually installed.
 - **Adopter instances with custom Terraform steps break** until they switch to
   `tofu`. That is intended (see the symlink decision) and must be called out in
   the upgrade notes.
-- The `ci-terraform` image name is now a mild misnomer. Renaming it would churn
-  `vars.TF_IMAGE` on every instance for cosmetics; left as-is deliberately.
+- **The image is renamed `ci-terraform` → `ci-tofu`.** An earlier draft of this
+  ADR kept the old name, reasoning that renaming would churn `vars.TF_IMAGE` for
+  cosmetics. That was wrong on both counts: the name would have been actively
+  misleading (grep `terraform`, find an image without it), and the churn is
+  avoidable — build-images publishes ONE build under BOTH names for a deprecation
+  window, so an un-updated pin keeps resolving to the current image instead of
+  silently rotting on the last `ci-terraform` push.
+
+  The alias is signed too. cosign stores a signature as a `sha256-<digest>.sig`
+  tag inside the repository it was pushed to, so signing `ci-tofu` does not cover
+  `ci-terraform` even though both names resolve to the same manifest.
+
+  The **variable** `TF_IMAGE` keeps its name — it is set in every adopter repo,
+  so renaming it would break exactly the instances the aliasing exists to
+  protect. Only the image it points at changed.
+
+  A third restatement of the version pin turned up during the rename, beyond the
+  two the Dockerfile header names: `ciTerraformTag` in `tools/cmd/llz/tokens.go`,
+  which computes the default `TF_IMAGE` for newly scaffolded instances. It was
+  still `1.9.8`, so a new instance would have been scaffolded onto a HashiCorp
+  Terraform image while every caller invoked `tofu`. It is now `ciTofuTag`. The
+  header's "a guard verb is the obvious follow-up" remains the right follow-up,
+  and now has three literals to check rather than two.
 - #354 (state + plan encryption at rest) is **unblocked** — the `encryption`
   block it needs exists only in OpenTofu, and this is its prerequisite.
 - `TF_VERSION` → `TOFU_VERSION`, and the version-named image tags in

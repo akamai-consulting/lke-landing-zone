@@ -33,7 +33,7 @@ func e2eRequirements(admin bool) []requirement {
 		{"APL_VALUES_REPO_TOKEN", true, true, true, false, "GitHub fine-grained PAT, Contents:write (values+apps repo)"},
 		{"TF_STATE_BUCKET", false, false, true, false, "state bucket name (created)"},
 		{"TF_STATE_ENDPOINT", false, false, true, false, "S3 endpoint of the chosen cluster"},
-		{"TF_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-terraform:<tag> (computed)"},
+		{"TF_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-tofu:<tag> (computed)"},
 		{"KUBE_IMAGE", false, false, true, false, "ghcr.io/<org>/ci-kubernetes:<tag> (computed)"},
 		{"LINODE_DNS_TOKEN", true, true, false, false, "Linode Domains:RW (cert DNS-01)"},
 		{"HARBOR_URL", false, false, false, false, "Harbor base URL"},

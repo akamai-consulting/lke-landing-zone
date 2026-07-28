@@ -48,7 +48,7 @@ scaffold generator that a downstream instance repo consumes.
 terraform-modules/   Reusable TF modules; published as git:: tagged sources (see RELEASING.md)
 kubernetes-charts/   First-party Helm charts; published to GHCR as OCI artifacts
 tools/               Native Go module: llz (adopter CLI + CI plumbing). firewall-cidrs/firewall-controller moved to the private lke-landing-zone-internal repo
-dockerfiles/         Container images (ci-terraform, ci-kubernetes, devcontainer) → ghcr.io/akamai-consulting/*
+dockerfiles/         Container images (ci-tofu, ci-kubernetes, devcontainer) → ghcr.io/akamai-consulting/*
 template-scripts/    stamp/drift scaffold provenance, git hooks, ci helpers
 instance-template/   Genericized starter material a downstream instance repo instantiates
 docs/                adopter-guide.md, agents.md
@@ -114,8 +114,8 @@ load-bearing.
 
 ### Container images (`.github/workflows/build-images.yml`)
 
-- `ci-terraform`, `ci-kubernetes`, `devcontainer` build multi-arch (amd64 +
-  arm64) to `ghcr.io/akamai-consulting/*`. `ci-terraform` builds the `llz` Go
+- `ci-tofu`, `ci-kubernetes`, `devcontainer` build multi-arch (amd64 +
+  arm64) to `ghcr.io/akamai-consulting/*`. `ci-tofu` builds the `llz` Go
   binary from the `tools/` module (supplied via
   `--build-context tools-src=tools`) in a multi-stage build.
 - `devcontainer` is the adopter-workstation image consumed by an instance's

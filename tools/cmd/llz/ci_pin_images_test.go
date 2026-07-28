@@ -9,7 +9,7 @@ import (
 )
 
 func TestImageRef(t *testing.T) {
-	const base, sha = "ghcr.io/akamai-consulting/ci-terraform", "abc123"
+	const base, sha = "ghcr.io/akamai-consulting/ci-tofu", "abc123"
 	if got := imageRef(base, sha, true); got != base+":sha-abc123" {
 		t.Errorf("built: imageRef = %q, want sha- tag", got)
 	}
@@ -103,7 +103,7 @@ func TestRunPinInstanceImages(t *testing.T) {
 	}
 	joined := strings.Join(*setVars, "\n")
 	for _, want := range []string{
-		"variable set TF_IMAGE --repo akamai-consulting/lke-landing-zone-example --body ghcr.io/akamai-consulting/ci-terraform:sha-deadbeef",
+		"variable set TF_IMAGE --repo akamai-consulting/lke-landing-zone-example --body ghcr.io/akamai-consulting/ci-tofu:sha-deadbeef",
 		"variable set KUBE_IMAGE --repo akamai-consulting/lke-landing-zone-example --body ghcr.io/akamai-consulting/ci-kubernetes:sha-deadbeef",
 	} {
 		if !strings.Contains(joined, want) {
@@ -116,7 +116,7 @@ func TestRunPinInstanceImages(t *testing.T) {
 	if err := runPinInstanceImages(baseOpts()); err != nil {
 		t.Fatalf("latest flow: %v", err)
 	}
-	if !strings.Contains(strings.Join(*setVars, "\n"), "ci-terraform:latest") {
+	if !strings.Contains(strings.Join(*setVars, "\n"), "ci-tofu:latest") {
 		t.Errorf("no-build flow should pin :latest, got %v", *setVars)
 	}
 
@@ -163,7 +163,7 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	if triggeredSha != "deadbeef" {
 		t.Errorf("build must target the exact sha, got %q", triggeredSha)
 	}
-	if !strings.Contains(strings.Join(*setVars, "\n"), "ci-terraform:sha-deadbeef") {
+	if !strings.Contains(strings.Join(*setVars, "\n"), "ci-tofu:sha-deadbeef") {
 		t.Errorf("should pin the sha image after the triggered build, got %v", *setVars)
 	}
 
@@ -211,7 +211,7 @@ func TestRunPinInstanceImagesBuildIfMissing(t *testing.T) {
 	if branchRef != "feat/x" {
 		t.Errorf("branch: expected a build triggered on ref feat/x, got %q", branchRef)
 	}
-	if !strings.Contains(strings.Join(*setVars2, "\n"), "ci-terraform:sha-deadbeef") {
+	if !strings.Contains(strings.Join(*setVars2, "\n"), "ci-tofu:sha-deadbeef") {
 		t.Errorf("branch: should pin the sha image (not :latest), got %v", *setVars2)
 	}
 	if strings.Contains(strings.Join(*setVars2, "\n"), ":latest") {

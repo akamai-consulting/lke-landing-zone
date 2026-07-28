@@ -1,15 +1,16 @@
 # Every container image this repo publishes, as one multi-stage build.
 #
 # Targets (build with `--target <name>`, see .github/workflows/build-images.yml):
-#   ci-terraform   — Terraform/IaC CI image (ghcr.io/<org>/ci-terraform)
+#   ci-tofu        — OpenTofu/IaC CI image (ghcr.io/<org>/ci-tofu; also published
+#                    as ci-terraform for a deprecation window)
 #   ci-kubernetes  — Kubernetes lint/validate CI image (ghcr.io/<org>/ci-kubernetes)
 #   devcontainer   — adopter workstation image (ghcr.io/<org>/devcontainer)
 #   llz            — slim distroless in-cluster image (ghcr.io/<org>/llz)
 #
 # WHY ONE FILE. These were four Dockerfiles that each re-implemented the same
 # work: an identical Go build stage (4 copies), and the same download-verify-
-# extract blocks for helm/kubectl/terraform/… (Helm and kubectl were triplicated).
-# Worse, every tool version was pinned in 2-3 separate `ARG`s plus, for terraform
+# extract blocks for helm/kubectl/tofu/… (Helm and kubectl were triplicated).
+# Worse, every tool version was pinned in 2-3 separate `ARG`s plus, for the IaC
 # and kubectl, a hardcoded image tag in build-images.yml — with a "kept in
 # lockstep" comment and NOTHING enforcing it. A missed copy did not fail; it
 # silently shipped a devcontainer whose helm differed from CI's.
@@ -259,7 +260,7 @@ RUN apt-get update -qq && \
 # In container jobs the workspace is bind-mounted with the runner user's
 # ownership, which differs from the UID git runs as inside this container, so
 # git trips its "detected dubious ownership" guard (>= 2.35.2). Trust every path
-# system-wide for this ephemeral CI user so `terraform init` module clones and
+# system-wide for this ephemeral CI user so `tofu init` module clones and
 # any `git` step proceed — formerly set ad hoc by the gh-install steps and
 # git-auth.sh; baked here so it holds regardless of step order.
 RUN git config --system --add safe.directory '*'
@@ -321,7 +322,7 @@ COPY --from=toolbox /out/bin/yq          /usr/local/bin/yq
 COPY --from=gotools /out/llz /usr/local/bin/llz
 
 # ── devcontainer ──────────────────────────────────────────────────────────────
-# The "adopter workstation in a box": every CLI `llz doctor` checks (terraform,
+# The "adopter workstation in a box": every CLI `llz doctor` checks (tofu,
 # kubectl, helm, bao, copier, gh, linode-cli, jq, ssh-keygen) plus the lint stack
 # (tflint, kustomize, kube-linter, kubeconform, checkov, actionlint, shellcheck,
 # yq, argo), so "Reopen in Container" gives a full toolchain with nothing
@@ -330,7 +331,7 @@ COPY --from=gotools /out/llz /usr/local/bin/llz
 # Silicon).
 #
 # Tool versions match the CI images BY CONSTRUCTION — the binaries below are
-# copied from the same `toolbox` stage ci-terraform/ci-kubernetes copy from, so
+# copied from the same `toolbox` stage ci-tofu/ci-kubernetes copy from, so
 # local checks cannot drift from CI.
 FROM mcr.microsoft.com/devcontainers/base:bookworm AS devcontainer
 

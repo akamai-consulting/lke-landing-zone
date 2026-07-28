@@ -47,7 +47,7 @@ Prefer these over reimplementing their logic inline:
 | Action | Purpose |
 |--------|---------|
 | `./.github/actions/setup-llz` | Sets up Go (version from `tools/go.mod`) and builds the `llz` CLI onto `PATH`. The repo's only composite action — use it instead of a hand-rolled `setup-go` + `go build` pair. `actions/setup-go` should appear nowhere else. |
-| `ghcr.io/<owner>/ci-terraform` | CI image with terraform, tflint, helm, kubectl, kustomize, checkov (bundles the `firewall-cidrs` Go binary) |
+| `ghcr.io/<owner>/ci-tofu` | CI image with terraform, tflint, helm, kubectl, kustomize, checkov (bundles the `firewall-cidrs` Go binary) |
 
 The one deliberate exception to `setup-llz` is `llz-release.yml`, which hand-rolls
 its `go build` to stamp the real release version via `-ldflags` — something the
@@ -64,7 +64,7 @@ On GitHub-hosted runners, install CLI tools with the official marketplace setup 
 | yq | `dcarbone/install-yq-action` |
 | kind (+ cluster) | `helm/kind-action` |
 
-Pin the version from the workflow `env:` block, e.g. `version: v${{ env.HELM_VERSION }}`, so the tool version stays reproducible. Tools consumed inside the `ci-terraform` / `ci-kubernetes` container images are already baked into those images — don't re-install them. In particular `ci-terraform` ships `gh` and the prebuilt Go CLIs (`llz`, `firewall-cidrs`) on `PATH`, so `TF_IMAGE` jobs call them directly with no `setup-go`/`go build`/`install-*` step.
+Pin the version from the workflow `env:` block, e.g. `version: v${{ env.HELM_VERSION }}`, so the tool version stays reproducible. Tools consumed inside the `ci-tofu` / `ci-kubernetes` container images are already baked into those images — don't re-install them. In particular `ci-tofu` ships `gh` and the prebuilt Go CLIs (`llz`, `firewall-cidrs`) on `PATH`, so `TF_IMAGE` jobs call them directly with no `setup-go`/`go build`/`install-*` step.
 
 **Carve-out — do not "clean up" `setup-llz` inside a container job.** A PR that
 changes `tools/` runs BEFORE the image carrying that change is rebuilt, and the
