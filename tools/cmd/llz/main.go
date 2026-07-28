@@ -334,7 +334,7 @@ func envCmd() *cobra.Command {
 	}
 	f := add.Flags()
 	f.StringVar(&o.templateEnv, "template-env", "example", "template env to clone")
-	f.StringVar(&o.region, "region", "", "Linode region for cluster/<env>.tfvars (e.g. us-sea)")
+	f.StringVar(&o.region, "region", "", "GEOGRAPHIC Linode region, e.g. us-sea — not the deployment name (that is the positional <env>)")
 	f.StringVar(&o.regionShort, "region-short", "", "3-letter REGION_SHORT for volume labels (default: first 3 chars of <env>)")
 	f.StringVar(&o.clusterDomain, "cluster-domain", "", "base domain → cluster.domainSuffix (default: <env>.internal)")
 	f.StringVar(&o.objCluster, "obj-cluster", "", "Linode Object Storage cluster (e.g. us-sea-1)")

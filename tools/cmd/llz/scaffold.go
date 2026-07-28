@@ -106,8 +106,16 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	if o.region == "" {
 		return fmt.Errorf("--region is required (the spec's cluster.region)")
 	}
-	if err := validateOBJCluster(o.objCluster); err != nil {
-		return fmt.Errorf("--obj-cluster: %w", err)
+	// Derive/check obj-cluster against the account rather than making the operator
+	// invent it. Best-effort: with no LINODE_TOKEN this is exactly the old
+	// shape-only validation. See objcluster_resolve.go for why the id matters.
+	resolved, note, err := resolveOBJCluster(o.objCluster, o.region)
+	if err != nil {
+		return err
+	}
+	o.objCluster = resolved
+	if note != "" {
+		fmt.Printf("  %s\n", note)
 	}
 	dryRun := o.dryRun || g.dryRun
 
