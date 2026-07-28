@@ -19,6 +19,19 @@ output "vpc_id" {
   value       = module.cluster.vpc_id
 }
 
+# The module has exposed vpc_subnet_id since it was written; the root never
+# re-exported it, which was harmless while nothing outside the cluster attached to
+# the subnet. The `databases` root changed that: spec.cluster.databases.<name>
+# REQUIRES subnetId, and without this output the only way to fill it is
+# `linode-cli vpcs subnets-list <vpc_id>` — an out-of-band lookup for a value
+# Terraform already holds, which is how a spec ends up with a stale or wrong id.
+# Pairs with vpc_id above: `terraform output vpc_id`/`vpc_subnet_id` in the
+# cluster workspace gives both fields the databases spec needs.
+output "vpc_subnet_id" {
+  description = "The ID of the VPC subnet the cluster's nodes attach to. Fills spec.cluster.databases.<name>.subnetId — a Managed Database attaches to a subnet of the VPC in vpc_id."
+  value       = module.cluster.vpc_subnet_id
+}
+
 output "node_firewall_id" {
   description = "The ID of the Linode Cloud Firewall attached to the LKE node pool."
   value       = module.cluster.node_firewall_id
