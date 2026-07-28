@@ -22,8 +22,10 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/forge"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/spf13/cobra"
@@ -47,12 +49,51 @@ type tokenEntry struct {
 	State    string `json:"state"`
 }
 
+// secretEntry is one GitHub Actions secret's WRITE time — the age signal for
+// credentials that have no expiry to read and cannot live in OpenBao (the
+// state-backend key pair, the state-encryption passphrase). Metadata only:
+// GitHub Actions secrets are write-only over the API, so there is no value to
+// carry even if we wanted to. UpdatedAt is RFC3339; empty means "not configured".
+type secretEntry struct {
+	Name      string `json:"name"`
+	Scope     string `json:"scope"` // repo | infra-<deployment>
+	UpdatedAt string `json:"updated_at,omitempty"`
+	Class     string `json:"class"` // rotation class for the age gauge
+	State     string `json:"state"`
+}
+
 // tokenInventory is the ConfigMap payload the reconciler reads (data["inventory.json"]).
 type tokenInventory struct {
-	Updated int64        `json:"updated"` // unix time the inventory was written (heartbeat)
-	Region  string       `json:"region,omitempty"`
-	Tokens  []tokenEntry `json:"tokens"`
+	Updated int64         `json:"updated"` // unix time the inventory was written (heartbeat)
+	Region  string        `json:"region,omitempty"`
+	Tokens  []tokenEntry  `json:"tokens"`
+	Secrets []secretEntry `json:"secrets,omitempty"`
 }
+
+// ghSecretTargets are the credentials measured by WRITE TIME rather than expiry.
+// They have no expiry (an Object Storage key pair and a passphrase), and they
+// cannot be tracked the usual way — via an OpenBao `updated_time` — because
+// OpenBao runs inside the cluster whose state these very credentials guard. See
+// docs/adr/0009.
+var ghSecretTargets = []struct {
+	name  string
+	class string
+}{
+	// Operator-dispatchable via secret-rotation.yml scope=tf-state-key.
+	{"TF_STATE_ACCESS_KEY", credClassOnDemand},
+	{"TF_STATE_SECRET_KEY", credClassOnDemand},
+	// Rotatable since the state-passphrase rollover landed: scope=state-passphrase
+	// re-keys every root, so its age IS actionable and belongs on the 90d SLA
+	// rather than the yearly nudge it would get as `static`.
+	{"TF_STATE_ENCRYPTION_PASSPHRASE", credClassOnDemand},
+}
+
+// The class is the SAME vocabulary the OpenBao age sampler uses
+// (reconcile_openbao.go), deliberately: these series are published as
+// llz_credential_age_days too, so LLZCredentialRotationOverdue picks them up with
+// no rule change. `on-demand` is right for all three — each has an operator-
+// dispatchable rotation path (secret-rotation.yml scopes `tf-state-key` and
+// `state-passphrase`), so their age is actionable and belongs on the 90d SLA.
 
 // ghPATTargets declares the GitHub service PATs the inventory measures. It was
 // two hardcoded literals at the call site, which is why `E2E_DISPATCH_TOKEN` and
@@ -114,9 +155,19 @@ func ciTokenInventoryCmd() *cobra.Command {
 			// buildTokenInventory skips the Linode section on "" and still
 			// reports the GitHub PATs.
 			linodeToken, _ := ciToken()
+			// Secret-age probe: metadata only, and only when a GitHub token +
+			// repo are available. GitHub Actions secrets are write-only over the
+			// API, so this cannot read a value even in principle.
+			if w, err := newSecretAgeWriter(); err != nil {
+				fmt.Fprintf(os.Stderr, "::warning::token-inventory: secret-age probe unavailable (%v) — token entries still written.\n", err)
+			} else {
+				secretAgeProbe = w.SecretUpdatedAt
+			}
 			inv := buildTokenInventory(cmd.Context(), tokenInvDeps{
 				ghTargets:   ghTargetsFromEnv(envOr("GITHUB_API", "https://api.github.com")),
 				linodeToken: linodeToken,
+				secretEnv:   secretScopeForRegion(os.Getenv("REGION")),
+				secretProbe: secretAgeProbe,
 				newLinode:   func(t string) credLister { return linode.NewClient(t, 30*time.Second) },
 				region:      os.Getenv("REGION"),
 				now:         time.Now(),
@@ -146,6 +197,8 @@ type tokenInvDeps struct {
 	linodeToken string
 	newLinode   func(token string) credLister
 	region      string
+	secretEnv   string
+	secretProbe func(env, name string) (string, bool, error)
 	now         time.Time
 	maxDays     int
 	warnDays    int
@@ -157,6 +210,8 @@ type tokenInvDeps struct {
 func buildTokenInventory(ctx context.Context, d tokenInvDeps) tokenInventory {
 	inv := tokenInventory{Updated: d.now.Unix(), Region: d.region}
 	inv.Tokens = append(inv.Tokens, gatherGitHubTokens(d.ghTargets, d.now, d.maxDays, d.warnDays)...)
+	// Write-time ages for the credentials with no expiry to read (ADR 0009).
+	inv.Secrets = gatherSecretAges(d.secretEnv, d.secretProbe)
 	if d.linodeToken != "" {
 		if entries, err := gatherLinodeTokens(ctx, d.newLinode(d.linodeToken), d.now, int64(d.maxDays), int64(d.warnDays)); err == nil {
 			inv.Tokens = append(inv.Tokens, entries...)
@@ -194,6 +249,76 @@ func gatherGitHubTokens(targets []patTarget, now time.Time, maxDays, warnDays in
 		out = append(out, tokenEntry{Provider: "github", Name: tgt.name, Expiry: expiry, State: patStateToInventory(state)})
 	}
 	return out
+}
+
+// newSecretAgeWriter builds the metadata client from the same GH_TOKEN/GH_REPO
+// the rest of the CI family uses. Best-effort by design: an instance without a
+// token still gets its Linode + GitHub PAT entries.
+func newSecretAgeWriter() (*forge.GitHubSecretWriter, error) {
+	tok := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("OPENBAO_SECRETS_WRITE_TOKEN"))
+	repo := os.Getenv("GH_REPO")
+	if tok == "" || repo == "" {
+		return nil, fmt.Errorf("GH_TOKEN/GH_REPO not set")
+	}
+	return forge.NewGitHubSecretWriter(envOr("GITHUB_API", "https://api.github.com"), tok, repo)
+}
+
+// secretAgeProbe reads one Actions secret's write time. Injected so the gather
+// logic is unit-testable without GitHub.
+var secretAgeProbe func(env, name string) (string, bool, error)
+
+// gatherSecretAges measures the WRITE time of each ghSecretTargets entry. Env
+// secrets are looked up first (these are infra-<deployment> scoped), then the
+// repo scope, because an instance may hold either.
+//
+// An absent secret is reported with state=unknown and no timestamp rather than
+// dropped. That is the property the OpenBao path could not give us: the sampler
+// there skips a 404 as "not seeded yet", so a never-written credential is
+// indistinguishable from a healthy one. Here the API distinguishes them, so a
+// missing state-backend credential is visible instead of silent.
+func gatherSecretAges(env string, probe func(env, name string) (string, bool, error)) []secretEntry {
+	if probe == nil {
+		return nil
+	}
+	out := make([]secretEntry, 0, len(ghSecretTargets))
+	for _, t := range ghSecretTargets {
+		e := secretEntry{Name: t.name, Class: t.class, State: tokenStateUnknown}
+		for _, scope := range []string{env, ""} {
+			if scope == "" && env == "" {
+				continue // already tried the repo scope
+			}
+			ts, ok, err := probe(scope, t.name)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "::warning::token-inventory: %s (%s): %v\n", t.name, scopeLabel(scope), err)
+				continue
+			}
+			if ok {
+				e.Scope, e.UpdatedAt, e.State = scopeLabel(scope), ts, tokenStateOK
+				break
+			}
+		}
+		if e.Scope == "" {
+			e.Scope = scopeLabel(env)
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// secretScopeForRegion maps a deployment to the GitHub environment its
+// credentials live in. Empty region → repo scope only.
+func secretScopeForRegion(region string) string {
+	if strings.TrimSpace(region) == "" {
+		return ""
+	}
+	return "infra-" + region
+}
+
+func scopeLabel(env string) string {
+	if env == "" {
+		return "repo"
+	}
+	return env
 }
 
 // patStateToInventory collapses a health.PATCheckState into the coarse inventory state.

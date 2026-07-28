@@ -59,6 +59,9 @@ on:
       # `llz ci require-secret`. Full reasoning in the sidecar doc.
       TF_STATE_ENCRYPTION_PASSPHRASE:
         required: false
+      TF_STATE_ENCRYPTION_PASSPHRASE_OLD:
+        description: 'PREVIOUS state-encryption passphrase. Set ONLY during a rotation window (secret-rotation.yml scope=state-passphrase); empty in steady state. Adds an ENCRYPTED fallback so OpenTofu can read state written with the old key and rewrite it with the new one.'
+        required: false
       TF_STATE_ACCESS_KEY:
         required: false
       TF_STATE_SECRET_KEY:
@@ -441,6 +444,9 @@ jobs:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name:      ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old:  ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           github-token:          ${{ github.token }}
 
       # Idempotent, and NOT a blind skip: unlike an object-storage key there is
