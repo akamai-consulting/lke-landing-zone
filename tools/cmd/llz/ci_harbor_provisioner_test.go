@@ -238,6 +238,60 @@ func TestHarborProvisionerCreatesBothSeedsAndPublishes(t *testing.T) {
 	}
 }
 
+// TestHarborProvisionerIgnoresUnusableHarborHost is the regression for the bug that
+// shipped to every Managed App Platform instance: `llz render` baked
+// harbor.<domainSuffix> with an EMPTY domainSuffix, so HARBOR_HOST arrived as the
+// bare prefix "harbor." — non-empty, so it sailed past the discovery fallback and
+// was seeded as registry_host. Every docker credential then authenticated for a
+// registry literally named "harbor.", matched nothing, and pushes 401'd with an
+// error that reads like bad credentials.
+//
+// The render side now emits "" (clusterspec.HarborHost), but instances rendered
+// before that fix carry "harbor." in a COMMITTED artifact, so this guard is what
+// heals them without a re-render. Same for the un-patched base's REPLACE_ME.
+func TestHarborProvisionerIgnoresUnusableHarborHost(t *testing.T) {
+	for _, bad := range []string{"harbor.", "REPLACE_ME", ""} {
+		t.Run("host="+bad, func(t *testing.T) {
+			srv, _ := harborStub(t, http.StatusCreated, []int{http.StatusCreated, http.StatusCreated})
+			store := &fakeBaoStore{}
+			setProvisionerEnv(t, "adminpass", store)
+			t.Setenv("HARBOR_API_URL", srv.URL)
+			t.Setenv("HARBOR_HOST", bad)
+
+			if err := runCIHarborProvisioner(); err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range store.writes {
+				if !strings.Contains(w, "registry_host=harbor.lke635371.akamai-apl.net") {
+					t.Errorf("seeded %q — an unusable HARBOR_HOST %q must be discarded in favour of Harbor's own systeminfo host", w, bad)
+				}
+			}
+			if len(store.writes) != 2 {
+				t.Errorf("bao writes = %d, want 2", len(store.writes))
+			}
+		})
+	}
+}
+
+// A usable HARBOR_HOST still wins outright — discovery is the fallback, not the
+// default. Guards against the fix above over-reaching into the self-install path,
+// where the rendered host is authoritative and Harbor may not even be reachable yet.
+func TestHarborProvisionerUsableHarborHostWinsOverDiscovery(t *testing.T) {
+	srv, _ := harborStub(t, http.StatusCreated, []int{http.StatusCreated, http.StatusCreated})
+	store := &fakeBaoStore{}
+	setProvisionerEnv(t, "adminpass", store) // pins HARBOR_HOST=harbor.env.internal
+	t.Setenv("HARBOR_API_URL", srv.URL)
+
+	if err := runCIHarborProvisioner(); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range store.writes {
+		if !strings.Contains(w, "registry_host=harbor.env.internal") {
+			t.Errorf("seeded %q — a usable HARBOR_HOST must not be replaced by discovery", w)
+		}
+	}
+}
+
 func TestHarborProvisionerExistingUnseededRobotWarnsAndContinues(t *testing.T) {
 	srv, _ := harborStub(t, http.StatusConflict, []int{http.StatusConflict, http.StatusCreated})
 	store := &fakeBaoStore{}

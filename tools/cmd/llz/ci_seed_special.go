@@ -117,15 +117,24 @@ func runCIResolveHarborURL(region string) error {
 	derived := clusterspec.HarborHost(domain)
 
 	if override != "" {
-		// The in-cluster harbor-robot-provisioner gets HARBOR_HOST from
-		// RenderHarborHostPatch, which ALWAYS derives harbor.<domainSuffix> and does
-		// not read this override. So an override that diverges from the derivation
-		// leaves CI and the in-cluster provisioner pointed at different registries —
-		// the provisioner writes the wrong registry_host into OpenBao, and nothing
-		// reports it. kustomize.go notes the two "must be kept in step"; this is
-		// what actually checks.
+		// The in-cluster harbor-robot-provisioner does not read this override, so an
+		// override that diverges leaves CI and the provisioner pointed at different
+		// registries — the provisioner writes a registry_host CI disagrees with, and
+		// nothing reports it. This is what actually checks. Where the provisioner's
+		// value COMES from differs by platform, so say which:
+		//   - self-install: RenderHarborHostPatch bakes harbor.<domainSuffix>, and
+		//     kustomize.go notes the two "must be kept in step".
+		//   - managed: HARBOR_HOST renders empty (no domainSuffix), so the provisioner
+		//     asks Harbor for its own registry host — ground truth, which an override
+		//     cannot move. `derived` above is the same host by a different route (the
+		//     discovered apl-core domain), so a mismatch still means the override is
+		//     the odd one out.
 		if override != derived {
-			fmt.Fprintf(os.Stderr, "::warning::HARBOR_URL is %q but the in-cluster provisioner will use %q (harbor.<domainSuffix>, from RenderHarborHostPatch, which ignores this override). CI and the cluster will disagree about the registry host — align vars.HARBOR_URL with the spec's domainSuffix, or change the domainSuffix.\n", override, derived)
+			source := "harbor.<domainSuffix>, from RenderHarborHostPatch"
+			if e.Cluster.Bootstrap.ManagedAppPlatform {
+				source = "discovered from Harbor's own systeminfo on managed App Platform"
+			}
+			fmt.Fprintf(os.Stderr, "::warning::HARBOR_URL is %q but the in-cluster provisioner will use %q (%s — it ignores this override). CI and the cluster will disagree about the registry host — align vars.HARBOR_URL with it, or change the domainSuffix.\n", override, derived, source)
 		}
 		fmt.Printf("HARBOR_URL: %s (from vars.HARBOR_URL).\n", override)
 		return nil

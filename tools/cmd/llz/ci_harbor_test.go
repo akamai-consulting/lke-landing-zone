@@ -155,6 +155,13 @@ func harborStub(t *testing.T, projectStatus int, robotStatuses []int) (*httptest
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/api/v2.0/projects"):
 			// The smoke: any non-admin basic auth is accepted as a valid robot.
 			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/api/v2.0/systeminfo"):
+			// Harbor's own view of its external registry host — the ground truth the
+			// provisioner falls back to when HARBOR_HOST is absent or unusable.
+			// Deliberately unlike the harbor.env.internal that setProvisionerEnv pins,
+			// so a test can tell which of the two a seed came from.
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"registry_url":"https://harbor.lke635371.akamai-apl.net"}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/api/v2.0/projects"):
 			if user, pass, ok := r.BasicAuth(); !ok || user != "admin" || pass != "adminpass" {
 				t.Errorf("bad basic auth: %s %s", user, pass)
