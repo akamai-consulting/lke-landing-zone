@@ -129,11 +129,20 @@ func DatabasesTFVars(env string, c Cluster) []Assign {
 // to the longest key within each entry block — rather than relying on renderTfvars
 // to format it afterwards. renderTfvars pipes through `tofu fmt` only when a tofu
 // or terraform binary exists; fmtHCL is a pass-through when neither does, which is
-// the case in the CI container. Every other mapper emits single-line scalars, so
-// that fallback was invisible; a multi-line block emitted un-indented is not, and
-// `llz render` would then write a tfvars that the instance's own `tofu fmt -check`
-// pre-commit hook rejects — on whichever machine DOES have tofu. Formatting here
-// makes the rendered bytes identical with or without the binary.
+// the case in the CI container.
+//
+// What that buys is DETERMINISM, not gate-compliance: the rendered bytes are the
+// same on a machine with a formatter and one without, so a test can assert them
+// exactly (the first version of the cmd/llz test asserted the indentation `tofu
+// fmt` adds, and so passed on every dev machine and failed in CI).
+//
+// It does NOT prevent a pre-commit `tofu fmt -check` failure — an earlier draft of
+// this comment claimed it did, which was wrong. Rendered tfvars are gitignored
+// build artifacts, and terraform-iac-bootstrap/.gitignore says so explicitly and
+// for exactly this reason: "a rendered-but-unformatted tfvars can never trip the
+// pre-commit tofu fmt -check". The cluster and object-storage roots do render
+// unaligned without a formatter (setHCLField writes `key = value` with single
+// spaces, breaking the example's alignment) and that is accepted by design.
 func hclDatabases(dbs Databases) string {
 	names := make([]string, 0, len(dbs))
 	for n := range dbs {

@@ -304,7 +304,11 @@ func first3(s string) string {
 
 func quote(s string) string { return `"` + s + `"` }
 
-// setHCLField replaces the first `^<key> ... = ...` line with `<key> = <value>`.
+// setHCLField replaces EVERY `^<key> ... = ...` line with `<key> = <value>` (the
+// doc said "the first" for years; the call has always been a ReplaceAll). Harmless
+// today — no embedded terraform.tfvars.example declares the same key twice at
+// column 0, which a test asserts — but two would both be rewritten into a
+// duplicate assignment, which HCL rejects as a redefined attribute.
 // Matches the bash `replace_in_file "^<key> .*=.*"` line-rewrite.
 //
 // ReplaceAllLiteral, NOT ReplaceAllString: the replacement is a rendered HCL value,
