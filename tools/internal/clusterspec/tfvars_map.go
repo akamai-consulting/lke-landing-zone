@@ -125,8 +125,15 @@ func DatabasesTFVars(env string, c Cluster) []Assign {
 // operator never wrote. The optional ones are omitted unless the spec sets them,
 // so the root's `optional(…, default)` stays the single source of the defaults.
 //
-// Output is deliberately un-aligned; renderTfvars pipes the result through
-// `tofu fmt`, which owns the `=` alignment the instance's fmt-check enforces.
+// The output is ALREADY `tofu fmt`-clean — two-space indent per level, `=` padded
+// to the longest key within each entry block — rather than relying on renderTfvars
+// to format it afterwards. renderTfvars pipes through `tofu fmt` only when a tofu
+// or terraform binary exists; fmtHCL is a pass-through when neither does, which is
+// the case in the CI container. Every other mapper emits single-line scalars, so
+// that fallback was invisible; a multi-line block emitted un-indented is not, and
+// `llz render` would then write a tfvars that the instance's own `tofu fmt -check`
+// pre-commit hook rejects — on whichever machine DOES have tofu. Formatting here
+// makes the rendered bytes identical with or without the binary.
 func hclDatabases(dbs Databases) string {
 	names := make([]string, 0, len(dbs))
 	for n := range dbs {
@@ -138,20 +145,35 @@ func hclDatabases(dbs Databases) string {
 	b.WriteString("{\n")
 	for _, n := range names {
 		d := dbs[n]
-		b.WriteString(hclStr(n) + " = {\n")
-		b.WriteString("region = " + hclStr(d.Region) + "\n")
-		b.WriteString("vpc_id = " + strconv.Itoa(d.VPCID) + "\n")
-		b.WriteString("subnet_id = " + strconv.Itoa(d.SubnetID) + "\n")
+		// Required first (always emitted, zero values included), then the optionals
+		// the spec actually set — the root's optional(…) owns the rest.
+		attrs := [][2]string{
+			{"region", hclStr(d.Region)},
+			{"vpc_id", strconv.Itoa(d.VPCID)},
+			{"subnet_id", strconv.Itoa(d.SubnetID)},
+		}
 		if d.EngineVersion != "" {
-			b.WriteString("engine_version = " + hclStr(d.EngineVersion) + "\n")
+			attrs = append(attrs, [2]string{"engine_version", hclStr(d.EngineVersion)})
 		}
 		if d.Type != "" {
-			b.WriteString("db_type = " + hclStr(d.Type) + "\n")
+			attrs = append(attrs, [2]string{"db_type", hclStr(d.Type)})
 		}
 		if d.ClusterSize != 0 {
-			b.WriteString("cluster_size = " + strconv.Itoa(d.ClusterSize) + "\n")
+			attrs = append(attrs, [2]string{"cluster_size", strconv.Itoa(d.ClusterSize)})
 		}
-		b.WriteString("}\n")
+
+		width := 0
+		for _, kv := range attrs {
+			if len(kv[0]) > width {
+				width = len(kv[0])
+			}
+		}
+
+		b.WriteString("  " + hclStr(n) + " = {\n")
+		for _, kv := range attrs {
+			b.WriteString("    " + kv[0] + strings.Repeat(" ", width-len(kv[0])) + " = " + kv[1] + "\n")
+		}
+		b.WriteString("  }\n")
 	}
 	b.WriteString("}")
 	return b.String()

@@ -158,15 +158,19 @@ func TestDatabasesTFVars(t *testing.T) {
 		t.Errorf("region_suffix = %q, want %q", got, `"prod"`)
 	}
 	// HCL numbers are unquoted, or the number-typed object attributes reject them.
+	// Already `tofu fmt`-clean: two-space indent per level and `=` padded to the
+	// longest key in the block. hclDatabases formats itself rather than leaning on
+	// renderTfvars' `tofu fmt` pipe, because fmtHCL is a pass-through when no
+	// tofu/terraform binary exists — the CI container has neither.
 	want := "{\n" +
-		"\"shared\" = {\n" +
-		"region = \"us-ord\"\n" +
-		"vpc_id = 575244\n" +
-		"subnet_id = 12345\n" +
-		"engine_version = \"16\"\n" +
-		"db_type = \"g6-dedicated-2\"\n" +
-		"cluster_size = 2\n" +
-		"}\n}"
+		"  \"shared\" = {\n" +
+		"    region         = \"us-ord\"\n" +
+		"    vpc_id         = 575244\n" +
+		"    subnet_id      = 12345\n" +
+		"    engine_version = \"16\"\n" +
+		"    db_type        = \"g6-dedicated-2\"\n" +
+		"    cluster_size   = 2\n" +
+		"  }\n}"
 	if got := one["databases"]; got != want {
 		t.Errorf("DatabasesTFVars(one)[\"databases\"] =\n%s\nwant\n%s", got, want)
 	}

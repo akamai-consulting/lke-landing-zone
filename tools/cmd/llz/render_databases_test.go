@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -12,9 +13,14 @@ import (
 // side (`databases = { "<name>" = { … } }`, one entry per cluster — the 0-n
 // fan-out the root does `for_each` over). Every other assignment is a scalar or a
 // single-line list, so nothing else exercises applyAssigns/setHCLField with an
-// RHS containing newlines: setHCLField is a single-line `^key\s*=.*$` rewrite, and
-// the result then has to survive `tofu fmt`, which owns the `=` alignment the
-// instance's own fmt-check enforces.
+// RHS containing newlines — setHCLField being a single-line `^key\s*=.*$` rewrite.
+//
+// It must hold WITHOUT a tofu/terraform binary. renderTfvars pipes through
+// `tofu fmt`, but fmtHCL is a best-effort pass-through when neither binary is
+// installed — which is exactly the CI container. An earlier version of this test
+// asserted the indentation `tofu fmt` adds and so passed locally and failed in CI;
+// hclDatabases now emits already-formatted HCL, so the bytes are the same either
+// way. Assert on bytes, not on layout the environment might supply.
 //
 // The unit test in internal/clusterspec pins the mapping; this pins the seam.
 func TestRenderDatabasesTfvars_MultilineAssign(t *testing.T) {
@@ -39,16 +45,30 @@ func TestRenderDatabasesTfvars_MultilineAssign(t *testing.T) {
 	if strings.Contains(out, "databases = {}") {
 		t.Error("the example's empty default survived instead of being replaced")
 	}
-	for _, want := range []string{`"analytics" = {`, `"shared" = {`} {
-		if !strings.Contains(out, want) {
-			t.Errorf("rendered tfvars missing %q:\n%s", want, out)
-		}
-	}
-	// vpc_id is an HCL number: unquoted, or the number-typed object attribute
-	// rejects it. `tofu fmt` pads the `=` per block, so match the value, not a
-	// fixed column.
-	if n := len(regexp.MustCompile(`(?m)^\s+vpc_id\s+= 575244$`).FindAllString(out, -1)); n != 2 {
-		t.Errorf("want an unquoted vpc_id in each of the 2 entries, got %d:\n%s", n, out)
+	// The exact block, byte for byte. This is what hclDatabases must produce with no
+	// formatter available: two-space indent per level, `=` padded to the longest key
+	// WITHIN each entry (so the two entries align differently — `cluster_size` vs
+	// `engine_version`), keys sorted, numbers unquoted, and only the optionals the
+	// spec set. It is also precisely what `tofu fmt` produces, which is the point:
+	// with or without the binary, the rendered bytes are identical.
+	wantBlock := `databases = {
+  "analytics" = {
+    region       = "us-ord"
+    vpc_id       = 575244
+    subnet_id    = 12345
+    cluster_size = 1
+  }
+  "shared" = {
+    region         = "us-ord"
+    vpc_id         = 575244
+    subnet_id      = 12345
+    engine_version = "16"
+    db_type        = "g6-dedicated-2"
+    cluster_size   = 2
+  }
+}`
+	if !strings.Contains(out, wantBlock) {
+		t.Errorf("rendered databases block does not match.\nwant:\n%s\n\ngot:\n%s", wantBlock, out)
 	}
 
 	// `llz render --check` compares BYTES, so an unchanged spec must re-render
@@ -65,5 +85,16 @@ func TestRenderDatabasesTfvars_MultilineAssign(t *testing.T) {
 	stub := renderTfvars(base, clusterspec.DatabasesTFVars("dev", clusterspec.Cluster{}))
 	if !strings.Contains(stub, "databases = {}") {
 		t.Errorf("an unconfigured env must keep `databases = {}`:\n%s", stub)
+	}
+
+	// The environment must not change the output. With no tofu/terraform on PATH
+	// fmtHCL returns its input untouched, so this run skips the formatter entirely —
+	// and must still produce the same bytes as the run above, which (on a dev
+	// machine) went through `tofu fmt`. This is the assertion that would have caught
+	// the CI-only failure: locally both paths formatted, in CI neither did.
+	withLookPath(t, func(string) (string, error) { return "", errors.New("not found") })
+	if unformatted := renderTfvars(base, clusterspec.DatabasesTFVars("prod", c)); unformatted != out {
+		t.Errorf("render differs with no tofu/terraform on PATH — the CI container has neither, "+
+			"so hclDatabases must emit already-formatted HCL.\nwith formatter:\n%s\n\nwithout:\n%s", out, unformatted)
 	}
 }
