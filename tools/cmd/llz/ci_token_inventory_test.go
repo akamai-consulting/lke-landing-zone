@@ -161,3 +161,78 @@ func TestRenderInventoryConfigMapNoTokenValues(t *testing.T) {
 		t.Errorf("rendered ConfigMap must carry no token material:\n%s", out)
 	}
 }
+
+// The GitHub target list is what decides which PATs reach the credential single
+// pane at all. It used to be two literals inline at the call site, so
+// E2E_DISPATCH_TOKEN and GHCR_READ_TOKEN — both ordinary PATs with a readable
+// expiry — were structurally unmeasurable.
+func TestGHTargetsFromEnvIncludesTheOptionalPATsWhenSet(t *testing.T) {
+	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp-openbao")
+	t.Setenv("APL_VALUES_REPO_TOKEN", "ghp-aplvalues")
+	t.Setenv("E2E_DISPATCH_TOKEN", "ghp-e2e")
+	t.Setenv("GHCR_READ_TOKEN", "ghp-ghcr")
+
+	got := ghTargetsFromEnv("https://api.example.test")
+	if len(got) != 4 {
+		t.Fatalf("got %d targets, want all 4: %+v", len(got), got)
+	}
+	byName := map[string]patTarget{}
+	for _, g := range got {
+		byName[g.name] = g
+		if g.api != "https://api.example.test" {
+			t.Errorf("%s: api = %q, want the injected base", g.name, g.api)
+		}
+	}
+	for name, want := range map[string]string{
+		"OPENBAO_SECRETS_WRITE_TOKEN": "ghp-openbao",
+		"APL_VALUES_REPO_TOKEN":       "ghp-aplvalues",
+		"E2E_DISPATCH_TOKEN":          "ghp-e2e",
+		"GHCR_READ_TOKEN":             "ghp-ghcr",
+	} {
+		if byName[name].token != want {
+			t.Errorf("%s: token = %q, want %q", name, byName[name].token, want)
+		}
+	}
+}
+
+// An unset OPTIONAL PAT is dropped, not reported as unknown. Most instances set
+// neither, and gatherGitHubTokens turns an empty token into a state=unknown row —
+// so keeping them would put two permanent "unknown" entries on every stock
+// instance's dashboard, which is how an inventory stops being read.
+func TestGHTargetsFromEnvDropsUnsetOptionalPATs(t *testing.T) {
+	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "ghp-openbao")
+	t.Setenv("APL_VALUES_REPO_TOKEN", "ghp-aplvalues")
+	t.Setenv("E2E_DISPATCH_TOKEN", "")
+	t.Setenv("GHCR_READ_TOKEN", "")
+
+	got := ghTargetsFromEnv("https://api.github.com")
+	if len(got) != 2 {
+		t.Fatalf("got %d targets, want only the 2 required: %+v", len(got), got)
+	}
+	for _, g := range got {
+		if g.name == "E2E_DISPATCH_TOKEN" || g.name == "GHCR_READ_TOKEN" {
+			t.Errorf("unset optional target %s must be dropped, not measured", g.name)
+		}
+	}
+}
+
+// A REQUIRED PAT that is unset must still be reported — its absence is a finding,
+// not a non-event. This is the asymmetry the `optional` field exists to express;
+// dropping both kinds would hide a missing bootstrap credential.
+func TestGHTargetsFromEnvKeepsUnsetRequiredPATs(t *testing.T) {
+	t.Setenv("OPENBAO_SECRETS_WRITE_TOKEN", "")
+	t.Setenv("APL_VALUES_REPO_TOKEN", "")
+	t.Setenv("E2E_DISPATCH_TOKEN", "")
+	t.Setenv("GHCR_READ_TOKEN", "")
+
+	got := ghTargetsFromEnv("https://api.github.com")
+	if len(got) != 2 {
+		t.Fatalf("got %d targets, want the 2 required ones even when unset: %+v", len(got), got)
+	}
+	// And they must classify as unknown (not ok) so nothing reads as healthy.
+	for _, e := range gatherGitHubTokens(got, time.Unix(1_800_000_000, 0), 90, 14) {
+		if e.State != tokenStateUnknown {
+			t.Errorf("%s unset: state = %q, want %q", e.Name, e.State, tokenStateUnknown)
+		}
+	}
+}
