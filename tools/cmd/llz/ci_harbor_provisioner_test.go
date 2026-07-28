@@ -99,9 +99,15 @@ func TestHarborProvisionerNoAdminPasswordIsCleanNoop(t *testing.T) {
 
 func TestHarborProvisionerSteadyStateNoop(t *testing.T) {
 	srv, payloads := harborStub(t, http.StatusCreated, nil)
+	// registry_host is part of a seeded path — every writer (this command and
+	// seed-standby-harbor-robots) writes all three keys together. It is spelled out
+	// here because the steady state is now "seeded AND the stored registry_host is
+	// usable": a path missing it is a real defect (cert-automation's
+	// harborDockerConfig ExternalSecret reads that property, and cannot sync
+	// without it), so the loop repairs it rather than calling it converged.
 	store := &fakeBaoStore{data: map[string]map[string]string{
-		"secret/harbor/robot":      {"username": "robot$ci-firewall-controller", "password": "sec"},
-		"secret/harbor/pull-robot": {"username": "robot$pull-platform", "password": "psec"},
+		"secret/harbor/robot":      {"username": "robot$ci-firewall-controller", "password": "sec", "registry_host": "harbor.env.internal"},
+		"secret/harbor/pull-robot": {"username": "robot$pull-platform", "password": "psec", "registry_host": "harbor.env.internal"},
 	}}
 	gh := setProvisionerEnv(t, "adminpass", store)
 	t.Setenv("HARBOR_API_URL", srv.URL)
@@ -235,6 +241,150 @@ func TestHarborProvisionerCreatesBothSeedsAndPublishes(t *testing.T) {
 	}
 	if strings.Join(*gh, " | ") != strings.Join(wantGH, " | ") {
 		t.Errorf("gh publications = %v, want %v", *gh, wantGH)
+	}
+}
+
+// TestHarborProvisionerIgnoresUnusableHarborHost is the regression for the bug that
+// shipped to every Managed App Platform instance: `llz render` baked
+// harbor.<domainSuffix> with an EMPTY domainSuffix, so HARBOR_HOST arrived as the
+// bare prefix "harbor." — non-empty, so it sailed past the discovery fallback and
+// was seeded as registry_host. Every docker credential then authenticated for a
+// registry literally named "harbor.", matched nothing, and pushes 401'd with an
+// error that reads like bad credentials.
+//
+// The render side now emits "" (clusterspec.HarborHost), but instances rendered
+// before that fix carry "harbor." in a COMMITTED artifact, so this guard is what
+// heals them without a re-render. Same for the un-patched base's REPLACE_ME.
+func TestHarborProvisionerIgnoresUnusableHarborHost(t *testing.T) {
+	for _, bad := range []string{"harbor.", "REPLACE_ME", ""} {
+		t.Run("host="+bad, func(t *testing.T) {
+			srv, _ := harborStub(t, http.StatusCreated, []int{http.StatusCreated, http.StatusCreated})
+			store := &fakeBaoStore{}
+			setProvisionerEnv(t, "adminpass", store)
+			t.Setenv("HARBOR_API_URL", srv.URL)
+			t.Setenv("HARBOR_HOST", bad)
+
+			if err := runCIHarborProvisioner(); err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range store.writes {
+				if !strings.Contains(w, "registry_host=harbor.lke635371.akamai-apl.net") {
+					t.Errorf("seeded %q — an unusable HARBOR_HOST %q must be discarded in favour of Harbor's own systeminfo host", w, bad)
+				}
+			}
+			if len(store.writes) != 2 {
+				t.Errorf("bao writes = %d, want 2", len(store.writes))
+			}
+		})
+	}
+}
+
+// TestHarborProvisionerRepairsSeededRegistryHost is the case the sibling test
+// above MISSES, and it is the one that matters in the field.
+//
+// Every managed instance that rendered before the HarborHost fix has already
+// seeded registry_host="harbor." — so it takes the STEADY-STATE branch (robots
+// present, smoke passes) and returns before the resolution block ever runs. The
+// unusable value would be permanent, and the tick would report healthy the whole
+// time: the smoke authenticates username/password, which are valid. Only the
+// docker config derived from registry_host is wrong.
+//
+// The seeded credentials must survive the repair untouched — a KV v2 write
+// replaces the whole secret.
+func TestHarborProvisionerRepairsSeededRegistryHost(t *testing.T) {
+	srv, payloads := harborStub(t, http.StatusCreated, nil)
+	store := &fakeBaoStore{data: map[string]map[string]string{
+		"secret/harbor/robot":      {"username": "robot$ci-firewall-controller", "password": "sec", "registry_host": "harbor."},
+		"secret/harbor/pull-robot": {"username": "robot$pull-platform", "password": "psec", "registry_host": "harbor."},
+	}}
+	setProvisionerEnv(t, "adminpass", store)
+	t.Setenv("HARBOR_API_URL", srv.URL)
+	t.Setenv("HARBOR_HOST", "harbor.") // the rendered value is equally unusable
+
+	if err := runCIHarborProvisioner(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"secret/harbor/robot username=robot$ci-firewall-controller password=sec registry_host=harbor.lke635371.akamai-apl.net",
+		"secret/harbor/pull-robot username=robot$pull-platform password=psec registry_host=harbor.lke635371.akamai-apl.net",
+	}
+	if strings.Join(store.writes, " | ") != strings.Join(want, " | ") {
+		t.Errorf("repair writes = %v,\nwant %v", store.writes, want)
+	}
+	// Repair must not touch Harbor's robot API — the credentials are fine.
+	if len(*payloads) != 0 {
+		t.Errorf("repair must not create robots, got %v", *payloads)
+	}
+}
+
+// A stored registry_host that is merely DIFFERENT from what discovery reports is
+// left alone: an operator may have pointed this cluster somewhere on purpose, and
+// a convergence loop that overwrites them every tick is worse than the bug it fixes.
+func TestHarborProvisionerLeavesADeliberateRegistryHostAlone(t *testing.T) {
+	srv, _ := harborStub(t, http.StatusCreated, nil)
+	store := &fakeBaoStore{data: map[string]map[string]string{
+		"secret/harbor/robot":      {"username": "u", "password": "p", "registry_host": "registry.corp.example"},
+		"secret/harbor/pull-robot": {"username": "pu", "password": "pp", "registry_host": "registry.corp.example"},
+	}}
+	setProvisionerEnv(t, "adminpass", store)
+	t.Setenv("HARBOR_API_URL", srv.URL)
+
+	if err := runCIHarborProvisioner(); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.writes) != 0 {
+		t.Errorf("a usable registry_host must never be rewritten, got %v", store.writes)
+	}
+}
+
+// Repairing must never cost a credential. A path whose username/password cannot be
+// read back would be rewritten with empty strings — a KV v2 write replaces the
+// secret — destroying a robot login Harbor will not re-reveal. Skip it instead.
+func TestHarborProvisionerRefusesRepairThatWouldDropCredentials(t *testing.T) {
+	srv, _ := harborStub(t, http.StatusCreated, nil)
+	store := &fakeBaoStore{data: map[string]map[string]string{
+		// robotsSeeded only requires pull-robot's USERNAME, so a password-less
+		// pull-robot still reaches the steady-state branch.
+		"secret/harbor/robot":      {"username": "u", "password": "p", "registry_host": "harbor."},
+		"secret/harbor/pull-robot": {"username": "pu", "registry_host": "harbor."},
+	}}
+	setProvisionerEnv(t, "adminpass", store)
+	t.Setenv("HARBOR_API_URL", srv.URL)
+	t.Setenv("HARBOR_HOST", "harbor.") // unusable → repair resolves via systeminfo
+
+	if err := runCIHarborProvisioner(); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range store.writes {
+		if strings.Contains(w, "pull-robot") {
+			t.Errorf("pull-robot has no password — rewriting it drops the credential: %q", w)
+		}
+		if strings.Contains(w, "password= ") || strings.HasSuffix(w, "password=") {
+			t.Errorf("empty credential written: %q", w)
+		}
+	}
+	// The healthy sibling is still repaired — one bad path must not block the other.
+	if len(store.writes) != 1 || !strings.Contains(store.writes[0], "secret/harbor/robot username=u password=p registry_host=harbor.lke635371") {
+		t.Errorf("the readable path should still be repaired, got %v", store.writes)
+	}
+}
+
+// A usable HARBOR_HOST still wins outright — discovery is the fallback, not the
+// default. Guards against the fix above over-reaching into the self-install path,
+// where the rendered host is authoritative and Harbor may not even be reachable yet.
+func TestHarborProvisionerUsableHarborHostWinsOverDiscovery(t *testing.T) {
+	srv, _ := harborStub(t, http.StatusCreated, []int{http.StatusCreated, http.StatusCreated})
+	store := &fakeBaoStore{}
+	setProvisionerEnv(t, "adminpass", store) // pins HARBOR_HOST=harbor.env.internal
+	t.Setenv("HARBOR_API_URL", srv.URL)
+
+	if err := runCIHarborProvisioner(); err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range store.writes {
+		if !strings.Contains(w, "registry_host=harbor.env.internal") {
+			t.Errorf("seeded %q — a usable HARBOR_HOST must not be replaced by discovery", w)
+		}
 	}
 }
 

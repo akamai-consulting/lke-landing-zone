@@ -277,3 +277,26 @@ func TestRenderHarborHostPatch(t *testing.T) {
 		}
 	}
 }
+
+// TestHarborHostEmptyDomainSuffix pins the Managed App Platform case. A managed env
+// deliberately carries NO domainSuffix (Linode owns the domain, and validateEnv
+// rejects a non-empty one), so the derivation ran on "" and produced the bare prefix
+// "harbor." — non-empty, so it defeated the provisioner's `host == ""` discovery
+// fallback and was seeded into OpenBao as registry_host. Every build then pushed to
+// a registry named "harbor." and 401'd. "" is the only correct answer: no domain, no
+// host, and the caller falls through to runtime discovery.
+func TestHarborHostEmptyDomainSuffix(t *testing.T) {
+	if got := HarborHost(""); got != "" {
+		t.Errorf("HarborHost(%q) = %q, want %q — a bare prefix is worse than nothing", "", got, "")
+	}
+	if got := HarborHost("web.example.com"); got != "harbor.web.example.com" {
+		t.Errorf("HarborHost lost the normal derivation: got %q", got)
+	}
+	// The patch must carry the empty value through, not the prefix: it overrides the
+	// component base's REPLACE_ME placeholder, and only an empty value reaches the
+	// provisioner's discovery path.
+	out := RenderHarborHostPatch("", "acme/inst")
+	if !strings.Contains(out, `value: ""`) || strings.Contains(out, `value: "harbor."`) {
+		t.Errorf("managed patch must render an EMPTY HARBOR_HOST:\n%s", out)
+	}
+}

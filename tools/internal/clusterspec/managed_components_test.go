@@ -3,6 +3,8 @@ package clusterspec
 import (
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // comp looks a registry component up by name for the disposition tests.
@@ -76,6 +78,113 @@ func TestEmitOnManaged(t *testing.T) {
 	// clusterHealthWorkflow is no longer ManagedSkip: enabled → emits.
 	if !comp(t, "clusterHealthWorkflow").EmitOnManaged(none, chwOn) {
 		t.Error("clusterHealthWorkflow must emit on managed when enabled")
+	}
+
+	// …but the consumer gate is a DEFAULT, not the only door. An operator who wants
+	// the Workflow CRDs for their own build pipeline can say so directly, instead of
+	// enabling an unrelated-sounding health component for its DependsOn side effect.
+	awOn := map[string]ComponentToggle{"argoWorkflows": {Enabled: boolPtr(true), Explicit: boolPtr(true)}}
+	if !comp(t, "argoWorkflows").EmitOnManaged(none, awOn) {
+		t.Error("argoWorkflows must emit on managed when the operator explicitly enables it")
+	}
+	// EXPLICIT means the AUTHOR wrote it. argoWorkflows is default-enabled, so a
+	// toggle Defaults() merely filled in must NOT open the gate — otherwise every
+	// managed cluster gets argo-workflows and the gate is dead.
+	for name, toggles := range map[string]map[string]ComponentToggle{
+		"defaulted-on (Explicit unset)": {"argoWorkflows": {Enabled: boolPtr(true)}},
+		"sizing knob only":              {"argoWorkflows": {Storage: "10Gi"}},
+		"explicit false":                {"argoWorkflows": {Enabled: boolPtr(false), Explicit: boolPtr(true)}},
+		"defaulted, decided false":      {"argoWorkflows": {Enabled: boolPtr(true), Explicit: boolPtr(false)}},
+	} {
+		if comp(t, "argoWorkflows").EmitOnManaged(none, toggles) {
+			t.Errorf("argoWorkflows must NOT emit on managed for %s — only an author-written enabled:true", name)
+		}
+	}
+}
+
+// TestArgoWorkflowsOptInThroughDefaults walks the REAL path — parse → merge →
+// Defaults → EmitOnManaged — because that is where the earlier attempt at this
+// broke: Defaults() materializes a complete toggle map, so after it runs every
+// component looks explicitly enabled unless the "author wrote it" bit is carried
+// forward. Hand-built toggle maps in the sibling test cannot catch that.
+func TestArgoWorkflowsOptInThroughDefaults(t *testing.T) {
+	emits := func(t *testing.T, componentsYAML string) bool {
+		t.Helper()
+		lz := &LandingZone{}
+		lz.Spec.Environments = map[string]Environment{"prod": {
+			Cluster: Cluster{Bootstrap: Bootstrap{ManagedAppPlatform: true}},
+		}}
+		if componentsYAML != "" {
+			var toggles map[string]ComponentToggle
+			if err := yaml.UnmarshalStrict([]byte(componentsYAML), &toggles); err != nil {
+				t.Fatal(err)
+			}
+			e := lz.Spec.Environments["prod"]
+			e.Components = toggles
+			lz.Spec.Environments["prod"] = e
+		}
+		lz.Defaults()
+		e := lz.Spec.Environments["prod"]
+		return comp(t, "argoWorkflows").EmitOnManaged(e.Cluster.Bootstrap, e.Components)
+	}
+
+	// The default managed cluster: no argo-workflows, exactly as before.
+	if emits(t, "") {
+		t.Error("a spec that says nothing must NOT get argoWorkflows on managed")
+	}
+	// Unrelated toggles must not drag it in — this is the case that regressed.
+	if emits(t, "observability: {retention: 30d}\n") {
+		t.Error("an unrelated toggle must not enable argoWorkflows on managed")
+	}
+	// The new door: ask for it by name.
+	if !emits(t, "argoWorkflows: {enabled: true}\n") {
+		t.Error("components.argoWorkflows.enabled=true must emit argoWorkflows on managed")
+	}
+	// The old door still works.
+	if !emits(t, "clusterHealthWorkflow: {enabled: true}\n") {
+		t.Error("the clusterHealthWorkflow consumer gate must still emit argoWorkflows")
+	}
+}
+
+// TestDefaultsIdempotentForExplicit guards the trap in deriving "the author wrote
+// this" inside Defaults(): Defaults is documented idempotent, and after one pass
+// EVERY toggle carries a non-nil Enabled. A first cut stored Explicit as a plain
+// bool and recomputed it as `Enabled != nil`, so a SECOND Defaults() re-derived
+// every component as author-stated — silently opting a managed cluster into
+// argoWorkflows (and anything else consumer-gated) just for calling Defaults twice.
+// The tri-state pointer is what makes the second pass a no-op.
+func TestDefaultsIdempotentForExplicit(t *testing.T) {
+	for _, tc := range []struct{ name, components string }{
+		{"silent spec", ""},
+		{"unrelated toggle", "observability: {retention: 30d}\n"},
+		{"opted in", "argoWorkflows: {enabled: true}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lz := &LandingZone{}
+			lz.Spec.Environments = map[string]Environment{"prod": {
+				Cluster: Cluster{Bootstrap: Bootstrap{ManagedAppPlatform: true}},
+			}}
+			if tc.components != "" {
+				var toggles map[string]ComponentToggle
+				if err := yaml.UnmarshalStrict([]byte(tc.components), &toggles); err != nil {
+					t.Fatal(err)
+				}
+				e := lz.Spec.Environments["prod"]
+				e.Components = toggles
+				lz.Spec.Environments["prod"] = e
+			}
+			emit := func() bool {
+				e := lz.Spec.Environments["prod"]
+				return comp(t, "argoWorkflows").EmitOnManaged(e.Cluster.Bootstrap, e.Components)
+			}
+			lz.Defaults()
+			first := emit()
+			lz.Defaults()
+			lz.Defaults()
+			if got := emit(); got != first {
+				t.Errorf("re-running Defaults() changed the verdict: %v -> %v", first, got)
+			}
+		})
 	}
 }
 

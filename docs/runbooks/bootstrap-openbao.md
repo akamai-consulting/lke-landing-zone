@@ -52,7 +52,7 @@ The workflow detects cluster state automatically and chooses the right path:
 |---|---|---|
 | `HARBOR_ROBOT_NAME` | In-cluster harbor-robot-provisioner (active cluster) | Harbor CI robot account name (push+pull+delete; used for buildah builds) |
 | `HARBOR_PASSWORD` | In-cluster harbor-robot-provisioner (active cluster) | Harbor CI robot account secret |
-| `HARBOR_PULL_ROBOT_NAME` | In-cluster harbor-robot-provisioner (active cluster) | Harbor pull-only robot account name (pull-only; distributed as imagePullSecret) |
+| `HARBOR_PULL_ROBOT_NAME` | In-cluster harbor-robot-provisioner (active cluster) | Harbor pull-only robot account name (the credential an imagePullSecret is built from; LLZ does not create one in workload namespaces — see [harbor-accounts.md](../playbooks/harbor-accounts.md)) |
 | `HARBOR_PULL_PASSWORD` | In-cluster harbor-robot-provisioner (active cluster) | Harbor pull-only robot account secret |
 
 ---

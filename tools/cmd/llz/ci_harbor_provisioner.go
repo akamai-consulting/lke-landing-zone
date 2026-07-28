@@ -77,6 +77,30 @@ func ciHarborProvisionerCmd() *cobra.Command {
 	}
 }
 
+// usableRegistryHost reports whether HARBOR_HOST carries a real registry host.
+//
+// It exists because the two ways HARBOR_HOST goes wrong both produce a NON-EMPTY
+// value, which used to sail past this command's `host == ""` discovery fallback and
+// get seeded into OpenBao as registry_host — the credential then authenticates for
+// a registry by that name, matches nothing, and every push/pull 401s with an error
+// that reads like bad credentials:
+//
+//   - "harbor." — RenderHarborHostPatch's harbor.<domainSuffix> rendered with an
+//     empty domainSuffix, i.e. EVERY Managed App Platform instance rendered before
+//     the fix in clusterspec.HarborHost. Those instances carry the bad value in a
+//     committed artifact, so this guard (not the render fix) is what heals them,
+//     with no re-render needed.
+//   - "REPLACE_ME" — the components/harbor base placeholder, if the per-env patch
+//     never merged.
+//
+// Deliberately narrow: it rejects a value with an empty final label or the known
+// placeholder, and nothing else. A single-label host ("harbor") stays usable — that
+// is a legitimate in-cluster registry name, not a rendering accident.
+func usableRegistryHost(h string) bool {
+	s := strings.TrimSpace(h)
+	return s != "" && s != "REPLACE_ME" && !strings.HasSuffix(s, ".")
+}
+
 func runCIHarborProvisioner() error {
 	ctx := context.Background()
 	apiURL := envOr("HARBOR_API_URL", "http://harbor-core.harbor.svc.cluster.local")
@@ -117,6 +141,9 @@ func runCIHarborProvisioner() error {
 		if err := smokeSeededRobot(h, creds); err != nil {
 			return err
 		}
+		if err := repairRegistryHost(ctx, bao, h, registryHost); err != nil {
+			return err
+		}
 		return republishMissingRepoSecrets(ctx, bao)
 	}
 
@@ -137,22 +164,27 @@ func runCIHarborProvisioner() error {
 	}
 
 	// registry_host resolution. HARBOR_HOST (render-injected harbor.<domainSuffix>)
-	// wins when set — the self-install path. On a Managed App Platform cluster the
-	// spec has no domainSuffix and render has no cluster access, so HARBOR_HOST is
-	// empty; ask Harbor for its own external registry host (ground truth). Harbor is
-	// confirmed reachable here (the project ensure above just succeeded).
-	if registryHost == "" {
+	// wins when set AND usable — the self-install path. On a Managed App Platform
+	// cluster the spec has no domainSuffix and render has no cluster access, so
+	// HARBOR_HOST arrives empty (or, on an instance rendered before the HarborHost
+	// fix, arrives as the unusable "harbor."); ask Harbor for its own external
+	// registry host (ground truth). Harbor is confirmed reachable here (the project
+	// ensure above just succeeded).
+	if !usableRegistryHost(registryHost) {
+		if strings.TrimSpace(registryHost) != "" {
+			fmt.Printf("HARBOR_HOST is %q — not a usable registry host; ignoring it and asking Harbor for its own.\n", registryHost)
+		}
 		discovered, err := h.systemInfoRegistryHost()
 		if err != nil {
-			fmt.Printf("HARBOR_HOST unset and harbor systeminfo unavailable (%v) — retrying next tick.\n", err)
+			fmt.Printf("no usable HARBOR_HOST and harbor systeminfo unavailable (%v) — retrying next tick.\n", err)
 			return nil
 		}
 		if discovered == "" {
-			fmt.Println("HARBOR_HOST unset and harbor systeminfo returned no registry_url — retrying next tick.")
+			fmt.Println("no usable HARBOR_HOST and harbor systeminfo returned no registry_url — retrying next tick.")
 			return nil
 		}
 		registryHost = discovered
-		fmt.Printf("HARBOR_HOST unset — discovered registry host %q from Harbor systeminfo (managed App Platform).\n", registryHost)
+		fmt.Printf("no usable HARBOR_HOST — discovered registry host %q from Harbor systeminfo (managed App Platform).\n", registryHost)
 	}
 
 	for _, spec := range []harborRobotSpec{
@@ -262,6 +294,81 @@ func robotsSeeded(ctx context.Context, bao baoStore) (bool, [2]string, error) {
 		}
 	}
 	return ok1 && ok2 && ok3 && user != "" && pass != "", [2]string{user, pass}, nil
+}
+
+// repairRegistryHost reconciles a STORED registry_host that is not a usable
+// registry host, on a cluster whose robots are already seeded.
+//
+// Without this, the "harbor." fix reaches nobody who needs it. Every managed
+// instance that rendered before it already seeded registry_host="harbor." into
+// OpenBao, and a seeded cluster takes the steady-state branch above and returns —
+// the resolution block never runs, so the bad value is permanent. Worse, the tick
+// reports healthy: the smoke authenticates username/password, which are perfectly
+// valid. Only the docker config DERIVED from registry_host is wrong, so every push
+// and pull 401s while the loop says steady state. This command is a convergence
+// loop, so a field that drifted out of the valid set gets reconciled like any other.
+//
+// Deliberately repairs only the UNUSABLE (see usableRegistryHost) — never a value
+// that is merely different from what discovery reports. An operator may have
+// pointed a cluster at a registry on purpose, and a loop that fights them every
+// five minutes is worse than the bug.
+//
+// Credentials are never at risk: a KV v2 write REPLACES the secret, so the rewrite
+// carries username/password back verbatim, and a path missing either is skipped
+// loudly rather than rewritten with an empty credential.
+func repairRegistryHost(ctx context.Context, bao baoStore, h *harborAPI, envHost string) error {
+	var broken []string
+	for _, p := range []string{"secret/harbor/robot", "secret/harbor/pull-robot"} {
+		cur, _, err := bao.Get(ctx, p, "registry_host")
+		if err != nil {
+			return fmt.Errorf("read %s registry_host: %w", p, err)
+		}
+		if !usableRegistryHost(cur) {
+			fmt.Printf("%s has registry_host %q — not a usable registry host; repairing.\n", p, cur)
+			broken = append(broken, p)
+		}
+	}
+	if len(broken) == 0 {
+		return nil
+	}
+
+	// Same precedence as the seeding path: a usable rendered HARBOR_HOST wins,
+	// otherwise ask Harbor for its own. Harbor being unreachable is not an error —
+	// the next tick retries, exactly like the seeding path's not-ready exits.
+	host := envHost
+	if !usableRegistryHost(host) {
+		discovered, err := h.systemInfoRegistryHost()
+		if err != nil || discovered == "" {
+			fmt.Printf("cannot resolve the registry host to repair with (systeminfo: %v) — retrying next tick.\n", err)
+			return nil
+		}
+		host = discovered
+	}
+
+	for _, p := range broken {
+		user, _, err := bao.Get(ctx, p, "username")
+		if err != nil {
+			return fmt.Errorf("read %s username: %w", p, err)
+		}
+		pass, _, err := bao.Get(ctx, p, "password")
+		if err != nil {
+			return fmt.Errorf("read %s password: %w", p, err)
+		}
+		if user == "" || pass == "" {
+			// Rewriting now would replace a live credential with an empty one. The
+			// wrong registry host is bad; a destroyed robot credential is worse.
+			fmt.Fprintf(os.Stderr, "%s is missing username/password — refusing to rewrite registry_host, "+
+				"which would drop the credential. Delete the robot in Harbor UI to have it re-provisioned.\n", p)
+			continue
+		}
+		if err := bao.Write(ctx, p, map[string]string{
+			"username": user, "password": pass, "registry_host": host,
+		}); err != nil {
+			return fmt.Errorf("repair %s registry_host: %w", p, err)
+		}
+		fmt.Printf("%s registry_host repaired to %q (credentials unchanged).\n", p, host)
+	}
+	return nil
 }
 
 // smokeSeededRobot verifies the seeded push robot authenticates. 401 is the one

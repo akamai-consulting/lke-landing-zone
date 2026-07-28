@@ -106,7 +106,7 @@ useful context for emergency recovery and understanding the secret layout.
 
 4. **Seed secrets** — writes the following into OpenBao KV v2 and sets the corresponding GitHub secrets:
    - `secret/harbor/robot` (Harbor CI robot credentials, push+pull+delete; the buildah `config.json` is derived from these in-cluster by ESO — see note below)
-   - `secret/harbor/pull-robot` (Harbor pull-only robot credentials; distributed as imagePullSecret to kube-system and workload namespaces)
+   - `secret/harbor/pull-robot` (Harbor pull-only robot credentials; seeded + published as the `HARBOR_PULL_*` repo secrets for standby bring-up. **Not** auto-distributed as an imagePullSecret — see "Pulling images in your own namespace" below)
    - `secret/infra/github-dispatch-token` (harbor-ready PostSync dispatch)
    - `secret/cert-automation/github-token` (cert-automation Argo Workflow)
    - `secret/loki/object-store` (Linode Object Storage keys minted at bootstrap by `llz ci mint-bootstrap-objkeys`, rotated by the in-cluster linodeCredRotator)
@@ -229,7 +229,7 @@ policy SLA), **generate-once** (created in-cluster, not re-rotated), **ephemeral
 | `secret/otel/ingress` | OTel ingress bearer token | **Generate-once** — ESO PushSecret, Password generator (`IfNotExists`) via `eso-pusher` role |
 | `secret/harbor/admin` | Harbor admin password | **Tracks Harbor** — ESO PushSecret mirrors Harbor's Helm-generated Secret (`Replace`) via `eso-pusher` role |
 | `secret/harbor/robot` | Harbor CI robot (push/pull/delete) | **Static** — bootstrap seed; re-seed to rotate |
-| `secret/harbor/pull-robot` | Harbor pull-only robot (imagePullSecret) | **Static** — bootstrap seed; re-seed to rotate |
+| `secret/harbor/pull-robot` | Harbor pull-only robot (the credential an imagePullSecret is built from — LLZ does not build one for you) | **Static** — bootstrap seed; re-seed to rotate |
 | `secret/harbor/docker-config` | buildah `dockerconfigjson` | **Derived** — rendered in-cluster by ESO from `harbor/robot`; follows the robot creds (not seeded/stored) |
 | `secret/cert-automation/github-token` | cert-automation Argo Workflow token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
 | `secret/infra/github-dispatch-token` | harbor-ready PostSync dispatch token | **Static** — bootstrap seed from `OPENBAO_SECRETS_WRITE_TOKEN`; follows that PAT |
