@@ -22,7 +22,7 @@ on:
         # NOTE: input name kept as `region` for parity with bootstrap-openbao.yml
         # and the infra-<deployment> Environment names. The value is really a
         # *deployment*. Free-form string (deployments are dynamic via `llz env add`).
-        description: 'Deployment to act on, e.g. primary | secondary | staging | lab | e2e (must have an infra-<deployment> Environment)'
+        description: 'Deployment name — NOT a Linode region. e.g. primary | secondary | staging | lab | e2e (must have an infra-<deployment> Environment)'
         required: true
         type: string
       action:

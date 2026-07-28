@@ -25,7 +25,7 @@ on:
         # hardcoded env list), so a choice input would reject any env an adopter
         # adds (e.g. `e2e`, `myteam-dev`). Must match a deployment you scaffolded
         # (^[a-z][a-z0-9-]{1,30}$) with a tfvars set + infra-<deployment> Environment.
-        description: 'Deployment to act on, e.g. primary | secondary | staging | lab | e2e (must have a tfvars set + infra-<deployment> Environment)'
+        description: 'Deployment name — NOT a Linode region (this field is named `region` for state-key compatibility). e.g. primary | staging | lab | e2e (must have a tfvars set + infra-<deployment> Environment)'
         required: true
         type: string
       reprovision_ca_only:

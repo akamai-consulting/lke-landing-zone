@@ -27,7 +27,7 @@ on:
         # Free-form string, not a fixed `choice`: deployments are dynamic
         # (`llz env add`), so a hardcoded list would reject adopter envs.
         # e.g. primary | secondary | staging | lab | e2e
-        description: 'Deployment to check, e.g. primary | secondary | staging | lab | e2e'
+        description: 'Deployment name to check — NOT a Linode region. e.g. primary | secondary | staging | lab | e2e'
         required: true
         type: string
         default: primary
