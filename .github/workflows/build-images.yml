@@ -76,10 +76,10 @@ jobs:
         run: |
           set -euo pipefail
           ALL='[
-            {"key":"terraform","image":"ci-terraform","target":"ci-terraform","version":"1.12.5"},
-            {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.31.0"},
-            {"key":"devcontainer","image":"devcontainer","target":"devcontainer","version":""},
-            {"key":"llz","image":"llz","target":"llz","version":""}
+            {"key":"terraform","image":"ci-tofu","target":"ci-tofu","version":"1.12.5","alias":"ci-terraform"},
+            {"key":"kubernetes","image":"ci-kubernetes","target":"ci-kubernetes","version":"1.31.0","alias":""},
+            {"key":"devcontainer","image":"devcontainer","target":"devcontainer","version":"","alias":""},
+            {"key":"llz","image":"llz","target":"llz","version":"","alias":""}
           ]'
           if [ "${WANT}" = "all" ]; then
             SEL="${ALL}"
@@ -156,13 +156,25 @@ jobs:
           IMAGE:   ${{ matrix.image }}
           TARGET:  ${{ matrix.target }}
           VERSION: ${{ matrix.version }}
+          ALIAS:   ${{ matrix.alias }}
         run: |
           set -euo pipefail
-          # The version tag is per-image and optional (ci-terraform pins the
-          # terraform version, ci-kubernetes the kubectl one; devcontainer and llz
-          # carry none), so it is appended rather than templated inline.
+          # The version tag is per-image and optional (ci-tofu pins the OpenTofu
+          # version, ci-kubernetes the kubectl one; devcontainer and llz carry
+          # none), so it is appended rather than templated inline.
           TAGS=(--tag "${REPO}/${IMAGE}:latest" --tag "${REPO}/${IMAGE}:sha-${SHA}")
           [ -n "${VERSION}" ] && TAGS+=(--tag "${REPO}/${IMAGE}:${VERSION}")
+          # DEPRECATION WINDOW: ci-tofu is also published as ci-terraform. The
+          # image was renamed when it stopped containing HashiCorp Terraform, but
+          # instances pin it through vars.TF_IMAGE — an explicit pin nobody's
+          # migration is obliged to update on our schedule. Publishing both names
+          # from one build means an un-updated pin keeps resolving to the CURRENT
+          # image rather than silently rotting on the last ci-terraform push.
+          # Remove the alias (and this block) once no instance pins the old name.
+          if [ -n "${ALIAS}" ]; then
+            TAGS+=(--tag "${REPO}/${ALIAS}:latest" --tag "${REPO}/${ALIAS}:sha-${SHA}")
+            [ -n "${VERSION}" ] && TAGS+=(--tag "${REPO}/${ALIAS}:${VERSION}")
+          fi
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             --push \
@@ -178,8 +190,21 @@ jobs:
             dockerfiles
           echo "digest=$(jq -r '."containerimage.digest"' /tmp/build-meta.json)" >> "$GITHUB_OUTPUT"
 
+      # Signed per REPOSITORY, not per digest: cosign stores the signature as a
+      # `sha256-<digest>.sig` tag inside the repo it was pushed to, so a signature
+      # on ci-tofu does NOT appear under the ci-terraform alias even though both
+      # names resolve to the same manifest. Sign the alias too, or the deprecation
+      # window would quietly publish an unsigned image to anyone still pinning the
+      # old name — the exact population least likely to notice.
       - name: Sign ${{ matrix.image }} (keyless)
         env:
-          IMAGE:  ${{ steps.ns.outputs.repo }}/${{ matrix.image }}
+          REPO:   ${{ steps.ns.outputs.repo }}
+          IMAGE:  ${{ matrix.image }}
+          ALIAS:  ${{ matrix.alias }}
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes --use-signing-config=false --new-bundle-format=false "${IMAGE}@${DIGEST}"
+        run: |
+          set -euo pipefail
+          cosign sign --yes --use-signing-config=false --new-bundle-format=false "${REPO}/${IMAGE}@${DIGEST}"
+          if [ -n "${ALIAS}" ]; then
+            cosign sign --yes --use-signing-config=false --new-bundle-format=false "${REPO}/${ALIAS}@${DIGEST}"
+          fi

@@ -20,7 +20,7 @@
 #
 # The tool ARGs in `toolbox` are the single source of truth for what goes INTO
 # the images. Two version-named image TAGS still restate a pin outside this file
-# and must be bumped with it — `ci-terraform:<TOFU_VERSION>` and
+# and must be bumped with it — `ci-tofu:<TOFU_VERSION>` and
 # `ci-kubernetes:<KUBECTL_VERSION>` in .github/workflows/build-images.yml, and the
 # same two literals as the `vars.TF_IMAGE`/`vars.KUBE_IMAGE` fallbacks in
 # .github/workflows/lint.yml. Nothing enforces that yet; a guard verb is the
@@ -60,7 +60,9 @@ ARG TARGETARCH
 # ── the single source of truth for tool versions ──
 # TRANSITIONAL: both binaries ship for one release. TF_VERSION goes away with the
 # HashiCorp Terraform block below, once every caller has moved to `tofu`
-# (docs/adr/0008-opentofu-migration.md, step 2).
+# (docs/adr/0008-opentofu-migration.md, step 2). The image stage is `ci-tofu`
+# from here on; build-images.yml also publishes it under the old `ci-terraform`
+# name for a deprecation window, so instances pinning that keep resolving.
 ARG TF_VERSION=1.9.8
 ARG TOFU_VERSION=1.12.5
 ARG TFLINT_VERSION=0.53.0
@@ -253,12 +255,12 @@ RUN set -eux; \
     curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
       | bash -s -- "${ACTIONLINT_VERSION}" /out/bin
 
-# ── ci-terraform ──────────────────────────────────────────────────────────────
+# ── ci-tofu ───────────────────────────────────────────────────────────────────
 # Terraform/IaC CI image. Ships NO Go toolchain: `llz` is prebuilt in `gotools`
 # and baked onto PATH, so CI jobs never run a runtime `go build`. Its tag tracks
 # vars.TF_IMAGE, not the workflow template-ref — keep TF_IMAGE in step with the
 # template release the instance pins.
-FROM debian:bookworm-slim AS ci-terraform
+FROM debian:bookworm-slim AS ci-tofu
 
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
