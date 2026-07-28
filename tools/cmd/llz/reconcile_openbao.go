@@ -27,12 +27,46 @@ const (
 	openbaoReconcilerRole = "reconciler"
 )
 
+// Rotation classes for the credential-age gauge. The class is what keeps
+// LLZCredentialRotationOverdue honest: only `automated` paths have a rotator
+// behind them, so only they can be EXPECTED to reset their age. Publishing the
+// other two classes without the label would mean an alert that fires on day 91
+// and can never be cleared by anything except a human doing a manual re-seed —
+// i.e. permanent noise that trains operators to ignore the rule.
+const (
+	// credClassAutomated — a rotator resets this path on a cadence
+	// (linodeCredRotator, ~80d threshold). Eligible for the 90d SLA alert.
+	credClassAutomated = "automated"
+	// credClassGenerateOnce — created in-cluster by an ESO PushSecret with a
+	// Password generator and `updatePolicy: IfNotExists`, so it is written once
+	// and never again. Its age is REAL (and worth seeing on the dashboard), but
+	// no automation will ever lower it. Visible, not alertable.
+	credClassGenerateOnce = "generate-once"
+	// credClassTracksSource — mirrored from a source of truth outside OpenBao
+	// (harbor/admin follows Harbor's Helm-generated Secret via a `Replace`
+	// PushSecret). Age tracks the SOURCE's rotation, not OpenBao's, so an
+	// overdue reading is a statement about Harbor, not about the vault.
+	credClassTracksSource = "tracks-source"
+)
+
 // credPaths maps each OpenBao KV path whose rotation age we track to its metric
-// `cred` label. These are the in-cluster-rotated object-storage keys.
-var credPaths = []struct{ path, cred string }{
-	{"secret/loki/object-store", "loki-object-store"},
-	{"secret/harbor/registry-s3", "harbor-registry-s3"},
-	{"secret/obj/platform", "obj-platform"},
+// `cred` label and its rotation class (above). The first three are the
+// in-cluster-rotated object-storage keys; the rest are the platform credentials
+// that had NO age visibility at all until this lane covered them — they were
+// aging silently, which is exactly the blind spot the credential single pane
+// exists to close.
+//
+// Every path here MUST also be granted a `secret/metadata/<path>` read in
+// policyReconcilerRead (ci_openbao_configure.go). A missing grant is a 403, and
+// a 403 is a non-404 error that fails the WHOLE sampler pass (up=0) — it does
+// not degrade to a single missing series.
+var credPaths = []struct{ path, cred, class string }{
+	{"secret/loki/object-store", "loki-object-store", credClassAutomated},
+	{"secret/harbor/registry-s3", "harbor-registry-s3", credClassAutomated},
+	{"secret/obj/platform", "obj-platform", credClassAutomated},
+	{"secret/grafana/admin", "grafana-admin", credClassGenerateOnce},
+	{"secret/otel/ingress", "otel-ingress", credClassGenerateOnce},
+	{"secret/harbor/admin", "harbor-admin", credClassTracksSource},
 }
 
 // openbaoProbe is the slice of the OpenBao client the sampler needs.
@@ -100,8 +134,8 @@ func sampleOpenBao(ctx context.Context, reg *metrics.Registry, now time.Time) er
 			continue // not seeded yet
 		}
 		reg.SetGauge("llz_credential_age_days",
-			"days since the credential was last rotated in OpenBao",
-			map[string]string{"cred": cp.cred}, float64(health.DaysSince(t, now)))
+			"days since the credential was last rotated in OpenBao (class: automated|generate-once|tracks-source)",
+			map[string]string{"cred": cp.cred, "class": cp.class}, float64(health.DaysSince(t, now)))
 	}
 	return nil
 }

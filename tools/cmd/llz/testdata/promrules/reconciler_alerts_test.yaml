@@ -154,3 +154,58 @@ tests:
       - eval_time: 20m
         alertname: LLZConvergenceUnobserved
         exp_alerts: []
+
+  # The rotation-class split. Every credential in the gauge set publishes a real
+  # age, but only class="automated" has a rotator that can bring that age back
+  # down. This pins the consequence: widening credPaths to cover the platform
+  # credentials must NOT turn LLZCredentialRotationOverdue into a rule that fires
+  # forever on paths nothing rotates.
+  #
+  # 2m interval, 26h of samples. The spacing has to stay inside Prometheus'
+  # 5m lookback or the series goes stale BETWEEN samples, which resolves the
+  # alert and restarts its `for` clock — an hourly series can never satisfy
+  # for:1h, let alone the for:24h rule.
+  - interval: 2m
+    name: rotation-overdue fires only for credentials something actually rotates
+    input_series:
+      # Automated + overdue: a rotator exists and is late. This is the real page.
+      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="loki-object-store",class="automated"}'
+        values: "95x780"
+      # Automated + inside SLA: silent.
+      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="obj-platform",class="automated"}'
+        values: "10x780"
+      # Generate-once, well past 90d but under a year: the old unscoped rule
+      # would have paged here every day forever.
+      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="grafana-admin",class="generate-once"}'
+        values: "200x780"
+      # Tracks-source, past a year: only the info-level never-rotated rule.
+      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="harbor-admin",class="tracks-source"}'
+        values: "400x780"
+    alert_rule_test:
+      # Only the automated+overdue credential. grafana-admin at 200d and
+      # harbor-admin at 400d are deliberately absent from this list.
+      - eval_time: 2h
+        alertname: LLZCredentialRotationOverdue
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+              cred: loki-object-store
+            exp_annotations:
+              summary: credential loki-object-store rotation is overdue
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
+              description: loki-object-store was last rotated 95 days ago (SLA 90d).
+      # 24h+ in, the year-old unrotatable credential surfaces as info — and the
+      # 200d generate-once one still does not, because it is under 365d.
+      - eval_time: 25h
+        alertname: LLZCredentialNeverRotated
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              service: llz-reconciler
+              cred: harbor-admin
+              class: tracks-source
+            exp_annotations:
+              summary: credential harbor-admin has never been rotated
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
+              description: harbor-admin (class tracks-source) is 400 days old and has no rotation automation. Re-seed it by hand, or accept the age deliberately.

@@ -52,6 +52,12 @@ func TestSampleOpenBaoHealthy(t *testing.T) {
 		updated: map[string]time.Time{
 			"secret/loki/object-store":  now.Add(-100 * 24 * time.Hour),
 			"secret/harbor/registry-s3": now.Add(-10 * 24 * time.Hour),
+			// The platform credentials the gauge set was widened to cover. They
+			// had no age visibility at all before, and each carries a class that
+			// is NOT "automated" — which is what keeps them off the SLA alert.
+			"secret/grafana/admin": now.Add(-400 * 24 * time.Hour),
+			"secret/otel/ingress":  now.Add(-400 * 24 * time.Hour),
+			"secret/harbor/admin":  now.Add(-5 * 24 * time.Hour),
 		},
 	}
 	withOpenbaoSeams(t, p, nil, nil)
@@ -63,11 +69,33 @@ func TestSampleOpenBaoHealthy(t *testing.T) {
 	for _, want := range []string{
 		"llz_openbao_sealed 0",
 		"llz_openbao_initialized 1",
-		`llz_credential_age_days{cred="loki-object-store"} 100`,
-		`llz_credential_age_days{cred="harbor-registry-s3"} 10`,
+		`llz_credential_age_days{class="automated",cred="loki-object-store"} 100`,
+		`llz_credential_age_days{class="automated",cred="harbor-registry-s3"} 10`,
+		`llz_credential_age_days{class="generate-once",cred="grafana-admin"} 400`,
+		`llz_credential_age_days{class="generate-once",cred="otel-ingress"} 400`,
+		`llz_credential_age_days{class="tracks-source",cred="harbor-admin"} 5`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// Every credPaths entry must have a matching metadata-read grant in
+// policyReconcilerRead. A missing grant is a 403, and sampleOpenBao treats any
+// non-404 failure as fatal — so one ungranted path silently takes down the seal
+// gauge and every OTHER credential's age with it, which is the opposite of what
+// widening the coverage was for.
+func TestCredPathsAreGrantedInReconcilerPolicy(t *testing.T) {
+	for _, cp := range credPaths {
+		meta := strings.Replace(cp.path, "secret/", "secret/metadata/", 1)
+		if !strings.Contains(policyReconcilerRead, `path "`+meta+`"`) {
+			t.Errorf("credPaths has %s but policyReconcilerRead grants no read on %q — the sampler will 403 and fail the whole lane", cp.path, meta)
+		}
+		switch cp.class {
+		case credClassAutomated, credClassGenerateOnce, credClassTracksSource:
+		default:
+			t.Errorf("credPaths entry %s has unknown class %q; the alert rules match on the known set", cp.cred, cp.class)
 		}
 	}
 }

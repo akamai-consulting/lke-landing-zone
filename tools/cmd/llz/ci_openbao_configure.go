@@ -110,18 +110,26 @@ path "secret/metadata/harbor/robot"      { capabilities = ["read"] }
 path "secret/metadata/harbor/pull-robot" { capabilities = ["read"] }
 `
 
-// reconciler-read: metadata read on the in-cluster-rotated object-storage key
-// paths for the credential-age gauges (--reconcile-openbao-gauges), PLUS a DATA
+// reconciler-read: metadata read on every path in the credential-age gauge set
+// (--reconcile-openbao-gauges; credPaths in reconcile_openbao.go), PLUS a DATA
 // read on the consolidated obj credential (secret/obj/platform) for the
 // apl-overlay reconciler (--reconcile-apl-overlay), which fills accessKeyId/
 // secretAccessKey into apl-core's native obj values before git-syncing them onto
 // apl-<env>. The data read is scoped to that ONE consolidated path — not the
-// per-app loki/harbor keys, which the reconciler never needs the data of. Mapped
-// to the `reconciler` k8s-auth role below. See docs/designs/apl-overlay-obj-native.md.
+// per-app loki/harbor keys, nor any of the metadata-only paths below, whose
+// VALUES the reconciler never sees. Mapped to the `reconciler` k8s-auth role
+// below. See docs/designs/apl-overlay-obj-native.md.
+//
+// The grant list and credPaths move together: the sampler treats a 403 as a hard
+// error (only a 404 is "not seeded yet"), so a path added to credPaths without a
+// line here takes down the whole openbao-gauges lane, not just its own series.
 const policyReconcilerRead = `path "secret/metadata/loki/object-store"  { capabilities = ["read"] }
 path "secret/metadata/harbor/registry-s3" { capabilities = ["read"] }
 path "secret/data/obj/platform"     { capabilities = ["read"] }
 path "secret/metadata/obj/platform" { capabilities = ["read"] }
+path "secret/metadata/grafana/admin" { capabilities = ["read"] }
+path "secret/metadata/otel/ingress"  { capabilities = ["read"] }
+path "secret/metadata/harbor/admin"  { capabilities = ["read"] }
 `
 
 // broad-pat-rotator: read/write on EXACTLY the broad-PAT path the in-cluster
