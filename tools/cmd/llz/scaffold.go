@@ -306,9 +306,16 @@ func quote(s string) string { return `"` + s + `"` }
 
 // setHCLField replaces the first `^<key> ... = ...` line with `<key> = <value>`.
 // Matches the bash `replace_in_file "^<key> .*=.*"` line-rewrite.
+//
+// ReplaceAllLiteral, NOT ReplaceAllString: the replacement is a rendered HCL value,
+// and ReplaceAllString EXPANDS `$name`/`${name}` in it. Every value here comes from
+// the spec, so a `$` in one was silently eaten rather than written — a Linode tag
+// `cost$1center` rendered as `"cost"`, and `owner${team}` as `"owner"`, tagging real
+// infrastructure wrong with no error (spec.cluster.tags is free-form, so nothing
+// upstream rejects it). No caller wants expansion; these are literals.
 func setHCLField(content, key, value string) string {
 	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(key) + `\s*=.*$`)
-	return re.ReplaceAllString(content, key+" = "+value)
+	return re.ReplaceAllLiteralString(content, key+" = "+value)
 }
 
 func tfvarsPaths(tfDir, env string) []string {

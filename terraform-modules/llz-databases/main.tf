@@ -24,6 +24,14 @@ locals {
 }
 
 resource "linode_database_postgresql_v2" "this" {
+  # UNVERIFIED: the composed label's maximum length. The provider declares NO
+  # client-side length validator on linode_database_postgresql_v2.label (checked
+  # against the provider source — unlike e.g. firewall rulesets, which do carry a
+  # LengthBetween(3, 32)), so whatever the API enforces surfaces only at APPLY.
+  # name and region_suffix are each capped at 31 by their own validations, so this
+  # can compose a label up to ~72 characters. Deliberately NOT guarded with a
+  # guessed bound — a wrong limit would reject valid labels — but if a long
+  # name+env pair ever fails at create with a label error, this is why.
   label     = "${var.label_prefix}-${var.name}-${var.region_suffix}"
   engine_id = local.engine_id
   region    = var.region

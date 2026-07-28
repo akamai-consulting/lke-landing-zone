@@ -418,10 +418,19 @@ func validateDatabases(c Cluster) []error {
 		if d.Region == "" {
 			errs = append(errs, fmt.Errorf("cluster.databases.%s.region is required — a database can only attach to a VPC in its own region", name))
 		} else if c.Region != "" && d.Region != c.Region {
-			// Not fatal on its own (a deployment may deliberately place a database
-			// in another region), but it CANNOT then attach to the cluster's VPC,
-			// which is the only VPC an instance normally has. Almost always a typo.
-			errs = append(errs, fmt.Errorf("cluster.databases.%s.region %q differs from cluster.region %q — the database can only attach to a VPC in its own region, so vpcId must name a VPC in %s", name, d.Region, c.Region, d.Region))
+			// A VPC-only database in another region is UNREACHABLE from this cluster:
+			// it must attach to a VPC in its own region, and Linode VPCs do not span
+			// or peer across regions, so no workload here can route to it. Both ways
+			// of "resolving" the mismatch fail — pointing vpcId at a VPC in the
+			// cluster's region is rejected by the API at apply (VPC not in the
+			// database's region), and pointing it at one in the database's region
+			// applies cleanly and produces a database nothing can connect to.
+			//
+			// So the only real fix is to match the cluster's region, and the message
+			// must say that: an earlier wording told the operator to point vpcId at a
+			// VPC in the OTHER region, which would not have cleared this check (it
+			// compares regions, not the VPC) and would have built the unreachable one.
+			errs = append(errs, fmt.Errorf("cluster.databases.%s.region %q differs from cluster.region %q — set it to %q. A database attaches only to a VPC in its own region, and Linode VPCs do not span regions, so a database in %s is unreachable from this cluster over the private network (and this root provisions no public endpoint)", name, d.Region, c.Region, c.Region, d.Region))
 		}
 		if d.VPCID <= 0 {
 			errs = append(errs, fmt.Errorf("cluster.databases.%s.vpcId is required and must be > 0 (`linode-cli vpcs list`) — the database is VPC-only, with no public endpoint", name))

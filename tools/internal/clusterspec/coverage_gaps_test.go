@@ -221,7 +221,7 @@ func TestValidateDatabases(t *testing.T) {
 	joined := errsString(validateDatabases(bad))
 	for _, want := range []string{
 		`key "Shared DB" is malformed`,
-		`cluster.databases.elsewhere.region "eu-west" differs from cluster.region "us-ord"`,
+		`cluster.databases.elsewhere.region "eu-west" differs from cluster.region "us-ord" — set it to "us-ord"`,
 		"cluster.databases.unset.vpcId is required",
 		"cluster.databases.unset.subnetId is required",
 		"cluster.databases.sized.clusterSize must be 1",
