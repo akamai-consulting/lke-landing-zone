@@ -5,8 +5,8 @@
 # encrypted the hop but authenticated neither end.
 #
 # The Secret is projected at /etc/openbao-client-tls (deployment.yaml); the
-# server CA it verifies OpenBao against is a SEPARATE mount, /etc/openbao-tls,
-# fed by openbao-tls-ca-externalsecret.yaml. Two different roots on purpose —
+# server CA it verifies OpenBao against is a SEPARATE mount, /etc/openbao-ca,
+# fed by openbao-ca-bundle.yaml (from #358). Two different roots on purpose —
 # see components/certManagerBootstrapCA/llz-client-ca.yaml.
 #
 # WAVE -14: after the llz-client-ca ClusterIssuer (-15) exists, and well before

@@ -127,7 +127,7 @@ spec:
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
             # OpenBao endpoint for the openbao-gauges sampler. The hop is mTLS:
             # this pod verifies OpenBao's serving cert against the openbao-ca root
-            # (/etc/openbao-tls/ca.crt) AND presents its own llz-reconciler client
+            # (/etc/openbao-ca/ca.crt) AND presents its own llz-reconciler client
             # identity (/etc/openbao-client-tls), which the listener requires.
             # Both mounts are below; the file paths are the code defaults in
             # openbao_k8s_login.go, restated here only where they differ.

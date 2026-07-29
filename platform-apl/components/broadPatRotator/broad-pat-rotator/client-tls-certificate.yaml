@@ -1,5 +1,10 @@
-# mTLS material for the broad-pat-rotator CronJob: its CLIENT identity to
-# OpenBao, and the OpenBao SERVING CA it verifies the server against.
+# The CLIENT half of this workload's mTLS to OpenBao: the identity it presents,
+# which the listener's tls_require_and_verify_client_cert demands.
+#
+# The SERVER half — the openbao-ca root it verifies OpenBao against — is NOT
+# here. It comes from openbao-ca-bundle.yaml in this same directory (added by
+# #358), mounted at /etc/openbao-ca. Two Certificates from two different roots,
+# deliberately: see components/certManagerBootstrapCA/llz-client-ca.yaml.
 #
 # Both replace OPENBAO_SKIP_VERIFY=true, which encrypted this pod's OpenBao hop
 # without authenticating either end.

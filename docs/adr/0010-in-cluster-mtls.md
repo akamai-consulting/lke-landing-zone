@@ -68,6 +68,28 @@ resulting Secret. This platform ships no trust-manager/reflector, and ESO's
 pattern, not a new one. If trust-manager is adopted later, each anchor
 Certificate becomes a Bundle and nothing else changes.
 
+### Relationship to #358
+
+PR #358 landed the same indirection for the SERVER half while this change was in
+flight: `openbao-ca-bundle` Certificates in llz-reconciler, harbor and
+llz-pat-rotator, an `OPENBAO_CA_FILE` env, and a shared
+`inClusterBaoHTTPClient()`. This change is **additive over it**, not a competing
+design — those Secrets are reused as-is and the client half is layered on top.
+
+Two things from #358 change here:
+
+- **`OPENBAO_SKIP_VERIFY` is removed.** #358 kept it as a cold-start fallback for
+  the window before the CA Secret exists. With a client certificate also
+  required, unverified TLS cannot complete the handshake at all, so the fallback
+  became unreachable. Leaving it would advertise a downgrade that no longer
+  exists.
+- **The client transport caches success only.** #358's `optional: true` posture on
+  the reconciler's CA volume is kept (its many non-OpenBao lanes must not wait on
+  a wave-0 Certificate), which means the CA can be briefly absent at cold start.
+  A `sync.OnceValues` memo would cache that failure for the life of a process
+  whose liveness probe never touches OpenBao — it would never recover. The client
+  retries on failure and caches only once built.
+
 ### Per-hop outcomes
 
 | Hop | Before | After |
