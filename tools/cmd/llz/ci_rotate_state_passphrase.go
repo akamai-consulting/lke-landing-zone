@@ -115,6 +115,49 @@ func lastLines(s string, n int) string {
 	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
+// buildNewKeyOnlyEncryption renders a TF_ENCRYPTION config carrying ONLY the new
+// key — no fallback. Verifying with the rotation-window config would decrypt via
+// the fallback and pass for a root still on the OLD key, so this is what makes
+// "verified" mean "the old passphrase can now be deleted".
+//
+// The passphrase is interpolated into an HCL string, so it is validated to the
+// same base64 alphabet the terraform-init action enforces: a quote or backslash
+// could close the string and append arbitrary encryption configuration (e.g.
+// swapping in method.unencrypted). The key name becomes an HCL identifier.
+func buildNewKeyOnlyEncryption(passphrase, keyName string) (string, error) {
+	if strings.TrimSpace(passphrase) == "" {
+		return "", fmt.Errorf("TF_STATE_ENCRYPTION_PASSPHRASE is not set — the verify pass needs the new passphrase to prove each root decrypts WITHOUT the fallback")
+	}
+	if keyName == "" {
+		keyName = "llz"
+	}
+	if strings.ContainsFunc(passphrase, func(r rune) bool {
+		return !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' ||
+			r == '+' || r == '/' || r == '=' || r == '_' || r == '-')
+	}) {
+		return "", fmt.Errorf("TF_STATE_ENCRYPTION_PASSPHRASE must contain only [A-Za-z0-9+/=_-] — it is interpolated into an HCL string where a quote or backslash could inject encryption configuration")
+	}
+	if strings.ContainsFunc(keyName, func(r rune) bool {
+		return !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_')
+	}) {
+		return "", fmt.Errorf("TF_STATE_ENCRYPTION_KEY_NAME %q must be an HCL identifier: [A-Za-z0-9_] only", keyName)
+	}
+	return fmt.Sprintf(`key_provider "pbkdf2" %[1]q {
+  passphrase = %[2]q
+}
+method "aes_gcm" %[1]q {
+  keys = key_provider.pbkdf2.%[1]s
+}
+method "unencrypted" "migrate" {}
+state {
+  method = method.aes_gcm.%[1]s
+}
+plan {
+  method = method.aes_gcm.%[1]s
+}
+`, keyName, passphrase), nil
+}
+
 func ciRotateStatePassphraseCmd() *cobra.Command {
 	var apply bool
 	var rootsDir string
@@ -124,7 +167,7 @@ func ciRotateStatePassphraseCmd() *cobra.Command {
 		Long: "Rollover half of state-encryption key rotation. Requires a rotation window:\n" +
 			"TF_ENCRYPTION must already carry BOTH key providers (terraform-init emits the\n" +
 			"encrypted fallback when TF_STATE_ENCRYPTION_PASSPHRASE_OLD is set), and\n" +
-			"TF_ENCRYPTION_NEW_ONLY must carry the new key alone for the verify pass.\n\n" +
+			"the new passphrase reaches it via TF_STATE_ENCRYPTION_PASSPHRASE.\n\n" +
 			"Per root: `tofu state pull | tofu state push -` re-encrypts under the new\n" +
 			"primary (no provider calls, plaintext never on disk), then the state is read\n" +
 			"back with the NEW KEY ALONE. Only when EVERY root verifies is it safe to\n" +
@@ -144,19 +187,24 @@ func ciRotateStatePassphraseCmd() *cobra.Command {
 
 func runRotateStatePassphrase(apply bool, rootsDir string) error {
 	encBoth := os.Getenv("TF_ENCRYPTION")
-	encNewOnly := os.Getenv("TF_ENCRYPTION_NEW_ONLY")
 	if strings.TrimSpace(encBoth) == "" {
 		return fmt.Errorf("TF_ENCRYPTION is not set — run this inside a job that used the terraform-init action")
-	}
-	if strings.TrimSpace(encNewOnly) == "" {
-		return fmt.Errorf("TF_ENCRYPTION_NEW_ONLY is not set — the verify pass needs the NEW key ALONE; " +
-			"without it a root could 'verify' via the fallback and the old passphrase would be deleted while state still depends on it")
 	}
 	// The rollover is only meaningful when a fallback is configured: with a single
 	// key, `state push` re-writes under the same key and the verify is vacuous.
 	if !strings.Contains(encBoth, "fallback") {
 		return fmt.Errorf("TF_ENCRYPTION carries no fallback — this is not a rotation window. " +
 			"Set TF_STATE_ENCRYPTION_PASSPHRASE_OLD (+ TF_STATE_ENCRYPTION_KEY_NAME_OLD) so terraform-init emits one")
+	}
+
+	// Built here rather than passed in: the verify pass needs the NEW key ALONE,
+	// and emitting that HCL in workflow YAML both duplicated the terraform-init
+	// action's escaping logic and put untested shell on the critical path of a
+	// state re-key. One implementation, unit-tested.
+	encNewOnly, err := buildNewKeyOnlyEncryption(
+		os.Getenv("TF_STATE_ENCRYPTION_PASSPHRASE"), os.Getenv("TF_STATE_ENCRYPTION_KEY_NAME"))
+	if err != nil {
+		return err
 	}
 
 	results := make([]rootRollover, 0, len(statePassphraseRoots))

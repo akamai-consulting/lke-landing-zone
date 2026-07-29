@@ -22,7 +22,8 @@ state {
   method = method.aes_gcm.n
   fallback { method = method.aes_gcm.o }
 }`)
-	t.Setenv("TF_ENCRYPTION_NEW_ONLY", `state { method = method.aes_gcm.n }`)
+	t.Setenv("TF_STATE_ENCRYPTION_PASSPHRASE", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	t.Setenv("TF_STATE_ENCRYPTION_KEY_NAME", "llz_g2")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 }
 
@@ -50,12 +51,53 @@ func TestRotateStatePassphraseRefusesWithoutAFallback(t *testing.T) {
 // The verify pass is the entire safety property. Without the new-key-alone
 // config it would run against the window config, decrypt via the FALLBACK, and
 // report success for a root still on the old key.
-func TestRotateStatePassphraseRequiresNewKeyOnlyConfig(t *testing.T) {
+func TestRotateStatePassphraseRequiresTheNewPassphrase(t *testing.T) {
 	t.Setenv("TF_ENCRYPTION", `state { fallback { method = method.aes_gcm.o } }`)
-	t.Setenv("TF_ENCRYPTION_NEW_ONLY", "")
+	t.Setenv("TF_STATE_ENCRYPTION_PASSPHRASE", "")
 	err := runRotateStatePassphrase(true, "terraform")
-	if err == nil || !strings.Contains(err.Error(), "TF_ENCRYPTION_NEW_ONLY") {
-		t.Fatalf("want a refusal naming TF_ENCRYPTION_NEW_ONLY, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "TF_STATE_ENCRYPTION_PASSPHRASE") {
+		t.Fatalf("want a refusal naming the passphrase, got %v", err)
+	}
+}
+
+// The new-key-only config is what makes "verified" mean "safe to delete the old
+// passphrase". It must carry the new key and NO fallback — a fallback would let a
+// root still on the old key pass.
+func TestBuildNewKeyOnlyEncryption(t *testing.T) {
+	got, err := buildNewKeyOnlyEncryption("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "llz_g2")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if strings.Contains(got, "fallback") {
+		t.Error("the verify config MUST NOT carry a fallback — it would decrypt old-key state and pass")
+	}
+	for _, want := range []string{
+		`key_provider "pbkdf2" "llz_g2"`,
+		`method "aes_gcm" "llz_g2"`,
+		"method = method.aes_gcm.llz_g2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if def, _ := buildNewKeyOnlyEncryption("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ""); !strings.Contains(def, `"llz"`) {
+		t.Error("empty key name should default to llz")
+	}
+}
+
+// The passphrase and key name are interpolated into HCL. A quote or backslash
+// could close the string and append encryption configuration — e.g. swapping in
+// method.unencrypted, which would silently write PLAINTEXT state.
+func TestBuildNewKeyOnlyEncryptionRejectsInjection(t *testing.T) {
+	for _, bad := range []struct{ pass, name, why string }{
+		{`x" } method "unencrypted" "z" {}`, "llz", "quote in passphrase"},
+		{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", `llz" }`, "quote in key name"},
+		{"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "llz-g2", "hyphen is not an HCL identifier"},
+		{"has spaces in it aaaaaaaaaaaaaaa", "llz", "space in passphrase"},
+	} {
+		if _, err := buildNewKeyOnlyEncryption(bad.pass, bad.name); err == nil {
+			t.Errorf("%s: must be rejected", bad.why)
+		}
 	}
 }
 
