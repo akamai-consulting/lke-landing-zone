@@ -44,26 +44,29 @@ type rotationInputs struct {
 	PATApply, RevokeApply            string
 	TFStateApply, TFStateRevokeApply string
 	DBAdminApply                     string
+	StatePassphraseApply             string
 	Deployments                      string // JSON array
 }
 
 // rotationPlan is the routed outcome: which jobs run, with what scope/arming.
 // Zero value = everything off (the bash default_off).
 type rotationPlan struct {
-	RunLKEAdmin         bool
-	RunPATCreate        bool
-	RunPATPropagateOnly bool
-	RunPATRevoke        bool
-	RunTFStateCreate    bool
-	RunTFStateRevoke    bool
-	RunDBAdmin          bool
-	Regions             string // JSON array
-	PATApply            bool
-	RevokeApply         bool
-	TFStateApply        bool
-	TFStateRevokeApply  bool
-	DBAdminApply        bool
-	Note                string // human routing note (log + summary)
+	RunLKEAdmin          bool
+	RunPATCreate         bool
+	RunPATPropagateOnly  bool
+	RunPATRevoke         bool
+	RunTFStateCreate     bool
+	RunTFStateRevoke     bool
+	RunDBAdmin           bool
+	RunStatePassphrase   bool
+	Regions              string // JSON array
+	PATApply             bool
+	RevokeApply          bool
+	TFStateApply         bool
+	TFStateRevokeApply   bool
+	DBAdminApply         bool
+	StatePassphraseApply bool
+	Note                 string // human routing note (log + summary)
 }
 
 func ciRotationPlanCmd() *cobra.Command {
@@ -84,19 +87,20 @@ func ciRotationPlanCmd() *cobra.Command {
 
 func rotationInputsFromEnv() rotationInputs {
 	return rotationInputs{
-		Event:              os.Getenv("EVENT"),
-		Cron:               os.Getenv("CRON"),
-		Scope:              os.Getenv("SCOPE"),
-		Region:             os.Getenv("REGION"),
-		Confirm:            os.Getenv("CONFIRM"),
-		Reason:             os.Getenv("REASON"),
-		Actor:              os.Getenv("ACTOR"),
-		PATApply:           os.Getenv("PAT_APPLY"),
-		RevokeApply:        os.Getenv("REVOKE_APPLY"),
-		TFStateApply:       os.Getenv("TF_STATE_APPLY"),
-		TFStateRevokeApply: os.Getenv("TF_STATE_REVOKE_APPLY"),
-		DBAdminApply:       os.Getenv("DB_ADMIN_APPLY"),
-		Deployments:        os.Getenv("DEPLOYMENTS"),
+		Event:                os.Getenv("EVENT"),
+		Cron:                 os.Getenv("CRON"),
+		Scope:                os.Getenv("SCOPE"),
+		Region:               os.Getenv("REGION"),
+		Confirm:              os.Getenv("CONFIRM"),
+		Reason:               os.Getenv("REASON"),
+		Actor:                os.Getenv("ACTOR"),
+		PATApply:             os.Getenv("PAT_APPLY"),
+		RevokeApply:          os.Getenv("REVOKE_APPLY"),
+		TFStateApply:         os.Getenv("TF_STATE_APPLY"),
+		TFStateRevokeApply:   os.Getenv("TF_STATE_REVOKE_APPLY"),
+		DBAdminApply:         os.Getenv("DB_ADMIN_APPLY"),
+		StatePassphraseApply: os.Getenv("STATE_PASSPHRASE_APPLY"),
+		Deployments:          os.Getenv("DEPLOYMENTS"),
 	}
 }
 
@@ -195,6 +199,26 @@ func routeRotation(in rotationInputs) (rotationPlan, error) {
 		p.RunDBAdmin = true
 		p.Regions = fmt.Sprintf("[%q]", in.Region)
 		p.DBAdminApply = armed(in.DBAdminApply)
+	case "state-passphrase":
+		// DISPATCH-ONLY, like db-admin and for a stronger reason: this re-keys
+		// every state file in the instance. A rollover that half-completes leaves
+		// some roots on the new key and some on the old, and the ONLY thing that
+		// can still read the stragglers is the old passphrase — so the job must
+		// verify every root before the old secret is discarded, and must never be
+		// started by a cron that nobody is watching.
+		//
+		// Not in `all` for the same reason db-admin isn't: "rotate:all" must not
+		// silently re-key state.
+		//
+		// Safe to re-run: with both passphrases present a root that is already on
+		// the new key decrypts via the primary and a root still on the old one via
+		// the fallback, so a resumed rollover converges rather than corrupting.
+		if err := requireConfirm("rotate:state-passphrase"); err != nil {
+			return p, err
+		}
+		p.RunStatePassphrase = true
+		p.Regions = in.Deployments
+		p.StatePassphraseApply = armed(in.StatePassphraseApply)
 	case "all":
 		if err := requireConfirm("rotate:all"); err != nil {
 			return p, err
@@ -222,12 +246,14 @@ func (p rotationPlan) outputLines() []string {
 		"run-tf-state-create=" + b(p.RunTFStateCreate),
 		"run-tf-state-revoke=" + b(p.RunTFStateRevoke),
 		"run-db-admin=" + b(p.RunDBAdmin),
+		"run-state-passphrase=" + b(p.RunStatePassphrase),
 		"regions=" + p.Regions,
 		"pat-apply=" + b(p.PATApply),
 		"revoke-apply=" + b(p.RevokeApply),
 		"tf-state-apply=" + b(p.TFStateApply),
 		"tf-state-revoke-apply=" + b(p.TFStateRevokeApply),
 		"db-admin-apply=" + b(p.DBAdminApply),
+		"state-passphrase-apply=" + b(p.StatePassphraseApply),
 	}
 }
 

@@ -1,10 +1,8 @@
 # ADR 0009 — Credential-age coverage for credentials with no measurable expiry
 
-Status: **accepted**, implemented for the two credentials that can be observed.
-Supersedes this ADR's own first draft, which proposed self-asserted
-`rotation-stamps`; observation turned out to be available, and the residue is
-named below. Kind 1 (below) needs no decision from this ADR — it is described
-here only to draw the boundary. Kind 2 is what this document is for.
+Status: **accepted**, implemented. Supersedes this ADR's own first draft, which
+proposed self-asserted `rotation-stamps`; observation turned out to be available
+for every credential that mattered, and the residue is named below.
 
 ## Context
 
@@ -69,10 +67,11 @@ state permanently unreadable.
 This is not a reason to leave them unmeasured. It is a reason not to measure them
 by moving them.
 
-
 ## Decision
 
-**Measure write time, not age-in-a-vault.**
+Two mechanisms, neither of which stores a credential anywhere new.
+
+### 1. Measure write time, not age-in-a-vault
 
 `GET /repos/{owner}/{repo}/environments/infra-<region>/secrets/<name>` returns
 `{name, created_at, updated_at}`. Age is `now - updated_at`.
@@ -91,7 +90,7 @@ the actual writers rather than assumed:
 | Writer | Behaviour |
 |---|---|
 | `llz tokens` | Write-on-missing (`if !have(...)`). Skips already-set secrets. |
-| `secret-rotation.yml` (`tf-state-key`) | Writes only on a real rotation. |
+| `secret-rotation.yml` (`tf-state-key`, `state-passphrase`) | Writes only on a real rotation. |
 | A human re-pasting in the UI | The one false-refresh path — rare, and "someone deliberately touched this secret" is a defensible reset. |
 
 An **absent** secret is reported `unknown` rather than dropped. That is the half
@@ -105,19 +104,45 @@ Published as `llz_credential_age_days` — the *same* metric the OpenBao sampler
 uses, because it means the same thing and only the source differs, so the existing
 dashboard panels and alert rules pick these up with no query changes.
 
-### Class: what the age is worth acting on
+### 2. Give the passphrase a real rotation path
 
-The state-backend key pair is `on-demand`: `secret-rotation.yml` scope
-`tf-state-key` is a real path an operator can dispatch, so a 90-day SLA is
-something a human can satisfy.
+The passphrase was classed "static by design" because rotating it means
+re-encrypting every state file. Three facts, each **verified against OpenTofu
+1.12.3** rather than reasoned about, make that rotation routine:
 
-`TF_STATE_ENCRYPTION_PASSPHRASE` is `static` **for now**. Rotating it means
-re-encrypting every state file, and no such path exists yet — so its age is worth
-*seeing* on the dashboard but must not page as overdue, because the operator it
-would page has nothing to dispatch. The taxonomy's own test is whether the age is
-actionable; classing it `on-demand` before a rollover exists would be the same
-kind of half-truth this ADR is fixing. A follow-on that builds the rollover flips
-this one word.
+1. **`enforced` bans `method.unencrypted`, not `fallback`.** The roots'
+   `encryption.tf` says the two are "mutually exclusive"; that is true only of the
+   *unencrypted* fallback. An **encrypted** fallback is legal alongside
+   `enforced = true`, so a rollover never relaxes the posture. (This ADR's earlier
+   draft assumed a rotation window would require dropping `enforced` — it does not.)
+
+2. **The key-provider NAME is decryption metadata.** pbkdf2 stores its salt at
+   `meta["key_provider.pbkdf2.<name>"]`, so a passphrase decrypts only state
+   written under the *same* name. Redefining `llz` to hold a new passphrase feeds
+   the old salt to the new key: `decryption failed for all attempted`. Rotation
+   therefore introduces a **new name** (`TF_STATE_ENCRYPTION_KEY_NAME`) and keeps
+   the old one for the fallback (`…_KEY_NAME_OLD`). This is the non-obvious
+   constraint and the reason the key name is now a tracked repo variable.
+
+3. **`tofu state pull | tofu state push -` re-encrypts with no provider API
+   calls**, and the plaintext lives only in the pipe between the two processes.
+   Cheaper than `apply -refresh-only` and immune to a provider outage.
+
+Because ADR 0007 put the *posture* in code and the *key material* in
+`TF_ENCRYPTION`, the second key provider and the fallback are emitted entirely
+from the `terraform-init` action — **no root is edited, and no PR is open during
+the rotation window.**
+
+The rollover is `secret-rotation.yml` scope `state-passphrase`: dispatch-only,
+confirmation-gated, absent from both the schedule and `all`. Per root it re-keys,
+then reads the state back **with the new key alone**; `llz ci
+rotate-state-passphrase` exits non-zero unless every root verifies, and deleting
+`TF_STATE_ENCRYPTION_PASSPHRASE_OLD` is gated on that. Until then the old
+passphrase is the only thing that can read a straggler, so it is never discarded
+early. Re-running converges, which is the recovery path.
+
+With a real rotation path, the passphrase is `on-demand` (90-day SLA), not
+`static` — the taxonomy's own test is whether the age is actionable.
 
 ### What this does not cover
 
@@ -133,12 +158,24 @@ observation, and an assertion by the rotating job was always the weaker signal.
 - The dashboard's "no rotation automation" panel stops being a half-truth: it
   implied the listed set was *all* the un-rotated credentials, when three of the
   highest-value ones were not in the query at all.
-- The state-backend key pair gets a rotation SLA for the first time.
-- The passphrase becomes *visible* but not yet *actionable*. That gap is now
-  explicit on the dashboard rather than hidden by absence from it, which is the
-  point — and it is the argument for building the rollover.
-- No new credential material is stored anywhere. The mechanism is pure
-  observation, so the `platform-ci` grants stay exactly as narrow as they are.
+- The state-backend credentials get a rotation SLA for the first time.
+- **The state-encryption passphrase becomes rotatable**, which it was not. That
+  removes the "escrow it forever, it can never change" property — a compromised
+  or suspected-compromised passphrase now has a remedy other than rebuilding.
+- **A rollover is all-or-nothing across an instance.** A half-completed one
+  leaves roots split across two keys. Mitigated by retaining the old passphrase
+  until every root verifies, by re-runs converging, and by an exclusive
+  concurrency group — but it is the sharp edge of this decision and belongs in
+  the runbook, not a footnote.
+- **`TF_STATE_ENCRYPTION_KEY_NAME` is now load-bearing config.** If the variable
+  drifts from the name state was actually written under, decryption fails —
+  loudly, not silently, which is the right failure, but it is a new way to break
+  a working instance.
+- `tofu state pull` emits plaintext state. Every path that runs it keeps stdout
+  out of buffers, files, and logs; only stderr is captured for errors.
+- No new credential material is stored anywhere. The measurement half is pure
+  observation, and the rollover moves key material between an Actions secret and
+  `TF_ENCRYPTION` — never into a file, a log, or OpenBao.
 - One more thing that fails soft: an instance with no GitHub token still gets its
   Linode and PAT entries, and a probe error reports `unknown` rather than taking
   the inventory down.
@@ -151,6 +188,8 @@ observation, and an assertion by the rotating job was always the weaker signal.
 | Store the credentials themselves in OpenBao | Circular: OpenBao runs inside the cluster whose state they guard. Also widens blast radius — the single pane's job is to *observe* credentials, not to hold them. |
 | Probe the Linode Object Storage keys API for `created` | **The field does not exist.** `ObjectStorageKey` is `{id, label, access_key, secret_key, limited, bucket_access, regions}` (verified, linodego v1.65.0). The repo's own rotator orders keys by monotonic `id` for exactly this reason. |
 | Derive OBJ-key age from the `obj_access_key_create` account event | Real, and carries a true `Created` — but bounded by event retention (unverified, and if shorter than the SLA every key reads as overdue), needs `account:read_only`, and covers neither the passphrase nor the kubeconfig. `updated_at` is simpler and covers all three. |
+| `apply -refresh-only` to re-key | Works, but calls provider APIs for every root × deployment, so a provider hiccup fails a rollover that has nothing to do with the provider. `state pull \| push` does the same re-encryption with no API calls. |
+| Reuse the key-provider name across a rotation | Verified to fail: the old salt is fed to the new passphrase. This is why the key name is versioned rather than fixed. |
 | Leave them unmeasured, document the gap | Honest, and cheaper. Rejected because the gap is not uniform: these are the state bucket and its decryption key, i.e. the credentials whose compromise is least recoverable. |
 
 ## Related
@@ -161,5 +200,4 @@ observation, and an assertion by the rotating job was always the weaker signal.
 - ADR 0001 (PAT rotation locus) — "where does the credential live" as a blast-radius question.
 - [docs/secrets.md](../secrets.md) — the rotation-class table and the
   credential-age coverage section this extends.
-- `tools/cmd/llz/ci_token_inventory.go` — Kind 1's target list, and the
-  write-time targets this ADR adds.
+- `tools/cmd/llz/ci_token_inventory.go` — Kind 1's target list.

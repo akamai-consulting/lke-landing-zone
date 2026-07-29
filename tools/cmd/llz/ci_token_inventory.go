@@ -82,11 +82,10 @@ var ghSecretTargets = []struct {
 	// Operator-dispatchable via secret-rotation.yml scope=tf-state-key.
 	{"TF_STATE_ACCESS_KEY", credClassOnDemand},
 	{"TF_STATE_SECRET_KEY", credClassOnDemand},
-	// No rotation path today: rotating the passphrase means re-encrypting every
-	// state file. `static` is therefore honest — the age is worth SEEING, but
-	// nobody can act on it yet, so it must not page as overdue. When a rollover
-	// path exists this becomes on-demand, which is a one-word change here.
-	{"TF_STATE_ENCRYPTION_PASSPHRASE", credClassStatic},
+	// Was `static` — correctly, while re-encrypting every state file had no
+	// automation. scope=state-passphrase is that automation, so the age is now
+	// ACTIONABLE and belongs on the 90d SLA rather than the yearly nudge.
+	{"TF_STATE_ENCRYPTION_PASSPHRASE", credClassOnDemand},
 }
 
 // The class is the SAME vocabulary the OpenBao age sampler uses
@@ -94,7 +93,8 @@ var ghSecretTargets = []struct {
 // llz_credential_age_days too, so LLZCredentialRotationOverdue picks them up with
 // no rule change. That is also why the class must track reality rather than
 // ambition — `on-demand` on a credential with no dispatchable rotation would page
-// an operator who has nothing to dispatch.
+// an operator who has nothing to dispatch. All three now have one
+// (secret-rotation.yml scopes `tf-state-key` and `state-passphrase`).
 
 // ghPATTargets declares the GitHub service PATs the inventory measures. It was
 // two hardcoded literals at the call site, which is why `E2E_DISPATCH_TOKEN` and
