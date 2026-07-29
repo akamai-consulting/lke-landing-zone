@@ -135,3 +135,91 @@ func repoRootForGuardTest(t *testing.T) string {
 	}
 	return root
 }
+
+// TestScanPlaintextGoServiceURL is the regression test for the guard's worst
+// blind spot. The first revision `continue`d after the InsecureSkipVerify check,
+// and its comment-stripper treated the "//" in "http://" as a comment start —
+// between them, the two hops that MOTIVATED this guard were invisible to it:
+// the Harbor REST base (Harbor admin password in a Basic-auth header) and
+// Keycloak's JWKS URL (the signing keys OpenBao validates team logins with).
+//
+// A guard that misses the findings it was built for is worse than none: it
+// reports green and buys false confidence.
+func TestScanPlaintextGoServiceURL(t *testing.T) {
+	cases := []struct{ name, body, wantKey string }{
+		{
+			name:    "URL in a function body",
+			body:    "func run() {\n\tapiURL := envOr(\"HARBOR_API_URL\", \"http://harbor-core.harbor.svc.cluster.local\")\n}\n",
+			wantKey: "x.go:http://harbor-core.harbor.svc.cluster.local",
+		},
+		{
+			name:    "URL in a const with a port and path",
+			body:    "const jwks = \"http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/realms/otomi/certs\"\n",
+			wantKey: "x.go:http://keycloak-keycloakx-http.keycloak.svc.cluster.local",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := scanPlaintext("x.go", c.body, true)
+			if len(got) != 1 {
+				t.Fatalf("want 1 finding, got %d: %+v", len(got), got)
+			}
+			if got[0].key != c.wantKey {
+				t.Errorf("key = %q, want %q", got[0].key, c.wantKey)
+			}
+		})
+	}
+}
+
+// TestStripCommentKeepsSchemeSeparator pins the specific mechanic above: "://"
+// must not be mistaken for the start of a Go comment.
+func TestStripCommentKeepsSchemeSeparator(t *testing.T) {
+	line := "\tu := \"http://svc.ns.svc.cluster.local\" // trailing note"
+	got := stripComment(line, true)
+	if !strings.Contains(got, "http://svc.ns.svc.cluster.local") {
+		t.Errorf("scheme separator was eaten as a comment: %q", got)
+	}
+	if strings.Contains(got, "trailing note") {
+		t.Errorf("the real trailing comment survived: %q", got)
+	}
+}
+
+// TestScanPlaintextEvasionShapes pins the tolerance the patterns need. YAML lets
+// the same meaning be spelled several ways, and the first revision of this guard
+// matched only one of them — anchored, lowercase, unquoted. `scheme: "http"`,
+// `scheme: HTTP` and a flow-style `{port: m, scheme: http}` all mean the same
+// thing to Kubernetes, so a guard that misses them is one a reviewer bypasses by
+// adding quotes without ever knowing there was a gate.
+func TestScanPlaintextEvasionShapes(t *testing.T) {
+	for _, c := range []struct{ name, body string }{
+		{"double-quoted scheme", "    - port: m\n      scheme: \"http\"\n"},
+		{"single-quoted scheme", "    - port: m\n      scheme: 'http'\n"},
+		{"uppercase scheme", "    - port: m\n      scheme: HTTP\n"},
+		{"trailing comment", "    - port: m\n      scheme: http # legacy\n"},
+		{"flow style", "    - {port: m, scheme: http}\n"},
+		{"quoted insecureSkipVerify", "    - port: m\n      insecureSkipVerify: \"true\"\n"},
+		{"svc without cluster.local", "  u: http://harbor-core.harbor.svc\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := scanPlaintext("p.yaml", c.body, false); len(got) != 1 {
+				t.Errorf("want 1 finding, got %d: %+v", len(got), got)
+			}
+		})
+	}
+}
+
+// TestScanPlaintextDoesNotFlagHTTPS is the other half of that tolerance: `https`
+// must not match, and RE2 has no negative lookahead, so the exclusion rides on
+// the trailing character class. Easy to break while widening the pattern.
+func TestScanPlaintextDoesNotFlagHTTPS(t *testing.T) {
+	for _, body := range []string{
+		"    - port: m\n      scheme: https\n",
+		"    - port: m\n      scheme: \"https\"\n",
+		"    - {port: m, scheme: https}\n",
+		"  u: https://harbor-core.harbor.svc.cluster.local\n",
+	} {
+		if got := scanPlaintext("p.yaml", body, false); len(got) != 0 {
+			t.Errorf("https must not be a finding (%q), got %+v", body, got)
+		}
+	}
+}

@@ -88,6 +88,22 @@ var plaintextAllowed = map[string]plaintextRule{
 			"Service does not exist — Loki runs in `monitoring` — so the pipeline is also BROKEN; " +
 			"whoever repairs the URL must give it TLS at the same time",
 	},
+	"tools/cmd/llz/ci_harbor_provisioner.go:http://harbor-core.harbor.svc.cluster.local": {
+		owner: "llz",
+		reason: "the harbor-robot-provisioner's REST base. Carries the Harbor ADMIN PASSWORD in a " +
+			"Basic-auth header and receives freshly minted ROBOT SECRETS in the response — the " +
+			"sharpest cleartext edge in the cluster. #360 puts the pod in the Istio mesh so the " +
+			"sidecar upgrades this to mTLS (harbor-core has no client-cert auth, so direct HTTPS " +
+			"would be TLS and not mTLS); the URL stays http:// by design once meshed",
+	},
+	"tools/cmd/llz/ci_openbao_configure.go:http://keycloak-keycloakx-http.keycloak.svc.cluster.local": {
+		owner: "llz",
+		reason: "OpenBao's `keycloak` auth mount fetching the realm JWKS — i.e. the SIGNING KEYS it " +
+			"validates team-login tokens with. Over plaintext, anything able to answer substitutes " +
+			"its own keys and mints tokens OpenBao accepts; bound_issuer does not help because the " +
+			"issuer claim is checked with the very keys being fetched. #360 moves it to https with " +
+			"jwks_ca_pem pinned — delete this entry when that lands",
+	},
 	"tools/internal/openbao/openbao.go:HTTPClientInsecure": {
 		owner: "llz",
 		reason: "the shared unverified transport for pod→OpenBao. #360 splits it: the loopback " +
@@ -131,12 +147,21 @@ type plaintextFinding struct {
 	line            int
 }
 
+// Patterns are deliberately TOLERANT of YAML's spelling freedom. An anchored,
+// case-sensitive, unquoted-only match is trivially evaded — `scheme: "http"`,
+// `scheme: HTTP`, or a flow-style `{port: m, scheme: http}` all mean the same
+// thing to Kubernetes and all slipped past the first revision of this guard.
+// A gate that a reviewer can bypass by adding quotes is not a gate.
+//
+// `https` is excluded by the trailing class rather than by a negative lookahead
+// (Go's RE2 has none): after `http` the next character must be whitespace, a
+// comma, a closing brace, a quote, or end-of-line — `s` is none of those.
 var (
-	reSchemeHTTP   = regexp.MustCompile(`^\s*scheme:\s*http\s*$`)
-	reInsecureYAML = regexp.MustCompile(`^\s*insecureSkipVerify:\s*true\s*$`)
+	reSchemeHTTP   = regexp.MustCompile(`(?i)scheme:\s*["']?http["']?(?:[\s,}]|$)`)
+	reInsecureYAML = regexp.MustCompile(`(?i)insecureSkipVerify:\s*["']?true["']?(?:[\s,}]|$)`)
 	reInsecureGo   = regexp.MustCompile(`InsecureSkipVerify:\s*true`)
 	reSvcHTTP      = regexp.MustCompile(`http://[a-z0-9.\-]+\.svc(\.cluster\.local)?`)
-	rePortName     = regexp.MustCompile(`^\s*-?\s*port:\s*(\S+)\s*$`)
+	rePortName     = regexp.MustCompile(`port:\s*["']?([A-Za-z0-9_.\-]+)`)
 )
 
 func ciPlaintextGuardCmd() *cobra.Command {
@@ -280,6 +305,19 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 					what: "InsecureSkipVerify: true",
 				})
 			}
+			// An in-cluster http:// URL is a plaintext hop wherever it is written,
+			// and the most consequential ones in this tree are Go constants, not
+			// YAML: the Harbor REST base (which carries the admin password in a
+			// Basic-auth header) and Keycloak's JWKS URL (which carries the signing
+			// keys OpenBao validates team logins with). An earlier revision of this
+			// scanner `continue`d here and saw neither — the guard was blind to
+			// exactly the two hops that motivated it.
+			if u := reSvcHTTP.FindString(code); u != "" {
+				out = append(out, plaintextFinding{
+					key: rel + ":" + u, file: rel, line: n,
+					what: "plaintext URL to an in-cluster Service (" + u + ")",
+				})
+			}
 			continue
 		}
 		if m := rePortName.FindStringSubmatch(code); m != nil {
@@ -314,7 +352,13 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 // finding.
 func stripComment(ln string, isGo bool) string {
 	if isGo {
-		if i := strings.Index(ln, "//"); i >= 0 {
+		// Mask "://" before hunting for "//", or the scheme separator in
+		// "http://harbor-core.harbor.svc" reads as a comment start and the rest of
+		// the line — the URL itself — is discarded. That is exactly how an earlier
+		// revision stayed blind to the Harbor and Keycloak hops: the finding was
+		// stripped away before any pattern could match it.
+		masked := strings.ReplaceAll(ln, "://", ":\x00\x00")
+		if i := strings.Index(masked, "//"); i >= 0 {
 			return ln[:i]
 		}
 		return ln
