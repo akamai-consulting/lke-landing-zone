@@ -42,10 +42,19 @@ type aplOverlayConfig struct {
 
 // openbaoGetClientFn builds an OpenBao client that can READ secret data (Get),
 // distinct from reconcile_openbao.go's metadata-only probe. A seam for tests.
-var openbaoGetClientFn = func(addr, token string) interface {
+//
+// Pod-network traffic, so it uses the shared mTLS transport. Returns the
+// transport error rather than a client that fails every call — the same shape
+// reconcile_openbao.go's openbaoClientFn uses, so a missing client certificate
+// surfaces once at construction instead of once per Get.
+var openbaoGetClientFn = func(addr, token string) (interface {
 	Get(ctx context.Context, path, key string) (string, bool, error)
-} {
-	return openbao.NewWithClient(addr, token, "", openbao.HTTPClientInsecure(30*time.Second))
+}, error) {
+	hc, err := inClusterBaoHTTPClient()
+	if err != nil {
+		return nil, err
+	}
+	return openbao.NewWithClient(addr, token, "", hc), nil
 }
 
 // aplOverlayConfigFromEnv reads + validates the reconciler's env contract. REGION
@@ -136,7 +145,10 @@ func readObjPlatformCreds(ctx context.Context, addr string) (accessKeyID string,
 	if err != nil {
 		return "", false, err
 	}
-	c := openbaoGetClientFn(addr, tok)
+	c, err := openbaoGetClientFn(addr, tok)
+	if err != nil {
+		return "", false, err
+	}
 	ak, ok, err := c.Get(ctx, objPlatformPath, objCredAccessField)
 	if err != nil || !ok {
 		return "", false, err

@@ -83,14 +83,14 @@ spec:
                   value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
                 # Verify OpenBao's TLS: `ca.crt` from the openbao-ca-bundle Certificate
                 # issued into this namespace (openbao-ca-bundle.yaml). Takes
-                # precedence over OPENBAO_SKIP_VERIFY below, which stays as the
-                # documented fallback for the window before the Secret exists —
-                # inClusterBaoHTTPClient() requires one or the other to be set, so
-                # an unset environment can never silently mean unverified TLS.
+                # precedence over ADR 0010. The skip-verify fallback #358 kept here is
+                # REMOVED: the listener now also requires a CLIENT certificate, so
+                # unverified TLS cannot complete the handshake — the fallback was
+                # unreachable, and leaving it would imply a downgrade that no
+                # longer exists.
                 - name: OPENBAO_CA_FILE
                   value: /etc/openbao-ca/ca.crt
-                - name: OPENBAO_SKIP_VERIFY
-                  value: "true"
+
                 - name: OPENBAO_KUBERNETES_ROLE
                   value: "broad-pat-rotator"
               resources:
@@ -105,14 +105,29 @@ spec:
                 seccompProfile: { type: RuntimeDefault }
               volumeMounts:
                 - { name: tmp, mountPath: /tmp }
+                # SERVER half — verifies OpenBao's serving cert (#358's bundle).
                 - { name: openbao-ca, mountPath: /etc/openbao-ca, readOnly: true }
+                # CLIENT half — this workload's identity (ADR 0010). A Job whose
+                # Secret is not yet written waits in ContainerCreating and the
+                # next schedule picks it up.
+                - { name: openbao-client-tls, mountPath: /etc/openbao-client-tls, readOnly: true }
           volumes:
             # optional: the CA bundle Secret appears once cert-manager issues the
             # leaf. Absent -> the pod still starts and falls back to
             # OPENBAO_SKIP_VERIFY rather than wedging in ContainerCreating.
+            # NOT optional any more: with mTLS required there is no skip-verify
+            # path to fall back to, so a missing CA must park the pod rather than
+            # let it start and fail every OpenBao call.
             - name: openbao-ca
               secret:
                 secretName: openbao-ca-bundle
-                optional: true
             - name: tmp
               emptyDir: { medium: Memory, sizeLimit: 16Mi }
+            # 0444 (not 0400): Secret volumes are root-owned and this pod runs as
+            # uid 65532 with no fsGroup, so 0400 would be unreadable to it. The
+            # key's protection is RBAC on the Secret + etcd encryption, not the
+            # in-pod mode — the only process in this pod is the rotator.
+            - name: openbao-client-tls
+              secret:
+                secretName: broad-pat-rotator-client-tls
+                defaultMode: 0444

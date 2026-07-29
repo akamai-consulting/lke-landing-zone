@@ -104,7 +104,7 @@ func openbaoClientForward(role string) (*openbao.Client, func(), error) {
 		return nil, noop, fmt.Errorf("auto port-forward to %s/%s: %w", openbaoNS, rootOpenbaoPod, err)
 	}
 	fmt.Fprintf(os.Stderr, "→ OPENBAO_ADDR_ACTIVE unset; port-forwarding %s/%s → %s (TLS verify skipped on loopback)\n", openbaoNS, rootOpenbaoPod, addr)
-	c := openbao.NewWithClient(addr, token, os.Getenv("OPENBAO_NAMESPACE"), openbao.HTTPClientInsecure(30*time.Second))
+	c := openbao.NewWithClient(addr, token, os.Getenv("OPENBAO_NAMESPACE"), openbao.HTTPClientLoopback(30*time.Second))
 	return c, cleanup, nil
 }
 
@@ -112,7 +112,11 @@ func openbaoClientForward(role string) (*openbao.Client, func(), error) {
 // kubectl-chosen local port (":0"), waits for it to be announced + the tunnel to
 // warm up, and returns the https base URL and a kill/reap teardown.
 func portForwardOpenbao() (string, func(), error) {
-	cmd := exec.Command("kubectl", "port-forward", "-n", openbaoNS, "pod/"+rootOpenbaoPod, ":8200")
+	// Forward to the LOOPBACK listener (8210), not the mTLS network listener
+	// (8200). port-forward is established inside the pod's network namespace, so
+	// a 127.0.0.1-bound port is reachable — which is what lets an operator use
+	// `llz openbao get/set` from a laptop that holds no client certificate.
+	cmd := exec.Command("kubectl", "port-forward", "-n", openbaoNS, "pod/"+rootOpenbaoPod, ":"+openbaoLoopbackPort)
 	// Surface kubectl's own stderr live: without this the common failure modes
 	// (wrong kube-context, pod-0 absent, RBAC-denied on pods/portforward) are
 	// swallowed and the operator only sees an opaque establish timeout. kubectl
@@ -149,7 +153,7 @@ func portForwardOpenbao() (string, func(), error) {
 // call doesn't race the port-forward coming up. Any HTTP response — even a
 // sealed/standby non-2xx from /v1/sys/seal-status — proves the tunnel is up.
 func warmUpOpenbao(base string) error {
-	client := openbao.HTTPClientInsecure(5 * time.Second)
+	client := openbao.HTTPClientLoopback(5 * time.Second)
 	var lastErr error
 	for i := 0; i < 15; i++ {
 		resp, err := client.Get(base + "/v1/sys/seal-status")
@@ -277,12 +281,45 @@ func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
 // by OpenBao's standby request-forwarding, so pod-0 is fine for day-2 admin.
 const rootOpenbaoPod = "platform-openbao-0"
 
+// ── in-pod `bao` CLI: the loopback listener ──────────────────────────────────
+
+// OpenBao serves TWO listeners (llz-openbao-platform values.yaml):
+//
+//	[::]:8200        pod network — mTLS, client certificate REQUIRED
+//	127.0.0.1:8210   loopback    — TLS, no client certificate
+//
+// Everything that drives OpenBao by exec-ing into the pod (`bao operator init`,
+// unseal/status, generate-root, the `llz ci health` probes) must target the
+// loopback listener: those callers run as the `bao` binary inside the container
+// and hold no client identity. Pointing them at 8200 fails the handshake.
+//
+// `kubectl port-forward` also reaches 8210 — forwarding is set up inside the
+// pod's network namespace, so a 127.0.0.1-bound listener is reachable. That is
+// what keeps the operator paths (`llz openbao get/set`, `llz openbao login`)
+// working without issuing client certs to laptops.
+const (
+	openbaoLoopbackPort = "8210"
+	openbaoLoopbackAddr = "https://127.0.0.1:" + openbaoLoopbackPort
+	// Mounted from the openbao-tls Secret. The serving cert carries a 127.0.0.1
+	// SAN (templates/openbao-tls-cert.yaml), so in-pod callers VERIFY the server
+	// rather than running VAULT_SKIP_VERIFY=true as they used to.
+	openbaoPodCACert = "/openbao/tls/ca.crt"
+)
+
+// baoLoopbackEnv is the VAULT_* env every in-pod `bao` invocation shares. Pure,
+// so the address/CA pairing is asserted once in tests instead of being restated
+// (and drifting) at each of the four call sites that used to inline it.
+func baoLoopbackEnv() []string {
+	return []string{"VAULT_ADDR=" + openbaoLoopbackAddr, "VAULT_CACERT=" + openbaoPodCACert}
+}
+
 // baoExecArgv builds the kubectl argv that runs `bao <args>` inside the openbao
 // container of pod with the standard VAULT_* env (token included). Pure, so the
 // argv shape + token placement are unit-tested.
 func baoExecArgv(pod, token string, args []string) []string {
-	argv := []string{"-n", openbaoNS, "exec", "-i", "-c", "openbao", pod, "--",
-		"env", "VAULT_ADDR=https://127.0.0.1:8200", "VAULT_SKIP_VERIFY=true", "VAULT_TOKEN=" + token, "bao"}
+	argv := []string{"-n", openbaoNS, "exec", "-i", "-c", "openbao", pod, "--", "env"}
+	argv = append(argv, baoLoopbackEnv()...)
+	argv = append(argv, "VAULT_TOKEN="+token, "bao")
 	return append(argv, args...)
 }
 

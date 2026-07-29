@@ -1,0 +1,40 @@
+# mTLS material for the broad-pat-rotator CronJob: its CLIENT identity to
+# OpenBao, and the OpenBao SERVING CA it verifies the server against.
+#
+# Both replace OPENBAO_SKIP_VERIFY=true, which encrypted this pod's OpenBao hop
+# without authenticating either end.
+#
+# This workload holds the account-wide Linode token and a GitHub env-secrets-write
+# PAT, and its whole reason for living in a dedicated namespace (llz-pat-rotator,
+# see namespace.yaml) is blast-radius isolation. A transport that any pod could
+# have impersonated the far end of undercut that isolation; a client identity
+# restores it.
+#
+# Wave -14: after the llz-client-ca / openbao-ca ClusterIssuers (-15), before the
+# CronJob's first schedule.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: broad-pat-rotator-client-tls
+  namespace: llz-pat-rotator
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+spec:
+  secretName: broad-pat-rotator-client-tls
+  commonName: broad-pat-rotator
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["pat-rotator"]
+  duration: 2160h    # 90 days
+  renewBefore: 720h  # 30 days
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: llz-client-ca
+    kind: ClusterIssuer

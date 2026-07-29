@@ -237,7 +237,7 @@ func runOpenbaoLogin(o openbaoLoginOpts) error {
 		return fmt.Errorf("port-forward to %s/%s: %w", openbaoNS, rootOpenbaoPod, err)
 	}
 	defer cleanup()
-	token, err := openbao.OIDCLogin(context.Background(), openbao.HTTPClientInsecure(30*time.Second), addr, "keycloak", o.team, idToken)
+	token, err := openbao.OIDCLogin(context.Background(), openbao.HTTPClientLoopback(30*time.Second), addr, "keycloak", o.team, idToken)
 	if err != nil {
 		return err
 	}

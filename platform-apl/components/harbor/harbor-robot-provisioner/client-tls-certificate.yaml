@@ -1,0 +1,41 @@
+# mTLS material for the harbor-robot-provisioner CronJob: its CLIENT identity to
+# OpenBao, and the OpenBao SERVING CA it verifies the server against.
+#
+# Both replace OPENBAO_SKIP_VERIFY=true. That flag mattered more here than
+# anywhere else in the tree: this pod reads and writes secret/harbor/{robot,
+# pull-robot} — the registry credentials the whole standby channel depends on —
+# over a hop that authenticated neither end.
+#
+# Note these live in the `harbor` namespace, which apl-core owns and which LLZ
+# does NOT label with restricted Pod Security. Anything that can run a pod there
+# could previously have watched this traffic; now it would also need a key signed
+# by llz-client-ca.
+#
+# Wave -14: after the llz-client-ca / openbao-ca ClusterIssuers (-15), before the
+# CronJob's first schedule.
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: harbor-robot-provisioner-client-tls
+  namespace: harbor
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+spec:
+  secretName: harbor-robot-provisioner-client-tls
+  commonName: harbor-robot-provisioner
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["harbor"]
+  duration: 2160h    # 90 days
+  renewBefore: 720h  # 30 days
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: llz-client-ca
+    kind: ClusterIssuer

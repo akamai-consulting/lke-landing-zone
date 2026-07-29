@@ -47,6 +47,57 @@ platform:
     duration: 8760h
     renewBefore: 720h
 
+  # ── Client-side mTLS ───────────────────────────────────────────────────────
+  # The listener requires and verifies client certificates (see the listener
+  # stanza in openbao.server.ha.raft.config). Three Certificates come off this
+  # block, all issued by the CLIENT root — a different trust anchor from
+  # platform.tls.issuerRef above, so a client cert can never serve as a server
+  # cert (rationale in components/certManagerBootstrapCA/llz-client-ca.yaml).
+  clientTls:
+    # Issuer for every client identity in this chart. Provided by the
+    # certManagerBootstrapCA component; a sibling cluster points this at its own.
+    issuerRef:
+      name: llz-client-ca
+      kind: ClusterIssuer
+    # Secret whose ca.crt becomes tls_client_ca_file. The leaf is unused — the
+    # Certificate exists only to land the client CA in this namespace.
+    caSecretName: openbao-client-ca
+    # Client identity the raft followers present on retry_join.
+    raftSecretName: openbao-raft-client-tls
+    # Client identity the Prometheus scrape presents. The Secret must live in the
+    # ServiceMonitor's namespace (this one) — prometheus-operator resolves
+    # endpoint tlsConfig secret refs relative to the ServiceMonitor, not to
+    # Prometheus, and mounts them into the Prometheus pod as scrape assets.
+    scrapeSecretName: openbao-scrape-client-tls
+    duration: 2160h    # 90 days
+    renewBefore: 720h  # 30 days
+
+  # ── apl-core CA, for the Keycloak JWKS fetch ───────────────────────────────
+  # OpenBao's `keycloak` auth mount fetches the realm JWKS over HTTPS and pins
+  # the CA (jwks_ca_pem, see ci_openbao_configure.go). Keycloak's serving cert is
+  # issued by apl-core, not by us, so we need apl-core's root in this namespace —
+  # landed by the same ca.crt indirection used everywhere else in this chart.
+  #
+  # ⚠️  UNVERIFIED PREREQUISITE. Two facts must hold on the target cluster and
+  # NEITHER could be confirmed from this repo alone:
+  #   1. apl-core exposes a ClusterIssuer named `custom-ca` (referenced by name in
+  #      components/observability/otel-bootstrap-ca.yaml's migration note, which
+  #      is the only evidence available here).
+  #   2. Keycloak's internal Service serves TLS on 8443 with a cert from THAT CA.
+  # Verify both before rollout:
+  #   kubectl get clusterissuer custom-ca
+  #   kubectl -n keycloak get svc keycloak-keycloakx-http -o yaml | grep -A3 ports
+  #   kubectl -n llz-openbao exec platform-openbao-0 -c openbao -- \
+  #     openssl s_client -connect keycloak-keycloakx-http.keycloak:8443 -showcerts
+  # If either fails, set enabled:false here and pin static keys instead
+  # (jwt_validation_pubkeys) — see docs/adr/0010-in-cluster-mtls.md.
+  aplCA:
+    enabled: true
+    secretName: openbao-apl-ca
+    issuerRef:
+      name: custom-ca
+      kind: ClusterIssuer
+
   # NetworkPolicy: namespaces allowed to reach OpenBao on :8200, and the
   # observability namespace OpenBao ships audit logs to on :80. These are
   # apl-core namespace names; a sibling deployment with different namespace
@@ -219,10 +270,76 @@ openbao:
             current_key    = "file:///openbao/seal/unseal.key"
           }
 
+          # NETWORK listener — mTLS REQUIRED. Every connection that crosses the
+          # pod network must present a client certificate chaining to
+          # `llz-client-ca` (mounted at /openbao/client-ca/ca.crt from the
+          # `openbao-client-ca` Secret; see templates/openbao-client-ca-cert.yaml).
+          #
+          # This is the control that makes the pod→OpenBao hop mutually
+          # authenticated rather than merely encrypted. Before it, the listener
+          # accepted any TCP peer and every client ran with VAULT_SKIP_VERIFY=1,
+          # so neither end authenticated the other: NetworkPolicy decided who
+          # could connect and a bearer token decided what they could do, with
+          # nothing binding the transport to either.
+          #
+          # `tls_require_and_verify_client_cert` is a HARD gate — a client with
+          # no cert, an expired cert, or a cert from another CA is rejected at
+          # the TLS handshake, before any token is read. Every consumer therefore
+          # needs a leaf BEFORE this is enabled; see the staged rollout in
+          # docs/adr/0010-in-cluster-mtls.md. Enabling this while a consumer is
+          # still cert-less takes that consumer down, and ESO being cert-less
+          # takes down every ExternalSecret in the cluster.
+          #
+          # unauthenticated_metrics_access stays TRUE: it exempts /v1/sys/metrics
+          # from OpenBao's TOKEN check, not from TLS. The Prometheus scrape still
+          # completes the client-cert handshake (see openbao-scrape-client-cert.yaml)
+          # — it just does not need a Vault token on top. Removing it would force
+          # a token into the ServiceMonitor for no security gain.
           listener "tcp" {
             tls_disable      = 0
             address          = "[::]:8200"
             cluster_address  = "[::]:8201"
+            tls_cert_file    = "/openbao/tls/tls.crt"
+            tls_key_file     = "/openbao/tls/tls.key"
+            tls_min_version  = "tls12"
+
+            tls_client_ca_file                  = "/openbao/client-ca/ca.crt"
+            tls_require_and_verify_client_cert  = true
+
+            telemetry {
+              unauthenticated_metrics_access = true
+            }
+          }
+
+          # LOOPBACK listener — 127.0.0.1 only, NO client-cert requirement.
+          #
+          # WHY THIS EXISTS: the operator/bootstrap paths shell into the pod and
+          # drive the local server (`bao operator init`, unseal/seal status,
+          # generate-root, the readiness probes in `llz ci health`). Those run as
+          # `bao` inside the container and have no client certificate — they
+          # cannot use the mTLS listener above, and minting a leaf into the
+          # server's own pod just to talk to itself would hand a client identity
+          # to anything that can exec into it.
+          #
+          # WHY IT IS SAFE: 127.0.0.1 is reachable ONLY from inside this pod's
+          # network namespace — no NetworkPolicy applies to loopback because no
+          # packet leaves the pod. The reachable set is the openbao container and
+          # the promtail sidecar. Neither gains anything: every API call on this
+          # listener still requires a Vault TOKEN exactly as before, so the
+          # authorization story is unchanged; only the transport-level client
+          # check is relaxed, on an interface with no network exposure.
+          #
+          # It still serves TLS, and the openbao-tls cert now carries 127.0.0.1
+          # in ipAddresses (templates/openbao-tls-cert.yaml), so in-pod callers
+          # VERIFY the server against /openbao/tls/ca.crt instead of running
+          # VAULT_SKIP_VERIFY=true. That retires the last skip-verify in the
+          # codebase — see `baoEnv` in tools/cmd/llz/openbao.go.
+          #
+          # NO cluster_address here: raft peer traffic belongs on the network
+          # listener above (8201), and a second cluster_address is a config error.
+          listener "tcp" {
+            tls_disable      = 0
+            address          = "127.0.0.1:8210"
             tls_cert_file    = "/openbao/tls/tls.crt"
             tls_key_file     = "/openbao/tls/tls.key"
             tls_min_version  = "tls12"
@@ -252,17 +369,36 @@ openbao:
             # the leader is currently serving (see templates/openbao-tls-cert.yaml,
             # which enumerates the same per-pod names). The CA file path mirrors
             # the standard volume mount of the openbao-tls Secret.
+            #
+            # leader_client_cert_file / leader_client_key_file: retry_join speaks
+            # the leader's HTTP API on :8200, which is the mTLS listener — so a
+            # JOINING PEER IS A CLIENT and must present a certificate like any
+            # other. Without these three lines every follower fails to join with a
+            # TLS handshake error and the raft cluster never forms, which on a
+            # fresh install means OpenBao never becomes available at all. The
+            # identity is `openbao-raft-client`, issued from llz-client-ca into
+            # this namespace (templates/openbao-raft-client-cert.yaml).
+            #
+            # This applies ONLY to retry_join. Raft's own cluster-port (8201)
+            # replication uses certificates OpenBao generates and rotates
+            # internally; it does not consult the listener's client CA.
             retry_join {
-              leader_api_addr     = "https://platform-openbao-0.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
-              leader_ca_cert_file = "/openbao/tls/ca.crt"
+              leader_api_addr         = "https://platform-openbao-0.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
+              leader_ca_cert_file     = "/openbao/tls/ca.crt"
+              leader_client_cert_file = "/openbao/raft-client/tls.crt"
+              leader_client_key_file  = "/openbao/raft-client/tls.key"
             }
             retry_join {
-              leader_api_addr     = "https://platform-openbao-1.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
-              leader_ca_cert_file = "/openbao/tls/ca.crt"
+              leader_api_addr         = "https://platform-openbao-1.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
+              leader_ca_cert_file     = "/openbao/tls/ca.crt"
+              leader_client_cert_file = "/openbao/raft-client/tls.crt"
+              leader_client_key_file  = "/openbao/raft-client/tls.key"
             }
             retry_join {
-              leader_api_addr     = "https://platform-openbao-2.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
-              leader_ca_cert_file = "/openbao/tls/ca.crt"
+              leader_api_addr         = "https://platform-openbao-2.platform-openbao-internal.llz-openbao.svc.cluster.local:8200"
+              leader_ca_cert_file     = "/openbao/tls/ca.crt"
+              leader_client_cert_file = "/openbao/raft-client/tls.crt"
+              leader_client_key_file  = "/openbao/raft-client/tls.key"
             }
           }
 
@@ -402,6 +538,45 @@ openbao:
       - name: openbao-tls
         secret:
           secretName: openbao-tls
+      # Client-verification bundle for the mTLS listener. Only `ca.crt` off this
+      # Secret is consumed (tls_client_ca_file) — it is the llz-client-ca root.
+      # The Secret is a cert-manager Certificate issued FROM llz-client-ca purely
+      # so its ca.crt lands in this namespace; the leaf itself is unused. That
+      # indirection is the platform's stand-in for a CA-reflector controller and
+      # matches how ESO's caProvider sources openbao-ca off the openbao-tls Secret.
+      - name: openbao-client-ca
+        secret:
+          secretName: openbao-client-ca
+          defaultMode: 0444
+          # ca.crt ONLY. Without this filter the whole Secret is projected,
+          # including the anchor leaf's tls.key — a private key nothing reads,
+          # published world-readable inside the pod for no reason. Every other CA
+          # anchor mount in this change filters; this one is the odd one out.
+          items:
+            - { key: ca.crt, path: ca.crt }
+      # Client identity the raft followers present to the leader on retry_join
+      # (see leader_client_cert_file in the raft stanza). 0440 — the private key
+      # must not be world-readable; the openbao process reads it via fsGroup 1000.
+      - name: openbao-raft-client
+        secret:
+          secretName: openbao-raft-client-tls
+          defaultMode: 0440
+      # apl-core's CA, for the Keycloak JWKS fetch (jwks_ca_pem). OPTIONAL on
+      # purpose: this Certificate is issued by apl-core's `custom-ca`, not by us,
+      # and if that issuer is absent the Secret never appears. A required volume
+      # would then park every OpenBao pod in ContainerCreating — i.e. an
+      # unverified apl-core assumption would take down the secret store. Optional
+      # means OpenBao starts regardless and only the Keycloak team-login path is
+      # affected; `llz ci bao-configure` fails loudly on the missing file rather
+      # than quietly configuring an unverified JWKS fetch.
+      - name: openbao-apl-ca
+        secret:
+          secretName: openbao-apl-ca
+          optional: true
+          defaultMode: 0444
+          # ca.crt only — same reason as openbao-client-ca above.
+          items:
+            - { key: ca.crt, path: ca.crt }
       # 32-byte static auto-unseal key, referenced as file:///openbao/seal/unseal.key
       # by the `seal "static"` stanza in server.ha.raft.config. Created by
       # `llz ci bao-seed-seal-key` before bootstrap (a missing Secret leaves the
@@ -419,6 +594,19 @@ openbao:
     volumeMounts:
       - name: openbao-tls
         mountPath: /openbao/tls
+        readOnly: true
+      # tls_client_ca_file for the mTLS listener (ca.crt only).
+      - name: openbao-client-ca
+        mountPath: /openbao/client-ca
+        readOnly: true
+      # leader_client_cert_file / leader_client_key_file for raft retry_join.
+      - name: openbao-raft-client
+        mountPath: /openbao/raft-client
+        readOnly: true
+      # jwks_ca_pem for the Keycloak JWKS fetch. Empty dir when the optional
+      # Secret is absent — see the volume note.
+      - name: openbao-apl-ca
+        mountPath: /openbao/apl-ca
         readOnly: true
       - name: openbao-seal-key
         mountPath: /openbao/seal

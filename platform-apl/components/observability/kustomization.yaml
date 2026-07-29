@@ -5,6 +5,8 @@ kind: Component
 resources:
   - obj-secrets-externalsecret.yaml
   - otel-bootstrap-ca.yaml
+  # llz-client-ca anchor for the OTLP receiver's client_ca_file (wave -5).
+  - otel-client-ca.yaml
   - otel-collector.yaml
   - otel-collector-servicemonitor.yaml
   - llz-day2-dashboard.yaml

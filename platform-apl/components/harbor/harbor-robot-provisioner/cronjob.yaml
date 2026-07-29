@@ -48,13 +48,39 @@ spec:
       ttlSecondsAfterFinished: 3600
       template:
         metadata:
-          # Keep this batch pod OUT of the istio mesh. On a managed (App Platform)
-          # cluster the harbor namespace has sidecar injection on by default; an
-          # injected proxy with holdApplicationUntilProxyStarts blocks the `provision`
-          # container until the sidecar is ready (and a never-exiting sidecar stops the
-          # Job completing). A provisioner that only calls the Harbor API needs no mesh.
+          # This pod is IN the istio mesh, reversing the previous opt-out.
+          #
+          # WHY IT CHANGED. The opt-out's reasoning was operational and correct as
+          # far as it went ("a provisioner that only calls the Harbor API needs no
+          # mesh"), but it was written before the hop's contents were weighed: this
+          # pod sends the Harbor ADMIN PASSWORD in a Basic-auth header and receives
+          # freshly minted ROBOT SECRETS in the response. harbor-core has no
+          # client-certificate auth, so the sidecar is the ONLY mechanism that can
+          # make that hop mutually authenticated.
+          #
+          # THE TWO PROBLEMS THE OPT-OUT WAS SOLVING, and how they are handled now:
+          #
+          #  1. "holdApplicationUntilProxyStarts blocks the container until the
+          #     sidecar is ready" — that is the behavior we WANT. Without it the
+          #     provisioner races its own proxy and the first API call leaves
+          #     unencrypted or fails. It costs a few seconds on a CronJob that runs
+          #     on a schedule. Set explicitly below rather than left to mesh default.
+          #
+          #  2. "a never-exiting sidecar stops the Job completing" — this is the
+          #     real one. Envoy does not exit when the app does, so the Pod stays
+          #     Running forever and the Job never reaches Complete. Handled in the
+          #     provisioner itself: `llz ci harbor-provisioner` POSTs to the
+          #     sidecar's /quitquitquit on exit (shutdownIstioSidecar in
+          #     ci_harbor_provisioner.go), which is the supported way to end a
+          #     meshed Job on a cluster without native sidecars.
+          #
+          # If this cluster's istiod runs with ENABLE_NATIVE_SIDECARS=true (K8s
+          # 1.29+, which LKE at v1.33 supports), the injected proxy becomes a
+          # native init container that terminates with the Job on its own and the
+          # /quitquitquit call is a harmless no-op. Either way the Job completes.
           annotations:
-            sidecar.istio.io/inject: "false"
+            sidecar.istio.io/inject: "true"
+            proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
           # Static label so the NetworkPolicy can podSelector-match it.
           labels:
             app.kubernetes.io/name: harbor-robot-provisioner
@@ -75,14 +101,16 @@ spec:
                   value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
                 # Verify OpenBao's TLS: `ca.crt` from the openbao-ca-bundle Certificate
                 # issued into this namespace (openbao-ca-bundle.yaml). Takes
-                # precedence over OPENBAO_SKIP_VERIFY below, which stays as the
-                # documented fallback for the window before the Secret exists —
-                # inClusterBaoHTTPClient() requires one or the other to be set, so
-                # an unset environment can never silently mean unverified TLS.
+                # precedence over ADR 0010. The skip-verify fallback #358 kept here is
+                # REMOVED: the listener now also requires a CLIENT certificate, so
+                # unverified TLS cannot complete the handshake — the fallback was
+                # unreachable, and leaving it would imply a downgrade that no
+                # longer exists.
                 - name: OPENBAO_CA_FILE
                   value: /etc/openbao-ca/ca.crt
-                - name: OPENBAO_SKIP_VERIFY
-                  value: "true"
+
+                - name: HARBOR_API_URL
+                  value: "http://harbor-core.harbor.svc.cluster.local"
                 # Repo-secret publication target — the instance repo. Rendered
                 # at instantiation; the standby's bootstrap reads these secrets.
                 - name: GH_REPO
@@ -105,15 +133,22 @@ spec:
               volumeMounts:
                 - { name: harbor-admin, mountPath: /etc/harbor-admin, readOnly: true }
                 - { name: tmp, mountPath: /tmp }
+                # SERVER half — verifies OpenBao's serving cert (#358's bundle).
                 - { name: openbao-ca, mountPath: /etc/openbao-ca, readOnly: true }
+                # CLIENT half — this workload's identity (ADR 0010). A Job whose
+                # Secret is not yet written waits in ContainerCreating and the
+                # next schedule picks it up.
+                - { name: openbao-client-tls, mountPath: /etc/openbao-client-tls, readOnly: true }
           volumes:
             # optional: the CA bundle Secret appears once cert-manager issues the
             # leaf. Absent -> the pod still starts and falls back to
             # OPENBAO_SKIP_VERIFY rather than wedging in ContainerCreating.
+            # NOT optional any more: with mTLS required there is no skip-verify
+            # path to fall back to, so a missing CA must park the pod rather than
+            # let it start and fail every OpenBao call.
             - name: openbao-ca
               secret:
                 secretName: openbao-ca-bundle
-                optional: true
             # optional: before apl-core's helmfile installs Harbor the Secret
             # doesn't exist — the pod still starts and llz no-ops cleanly on the
             # missing file instead of wedging in ContainerCreating.
@@ -125,3 +160,9 @@ spec:
               emptyDir:
                 medium: Memory
                 sizeLimit: 16Mi
+            # 0444 (not 0400): Secret volumes are root-owned and this pod runs as
+            # uid 65532 with no fsGroup, so 0400 would be unreadable to it.
+            - name: openbao-client-tls
+              secret:
+                secretName: harbor-robot-provisioner-client-tls
+                defaultMode: 0444

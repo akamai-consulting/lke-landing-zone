@@ -55,6 +55,28 @@ spec:
           http:
             endpoint: 0.0.0.0:4318
             include_metadata: true
+            # mTLS on the OTLP ingress. This receiver previously listened in the
+            # clear with no client authentication of any kind — the file's own
+            # header noted "to enforce client auth, add a bearertokenauth
+            # extension" as a TODO. Any pod that could reach :4318 could inject
+            # arbitrary telemetry.
+            #
+            # cert_file/key_file: the platform-otel-collector-tls Secret that
+            # otel-bootstrap-ca.yaml ALREADY ISSUES. That Certificate has existed
+            # and renewed this whole time while nothing mounted it — the serving
+            # cert was provisioned and then never used. This wires it up.
+            #
+            # client_ca_file: llz-client-ca, so callers must present an identity
+            # from the same root every other mTLS hop uses. mTLS rather than
+            # bearer tokens because there is no token to distribute here and the
+            # client-identity CA already exists.
+            #
+            # The operator mounts these from the CR's volumes/volumeMounts below.
+            tls:
+              cert_file: /etc/otel-tls/tls.crt
+              key_file: /etc/otel-tls/tls.key
+              client_ca_file: /etc/otel-client-ca/ca.crt
+              min_version: "1.2"
     processors:
       memory_limiter:
         check_interval: 1s
@@ -84,6 +106,24 @@ spec:
           receivers: [otlp]
           processors: [memory_limiter, batch]
           exporters: [debug]
+  # TLS material for the OTLP receiver above. The OpenTelemetryCollector CR
+  # passes volumes/volumeMounts straight through to the generated Deployment.
+  volumes:
+    - name: otel-tls
+      secret:
+        secretName: platform-otel-collector-tls
+        defaultMode: 0444
+    # ca.crt only — the llz-client-ca root the receiver verifies callers against.
+    # Landed in this namespace by otel-client-ca.yaml's anchor Certificate.
+    - name: otel-client-ca
+      secret:
+        secretName: otel-client-ca
+        defaultMode: 0444
+        items:
+          - { key: ca.crt, path: ca.crt }
+  volumeMounts:
+    - { name: otel-tls, mountPath: /etc/otel-tls, readOnly: true }
+    - { name: otel-client-ca, mountPath: /etc/otel-client-ca, readOnly: true }
   resources:
     limits:
       cpu: 500m

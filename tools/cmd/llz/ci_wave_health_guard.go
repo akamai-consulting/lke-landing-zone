@@ -115,6 +115,36 @@ var waveHealthAllowedNames = map[string]waveHealthKindRule{
 	"cert-manager.io/Certificate/openbao-ca":                  {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
 	"cert-manager.io/Certificate/otel-bootstrap-ca":           {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
 	"cert-manager.io/Certificate/platform-otel-collector-tls": {reason: "issued by the in-cluster otel-bootstrap-ca; no external dependency"},
+	// ── in-cluster mTLS PKI (docs/adr/0010-in-cluster-mtls.md) ───────────────
+	//
+	// Two roots, both selfSigned-issued exactly like openbao-ca: no external
+	// dependency, and cert-manager is already Available before this tree syncs
+	// (gated by `llz ci wait-apl-pipeline`).
+	"cert-manager.io/Certificate/llz-client-ca":  {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
+	"cert-manager.io/Certificate/llz-serving-ca": {reason: "in-cluster self-signed CA-chain cert; no external dependency"},
+	//
+	// The leaves. Each is issued by one of the three in-cluster CA ClusterIssuers
+	// above (llz-client-ca / llz-serving-ca / openbao-ca), all of which are
+	// selfSigned-rooted and present by wave -15 — so a leaf at -14 has its issuer
+	// already. None reaches outside the cluster, which is the property that
+	// distinguishes them from the ACME certs this guard exists to catch.
+	//
+	// Listed individually rather than waved through by kind, per this map's own
+	// rule: a NEW Certificate at a negative wave must be vetted here.
+	"cert-manager.io/Certificate/llz-reconciler-client-tls":           {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/llz-reconciler-serving-tls":          {reason: "llz-serving-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/llz-reconciler-scrape-client-tls":    {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/llz-reconciler-serving-ca":           {reason: "llz-serving-ca anchor (ca.crt only); in-cluster issuer"},
+	"cert-manager.io/Certificate/harbor-robot-provisioner-client-tls": {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/broad-pat-rotator-client-tls":        {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/eso-openbao-client-tls":              {reason: "llz-client-ca leaf; in-cluster issuer, no external dependency"},
+	"cert-manager.io/Certificate/otel-client-ca":                      {reason: "llz-client-ca anchor (ca.crt only); in-cluster issuer"},
+	//
+	// NOT listed, deliberately: openbao-apl-ca (llz-openbao-platform chart). It
+	// is issued by apl-core's `custom-ca`, an issuer this repo cannot guarantee
+	// exists, so it CAN sit Pending indefinitely — exactly the wedge class this
+	// guard catches. It therefore ships at the default wave (0), not a negative
+	// one, and its Secret volume is `optional`.
 }
 
 // waveHealthDoc is the minimal YAML shape the guard inspects.

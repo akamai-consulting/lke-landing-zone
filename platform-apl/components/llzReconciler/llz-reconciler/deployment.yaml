@@ -84,6 +84,17 @@ spec:
           args:
             - reconcile
             - --metrics-addr=:8080
+            # /healthz on its own PLAINTEXT port. The kubelet runs the liveness
+            # and readiness probes and cannot present a client certificate, so it
+            # cannot be moved behind the mTLS listener below; splitting the ports
+            # is what lets /metrics require a client cert without CrashLooping the
+            # pod on every probe. /healthz exposes a leader-election verdict only.
+            - --health-addr=:8081
+            # mTLS for /metrics. All three or none — serveMetrics rejects a
+            # partial set rather than silently serving unauthenticated.
+            - --metrics-tls-cert-file=/etc/metrics-tls/tls.crt
+            - --metrics-tls-key-file=/etc/metrics-tls/tls.key
+            - --metrics-tls-client-ca-file=/etc/metrics-client-ca/ca.crt
             - --sample-interval=30
             - --reconcile-argo-nudge
             - --reconcile-sc-demote
@@ -114,11 +125,13 @@ spec:
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: POD_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-            # OpenBao endpoint for the openbao-gauges sampler. VAULT_SKIP_VERIFY-style
-            # posture: OpenBao's serving cert is signed by its private CA, so the
-            # in-cluster consumers connect insecure (the code's HTTPClientInsecure);
-            # traffic stays on the pod network. OPENBAO_ADDR has a code default but
-            # is set explicitly for legibility.
+            # OpenBao endpoint for the openbao-gauges sampler. The hop is mTLS:
+            # this pod verifies OpenBao's serving cert against the openbao-ca root
+            # (/etc/openbao-tls/ca.crt) AND presents its own llz-reconciler client
+            # identity (/etc/openbao-client-tls), which the listener requires.
+            # Both mounts are below; the file paths are the code defaults in
+            # openbao_k8s_login.go, restated here only where they differ.
+            # OPENBAO_ADDR has a code default but is set explicitly for legibility.
             - name: OPENBAO_ADDR
               value: "https://platform-openbao.llz-openbao.svc.cluster.local:8200"
             # (LINODE_TOKEN is no longer an env secretKeyRef: the linode lanes
@@ -160,10 +173,14 @@ spec:
             # OPENBAO_SKIP_VERIFY stays as the fallback for the window before the
             # Secret exists, because that helper requires one of the two to be set
             # and would otherwise hard-fail the openbao lanes on a cold start.
+            # OPENBAO_SKIP_VERIFY is GONE (ADR 0010). #358 added OPENBAO_CA_FILE
+            # with skip-verify as a cold-start fallback; the fallback is now
+            # unreachable, because the listener requires a CLIENT certificate too
+            # — unverified TLS cannot complete the handshake at all. Removing the
+            # flag keeps the manifest honest: there is no longer any env var that
+            # can downgrade this hop.
             - name: OPENBAO_CA_FILE
               value: /etc/openbao-ca/ca.crt
-            - name: OPENBAO_SKIP_VERIFY
-              value: "true"
             # linode-creds logs into OpenBao via Kubernetes auth. rotate-linode-creds
             # defaults the role to `linode-rotator` (the CronJob's SA-bound role), but
             # THIS pod runs as the llz-reconciler SA, which is bound to the `reconciler`
@@ -175,12 +192,19 @@ spec:
             - name: metrics
               containerPort: 8080
               protocol: TCP
+            # Separate probe port — see the --health-addr note above.
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          # Probes target `health`, NOT `metrics`. Pointing them at the metrics
+          # port would fail every probe: that listener demands a client
+          # certificate and kubelet has none, so the pod would CrashLoop.
           livenessProbe:
-            httpGet: { path: /healthz, port: metrics }
+            httpGet: { path: /healthz, port: health }
             initialDelaySeconds: 5
             periodSeconds: 20
           readinessProbe:
-            httpGet: { path: /healthz, port: metrics }
+            httpGet: { path: /healthz, port: health }
             initialDelaySeconds: 3
             periodSeconds: 10
           resources:
@@ -201,8 +225,23 @@ spec:
             - name: apl-values-repo-token
               mountPath: /var/run/secrets/llz/apl-values-repo-token
               readOnly: true
+            # SERVER half — verifies OpenBao's serving cert (#358's bundle).
             - name: openbao-ca
               mountPath: /etc/openbao-ca
+              readOnly: true
+            # CLIENT half — this pod's identity, which the listener requires.
+            # Its volume is `optional` (see volumes below): the pod's non-OpenBao
+            # lanes must keep running if the identity has not issued yet.
+            - name: openbao-client-tls
+              mountPath: /etc/openbao-client-tls
+              readOnly: true
+            # Serving side: this pod's own cert for the mTLS /metrics listener,
+            # and the client CA it verifies scrapers against.
+            - name: metrics-tls
+              mountPath: /etc/metrics-tls
+              readOnly: true
+            - name: metrics-client-ca
+              mountPath: /etc/metrics-client-ca
               readOnly: true
       volumes:
         - name: tmp
@@ -230,3 +269,42 @@ spec:
           secret:
             secretName: apl-values-repo-token
             optional: true
+        # mTLS material, both written by cert-manager (client-tls-certificate.yaml
+        # in this directory). NOT optional — see the volumeMounts note.
+        #
+        # 0444, NOT 0400. Secret volume files are owned root:root and this pod
+        # runs as uid 65532 with no fsGroup, so 0400 would make the key
+        # unreadable to the only process that needs it. World-readable is
+        # world-inside-this-pod: the single container is the reconciler itself.
+        # The controls that actually protect this key are RBAC on the Secret and
+        # etcd encryption at rest, not the in-pod file mode.
+        # optional, matching the openbao-ca bundle above: this pod runs many
+        # lanes that never touch OpenBao (argo-nudge, sc-demote, volume-labels,
+        # cidr-firewall), and wedging all of them in ContainerCreating because an
+        # OpenBao identity has not issued yet would be a worse failure than the
+        # OpenBao lanes erroring. inClusterBaoHTTPClient retries rather than
+        # caching that failure, so the lanes recover on their own once it lands.
+        # The CronJobs mount theirs NON-optional — they exist only to do OpenBao
+        # work, so for them waiting is exactly right.
+        - name: openbao-client-tls
+          secret:
+            secretName: llz-reconciler-client-tls
+            defaultMode: 0444
+            optional: true
+        # Serving keypair for /metrics (llz-serving-ca leaf).
+        - name: metrics-tls
+          secret:
+            secretName: llz-reconciler-serving-tls
+            defaultMode: 0444
+        # llz-client-ca root — scrapers must chain to it. ca.crt off the
+        # scrape-client Secret: cert-manager writes the ISSUING CA there, and
+        # that Secret's issuer IS llz-client-ca, so its ca.crt is exactly the
+        # bundle this listener needs. (Reusing it avoids a fourth Certificate
+        # whose only job would be to restate the same root.)
+        - name: metrics-client-ca
+          secret:
+            secretName: llz-reconciler-scrape-client-tls
+            defaultMode: 0444
+            items:
+              - key: ca.crt
+                path: ca.crt

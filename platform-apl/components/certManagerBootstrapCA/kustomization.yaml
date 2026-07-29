@@ -7,3 +7,7 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:
   - openbao-bootstrap-ca.yaml
+  # Client-identity CA (llz-client-ca). Separate trust root from openbao-ca —
+  # see the header of llz-client-ca.yaml for why server and client roots must
+  # not be shared. Every mTLS server in the tree verifies clients against it.
+  - llz-client-ca.yaml

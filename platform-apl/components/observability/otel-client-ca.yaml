@@ -1,0 +1,34 @@
+# llz-client-ca anchor for the OTel Collector's OTLP receiver.
+#
+# Same ca.crt indirection as everywhere else: a throwaway leaf issued FROM
+# llz-client-ca so that root's certificate lands in llz-observability, where the
+# collector can mount it as `client_ca_file`. The leaf itself is unused.
+#
+# The collector's SERVING cert is a different Secret on a different root
+# (platform-otel-collector-tls, from otel-bootstrap-ca) — server root and client
+# root stay separate, as with OpenBao.
+#
+# Wave -5, matching the serving Certificate in otel-bootstrap-ca.yaml: both
+# Secrets must exist before the OpenTelemetryCollector CR (wave 10) is applied,
+# and -5 gives cert-manager the same head start the serving cert already gets.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-client-ca
+  namespace: llz-observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  secretName: otel-client-ca
+  commonName: otel-client-ca-anchor
+  duration: 2160h    # 90 days
+  renewBefore: 720h  # 30 days
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: llz-client-ca
+    kind: ClusterIssuer

@@ -27,6 +27,34 @@ spec:
           - prometheus
       interval: 30s
       scrapeTimeout: 10s
+      # mTLS to the OpenBao listener. Was `insecureSkipVerify: true`, which meant
+      # Prometheus encrypted the scrape but authenticated nothing at either end.
+      # Now both directions are proven:
+      #
+      #   ca         — verify OpenBao's serving cert against the openbao-ca root
+      #                (ca.crt on the openbao-tls Secret, the same anchor ESO's
+      #                caProvider reads). serverName is required because the
+      #                scrape connects to a Pod IP, which is not a SAN on that
+      #                cert; without it verification fails on hostname mismatch.
+      #   cert/key   — present the openbao-metrics-scraper client identity, which
+      #                the listener's tls_require_and_verify_client_cert demands.
+      #                Missing it means every scrape fails at the handshake and
+      #                vault_* disappears cluster-wide.
+      #
+      # All three Secrets live in THIS namespace beside the ServiceMonitor —
+      # prometheus-operator resolves these refs relative to the ServiceMonitor,
+      # not to the Prometheus pod, and mounts them as scrape assets.
       tlsConfig:
-        insecureSkipVerify: true
+        ca:
+          secret:
+            name: {{ .Values.platform.tls.secretName }}
+            key: ca.crt
+        cert:
+          secret:
+            name: {{ .Values.platform.clientTls.scrapeSecretName }}
+            key: tls.crt
+        keySecret:
+          name: {{ .Values.platform.clientTls.scrapeSecretName }}
+          key: tls.key
+        serverName: {{ .Values.platform.releaseName }}.{{ .Release.Namespace }}.svc.cluster.local
 {{- end }}

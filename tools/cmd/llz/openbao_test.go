@@ -7,9 +7,13 @@ import (
 
 func TestBaoExecArgv(t *testing.T) {
 	got := baoExecArgv("platform-openbao-0", "s.tok", []string{"policy", "list"})
+	// Targets the LOOPBACK listener (8210) and VERIFIES the server against the
+	// pod-mounted CA. The network listener (8200) now requires a client
+	// certificate that an exec'd `bao` does not carry, and the openbao-tls cert
+	// gained a 127.0.0.1 SAN so skip-verify is no longer needed here.
 	want := []string{
 		"-n", "llz-openbao", "exec", "-i", "-c", "openbao", "platform-openbao-0", "--",
-		"env", "VAULT_ADDR=https://127.0.0.1:8200", "VAULT_SKIP_VERIFY=true", "VAULT_TOKEN=s.tok", "bao",
+		"env", "VAULT_ADDR=https://127.0.0.1:8210", "VAULT_CACERT=/openbao/tls/ca.crt", "VAULT_TOKEN=s.tok", "bao",
 		"policy", "list",
 	}
 	if !reflect.DeepEqual(got, want) {

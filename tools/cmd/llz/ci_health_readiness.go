@@ -203,9 +203,17 @@ func runHealthCertManager() error {
 //
 // Now the exec retries, and an undeterminable pod is reported as unknown rather
 // than silently counted as sealed.
+// BUG FIXED HERE (pre-existing, unrelated to mTLS): this passed
+// `env VAULT_ADDR=… VAULT_SKIP_VERIFY=true bao status -format=json` as ARGS to
+// baoExecFn. baoExec already prepends its own `env … bao`, so the command that
+// actually ran was `… env … bao env VAULT_ADDR=… bao status -format=json` —
+// i.e. `bao env`, which is not a subcommand. Every call errored, so baoStatus
+// always returned ok=false and every pod's seal state read "unknown". The test
+// stub ignores args and returns canned JSON, which is why it never showed up.
+// Args are now bare, matching every other baoExecFn caller; the VAULT_* env is
+// baoExec's job alone.
 func baoStatus(pod string) (st health.BaoStatus, ok bool) {
-	stdout, _, err := baoExecFn(pod, "", "",
-		"env", "VAULT_ADDR=https://127.0.0.1:8200", "VAULT_SKIP_VERIFY=true", "bao", "status", "-format=json")
+	stdout, _, err := baoExecFn(pod, "", "", "status", "-format=json")
 	if err != nil {
 		return health.BaoStatus{}, false
 	}

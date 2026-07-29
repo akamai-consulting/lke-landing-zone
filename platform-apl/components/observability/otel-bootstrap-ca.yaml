@@ -107,6 +107,23 @@ spec:
     algorithm: RSA
     size: 4096
   dnsNames:
+    # The `platform-otel-collector.*` pair is inherited verbatim from the retired
+    # `llz ci gen-bootstrap-tls` step and does NOT match any Service: the
+    # OpenTelemetryCollector CR is named `otel`, so the operator creates Service
+    # `otel-collector` (otel-collector.yaml's header says the name MUST be `otel`
+    # for exactly that reason).
+    #
+    # That mismatch was harmless while nothing mounted this certificate. It is
+    # NOT harmless now that the OTLP receiver actually serves it: a client
+    # connecting to otel-collector.llz-observability.svc:4318 and verifying the
+    # chain would fail on hostname mismatch, and the mTLS receiver would be
+    # unreachable by any correct client.
+    #
+    # Both pairs are listed rather than replacing the old one: the retired step's
+    # names are load-bearing identity elsewhere per this file's header, and extra
+    # SANs cost nothing.
+    - otel-collector.llz-observability.svc
+    - otel-collector.llz-observability.svc.cluster.local
     - platform-otel-collector.llz-observability.svc
     - platform-otel-collector.llz-observability.svc.cluster.local
   issuerRef:

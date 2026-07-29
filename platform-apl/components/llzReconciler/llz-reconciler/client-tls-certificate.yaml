@@ -1,0 +1,147 @@
+# The reconciler's CLIENT identity for mTLS to OpenBao.
+#
+# OpenBao's listener sets tls_require_and_verify_client_cert, so the pod cannot
+# open a connection without this. It replaces OPENBAO_SKIP_VERIFY=true, which
+# encrypted the hop but authenticated neither end.
+#
+# The Secret is projected at /etc/openbao-client-tls (deployment.yaml); the
+# server CA it verifies OpenBao against is a SEPARATE mount, /etc/openbao-tls,
+# fed by openbao-tls-ca-externalsecret.yaml. Two different roots on purpose —
+# see components/certManagerBootstrapCA/llz-client-ca.yaml.
+#
+# WAVE -14: after the llz-client-ca ClusterIssuer (-15) exists, and well before
+# the Deployment (wave 0) mounts the Secret. A pod scheduled before cert-manager
+# has written it parks in ContainerCreating rather than crash-looping, so the
+# ordering is belt-and-braces, not load-bearing.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llz-reconciler-client-tls
+  namespace: llz-reconciler
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+spec:
+  secretName: llz-reconciler-client-tls
+  # The authorization principal. Stable across renewals (cert-manager preserves
+  # commonName), so an OpenBao cert-auth role or audit filter can bind to it.
+  commonName: llz-reconciler
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["llz-reconciler"]
+  duration: 2160h    # 90 days
+  renewBefore: 720h  # 30 days
+  isCA: false
+  # client auth ONLY — this identity must never be usable to impersonate a server.
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: llz-client-ca
+    kind: ClusterIssuer
+
+---
+# The reconciler's own SERVING certificate, for its mTLS /metrics listener.
+#
+# The reconciler is a server here, not a client: Prometheus connects TO it. The
+# endpoint was plaintext (`scheme: http`), so the gauges crossed the pod network
+# in the clear and nothing authenticated the scraper.
+#
+# Issued by llz-serving-ca, NOT openbao-ca — see the serving-root rationale in
+# components/certManagerBootstrapCA/llz-client-ca.yaml.
+#
+# SANs are the Service DNS names. The ServiceMonitor connects to a POD IP, which
+# is not listed here, so its tlsConfig sets serverName to the first name below —
+# without that, verification fails on hostname mismatch and every scrape errors.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llz-reconciler-serving-tls
+  namespace: llz-reconciler
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+spec:
+  secretName: llz-reconciler-serving-tls
+  commonName: llz-reconciler.llz-reconciler.svc
+  dnsNames:
+    - llz-reconciler.llz-reconciler.svc
+    - llz-reconciler.llz-reconciler.svc.cluster.local
+  duration: 2160h
+  renewBefore: 720h
+  isCA: false
+  usages:
+    - server auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: llz-serving-ca
+    kind: ClusterIssuer
+---
+# Client identity for the PROMETHEUS SCRAPE of this reconciler, plus (via its
+# ca.crt) the llz-serving-ca root Prometheus verifies the reconciler against.
+#
+# One Secret covers both halves of the ServiceMonitor's tlsConfig:
+#   tls.crt/tls.key → the scraper's identity, chaining to llz-client-ca
+#   ca.crt          → llz-client-ca, which is NOT what we need for `ca:` …
+#
+# … so note carefully: the ServiceMonitor's `ca:` ref points at the SERVING
+# anchor Secret below, not at this one. Getting those two crossed is the easy
+# mistake here — the scrape would then try to verify a server cert against the
+# client root and fail with an opaque x509 error.
+#
+# In THIS namespace because prometheus-operator resolves ServiceMonitor tlsConfig
+# secret refs relative to the ServiceMonitor, not to the Prometheus pod.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llz-reconciler-scrape-client-tls
+  namespace: llz-reconciler
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+spec:
+  secretName: llz-reconciler-scrape-client-tls
+  commonName: llz-reconciler-metrics-scraper
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["observability"]
+  duration: 2160h
+  renewBefore: 720h
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: llz-client-ca
+    kind: ClusterIssuer
+---
+# llz-serving-ca anchor: lands the SERVING root in this namespace so the
+# ServiceMonitor's `ca:` ref can verify the reconciler's serving cert. ca.crt
+# only; the leaf is unused. (Same indirection as everywhere else in this change.)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llz-reconciler-serving-ca
+  namespace: llz-reconciler
+  annotations:
+    argocd.argoproj.io/sync-wave: "-14"
+spec:
+  secretName: llz-reconciler-serving-ca
+  commonName: llz-reconciler-serving-ca-anchor
+  duration: 2160h
+  renewBefore: 720h
+  isCA: false
+  usages:
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: llz-serving-ca
+    kind: ClusterIssuer

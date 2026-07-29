@@ -269,6 +269,13 @@ func diagnoseAPIServer() {
 // timeout diagnostics use (LKE's API cert is fine; a bootstrap-window probe
 // must not fail on TLS while the endpoint is mid-provision). A package var so
 // tests can point it at a stub server.
+//
+// DELIBERATELY OUT OF SCOPE for the in-cluster mTLS work (ADR 0010), which
+// covers pod↔pod traffic. This probes the LKE-managed control-plane endpoint
+// from OUTSIDE the cluster during provisioning, before the cluster exists to
+// have a PKI, and it is a diagnostic that reads a status line — it carries no
+// credential and its result authorizes nothing. Left as-is on purpose; do not
+// "fix" it by reference to that ADR.
 var apiProbeClient = func() *http.Client {
 	return &http.Client{
 		Timeout:   5 * time.Second,

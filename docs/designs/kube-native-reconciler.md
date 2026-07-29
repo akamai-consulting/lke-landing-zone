@@ -26,7 +26,9 @@ controller). CronJob deletions follow once each reconciler proves out per the
   [`internal/metrics`](../../tools/internal/metrics/metrics.go) (a dependency-free
   Prometheus text-exposition registry — gauges + counters) and the
   [`llz reconcile`](../../tools/cmd/llz/reconcile.go) command (serves
-  `:8080/metrics` + `/healthz`, SIGTERM-graceful), plus the deployable
+  `:8080/metrics` and `:8081/healthz` on SEPARATE listeners — metrics is mTLS,
+  healthz is plaintext because the kubelet probing it cannot present a client
+  certificate; see ADR 0010 — SIGTERM-graceful), plus the deployable
   default-disabled [`platform-apl/components/llzReconciler/`](../../platform-apl/components/llzReconciler/)
   component (Deployment + read-only RBAC + a default-deny-compatible NetworkPolicy
   that closes the scrape path + Service + ServiceMonitor + PrometheusRule).
