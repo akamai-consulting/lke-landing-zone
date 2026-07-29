@@ -254,29 +254,41 @@ Fail-closed ordering — **each step must be verified before the next**:
    instance has completed step 5. Leaving it is a standing permission for the
    plaintext fetch this ADR exists to eliminate.
 
-## The wiring is not statically enforced
+## The wiring is statically enforced — `mtls-wiring-guard`
 
-Verified by mutation: **deleting the reconciler's client-certificate volumeMount
-passes every gate in the repo** — `make lint-k8s` reports zero errors, kustomize
-still renders, kubeconform is satisfied, and the tree looks healthy. The pod
-would simply be unable to reach OpenBao at all.
+This was found by mutation, not by review: **deleting the reconciler's
+client-certificate volumeMount passed every gate in the repo** — `make lint-k8s`
+reported zero errors, kustomize rendered, kubeconform was satisfied — while
+leaving the pod unable to reach OpenBao at all. Green CI meant nothing here.
 
-Nothing here checks that a workload calling `inClusterBaoHTTPClient()` actually
-mounts the CA and the client identity at the paths that code reads. The gates
-this repo has are about sync-wave health, schema validity and plaintext drift;
-the correspondence between "this Go path needs TLS material" and "this pod spec
-provides it" is unguarded, and it is exactly the kind of thing a refactor breaks
-silently.
+`llz ci mtls-wiring-guard` closes that, as a fifth member of the guard family
+(`wave-health`, `wave-dependency`, `mesh-egress`, `plaintext`). It asserts three
+things about every workload in the platform tree:
 
-That correspondence is a natural fifth member of the guard family
-(`wave-health`, `wave-dependency`, `mesh-egress`, `plaintext`): assert that every
-workload whose image runs an OpenBao-consuming verb mounts both Secrets, and
-that every mounted TLS Secret has a Certificate that creates it. It is NOT in
-this change — flagging a gap is not licence to grow the diff — but it is the
-first thing to build on top of it.
+1. **A pod that declares `OPENBAO_ADDR` mounts what its code reads.** That pod
+   will call `inClusterBaoHTTPClient()`, which opens a CA bundle and a client
+   keypair, so paths covering all three must be mounted — honouring the
+   `OPENBAO_CA_FILE` / `OPENBAO_CLIENT_{CERT,KEY}_FILE` overrides where set.
+2. **Every TLS Secret it mounts has a Certificate creating it**, in the same
+   namespace. A rename on either side of that pair is otherwise invisible until
+   a pod sits in `ContainerCreating` on a real cluster.
+3. **`OPENBAO_SKIP_VERIFY` does not come back.** A mounts-only check would pass a
+   pod that had both the mounts and the escape hatch.
 
-Until then, the check is manual: after any change to these manifests, confirm
-each pod still mounts `/etc/openbao-ca` and `/etc/openbao-client-tls`.
+The requirement is **inferred, not registered**. There is no allowlist to
+maintain and no way to add an OpenBao consumer that silently escapes the rule —
+declaring the address is what opts you in. That is the property a registry-based
+version would lose, and it is why this guard has no counterpart to
+`plaintextAllowed`.
+
+Both mutations above now fail the guard, and both are pinned as tests
+(`TestMTLSWiringCatchesMissingClientCert`, `TestMTLSWiringRejectsSkipVerify`)
+alongside the CronJob-nesting case — two of the three consumers are CronJobs, and
+a guard that only understood Deployments would have skipped them silently.
+
+**What it still does not cover:** the guard reads manifests, so it cannot see
+whether the Secret contents are valid, whether cert-manager actually issued, or
+whether the far end accepts the certificate. Those need a cluster.
 
 ## Unverified prerequisites
 
