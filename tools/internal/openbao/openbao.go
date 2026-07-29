@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -45,25 +46,111 @@ func NewWithClient(addr, token, namespace string, httpClient *http.Client) *Clie
 	}
 }
 
-// HTTPClientInsecure builds an *http.Client that skips TLS verification. It
-// remains the transport for the loopback cases where there is nothing to verify
-// — the `kubectl port-forward` tunnel `llz openbao get/set/login` open to
-// 127.0.0.1, and every `baoExec` (VAULT_SKIP_VERIFY=true) that runs INSIDE the
-// OpenBao pod.
+// HTTPClientLoopback builds an *http.Client that skips TLS verification. It is
+// ONLY for the loopback cases where there is nothing to verify: the `kubectl
+// port-forward` tunnel `llz openbao get/set/login` open to 127.0.0.1, and the
+// in-pod callers that reach OpenBao's own 127.0.0.1:8210 listener.
 //
-// It is NO LONGER the default for pod→OpenBao traffic. The old rationale
-// ("distributing OpenBao's private CA into each consumer namespace needs a
-// reflector this platform doesn't ship") is obsolete: each consumer namespace
-// now issues its own bundle from the `openbao-ca` ClusterIssuer
-// (platform-apl/components/*/openbao-ca-bundle.yaml), and cert-manager writes
-// `ca.crt` onto the resulting Secret. In-cluster callers select their transport
-// via inClusterBaoHTTPClient(), which prefers HTTPClientWithCA and requires an
-// explicit OPENBAO_SKIP_VERIFY=true to land here.
-func HTTPClientInsecure(timeout time.Duration) *http.Client {
+// It is NOT a general in-cluster client. Anything reaching OpenBao over the pod
+// network must use HTTPClientMTLSFromFiles: the listener now requires and
+// verifies a client certificate (tls_require_and_verify_client_cert), so an
+// unverified transport fails the handshake outright.
+//
+// This was HTTPClientInsecure. #358 had already narrowed its ROLE to the
+// loopback cases without renaming it; the name is what made the pod-network use
+// look as sanctioned as the loopback one, so it is renamed here to match the
+// role. The CA-distribution problem that originally justified the insecure
+// default is long solved — each consumer namespace issues its own bundle from
+// the `openbao-ca` ClusterIssuer (platform-apl/components/*/openbao-ca-bundle.yaml)
+// and cert-manager writes `ca.crt` onto the resulting Secret.
+func HTTPClientLoopback(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}, //nolint:gosec
 	}
+}
+
+// HTTPClientMTLS builds an *http.Client that both verifies OpenBao's serving
+// cert against caPEM AND presents certPEM/keyPEM as its own client identity —
+// the mutually-authenticated transport every pod-network caller uses.
+//
+// caPEM is the openbao-ca root (ca.crt off the openbao-tls Secret); certPEM/
+// keyPEM are a leaf issued by llz-client-ca, which is what the listener's
+// tls_client_ca_file trusts. The two roots are deliberately different: see
+// platform-apl/components/certManagerBootstrapCA/llz-client-ca.yaml.
+//
+// A caller that gets this wrong fails at the TLS handshake with a bare
+// "remote error: tls: bad certificate" and no indication of which side was
+// unhappy, so the two failure modes are separated here into distinct errors.
+func HTTPClientMTLS(caPEM, certPEM, keyPEM []byte, timeout time.Duration) (*http.Client, error) {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("openbao CA bundle contains no valid certificate")
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("client keypair: %w", err)
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			RootCAs:      pool,
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}},
+	}, nil
+}
+
+// HTTPClientMTLSFromFiles is HTTPClientMTLS for a LONG-LIVED process: it re-reads
+// the client keypair from disk on every TLS handshake instead of capturing it
+// once.
+//
+// WHY THIS EXISTS, and why the byte-slice version is not enough for the
+// reconciler. cert-manager renews the client leaf 30 days before its 90-day
+// expiry and kubelet updates the mounted file within about a minute. A client
+// built from bytes read at process start keeps using the ORIGINAL keypair for
+// the life of the process — so roughly 90 days after the pod started, the cert
+// it is still presenting expires and every OpenBao call fails the handshake.
+// Nothing recovers from that on its own: the reconciler's liveness probe only
+// reports leader-election health and never touches OpenBao, so the pod is never
+// restarted and simply loses OpenBao access permanently.
+//
+// GetClientCertificate is called per handshake, not per request, and connections
+// are pooled — so on a steady-state reconciler this is a handful of file reads
+// per hour, not per call.
+//
+// Short-lived callers (the CronJobs, CI one-shots) can use either; their process
+// does not outlive a renewal window. This one is correct for both, so it is the
+// default in openbao_k8s_login.go.
+func HTTPClientMTLSFromFiles(caFile, certFile, keyFile string, timeout time.Duration) (*http.Client, error) {
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read OpenBao CA (%s): %w", caFile, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("openbao CA bundle %s contains no valid certificate", caFile)
+	}
+	// Load once up front purely to FAIL FAST: a missing or malformed keypair
+	// should be an error at startup with a clear message, not an opaque
+	// handshake failure on the first OpenBao call minutes later.
+	if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
+		return nil, fmt.Errorf("client keypair (%s / %s): %w", certFile, keyFile, err)
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+				c, err := tls.LoadX509KeyPair(certFile, keyFile)
+				if err != nil {
+					return nil, fmt.Errorf("reload client keypair: %w", err)
+				}
+				return &c, nil
+			},
+		}},
+	}, nil
 }
 
 // HTTPClientWithCA builds an *http.Client that trusts caPEM (the openbao-ca

@@ -116,7 +116,14 @@ spec:
         [
           "cert-manager.io/Certificate/openbao-ca",
           "cert-manager.io/Certificate/otel-bootstrap-ca",
-          "cert-manager.io/Certificate/platform-otel-collector-tls"
+          "cert-manager.io/Certificate/platform-otel-collector-tls",
+          "cert-manager.io/Certificate/llz-client-ca",
+          "cert-manager.io/Certificate/llz-serving-ca",
+          "cert-manager.io/Certificate/llz-reconciler-client-tls",          "cert-manager.io/Certificate/llz-reconciler-serving-tls",
+          "cert-manager.io/Certificate/llz-reconciler-scrape-client-tls",
+          "cert-manager.io/Certificate/llz-reconciler-serving-ca",
+          "cert-manager.io/Certificate/harbor-robot-provisioner-client-tls",          "cert-manager.io/Certificate/broad-pat-rotator-client-tls",          "cert-manager.io/Certificate/eso-openbao-client-tls",
+          "cert-manager.io/Certificate/otel-client-ca"
         ]
   validations:
     - expression: >-

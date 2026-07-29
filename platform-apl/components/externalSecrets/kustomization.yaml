@@ -15,3 +15,9 @@ kind: Component
 # not-ready health used to fail the whole platform-bootstrap sync.
 resources:
   - network-policies.yaml
+  # ESO's client identity for mTLS to OpenBao. It ships HERE rather than beside
+  # the stores in manifest-secret-store/ on purpose: this component already owns
+  # what the ESO namespace needs but apl-core does not supply, and the stores'
+  # Application is kept deliberately minimal for blast-radius reasons (see the
+  # note above). The stores REFERENCE this Secret by name.
+  - eso-client-tls.yaml

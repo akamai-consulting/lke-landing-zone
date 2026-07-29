@@ -15,6 +15,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	"os"
@@ -72,6 +74,10 @@ func reconcileCmd() *cobra.Command {
 			}
 			return runReconcile(cmd.Context(), client, reconcileOpts{
 				metricsAddr:         o.metricsAddr,
+				healthAddr:          o.healthAddr,
+				metricsCertFile:     o.metricsCertFile,
+				metricsKeyFile:      o.metricsKeyFile,
+				metricsClientCAFile: o.metricsClientCAFile,
 				sampleInterval:      time.Duration(o.sampleInterval) * time.Second,
 				leaderElection:      o.leaderElection,
 				reconcileArgoNudge:  o.reconcileArgoNudge,
@@ -99,7 +105,13 @@ func reconcileCmd() *cobra.Command {
 		},
 	}
 	f := c.Flags()
-	f.StringVar(&o.metricsAddr, "metrics-addr", ":8080", "address to serve the Prometheus /metrics endpoint on")
+	f.StringVar(&o.metricsAddr, "metrics-addr", ":8080", "address to serve the Prometheus /metrics endpoint on (mTLS when --metrics-tls-* are set)")
+	// /healthz is on its OWN port because the kubelet probes it and cannot
+	// present a client certificate; see the two-listener note in runReconcile.
+	f.StringVar(&o.healthAddr, "health-addr", ":8081", "address to serve the plaintext /healthz probe endpoint on")
+	f.StringVar(&o.metricsCertFile, "metrics-tls-cert-file", "", "serving certificate for /metrics (llz-serving-ca leaf); enables mTLS with the two flags below")
+	f.StringVar(&o.metricsKeyFile, "metrics-tls-key-file", "", "private key for --metrics-tls-cert-file")
+	f.StringVar(&o.metricsClientCAFile, "metrics-tls-client-ca-file", "", "CA bundle scrapers' client certificates must chain to (llz-client-ca)")
 	f.IntVar(&o.sampleInterval, "sample-interval", 30, "seconds between observe-reconciler cluster samples")
 	f.BoolVar(&o.leaderElection, "leader-election", true, "gate the driving reconcilers on a coordination.k8s.io Lease (single writer)")
 	f.BoolVar(&o.reconcileArgoNudge, "reconcile-argo-nudge", false, "enable the argo-resync-nudger watch reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
@@ -110,7 +122,7 @@ func reconcileCmd() *cobra.Command {
 	f.IntVar(&o.volLabelsResync, "volume-labels-resync", 3600, "resync-floor seconds for the volume-labels reconciler (PV watch drives immediacy)")
 	f.BoolVar(&o.reconcileLinodeCred, "reconcile-linode-creds", false, "enable the Linode credential-rotation reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
 	f.IntVar(&o.linodeCredInterval, "linode-creds-interval", 3600, "seconds between Linode credential-rotation resync passes")
-	f.BoolVar(&o.reconcileHarbor, "reconcile-harbor", false, "enable the Harbor-provisioner reconciler (default off: the CronJob owns it)")
+	f.BoolVar(&o.reconcileHarbor, "reconcile-harbor", false, "enable the Harbor-provisioner reconciler (default off: the CronJob owns it, and this lane CANNOT reach a STRICT-mTLS harbor namespace from the unmeshed reconciler pod — see below)")
 	f.IntVar(&o.harborInterval, "harbor-interval", 300, "seconds between Harbor-provisioner resync passes")
 	f.BoolVar(&o.reconcileOpenBao, "reconcile-openbao-gauges", false, "enable the OpenBao seal + credential-age gauges (read-only; needs OpenBao egress + the reconciler k8s-auth role)")
 	f.IntVar(&o.openbaoInterval, "openbao-gauges-interval", 60, "seconds between OpenBao gauge samples")
@@ -130,6 +142,10 @@ func reconcileCmd() *cobra.Command {
 // the typed reconcileOpts.
 type reconcileFlags struct {
 	metricsAddr         string
+	healthAddr          string
+	metricsCertFile     string
+	metricsKeyFile      string
+	metricsClientCAFile string
 	sampleInterval      int
 	leaderElection      bool
 	reconcileArgoNudge  bool
@@ -157,6 +173,10 @@ type reconcileFlags struct {
 
 type reconcileOpts struct {
 	metricsAddr         string
+	healthAddr          string
+	metricsCertFile     string
+	metricsKeyFile      string
+	metricsClientCAFile string
 	sampleInterval      time.Duration
 	leaderElection      bool
 	reconcileArgoNudge  bool
@@ -279,20 +299,45 @@ func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) 
 		}
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+	// TWO listeners, deliberately split by who can authenticate.
+	//
+	// /metrics moves onto an mTLS listener: Prometheus presents a client cert
+	// from llz-client-ca and verifies this server against llz-serving-ca. It was
+	// plaintext, scraped over `scheme: http`.
+	//
+	// /healthz STAYS PLAINTEXT on its own port, because the client is the KUBELET
+	// running the liveness/readiness probes, and kubelet cannot present a client
+	// certificate — an httpGet probe has no way to carry one. Requiring mTLS on a
+	// single combined listener would make every probe fail and CrashLoop the pod.
+	//
+	// That split is safe because of what each endpoint returns: /healthz is a
+	// leader-election liveness verdict with no cluster data in it, while /metrics
+	// carries the llz_* gauge set. Keeping them on one port would have forced the
+	// weaker of the two postures onto both.
+	metricsMux := http.NewServeMux()
+	metricsMux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		_, _ = reg.WriteTo(w)
 	})
 	// /healthz doubles as the liveness probe: with leader election active it fails
 	// once the elector loop wedges, so a silently-stuck reconciler is restarted
 	// instead of sitting leaderless forever (see reconcilerHealthz).
-	mux.HandleFunc("/healthz", reconcilerHealthz(elector))
-	srv := &http.Server{Addr: o.metricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	healthMux := http.NewServeMux()
+	healthMux.HandleFunc("/healthz", reconcilerHealthz(elector))
+
+	srv := &http.Server{Addr: o.metricsAddr, Handler: metricsMux, ReadHeaderTimeout: 5 * time.Second}
+	healthSrv := &http.Server{Addr: o.healthAddr, Handler: healthMux, ReadHeaderTimeout: 5 * time.Second}
 
 	errc := make(chan error, 1)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errc <- err
+		}
+	}()
+	go func() {
+		// serveMetrics decides TLS-vs-plaintext from the flags; see it for why a
+		// missing certificate is a hard error rather than a plaintext fallback.
+		if err := serveMetrics(srv, o.metricsCertFile, o.metricsKeyFile, o.metricsClientCAFile); err != nil && err != http.ErrServerClosed {
 			errc <- err
 		}
 	}()
@@ -317,8 +362,72 @@ func runReconcile(ctx context.Context, client reconcileClient, o reconcileOpts) 
 		<-done // let the reconciler loops unwind
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		// Both listeners now, not just the metrics one — a leaked health server
+		// would hold the port and keep the process alive past shutdown.
+		_ = healthSrv.Shutdown(shutCtx)
 		return srv.Shutdown(shutCtx)
 	}
+}
+
+// serveMetrics starts the /metrics listener, with mTLS when a serving keypair is
+// configured and plaintext when it is not.
+//
+// The plaintext branch exists ONLY so `llz reconcile` stays runnable outside a
+// cluster (local runs, tests) where no cert-manager has issued anything. In the
+// deployed manifest all three paths are always set, so the in-cluster listener is
+// always mTLS.
+//
+// A PARTIAL configuration is a hard error rather than a downgrade: if someone
+// sets the cert but not the client CA, that is a server which encrypts but
+// accepts any caller, and silently starting it would look exactly like success.
+// The whole point of this change was removing a flag whose failure mode was a
+// silent downgrade — reintroducing one here would be self-defeating.
+func serveMetrics(srv *http.Server, certFile, keyFile, clientCAFile string) error {
+	if certFile == "" && keyFile == "" && clientCAFile == "" {
+		return srv.ListenAndServe()
+	}
+	if certFile == "" || keyFile == "" || clientCAFile == "" {
+		return fmt.Errorf("metrics TLS is partially configured (cert=%q key=%q client-ca=%q): set all three or none — a serving cert without a client CA would accept unauthenticated scrapes",
+			certFile, keyFile, clientCAFile)
+	}
+	caPEM, err := os.ReadFile(clientCAFile)
+	if err != nil {
+		return fmt.Errorf("read metrics client CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return fmt.Errorf("metrics client CA %s contains no valid certificate", clientCAFile)
+	}
+	// Fail fast on a missing/malformed keypair. With GetCertificate below the
+	// files are otherwise not touched until the first scrape, which would turn a
+	// bad mount into a silent "listener up, every scrape fails" state.
+	if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
+		return fmt.Errorf("metrics serving keypair (%s / %s): %w", certFile, keyFile, err)
+	}
+	srv.TLSConfig = &tls.Config{
+		ClientCAs: pool,
+		// The scrape must PROVE it is Prometheus, not merely offer a cert.
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		MinVersion: tls.VersionTLS12,
+		// GetCertificate re-reads the SERVING keypair per handshake, for the same
+		// reason the client side uses GetClientCertificate: this process is a
+		// long-lived Deployment and the leaf is 90 days. ListenAndServeTLS(cert,
+		// key) loads once at startup, so after cert-manager renewed at day 60 the
+		// server would keep serving the original leaf until it expired at day 90
+		// and then fail every scrape — with nothing to restart it, since the
+		// liveness probe is on the separate plaintext health port.
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			c, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return nil, fmt.Errorf("reload metrics serving keypair: %w", err)
+			}
+			return &c, nil
+		},
+	}
+	// Empty strings: the keypair comes from GetCertificate above, not from these
+	// arguments. Passing the paths here would ALSO load them once at startup and
+	// silently win for connections that do not hit GetCertificate.
+	return srv.ListenAndServeTLS("", "")
 }
 
 // buildReconcilers assembles the enabled reconciler set: the always-on observe
@@ -441,6 +550,20 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			name:     "harbor",
 			interval: o.harborInterval,
 			// Same logic the harbor-robot-provisioner CronJob runs.
+			//
+			// INCOMPATIBLE WITH STRICT-mTLS HARBOR (ADR 0010). runCIHarborProvisioner
+			// speaks PLAINTEXT to harbor-core, which is correct for the CronJob —
+			// that pod carries an Istio sidecar that upgrades the hop to mTLS on the
+			// wire. THIS pod does not: llz-reconciler is not a meshed namespace, so
+			// enabling this lane once the harbor PeerAuthentication is STRICT means
+			// every request is dropped at harbor-core's sidecar.
+			//
+			// Deliberately NOT a hard error at startup: a future change that meshes
+			// the reconciler would make this lane correct again, and a build-time
+			// refusal would be wrong then. The failure is also loud (the lane's
+			// errors surface as llz_reconcile_up=0, which alerts) rather than silent.
+			// ci_mesh_egress_guard.go cannot catch this — it inspects
+			// NetworkPolicies, and this path is Go.
 			run: gate(func(context.Context) error { return runCIHarborProvisioner() }),
 		})
 	}

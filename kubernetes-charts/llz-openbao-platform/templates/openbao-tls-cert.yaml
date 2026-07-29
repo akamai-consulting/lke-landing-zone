@@ -20,6 +20,14 @@ spec:
   isCA: false
   usages:
     - server auth
+  # 127.0.0.1 covers the loopback listener (127.0.0.1:8210) that the in-pod
+  # operator paths use — `bao operator init`, unseal/status, generate-root, the
+  # `llz ci health` probes. With this SAN those callers VERIFY the server against
+  # /openbao/tls/ca.crt instead of running VAULT_SKIP_VERIFY=true, which is what
+  # let the last skip-verify be removed from tools/cmd/llz/openbao.go (baoEnv).
+  # Without it every in-pod `bao` call fails x509 hostname verification.
+  ipAddresses:
+    - 127.0.0.1
   dnsNames:
     - {{ .Values.platform.releaseName }}
     - {{ .Values.platform.releaseName }}.{{ .Release.Namespace }}

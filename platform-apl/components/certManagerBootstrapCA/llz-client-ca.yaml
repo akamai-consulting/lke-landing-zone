@@ -1,0 +1,137 @@
+# Dedicated, self-signed cert-manager CA that issues CLIENT identities for
+# LLZ workloads (`llz-client-ca`). Sibling of openbao-bootstrap-ca.yaml in this
+# same component, and deliberately a SEPARATE trust root from it.
+#
+# WHY A SEPARATE CA FROM `openbao-ca`. `openbao-ca` signs SERVER certs — the
+# thing clients verify to know they reached the real OpenBao. If the same CA
+# also signed client certs, any holder of a client cert could present it as a
+# server cert (X.509 EKU is advisory; OpenBao's `tls_require_and_verify_client_cert`
+# checks the chain, not the EKU) and impersonate the server to a peer that
+# trusts that CA. Two roots means "trusted to be a client" and "trusted to be
+# the server" are non-overlapping statements. The leaves below carry
+# `usages: [client auth]` only, which enforces the same split at the leaf.
+#
+# WHAT TRUSTS THIS. Every mTLS server in the landing zone mounts this CA's
+# ca.crt as its client-verification bundle:
+#   - OpenBao       listener.tls_client_ca_file        (llz-openbao-platform chart)
+#   - OTel Collector otlp receiver tls.client_ca_file  (components/observability)
+# Each mounts it via a cert-manager Certificate issued FROM this CA into its own
+# namespace, whose Secret carries the CA in `ca.crt` — the same indirection the
+# ESO caProvider already uses to read `openbao-ca` off the openbao-tls Secret.
+# There is no CA-reflector controller in this platform; this is the established
+# substitute for one.
+#
+# WHO GETS A LEAF. One client Certificate per workload identity, each shipped
+# ALONGSIDE its consumer (so it is created and torn down with it, and a
+# disabled component leaves no orphan cert):
+#   llz-reconciler         components/llzReconciler/llz-reconciler/client-tls-certificate.yaml
+#   harbor-robot-provisioner components/harbor/harbor-robot-provisioner/client-tls-certificate.yaml
+#   broad-pat-rotator      components/broadPatRotator/broad-pat-rotator/client-tls-certificate.yaml
+#   external-secrets (ESO) components/externalSecrets/eso-client-tls.yaml
+#   prometheus (scrapes)   llz-openbao-platform chart, templates/openbao-scrape-client-cert.yaml
+#
+# The leaf commonName IS the authorization principal: OpenBao's cert auth method
+# and any future authz binds on it, so the CN must stay stable across renewals.
+# cert-manager preserves commonName on renewal; only the key and serial change.
+#
+# WAVES — mirrors openbao-bootstrap-ca exactly. No OpenBao dependency, so it can
+# come up before anything that needs it:
+#   -16  self-signed issuer + the CA Certificate
+#   -15  the CA ClusterIssuer that signs the client leaves
+# Leaf Certificates ship at -14 or later so the issuer exists first.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: llz-client-selfsigned
+  annotations:
+    argocd.argoproj.io/sync-wave: "-16"
+spec:
+  selfSigned: {}
+---
+# Self-signed root that signs every LLZ client identity. Long-lived (10y) so the
+# client trust anchor is effectively immutable across the cluster's life — a CA
+# rotation here would require every mTLS server to reload its client-CA bundle
+# and every client to re-issue simultaneously, which this platform has no
+# orchestration for. Leaves rotate under it on the normal cadence; `ca.crt` on
+# every derived Secret is unchanged by a leaf renewal.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llz-client-ca
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "-16"
+spec:
+  isCA: true
+  commonName: llz-client-ca
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["client-identity"]
+  secretName: llz-client-ca
+  duration: 87600h    # 10 years
+  renewBefore: 2160h  # 90 days
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: llz-client-selfsigned
+    kind: ClusterIssuer
+---
+# CA ClusterIssuer that signs the client leaves. Reads the keypair from the
+# `llz-client-ca` Secret minted above (cert-manager's cluster-resource-namespace
+# is `cert-manager`, where that Secret lives).
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: llz-client-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  ca:
+    secretName: llz-client-ca
+---
+# ── LLZ SERVING ROOT ─────────────────────────────────────────────────────────
+#
+# The counterpart root, for LLZ services that TERMINATE TLS themselves and are
+# not fronted by OpenBao's or apl-core's own PKI. Today that is the reconciler's
+# /metrics listener; anything else LLZ makes serve TLS belongs here too.
+#
+# WHY A THIRD ROOT rather than reusing `openbao-ca`: openbao-ca's meaning is
+# precisely "this is the OpenBao server". A reconciler serving cert signed by it
+# would be accepted by any client that trusts openbao-ca as proof it had reached
+# OpenBao. Roots are assertions, and this is a different assertion.
+#
+# Same wave shape as the pair above.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llz-serving-ca
+  namespace: cert-manager
+  annotations:
+    argocd.argoproj.io/sync-wave: "-16"
+spec:
+  isCA: true
+  commonName: llz-serving-ca
+  subject:
+    organizations: ["platform"]
+    organizationalUnits: ["serving"]
+  secretName: llz-serving-ca
+  duration: 87600h    # 10 years
+  renewBefore: 2160h  # 90 days
+  privateKey:
+    algorithm: RSA
+    size: 4096
+  issuerRef:
+    name: llz-client-selfsigned
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: llz-serving-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  ca:
+    secretName: llz-serving-ca

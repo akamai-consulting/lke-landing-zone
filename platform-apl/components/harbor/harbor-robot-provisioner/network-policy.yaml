@@ -53,6 +53,28 @@ spec:
               kubernetes.io/metadata.name: llz-openbao
       ports:
         - { protocol: TCP, port: 8200 }
+    # istiod (xDS + cert signing). REQUIRED now that this pod is meshed
+    # (cronjob.yaml sets sidecar.istio.io/inject: "true"). Without it Envoy's
+    # iptables redirect kills ALL egress from the pod — including DNS and the
+    # OpenBao and GitHub rules above — and the container never gets a working
+    # network at all. This is the exact failure llz-cluster-foundation's
+    # networkPolicies.istiod block documents: "Required in every namespace that
+    # has BOTH default-deny AND sidecar injection."
+    #
+    # 15012 (mTLS xDS + CSR) is the one that matters; 15010 (plaintext xDS) and
+    # 15014 (monitoring) are included to match the foundation's istiod rule
+    # exactly rather than inventing a narrower variant that drifts from it.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+          podSelector:
+            matchLabels:
+              app: istiod
+      ports:
+        - { protocol: TCP, port: 15010 }
+        - { protocol: TCP, port: 15012 }
+        - { protocol: TCP, port: 15014 }
     # api.github.com (TCP/443) for the repo-secret publication. ipBlock
     # 0.0.0.0/0 is acceptable here: the port restriction + the scoped tokens
     # mean only outbound HTTPS is reachable — same posture as the

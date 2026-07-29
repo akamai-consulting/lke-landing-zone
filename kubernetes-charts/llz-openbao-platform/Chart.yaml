@@ -83,7 +83,20 @@ type: application
 # 0.1.23: add values.schema.json — root-strict, so a typo'd top-level key is
 #        REJECTED AT RENDER instead of silently activating nothing. Nested
 #        objects stay permissive; no rendered change for valid values.
-version: 0.1.23
+# 0.1.24: mTLS on the OpenBao API (ADR 0010). The :8200 listener now sets
+#         tls_require_and_verify_client_cert against the llz-client-ca root, so
+#         pod→OpenBao is mutually authenticated instead of TLS-with-verification-
+#         off (every consumer ran VAULT_SKIP_VERIFY). BREAKING for any client
+#         without a client certificate — ESO, the reconciler and both CronJobs
+#         gain one; see the staged rollout in the ADR before deploying.
+#         Also: a 127.0.0.1:8210 loopback listener (no client cert) for the in-pod
+#         `bao` CLI and `kubectl port-forward`, since those callers hold no
+#         identity; a 127.0.0.1 SAN on openbao-tls so they verify the server
+#         rather than skipping; raft retry_join gains leader_client_cert_file
+#         (a joining peer is a client too, and without it no follower can join);
+#         the ServiceMonitor swaps insecureSkipVerify for real CA + client certs;
+#         and the Keycloak JWKS egress moves to :8443.
+version: 0.1.24
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

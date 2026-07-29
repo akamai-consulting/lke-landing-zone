@@ -14,9 +14,19 @@ package main
 //     CI/CD pipeline — auth is workload identity, not a CI vendor's token.
 //
 //   --method oidc — a GitHub Actions OIDC token → OpenBao's `jwt` auth method.
-//     The FALLBACK, for a genuinely external GitHub-hosted caller. Needs
-//     `permissions: id-token: write`. GitHub-coupled by construction, so it is
-//     opt-in, not the default.
+//     Needs `permissions: id-token: write`. GitHub-coupled by construction, so it
+//     is opt-in, not the default.
+//
+//     NO LONGER a fallback for a genuinely external GitHub-hosted caller, which
+//     is what it was introduced as. OpenBao's listener now requires a client
+//     certificate (ADR 0010), and an external runner has neither an
+//     llz-client-ca identity nor in-cluster DNS for the ClusterIP — so this
+//     method, like --method kubernetes, only works from a pod that mounts the
+//     mTLS material. What changed is the TRANSPORT requirement, not the auth
+//     method: the OIDC token is still what proves identity to the `jwt` mount.
+//     External access goes through `kubectl port-forward … :8210` (the loopback
+//     listener), which is deliberately exempt from the client-cert requirement.
+//     No workflow in this repo currently invokes either method.
 //
 // Either way the OpenBao role's bound_service_account/bound_claims pin it to this
 // cluster/repo (llz ci bao-configure), so a token from elsewhere can't use it.
@@ -49,7 +59,15 @@ func ciOpenBaoLoginCmd() *cobra.Command {
 			"--method kubernetes (default): the pod ServiceAccount token → OpenBao's\n" +
 			"kubernetes auth — works from any in-cluster workload, nothing GitHub-specific.\n" +
 			"--method oidc: a GitHub Actions OIDC token → OpenBao's jwt auth (needs\n" +
-			"`permissions: id-token: write`) — the fallback for an external GitHub caller.",
+			"`permissions: id-token: write`).\n\n" +
+			"BOTH methods now require this to run IN-CLUSTER with a client certificate:\n" +
+			"OpenBao's listener verifies client certs, so the caller must mount an\n" +
+			"llz-client-ca identity (OPENBAO_CLIENT_CERT_FILE / _KEY_FILE) plus the\n" +
+			"openbao-ca anchor (OPENBAO_CA_FILE). --method oidc was previously described\n" +
+			"as the fallback for an EXTERNAL GitHub-hosted caller; that is no longer\n" +
+			"true — an external runner has neither the certificate nor in-cluster DNS\n" +
+			"for the ClusterIP. Reach OpenBao from outside via\n" +
+			"`kubectl port-forward … :8210` (the loopback listener) instead.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			return runOpenBaoLogin(gopts, method, role, addr, mount, saTokenFile, exportVar)
@@ -77,10 +95,18 @@ func runOpenBaoLogin(g globalOpts, method, role, addr, mount, saTokenFile, expor
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client := openbao.HTTPClientInsecure(30 * time.Second)
+	// This command runs as an in-cluster step (Argo/CI pod) and reaches OpenBao
+	// on the ClusterIP, so it is pod-network traffic and needs the workload's
+	// client certificate — the same identity the reconciler and CronJobs mount.
+	// A step that runs somewhere without one must go through the loopback
+	// listener instead (`kubectl port-forward … :8210`), not fall back to
+	// unverified TLS.
+	client, err := inClusterBaoHTTPClient()
+	if err != nil {
+		return err
+	}
 
 	var token string
-	var err error
 	switch method {
 	case "kubernetes", "":
 		if role == "" {

@@ -27,7 +27,31 @@ spec:
       app.kubernetes.io/name: llz-reconciler
   endpoints:
     - port: metrics
-      scheme: http
+      # https, was http. The reconciler's /metrics listener now requires a client
+      # certificate (serveMetrics in reconcile.go), so this scrape both proves
+      # itself and verifies the server.
+      #
+      # WATCH THE TWO `ca:` vs `cert:` SOURCES — they are DIFFERENT Secrets and
+      # crossing them yields an opaque x509 failure:
+      #   ca   → llz-reconciler-serving-ca      (the SERVING root, llz-serving-ca)
+      #   cert → llz-reconciler-scrape-client-tls (this scraper's own identity)
+      #
+      # serverName is required: the scrape dials a POD IP, which is not a SAN on
+      # the serving cert, so verification would fail on hostname mismatch without it.
+      scheme: https
+      tlsConfig:
+        ca:
+          secret:
+            name: llz-reconciler-serving-ca
+            key: ca.crt
+        cert:
+          secret:
+            name: llz-reconciler-scrape-client-tls
+            key: tls.crt
+        keySecret:
+          name: llz-reconciler-scrape-client-tls
+          key: tls.key
+        serverName: llz-reconciler.llz-reconciler.svc
       path: /metrics
       interval: 30s
       scrapeTimeout: 10s

@@ -20,7 +20,14 @@ bare chart leaves to you:
 - **NetworkPolicies** — default-deny plus an explicit allow-list of client
   namespaces on `:8200`, the intra-raft `:8200/:8201` mesh, DNS, the K8s API
   (with the LKE-Enterprise `443→6443` DNAT quirk), and audit egress to Loki.
-- **Prometheus ServiceMonitor** — scrapes `/v1/sys/metrics` over HTTPS.
+- **mTLS on the API** — the `:8200` listener sets
+  `tls_require_and_verify_client_cert` against a client-identity CA that is a
+  separate root from the serving CA, so a caller must PROVE who it is at the
+  handshake rather than only encrypting. A `127.0.0.1:8210` loopback listener
+  (no client cert) serves the in-pod `bao` CLI and `kubectl port-forward`, which
+  hold no identity and never put a packet on the network. See ADR 0010.
+- **Prometheus ServiceMonitor** — scrapes `/v1/sys/metrics` over mTLS (real CA
+  verification plus a client certificate; not `insecureSkipVerify`).
 - **Promtail audit-shipper** — a sidecar config that tails the file audit device
   and ships to the in-cluster Loki gateway.
 
@@ -55,6 +62,13 @@ knobs live under `platform` and `openbaoPromtail`:
 | `platform.tls.issuerRef.name` | `openbao-ca` | cert-manager issuer (stable self-signed bootstrap CA). |
 | `platform.tls.issuerRef.kind` | `ClusterIssuer` | |
 | `platform.tls.duration` / `renewBefore` | `8760h` / `720h` | |
+| `platform.clientTls.issuerRef.name` | `llz-client-ca` | **Client-identity root — a DIFFERENT trust anchor from `platform.tls.issuerRef`.** Signs the client certificates the `:8200` listener verifies. Sharing one root with the serving CA would let any client cert impersonate the server; see ADR 0010. |
+| `platform.clientTls.caSecretName` | `openbao-client-ca` | Secret whose `ca.crt` becomes `tls_client_ca_file`. The leaf is unused — the Certificate exists only to land the client root in this namespace (no trust-manager here). |
+| `platform.clientTls.raftSecretName` | `openbao-raft-client-tls` | Identity a joining follower presents on `retry_join`. **Load-bearing:** `retry_join` speaks the leader's `:8200` API, so a peer is a client too — without this no follower joins and a fresh cluster never forms. |
+| `platform.clientTls.scrapeSecretName` | `openbao-scrape-client-tls` | Identity the Prometheus scrape presents. Must live in THIS namespace — prometheus-operator resolves ServiceMonitor `tlsConfig` refs against the ServiceMonitor's namespace. |
+| `platform.clientTls.duration` / `renewBefore` | `2160h` / `720h` | 90d leaf, renewed at 60d. |
+| `platform.aplCA.enabled` | `true` | Lands apl-core's CA here for the Keycloak JWKS fetch (`jwks_ca_pem`). **Set false if apl-core provides no `custom-ca` ClusterIssuer** — the Certificate would sit Pending. Its Secret volume is `optional`, so OpenBao starts either way. |
+| `platform.aplCA.issuerRef.name` | `custom-ca` | apl-core's issuer. NOT ours — the only in-repo evidence it exists is a by-name reference in `otel-bootstrap-ca.yaml`. Verify before rollout. |
 | `platform.networkPolicy.enabled` | `true` | |
 | `platform.networkPolicy.allowedClientNamespaces` | `[external-secrets, llz-cert-automation, llz-observability]` | Namespaces allowed to reach `:8200`. `external-secrets` is apl-core 6.x's namespace for the bundled ESO controller. |
 | `platform.networkPolicy.observabilityNamespace` | `llz-observability` | Audit egress target on `:80`. |

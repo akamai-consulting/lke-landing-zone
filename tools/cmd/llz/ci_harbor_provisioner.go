@@ -30,14 +30,21 @@ package main
 // recreates + re-publishes it, replacing the old "re-run the workflow" runbook).
 //
 // Env contract (set by the CronJob manifest):
-//   HARBOR_API_URL              Harbor REST base (default http://harbor-core.harbor.svc.cluster.local)
+//   HARBOR_API_URL              Harbor REST base (default http://harbor-core.harbor.svc.cluster.local).
+//                               PLAINTEXT by design — the pod is in the Istio mesh
+//                               and its sidecar upgrades this to mTLS on the wire.
+//                               harbor-core has no client-cert auth, so the mesh is
+//                               the only way this hop is mutually authenticated.
 //   HARBOR_HOST                 registry host written as registry_host (per-env,
 //                               patched by `llz render` from cluster.bootstrap.domainSuffix)
 //   HARBOR_ADMIN_PASSWORD_FILE  mounted admin password (default /etc/harbor-admin/HARBOR_ADMIN_PASSWORD)
 //   OPENBAO_ADDR / OPENBAO_KUBERNETES_MOUNT / OPENBAO_KUBERNETES_ROLE /
-//   SA_TOKEN_FILE / OPENBAO_CA_FILE / OPENBAO_SKIP_VERIFY
-//                               OpenBao k8s-auth login (same contract as the
-//                               linode-cred-rotator; role defaults to harbor-provisioner)
+//   SA_TOKEN_FILE / OPENBAO_CA_FILE / OPENBAO_CLIENT_CERT_FILE / OPENBAO_CLIENT_KEY_FILE
+//                               OpenBao k8s-auth login over mTLS (same contract as
+//                               every in-cluster caller — openbao_k8s_login.go;
+//                               role defaults to harbor-provisioner).
+//                               OPENBAO_SKIP_VERIFY is GONE: the listener requires
+//                               a client certificate, so there is no unverified path.
 //   GH_TOKEN / GH_REPO          repo-secret publication; unset → skip with a
 //                               warning (single-cluster instances need no
 //                               standby distribution)
@@ -73,8 +80,45 @@ func ciHarborProvisionerCmd() *cobra.Command {
 			"Not-ready states exit 0 (the CronJob retries); a 401 smoke exits 1 —\n" +
 			"delete the stale robot in Harbor UI and the next tick recreates it.",
 		Args: cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error { return runCIHarborProvisioner() },
+		// The sidecar shutdown is deliberately HERE and not inside
+		// runCIHarborProvisioner: that function is also driven in-process by the
+		// reconciler's harbor lane (reconcile.go), which is a long-lived pod that
+		// must not shut anything down when one pass finishes.
+		RunE: func(_ *cobra.Command, _ []string) error {
+			defer shutdownIstioSidecar()
+			return runCIHarborProvisioner()
+		},
 	}
+}
+
+// istioQuitURL is the Envoy admin endpoint that asks an injected sidecar to exit.
+// Overridable so the test can point it at a stub.
+var istioQuitURL = "http://127.0.0.1:15020/quitquitquit"
+
+// shutdownIstioSidecar asks this pod's Istio sidecar to exit, so a MESHED Job
+// can reach Complete.
+//
+// Envoy does not exit when the application container does: the pod would stay
+// Running forever and the Job would never complete. That single fact is why this
+// CronJob previously opted OUT of the mesh (`sidecar.istio.io/inject: "false"`)
+// — and opting out is what left the Harbor admin password crossing the pod
+// network in cleartext. This call is what buys the opt-out back.
+//
+// Best-effort by construction, and silent on every failure:
+//   - no sidecar injected (native sidecars, or injection disabled) → connection
+//     refused, which is the correct no-op
+//   - istiod running ENABLE_NATIVE_SIDECARS → the proxy is a native init
+//     container that terminates on its own; this is redundant, not wrong
+//
+// It must never turn a successful provisioning run into a failed one, so the
+// error is discarded rather than returned.
+func shutdownIstioSidecar() {
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Post(istioQuitURL, "", nil)
+	if err != nil {
+		return // no sidecar to stop — the overwhelmingly common case off-mesh
+	}
+	_ = resp.Body.Close()
 }
 
 // usableRegistryHost reports whether HARBOR_HOST carries a real registry host.

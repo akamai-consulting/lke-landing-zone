@@ -12,6 +12,12 @@ resources:
   - harbor-robot-provisioner/externalsecret.yaml
   - harbor-robot-provisioner/cronjob.yaml
   - harbor-robot-provisioner/network-policy.yaml
-  # OpenBao CA bundle for this namespace, so the provisioner verifies OpenBao's
-  # TLS instead of skipping it. See harbor-robot-provisioner/openbao-ca-bundle.yaml.
+  # OpenBao CA bundle for this namespace — the SERVER half of the mTLS hop
+  # (verifies OpenBao's serving cert). From #358; reused rather than duplicated.
   - harbor-robot-provisioner/openbao-ca-bundle.yaml
+  # The CLIENT half: this workload's own identity, which OpenBao's listener now
+  # requires (ADR 0010).
+  - harbor-robot-provisioner/client-tls-certificate.yaml
+  # STRICT mTLS for the harbor namespace — the enforcement behind putting the
+  # provisioner in the mesh. HIGH BLAST RADIUS: read its header before enabling.
+  - harbor-peerauthentication.yaml

@@ -7,6 +7,8 @@ resources:
   - namespace.yaml
   - serviceaccount.yaml
   - network-policy.yaml
+  # mTLS identity + serving-CA anchor for the OpenBao hop (wave -14).
+  - client-tls-certificate.yaml
   - externalsecret.yaml
   - openbao-ca-bundle.yaml
   - cronjob.yaml

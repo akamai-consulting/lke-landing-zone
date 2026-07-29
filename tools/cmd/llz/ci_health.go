@@ -935,8 +935,11 @@ func checkOpenBao(r *health.Report, phase1 bool) {
 			record(r, health.CatPending, "Pod openbao/"+pod+" (openbao container not Ready — can't query seal status)")
 			continue
 		}
-		out, execErr := execOutput("kubectl", "-n", openbaoNamespace, "exec", pod, "-c", "openbao", "--",
-			"env", "VAULT_ADDR=https://127.0.0.1:8200", "VAULT_SKIP_VERIFY=true", "bao", "status", "-format=json")
+		// Loopback listener + CA verification (baoLoopbackEnv): the network
+		// listener requires a client certificate, which an exec'd `bao` has not got.
+		execArgv := append([]string{"-n", openbaoNamespace, "exec", pod, "-c", "openbao", "--", "env"}, baoLoopbackEnv()...)
+		execArgv = append(execArgv, "bao", "status", "-format=json")
+		out, execErr := execOutput("kubectl", execArgv...)
 		st, perr := health.ParseBaoStatus(out)
 		if perr != nil {
 			// `bao status` runs through `kubectl exec`, i.e. the konnectivity tunnel.

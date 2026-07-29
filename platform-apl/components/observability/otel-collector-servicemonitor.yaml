@@ -28,6 +28,18 @@ spec:
       app.kubernetes.io/instance: llz-observability.otel
   endpoints:
     - port: monitoring
+      # PLAINTEXT, and deliberately left so — an accepted residual of ADR 0010,
+      # which put mTLS on this collector's OTLP DATA port (:4318) but not here.
+      #
+      # This :8888 Service is created by the otel-OPERATOR from the CR, not by us,
+      # and its Prometheus pull endpoint takes TLS only through the collector's
+      # `service.telemetry` block, whose TLS support is thin and version-dependent.
+      # The payload is `otelcol_*` internal counters — no credentials, no cluster
+      # data — and the thing that depends on this target is the
+      # OTelCollectorMetricsTargetDown alert. Breaking that alert to encrypt a
+      # queue-depth gauge is a bad trade.
+      #
+      # Revisit if the collector's telemetry server gains first-class TLS.
       scheme: http
       path: /metrics
       interval: 30s

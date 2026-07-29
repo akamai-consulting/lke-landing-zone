@@ -29,6 +29,12 @@ spec:
       app.kubernetes.io/component: controller
   endpoints:
     - port: tcp-prometheus-servicemonitor
+      # PLAINTEXT, and out of LLZ's reach — an accepted residual of ADR 0010.
+      # cert-manager is installed and configured by apl-core; its metrics listener
+      # serves HTTP and LLZ cannot give it a serving certificate from here. The
+      # payload is cert-manager's own counters plus certificate expiry timestamps
+      # — no key material. Closing this needs an apl-core change, not a change in
+      # this repo.
       scheme: http
       path: /metrics
       interval: 60s

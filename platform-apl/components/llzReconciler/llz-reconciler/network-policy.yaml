@@ -31,13 +31,27 @@ spec:
       app.kubernetes.io/name: llz-reconciler
   policyTypes: [Ingress, Egress]
   ingress:
-    # Prometheus (monitoring namespace) scrapes :8080/metrics.
+    # Prometheus (monitoring namespace) scrapes :8080/metrics — now over mTLS.
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
       ports:
         - { protocol: TCP, port: 8080 }
+    # Kubelet probes :8081/healthz. NOT scoped by `from`: the probe originates
+    # from the NODE, which is not a pod and cannot be selected by namespace or
+    # pod labels — a `from` clause here would drop every probe and CrashLoop the
+    # pod. The port serves only the leader-election liveness verdict, so an
+    # unscoped ingress on it exposes nothing.
+    #
+    # Note what this does NOT claim: the previous :8080 rule was scoped to the
+    # monitoring namespace and therefore never admitted kubelet either, yet
+    # probes worked — so node→pod probe traffic is evidently not policed here
+    # (Cilium host-entity handling on LKE). This rule makes the allowance
+    # EXPLICIT rather than dependent on that behavior, which is worth doing
+    # precisely because it is undocumented and could change.
+    - ports:
+        - { protocol: TCP, port: 8081 }
   egress:
     # DNS. Match kube-system by NAMESPACE only, NOT a `k8s-app: kube-dns`
     # podSelector: LKE-Enterprise / managed CoreDNS is labeled differently

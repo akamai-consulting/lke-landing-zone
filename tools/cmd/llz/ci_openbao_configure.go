@@ -432,13 +432,42 @@ type keycloakRoleBody struct {
 	TokenMaxTTL   string              `json:"token_max_ttl"`
 }
 
-// keycloakInternalJWKS is Keycloak's realm JWKS on its INTERNAL http service —
-// the URL OpenBao (in-cluster) can actually reach to validate team-login tokens
-// (the public keycloak.<domain> URL hairpins off the cluster's own LB). The
-// service name is apl-core v6's Keycloak.X chart (`keycloak-keycloakx-http`) in
-// the `keycloak` namespace; the realm is `otomi`. The egress allow is in
+// keycloakInternalJWKS is Keycloak's realm JWKS on its INTERNAL service — the
+// URL OpenBao (in-cluster) can actually reach to validate team-login tokens (the
+// public keycloak.<domain> URL hairpins off the cluster's own LB). The service
+// name is apl-core v6's Keycloak.X chart (`keycloak-keycloakx-http`) in the
+// `keycloak` namespace; the realm is `otomi`. The egress allow is in
 // kubernetes-charts/llz-openbao-platform (platform.networkPolicy.keycloakNamespace).
-const keycloakInternalJWKS = "http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/realms/otomi/protocol/openid-connect/certs"
+//
+// HTTPS on :8443, was plaintext :8080. This fetch retrieves the SIGNING KEYS
+// OpenBao uses to decide whether a team-login token is genuine. Over plaintext,
+// anything able to answer that request substitutes its own keys and can then
+// mint tokens OpenBao will accept — the `bound_issuer` check does not help,
+// because the issuer claim is verified with the very keys being fetched. Of all
+// the cleartext hops in the cluster this was the only one carrying TRUST
+// MATERIAL rather than data, which is why it is TLS even though Keycloak cannot
+// do mutual auth here (see keycloakJWKSCAPEM).
+//
+// PREREQUISITE — verify on a live cluster before rollout: apl-core's Keycloak.X
+// Service must expose 8443. The chart's `http` Service is named for the
+// container's HTTP port and some builds expose ONLY 8080. If 8443 is absent this
+// fetch fails and team login breaks; the fallback is NOT to revert to 8080 but
+// to pin static keys via jwt_validation_pubkeys — see the ADR.
+const keycloakInternalJWKS = "https://keycloak-keycloakx-http.keycloak.svc.cluster.local:8443/realms/otomi/protocol/openid-connect/certs"
+
+// keycloakJWKSCAFile is the CA bundle OpenBao verifies Keycloak's serving cert
+// against, passed to the auth mount as `jwks_ca_pem`.
+//
+// WHY NOT mTLS HERE. This hop is one-way TLS, not mutual, and that is a
+// limitation rather than a choice: Keycloak is not in the mesh (the
+// llz-openbao-platform NetworkPolicy comment says so explicitly) and apl-core's
+// Keycloak.X deployment does not do client-certificate authentication. The
+// options were (a) verified TLS, which stops the substitution attack that
+// actually matters here, or (b) put Keycloak in the mesh, which is an apl-core
+// change LLZ cannot make from this repo. (a) closes the real hole; the residual
+// gap is that Keycloak cannot verify OpenBao, which for a public-key fetch of
+// non-secret material is not a meaningful exposure.
+const keycloakJWKSCAFile = "/openbao/apl-ca/ca.crt"
 
 // aplPlatformAdminRole is apl-core's built-in all-teams platform-admin realm role
 // — the value its groups-claim mapper emits for the default admin user(s)
@@ -480,9 +509,22 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 		// this fatal step → the whole bao-configure job. We validate keys LAZILY at
 		// first login instead, by which point Keycloak (and the internal JWKS) is up.
 		// The signature is still verified on every login; this only defers the fetch.
-		{desc: "configure keycloak auth (internal jwks_url + public bound_issuer)", fatal: true,
+		//
+		// jwks_ca_pem pins the CA for that fetch. Without it, moving the URL to
+		// https would only encrypt the hop — OpenBao would still accept any
+		// certificate, so an on-path substitution of the signing keys would
+		// succeed exactly as it did over plaintext. The pin is the control; the
+		// scheme change alone is not.
+		//
+		// Note the interaction with skip_jwks_validation above: the fetch is
+		// deferred to first login, so a WRONG jwks_ca_pem does not fail this step
+		// — it fails team login later, with a TLS error in the OpenBao log rather
+		// than at configure time. Watch the first `llz openbao login --team` after
+		// a rollout.
+		{desc: "configure keycloak auth (internal jwks_url over TLS + public bound_issuer)", fatal: true,
 			args: []string{"write", "auth/keycloak/config",
 				"jwks_url=" + keycloakInternalJWKS, "bound_issuer=" + issuer,
+				"jwks_ca_pem=@" + keycloakJWKSCAFile,
 				"skip_jwks_validation=true"}},
 	}
 	for _, t := range teams {

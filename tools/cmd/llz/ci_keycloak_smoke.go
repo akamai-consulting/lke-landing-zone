@@ -212,11 +212,11 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	}
 	defer cleanup()
 	ctx := context.Background()
-	token, err := openbao.OIDCLogin(ctx, openbao.HTTPClientInsecure(30*time.Second), addr, "keycloak", team, idToken)
+	token, err := openbao.OIDCLogin(ctx, openbao.HTTPClientLoopback(30*time.Second), addr, "keycloak", team, idToken)
 	if err != nil {
 		return fmt.Errorf("openbao oidc login (mount keycloak, role %s): %w", team, err)
 	}
-	obc := openbao.NewWithClient(addr, token, "", openbao.HTTPClientInsecure(30*time.Second))
+	obc := openbao.NewWithClient(addr, token, "", openbao.HTTPClientLoopback(30*time.Second))
 
 	inPath := subtree + "/_llz_smoke_" + suffix
 	if err := obc.Write(ctx, inPath, map[string]string{"ok": "1"}); err != nil {
@@ -243,11 +243,11 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	if err != nil {
 		return fmt.Errorf("mint %s/%s SA token for the eso-reader check: %w", esoNamespace, esoServiceAccount, err)
 	}
-	esoTok, err := openbao.KubernetesLogin(ctx, openbao.HTTPClientInsecure(30*time.Second), addr, "kubernetes", "eso", saJWT)
+	esoTok, err := openbao.KubernetesLogin(ctx, openbao.HTTPClientLoopback(30*time.Second), addr, "kubernetes", "eso", saJWT)
 	if err != nil {
 		return fmt.Errorf("openbao kubernetes login (role eso) failed — is the eso k8s-auth role configured + reachable? %w", err)
 	}
-	esoC := openbao.NewWithClient(addr, esoTok, "", openbao.HTTPClientInsecure(30*time.Second))
+	esoC := openbao.NewWithClient(addr, esoTok, "", openbao.HTTPClientLoopback(30*time.Second))
 	// %v, not %w, on err: the !ok / wrong-value branches reach here with a NIL err
 	// (Get reports an absent secret as ok=false, err=nil), and %w would render that
 	// as "%!w(<nil>)" in the one place an operator reads this — a red e2e lane.
@@ -323,11 +323,11 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 		}
 		fmt.Printf("✓ admin id_token carries groups=%v (has %s, not %s)\n", aGroups, adminRole, group)
 
-		aOBTok, err := openbao.OIDCLogin(ctx, openbao.HTTPClientInsecure(30*time.Second), addr, "keycloak", team, aIDToken)
+		aOBTok, err := openbao.OIDCLogin(ctx, openbao.HTTPClientLoopback(30*time.Second), addr, "keycloak", team, aIDToken)
 		if err != nil {
 			return fmt.Errorf("admin openbao oidc login (role %s) must SUCCEED via %s but did not — the team role does not accept the platform-admin group: %w", team, adminRole, err)
 		}
-		aOBC := openbao.NewWithClient(addr, aOBTok, "", openbao.HTTPClientInsecure(30*time.Second))
+		aOBC := openbao.NewWithClient(addr, aOBTok, "", openbao.HTTPClientLoopback(30*time.Second))
 		aPath := subtree + "/_llz_smoke_admin_" + aSuffix
 		if err := aOBC.Write(ctx, aPath, map[string]string{"ok": "1"}); err != nil {
 			return fmt.Errorf("EXPECTED platform-admin write to %s to SUCCEED via %s, got: %w", aPath, adminRole, err)

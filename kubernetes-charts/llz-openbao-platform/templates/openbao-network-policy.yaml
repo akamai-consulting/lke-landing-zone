@@ -99,15 +99,25 @@ spec:
         - port: 80
           protocol: TCP
     {{- if .Values.platform.networkPolicy.keycloakNamespace }}
-    # apl-core Keycloak (:8080 http): the `keycloak` OIDC auth mount fetches the
-    # realm JWKS to validate team-login id_tokens. Keycloak is not meshed, so this
-    # is a direct L4 allow; the mount MUST target the internal jwks_url (the public
-    # URL hairpins) — see `llz ci bao-configure` (keycloakTeamSteps).
+    # apl-core Keycloak: the `keycloak` OIDC auth mount fetches the realm JWKS to
+    # validate team-login id_tokens. Keycloak is not meshed, so this is a direct
+    # L4 allow; the mount MUST target the internal jwks_url (the public URL
+    # hairpins) — see `llz ci bao-configure` (keycloakTeamSteps).
+    #
+    # 8443 (TLS) is the port the fetch now uses. 8080 (plaintext) is retained
+    # ONLY for the staged rollout: the JWKS fetch is lazy (skip_jwks_validation),
+    # so an instance that has not yet re-run bao-configure is still pointed at
+    # 8080 and would lose team login the moment this allow disappeared. REMOVE
+    # THE 8080 ENTRY once every instance has re-run `llz ci bao-configure` and a
+    # team login has been verified — leaving it is a standing permission for the
+    # exact plaintext fetch this change exists to eliminate.
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.platform.networkPolicy.keycloakNamespace }}
       ports:
+        - port: 8443
+          protocol: TCP
         - port: 8080
           protocol: TCP
     {{- end }}
