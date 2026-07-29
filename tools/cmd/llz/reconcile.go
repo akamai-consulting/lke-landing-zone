@@ -57,8 +57,6 @@ func reconcileCmd() *cobra.Command {
 			"  --reconcile-linode-creds   rotate in-cluster Linode object-storage keys (was\n" +
 			"                             the linodeCredRotator CronJob; needs REGION,\n" +
 			"                             OBJ_CLUSTER, LINODE_TOKEN, OPENBAO_*)\n" +
-			"  --reconcile-harbor         ensure Harbor project + robots (was the\n" +
-			"                             harbor-robot-provisioner CronJob)\n" +
 			"  --reconcile-openbao-gauges seal + credential-age gauges (read-only; needs\n" +
 			"                             OpenBao egress + the reconciler k8s-auth role)\n" +
 			"  --reconcile-es-store-recovery force-sync ExternalSecrets/PushSecrets when\n" +
@@ -93,8 +91,6 @@ func reconcileCmd() *cobra.Command {
 				volTagsResync:       time.Duration(o.volTagsResync) * time.Second,
 				reconcileLinodeCred: o.reconcileLinodeCred,
 				linodeCredInterval:  time.Duration(o.linodeCredInterval) * time.Second,
-				reconcileHarbor:     o.reconcileHarbor,
-				harborInterval:      time.Duration(o.harborInterval) * time.Second,
 				reconcileOpenBao:    o.reconcileOpenBao,
 				openbaoInterval:     time.Duration(o.openbaoInterval) * time.Second,
 				reconcileTokens:     o.reconcileTokens,
@@ -129,8 +125,6 @@ func reconcileCmd() *cobra.Command {
 	f.IntVar(&o.volTagsResync, "volume-tags-resync", 3600, "resync-floor seconds for the volume-tags reconciler (PV watch drives immediacy)")
 	f.BoolVar(&o.reconcileLinodeCred, "reconcile-linode-creds", false, "enable the Linode credential-rotation reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
 	f.IntVar(&o.linodeCredInterval, "linode-creds-interval", 3600, "seconds between Linode credential-rotation resync passes")
-	f.BoolVar(&o.reconcileHarbor, "reconcile-harbor", false, "enable the Harbor-provisioner reconciler (default off: the CronJob owns it, and this lane CANNOT reach a STRICT-mTLS harbor namespace from the unmeshed reconciler pod — see below)")
-	f.IntVar(&o.harborInterval, "harbor-interval", 300, "seconds between Harbor-provisioner resync passes")
 	f.BoolVar(&o.reconcileOpenBao, "reconcile-openbao-gauges", false, "enable the OpenBao seal + credential-age gauges (read-only; needs OpenBao egress + the reconciler k8s-auth role)")
 	f.IntVar(&o.openbaoInterval, "openbao-gauges-interval", 60, "seconds between OpenBao gauge samples")
 	f.BoolVar(&o.reconcileTokens, "reconcile-token-inventory", false, "enable the CI-token expiry gauges (read-only; re-exposes the llz-token-inventory ConfigMap the token-inventory job writes)")
@@ -165,8 +159,6 @@ type reconcileFlags struct {
 	volTagsResync       int
 	reconcileLinodeCred bool
 	linodeCredInterval  int
-	reconcileHarbor     bool
-	harborInterval      int
 	reconcileOpenBao    bool
 	openbaoInterval     int
 	reconcileTokens     bool
@@ -201,8 +193,6 @@ type reconcileOpts struct {
 	scDemoteName        string
 	reconcileLinodeCred bool
 	linodeCredInterval  time.Duration
-	reconcileHarbor     bool
-	harborInterval      time.Duration
 	reconcileOpenBao    bool
 	openbaoInterval     time.Duration
 	reconcileTokens     bool
@@ -239,7 +229,7 @@ func openbaoBootstrapGrace(sample func(context.Context) error) func(context.Cont
 // that needs a single writer, hence leader election.
 func (o reconcileOpts) drivingEnabled() bool {
 	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolLabels || o.reconcileVolTags ||
-		o.reconcileSCDemote || o.reconcileLinodeCred || o.reconcileHarbor ||
+		o.reconcileSCDemote || o.reconcileLinodeCred ||
 		o.reconcileESRecovery || o.reconcileAplOverlay
 }
 
@@ -576,28 +566,6 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// Same logic the linodeCredRotator CronJob runs (`ci rotate-linode-creds
 			// --apply`); reads REGION/OBJ_CLUSTER/LINODE_TOKEN/OPENBAO_* from env.
 			run: gate(requireLinodeToken(func(ctx context.Context) error { return runRotateLinodeCreds(ctx, true) })),
-		})
-	}
-	if o.reconcileHarbor {
-		recs = append(recs, reconciler{
-			name:     "harbor",
-			interval: o.harborInterval,
-			// Same logic the harbor-robot-provisioner CronJob runs.
-			//
-			// INCOMPATIBLE WITH STRICT-mTLS HARBOR (ADR 0010). runCIHarborProvisioner
-			// speaks PLAINTEXT to harbor-core, which is correct for the CronJob —
-			// that pod carries an Istio sidecar that upgrades the hop to mTLS on the
-			// wire. THIS pod does not: llz-reconciler is not a meshed namespace, so
-			// enabling this lane once the harbor PeerAuthentication is STRICT means
-			// every request is dropped at harbor-core's sidecar.
-			//
-			// Deliberately NOT a hard error at startup: a future change that meshes
-			// the reconciler would make this lane correct again, and a build-time
-			// refusal would be wrong then. The failure is also loud (the lane's
-			// errors surface as llz_reconcile_up=0, which alerts) rather than silent.
-			// ci_mesh_egress_guard.go cannot catch this — it inspects
-			// NetworkPolicies, and this path is Go.
-			run: gate(func(context.Context) error { return runCIHarborProvisioner() }),
 		})
 	}
 	if o.reconcileESRecovery {

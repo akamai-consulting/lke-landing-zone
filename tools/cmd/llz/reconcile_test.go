@@ -165,9 +165,11 @@ func TestBuildReconcilers(t *testing.T) {
 		reconcileVolLabels: true, volLabelsResync: time.Hour,
 		reconcileSCDemote: true, scDemoteResync: 2 * time.Minute,
 		reconcileLinodeCred: true, linodeCredInterval: time.Hour,
-		reconcileHarbor: true, harborInterval: 5 * time.Minute,
 	}, identity)
-	want := []string{"observe", "argo-nudge", "cidr-firewall", "volume-labels", "sc-demote", "linode-creds", "harbor"}
+	// No "harbor": that lane is DELETED. It spoke plaintext to harbor-core from
+	// outside the harbor mesh, which cannot work once that namespace enforces
+	// STRICT mTLS — the in-namespace CronJob is the sole owner.
+	want := []string{"observe", "argo-nudge", "cidr-firewall", "volume-labels", "sc-demote", "linode-creds"}
 	if got := names(recs); len(got) != len(want) {
 		t.Fatalf("enabled set = %v, want %v", got, want)
 	} else {
@@ -187,7 +189,7 @@ func TestBuildReconcilers(t *testing.T) {
 			t.Errorf("%s should carry a watch closure", n)
 		}
 	}
-	for _, n := range []string{"linode-creds", "harbor"} {
+	for _, n := range []string{"linode-creds"} {
 		if byName[n].watch != nil {
 			t.Errorf("%s should be timed (no watch)", n)
 		}
