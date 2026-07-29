@@ -604,7 +604,7 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			interval: o.tokensInterval,
 			// Read-only (re-exposes the token-inventory ConfigMap), so NOT gated —
 			// every replica may read the ConfigMap harmlessly.
-			run: func(ctx context.Context) error { return sampleTokenInventory(ctx, client, reg) },
+			run: func(ctx context.Context) error { return sampleTokenInventory(ctx, client, reg, time.Now()) },
 		})
 	}
 	if o.reconcileAplOverlay {

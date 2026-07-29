@@ -169,6 +169,60 @@ func (w *GitHubSecretWriter) RepoSecretExists(name string) (bool, error) {
 	}
 }
 
+// SecretUpdatedAt returns when an Actions secret was last WRITTEN, as RFC3339.
+// ok=false (no error) when the secret does not exist.
+//
+// This is the age signal for credentials that have no expiry to read and cannot
+// live in OpenBao — the state-backend key pair and the state-encryption
+// passphrase (ADR 0009). GitHub Actions secrets are WRITE-ONLY over the API:
+// there is no endpoint that returns a value at any permission level, so a
+// metadata probe cannot leak the credential even by accident. That is a stronger
+// guarantee than the OpenBao metadata reads, which merely decline to grant the
+// data path.
+//
+// env == "" reads the repo-level secret; otherwise the infra-<env> environment
+// secret. Same endpoint family RepoSecretExists already uses — it discards this
+// very body.
+func (w *GitHubSecretWriter) SecretUpdatedAt(env, name string) (string, bool, error) {
+	var url string
+	if env == "" {
+		url = fmt.Sprintf("%s/repos/%s/actions/secrets/%s", w.apiBase, w.repo, name)
+	} else {
+		id, err := w.repoID()
+		if err != nil {
+			return "", false, err
+		}
+		url = fmt.Sprintf("%s/repositories/%d/environments/%s/secrets/%s", w.apiBase, id, env, name)
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", false, err
+	}
+	w.auth(req)
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", false, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return "", false, fmt.Errorf("get secret %s: HTTP %d: %s", name, resp.StatusCode, string(b))
+	}
+	var out struct {
+		UpdatedAt string `json:"updated_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", false, fmt.Errorf("parse secret %s metadata: %w", name, err)
+	}
+	if out.UpdatedAt == "" {
+		return "", false, nil
+	}
+	return out.UpdatedAt, true, nil
+}
+
 // sealAndPut fetches the Actions public key at secretsBase/public-key, seals
 // value against it (anonymous NaCl box), and PUTs it to secretsBase/name.
 func (w *GitHubSecretWriter) sealAndPut(secretsBase, name, value string) error {
