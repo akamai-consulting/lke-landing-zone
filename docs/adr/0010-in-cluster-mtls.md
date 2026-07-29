@@ -254,6 +254,30 @@ Fail-closed ordering — **each step must be verified before the next**:
    instance has completed step 5. Leaving it is a standing permission for the
    plaintext fetch this ADR exists to eliminate.
 
+## The wiring is not statically enforced
+
+Verified by mutation: **deleting the reconciler's client-certificate volumeMount
+passes every gate in the repo** — `make lint-k8s` reports zero errors, kustomize
+still renders, kubeconform is satisfied, and the tree looks healthy. The pod
+would simply be unable to reach OpenBao at all.
+
+Nothing here checks that a workload calling `inClusterBaoHTTPClient()` actually
+mounts the CA and the client identity at the paths that code reads. The gates
+this repo has are about sync-wave health, schema validity and plaintext drift;
+the correspondence between "this Go path needs TLS material" and "this pod spec
+provides it" is unguarded, and it is exactly the kind of thing a refactor breaks
+silently.
+
+That correspondence is a natural fifth member of the guard family
+(`wave-health`, `wave-dependency`, `mesh-egress`, `plaintext`): assert that every
+workload whose image runs an OpenBao-consuming verb mounts both Secrets, and
+that every mounted TLS Secret has a Certificate that creates it. It is NOT in
+this change — flagging a gap is not licence to grow the diff — but it is the
+first thing to build on top of it.
+
+Until then, the check is manual: after any change to these manifests, confirm
+each pod still mounts `/etc/openbao-ca` and `/etc/openbao-client-tls`.
+
 ## Unverified prerequisites
 
 These could not be confirmed from the repo and **must be checked on a live
