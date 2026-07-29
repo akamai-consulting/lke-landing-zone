@@ -1,0 +1,62 @@
+{
+  "_readme": [
+    "Survivors that are KNOWN and ACCEPTED for cmd/llz. `llz ci mutate --baseline` diffs a",
+    "run against this set and fails only on survivors NOT listed here. The absolute efficacy",
+    "score is not a useful gate: equivalent mutants cap it below 100% by construction, so",
+    "chasing the number optimises the wrong thing. 'A survivor appeared that is not in this",
+    "file' is the actionable event.",
+    "",
+    "Every entry needs a `why` a reader can check. An entry without one is a rubber stamp,",
+    "and a baseline of rubber stamps is worse than no baseline: it launders unknown gaps as",
+    "accepted ones.",
+    "",
+    "Do NOT add pattern-level blanket rules. Three 'obviously equivalent' patterns were each",
+    "disproven by evidence in the same session that proposed them: log/message-only",
+    "arithmetic (killable — the command installs a JSON slog handler, so a buffer handler",
+    "asserts the field), sort-comparator boundaries (killable wherever duplicate keys are",
+    "constructible), and Index(...) >= 0 negations (a real branch inversion). Justify per",
+    "site."
+  ],
+  "accepted": [
+    {
+      "file": "ci_rotate_dbadmin.go",
+      "line": 262,
+      "col": 58,
+      "mutator": "ARITHMETIC_BASE",
+      "why": "make(map[string]string, len(dbAdminCarriedFields)+3) -> -3. A MAP size hint is not observable through cap() or any other API, and len(dbAdminCarriedFields)==4 so the mutant computes 1: positive, so no makemap panic either. Verified by hand: mutation applied, full suite still green. THIS ENTRY IS ALSO THE HARNESS CANARY (see canaries in ci_mutate.go) -- it MUST report LIVED. A run that reports it KILLED is not executing tests, and its score must be discarded."
+    },
+    {
+      "file": "ci_extsecret_paths.go",
+      "line": 155,
+      "col": 60,
+      "mutator": "CONDITIONALS_BOUNDARY",
+      "why": "strings.Index(lookahead, \"remoteRef:\") >= 0 -> > 0. Differs only when the match is at offset 0, which is unreachable: lookahead starts at the end of a regex whose terminal \\S+ is maximal, so the byte at that offset is always whitespace or EOF. Probed empirically, including the adversarial `key: a/bremoteRef:` case where \\S+ swallows the literal and Index returns -1; the smallest positive index observed was 1."
+    },
+    {
+      "file": "ci_extsecret_paths.go",
+      "line": 312,
+      "col": 66,
+      "mutator": "CONDITIONALS_BOUNDARY",
+      "why": "len(ms) > 0 -> >= 0 on a guard whose block's only side effects are inside `for _, m := range ms`. With ms empty the loop body never runs and the locals are built and discarded, so executing the block is observationally identical to skipping it."
+    },
+    {
+      "file": "ci_extsecret_paths.go",
+      "line": 551,
+      "col": 83,
+      "mutator": "CONDITIONALS_BOUNDARY",
+      "why": "sort.SliceStable comparator sortKey() < -> <=. Distinguishing them needs two entries with EQUAL sortKey() in one key's propFiles. Entries come from distinct esRef{key,prop,hasProp} map keys, so within one key they differ in (prop,hasProp); sortKey() is \"\" when !hasProp else prop, and esPropertyRx (`property:\\s+(\\S+)`) can never yield an empty prop. A collision is unconstructible, so with all-distinct keys the comparators are identical."
+    }
+  ],
+  "_not_in_this_file": [
+    "TIMED OUT mutants are NOT survivors and do not belong here; they are unmeasured and",
+    "sit outside the efficacy denominator entirely. `llz ci mutate` fails the run on any",
+    "non-zero timeout count rather than letting them pass silently.",
+    "",
+    "Two cmd/llz mutants are unkillable for structural reasons rather than equivalence, and",
+    "are documented in place rather than baselined, because they surface as TIMED OUT:",
+    "ci_untestable_loc.go:375 (reaching the loop body already implies the guard, so every",
+    "input that enters loops forever and none terminate differently) and import_cluster.go:244",
+    "(fails only by OOM, because an existing test legitimately passes the one input the",
+    "mutant never returns from)."
+  ]
+}
