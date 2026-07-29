@@ -166,6 +166,9 @@ func ciCmd() *cobra.Command {
 	// Linode Volume relabeler — the Go port of the linode-volume-labeler
 	// relabel.sh CronJob (also runnable in-cluster by the volume-labels reconciler).
 	c.AddCommand(ciRelabelVolumesCmd())
+	// Linode Volume tag-heal backstop for Volumes born without the StorageClass's
+	// lke<id> ownership tag (also runnable in-cluster by the volume-tags reconciler).
+	c.AddCommand(ciReconcileVolumeTagsCmd())
 	// The narrow in-cluster PAT, same one-owner shape: mint-bootstrap-pat seeds
 	// the first token at bootstrap; rotate-incluster-pat (registered with the
 	// rotation commands above) re-mints it monthly.

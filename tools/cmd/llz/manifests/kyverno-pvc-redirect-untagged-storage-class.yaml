@@ -1,0 +1,85 @@
+# Kyverno ClusterPolicy: coverage guardrail — no PVC may be born on an UNTAGGED
+# LKE stock StorageClass.
+#
+# block-storage-retain stamps this cluster's `lke<id>` ownership tag on its Volumes
+# AT PROVISION time (the class's CSI `volumeTags` parameter, rendered by
+# `llz ci bootstrap-cluster` from the cluster's numeric id). That tag is what `llz reap`'s cluster-liveness gate keys
+# on to avoid deleting a live cluster's detached Retain Volume. A PVC provisioned
+# on the stock `linode-block-storage` / `linode-block-storage-retain` classes gets
+# a Volume with NO ownership tag — reap can't attribute it, and reap's fail-safe
+# default then KEEPS it (a cost leak, surfaced by the preflight quota census). This
+# policy rewrites those stock classes to block-storage-retain on every PVC CREATE,
+# cluster-wide, so every Linode Volume is born tagged.
+#
+# Scope vs pvc-force-encrypted-storage-class (the bootstrap-applied policy):
+# that one is NARROW (gitea + istio-system) and race-critical — it must beat
+# apl-operator's non-Argo helmfile creating the two charts that hardcode
+# linode-block-storage, so `llz ci bootstrap-cluster` applies it imperatively the
+# instant Kyverno is Ready.
+# THIS policy is the general, low-race net for every OTHER namespace / future
+# workload, so it lives in the GitOps tree at sync-wave -15 like the other
+# declarative policies (the two overlap harmlessly in gitea/istio-system — both
+# mutate to the same class, which is idempotent).
+#
+# Empty storageClassName is intentionally NOT matched: it resolves to the cluster
+# default (block-storage-retain, kept the sole default by kyverno-sc-default-demote),
+# which is already tagged — matching it would add admission-webhook load for no
+# coverage gain. Only EXPLICIT stock-class references are redirected.
+#
+# Namespace-exclusion coverage (audited): Kyverno's default resourceFilters exclude
+# system namespaces (kube-system et al.) from admission, so a stock-class PVC created
+# there would NOT be redirected. Verified this bites no platform PVC — every PVC/
+# volumeClaimTemplate the platform ships lands in a dedicated namespace (gitea,
+# harbor, keycloak, llz-openbao, istio-system, …), never kube-system/flux-system/
+# kyverno. The only two charts that hardcode a stock class (gitea-valkey,
+# oauth2-proxy) sit in gitea/istio-system, which Kyverno admits. A FUTURE chart
+# hardcoding a stock class in an excluded namespace is the residual risk — the
+# broadened `llz ci` health check (audits every linodebs StorageClass) and the
+# preflight quota census are the detection surfaces, and the volumeTagReconciler
+# CronJob is the healing surface (it stamps the tags onto ANY linodebs PV's
+# Volume hourly, whatever class it was born on).
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pvc-redirect-untagged-storage-class
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+    policies.kyverno.io/title: Redirect PVCs off untagged LKE stock StorageClasses
+    policies.kyverno.io/category: Storage / Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: PersistentVolumeClaim
+    policies.kyverno.io/description: >-
+      Rewrites storageClassName=linode-block-storage / linode-block-storage-retain
+      to block-storage-retain on every PVC CREATE, cluster-wide, so every Linode
+      Volume is born carrying this cluster's lke<id> ownership tag (applied by the
+      block-storage-retain class's CSI volumeTags). Guarantees no PVC lands on an
+      untagged stock class, which llz reap could neither attribute nor safely sweep.
+spec:
+  # Admission only — do NOT touch existing (already-bound) PVCs; rewriting an
+  # immutable storageClassName would no-op and the background scanner would log
+  # spurious failures.
+  background: false
+  # Best-effort: never block a workload's PVC on a webhook hiccup. A missed
+  # rewrite degrades to an untagged Volume that reap keeps (fail-safe) — not data
+  # loss — so failing open is the correct bias here.
+  failurePolicy: Ignore
+  rules:
+    - name: redirect-stock-to-tagged-retain
+      match:
+        any:
+          - resources:
+              kinds: [PersistentVolumeClaim]
+              operations: [CREATE]
+      preconditions:
+        all:
+          # Only EXPLICIT stock-class references. Empty ("") is left alone — it
+          # resolves to the tagged default. `|| ''` maps a missing field to "".
+          - key: "{{ request.object.spec.storageClassName || '' }}"
+            operator: AnyIn
+            value:
+              - linode-block-storage
+              - linode-block-storage-retain
+      mutate:
+        patchStrategicMerge:
+          spec:
+            storageClassName: block-storage-retain

@@ -49,6 +49,9 @@ func reconcileCmd() *cobra.Command {
 			"  --reconcile-volume-labels  rename Linode Volumes for bound PVs, watch-driven (was\n" +
 			"                             the linode-volume-labeler CronJob; needs REGION_SHORT,\n" +
 			"                             LINODE_TOKEN)\n" +
+			"  --reconcile-volume-tags    heal the block-storage-retain StorageClass's volumeTags\n" +
+			"                             (incl. this cluster's lke<id> ownership tag) onto\n" +
+			"                             Volumes born untagged, watch-driven (needs LINODE_TOKEN)\n" +
 			"  --reconcile-sc-demote      keep LKE's Flux-promoted retain StorageClass non-default,\n" +
 			"                             watch + resync floor (was the sc-default-patcher CronJob)\n" +
 			"  --reconcile-linode-creds   rotate in-cluster Linode object-storage keys (was\n" +
@@ -86,6 +89,8 @@ func reconcileCmd() *cobra.Command {
 				cidrFWResync:        time.Duration(o.cidrFWResync) * time.Second,
 				reconcileVolLabels:  o.reconcileVolLabels,
 				volLabelsResync:     time.Duration(o.volLabelsResync) * time.Second,
+				reconcileVolTags:    o.reconcileVolTags,
+				volTagsResync:       time.Duration(o.volTagsResync) * time.Second,
 				reconcileLinodeCred: o.reconcileLinodeCred,
 				linodeCredInterval:  time.Duration(o.linodeCredInterval) * time.Second,
 				reconcileHarbor:     o.reconcileHarbor,
@@ -120,6 +125,8 @@ func reconcileCmd() *cobra.Command {
 	f.IntVar(&o.cidrFWResync, "cidr-firewall-resync", 600, "resync-floor seconds for the cidr-firewall reconciler (Node watch drives immediacy)")
 	f.BoolVar(&o.reconcileVolLabels, "reconcile-volume-labels", false, "enable the Linode Volume relabeler watch reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
 	f.IntVar(&o.volLabelsResync, "volume-labels-resync", 3600, "resync-floor seconds for the volume-labels reconciler (PV watch drives immediacy)")
+	f.BoolVar(&o.reconcileVolTags, "reconcile-volume-tags", false, "enable the Linode Volume tag-heal watch reconciler (default off; the StorageClass tags at provision — this lane only heals Volumes born untagged)")
+	f.IntVar(&o.volTagsResync, "volume-tags-resync", 3600, "resync-floor seconds for the volume-tags reconciler (PV watch drives immediacy)")
 	f.BoolVar(&o.reconcileLinodeCred, "reconcile-linode-creds", false, "enable the Linode credential-rotation reconciler (default off; enabled in the llz-reconciler Deployment — the former CronJob is RETIRED, so this lane is the sole owner)")
 	f.IntVar(&o.linodeCredInterval, "linode-creds-interval", 3600, "seconds between Linode credential-rotation resync passes")
 	f.BoolVar(&o.reconcileHarbor, "reconcile-harbor", false, "enable the Harbor-provisioner reconciler (default off: the CronJob owns it, and this lane CANNOT reach a STRICT-mTLS harbor namespace from the unmeshed reconciler pod — see below)")
@@ -154,6 +161,8 @@ type reconcileFlags struct {
 	cidrFWResync        int
 	reconcileVolLabels  bool
 	volLabelsResync     int
+	reconcileVolTags    bool
+	volTagsResync       int
 	reconcileLinodeCred bool
 	linodeCredInterval  int
 	reconcileHarbor     bool
@@ -185,6 +194,8 @@ type reconcileOpts struct {
 	cidrFWResync        time.Duration
 	reconcileVolLabels  bool
 	volLabelsResync     time.Duration
+	reconcileVolTags    bool
+	volTagsResync       time.Duration
 	reconcileSCDemote   bool
 	scDemoteResync      time.Duration
 	scDemoteName        string
@@ -227,7 +238,7 @@ func openbaoBootstrapGrace(sample func(context.Context) error) func(context.Cont
 // drivingEnabled reports whether any state-mutating reconciler is on — the case
 // that needs a single writer, hence leader election.
 func (o reconcileOpts) drivingEnabled() bool {
-	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolLabels ||
+	return o.reconcileArgoNudge || o.reconcileCidrFW || o.reconcileVolLabels || o.reconcileVolTags ||
 		o.reconcileSCDemote || o.reconcileLinodeCred || o.reconcileHarbor ||
 		o.reconcileESRecovery || o.reconcileAplOverlay
 }
@@ -511,6 +522,28 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// reads REGION_SHORT/LINODE_TOKEN from env. A new PV means a new Linode
 			// Volume to relabel, so watch PersistentVolumes.
 			run: gate(requireLinodeToken(func(ctx context.Context) error { return runRelabelVolumes(ctx) })),
+			watch: func(ctx context.Context, onEvent func()) error {
+				return client.Watch(ctx, "/api/v1/persistentvolumes", "", func(kube.WatchEvent) error {
+					onEvent()
+					return nil
+				})
+			},
+		})
+	}
+	if o.reconcileVolTags {
+		recs = append(recs, reconciler{
+			name:     "volume-tags",
+			interval: o.volTagsResync,
+			// Tag-heal BACKSTOP (`ci reconcile-volume-tags`). The block-storage-retain
+			// StorageClass stamps the desired tags — this cluster's lke<id> ownership tag
+			// included — inside the CreateVolume call, so this lane exists only for
+			// Volumes born untagged (a clone/snapshot PVC admitted while admission
+			// control was degraded). Same PV watch as volume-labels: a new PV means a new
+			// Volume whose tags need checking. Reads the desired set from the live
+			// StorageClass, so it needs no per-env config — only LINODE_TOKEN.
+			run: gate(requireLinodeToken(func(ctx context.Context) error {
+				return runCIReconcileVolumeTags(ctx, defaultVolumeTagsSC)
+			})),
 			watch: func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, "/api/v1/persistentvolumes", "", func(kube.WatchEvent) error {
 					onEvent()

@@ -1,0 +1,46 @@
+# ValidatingAdmissionPolicy: deny clone/snapshot-sourced PVCs — in-apiserver twin
+# of the Kyverno pvc-deny-untaggable-clone ClusterPolicy.
+#
+# (Formerly applied by the cluster-bootstrap TF workspace; that workspace was
+# ported to Go, so `llz ci bootstrap-cluster` now applies it.)
+#
+# WHY A SECOND POLICY: Kyverno enforces via a WEBHOOK — an external call the API
+# server skips whenever the webhook is unreachable (failurePolicy: Ignore, chosen
+# deliberately so a Kyverno outage can't block ALL PVC creation). That leaves a
+# window — Kyverno down, or the bootstrap phase before Kyverno exists — in which
+# a clone/snapshot PVC is admitted, and the Linode CSI clone path (CloneVolume
+# takes only source-id + label, no tags; verified against v1.0.11) then mints a
+# Volume with NO lke<id> ownership tag: unattributable, so `llz reap` can never
+# clean it (a permanent orphan under the fail-safe keep-untagged default).
+#
+# A ValidatingAdmissionPolicy is different in kind: CEL evaluated INSIDE the API
+# server process — no webhook, no availability dependency, it cannot be "down"
+# separately from the apiserver itself. Applied by `llz ci bootstrap-cluster`
+# (in-tree admissionregistration API, no CRD wait) so it enforces from bootstrap,
+# BEFORE apl-core installs Kyverno. The Kyverno twin stays for policy-reporter
+# visibility; this is the guarantee. The in-cluster volumeTagReconciler CronJob
+# is the third layer, healing tags onto anything that ever slips both.
+#
+# failurePolicy: Fail (the k8s default) — the expression is two has() checks on
+# typed fields and cannot runtime-error, so Fail costs nothing and preserves the
+# guarantee semantics.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: pvc-deny-untaggable-clone
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["persistentvolumeclaims"]
+  validations:
+    - expression: "!has(object.spec.dataSource) && !has(object.spec.dataSourceRef)"
+      message: >-
+        Clone/snapshot-sourced PVCs are denied: the Linode CSI clone API cannot
+        apply the block-storage-retain lke<id> ownership tag, so the Volume would
+        be un-reapable — a permanent orphan after cluster teardown. Provision a
+        fresh PVC on block-storage-retain instead.
+      reason: Forbidden

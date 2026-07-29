@@ -402,6 +402,10 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 30
+    outputs:
+      # Numeric LKE cluster id, forwarded to bootstrap-cluster's --cluster-id so the
+      # block-storage-retain StorageClass renders this cluster's lke<id> volumeTag.
+      cluster_id: ${{ steps.cluster_id.outputs.cluster_id }}
     env:
       REGION:                          ${{ inputs.region }}
       ACTION:                          ${{ inputs.action }}
@@ -474,6 +478,16 @@ jobs:
           echo "Cluster API endpoints:"
           llz ci tf-output api_endpoints --json
 
+      # Export the numeric LKE cluster id for bootstrap-cluster's --cluster-id
+      # (renders block-storage-retain's lke<id> volumeTag). Read from the
+      # just-applied cluster workspace's state — authoritative and always present
+      # here, which is what the retired cluster-bootstrap TF got from remote state.
+      - name: Export cluster_id for bootstrap
+        id: cluster_id
+        if: env.ACTION == 'apply'
+        working-directory: terraform-iac-bootstrap/cluster
+        run: llz ci tf-output cluster_id --out-key cluster_id
+
       # Best-effort instrumentation; never affects the apply outcome.
       - name: Report cluster-create timing
         if: always() && env.ACTION == 'apply'
@@ -516,6 +530,7 @@ jobs:
       instance_repo: ${{ inputs.instance_repo }}
       assert_loki: ${{ inputs.assert_loki }}
       bootstrap_cluster: true
+      cluster_id: ${{ needs.apply-cluster.outputs.cluster_id }}
     # Forwards repo + environment-scoped secrets; the callee declares the same
     # `environment:` so env-scoped secrets resolve at runtime.
     secrets: inherit

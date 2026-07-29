@@ -1,0 +1,84 @@
+# Kyverno ClusterPolicy: deny clone/snapshot-sourced PVCs — they yield UNREAPABLE
+# Volumes.
+#
+# The Linode Block Storage CSI driver (v1.0.11) clones via the Linode CloneVolume
+# API, which takes only (source id, label) — it does NOT accept tags, and the clone
+# does NOT inherit the source Volume's tags. So a PVC created FROM a source (a PVC
+# clone via spec.dataSource/dataSourceRef kind PersistentVolumeClaim, or a
+# VolumeSnapshot restore) produces a Volume with NO `lke<id>` ownership tag, even on
+# the block-storage-retain class. `llz reap`'s cluster-liveness gate keys on that
+# tag, so a cloned Volume can never be attributed to its cluster — it dangles as an
+# orphan after teardown (reap keeps untagged Volumes by default; the preflight
+# census surfaces it, but nothing reaps it).
+#
+# Verified against the driver source:
+#   https://github.com/linode/linode-blockstorage-csi-driver/blob/v1.0.11/internal/driver/controllerserver_helper.go
+#   fresh create → createLinodeVolume() sets VolumeCreateOptions.Tags;
+#   clone        → cloneLinodeVolume() calls CloneVolume(ctx, sourceID, label) — NO tags.
+#
+# The platform uses NO clone/snapshot PVCs (grep: no dataSource/VolumeSnapshot in
+# any chart or apl-values), so denying them has zero functional impact today and
+# keeps the "every pvc-* Volume carries lke<id>" invariant TRUE — which is what makes
+# cluster-scoped Volume reaping reliable, with no dangling orphans.
+#
+# Defense-in-depth siblings: the pvc-deny-untaggable-clone ValidatingAdmissionPolicy
+# (applied by `llz ci bootstrap-cluster`) is this policy's in-APISERVER twin — CEL, no webhook, so it
+# still enforces when Kyverno is down or not yet installed (this webhook fails open;
+# see below). And the volumeTagReconciler CronJob (`llz ci reconcile-volume-tags`,
+# hourly) heals the StorageClass's volumeTags onto any Volume that slips both denies,
+# so even an admitted clone converges to tagged within the hour. If clones are ever
+# genuinely needed, relax BOTH denies together — the reconciler already provides the
+# post-create tagging that makes that safe (modulo an up-to-an-hour untagged window,
+# which reap's fail-safe keep-untagged default already tolerates).
+#
+# failurePolicy: Ignore (like the other PVC policies): the webhook matches ALL PVC
+# CREATEs (Kyverno can't scope a webhook to "has a dataSource" — that's evaluated in
+# the rule, after admission), so failurePolicy: Fail would block EVERY PVC during a
+# Kyverno outage, not just clones. Failing open means a clone created in that rare
+# window slips through untagged — caught by the fail-safe reap default + census.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pvc-deny-untaggable-clone
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+    policies.kyverno.io/title: Deny clone/snapshot-sourced PVCs (untaggable → unreapable)
+    policies.kyverno.io/category: Storage / Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: PersistentVolumeClaim
+    policies.kyverno.io/description: >-
+      Denies PVCs created from a PVC clone or VolumeSnapshot dataSource. The Linode
+      CSI clone API can't apply the block-storage-retain class's lke<id> volumeTags,
+      so the resulting Volume is unattributable and llz reap can never clean it up
+      (a permanent orphan after teardown). The platform uses no clones, so this keeps
+      the tagging invariant intact.
+spec:
+  validationFailureAction: Enforce
+  # Admission only — do not background-scan existing (already-bound) PVCs.
+  background: false
+  # Fail open: never block ALL PVC creation on a Kyverno outage (see header).
+  failurePolicy: Ignore
+  rules:
+    - name: no-clone-or-snapshot-source
+      match:
+        any:
+          - resources:
+              kinds: [PersistentVolumeClaim]
+              operations: [CREATE]
+      validate:
+        message: >-
+          Clone/snapshot-sourced PVCs are not allowed: the Linode CSI clone API
+          cannot apply the block-storage-retain lke<id> ownership tag, so the Volume
+          would be un-reapable — a permanent orphan after cluster teardown. Provision
+          a fresh PVC on block-storage-retain instead.
+        deny:
+          conditions:
+            any:
+              # dataSource/dataSourceRef always carry a .name when set; absent → the
+              # JMESPath resolves to null, `|| ''` maps it to "" → condition false.
+              - key: "{{ request.object.spec.dataSource.name || '' }}"
+                operator: NotEquals
+                value: ""
+              - key: "{{ request.object.spec.dataSourceRef.name || '' }}"
+                operator: NotEquals
+                value: ""

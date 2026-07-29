@@ -51,6 +51,11 @@ on:
         required: false
         type: boolean
         default: false
+      cluster_id:
+        description: 'Numeric LKE cluster id (the `cluster` workspace''s cluster_id output), forwarded by llz-terraform.yml''s chained call. Rendered into the block-storage-retain StorageClass''s lke<id> volumeTag, which is the ownership signal `llz reap`''s cluster-liveness gate keys on. Only read when bootstrap_cluster is true; bootstrap-cluster hard-fails on an empty value, because StorageClass parameters are immutable — a silently-untagged class could never be fixed in place and every Volume it provisioned would be un-reapable.'
+        required: false
+        type: string
+        default: ''
     secrets:
       # ALL required: false, deliberately — do not "fix" this. `secrets: inherit`
       # cannot forward environment-scoped secrets, and `required: true` is checked
@@ -295,10 +300,15 @@ jobs:
           GHCR_TOKEN:            ${{ secrets.GHCR_READ_TOKEN }}
           GHCR_USERNAME:         ${{ vars.GHCR_USERNAME }}
           APPS_REPO_REVISION:    ${{ vars.APPS_REPO_REVISION || secrets.APPS_REPO_REVISION || 'main' }}
+          # Numeric LKE cluster id from apply-cluster's TF output — rendered into the
+          # block-storage-retain StorageClass's lke<id> ownership tag. bootstrap-cluster
+          # hard-fails if empty, so an un-reapable untagged class can never ship.
+          LKE_CLUSTER_ID:        ${{ inputs.cluster_id }}
         run: |
           llz ci phase-mark apl-core-install
           llz ci bootstrap-cluster \
             --env "${REGION}" \
+            --cluster-id "${LKE_CLUSTER_ID}" \
             --apps-repo-revision "${APPS_REPO_REVISION}" \
             --instance-repo "${{ inputs.instance_repo }}"
           llz ci phase-mark foundation-ready
