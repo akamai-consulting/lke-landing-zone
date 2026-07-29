@@ -320,18 +320,26 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 			}
 			continue
 		}
+		// A document separator RESETS the port context. Without this the port from
+		// a previous document leaks into the next one, so a finding is keyed on a
+		// port it has nothing to do with — and two hops in one file can collide on
+		// the same key, silently masking one behind the other's registry entry.
+		if strings.HasPrefix(strings.TrimSpace(code), "---") {
+			lastPort = ""
+			continue
+		}
 		if m := rePortName.FindStringSubmatch(code); m != nil {
 			lastPort = strings.Trim(m[1], `"'`)
 		}
 		switch {
 		case reSchemeHTTP.MatchString(code):
 			out = append(out, plaintextFinding{
-				key: rel + ":" + lastPort, file: rel, line: n,
+				key: rel + ":" + locator(lastPort, "scheme-http"), file: rel, line: n,
 				what: "scrape over plaintext (scheme: http)",
 			})
 		case reInsecureYAML.MatchString(code):
 			out = append(out, plaintextFinding{
-				key: rel + ":" + lastPort, file: rel, line: n,
+				key: rel + ":" + locator(lastPort, "insecure-skip-verify"), file: rel, line: n,
 				what: "TLS without server verification (insecureSkipVerify: true)",
 			})
 		case reSvcHTTP.MatchString(code):
@@ -342,6 +350,17 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 		}
 	}
 	return out
+}
+
+// locator picks the within-file part of a registry key: the scrape port when
+// one is in scope, otherwise a stable name for the finding kind. It must never
+// be empty — an empty locator makes two unrelated findings in one file share a
+// key, so registering one would silently vouch for the other.
+func locator(port, fallback string) string {
+	if port != "" {
+		return port
+	}
+	return fallback
 }
 
 // stripComment removes the trailing/leading comment so prose about a hop is not

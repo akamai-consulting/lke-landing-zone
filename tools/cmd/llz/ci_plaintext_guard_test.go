@@ -223,3 +223,57 @@ func TestScanPlaintextDoesNotFlagHTTPS(t *testing.T) {
 		}
 	}
 }
+
+// TestScanPlaintextResetsPortPerDocument: a registry key must identify ONE hop.
+// Port context is tracked line-by-line, and before this it leaked across YAML
+// document separators — a finding in the second document was keyed on the first
+// document's port. Two hops in one file could then collide on the same key, so
+// registering one would silently vouch for the other.
+func TestScanPlaintextResetsPortPerDocument(t *testing.T) {
+	body := "kind: ServiceMonitor\nspec:\n  endpoints:\n    - port: alpha\n      scheme: https\n" +
+		"---\nkind: ServiceMonitor\nspec:\n  endpoints:\n    - scheme: http\n"
+	got := scanPlaintext("multi.yaml", body, false)
+	if len(got) != 1 {
+		t.Fatalf("want 1 finding, got %d: %+v", len(got), got)
+	}
+	if got[0].key == "multi.yaml:alpha" {
+		t.Error("port leaked across the document separator — the finding is keyed on another document's port")
+	}
+	if got[0].key != "multi.yaml:scheme-http" {
+		t.Errorf("key = %q, want the no-port fallback multi.yaml:scheme-http", got[0].key)
+	}
+}
+
+// TestScanPlaintextLocatorNeverEmpty: an empty locator makes unrelated findings
+// in one file share a key.
+func TestScanPlaintextLocatorNeverEmpty(t *testing.T) {
+	for _, body := range []string{
+		"  tlsConfig:\n    insecureSkipVerify: true\n",
+		"  endpoints:\n    - scheme: http\n",
+	} {
+		for _, f := range scanPlaintext("x.yaml", body, false) {
+			if strings.HasSuffix(f.key, ":") {
+				t.Errorf("empty locator in key %q", f.key)
+			}
+		}
+	}
+}
+
+// TestScanPlaintextKeysAreUniquePerFile guards the same property on the real
+// tree: no two findings in one file may share a key.
+func TestScanPlaintextKeysAreUniquePerFile(t *testing.T) {
+	root := repoRootForGuardTest(t)
+	findings, _, err := collectPlaintextFindings(root, plaintextScanDirs(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	for _, f := range findings {
+		seen[f.key]++
+	}
+	for k, n := range seen {
+		if n > 1 {
+			t.Errorf("key %q covers %d distinct findings — registering it would vouch for all of them", k, n)
+		}
+	}
+}
