@@ -228,9 +228,17 @@ func runCIPlaintextGuard(root string) error {
 	return nil
 }
 
+// plaintextScanDirs resolves the scan roots through esRepoPath, NOT raw joins.
+// The sibling guards all take --root as either a template checkout or an
+// instance, where the same trees sit one level down under instance-template/.
+// A raw filepath.Join silently resolved to a non-existent path in the second
+// layout, and a missing tree is tolerated by the walk — so the guard would have
+// scanned less than it appeared to, which is the precise failure requireCorpus
+// exists to catch and would NOT have caught here (platform-apl alone keeps the
+// examined count above zero).
 func plaintextScanDirs(root string) []string {
 	dirs := platformTreeDirs(root)
-	dirs = append(dirs, filepath.Join(root, "kubernetes-charts"), filepath.Join(root, "tools"))
+	dirs = append(dirs, esRepoPath(root, "kubernetes-charts"), esRepoPath(root, "tools"))
 	return dirs
 }
 
@@ -425,5 +433,11 @@ func relForKey(root, path string) string {
 	if err != nil {
 		return filepath.ToSlash(path)
 	}
-	return filepath.ToSlash(rel)
+	// Canonicalise across the two layouts esRepoPath resolves. In an instance
+	// checkout the same trees sit under instance-template/, so without this strip
+	// every registry key would carry that prefix in one layout and not the other —
+	// and EVERY entry would miss, reporting the whole tree as unregistered while
+	// simultaneously reporting every entry as stale. Keys name the hop, not the
+	// checkout it was read from.
+	return strings.TrimPrefix(filepath.ToSlash(rel), "instance-template/")
 }

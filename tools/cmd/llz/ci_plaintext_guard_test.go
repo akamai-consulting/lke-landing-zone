@@ -277,3 +277,27 @@ func TestScanPlaintextKeysAreUniquePerFile(t *testing.T) {
 		}
 	}
 }
+
+// TestRelForKeyIsLayoutStable: registry keys must name the HOP, not the
+// checkout it was read from. The sibling guards accept --root as either a
+// template checkout or an instance, where the same trees sit one level down
+// under instance-template/. Before this, every key carried that prefix in one
+// layout and not the other — so running the guard against an instance reported
+// the entire tree as unregistered AND every registry entry as stale.
+func TestRelForKeyIsLayoutStable(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "instance-template", "platform-apl", "x.yaml")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	flat := filepath.Join(dir, "platform-apl", "x.yaml")
+	if err := os.MkdirAll(filepath.Dir(flat), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := relForKey(dir, nested), "platform-apl/x.yaml"; got != want {
+		t.Errorf("nested layout: relForKey = %q, want %q", got, want)
+	}
+	if got, want := relForKey(dir, flat), "platform-apl/x.yaml"; got != want {
+		t.Errorf("flat layout: relForKey = %q, want %q", got, want)
+	}
+}
