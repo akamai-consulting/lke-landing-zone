@@ -33,11 +33,18 @@ The cutover happens **per cluster**, not all at once. The promotion path is
       `helm repo add apl https://linode.github.io/apl-core && helm repo update && helm search repo apl/apl --versions | head`
       and update `spec.cluster.bootstrap.aplChartVersion` in each
       `environments/<env>.yaml` to match.
-      The current pin is the GA `6.0.0` release. If you are upgrading
+      The current pin is the GA `v6.1.0` release (note the `v` — apl-core's
+      published chart version gained the prefix at 6.1.0; `6.1.0` still resolves,
+      but only via helm's "unable to find exact version requested" fallback).
+      The supported FLOOR is still `6.0.0`, so an instance mid-rollout warns
+      rather than fails. If you are upgrading
       an existing 5.x cluster (rather than cutting over a fresh one), read the
       [apl-core v6 migration design](designs/apl-core-v6-migration.md) first — it
       covers the breaking changes (ESO becomes a core app, Gitea→git-server,
-      ingress-nginx→Gateway API) and the in-place upgrade path.
+      ingress-nginx→Gateway API) and the in-place upgrade path. For 6.0.0 → 6.1.0
+      read [the 6.1.0 upgrade note](designs/apl-core-v61-upgrade.md) — in
+      particular the **apl-operator annotation that must be applied before the
+      upgrade rolls**.
 - [ ] **Mirror `apl-values/` to an HTTPS-reachable Git host** (the placeholder
       is `https://github.com/<org>/apl-values.git`). apl-core's values
       schema enforces `^https?://.+` on the values-repo URL; SSH is not

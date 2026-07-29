@@ -11,7 +11,8 @@ the landing zone drives into apl-core's *native* values:
 
 - `obj.yaml` — apl-core's `AplObjectStorage` settings CR (`kind: AplObjectStorage`,
   config under `spec.provider.linode`: `type: linode`, region, `buckets.{loki,harbor}`,
-  `spec.showWizard: false`). Lab-confirmed against apl-core v6.0.0's fixture/schema.
+  `spec.showWizard: false`). Lab-confirmed against apl-core v6.0.0's fixture/schema
+  and re-confirmed unchanged at v6.1.0 (`tests/fixtures/env/settings/obj.yaml`).
   The `_shared` copy carries the `${obj_access_key_id}` **placeholder** (the reconciler
   fills it from OpenBao — apl-core inlines accessKeyId from settings). There is **no
   `secretAccessKey`** field: it is an x-secret apl-core reads from the `obj-secrets`

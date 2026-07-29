@@ -66,7 +66,9 @@ var aplStaticDisabledApps = []string{
 
 // The obj overlay is apl-core's `AplObjectStorage` settings CR (env/settings/obj.yaml),
 // NOT a bare `obj:` map — LAB-CONFIRMED against apl-core v6.0.0's fixture + schema
-// (tests/fixtures/env/settings/obj.yaml; values-schema.yaml $.obj). Config lives under
+// (tests/fixtures/env/settings/obj.yaml; values-schema.yaml $.obj), and re-confirmed
+// byte-identical at v6.1.0 (the whole tests/fixtures/env/ tree moved only
+// settings/cluster.yaml + settings/otomi.yaml). Config lives under
 // `spec` (kind/metadata/spec), all-but-buckets omitempty so the _shared and per-env
 // fragments each emit ONLY their own keys and deep-merge cleanly.
 //

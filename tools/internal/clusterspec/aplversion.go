@@ -17,7 +17,17 @@ import (
 // exactly the signal that was missing when an APL 5 instance upgraded llz to the
 // APL 6 release and its stale `aplChartVersion: 5.0.0` pin silently kept
 // deploying APL 5.
-const BaselineAplChartVersion = "6.0.0"
+//
+// NOTE THE LEADING "v". Up to and including 6.0.0 apl-core published its Helm
+// chart with a bare `version: 6.0.0`; the release-automation rework that shipped
+// with 6.1.0 (upstream ADR 2026-06-02-release-branch-per-cycle) changed the
+// published Chart.yaml to `version: v6.1.0`, and the chart git tag from
+// `apl-6.0.0` to `apl-v6.1.0`. `helm --version 6.1.0` still RESOLVES (helm treats
+// the flag as a semver constraint and v6.1.0 normalises to 6.1.0), but only with
+// an "unable to find exact version requested" warning, so we carry the exact
+// published string. Every comparison here goes through aplSemver, which strips
+// the prefix — a spec pinned to a bare "6.1.0" is still DriftNone.
+const BaselineAplChartVersion = "v6.1.0"
 
 // AllowMajorDriftEnv opts an instance out of the major-version gate for the
 // duration of a staged upgrade (e.g. dev pinned a major ahead of prod while the

@@ -54,9 +54,14 @@ var vapPVCDenyCloneBindingYAML []byte
 
 // defaultAplChartVersion is the apl-core baseline this LLZ release tracks. On a
 // managed cluster Linode owns the apl-core version, so bootstrap does not consume
-// it; it survives as the single baseline other tooling asserts against
-// (ci_assert_apl_version.go). Bump in lockstep when raising the platform baseline.
-const defaultAplChartVersion = "6.0.0"
+// it; it survives as the baseline other tooling asserts against
+// (ci_assert_apl_version.go, ci_apl_schema.go).
+//
+// It is an ALIAS, not a literal. It and clusterspec.BaselineAplChartVersion were
+// two independent "6.0.0" strings for the same fact, with nothing saying they had
+// to move together — the same one-fact-two-records shape that let instance pins
+// skew. Bump the clusterspec constant; this follows.
+const defaultAplChartVersion = clusterspec.BaselineAplChartVersion
 
 // bootstrapValuePlaceholders is the SECRETS-ONLY set of ${...} tokens a committed
 // apl-values file may still carry after `llz render`. It remains the single source
