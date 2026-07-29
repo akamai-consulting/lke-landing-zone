@@ -269,6 +269,11 @@ func ciCmd() *cobra.Command {
 	// destroy-unwedge / clear-cluster-secrets are the destroy-path cleanups.
 	c.AddCommand(ciBootstrapClusterCmd(), ciWaitAplPipelineCmd(), ciApplyKyvernoPolicyCmd(),
 		ciDestroyUnwedgeCmd(), ciClearClusterSecretsCmd())
+	// apl-core 6.1.0's pre-upgrade prerequisite (the apl-operator sync-options
+	// annotation). bootstrap-cluster runs it on every apply; it stays separately
+	// runnable so an operator can assert it on a cluster ahead of a managed upgrade
+	// without re-running a bootstrap.
+	c.AddCommand(ciPrepareAplUpgradeCmd())
 	// Image/source skew guard: fail fast when the baked llz is older than the
 	// workflow's template-ref (the independent TF_IMAGE vs template-ref pins drift).
 	c.AddCommand(ciAssertImageFreshCmd())

@@ -314,6 +314,12 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		return err
 	}
 
+	// apl-core 6.1.0's documented pre-upgrade prerequisite. Linode owns WHEN the
+	// managed apl-core upgrade rolls, so LLZ has no upgrade hook to hang this on —
+	// assert it eagerly, every apply, while we already hold a kubeconfig. Idempotent,
+	// and self-retiring: 6.1.x's own chart sets the same annotation.
+	prepareAplUpgradeBestEffort(d)
+
 	// Point the managed apl-core at LLZ's github values branch (BYO Git) and enable the
 	// default apps (harbor/loki/grafana/kyverno) so apl-core INSTALLS them and LLZ's
 	// extras layer on apl-core's own installs. See ADR 0006. Best-effort: on failure it
