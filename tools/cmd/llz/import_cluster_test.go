@@ -103,7 +103,9 @@ func TestCommonDomainSuffix(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := commonDomainSuffix(c.hosts); got != c.want {
-			t.Errorf("commonDomainSuffix(%v)=%q, want %q", c.hosts, got, c.want)
+			// Fatal, not Error: the nil case below is the one a lost length guard
+			// spins forever on, so the first wrong answer has to stop the test.
+			t.Fatalf("commonDomainSuffix(%v)=%q, want %q", c.hosts, got, c.want)
 		}
 	}
 }

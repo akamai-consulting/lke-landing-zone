@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"sigs.k8s.io/yaml"
@@ -155,6 +154,10 @@ func TestBootstrapCluster_AppliesOnlyBridge(t *testing.T) {
 		appsRepoRevision: "main",
 	}
 	var applied, mgrs []string
+	// A FAKE clock whose sleep advances it: with a frozen (or real) clock, a
+	// waitManagedArgoReady that stops recognising "ready" spins for its whole
+	// 15-minute budget instead of failing this test. See advancingClock.
+	now, sleep := advancingClock()
 	d := bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
@@ -171,8 +174,8 @@ func TestBootstrapCluster_AppliesOnlyBridge(t *testing.T) {
 			mgrs = append(mgrs, mgr)
 			return "", true
 		},
-		now:   time.Now,
-		sleep: func(time.Duration) {},
+		now:   now,
+		sleep: sleep,
 	}
 	if err := bootstrapCluster(o, d); err != nil {
 		t.Fatalf("bootstrapCluster: %v", err)
@@ -216,6 +219,7 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 			instanceRepoToken: token,
 		}
 		var applied []string
+		now, sleep := advancingClock()
 		d := bootstrapDeps{
 			kubectl: func(args ...string) (string, bool) {
 				line := strings.Join(args, " ")
@@ -248,7 +252,12 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 				return "", true
 			},
 			apply: func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
-			now:   time.Now, sleep: func(time.Duration) {},
+			// configureManagedApl runs when a token is set; the kubectl stub above
+			// returns no apl-git-config repoUrl, so it warns-and-continues (best-effort)
+			// without reaching the migration Job — this test only asserts the bridge.
+			// The advancing fake clock keeps the wait loops it DOES enter bounded in
+			// fake time rather than in 15 real minutes.
+			now: now, sleep: sleep,
 		}
 		if err := bootstrapCluster(o, d); err != nil {
 			t.Fatalf("bootstrapCluster: %v", err)
@@ -288,6 +297,7 @@ func TestConfigureManagedApl(t *testing.T) {
 	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 	var applied []string
 	var patched string
+	now, sleep := advancingClock()
 	d := bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
@@ -309,7 +319,7 @@ func TestConfigureManagedApl(t *testing.T) {
 			return "", true
 		},
 		apply: func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
-		now:   time.Now, sleep: func(time.Duration) {},
+		now:   now, sleep: sleep,
 	}
 	if err := configureManagedApl(o, d); err != nil {
 		t.Fatalf("configureManagedApl: %v", err)
@@ -401,15 +411,11 @@ func TestAplAppEnableManifest(t *testing.T) {
 // TestWaitManagedArgoReady_Timeout: when managed ArgoCD never comes up, the wait
 // returns a diagnostic error rather than hanging (budget enforced via the clock seam).
 func TestWaitManagedArgoReady_Timeout(t *testing.T) {
-	base := time.Unix(0, 0)
+	now, sleep := advancingClock()
 	d := bootstrapDeps{
 		kubectl: func(_ ...string) (string, bool) { return "", false }, // never ready
-		now: func() time.Time {
-			cur := base
-			base = base.Add(20 * time.Minute) // second read is past the 15m budget
-			return cur
-		},
-		sleep: func(time.Duration) {},
+		now:     now,
+		sleep:   sleep, // advances the fake clock, so the budget is actually reached
 	}
 	if err := waitManagedArgoReady(d); err == nil {
 		t.Fatal("expected a timeout error when ArgoCD never becomes ready")
@@ -423,6 +429,7 @@ func TestWaitManagedArgoReady_Timeout(t *testing.T) {
 func TestBootstrapCluster_AppliesStorageClass(t *testing.T) {
 	o := bootstrapClusterOpts{env: "primary", clusterID: "393244", instanceRepo: "acme/instance", upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main"}
 	var sawSC, sawOpenbaoNS bool
+	now, sleep := advancingClock()
 	d := bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
 			line := strings.Join(args, " ")
@@ -446,7 +453,7 @@ func TestBootstrapCluster_AppliesStorageClass(t *testing.T) {
 			}
 			return "", true
 		},
-		now: time.Now, sleep: func(time.Duration) {},
+		now: now, sleep: sleep,
 	}
 	if err := bootstrapCluster(o, d); err != nil {
 		t.Fatalf("bootstrapCluster: %v", err)
