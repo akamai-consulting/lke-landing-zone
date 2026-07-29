@@ -5,7 +5,30 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 )
+
+func TestVolumeYoungerThan(t *testing.T) {
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name    string
+		created string
+		want    bool
+	}{
+		{"young zoned RFC3339", "2026-07-02T11:45:00Z", true},              // 15m ago < 30m
+		{"old zoned RFC3339", "2026-07-02T11:00:00Z", false},               // 60m ago
+		{"young zoneless (UTC)", "2026-07-02T11:50:00", true},              // 10m ago
+		{"old zoneless (UTC)", "2026-07-02T10:00:00", false},               // 2h ago
+		{"exactly at grace is not younger", "2026-07-02T11:30:00Z", false}, // 30m ago, not < 30m
+		{"empty -> not young (reap-eligible)", "", false},
+		{"garbage -> not young (reap-eligible)", "not-a-time", false},
+	}
+	for _, c := range cases {
+		if got := VolumeYoungerThan(c.created, now, UntaggedVolumeReapGrace); got != c.want {
+			t.Errorf("%s: VolumeYoungerThan(%q) = %v, want %v", c.name, c.created, got, c.want)
+		}
+	}
+}
 
 func TestLKEIDFromLabel(t *testing.T) {
 	cases := map[string]string{
@@ -92,6 +115,28 @@ func TestVPCIsOrphan(t *testing.T) {
 	}
 	if VPCIsOrphan("platform-vpc", live) {
 		t.Error("a BYO label carries no lke id — not an lke-orphan")
+	}
+}
+
+func TestClassifyVolume(t *testing.T) {
+	live := map[string]bool{"100": true}
+	cases := []struct {
+		name string
+		tags []string
+		want VolDecision
+	}{
+		// The block-storage SC stamps `lke<id>`; a live cluster's detached PVC is kept.
+		{"live-cluster", []string{"block-storage", "lke100"}, VolKeep},
+		{"gone-cluster", []string{"block-storage", "lke200"}, VolOrphan},
+		{"hyphen-form-live", []string{"lke-100"}, VolKeep},
+		// No cluster tag (legacy / other tooling) — no ownership signal.
+		{"no-cluster-tag", []string{"block-storage", "platform-support-services"}, VolUntagged},
+		{"no-tags", nil, VolUntagged},
+	}
+	for _, c := range cases {
+		if got := ClassifyVolume(c.tags, live); got != c.want {
+			t.Errorf("%s: ClassifyVolume(%v) = %v, want %v", c.name, c.tags, got, c.want)
+		}
 	}
 }
 

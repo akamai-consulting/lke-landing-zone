@@ -888,7 +888,7 @@ func runTeed(name string, args ...string) (string, int, error) {
 func ciReapVolumesCmd() *cobra.Command {
 	var region, volumeIDs, tagMustInclude, env string
 	var waitDetach, attempts, retryDelay int
-	var requireEmpty bool
+	var requireEmpty, reapUntagged bool
 	c := &cobra.Command{
 		Use:   "reap-volumes",
 		Short: "delete orphaned pvc-* Block Storage Volumes (--yes to delete)",
@@ -906,10 +906,13 @@ func ciReapVolumesCmd() *cobra.Command {
 			"--retry-delay s between tries) and finally EXITS NON-ZERO when orphans\n" +
 			"remain — so a destroy doesn't go green leaving Volumes that block the next\n" +
 			"apply's preflight. Without it the sweep is single-pass and best-effort.\n" +
+			"A Volume carrying an `lke<id>` tag whose cluster is still LIVE is always\n" +
+			"kept; an UNTAGGED Volume is kept too unless --reap-untagged is passed\n" +
+			"(it has no ownership signal, so it cannot be proven orphaned).\n" +
 			"Reads LINODE_TOKEN; dry-run by default, deletes only with --yes.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIReapVolumes(gopts, env, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty)
+			return runCIReapVolumes(gopts, env, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty, reapUntagged)
 		},
 	}
 	f := c.Flags()
@@ -919,6 +922,7 @@ func ciReapVolumesCmd() *cobra.Command {
 	f.StringVar(&tagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
 	f.IntVar(&waitDetach, "wait-detach", 0, "seconds to wait for the --volume-ids Volumes to detach before sweeping (0 = no wait)")
 	f.BoolVar(&requireEmpty, "require-empty", false, "verify every --volume-ids Volume is gone; retry then fail if orphans remain")
+	f.BoolVar(&reapUntagged, "reap-untagged", false, "also delete pvc-* Volumes carrying NO lke<id> ownership tag (kept by default — an untagged Volume cannot be proven orphaned)")
 	f.IntVar(&attempts, "attempts", 1, "sweep+verify attempts before failing (only with --require-empty)")
 	f.IntVar(&retryDelay, "retry-delay", 30, "seconds between --require-empty retries")
 	return c
@@ -1118,7 +1122,7 @@ func sweepUntilEmpty(ctx context.Context, g globalOpts, client *linode.Client, o
 		o.cmd, firstNonEmpty(itoaOrUnknown(remaining), "some"), o.unit, o.attempts)
 }
 
-func runCIReapVolumes(g globalOpts, env, region, volumeIDs, tagMustInclude string, waitDetach, attempts, retryDelay int, requireEmpty bool) error {
+func runCIReapVolumes(g globalOpts, env, region, volumeIDs, tagMustInclude string, waitDetach, attempts, retryDelay int, requireEmpty, reapUntagged bool) error {
 	if region == "" && volumeIDs == "" {
 		return fmt.Errorf("--region and/or --volume-ids is required (refusing an unscoped Volume sweep)")
 	}
@@ -1165,7 +1169,7 @@ func runCIReapVolumes(g globalOpts, env, region, volumeIDs, tagMustInclude strin
 		// volumes survived the destroy of lke637974, then squatted their labels so
 		// the NEXT cluster could not relabel 12 of its 17. `llz reap` already passed
 		// env here; this path never did.
-		return reapVolumes(ctx, client, reapOpts{env: env, region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del)
+		return reapVolumes(ctx, client, reapOpts{env: env, region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude, reapUntagged: reapUntagged}, del)
 	}, func() (int, error) {
 		return countVolumesPresent(ctx, client, volumeIDs)
 	})
