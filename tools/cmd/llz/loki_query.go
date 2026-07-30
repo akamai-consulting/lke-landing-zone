@@ -85,10 +85,10 @@ func parseLokiStreams(raw []byte) ([]lokiStream, error) {
 		return nil, fmt.Errorf("decoding Loki response: %w (%s)", err, truncateForError(raw))
 	}
 	if resp.Status != "" && resp.Status != "success" {
-		return nil, fmt.Errorf("Loki returned status %q: %s", resp.Status, truncateForError(raw))
+		return nil, fmt.Errorf("query_range: Loki returned status %q: %s", resp.Status, truncateForError(raw))
 	}
 	if rt := resp.Data.ResultType; rt != "" && rt != "streams" {
-		return nil, fmt.Errorf("Loki returned resultType %q, expected \"streams\" — the selector is not a log query", rt)
+		return nil, fmt.Errorf("query_range: Loki returned resultType %q, expected \"streams\" — the selector is not a log query", rt)
 	}
 	out := make([]lokiStream, 0, len(resp.Data.Result))
 	for _, r := range resp.Data.Result {
