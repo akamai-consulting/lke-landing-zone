@@ -291,6 +291,10 @@ func ciCmd() *cobra.Command {
 	// Vendored-CI drift guard: the `managed` .github/ surface is overwritten by
 	// `llz upgrade`, so a local edit is silently lost — fail CI instead.
 	c.AddCommand(ciWorkflowsFreshCmd())
+	// Config-surface accounting: every ${{ vars.X }} a shipped workflow reads must
+	// be in e2eRequirements (doctor reports it) or knownOptionalWorkflowVars (with
+	// a reason) — otherwise doctor stays silent about a real setup requirement.
+	c.AddCommand(ciWorkflowVarsCmd())
 	return c
 }
 
