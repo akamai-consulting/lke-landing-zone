@@ -377,7 +377,9 @@ mtls-wiring-guard:
 
 # plaintext-guard: `llz ci plaintext-guard` — the drift gate on UNENCRYPTED
 # in-cluster hops (docs/adr/0010-in-cluster-mtls.md). Every `scheme: http`
-# scrape, `insecureSkipVerify: true`, in-cluster http:// URL, and Go
+# scrape, `insecureSkipVerify: true`, in-cluster http:// URL (fully qualified or
+# the short svc.namespace / svc forms), Istio mesh policy accepting cleartext
+# (PeerAuthentication PERMISSIVE / DestinationRule tls.mode DISABLE), and Go
 # InsecureSkipVerify must be registered in plaintextAllowed with a reason and an
 # owner. Unregistered hits fail; so do registry entries whose hop is gone, so the
 # list cannot rot into a rubber stamp.

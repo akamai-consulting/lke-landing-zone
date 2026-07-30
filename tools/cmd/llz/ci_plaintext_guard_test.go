@@ -301,3 +301,135 @@ func TestRelForKeyIsLayoutStable(t *testing.T) {
 		t.Errorf("flat layout: relForKey = %q, want %q", got, want)
 	}
 }
+
+// A PeerAuthentication port exemption is an accepted plaintext hop, and it is
+// spelled as mesh policy rather than as a URL or a scrape scheme. The guard was
+// blind to the whole class, so the two exemptions the harbor namespace ships
+// (CNPG on 8000, Prometheus on 8001) passed green while the registry claimed to
+// enumerate every accepted residual.
+//
+// Each exemption must key on ITS OWN port, which comes from a quoted MAP KEY
+// (`"8000":`) that rePortName cannot see — keying both on the same locator would
+// let one registry entry silently vouch for the other.
+func TestPermissiveMTLSIsPerPortFinding(t *testing.T) {
+	const doc = `
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: harbor-strict-mtls
+spec:
+  mtls:
+    mode: STRICT
+  portLevelMtls:
+    "8000":
+      mode: PERMISSIVE
+    "8001":
+      mode: PERMISSIVE
+`
+	got := map[string]bool{}
+	for _, f := range scanPlaintext("p/pa.yaml", doc, false) {
+		got[f.key] = true
+	}
+	for _, want := range []string{"p/pa.yaml:mtls-8000", "p/pa.yaml:mtls-8001"} {
+		if !got[want] {
+			t.Errorf("missing per-port finding %q; got %v", want, got)
+		}
+	}
+	// STRICT is the enforced case and must not be reported.
+	if len(got) != 2 {
+		t.Errorf("expected exactly the two PERMISSIVE ports, got %v", got)
+	}
+}
+
+// A namespace-wide PERMISSIVE has no port context. It must still be a finding —
+// it is strictly WORSE than a port exemption (every port accepts cleartext) — and
+// it must not key on an empty locator, which would make it collide with an
+// unrelated hop in the same file.
+func TestNamespaceWidePermissiveIsReported(t *testing.T) {
+	fs := scanPlaintext("p/pa.yaml", "spec:\n  mtls:\n    mode: PERMISSIVE\n", false)
+	if len(fs) != 1 {
+		t.Fatalf("want 1 finding, got %d (%v)", len(fs), fs)
+	}
+	if fs[0].key != "p/pa.yaml:mtls-mode" {
+		t.Errorf("key = %q, want p/pa.yaml:mtls-mode", fs[0].key)
+	}
+}
+
+// DestinationRule tls.mode: DISABLE turns encryption off outright, so it belongs
+// to the same class as PERMISSIVE.
+func TestDestinationRuleDisableIsReported(t *testing.T) {
+	if fs := scanPlaintext("p/dr.yaml", "  tls:\n    mode: DISABLE\n", false); len(fs) != 1 {
+		t.Fatalf("tls.mode: DISABLE must be a finding, got %v", fs)
+	}
+}
+
+// `mode:` alone is everywhere in Kubernetes YAML. Only the two mesh values are
+// findings — matching the key would flood the gate and train reviewers around it.
+// UNSET means "inherit", so the hop belongs to whatever sets the mesh default.
+func TestBenignModeValuesAreNotFindings(t *testing.T) {
+	for _, ln := range []string{
+		"        mode: 0644\n", "  defaultMode: 420\n", "  volumeMode: Block\n",
+		"    mode: STRICT\n", "    mode: UNSET\n",
+	} {
+		if fs := scanPlaintext("p/x.yaml", ln, false); len(fs) != 0 {
+			t.Errorf("%q must not be a finding, got %v", ln, fs)
+		}
+	}
+}
+
+// reSvcHTTP only ever saw the fully-qualified name, so writing the SHORT form
+// Kubernetes DNS also resolves bypassed the gate entirely — and the short form is
+// the spelling a reviewer reaches for first.
+func TestShortFormInClusterURLsAreFindings(t *testing.T) {
+	for _, tc := range []struct{ line, wantKey string }{
+		{`  value: "http://harbor-core.harbor"`, "p/x.yaml:http://harbor-core.harbor"},
+		{`  value: "http://harbor-core"`, "p/x.yaml:http://harbor-core"},
+		// The port must not enter the key: adding one later would strand the entry.
+		{`  value: "http://harbor-core.harbor:8080/api"`, "p/x.yaml:http://harbor-core.harbor"},
+		// Credentials must not enter the key either — it would rotate with them.
+		{`  value: "http://user:pw@git-server.git-server"`, "p/x.yaml:http://git-server.git-server"},
+	} {
+		fs := scanPlaintext("p/x.yaml", tc.line+"\n", false)
+		if len(fs) != 1 || fs[0].key != tc.wantKey {
+			t.Errorf("%s -> %v, want single finding keyed %q", tc.line, fs, tc.wantKey)
+		}
+	}
+}
+
+// The same hole existed in Go, where the most consequential URLs in this tree
+// live as constants.
+func TestShortFormInClusterURLsAreFindingsInGo(t *testing.T) {
+	fs := scanPlaintext("t/x.go", "const u = \"http://harbor-core.harbor:8080\"\n", true)
+	if len(fs) != 1 || fs[0].key != "t/x.go:http://harbor-core.harbor" {
+		t.Fatalf("got %v, want a single short-form finding", fs)
+	}
+}
+
+// The cost of a false positive is a reviewer who learns to bypass the gate, so
+// external hosts must stay silent. These are the shapes this repo actually
+// contains.
+func TestExternalAndLoopbackHostsAreNotFindings(t *testing.T) {
+	for _, ln := range []string{
+		`  value: "http://nl-ams-1.linodeobjects.com"`,
+		`  value: "http://git.lke1.akamai-apl.net/otomi/values.git"`,
+		`  value: "http://www.w3.org/2001/XMLSchema"`,
+		`  value: "http://localhost:8200"`,
+		`  value: "http://127.0.0.1:8210"`,
+		`  value: "http://10.0.0.1:9090"`,
+		// Templated hosts do not match by design (documented on reAnyHTTPHost).
+		`  value: "http://{{ .Values.host }}"`,
+	} {
+		if fs := scanPlaintext("p/x.yaml", ln+"\n", false); len(fs) != 0 {
+			t.Errorf("%s must not be a finding, got %v", ln, fs)
+		}
+	}
+}
+
+// The fully-qualified form keeps its EXACT historical key. Re-keying it would
+// strand every existing registry entry as stale in one commit.
+func TestFullyQualifiedURLKeyIsUnchanged(t *testing.T) {
+	fs := scanPlaintext("t/x.go", "const u = \"http://harbor-core.harbor.svc.cluster.local\"\n", true)
+	if len(fs) != 1 || fs[0].key != "t/x.go:http://harbor-core.harbor.svc.cluster.local" {
+		t.Fatalf("got %v, want the unchanged fully-qualified key", fs)
+	}
+}

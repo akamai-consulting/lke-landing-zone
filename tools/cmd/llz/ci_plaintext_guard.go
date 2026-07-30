@@ -107,6 +107,40 @@ var plaintextAllowed = map[string]plaintextRule{
 			"branch has gone missing, which narrows exposure but does not remove it",
 	},
 
+	// ── mesh policy: STRICT with named port exemptions ───────────────────────
+	//
+	// harbor is namespace-wide STRICT (harbor-peerauthentication.yaml). These two
+	// ports are the exemptions that make STRICT deployable at all, and they are
+	// accepted plaintext hops in exactly the sense this registry exists to record —
+	// they were invisible until the guard learned to read mesh policy.
+	//
+	// They also GUARD THE GUARD: the two harbor http:// entries above are accepted
+	// only because the provisioner's sidecar upgrades that hop to mTLS, which holds
+	// only while this policy stays STRICT on Harbor's API port. If it is reverted to
+	// namespace-wide PERMISSIVE — the documented first step of its own rollout — that
+	// justification silently becomes false. A namespace-wide PERMISSIVE lands here as
+	// an unregistered `mtls-mode` finding rather than passing green.
+	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-8000": {
+		owner: "apl-core",
+		reason: "CNPG operator (cnpg-system, NOT a meshed namespace) polling harbor-otomi-db's " +
+			"instance-status endpoint. What crosses is Postgres cluster/instance state — primary " +
+			"identity, replication and WAL position, readiness — not credentials. Cannot be closed " +
+			"from this repo: it needs cnpg-system meshed, which is apl-core's call. Removing the " +
+			"exemption instead of closing it wedges the Harbor DB (\"Instance Status Extraction " +
+			"Error\" -> ClusterIsNotReady -> convergence stalls), so it must stay until the operator " +
+			"side is meshed",
+	},
+	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-8001": {
+		owner: "apl-core",
+		reason: "apl-core's Prometheus (monitoring, unmeshed) scraping Harbor's :8001 metrics — the " +
+			"exporter plus core/registry/jobservice. Payload is Harbor's own counters; no key " +
+			"material. This is the SAME hop in kind as the registered cert-manager and " +
+			"otel-collector scrapes, and it escaped notice only because it is spelled as a mesh " +
+			"exemption instead of `scheme: http` — the coverage gap that motivated reading mesh " +
+			"policy here. Closing it needs a meshed Prometheus or an mTLS scrape config, both " +
+			"apl-core's to make",
+	},
+
 	// ── apl-core owned ───────────────────────────────────────────────────────
 	"platform-apl/components/observability/cert-manager-servicemonitor.yaml:tcp-prometheus-servicemonitor": {
 		owner: "apl-core",
@@ -167,7 +201,94 @@ var (
 	reInsecureGo   = regexp.MustCompile(`InsecureSkipVerify:\s*true`)
 	reSvcHTTP      = regexp.MustCompile(`http://[a-z0-9.\-]+\.svc(\.cluster\.local)?`)
 	rePortName     = regexp.MustCompile(`port:\s*["']?([A-Za-z0-9_.\-]+)`)
+
+	// ── mesh-level plaintext ─────────────────────────────────────────────────
+	//
+	// An Istio PeerAuthentication `mode: PERMISSIVE` ACCEPTS cleartext alongside
+	// mTLS, and a DestinationRule `tls.mode: DISABLE` turns encryption off outright.
+	// Both declare an accepted unencrypted hop just as surely as `scheme: http`
+	// does — they are simply spelled as mesh policy rather than as a URL or a
+	// scrape scheme, which is why the first revision of this guard could not see
+	// the two port exemptions in the harbor namespace.
+	//
+	// The VALUE carries the specificity, not the key: bare `mode:` is everywhere in
+	// Kubernetes YAML (volume file modes, volumeMode), so matching it would be
+	// noise. `UNSET` is deliberately NOT flagged — it means "inherit", so the hop it
+	// describes belongs to whatever sets the mesh-wide default, not to this file.
+	rePermissiveMTLS = regexp.MustCompile(`(?i)mode:\s*["']?(PERMISSIVE|DISABLE)["']?(?:[\s,}]|$)`)
+	// portLevelMtls keys each exemption as a QUOTED MAP KEY (`"8000":`), never as
+	// `port: 8000`, so rePortName cannot see it. Without this the exemptions would
+	// key on whatever unrelated `port:` line came last in the document.
+	rePortMapKey = regexp.MustCompile(`^\s*["'](\d+)["']:\s*$`)
+
+	// ── short-form in-cluster URLs ───────────────────────────────────────────
+	//
+	// reSvcHTTP only sees the FULLY-QUALIFIED spelling. Kubernetes DNS also
+	// resolves `svc.namespace` and a bare `svc` within the same namespace, and those
+	// are the idiomatic forms — so the gate was bypassable by writing the shorter
+	// name, which is the spelling a reviewer is most likely to reach for.
+	//
+	// The host is captured WITHOUT userinfo or port so the registry key stays stable
+	// when a port is added or a password rotates. Templated hosts
+	// (`http://{{ .Values.x }}`) do not match at all: `{` is outside the class. That
+	// is a real blind spot, left open on purpose — the alternative is matching
+	// `http://` unconditionally, which floods the gate with external URLs.
+	reAnyHTTPHost = regexp.MustCompile(`http://(?:[^\s"'/@]+@)?([A-Za-z0-9.\-]+)`)
 )
+
+// publicLastLabels are final DNS labels that mark a host as PUBLIC, so a dotted
+// name ending in one is not an in-cluster Service. This is a deny-list rather
+// than an allow-list of cluster names because namespaces are unbounded: any new
+// namespace must be caught WITHOUT touching this file, while the set of public
+// suffixes this repo actually references is small and changes rarely.
+//
+// `local` is deliberately ABSENT: the `.svc.cluster.local` form is reSvcHTTP's,
+// and leaving `local` out means an odd `foo.cluster.local` still gets flagged
+// rather than silently passing as public.
+var publicLastLabels = map[string]bool{
+	"com": true, "org": true, "net": true, "io": true, "dev": true, "app": true,
+	"cloud": true, "ai": true, "co": true, "uk": true, "edu": true, "gov": true,
+	"me": true, "sh": true, "run": true, "info": true, "biz": true,
+}
+
+// inClusterHTTPHost decides whether a bare http:// host is a cluster-local
+// Service. It errs toward NOT flagging: a false positive on an external URL
+// trains reviewers to bypass the gate, which costs more than the hop it would
+// have caught.
+func inClusterHTTPHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(host, "."))
+	if h == "" || h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return false
+	}
+	labels := strings.Split(h, ".")
+	last := labels[len(labels)-1]
+	// An IP literal is not a Service name. Testing only the LAST label is enough:
+	// no DNS name may end in an all-numeric label, so this cannot reject a Service.
+	if last != "" && strings.Trim(last, "0123456789") == "" {
+		return false
+	}
+	// A single label resolves only inside the cluster (localhost is out above).
+	if len(labels) == 1 {
+		return true
+	}
+	return !publicLastLabels[last]
+}
+
+// shortInClusterURL finds the first short-form in-cluster http:// URL on a line,
+// skipping the fully-qualified spelling so reSvcHTTP keeps ownership of it AND of
+// its existing registry keys — re-keying those would strand every entry.
+func shortInClusterURL(code string) (string, bool) {
+	for _, m := range reAnyHTTPHost.FindAllStringSubmatch(code, -1) {
+		host := m[1]
+		if strings.Contains(strings.ToLower(host), ".svc") {
+			continue
+		}
+		if inClusterHTTPHost(host) {
+			return "http://" + strings.ToLower(host), true
+		}
+	}
+	return "", false
+}
 
 func ciPlaintextGuardCmd() *cobra.Command {
 	var root string
@@ -176,10 +297,12 @@ func ciPlaintextGuardCmd() *cobra.Command {
 		Short: "fail when an unencrypted in-cluster hop is not registered as an accepted residual",
 		Long: "Static gate on cleartext in-cluster communication (docs/adr/0010-in-cluster-mtls.md).\n" +
 			"Scans platform-apl/ and kubernetes-charts/ for `scheme: http` scrapes,\n" +
-			"`insecureSkipVerify: true`, and http:// URLs to in-cluster Services, plus\n" +
-			"tools/ for InsecureSkipVerify. Every hit must be registered in\n" +
-			"plaintextAllowed with a reason and an owner; unregistered hits fail, and so\n" +
-			"do registry entries whose hop no longer exists.",
+			"`insecureSkipVerify: true`, http:// URLs to in-cluster Services (fully\n" +
+			"qualified OR the short svc.namespace / svc forms), and Istio mesh policy that\n" +
+			"accepts cleartext (PeerAuthentication mode: PERMISSIVE, DestinationRule\n" +
+			"tls.mode: DISABLE), plus tools/ for InsecureSkipVerify. Every hit must be\n" +
+			"registered in plaintextAllowed with a reason and an owner; unregistered hits\n" +
+			"fail, and so do registry entries whose hop no longer exists.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIPlaintextGuard(root) },
 	}
@@ -302,6 +425,7 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 	var out []plaintextFinding
 	lines := strings.Split(content, "\n")
 	lastPort := ""
+	lastMTLSPort := ""
 	for i, ln := range lines {
 		n := i + 1
 		// Strip comments so a line DESCRIBING a plaintext hop is not itself a
@@ -330,6 +454,11 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 					key: rel + ":" + u, file: rel, line: n,
 					what: "plaintext URL to an in-cluster Service (" + u + ")",
 				})
+			} else if su, ok := shortInClusterURL(code); ok {
+				out = append(out, plaintextFinding{
+					key: rel + ":" + su, file: rel, line: n,
+					what: "plaintext URL to an in-cluster Service, short form (" + su + ")",
+				})
 			}
 			continue
 		}
@@ -339,7 +468,14 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 		// the same key, silently masking one behind the other's registry entry.
 		if strings.HasPrefix(strings.TrimSpace(code), "---") {
 			lastPort = ""
+			lastMTLSPort = ""
 			continue
+		}
+		// Tracked separately from lastPort: a PeerAuthentication carries no `port:`
+		// line at all, so sharing one variable would key an exemption on a port from
+		// an unrelated document earlier in the file.
+		if m := rePortMapKey.FindStringSubmatch(code); m != nil {
+			lastMTLSPort = m[1]
 		}
 		if m := rePortName.FindStringSubmatch(code); m != nil {
 			lastPort = strings.Trim(m[1], `"'`)
@@ -360,6 +496,19 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 				key: rel + ":" + reSvcHTTP.FindString(code), file: rel, line: n,
 				what: "plaintext URL to an in-cluster Service (" + reSvcHTTP.FindString(code) + ")",
 			})
+		case rePermissiveMTLS.MatchString(code):
+			m := rePermissiveMTLS.FindStringSubmatch(code)
+			out = append(out, plaintextFinding{
+				key: rel + ":" + locator(mtlsLocator(lastMTLSPort), "mtls-mode"), file: rel, line: n,
+				what: "mesh mTLS not enforced (mode: " + strings.ToUpper(m[1]) + ") — cleartext is accepted on this hop",
+			})
+		default:
+			if u, ok := shortInClusterURL(code); ok {
+				out = append(out, plaintextFinding{
+					key: rel + ":" + u, file: rel, line: n,
+					what: "plaintext URL to an in-cluster Service, short form (" + u + ")",
+				})
+			}
 		}
 	}
 	return out
@@ -374,6 +523,15 @@ func locator(port, fallback string) string {
 		return port
 	}
 	return fallback
+}
+
+// mtlsLocator prefixes the port so an mTLS exemption on port 8000 cannot collide
+// with a scrape finding keyed on the same number.
+func mtlsLocator(port string) string {
+	if port == "" {
+		return ""
+	}
+	return "mtls-" + port
 }
 
 // stripComment removes the trailing/leading comment so prose about a hop is not
