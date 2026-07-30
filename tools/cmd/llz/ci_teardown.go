@@ -325,9 +325,25 @@ func runCITeardownCapture(region, tfDir string) error {
 		if err != nil {
 			return fmt.Errorf("list Volumes: %w", err)
 		}
+		// Accept the CSI default label AND anything the volume-labels reconciler
+		// renamed to `<region>-<ns>-<pvc>`.
+		//
+		// This used to be a bare `pvc-` prefix check, which silently stopped
+		// matching the moment that reconciler started working: a renamed Volume was
+		// never TRACKED, so it was never handed to the sweep below, so it survived
+		// the destroy. Measured on lke637974 — 15 renamed Volumes outlived their
+		// cluster, then squatted their labels (Linode labels are account-unique) so
+		// the next cluster could not relabel 12 of its 17. One stale prefix check
+		// produced both an unbounded cost leak and a permanently broken relabeler.
+		//
+		// The real scope here is node membership, asserted just below: the Volume is
+		// attached to one of THIS cluster's nodes. The label check only guards
+		// against sweeping something an operator attached by hand, so it must admit
+		// every label the platform itself produces.
+		prefixes := linode.VolumeLabelPrefixes(region)
 		var tracked []string
 		for _, v := range vols {
-			if !strings.HasPrefix(linode.MapString(v, "label"), "pvc-") {
+			if !linode.HasAnyVolumeLabelPrefix(linode.MapString(v, "label"), prefixes) {
 				continue
 			}
 			if linode.VolumeLinodeIDNull(v) || !nodeIDs[linode.MapUint(v, "linode_id")] {

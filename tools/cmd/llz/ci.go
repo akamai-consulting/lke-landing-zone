@@ -802,14 +802,16 @@ func runTeed(name string, args ...string) (string, int, error) {
 // CI-scoped orchestration. Dry-run by default; deletes only with --yes.
 
 func ciReapVolumesCmd() *cobra.Command {
-	var region, volumeIDs, tagMustInclude string
+	var region, volumeIDs, tagMustInclude, env string
 	var waitDetach, attempts, retryDelay int
 	var requireEmpty bool
 	c := &cobra.Command{
 		Use:   "reap-volumes",
 		Short: "delete orphaned pvc-* Block Storage Volumes (--yes to delete)",
 		Long: "Native port of cleanup-orphan-volumes.sh. Deletes unattached CSI Volumes\n" +
-			"(label pvc-*, linode_id null) scoped by --volume-ids and/or --region, with an\n" +
+			"(linode_id null) scoped by --volume-ids and/or --region, with an\n" +
+			"optional --env so RELABELED volumes (<env>-<ns>-<pvc>) are swept too — without\n" +
+			"it only the CSI default pvc-* labels match and every renamed volume leaks.\n" +
 			"optional --tag-must-include constraint — the same orphan predicate as `llz\n" +
 			"reap`. At least one scope is required (never an unscoped sweep).\n" +
 			"--wait-detach polls until every --volume-ids Volume is unattached before\n" +
@@ -823,11 +825,12 @@ func ciReapVolumesCmd() *cobra.Command {
 			"Reads LINODE_TOKEN; dry-run by default, deletes only with --yes.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIReapVolumes(gopts, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty)
+			return runCIReapVolumes(gopts, env, region, volumeIDs, tagMustInclude, waitDetach, attempts, retryDelay, requireEmpty)
 		},
 	}
 	f := c.Flags()
 	f.StringVar(&region, "region", "", "scope to one Linode region (e.g. us-ord)")
+	f.StringVar(&env, "env", "", "deployment name (REGION_SHORT) whose RELABELED volumes to include; without it the sweep sees only the CSI default pvc-* labels and leaks every renamed volume")
 	f.StringVar(&volumeIDs, "volume-ids", "", "space-separated Volume id allowlist (the precise CI scope)")
 	f.StringVar(&tagMustInclude, "tag-must-include", "", "only delete Volumes whose tags include this (e.g. block-storage)")
 	f.IntVar(&waitDetach, "wait-detach", 0, "seconds to wait for the --volume-ids Volumes to detach before sweeping (0 = no wait)")
@@ -1031,7 +1034,7 @@ func sweepUntilEmpty(ctx context.Context, g globalOpts, client *linode.Client, o
 		o.cmd, firstNonEmpty(itoaOrUnknown(remaining), "some"), o.unit, o.attempts)
 }
 
-func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, waitDetach, attempts, retryDelay int, requireEmpty bool) error {
+func runCIReapVolumes(g globalOpts, env, region, volumeIDs, tagMustInclude string, waitDetach, attempts, retryDelay int, requireEmpty bool) error {
 	if region == "" && volumeIDs == "" {
 		return fmt.Errorf("--region and/or --volume-ids is required (refusing an unscoped Volume sweep)")
 	}
@@ -1061,8 +1064,8 @@ func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, wa
 
 	return sweepUntilEmpty(ctx, g, client, sweepOpts{
 		cmd: "reap-volumes",
-		banner: fmt.Sprintf("=== orphan Volumes (region=%q volume-ids=%q tag=%q, label prefix pvc-, unattached)",
-			region, volumeIDs, tagMustInclude),
+		banner: fmt.Sprintf("=== orphan Volumes (env=%q region=%q volume-ids=%q tag=%q, label prefixes %v, unattached)",
+			env, region, volumeIDs, tagMustInclude, linode.VolumeLabelPrefixes(env)),
 		singular:     "Volume",
 		plural:       "Volumes",
 		unit:         "tracked Volume(s)",
@@ -1071,7 +1074,14 @@ func runCIReapVolumes(g globalOpts, region, volumeIDs, tagMustInclude string, wa
 		retryDelay:   retryDelay,
 		requireEmpty: requireEmpty,
 	}, func(del func(path, desc string)) error {
-		return reapVolumes(ctx, client, reapOpts{region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del)
+		// env is load-bearing, not cosmetic: VolumeLabelPrefixes(env) is what lets
+		// the sweep see volumes the volume-labels reconciler has RENAMED. Left
+		// empty (as it was) the predicate matches only `pvc-*`, so every relabeled
+		// volume is invisible to the destroy-time sweep and leaks. Measured: 15
+		// volumes survived the destroy of lke637974, then squatted their labels so
+		// the NEXT cluster could not relabel 12 of its 17. `llz reap` already passed
+		// env here; this path never did.
+		return reapVolumes(ctx, client, reapOpts{env: env, region: region, volumeIDs: volumeIDs, tagMustInclude: tagMustInclude}, del)
 	}, func() (int, error) {
 		return countVolumesPresent(ctx, client, volumeIDs)
 	})

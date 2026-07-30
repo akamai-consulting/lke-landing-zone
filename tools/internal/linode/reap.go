@@ -324,6 +324,15 @@ func VolumeLinodeIDNull(m map[string]any) bool {
 	return !present || v == nil
 }
 
+// HasAnyVolumeLabelPrefix reports whether a Volume label carries one of the
+// prefixes VolumeLabelPrefixes returned. Exported so the teardown TRACKING pass
+// applies the same rule as the sweep — they diverged once (tracking hardcoded
+// `pvc-`), and a Volume the tracker cannot see is one the sweep is never asked
+// about, which is how 15 renamed Volumes outlived their cluster.
+func HasAnyVolumeLabelPrefix(label string, prefixes []string) bool {
+	return hasAnyPrefix(label, prefixes)
+}
+
 func hasAnyPrefix(s string, prefixes []string) bool {
 	for _, p := range prefixes {
 		if p != "" && strings.HasPrefix(s, p) {

@@ -126,8 +126,13 @@ func TestTeardownCapture(t *testing.T) {
 		volumes: []map[string]any{
 			{"id": float64(1), "label": "pvc-aaa", "linode_id": float64(11)}, // ours
 			{"id": float64(2), "label": "pvc-bbb", "linode_id": float64(99)}, // peer's node
-			{"id": float64(3), "label": "data-c", "linode_id": float64(11)},  // not pvc-*
+			{"id": float64(3), "label": "data-c", "linode_id": float64(11)},  // operator-owned: no platform prefix
 			{"id": float64(4), "label": "pvc-ddd", "linode_id": nil},         // already detached
+			// RELABELED by the volume-labels reconciler. The tracker used to hardcode
+			// a `pvc-` prefix and skip this, so it was never handed to the sweep and
+			// outlived the cluster — then squatted its label (Linode labels are
+			// account-unique) and blocked the next cluster from relabeling.
+			{"id": float64(5), "label": "e2e-harbor-harbor-otomi-db-1", "linode_id": float64(12)},
 		},
 	}
 	dir, ghaEnv := withTeardown(t, fake, teardownTFVars)
@@ -135,7 +140,7 @@ func TestTeardownCapture(t *testing.T) {
 		t.Fatalf("capture: %v", err)
 	}
 	got, _ := os.ReadFile(ghaEnv)
-	want := "LKE_CLUSTER_ID=777\nCLUSTER_PVC_VOLUME_IDS=1\n"
+	want := "LKE_CLUSTER_ID=777\nCLUSTER_PVC_VOLUME_IDS=1 5\n"
 	if string(got) != want {
 		t.Errorf("GITHUB_ENV = %q, want %q", got, want)
 	}
