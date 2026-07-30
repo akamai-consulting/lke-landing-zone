@@ -26,6 +26,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -35,6 +37,52 @@ import (
 // confirmed STRICT — a false entry would flag a reachable target.
 var meshStrictNamespaces = map[string]string{
 	"harbor": "harbor-core runs behind an Istio sidecar with STRICT mTLS (apl-core). A plaintext request from a pod outside the harbor namespace is rejected at the sidecar — provisioning must run IN the harbor namespace (the harbor-robot-provisioner CronJob), not from llz-reconciler. See the batch-5 harbor-reconciler revert.",
+}
+
+// meshEgressRule is why one cross-mesh egress rule is allowed to stay.
+type meshEgressRule struct{ reason, owner string }
+
+// meshEgressAllowed registers cross-mesh egress rules that are accepted for now,
+// keyed "<sourceNS>/<policy>-><targetNS>".
+//
+// Modelled on plaintextAllowed, including the stale-entry failure: an entry whose
+// rule no longer exists is deleted, not kept. Rendering the charts made these
+// visible for the first time, and the honest disposition for the one below is
+// "probably dead, do not delete blind" rather than either silence or a guess.
+var meshEgressAllowed = map[string]meshEgressRule{
+	"llz-cert-automation/llz-cert-automation-allow-runner-egress->harbor": {
+		owner: "llz",
+		reason: "the haproxy-rebuild Workflow's push lane, opening :80 and :443 into harbor from an " +
+			"`istio-injection: disabled` namespace. BELIEVED DEAD: harbor is namespace-wide STRICT " +
+			"since #360, so an unmeshed client's plaintext :80 is rejected at the proxy regardless of " +
+			"this allow, and the Workflow's push target is `harborUrl`, which defaults to the EXTERNAL " +
+			"`https://harbor.<cluster-domain>:5000` and therefore egresses through the ingress gateway, " +
+			"not into this namespace. NOT DELETED, deliberately: 'believed dead' is not 'observed " +
+			"dead', this could not be checked without a cluster, and the cost of being wrong is that " +
+			"the HAProxy certificate rebuild fails — surfacing ~80 days later as an expired edge " +
+			"certificate, which is far worse than an over-broad allow that grants nothing reachable. " +
+			"TO CLOSE: on a live cluster confirm the rebuild Workflow makes no in-cluster connection " +
+			"to the harbor namespace (the push should leave via the gateway), then delete both the " +
+			"rule and this entry",
+	},
+}
+
+// filterMeshEgressAllowed splits findings into unregistered (returned) and
+// registered (reported as ok), and records which allowlist keys were matched so
+// stale entries can be failed.
+func filterMeshEgressAllowed(all []meFinding) (unregistered []meFinding, seen map[string]bool) {
+	seen = map[string]bool{}
+	for _, f := range all {
+		k := f.sourceNS + "/" + f.policy + "->" + f.targetNS
+		rule, ok := meshEgressAllowed[k]
+		if !ok {
+			unregistered = append(unregistered, f)
+			continue
+		}
+		seen[k] = true
+		fmt.Printf("  ok: %s %s — [%s] %s\n", f.file, k, rule.owner, rule.reason)
+	}
+	return unregistered, seen
 }
 
 // meDoc is the minimal NetworkPolicy shape the guard inspects.
@@ -77,16 +125,27 @@ func ciMeshEgressGuardCmd() *cobra.Command {
 }
 
 func runCIMeshEgressGuard(root string) error {
-	dirs := platformTreeDirs(root)
-	findings, examined, err := collectMeshEgressFindings(dirs)
+	if err := requireRenderedCharts(root); err != nil {
+		return err
+	}
+	dirs := meshEgressScanDirs(root)
+	all, examined, err := collectMeshEgressFindings(dirs)
 	if err != nil {
 		return err
 	}
 	if err := requireCorpus("mesh-egress-guard", examined, dirs); err != nil {
 		return err
 	}
+	findings, seen := filterMeshEgressAllowed(all)
+	for k, rule := range meshEgressAllowed {
+		if !seen[k] {
+			return fmt.Errorf("mesh-egress-guard: allowlist entry %q matches nothing. The rule was "+
+				"removed or re-scoped — delete the entry. Same rationale as plaintextAllowed: a "+
+				"registry that outlives its rules stops being reviewable (owner: %s)", k, rule.owner)
+		}
+	}
 	if len(findings) == 0 {
-		fmt.Println("mesh-egress-guard: no NetworkPolicy egresses to a STRICT-mesh namespace from outside it.")
+		fmt.Printf("mesh-egress-guard: no unregistered NetworkPolicy egress to a STRICT-mesh namespace (%d allowed).\n", len(meshEgressAllowed))
 		return nil
 	}
 	for _, f := range findings {
@@ -94,6 +153,51 @@ func runCIMeshEgressGuard(root string) error {
 			f.file, f.policy, f.sourceNS, f.targetNS, f.reason)
 	}
 	return fmt.Errorf("mesh-egress-guard: %d cross-mesh egress rule(s) to a STRICT-mesh namespace", len(findings))
+}
+
+// meshEgressScanDirs resolves the scan roots: the platform tree plus the
+// RENDERED first-party charts.
+//
+// The rendered tree is the load-bearing addition. The first-party charts ship
+// NetworkPolicies of their own, and scanning platform-apl/ alone was a real blind
+// spot rather than a theoretical one — llz-cert-automation's runner egress opens
+// :80 and :443 into the STRICT harbor namespace from a namespace labelled
+// `istio-injection: disabled`, precisely the shape this guard exists to fail.
+//
+// Pointing at kubernetes-charts/ does NOT fix that, which is worth stating because
+// it is the obvious wrong fix: every chart NetworkPolicy lives under templates/,
+// and walkManifests skips templates/ by design (Go-templated YAML parses as
+// garbage). Even reaching the file would not help — the target is written
+// `kubernetes.io/metadata.name: {{ .Values.networkPolicy.harborNamespace }}`, which
+// no amount of YAML parsing resolves to "harbor".
+//
+// Rendering resolves both problems at once: `make render-charts` materializes the
+// charts with values applied, so the namespace is a literal and the file is real
+// YAML. That is the same tree k8s-lint and k8s-validate already consume.
+func meshEgressScanDirs(root string) []string {
+	return append(platformTreeDirs(root), filepath.Join(root, renderedChartsDir))
+}
+
+// renderedChartsDir mirrors the Makefile's RENDER_DIR default. The two must agree;
+// they are kept in sync by TestMeshEgressRenderedDirMatchesMakefile.
+const renderedChartsDir = "rendered"
+
+// requireRenderedCharts fails when the rendered tree is absent.
+//
+// This is requireCorpus's argument applied one level up: a guard whose corpus is
+// half-missing prints the same green as one that scanned everything. Since the
+// chart-shipped policies are ONLY visible after rendering, running without a
+// rendered tree would silently return to the exact blind spot this change closes —
+// and it would do so quietly, on a machine where someone forgot a make target.
+func requireRenderedCharts(root string) error {
+	dir := filepath.Join(root, renderedChartsDir)
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("mesh-egress-guard: no rendered charts at %s — the first-party charts' "+
+			"NetworkPolicies are only visible once rendered (their templates/ dirs are skipped, and "+
+			"their target namespaces are Helm values). Run `make render-charts` first, or `make "+
+			"mesh-egress-guard`, which does it for you", dir)
+	}
+	return nil
 }
 
 // collectMeshEgressFindings walks the dirs and flags every NetworkPolicy egress

@@ -402,7 +402,12 @@ wave-dependency-guard:
 # NetworkPolicy). Flags any NetworkPolicy egress to a STRICT-mesh namespace from a
 # different namespace — the batch-5 harbor reconciler's mistake, caught at PR time
 # instead of two ~50-minute e2e cycles.
-mesh-egress-guard:
+#
+# Depends on render-charts: the first-party charts' own NetworkPolicies are only
+# visible once rendered (walkManifests skips templates/, and their target
+# namespaces are Helm values), and the guard hard-fails on a missing rendered tree
+# rather than passing green over a corpus it never saw.
+mesh-egress-guard: render-charts
 	$(call LLZ_CI,mesh-egress-guard,--root ..)
 
 # monitoring-label-guard: `llz ci monitoring-label-guard` — the #175 day-2-blind
