@@ -19,6 +19,75 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// upgradeAction is what `llz upgrade` does to a file of a given class once
+// `copier update` has run. It is the manifest's operational meaning: the class
+// name is the label, this is the behaviour.
+type upgradeAction string
+
+const (
+	// upgradeOverwrite re-copies the file from a clean render of the target
+	// template version, discarding whatever the instance had.
+	upgradeOverwrite upgradeAction = "overwrite"
+	// upgradeMerge leaves copier's own 3-way merge result in place.
+	upgradeMerge upgradeAction = "merge"
+	// upgradeRestore puts the instance's pre-update bytes back.
+	upgradeRestore upgradeAction = "restore"
+)
+
+// templateClass is the single definition of what an update class MEANS: what
+// `llz upgrade` does to a file in it, whether `copier update` must be fenced off
+// it, and whether its bytes are recorded in the digest lock.
+//
+// Those three facts used to live in three files as scattered `classify(rel) ==
+// "owned"` string comparisons — this classifier, upgrade_policy.go, and the
+// digest lock — so .template-manifest, copier.yml and the lock could disagree
+// with nothing noticing. Everything now reads this table, which makes the
+// manifest the one ownership authority and the lock a projection of it rather
+// than a second, separately-scoped system. A NEW class is one row here, not a
+// fourth mechanism.
+type templateClass struct {
+	name    string
+	upgrade upgradeAction
+	// copierFenced: the class carries instance-authored content, so `copier
+	// update` must not re-render + 3-way-merge it. Enforced against copier.yml's
+	// _skip_if_exists/_exclude by checkCopierFencing.
+	copierFenced bool
+	// digestLocked: the template owns the bytes outright and an upgrade
+	// overwrites them, so a local edit is silently lost — record a digest and
+	// fail CI on drift instead. Only meaningful for token-free files (a copier
+	// token makes the rendered bytes per-instance); see writeManagedLock.
+	digestLocked bool
+	summary      string
+}
+
+var templateClasses = []templateClass{
+	{name: "managed", upgrade: upgradeOverwrite, digestLocked: true,
+		summary: "template owns it outright — an upgrade overwrites it"},
+	{name: "merge", upgrade: upgradeMerge,
+		summary: "template owns the logic, the file carries fork-local tokens — 3-way-merged"},
+	{name: "owned", upgrade: upgradeRestore, copierFenced: true,
+		summary: "the instance owns it — an upgrade never touches it"},
+}
+
+func lookupTemplateClass(name string) (templateClass, bool) {
+	for _, c := range templateClasses {
+		if c.name == name {
+			return c, true
+		}
+	}
+	return templateClass{}, false
+}
+
+// templateClassNames renders the class set for help and error text, so adding a
+// row to templateClasses updates every message that lists the classes.
+func templateClassNames() string {
+	names := make([]string, len(templateClasses))
+	for i, c := range templateClasses {
+		names[i] = c.name
+	}
+	return strings.Join(names, "|")
+}
+
 type templateManifestRule struct {
 	class   string
 	pattern string
@@ -36,7 +105,7 @@ func ciTemplateManifestCmd() *cobra.Command {
 		Use:   "template-manifest",
 		Short: "validate or query the scaffold .template-manifest update classes",
 		Long: "Validates that every scaffold file is classified by .template-manifest\n" +
-			"(managed / merge / owned), or queries the class/list for callers that need\n" +
+			"(" + templateClassNames() + "), or queries the class/list for callers that need\n" +
 			"the same last-match-wins rules. Auto-detects instance-template/ in the\n" +
 			"template repo, else .template-manifest in the current directory.",
 		Args: cobra.NoArgs,
@@ -46,7 +115,7 @@ func ciTemplateManifestCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&root, "root", "", "scaffold root containing .template-manifest (default: auto-detect instance-template/ or .)")
 	c.Flags().StringVar(&classifyPath, "classify", "", "print the update class for a scaffold-relative path")
-	c.Flags().StringVar(&listClass, "list", "", "list scaffold files in the given class (managed|merge|owned)")
+	c.Flags().StringVar(&listClass, "list", "", "list scaffold files in the given class ("+templateClassNames()+")")
 	return c
 }
 
@@ -76,7 +145,7 @@ func runTemplateManifest(root, classifyPath, listClass string, out, errOut io.Wr
 
 	if listClass != "" {
 		if !validTemplateClass(listClass) {
-			return fmt.Errorf("template-manifest: unknown class %q (managed|merge|owned)", listClass)
+			return fmt.Errorf("template-manifest: unknown class %q (%s)", listClass, templateClassNames())
 		}
 		for _, rel := range files {
 			if m.classify(rel) == listClass {
@@ -86,7 +155,10 @@ func runTemplateManifest(root, classifyPath, listClass string, out, errOut io.Wr
 		return nil
 	}
 
-	counts := map[string]int{"managed": 0, "merge": 0, "owned": 0}
+	counts := map[string]int{}
+	for _, c := range templateClasses {
+		counts[c.name] = 0
+	}
 	var unclassified []string
 	for _, rel := range files {
 		cls := m.classify(rel)
@@ -101,14 +173,18 @@ func runTemplateManifest(root, classifyPath, listClass string, out, errOut io.Wr
 		for _, rel := range unclassified {
 			fmt.Fprintf(errOut, "  - %s\n", rel)
 		}
-		fmt.Fprintf(errOut, "Add a rule for each (managed | merge | owned) — see the header in %s.\n", m.path)
+		fmt.Fprintf(errOut, "Add a rule for each (%s) — see the header in %s.\n", templateClassNames(), m.path)
 		return fmt.Errorf("template-manifest: %d unclassified scaffold file(s)", len(unclassified))
 	}
-	if err := m.checkCopierProtectsOwned(files, errOut); err != nil {
+	if err := m.checkCopierFencing(files, errOut); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "template-manifest: OK — managed=%d merge=%d owned=%d (%d files, all classified)\n",
-		counts["managed"], counts["merge"], counts["owned"], len(files))
+	var tally []string
+	for _, c := range templateClasses {
+		tally = append(tally, fmt.Sprintf("%s=%d", c.name, counts[c.name]))
+	}
+	fmt.Fprintf(out, "template-manifest: OK — %s (%d files, all classified)\n",
+		strings.Join(tally, " "), len(files))
 	return nil
 }
 
@@ -123,9 +199,9 @@ type copierProtect struct {
 	AnswersFile  string   `yaml:"_answers_file"`
 }
 
-// checkCopierProtectsOwned enforces the invariant behind the manifest's `owned`
-// class: an `owned` file carries instance-authored content, so `copier update`
-// must NOT re-render + 3-way-merge it — every `owned` scaffold file that the
+// checkCopierFencing enforces the invariant behind every `copierFenced` class
+// (today: `owned`): such a file carries instance-authored content, so `copier
+// update` must NOT re-render + 3-way-merge it — every fenced scaffold file that the
 // template actually ships must be covered by copier's `_skip_if_exists` (or
 // `_exclude`). When it isn't, copier merges the template's version onto the
 // instance's divergent content and can leave conflict markers behind — the class
@@ -136,7 +212,7 @@ type copierProtect struct {
 // Only runs when copier.yml is found next to the scaffold root (the template
 // repo); in an instance (no copier.yml) it is a no-op, since there is nothing to
 // keep consistent there.
-func (m templateManifest) checkCopierProtectsOwned(files []string, errOut io.Writer) error {
+func (m templateManifest) checkCopierFencing(files []string, errOut io.Writer) error {
 	copierPath := filepath.Join(filepath.Dir(m.root), "copier.yml")
 	if !fileExists(copierPath) {
 		if alt := filepath.Join(filepath.Dir(m.root), "copier.yaml"); fileExists(alt) {
@@ -157,7 +233,8 @@ func (m templateManifest) checkCopierProtectsOwned(files []string, errOut io.Wri
 
 	var viol []string
 	for _, rel := range files {
-		if m.classify(rel) != "owned" {
+		c, ok := lookupTemplateClass(m.classify(rel))
+		if !ok || !c.copierFenced {
 			continue
 		}
 		if p.AnswersFile != "" && rel == p.AnswersFile {
@@ -175,14 +252,14 @@ func (m templateManifest) checkCopierProtectsOwned(files []string, errOut io.Wri
 		}
 	}
 	if len(viol) > 0 {
-		fmt.Fprintf(errOut, "::error::%d `owned` scaffold file(s) are not protected by copier's _skip_if_exists/_exclude in %s:\n", len(viol), copierPath)
+		fmt.Fprintf(errOut, "::error::%d copier-fenced scaffold file(s) are not protected by copier's _skip_if_exists/_exclude in %s:\n", len(viol), copierPath)
 		for _, rel := range viol {
 			fmt.Fprintf(errOut, "  - %s\n", rel)
 		}
 		fmt.Fprintf(errOut, "`copier update` would re-render + 3-way-merge these onto the instance's own\n"+
 			"content (risking committed conflict markers). Add each to copier.yml `_skip_if_exists`,\n"+
 			"or reclassify it in %s if the template should in fact own it.\n", m.path)
-		return fmt.Errorf("template-manifest: %d `owned` file(s) not protected by copier", len(viol))
+		return fmt.Errorf("template-manifest: %d copier-fenced file(s) not protected by copier", len(viol))
 	}
 	return nil
 }
@@ -221,7 +298,7 @@ func loadTemplateManifest(root string) (templateManifest, error) {
 		}
 		parts := strings.Fields(line)
 		if len(parts) != 2 || !validTemplateClass(parts[0]) {
-			return templateManifest{}, fmt.Errorf("template-manifest: %s:%d bad rule (expected `<managed|merge|owned>  <glob>`): %q", m.path, lineNo, line)
+			return templateManifest{}, fmt.Errorf("template-manifest: %s:%d bad rule (expected `<%s>  <glob>`): %q", m.path, lineNo, templateClassNames(), line)
 		}
 		m.rules = append(m.rules, templateManifestRule{class: parts[0], pattern: parts[1]})
 	}
@@ -274,7 +351,8 @@ func scaffoldManifestFiles(root string) ([]string, error) {
 }
 
 func validTemplateClass(s string) bool {
-	return s == "managed" || s == "merge" || s == "owned"
+	_, ok := lookupTemplateClass(s)
+	return ok
 }
 
 func fileExists(path string) bool {

@@ -120,6 +120,78 @@ func TestTemplateManifestCopierConsistency(t *testing.T) {
 	}
 }
 
+// The class table is the single authority the manifest, copier.yml and the digest
+// lock all read. These assertions pin the invariants a new row must preserve, so
+// adding a class cannot quietly leave one of the three consumers behind.
+func TestTemplateClassTableInvariants(t *testing.T) {
+	if len(templateClasses) == 0 {
+		t.Fatal("templateClasses must not be empty")
+	}
+	seen := map[string]bool{}
+	for _, c := range templateClasses {
+		if c.name == "" {
+			t.Error("every class needs a name")
+		}
+		if seen[c.name] {
+			t.Errorf("duplicate class %q — classify() is last-match-wins over names, so they must be unique", c.name)
+		}
+		seen[c.name] = true
+		if c.summary == "" {
+			t.Errorf("class %q has no summary — the manifest header documents each class", c.name)
+		}
+		switch c.upgrade {
+		case upgradeOverwrite, upgradeMerge, upgradeRestore:
+		default:
+			t.Errorf("class %q has unknown upgrade action %q", c.name, c.upgrade)
+		}
+		// The digest lock exists because an upgrade DISCARDS the instance's bytes.
+		// Locking a class the upgrade preserves would fail on every legitimate edit.
+		if c.digestLocked && c.upgrade != upgradeOverwrite {
+			t.Errorf("class %q is digestLocked but its upgrade action is %q — only overwritten classes may be locked",
+				c.name, c.upgrade)
+		}
+		// Fencing copier off a file only makes sense when the instance owns it;
+		// a class the template overwrites has nothing to protect.
+		if c.copierFenced && c.upgrade == upgradeOverwrite {
+			t.Errorf("class %q is copierFenced but overwritten on upgrade — the fence would be pointless", c.name)
+		}
+	}
+	if !validTemplateClass("managed") || validTemplateClass("nonsense") {
+		t.Error("validTemplateClass must be backed by the table")
+	}
+	if got := templateClassNames(); !strings.Contains(got, "managed") || !strings.Contains(got, "owned") {
+		t.Errorf("templateClassNames() = %q, want it to list the table's names", got)
+	}
+}
+
+// checkCopierFencing must read the table's copierFenced flag, not a hardcoded
+// "owned" — otherwise a future fenced class (the extension/recipe class in #15)
+// silently gets no copier protection at all.
+func TestCopierFencingIsDrivenByTheTable(t *testing.T) {
+	var fenced []string
+	for _, c := range templateClasses {
+		if c.copierFenced {
+			fenced = append(fenced, c.name)
+		}
+	}
+	if len(fenced) == 0 {
+		t.Skip("no copier-fenced class in the table")
+	}
+	for _, class := range fenced {
+		root := t.TempDir()
+		scaffold := filepath.Join(root, "instance-template")
+		writeTestFile(t, scaffold, ".template-manifest", "managed **\n"+class+" keep.txt\n")
+		writeTestFile(t, scaffold, "keep.txt", "instance content\n")
+		writeTestFile(t, root, "copier.yml", "_skip_if_exists: []\n_exclude: []\n")
+
+		var out, errOut bytes.Buffer
+		if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err == nil {
+			t.Errorf("class %q is copierFenced but an unprotected file passed the check\nstdout: %s",
+				class, out.String())
+		}
+	}
+}
+
 func writeTestFile(t *testing.T, root, rel, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(rel))
