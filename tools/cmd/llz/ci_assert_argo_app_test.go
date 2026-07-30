@@ -17,8 +17,13 @@ func assertArgoAppDeps(t *testing.T, script func(call int, args []string) (strin
 			calls++
 			return script(calls, args)
 		},
-		now:   func() time.Time { return now },
-		sleep: func(d time.Duration) { now = now.Add(d) },
+		now: func() time.Time { return now },
+		sleep: func(d time.Duration) {
+			if d <= 0 {
+				d = time.Hour // never freeze: a zero interval must fail an assertion, not hang
+			}
+			now = now.Add(d)
+		},
 	}, &calls
 }
 

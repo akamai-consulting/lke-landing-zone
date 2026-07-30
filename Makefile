@@ -113,7 +113,7 @@ help:
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 install-tools: install-syft install-trivy
-	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install golang.org/x/vuln/cmd/govulncheck@latest && go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 	@if command -v brew >/dev/null 2>&1; then \
 		brew install actionlint checkov helm; \
 	else \
@@ -718,6 +718,91 @@ sbom-scan:
 
 test:
 	cd $(GO_DIR) && go test ./...
+
+# Race detector. Separate from `test`/`coverage` so a data race fails under its
+# own name rather than as a confusing coverage failure, and so the ordinary
+# `go test` path stays fast.
+#
+# LLZ_EXPECT_RACE=1 arms the canary in cmd/llz/racegate_test.go: it asserts the
+# binary really was built with -race. Without it, a step that silently lost the
+# flag would still report green while detecting nothing — the same failure shape
+# as a mutation run that reports 100% because it never spawned a test process.
+# Do not drop the variable to quiet that test; it is the only thing proving this
+# target does what its name says.
+test-race:
+	cd $(GO_DIR) && LLZ_EXPECT_RACE=1 go test -race ./...
+
+# staticcheck. `go vet` is deliberately conservative — it reports only what is
+# almost certainly a mistake. staticcheck's SA* checks cover the adjacent ground:
+# impossible conditions, values assigned and never read, misused stdlib. It found
+# one real gap on introduction (SA4006: a test re-stubbed its call recorder for
+# the build-failure case and then never asserted it, so that case checked the
+# error wrap but not that the earlier steps ran).
+#
+# Pinned, not @latest: a floating linter turns an unrelated PR red when the tool
+# gains a check, which trains people to ignore it.
+#
+# ST1005 (error-string style) stays ENABLED. The eight places this codebase
+# legitimately breaks it — multi-line operator diagnostics whose punctuation
+# precedes an embedded newline of remediation, and one usage string whose "..."
+# is variadic syntax — carry per-site //lint:ignore directives with reasons.
+# Blanket-disabling a check because it flagged you is how a linter stops meaning
+# anything; staticcheck errors on a directive that matches nothing, so a stale
+# exception cannot rot silently either.
+STATICCHECK_VERSION ?= 2025.1.1
+DEADCODE_VERSION ?= latest
+staticcheck:
+	@cd $(GO_DIR) && if command -v staticcheck >/dev/null 2>&1; then \
+	  staticcheck ./...; \
+	else \
+	  echo "staticcheck not on PATH — falling back to 'go run' (make install-tools installs it)"; \
+	  go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...; \
+	fi
+
+# deadcode: functions unreachable from the llz entry point. REPORT ONLY — this is
+# deliberately NOT a CI gate, because "unreachable from main" and "should be
+# deleted" are different claims and this repo has three legitimate reasons for the
+# gap:
+#
+#   * implemented ahead of wiring — internal/forge carries a whole GitLab client
+#     behind the documented Forge abstraction (LLZ_FORGE, docs/designs/
+#     forge-abstraction.md). It is a second backend awaiting selection, not rot;
+#     deleting it would remove the point of the interface.
+#   * test-only production helpers — reachable from tests but nothing else. Worth
+#     looking at, since that usually means either a missing caller or a function
+#     that should not be production code.
+#   * genuinely orphaned subsystems, which is what makes this worth running: it
+#     found that ALL of internal/clusterspec/aplversion.go — the apl-chart
+#     major-drift gate, its LLZ_ALLOW_APL_CHART_MAJOR_DRIFT override and its
+#     warnings — is called by nothing. See the tracking issue.
+#
+# Gating on it would force the first class to be suppressed forever, which trains
+# people to ignore the third.
+deadcode:
+	@cd $(GO_DIR) && if command -v deadcode >/dev/null 2>&1; then \
+	  deadcode ./cmd/llz; \
+	else \
+	  go run golang.org/x/tools/cmd/deadcode@$(DEADCODE_VERSION) ./cmd/llz; \
+	fi
+
+# Fuzzing. NOT a CI gate: fuzzing is non-deterministic and open-ended, so gating
+# on it would make the build flaky rather than safe. Instead the SEED CORPORA run
+# as ordinary subtests on every `go test` — free, deterministic regression cover —
+# and this target explores beyond them on demand.
+#
+# FUZZTIME defaults to 60s per target; raise it for a real hunt (FUZZTIME=10m).
+# A crasher is written to the package's testdata/fuzz/ by the toolchain: COMMIT
+# THAT FILE. It then replays forever as part of the seed corpus, which is how a
+# one-off fuzz find becomes a permanent test.
+FUZZTIME ?= 60s
+fuzz:
+	@set -e; cd $(GO_DIR); \
+	for pkg in ./cmd/llz ./internal/terraform; do \
+	  for t in $$(go test $$pkg -list 'Fuzz.*' | grep '^Fuzz'); do \
+	    echo "── $$pkg $$t ($(FUZZTIME))"; \
+	    go test $$pkg -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME); \
+	  done; \
+	done
 
 # ── Coverage ─────────────────────────────────────────────────────────────────
 

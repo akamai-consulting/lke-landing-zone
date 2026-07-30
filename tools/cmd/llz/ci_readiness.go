@@ -132,7 +132,7 @@ func runCIAssertLoki(nameMatch string, settle, interval time.Duration) error {
 
 	if !ok {
 		fmt.Fprintln(os.Stderr, "::error::Loki is not bootstrapped")
-		return fmt.Errorf("Loki is not bootstrapped")
+		return fmt.Errorf("loki is not bootstrapped")
 	}
 	fmt.Println("Loki is bootstrapped.")
 	return nil

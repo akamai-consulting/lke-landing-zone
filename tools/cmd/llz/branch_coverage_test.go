@@ -304,6 +304,13 @@ func TestCmdUp(t *testing.T) {
 	if err == nil || !strings.HasPrefix(err.Error(), "build:") {
 		t.Errorf("build failure: err = %v, want a build: wrap", err)
 	}
+	// The sibling cases above assert the call order; this one re-stubbed `calls`
+	// and then never read it, so the build case verified the error wrap but not
+	// that the earlier steps actually ran first. staticcheck's SA4006 ("this value
+	// is never used") is what surfaced the omission.
+	if got := strings.Join(*calls, ","); got != "tokens,doctor,build" {
+		t.Errorf("build failure order = %q, want tokens,doctor,build", got)
+	}
 	if strings.Contains(out, "remaining manual actions") {
 		t.Errorf("manual actions must not print on build failure:\n%s", out)
 	}

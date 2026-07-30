@@ -108,6 +108,7 @@ func shaPrefixMatch(a, b string) bool {
 }
 
 func imageSkewError(baked, templateRef string) error {
+	//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline and further remediation lines
 	return fmt.Errorf("image/template skew: the ci-tofu image's baked llz is %q but this instance pins template ref %q.\n"+
 		"  The baked binary lacks any llz command/flag added after its build, so this run will fail later with a cryptic\n"+
 		"  'unknown flag'/'unknown command' or a silently no-op'd gate. Fix: republish ci-tofu at %s (build-images.yml)\n"+

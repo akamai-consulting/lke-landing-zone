@@ -287,8 +287,16 @@ func TestWaitForAutoUnsealHappyPath(t *testing.T) {
 func TestWaitForAutoUnsealLeaderTimeout(t *testing.T) {
 	withBaoSleep(t)
 	withExecOutput(t, func(string, ...string) ([]byte, error) { return []byte(""), nil })
+	reads := 0
 	withBaoExec(t, func(pod, _, _ string, args ...string) (string, string, error) {
-		// Leader never auto-unseals (e.g. missing/wrong static seal key).
+		// Leader never auto-unseals (e.g. missing/wrong static seal key). The read
+		// cap keeps that from being literally forever: waitForBaoState spends its
+		// budget by accumulating the interval, so a collapsed interval would poll
+		// without end — the cap turns that into the failed assertion below.
+		reads++
+		if reads > 50 {
+			return `{"initialized":true,"sealed":false}`, "", nil
+		}
 		return `{"initialized":true,"sealed":true}`, "", errors.New("exit status 2")
 	})
 	err := waitForAutoUnseal(10*time.Second, 10*time.Second)
@@ -306,8 +314,13 @@ func TestWaitForAutoUnsealFollowerTimeoutDumpsLogs(t *testing.T) {
 		}
 		return []byte("retry_join: failed to get raft challenge"), nil
 	})
+	followerReads := 0
 	withBaoExec(t, func(pod, _, _ string, args ...string) (string, string, error) {
 		if pod == "platform-openbao-0" {
+			return `{"initialized":true,"sealed":false}`, "", nil
+		}
+		followerReads++ // see the read cap in TestWaitForAutoUnsealLeaderTimeout
+		if followerReads > 50 {
 			return `{"initialized":true,"sealed":false}`, "", nil
 		}
 		return `{"initialized":false,"sealed":true}`, "", errors.New("exit status 2")

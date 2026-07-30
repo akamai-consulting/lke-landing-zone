@@ -472,8 +472,31 @@ jobs:
       - name: gofmt + go vet
         run: make fmt-check vet
 
+      # staticcheck. `go vet` reports only what is almost certainly a mistake;
+      # staticcheck's SA* checks cover the adjacent ground (impossible conditions,
+      # values assigned and never read, misused stdlib). On introduction it found
+      # a test that re-stubbed its call recorder and never asserted it. Pinned via
+      # STATICCHECK_VERSION so a new upstream check cannot turn an unrelated PR
+      # red. Runs beside vet: both are cheap and fail fast.
+      - name: staticcheck
+        run: make staticcheck
+
       - name: Test + enforce per-package coverage thresholds
         run: make coverage
+
+      # Data-race gate. The tools module runs goroutines in the reconcile
+      # manager, the Prometheus query fan-out, the OpenBao client and the
+      # Keycloak configure retry loop, and reconcile_manager.go is ~97% covered,
+      # so the detector has real concurrency to observe. Nothing ran -race before
+      # this, which is how a node-clock-dependent elector bug reached e2e as an
+      # intermittent "converge never completes" rather than as a test failure.
+      #
+      # Separate step from `make coverage` so a race fails under its own name.
+      # `make test-race` sets LLZ_EXPECT_RACE=1, which arms a canary asserting the
+      # binary really was built with -race — if the flag is ever dropped, that
+      # test fails instead of this step passing while detecting nothing.
+      - name: Data-race gate
+        run: make test-race
 
       # Design-principle gate: fail when inline-bash / shell / python logic
       # exceeds .untestable-budget.yaml — the prompt to convert logic into the

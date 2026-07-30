@@ -307,11 +307,15 @@ func TestTeardownDeleteVPC(t *testing.T) {
 }
 
 func TestWaitVolumesDetached(t *testing.T) {
+	origInterval := volumeDetachPollInterval
+	volumeDetachPollInterval = 0
+	t.Cleanup(func() { volumeDetachPollInterval = origInterval })
+
 	// Already detached → returns without sleeping.
 	fake := &fakeTeardownClient{volumes: []map[string]any{
 		{"id": float64(1), "label": "pvc-a", "linode_id": nil},
 	}}
-	waitVolumesDetached(context.Background(), fake, "1", 600)
+	waitVolumesDetached(context.Background(), fake, "1", 0)
 
 	// Still attached + zero budget → gives up after the immediate check.
 	fake.volumes = []map[string]any{{"id": float64(1), "label": "pvc-a", "linode_id": float64(7)}}

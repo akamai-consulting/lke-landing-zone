@@ -90,6 +90,9 @@ func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
 func TestRunCIWaitHarbor(t *testing.T) {
 	origBudget := harborWaitBudget
 	t.Cleanup(func() { harborWaitBudget = origBudget })
+	// Budget 0 so every case evaluates once: waitPoll probes before it checks the
+	// deadline, so the rolled-out cases below still exercise the success path.
+	harborWaitBudget = 0
 
 	// The verb waits for the harbor-registry rollout and nothing else. Its two
 	// parameters are vestigial (kept so vendored instance workflows that still

@@ -96,7 +96,7 @@ func promScalar(raw []byte) (value float64, hasSeries bool, queryErr error) {
 		if detail == "" {
 			detail = "status=" + resp.Status
 		}
-		return 0, false, fmt.Errorf("Prometheus returned an error: %s", detail)
+		return 0, false, fmt.Errorf("prometheus returned an error: %s", detail)
 	}
 	if len(resp.Data.Result) == 0 {
 		return 0, false, nil // a real answer: the series genuinely is not there

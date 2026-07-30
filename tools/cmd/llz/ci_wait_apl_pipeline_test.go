@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,9 @@ func TestWaitForAplResourceForClauseTranslation(t *testing.T) {
 }
 
 func TestRunCIWaitAplPipelineRequiresKubeconfig(t *testing.T) {
+	// An unusable TMPDIR gives the step AFTER the guard its own instant failure,
+	// so a guard that stops guarding cannot fall through into a real 55m poll.
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "no-such-dir"))
 	t.Setenv("KUBECONFIG_RAW", "")
 	if err := runCIWaitAplPipeline(); err == nil || !strings.Contains(err.Error(), "KUBECONFIG_RAW") {
 		t.Errorf("err = %v, want KUBECONFIG_RAW-required error", err)

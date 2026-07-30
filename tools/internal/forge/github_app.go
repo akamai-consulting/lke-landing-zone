@@ -158,11 +158,11 @@ func parseRSAPrivateKey(pemBytes []byte) (*rsa.PrivateKey, error) {
 	}
 	k8, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("App private key is neither PKCS#1 nor PKCS#8: %w", err)
+		return nil, fmt.Errorf("github app private key is neither PKCS#1 nor PKCS#8: %w", err)
 	}
 	rsaKey, ok := k8.(*rsa.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("App private key is not RSA (%T)", k8)
+		return nil, fmt.Errorf("github app private key is not RSA (%T)", k8)
 	}
 	return rsaKey, nil
 }

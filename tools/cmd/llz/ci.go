@@ -110,6 +110,9 @@ func ciCmd() *cobra.Command {
 	// Credential single-pane-of-glass writer: measure CI-token expiry and emit the
 	// ConfigMap the in-cluster reconciler re-exposes as metrics (llz-scheduled-checks.yml).
 	c.AddCommand(ciTokenInventoryCmd())
+	// Mutation testing that validates its own harness before reporting a score
+	// (every gremlins failure mode so far surfaced as a flattering 100%).
+	c.AddCommand(ciMutateCmd())
 	// Scheduled rotation-SLA + cluster-readiness checks (llz-scheduled-checks.yml).
 	c.AddCommand(ciHealthLKEAdminRotationCmd(), ciHealthLokiObjkeyRotationCmd(),
 		ciHealthOpenbaoCmd(), ciHealthCertManagerCmd(), ciHealthPromRulesCmd())

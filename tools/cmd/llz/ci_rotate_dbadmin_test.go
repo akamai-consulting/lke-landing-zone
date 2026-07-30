@@ -91,7 +91,7 @@ func newRotateDBHarness(t *testing.T, outputs string, stored map[string]string, 
 
 	tfOutputRunFn = func() (string, error) { return outputs, nil }
 	dbAdminNow = func() time.Time { return h.now }
-	dbAdminSleep = func(time.Duration) {}
+	dbAdminSleep = func(d time.Duration) { h.now = h.now.Add(d) }
 	dbAdminLinodeClient = func(string) dbAdminAPI { return h.api }
 
 	baoExecFn = func(_, _, _ string, args ...string) (string, string, error) {
@@ -209,8 +209,13 @@ func TestRotateDBAdminRotatesAndCarriesFields(t *testing.T) {
 			t.Errorf("field %s = %q, want %q", k, got[k], want)
 		}
 	}
-	if got["rotated_at"] != strconv.FormatInt(now.Unix(), 10) {
-		t.Errorf("rotated_at = %q, want the current stamp %q", got["rotated_at"], strconv.FormatInt(now.Unix(), 10))
+	stamp, perr := strconv.ParseInt(got["rotated_at"], 10, 64)
+	if perr != nil {
+		t.Fatalf("rotated_at = %q, want a unix stamp: %v", got["rotated_at"], perr)
+	}
+	if stamp < now.Unix() || stamp > now.Add(dbAdminActiveTimeout).Unix() {
+		t.Errorf("rotated_at = %d, want a stamp between the start of the rotation (%d) and its wait budget (%d)",
+			stamp, now.Unix(), now.Add(dbAdminActiveTimeout).Unix())
 	}
 }
 

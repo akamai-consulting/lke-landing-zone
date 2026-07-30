@@ -136,7 +136,7 @@ func routeRotation(in rotationInputs) (rotationPlan, error) {
 	// requireConfirm gates every dispatch scope on its exact typed phrase.
 	requireConfirm := func(expected string) error {
 		if in.Confirm != expected {
-			return fmt.Errorf("confirmation mismatch. Type exactly '%s'.", expected)
+			return fmt.Errorf("confirmation mismatch: type exactly %q", expected)
 		}
 		return nil
 	}
