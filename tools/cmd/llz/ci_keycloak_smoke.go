@@ -118,7 +118,10 @@ func runTeamLoginSmoke(g globalOpts, region, teamFlag string) error {
 	user := k8sSecretField(keycloakNS, keycloakAdminSecret, "username")
 	pass := k8sSecretField(keycloakNS, keycloakAdminSecret, "password")
 	if user == "" || pass == "" {
-		return fmt.Errorf("admin creds not readable from %s/%s (keys username/password)", keycloakNS, keycloakAdminSecret)
+		// k8sSecretField returns "" for every failure mode alike, so say which one this
+		// is — otherwise the e2e team-write lane dead-ends on an unactionable line.
+		return fmt.Errorf("admin creds not readable from %s/%s (want keys username/password): %s",
+			keycloakNS, keycloakAdminSecret, describeSecretForDiag(keycloakNS, keycloakAdminSecret))
 	}
 	fmt.Fprintf(os.Stderr, "→ team-login smoke: team %q, subtree %q, realm %s at %s\n", team, subtree, keycloakRealm, base)
 
