@@ -12,7 +12,7 @@
     "",
     "Do NOT add pattern-level blanket rules. Three 'obviously equivalent' patterns were each",
     "disproven by evidence in the same session that proposed them: log/message-only",
-    "arithmetic (killable — the command installs a JSON slog handler, so a buffer handler",
+    "arithmetic (killable \u2014 the command installs a JSON slog handler, so a buffer handler",
     "asserts the field), sort-comparator boundaries (killable wherever duplicate keys are",
     "constructible), and Index(...) >= 0 negations (a real branch inversion). Justify per",
     "site."
@@ -45,6 +45,13 @@
       "col": 83,
       "mutator": "CONDITIONALS_BOUNDARY",
       "why": "sort.SliceStable comparator sortKey() < -> <=. Distinguishing them needs two entries with EQUAL sortKey() in one key's propFiles. Entries come from distinct esRef{key,prop,hasProp} map keys, so within one key they differ in (prop,hasProp); sortKey() is \"\" when !hasProp else prop, and esPropertyRx (`property:\\s+(\\S+)`) can never yield an empty prop. A collision is unconstructible, so with all-distinct keys the comparators are identical."
+    },
+    {
+      "file": "ci_mutate.go",
+      "line": 103,
+      "col": 60,
+      "mutator": "CONDITIONALS_BOUNDARY",
+      "why": "survivors() sort comparator, `<` -> `<=`. Distinguishing them needs two mutants sharing file:line:col:mutator, and gremlins never emits that -- verified across a real 6,639-mutant cmd/llz run, which contained ZERO duplicate keys -- so the comparator is never called on a tie. The sibling CONDITIONALS_NEGATION at the same site reverses the order and IS killed by TestSurvivorsAreSortedAndFilterAllButLived."
     }
   ],
   "_not_in_this_file": [

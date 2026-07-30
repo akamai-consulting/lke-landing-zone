@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,54 @@ func TestEfficacyExcludesTimeouts(t *testing.T) {
 	}
 	if r2 := (mutationRun{}); r2.Efficacy() != 0 {
 		t.Errorf("empty run efficacy = %v, want 0", r2.Efficacy())
+	}
+	// The denominator must be killed PLUS lived. Mutation testing caught this
+	// file's own gap: the cases above both use Lived == 0, where `Killed + Lived`
+	// and `Killed - Lived` are the same number, so a flipped operator survived in
+	// the tool built to find survivors. A case with survivors present is what
+	// distinguishes them — 3/(3+1) = 75%, versus 3/(3-1) = 150%, which is not even
+	// a percentage.
+	if e := (mutationRun{Killed: 3, Lived: 1}).Efficacy(); e != 75 {
+		t.Errorf("efficacy with survivors = %v, want 75 (3 killed of 4 measured)", e)
+	}
+	if e := (mutationRun{Killed: 1, Lived: 3}).Efficacy(); e != 25 {
+		t.Errorf("efficacy = %v, want 25", e)
+	}
+	// A run that killed nothing is 0%, not a division blow-up.
+	if e := (mutationRun{Killed: 0, Lived: 5}).Efficacy(); e != 0 {
+		t.Errorf("efficacy with no kills = %v, want 0", e)
+	}
+}
+
+// survivors() sorts so the report is diffable run to run. The comparator carried
+// two mutants; this kills the one that reverses the order. Its sibling
+// (`<` -> `<=`) is EQUIVALENT and baselined: gremlins never emits two mutants
+// sharing file:line:col:mutator — verified across a real 6,639-mutant run, which
+// had zero duplicate keys — so the comparator is never called on a tie.
+func TestSurvivorsAreSortedAndFilterAllButLived(t *testing.T) {
+	r := mutationRun{Mutants: []mutant{
+		{Status: statusLived, Mutator: "Z_MUT", File: "z.go", Line: 9, Col: 1},
+		{Status: statusKilled, Mutator: "A_MUT", File: "a.go", Line: 1, Col: 1},
+		{Status: statusLived, Mutator: "A_MUT", File: "a.go", Line: 1, Col: 2},
+		{Status: statusTimedOut, Mutator: "T_MUT", File: "t.go", Line: 5, Col: 1},
+		{Status: statusNotCovered, Mutator: "N_MUT", File: "n.go", Line: 5, Col: 1},
+		{Status: statusLived, Mutator: "M_MUT", File: "m.go", Line: 3, Col: 1},
+	}}
+	got := r.survivors()
+	if len(got) != 3 {
+		t.Fatalf("survivors() returned %d, want the 3 LIVED only: %+v", len(got), got)
+	}
+	for _, m := range got {
+		if m.Status != statusLived {
+			t.Errorf("non-survivor leaked in: %+v", m)
+		}
+	}
+	want := []string{"a.go:1:2:A_MUT", "m.go:3:1:M_MUT", "z.go:9:1:Z_MUT"}
+	for i, w := range want {
+		if got[i].key() != w {
+			t.Errorf("survivors()[%d] = %q, want %q — ascending by key, so a report diffs cleanly between runs",
+				i, got[i].key(), w)
+		}
 	}
 }
 
@@ -200,5 +249,142 @@ func TestCanariesAreJustified(t *testing.T) {
 		if len(c.Why) < 40 {
 			t.Errorf("%s: canary needs a real justification, got %q", pkg, c.Why)
 		}
+	}
+}
+
+// ── ciMutateCmd's RunE ────────────────────────────────────────────────────────
+//
+// The pure helpers above were at 100% while RunE — where CONTROL, CANARY and the
+// baseline diff are actually ASSEMBLED — sat at 21%. That is the wrong way round
+// for a command whose whole purpose is refusing to report an unvalidated score:
+// the assembly is the part that can silently stop checking.
+
+// stubMutateRun makes execOutput answer both calls RunE makes: the CONTROL
+// `go test`, and gremlins itself. gremlinsOut is returned verbatim as the
+// gremlins stdout.
+func stubMutateRun(t *testing.T, controlErr error, gremlinsOut string) *[]string {
+	t.Helper()
+	var calls []string
+	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "go" {
+			return nil, controlErr
+		}
+		return []byte(gremlinsOut), nil
+	})
+	return &calls
+}
+
+// A gremlins run whose canary comes back LIVED and whose only other survivor is
+// in the baseline: the one shape that should report a score and exit 0.
+const mutateHealthyOut = `Starting...
+      KILLED CONDITIONALS_NEGATION at a.go:1:1
+       LIVED ARITHMETIC_BASE at ci_rotate_dbadmin.go:262:58
+`
+
+func runMutateCmd(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	c := ciMutateCmd()
+	var buf strings.Builder
+	c.SetOut(&buf)
+	c.SetErr(&buf)
+	c.SetArgs(args)
+	err := c.Execute()
+	return buf.String(), err
+}
+
+func TestMutateCmdRequiresAPackage(t *testing.T) {
+	if _, err := runMutateCmd(t); err == nil {
+		t.Fatal("--package is required; without it the command has nothing to measure")
+	}
+}
+
+func TestMutateCmdReportsAScoreWhenTheRunValidates(t *testing.T) {
+	calls := stubMutateRun(t, nil, mutateHealthyOut)
+	out, err := runMutateCmd(t, "--package", "./cmd/llz",
+		"--baseline", filepath.Join("testdata", "mutation-baseline.json"))
+	if err != nil {
+		t.Fatalf("a validating run with no NEW survivors must exit 0, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "efficacy=") {
+		t.Errorf("a validated run must report the score:\n%s", out)
+	}
+	// The canary survivor is in the baseline, so it is not reported as new.
+	if strings.Contains(out, "NEW ") {
+		t.Errorf("a baselined survivor must not be reported as new:\n%s", out)
+	}
+	// CONTROL must actually run, and before gremlins — a score computed without
+	// it is the "red suite kills every mutant" failure.
+	if len(*calls) < 2 || !strings.HasPrefix((*calls)[0], "go test") {
+		t.Errorf("CONTROL `go test` must run first, calls were: %v", *calls)
+	}
+	if !strings.Contains((*calls)[1], "gremlins") {
+		t.Errorf("gremlins must run after the control, calls were: %v", *calls)
+	}
+}
+
+func TestMutateCmdRefusesToScoreAnUntrustworthyRun(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		controlErr error
+		out        string
+		want       string
+	}{
+		{
+			name:       "red control",
+			controlErr: errors.New("suite failed"),
+			out:        mutateHealthyOut,
+			want:       "CONTROL failed",
+		},
+		{
+			// The failure that produced "4998 killed in 12 seconds".
+			name: "canary killed means tests never ran",
+			out: "      KILLED ARITHMETIC_BASE at ci_rotate_dbadmin.go:262:58\n" +
+				"      KILLED CONDITIONALS_NEGATION at a.go:1:1\n",
+			want: "CANARY",
+		},
+		{
+			name: "timeouts are unmeasured",
+			out:  mutateHealthyOut + "   TIMED OUT INCREMENT_DECREMENT at b.go:2:2\n",
+			want: "TIMED OUT",
+		},
+		{
+			name: "gremlins reported nothing at all",
+			out:  "Starting...\nno mutants here\n",
+			want: "no mutants",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubMutateRun(t, tc.controlErr, tc.out)
+			out, err := runMutateCmd(t, "--package", "./cmd/llz")
+			if err == nil {
+				t.Fatalf("an untrustworthy run must NOT exit 0:\n%s", out)
+			}
+			if !strings.Contains(out, "harness is not trustworthy") {
+				t.Errorf("the operator must be told the harness is at fault, not shown a score:\n%s", out)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("reason %q missing from:\n%s", tc.want, out)
+			}
+			if strings.Contains(out, "efficacy=") {
+				t.Errorf("NO score may be printed for an unvalidated run:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestMutateCmdFailsOnASurvivorOutsideTheBaseline(t *testing.T) {
+	stubMutateRun(t, nil, mutateHealthyOut+"       LIVED CONDITIONALS_BOUNDARY at brandnew.go:7:3\n")
+	out, err := runMutateCmd(t, "--package", "./cmd/llz",
+		"--baseline", filepath.Join("testdata", "mutation-baseline.json"))
+	if err == nil {
+		t.Fatalf("a survivor outside the baseline is the actionable event and must fail:\n%s", out)
+	}
+	if !strings.Contains(out, "NEW ") || !strings.Contains(out, "brandnew.go") {
+		t.Errorf("the new survivor must be named:\n%s", out)
+	}
+	// The baselined canary must still not be reported.
+	if strings.Contains(out, "ci_rotate_dbadmin.go") {
+		t.Errorf("a baselined survivor leaked into the new list:\n%s", out)
 	}
 }
