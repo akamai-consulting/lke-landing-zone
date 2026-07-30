@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -308,8 +309,35 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 	})
 }
 
+// TestPolicyName pins the fix for a check that could never pass. policyName feeds
+// `kubectl wait clusterpolicy/<name>`, but returned the manifest's FILENAME — and
+// no manifest's filename equals the name it declares. Every readiness wait ever
+// made addressed a nonexistent object and degraded to "applied but did not report
+// Ready", so the confirmation that a policy is actually ENFORCING never ran.
+//
+// Reads the real manifests rather than fixtures on purpose: the bug was precisely
+// that these two spellings drift, so the test has to compare against the shipped
+// files or it re-encodes the assumption instead of checking it.
 func TestPolicyName(t *testing.T) {
-	if got := policyName("manifests/kyverno-pvc-encrypted-storage-class.yaml"); got != "kyverno-pvc-encrypted-storage-class" {
-		t.Errorf("policyName = %q", got)
+	for manifest, want := range map[string]string{
+		"manifests/kyverno-pvc-encrypted-storage-class.yaml":         "pvc-force-encrypted-storage-class",
+		"manifests/kyverno-pvc-redirect-untagged-storage-class.yaml": "pvc-redirect-untagged-storage-class",
+		"manifests/kyverno-sc-default-demote.yaml":                   "sc-default-demote",
+		"manifests/kyverno-pvc-deny-untaggable-clone.yaml":           "pvc-deny-untaggable-clone",
+	} {
+		got := policyName(manifest)
+		if got != want {
+			t.Errorf("policyName(%s) = %q, want the manifest's metadata.name %q — a filename here makes `kubectl wait clusterpolicy/<name>` address nothing",
+				manifest, got, want)
+		}
+		if got == strings.TrimSuffix(filepath.Base(manifest), ".yaml") {
+			t.Errorf("policyName(%s) returned the basename — this manifest can no longer catch the regression; pick one whose filename differs from its metadata.name", manifest)
+		}
+	}
+
+	// Unreadable manifests fall back to the basename: no worse than the old
+	// behaviour, and never a panic on a path the operator typo'd.
+	if got := policyName("manifests/does-not-exist.yaml"); got != "does-not-exist" {
+		t.Errorf("missing manifest should fall back to the basename, got %q", got)
 	}
 }
