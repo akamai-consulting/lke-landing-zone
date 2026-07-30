@@ -732,6 +732,25 @@ test:
 test-race:
 	cd $(GO_DIR) && LLZ_EXPECT_RACE=1 go test -race ./...
 
+# Fuzzing. NOT a CI gate: fuzzing is non-deterministic and open-ended, so gating
+# on it would make the build flaky rather than safe. Instead the SEED CORPORA run
+# as ordinary subtests on every `go test` — free, deterministic regression cover —
+# and this target explores beyond them on demand.
+#
+# FUZZTIME defaults to 60s per target; raise it for a real hunt (FUZZTIME=10m).
+# A crasher is written to the package's testdata/fuzz/ by the toolchain: COMMIT
+# THAT FILE. It then replays forever as part of the seed corpus, which is how a
+# one-off fuzz find becomes a permanent test.
+FUZZTIME ?= 60s
+fuzz:
+	@set -e; cd $(GO_DIR); \
+	for pkg in ./cmd/llz ./internal/terraform; do \
+	  for t in $$(go test $$pkg -list 'Fuzz.*' | grep '^Fuzz'); do \
+	    echo "── $$pkg $$t ($(FUZZTIME))"; \
+	    go test $$pkg -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME); \
+	  done; \
+	done
+
 # ── Coverage ─────────────────────────────────────────────────────────────────
 
 coverage:
