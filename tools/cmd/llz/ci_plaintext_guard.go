@@ -115,17 +115,25 @@ var plaintextAllowed = map[string]plaintextRule{
 
 	// ── mesh policy: STRICT with named port exemptions ───────────────────────
 	//
-	// harbor is namespace-wide STRICT (harbor-peerauthentication.yaml). These two
-	// ports are the exemptions that make STRICT deployable at all, and they are
-	// accepted plaintext hops in exactly the sense this registry exists to record —
-	// they were invisible until the guard learned to read mesh policy.
+	// harbor is namespace-wide STRICT (harbor-peerauthentication.yaml), and these
+	// are the exemptions that make STRICT deployable at all — accepted plaintext
+	// hops in exactly the sense this registry exists to record. They were invisible
+	// until the guard learned to read mesh policy.
+	//
+	// CORRECTION: an earlier revision of this block asserted harbor WAS STRICT. It
+	// was not. The policy carried portLevelMtls on a selector-less document, which
+	// Istio rejects ("portLevelMtls requires selector"), so the apiserver refused
+	// every apply and the resource existed on no cluster — the namespace ran
+	// PERMISSIVE throughout. Splitting it into a namespace-wide document plus
+	// workload-scoped ones is what made the enforcement real; these entries describe
+	// a policy that now applies.
 	//
 	// They also GUARD THE GUARD: the two harbor http:// entries above are accepted
 	// only because the provisioner's sidecar upgrades that hop to mTLS, which holds
-	// only while this policy stays STRICT on Harbor's API port. If it is reverted to
-	// namespace-wide PERMISSIVE — the documented first step of its own rollout — that
-	// justification silently becomes false. A namespace-wide PERMISSIVE lands here as
-	// an unregistered `mtls-mode` finding rather than passing green.
+	// only while the policy stays STRICT on Harbor's API port. Reverting it to
+	// namespace-wide PERMISSIVE — the documented first step of its own rollout —
+	// silently falsifies them, and lands here as an unregistered `mtls-mode` finding
+	// rather than passing green.
 	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-8000": {
 		owner: "apl-core",
 		reason: "CNPG operator (cnpg-system, NOT a meshed namespace) polling harbor-otomi-db's " +
@@ -135,6 +143,17 @@ var plaintextAllowed = map[string]plaintextRule{
 			"exemption instead of closing it wedges the Harbor DB (\"Instance Status Extraction " +
 			"Error\" -> ClusterIsNotReady -> convergence stalls), so it must stay until the operator " +
 			"side is meshed",
+	},
+	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-9187": {
+		owner: "apl-core",
+		reason: "Prometheus scraping harbor-otomi-db's CNPG metrics port. Payload is Postgres " +
+			"exporter gauges — connection counts, replication lag, WAL position; no credentials and " +
+			"no row data. MISSED by the first revision of this policy, which exempted :8000 and :8001 " +
+			"but not this one: PodMonitor harbor/harbor-otomi-db selects these pods and scrapes port " +
+			"`metrics` with NO `scheme:`, which Prometheus defaults to HTTP, and the `monitoring` " +
+			"namespace carries no istio.io/rev label — so the hop is unmeshed cleartext. Had STRICT " +
+			"ever applied with the old exemption set, it would have blackholed CNPG metrics. Closing " +
+			"it needs a meshed Prometheus, which is apl-core's to make",
 	},
 	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-8001": {
 		owner: "apl-core",
