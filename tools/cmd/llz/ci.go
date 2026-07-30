@@ -149,6 +149,8 @@ func ciCmd() *cobra.Command {
 	// fixed `akmadmin` user — so it is --apply-gated and refreshes TF state after,
 	// or seed-db-admin would reconcile the rotation away. See ci_rotate_dbadmin.go.
 	c.AddCommand(ciSeedDBAdminCmd(), ciDBDeclaredCmd(), ciDBSummaryCmd(), ciRotateDBAdminCmd())
+	// State-encryption key rollover (ADR 0007 / ADR 0009). Dispatch-only.
+	c.AddCommand(ciRotateStatePassphraseCmd())
 	// In-cluster rotation of the broad account:read_write Linode PAT (LINODE_API_TOKEN):
 	// mint -> seed OpenBao -> publish to each deployment's GitHub env secret (sealed box)
 	// -> revoke old. Runs in a dedicated CronJob, not the reconciler.

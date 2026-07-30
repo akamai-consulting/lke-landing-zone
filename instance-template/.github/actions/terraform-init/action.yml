@@ -30,6 +30,34 @@ inputs:
       `encryption` block, so a run without this fails rather than writing
       plaintext state — see roots' encryption.tf.
     required: true
+  state-encryption-key-name:
+    description: >
+      HCL name of the CURRENT pbkdf2 key provider (repo variable
+      TF_STATE_ENCRYPTION_KEY_NAME; default `llz`). LOAD-BEARING: OpenTofu stores
+      each key provider's pbkdf2 SALT in the state metadata keyed by this name
+      (`meta["key_provider.pbkdf2.<name>"]`), so a passphrase can only decrypt
+      state that was written under the SAME name. Renaming it in place makes the
+      old salt be fed to the new passphrase and every decrypt fails. Rotation
+      therefore introduces a NEW name and keeps the old one; see
+      state-encryption-passphrase-old.
+    required: false
+    default: "llz"
+  state-encryption-passphrase-old:
+    description: >
+      PREVIOUS passphrase, set ONLY during a rotation window (secret
+      TF_STATE_ENCRYPTION_PASSPHRASE_OLD). When present the action adds a second
+      key provider and an ENCRYPTED `fallback`, so OpenTofu reads state written
+      with the old key and rewrites it with the new one. Empty in steady state.
+    required: false
+    default: ""
+  state-encryption-key-name-old:
+    description: >
+      HCL name the PREVIOUS passphrase was written under (repo variable
+      TF_STATE_ENCRYPTION_KEY_NAME_OLD). Required whenever
+      state-encryption-passphrase-old is set — the fallback cannot find its salt
+      without the original name.
+    required: false
+    default: ""
   state-key:
     description: >
       Override the S3 state key. Default is <module>/<REGION>/terraform.tfstate
@@ -75,6 +103,12 @@ runs:
       uses: ./.github/actions/tf-encryption-env
       with:
         state-encryption-passphrase: ${{ inputs.state-encryption-passphrase }}
+        # Rollover coordinates. The shared action owns the HCL emission AND the
+        # injection guards for all of them — keeping a second copy here is exactly
+        # the liability that action's own header warns about.
+        state-encryption-key-name: ${{ inputs.state-encryption-key-name }}
+        state-encryption-passphrase-old: ${{ inputs.state-encryption-passphrase-old }}
+        state-encryption-key-name-old: ${{ inputs.state-encryption-key-name-old }}
     - name: Authenticate git for published module sources
       shell: bash
       env:
