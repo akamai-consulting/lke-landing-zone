@@ -51,6 +51,12 @@ on:
         required: true
         type: string
     secrets:
+      TF_STATE_ENCRYPTION_PASSPHRASE:
+        description: >
+          Passphrase for OpenTofu state+plan encryption (ADR 0007). Required by
+          the cluster-access action: the kubeconfig is read from Terraform state,
+          whose roots carry an `encryption` block.
+        required: false
       # ALL required: false, deliberately — same rule as llz-bootstrap-openbao.yml.
       # `secrets: inherit` cannot forward environment-scoped secrets, and
       # `required: true` is checked statically at the call boundary, so it would fail
@@ -133,7 +139,10 @@ jobs:
       # control-plane ACL. Revoked in the always() step at the tail.
       - name: Cluster access (kubeconfig + runner ACL)
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -173,6 +182,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

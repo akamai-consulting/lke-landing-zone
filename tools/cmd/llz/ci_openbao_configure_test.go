@@ -226,13 +226,21 @@ func TestKeycloakTeamSteps(t *testing.T) {
 		!strings.Contains(strings.Join(steps[0].args, " "), "-path=keycloak") {
 		t.Errorf("step0 must be the non-fatal `auth enable -path=keycloak`, got %+v", steps[0])
 	}
-	// The mount validates via the INTERNAL jwks_url (reachable in-cluster) while
-	// binding the PUBLIC issuer — NOT oidc_discovery_url (which hairpins).
+	// The mount validates via a jwks_url on the SAME HOST as the public issuer —
+	// that host is the only name apl-core has a certificate for (the gateway's
+	// `otomi-wildcard`), and the in-cluster route to it is the hostAliases pin
+	// from `llz ci pin-keycloak-gateway-alias`. Still NOT oidc_discovery_url.
 	step1 := strings.Join(steps[1].args, " ")
 	if steps[1].args[1] != "auth/keycloak/config" ||
-		!strings.Contains(step1, "jwks_url="+keycloakInternalJWKS) ||
+		!strings.Contains(step1, "jwks_url="+keycloakJWKSURL(issuer)) ||
 		!strings.Contains(step1, "bound_issuer="+issuer) {
-		t.Errorf("step1 must configure jwks_url (internal) + bound_issuer (public), got %v", steps[1].args)
+		t.Errorf("step1 must configure jwks_url (issuer-derived) + bound_issuer (public), got %v", steps[1].args)
+	}
+	// A Service DNS name here is the bug this replaced: nothing in the cluster
+	// holds a certificate for one, so the fetch either runs in plaintext or hits
+	// a port with no TLS listener at all.
+	if strings.Contains(step1, ".svc.cluster.local") {
+		t.Errorf("step1 must not point jwks_url at a Service DNS name — no cert covers it: %v", steps[1].args)
 	}
 	if strings.Contains(step1, "oidc_discovery_url") {
 		t.Errorf("step1 must NOT use oidc_discovery_url (the public URL hairpins in-cluster): %v", steps[1].args)
@@ -645,5 +653,51 @@ func TestSeedTargetsAreReservedNamespaces(t *testing.T) {
 	// A regex that silently matches nothing would make this test vacuously green.
 	if seen == 0 {
 		t.Error("matched no `const … = \"secret/<ns>/…\"` declarations; the pattern has drifted from the code and this guard is inert")
+	}
+}
+
+// TestKeycloakAuthConfigDoesNotPinACustomCA pins the fix for the team-write failure
+// in e2e run 30510747640. jwks_ca_pem REPLACES the system trust store, so pinning
+// apl-core's custom-ca made the JWKS fetch fail with
+// "x509: certificate signed by unknown authority" — on managed clusters Linode
+// issues the keycloak.<domain> wildcard from a PUBLIC CA, which custom-ca is not in.
+//
+// The pin looks security-relevant, so without this test the obvious "hardening"
+// change silently breaks every team login — and it breaks it LAZILY, at first login
+// rather than at configure time (skip_jwks_validation=true), which is why it took a
+// full e2e run to surface.
+func TestKeycloakAuthConfigDoesNotPinACustomCA(t *testing.T) {
+	steps := keycloakTeamSteps("https://keycloak.lke1.akamai-apl.net/realms/otomi",
+		[]clusterspec.Team{{Name: "platform", OpenbaoSubtree: "secret/platform"}})
+	if len(steps) == 0 {
+		t.Fatal("no steps built")
+	}
+	var cfg []string
+	for _, s := range steps {
+		if len(s.args) > 1 && s.args[0] == "write" && s.args[1] == "auth/keycloak/config" {
+			cfg = s.args
+		}
+	}
+	if cfg == nil {
+		t.Fatal("no auth/keycloak/config write step")
+	}
+	joined := strings.Join(cfg, " ")
+	if strings.Contains(joined, "jwks_ca_pem") {
+		t.Error("jwks_ca_pem is set again: it REPLACES the system roots, and the managed " +
+			"gateway's wildcard is publicly issued — this fails team login with x509: " +
+			"certificate signed by unknown authority. See keycloakJWKSTrustNote.")
+	}
+	// The things that DO have to stay: verified TLS to the public host, and the
+	// issuer binding that stops a token from another realm being accepted.
+	if !strings.Contains(joined, "jwks_url=https://") {
+		t.Error("jwks_url must be https — plaintext allows key substitution outright")
+	}
+	if !strings.Contains(joined, "bound_issuer=https://keycloak.lke1.akamai-apl.net/realms/otomi") {
+		t.Error("bound_issuer must be the public issuer")
+	}
+	// jwks_url host and bound_issuer host must agree, which is why the URL is derived
+	// rather than written twice.
+	if !strings.Contains(joined, "jwks_url=https://keycloak.lke1.akamai-apl.net/realms/otomi/") {
+		t.Errorf("jwks_url host disagrees with bound_issuer: %s", joined)
 	}
 }

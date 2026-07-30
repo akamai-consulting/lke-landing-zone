@@ -363,3 +363,55 @@ func TestBaoSeedCmdFlagWiring(t *testing.T) {
 		t.Errorf("--on-missing default = %q, want error", got)
 	}
 }
+
+// TestDescribeSecretForDiagNeverLeaksValues is the load-bearing property. This
+// helper exists to be printed into a CI log on a failure path, so it must report
+// key NAMES and never key CONTENTS. Asserting on the jsonpath it asks kubectl for
+// is what actually pins that: `{$k}` iterates keys, and any expression reaching
+// `$v` (or a `.data.<key>` selector) would put decoded secret material in the log.
+func TestDescribeSecretForDiagNeverLeaksValues(t *testing.T) {
+	src, err := os.ReadFile("ci_bao_seed.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := funcBody(string(src), "func describeSecretForDiag")
+	if fn == "" {
+		t.Fatal("describeSecretForDiag not found")
+	}
+	if strings.Contains(fn, "{$v}") {
+		t.Error("jsonpath emits {$v} — that is the secret VALUE, and this string is logged")
+	}
+	if strings.Contains(fn, ".data.") {
+		t.Error("selects .data.<key> — that reads a secret value, and this string is logged")
+	}
+	if !strings.Contains(fn, "{$k}") {
+		t.Error("expected the key-name jsonpath {$k}; did the query change shape?")
+	}
+	// It must also never hand back raw base64 by dumping the whole .data map.
+	if strings.Contains(fn, "jsonpath={.data}") {
+		t.Error("dumps the entire .data map (base64 values) into the message")
+	}
+}
+
+// funcBody returns the source text of a top-level func, from its declaration to
+// the next one. Good enough to assert on a single function's contents.
+func funcBody(src, decl string) string {
+	i := strings.Index(src, decl)
+	if i < 0 {
+		return ""
+	}
+	rest := src[i+len(decl):]
+	if j := strings.Index(rest, "\nfunc "); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+func TestNonEmptyFields(t *testing.T) {
+	if got := nonEmptyFields("  a   b \n c  "); !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
+		t.Fatalf("got %v", got)
+	}
+	if got := nonEmptyFields("   \n  "); len(got) != 0 {
+		t.Fatalf("whitespace-only should yield nothing, got %v", got)
+	}
+}

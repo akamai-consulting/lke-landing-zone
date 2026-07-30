@@ -7,9 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
+
+const fakeACLRevision = "rev-test"
 
 type fakeACLClient struct {
 	clusters []map[string]any
@@ -40,17 +43,21 @@ func (f *fakeACLClient) ListClusters(context.Context) ([]map[string]any, error) 
 func (f *fakeACLClient) GetControlPlaneACL(context.Context, uint64) (linode.ControlPlaneACL, error) {
 	return f.acl, f.getErr
 }
-func (f *fakeACLClient) PutControlPlaneACL(_ context.Context, _ uint64, a linode.ControlPlaneACL) error {
+func (f *fakeACLClient) PutControlPlaneACL(_ context.Context, _ uint64, a linode.ControlPlaneACL) (string, error) {
 	if f.putErr != nil {
-		return f.putErr
+		return "", f.putErr
 	}
 	f.puts = append(f.puts, a)
 	f.acl = a
+	// Enforcement is reported IMMEDIATELY here so the existing cases keep
+	// exercising the happy path. The enforcement WAIT is covered separately by
+	// TestWaitACLEnforced, which is where the async behaviour belongs.
+	f.acl.RevisionID = fakeACLRevision
 	if f.clobberN > 0 {
 		f.clobberN--
 		f.acl = f.clobberACL // a racing writer overwrote our PUT
 	}
-	return nil
+	return fakeACLRevision, nil
 }
 
 // withFakeACL points the command's seams at fake and a hermetic state dir.
@@ -299,4 +306,80 @@ func TestResolveClusterIDRetriesTransientListFailure(t *testing.T) {
 	if len(fake.listErrs) != 0 {
 		t.Errorf("%d simulated list failures left unconsumed — retry stopped early", len(fake.listErrs))
 	}
+}
+
+// enforceFake reports a revision as enforced only after N GETs, modelling the
+// asynchronous enforcement the API documents ("up to 20 minutes").
+type enforceFake struct {
+	revision   string
+	afterGets  int
+	gets       int
+	getErrOnce bool
+}
+
+func (f *enforceFake) GetControlPlaneACL(context.Context, uint64) (linode.ControlPlaneACL, error) {
+	f.gets++
+	if f.getErrOnce && f.gets == 1 {
+		return linode.ControlPlaneACL{}, errString("temporary API error")
+	}
+	acl := linode.ControlPlaneACL{Enabled: true, IPv4: []string{"1.2.3.4/32"}}
+	if f.gets >= f.afterGets {
+		acl.RevisionID = f.revision // control plane has now verified enforcement
+	} else {
+		acl.RevisionID = "older-revision"
+	}
+	return acl, nil
+}
+func (f *enforceFake) PutControlPlaneACL(context.Context, uint64, linode.ControlPlaneACL) (string, error) {
+	return f.revision, nil
+}
+func (f *enforceFake) ListClusters(context.Context) ([]map[string]any, error) { return nil, nil }
+
+// THE BUG THIS CLOSES. PutControlPlaneACL is asynchronous: a GET straight after it
+// echoes the DESIRED address list, so the old ContainsIP verify proved only that
+// the API accepted the write. cluster-access announced "added <ip> to
+// control-plane ACL" and moved on, and every kubectl then timed out or EOF'd
+// until enforcement caught up — passing when enforcement was fast (run 7, 48s)
+// and failing when it was not (runs 8-12). The API's only enforcement signal is
+// the submitted revision-id appearing on GET.
+func TestWaitACLEnforced(t *testing.T) {
+	prevSleep := aclSleep
+	aclSleep = func(time.Duration) {}
+	t.Cleanup(func() { aclSleep = prevSleep })
+
+	t.Run("waits until the revision is reflected", func(t *testing.T) {
+		f := &enforceFake{revision: "rev-9", afterGets: 3}
+		if err := waitACLEnforced(context.Background(), f, 1, "rev-9"); err != nil {
+			t.Fatalf("want enforcement detected, got %v", err)
+		}
+		if f.gets < 3 {
+			t.Errorf("returned after %d GET(s) — it accepted a STALE revision as enforced, "+
+				"which is exactly the desired-state read that made this racy", f.gets)
+		}
+	})
+
+	t.Run("a transient GET error does not abort the wait", func(t *testing.T) {
+		f := &enforceFake{revision: "rev-9", afterGets: 2, getErrOnce: true}
+		if err := waitACLEnforced(context.Background(), f, 1, "rev-9"); err != nil {
+			t.Errorf("one API blip must not end the wait: %v", err)
+		}
+	})
+
+	t.Run("times out rather than blocking the job forever", func(t *testing.T) {
+		prev := aclEnforceWait
+		aclEnforceWait = 0 // deadline already passed
+		t.Cleanup(func() { aclEnforceWait = prev })
+		f := &enforceFake{revision: "rev-9", afterGets: 1 << 30}
+		err := waitACLEnforced(context.Background(), f, 1, "rev-9")
+		if err == nil {
+			t.Error("want a timeout error so the caller can report enforcement is still pending")
+		}
+	})
+
+	t.Run("no revision to track is not an error", func(t *testing.T) {
+		f := &enforceFake{revision: "", afterGets: 1}
+		if err := waitACLEnforced(context.Background(), f, 1, ""); err != nil {
+			t.Errorf("an empty revision (older API / no-change path) must be a no-op: %v", err)
+		}
+	})
 }

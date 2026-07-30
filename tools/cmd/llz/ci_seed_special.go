@@ -208,17 +208,51 @@ func renderPVCTable(rows []pvcRow) []string {
 	return lines
 }
 
+// kyvernoScopedNamespaces are the namespaces the pvc-force-encrypted-storage-class
+// ClusterPolicy actually matches. MUST stay in sync with the `namespaces:` list in
+// manifests/kyverno-pvc-encrypted-storage-class.yaml — TestKyvernoScopeMatchesPolicy
+// reads that file and fails if they drift, because a stale list here would go on
+// blaming the webhook for PVCs it was never asked to mutate.
+var kyvernoScopedNamespaces = []string{"gitea", "istio-system"}
+
+// splitByKyvernoScope partitions escaped PVCs by whether the mutation policy even
+// applied to them. The audit used to report every one as "Kyverno webhook
+// readiness lagged", which is only true INSIDE that scope; for a harbor or
+// keycloak PVC it sends the reader after a timing bug that isn't there. The real
+// cause outside the scope is the default-StorageClass ordering — see the step
+// summary in runCIAuditPVCStorageClass.
+func splitByKyvernoScope(rows []pvcRow) (inScope, outOfScope []pvcRow) {
+	scoped := make(map[string]bool, len(kyvernoScopedNamespaces))
+	for _, ns := range kyvernoScopedNamespaces {
+		scoped[ns] = true
+	}
+	for _, r := range rows {
+		if scoped[r.Namespace] {
+			inScope = append(inScope, r)
+		} else {
+			outOfScope = append(outOfScope, r)
+		}
+	}
+	return inScope, outOfScope
+}
+
 func ciAuditPVCStorageClassCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "audit-pvc-storageclass",
 		Short: "warn about PVCs that escaped the Kyverno encrypted-StorageClass mutation",
 		Long: "Native port of the 'Audit PVCs against encrypted-Retain StorageClass'\n" +
-			"bootstrap step. The Kyverno mutation rewrites PVCs onto block-storage-retain\n" +
-			"at admission, but its webhook has a 30-90s readiness lag after CRD\n" +
-			"registration; any PVC apl-core's helmfile created in that window persists\n" +
-			"silently on an unencrypted Delete-reclaim class. Lists every such PVC as\n" +
-			"::warning:: lines plus a step-summary remediation block. Never fails the\n" +
-			"workflow — the cluster is functional, just less secure than intended.",
+			"bootstrap step. Lists every PVC not on block-storage-retain as ::warning::\n" +
+			"lines plus a step-summary block, SPLIT BY CAUSE. Two different things put a\n" +
+			"PVC on an unencrypted Delete-reclaim class:\n" +
+			"  • in gitea/istio-system, the Kyverno mutation covers the PVC but its\n" +
+			"    webhook has a 30-90s readiness lag after CRD registration, so anything\n" +
+			"    apl-core's helmfile created in that window escaped it;\n" +
+			"  • anywhere else, Kyverno never applied — the chart honored\n" +
+			"    cluster.defaultStorageClass, which defaults to '' (\"use the cluster\n" +
+			"    default\"), so the PVC took whatever class was annotated default when\n" +
+			"    apl-core created it. Widening the policy would not fix those.\n" +
+			"Never fails the workflow — the cluster is functional, just less secure\n" +
+			"than intended.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runCIAuditPVCStorageClass() },
 	}
@@ -237,17 +271,18 @@ func runCIAuditPVCStorageClass() error {
 		return nil
 	}
 	table := renderPVCTable(escaped)
-	fmt.Fprintf(os.Stderr, "::warning::Found %d PVC(s) NOT on block-storage-retain — Kyverno admission webhook readiness lagged the chart-installed PVC creates.\n", len(escaped))
+	inScope, outOfScope := splitByKyvernoScope(escaped)
+	fmt.Fprintf(os.Stderr, "::warning::Found %d PVC(s) NOT on block-storage-retain (%d in Kyverno's scope, %d never covered by it).\n",
+		len(escaped), len(inScope), len(outOfScope))
 	for _, l := range table {
 		fmt.Fprintf(os.Stderr, "::warning::  %s\n", l)
 	}
 	summary := append([]string{
-		"### PVCs that escaped the Kyverno encryption mutation",
+		"### PVCs not on the encrypted, Retain StorageClass",
 		"",
-		"These PVCs landed on a StorageClass other than",
-		"`block-storage-retain` because Kyverno's admission",
-		"webhook wasn't yet enforcing when apl-core's helmfile created",
-		"them. Data is NOT encrypted at rest and reclaim policy is Delete.",
+		"Data on these is NOT encrypted at rest, and their reclaim policy is Delete.",
+		"There are TWO distinct causes and only one of them is a Kyverno timing issue —",
+		"so read the namespace before concluding anything about webhook readiness.",
 		"",
 		"```",
 		"NAMESPACE  PVC  STORAGECLASS",
@@ -255,9 +290,30 @@ func runCIAuditPVCStorageClass() error {
 	summary = append(summary,
 		"```",
 		"",
-		"**To remediate** (per-workload, irreversible for that data):",
+		fmt.Sprintf("**In `%s` (%d here):** the `pvc-force-encrypted-storage-class`",
+			strings.Join(kyvernoScopedNamespaces, "`, `"), len(inScope)),
+		"policy DOES cover these, so landing on the wrong class means its admission webhook",
+		"was not yet enforcing when apl-core's helmfile created the PVC. Those two charts",
+		"(gitea-valkey, oauth2-proxy redis) hardcode `linode-block-storage` on the linode",
+		"provider — verified in apl-core v6.0.0 — which is why a mutation is needed at all.",
+		"",
+		fmt.Sprintf("**Any other namespace (%d here):** NOT a Kyverno problem — the policy is", len(outOfScope)),
+		"deliberately scoped to the two namespaces above and never applied to these. Every",
+		"other apl-core chart honors `cluster.defaultStorageClass` (verified: harbor.gotmpl,",
+		"harbor-otomi-db, keycloak-otomi-db, git-server all template it), and that value",
+		"DEFAULTS TO `''` = \"use the cluster's default StorageClass\". So these PVCs took",
+		"whichever class was annotated default at the moment apl-core created them. On a",
+		"managed (`apl_enabled`) cluster Linode installs apl-core during cluster",
+		"provisioning — before `llz ci bootstrap-cluster` promotes block-storage-retain to",
+		"default — so LKE's unencrypted class wins the race. Widening the Kyverno policy",
+		"would NOT fix this: the PVCs predate the webhook existing.",
+		"",
+		"**To remediate** (per-workload, irreversible for that data — `storageClassName`",
+		"is immutable once bound, so there is no in-place fix):",
 		"1. Delete the workload owning the PVC (e.g. `kubectl -n <ns> delete sts <name>`)",
 		"2. Delete the PVC (`kubectl -n <ns> delete pvc <name>`)",
-		"3. Reapply via Argo sync — new PVC goes through Kyverno admission, lands on the encrypted SC")
+		"3. Reapply via Argo sync — by now block-storage-retain is the default and the",
+		"   migrated values set `cluster.defaultStorageClass` explicitly, so the new PVC",
+		"   lands encrypted whether or not Kyverno covers its namespace.")
 	return appendGHAFile("GITHUB_STEP_SUMMARY", summary...)
 }

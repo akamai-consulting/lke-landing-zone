@@ -296,3 +296,69 @@ spec:
 		t.Errorf("the failure should tell the operator how to fix it, got: %v", err)
 	}
 }
+
+// TestGoFmtGate covers the gofmt pre-commit gate. The bug it exists to prevent is
+// structural, not cosmetic: `gofmt -l` reports drift on STDOUT and exits 0
+// regardless, so a step that trusted the exit code would pass forever.
+func TestGoFmtGate(t *testing.T) {
+	t.Run("argv lists, it does not rewrite", func(t *testing.T) {
+		argv := goFmtListArgv("gofmt", []string{"tools/cmd", "tools/internal"})
+		want := []string{"gofmt", "-l", "tools/cmd", "tools/internal"}
+		if !reflect.DeepEqual(argv, want) {
+			t.Fatalf("argv = %v, want %v", argv, want)
+		}
+		for _, a := range argv {
+			// -w would silently REWRITE the developer's staged tree from inside a
+			// pre-commit hook, committing files they never saw.
+			if a == "-w" {
+				t.Fatal("argv contains -w: the gate must report drift, never rewrite source")
+			}
+		}
+	})
+
+	t.Run("output is the verdict, not the exit code", func(t *testing.T) {
+		if got := goFmtUnformatted(""); len(got) != 0 {
+			t.Fatalf("clean output parsed as %v, want none", got)
+		}
+		if got := goFmtUnformatted("\n  \n"); len(got) != 0 {
+			t.Fatalf("blank-only output parsed as %v, want none", got)
+		}
+		got := goFmtUnformatted("cmd/llz/a.go\ncmd/llz/b.go\n")
+		want := []string{"cmd/llz/a.go", "cmd/llz/b.go"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("skips where there is no Go tree", func(t *testing.T) {
+		// An adopter instance repo vendors no Go source. Running there must be a
+		// no-op pass, not a failure — same philosophy as a missing linter.
+		dir := t.TempDir()
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chdir(cwd) })
+		if err := os.Chdir(dir); err != nil {
+			t.Fatal(err)
+		}
+		if got := goModuleDirs(); len(got) != 0 {
+			t.Fatalf("goModuleDirs in an empty repo = %v, want none", got)
+		}
+		if err := stepGoFmt(globalOpts{}); err != nil {
+			t.Fatalf("stepGoFmt with no Go tree = %v, want nil (skip)", err)
+		}
+	})
+
+	t.Run("wired into the lint gate", func(t *testing.T) {
+		// A step nobody calls protects nothing. Compare code pointers, since func
+		// values are not otherwise comparable in Go.
+		want := reflect.ValueOf(stepGoFmt).Pointer()
+		for _, s := range lintSteps() {
+			if reflect.ValueOf(s).Pointer() == want {
+				return
+			}
+		}
+		t.Fatal("stepGoFmt is not in lintSteps() — the gate would never run it")
+	})
+}

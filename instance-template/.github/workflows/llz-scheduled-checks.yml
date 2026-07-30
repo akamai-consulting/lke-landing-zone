@@ -18,6 +18,12 @@ on:
         type: boolean
         default: false
     secrets:
+      TF_STATE_ENCRYPTION_PASSPHRASE:
+        description: >
+          Passphrase for OpenTofu state+plan encryption (ADR 0007). Required by
+          the cluster-access action: the kubeconfig is read from Terraform state,
+          whose roots carry an `encryption` block.
+        required: false
       TF_STATE_ACCESS_KEY:
         required: true
       TF_STATE_SECRET_KEY:
@@ -90,7 +96,10 @@ jobs:
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -136,6 +145,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -170,7 +182,10 @@ jobs:
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -191,6 +206,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -233,7 +251,10 @@ jobs:
       - name: Cluster access (kubeconfig + runner ACL + llz)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -261,6 +282,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -297,7 +321,10 @@ jobs:
       - name: Cluster access (kubeconfig + runner ACL)
         id: kubeconfig
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -355,6 +382,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}

@@ -63,3 +63,40 @@ func TestEffectiveKubeconfig(t *testing.T) {
 		}
 	})
 }
+
+// The one-line Application table prints `.status.conditions[*].message`, so an
+// app carrying several conditions shows whichever comes first — a benign
+// OrphanedResourceWarning masks a SyncError behind it. The full-status dump is
+// what makes the real message visible, so its SELECTION must not be the thing
+// that loses a failure.
+//
+// The case that cost an e2e run: an app whose own apply was rejected sits
+// OutOfSync while still reporting Healthy (it has no workload to be unhealthy),
+// and its parent reports "successfully synced (all tasks run)". Selecting on sync
+// AND health independently is what catches it; either alone does not.
+func TestNeedsFullAppStatusDump(t *testing.T) {
+	for _, tc := range []struct {
+		name, appName, sync, health string
+		want                        bool
+	}{
+		{"the run-6 shape: apply rejected, so OutOfSync but nothing unhealthy",
+			"llz-openbao", "OutOfSync", "Healthy", true},
+		{"degraded workload is equally worth the dump",
+			"llz-reconciler", "Synced", "Degraded", true},
+		{"status not written yet — a stalled child looks exactly like this",
+			"llz-harbor", "", "", true},
+		{"fully converged apps are skipped, or the dump buries the failures",
+			"keycloak-keycloak", "Synced", "Healthy", false},
+		{"platform-bootstrap is skipped — it already gets its own full dump",
+			"platform-bootstrap", "OutOfSync", "Healthy", false},
+		{"an unparseable/nameless item cannot be fetched",
+			"", "OutOfSync", "Degraded", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := needsFullAppStatusDump(tc.appName, tc.sync, tc.health); got != tc.want {
+				t.Errorf("needsFullAppStatusDump(%q, %q, %q) = %v, want %v",
+					tc.appName, tc.sync, tc.health, got, tc.want)
+			}
+		})
+	}
+}

@@ -1,0 +1,85 @@
+name: TF_ENCRYPTION env
+description: >
+  Builds the OpenTofu state+plan encryption config from the passphrase secret and
+  exports it as TF_ENCRYPTION for every LATER step in the calling job.
+
+  ADR 0007 splits posture from key material: the roots' encryption.tf carries only
+  the `state`/`plan` blocks and REFERENCES `method.unencrypted.migrate`, while the
+  key provider and the method DECLARATIONS arrive in this env var. OpenTofu merges
+  the two, so a job that runs tofu without this env var fails to init.
+
+  WHY IT IS ITS OWN ACTION. This lived inline in terraform-init, so only jobs that
+  inited through that action got the env var. `cluster-access` → `fetch-kubeconfig`
+  runs `llz ci fetch-kubeconfig-state`, which does its OWN `tofu init` and never
+  goes through terraform-init — so after ADR 0007 landed, every cluster-facing job
+  failed at init with OpenTofu's own unhelpful diagnostic:
+
+      Error: Reference to undeclared encryption method
+        on encryption.tf line 58: method = method.unencrypted.migrate
+
+  which points at the roots rather than at the missing config. That is precisely
+  the confusion the preflight below exists to prevent, so it has to guard BOTH
+  paths — and the HCL-injection guard on the passphrase is security-relevant
+  enough that a second copy of it would be a liability, not a convenience.
+inputs:
+  state-encryption-passphrase:
+    description: >
+      Passphrase for OpenTofu native state+plan encryption (GitHub secret
+      TF_STATE_ENCRYPTION_PASSPHRASE). Exported as TF_ENCRYPTION for every
+      subsequent step in the calling job. REQUIRED: the roots carry an
+      `encryption` block, so a run without this fails rather than writing
+      plaintext state — see the roots' encryption.tf.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Export TF_ENCRYPTION (state + plan encryption at rest)
+      shell: bash
+      env:
+        PASSPHRASE: ${{ inputs.state-encryption-passphrase }}
+      run: |
+        if [ -z "${PASSPHRASE}" ]; then
+          echo "::error title=Missing TF_STATE_ENCRYPTION_PASSPHRASE::The Terraform roots encrypt state at rest, so this secret is required. Generate one (openssl rand -base64 32), store it as the TF_STATE_ENCRYPTION_PASSPHRASE repository secret, and ESCROW IT OFFLINE — losing it makes every state file unrecoverable. See docs/adr/0007-terraform-state-encryption.md."
+          exit 1
+        fi
+        # Mask before anything can echo it.
+        echo "::add-mask::${PASSPHRASE}"
+        # The passphrase is interpolated into an HCL string below, so a value
+        # containing a quote, a backslash or a newline would not merely break
+        # parsing — it could CLOSE the string and append arbitrary encryption
+        # configuration (e.g. swap in method.unencrypted). Restrict it to the
+        # base64 alphabet, which is what the documented `openssl rand -base64 32`
+        # produces, and reject anything else rather than escaping it.
+        case "${PASSPHRASE}" in
+          *[!A-Za-z0-9+/=_-]*)
+            echo "::error title=Invalid TF_STATE_ENCRYPTION_PASSPHRASE::The passphrase must contain only [A-Za-z0-9+/=_-] — it is interpolated into an HCL string, where a quote or backslash could inject encryption configuration. Regenerate it with 'openssl rand -base64 32'."
+            exit 1
+            ;;
+        esac
+        # pbkdf2 requires at least 16 characters; OpenTofu rejects shorter ones
+        # at init with a message about the key provider rather than the secret.
+        if [ "${#PASSPHRASE}" -lt 16 ]; then
+          echo "::error title=TF_STATE_ENCRYPTION_PASSPHRASE too short::pbkdf2 requires >= 16 characters (got ${#PASSPHRASE}). Regenerate it with 'openssl rand -base64 32'."
+          exit 1
+        fi
+        # method.unencrypted.migrate is referenced by the roots' phase-1 fallback
+        # (read plaintext, write encrypted). It is declared here so that deleting
+        # the fallback in phase 2 needs no change to this action.
+        {
+          echo 'TF_ENCRYPTION<<TF_ENCRYPTION_EOF'
+          echo 'key_provider "pbkdf2" "llz" {'
+          echo "  passphrase = \"${PASSPHRASE}\""
+          echo '}'
+          echo 'method "aes_gcm" "llz" {'
+          echo '  keys = key_provider.pbkdf2.llz'
+          echo '}'
+          echo 'method "unencrypted" "migrate" {}'
+          echo 'state {'
+          echo '  method = method.aes_gcm.llz'
+          echo '}'
+          echo 'plan {'
+          echo '  method = method.aes_gcm.llz'
+          echo '}'
+          echo 'TF_ENCRYPTION_EOF'
+        } >> "$GITHUB_ENV"

@@ -98,27 +98,30 @@ spec:
       ports:
         - port: 80
           protocol: TCP
-    {{- if .Values.platform.networkPolicy.keycloakNamespace }}
+    {{- if .Values.platform.networkPolicy.gatewayNamespace }}
     # apl-core Keycloak: the `keycloak` OIDC auth mount fetches the realm JWKS to
-    # validate team-login id_tokens. Keycloak is not meshed, so this is a direct
-    # L4 allow; the mount MUST target the internal jwks_url (the public URL
-    # hairpins) — see `llz ci bao-configure` (keycloakTeamSteps).
+    # validate team-login id_tokens, and that fetch carries SIGNING KEYS, so it
+    # must be verified TLS (ADR 0010).
     #
-    # 8443 (TLS) is the port the fetch now uses. 8080 (plaintext) is retained
-    # ONLY for the staged rollout: the JWKS fetch is lazy (skip_jwks_validation),
-    # so an instance that has not yet re-run bao-configure is still pointed at
-    # 8080 and would lose team login the moment this allow disappeared. REMOVE
-    # THE 8080 ENTRY once every instance has re-run `llz ci bao-configure` and a
-    # team login has been verified — leaving it is a standing permission for the
-    # exact plaintext fetch this change exists to eliminate.
+    # The egress is to the INGRESS GATEWAY, not to Keycloak. apl-core gives the
+    # Keycloak pod no TLS key material, so its :8443 is declared but dead; the
+    # only endpoint serving Keycloak over TLS is the gateway, which presents the
+    # `otomi-wildcard` certificate (SAN *.<domainSuffix>, issued by custom-ca —
+    # the same CA openbao-apl-ca chains to). `llz ci pin-keycloak-gateway-alias`
+    # points keycloak.<domain> at this Service's ClusterIP so the request stays
+    # in-cluster instead of hairpinning through the external LoadBalancer, which
+    # LKE-E does not support.
+    #
+    # NOTE the keycloak namespace is deliberately NOT allowed here any more.
+    # Both previous targets were dead ends — :8080 was the plaintext fetch this
+    # exists to eliminate, and :8443 never had a listener — so keeping either
+    # would be a standing permission for a path nothing uses.
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.platform.networkPolicy.keycloakNamespace }}
+              kubernetes.io/metadata.name: {{ .Values.platform.networkPolicy.gatewayNamespace }}
       ports:
-        - port: 8443
-          protocol: TCP
-        - port: 8080
+        - port: 443
           protocol: TCP
     {{- end }}
 {{- end }}

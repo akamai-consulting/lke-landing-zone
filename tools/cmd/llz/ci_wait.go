@@ -190,7 +190,27 @@ func runCIWaitClusterReady(timeout, interval, requestTimeout, expectNodes int) e
 			"-o", `jsonpath={range .items[*]}{.metadata.name}{"="}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}`,
 			fmt.Sprintf("--request-timeout=%ds", requestTimeout))
 		if err != nil {
-			fmt.Println("Waiting for the control plane to accept the kubeconfig...")
+			// PRINT THE REASON. This used to discard err and out entirely, so a
+			// 15-minute timeout produced fifteen identical lines and no cause —
+			// and the three outcomes it hides want completely different responses:
+			//
+			//   i/o timeout / no route  -> this runner is not in the ACL
+			//   EOF / connection reset  -> ACL'd but the apiserver is closing us
+			//   TLS/x509                -> kubeconfig or CA mismatch
+			//   NotFound/Forbidden      -> reachable; an RBAC or resource problem
+			//
+			// Observed on run 30485106067 only because a DIFFERENT command happened
+			// to log it: "couldn't get current server API group list: ... EOF".
+			// execCombined, NOT the captured stdout: kubectl writes these errors to
+			// STDERR, so the first version of this printed "exit status 1: " with an
+			// empty reason on all 15 polls of run 30499831638 — a diagnostic that
+			// looked like one and carried nothing.
+			detail := firstLine(strings.TrimSpace(execCombined("kubectl", "get", "--raw", "/readyz",
+				fmt.Sprintf("--request-timeout=%ds", requestTimeout))))
+			if detail == "" {
+				detail = firstLine(strings.TrimSpace(string(out)))
+			}
+			fmt.Printf("Waiting for the control plane to accept the kubeconfig... (%v: %s)\n", err, detail)
 			return false
 		}
 		apiReachable = true

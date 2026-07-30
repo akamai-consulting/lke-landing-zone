@@ -16,6 +16,7 @@ package main
 // preferred name anywhere, and the CI image no longer contains it.
 
 import (
+	"context"
 	"os"
 	"os/exec"
 )
@@ -56,4 +57,13 @@ func tfBin() string { return resolveTFBin() }
 // Terraform/OpenTofu goes through here.
 func tfCommand(args ...string) *exec.Cmd {
 	return exec.Command(tfBin(), args...) // #nosec G204 -- binary is resolved from a fixed allowlist above
+}
+
+// tfCommandContext is tfCommand with a deadline, for the call sites that bound a
+// hung state-refresh. It exists so a caller needing a context does not reach for
+// exec.CommandContext directly and reintroduce a hardcoded binary name — which
+// is exactly how `tf-import` and `tf-apply` were left behind by the OpenTofu
+// migration and only surfaced when a real apply ran in CI.
+func tfCommandContext(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, tfBin(), args...) // #nosec G204 -- binary is resolved from a fixed allowlist above
 }

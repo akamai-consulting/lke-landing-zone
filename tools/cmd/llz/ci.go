@@ -130,7 +130,10 @@ func ciCmd() *cobra.Command {
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
 	// ci_seed_special.go.
 	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciBaoSeedSealKeyCmd(),
-		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd())
+		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd(),
+		// Must run BEFORE the OpenBao pods are waited on: it patches the
+		// StatefulSet, so pinning it late would roll a freshly unsealed cluster.
+		ciPinKeycloakGatewayAliasCmd())
 	// Object-storage key lifecycle, one owner end to end: mint-bootstrap-objkeys
 	// mints the FIRST Loki/Harbor keys at bootstrap and seeds OpenBao (replacing
 	// the TF-minted keys + LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub relay +
@@ -598,7 +601,7 @@ func tfImport(g globalOpts, varFile, addr, id string, fatal bool) (ok bool, err 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "terraform", "import", "-var-file="+varFile, addr, id)
+	cmd := tfCommandContext(ctx, "import", "-var-file="+varFile, addr, id)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	runErr := cmd.Run()
 	// A context-deadline kill returns from Run() as an opaque "signal: killed"
@@ -646,7 +649,7 @@ func runCITFApply(g globalOpts, plan, varFile string) error {
 
 	// First attempt — the happy path. -no-color is load-bearing: the heal
 	// parsers anchor on the plain "  with <addr>," diagnostic lines.
-	applyLog, code, err := runTeed("terraform", "apply", "-no-color", "-auto-approve", plan)
+	applyLog, code, err := runTeed(tfBin(), "apply", "-no-color", "-auto-approve", plan)
 	if err != nil {
 		return fmt.Errorf("could not run terraform apply: %w", err)
 	}

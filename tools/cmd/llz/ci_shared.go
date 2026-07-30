@@ -103,13 +103,25 @@ func newAplGateDepsFor(kubeconfig string) aplGateDeps {
 // call sites did, and it makes a fake clock that lands exactly on the deadline
 // terminate instead of spinning. With a real clock the two spellings differ only
 // on an exact-nanosecond tie, which is why nothing observable changes here.
+// Second bound: an ATTEMPT CAP, because the deadline alone is not enough. now and
+// sleep are independent seams, and a caller that injects a REAL clock with a no-op
+// sleep — the combination every bootstrapDeps fake in this package uses — makes the
+// deadline unreachable in any useful time and turns this into a busy-spin for the
+// full real timeout. That hung the test suite once already (see
+// waitAplGitConfig/353ea2de). Under a real clock the cap and the deadline expire at
+// essentially the same iteration, so nothing observable changes in production; the
+// cap simply cannot be defeated by a clock that does not advance.
 func pollUntil(now func() time.Time, sleep func(time.Duration), timeout, interval time.Duration, cond func() bool) bool {
 	deadline := now().Add(timeout)
-	for {
+	attempts := 1
+	if interval > 0 {
+		attempts = int(timeout/interval) + 1
+	}
+	for attempt := 1; ; attempt++ {
 		if cond() {
 			return true
 		}
-		if !now().Before(deadline) {
+		if !now().Before(deadline) || attempt >= attempts {
 			return false
 		}
 		sleep(interval)

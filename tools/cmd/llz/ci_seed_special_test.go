@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -281,11 +282,19 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 	}
 	b, _ := os.ReadFile(sum)
 	for _, want := range []string{
-		"### PVCs that escaped the Kyverno encryption mutation",
+		"### PVCs not on the encrypted, Retain StorageClass",
 		"NAMESPACE  PVC  STORAGECLASS",
 		"data-harbor-redis-0",
 		"gitea-shared",
-		"**To remediate** (per-workload, irreversible for that data):",
+		"**To remediate**",
+		// The whole point of the rewrite: the summary must SPLIT BY CAUSE. The harbor
+		// PVC is outside the Kyverno policy's scope, so blaming webhook readiness for
+		// it sends the reader after a race that cannot explain it.
+		"**Any other namespace (1 here):** NOT a Kyverno problem",
+		"cluster.defaultStorageClass",
+		// And it must say that recreate is the only remedy, since storageClassName is
+		// immutable once bound.
+		"is immutable once bound",
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("summary missing %q:\n%s", want, b)
@@ -384,4 +393,61 @@ spec:
 			}
 		}
 	})
+}
+
+// TestKyvernoScopeMatchesPolicy pins kyvernoScopedNamespaces to the ClusterPolicy
+// it describes. Drift here is silent and misleading, not loud: the audit would keep
+// attributing an out-of-scope PVC to "Kyverno's webhook lagged" — sending the reader
+// after a timing bug that cannot explain it — or stop naming a namespace the policy
+// really does cover.
+func TestKyvernoScopeMatchesPolicy(t *testing.T) {
+	raw, err := os.ReadFile("manifests/kyverno-pvc-encrypted-storage-class.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The policy line is `namespaces: [gitea, istio-system]`.
+	m := regexp.MustCompile(`(?m)^\s*namespaces:\s*\[([^\]]*)\]`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("no `namespaces: [...]` list found in the policy — did its match block change shape?")
+	}
+	var fromPolicy []string
+	for _, f := range strings.Split(string(m[1]), ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			fromPolicy = append(fromPolicy, f)
+		}
+	}
+	if !reflect.DeepEqual(fromPolicy, kyvernoScopedNamespaces) {
+		t.Fatalf("policy scopes %v but kyvernoScopedNamespaces is %v — the audit would misattribute the cause",
+			fromPolicy, kyvernoScopedNamespaces)
+	}
+}
+
+// TestSplitByKyvernoScope covers the partition that decides WHICH cause the audit
+// reports. Getting it backwards is worse than not splitting at all.
+func TestSplitByKyvernoScope(t *testing.T) {
+	rows := []pvcRow{
+		{"harbor", "harbor-otomi-db-1", "linode-block-storage"},
+		{"istio-system", "data-oauth2-proxy-redis-ha-server-0", "linode-block-storage"},
+		{"keycloak", "keycloak-db-1", "linode-block-storage"},
+		{"gitea", "valkey-data-gitea-valkey-primary-0", "linode-block-storage"},
+	}
+	in, out := splitByKyvernoScope(rows)
+	if got := pvcNames(in); !reflect.DeepEqual(got, []string{"data-oauth2-proxy-redis-ha-server-0", "valkey-data-gitea-valkey-primary-0"}) {
+		t.Fatalf("in-scope = %v", got)
+	}
+	// harbor/keycloak are the real-world case that used to be misreported.
+	if got := pvcNames(out); !reflect.DeepEqual(got, []string{"harbor-otomi-db-1", "keycloak-db-1"}) {
+		t.Fatalf("out-of-scope = %v", got)
+	}
+	if i, o := splitByKyvernoScope(nil); len(i) != 0 || len(o) != 0 {
+		t.Fatal("nil input should partition to nothing")
+	}
+}
+
+func pvcNames(rows []pvcRow) []string {
+	var out []string
+	for _, r := range rows {
+		out = append(out, r.Name)
+	}
+	return out
 }

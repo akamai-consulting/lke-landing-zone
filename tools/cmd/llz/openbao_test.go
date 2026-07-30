@@ -11,9 +11,17 @@ func TestBaoExecArgv(t *testing.T) {
 	// pod-mounted CA. The network listener (8200) now requires a client
 	// certificate that an exec'd `bao` does not carry, and the openbao-tls cert
 	// gained a 127.0.0.1 SAN so skip-verify is no longer needed here.
+	//
+	// The BAO_* names must come through, not only the VAULT_* aliases: the chart
+	// puts BAO_ADDR=…:8200 in the container, and OpenBao prefers a present BAO_*
+	// over VAULT_* unconditionally, so a VAULT_ADDR-only argv is silently
+	// overridden back onto the mTLS listener. See baoLoopbackEnv.
 	want := []string{
 		"-n", "llz-openbao", "exec", "-i", "-c", "openbao", "platform-openbao-0", "--",
-		"env", "VAULT_ADDR=https://127.0.0.1:8210", "VAULT_CACERT=/openbao/tls/ca.crt", "VAULT_TOKEN=s.tok", "bao",
+		"env",
+		"BAO_ADDR=https://127.0.0.1:8210", "BAO_CACERT=/openbao/tls/ca.crt",
+		"VAULT_ADDR=https://127.0.0.1:8210", "VAULT_CACERT=/openbao/tls/ca.crt",
+		"BAO_TOKEN=s.tok", "VAULT_TOKEN=s.tok", "bao",
 		"policy", "list",
 	}
 	if !reflect.DeepEqual(got, want) {

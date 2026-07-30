@@ -79,18 +79,27 @@ platform:
   # landed by the same ca.crt indirection used everywhere else in this chart.
   #
   # ⚠️  UNVERIFIED PREREQUISITE. Two facts must hold on the target cluster and
-  # NEITHER could be confirmed from this repo alone:
-  #   1. apl-core exposes a ClusterIssuer named `custom-ca` (referenced by name in
-  #      components/observability/otel-bootstrap-ca.yaml's migration note, which
-  #      is the only evidence available here).
-  #   2. Keycloak's internal Service serves TLS on 8443 with a cert from THAT CA.
-  # Verify both before rollout:
-  #   kubectl get clusterissuer custom-ca
-  #   kubectl -n keycloak get svc keycloak-keycloakx-http -o yaml | grep -A3 ports
-  #   kubectl -n llz-openbao exec platform-openbao-0 -c openbao -- \
-  #     openssl s_client -connect keycloak-keycloakx-http.keycloak:8443 -showcerts
-  # If either fails, set enabled:false here and pin static keys instead
-  # (jwt_validation_pubkeys) — see docs/adr/0010-in-cluster-mtls.md.
+  # BOTH assumptions have now been checked on a live cluster. One held, one did not:
+  #   1. HOLDS — apl-core exposes a ClusterIssuer named `custom-ca`
+  #      (`llz ci health` reports "ClusterIssuer custom-ca Ready").
+  #   2. FALSE — Keycloak's internal Service does NOT serve TLS on 8443. apl-core
+  #      runs Keycloak with `args: [start]`, KC_HTTP_ENABLED=true and proxy-mode
+  #      xforwarded, and gives it no TLS key material, so it never opens an HTTPS
+  #      listener. The port is declared on the Service and container and is dead;
+  #      because Keycloak IS meshed, its Envoy sidecar accepts the connection and
+  #      then resets it (`read: connection reset by peer`, not `refused`).
+  #
+  # This CA is still exactly right, because the TLS that DOES exist for Keycloak
+  # is terminated by the Istio ingress gateway, serving apl-core's `otomi-wildcard`
+  # Certificate — SAN *.<domainSuffix>, issued by this same `custom-ca`
+  # (values/cert-manager/cert-manager-raw.gotmpl). That wildcard covers
+  # keycloak.<domain>, so this leaf's ca.crt verifies it. Only the ENDPOINT was
+  # wrong; see keycloakJWKSURL and `llz ci pin-keycloak-gateway-alias`.
+  #
+  # ADOPTERS: apl-core issues the same wildcard from Let's Encrypt when
+  # cert-manager.issuer is `letsencrypt`. This leaf will NOT verify that chain —
+  # set enabled:false and drop jwks_ca_pem so OpenBao uses system roots (a public
+  # CA is verifiable without pinning).
   aplCA:
     enabled: true
     secretName: openbao-apl-ca
@@ -151,17 +160,29 @@ platform:
         name: broad-pat-rotator
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
     observabilityNamespace: llz-observability
-    # Namespace of apl-core's Keycloak. OpenBao's `keycloak` OIDC auth mount
-    # (team-scoped writes) fetches the realm JWKS from Keycloak's INTERNAL http
-    # service (:8080) to validate team-login id_tokens — the public
-    # keycloak.<domain> URL is unreachable in-cluster (resolves to the cluster's
-    # own LB IP → hairpin, unsupported on LKE-E). Keycloak is not meshed, so this
-    # is a plain L4 allow. Defaults to `keycloak`, so the egress is rendered on
-    # EVERY instance (it's a benign L4 allow to one platform namespace on :8080).
-    # Set it empty to drop the rule on an instance with no spec.teams (the OpenBao
-    # `keycloak` OIDC mount — the only user of this egress — exists only when teams
-    # are declared).
-    keycloakNamespace: keycloak
+    # Namespace of apl-core's Istio ingress gateway. OpenBao's `keycloak` OIDC
+    # auth mount (team-scoped writes) fetches the realm JWKS to validate
+    # team-login id_tokens, and reaches it through the GATEWAY on :443 — not
+    # through Keycloak directly.
+    #
+    # Keycloak itself cannot serve this: apl-core runs it with no TLS key
+    # material, so its :8443 is a declared-but-dead port, and :8080 is the
+    # plaintext fetch ADR 0010 exists to eliminate (this request carries signing
+    # keys, so anything that can answer it can mint tokens OpenBao will accept).
+    # The gateway terminates TLS with apl-core's `otomi-wildcard` certificate
+    # (SAN *.<domainSuffix>, issued by the custom-ca ClusterIssuer), and
+    # openbao-apl-ca is a leaf of that SAME CA — so the cert OpenBao already
+    # mounts verifies it.
+    #
+    # `llz ci pin-keycloak-gateway-alias` pins keycloak.<domain> to this Service's
+    # ClusterIP in the pods' /etc/hosts, so the request stays in-cluster (the
+    # public name resolves to the external LB IP, and hairpinning through it is
+    # unsupported on LKE-E) while Host/SNI still match the certificate.
+    #
+    # Defaults to `istio-system`, so the egress renders on every instance. Set it
+    # empty to drop the rule on an instance with no spec.teams — the OIDC mount,
+    # the only user of this egress, exists only when teams are declared.
+    gatewayNamespace: istio-system
 
   # Prometheus ServiceMonitor for OpenBao's /v1/sys/metrics endpoint. In the
   # source chart this rendered only when the release was named `platform-prom`
@@ -452,21 +473,122 @@ openbao:
       type: ClusterIP
       port: 8200
 
+    # BOTH PROBES MUST BE `exec`, NOT `httpGet`. This is a hard constraint, not a
+    # preference, and it is the whole reason this block exists.
+    #
+    # ADR 0010 made the :8200 network listener require a client certificate. A
+    # kubelet probe holds no identity, so it cannot use :8200 — its handshake is
+    # rejected with `remote error: tls: certificate required`, liveness fails,
+    # and kubelet SIGKILLs the container on a loop (observed live: 18 restarts).
+    #
+    # The obvious repair — repoint the probes at the cert-free loopback listener
+    # via `port: 8210` — DOES NOT WORK, and fails in a way that looks like the
+    # same bug. A Kubernetes httpGet probe has no `host` field in this subchart's
+    # template (server-statefulset.yaml renders only path/port/scheme), and
+    # httpGet defaults its host to the POD IP, never 127.0.0.1. The loopback
+    # listener binds 127.0.0.1:8210 only, so kubelet would get `connection
+    # refused` on the pod IP and restart the container exactly as before. The
+    # live evidence for the default is the pre-fix liveness failure, which
+    # resolved to the pod IP rather than loopback:
+    #
+    #   Liveness probe failed: Get "https://10.4.6.135:8200/v1/sys/health?..."
+    #
+    # Binding the health listener on the pod network instead would re-expose a
+    # certificate-free API port to the cluster, which is precisely what ADR 0010
+    # removed. So health checks must not traverse the network at all: an `exec`
+    # probe runs INSIDE the pod's network namespace.
+    #
+    # An exec probe then reaches :8200 over loopback and CAN present a client
+    # certificate, which is what makes the rest of this block work — see
+    # extraEnvironmentVars below.
     readinessProbe:
-      # default readiness treats sealed/uninitialized as not-ready (correct —
-      # keeps sealed pods out of Service endpoints).
+      # Left as the subchart's DEFAULT exec (`bao status -tls-skip-verify`).
+      # That exec takes its address from the container's BAO_ADDR, which the
+      # subchart hardcodes to https://127.0.0.1:8200 and exposes no knob for —
+      # so rather than fight it, extraEnvironmentVars below hands the exec a
+      # CLIENT CERTIFICATE, which is the one thing :8200 was missing. Setting
+      # `path` here would switch the template to httpGet and reintroduce the
+      # unreachability bug above.
+      #
+      # The default exec also carries the seal semantics we want for free:
+      # `bao status` exits 0 for any unsealed node INCLUDING a raft standby and
+      # non-zero while sealed/uninitialized. (Note that with the subchart's
+      # publishNotReadyAddresses=true on every Service, readiness does not
+      # actually gate endpoint membership here — it is a status signal for Argo,
+      # operators and `llz ci health`, not a traffic gate.)
       enabled: true
 
     livenessProbe:
       enabled: true
-      # sealedcode=204 & uninitcode=204: a freshly deployed OpenBao comes up
-      # sealed/uninitialized and answers /v1/sys/health with 503/501. Default
-      # liveness treats those as failure, so kubelet SIGKILLs the container
-      # (~90s after start) before bootstrap-openbao.yml can run `bao operator
-      # init`. Mapping sealed/uninitialized to 204 keeps the pod alive through
-      # the bootstrap window.
-      path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+      # An exec, for the reason at the top of this block. The exit-code mapping
+      # replaces the sealedcode/uninitcode query parameters the httpGet form
+      # used: `bao status` exits 0 unsealed, 2 sealed-or-uninitialized, 1 on a
+      # real error. A freshly deployed OpenBao comes up sealed and stays that way
+      # until bootstrap-openbao.yml runs `bao operator init`, so liveness MUST
+      # tolerate exit 2 through the bootstrap window — treating it as failure is
+      # what used to SIGKILL the container before bootstrap could reach it.
+      #
+      # `-c`, not `-ec`: under `set -e` the sealed exit status would abort the
+      # shell before the mapping below ever ran, turning "sealed" back into
+      # "dead". `|| s=$?` captures the status without tripping the errexit trap.
+      #
+      # Address and client identity come from the container env below, the same
+      # way the readiness exec gets them, so the two probes cannot drift.
+      # -tls-skip-verify only skips verifying the SERVER, which is this same
+      # process over loopback; the CLIENT certificate is still presented, and
+      # that is what :8200 requires.
+      execCommand:
+        - /bin/sh
+        - -c
+        - 's=0; bao status -tls-skip-verify >/dev/null 2>&1 || s=$?; [ "$s" -eq 0 ] || [ "$s" -eq 2 ]'
       initialDelaySeconds: 60
+      # The subchart default (period 5s, threshold 2) kills after 10s of failure.
+      # That is far too eager for a restart-the-server action whose only true
+      # positive is a wedged process: an exec probe also fails on a slow node or
+      # a momentary CRI hiccup. 6 × 10s = a full minute of sustained failure.
+      periodSeconds: 10
+      failureThreshold: 6
+
+    # LOAD-BEARING, and the half of the mTLS repair that is not about probes at all.
+    #
+    # The subchart hardcodes BAO_ADDR=https://127.0.0.1:8200 into the container
+    # and exposes NO knob to change it. Every in-pod client inherits it — both
+    # probes above, and any operator shell. ADR 0010 made that address require a
+    # client certificate, so all of them broke at the TLS handshake.
+    #
+    # It cannot be fixed by overriding BAO_ADDR here. Doing so emits a SECOND
+    # `BAO_ADDR` entry (extraEnvironmentVars renders after the subchart's own),
+    # and `container.env` is a server-side-apply list-map keyed on `name`:
+    # duplicate keys are REJECTED by the apiserver, not last-write-wins. This
+    # Application syncs with ServerSideApply=true, so the StatefulSet is never
+    # created at all — the whole app sits OutOfSync with no workload and no pod
+    # to diagnose. That failure looks nothing like an env problem, which is
+    # exactly why it gets a guard (TestOpenBaoExtraEnvNeverShadowsSubchartEnv).
+    #
+    # So instead of arguing with :8200 about WHERE to connect, give the client
+    # the IDENTITY that address demands. These three names are NOT set by the
+    # subchart, so they add cleanly.
+    #
+    # The certificate reused here is `openbao-raft-client` — already mounted,
+    # already required for the pod to start (raft retry_join presents it to the
+    # leader's :8200 for exactly the same reason), and already trusted by this
+    # listener's tls_client_ca_file. Reusing it therefore adds NO new startup
+    # dependency; minting a second identity would add a Secret the pod must wait
+    # on before it can boot, to say the same thing.
+    #
+    # Note this does not help `llz`'s `kubectl exec … bao …` paths: those pass
+    # their own env on the command line (baoLoopbackEnv), which is a process
+    # environment and not a PodSpec list, so they may — and do — set BAO_ADDR to
+    # the cert-free loopback listener without any duplicate-key problem.
+    extraEnvironmentVars:
+      # cert-manager writes tls.crt/tls.key into the openbao-raft-client-tls
+      # Secret, mounted read-only at /openbao/raft-client (see server.volumes).
+      BAO_CLIENT_CERT: "/openbao/raft-client/tls.crt"
+      BAO_CLIENT_KEY: "/openbao/raft-client/tls.key"
+      # Server verification for in-pod clients that do not pass -tls-skip-verify.
+      # The serving cert carries a 127.0.0.1 SAN (templates/openbao-tls-cert.yaml),
+      # so loopback verifies cleanly.
+      BAO_CACERT: "/openbao/tls/ca.crt"
 
     # --- Audit log shipping via Promtail sidecar ------------------------------
     # A Promtail sidecar tails the file audit device and ships to the in-cluster
