@@ -701,13 +701,35 @@ jobs:
       # (assert-reconciler reads gauges the scrape assert just proved fresh), and the
       # lanes are collision-free only because the mutating ones use disjoint
       # namespaces and each Prometheus lane port-forwards on local port :0.
-      - name: (e2e) assert suite — 7 gates + 2 diagnostics, in parallel lanes
+      # ── Storage invariant — DELIBERATELY NOT in the fan-out below ─────────────
+      # Every PV-backed Linode Volume must be encrypted at rest, carry its lke<id>
+      # ownership tag, and have been renamed off the CSI default pvc-<uuid> to a
+      # readable <region>-<ns>-<pvc> (an opaque uuid is unattributable in the Linode
+      # UI, the billing export and the quota census — the places you look once the
+      # cluster is gone). Checks the Volume's own `encryption` field, not the PVC's
+      # storageClassName: the class name is a PROXY, and it was a satisfied proxy
+      # the entire time a managed cluster provisioned 13 of 16 PVCs unencrypted.
+      #
+      # It runs SERIALLY, BEFORE the parallel suite, because it authenticates with
+      # the broad PAT — and the `broad-pat` lane in that suite ROTATES that PAT,
+      # revoking the old id. Run concurrently, this 401s on every volume partway
+      # through and reports a fleet-wide violation that is really just a revoked
+      # credential (observed: revoked_ids=[71820512] while this was mid-flight).
+      # The fan-out's collision rules cover namespaces and ports; shared CREDENTIALS
+      # are a third axis, and this is the only lane that sits on one.
+      #
+      # Tags and labels are healed by reconciler lanes after CreateVolume, so the
+      # verb waits a bounded time for them. Encryption never waits — it cannot
+      # change, and a red run is not re-runnable: storageClassName is immutable once
+      # bound, so it means re-rolling the workload and losing that volume's data.
+      - name: (e2e) assert storage invariant — Volume encryption + tags + labels
         if: ${{ inputs.assert_loki }}
         env:
-          # The volume-encryption lane reads Volume encryption/tags from the LINODE
-          # API — the only place the ground truth lives. Without a token it hard-fails
-          # rather than skipping, so this must be set or the lane goes red.
           LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci assert-volume-encryption
+
+      - name: (e2e) assert suite — 6 gates + 2 diagnostics, in parallel lanes
+        if: ${{ inputs.assert_loki }}
         run: |
           set -uo pipefail
           dir="$(mktemp -d)"
@@ -720,23 +742,6 @@ jobs:
           lane health-workflow   llz ci assert-health-workflow --region "$REGION"
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
           lane wave-vap          llz ci assert-wave-health-vap
-          # Storage invariant, asserted against the LINODE API: every PV-backed
-          # Volume encrypted at rest, carrying its lke<id> ownership tag, AND
-          # renamed off the CSI default pvc-<uuid> to a readable <region>-<ns>-<pvc>
-          # (an opaque uuid is unattributable in the Linode UI, the billing export
-          # and the quota census — the places you look once the cluster is gone).
-          # Tags and labels are healed by reconciler lanes after CreateVolume, so
-          # the verb waits a bounded time for them; encryption never waits.
-          # GATING. Checks the Volume's own `encryption` field rather than the PVC's
-          # storageClassName, because the class name is only a PROXY for encryption
-          # — and it was a satisfied proxy the entire time a managed cluster was
-          # provisioning 13 of 16 PVCs unencrypted. Fails closed, including when the
-          # cluster has no Linode-CSI PVs at all: a gate that passes having examined
-          # nothing is worse than no gate.
-          # A red lane is NOT re-runnable — encryption is set inside CreateVolume and
-          # storageClassName is immutable once bound, so it means re-rolling the
-          # workload (which destroys that volume's data).
-          lane volume-encryption llz ci assert-volume-encryption
           lane instance-custom   llz ci assert-instance-custom
           # Team-scoped OpenBao credential path, BOTH halves. Write: spec.teams →
           # apl-core team → Keycloak group/role → OpenBao keycloak role →
@@ -753,7 +758,7 @@ jobs:
           lane alert-eval        bash -c 'llz ci alert-eval || true'
           wait
           fail=0
-          for n in loki scrape-reconciler health-workflow broad-pat wave-vap volume-encryption instance-custom team-write metric-surface alert-eval; do
+          for n in loki scrape-reconciler health-workflow broad-pat wave-vap instance-custom team-write metric-surface alert-eval; do
             rc="$(cat "${dir}/${n}.rc" 2>/dev/null || echo 1)"
             echo "::group::assert ${n} (rc=${rc})"
             cat "${dir}/${n}.log" 2>/dev/null || true
