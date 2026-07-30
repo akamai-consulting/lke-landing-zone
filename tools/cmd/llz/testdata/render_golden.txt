@@ -904,15 +904,15 @@ spec:
 --- terraform-iac-bootstrap/cluster/outputs.tf  sha256=df6e280f94f06f02b1d4129a2d6b4628769e648110b71dc543711c8d96dab2e6  bytes=2200
 === terraform-iac-bootstrap/cluster/prod.tfvars
 cluster_label = "platform-prod"
-region        = "us-ord"
+region = "us-ord"
 
 # OpenBao HA topology for this deployment. The default is a self-contained,
 # single-cluster OpenBao — most deployments want this:
-ha_role  = "standalone"
+ha_role = "standalone"
 ha_group = ""
 # For a two-cluster HA pair, give BOTH deployments the same ha_group and opposite
-# roles, e.g. in <active>.tfvars:   ha_role = "active"  ha_group = "prod"
-#                  in <standby>.tfvars:  ha_role = "standby" ha_group = "prod"
+# roles, e.g. in <active>.tfvars: ha_role = "active" ha_group = "prod"
+# in <standby>.tfvars: ha_role = "standby" ha_group = "prod"
 # `llz env list --ha`, `llz env role <name>`, and `llz env peer <name>` read
 # these to drive the OpenBao dual-write, cross-region CA, and Harbor seeding.
 
@@ -951,10 +951,10 @@ tags = []
 # stalling Bootstrap OpenBao. 5 nodes give the memory headroom and spread PVCs
 # under the per-Linode Block Storage attach limit. (node_count is NOT ForceNew —
 # it just scales the pool.)
-node_type  = "g8-dedicated-8-4"
+node_type = "g8-dedicated-8-4"
 node_count = 5
 
-control_plane_high_availability  = true
+control_plane_high_availability = true
 control_plane_audit_logs_enabled = true
 
 # Control-plane ACL: who may reach the LKE Kubernetes API server (TCP 443).
@@ -982,15 +982,15 @@ apl_enabled = false
 --- terraform-iac-bootstrap/cluster/providers.tf  sha256=2718a1c8896f90d6d167e4d5ee2d536928fe895c090ee6331c295a60260fb189  bytes=276
 === terraform-iac-bootstrap/cluster/staging.tfvars
 cluster_label = "platform-staging"
-region        = "us-sea"
+region = "us-sea"
 
 # OpenBao HA topology for this deployment. The default is a self-contained,
 # single-cluster OpenBao — most deployments want this:
-ha_role  = "standalone"
+ha_role = "standalone"
 ha_group = ""
 # For a two-cluster HA pair, give BOTH deployments the same ha_group and opposite
-# roles, e.g. in <active>.tfvars:   ha_role = "active"  ha_group = "prod"
-#                  in <standby>.tfvars:  ha_role = "standby" ha_group = "prod"
+# roles, e.g. in <active>.tfvars: ha_role = "active" ha_group = "prod"
+# in <standby>.tfvars: ha_role = "standby" ha_group = "prod"
 # `llz env list --ha`, `llz env role <name>`, and `llz env peer <name>` read
 # these to drive the OpenBao dual-write, cross-region CA, and Harbor seeding.
 
@@ -1029,10 +1029,10 @@ tags = []
 # stalling Bootstrap OpenBao. 5 nodes give the memory headroom and spread PVCs
 # under the per-Linode Block Storage attach limit. (node_count is NOT ForceNew —
 # it just scales the pool.)
-node_type  = "g6-standard-4"
+node_type = "g6-standard-4"
 node_count = 2
 
-control_plane_high_availability  = true
+control_plane_high_availability = true
 control_plane_audit_logs_enabled = true
 
 # Control-plane ACL: who may reach the LKE Kubernetes API server (TCP 443).
@@ -1071,7 +1071,7 @@ apl_enabled = false
 # `secret/platform/db-admin/<name>` by `llz ci seed-db-admin` at bootstrap —
 # never committed.
 #
-#   terraform apply -var-file=<env>.tfvars
+# terraform apply -var-file=<env>.tfvars
 #
 # Per-env separation is the backend state key (-backend-config at init), NOT a
 # terraform workspace.
@@ -1091,38 +1091,38 @@ region_suffix = "prod"
 # whether or not the instance wants a database.
 #
 # Per entry:
-#   region         (required) Linode geographic region — MUST match the VPC's region.
-#   vpc_id         (required) VPC to attach to; VPC-only, no public endpoint.
-#                            Typically the same VPC the LKE cluster attaches to.
-#   subnet_id      (required) Subnet within vpc_id.
-#                              linode-cli vpcs list
-#                              linode-cli vpcs subnets-list <vpc_id>
-#   engine_version (optional, "16") Major PostgreSQL version. When MIGRATING data
-#                            in, set at least the source's major version —
-#                            pg_restore is forward-compatible only.
-#   db_type        (optional, "g6-dedicated-2") linode-cli databases types
-#   cluster_size   (optional, 2) 1 = single node, 2/3 = HA with standbys.
+# region (required) Linode geographic region — MUST match the VPC's region.
+# vpc_id (required) VPC to attach to; VPC-only, no public endpoint.
+# Typically the same VPC the LKE cluster attaches to.
+# subnet_id (required) Subnet within vpc_id.
+# linode-cli vpcs list
+# linode-cli vpcs subnets-list <vpc_id>
+# engine_version (optional, "16") Major PostgreSQL version. When MIGRATING data
+# in, set at least the source's major version —
+# pg_restore is forward-compatible only.
+# db_type (optional, "g6-dedicated-2") linode-cli databases types
+# cluster_size (optional, 2) 1 = single node, 2/3 = HA with standbys.
 #
 # Example — one shared cluster plus a separately-sized one:
 #
-#   databases = {
-#     shared = {
-#       region    = "us-ord"
-#       vpc_id    = 575244
-#       subnet_id = 12345
-#     }
-#     analytics = {
-#       region       = "us-ord"
-#       vpc_id       = 575244
-#       subnet_id    = 12345
-#       db_type      = "g6-dedicated-8"
-#       cluster_size = 1
-#     }
-#   }
+# databases = {
+# shared = {
+# region = "us-ord"
+# vpc_id = 575244
+# subnet_id = 12345
+# }
+# analytics = {
+# region = "us-ord"
+# vpc_id = 575244
+# subnet_id = 12345
+# db_type = "g6-dedicated-8"
+# cluster_size = 1
+# }
+# }
 databases = {}
 
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
-#   TF_VAR_linode_token   Linode account API token (databases:read_write)
+# TF_VAR_linode_token Linode account API token (databases:read_write)
 === terraform-iac-bootstrap/databases/staging.tfvars
 # databases — the VPC-attached Linode Managed PostgreSQL clusters for this
 # deployment: zero, one, or several. Downstream app platforms carve per-app
@@ -1131,7 +1131,7 @@ databases = {}
 # `secret/platform/db-admin/<name>` by `llz ci seed-db-admin` at bootstrap —
 # never committed.
 #
-#   terraform apply -var-file=<env>.tfvars
+# terraform apply -var-file=<env>.tfvars
 #
 # Per-env separation is the backend state key (-backend-config at init), NOT a
 # terraform workspace.
@@ -1151,38 +1151,38 @@ region_suffix = "staging"
 # whether or not the instance wants a database.
 #
 # Per entry:
-#   region         (required) Linode geographic region — MUST match the VPC's region.
-#   vpc_id         (required) VPC to attach to; VPC-only, no public endpoint.
-#                            Typically the same VPC the LKE cluster attaches to.
-#   subnet_id      (required) Subnet within vpc_id.
-#                              linode-cli vpcs list
-#                              linode-cli vpcs subnets-list <vpc_id>
-#   engine_version (optional, "16") Major PostgreSQL version. When MIGRATING data
-#                            in, set at least the source's major version —
-#                            pg_restore is forward-compatible only.
-#   db_type        (optional, "g6-dedicated-2") linode-cli databases types
-#   cluster_size   (optional, 2) 1 = single node, 2/3 = HA with standbys.
+# region (required) Linode geographic region — MUST match the VPC's region.
+# vpc_id (required) VPC to attach to; VPC-only, no public endpoint.
+# Typically the same VPC the LKE cluster attaches to.
+# subnet_id (required) Subnet within vpc_id.
+# linode-cli vpcs list
+# linode-cli vpcs subnets-list <vpc_id>
+# engine_version (optional, "16") Major PostgreSQL version. When MIGRATING data
+# in, set at least the source's major version —
+# pg_restore is forward-compatible only.
+# db_type (optional, "g6-dedicated-2") linode-cli databases types
+# cluster_size (optional, 2) 1 = single node, 2/3 = HA with standbys.
 #
 # Example — one shared cluster plus a separately-sized one:
 #
-#   databases = {
-#     shared = {
-#       region    = "us-ord"
-#       vpc_id    = 575244
-#       subnet_id = 12345
-#     }
-#     analytics = {
-#       region       = "us-ord"
-#       vpc_id       = 575244
-#       subnet_id    = 12345
-#       db_type      = "g6-dedicated-8"
-#       cluster_size = 1
-#     }
-#   }
+# databases = {
+# shared = {
+# region = "us-ord"
+# vpc_id = 575244
+# subnet_id = 12345
+# }
+# analytics = {
+# region = "us-ord"
+# vpc_id = 575244
+# subnet_id = 12345
+# db_type = "g6-dedicated-8"
+# cluster_size = 1
+# }
+# }
 databases = {}
 
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
-#   TF_VAR_linode_token   Linode account API token (databases:read_write)
+# TF_VAR_linode_token Linode account API token (databases:read_write)
 --- terraform-iac-bootstrap/databases/variables.tf  sha256=6d50a8b4dac30f9c6bdb67b7eed64a217a399eb7160faa62664c7922afe31fe5  bytes=2912
 --- terraform-iac-bootstrap/databases/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
 --- terraform-iac-bootstrap/object-storage/backend.tf  sha256=35ab77b664436bc69caf9b63cf2218279689ea451acb552b41d03cc09dac903f  bytes=1109
@@ -1194,7 +1194,7 @@ databases = {}
 # Harbor and Loki. Buckets only: the scoped access keys are minted by
 # `llz ci mint-bootstrap-objkeys` and rotated in-cluster, never by Terraform.
 #
-#   terraform apply -var-file=<env>.tfvars
+# terraform apply -var-file=<env>.tfvars
 #
 # Per-env separation is the backend state key (-backend-config at init), NOT a
 # terraform workspace.
@@ -1205,17 +1205,17 @@ databases = {}
 region_suffix = "prod"
 
 # Linode Object Storage cluster ID. List options with:
-#   linode-cli object-storage clusters-list
+# linode-cli object-storage clusters-list
 obj_cluster = "us-ord-7"
 
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
-#   TF_VAR_linode_token   Linode account API token (object-storage:read_write)
+# TF_VAR_linode_token Linode account API token (object-storage:read_write)
 === terraform-iac-bootstrap/object-storage/staging.tfvars
 # object-storage — Linode Object Storage buckets (registry + logs). Consumed by
 # Harbor and Loki. Buckets only: the scoped access keys are minted by
 # `llz ci mint-bootstrap-objkeys` and rotated in-cluster, never by Terraform.
 #
-#   terraform apply -var-file=<env>.tfvars
+# terraform apply -var-file=<env>.tfvars
 #
 # Per-env separation is the backend state key (-backend-config at init), NOT a
 # terraform workspace.
@@ -1226,11 +1226,11 @@ obj_cluster = "us-ord-7"
 region_suffix = "staging"
 
 # Linode Object Storage cluster ID. List options with:
-#   linode-cli object-storage clusters-list
+# linode-cli object-storage clusters-list
 obj_cluster = "us-sea-1"
 
 # ── SECRET — supply via TF_VAR_* env var, NOT in this file ────────────────────
-#   TF_VAR_linode_token   Linode account API token (object-storage:read_write)
+# TF_VAR_linode_token Linode account API token (object-storage:read_write)
 --- terraform-iac-bootstrap/object-storage/variables.tf  sha256=431f70c0296816d5dd8b6a7fc7a9c3045b2c0d7eaa9dd1670a23d2530b600a7c  bytes=1334
 --- terraform-iac-bootstrap/object-storage/versions.tf  sha256=1f274b971dea4630e7b42eca0c3813b1737ef988a391e4bebd0826bfbfc82e31  bytes=153
 --- terraform-iac-bootstrap/vpc/backend.tf  sha256=5079fd70224c8b0a7a4ba7229ca655b7d779ee5e2d80bed952db0b4d40ab7081  bytes=1151

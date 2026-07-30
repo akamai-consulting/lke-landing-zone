@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -90,6 +91,32 @@ func specDerived(path string) bool {
 	return strings.HasSuffix(path, ".tfvars") || strings.Contains(path, "/apl-values/")
 }
 
+// hclRunOfSpaces matches a run of two or more spaces that is NOT at the start of
+// a line, i.e. the padding `tofu fmt` inserts to column-align `=` signs and
+// trailing comments.
+var hclRunOfSpaces = regexp.MustCompile(`(\S) {2,}`)
+
+// normalizeRendered makes a rendered artifact comparable across machines.
+//
+// renderTargets pipes HCL through `tofu fmt` BEST-EFFORT (render.go:fmtHCL): with
+// the binary present the `=` signs AND trailing comments are column-aligned,
+// without it they are not. A golden captured where tofu is installed therefore
+// fails where it is not — which is how this first landed: green locally, red on
+// the plain-ubuntu CI runner, twice (once on `=` padding, then on comment
+// padding). Alignment is not part of the spec->artifact mapping this file exists
+// to pin, so it is normalised away rather than made a precondition for the test.
+//
+// Applied ONLY to .tfvars. The apl-values artifacts are YAML, where leading
+// whitespace is semantic — collapsing runs there would let a real indentation
+// change slip through. Leading whitespace is preserved in both cases; only
+// padding AFTER a non-space character is collapsed.
+func normalizeRendered(path, content string) string {
+	if !strings.HasSuffix(path, ".tfvars") {
+		return content
+	}
+	return hclRunOfSpaces.ReplaceAllString(content, "$1 ")
+}
+
 // serializeRender renders the targets into a stable, reviewable text form:
 // sorted by path, full content for spec-derived files, hash+size for the rest.
 func serializeRender(targets map[string]string, instRoot string) string {
@@ -103,7 +130,15 @@ func serializeRender(targets map[string]string, instRoot string) string {
 	for _, p := range paths {
 		rel := strings.TrimPrefix(strings.TrimPrefix(p, instRoot), "/")
 		if specDerived(p) {
-			fmt.Fprintf(&b, "=== %s\n%s", rel, targets[p])
+			// dealign before comparing. renderTargets pipes HCL through
+			// `tofu fmt` BEST-EFFORT (render.go:fmtHCL): with the binary present
+			// the `=` signs are column-aligned, without it they are not. A golden
+			// captured on a machine that has tofu therefore fails on one that does
+			// not — which is exactly how this first landed, green locally and red
+			// on the plain-ubuntu CI runner. Alignment is not part of the
+			// spec->artifact mapping this file exists to pin, so it is normalised
+			// away rather than made a precondition for running the test.
+			fmt.Fprintf(&b, "=== %s\n%s", rel, normalizeRendered(p, targets[p]))
 			if !strings.HasSuffix(targets[p], "\n") {
 				b.WriteString("\n")
 			}
