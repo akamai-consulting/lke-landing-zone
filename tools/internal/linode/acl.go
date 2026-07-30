@@ -10,7 +10,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
+	"strings"
+	"time"
 )
 
 // ControlPlaneACL is an LKE cluster's control-plane ACL: whether access is
@@ -25,6 +28,9 @@ type ControlPlaneACL struct {
 	Enabled bool
 	IPv4    []string
 	IPv6    []string
+	// RevisionID is the id of the LAST ACL revision the control plane has
+	// verified as ENFORCED — not the desired state. See PutControlPlaneACL.
+	RevisionID string
 }
 
 // GetControlPlaneACL reads the cluster's control-plane ACL. An absent `enabled`
@@ -41,8 +47,9 @@ func (c *Client) GetControlPlaneACL(ctx context.Context, clusterID uint64) (Cont
 	}
 	var body struct {
 		ACL struct {
-			Enabled   *bool `json:"enabled"`
-			Addresses struct {
+			Enabled    *bool  `json:"enabled"`
+			RevisionID string `json:"revision-id"`
+			Addresses  struct {
 				IPv4 []string `json:"ipv4"`
 				IPv6 []string `json:"ipv6"`
 			} `json:"addresses"`
@@ -55,29 +62,87 @@ func (c *Client) GetControlPlaneACL(ctx context.Context, clusterID uint64) (Cont
 	if body.ACL.Enabled != nil {
 		enabled = *body.ACL.Enabled
 	}
-	return ControlPlaneACL{Enabled: enabled, IPv4: body.ACL.Addresses.IPv4, IPv6: body.ACL.Addresses.IPv6}, nil
+	acl := ControlPlaneACL{
+		Enabled:    enabled,
+		IPv4:       body.ACL.Addresses.IPv4,
+		IPv6:       body.ACL.Addresses.IPv6,
+		RevisionID: body.ACL.RevisionID,
+	}
+	// An EMPTY revision-id on GET is itself the answer to "has anything been
+	// enforced yet". Worth surfacing: if the field never populates, the
+	// enforcement handshake is unavailable on this cluster and the caller's wait
+	// would otherwise look like a hang with no explanation.
+	if acl.RevisionID == "" {
+		fmt.Fprintf(os.Stderr, "linode: GET control_plane_acl cluster=%d returned NO revision-id "+
+			"(enabled=%v, %d ipv4 entr(ies)) — the control plane has not reported an enforced revision\n",
+			clusterID, acl.Enabled, len(acl.IPv4))
+	}
+	return acl, nil
 }
 
-// PutControlPlaneACL replaces the cluster's control-plane ACL. Address lists are
-// forced non-nil so they marshal as [] rather than null.
-func (c *Client) PutControlPlaneACL(ctx context.Context, clusterID uint64, acl ControlPlaneACL) error {
+// PutControlPlaneACL replaces the cluster's control-plane ACL and returns the
+// revision id it submitted. Address lists are forced non-nil so they marshal as
+// [] rather than null.
+//
+// THE PUT IS ASYNCHRONOUS AND A READ-BACK OF `addresses` PROVES NOTHING.
+// A GET immediately after this returns the DESIRED address list — it echoes what
+// was accepted, not what the control plane enforces. The API contract is explicit:
+// "The optional field revision-id provided will be reflected on GET response when
+// (and only after) the ACL stanza is verified as enforced", and the docs state
+// enabling an ACL "may take up to 20 minutes for the ACL rules to take effect".
+//
+// Verifying with ContainsIP alone is what made cluster-access racy: it reported
+// "added <ip> to control-plane ACL" and proceeded, and every subsequent kubectl
+// then timed out or EOF'd until enforcement caught up. It passed whenever
+// enforcement happened to be fast (run 7: 48s) and failed whenever it was not
+// (runs 8-12). Callers must wait for the returned id via waitACLEnforced.
+func (c *Client) PutControlPlaneACL(ctx context.Context, clusterID uint64, acl ControlPlaneACL) (string, error) {
+	revision := newACLRevisionID()
 	body := map[string]any{
 		"acl": map[string]any{
-			"enabled":   acl.Enabled,
-			"addresses": map[string]any{"ipv4": NonNil(acl.IPv4), "ipv6": NonNil(acl.IPv6)},
+			"enabled":     acl.Enabled,
+			"revision-id": revision,
+			"addresses":   map[string]any{"ipv4": NonNil(acl.IPv4), "ipv6": NonNil(acl.IPv6)},
 		},
 	}
 	url := fmt.Sprintf("%s/v4beta/lke/clusters/%d/control_plane_acl", c.base, clusterID)
 	resp, err := c.put(ctx, url, body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
+	raw := readBody(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("PUT control-plane ACL for cluster %d returned %d: %s",
-			clusterID, resp.StatusCode, readBody(resp))
+		return "", fmt.Errorf("PUT control-plane ACL for cluster %d returned %d: %s",
+			clusterID, resp.StatusCode, raw)
 	}
-	return nil
+	// LOG THE STATUS AND BODY. Checking only the 2xx BUCKET hid the most
+	// important fact about this call: 200 means applied, 202 means QUEUED, and the
+	// difference is exactly the asynchrony that broke cluster-access. The success
+	// path previously printed "added <ip> to control-plane ACL" with no evidence
+	// of what the API actually said, which is why five runs argued about whether
+	// the grant had taken effect. The body is an ACL — addresses already logged
+	// elsewhere — so there is nothing sensitive to redact.
+	fmt.Fprintf(os.Stderr, "linode: PUT control_plane_acl cluster=%d revision=%s -> HTTP %d %s\n",
+		clusterID, revision, resp.StatusCode, truncateForLog(raw, 400))
+	return revision, nil
+}
+
+// truncateForLog keeps a response body loggable without flooding a run log.
+func truncateForLog(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…(truncated)"
+}
+
+// newACLRevisionID mints a revision id unique to this PUT. Seamed for tests.
+var newACLRevisionID = func() string { return fmt.Sprintf("llz-%d", time.Now().UnixNano()) }
+
+// ACLEnforced reports whether the control plane has verified revision as enforced.
+func (a ControlPlaneACL) ACLEnforced(revision string) bool {
+	return revision != "" && a.RevisionID == revision
 }
 
 // ContainsIP reports whether ip is in the ACL's IPv4 set, in bare or /32 form.

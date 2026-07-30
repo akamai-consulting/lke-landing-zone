@@ -57,7 +57,7 @@ type clusterLister interface {
 type aclClient interface {
 	clusterLister
 	GetControlPlaneACL(ctx context.Context, clusterID uint64) (linode.ControlPlaneACL, error)
-	PutControlPlaneACL(ctx context.Context, clusterID uint64, acl linode.ControlPlaneACL) error
+	PutControlPlaneACL(ctx context.Context, clusterID uint64, acl linode.ControlPlaneACL) (string, error)
 }
 
 // clusterRef is the resolve-this-cluster input shared by the CI commands: an
@@ -204,13 +204,18 @@ func runnerACLOpen(ctx context.Context, client aclClient, o runnerACLOpts) error
 			// Still (re)lease it: the IP may be present only because a prior reconcile
 			// preserved an existing lease, which must be refreshed to keep it.
 			if o.configMap {
-				registerRunnerACLIP(ip)
+				if lerr := registerRunnerACLIP(ip, reassertRunnerACL(ctx, client, cid, ip)); lerr != nil {
+					// State is written first so the paired revoke still cleans up.
+					_ = writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: false})
+					return lerr
+				}
 			}
 			return writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: false})
 		}
 
 		next, _ := acl.WithIP(ip)
-		if err := client.PutControlPlaneACL(ctx, cid, next); err != nil {
+		revision, err := client.PutControlPlaneACL(ctx, cid, next)
+		if err != nil {
 			lastErr = err
 			fmt.Fprintf(os.Stderr, "::warning::runner-acl(open): PUT attempt %d failed (%v); re-reading and retrying.\n", attempt, err)
 			aclSleep(aclRetryDelay)
@@ -223,16 +228,50 @@ func runnerACLOpen(ctx context.Context, client aclClient, o runnerACLOpts) error
 			aclSleep(aclRetryDelay)
 			continue
 		}
-		fmt.Printf("runner-acl(open): added %s to cluster %d control-plane ACL.\n", ip, cid)
+		fmt.Printf("runner-acl(open): added %s to cluster %d control-plane ACL (revision %s).\n", ip, cid, revision)
+		// The address list is the DESIRED state; it says nothing about whether the
+		// control plane enforces it yet. Wait for the revision to be reflected —
+		// the API's only enforcement signal — before claiming access works.
+		if werr := waitACLEnforced(ctx, client, cid, revision); werr != nil {
+			fmt.Fprintf(os.Stderr, "::warning::runner-acl(open): %v\n", werr)
+		}
 		// Lease it so the internal-CIDR firewall controller's next reconcile
 		// preserves the IP instead of replacing it out from under a long-running
 		// kubectl job.
 		if o.configMap {
-			registerRunnerACLIP(ip)
+			if lerr := registerRunnerACLIP(ip, reassertRunnerACL(ctx, client, cid, ip)); lerr != nil {
+				// State FIRST: this invocation did add the IP, so the paired
+				// revoke must still know to remove it even though we fail here.
+				_ = writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: true})
+				return lerr
+			}
 		}
 		return writeRunnerACLState(o.region, runnerACLState{ClusterID: strconv.FormatUint(cid, 10), IP: ip, Modified: true})
 	}
 	return fmt.Errorf("failed to add %s to cluster %d control-plane ACL after %d attempts: %w", ip, cid, aclMaxAttempts, lastErr)
+}
+
+// reassertRunnerACL returns a closure that re-adds ip to cluster cid's
+// control-plane ACL. Handed to registerRunnerACLIP so a failed lease write can
+// undo an eviction that happened between the add above and the lease — see the
+// deadlock note on registerRunnerACLIP. Re-reads the ACL each time so it unions
+// with whatever the controller last wrote rather than restoring a stale set.
+func reassertRunnerACL(ctx context.Context, client aclClient, cid uint64, ip string) reassertACL {
+	return func() error {
+		cur, err := client.GetControlPlaneACL(ctx, cid)
+		if err != nil {
+			return err
+		}
+		if cur.ContainsIP(ip) {
+			return nil // not evicted; nothing to do
+		}
+		next, _ := cur.WithIP(ip)
+		fmt.Fprintf(os.Stderr, "::warning::runner-acl: %s was evicted from cluster %d ACL (controller reconcile) — re-adding before the next lease attempt.\n", ip, cid)
+		// Revision discarded: this is a mid-loop repair, and enforcement of the
+		// re-add is covered by the caller's own API-readiness wait.
+		_, perr := client.PutControlPlaneACL(ctx, cid, next)
+		return perr
+	}
 }
 
 func runnerACLRevoke(ctx context.Context, client aclClient, o runnerACLOpts) error {
@@ -281,7 +320,7 @@ func runnerACLRevoke(ctx context.Context, client aclClient, o runnerACLOpts) err
 			fmt.Printf("runner-acl(revoke): %s absent from cluster %d ACL — no change.\n", st.IP, cid)
 			return removeRunnerACLState(o.region)
 		}
-		if err := client.PutControlPlaneACL(ctx, cid, next); err != nil {
+		if _, err := client.PutControlPlaneACL(ctx, cid, next); err != nil {
 			if attempt == aclMaxAttempts {
 				fmt.Fprintf(os.Stderr, "::warning::runner-acl(revoke): PUT ACL for cluster %d failed (%v); %s may still be allowed — prune manually.\n", cid, err, st.IP)
 				return nil
@@ -371,21 +410,59 @@ func resolveClusterID(ctx context.Context, lister clusterLister, r clusterRef) (
 
 // ── egress IP detection ──────────────────────────────────────────────────────
 
+// detectEgressIP returns this runner's public IPv4 and reports whether the probes
+// AGREE about it.
+//
+// WHY IT ASKS ALL THREE INSTEAD OF STOPPING AT THE FIRST. A GitHub-hosted runner
+// sits behind Azure SNAT with a POOL of egress addresses, and the address chosen
+// can differ per destination. So the IP that api.ipify.org sees is not
+// necessarily the IP the LKE apiserver sees — and if they differ we allowlist an
+// address that never connects, producing precisely
+//
+//	dial tcp <apiserver>:6443: i/o timeout
+//
+// while the ACL, its revision, and the read-back all look correct. That is the
+// exact signature seen on clusters 637276/637285/637289/637329/637367, where the
+// Cloud Manager UI confirmed our IP present under our own revision-id.
+//
+// Disagreement between probes is therefore load-bearing evidence, not noise, and
+// stopping at the first answer threw it away. This still RETURNS one IP (changing
+// the ACL to a multi-address set touches the revoke contract), but it now logs
+// every answer and says plainly when they diverge.
 func detectEgressIP() (string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
+	seen := map[string][]string{} // ip -> probes reporting it
+	var order []string
 	for _, u := range []string{"https://api.ipify.org", "https://checkip.amazonaws.com", "https://ifconfig.me/ip"} {
 		resp, err := client.Get(u)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "runner-acl: egress probe %s failed: %v\n", u, err)
 			continue
 		}
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
 		resp.Body.Close()
 		ip := strings.TrimSpace(string(b))
-		if p := net.ParseIP(ip); p != nil && p.To4() != nil {
-			return ip, nil
+		p := net.ParseIP(ip)
+		if p == nil || p.To4() == nil {
+			fmt.Fprintf(os.Stderr, "runner-acl: egress probe %s returned non-IPv4 %q\n", u, ip)
+			continue
 		}
+		fmt.Printf("runner-acl: egress probe %s -> %s\n", u, ip)
+		if _, dup := seen[ip]; !dup {
+			order = append(order, ip)
+		}
+		seen[ip] = append(seen[ip], u)
 	}
-	return "", fmt.Errorf("none of the egress-IP probes returned an IPv4 address")
+	if len(order) == 0 {
+		return "", fmt.Errorf("none of the egress-IP probes returned an IPv4 address")
+	}
+	if len(order) > 1 {
+		fmt.Fprintf(os.Stderr, "::warning::runner-acl: egress probes DISAGREE (%v) — this runner has multiple "+
+			"public egress addresses, so the one allowlisted may not be the one the apiserver sees. That produces "+
+			"an `i/o timeout` to :6443 while the ACL looks correct. Using %s; if kubectl then times out, allowlist "+
+			"all of %v (or use a runner with a stable egress).\n", order, order[0], order)
+	}
+	return order[0], nil
 }
 
 // ── per-region state file ────────────────────────────────────────────────────
@@ -430,4 +507,71 @@ func removeRunnerACLState(region string) error {
 		return err
 	}
 	return nil
+}
+
+// aclEnforceWait / aclEnforcePoll bound the enforcement wait. The docs say
+// enabling an ACL "may take up to 20 minutes for the ACL rules to take effect",
+// but this runs inside a step budget, so it waits a useful slice and then hands
+// off to the caller's own API-readiness wait rather than blocking the whole job.
+var (
+	aclEnforceWait = 4 * time.Minute
+	aclEnforcePoll = 10 * time.Second
+)
+
+// waitACLEnforced polls until the control plane reflects revision back.
+//
+// DO NOT TREAT A PASS HERE AS PROOF OF REACHABILITY. The name says ENFORCED
+// because that is the API's documented contract — the submitted revision-id is
+// said to appear on GET "when (and only after) the ACL stanza is verified as
+// enforced". MEASURED BEHAVIOUR CONTRADICTS THAT, and the original rationale for
+// this function ("the only real signal available") was wrong:
+//
+//   - On a settled cluster the revision is reflected essentially IMMEDIATELY,
+//     while kubectl is still being refused. Timed on a live cluster: ACL remove →
+//     blocked within 25s; ACL add → access restored in ~35s. The revision LEADS
+//     reality; it does not trail it.
+//   - Run 13's log shows the failure mode changing from `i/o timeout` (SYN
+//     dropped) to `EOF` (connected, then closed) around 60s after the PUT — so
+//     there are at least two enforcement stages, and the revision handshake
+//     tracks neither.
+//
+// So this is a DIAGNOSTIC, not a gate: it makes the log distinguish "the API
+// acknowledged our revision" from "it never did", which was previously invisible
+// and cost five runs of confusion. What actually establishes access is the
+// caller's own wait-for-API step, and that is deliberately where the real waiting
+// happens.
+//
+// A timeout is therefore a WARNING, not an error — doubly so given the documented
+// window is up to 20 minutes, longer than any single step should hold. Do not
+// "fix" that by making it fatal: the signal is not reliable enough to gate on.
+//
+// Historical note: three commits in this area (57130891, 908f8e0d, 95ca3c39)
+// attribute the e2e hangs to ACL enforcement. They fixed real defects, but the
+// attribution was wrong — run 8's hang predates the first of them, and the
+// address was in fact present in the ACL throughout.
+func waitACLEnforced(ctx context.Context, client aclClient, cid uint64, revision string) error {
+	if revision == "" {
+		return nil // nothing to track (older API or a no-change path)
+	}
+	deadline := time.Now().Add(aclEnforceWait)
+	for attempt := 1; ; attempt++ {
+		cur, err := client.GetControlPlaneACL(ctx, cid)
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "runner-acl(open): enforcement check %d failed: %v\n", attempt, err)
+		case cur.ACLEnforced(revision):
+			fmt.Printf("runner-acl(open): ACL revision %s is ENFORCED — the control plane will accept this runner.\n", revision)
+			return nil
+		default:
+			fmt.Printf("runner-acl(open): ACL revision %s not yet enforced (control plane reports %q) — waiting...\n",
+				revision, cur.RevisionID)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("ACL revision %s was not reported enforced within %s. The address IS in the ACL, but "+
+				"the control plane had not applied it yet — enforcement is documented as taking up to 20 minutes. "+
+				"kubectl will keep failing (timeout/EOF) until it lands; the API-readiness wait continues from here",
+				revision, aclEnforceWait)
+		}
+		aclSleep(aclEnforcePoll)
+	}
 }

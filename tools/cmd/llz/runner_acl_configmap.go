@@ -39,13 +39,40 @@ const (
 	runnerACLLeaseTTL = 45 * time.Minute
 )
 
+// runnerACLKubectlTimeout bounds each individual kubectl call.
+//
+// WITHOUT IT THE RETRY BUDGET IS FICTION. This lease is registered right after
+// the control-plane ACL is opened, against an apiserver that may not yet accept
+// this runner — which is the entire reason for the retry loop. kubectl's default
+// client timeout is effectively unbounded for that case (it sits in connect/TLS
+// until the kernel gives up, ~2 minutes), so "8 retries" silently means "8 times
+// however long kubectl takes to despair".
+//
+// Measured on a live e2e run: the ACL-open step took 15m25s and emitted not one
+// line, because 8 attempts × ~115s of blocked kubectl is 15m20s. The step then
+// reported SUCCESS, since a lease failure is deliberately a warning (see below),
+// so 15 minutes of a 70-minute job budget vanished with no failure and no signal.
+// The job later died anyway on the same unreachable apiserver.
+//
+// 10s is far above a healthy apiserver's response and far below the point where
+// waiting tells you anything: if the ACL has not taken effect, it has not taken
+// effect. The whole loop is now bounded at roughly 8×(10s+8s) ≈ 2.5m.
+const runnerACLKubectlTimeout = 10 * time.Second
+
+// runnerACLLeaseBudget caps the ENTIRE lease phase. Must stay well under the
+// caller's step timeout (6m on the cluster-access steps) so the loop always gets
+// to say why it stopped, instead of being killed mid-attempt with no output.
+// 8 attempts x (10s kubectl + 8s gap + a bounded re-assert) fits inside this
+// with room to spare; exceeding it means something is wedged, not slow.
+const runnerACLLeaseBudget = 90 * time.Second
+
 // Seams (overridden in tests).
 var (
 	// runnerACLKubectlFn runs kubectl with args, piping stdin, and returns the
 	// combined output. KUBECONFIG reaches kubectl through the inherited
 	// environment, set by the lke-runner-acl action when a kubeconfig is wired.
 	runnerACLKubectlFn = func(stdin string, args ...string) (string, error) {
-		cmd := exec.Command("kubectl", args...)
+		cmd := exec.Command("kubectl", runnerACLKubectlArgv(args)...)
 		if stdin != "" {
 			cmd.Stdin = strings.NewReader(stdin)
 		}
@@ -57,6 +84,59 @@ var (
 	runnerACLPatchGap = 8 * time.Second // delay between register retries
 	runnerACLSleep    = func(d time.Duration) { time.Sleep(d) }
 )
+
+// runnerACLKubectlArgv prepends the request timeout to a kubectl argv. Pure, and
+// separated from the exec seam ON PURPOSE: the tests replace runnerACLKubectlFn
+// wholesale, so anything inline in that closure is never exercised — which is
+// exactly how an unbounded kubectl survived here in the first place.
+//
+// PREPENDED, not appended. These calls end in `-f -` or a resource name, and
+// kubectl parses a flag placed after those as a positional argument.
+func runnerACLKubectlArgv(args []string) []string {
+	return append([]string{"--request-timeout=" + runnerACLKubectlTimeout.String()}, args...)
+}
+
+// apiServerUnreachableMarkers are kubectl/client-go signatures that mean the
+// request never reached a serving apiserver — as opposed to reaching one and
+// being refused (RBAC), or the object not existing (NotFound).
+//
+// The distinction is for the OPERATOR reading the log, not for the exit code:
+// "the apiserver never answered" and "the apiserver refused this write" want
+// different responses. An earlier version made the former fatal; measurement
+// showed that is the normal state during a cold bootstrap (a fresh LKE-E cluster
+// takes minutes to honour a newly added ACL address, vs ~35s once settled), so
+// failing on it aborted every cold start before the API-readiness wait could do
+// its job. See leaseOutcome.
+//
+// Observed verbatim across runs 30485106067 and 30499831638:
+//
+//	Get "https://lke637329.api.us-ord.enterprise.linodelke.net:6443/api?timeout=10s":
+//	net/http: request canceled while waiting for connection (Client.Timeout exceeded ...)
+//	client rate limiter Wait returned an error: context deadline exceeded
+//	  - error from a previous attempt: EOF
+var apiServerUnreachableMarkers = []string{
+	"Client.Timeout exceeded",
+	"context deadline exceeded",
+	"couldn't get current server API group list",
+	"Unable to connect to the server",
+	"connection refused",
+	"i/o timeout",
+	"no route to host",
+	"EOF",
+	"TLS handshake timeout",
+}
+
+// isAPIServerUnreachable reports whether kubectl output shows the apiserver was
+// never reached. Pure, so the classification is unit-tested against the real
+// strings rather than guessed at.
+func isAPIServerUnreachable(out string) bool {
+	for _, m := range apiServerUnreachableMarkers {
+		if strings.Contains(out, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // runnerACLLeaseValue is the JSON stored in each ConfigMap data value. The data
 // key is a sanitized IP (ConfigMap keys can't contain '/'); the controller reads
@@ -87,7 +167,64 @@ func runnerACLDataKey(ip string) string {
 // firewall-runner-acl ConfigMap and opportunistically prunes any expired leases
 // it sees in the same patch. Retries while the just-opened ACL propagates to the
 // apiserver. Best-effort: a persistent failure warns and returns.
-func registerRunnerACLIP(ip string) {
+// reassertACL is called between failed lease attempts to re-add the runner IP to
+// the control-plane ACL. See registerRunnerACLIP for why that is the whole point.
+// nil disables it (tests, and the no-client paths).
+type reassertACL func() error
+
+// registerRunnerACLIP leases ip in the ConfigMap. reassert may be nil.
+//
+// THE DEADLOCK THIS SOLVES. The caller has just added ip to the control-plane
+// ACL directly and verified it — but the firewall controller PUTs (replaces) that
+// ACL roughly every 10 minutes, and the lease below is what makes it PRESERVE the
+// runner. Between the caller's verify and a successful lease there is an
+// unprotected window: if a reconcile lands in it, the runner is evicted, and the
+// lease can never be written because writing it needs the apiserver the runner
+// was just locked out of. Every remaining retry is then guaranteed to fail — the
+// loop retries the one thing that cannot succeed.
+//
+// Observed twice on live e2e runs (30473785350, 30478772336): "added <ip> to
+// cluster <id> control-plane ACL" followed by kubectl hanging until the step
+// budget ran out, and the apiserver never becoming reachable again.
+//
+// So a kubectl failure here is not just a failed write — it is EVIDENCE that we
+// may have been evicted. Re-asserting the ACL before the next attempt turns a
+// permanent deadlock into a race we win on the following try. It is safe to
+// re-assert repeatedly: the caller's add is idempotent (WithIP is a set union)
+// and cheap, and if we were never evicted it is a no-op.
+// leaseOutcome reports a give-up. ALWAYS a warning, never an error.
+//
+// An earlier version hard-failed when the apiserver was unreachable, reasoning
+// that it disproved the "the grant already worked" premise. That reasoning was
+// wrong, and measurement showed why: on a FRESHLY CREATED LKE-E cluster the
+// control-plane ACL takes minutes to begin honouring a newly added address —
+// far longer than this lease loop can wait — while on a settled cluster the same
+// operation takes ~35s. So "unreachable" here is the EXPECTED state during a cold
+// bootstrap, not evidence of a broken grant.
+//
+// Hard-failing on it would abort every cold start at cluster-access, before
+// `wait-cluster-ready` — the step that exists to wait exactly this out — ever
+// runs. Reachability is that step's job, and it owns the verdict.
+//
+// The unreachable/answered distinction is still worth DRAWING, because the two
+// mean different things to a reader, and isAPIServerUnreachable keeps that
+// classification for the message. It just no longer changes the exit code.
+func leaseOutcome(ip string, attempts int, e time.Duration, lastErr error, lastOut string) error {
+	detail := firstLine(strings.TrimSpace(lastOut))
+	if isAPIServerUnreachable(lastOut) || (lastErr != nil && isAPIServerUnreachable(lastErr.Error())) {
+		fmt.Fprintf(os.Stderr, "::warning::runner-acl: could not lease %s after %s (%d/%d attempts) — the apiserver "+
+			"is not reachable yet. On a newly created cluster the control-plane ACL takes minutes to honour a new "+
+			"address; the API-readiness wait that follows is what waits for it. Not failing here. Last error: %v: %s\n",
+			ip, e, attempts, runnerACLPatchN, lastErr, detail)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "::warning::runner-acl: could not lease %s after %s (%d/%d attempts): %v: %s — "+
+		"the apiserver ANSWERED, so access works and only the lease is missing (eviction risk later in the job).\n",
+		ip, e, attempts, runnerACLPatchN, lastErr, detail)
+	return nil
+}
+
+func registerRunnerACLIP(ip string, reassert reassertACL) error {
 	now := runnerACLNow()
 	val, err := json.Marshal(runnerACLLeaseValue{
 		CIDR:      ip,
@@ -95,12 +232,24 @@ func registerRunnerACLIP(ip string) {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "::warning::runner-acl: marshaling lease for %s: %v\n", ip, err)
-		return
+		return nil
 	}
+
+	// HARD CEILING on the whole lease phase. This is best-effort work — the ACL
+	// grant already happened — so it must never be able to consume the step
+	// budget above it. It did: an e2e run sat in this function for 5m48s and
+	// emitted NOTHING, because the only warning was after all 8 attempts, so the
+	// step timed out before the loop could explain itself. A phase that cannot
+	// report why it gave up is worse than one that gives up early.
+	phaseStart := runnerACLNow()
+	elapsed := func() time.Duration { return runnerACLNow().Sub(phaseStart).Round(time.Second) }
 
 	var lastOut string
 	var lastErr error
 	for attempt := 1; attempt <= runnerACLPatchN; attempt++ {
+		if e := elapsed(); e >= runnerACLLeaseBudget {
+			return leaseOutcome(ip, attempt-1, e, lastErr, lastOut)
+		}
 		// Build the merge patch fresh each attempt: null out leases that have
 		// since expired, set our own. Merge-patch keys are independent, so a
 		// concurrent runner adding a different IP is not clobbered.
@@ -115,14 +264,14 @@ func registerRunnerACLIP(ip string) {
 			"-n", runnerACLConfigMapNS, "--type", "merge", "-p", string(body))
 		if perr == nil {
 			fmt.Printf("runner-acl: leased %s in %s/%s for %s.\n", ip, runnerACLConfigMapNS, runnerACLConfigMapName, runnerACLLeaseTTL)
-			return
+			return nil
 		}
 		// The ConfigMap may not exist yet — create it with just this lease.
 		if isNotFound(out) {
 			manifest := runnerACLConfigMapManifest(map[string]string{runnerACLDataKey(ip): string(val)})
 			if cout, cerr := runnerACLKubectlFn(manifest, "apply", "-f", "-"); cerr == nil {
 				fmt.Printf("runner-acl: created %s/%s with %s lease.\n", runnerACLConfigMapNS, runnerACLConfigMapName, ip)
-				return
+				return nil
 			} else if !isAlreadyExists(cout) {
 				lastOut, lastErr = cout, cerr
 			} else {
@@ -130,14 +279,26 @@ func registerRunnerACLIP(ip string) {
 			}
 		} else {
 			lastOut, lastErr = out, perr
+			// Per-attempt, not just at the end: without this the whole phase is a
+			// black box, which is exactly how 5m48s of silence happened.
+			fmt.Fprintf(os.Stderr, "runner-acl: lease attempt %d/%d failed after %s (%v): %s\n",
+				attempt, runnerACLPatchN, elapsed(), perr, strings.TrimSpace(out))
 		}
 		if attempt < runnerACLPatchN {
+			// The kubectl call failed, so we may have just been evicted by a
+			// controller reconcile — in which case retrying kubectl alone can
+			// never succeed. Put the IP back first.
+			if reassert != nil {
+				rstart := runnerACLNow()
+				if rerr := reassert(); rerr != nil {
+					fmt.Fprintf(os.Stderr, "::warning::runner-acl: re-asserting %s in the control-plane ACL failed after %s: %v\n",
+						ip, runnerACLNow().Sub(rstart).Round(time.Second), rerr)
+				}
+			}
 			runnerACLSleep(runnerACLPatchGap)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "::warning::runner-acl: could not lease %s after %d tries (%v): %s — "+
-		"a controller reconcile may evict this runner before the job finishes.\n",
-		ip, runnerACLPatchN, lastErr, strings.TrimSpace(lastOut))
+	return leaseOutcome(ip, runnerACLPatchN, elapsed(), lastErr, lastOut)
 }
 
 // deregisterRunnerACLIP removes ip's lease so the controller stops re-adding it
@@ -165,6 +326,13 @@ func expiredRunnerACLKeys(now time.Time) map[string]struct{} {
 	cmOut, err := runnerACLKubectlFn("", "get", "configmap", runnerACLConfigMapName,
 		"-n", runnerACLConfigMapNS, "-o", "json")
 	if err != nil {
+		// Swallowing this hid the first sign of an unreachable apiserver: this
+		// read runs BEFORE the patch, so it is the earliest evidence available.
+		// NotFound is normal on a fresh cluster and stays quiet.
+		if !isNotFound(cmOut) {
+			fmt.Fprintf(os.Stderr, "runner-acl: reading %s/%s for expired leases failed (%v): %s\n",
+				runnerACLConfigMapNS, runnerACLConfigMapName, err, strings.TrimSpace(cmOut))
+		}
 		return out
 	}
 	var cm struct {

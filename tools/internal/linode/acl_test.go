@@ -138,9 +138,14 @@ func TestPutControlPlaneACL(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	err := c.PutControlPlaneACL(context.Background(), 7, ControlPlaneACL{Enabled: true, IPv4: []string{"1.1.1.1/32"}})
+	rev, err := c.PutControlPlaneACL(context.Background(), 7, ControlPlaneACL{Enabled: true, IPv4: []string{"1.1.1.1/32"}})
 	if err != nil {
 		t.Errorf("PutControlPlaneACL = %v, want nil", err)
+	}
+	// The revision id must be RETURNED, or the caller has no way to observe
+	// enforcement and is forced back onto the address read-back that proves nothing.
+	if rev == "" {
+		t.Error("PutControlPlaneACL returned an empty revision id — enforcement becomes unobservable")
 	}
 }
 
@@ -148,7 +153,7 @@ func TestPutControlPlaneACLError(t *testing.T) {
 	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "denied", http.StatusForbidden)
 	})
-	if err := c.PutControlPlaneACL(context.Background(), 7, ControlPlaneACL{}); err == nil {
+	if _, err := c.PutControlPlaneACL(context.Background(), 7, ControlPlaneACL{}); err == nil {
 		t.Error("PutControlPlaneACL on 403 = nil, want error")
 	}
 }
