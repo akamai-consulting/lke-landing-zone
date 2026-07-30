@@ -308,8 +308,22 @@ func TestRetrofitKyvernoConfigMap(t *testing.T) {
 	})
 }
 
+// TestPolicyName pins the fix for a check that could never pass: policyName fed
+// `kubectl wait clusterpolicy/<name>`, but returned the manifest's FILENAME, and no
+// manifest's filename equals the name it declares. Every readiness wait addressed a
+// nonexistent object and degraded to "applied but did not report Ready" — so the
+// confirmation that a policy is actually ENFORCING never once ran.
 func TestPolicyName(t *testing.T) {
-	if got := policyName("manifests/kyverno-pvc-encrypted-storage-class.yaml"); got != "kyverno-pvc-encrypted-storage-class" {
-		t.Errorf("policyName = %q", got)
+	if got := policyName("manifests/kyverno-pvc-redirect-untagged-storage-class.yaml"); got != "pvc-redirect-untagged-storage-class" {
+		t.Errorf("policyName = %q, want the manifest's metadata.name %q — a filename here makes `kubectl wait clusterpolicy/<name>` address nothing",
+			got, "pvc-redirect-untagged-storage-class")
+	}
+	if got := policyName("manifests/kyverno-sc-default-demote.yaml"); got != "sc-default-demote" {
+		t.Errorf("policyName = %q, want \"sc-default-demote\"", got)
+	}
+	// Unreadable/unparseable manifests fall back to the basename — no worse than the
+	// old behaviour, and never a panic on a path the operator typo'd.
+	if got := policyName("manifests/does-not-exist.yaml"); got != "does-not-exist" {
+		t.Errorf("missing manifest should fall back to the basename, got %q", got)
 	}
 }

@@ -20,8 +20,15 @@
 #
 # The patcher Job still does the fast initial demote; this admission policy makes
 # it DURABLE by rewriting is-default-class back to "false" on every CREATE/UPDATE
-# of the SC, so each Flux re-promotion is overridden before it persists. Mirrors
-# the kyverno-pvc-encrypted-storage-class.yaml sibling in this directory.
+# of the SC, so each Flux re-promotion is overridden before it persists.
+#
+# NOT CURRENTLY APPLIED by any code path. The always-on llzReconciler sc-demote lane
+# (`llz reconcile --reconcile-sc-demote`) owns this job now and is verified working
+# in the field. This manifest is kept as the admission-time twin for the day the
+# reconciler is not enough — it is applied by hand via `llz ci apply-kyverno-policy`.
+# If you are here because PVCs landed on the wrong class, this is not the policy you
+# want: see kyverno-pvc-redirect-untagged-storage-class.yaml, which is the one
+# bootstrap applies and the only one that reaches a PVC naming a class EXPLICITLY.
 #
 # Scoped to exactly one SC by name; on a single-class cluster where it is absent
 # the rule simply never matches. If/when LKE stops defaulting its retain class,

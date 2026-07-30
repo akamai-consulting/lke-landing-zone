@@ -277,24 +277,30 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 		return nil, errors.New("unexpected: " + a)
 	})
 	sum := withGHASummaryFile(t)
-	if err := runCIAuditPVCStorageClass(); err != nil {
-		t.Fatal(err)
+	err := runCIAuditPVCStorageClass()
+	// THE contract change: escapees FAIL. This used to warn and exit 0 — "the cluster
+	// is functional, just less secure than intended" — which is exactly the defect a
+	// gate exists to catch, and is why a regression that put 13 of 16 PVCs on the
+	// unencrypted class shipped unnoticed.
+	if err == nil {
+		t.Fatal("escaped PVCs must FAIL the audit, not warn — a security check that cannot go red gates nothing")
+	}
+	if !strings.Contains(err.Error(), "2 of 3") {
+		t.Errorf("error should count the escapees against the total, got %q", err)
 	}
 	b, _ := os.ReadFile(sum)
 	for _, want := range []string{
-		"### PVCs not on the encrypted, Retain StorageClass",
+		"### PVCs not on the encrypted, ownership-tagged StorageClass",
 		"NAMESPACE  PVC  STORAGECLASS",
 		"data-harbor-redis-0",
 		"gitea-shared",
-		"**To remediate**",
-		// The whole point of the rewrite: the summary must SPLIT BY CAUSE. The harbor
-		// PVC is outside the Kyverno policy's scope, so blaming webhook readiness for
-		// it sends the reader after a race that cannot explain it.
-		"**Any other namespace (1 here):** NOT a Kyverno problem",
-		"cluster.defaultStorageClass",
-		// And it must say that recreate is the only remedy, since storageClassName is
-		// immutable once bound.
+		// The summary must name the ONE cause (a PVC created while the cluster-wide
+		// redirect policy was not yet enforcing) and the policy to go check.
+		"pvc-redirect-untagged-storage-class",
+		// …and must say that re-running cannot fix it, since storageClassName is
+		// immutable once bound — remediation is a workload re-roll that destroys data.
 		"is immutable once bound",
+		"destroys that volume's data",
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("summary missing %q:\n%s", want, b)
@@ -304,7 +310,7 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 		t.Error("compliant PVCs must not be reported")
 	}
 
-	// All compliant → no summary written.
+	// All compliant → clean exit, no summary written.
 	withKubectl(t, func(string) ([]byte, error) {
 		return []byte(`{"items":[{"metadata":{"namespace":"a","name":"b"},"spec":{"storageClassName":"block-storage-retain"}}]}`), nil
 	})
@@ -316,10 +322,12 @@ func TestRunCIAuditPVCStorageClass(t *testing.T) {
 		t.Errorf("clean audit must write no summary, got %q", b)
 	}
 
-	// kubectl failure → best-effort clean exit (the bash || true).
+	// kubectl failure → FAIL, not "nothing escaped". The ported bash used `|| true`
+	// because it could only warn anyway; now that this gates the build, reading an
+	// unreachable cluster as a pass is the worst available failure mode.
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("no cluster") })
-	if err := runCIAuditPVCStorageClass(); err != nil {
-		t.Errorf("kubectl failure must not fail the audit: %v", err)
+	if err := runCIAuditPVCStorageClass(); err == nil {
+		t.Error("an unreachable cluster must FAIL the audit — silently passing is indistinguishable from a clean cluster")
 	}
 }
 
@@ -395,53 +403,45 @@ spec:
 	})
 }
 
-// TestKyvernoScopeMatchesPolicy pins kyvernoScopedNamespaces to the ClusterPolicy
-// it describes. Drift here is silent and misleading, not loud: the audit would keep
-// attributing an out-of-scope PVC to "Kyverno's webhook lagged" — sending the reader
-// after a timing bug that cannot explain it — or stop naming a namespace the policy
-// really does cover.
-func TestKyvernoScopeMatchesPolicy(t *testing.T) {
-	raw, err := os.ReadFile("manifests/kyverno-pvc-encrypted-storage-class.yaml")
+// TestPVCRedirectPolicyIsClusterWide pins the property the storage invariant rests
+// on: the redirect policy must match PVCs in EVERY namespace.
+//
+// This replaces the old scope-drift test, which pinned a narrow gitea+istio-system
+// policy. That policy was written when only two apl-core charts hardcoded the LKE
+// stock class; on MANAGED, Linode's cluster.defaultStorageClass is
+// `linode-block-storage`, so every apl-core chart names it explicitly and a
+// two-namespace policy covers ~1 of 13 PVCs. If anyone re-scopes this policy to a
+// namespace list, the cluster silently goes back to provisioning unencrypted,
+// untagged Volumes — so assert the absence of a `namespaces:` restriction directly.
+func TestPVCRedirectPolicyIsClusterWide(t *testing.T) {
+	raw, err := os.ReadFile("manifests/kyverno-pvc-redirect-untagged-storage-class.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The policy line is `namespaces: [gitea, istio-system]`.
-	m := regexp.MustCompile(`(?m)^\s*namespaces:\s*\[([^\]]*)\]`).FindSubmatch(raw)
-	if m == nil {
-		t.Fatal("no `namespaces: [...]` list found in the policy — did its match block change shape?")
+	body := stripYAMLComments(string(raw))
+	if regexp.MustCompile(`(?m)^\s*namespaces:`).MatchString(body) {
+		t.Error("pvc-redirect-untagged-storage-class declares a `namespaces:` restriction — it MUST stay cluster-wide, or apl-core PVCs outside the listed namespaces are born unencrypted and untagged")
 	}
-	var fromPolicy []string
-	for _, f := range strings.Split(string(m[1]), ",") {
-		if f = strings.TrimSpace(f); f != "" {
-			fromPolicy = append(fromPolicy, f)
+	// Both LKE stock classes must stay in the precondition, and the mutation target
+	// must remain the encrypted/tagged class the audit asserts.
+	for _, want := range []string{"linode-block-storage", "linode-block-storage-retain", "storageClassName: " + auditWantStorageClass} {
+		if !strings.Contains(body, want) {
+			t.Errorf("policy no longer mentions %q — the redirect would miss PVCs the audit gate then fails on", want)
 		}
-	}
-	if !reflect.DeepEqual(fromPolicy, kyvernoScopedNamespaces) {
-		t.Fatalf("policy scopes %v but kyvernoScopedNamespaces is %v — the audit would misattribute the cause",
-			fromPolicy, kyvernoScopedNamespaces)
 	}
 }
 
-// TestSplitByKyvernoScope covers the partition that decides WHICH cause the audit
-// reports. Getting it backwards is worse than not splitting at all.
-func TestSplitByKyvernoScope(t *testing.T) {
-	rows := []pvcRow{
-		{"harbor", "harbor-otomi-db-1", "linode-block-storage"},
-		{"istio-system", "data-oauth2-proxy-redis-ha-server-0", "linode-block-storage"},
-		{"keycloak", "keycloak-db-1", "linode-block-storage"},
-		{"gitea", "valkey-data-gitea-valkey-primary-0", "linode-block-storage"},
+// stripYAMLComments drops whole-line `#` comments so a prose mention of a field
+// cannot satisfy (or trip) a structural assertion about the policy body. The
+// redirect policy's header discusses namespace exclusions at length.
+func stripYAMLComments(s string) string {
+	var keep []string
+	for _, l := range strings.Split(s, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			keep = append(keep, l)
+		}
 	}
-	in, out := splitByKyvernoScope(rows)
-	if got := pvcNames(in); !reflect.DeepEqual(got, []string{"data-oauth2-proxy-redis-ha-server-0", "valkey-data-gitea-valkey-primary-0"}) {
-		t.Fatalf("in-scope = %v", got)
-	}
-	// harbor/keycloak are the real-world case that used to be misreported.
-	if got := pvcNames(out); !reflect.DeepEqual(got, []string{"harbor-otomi-db-1", "keycloak-db-1"}) {
-		t.Fatalf("out-of-scope = %v", got)
-	}
-	if i, o := splitByKyvernoScope(nil); len(i) != 0 || len(o) != 0 {
-		t.Fatal("nil input should partition to nothing")
-	}
+	return strings.Join(keep, "\n")
 }
 
 func pvcNames(rows []pvcRow) []string {

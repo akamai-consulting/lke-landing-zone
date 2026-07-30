@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/base64"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -754,5 +756,140 @@ func TestRenderBlockStorageClass_EmptyIDHardFails(t *testing.T) {
 func TestRenderBlockStorageClass_MalformedIDHardFails(t *testing.T) {
 	if _, err := renderBlockStorageClass("us-ord-1"); err == nil {
 		t.Fatal("expected an error for a non-numeric cluster id, got nil")
+	}
+}
+
+// ── PVC StorageClass redirect ────────────────────────────────────────────────
+
+// bootstrapKubectlFake answers the reads bootstrapCluster's happy path needs
+// (managed ArgoCD ready, apl-git-config published, migration Job succeeded,
+// Kyverno admissible) and records every invocation. extra runs first and, when it
+// returns handled, overrides the default answer.
+//
+// Recording is mutex-guarded because the PVC-redirect policy applies from its own
+// goroutine — that concurrency is the point of the design, so the fake has to be
+// safe for it rather than pretending it away.
+func bootstrapKubectlFake(extra func(line string) (string, bool, bool)) (func(...string) (string, bool), func() []string) {
+	var mu sync.Mutex
+	var seen []string
+	run := func(args ...string) (string, bool) {
+		line := strings.Join(args, " ")
+		mu.Lock()
+		seen = append(seen, line)
+		mu.Unlock()
+		if extra != nil {
+			if out, ok, handled := extra(line); handled {
+				return out, ok
+			}
+		}
+		switch {
+		case strings.Contains(line, "crd applications.argoproj.io"):
+			return "applications.argoproj.io", true
+		case strings.Contains(line, "deploy argocd-server"):
+			return "1", true
+		case strings.Contains(line, "secret apl-git-config"):
+			switch {
+			case strings.Contains(line, "data.repoUrl"):
+				return b64("http://git-server.git-server.svc.cluster.local/otomi/values.git"), true
+			case strings.Contains(line, "data.branch"):
+				return b64("main"), true
+			case strings.Contains(line, "data.username"):
+				return b64("otomi-admin"), true
+			case strings.Contains(line, "data.password"):
+				return b64("pw"), true
+			}
+			return "", true
+		case strings.Contains(line, "jsonpath={.status.succeeded}"):
+			return "1", true
+		}
+		return "", true
+	}
+	return run, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), seen...)
+	}
+}
+
+func bootstrapOptsForTest() bootstrapClusterOpts {
+	return bootstrapClusterOpts{
+		env: "primary", clusterID: "393244", instanceRepo: "acme/instance",
+		upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main",
+	}
+}
+
+// TestBootstrapCluster_AppliesPVCRedirectPolicy is the regression test for the
+// defect this whole change exists to fix.
+//
+// bootstrap-cluster used to apply two race-ahead Kyverno policies. The managed-APL
+// rewrite deleted the self-install flow and took the policy apply with it, leaving
+// the manifests in-tree as orphans nothing read — so a managed cluster provisioned
+// 13 of 16 PVCs on the UNENCRYPTED, untagged LKE stock class, and every surface
+// that should have caught it (the health check's prose, the audit verb) went on
+// describing a policy that was not installed. Nothing failed. Nothing was loud.
+//
+// So: assert the apply actually happens, and that it addresses the policy by its
+// real metadata.name.
+func TestBootstrapCluster_AppliesPVCRedirectPolicy(t *testing.T) {
+	var policyBody string
+	kubectl, seen := bootstrapKubectlFake(func(line string) (string, bool, bool) {
+		// Capture what the policy apply actually sent: applyKyvernoPolicy takes a
+		// manifest PATH, so read it back while the tempfile still exists.
+		if strings.Contains(line, "apply --server-side") && strings.Contains(line, "-f ") {
+			path := line[strings.LastIndex(line, "-f ")+3:]
+			if raw, err := os.ReadFile(strings.TrimSpace(path)); err == nil {
+				policyBody = string(raw)
+			}
+		}
+		return "", true, false
+	})
+	d := bootstrapDeps{
+		kubectl: kubectl,
+		apply:   func(string, string, bool) (string, bool) { return "", true },
+		now:     time.Now, sleep: func(time.Duration) {},
+	}
+	if err := bootstrapCluster(bootstrapOptsForTest(), d); err != nil {
+		t.Fatalf("bootstrapCluster: %v", err)
+	}
+
+	if !strings.Contains(policyBody, "name: pvc-redirect-untagged-storage-class") {
+		t.Fatalf("bootstrap did not apply the PVC-redirect ClusterPolicy — PVCs would be born unencrypted and untagged. Applied body:\n%s", policyBody)
+	}
+	// The mutation target is what makes the Volume encrypted + tagged at all.
+	if !strings.Contains(policyBody, "storageClassName: block-storage-retain") {
+		t.Error("the applied policy does not mutate to block-storage-retain")
+	}
+
+	var waited bool
+	for _, line := range seen() {
+		if strings.Contains(line, "wait --for=condition=Ready clusterpolicy/pvc-redirect-untagged-storage-class") {
+			waited = true
+		}
+	}
+	if !waited {
+		t.Errorf("expected a readiness wait on clusterpolicy/pvc-redirect-untagged-storage-class (its metadata.name, NOT the manifest filename), calls:\n%s",
+			strings.Join(seen(), "\n"))
+	}
+}
+
+// TestBootstrapCluster_PVCRedirectHardFailureIsFatal pins the severity choice: a
+// non-race apply failure aborts bootstrap. Returning 0 here would hand back a
+// cluster that looks bootstrapped and quietly provisions unencrypted Volumes —
+// the failure mode that shipped. (Kyverno-not-ready and webhook-race stay
+// soft-fails inside applyKyvernoPolicy; the audit gate catches their fallout.)
+func TestBootstrapCluster_PVCRedirectHardFailureIsFatal(t *testing.T) {
+	kubectl, _ := bootstrapKubectlFake(func(line string) (string, bool, bool) {
+		if strings.Contains(line, "apply --server-side") && strings.Contains(line, "kyverno-pvc-redirect") {
+			return "the server rejected our request: ClusterPolicy is invalid", false, true
+		}
+		return "", true, false
+	})
+	d := bootstrapDeps{
+		kubectl: kubectl,
+		apply:   func(string, string, bool) (string, bool) { return "", true },
+		now:     time.Now, sleep: func(time.Duration) {},
+	}
+	if err := bootstrapCluster(bootstrapOptsForTest(), d); err == nil {
+		t.Fatal("a hard PVC-redirect policy apply failure must fail bootstrap, not warn")
 	}
 }

@@ -11,15 +11,22 @@
 # policy rewrites those stock classes to block-storage-retain on every PVC CREATE,
 # cluster-wide, so every Linode Volume is born tagged.
 #
-# Scope vs pvc-force-encrypted-storage-class (the bootstrap-applied policy):
-# that one is NARROW (gitea + istio-system) and race-critical — it must beat
-# apl-operator's non-Argo helmfile creating the two charts that hardcode
-# linode-block-storage, so `llz ci bootstrap-cluster` applies it imperatively the
-# instant Kyverno is Ready.
-# THIS policy is the general, low-race net for every OTHER namespace / future
-# workload, so it lives in the GitOps tree at sync-wave -15 like the other
-# declarative policies (the two overlap harmlessly in gitea/istio-system — both
-# mutate to the same class, which is idempotent).
+# APPLIED BY `llz ci bootstrap-cluster`, imperatively, on a background goroutine
+# started the instant its target StorageClass exists — see startPVCRedirectPolicy.
+# It is race-critical: it must beat apl-core's non-Argo helmfile creating the
+# harbor/keycloak/CNPG/oauth2-proxy PVCs, which Argo sync-waves cannot order because
+# Argo is not what creates them. It is NOT shipped in the GitOps tree: a Kyverno
+# ClusterPolicy in the always-on platform-bootstrap base wedges the whole
+# Application when the CRD is absent (see platform-apl/manifest/kustomization.yaml).
+#
+# This policy is CLUSTER-WIDE, and must stay that way. It replaced a narrow
+# gitea+istio-system predecessor (pvc-force-encrypted-storage-class, deleted) that
+# was written when only two apl-core charts hardcoded the stock class. That premise
+# does not hold on MANAGED: Linode owns apl-values there and its
+# cluster.defaultStorageClass is `linode-block-storage`, so every apl-core chart
+# names the unencrypted class EXPLICITLY and a two-namespace policy covers roughly
+# one PVC in thirteen. Re-scoping this to a namespace list silently reintroduces
+# unencrypted, un-reapable Volumes; TestPVCRedirectPolicyIsClusterWide guards it.
 #
 # Empty storageClassName is intentionally NOT matched: it resolves to the cluster
 # default (block-storage-retain, kept the sole default by kyverno-sc-default-demote),
@@ -43,7 +50,6 @@ kind: ClusterPolicy
 metadata:
   name: pvc-redirect-untagged-storage-class
   annotations:
-    argocd.argoproj.io/sync-wave: "-15"
     policies.kyverno.io/title: Redirect PVCs off untagged LKE stock StorageClasses
     policies.kyverno.io/category: Storage / Security
     policies.kyverno.io/severity: high

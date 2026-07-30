@@ -7,10 +7,24 @@ package main
 // lke<id>.akamai-apl.net domain/DNS/wildcard-cert. LLZ never self-installs
 // apl-core (see ADR 0005). All LLZ does here is LAYER its extras (OpenBao,
 // harbor-robot, reconciler, team-creds) onto the managed cluster as SEPARATE
-// Argo Applications — the "Argo bridge" — plus the two cluster-scoped pieces
-// managed apl-core doesn't provide for the extras (the named non-default
-// block-storage-retain StorageClass the OpenBao PVC references, and the
-// llz-openbao namespace).
+// Argo Applications — the "Argo bridge" — plus the cluster-scoped pieces managed
+// apl-core doesn't provide for the extras (the block-storage-retain StorageClass
+// the OpenBao PVC references, the llz-openbao namespace, and the admission
+// controls that keep every Linode Volume encrypted and ownership-tagged).
+//
+// STORAGE INVARIANT — every Linode Volume in the cluster is encrypted at rest and
+// carries this cluster's lke<id> tag. Three pieces hold it up, and they are not
+// interchangeable:
+//   - the block-storage-retain StorageClass (encryption + volumeTags at
+//     CreateVolume) is the TARGET;
+//   - pvc-redirect-untagged-storage-class rewrites PVCs that name an LKE stock
+//     class onto it. Required, not belt-and-braces: managed apl-core's
+//     cluster.defaultStorageClass is Linode's `linode-block-storage`, so its PVCs
+//     name the unencrypted class EXPLICITLY and never consult the cluster default;
+//   - pvc-deny-untaggable-clone (VAP) blocks the clone/snapshot path, which cannot
+//     carry the tag at all.
+//
+// `llz ci audit-pvc-storageclass` is the gate that fails if the invariant slipped.
 //
 // CONVERGENCE CONTRACT — see docs/architecture/convergence-contract.md. This
 // command returning 0 means the Argo bridge was placed onto a managed ArgoCD
@@ -51,6 +65,27 @@ var vapPVCDenyCloneYAML []byte
 
 //go:embed manifests/vap-pvc-deny-untaggable-clone-binding.yaml
 var vapPVCDenyCloneBindingYAML []byte
+
+// The cluster-wide PVC StorageClass redirect. Rewrites an EXPLICIT
+// linode-block-storage / linode-block-storage-retain on any PVC CREATE to
+// block-storage-retain, so every Linode Volume is born ENCRYPTED and carrying this
+// cluster's lke<id> ownership tag.
+//
+// Load-bearing on managed, and not optional: Linode owns apl-values during the
+// managed apl-core install, and its cluster.defaultStorageClass is
+// `linode-block-storage`. Every apl-core PVC therefore names the unencrypted class
+// EXPLICITLY — harbor, keycloak, monitoring, git-server, oauth2-proxy — which
+// promoting block-storage-retain to cluster default does nothing about, because an
+// explicit storageClassName never consults the default. A mutation is the only
+// lever that reaches these PVCs.
+//
+// This supersedes the narrow gitea+istio-system pvc-force-encrypted-storage-class
+// policy, deleted with this change: it was written when only two charts hardcoded
+// the class, covers 1 of the 13 PVCs a managed cluster actually creates, and
+// mutates to the same target, so keeping both would be pure redundancy.
+//
+//go:embed manifests/kyverno-pvc-redirect-untagged-storage-class.yaml
+var kyvernoPVCRedirectYAML []byte
 
 // defaultAplChartVersion is the apl-core baseline this LLZ release tracks. On a
 // managed cluster Linode owns the apl-core version, so bootstrap does not consume
@@ -247,6 +282,13 @@ const (
 	managedArgoReadyInterval = 10 * time.Second
 )
 
+// pvcRedirectPolicyBudget bounds the background wait for Kyverno before the PVC
+// StorageClass redirect gives up. Kyverno is one of the managed apl-core apps, so
+// it lands on the same rough schedule as ArgoCD — the budget matches
+// managedArgoReadyBudget rather than being tuned separately, since the two wait on
+// the same install completing.
+const pvcRedirectPolicyBudget = 15 * time.Minute
+
 // bootstrapCluster applies the Argo bridge onto a Linode-managed apl-core: it
 // applies the named non-default StorageClass + the llz-openbao namespace the
 // extras need, waits for the managed ArgoCD to be able to admit Applications, then
@@ -283,6 +325,25 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		fmt.Fprint(os.Stderr, out)
 		return fmt.Errorf("apply managed block-storage-retain StorageClass")
 	}
+
+	// ── PVC StorageClass redirect, RACED against the rest of this function ──
+	// Started here (the instant its target class exists) and joined at the very end.
+	//
+	// It cannot be applied inline: the policy needs Kyverno's CRD + admission
+	// controller, which the MANAGED apl-core installs on Linode's schedule, so
+	// applyKyvernoPolicy polls for it — inline that would stall the Argo bridge
+	// behind a component the bridge does not depend on. It must not be deferred to
+	// after the bridge either: the PVCs it protects are created by apl-core's
+	// helmfile, so every second between "Kyverno can admit a policy" and "the policy
+	// is applied" is a window where a PVC is born unencrypted and untagged. Racing
+	// it alongside the bridge enters that window as early as this command can.
+	//
+	// Concurrency safety: this goroutine's kubectl calls are reads plus one apply of
+	// an object nothing else here touches, against the same kubeconfig — the same
+	// property the deleted self-install path's gateAndPolicies relied on. It owns its
+	// own tempfile cleanup and is bounded by pollUntil's attempt cap, so an error
+	// return below that never joins orphans nothing that outlives the process.
+	joinPVCRedirect := startPVCRedirectPolicy(d)
 
 	// clone/snapshot-PVC deny ValidatingAdmissionPolicy + binding. In-apiserver CEL
 	// (no webhook, no CRD wait) blocking clone/snapshot-sourced PVCs, whose Linode
@@ -388,8 +449,66 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	if err := applyManifest(d, secretStoreApplicationManifest(o), "llz-managed-bridge", true); err != nil {
 		return err
 	}
+	// Join the PVC-redirect race started at the top. A hard apply failure is fatal —
+	// silently shipping a cluster whose PVCs can be born unencrypted is the exact
+	// regression this policy exists to prevent. Kyverno-not-ready and
+	// webhook-not-reachable remain ::warning:: + nil inside applyKyvernoPolicy, and
+	// `llz ci audit-pvc-storageclass` is the gate that catches what those let through.
+	if err := joinPVCRedirect(); err != nil {
+		return err
+	}
+
 	fmt.Fprintln(os.Stderr, "✓ Argo bridge applied — Argo CD will converge the LLZ extras onto the managed cluster.")
 	return nil
+}
+
+// startPVCRedirectPolicy stages the embedded pvc-redirect-untagged-storage-class
+// ClusterPolicy to a tempfile and applies it on a background goroutine, returning
+// the join func that blocks for its result. See the call site for why this races
+// rather than running inline.
+//
+// applyKyvernoPolicy takes a manifest PATH (it is also the standalone
+// `llz ci apply-kyverno-policy` body), hence the tempfile; the goroutine removes it
+// on the way out so no caller has to sequence cleanup against the race.
+func startPVCRedirectPolicy(d bootstrapDeps) func() error {
+	done := make(chan error, 1)
+	go func() {
+		path, cleanup, err := writeTempManifest("llz-kyverno-pvc-redirect-*.yaml", kyvernoPVCRedirectYAML)
+		if err != nil {
+			done <- fmt.Errorf("stage PVC-redirect policy: %w", err)
+			return
+		}
+		defer cleanup()
+		done <- applyKyvernoPolicy(kyvernoPolicyOpts{
+			policyManifest: path,
+			fieldManager:   "llz-managed-bridge",
+			waitForKyverno: true,
+			waitTimeout:    pvcRedirectPolicyBudget,
+			timeoutWarning: "Kyverno admission controller not Ready within " + pvcRedirectPolicyBudget.String() +
+				" — pvc-redirect-untagged-storage-class NOT applied. PVCs apl-core creates from here on can land on the UNENCRYPTED, untagged linode-block-storage class. Re-run bootstrap-cluster once Kyverno is up, then check `llz ci audit-pvc-storageclass`.",
+			webhookRaceWarning: "Kyverno admission webhook not yet reachable — pvc-redirect-untagged-storage-class apply skipped. Re-run bootstrap-cluster once kyverno-svc has Ready endpoints; `llz ci audit-pvc-storageclass` reports any PVC that escaped meanwhile.",
+		}, aplGateDeps{kubectl: d.kubectl, now: d.now, sleep: d.sleep})
+	}()
+	return func() error { return <-done }
+}
+
+// writeTempManifest spills an embedded manifest to a 0600 tempfile, returning its
+// path and a remover.
+func writeTempManifest(pattern string, body []byte) (string, func(), error) {
+	f, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", func() {}, err
+	}
+	if _, err := f.Write(body); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
 // waitManagedArgoReady blocks until the managed apl-core's ArgoCD can admit our
@@ -426,6 +545,7 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	fmt.Printf("→ (dry-run) bootstrap-cluster (managed App Platform / apl_enabled) env=%s kubeconfig=%s\n", o.env, kubeconfigPath)
 	fmt.Printf("  0. kubectl apply --server-side block-storage-retain StorageClass (cluster DEFAULT; volumeTags lke<id> rendered from --cluster-id; llzReconciler sc-demote keeps LKE's linode-block-storage-retain non-default)\n")
 	fmt.Printf("  0a. kubectl apply --server-side pvc-deny-untaggable-clone ValidatingAdmissionPolicy + binding\n")
+	fmt.Printf("  0a2. (background, raced against 1-4) wait up to %s for Kyverno, then kubectl apply --server-side pvc-redirect-untagged-storage-class ClusterPolicy (rewrites explicit linode-block-storage[-retain] → block-storage-retain on every PVC CREATE, so no Volume is born unencrypted/untagged)\n", pvcRedirectPolicyBudget)
 	fmt.Printf("  0b. kubectl apply --server-side llz-openbao Namespace (OpenBao is CreateNamespace=false; managed apl-core does not create it)\n")
 	fmt.Printf("  1. wait for managed ArgoCD (Application CRD + argocd-server available)\n")
 	if o.instanceRepoToken != "" {
@@ -434,7 +554,7 @@ func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	fmt.Printf("  2. kubectl apply --server-side platform-bootstrap AppProject (sourceRepos: %s + %s)\n", o.instanceRepo, o.upstreamOrg+"/lke-landing-zone")
 	fmt.Printf("  3. kubectl apply --server-side platform-bootstrap Application (source: %s @ %s, path apl-values/%s/manifest)\n", o.instanceRepo, o.appsRepoRevision, o.env)
 	fmt.Printf("  4. kubectl apply --server-side llz-secret-store Application (source: %s @ %s)\n", o.upstreamOrg+"/lke-landing-zone", o.templateRef)
-	fmt.Printf("  (skipped — Linode owns it on managed: apl-core helm install, otomi.git seed, values render, DNS/cert, Kyverno)\n")
+	fmt.Printf("  (skipped — Linode owns it on managed: apl-core helm install, otomi.git seed, values render, DNS/cert, the Kyverno INSTALL — LLZ only adds the PVC-redirect policy at 0a2)\n")
 	return nil
 }
 

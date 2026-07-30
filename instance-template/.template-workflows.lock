@@ -16,7 +16,7 @@ e231afa731a262625e1a450262a23c842db1898681f53d39ebb80fd544e8af75  .github/action
 0aa062cfe316d53948f441bde7281e62a344361117704abff5d9f3d5eab7b6c5  .github/actions/lke-runner-acl/action.yml
 9f9cd7da3a76bf36410fddfcada7404cb4f313c906f7789f3cc7d231161f10c0  .github/actions/terraform-init/action.yml
 d656247507095bbc5deedeb558e85b5975c8b445465f6d202fafedacba744050  .github/actions/tf-encryption-env/action.yml
-846e6c72e2e72be36bb657e1fb2310a359da9d234e4e0ac5cd2449efad5fdf41  .github/workflows/llz-bootstrap-openbao.yml
+82e95042e094f393555974c50ec25371d2dc8a2b310cac0f05aaca509a0fb8a0  .github/workflows/llz-bootstrap-openbao.yml
 215b46a061f2d96cc794fca7ea22df4928e29eb1d841a18295ba16b98034a08f  .github/workflows/llz-breakglass-openbao.yml
 7b6765b4c723a660864467d70e9d67a06eed3d805e330c9e655b7d6149ab4d21  .github/workflows/llz-cluster-health.yml
 4eec66a2f7026ee45a99dc94a754930e8f1977c7c4fbaebb26bba15aa593b790  .github/workflows/llz-discover-deployments.yml

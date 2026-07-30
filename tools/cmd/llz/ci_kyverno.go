@@ -1,13 +1,24 @@
 package main
 
-// ci_kyverno.go implements `llz ci apply-kyverno-policy` — the local-exec body
-// the kyverno_pvc_encrypted_policy null_resource in instance-template
-// cluster-bootstrap/main.tf runs (it replaced the former
-// scripts/apply-kyverno-policy.sh). The low-race loki-s3 + oauth2-proxy policies
-// it used to also drive now ship via the GitOps tree
-// (platform-apl/manifest/kyverno-policies/); only the PVC-encryption
-// policy stays imperative here, because it must beat apl-operator's non-Argo PVC
-// creation — a race Argo sync-waves can't win.
+// ci_kyverno.go implements `llz ci apply-kyverno-policy` and the reusable
+// poll/apply/retrofit state machine behind it (applyKyvernoPolicy), which
+// `llz ci bootstrap-cluster` calls in-process to land the cluster-wide
+// pvc-redirect-untagged-storage-class ClusterPolicy.
+//
+// Why any Kyverno policy is applied IMPERATIVELY rather than shipped in the
+// GitOps tree: a Kyverno ClusterPolicy in platform-apl/manifest would sit in the
+// always-on platform-bootstrap base, and a CRD-less ClusterPolicy there wedges
+// the whole Application before Kyverno exists (see the note in
+// platform-apl/manifest/kustomization.yaml). The PVC policy also has to beat
+// apl-core's helmfile creating PVCs — a race Argo sync-waves cannot win, since
+// Argo is not what creates them. So it is applied here, gated on Kyverno
+// readiness, as early in bootstrap as possible.
+//
+// Historically this was the local-exec body of the kyverno_* null_resources in
+// the instance-template cluster-bootstrap TF workspace (itself a port of
+// scripts/apply-kyverno-policy.sh). That workspace is gone; the env-var config
+// surface survives because `apply-kyverno-policy` remains a usable standalone
+// verb for re-applying a policy against a live cluster by hand.
 //
 // Flow (unchanged from the bash it replaced): write KUBECONFIG_RAW to a
 // tempfile, optionally poll until Kyverno can admit a ClusterPolicy (CRD present
@@ -33,6 +44,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 )
 
 type kyvernoPolicyOpts struct {
@@ -223,8 +235,35 @@ func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d aplGateDeps) {
 func warn(msg string)   { fmt.Printf("::warning::%s\n", msg) }
 func notice(msg string) { fmt.Printf("::notice::%s\n", msg) }
 
-// policyName is the manifest's basename without the .yaml extension — the label
-// the bash logged via `basename … .yaml`.
+// policyName is the ClusterPolicy's OWN metadata.name — the identity
+// `kubectl wait clusterpolicy/<name>` addresses.
+//
+// It used to be the manifest's basename minus .yaml, inherited from the bash's
+// `basename … .yaml` logging label. That was fine as a log label and wrong the
+// moment it started addressing the API: no manifest's filename equals the name it
+// declares — kyverno-pvc-encrypted-storage-class.yaml declares
+// `pvc-force-encrypted-storage-class`, kyverno-sc-default-demote.yaml declares
+// `sc-default-demote`, kyverno-pvc-redirect-untagged-storage-class.yaml declares
+// `pvc-redirect-untagged-storage-class`. So the readiness wait always addressed a
+// nonexistent object, always failed, and always degraded to the "applied but did
+// not report Ready" warning — the one confirmation that a policy is actually
+// ENFORCING never ran, on any policy, ever.
+//
+// Falls back to the basename when the manifest can't be read or carries no
+// metadata.name; that only re-enters the old behaviour, which is no worse.
 func policyName(manifest string) string {
-	return strings.TrimSuffix(filepath.Base(manifest), ".yaml")
+	fallback := strings.TrimSuffix(filepath.Base(manifest), ".yaml")
+	raw, err := os.ReadFile(manifest)
+	if err != nil {
+		return fallback
+	}
+	var doc struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil || doc.Metadata.Name == "" {
+		return fallback
+	}
+	return doc.Metadata.Name
 }

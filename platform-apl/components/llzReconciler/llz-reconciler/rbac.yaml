@@ -11,6 +11,10 @@
 #     cidr-firewall  — nodes (node → instance → firewall).
 #     volume-labels  — persistentvolumes (map bound Linode-CSI Volumes; renames go
 #                      to the Linode API, not Kubernetes — read-only here).
+#     volume-tags    — no grants of its OWN. It reads persistentvolumes (the
+#                      volume-labels rule) and the desired tag set from the
+#                      block-storage-retain StorageClass (the sc-demote rule's
+#                      get/list); the writes it makes are to the Linode API.
 #     sc-demote      — storageclasses get/list/watch/patch (StorageClass is a
 #                      cluster-scoped resource; keep LKE's Flux-promoted retain
 #                      class non-default).

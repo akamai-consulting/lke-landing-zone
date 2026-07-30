@@ -105,6 +105,23 @@ spec:
             - --reconcile-openbao-gauges
             - --reconcile-token-inventory
             - --reconcile-volume-labels
+            # volume-tags: heal the block-storage-retain StorageClass's volumeTags
+            # (this cluster's lke<id> ownership tag included) onto any Linode Volume
+            # born WITHOUT them. The class stamps them inside CreateVolume, so this
+            # lane only ever sees Volumes that escaped it — a PVC admitted while the
+            # pvc-redirect-untagged-storage-class webhook was not yet enforcing, which
+            # is exactly the window a cold managed bootstrap opens. Left off, those
+            # Volumes stay un-attributable forever and `llz reap`'s liveness gate
+            # fail-safes to KEEPING them (a cost leak). Reads the desired set from the
+            # live StorageClass, so it needs no per-env config beyond LINODE_TOKEN;
+            # RBAC is already covered (persistentvolumes read via volume-labels,
+            # storageclasses get/list via sc-demote). Same PV watch as volume-labels.
+            #
+            # It does NOT fix encryption: that is fixed at CreateVolume or not at all
+            # (storageClassName is immutable once bound). Tags are healable, bytes are
+            # not — `llz ci audit-pvc-storageclass` is what fails the build on the
+            # unencrypted half.
+            - --reconcile-volume-tags
             - --reconcile-cidr-firewall
             - --reconcile-linode-creds
             # es-store-recovery: force-sync every ExternalSecret/PushSecret when

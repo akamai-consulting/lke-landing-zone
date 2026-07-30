@@ -695,7 +695,7 @@ jobs:
       # (assert-reconciler reads gauges the scrape assert just proved fresh), and the
       # lanes are collision-free only because the mutating ones use disjoint
       # namespaces and each Prometheus lane port-forwards on local port :0.
-      - name: (e2e) assert suite — 6 gates + 2 diagnostics, in parallel lanes
+      - name: (e2e) assert suite — 8 gates + 2 diagnostics, in parallel lanes
         if: ${{ inputs.assert_loki }}
         run: |
           set -uo pipefail
@@ -709,6 +709,13 @@ jobs:
           lane health-workflow   llz ci assert-health-workflow --region "$REGION"
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
           lane wave-vap          llz ci assert-wave-health-vap
+          # Storage invariant: every PVC on the encrypted, lke<id>-tagged class.
+          # Read-only, so it joins the fan-out. GATING on purpose — this check
+          # existed but warned-and-exited-0 and was wired into no workflow, which is
+          # how a regression that put 13 of 16 PVCs on the unencrypted LKE stock
+          # class shipped unnoticed. A red lane is NOT re-runnable: storageClassName
+          # is immutable once bound, so it means re-rolling the workload.
+          lane pvc-storageclass  llz ci audit-pvc-storageclass
           lane instance-custom   llz ci assert-instance-custom
           # Team-scoped OpenBao credential path, BOTH halves. Write: spec.teams →
           # apl-core team → Keycloak group/role → OpenBao keycloak role →
@@ -725,7 +732,7 @@ jobs:
           lane alert-eval        bash -c 'llz ci alert-eval || true'
           wait
           fail=0
-          for n in loki scrape-reconciler health-workflow broad-pat wave-vap instance-custom team-write metric-surface alert-eval; do
+          for n in loki scrape-reconciler health-workflow broad-pat wave-vap instance-custom pvc-storageclass team-write metric-surface alert-eval; do
             rc="$(cat "${dir}/${n}.rc" 2>/dev/null || echo 1)"
             echo "::group::assert ${n} (rc=${rc})"
             cat "${dir}/${n}.log" 2>/dev/null || true

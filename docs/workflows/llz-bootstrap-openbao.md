@@ -587,21 +587,38 @@ ClusterSecretStore + ExternalSecret (set via apl-core values at
 now confirms ESO has caught up. See `docs/architecture/convergence-contract.md`
 anti-pattern #3.
 
-### Step: Audit PVCs against encrypted-Retain StorageClass
+### Gate: `audit-pvc-storageclass` (in the e2e assert suite)
 
-The Kyverno ClusterPolicy at
-`terraform-iac-bootstrap/cluster-bootstrap/manifests/kyverno-pvc-encrypted-storage-class.yaml`
-rewrites `linode-block-storage(-retain)` → `block-storage-retain` at admission. The TF
-install (`wait_for_kyverno_crd` → `kubectl_manifest`) races apl-core's helmfile that
-creates harbor/gitea/keycloak/CNPG PVCs; the policy's mutating webhook has a 30–90s
-readiness lag after CRD registration. Any PVC admitted during that window lands on
-`linode-block-storage` (unencrypted, Delete reclaim) and persists silently — Kyverno
-does NOT background-migrate existing resources.
+Asserts the storage invariant — every PVC on `block-storage-retain`, the only class
+that encrypts at rest and stamps this cluster's `lke<id>` ownership tag at
+CreateVolume. Runs as a gating lane of the parallel assert suite and **fails the
+workflow** when any PVC escaped.
 
-This step lists every PVC not on `block-storage-retain` and emits `::warning::` lines so
-the operator can decide whether to delete+recreate the affected workloads (forcing PVC
-re-admission with the policy now active). Does NOT fail the workflow — the cluster is
-still functional, just less secure than intended.
+What holds the invariant up is the Kyverno ClusterPolicy
+`tools/cmd/llz/manifests/kyverno-pvc-redirect-untagged-storage-class.yaml`, which
+rewrites an explicit `linode-block-storage(-retain)` → `block-storage-retain` on every
+PVC CREATE, cluster-wide. `llz ci bootstrap-cluster` applies it on a background
+goroutine started the moment its target StorageClass exists, so it races apl-core's
+helmfile (which creates the harbor/gitea/keycloak/CNPG PVCs) rather than queueing
+behind the Argo bridge. It still has to wait for Kyverno's CRD + admission controller,
+which the managed apl-core installs on Linode's schedule, so a narrow escape window
+remains; that window is exactly what this gate reports.
+
+Two properties are load-bearing and easy to get wrong:
+
+- **The policy must stay cluster-wide.** On managed, Linode owns apl-values and its
+  `cluster.defaultStorageClass` is `linode-block-storage`, so *every* apl-core chart
+  names the unencrypted class explicitly. Promoting `block-storage-retain` to cluster
+  default does not reach them — an explicit `storageClassName` never consults the
+  default. A namespace-scoped policy covers a small fraction of the PVCs.
+- **A red gate is not re-runnable.** `storageClassName` is immutable once bound and
+  Kyverno does not background-migrate existing resources, so remediation means
+  re-rolling the workload (delete workload → delete PVC → Argo re-sync). The step
+  summary spells this out per PVC.
+
+Tag drift alone — a Volume that reached the right class but missed its tags — self-heals
+via the llzReconciler `volume-tags` lane. Encryption does not: it is decided at
+CreateVolume or not at all.
 
 ### Step: Revoke root token
 
