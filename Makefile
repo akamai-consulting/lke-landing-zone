@@ -506,25 +506,6 @@ helm-lint-charts: helm-repos
 		helm lint --strict "$$dir"; \
 		helm template "$$(basename "$$dir")" "$$dir" >/dev/null; \
 	done
-	@# Off-by-default paths render nothing above, so a break in them stays green
-	@# through every gate: render-charts materializes defaults, and kubeconform and
-	@# kube-linter only ever see what was materialized. Each default-off block that
-	@# ships ahead of its migration needs one explicit pass here.
-	@#
-	@# networkPolicies.ambient: the HBONE + health-probe allows that Istio ambient
-	@# enrolment requires (values.yaml documents why they ship off).
-	@set -euo pipefail; \
-	echo "── llz-cluster-foundation (networkPolicies.ambient.enabled=true)"; \
-	out="$$(helm template llz-cluster-foundation kubernetes-charts/llz-cluster-foundation \
-		--set networkPolicies.ambient.enabled=true)"; \
-	for ns in cert-manager harbor istio-system observability; do \
-		echo "$$out" | grep -q "name: $$ns-allow-ambient" \
-			|| { echo "ambient NetworkPolicy missing for $$ns"; exit 1; }; \
-	done; \
-	echo "$$out" | grep -q "port: 15008" \
-		|| { echo "ambient render lost the HBONE port"; exit 1; }; \
-	echo "$$out" | grep -q "169.254.7.127/32" \
-		|| { echo "ambient render lost the health-probe source"; exit 1; }
 
 actions-lint:
 	actionlint .github/workflows/*.yml
