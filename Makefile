@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -422,7 +422,7 @@ plaintext-guard:
 # because OPENBAO_SEAL_KEY — the at-rest key for every other credential in the
 # platform — sat off the pane by omission, and nothing in the repo noticed.
 #
-# FROM SOURCE, same reason as workflows-lock-check: it compares the working tree
+# FROM SOURCE, same reason as managed-lock-check: it compares the working tree
 # against Go lists in the working tree, and the prebuilt image binary is built from
 # the merge-base (so it lacks this verb on the PR that introduces it).
 credential-coverage-guard: export LLZ_FORCE_SOURCE := 1
@@ -597,7 +597,7 @@ LINT_TF := tf-lint checkov at-rest-guard tf-validate-roots
 
 # CI job entrypoints — one target per lint.yml container job.
 lint-k8s: $(LINT_K8S) shellcheck
-lint-tf: $(LINT_TF) template-manifest-check workflows-lock-check
+lint-tf: $(LINT_TF) template-manifest-check managed-lock-check
 
 # Assert .template-manifest classifies every scaffold file (managed/merge/owned),
 # so the template-update tooling never has to guess about a new file.
@@ -609,9 +609,9 @@ lint-tf: $(LINT_TF) template-manifest-check workflows-lock-check
 template-manifest-check:
 	$(call LLZ_CI,template-manifest,--root ../instance-template)
 
-# Assert instance-template/.template-workflows.lock still matches the vendored
+# Assert instance-template/.template-managed.lock still matches the template-owned
 # .github/ files it covers. Editing a llz-*.yml body without re-running
-# `llz ci workflows-fresh --write` would ship a lock that every instance fails on,
+# `llz ci managed-fresh --write` would ship a lock that every instance fails on,
 # so catch it here instead. Same two-branch --root trick as above (last wins).
 #
 # FROM SOURCE (like chart-guards, and for a sharper reason): this gate compares
@@ -619,9 +619,9 @@ template-manifest-check:
 # working tree's llz. LLZ_CI's PATH-first default would use the prebuilt image
 # binary — which is built from the merge-base and therefore doesn't even have this
 # verb on the PR that introduces it.
-workflows-lock-check: export LLZ_FORCE_SOURCE := 1
-workflows-lock-check:
-	$(call LLZ_CI,workflows-fresh,--root ../instance-template)
+managed-lock-check: export LLZ_FORCE_SOURCE := 1
+managed-lock-check:
+	$(call LLZ_CI,managed-fresh --root instance-template,--root ../instance-template)
 
 # Assert every restatement of a tool version agrees with the Dockerfile ARG block
 # (the declared single source of truth): the build-images matrix, lint.yml's
@@ -629,7 +629,7 @@ workflows-lock-check:
 # that derive TF_IMAGE/KUBE_IMAGE. The Go constants sat on Terraform 1.9.8 after
 # the other two moved to OpenTofu 1.12.5 — caught by hand then, caught here now.
 #
-# FROM SOURCE, for the same reason as workflows-lock-check: this compares the
+# FROM SOURCE, for the same reason as managed-lock-check: this compares the
 # WORKING TREE against itself, and the prebuilt image binary is built from the
 # merge-base (so it lacks this verb on the PR that introduces it).
 version-pins-check: export LLZ_FORCE_SOURCE := 1
@@ -639,7 +639,7 @@ version-pins-check:
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check workflows-lock-check version-pins-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \

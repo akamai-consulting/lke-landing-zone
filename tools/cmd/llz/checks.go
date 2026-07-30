@@ -305,7 +305,7 @@ func stepVendoredFresh(_ globalOpts) error {
 		fmt.Fprintln(os.Stderr, "  skip: no .template-manifest (vendored-fresh)")
 		return nil
 	}
-	return runWorkflowsFresh("", false, io.Discard, os.Stderr)
+	return runManagedFresh("", false, io.Discard, os.Stderr)
 }
 
 // stepRenderFresh fails the lint gate when the COMMITTED render output no longer

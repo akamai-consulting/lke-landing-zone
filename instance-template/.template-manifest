@@ -18,7 +18,7 @@
 #   managed  Template owns it outright. An update OVERWRITES it. Do NOT hand-edit
 #            it in an instance — your change will be lost on the next sync (and
 #            belongs upstream in the template anyway). Digest-locked: every
-#            token-free `managed` file is recorded in .template-workflows.lock,
+#            token-free `managed` file is recorded in .template-managed.lock,
 #            so a hand-edit fails `llz lint` instead of vanishing at upgrade.
 #   merge    Template owns the logic, but the file carries a few fork-local tokens
 #            (your GitHub org/registry, your state bucket). An update 3-way-merges
@@ -32,7 +32,7 @@ managed  .template-manifest
 # files the template drops). Template-owned — overwritten on update.
 managed  .template-removals
 # Digests of the template-owned scaffold surface, written by `llz ci
-# workflows-fresh --write`. `llz lint` recomputes them offline so a hand-edited
+# managed-fresh --write`. `llz lint` recomputes them offline so a hand-edited
 # (and therefore doomed — see `managed`) file fails CI instead of being silently
 # overwritten on the next upgrade. Ships with the files it covers, so it is
 # template-owned too.
@@ -45,7 +45,7 @@ managed  .template-removals
 # rendered bytes are per-instance — those are declared in the lock header
 # instead), and the verify pass fails in the TEMPLATE repo when a lockable file
 # is absent from the lock, so the lock cannot decay into a stale subset.
-managed  .template-workflows.lock
+managed  .template-managed.lock
 # Composite actions are VENDORED into every instance (.github/actions/) so the
 # reusable llz-* workflow bodies reference them locally (./.github/actions/<name>)
 # with no cross-repo fetch — this is what lets an instance run self-contained on an
@@ -122,7 +122,7 @@ managed  apl-values/values.yaml
 # substitutions down to ONE — `instance_repo` — and to ZERO for cluster-health.yml,
 # scheduled-checks.yml and wedge-gameday.yml. Those three are token-free template
 # logic held in `merge` purely for the trigger-surface affordance, so a hand-edit
-# there survives upgrades silently (they are `merge`, and the `workflows-fresh`
+# there survives upgrades silently (they are `merge`, and the `managed-fresh`
 # digest gate covers only digest-locked classes). If that affordance is ever
 # dropped, they belong in `managed` with the bodies — where the lock picks them
 # up automatically.
@@ -135,7 +135,7 @@ merge    .github/workflows/**
 # large body change (e.g. moving maintainer rationale out of the vendored YAML) land
 # as a clean overwrite rather than a merge that can strand conflict markers in
 # 1000-line workflow files — the gsap-apl v0.0.24 failure mode. Operators must not
-# hand-edit these; `llz ci workflows-fresh` fails CI when one drifts.
+# hand-edit these; `llz ci managed-fresh` fails CI when one drifts.
 # (Last-match-wins, so this MUST stay after the `merge .github/workflows/**` above.)
 managed  .github/workflows/llz-*.yml
 # GitLab CI flavor: the parallel pipeline files a GitLab instance `include:`s from

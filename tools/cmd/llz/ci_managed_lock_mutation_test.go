@@ -12,24 +12,24 @@ import (
 // lock is part of that scaffold — it has to be written (and read back) beside
 // the .template-manifest it describes, not in the repo root. The cwd-relative
 // spelling is reserved for a rendered instance, whose root IS ".".
-func TestWorkflowsFreshLockLivesBesideTheDetectedScaffoldRoot(t *testing.T) {
+func TestManagedFreshLockLivesBesideTheDetectedScaffoldRoot(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "instance-template")
 	writeFile(t, filepath.Join(root, ".template-manifest"), "managed  .github/workflows/llz-*.yml\n")
 	writeFile(t, filepath.Join(root, ".github/workflows/llz-terraform.yml"), "on: workflow_call\n")
 	chdir(t, dir)
 
-	if err := runWorkflowsFresh("", true, io.Discard, io.Discard); err != nil {
+	if err := runManagedFresh("", true, io.Discard, io.Discard); err != nil {
 		t.Fatalf("--write: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, vendoredLockPath)); err != nil {
+	if _, err := os.Stat(filepath.Join(root, managedLockPath)); err != nil {
 		t.Fatalf("the lock must be written under the detected scaffold root: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, vendoredLockPath)); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, managedLockPath)); err == nil {
 		t.Error("the lock must not land in the cwd when the scaffold root is instance-template/")
 	}
 	// And the check pass must read it back from the same place.
-	if err := runWorkflowsFresh("", false, io.Discard, io.Discard); err != nil {
+	if err := runManagedFresh("", false, io.Discard, io.Discard); err != nil {
 		t.Errorf("a freshly written lock must verify clean: %v", err)
 	}
 }
@@ -37,9 +37,9 @@ func TestWorkflowsFreshLockLivesBesideTheDetectedScaffoldRoot(t *testing.T) {
 // Missing and drifted files are two shapes of the same failure and the guard
 // reports ONE count over both. Netting them against each other reports "0
 // template-owned file(s) drifted" on a tree where two files are wrong.
-func TestWorkflowsFreshCountsMissingAndDriftedTogether(t *testing.T) {
+func TestManagedFreshCountsMissingAndDriftedTogether(t *testing.T) {
 	dir := freshFixture(t)
-	if err := runWorkflowsFresh("", true, io.Discard, io.Discard); err != nil {
+	if err := runManagedFresh("", true, io.Discard, io.Discard); err != nil {
 		t.Fatalf("--write: %v", err)
 	}
 	writeFile(t, filepath.Join(dir, ".github/workflows/llz-terraform.yml"), "on: workflow_call\n# operator edit\n")
@@ -48,7 +48,7 @@ func TestWorkflowsFreshCountsMissingAndDriftedTogether(t *testing.T) {
 	}
 
 	var errOut strings.Builder
-	err := runWorkflowsFresh("", false, io.Discard, &errOut)
+	err := runManagedFresh("", false, io.Discard, &errOut)
 	if err == nil {
 		t.Fatal("one edited + one deleted template-owned file must fail the guard")
 	}
@@ -62,11 +62,11 @@ func TestWorkflowsFreshCountsMissingAndDriftedTogether(t *testing.T) {
 
 // The lock parser points at the offending line so a hand-edited lock is fixable
 // without counting lines by hand.
-func TestReadVendoredLockNamesTheOffendingLineNumber(t *testing.T) {
-	p := filepath.Join(t.TempDir(), vendoredLockPath)
+func TestReadManagedLockNamesTheOffendingLineNumber(t *testing.T) {
+	p := filepath.Join(t.TempDir(), managedLockPath)
 	writeFile(t, p, "# GENERATED — do not hand-edit\nnot-a-valid-entry\n")
 
-	_, err := readVendoredLock(p)
+	_, err := readManagedLock(p)
 	if err == nil {
 		t.Fatal("a malformed entry must be rejected")
 	}

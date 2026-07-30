@@ -1,6 +1,6 @@
 package main
 
-// ci_workflows_fresh.go implements `llz ci workflows-fresh` — the drift guard
+// ci_managed_lock.go implements `llz ci managed-fresh` — the drift guard
 // specified in docs/designs/cross-org-reuse-pattern.md ("a hand-edited instance
 // graph fails CI rather than silently diverging") and left unbuilt until now.
 //
@@ -8,7 +8,7 @@ package main
 // at the pinned ref and diff", but `copier` ships only in the devcontainer image —
 // the reusable workflows run in ci-tofu (vars.TF_IMAGE), which has no copier
 // and, on an air-gapped GHE, no route to the template repo either (ADR 0003). So
-// the template instead SHIPS the expected digests in .template-workflows.lock and
+// the template instead SHIPS the expected digests in .template-managed.lock and
 // the guard recomputes them locally: no network, no Python, no template checkout.
 //
 // WHY THAT IS SOUND: a `managed` file that carries no `<@ … @>` copier
@@ -38,20 +38,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// vendoredLockPath is the digest list, relative to the scaffold root. It is
+// managedLockPath is the digest list, relative to the scaffold root. It is
 // itself `managed`, so `llz upgrade` refreshes it alongside the files it covers.
-const vendoredLockPath = ".template-workflows.lock"
+// Named for the CLASS it locks, not a directory: it used to be
+// .template-workflows.lock, scoped to .github/, and the name outlived the scope.
+const managedLockPath = ".template-managed.lock"
 
-func ciWorkflowsFreshCmd() *cobra.Command {
+func ciManagedFreshCmd() *cobra.Command {
 	var write bool
 	var root string
 	c := &cobra.Command{
-		Use:   "workflows-fresh",
+		Use:   "managed-fresh",
 		Short: "fail when a template-owned scaffold file drifts from the template",
 		Long: "Verifies every token-free file in a digest-locked class of .template-manifest\n" +
 			"(today: `managed` — the vendored llz-*.yml bodies, composite actions and the\n" +
 			"template-owned configs) still matches the digest the template shipped in\n" +
-			vendoredLockPath + ". These files are template-owned: `llz upgrade` overwrites them\n" +
+			managedLockPath + ". These files are template-owned: `llz upgrade` overwrites them\n" +
 			"from a clean render, so a local edit is silently lost on the next bump. Failing\n" +
 			"here turns that silent loss into a CI error.\n\n" +
 			"Runs offline — no copier, no template checkout, no network.\n\n" +
@@ -59,7 +61,7 @@ func ciWorkflowsFreshCmd() *cobra.Command {
 			"is current), not for instances.",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runWorkflowsFresh(root, write, os.Stdout, os.Stderr)
+			return runManagedFresh(root, write, os.Stdout, os.Stderr)
 		},
 	}
 	c.Flags().BoolVar(&write, "write", false, "regenerate the lock from the scaffold (template repo only)")
@@ -67,26 +69,26 @@ func ciWorkflowsFreshCmd() *cobra.Command {
 	return c
 }
 
-func runWorkflowsFresh(root string, write bool, out, errOut io.Writer) error {
+func runManagedFresh(root string, write bool, out, errOut io.Writer) error {
 	m, err := loadTemplateManifest(root)
 	if err != nil {
 		return err
 	}
-	lockPath := filepath.Join(m.root, vendoredLockPath)
+	lockPath := filepath.Join(m.root, managedLockPath)
 	if m.root == "." {
-		lockPath = vendoredLockPath
+		lockPath = managedLockPath
 	}
 
 	if write {
-		return writeVendoredLock(m, lockPath, out)
+		return writeManagedLock(m, lockPath, out)
 	}
 
-	want, err := readVendoredLock(lockPath)
+	want, err := readManagedLock(lockPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Instances rendered before the lock existed simply have nothing to
 			// check — don't fail their lint gate; the next `llz upgrade` ships one.
-			fmt.Fprintf(errOut, "workflows-fresh: no %s — skipping (upgrade to a template version that ships it)\n", vendoredLockPath)
+			fmt.Fprintf(errOut, "managed-fresh: no %s — skipping (upgrade to a template version that ships it)\n", managedLockPath)
 			return nil
 		}
 		return err
@@ -107,7 +109,7 @@ func runWorkflowsFresh(root string, write bool, out, errOut io.Writer) error {
 		if err := checkLockComplete(m, want, errOut); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "workflows-fresh: OK — %d template-owned file(s) match %s\n", len(want), vendoredLockPath)
+		fmt.Fprintf(out, "managed-fresh: OK — %d template-owned file(s) match %s\n", len(want), managedLockPath)
 		return nil
 	}
 
@@ -127,7 +129,7 @@ func runWorkflowsFresh(root string, write bool, out, errOut io.Writer) error {
 		"Fix by either:\n"+
 		"  • reverting the edit (`llz upgrade` re-syncs them), or\n"+
 		"  • sending the change upstream to the template, where it belongs.\n")
-	return fmt.Errorf("workflows-fresh: %d template-owned file(s) drifted", len(drifted)+len(missing))
+	return fmt.Errorf("managed-fresh: %d template-owned file(s) drifted", len(drifted)+len(missing))
 }
 
 // lockableFiles splits the scaffold into what the digest lock can cover and what
@@ -140,7 +142,7 @@ func runWorkflowsFresh(root string, write bool, out, errOut io.Writer) error {
 func lockableFiles(m templateManifest, files []string) (sums map[string]string, tokenful []string, err error) {
 	sums = map[string]string{}
 	for _, rel := range files {
-		if rel == vendoredLockPath {
+		if rel == managedLockPath {
 			continue
 		}
 		c, ok := lookupTemplateClass(m.classify(rel))
@@ -149,7 +151,7 @@ func lockableFiles(m templateManifest, files []string) (sums map[string]string, 
 		}
 		data, err := os.ReadFile(filepath.Join(m.root, filepath.FromSlash(rel)))
 		if err != nil {
-			return nil, nil, fmt.Errorf("workflows-fresh: read %s: %w", rel, err)
+			return nil, nil, fmt.Errorf("managed-fresh: read %s: %w", rel, err)
 		}
 		if strings.Contains(string(data), "<@") {
 			tokenful = append(tokenful, rel)
@@ -195,23 +197,23 @@ func checkLockComplete(m templateManifest, want map[string]string, errOut io.Wri
 		return nil
 	}
 	for _, rel := range unlocked {
-		fmt.Fprintf(errOut, "::error file=%s::template-owned file is missing from %s\n", rel, vendoredLockPath)
+		fmt.Fprintf(errOut, "::error file=%s::template-owned file is missing from %s\n", rel, managedLockPath)
 	}
-	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) are not covered by %s:\n", red("✗"), len(unlocked), vendoredLockPath)
+	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) are not covered by %s:\n", red("✗"), len(unlocked), managedLockPath)
 	for _, rel := range unlocked {
 		fmt.Fprintf(errOut, "    %s\n", rel)
 	}
 	fmt.Fprintf(errOut, "\n`llz upgrade` overwrites these from a clean render, so an instance's local edit\n"+
 		"is silently lost — which is exactly what this lock exists to catch. Regenerate it:\n"+
-		"    llz ci workflows-fresh --root %s --write\n", m.root)
-	return fmt.Errorf("workflows-fresh: %d template-owned file(s) missing from the lock", len(unlocked))
+		"    llz ci managed-fresh --root %s --write\n", m.root)
+	return fmt.Errorf("managed-fresh: %d template-owned file(s) missing from the lock", len(unlocked))
 }
 
-// writeVendoredLock regenerates the digest list from the scaffold, covering every
+// writeManagedLock regenerates the digest list from the scaffold, covering every
 // token-free file in a digestLocked class. Tokenful ones cannot be locked at all
 // (their rendered bytes differ per instance) and are recorded in the header as
 // declared exclusions rather than dropped silently.
-func writeVendoredLock(m templateManifest, lockPath string, out io.Writer) error {
+func writeManagedLock(m templateManifest, lockPath string, out io.Writer) error {
 	files, err := scaffoldManifestFiles(m.root)
 	if err != nil {
 		return err
@@ -221,18 +223,18 @@ func writeVendoredLock(m templateManifest, lockPath string, out io.Writer) error
 		return err
 	}
 	if len(sums) == 0 {
-		return fmt.Errorf("workflows-fresh: no digest-lockable files in %s — refusing to write an empty lock", m.root)
+		return fmt.Errorf("managed-fresh: no digest-lockable files in %s — refusing to write an empty lock", m.root)
 	}
 
 	var b strings.Builder
-	b.WriteString("# " + vendoredLockPath + " — digests of the template-owned scaffold surface.\n")
+	b.WriteString("# " + managedLockPath + " — digests of the template-owned scaffold surface.\n")
 	b.WriteString("#\n")
-	b.WriteString("# GENERATED by `llz ci workflows-fresh --write` — do not hand-edit.\n")
+	b.WriteString("# GENERATED by `llz ci managed-fresh --write` — do not hand-edit.\n")
 	b.WriteString("# Covers every token-free file in a digest-locked class of .template-manifest\n")
 	b.WriteString("# (today: `managed`). Those render byte-identically in every instance, which is\n")
 	b.WriteString("# what makes one digest valid for all of them.\n")
 	b.WriteString("#\n")
-	b.WriteString("# `llz ci workflows-fresh` (part of `llz lint`) recomputes these offline and fails\n")
+	b.WriteString("# `llz ci managed-fresh` (part of `llz lint`) recomputes these offline and fails\n")
 	b.WriteString("# when an instance hand-edits a file the next `llz upgrade` would overwrite.\n")
 	if len(tokenful) > 0 {
 		b.WriteString("#\n")
@@ -251,13 +253,13 @@ func writeVendoredLock(m templateManifest, lockPath string, out io.Writer) error
 		fmt.Fprintf(&b, "%s  %s\n", sums[rel], rel)
 	}
 	if err := os.WriteFile(lockPath, []byte(b.String()), 0o644); err != nil {
-		return fmt.Errorf("workflows-fresh: write %s: %w", lockPath, err)
+		return fmt.Errorf("managed-fresh: write %s: %w", lockPath, err)
 	}
-	fmt.Fprintf(out, "workflows-fresh: wrote %s (%d file(s))\n", lockPath, len(sums))
+	fmt.Fprintf(out, "managed-fresh: wrote %s (%d file(s))\n", lockPath, len(sums))
 	return nil
 }
 
-func readVendoredLock(path string) (map[string]string, error) {
+func readManagedLock(path string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -274,12 +276,12 @@ func readVendoredLock(path string) (map[string]string, error) {
 		}
 		parts := strings.Fields(line)
 		if len(parts) != 2 || len(parts[0]) != 64 {
-			return nil, fmt.Errorf("workflows-fresh: %s:%d bad entry (expected `<sha256>  <path>`): %q", path, lineNo, line)
+			return nil, fmt.Errorf("managed-fresh: %s:%d bad entry (expected `<sha256>  <path>`): %q", path, lineNo, line)
 		}
 		sums[filepath.ToSlash(parts[1])] = parts[0]
 	}
 	if err := s.Err(); err != nil {
-		return nil, fmt.Errorf("workflows-fresh: read %s: %w", path, err)
+		return nil, fmt.Errorf("managed-fresh: read %s: %w", path, err)
 	}
 	return sums, nil
 }

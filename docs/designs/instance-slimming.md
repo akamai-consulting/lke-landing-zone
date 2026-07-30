@@ -69,11 +69,11 @@ Lever 1 made the upgrade *reviewable*; this makes it *authoritative*.
   files before copier and restores them after, then overwrites `managed` files
   from a clean render of the target ref (`applyUpgradeManifestPolicy`). Instances
   with no usable manifest upgrade exactly as before.
-- **`llz ci workflows-fresh` drift guard** — the check
+- **`llz ci managed-fresh` drift guard** — the check
   `cross-org-reuse-pattern.md` specified and nobody built. It runs inside
   `llz lint` (so it reaches instances without editing the vendored workflows it
   protects) and compares the `.github/` surface against digests the template ships
-  in `.template-workflows.lock`.
+  in `.template-managed.lock`.
 
   It is a **hash lock, not a re-render**: `copier` exists only in the devcontainer
   image, while the reusable workflows run in `ci-tofu` — and an air-gapped GHE

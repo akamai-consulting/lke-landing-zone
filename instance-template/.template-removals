@@ -32,3 +32,9 @@ untrack  terraform-iac-bootstrap/*/[a-z]*.tfvars
 # template_sha + a stamped_at that moved on every render) and could disagree with
 # copier's own answers after an aborted upgrade. Delete the orphan.
 delete   .template-version
+
+# The digest lock was renamed .template-workflows.lock -> .template-managed.lock
+# when its scope stopped being `.github/` and became "whatever .template-manifest
+# marks digest-locked". The old name described a directory the lock no longer
+# tracks. `llz upgrade` renders the new file; delete the orphaned old one.
+delete   .template-workflows.lock

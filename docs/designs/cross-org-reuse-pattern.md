@@ -103,7 +103,7 @@ Convert the one workflow to a full instance-local graph consuming cross-org acti
 
 ### Phase 3 — convert the rest + retire the reusables
 
-`bootstrap-openbao`, `secret-rotation`, `cluster-health`, `wedge-gameday`, `promote`; inline secret-bearing nested reusables; keep secret-free ones thin. Add a `llz ci workflows-fresh`-style drift guard so a hand-edited instance graph fails CI rather than silently diverging. Retire the `llz-*.yml` reusables (or keep as an internal library for the template's own e2e). Bump the template major + migration.
+`bootstrap-openbao`, `secret-rotation`, `cluster-health`, `wedge-gameday`, `promote`; inline secret-bearing nested reusables; keep secret-free ones thin. Add a `llz ci managed-fresh`-style drift guard so a hand-edited instance graph fails CI rather than silently diverging. Retire the `llz-*.yml` reusables (or keep as an internal library for the template's own e2e). Bump the template major + migration.
 
 ## Alternatives considered
 
