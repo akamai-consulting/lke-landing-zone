@@ -751,12 +751,39 @@ test-race:
 # anything; staticcheck errors on a directive that matches nothing, so a stale
 # exception cannot rot silently either.
 STATICCHECK_VERSION ?= 2025.1.1
+DEADCODE_VERSION ?= latest
 staticcheck:
 	@cd $(GO_DIR) && if command -v staticcheck >/dev/null 2>&1; then \
 	  staticcheck ./...; \
 	else \
 	  echo "staticcheck not on PATH — falling back to 'go run' (make install-tools installs it)"; \
 	  go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...; \
+	fi
+
+# deadcode: functions unreachable from the llz entry point. REPORT ONLY — this is
+# deliberately NOT a CI gate, because "unreachable from main" and "should be
+# deleted" are different claims and this repo has three legitimate reasons for the
+# gap:
+#
+#   * implemented ahead of wiring — internal/forge carries a whole GitLab client
+#     behind the documented Forge abstraction (LLZ_FORGE, docs/designs/
+#     forge-abstraction.md). It is a second backend awaiting selection, not rot;
+#     deleting it would remove the point of the interface.
+#   * test-only production helpers — reachable from tests but nothing else. Worth
+#     looking at, since that usually means either a missing caller or a function
+#     that should not be production code.
+#   * genuinely orphaned subsystems, which is what makes this worth running: it
+#     found that ALL of internal/clusterspec/aplversion.go — the apl-chart
+#     major-drift gate, its LLZ_ALLOW_APL_CHART_MAJOR_DRIFT override and its
+#     warnings — is called by nothing. See the tracking issue.
+#
+# Gating on it would force the first class to be suppressed forever, which trains
+# people to ignore the third.
+deadcode:
+	@cd $(GO_DIR) && if command -v deadcode >/dev/null 2>&1; then \
+	  deadcode ./cmd/llz; \
+	else \
+	  go run golang.org/x/tools/cmd/deadcode@$(DEADCODE_VERSION) ./cmd/llz; \
 	fi
 
 # Fuzzing. NOT a CI gate: fuzzing is non-deterministic and open-ended, so gating

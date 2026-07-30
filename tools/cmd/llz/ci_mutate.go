@@ -301,6 +301,19 @@ func ciMutateCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 
+			// Warn BEFORE the run, not after: a package whose tests reach outside
+			// the module dies in gremlins' isolated copy, -failfast aborts the
+			// binary, and every mutant comes back "killed" — the second of the
+			// three flattering-100% failures this command exists to catch. The
+			// canary catches it after the fact; this says so up front, while the
+			// operator can still stage the repo root and avoid burning the run.
+			if outside, err := testsReachOutsideModule(strings.TrimPrefix(pkg, "./")); err == nil && outside {
+				fmt.Fprintf(out, "::warning::%s has tests referencing paths above the module root. "+
+					"gremlins runs each mutant in a COPY of the module, where those paths do not exist, "+
+					"so the first such test dies and -failfast marks every mutant killed. "+
+					"Stage the repo root around gremlins' workdir, or expect the canary to fail.\n", pkg)
+			}
+
 			// CONTROL first: a red suite makes every mutant trivially killed.
 			_, ctlErr := execOutput("go", "test", pkg, "-count=1")
 			controlGreen := ctlErr == nil
