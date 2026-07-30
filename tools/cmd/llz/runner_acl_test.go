@@ -20,6 +20,8 @@ type fakeACLClient struct {
 	getErr   error
 	putErr   error
 	puts     []linode.ControlPlaneACL
+	// gets counts ACL reads, so a test can assert a read-only path still reads.
+	gets int
 	// clobberN simulates a racing writer: on each of the next clobberN PUTs the
 	// fake overwrites our just-PUT list with clobberACL (as if another job's PUT
 	// landed immediately after ours), exercising the verify-after-write retry.
@@ -41,6 +43,7 @@ func (f *fakeACLClient) ListClusters(context.Context) ([]map[string]any, error) 
 	return f.clusters, nil
 }
 func (f *fakeACLClient) GetControlPlaneACL(context.Context, uint64) (linode.ControlPlaneACL, error) {
+	f.gets++
 	return f.acl, f.getErr
 }
 func (f *fakeACLClient) PutControlPlaneACL(_ context.Context, _ uint64, a linode.ControlPlaneACL) (string, error) {
@@ -382,4 +385,50 @@ func TestWaitACLEnforced(t *testing.T) {
 			t.Errorf("an empty revision (older API / no-change path) must be a no-op: %v", err)
 		}
 	})
+}
+
+// --dry-run is a ROOT persistent flag ("print commands; change nothing") that
+// this command accepted and then ignored: it issued a live PUT and rewrote a
+// cluster's control-plane ACL. Anyone dry-running first as a safety step got the
+// mutation they were checking for. Verified against a live cluster before the
+// fix — the ACL revision-id changed.
+func TestRunnerACLDryRunMakesNoWrites(t *testing.T) {
+	for _, mode := range []string{"open", "revoke"} {
+		t.Run(mode, func(t *testing.T) {
+			fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}}}
+			withFakeACL(t, fake)
+			// For revoke, the IP must be PRESENT so the non-dry path would have
+			// something to remove — otherwise the test passes for the wrong reason.
+			if mode == "revoke" {
+				fake.acl.IPv4 = append(fake.acl.IPv4, "1.2.3.4")
+			}
+			o := runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true, dryRun: true}
+			if err := runRunnerACL(mode, o); err != nil {
+				t.Fatalf("%s --dry-run = %v", mode, err)
+			}
+			if len(fake.puts) != 0 {
+				t.Errorf("%s --dry-run issued %d PUT(s): %+v", mode, len(fake.puts), fake.puts)
+			}
+			// The state file is a write too, and a bogus one: recording
+			// Modified=true when nothing changed would make the paired revoke try
+			// to remove an IP this run never added.
+			if _, ok, _ := readRunnerACLState("e2e"); ok {
+				t.Errorf("%s --dry-run wrote a runner-acl state file", mode)
+			}
+		})
+	}
+}
+
+// The dry-run branch must still do the real RESOLUTION work — a dry run that
+// silently skips cluster lookup would hide the failure it exists to surface.
+func TestRunnerACLDryRunStillResolvesAndReads(t *testing.T) {
+	fake := &fakeACLClient{acl: linode.ControlPlaneACL{Enabled: true, IPv4: []string{"9.9.9.0/24"}}}
+	withFakeACL(t, fake)
+	o := runnerACLOpts{region: "e2e", clusterID: "5", ip: "1.2.3.4", failOnMissing: true, dryRun: true}
+	if err := runRunnerACL("open", o); err != nil {
+		t.Fatalf("open --dry-run = %v", err)
+	}
+	if fake.gets == 0 {
+		t.Error("dry-run never read the ACL — it cannot report what would change")
+	}
 }

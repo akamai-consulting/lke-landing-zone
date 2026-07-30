@@ -97,6 +97,10 @@ type runnerACLOpts struct {
 	tfvarsDir     string
 	failOnMissing bool
 	configMap     bool // also lease/release the IP in the firewall-runner-acl ConfigMap (needs KUBECONFIG)
+	// dryRun mirrors the ROOT --dry-run flag. It is read in RunE rather than
+	// declared here as a local flag so `llz --dry-run ci runner-acl ...` and
+	// `llz ci runner-acl --dry-run ...` behave identically.
+	dryRun bool
 }
 
 func ciRunnerACLCmd() *cobra.Command {
@@ -115,7 +119,13 @@ func ciRunnerACLCmd() *cobra.Command {
 			"--cluster-id, else --cluster-label (+ --linode-region), else cluster_label /\n" +
 			"region read from <tfvars-dir>/<region>.tfvars.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error { return runRunnerACL(args[0], o) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// cmd.Flags() includes flags inherited from the root, so this picks up
+			// the global --dry-run. It was previously never read: the flag parsed
+			// fine, printed nothing, and the command mutated the ACL anyway.
+			o.dryRun, _ = cmd.Flags().GetBool("dry-run")
+			return runRunnerACL(args[0], o)
+		},
 	}
 	f := c.Flags()
 	f.StringVar(&o.region, "region", "", "deployment/env key (names the state file; finds <region>.tfvars)")
@@ -151,10 +161,75 @@ func runRunnerACL(mode string, o runnerACLOpts) error {
 	client := newACLClient(token)
 	ctx := context.Background()
 
+	if o.dryRun {
+		// A SEPARATE path, not a flag threaded through the write path. The open /
+		// revoke flows do more than the one PUT — they verify-after-write, wait for
+		// the revision to be enforced, optionally lease the IP into a ConfigMap, and
+		// write a state file that the paired revoke later acts on. Making all of that
+		// pretend convincingly means several places that must each remember to check
+		// a bool, and the cost of missing one is a mutation from a flag that promised
+		// none. This branch can only GET, so it cannot mutate by construction.
+		return runnerACLDryRun(ctx, client, mode, o)
+	}
 	if mode == "revoke" {
 		return runnerACLRevoke(ctx, client, o)
 	}
 	return runnerACLOpen(ctx, client, o)
+}
+
+// runnerACLDryRun reports what open/revoke WOULD change and returns. It performs
+// reads only — no PUT, no ConfigMap lease, no state file — so `--dry-run` is
+// honest about leaving the cluster and the runner's own state untouched.
+func runnerACLDryRun(ctx context.Context, client aclClient, mode string, o runnerACLOpts) error {
+	cid, err := resolveClusterID(ctx, client, clusterRef{
+		region: o.region, clusterID: o.clusterID, clusterLabel: o.clusterLabel,
+		linodeRegion: o.linodeRegion, tfvarsDir: o.tfvarsDir,
+	})
+	if err != nil {
+		if mode == "open" && !o.failOnMissing {
+			fmt.Printf("dry-run runner-acl(open): cluster not resolvable and --fail-on-missing=false — would no-op.\n")
+			return nil
+		}
+		return err
+	}
+
+	ip := o.ip
+	if ip == "" {
+		if ip, err = detectEgressIP(); err != nil {
+			return fmt.Errorf("could not detect runner egress IP: %w", err)
+		}
+	}
+
+	acl, err := client.GetControlPlaneACL(ctx, cid)
+	if err != nil {
+		return fmt.Errorf("read control-plane ACL for cluster %d: %w", cid, err)
+	}
+	fmt.Printf("dry-run runner-acl(%s): cluster %d, runner IP %s.\n", mode, cid, ip)
+	fmt.Printf("dry-run: current ACL enabled=%t ipv4=%v\n", acl.Enabled, acl.IPv4)
+
+	if !acl.Enabled {
+		fmt.Printf("dry-run: ACL is disabled (open to all) — would make no change.\n")
+		return nil
+	}
+	if mode == "open" {
+		if acl.ContainsIP(ip) {
+			fmt.Printf("dry-run: %s already present — would make no change.\n", ip)
+			return nil
+		}
+		next, _ := acl.WithIP(ip)
+		fmt.Printf("dry-run: WOULD PUT ipv4=%v (adding %s); no request sent.\n", next.IPv4, ip)
+		if o.configMap {
+			fmt.Printf("dry-run: would also lease %s in the firewall-runner-acl ConfigMap.\n", ip)
+		}
+		return nil
+	}
+	if !acl.ContainsIP(ip) {
+		fmt.Printf("dry-run: %s not present — would make no change.\n", ip)
+		return nil
+	}
+	next, _ := acl.WithoutIP(ip)
+	fmt.Printf("dry-run: WOULD PUT ipv4=%v (removing %s); no request sent.\n", next.IPv4, ip)
+	return nil
 }
 
 func runnerACLOpen(ctx context.Context, client aclClient, o runnerACLOpts) error {
