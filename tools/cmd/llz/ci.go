@@ -174,6 +174,10 @@ func ciCmd() *cobra.Command {
 	// Linode Volume tag-heal backstop for Volumes born without the StorageClass's
 	// lke<id> ownership tag (also runnable in-cluster by the volume-tags reconciler).
 	c.AddCommand(ciReconcileVolumeTagsCmd())
+	// The e2e GATE for the same invariant the two lanes above maintain: asserts
+	// against the Linode API that every PV-backed Volume is encrypted at rest AND
+	// carries its lke<id> ownership tag. Fails closed, including on an empty cluster.
+	c.AddCommand(ciAssertVolumeEncryptionCmd())
 	// The narrow in-cluster PAT, same one-owner shape: mint-bootstrap-pat seeds
 	// the first token at bootstrap; rotate-incluster-pat (registered with the
 	// rotation commands above) re-mints it monthly.
