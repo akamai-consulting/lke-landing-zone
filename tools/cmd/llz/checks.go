@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -120,7 +121,69 @@ func checkovArgv(checkov, dir string) []string {
 		"--config-file", ".checkov.yaml", "--compact", "--quiet"}
 }
 
+// goFmtListArgv lists Go files needing formatting. `gofmt -l` prints paths and
+// exits 0 either way, so the OUTPUT is the verdict — not the exit code.
+func goFmtListArgv(gofmtBin string, dirs []string) []string {
+	return append([]string{gofmtBin, "-l"}, dirs...)
+}
+
+// goFmtUnformatted parses `gofmt -l` output into the list of files needing
+// formatting. Pure, so the parsing is tested without invoking gofmt.
+func goFmtUnformatted(out string) []string {
+	var files []string
+	for _, ln := range strings.Split(out, "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			files = append(files, ln)
+		}
+	}
+	return files
+}
+
+// goModuleDirs are the module roots stepGoFmt formats, relative to the repo root.
+// Only the ones that exist are scanned, so this is a no-op in an adopter instance
+// repo (which vendors no Go source).
+func goModuleDirs() []string {
+	var out []string
+	for _, d := range []string{"tools/cmd", "tools/internal"} {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // ── steps (each respects --dry-run via run; a missing tool is a no-op pass) ───
+
+// stepGoFmt is the gofmt half of the format gate. stepFmtCheck covers HCL via
+// `tofu fmt`; nothing covered Go, so gofmt drift could only ever be caught by
+// CI's `make fmt-check` — which is exactly how it was caught, as a red Lint on an
+// already-pushed commit. The pre-commit gate is the cheaper place to learn it.
+//
+// Deliberately NOT `make fmt-check`: this must run from any cwd inside the repo,
+// stay a no-op where there is no Go tree, and not depend on make.
+func stepGoFmt(g globalOpts) error {
+	gofmtBin := tool("gofmt", "LLZ_GOFMT")
+	dirs := goModuleDirs()
+	if len(dirs) == 0 || !haveTool(gofmtBin) {
+		return nil
+	}
+	argv := goFmtListArgv(gofmtBin, dirs)
+	fmt.Fprintln(os.Stderr, "→ "+shellQuote(argv))
+	if g.dryRun {
+		return nil
+	}
+	out, _ := runCombined(exec.Command(argv[0], argv[1:]...))
+	unformatted := goFmtUnformatted(out)
+	if len(unformatted) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "gofmt: %d file(s) need formatting:\n", len(unformatted))
+	for _, f := range unformatted {
+		fmt.Fprintf(os.Stderr, "  • %s\n", f)
+	}
+	fmt.Fprintf(os.Stderr, "  fix: gofmt -w %s\n", strings.Join(dirs, " "))
+	return fmt.Errorf("gofmt: %d file(s) need formatting", len(unformatted))
+}
 
 func stepFmtCheck(g globalOpts) error {
 	tofu := tool("tofu", "LLZ_TOFU")
@@ -519,13 +582,20 @@ func stepCheckov(g globalOpts) error {
 	return nil
 }
 
-// runLint is the fast pre-commit gate (also called by `llz precommit`).
-func runLint(g globalOpts) error {
-	for _, step := range []func(globalOpts) error{
+// lintSteps is the ordered gate. Named (not inlined into runLint) so a test can
+// assert a step is actually WIRED IN — an unreferenced check protects nothing,
+// and that is a silent failure no amount of testing the step itself would catch.
+func lintSteps() []func(globalOpts) error {
+	return []func(globalOpts) error{
 		stepConflictMarkers, stepDroppedAPIVersions, stepVendoredFresh, stepUpgradeChurnGuard,
 		stepPinCoherence, stepRenderFresh,
-		stepFmtCheck, stepTFLint, stepActionsLint, stepGitleaks,
-	} {
+		stepFmtCheck, stepGoFmt, stepTFLint, stepActionsLint, stepGitleaks,
+	}
+}
+
+// runLint is the fast pre-commit gate (also called by `llz precommit`).
+func runLint(g globalOpts) error {
+	for _, step := range lintSteps() {
 		if err := step(g); err != nil {
 			return err
 		}
