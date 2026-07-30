@@ -472,6 +472,25 @@ func TestEventSourceSecretsDetectorIsNarrow(t *testing.T) {
 	}
 }
 
+// The guard began as an HTTP gate, which quietly implied HTTP is where cleartext
+// lives. This platform runs CNPG Postgres and Redis: a plaintext DSN carries
+// credentials and row data with no `http://` anywhere in it.
+func TestCleartextWireProtocolsAreFindings(t *testing.T) {
+	for _, tc := range []struct{ line, wantKey string }{
+		{`  url: "postgres://user:pw@harbor-otomi-db:5432/registry"`, "p/x.yaml:postgres"},
+		{`  url: "redis://harbor-redis:6379/0"`, "p/x.yaml:redis"},
+		{`  broker: "amqp://guest:guest@rabbit:5672"`, "p/x.yaml:amqp"},
+		{`  dsn: "mysql://root@db:3306/app"`, "p/x.yaml:mysql"},
+		{`  uri: "mongodb://mongo:27017"`, "p/x.yaml:mongodb"},
+		{`  dir: "ldap://dc:389"`, "p/x.yaml:ldap"},
+	} {
+		fs := scanPlaintext("p/x.yaml", tc.line+"\n", false)
+		if len(fs) != 1 || fs[0].key != tc.wantKey {
+			t.Errorf("%s -> %v, want one finding keyed %q", tc.line, fs, tc.wantKey)
+		}
+	}
+}
+
 // Spelling freedom: quoted and trailing-whitespace forms mean the same thing to
 // Kubernetes and must not be a way around the gate. Same rationale as
 // TestSchemeHTTPSpellings.
@@ -485,6 +504,98 @@ func TestEventSourceSecretsSpellings(t *testing.T) {
 	} {
 		if fs := scanPlaintext("k/x.yaml", ln+"\n", false); len(fs) != 1 {
 			t.Errorf("%s must be a finding, got %+v", ln, fs)
+		}
+	}
+}
+
+// The TLS-bearing spellings must stay silent, or the gate cries wolf on the very
+// thing it wants people to adopt. RE2 has no negative lookahead, so this is
+// enforced by the character right after the scheme name.
+func TestTLSBearingProtocolsAreNotFindings(t *testing.T) {
+	for _, ln := range []string{
+		`  url: "rediss://harbor-redis:6380/0"`,
+		`  broker: "amqps://rabbit:5671"`,
+		`  dir: "ldaps://dc:636"`,
+		`  uri: "mongodb+srv://mongo/db"`,
+		`  url: "https://harbor-core.harbor.svc.cluster.local"`,
+	} {
+		if fs := scanPlaintext("p/x.yaml", ln+"\n", false); len(fs) != 0 {
+			t.Errorf("%s must not be a finding, got %v", ln, fs)
+		}
+	}
+}
+
+// A Postgres DSN that turns TLS off outright, in either spelling.
+func TestSSLModeDisableIsAFinding(t *testing.T) {
+	for _, ln := range []string{`  dsn: "host=db sslmode=disable"`, `  sslmode: disable`} {
+		fs := scanPlaintext("p/x.yaml", ln+"\n", false)
+		if len(fs) != 1 || fs[0].key != "p/x.yaml:sslmode-disable" {
+			t.Errorf("%s -> %v, want a sslmode-disable finding", ln, fs)
+		}
+	}
+	if fs := scanPlaintext("p/x.yaml", "  sslmode: require\n", false); len(fs) != 0 {
+		t.Errorf("sslmode: require must not be a finding, got %v", fs)
+	}
+}
+
+// reInsecureGo matched only the composite-literal form. These are the same
+// decision written differently — a gate a reviewer clears by assigning instead of
+// initialising is not a gate. client-go's rest.Config spells it `Insecure`, so
+// every kubeconfig-building path was invisible to the original pattern.
+func TestAlternateInsecureGoSpellingsAreFindings(t *testing.T) {
+	for _, ln := range []string{
+		"\tcfg.TLSClientConfig.InsecureSkipVerify = true\n",
+		"\tc := rest.Config{TLSClientConfig: rest.TLSClientConfig{Insecure: true}}\n",
+	} {
+		if fs := scanPlaintext("t/x.go", ln, true); len(fs) == 0 {
+			t.Errorf("%q must be a finding", strings.TrimSpace(ln))
+		}
+	}
+	// The safe spellings stay quiet.
+	for _, ln := range []string{
+		"\tcfg.InsecureSkipVerify = false\n",
+		"\tc := rest.Config{Insecure: false}\n",
+	} {
+		if fs := scanPlaintext("t/x.go", ln, true); len(fs) != 0 {
+			t.Errorf("%q must not be a finding, got %v", strings.TrimSpace(ln), fs)
+		}
+	}
+}
+
+// Command-line opt-outs, including inside a YAML container command/args block —
+// which the walker already reads as text.
+func TestInsecureCommandLineFlagsAreFindings(t *testing.T) {
+	for _, ln := range []string{
+		`            - "curl -k https://harbor-core/api"`,
+		`            - "wget --no-check-certificate https://x"`,
+		`            - "kubectl --insecure-skip-tls-verify get po"`,
+		`            - "helm push chart oci://reg --plain-http"`,
+	} {
+		if fs := scanPlaintext("p/x.yaml", ln+"\n", false); len(fs) != 1 {
+			t.Errorf("%s -> %v, want one finding", ln, fs)
+		}
+	}
+	// `-k` only counts as a curl flag; an unrelated -k must not trip it.
+	if fs := scanPlaintext("p/x.yaml", `            - "sort -k 2 file"`+"\n", false); len(fs) != 0 {
+		t.Errorf("unrelated -k must not be a finding, got %v", fs)
+	}
+}
+
+// Config keys that mean "do not verify TLS": unsafe when true (insecure,
+// skipVerify) and unsafe when false (sslVerify, tlsVerify, verify_ssl).
+func TestInsecureConfigKeysAreFindings(t *testing.T) {
+	for _, ln := range []string{
+		`  insecure: true`, `  skipVerify: true`, `  insecureSkipTLSVerify: true`,
+		`  sslVerify: false`, `  tlsVerify: false`, `  verify_ssl: false`,
+	} {
+		if fs := scanPlaintext("p/x.yaml", ln+"\n", false); len(fs) != 1 {
+			t.Errorf("%s -> %v, want one finding", ln, fs)
+		}
+	}
+	// Their safe polarities must stay silent.
+	for _, ln := range []string{`  insecure: false`, `  sslVerify: true`, `  tlsVerify: true`} {
+		if fs := scanPlaintext("p/x.yaml", ln+"\n", false); len(fs) != 0 {
+			t.Errorf("%s must not be a finding, got %v", ln, fs)
 		}
 	}
 }
