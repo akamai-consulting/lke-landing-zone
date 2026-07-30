@@ -113,8 +113,7 @@ help:
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 install-tools: install-syft install-trivy
-	go install golang.org/x/vuln/cmd/govulncheck@latest
-	go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
+	go install golang.org/x/vuln/cmd/govulncheck@latest && go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 	@if command -v brew >/dev/null 2>&1; then \
 		brew install actionlint checkov helm; \
 	else \
