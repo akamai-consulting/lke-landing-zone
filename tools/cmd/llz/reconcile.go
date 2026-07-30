@@ -475,6 +475,12 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			return run(ctx)
 		}
 	}
+	// …and the other half of that contract: re-kick the lane WHEN the token shows
+	// up. Without this, the clean no-op above is a permanent one for anything whose
+	// watch events all fired during bootstrap — see withLinodeTokenWait.
+	linodeWatch := func(inner func(context.Context, func()) error) func(context.Context, func()) error {
+		return withLinodeTokenWait(inner)
+	}
 	if o.reconcileArgoNudge {
 		recs = append(recs, reconciler{
 			name:     "argo-nudge",
@@ -496,12 +502,14 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// reads NODE_NAME/LINODE_TOKEN from env. Node changes shift which instance
 			// (and thus which firewall/VPC) backs this pod, so watch Nodes.
 			run: gate(requireLinodeToken(func(ctx context.Context) error { return runCIDiscoverFirewallConfig(ctx) })),
-			watch: func(ctx context.Context, onEvent func()) error {
+			// Same first-boot gap as volume-labels: nodes settle long before the
+			// token is seeded, so the arrival kick is what makes the first pass run.
+			watch: linodeWatch(func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, "/api/v1/nodes", "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})
-			},
+			}),
 		})
 	}
 	if o.reconcileVolLabels {
@@ -512,12 +520,15 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			// reads REGION_SHORT/LINODE_TOKEN from env. A new PV means a new Linode
 			// Volume to relabel, so watch PersistentVolumes.
 			run: gate(requireLinodeToken(func(ctx context.Context) error { return runRelabelVolumes(ctx) })),
-			watch: func(ctx context.Context, onEvent func()) error {
+			// linodeWatch: on a cold bootstrap every PV event fires BEFORE the token
+			// is seeded, so without the token-arrival kick these Volumes keep their
+			// pvc-<uuid> labels until the 1h resync floor. See withLinodeTokenWait.
+			watch: linodeWatch(func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, "/api/v1/persistentvolumes", "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})
-			},
+			}),
 		})
 	}
 	if o.reconcileVolTags {
@@ -534,12 +545,13 @@ func buildReconcilers(reg *metrics.Registry, client reconcileClient, o reconcile
 			run: gate(requireLinodeToken(func(ctx context.Context) error {
 				return runCIReconcileVolumeTags(ctx, defaultVolumeTagsSC)
 			})),
-			watch: func(ctx context.Context, onEvent func()) error {
+			// Same first-boot gap as volume-labels — see withLinodeTokenWait.
+			watch: linodeWatch(func(ctx context.Context, onEvent func()) error {
 				return client.Watch(ctx, "/api/v1/persistentvolumes", "", func(kube.WatchEvent) error {
 					onEvent()
 					return nil
 				})
-			},
+			}),
 		})
 	}
 	if o.reconcileSCDemote {
