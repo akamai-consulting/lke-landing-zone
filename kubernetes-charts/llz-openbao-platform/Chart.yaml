@@ -171,7 +171,16 @@ type: application
 #         both old targets were dead ends — 8080 was the plaintext fetch ADR 0010
 #         exists to eliminate, 8443 never had a listener — so keeping either was a
 #         standing permission for a path nothing uses.
-version: 0.1.28
+# 0.1.29: FIX the OpenBao audit-log pipeline, which was shipping nowhere. The
+#         promtail sidecar pushed to loki-gateway.llz-observability, but apl-core
+#         runs Loki in `monitoring` and nothing ever created that Service — so the
+#         audit stream had no destination, and the NetworkPolicy egress allow
+#         pointed at the same empty namespace, granting nothing while looking
+#         complete. Both now target `monitoring`. The hop stays PLAINTEXT and
+#         stays registered in plaintextAllowed: the gateway is nginx with no TLS
+#         material from apl-core (its own otel-operator ships to it over http://),
+#         so https:// would connect to nothing. Meshing closes it.
+version: 0.1.29
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

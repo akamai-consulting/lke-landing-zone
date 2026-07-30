@@ -70,12 +70,18 @@ var plaintextAllowed = map[string]plaintextRule{
 	// now mTLS; the Keycloak JWKS fetch, now https) or re-keyed (HTTPClientInsecure
 	// → HTTPClientLoopback). What remains below is what the cutover did NOT close,
 	// each kept for a stated reason rather than for lack of attention.
-	"kubernetes-charts/llz-openbao-platform/values.yaml:http://loki-gateway.llz-observability.svc.cluster.local": {
+	"kubernetes-charts/llz-openbao-platform/values.yaml:http://loki-gateway.monitoring.svc.cluster.local": {
 		owner: "llz",
 		reason: "OpenBao audit-log shipping from the promtail sidecar. Values are hashed by " +
-			"OpenBao, but request paths, operations and auth.display_name ship in clear. NOTE this " +
-			"Service does not exist — Loki runs in `monitoring` — so the pipeline is also BROKEN; " +
-			"whoever repairs the URL must give it TLS at the same time",
+			"OpenBao, but request paths, operations and auth.display_name ship in clear. RE-KEYED: " +
+			"this pointed at llz-observability, where nothing creates a loki-gateway Service, so the " +
+			"pipeline was BROKEN as well as plaintext. Repaired to `monitoring`, where apl-core " +
+			"actually runs Loki — confirmed by apl-core's own otel-operator shipping to " +
+			"http://loki-gateway.monitoring/otlp. The TLS half of ADR 0010's instruction (\"whoever " +
+			"repairs the URL must give it TLS at the same time\") is NOT satisfied and cannot be from " +
+			"here: the gateway is nginx serving plain HTTP with no TLS material from apl-core, so " +
+			"https:// would connect to nothing. This closes when the hop is meshed — i.e. when " +
+			"llz-openbao and monitoring are both enrolled in ambient",
 	},
 	"tools/cmd/llz/ci_harbor_provisioner.go:http://harbor-core.harbor.svc.cluster.local": {
 		owner: "llz",
