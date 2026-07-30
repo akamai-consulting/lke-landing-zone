@@ -282,19 +282,29 @@ func reapVolumes(ctx context.Context, client *linode.Client, o reapOpts, del fun
 	if err != nil {
 		return fmt.Errorf("list Volumes: %w", err)
 	}
-	matched := false
+	matched, skipped := false, 0
 	for _, v := range vols {
 		id := linode.MapIDString(v)
 		if !linode.VolumeIsCandidate(
 			linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"), linode.MapString(v, "region"),
-			linode.MapTags(v), o.region, idAllow, id, o.tagMustInclude) {
+			linode.MapTags(v), o.region, idAllow, id, o.tagMustInclude,
+			linode.VolumeLabelPrefixes(o.env)...) {
+			skipped++
 			continue
 		}
 		del("/v4/volumes/"+id, fmt.Sprintf("volume %s (%s)", id, linode.MapString(v, "label")))
 		matched = true
 	}
 	if !matched {
-		fmt.Println(dim("  none matched the filter"))
+		// Never just "none matched": that reads identically to "nothing to do",
+		// which is how a filter that excluded EVERYTHING stayed invisible for
+		// weeks. Say what was skipped and what would widen the net.
+		fmt.Printf("  none matched the filter (%d Volume(s) skipped)\n", skipped)
+		if o.env == "" {
+			fmt.Println(dim("  NOTE: LLZ's volume-labels reconciler renames bound volumes to"))
+			fmt.Println(dim("        <deployment>-<namespace>-<pvc>, which no longer start with \"pvc-\"."))
+			fmt.Println(dim("        Pass --env <deployment> (e.g. --env e2e) to include those."))
+		}
 	}
 	return nil
 }

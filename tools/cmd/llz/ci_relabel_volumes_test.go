@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
 // jnum mirrors how the Linode client decodes numbers (UseNumber → json.Number),
@@ -152,5 +154,52 @@ func TestRunRelabelVolumesUpdateErrorSurfaces(t *testing.T) {
 	withRelabelSeams(t, kube, lc)
 	if err := runRelabelVolumes(context.Background()); err == nil {
 		t.Error("a rename error should surface a non-nil error (so the CronJob/alert fires)")
+	}
+}
+
+// THE CONTRACT BETWEEN THE RELABELER AND THE REAPER.
+//
+// These live in different packages and were written months apart, and for weeks
+// they disagreed: the volume-labels reconciler renames every bound volume away
+// from `pvc-*`, while `llz reap` matched ONLY `pvc-*`. The reaper therefore saw
+// nothing on any converged cluster and reported "none matched the filter", which
+// is indistinguishable from "nothing to clean". ~17 volumes leaked before anyone
+// looked at the Linode UI.
+//
+// This composes the two directly — the relabeler's real output fed into the
+// reaper's real filter — so the same divergence cannot recur silently. The
+// namespaces are the ones actually observed leaking.
+func TestReaperRecognisesRelabelerOutput(t *testing.T) {
+	const env = "e2e"
+	prefixes := linode.VolumeLabelPrefixes(env)
+
+	for _, tc := range []struct{ ns, pvc string }{
+		{"harbor", "harbor-otomi-db-1"},
+		{"harbor", "data-harbor-redis-0"},
+		{"keycloak", "keycloak-db-1-wal"},
+		{"llz-openbao", "data-platform-openbao-0"},              // truncated at 32 chars
+		{"istio-system", "data-oauth2-proxy-redis-ha-server-0"}, // also truncated
+		{"monitoring", "storage-loki-0"},
+	} {
+		label := desiredVolumeLabel(env, tc.ns, tc.pvc)
+		t.Run(label, func(t *testing.T) {
+			if !linode.VolumeIsCandidate(true, label, "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
+				t.Errorf("reap cannot see %q, which is exactly what the relabeler writes for %s/%s.\n"+
+					"The two must agree or orphaned Volumes accumulate invisibly.", label, tc.ns, tc.pvc)
+			}
+		})
+	}
+
+	// Still matches volumes no reconciler has renamed yet (fresh, or relabeler down).
+	if !linode.VolumeIsCandidate(true, "pvc-abc123", "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
+		t.Error("the CSI default prefix must still match — a volume is unrenamed between create and the first reconcile")
+	}
+	// And the prefix must still EXCLUDE: without --env, a relabeled volume is out
+	// of scope rather than silently swept, and an unrelated volume never matches.
+	if linode.VolumeIsCandidate(true, "e2e-harbor-x", "us-ord", nil, "us-ord", nil, "1", "", linode.VolumeLabelPrefixes("")...) {
+		t.Error("without --env, relabeled volumes must NOT be candidates — widening a destructive sweep needs to be explicit")
+	}
+	if linode.VolumeIsCandidate(true, "my-teams-database", "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
+		t.Error("an unrelated volume must never be a deletion candidate")
 	}
 }

@@ -103,13 +103,47 @@ func VPCIsOrphan(label string, live map[string]bool) bool {
 	return cid != "" && !live[cid]
 }
 
-// VolumeIsCandidate mirrors cleanup-orphan-volumes.sh's safe filter: an
-// unattached `pvc-*` Volume, optionally constrained by region, an id allowlist,
-// and a required tag. An empty regionFilter / idAllow / tagMustInclude means
-// "no constraint".
+// CSIDefaultVolumePrefix is the label the Linode CSI driver assigns a volume it
+// provisions, before anything renames it.
+//
+// IT IS NOT ENOUGH ON ITS OWN. LLZ's volume-labels reconciler (a PV watch in
+// llz-reconciler, `llz ci relabel-volumes`) renames every bound volume to
+// <REGION_SHORT>-<namespace>-<pvc>, e.g. `e2e-harbor-harbor-otomi-db-1`. From the
+// moment that reconciler landed (2026-07-05), matching only this prefix matched
+// NOTHING on any converged cluster — the reaper reported "none matched the
+// filter" while ~17 volumes leaked. Callers must pass the relabeled prefix too;
+// see VolumeLabelPrefixes.
+const CSIDefaultVolumePrefix = "pvc-"
+
+// VolumeLabelPrefixes returns the label prefixes a reap should accept. env is the
+// deployment name (the relabeler's REGION_SHORT); empty means "only volumes no
+// reconciler has renamed yet".
+//
+// Deliberately NOT prefix-free: dropping the constraint entirely would make every
+// unattached volume in the account a deletion candidate, which for a destructive
+// sweep is far worse than missing some.
+func VolumeLabelPrefixes(env string) []string {
+	if env == "" {
+		return []string{CSIDefaultVolumePrefix}
+	}
+	return []string{CSIDefaultVolumePrefix, env + "-"}
+}
+
+// VolumeIsCandidate is the safe filter for a destructive Volume sweep: an
+// unattached Volume whose label carries one of labelPrefixes, optionally
+// constrained by region, an id allowlist, and a required tag. An empty
+// regionFilter / idAllow / tagMustInclude means "no constraint"; empty
+// labelPrefixes means the CSI default only.
 func VolumeIsCandidate(linodeIDNull bool, label, region string, tags []string,
-	regionFilter string, idAllow map[string]bool, id, tagMustInclude string) bool {
-	if !linodeIDNull || !strings.HasPrefix(label, "pvc-") {
+	regionFilter string, idAllow map[string]bool, id, tagMustInclude string,
+	labelPrefixes ...string) bool {
+	if !linodeIDNull {
+		return false
+	}
+	if len(labelPrefixes) == 0 {
+		labelPrefixes = []string{CSIDefaultVolumePrefix}
+	}
+	if !hasAnyPrefix(label, labelPrefixes) {
 		return false
 	}
 	if regionFilter != "" && region != regionFilter {
@@ -288,4 +322,13 @@ func MapIDString(m map[string]any) string         { return mIDString(m) }
 func VolumeLinodeIDNull(m map[string]any) bool {
 	v, present := m["linode_id"]
 	return !present || v == nil
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if p != "" && strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
