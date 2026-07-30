@@ -227,6 +227,13 @@ func ciCmd() *cobra.Command {
 	// failing on dropped RBAC/OpenBao access) that converge and alert-eval --strict
 	// both miss.
 	c.AddCommand(ciAssertReconcilerCmd())
+	// E2E gate: assert OpenBao's audit log is ARRIVING in Loki, by reading it back
+	// out of Loki. The metrics path has assert-scrape-targets; the log path had
+	// nothing, and shipped to a Service that never existed for its entire life —
+	// with a NetworkPolicy egress allow pointed at the same empty namespace, so
+	// both sides agreed with each other and neither agreed with the cluster. Only
+	// the round trip can tell a correct URL from a plausible one.
+	c.AddCommand(ciAssertOpenbaoAuditCmd())
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).

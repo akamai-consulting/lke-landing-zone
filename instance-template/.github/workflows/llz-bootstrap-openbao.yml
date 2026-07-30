@@ -700,7 +700,7 @@ jobs:
       # constraints before editing: scrape+reconciler is ONE ordered lane on purpose
       # (assert-reconciler reads gauges the scrape assert just proved fresh), and the
       # lanes are collision-free only because the mutating ones use disjoint
-      # namespaces and each Prometheus lane port-forwards on local port :0.
+      # namespaces and each Prometheus/Loki lane port-forwards on local port :0.
       # ── Storage invariant — DELIBERATELY NOT in the fan-out below ─────────────
       # Every PV-backed Linode Volume must be encrypted at rest, carry its lke<id>
       # ownership tag, and have been renamed off the CSI default pvc-<uuid> to a
@@ -728,7 +728,7 @@ jobs:
           LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
         run: llz ci assert-volume-encryption
 
-      - name: (e2e) assert suite — 6 gates + 2 diagnostics, in parallel lanes
+      - name: (e2e) assert suite — 7 gates + 2 diagnostics, in parallel lanes
         if: ${{ inputs.assert_loki }}
         run: |
           set -uo pipefail
@@ -739,6 +739,14 @@ jobs:
           }
           lane loki              llz ci assert-loki
           lane scrape-reconciler bash -ec 'llz ci assert-scrape-targets && llz ci assert-reconciler'
+          # The LOG path, which assert-loki (Loki is up) and assert-scrape-targets
+          # (the METRICS path) both leave uncovered. Reads OpenBao's audit stream
+          # back out of Loki: the pipeline shipped to a Service that never existed
+          # for its whole life, with a NetworkPolicy allow pointed at the same empty
+          # namespace, and nothing in this suite could see it. Only the round trip
+          # can. Separate lane from `loki` on purpose — "Loki is bootstrapped" and
+          # "records are arriving in it" are different failures.
+          lane openbao-audit     llz ci assert-openbao-audit
           lane health-workflow   llz ci assert-health-workflow --region "$REGION"
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
           lane wave-vap          llz ci assert-wave-health-vap
@@ -758,7 +766,7 @@ jobs:
           lane alert-eval        bash -c 'llz ci alert-eval || true'
           wait
           fail=0
-          for n in loki scrape-reconciler health-workflow broad-pat wave-vap instance-custom team-write metric-surface alert-eval; do
+          for n in loki openbao-audit scrape-reconciler health-workflow broad-pat wave-vap instance-custom team-write metric-surface alert-eval; do
             rc="$(cat "${dir}/${n}.rc" 2>/dev/null || echo 1)"
             echo "::group::assert ${n} (rc=${rc})"
             cat "${dir}/${n}.log" 2>/dev/null || true

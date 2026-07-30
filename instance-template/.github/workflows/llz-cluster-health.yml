@@ -157,6 +157,13 @@ jobs:
       # E2E validation gate (same assert-loki input): asserts the observability
       # pipeline is WIRED, and --strict fails on DEAD?/BROKEN alerts. Unlike the
       # best-effort alert-eval above, these are gating.
+      #
+      # assert-openbao-audit covers the LOG path the other three leave open: the
+      # step above proves Loki is bootstrapped, not that anything reaches it, and
+      # OpenBao's audit stream shipped to a Service that never existed — with a
+      # NetworkPolicy allow pointed at the same empty namespace, so both halves
+      # agreed with each other and neither agreed with the cluster. Reading the
+      # stream back out of Loki is the only check that can tell those apart.
       - name: Assert observability + reconciler + wave-health (E2E gate)
         if: ${{ inputs.assert-loki }}
         run: |
@@ -164,6 +171,7 @@ jobs:
           export KUBECONFIG="$HOME/.kube/config"
           llz ci assert-scrape-targets
           llz ci assert-reconciler
+          llz ci assert-openbao-audit
           llz ci alert-eval --strict
           llz ci assert-wave-health-vap
 

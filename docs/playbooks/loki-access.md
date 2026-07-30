@@ -67,7 +67,7 @@ Forgetting the header is the most common debug-time mistake; the API returns a u
 You should not normally write to Loki by hand. The two production writers are:
 
 - **OTel Collector** — note its pipelines currently use the `debug` exporter only (`platform-apl/components/observability/otel-collector.yaml`); it is not yet wired to Loki. Extend `exporters:` when a downstream is in place.
-- **Promtail sidecar in the OpenBao pod** — tails `/openbao/audit/audit.log` and pushes to the same gateway. See the audit-logging notes in [`docs/secrets.md`](../secrets.md#audit-logging).
+- **Promtail sidecar in the OpenBao pod** — tails `/openbao/audit/audit.log` and pushes to the same gateway. See the audit-logging notes in [`docs/secrets.md`](../secrets.md#audit-logging). That write path is gated end to end by `llz ci assert-openbao-audit`, which queries `{app="openbao",component="audit"}` over the last 30 minutes and fails if nothing arrived — run it (it is read-only) before hand-debugging a "no audit logs" report; its failure output names the five things to check, in order.
 
 If you need to push test logs manually:
 

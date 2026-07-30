@@ -547,6 +547,17 @@ Each OpenBao pod runs a **Promtail sidecar** (see the `llz-openbao-platform` cha
 instance in `monitoring`. The Promtail config is rendered by the chart into the
 `<release>-openbao-promtail` ConfigMap.
 
+**The delivery is gated, not assumed.** `llz ci assert-openbao-audit` reads the audit
+stream back out of Loki and fails if nothing arrived in the lookback window; it runs in
+the release-e2e assert suite and in `cluster-health.yml`'s gate mode. It exists because
+the pipeline shipped nowhere for its entire life: `lokiPushUrl` pointed at
+`loki-gateway.llz-observability`, a Service nothing creates, while `observabilityNamespace`
+named that same empty namespace — so the NetworkPolicy egress allow was correct in shape,
+wrong in target, and granted nothing while looking complete. Promtail retries a dead name
+forever, so every pod stayed Running and every other check stayed green. Only reading the
+records back can tell a working pipeline from a plausible-looking one. To check by hand,
+see [`playbooks/loki-access.md`](playbooks/loki-access.md).
+
 ### Enable the audit device (one-time, per region)
 
 **This is automated by `bootstrap-openbao.yml`** and by the chart itself — the file
