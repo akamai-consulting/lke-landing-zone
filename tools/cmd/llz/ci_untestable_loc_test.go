@@ -456,3 +456,87 @@ func TestLoadUntestableBudget(t *testing.T) {
 		t.Error("expected error for config with no categories")
 	}
 }
+
+func TestCountEmbeddedShellLines(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{
+			name: "configmap .sh data key counts body, skips shebang/comments/blanks",
+			in: "" +
+				"data:\n" +
+				"  relabel.sh: |\n" +
+				"    #!/bin/sh\n" +
+				"    # a comment\n" +
+				"    set -eu\n" +
+				"\n" +
+				"    echo hi\n",
+			want: 2,
+		},
+		{
+			name: "argo script.source detected by shebang, not key name",
+			in: "" +
+				"      script:\n" +
+				"        command: [\"/bin/sh\"]\n" +
+				"        source: |\n" +
+				"          #!/bin/sh\n" +
+				"          kubectl get pods\n" +
+				"          echo done\n",
+			want: 2,
+		},
+		{
+			name: "block ends when indentation returns to key level",
+			in: "" +
+				"  setup.sh: |\n" +
+				"    echo a\n" +
+				"    echo b\n" +
+				"  other: value\n",
+			want: 2,
+		},
+		{
+			name: "non-shell block scalar ignored (no .sh key, no shebang)",
+			in: "" +
+				"  config.yaml: |\n" +
+				"    server:\n" +
+				"      port: 8080\n" +
+				"      host: 0.0.0.0\n",
+			want: 0,
+		},
+		{
+			name: "folded prose block ignored",
+			in: "" +
+				"  description: >\n" +
+				"    human prose here\n" +
+				"    spanning lines\n",
+			want: 0,
+		},
+		{
+			name: "two embedded shell blocks both counted",
+			in: "" +
+				"  a.sh: |\n" +
+				"    echo a\n" +
+				"  b.sh: |\n" +
+				"    echo b\n" +
+				"    echo c\n",
+			want: 3,
+		},
+		{
+			name: "block indicators |- and |2 handled",
+			in: "" +
+				"  trim.sh: |-\n" +
+				"    echo a\n" +
+				"  keep.sh: |2\n" +
+				"    echo b\n",
+			want: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countEmbeddedShellLines(tt.in); got != tt.want {
+				t.Errorf("countEmbeddedShellLines() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}

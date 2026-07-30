@@ -125,7 +125,7 @@ func TestLlzNamespaceManifest(t *testing.T) {
 // Linode owns apl-core. See ADR 0005 option A.
 func TestBootstrapCluster_AppliesOnlyBridge(t *testing.T) {
 	o := bootstrapClusterOpts{
-		env: "primary", instanceRepo: "acme/instance",
+		env: "primary", clusterID: "393244", instanceRepo: "acme/instance",
 		upstreamOrg: "akamai-consulting", templateRef: "abc123",
 		appsRepoRevision: "main",
 	}
@@ -152,10 +152,13 @@ func TestBootstrapCluster_AppliesOnlyBridge(t *testing.T) {
 	if err := bootstrapCluster(o, d); err != nil {
 		t.Fatalf("bootstrapCluster: %v", err)
 	}
-	// Separate the bridge manifests from the block-storage-retain SC + namespace apply.
+	// Separate the bridge manifests from the cluster-scoped pieces bootstrap also
+	// applies: the block-storage-retain SC, the LLZ namespaces, and the
+	// pvc-deny-untaggable-clone ValidatingAdmissionPolicy + its binding.
 	var bridge []string
 	for _, y := range applied {
-		if strings.Contains(y, "kind: StorageClass") || strings.Contains(y, "kind: Namespace") {
+		if strings.Contains(y, "kind: StorageClass") || strings.Contains(y, "kind: Namespace") ||
+			strings.Contains(y, "kind: ValidatingAdmissionPolicy") {
 			continue
 		}
 		bridge = append(bridge, y)
@@ -183,7 +186,7 @@ func TestBootstrapCluster_AppliesOnlyBridge(t *testing.T) {
 func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 	run := func(token string) []string {
 		o := bootstrapClusterOpts{
-			env: "primary", instanceRepo: "acme/instance",
+			env: "primary", clusterID: "393244", instanceRepo: "acme/instance",
 			upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main",
 			instanceRepoToken: token,
 		}
@@ -393,7 +396,7 @@ func TestWaitManagedArgoReady_Timeout(t *testing.T) {
 // cluster default (llzReconciler sc-demote keeps LKE's class non-default); managed
 // leaves no default of its own, so without this PVCs without a class stay Pending.
 func TestBootstrapCluster_AppliesStorageClass(t *testing.T) {
-	o := bootstrapClusterOpts{env: "primary", instanceRepo: "acme/instance", upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main"}
+	o := bootstrapClusterOpts{env: "primary", clusterID: "393244", instanceRepo: "acme/instance", upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main"}
 	var sawSC, sawOpenbaoNS bool
 	d := bootstrapDeps{
 		kubectl: func(args ...string) (string, bool) {
@@ -678,4 +681,53 @@ func TestWaitAplGitConfigIsBoundedAndTerminal(t *testing.T) {
 			t.Errorf("retried a non-transient failure %d times", calls)
 		}
 	})
+}
+
+// ── renderBlockStorageClass (rebase adaptation: TF templatefile → Go render) ──
+
+// The lke<id> ownership tag must be rendered into the class's volumeTags from the
+// explicit cluster id (--cluster-id / $LKE_CLUSTER_ID, threaded from the cluster
+// workspace's cluster_id output); the CSI CreateVolume call then carries it, which
+// is the whole basis for reap's cluster-liveness attribution.
+func TestRenderBlockStorageClass_InjectsLKETag(t *testing.T) {
+	got, err := renderBlockStorageClass("393244")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `linodebs.csi.linode.com/volumeTags: "block-storage,platform-support-services,lke393244"`
+	if !strings.Contains(got, want) {
+		t.Errorf("rendered class missing %q\n---\n%s", want, got)
+	}
+	if strings.Contains(got, "${") {
+		t.Errorf("rendered class still has an unrendered ${...} placeholder:\n%s", got)
+	}
+}
+
+// An already-prefixed id is normalized (not doubled): lke393244 -> lke393244, not
+// lkelke393244.
+func TestRenderBlockStorageClass_StripsOptionalLKEPrefix(t *testing.T) {
+	got, err := renderBlockStorageClass("lke393244")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `,lke393244"`) || strings.Contains(got, "lkelke") {
+		t.Errorf("prefixed id not normalized:\n%s", got)
+	}
+}
+
+// HARD-FAIL on an empty id: a StorageClass without the lke<id> tag provisions
+// un-reapable Volumes, and its params are immutable — so the bootstrap must refuse
+// rather than ship a silently-untagged class.
+func TestRenderBlockStorageClass_EmptyIDHardFails(t *testing.T) {
+	if _, err := renderBlockStorageClass("   "); err == nil {
+		t.Fatal("expected an error for an empty cluster id, got nil")
+	}
+}
+
+// A non-numeric id would render a malformed lke<id> tag that reap's parser
+// (`^lke-?[0-9]+$`) can't attribute — reject it up front.
+func TestRenderBlockStorageClass_MalformedIDHardFails(t *testing.T) {
+	if _, err := renderBlockStorageClass("us-ord-1"); err == nil {
+		t.Fatal("expected an error for a non-numeric cluster id, got nil")
+	}
 }
