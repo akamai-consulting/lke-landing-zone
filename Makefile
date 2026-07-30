@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check workflow-vars-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -564,10 +564,23 @@ workflows-lock-check: export LLZ_FORCE_SOURCE := 1
 workflows-lock-check:
 	$(call LLZ_CI,workflows-fresh --root instance-template,--root ../instance-template)
 
+# Assert every ${{ vars.X }} a shipped workflow reads is accounted for in state.go
+# — either e2eRequirements (so `llz doctor` reports it and `llz tokens` provisions
+# it) or knownOptionalWorkflowVars (unset is fine, with a recorded reason). A
+# variable in neither is a setup trap: doctor stays silent and the operator meets
+# it as an empty value mid-CI-run.
+#
+# FROM SOURCE, same reason as workflows-lock-check: it compares the WORKING TREE's
+# workflows against the WORKING TREE's lists, and the prebuilt image binary is
+# built from the merge-base.
+workflow-vars-check: export LLZ_FORCE_SOURCE := 1
+workflow-vars-check:
+	$(call LLZ_CI,workflow-vars --root .,--root ..)
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check workflows-lock-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check workflows-lock-check workflow-vars-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \

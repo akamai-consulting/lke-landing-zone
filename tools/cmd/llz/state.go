@@ -56,6 +56,39 @@ func e2eRequirements(admin bool) []requirement {
 	return reqs
 }
 
+// knownOptionalWorkflowVars accounts for the `vars.*` a shipped workflow reads
+// that are deliberately NOT in e2eRequirements: an unset one is a working
+// instance, so `llz doctor` must not nag about it and `llz tokens` must not try
+// to provision it.
+//
+// It exists so "not in e2eRequirements" stops being ambiguous. Before this,
+// eight variables were consumed by workflows and mentioned in neither list, and
+// nothing distinguished "deliberately optional" from "someone added a required
+// variable and forgot to declare it" — the second of which an operator only
+// discovers as an empty value deep inside a container job.
+//
+// `llz ci workflow-vars` enforces the accounting in both directions: a consumed
+// variable must appear in one of the two lists, and an entry here that no
+// workflow reads any more must be removed. See ci_workflow_vars.go.
+var knownOptionalWorkflowVars = map[string]string{
+	// State encryption (ADR 0007). The workflows default the key NAME, so an
+	// instance that never renamed its key needs neither variable set.
+	"TF_STATE_ENCRYPTION_KEY_NAME": "defaulted by the workflows; set only to override the key name",
+	// Set only for the duration of a passphrase rollover, so the old key stays
+	// available to decrypt existing state. Absent is the steady state.
+	"TF_STATE_ENCRYPTION_KEY_NAME_OLD": "rollover-only — set while re-encrypting state under a new passphrase",
+	// Optional EAA firewall integration; absent means the feature is off.
+	"EAA_FIREWALL_TEMPLATE_ID": "optional EAA firewall template; unset disables that integration",
+	// Preflight tuning knobs, both defaulted at the point of use.
+	"PREFLIGHT_ORPHAN_THRESHOLD": "preflight tuning; defaulted at point of use",
+	"PREFLIGHT_FAIL_ON_ORPHANS":  "preflight tuning; defaulted at point of use",
+	// Defaulted to 'main' where it is read.
+	"APPS_REPO_REVISION": "defaults to 'main'; set to pin the apps repo to another ref",
+	// Template-repo GHES release lane only — not part of an instance's surface.
+	"E2E_GHES_HOST":          "template-repo GHES e2e lane only; defaulted",
+	"E2E_GHES_INSTANCE_REPO": "template-repo GHES e2e lane only; defaulted",
+}
+
 // liveState is the configured-on-GitHub state of one repo. Variable values are
 // captured; secrets are presence-only. Env maps cover the infra-<env> scope.
 type liveState struct {
