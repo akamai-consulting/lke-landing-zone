@@ -30,7 +30,7 @@ spec:
   source:
     repoURL: ghcr.io/akamai-consulting/charts
     chart: llz-openbao-platform
-    targetRevision: 0.1.24
+    targetRevision: 0.1.28
     helm:
       # LOAD-BEARING: the upstream subchart derives the StatefulSet name
       # (platform-openbao → pod platform-openbao-0, which the bootstrap workflow
@@ -48,6 +48,13 @@ spec:
       namespace: llz-openbao
       jsonPointers:
         - /spec/volumeClaimTemplates
+        # hostAliases is written by `llz ci pin-keycloak-gateway-alias`, which
+        # pins keycloak.<domain> to the ingress gateway's CLUSTER IP so the JWKS
+        # fetch stays in-cluster (see the llz-openbao-platform netpol comment).
+        # The value is cluster-specific and only knowable at runtime, so it
+        # cannot live in the chart — without this entry selfHeal reverts it on
+        # the next sync and team login breaks again, intermittently.
+        - /spec/template/spec/hostAliases
     - group: external-secrets.io
       kind: ExternalSecret
       jqPathExpressions:

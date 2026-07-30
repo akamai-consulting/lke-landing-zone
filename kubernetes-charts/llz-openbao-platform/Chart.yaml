@@ -96,7 +96,82 @@ type: application
 #         (a joining peer is a client too, and without it no follower can join);
 #         the ServiceMonitor swaps insecureSkipVerify for real CA + client certs;
 #         and the Keycloak JWKS egress moves to :8443.
-version: 0.1.24
+# 0.1.25: FIX OpenBao never reaching Ready under mTLS. 0.1.24 made the :8200
+#         listener require a client certificate, but both probes still targeted
+#         it — readiness via the subchart's hardcoded `bao status` (which resolves
+#         VAULT_ADDR to :8200) and liveness via httpGet :8200. A kubelet probe
+#         cannot present a client certificate, so every probe failed the
+#         handshake: pods never went Ready, raft never formed, and `bao operator
+#         init` died with "http2: client conn could not be established". Both now
+#         target the loopback listener :8210. Readiness becomes an httpGet
+#         (the subchart exposes no execCommand for it) with standbyok=true, which
+#         preserves the replaced exec's behaviour of keeping raft standbys in the
+#         Service.
+#         NEVER DEPLOYED CLEANLY — superseded by 0.1.26, which explains why the
+#         httpGet form could not have worked.
+# 0.1.26: FIX the same mTLS outage properly; 0.1.25 moved the probes to :8210 but
+#         left them httpGet, which cannot reach that listener. A Kubernetes
+#         httpGet has no `host` field in the subchart's template, so kubelet
+#         dials the POD IP — and :8210 binds 127.0.0.1 only, so it would have
+#         been `connection refused` instead of `certificate required`: the same
+#         restart loop with a new error string. There is no port a kubelet probe
+#         can legally reach, so BOTH probes are now `exec`, which runs inside the
+#         pod's network namespace. Readiness returns to the subchart's built-in
+#         `bao status` exec (its 0/2 exit codes already carry the standby- and
+#         sealed-semantics the httpGet query parameters were emulating); liveness
+#         gets an execCommand that treats exit 2 (sealed/uninitialized) as alive
+#         so it tolerates the window before `bao operator init`, on a 6×10s
+#         threshold rather than the subchart's trigger-happy 2×5s.
+#         Also fixes the half of the outage 0.1.25 misattributed to the probes:
+#         the subchart hardcodes BAO_ADDR=https://127.0.0.1:8200, and OpenBao
+#         prefers a present BAO_* over its VAULT_* alias unconditionally
+#         (api/env.go), so the VAULT_ADDR=:8210 that `llz` exports on every
+#         `kubectl exec … bao …` was silently overridden onto the mTLS listener —
+#         which is where "http2: client conn could not be established" actually
+#         came from. extraEnvironmentVars now repoints BAO_ADDR/BAO_CACERT at the
+#         loopback listener for every in-pod client.
+#         NEVER DEPLOYED — the BAO_ADDR override was rejected at apply; see 0.1.27.
+# 0.1.27: FIX the StatefulSet never being created at all. 0.1.26 overrode the
+#         subchart's hardcoded BAO_ADDR from extraEnvironmentVars, on the premise
+#         that the later of two duplicate env entries wins. It does not:
+#         `container.env` is a server-side-apply list-map keyed on `name`, and SSA
+#         REJECTS duplicate keys rather than resolving them. This Application
+#         syncs with ServerSideApply=true, so the apply failed, no StatefulSet was
+#         ever created, and the app sat OutOfSync/Healthy with no pod — a failure
+#         with no container, no restart and no log to read. `helm template`,
+#         `helm lint` and client-side `kubectl apply` all accept the duplicate,
+#         so nothing local caught it.
+#         The address is no longer overridden. Instead the in-pod clients are
+#         given the one thing :8200 actually wanted: a CLIENT CERTIFICATE, via
+#         BAO_CLIENT_CERT / BAO_CLIENT_KEY / BAO_CACERT — three names the subchart
+#         does not set, so they add without shadowing anything. The identity is
+#         the existing `openbao-raft-client`, already mounted and already trusted
+#         by this listener (raft retry_join presents it for the same reason), so
+#         this adds no new Secret the pod must block on at startup.
+#         Probes stay `exec` for the 0.1.26 reason, which is unchanged.
+# 0.1.28: FIX the Keycloak JWKS fetch, the last mTLS casualty. 0.1.24 moved it to
+#         https://keycloak-keycloakx-http…:8443 on the stated PREREQUISITE that
+#         Keycloak's internal Service serves TLS there. It does not: apl-core runs
+#         Keycloak with `args: [start]`, KC_HTTP_ENABLED=true and proxy-mode
+#         xforwarded and gives it no TLS key material, so it never opens an HTTPS
+#         listener. The port is declared on both Service and container and is
+#         dead. Live symptom was `read: connection reset by peer` rather than
+#         `refused`, because Keycloak IS meshed (contrary to the netpol comment)
+#         and its Envoy sidecar accepts the connection before resetting it.
+#         The trust anchor was right all along — only the endpoint was wrong.
+#         Keycloak's TLS is terminated by the Istio ingress gateway serving
+#         apl-core's `otomi-wildcard` cert (SAN *.<domainSuffix>, issued by the
+#         same custom-ca that openbao-apl-ca chains to), so jwks_url now targets
+#         the PUBLIC hostname — identical to bound_issuer, so the two can never
+#         disagree — and `llz ci pin-keycloak-gateway-alias` pins that name to the
+#         gateway's ClusterIP via hostAliases, keeping the request in-cluster
+#         (the public name resolves to the external LB, and hairpinning through it
+#         is unsupported on LKE-E) while Host/SNI still match the certificate.
+#         The egress allow moves from keycloak:{8443,8080} to istio-system:443:
+#         both old targets were dead ends — 8080 was the plaintext fetch ADR 0010
+#         exists to eliminate, 8443 never had a listener — so keeping either was a
+#         standing permission for a path nothing uses.
+version: 0.1.28
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

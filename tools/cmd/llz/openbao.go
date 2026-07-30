@@ -306,20 +306,44 @@ const (
 	openbaoPodCACert = "/openbao/tls/ca.crt"
 )
 
-// baoLoopbackEnv is the VAULT_* env every in-pod `bao` invocation shares. Pure,
-// so the address/CA pairing is asserted once in tests instead of being restated
-// (and drifting) at each of the four call sites that used to inline it.
+// baoLoopbackEnv is the env every in-pod `bao` invocation shares. Pure, so the
+// address/CA pairing is asserted once in tests instead of being restated (and
+// drifting) at each of the four call sites that used to inline it.
+//
+// MUST set the BAO_* names, not just the VAULT_* aliases. OpenBao's env lookup
+// prefers a PRESENT BAO_* variable over its VAULT_* alias unconditionally —
+// api/env.go: "If the BAO_ version is present but set to the empty string, still
+// prefer that over the VAULT_ prefixed version." The OpenBao chart hardcodes
+// BAO_ADDR=https://127.0.0.1:8200 into the container, so exporting VAULT_ADDR
+// alone was silently shadowed: every command below reached the mTLS listener
+// without a client certificate and died on the handshake —
+//
+//	Get "https://127.0.0.1:8200/v1/sys/seal-status":
+//	http2: client conn could not be established
+//
+// — which is how a bootstrap failure caused by ADR 0010 read as a probe bug.
+// The chart now repoints BAO_ADDR at :8210 as well; both sides are set so
+// neither depends on the other being right.
+//
+// The VAULT_* aliases stay for an older `bao` (or a `vault` binary) that does
+// not know the BAO_ names. They are inert whenever the BAO_* names are honoured.
 func baoLoopbackEnv() []string {
-	return []string{"VAULT_ADDR=" + openbaoLoopbackAddr, "VAULT_CACERT=" + openbaoPodCACert}
+	return []string{
+		"BAO_ADDR=" + openbaoLoopbackAddr, "BAO_CACERT=" + openbaoPodCACert,
+		"VAULT_ADDR=" + openbaoLoopbackAddr, "VAULT_CACERT=" + openbaoPodCACert,
+	}
 }
 
 // baoExecArgv builds the kubectl argv that runs `bao <args>` inside the openbao
-// container of pod with the standard VAULT_* env (token included). Pure, so the
-// argv shape + token placement are unit-tested.
+// container of pod with the standard env (token included). Pure, so the argv
+// shape + token placement are unit-tested.
 func baoExecArgv(pod, token string, args []string) []string {
 	argv := []string{"-n", openbaoNS, "exec", "-i", "-c", "openbao", pod, "--", "env"}
 	argv = append(argv, baoLoopbackEnv()...)
-	argv = append(argv, "VAULT_TOKEN="+token, "bao")
+	// Both names, same reason as the address above. The chart does not set
+	// BAO_TOKEN today, so VAULT_TOKEN alone happens to work — but it works by
+	// luck, and the shadowing rule is the same one that broke the address.
+	argv = append(argv, "BAO_TOKEN="+token, "VAULT_TOKEN="+token, "bao")
 	return append(argv, args...)
 }
 

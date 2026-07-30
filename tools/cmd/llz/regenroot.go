@@ -184,14 +184,15 @@ func findLeaderPod() string {
 }
 
 // baoExec runs `bao <args>` inside the openbao container of pod via kubectl exec.
-// token (if non-empty) sets VAULT_TOKEN; stdin (if non-empty) is piped in.
+// token (if non-empty) sets the bao token; stdin (if non-empty) is piped in.
 func baoExec(pod, token, stdin string, args ...string) (stdout, stderr string, err error) {
 	argv := []string{"-n", openbaoNS, "exec", "-i", "-c", "openbao", pod, "--", "env"}
 	// Loopback listener + CA verification — the network listener now requires a
-	// client certificate this in-pod caller does not have. See baoLoopbackEnv.
+	// client certificate this in-pod caller does not have. See baoLoopbackEnv,
+	// which also explains why the BAO_* names (not just VAULT_*) are required.
 	argv = append(argv, baoLoopbackEnv()...)
 	if token != "" {
-		argv = append(argv, "VAULT_TOKEN="+token)
+		argv = append(argv, "BAO_TOKEN="+token, "VAULT_TOKEN="+token)
 	}
 	argv = append(argv, "bao")
 	argv = append(argv, args...)
