@@ -62,25 +62,14 @@ type plaintextRule struct {
 // Keys are path-based on purpose. A kind/name key would collide across the
 // chart-templated resources, and the path is what a reviewer needs to go read.
 var plaintextAllowed = map[string]plaintextRule{
-	// ── ours, actively being closed (PR #360, ADR 0010) ──────────────────────
+	// ── ours, surviving the mTLS cutover (PR #360, ADR 0010) ─────────────
 	//
-	// These are NOT settled residuals. They are the cleartext hops the mTLS work
-	// removes, registered so this guard can land independently of it. When #360
-	// merges, each of these stops matching and the guard FAILS on the stale
-	// entry — which is the intended forcing function: the registry cannot
-	// silently outlive the thing it describes.
-	"platform-apl/components/llzReconciler/llz-reconciler/servicemonitor.yaml:metrics": {
-		owner: "llz",
-		reason: "Prometheus scrape of the reconciler's llz_* gauges. Becomes mTLS in #360 " +
-			"(serving cert from llz-serving-ca, client cert from llz-client-ca) — delete this " +
-			"entry when that lands",
-	},
-	"kubernetes-charts/llz-openbao-platform/templates/openbao-servicemonitor.yaml:https": {
-		owner: "llz",
-		reason: "Prometheus scrape of OpenBao /v1/sys/metrics — encrypted but the server is not " +
-			"verified and the client is not authenticated. Becomes real CA verification plus a " +
-			"client certificate in #360 — delete this entry when that lands",
-	},
+	// #360 has MERGED, and the forcing function this block was built around did its
+	// job: every entry that named a hop the cutover secured went stale and failed
+	// the guard on the rebase, and was deleted (the reconciler + OpenBao scrapes,
+	// now mTLS; the Keycloak JWKS fetch, now https) or re-keyed (HTTPClientInsecure
+	// → HTTPClientLoopback). What remains below is what the cutover did NOT close,
+	// each kept for a stated reason rather than for lack of attention.
 	"kubernetes-charts/llz-openbao-platform/values.yaml:http://loki-gateway.llz-observability.svc.cluster.local": {
 		owner: "llz",
 		reason: "OpenBao audit-log shipping from the promtail sidecar. Values are hashed by " +
@@ -92,23 +81,30 @@ var plaintextAllowed = map[string]plaintextRule{
 		owner: "llz",
 		reason: "the harbor-robot-provisioner's REST base. Carries the Harbor ADMIN PASSWORD in a " +
 			"Basic-auth header and receives freshly minted ROBOT SECRETS in the response — the " +
-			"sharpest cleartext edge in the cluster. #360 puts the pod in the Istio mesh so the " +
-			"sidecar upgrades this to mTLS (harbor-core has no client-cert auth, so direct HTTPS " +
-			"would be TLS and not mTLS); the URL stays http:// by design once meshed",
+			"sharpest cleartext edge in the cluster. #360 PUT the pod in the Istio mesh, so the " +
+			"sidecar upgrades this to mTLS on the wire (harbor-core has no client-cert auth, so " +
+			"direct HTTPS would be TLS and not mTLS); the URL stays http:// by design once meshed",
 	},
-	"tools/cmd/llz/ci_openbao_configure.go:http://keycloak-keycloakx-http.keycloak.svc.cluster.local": {
+	"platform-apl/components/harbor/harbor-robot-provisioner/cronjob.yaml:http://harbor-core.harbor.svc.cluster.local": {
 		owner: "llz",
-		reason: "OpenBao's `keycloak` auth mount fetching the realm JWKS — i.e. the SIGNING KEYS it " +
-			"validates team-login tokens with. Over plaintext, anything able to answer substitutes " +
-			"its own keys and mints tokens OpenBao accepts; bound_issuer does not help because the " +
-			"issuer claim is checked with the very keys being fetched. #360 moves it to https with " +
-			"jwks_ca_pem pinned — delete this entry when that lands",
+		reason: "HARBOR_API_URL — the manifest half of the ci_harbor_provisioner.go hop above, " +
+			"added by #360 itself. Same payload (Harbor admin password out, robot secrets back) and " +
+			"the same justification: this CronJob's pod is deliberately IN the istio mesh, so the " +
+			"sidecar upgrades the hop to mTLS. Registered separately because the guard keys on file " +
+			"path, and a reviewer reading the manifest should find the reasoning here too",
 	},
-	"tools/internal/openbao/openbao.go:HTTPClientInsecure": {
+	"tools/cmd/llz/ci_bootstrap_cluster.go:http://git-server.git-server.svc.cluster.local": {
 		owner: "llz",
-		reason: "the shared unverified transport for pod→OpenBao. #360 splits it: the loopback " +
-			"cases keep an unverified client (renamed HTTPClientLoopback) and everything on the " +
-			"pod network moves to mTLS — re-key this entry to the new name when that lands",
+		reason: "aplGiteaInClusterURL — apl-core's in-cluster Gitea values repo, used to re-seed a " +
+			"missing apl-values branch. NOT mesh-upgraded: giteaSourceFromCloneCmd injects the Gitea " +
+			"USERNAME AND PASSWORD into this URL (basicAuthGitURL) and the migration Job that clones " +
+			"it sets sidecar.istio.io/inject=false on purpose (batch pod), so git sends that " +
+			"credential as an HTTP Basic header in clear, and the whole values tree comes back in " +
+			"clear. Arrived with the migration fix (854d627c), AFTER #360 drew the mTLS line. Not " +
+			"closed here because apl-core deploys git-server with httproute.enabled=false and no TLS " +
+			"listener, so closing it means meshing the Job or terminating TLS at git-server — " +
+			"neither is a rebase-sized change. Reachable only on a re-bootstrap whose destination " +
+			"branch has gone missing, which narrows exposure but does not remove it",
 	},
 
 	// ── apl-core owned ───────────────────────────────────────────────────────
@@ -132,6 +128,15 @@ var plaintextAllowed = map[string]plaintextRule{
 	},
 
 	// ── ours, out of this guard's scope by construction ──────────────────────
+	"tools/internal/openbao/openbao.go:HTTPClientLoopback": {
+		owner: "inherent",
+		reason: "re-keyed from HTTPClientInsecure, which #360 renamed. The unverified transport now " +
+			"reaches ONLY loopback: the `kubectl port-forward` tunnel to 127.0.0.1 that `llz openbao " +
+			"get/set/login` opens, and in-pod callers of OpenBao's own 127.0.0.1:8210 listener. " +
+			"Nothing crosses a network, so there is no peer to authenticate and no traffic to " +
+			"intercept. Pod-network callers can no longer reuse it even by mistake — the listener " +
+			"requires and verifies a client cert, so an unverified transport fails the handshake",
+	},
 	"tools/cmd/llz/ci_wait.go:apiProbeClient": {
 		owner: "inherent",
 		reason: "probes the LKE-managed control-plane endpoint from OUTSIDE the cluster during " +
