@@ -179,6 +179,7 @@ func diagnoseConvergence(argoNS string) {
 		// OutOfSync/Missing stall (and whether a child app poisoned its sync).
 		diagStream("kubectl", "-n", argoNS, "get", "application", "platform-bootstrap", "-o", "yaml")
 	})
+	diagnoseUnsyncedApplications(argoNS)
 	diagGroup("convergence — phase gate: platform-app-ca, OpenBao store, CA chain", func() {
 		// platform-app-ca is legacy but still useful context; OpenBao store Ready is
 		// the post-bootstrap signal that ends phase1. Capture both plus the CA chain.
@@ -186,6 +187,83 @@ func diagnoseConvergence(argoNS string) {
 		diagStream("kubectl", "get", "clustersecretstore", "openbao", "-o", "wide")
 		diagStream("kubectl", "get", "certificate,certificaterequest", "--all-namespaces", "-o", "wide")
 		diagStream("kubectl", "get", "clusterissuer", "-o", "wide")
+	})
+}
+
+// diagnoseUnsyncedApplications dumps the FULL status of every Application that is
+// not Synced-and-Healthy — conditions plus operationState, which is where Argo
+// records why an apply was refused.
+//
+// WHY THIS EXISTS. The one-line table above prints
+// `.status.conditions[*].message`, so an app carrying several conditions shows
+// whichever came first — and a benign OrphanedResourceWarning will happily mask a
+// SyncError sitting right behind it. Only platform-bootstrap got a full dump, on
+// the assumption that a child's failure always surfaces through the parent. It
+// does not when the child app itself was created fine and only its OWN apply
+// failed: the parent reports "successfully synced (all tasks run)" and looks
+// healthy.
+//
+// That combination cost a whole e2e run. A StatefulSet was rejected at apply
+// (a duplicate `container.env` key, which server-side apply refuses), so the app
+// sat OutOfSync/Healthy with no workload — no pod, no restart, no container log,
+// and the only line about it in the entire run log was an orphaned-resources
+// warning. The error text existed in `.status.operationState.message` and nothing
+// printed it.
+//
+// Health is deliberately part of the predicate, not just sync: a Degraded app is
+// equally worth the dump, and an app that is OutOfSync purely because it is
+// mid-sync costs only a few lines of noise.
+// needsFullAppStatusDump selects the Applications worth a full status dump. Pure,
+// so the predicate is unit-tested rather than only exercised against a cluster.
+//
+// An EMPTY sync or health status counts as needing the dump: a freshly created
+// Application whose controller has not written status yet is precisely the state
+// a stalled child sits in, and treating "" as fine would skip it.
+func needsFullAppStatusDump(name, sync, health string) bool {
+	if name == "" {
+		return false
+	}
+	// platform-bootstrap already gets a full dump of its own.
+	if name == "platform-bootstrap" {
+		return false
+	}
+	return sync != "Synced" || health != "Healthy"
+}
+
+func diagnoseUnsyncedApplications(argoNS string) {
+	type app struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Status struct {
+			Sync struct {
+				Status string `json:"status"`
+			} `json:"sync"`
+			Health struct {
+				Status string `json:"status"`
+			} `json:"health"`
+		} `json:"status"`
+	}
+	var names []string
+	for _, raw := range kItems("-n", argoNS, "get", "applications") {
+		var a app
+		if json.Unmarshal(raw, &a) != nil {
+			continue
+		}
+		if needsFullAppStatusDump(a.Metadata.Name, a.Status.Sync.Status, a.Status.Health.Status) {
+			names = append(names, a.Metadata.Name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	diagGroup(fmt.Sprintf("convergence — full status of %d not-Synced/not-Healthy Application(s)", len(names)), func() {
+		for _, n := range names {
+			fmt.Printf("### %s\n", n)
+			// .status only: the spec is already visible in git, and the whole
+			// object for ~10 apps buries the one message that matters.
+			diagStream("kubectl", "-n", argoNS, "get", "application", n, "-o", "jsonpath={.status.conditions}{\"\\n\"}{.status.operationState.phase}{\"\\n\"}{.status.operationState.message}{\"\\n\"}")
+		}
 	})
 }
 
