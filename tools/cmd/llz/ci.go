@@ -190,6 +190,7 @@ func ciCmd() *cobra.Command {
 	// could health-wedge the platform-bootstrap sync (Makefile wave-health-guard).
 	c.AddCommand(ciWaveHealthGuardCmd())
 	c.AddCommand(ciMTLSWiringGuardCmd())
+	c.AddCommand(ciPlaintextGuardCmd())
 	// Static guard for the #163 wedge class: a workload that hard-depends on a
 	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
 	// wedges the sync (Makefile wave-dependency-guard).

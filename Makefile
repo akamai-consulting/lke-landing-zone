@@ -68,6 +68,7 @@ help:
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
 	@echo "  mtls-wiring-guard  OpenBao consumers must mount the mTLS material they read (ADR 0010)"
+	@echo "  plaintext-guard  registry gate on unencrypted in-cluster hops (ADR 0010)"
 	@echo "  k8s-validate    kubeconform — schema validation against k8s 1.31"
 	@echo "  prom-rules-check  promtool check rules — PromQL syntax + rule structure"
 	@echo "  helm-lint-charts  helm lint --strict + template every first-party chart"
@@ -374,6 +375,17 @@ wave-health-guard:
 mtls-wiring-guard:
 	$(call LLZ_CI,mtls-wiring-guard,--root ..)
 
+# plaintext-guard: `llz ci plaintext-guard` — the drift gate on UNENCRYPTED
+# in-cluster hops (docs/adr/0010-in-cluster-mtls.md). Every `scheme: http`
+# scrape, `insecureSkipVerify: true`, in-cluster http:// URL (fully qualified or
+# the short svc.namespace / svc forms), Istio mesh policy accepting cleartext
+# (PeerAuthentication PERMISSIVE / DestinationRule tls.mode DISABLE), and Go
+# InsecureSkipVerify must be registered in plaintextAllowed with a reason and an
+# owner. Unregistered hits fail; so do registry entries whose hop is gone, so the
+# list cannot rot into a rubber stamp.
+plaintext-guard:
+	$(call LLZ_CI,plaintext-guard,--root ..)
+
 # wave-dependency-guard: `llz ci wave-dependency-guard` — the #163 wedge-class gate.
 # Argo sync waves gate on per-resource health, so a Deployment/StatefulSet/DaemonSet
 # that hard-references a Secret produced by a LATER-wave ExternalSecret can never go
@@ -512,7 +524,7 @@ actions-lint:
 # targets share a render-charts prerequisite, so one $(MAKE) invocation renders
 # once. tf-fmt-check is kept OUT of LINT_TF (it uses tofu, absent from the CI
 # TF_IMAGE) and added explicitly to the local all-checks run.
-LINT_K8S := k8s-lint k8s-validate wave-health-guard mtls-wiring-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check placeholder-guard \
+LINT_K8S := k8s-lint k8s-validate wave-health-guard mtls-wiring-guard plaintext-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check placeholder-guard \
             externalsecret-paths-check argocd-rendered-apps-check chart-pin-guard prom-rules-check \
             cosign-subject-guard \
             helm-lint-charts helm-lint-real-values \

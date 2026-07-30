@@ -77,10 +77,14 @@ spec:
           # OBJ_CLUSTER (per-env, render-patch) + OPENBAO_* + LINODE_TOKEN. Due-based: a
           # no-op until a key is within its rotation window. Leader-gated; the sole owner
           # now that the linodeCredRotator CronJob is retired.
-          # NOT a reconciler: --reconcile-harbor. Harbor provisioning talks to the
-          # mesh-protected harbor-core Service, which a pod in llz-reconciler (outside
-          # the harbor Istio mesh) cannot reach — so it stays the in-namespace
-          # harbor-robot-provisioner CronJob (components/harbor/).
+          # Harbor provisioning is NOT a lane here, and the --reconcile-harbor flag
+          # that once offered it is DELETED. It talked plaintext to the
+          # mesh-protected harbor-core Service, which a pod in llz-reconciler
+          # (outside the harbor Istio mesh) cannot reach — and once that namespace
+          # enforces STRICT mTLS the hop is rejected at the sidecar outright. It
+          # stays the in-namespace harbor-robot-provisioner CronJob
+          # (components/harbor/), which IS meshed. A flag that could only ever
+          # fail is worse than no flag: it reads as a supported option.
           args:
             - reconcile
             - --metrics-addr=:8080
