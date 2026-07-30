@@ -292,12 +292,37 @@ k8s-validate: render-charts
 # report the OLD guard's verdict — a silent, very convincing wrong answer. So
 # the branch taken is announced on every run. Set LLZ_FORCE_SOURCE=1 to always
 # build from source when iterating on a guard.
+#
+# The announcement was NOT enough on its own: it scrolls past in a wall of lint
+# output, and the wrong answer it labels is indistinguishable from a right one.
+# So the choice is now made from the tree's state rather than left to the reader —
+# if $(GO_DIR) has uncommitted changes, the installed binary would be answering
+# for code you did not write, and source wins automatically. CI is unaffected: a
+# clean checkout takes the PATH branch exactly as before.
+#
+# BOTH BRANCHES NOW cd INTO $(GO_DIR) AND TAKE $(2). They used to differ — the
+# PATH branch ran from the repo root and silently DROPPED $(2) — which made $(1)
+# "args that work from the repo root" and $(2) "args that work from tools/", an
+# unnamed convention with one job: be got wrong. It survived only because every
+# --root .. happened to match the repo-root default, and the two template-manifest
+# callers hand-compensated by repeating the flag in $(1). A new caller passing any
+# other flag would have had it silently ignored on the PATH branch. One cwd, one
+# argument list, no convention to remember.
 define LLZ_CI
-	@if [ -z "$$LLZ_FORCE_SOURCE" ] && command -v llz >/dev/null 2>&1; then \
+	@set -e; \
+	dirty=""; \
+	if git -C . rev-parse --git-dir >/dev/null 2>&1; then \
+		dirty="$$(git -C . status --porcelain -- $(GO_DIR) 2>/dev/null | head -1)"; \
+	fi; \
+	if [ -z "$$LLZ_FORCE_SOURCE" ] && [ -z "$$dirty" ] && command -v llz >/dev/null 2>&1; then \
 		echo "[llz: $$(command -v llz) $$(llz version 2>/dev/null | head -1) — NOT your working tree; LLZ_FORCE_SOURCE=1 to build from source]"; \
-		llz ci $(1); \
+		cd $(GO_DIR) && llz ci $(1) $(2); \
 	else \
-		echo "[llz: built from source]"; \
+		if [ -n "$$dirty" ]; then \
+			echo "[llz: built from source — $(GO_DIR) has uncommitted changes, so the installed binary would answer for code you did not write]"; \
+		else \
+			echo "[llz: built from source]"; \
+		fi; \
 		cd $(GO_DIR) && go run ./cmd/llz ci $(1) $(2); \
 	fi
 endef
@@ -548,7 +573,7 @@ lint-tf: $(LINT_TF) template-manifest-check workflows-lock-check
 # LAST occurrence wins — pflag's documented behaviour, verified. Don't "fix" the
 # apparent duplicate: dropping either one breaks one of the two branches.
 template-manifest-check:
-	$(call LLZ_CI,template-manifest --root instance-template,--root ../instance-template)
+	$(call LLZ_CI,template-manifest,--root ../instance-template)
 
 # Assert instance-template/.template-workflows.lock still matches the vendored
 # .github/ files it covers. Editing a llz-*.yml body without re-running
@@ -562,7 +587,7 @@ template-manifest-check:
 # verb on the PR that introduces it.
 workflows-lock-check: export LLZ_FORCE_SOURCE := 1
 workflows-lock-check:
-	$(call LLZ_CI,workflows-fresh --root instance-template,--root ../instance-template)
+	$(call LLZ_CI,workflows-fresh,--root ../instance-template)
 
 lint:
 	@set -e; \
