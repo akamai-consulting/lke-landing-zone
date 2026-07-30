@@ -1,8 +1,18 @@
 package main
 
 // ci_assert_volume_encryption.go is `llz ci assert-volume-encryption` — the e2e
-// gate for the storage invariant: every Linode Volume backing a PV in this cluster
-// is ENCRYPTED at rest and carries this cluster's `lke<id>` ownership tag.
+// gate for the storage invariant. Every Linode Volume backing a PV in this cluster
+// must be:
+//
+//   1. ENCRYPTED at rest (the security property, and the reason for the name);
+//   2. tagged with this cluster's `lke<id>`, so `llz reap` can attribute it;
+//   3. labelled `<region>-<ns>-<pvc>` rather than the CSI's default `pvc-<uuid>`,
+//      so it is identifiable in the Linode UI, the billing export and the quota
+//      census — the places you look when the cluster is already gone.
+//
+// (1) is fixed at CreateVolume or never. (2) and (3) are applied afterwards by
+// llz-reconciler lanes, so this gate waits a bounded time for them before failing —
+// see volumeHealBudget.
 //
 // It asserts against the LINODE API, not against Kubernetes. That is the whole
 // point. The obvious cheaper check — "is every PVC on block-storage-retain?" — is a
@@ -27,8 +37,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 	"github.com/spf13/cobra"
@@ -39,19 +52,56 @@ import (
 // encrypted — the correct bias.
 const volumeEncryptionEnabled = "enabled"
 
+// volumeHealBudget / volumeHealInterval bound the wait for the volume-tags and
+// volume-labels reconciler lanes to sweep. Both apply AFTER CreateVolume, so
+// asserting the instant converge finishes would be asserting on a race. Encryption
+// is never waited on — it cannot change.
+const (
+	volumeHealBudget   = 3 * time.Minute
+	volumeHealInterval = 20 * time.Second
+)
+
+// Clock seams so the retry loop is unit-testable without real waiting.
+var (
+	assertVolumeNow   = time.Now
+	assertVolumeSleep = time.Sleep
+)
+
+// csiDefaultLabelRE matches the label the Linode CSI controller assigns when it
+// has no --volume-label-prefix, which is the case on LKE-E: `pvc-<uuid-ish hex>`.
+// A Volume still carrying it has not been through the volume-labels reconciler, so
+// its identity in the Linode UI, the billing export, and the quota census is an
+// opaque uuid — nobody can tell which workload owns it without joining back
+// through Kubernetes, which is exactly what you cannot do once the cluster is gone.
+var csiDefaultLabelRE = regexp.MustCompile(`^pvc-[0-9a-f]{8,}$`)
+
 // volumeVerdict is one PV-backed Volume's compliance with the storage invariant.
 type volumeVerdict struct {
 	pvVolume
 	Label       string
 	Encryption  string
 	MissingTags []string
+	// BadLabel is non-empty when the Volume's Linode label is not the readable
+	// <region>-<ns>-<pvc> the volume-labels reconciler is supposed to give it.
+	BadLabel string
 	// Unreachable records why the Volume could not be judged. A Volume we cannot
 	// read is a FAILURE, never a pass — see the fail-closed note in the header.
 	Unreachable string
 }
 
 func (v volumeVerdict) ok() bool {
-	return v.Unreachable == "" && v.Encryption == volumeEncryptionEnabled && len(v.MissingTags) == 0
+	return v.Unreachable == "" && v.Encryption == volumeEncryptionEnabled &&
+		len(v.MissingTags) == 0 && v.BadLabel == ""
+}
+
+// healable reports whether a reconciler lane can still fix this Volume. Tags
+// (volume-tags lane) and labels (volume-labels lane) are healed asynchronously
+// after CreateVolume, so a violation may simply mean the lane has not run yet.
+// Encryption is NOT healable — it is decided inside CreateVolume and
+// storageClassName is immutable once bound — so an encryption violation is final
+// the moment it is observed, and waiting on it only wastes the budget.
+func (v volumeVerdict) healable() bool {
+	return v.Unreachable == "" && v.Encryption == volumeEncryptionEnabled
 }
 
 // problem renders the single most important thing wrong with this Volume.
@@ -65,14 +115,20 @@ func (v volumeVerdict) problem() string {
 			enc = "<unset>"
 		}
 		return "NOT ENCRYPTED (encryption=" + enc + ")"
-	default:
+	case len(v.MissingTags) > 0:
 		return "untagged: missing " + strings.Join(v.MissingTags, ",")
+	default:
+		return v.BadLabel
 	}
 }
 
 // judgeVolume compares one fetched Volume against the invariant. Pure, so the
 // classification is testable without a Linode account.
-func judgeVolume(pv pvVolume, vol map[string]any, desired []string) volumeVerdict {
+//
+// regionShort empty means "REGION_SHORT was not available", in which case the label
+// is only checked for NOT being the CSI default — a weaker but still meaningful
+// assertion, and better than skipping the check because one env var is missing.
+func judgeVolume(pv pvVolume, vol map[string]any, desired []string, regionShort string) volumeVerdict {
 	v := volumeVerdict{pvVolume: pv}
 	if vol == nil {
 		v.Unreachable = "Linode API returned no volume"
@@ -91,6 +147,22 @@ func judgeVolume(pv pvVolume, vol map[string]any, desired []string) volumeVerdic
 		}
 	}
 	sort.Strings(v.MissingTags)
+
+	// Label is only meaningful for a PV with a bound claim: the relabeler derives
+	// it from namespace/pvc and skips released PVs, so demanding a readable label
+	// on one would be asserting something nothing ever sets.
+	if pv.Namespace != "" && pv.PVC != "" {
+		switch {
+		case v.Label == "":
+			v.BadLabel = "Linode Volume has NO label"
+		case csiDefaultLabelRE.MatchString(v.Label):
+			v.BadLabel = fmt.Sprintf("label %q is still the CSI default pvc-<uuid> — the volume-labels reconciler has not renamed it to <region>-%s-%s", v.Label, pv.Namespace, pv.PVC)
+		case regionShort != "":
+			if want := desiredVolumeLabel(regionShort, pv.Namespace, pv.PVC); v.Label != want {
+				v.BadLabel = fmt.Sprintf("label %q != expected %q", v.Label, want)
+			}
+		}
+	}
 	return v
 }
 
@@ -98,10 +170,14 @@ func ciAssertVolumeEncryptionCmd() *cobra.Command {
 	var scName string
 	c := &cobra.Command{
 		Use:   "assert-volume-encryption",
-		Short: "FAIL if any PV-backed Linode Volume is unencrypted or missing its lke<id> tag",
+		Short: "FAIL if any PV-backed Linode Volume is unencrypted, untagged, or still named pvc-<uuid>",
 		Long: "E2E gate for the storage invariant. Lists every Linode-CSI PV in the cluster,\n" +
-			"GETs its backing Volume from the Linode API, and fails unless EVERY one reports\n" +
-			"encryption=enabled and carries the tag set the StorageClass defines.\n" +
+			"GETs its backing Volume from the Linode API, and fails unless EVERY one is\n" +
+			"encrypted, carries the tag set the StorageClass defines, and has been renamed\n" +
+			"off the CSI default pvc-<uuid> to a readable <region>-<ns>-<pvc>.\n" +
+			"\n" +
+			"Tags and labels are applied by reconciler lanes after CreateVolume, so those two\n" +
+			"get a bounded wait before failing. Encryption never does — it cannot change.\n" +
 			"\n" +
 			"Checks the Linode API rather than the PVC's storageClassName on purpose: the\n" +
 			"class name is a proxy for encryption, and it was a satisfied proxy the whole\n" +
@@ -131,6 +207,17 @@ func runCIAssertVolumeEncryption(ctx context.Context, scName string) error {
 	}
 	if scName == "" {
 		scName = defaultVolumeTagsSC
+	}
+
+	// REGION_SHORT is the volume-label prefix the relabeler uses. Optional here: when
+	// absent the label check degrades to "must not be the CSI default" rather than
+	// being skipped, because a missing env var must not silently disable a gate.
+	regionShort := os.Getenv("REGION_SHORT")
+	if regionShort == "REPLACE_ME" {
+		// The un-rendered placeholder from the reconciler manifest. Treat as unset:
+		// comparing against "REPLACE_ME-<ns>-<pvc>" would fail every Volume for the
+		// wrong reason.
+		regionShort = ""
 	}
 
 	// Read the cluster through kubectl, NOT the in-pod client the sibling
@@ -164,18 +251,51 @@ func runCIAssertVolumeEncryption(ctx context.Context, scName string) error {
 	}
 
 	client := tagReconcileLinodeFn(token)
-	verdicts := make([]volumeVerdict, 0, len(pvs))
-	for _, pv := range pvs {
-		vol, status, err := client.Volume(ctx, pv.VolumeID)
-		switch {
-		case err != nil:
-			verdicts = append(verdicts, volumeVerdict{pvVolume: pv, Unreachable: fmt.Sprintf("GET: %v", err)})
-			continue
-		case status < 200 || status >= 300:
-			verdicts = append(verdicts, volumeVerdict{pvVolume: pv, Unreachable: fmt.Sprintf("GET returned %d", status)})
-			continue
+
+	// Tags and labels are applied by reconciler lanes AFTER CreateVolume, so a
+	// violation of either can simply mean the lane has not swept yet. Give those a
+	// bounded chance to heal rather than asserting on a race. Encryption is not
+	// healable, so the moment any Volume is unencrypted the answer is final and this
+	// returns immediately — no reason to burn the budget on a verdict that cannot
+	// change.
+	var verdicts []volumeVerdict
+	deadline := assertVolumeNow().Add(volumeHealBudget)
+	for attempt := 1; ; attempt++ {
+		verdicts = verdicts[:0]
+		for _, pv := range pvs {
+			vol, status, err := client.Volume(ctx, pv.VolumeID)
+			switch {
+			case err != nil:
+				verdicts = append(verdicts, volumeVerdict{pvVolume: pv, Unreachable: fmt.Sprintf("GET: %v", err)})
+				continue
+			case status < 200 || status >= 300:
+				verdicts = append(verdicts, volumeVerdict{pvVolume: pv, Unreachable: fmt.Sprintf("GET returned %d", status)})
+				continue
+			}
+			verdicts = append(verdicts, judgeVolume(pv, vol, desired, regionShort))
 		}
-		verdicts = append(verdicts, judgeVolume(pv, vol, desired))
+
+		pending := 0
+		for _, v := range verdicts {
+			if v.ok() {
+				continue
+			}
+			if !v.healable() {
+				pending = 0 // a final violation exists; stop waiting
+				break
+			}
+			pending++
+		}
+		if pending == 0 || !assertVolumeNow().Before(deadline) {
+			if pending > 0 {
+				fmt.Printf("::warning::%d Volume(s) still missing tags/labels after %s — the volume-tags / volume-labels reconciler lanes did not heal them in time.\n",
+					pending, volumeHealBudget)
+			}
+			break
+		}
+		fmt.Printf("attempt %d: %d Volume(s) awaiting tag/label reconciliation — re-checking in %s (budget %s)\n",
+			attempt, pending, volumeHealInterval, volumeHealBudget)
+		assertVolumeSleep(volumeHealInterval)
 	}
 
 	return reportVolumeEncryption(verdicts, desired, scName)
@@ -219,11 +339,23 @@ func reportVolumeEncryption(verdicts []volumeVerdict, desired []string, scName s
 	summary = append(summary,
 		"```",
 		"",
-		"**Encryption is not repairable in place.** It is decided inside CreateVolume and",
-		"`storageClassName` is immutable once bound, so re-running this job cannot turn it",
-		"green. Remediation is per-workload and destroys that volume's data: delete the",
-		"owning workload, delete the PVC, re-sync so it is recreated on a class that",
-		"encrypts.",
+		"Three different invariants are checked, and they do NOT have the same remedy:",
+		"",
+		"**NOT ENCRYPTED — not repairable in place.** Encryption is decided inside",
+		"CreateVolume and `storageClassName` is immutable once bound, so re-running this",
+		"job cannot turn it green. Remediation is per-workload and",
+		"destroys that volume's data: delete the owning workload, delete the PVC, re-sync",
+		"so it is recreated on a class that encrypts.",
+		"",
+		"**untagged / CSI-default label — repairable, and something should already have**",
+		"**done it.** Both are applied after CreateVolume by llz-reconciler lanes",
+		"(`--reconcile-volume-tags`, `--reconcile-volume-labels`), and this gate already",
+		"waited for them. Seeing them here means the lane is not running, not electing a",
+		"leader, or has no LINODE_TOKEN — both lanes read it lazily from the optional",
+		"`linode-api-token` Secret and silently no-op when it is absent, so check that",
+		"Secret exists before suspecting anything subtler. A `pvc-<uuid>` label is not",
+		"cosmetic: it is the Volume's identity in the Linode UI, the billing export and",
+		"the quota census, and once the cluster is deleted nothing can attribute it.",
 		"",
 		"**If these landed on an LKE stock class** (`linode-block-storage[-retain]`), the",
 		"cause is upstream of the PVC: on managed, apl-core's `cluster.defaultStorageClass`",

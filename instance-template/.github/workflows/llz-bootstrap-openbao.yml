@@ -721,7 +721,12 @@ jobs:
           lane broad-pat         llz ci assert-broad-pat-rotation --region "$REGION"
           lane wave-vap          llz ci assert-wave-health-vap
           # Storage invariant, asserted against the LINODE API: every PV-backed
-          # Volume encrypted at rest AND carrying its lke<id> ownership tag.
+          # Volume encrypted at rest, carrying its lke<id> ownership tag, AND
+          # renamed off the CSI default pvc-<uuid> to a readable <region>-<ns>-<pvc>
+          # (an opaque uuid is unattributable in the Linode UI, the billing export
+          # and the quota census — the places you look once the cluster is gone).
+          # Tags and labels are healed by reconciler lanes after CreateVolume, so
+          # the verb waits a bounded time for them; encryption never waits.
           # GATING. Checks the Volume's own `encryption` field rather than the PVC's
           # storageClassName, because the class name is only a PROXY for encryption
           # — and it was a satisfied proxy the entire time a managed cluster was
