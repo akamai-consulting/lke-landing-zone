@@ -106,13 +106,21 @@ Two things from #358 change here:
 
 ### Two hops that are deliberately not mTLS
 
-**Keycloak JWKS — one-way TLS.** Keycloak is not in the mesh and apl-core's
-Keycloak.X does not do client-cert auth. The options were verified TLS, or an
-apl-core change LLZ cannot make from this repo. Verified TLS closes the attack
-that matters (response substitution); the residual gap is that Keycloak cannot
-verify OpenBao, which for a public-key fetch of non-secret material is not a
-meaningful exposure. `jwks_ca_pem` is the control — moving to `https` alone would
-still accept any certificate.
+**Keycloak JWKS — one-way TLS.** apl-core's Keycloak.X does not do client-cert
+auth. The options were verified TLS, or an apl-core change LLZ cannot make from
+this repo. Verified TLS closes the attack that matters (response substitution);
+the residual gap is that Keycloak cannot verify OpenBao, which for a public-key
+fetch of non-secret material is not a meaningful exposure. `jwks_ca_pem` is the
+control — moving to `https` alone would still accept any certificate.
+
+> **Corrected 2026-07-29.** This paragraph originally opened "Keycloak is not in
+> the mesh", and that is false — `core.yaml` gives the `keycloak` namespace no
+> `disableIstioInjection`, so it IS meshed. The conclusion (one-way TLS) still
+> holds, because `llz-openbao` is NOT meshed, so only one end of the hop is in
+> the mesh and it cannot supply mTLS here. The claim mattered anyway: it ruled
+> out "let Istio secure a plaintext :8080 hop" without anyone checking it, and it
+> made the live failure read as `connection reset by peer` rather than
+> `connection refused` — the sidecar accepts, then resets. See prerequisite 1.
 
 **Reconciler `/healthz` — plaintext, separate port.** The client is the kubelet,
 and an `httpGet` probe cannot present a client certificate. A single combined
@@ -295,15 +303,57 @@ whether the far end accepts the certificate. Those need a cluster.
 These could not be confirmed from the repo and **must be checked on a live
 cluster** before rollout:
 
-1. **Keycloak serves TLS on 8443** with a cert from apl-core's CA:
-   ```
-   kubectl -n keycloak get svc keycloak-keycloakx-http -o yaml | grep -A4 ports
-   ```
-   If it does not, set `platform.aplCA.enabled=false` and pin static keys via
-   `jwt_validation_pubkeys` instead.
+1. ~~**Keycloak serves TLS on 8443** with a cert from apl-core's CA.~~
+   **FALSE — checked on a live cluster (e2e, 2026-07-29). This was the ADR's one
+   load-bearing wrong assumption.**
+
+   apl-core runs Keycloak with `args: [start]`, `KC_HTTP_ENABLED=true` and
+   proxy-mode `xforwarded`, and gives it **no TLS key material**
+   (`values/keycloak/keycloak.gotmpl`). Keycloak therefore never opens an HTTPS
+   listener. Port 8443 *is* declared on both the Service and the container —
+   both gated on the chart's `service.httpsPort` default, which apl-core leaves
+   untouched — so it looks present in every manifest and answers nothing. The
+   grep in the original check would have PASSED while the port stayed dead.
+
+   The live symptom was `read: connection reset by peer`, not `connection
+   refused`, because prerequisite 3's premise is also wrong: **Keycloak IS in
+   the mesh** (`core.yaml` gives the `keycloak` namespace no
+   `disableIstioInjection`, unlike `istio-system` / `apl-keycloak-operator` /
+   `knative-serving`). Its Envoy sidecar accepts the connection, then resets
+   when it forwards to a port with no listener.
+
+   The stated fallback — pin static keys via `jwt_validation_pubkeys` — was
+   **not** taken, and should not be: it trades an on-path risk for a silent
+   outage on every Keycloak realm-key rotation, with no expiry warning.
+
+   The resolution keeps this ADR's actual goal (a verified fetch of trust
+   material) because **the trust anchor was right and only the endpoint was
+   wrong**. Keycloak's TLS is terminated by the Istio ingress gateway, serving
+   apl-core's `otomi-wildcard` Certificate — SAN `*.<domainSuffix>`, issued by
+   the very `custom-ca` of prerequisite 2, which `openbao-apl-ca` already chains
+   to. So `jwks_url` now targets the public hostname (derived from the issuer,
+   so the two cannot disagree) and `llz ci pin-keycloak-gateway-alias` pins that
+   name to the gateway's ClusterIP via `hostAliases`, which is what keeps the
+   request in-cluster — the public name resolves to the external LoadBalancer,
+   and hairpinning through it is unsupported on LKE-E. See `keycloakJWKSURL`.
+
+   The egress allow moved from `keycloak:{8443,8080}` to `istio-system:443`.
+   Both old targets were dead ends: 8080 was the plaintext fetch this ADR exists
+   to eliminate, and 8443 never had a listener.
+
+   **Lesson for the next prerequisite of this shape:** the check as written
+   (`grep -A4 ports`) tested that a PORT WAS DECLARED, not that anything was
+   LISTENING. Those differ, and a chart will happily declare both a Service port
+   and a containerPort for a listener the process never opens. Verify a TLS
+   prerequisite by completing a handshake, not by reading a manifest.
 2. **apl-core exposes a `custom-ca` ClusterIssuer** (`kubectl get clusterissuer
    custom-ca`). The only evidence in-repo is a by-name reference in
    `otel-bootstrap-ca.yaml`'s migration note.
+   **CONFIRMED on the live e2e cluster** — `llz ci health` reports
+   `ClusterIssuer custom-ca Ready`. Note this holds only while apl-core's
+   `cert-manager.issuer` is `custom-ca`; on `letsencrypt` the same wildcard is
+   LE-signed and `openbao-apl-ca` will not verify it (see the `platform.aplCA`
+   note in the chart values).
 3. **The harbor namespace has no unmeshed plaintext clients** beyond the CNPG
    (:8000) and metrics (:8001) ports already exempted — step 3 above measures this.
 4. **`prometheus-operator` resolves ServiceMonitor `tlsConfig` secret refs in the
