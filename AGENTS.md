@@ -36,6 +36,20 @@ scaffold generator that a downstream instance repo consumes.
   or release names — names stay generic so two system teams don't collide.
 - **Scars as defaults.** Every non-obvious value ships as a default with a comment
   explaining the failure mode it prevents.
+- **New behavior ships with a gate that fails when the behavior stops working.**
+  Not a test that the code renders, parses, or is present — a test that the thing
+  it does still happens. Two live regressions came from skipping this, and both
+  passed every existing check: OpenBao's audit log shipped to a Service that never
+  existed (the push URL and its NetworkPolicy named the same wrong namespace, so
+  they agreed with each other and with nothing in the cluster), and volume
+  relabeling renamed Volumes out from under the reaper's `pvc-` prefix (one
+  commit, both sides of a contract, one side updated). Read
+  [docs/e2e-gates.md](docs/e2e-gates.md) **before** adding a behavior — it has the
+  two archetypes, the fail-closed doctrine, and how to wire a lane. Three rules
+  carry most of it: assert at the CONSUMER on data the producer really emitted;
+  call both sides' REAL functions rather than restating a shared rule; and fail
+  closed on vacuity, because a gate that passes having examined nothing looks
+  exactly like the outage it exists to catch.
 - **NEVER attribute commits to Claude or any AI agent.** Do not add a
   `Co-Authored-By:` trailer (or any model/agent attribution) to commit messages,
   and do not set the git author or committer to an agent identity — commits carry
@@ -145,6 +159,12 @@ The git hooks in `template-scripts/hooks/` enforce this at commit/push time (wir
    `tflint`, `checkov`), Kubernetes (`kube-linter`, `kubeconform`), Helm
    (`helm lint --strict`), and `actionlint` for `.github/workflows/*.yml`.
    (`make LINT_ALL=1 lint` runs every check unconditionally.)
+5. **If you changed behavior, name the gate that would catch it regressing** — in
+   the PR body, in one line. If the honest answer is "none", write the gate
+   ([docs/e2e-gates.md](docs/e2e-gates.md)); if the behavior genuinely doesn't
+   need one (refactor, docs, a statically-decidable invariant already in
+   `make lint`), say which and why. A green `make lint` is not evidence a
+   behavior works — both of the regressions this rule comes from were green.
 
 ## Where to look
 
@@ -153,6 +173,7 @@ The git hooks in `template-scripts/hooks/` enforce this at commit/push time (wir
 | End-to-end adopter path | [docs/adopter-guide.md](docs/adopter-guide.md) |
 | Agent convention (this file's rules) | [docs/agents.md](docs/agents.md) |
 | Non-obvious gotchas / hard-won lessons | [docs/lessons-learned.md](docs/lessons-learned.md) |
+| Testing behavior — when a gate is required, and how to write one | [docs/e2e-gates.md](docs/e2e-gates.md) |
 | Terraform module release contract | [terraform-modules/RELEASING.md](terraform-modules/RELEASING.md) |
 | Helm chart inventory + OCI publishing | [kubernetes-charts/README.md](kubernetes-charts/README.md) |
 | Contributor workflow, prereqs, git hooks | [CONTRIBUTING.md](CONTRIBUTING.md) |

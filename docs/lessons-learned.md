@@ -103,6 +103,35 @@ to be stale, fix it in place rather than working around it.
   exist yet; when it's created, update the OTel collector `tls.host` value in both
   overlay patches to the real public FQDNs.
 
+## Regressions that stayed green (why gates exist)
+
+Both of these shipped, ran broken for weeks, and passed every check in CI. They
+are the reason for the AGENTS.md rule that new behavior ships with a gate — see
+[e2e-gates.md](e2e-gates.md) for the archetypes and how to write one.
+
+- **Two wrong values that agree with each other look correct.** OpenBao's audit
+  log shipped to `loki-gateway.llz-observability`; apl-core runs Loki in
+  `monitoring` and nothing creates that Service. The egress NetworkPolicy named
+  the *same* wrong namespace, so the allow matched the push URL exactly — correct
+  in shape, wrong in target, complete-looking from every angle. `converge` and
+  `health` saw a Running pod (promtail retries a dead DNS name forever);
+  `assert-loki` proved Loki was up, which is a fact about Loki, not about anything
+  reaching it. **No static check can distinguish a consistent pair from a correct
+  pair** — only the round trip can. Gate: `llz ci assert-openbao-audit`.
+- **A rename on one side of a contract, unchanged on the other.** `llz reap`
+  selected orphan Volumes by the CSI's `pvc-` prefix; the volume-labels reconciler
+  started renaming bound Volumes to `<region>-<ns>-<pvc>`, so the filter excluded
+  100% of its targets and reported "none matched the filter" — which reads exactly
+  like "nothing to do." The commit that introduced the rename edited the reaper's
+  own file, ~19 lines from the check it invalidated. Both sides had passing tests;
+  each tested its own copy of the rule. Guard:
+  `TestReaperRecognisesRelabelerOutput`, which feeds the relabeler's real
+  `desiredVolumeLabel()` into the reaper's real `linode.VolumeIsCandidate()`.
+- **The shared shape:** the failure mode is *silence*. Nothing errored, nothing
+  restarted, nothing alerted. When a change makes one component depend on another's
+  live output — or reformats something a second component parses — assume the
+  broken version will look exactly like the working one and write the gate.
+
 ## Operational scars (observed failure modes)
 
 These are failure modes hit while operating this Linode LKE-Enterprise +
