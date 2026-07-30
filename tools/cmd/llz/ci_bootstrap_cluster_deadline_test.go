@@ -164,8 +164,16 @@ func TestMigrateAplValuesToGitHub_DeadlineError(t *testing.T) {
 	if want := "did not complete within " + aplMigrateBudget.String(); !strings.Contains(err.Error(), want) {
 		t.Errorf("deadline error = %v, want it to mention %q", err, want)
 	}
-	if elapsed := now().Sub(start); elapsed < aplMigrateBudget {
-		t.Errorf("gave up after %s of fake time, before the %s budget", elapsed, aplMigrateBudget)
+	// The loop is attempt-counted (attempts := aplMigrateBudget / aplMigrateTick)
+	// and sleeps AFTER each check, so the final attempt does not sleep: the clock
+	// advances (attempts-1) ticks, not the whole budget. Derived from the
+	// constants rather than hardcoded, so a budget or tick change moves this with
+	// it instead of breaking it — an earlier version asserted the full budget and
+	// broke when the deadline loop became an attempt loop upstream.
+	wantAdvance := time.Duration(int(aplMigrateBudget/aplMigrateTick)-1) * aplMigrateTick
+	if elapsed := now().Sub(start); elapsed < wantAdvance {
+		t.Errorf("gave up after %s of fake time, want at least %s (%d attempts x %s, the last without a sleep)",
+			elapsed, wantAdvance, int(aplMigrateBudget/aplMigrateTick), aplMigrateTick)
 	}
 	// Once up front (a prior run would make the Job template immutable-conflicted)
 	// and once on the way out via the deferred cleanup.

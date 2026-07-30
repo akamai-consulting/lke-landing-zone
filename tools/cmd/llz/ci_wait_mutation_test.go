@@ -81,17 +81,22 @@ func TestRunCIWaitClusterReadyKeepsPollingUntilNodesJoin(t *testing.T) {
 			return nil, errors.New("unexpected: " + a)
 		}
 		polls++
-		if polls >= 3 {
+		if polls >= 2 {
 			return []byte("node-1=True\n"), nil // the pool finally registers
 		}
 		return []byte(""), nil // reachable, but no nodes yet
 	})
-	// 1s budget, 0s interval: the whole retry sequence runs inside one second.
-	if err := runCIWaitClusterReady(1, 0, 10, 1); err != nil {
+	// 1s budget, 1s interval => pollUntil allows timeout/interval+1 = 2 attempts.
+	// An earlier version passed interval=0 to run the whole sequence inside one
+	// second; pollUntil now caps a zero interval at a SINGLE attempt, so that
+	// spelling silently tested nothing but the first poll. The interval must be
+	// non-zero for the gate to re-poll at all, which costs one real second here —
+	// the smallest that still proves it does not give up after one look.
+	if err := runCIWaitClusterReady(1, 1, 10, 1); err != nil {
 		t.Fatalf("wait-cluster-ready = %v, want nil — the gate must keep polling for the pool (polls=%d)", err, polls)
 	}
-	if polls < 3 {
-		t.Errorf("gate made %d polls, want >= 3 — it stopped probing before the nodes joined", polls)
+	if polls < 2 {
+		t.Errorf("gate made %d polls, want >= 2 — it stopped probing before the nodes joined", polls)
 	}
 }
 

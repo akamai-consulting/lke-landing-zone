@@ -23,7 +23,7 @@ func TestDoSetsContentTypeOnlyWithBody(t *testing.T) {
 	})
 
 	// Body-carrying verbs must declare JSON.
-	if err := c.PutControlPlaneACL(ctx, 7, ControlPlaneACL{Enabled: true}); err != nil {
+	if _, err := c.PutControlPlaneACL(ctx, 7, ControlPlaneACL{Enabled: true}); err != nil {
 		t.Fatalf("PutControlPlaneACL = %v", err)
 	}
 	if gotContentType != "application/json" {

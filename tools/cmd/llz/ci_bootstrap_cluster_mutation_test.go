@@ -32,12 +32,21 @@ func managedArgoUpKubectl(extra func(line string) (string, bool)) func(args ...s
 	}
 }
 
-// configureManagedApl is deliberately best-effort — but "best-effort" means the
-// failure is ANNOUNCED. Silence here is how a cluster whose apl-core was never
-// repointed at the values branch looks identical to one that was.
-func TestBootstrapClusterWarnsWhenManagedAplConfigFails(t *testing.T) {
+// A failed managed apl-core configuration must ABORT bootstrap and say why.
+//
+// This test previously asserted the opposite — warn-and-continue — which was the
+// contract when it was written. Upstream deliberately made it fatal: on a managed
+// cluster that never publishes apl-git-config there is no apl-core, so every
+// gitops-* Application would sit in ComparisonError and converge would hard-fail
+// ~20 minutes later naming none of it. Failing here cannot turn a passing run red;
+// it fails earlier and names the cause. The assertion is inverted to match, and
+// the error text is asserted so a silent abort is still a failure.
+func TestBootstrapClusterAbortsWhenManagedAplConfigFails(t *testing.T) {
 	o := bootstrapClusterOpts{
-		env: "primary", instanceRepo: "acme/instance",
+		// clusterID is required since the block-storage-retain StorageClass gained
+		// its lke<id> ownership tag: without it bootstrap aborts before the bridge,
+		// which is what this test is about.
+		env: "primary", clusterID: "393244", instanceRepo: "acme/instance",
 		upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main",
 		instanceRepoToken: "tok",
 	}
@@ -50,12 +59,15 @@ func TestBootstrapClusterWarnsWhenManagedAplConfigFails(t *testing.T) {
 		sleep:   func(time.Duration) {},
 	}
 	var err error
-	out := captureStdout(t, func() { err = bootstrapCluster(o, d) })
-	if err != nil {
-		t.Fatalf("a failed managed-apl config must not abort the bridge: %v", err)
+	captureStdout(t, func() { err = bootstrapCluster(o, d) })
+	if err == nil {
+		t.Fatal("a failed managed-apl config must abort: apl-core has no values branch, so every gitops-* " +
+			"Application would sit in ComparisonError and converge would fail 20 minutes later naming none of it")
 	}
-	if !strings.Contains(out, "::warning::") || !strings.Contains(out, "managed apl-core BYO-Git") {
-		t.Errorf("a failed managed apl-core configuration must warn — otherwise apps that need apl-core installs silently never converge:\n%s", out)
+	for _, want := range []string{"managed apl-core BYO-Git", "no values branch to reconcile"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("abort error must name the cause (%q), got: %v", want, err)
+		}
 	}
 }
 
@@ -64,13 +76,33 @@ func TestBootstrapClusterWarnsWhenManagedAplConfigFails(t *testing.T) {
 // A bootstrap that stops there exits 0 having created no Application at all.
 func TestBootstrapClusterAppliesTheBridgeAfterTheInstanceRepoSecret(t *testing.T) {
 	o := bootstrapClusterOpts{
-		env: "primary", instanceRepo: "acme/instance",
+		// clusterID is required since the block-storage-retain StorageClass gained
+		// its lke<id> ownership tag: without it bootstrap aborts before the bridge,
+		// which is what this test is about.
+		env: "primary", clusterID: "393244", instanceRepo: "acme/instance",
 		upstreamOrg: "akamai-consulting", templateRef: "ref", appsRepoRevision: "main",
 		instanceRepoToken: "tok",
 	}
 	var applied []string
 	d := bootstrapDeps{
-		kubectl: managedArgoUpKubectl(nil),
+		// A populated apl-git-config: configureManagedApl is fatal on failure now,
+		// so this test — which is about the ORDER of the bridge steps — must not
+		// trip it. Answering the read keeps the run on the happy path.
+		kubectl: managedArgoUpKubectl(func(line string) (string, bool) {
+			// configureManagedApl is fatal on failure now, so this test — which is
+			// about the ORDER of the bridge steps — has to keep it on its happy
+			// path: answer the apl-git-config read, then report the migration Job
+			// succeeded so the wait returns instead of burning its 13m budget.
+			for k, v := range fullAplGitSecret() {
+				if strings.Contains(line, "jsonpath={.data."+k+"}") {
+					return base64.StdEncoding.EncodeToString([]byte(v)), true
+				}
+			}
+			if strings.Contains(line, "jsonpath={.status.succeeded}") {
+				return "1", true
+			}
+			return "", true
+		}),
 		apply: func(y, _ string, _ bool) (string, bool) {
 			applied = append(applied, y)
 			return "", true

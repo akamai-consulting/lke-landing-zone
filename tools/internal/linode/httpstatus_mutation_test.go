@@ -91,7 +91,8 @@ func statusProbes() []statusProbe {
 	}, {
 		name: "PutControlPlaneACL", source: "acl.go:76",
 		ok: func(ctx context.Context, c *Client) bool {
-			return c.PutControlPlaneACL(ctx, 7, ControlPlaneACL{}) == nil
+			_, err := c.PutControlPlaneACL(ctx, 7, ControlPlaneACL{})
+			return err == nil
 		},
 	}, {
 		name: "PostgresInstance", source: "database.go:44",
