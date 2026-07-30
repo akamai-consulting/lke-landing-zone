@@ -245,7 +245,12 @@ var (
 	// Kubernetes YAML (volume file modes, volumeMode), so matching it would be
 	// noise. `UNSET` is deliberately NOT flagged — it means "inherit", so the hop it
 	// describes belongs to whatever sets the mesh-wide default, not to this file.
-	rePermissiveMTLS = regexp.MustCompile(`(?i)mode:\s*["']?(PERMISSIVE|DISABLE)["']?(?:[\s,}]|$)`)
+	//
+	// `mode:` is anchored to a line start / whitespace / brace so it cannot match
+	// the TAIL of a longer key. Without that, `sslmode: disable` — a legitimate
+	// (if unwise) Postgres setting — was reported as "mesh mTLS not enforced",
+	// which is both a wrong diagnosis and a wrong owner to send it to.
+	rePermissiveMTLS = regexp.MustCompile(`(?im)(?:^|[\s,{])mode:\s*["']?(PERMISSIVE|DISABLE)["']?(?:[\s,}]|$)`)
 	// portLevelMtls keys each exemption as a QUOTED MAP KEY (`"8000":`), never as
 	// `port: 8000`, so rePortName cannot see it. Without this the exemptions would
 	// key on whatever unrelated `port:` line came last in the document.
@@ -275,6 +280,39 @@ var (
 	// EventSource's resource selector and not as prose in a comment or a longer
 	// key such as `subresource: secrets-foo`.
 	reEventSourceSecrets = regexp.MustCompile(`(?i)^\s*resource:\s*["']?secrets["']?\s*$`)
+
+	// ── cleartext wire protocols other than HTTP ────────────────────────────
+	//
+	// The guard began as an HTTP gate, which quietly implied that HTTP is where
+	// cleartext lives. It is not: this platform runs CNPG Postgres (harbor-otomi-db,
+	// keycloak-db) and Redis, and a plaintext DSN or a `sslmode=disable` carries
+	// credentials and row data in the clear with no `http://` anywhere in sight.
+	//
+	// The TLS-bearing spellings are excluded by construction rather than by a
+	// negative lookahead (RE2 has none): after `redis` the next character must be
+	// `:`, so `rediss://` cannot match, and likewise for amqps/ldaps/mongodb+srv.
+	reCleartextProto = regexp.MustCompile(`(?i)\b(redis|postgres|postgresql|mysql|mongodb|amqp|ldap|memcached)://`)
+	// A Postgres DSN that disables TLS outright. Spelled as a URI parameter
+	// (sslmode=disable) or as a YAML/config key (sslmode: disable).
+	reSSLModeDisable = regexp.MustCompile(`(?i)sslmode\s*[=:]\s*["']?disable`)
+
+	// ── insecure-TLS spellings the first revision did not match ─────────────
+	//
+	// reInsecureGo matches only the composite-literal form `InsecureSkipVerify:
+	// true`. These are the same decision written differently, and a gate that a
+	// reviewer clears by assigning instead of initialising is not a gate.
+	reInsecureGoAssign = regexp.MustCompile(`InsecureSkipVerify\s*=\s*true`)
+	// client-go's rest.Config spells it `Insecure`, not `InsecureSkipVerify`, so
+	// every kubeconfig-building path was invisible to the original pattern.
+	reInsecureGoRest = regexp.MustCompile(`\bInsecure:\s*true`)
+	// Command-line opt-outs, wherever they appear — including inside a YAML
+	// container command/args block, which the walker already reads as text.
+	reInsecureCLI = regexp.MustCompile(`--insecure-skip-tls-verify|--no-check-certificate|--plain-http|\bcurl\b[^\n]*\s-k(\s|$)`)
+	// YAML/Helm keys that mean "do not verify TLS". Two families: keys that are
+	// unsafe when TRUE (insecure, skipVerify) and keys that are unsafe when FALSE
+	// (sslVerify, tlsVerify, verify_ssl).
+	reInsecureYAMLTrue  = regexp.MustCompile(`(?i)\b(insecure|skipVerify|tlsSkipVerify|insecureSkipTLSVerify):\s*["']?true(?:[\s,}]|$)`)
+	reInsecureYAMLFalse = regexp.MustCompile(`(?i)\b(sslVerify|tlsVerify|verify_ssl):\s*["']?false(?:[\s,}]|$)`)
 
 	// ── short-form in-cluster URLs ───────────────────────────────────────────
 	//
@@ -491,6 +529,24 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 			continue
 		}
 		if isGo {
+			if u := reCleartextProto.FindString(code); u != "" {
+				out = append(out, plaintextFinding{
+					key: rel + ":" + strings.ToLower(strings.TrimSuffix(u, "://")), file: rel, line: n,
+					what: "cleartext wire protocol (" + strings.ToLower(u) + ")",
+				})
+			}
+			if reSSLModeDisable.MatchString(code) {
+				out = append(out, plaintextFinding{
+					key: rel + ":sslmode-disable", file: rel, line: n,
+					what: "TLS disabled on a Postgres connection (sslmode=disable)",
+				})
+			}
+			if reInsecureGoAssign.MatchString(code) || reInsecureGoRest.MatchString(code) {
+				out = append(out, plaintextFinding{
+					key: rel + ":" + goSymbolFor(lines, i), file: rel, line: n,
+					what: "TLS verification disabled (assignment or client-go rest.Config Insecure)",
+				})
+			}
 			if reInsecureGo.MatchString(code) {
 				out = append(out, plaintextFinding{
 					key: rel + ":" + goSymbolFor(lines, i), file: rel, line: n,
@@ -561,6 +617,27 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 			out = append(out, plaintextFinding{
 				key: rel + ":" + locator(mtlsLocator(lastMTLSPort), "mtls-mode"), file: rel, line: n,
 				what: "mesh mTLS not enforced (mode: " + strings.ToUpper(m[1]) + ") — cleartext is accepted on this hop",
+			})
+		case reCleartextProto.MatchString(code):
+			u := reCleartextProto.FindString(code)
+			out = append(out, plaintextFinding{
+				key: rel + ":" + strings.ToLower(strings.TrimSuffix(u, "://")), file: rel, line: n,
+				what: "cleartext wire protocol (" + strings.ToLower(u) + ")",
+			})
+		case reSSLModeDisable.MatchString(code):
+			out = append(out, plaintextFinding{
+				key: rel + ":sslmode-disable", file: rel, line: n,
+				what: "TLS disabled on a Postgres connection (sslmode=disable)",
+			})
+		case reInsecureCLI.MatchString(code):
+			out = append(out, plaintextFinding{
+				key: rel + ":" + locator(lastPort, "insecure-cli-flag"), file: rel, line: n,
+				what: "TLS verification disabled on a command line",
+			})
+		case reInsecureYAMLTrue.MatchString(code) || reInsecureYAMLFalse.MatchString(code):
+			out = append(out, plaintextFinding{
+				key: rel + ":" + locator(lastPort, "insecure-tls-key"), file: rel, line: n,
+				what: "TLS verification disabled by configuration key",
 			})
 		default:
 			if u, ok := shortInClusterURL(code); ok {
