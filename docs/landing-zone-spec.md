@@ -104,7 +104,7 @@ spec:
     bootstrap:                                    # → apl-core values (llz ci bootstrap-cluster)
       name: platform-prod                         # → cluster_name
       domainSuffix: prod.example.com              # → cluster_domain
-      # aplChartVersion: 6.0.0                    # optional; omit to track the llz baseline.
+      # aplChartVersion: v6.1.0                   # optional; omit to track the llz baseline.
                                                   # Linode owns the deployed version on managed
                                                   # App Platform — this only pins what
                                                   # `llz ci assert-apl-version` / the apl-values

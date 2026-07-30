@@ -269,6 +269,7 @@ failure mode the default already prevents.
 | Alerting inventory + coverage | [docs/alerting.md](docs/alerting.md) |
 | apl-core cutover runbook | [docs/apl-core-migration-runbook.md](docs/apl-core-migration-runbook.md) |
 | apl-core 5.x → 6.x migration design | [docs/designs/apl-core-v6-migration.md](docs/designs/apl-core-v6-migration.md) |
+| apl-core 6.0 → 6.1 upgrade design | [docs/designs/apl-core-v61-upgrade.md](docs/designs/apl-core-v61-upgrade.md) |
 | Linode account request + InfoSec checklist | [docs/infosec/linode-account-request-checklist.md](docs/infosec/linode-account-request-checklist.md) |
 
 **Runbooks** ([docs/runbooks/](docs/runbooks/)) — bootstrap & rotation procedures:

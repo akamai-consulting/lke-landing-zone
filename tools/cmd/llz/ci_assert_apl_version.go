@@ -19,9 +19,12 @@ package main
 //
 // Both are knowable from the spec before any infrastructure exists, but they surface
 // ~2h into a bootstrap as a pile of CreateContainerConfigError pods and a converge
-// that burns its whole budget (observed on a live prod bootstrap). `llz import init`
-// still pins 5.0.0 as its migration target, so any IMPORTED instance reaches this by
-// default. Fail in seconds, naming the fix, instead.
+// that burns its whole budget (observed on a live prod bootstrap). Fail in seconds,
+// naming the fix, instead.
+//
+// This gate is the FLOOR only. Drift from the baseline this release targets — an
+// instance still pinned to 6.0.0 while the baseline is v6.1.0 — is a separate,
+// non-blocking signal (clusterspec.AplChartVersionWarnings).
 
 import (
 	"fmt"
@@ -30,15 +33,21 @@ import (
 )
 
 // minSupportedAplChartVersion is the oldest apl-core chart the landing zone still
-// supports. It is DERIVED from the baseline rather than restated: the two were
-// separate 6.0.0 literals that had to be bumped together, with nothing saying so —
-// the same one-fact-two-records shape that let the template pins skew.
+// supports. It used to be an ALIAS of defaultAplChartVersion, with a note saying
+// to give it its own literal on the day the floor and the target legitimately
+// diverged. The v6.1.0 baseline bump is that day.
 //
-// Deliberately an alias, not a merge. The floor and the target are distinct ideas
-// and may legitimately diverge (supporting 6.0.0 while targeting 6.2.0); when that
-// day comes, give this its own literal again and the split is explicit rather than
-// accidental. Until then there is exactly one place to bump.
-const minSupportedAplChartVersion = defaultAplChartVersion
+// The floor stays 6.0.0 because nothing in the 6.1.0 upgrade made the landing
+// zone 6.1-only: the apl-values env-tree paths (env/apps/<name>.yaml,
+// env/settings/obj.yaml, env/teams/<name>/), the apl-secrets/apl-git-config BYO-Git
+// Secret contract, and the external-secrets.io/v1 + v1alpha1 PushSecret API
+// versions LLZ writes are all unchanged between 6.0.0 and 6.1.0. Raising the floor
+// in lockstep would have hard-failed every instance still on 6.0.0 for no reason —
+// minor drift is a WARNING (clusterspec.AplChartVersionWarnings), not a block.
+//
+// Raise it only when a 6.0.0 cluster genuinely stops working, and say why here the
+// way the 5.x rationale below does.
+const minSupportedAplChartVersion = "6.0.0"
 
 func ciAssertAplVersionCmd() *cobra.Command {
 	var env string
@@ -114,8 +123,9 @@ Fix one of:
   * set spec.cluster.bootstrap.aplChartVersion to >= %s for deployment %q (preferred), or
   * pin the instance to a template release that still supported %s.
 
-NOTE: `+"`llz import init`"+` pins %s as its MIGRATION TARGET, so a freshly imported
-instance lands here by default — bump the spec before the first apply.`,
+NOTE: `+"`llz import init`"+` scaffolds apl-core %s (this release's baseline), which is
+already above this floor — so a rejection here means an EXISTING pin was carried
+across an llz upgrade, not that the scaffolder produced it.`,
 			v, env, minSupportedAplChartVersion,
 			v, v, minSupportedAplChartVersion, env, v, importInitAplChartVersion)
 	}

@@ -82,7 +82,7 @@ add a one-line annotation above it so the annotation manager bumps it too:
 
 ```hcl
 # renovate: datasource=helm depName=apl registryUrl=https://<your-apl-helm-repo>
-apl_chart_version = "6.0.0"
+apl_chart_version = "v6.1.0"
 ```
 
 Renovate keeps the *published artifacts* current. For the **copied** scaffolding

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"sigs.k8s.io/yaml"
 )
 
@@ -37,10 +38,34 @@ func TestRunCombined_OutputAfterRun(t *testing.T) {
 // TestDefaultAplChartVersion pins the platform baseline other tooling asserts
 // against (ci_assert_apl_version.go). On a managed cluster Linode owns the
 // apl-core version, so bootstrap does not consume this — but the constant is still
-// the single baseline; bump it deliberately, in lockstep with the platform.
+// the baseline; bump it deliberately, in lockstep with the platform.
+//
+// The literal is the EXACT published chart version, "v" and all: apl-core changed
+// its published Chart.yaml from `version: 6.0.0` to `version: v6.1.0` with the
+// 6.1.0 release automation, and `helm --version 6.1.0` only resolves it via a
+// fallback warning. Dropping the prefix on the next bump is a silent regression, so
+// assert it here.
 func TestDefaultAplChartVersion(t *testing.T) {
-	if defaultAplChartVersion != "6.0.0" {
-		t.Errorf("defaultAplChartVersion = %q, want \"6.0.0\" — bump deliberately, in lockstep with the platform baseline", defaultAplChartVersion)
+	if defaultAplChartVersion != "v6.1.0" {
+		t.Errorf("defaultAplChartVersion = %q, want \"v6.1.0\" — bump deliberately, in lockstep with the platform baseline", defaultAplChartVersion)
+	}
+	if defaultAplChartVersion != clusterspec.BaselineAplChartVersion {
+		t.Errorf("defaultAplChartVersion = %q but clusterspec.BaselineAplChartVersion = %q — they are one fact and must not skew",
+			defaultAplChartVersion, clusterspec.BaselineAplChartVersion)
+	}
+}
+
+// TestMinSupportedAplChartVersionIsNotTheBaseline guards the split made when the
+// baseline moved to v6.1.0: the SUPPORT FLOOR is a separate idea from the version
+// this release targets. Nothing in 6.1.0 made the landing zone 6.1-only, so a
+// 6.0.0 instance must still pass the preflight and merely warn about drift.
+func TestMinSupportedAplChartVersionIsNotTheBaseline(t *testing.T) {
+	if err := aplVersionSupported("6.0.0", "prod"); err != nil {
+		t.Errorf("6.0.0 must remain SUPPORTED (floor %s) — the 6.1.0 bump raises the target, not the floor: %v",
+			minSupportedAplChartVersion, err)
+	}
+	if clusterspec.AplChartDriftOf("6.0.0") != clusterspec.AplChartDriftMinor {
+		t.Error("a 6.0.0 pin against the v6.1.0 baseline must be MINOR drift (a warning), not a block")
 	}
 }
 
