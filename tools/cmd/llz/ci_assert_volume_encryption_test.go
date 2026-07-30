@@ -218,3 +218,47 @@ func TestVolumeVerdict_HealableSplit(t *testing.T) {
 		t.Error("an unreadable Volume is not healable — it is a hard failure")
 	}
 }
+
+// TestJudgeVolume_DryRunReap is the coupling test between naming and reaping —
+// the interaction that broke in production while both subsystems looked healthy
+// in isolation.
+//
+// reap selects Volumes by label prefix. The volume-labels reconciler renames
+// Volumes. When the rename produced a shape reap's prefix list did not accept,
+// destroying lke637974 leaked all 15 of its renamed Volumes, which then squatted
+// their account-unique labels and made relabeling impossible on the next cluster.
+func TestJudgeVolume_DryRunReap(t *testing.T) {
+	pvc := encPV("harbor", "data-harbor-redis-0", "17094415")
+
+	t.Run("relabeled volume stays visible to reap", func(t *testing.T) {
+		v := judgeVolume(pvc, labelledVol(desiredVolumeLabel("e2e", "harbor", "data-harbor-redis-0")), wantTags, "e2e")
+		if v.NotReapable != "" {
+			t.Fatalf("the relabeler's own output must remain reapable, got: %s", v.NotReapable)
+		}
+	})
+
+	t.Run("CSI default stays visible to reap", func(t *testing.T) {
+		// Before the reconciler renames it, reap must still be able to sweep it.
+		v := judgeVolume(pvc, labelledVol("pvc-e2e495ebe1504dff"), wantTags, "e2e")
+		if v.NotReapable != "" {
+			t.Fatalf("an un-renamed Volume must be reapable, got: %s", v.NotReapable)
+		}
+	})
+
+	t.Run("a label reap cannot see is a FINAL failure", func(t *testing.T) {
+		// Simulates someone changing the naming scheme without teaching reap about
+		// it — the exact shape of the production bug.
+		v := judgeVolume(pvc, labelledVol("newscheme-harbor-redis-0"), wantTags, "e2e")
+		if v.ok() {
+			t.Fatal("a Volume invisible to reap must fail — it would survive its own cluster's destroy")
+		}
+		if !strings.Contains(v.problem(), "INVISIBLE to reap") {
+			t.Errorf("verdict should name the reap blind spot, got %q", v.problem())
+		}
+		// Not healable: no reconciler fixes a naming/predicate mismatch, so waiting
+		// on it would only burn the budget.
+		if v.healable() {
+			t.Error("a reap blind spot is a code bug, not a pending reconcile — it must not be waited on")
+		}
+	})
+}

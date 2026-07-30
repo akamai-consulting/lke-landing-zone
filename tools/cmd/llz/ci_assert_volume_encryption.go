@@ -84,6 +84,9 @@ type volumeVerdict struct {
 	// BadLabel is non-empty when the Volume's Linode label is not the readable
 	// <region>-<ns>-<pvc> the volume-labels reconciler is supposed to give it.
 	BadLabel string
+	// NotReapable is non-empty when reap's OWN predicate would not select this
+	// Volume once it detaches — i.e. the destroy-time sweep is blind to it.
+	NotReapable string
 	// Unreachable records why the Volume could not be judged. A Volume we cannot
 	// read is a FAILURE, never a pass — see the fail-closed note in the header.
 	Unreachable string
@@ -91,7 +94,7 @@ type volumeVerdict struct {
 
 func (v volumeVerdict) ok() bool {
 	return v.Unreachable == "" && v.Encryption == volumeEncryptionEnabled &&
-		len(v.MissingTags) == 0 && v.BadLabel == ""
+		len(v.MissingTags) == 0 && v.BadLabel == "" && v.NotReapable == ""
 }
 
 // healable reports whether a reconciler lane can still fix this Volume. Tags
@@ -101,7 +104,9 @@ func (v volumeVerdict) ok() bool {
 // storageClassName is immutable once bound — so an encryption violation is final
 // the moment it is observed, and waiting on it only wastes the budget.
 func (v volumeVerdict) healable() bool {
-	return v.Unreachable == "" && v.Encryption == volumeEncryptionEnabled
+	// NotReapable is a naming/predicate mismatch in code, not a pending reconcile —
+	// waiting cannot change it, so it is final like encryption.
+	return v.Unreachable == "" && v.Encryption == volumeEncryptionEnabled && v.NotReapable == ""
 }
 
 // problem renders the single most important thing wrong with this Volume.
@@ -115,6 +120,8 @@ func (v volumeVerdict) problem() string {
 			enc = "<unset>"
 		}
 		return "NOT ENCRYPTED (encryption=" + enc + ")"
+	case v.NotReapable != "":
+		return v.NotReapable
 	case len(v.MissingTags) > 0:
 		return "untagged: missing " + strings.Join(v.MissingTags, ",")
 	default:
@@ -147,6 +154,33 @@ func judgeVolume(pv pvVolume, vol map[string]any, desired []string, regionShort 
 		}
 	}
 	sort.Strings(v.MissingTags)
+
+	// DRY-RUN REAP. Run reap's OWN selection predicate against this Volume with
+	// detachment simulated (linodeIDNull=true), asking: once the cluster is
+	// destroyed and this Volume detaches, would the destroy-time sweep actually
+	// pick it up?
+	//
+	// This exists because the answer was silently NO for months. reap selects on a
+	// label prefix; the volume-labels reconciler renames Volumes; nobody re-checked
+	// that the new names still matched. Destroying lke637974 leaked all 15 renamed
+	// Volumes, which then squatted their account-unique labels and broke relabeling
+	// on the next cluster. Neither subsystem was individually wrong — their COUPLING
+	// was, and nothing tested it.
+	//
+	// Deliberately calls linode.VolumeIsCandidate / VolumeLabelPrefixes rather than
+	// re-implementing the rule: the point is to pin naming against the real reaper,
+	// so changing either side without the other turns this red. A literal `reap
+	// --dry-run` cannot do this job — reap only considers UNATTACHED Volumes, and a
+	// live cluster's are attached, so it would match nothing and prove nothing.
+	// Only meaningful when REGION_SHORT is known: the accepted prefix set is
+	// {"pvc-", "<env>-"}, so without env every RELABELED Volume would look
+	// unreapable and this check would fire on a healthy cluster. Skipping is right
+	// here — unlike the label and encryption checks, a wrong answer would be a
+	// false alarm about a destructive sweep, and the destroy path passes --env.
+	if regionShort != "" && !linode.VolumeIsCandidate(true, v.Label, linode.MapString(vol, "region"),
+		linode.MapTags(vol), "", nil, pv.VolumeID, "", linode.VolumeLabelPrefixes(regionShort)...) {
+		v.NotReapable = fmt.Sprintf("label %q is INVISIBLE to reap (accepted prefixes: %v) — this Volume would survive its own cluster's destroy and leak", v.Label, linode.VolumeLabelPrefixes(regionShort))
+	}
 
 	// Label is only meaningful for a PV with a bound claim: the relabeler derives
 	// it from namespace/pvc and skips released PVs, so demanding a readable label
