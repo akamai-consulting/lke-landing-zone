@@ -1,8 +1,10 @@
 # ADR 0009 — Credential-age coverage for credentials with no measurable expiry
 
-Status: **proposed**. Kind 1 (below) is implemented in the same PR and needs no
-decision from this ADR — it is described here only to draw the boundary. Kind 2
-is what this document is for.
+Status: **accepted**, implemented for the two credentials that can be observed.
+Supersedes this ADR's own first draft, which proposed self-asserted
+`rotation-stamps`; observation turned out to be available, and the residue is
+named below. Kind 1 (below) needs no decision from this ADR — it is described
+here only to draw the boundary. Kind 2 is what this document is for.
 
 ## Context
 
@@ -67,91 +69,89 @@ state permanently unreadable.
 This is not a reason to leave them unmeasured. It is a reason not to measure them
 by moving them.
 
+
 ## Decision
 
-**Do not move Kind 2 credentials into OpenBao. Track their rotation age in a
-dedicated metadata-only KV path that holds no credential material.**
+**Measure write time, not age-in-a-vault.**
 
-Introduce `secret/infra/rotation-stamps` — a single KV path whose *keys* are
-credential names and whose *values* are RFC3339 timestamps:
+`GET /repos/{owner}/{repo}/environments/infra-<region>/secrets/<name>` returns
+`{name, created_at, updated_at}`. Age is `now - updated_at`.
 
-```
-secret/infra/rotation-stamps
-  tf-state-key              = "2026-07-28T14:02:11Z"
-  tf-state-passphrase       = "2026-05-02T09:31:40Z"
-  lke-admin-kubeconfig      = "2026-07-01T03:17:00Z"
-```
+This is an **observation**, not an assertion, and it needs no storage — so the
+circularity above simply does not arise. The security property is also stronger
+than the OpenBao metadata reads: GitHub Actions secrets are **write-only over the
+API**. No endpoint returns a value at any permission level, so a metadata probe
+cannot leak the credential even by accident. With OpenBao we rely on a data grant
+being absent; here the capability does not exist.
 
-The credential itself never enters OpenBao. Only the assertion "this was rotated
-at time T" does — which is exactly, and only, what the dashboard needs. The
-circularity dissolves because losing OpenBao loses a *timestamp*, not the key.
+The obvious objection — `updated_at` measures the secret *object*, so re-writing
+an unchanged value reports a rotation that never happened — was checked against
+the actual writers rather than assumed:
 
-Whoever rotates the credential stamps it. `secret-rotation.yml` already owns the
-`tf-state-key` and `lke-admin` scopes, so the stamp is one write at the end of a
-job that has just succeeded.
+| Writer | Behaviour |
+|---|---|
+| `llz tokens` | Write-on-missing (`if !have(...)`). Skips already-set secrets. |
+| `secret-rotation.yml` (`tf-state-key`) | Writes only on a real rotation. |
+| A human re-pasting in the UI | The one false-refresh path — rare, and "someone deliberately touched this secret" is a defensible reset. |
 
-### Why a single path rather than one per credential
+An **absent** secret is reported `unknown` rather than dropped. That is the half
+the rejected stamp design got wrong: the OpenBao sampler treats 404 as "not seeded
+yet" and skips it, so a never-written credential is indistinguishable from a
+healthy one. The API distinguishes them, so no companion absence alert is needed.
 
-`credPaths` is an enumeration and each entry costs a policy grant
-(`TestCredPathsAreGrantedInReconcilerPolicy` pins the pair). A single path means
-one grant for the whole class, and adding a credential later is a one-line change
-with no policy edit — which matters, because a path added to `credPaths` without
-its grant 403s and takes the **entire sampler pass** down, seal gauge included.
+Runs inside the existing `token-inventory` CI job, which already holds a GitHub
+token with Secrets:write (⊇ metadata read). No new credential, job, or schedule.
+Published as `llz_credential_age_days` — the *same* metric the OpenBao sampler
+uses, because it means the same thing and only the source differs, so the existing
+dashboard panels and alert rules pick these up with no query changes.
 
-It also means the sampler needs a new read shape: these are per-**key** stamps
-inside one secret, not one `updated_time` per path. That is a real addition to
-`sampleOpenBao` (a data read, where every other credential entry is metadata
-only) and is the main implementation cost of this decision.
+### Class: what the age is worth acting on
 
-### Class: `on-demand`
+The state-backend key pair is `on-demand`: `secret-rotation.yml` scope
+`tf-state-key` is a real path an operator can dispatch, so a 90-day SLA is
+something a human can satisfy.
 
-`tf-state-key` and `lke-admin` have real rotation paths a human can dispatch;
-`tf-state-passphrase` does not yet have one at all. All three are actionable by a
-human, none by a schedule — which is the existing `on-demand` definition, and
-puts them on the 90-day SLA rather than the yearly info nudge.
+`TF_STATE_ENCRYPTION_PASSPHRASE` is `static` **for now**. Rotating it means
+re-encrypting every state file, and no such path exists yet — so its age is worth
+*seeing* on the dashboard but must not page as overdue, because the operator it
+would page has nothing to dispatch. The taxonomy's own test is whether the age is
+actionable; classing it `on-demand` before a rollover exists would be the same
+kind of half-truth this ADR is fixing. A follow-on that builds the rollover flips
+this one word.
 
-### An absent stamp is not "fresh"
+### What this does not cover
 
-The failure mode to design against is a stamp that is never written: a missing
-key must not read as a healthy credential. The sampler skips absent paths (404 =
-"not seeded yet"), which is correct for an opt-in credential but wrong here — a
-never-stamped `tf-state-key` would simply publish no series and look identical to
-a well-managed one.
+The **LKE admin kubeconfig** is not a GitHub secret and has no `lke_*` event for
+regeneration. It stays unmeasured, and is the honest residue of this ADR.
 
-So this needs a companion alert on **absence**, keyed off the instance's declared
-credential set rather than off what happens to be in the ConfigMap:
-`LLZRotationStampMissing`, info, for a credential the instance is known to use
-that has no stamp. Without it this decision buys visibility that silently fails
-open — the same defect the `class` label was introduced to fix.
+`rotation-stamps` — a metadata-only OpenBao path holding self-asserted timestamps
+— is **withdrawn**. Both credentials it was meant to serve are now measured by
+observation, and an assertion by the rotating job was always the weaker signal.
 
 ## Consequences
 
 - The dashboard's "no rotation automation" panel stops being a half-truth: it
-  currently implies the listed set is *all* the un-rotated credentials, when
-  three of the highest-value ones were never in the query at all.
-- The state-backend credentials get a rotation SLA for the first time.
-  [docs/secrets.md](../secrets.md) records `TF_STATE_ACCESS_KEY` as having no
-  scheduled rotation; a 90-day alert makes that a decision someone renews rather
-  than a default nobody revisits.
-- **Stamps can lie.** A stamp is an assertion by the rotating job, not an
-  observation of the credential. A job that writes the stamp but fails to publish
-  the new key reports success. This is strictly weaker than Kind 1's measured
-  expiry and must be documented as such — mitigated by stamping only *after* the
-  verify step, never before.
-- One more thing bootstrap must not depend on. The stamp write has to be
-  best-effort: a failed stamp must not fail a successful key rotation.
-- No new credential material anywhere. The path is metadata-only by construction,
-  so the `platform-ci` read grant stays as narrow as it is today.
+  implied the listed set was *all* the un-rotated credentials, when three of the
+  highest-value ones were not in the query at all.
+- The state-backend key pair gets a rotation SLA for the first time.
+- The passphrase becomes *visible* but not yet *actionable*. That gap is now
+  explicit on the dashboard rather than hidden by absence from it, which is the
+  point — and it is the argument for building the rollover.
+- No new credential material is stored anywhere. The mechanism is pure
+  observation, so the `platform-ci` grants stay exactly as narrow as they are.
+- One more thing that fails soft: an instance with no GitHub token still gets its
+  Linode and PAT entries, and a probe error reports `unknown` rather than taking
+  the inventory down.
 
 ## Alternatives rejected
 
 | Option | Why not |
 |--------|---------|
-| Store the credentials themselves in OpenBao | Circular for the state key and passphrase — OpenBao lives in the cluster whose state they guard. Also widens blast radius: the single-pane's job is to *observe* credentials, not to become a place they are kept. |
-| Probe the Linode Object Storage keys API for `created` | Gives creation time, not rotation time, and only for OBJ keys — nothing for the passphrase or the kubeconfig. Solves a third of the problem with a mechanism that does not generalise. |
-| Derive age from GitHub's secret `updated_at` | The GitHub API does expose `updated_at` on an Actions secret, and it needs no new storage. But it measures *the secret object*, not the credential: re-running `llz tokens` or any re-set of an unchanged value refreshes it, so it reports freshness that did not happen. Worth revisiting only if stamping proves too easy to skip. |
-| A `rotated_at` convention inside each credential's own secret | Exactly what `linodeCredRotator` does for the OBJ keys, and the right pattern — but it requires the credential to be in OpenBao, which is the thing this ADR cannot do. |
-| Leave them unmeasured, document the gap | Honest, and cheaper. Rejected because the gap is not uniform: these are the state bucket and cluster-admin, i.e. the credentials whose compromise is least recoverable. |
+| `rotation-stamps` (this ADR's first draft) | A timestamp asserted by the rotating job, not an observation: a job that stamps but fails to publish the new credential reports success. Superseded — observation was available after all. |
+| Store the credentials themselves in OpenBao | Circular: OpenBao runs inside the cluster whose state they guard. Also widens blast radius — the single pane's job is to *observe* credentials, not to hold them. |
+| Probe the Linode Object Storage keys API for `created` | **The field does not exist.** `ObjectStorageKey` is `{id, label, access_key, secret_key, limited, bucket_access, regions}` (verified, linodego v1.65.0). The repo's own rotator orders keys by monotonic `id` for exactly this reason. |
+| Derive OBJ-key age from the `obj_access_key_create` account event | Real, and carries a true `Created` — but bounded by event retention (unverified, and if shorter than the SLA every key reads as overdue), needs `account:read_only`, and covers neither the passphrase nor the kubeconfig. `updated_at` is simpler and covers all three. |
+| Leave them unmeasured, document the gap | Honest, and cheaper. Rejected because the gap is not uniform: these are the state bucket and its decryption key, i.e. the credentials whose compromise is least recoverable. |
 
 ## Related
 
@@ -161,4 +161,5 @@ open — the same defect the `class` label was introduced to fix.
 - ADR 0001 (PAT rotation locus) — "where does the credential live" as a blast-radius question.
 - [docs/secrets.md](../secrets.md) — the rotation-class table and the
   credential-age coverage section this extends.
-- `tools/cmd/llz/ci_token_inventory.go` — Kind 1's target list.
+- `tools/cmd/llz/ci_token_inventory.go` — Kind 1's target list, and the
+  write-time targets this ADR adds.

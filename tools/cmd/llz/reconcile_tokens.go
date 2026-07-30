@@ -11,7 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/metrics"
 )
 
@@ -20,7 +23,7 @@ import (
 // llz_token_audit_ok series per token, plus an inventory heartbeat. A 404 (the
 // scheduled writer hasn't run yet) is not an error — the sampler no-ops until the
 // funnel is primed, and LLZTokenInventoryStale covers a funnel that later stalls.
-func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.Registry) error {
+func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.Registry, now time.Time) error {
 	ns := podNamespace()
 	obj, status, err := client.GetJSON(ctx, "/api/v1/namespaces/"+ns+"/configmaps/llz-token-inventory")
 	if err != nil {
@@ -62,7 +65,34 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 			"1 if the CI token satisfies the expiry policy, 0 on a breach (no-expiry / expired / over-policy)",
 			labels, auditOK)
 	}
+
+	// Write-time ages for the credentials that have no expiry to read and cannot
+	// live in OpenBao (ADR 0009). Deliberately published as llz_credential_age_days
+	// — the SAME metric the OpenBao sampler uses — because it means exactly the
+	// same thing ("days since this credential was last written") and only the
+	// SOURCE differs. Reusing it means the existing dashboard panels and both
+	// alert rules pick these up with no query changes.
+	for _, sec := range inv.Secrets {
+		if sec.UpdatedAt == "" {
+			continue // not configured — carried in the inventory, but there is no age
+		}
+		t, err := time.Parse(time.RFC3339, sec.UpdatedAt)
+		if err != nil {
+			continue
+		}
+		reg.SetGauge("llz_credential_age_days",
+			"days since the credential was last written (class: automated|on-demand|generate-once|tracks-source|static)",
+			map[string]string{"cred": credLabelForSecret(sec.Name), "class": sec.Class},
+			float64(health.DaysSince(t, now)))
+	}
 	return nil
+}
+
+// credLabelForSecret turns a GitHub secret name into the lower-kebab `cred`
+// label the credential dashboard uses, so these sit alongside the OpenBao-sourced
+// series instead of shouting in SCREAMING_SNAKE next to them.
+func credLabelForSecret(name string) string {
+	return strings.ToLower(strings.ReplaceAll(name, "_", "-"))
 }
 
 // configMapData returns the string value of data[key] from a ConfigMap object,
