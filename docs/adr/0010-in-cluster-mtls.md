@@ -216,6 +216,53 @@ Three hops stay in the clear. Each is a decision, not an oversight:
 | Prometheus → otel-collector `:8888` | Service is operator-created; TLS only via the collector's thin `service.telemetry` support. Payload is `otelcol_*` internals. Breaking `OTelCollectorMetricsTargetDown` to encrypt a queue gauge is a bad trade. | upstream collector |
 | kubelet → reconciler `/healthz` | `httpGet` probes cannot present a client cert; see above. Payload is a leader-election verdict. | nothing — inherent |
 
+### Addendum 2026-07-30 — the hop this ADR never looked at
+
+A re-audit of `origin/main` found one in-cluster hop that predates this ADR and
+was never considered by it, because it is a **payload** decision rather than a
+transport one and no shape in `plaintext-guard` could see it.
+
+`llz-cert-automation`'s Argo Events `resource` EventSource watches the
+cert-manager `haproxy-tls` **Secret**. A resource EventSource publishes the
+**whole watched object** — upstream offers no field projection, only Sensor-side
+data filters, which act *after* publication. So the Secret's `data`, i.e. the
+HAProxy **TLS private key**, is serialized onto the JetStream EventBus,
+persisted across its three replicas, and delivered to the Sensor. It is the only
+private key material on a wire in this tree, and the namespace carries
+`istio-injection: disabled`, so the mesh is never in that path.
+
+It is probably not cleartext: Argo Events enables TLS by default for JetStream
+client and route traffic, with self-signed material it generates itself. That is
+an upstream default this repo neither sets, pins, nor verifies — which is the
+point. The hop is now **registered** in `plaintextAllowed`, and the guard gained
+a fifth shape so that no new `resource: secrets` EventSource can be added
+unnoticed.
+
+**Not fixed here, on purpose.** The Sensor consumes only
+`.Input.body.resource.metadata.resourceVersion`, and the rebuild Workflow
+re-reads the certificate from the apiserver under RBAC — so the trigger never
+needs the Secret's contents, and watching the cert-manager `Certificate` instead
+would remove the key from the bus with no loss of function. That change needs one
+fact this repo does not contain: the Certificate's name. `haproxy-tls` is created
+outside this tree, and Certificate name and `secretName` are conventionally but
+not necessarily equal. Guessing wrong makes the trigger silently never fire, and
+that failure surfaces ~80 days later as an expired edge certificate — strictly
+worse than the hop. Read the name from
+`.metadata.annotations.cert-manager\.io/certificate-name` on the live Secret and
+switch it there.
+
+### Addendum 2026-07-30 — cert-manager metrics: resolved, and only ambient closes it
+
+The registry's note that a `_rawValues` override "may be possible" for
+cert-manager is **wrong**, checked against `linode/apl-core` @ `bbecae1`: the
+cert-manager release is a bare `<<: *default` with no `_rawValues` passthrough
+(only prometheus, alertmanager, grafana and tekton have one), so it cannot be
+closed from the values repo at all. `values/cert-manager/cert-manager.gotmpl`
+additionally sets `podAnnotations.sidecar.istio.io/inject: "false"`, so even a
+meshed Prometheus could not reach it over mTLS under sidecars. Under **ambient**
+that annotation is inert and the pods enrol via the namespace — ambient is the
+only path that closes this residual.
+
 Separately, `openbaoPromtail.lokiPushUrl` points at `loki-gateway.llz-observability`
 over HTTP, but **Loki runs in `monitoring`** (per the alert rules) and nothing
 creates that Service — so OpenBao's audit log is almost certainly not reaching
