@@ -21,7 +21,7 @@ func TestRunAssertReconcilerCountsAttemptsUp(t *testing.T) {
 	out := captureStdout(t, func() {
 		// A few milliseconds of settle at a 1ms interval → several attempts, no
 		// meaningful wall-clock cost.
-		_ = runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 8*time.Millisecond, time.Millisecond)
+		_ = runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 8*time.Millisecond, time.Millisecond)
 	})
 	if !strings.Contains(out, "attempt 1:") {
 		t.Fatalf("the first retry must be labelled attempt 1:\n%s", out)

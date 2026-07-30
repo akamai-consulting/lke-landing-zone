@@ -164,16 +164,24 @@ jobs:
       # NetworkPolicy allow pointed at the same empty namespace, so both halves
       # agreed with each other and neither agreed with the cluster. Reading the
       # stream back out of Loki is the only check that can tell those apart.
+      #
+      # The delivery/enforcement gates come in as ONE call to `llz ci assert-suite`,
+      # which owns the lane table (tools/cmd/llz/ci_assert_suite.go). They belong on
+      # this day-2 path as much as on the e2e one — a collector that stops shipping
+      # next month is exactly what a scheduled check should catch — and routing them
+      # through the suite means this workflow never has to be edited again when a
+      # gate is added: `llz upgrade` carries the new lane.
+      #
+      # --only skips the two MUTATING lanes (health-workflow submits a Workflow,
+      # broad-pat forces a PAT rotation). Those are deliberate e2e exercises, not
+      # things a scheduled health check should do to a live cluster on a timer.
       - name: Assert observability + reconciler + wave-health (E2E gate)
         if: ${{ inputs.assert-loki }}
         run: |
           set -euo pipefail
           export KUBECONFIG="$HOME/.kube/config"
-          llz ci assert-scrape-targets
-          llz ci assert-reconciler
-          llz ci assert-openbao-audit
+          llz ci assert-suite --only loki,scrape-reconciler,openbao-audit,delivery,surfaces,wave-vap
           llz ci alert-eval --strict
-          llz ci assert-wave-health-vap
 
       - name: Revoke control-plane ACL for this runner
         if: always()

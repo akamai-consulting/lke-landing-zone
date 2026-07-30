@@ -736,11 +736,94 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
   half — the gate's target, the chart's push URL and the netpol namespace all agreeing —
   is a unit test (`TestAuditGateDefaultsMatchTheChart`), so a revert fails at PR time
   rather than an e2e cycle later.
-* **scrape+reconciler** — ONE lane, ordered. `assert-scrape-targets` proves every
-  landing-zone ServiceMonitor has a live `up` target and each PrometheusRule group
-  loaded (the silent un-scraped-CR regression class); `assert-reconciler` then reads
-  `llz_reconcile_up`/`_leader`, which the scrape assert just proved fresh. Splitting them
-  would race the gauge's first scrape.
+* **scrape+reconciler** — ONE lane, ordered, THREE verbs. `assert-scrape-targets`
+  proves every landing-zone ServiceMonitor has a live `up` target and each
+  PrometheusRule group loaded (the silent un-scraped-CR regression class);
+  `assert-reconciler` then reads `llz_reconcile_up`/`_leader`, which the scrape assert
+  just proved fresh. Splitting them would race the gauge's first scrape.
+  `assert-reconciler` also gates **per-lane freshness**: `llz_reconcile_up` is a
+  `max()` across lanes, so one dead lane among nine leaves it pinned at 1, and because
+  the metric registry never expires a gauge a dead lane keeps serving its
+  last-known-good sample rather than going absent. The expected lane set is read from
+  the reconciler **Deployment's `--reconcile-*` args**, not from the metrics — deriving
+  it from the gauge would make a lane that never reports unobservable, which is the
+  failure itself. (`LLZReconcilerStale` covers this as an *alert*, but `alert-eval` is
+  report-only and `--strict` ignores FIRING by design, so nothing consumed it.)
+  `assert-reconciler-effects` closes the last step: what the lanes DO. A lane can
+  report a successful pass every cycle while its effect is absent — reconciled onto the
+  wrong object, reverted by Argo, computed from empty input. It asserts exactly one
+  default StorageClass (the PR #101 convergence wedge), a fresh `llz-token-inventory`
+  ConfigMap, and a populated firewall-controller ConfigMap. The volume lanes'
+  invariants are deliberately left to `assert-volume-encryption`, which already holds
+  the Linode client; `apl-overlay` and `es-store-recovery` have no cheap in-cluster
+  invariant that isn't a restatement of their own metric, so they stay freshness-only.
+* **log-ingestion** — the OTHER log path. `assert-openbao-audit` covers the promtail
+  sidecar this repo configures; this covers apl-core's cluster-wide collector over pod
+  stdout, which nothing asserted. A namespace dropped from discovery, a relabel rule
+  that stops emitting `namespace`, or a NetworkPolicy between collector and namespace
+  all leave pods Running, Loki Ready and `assert-loki` green with the logs simply
+  absent — discovered when you go looking mid-incident. Freshness-bounded, so
+  collection that stopped an hour ago can't pass on retained history.
+* **eso-roundtrip** — the SECRET delivery path. Not "does the Secret exist" (it does,
+  and will until something deletes it) but "is ESO still re-reading OpenBao": the store
+  is Ready, every ExternalSecret is `SecretSynced`, its target Secret has non-empty
+  data, and its `status.refreshTime` is recent. When the read path breaks — stale store
+  CA, a lost k8s-auth policy, a renamed KV path, a sealed OpenBao — the already-written
+  Secret keeps serving its frozen value and every consumer keeps working. Refresh
+  staleness is the only signal that separates that from health.
+* **alert-delivery** — firing alerts must have somewhere to go. promtool checks syntax,
+  `assert-scrape-targets` proves rules are loaded, `alert-eval` proves they evaluate —
+  but a rule can evaluate to FIRING with no Alertmanager discovered, and Prometheus
+  does not consider that an error. Asserts ≥1 *active* Alertmanager plus Alertmanager's
+  own `/api/v2/status`. Scoped to the link this repo owns: apl-core owns receivers, so
+  gating on a human destination would fail every cluster that deliberately has none.
+* **grafana-dash** — the dashboard sidecar is a label selector and nothing else. Drop
+  or mistype the label and the ConfigMap sits there forever, valid and invisible, with
+  Argo reporting Synced. Worse, the landing zone must render on BOTH stacks
+  (`grafana_dashboard: "1"` self-install, `release: grafana-dashboards` managed), so a
+  dashboard carrying one label works on the cluster you tested and vanishes on the
+  other. A companion unit test pins the expected list against the shipped manifests.
+* **admission** — runtime proof the Kyverno policies enforce, the same argument
+  `wave-vap` makes for the VAP. Server-dry-runs an unsigned first-party image (must be
+  rejected by `verify-llz-image-signature`) and an unencrypted-class PVC (must come
+  back rewritten to `block-storage-retain`). `kubectl get clusterpolicy` proves the YAML
+  is present and cannot tell an enforcing policy from a decorative one — and both ship
+  `failurePolicy: Ignore`, so a downed Kyverno ADMITS everything silently. A denial from
+  anything other than the policy under test is inconclusive and fails. Dry-run only.
+* **net-enforcement** — MUTATING (its own scratch namespace, deleted on every
+  path, including failure). The two enforcement properties that cannot be
+  server-dry-run: admission answers from the API server, but a dropped packet is
+  only knowable by sending one. Proves the CNI actually enforces NetworkPolicy —
+  without which every default-deny in this repo is decorative — and that Istio
+  refuses plaintext on a STRICT-mesh port. **Every negative carries a positive
+  control**: the same pod dials an address that must connect and one that must
+  not, so a probe that could not reach anything (bad image pull, no DNS, unscheduled
+  pod) reports INCONCLUSIVE rather than passing as enforcement it never observed.
+  The probe pod runs the llz image — already in the cluster and already
+  signature-gated — via `llz ci net-probe`, rather than pulling a shell image,
+  which would need registry egress from a namespace whose whole point is to have
+  egress denied. It is deliberately `sidecar.istio.io/inject: "false"`: a meshed
+  pod would have its plaintext transparently upgraded by its own sidecar, so the
+  mTLS negative would succeed and assert the opposite of what it claims.
+* **credentials** — the credential lifecycle, ordered. `assert-rotation-health`
+  gates every credential `credPaths` declares: a declared credential publishing NO
+  `llz_credential_age_days` series is invisible on the single pane *and*
+  unalertable, because `LLZCredentialRotationOverdue` over an absent series never
+  evaluates — which is the native failure here (the `static` class exists because a
+  whole group of paths had silently published nothing). Only alertable classes
+  (`automated`/`on-demand`) gate; `generate-once`/`tracks-source`/`static` are
+  reported, since nothing will ever lower their age and gating would be a permanent
+  red. A unit test pins the SLAs against the alert rules so the gate and the alert
+  cannot disagree about "overdue". `assert-harbor-roundtrip` then USES a minted
+  robot rather than trusting it exists: the OCI v2 handshake for pull AND push,
+  asserting the token's *granted access* rather than its status code (Harbor returns
+  a valid JWT with an empty access list when the robot lacks the scope). It uploads
+  no layers and creates no tags — push is proven by the registry granting an upload
+  session, which is then cancelled. Neither gate forces a rotation: `broad-pat`
+  already exercises one full cycle safely on a throwaway PAT family, and forcing
+  lke-admin (deletes the kubeconfig the job is using), obj-key (cuts TF state
+  access), db-admin (Linode resets in place with no overlap) or the state passphrase
+  (a near one-way door) would break the cluster being measured.
 * **health-workflow** — submits a one-shot Workflow from the `llz-cluster-health`
   WorkflowTemplate and asserts it Succeeds — the day-2 RUN path (kyverno signature policy
   on the pod, SA/executor RBAC, `health-incluster` verb). SKIPS clean when the component
