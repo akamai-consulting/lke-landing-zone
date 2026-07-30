@@ -228,6 +228,7 @@ func runOpenbaoSet(g globalOpts, path string, kvPairs []string) error {
 		maskGHA(v)
 	}
 	if len(data) == 0 {
+		//lint:ignore ST1005 usage string: the trailing ... is variadic-argument syntax, not sentence punctuation
 		return fmt.Errorf("usage: llz openbao set <secret/path> <key=value>...")
 	}
 

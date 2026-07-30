@@ -106,6 +106,7 @@ func aplVersionSupported(v, env string) error {
 			v, env, minSupportedAplChartVersion)
 	}
 	if semverLess(v, minSupportedAplChartVersion) {
+		//lint:ignore ST1005 multi-line operator diagnostic: the trailing period ends a sentence of remediation prose that continues on the next line
 		return fmt.Errorf(`apl-core chart version %q (deployment %q) is NOT supported — this landing zone requires >= %s.
 
 The v6 migration made the template apl-core-6.x-only in two ways that do not fail

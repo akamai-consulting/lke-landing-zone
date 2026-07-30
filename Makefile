@@ -114,6 +114,7 @@ help:
 
 install-tools: install-syft install-trivy
 	go install golang.org/x/vuln/cmd/govulncheck@latest
+	go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 	@if command -v brew >/dev/null 2>&1; then \
 		brew install actionlint checkov helm; \
 	else \
@@ -731,6 +732,32 @@ test:
 # target does what its name says.
 test-race:
 	cd $(GO_DIR) && LLZ_EXPECT_RACE=1 go test -race ./...
+
+# staticcheck. `go vet` is deliberately conservative — it reports only what is
+# almost certainly a mistake. staticcheck's SA* checks cover the adjacent ground:
+# impossible conditions, values assigned and never read, misused stdlib. It found
+# one real gap on introduction (SA4006: a test re-stubbed its call recorder for
+# the build-failure case and then never asserted it, so that case checked the
+# error wrap but not that the earlier steps ran).
+#
+# Pinned, not @latest: a floating linter turns an unrelated PR red when the tool
+# gains a check, which trains people to ignore it.
+#
+# ST1005 (error-string style) stays ENABLED. The eight places this codebase
+# legitimately breaks it — multi-line operator diagnostics whose punctuation
+# precedes an embedded newline of remediation, and one usage string whose "..."
+# is variadic syntax — carry per-site //lint:ignore directives with reasons.
+# Blanket-disabling a check because it flagged you is how a linter stops meaning
+# anything; staticcheck errors on a directive that matches nothing, so a stale
+# exception cannot rot silently either.
+STATICCHECK_VERSION ?= 2025.1.1
+staticcheck:
+	@cd $(GO_DIR) && if command -v staticcheck >/dev/null 2>&1; then \
+	  staticcheck ./...; \
+	else \
+	  echo "staticcheck not on PATH — falling back to 'go run' (make install-tools installs it)"; \
+	  go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...; \
+	fi
 
 # Fuzzing. NOT a CI gate: fuzzing is non-deterministic and open-ended, so gating
 # on it would make the build flaky rather than safe. Instead the SEED CORPORA run

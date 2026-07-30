@@ -100,6 +100,7 @@ func resolveOBJCluster(objCluster, region string) (string, string, error) {
 			return objCluster, "", nil
 		}
 		if !slices.Contains(ids, objCluster) {
+			//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline carrying the fix instructions
 			return "", "", fmt.Errorf(
 				"--obj-cluster %q is not an object-storage cluster in region %s.\n"+
 					"  This account offers: %s\n"+
@@ -113,17 +114,20 @@ func resolveOBJCluster(objCluster, region string) (string, string, error) {
 
 	// Nothing supplied.
 	if !ok {
+		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline carrying the fix instructions
 		return "", "", fmt.Errorf("--obj-cluster is required (the spec's cluster.objectStorage.cluster).\n" +
 			"  Set LINODE_TOKEN and llz will derive it from your account; otherwise list them with\n" +
 			"  `linode-cli object-storage clusters-list` and pass --obj-cluster explicitly.")
 	}
 	switch len(ids) {
 	case 0:
+		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline carrying the fix instructions
 		return "", "", fmt.Errorf("--obj-cluster is required: this account has no object-storage cluster in region %s.\n"+
 			"  Check the region, or enable Object Storage there first.", region)
 	case 1:
 		return ids[0], fmt.Sprintf("obj-cluster %s derived — the only object-storage cluster in %s.", ids[0], region), nil
 	default:
+		//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline carrying the fix instructions
 		return "", "", fmt.Errorf("--obj-cluster is required: region %s offers more than one object-storage cluster (%s).\n"+
 			"  These are DIFFERENT endpoint generations and a bucket is reachable only at the one it\n"+
 			"  was created against, so llz will not choose for you. Pick one and pass --obj-cluster.",

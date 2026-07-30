@@ -49,6 +49,7 @@ func assertPinCoherence(dir string) error {
 	if !exactReleaseTag.MatchString(commit) || !exactReleaseTag.MatchString(version) || commit == version {
 		return nil
 	}
+	//lint:ignore ST1005 multi-line operator diagnostic: the period precedes an embedded newline explaining what the two pins record
 	return fmt.Errorf("template pin skew in .copier-answers.yml: `_commit: %s` but `llz_version: %s`.\n"+
 		"  These record the same fact. Everything that resolves the pin (pinnedTemplateRef, resolveTemplateRef —\n"+
 		"  so the vendored workflows' TF_IMAGE check AND the apl-values remote refs ArgoCD syncs) prefers\n"+

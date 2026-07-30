@@ -472,6 +472,15 @@ jobs:
       - name: gofmt + go vet
         run: make fmt-check vet
 
+      # staticcheck. `go vet` reports only what is almost certainly a mistake;
+      # staticcheck's SA* checks cover the adjacent ground (impossible conditions,
+      # values assigned and never read, misused stdlib). On introduction it found
+      # a test that re-stubbed its call recorder and never asserted it. Pinned via
+      # STATICCHECK_VERSION so a new upstream check cannot turn an unrelated PR
+      # red. Runs beside vet: both are cheap and fail fast.
+      - name: staticcheck
+        run: make staticcheck
+
       - name: Test + enforce per-package coverage thresholds
         run: make coverage
 
