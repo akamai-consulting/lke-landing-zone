@@ -36,7 +36,7 @@ func TestWorkflowsFreshLockLivesBesideTheDetectedScaffoldRoot(t *testing.T) {
 
 // Missing and drifted files are two shapes of the same failure and the guard
 // reports ONE count over both. Netting them against each other reports "0
-// vendored file(s) drifted" on a tree where two files are wrong.
+// template-owned file(s) drifted" on a tree where two files are wrong.
 func TestWorkflowsFreshCountsMissingAndDriftedTogether(t *testing.T) {
 	dir := freshFixture(t)
 	if err := runWorkflowsFresh("", true, io.Discard, io.Discard); err != nil {
@@ -50,12 +50,12 @@ func TestWorkflowsFreshCountsMissingAndDriftedTogether(t *testing.T) {
 	var errOut strings.Builder
 	err := runWorkflowsFresh("", false, io.Discard, &errOut)
 	if err == nil {
-		t.Fatal("one edited + one deleted vendored file must fail the guard")
+		t.Fatal("one edited + one deleted template-owned file must fail the guard")
 	}
-	if !strings.Contains(err.Error(), "2 vendored file(s) drifted") {
+	if !strings.Contains(err.Error(), "2 template-owned file(s) drifted") {
 		t.Errorf("the error must count both, got %v", err)
 	}
-	if !strings.Contains(errOut.String(), "2 vendored file(s) drifted from the template") {
+	if !strings.Contains(errOut.String(), "2 template-owned file(s) drifted from the template") {
 		t.Errorf("the report must count both:\n%s", errOut.String())
 	}
 }

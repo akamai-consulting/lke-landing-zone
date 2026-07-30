@@ -11,11 +11,18 @@ package main
 // the template instead SHIPS the expected digests in .template-workflows.lock and
 // the guard recomputes them locally: no network, no Python, no template checkout.
 //
-// WHY THAT IS SOUND: every `managed` file under .github/ is token-free (no
-// `<@ … @>` copier substitutions — asserted at --write time), so the rendered
-// instance bytes are byte-identical to the template source bytes. That is exactly
-// the property that also lets these files be `managed` rather than `merge`
-// (.template-manifest), so the two decisions stand or fall together.
+// WHY THAT IS SOUND: a `managed` file that carries no `<@ … @>` copier
+// substitution renders byte-identically in every instance, so one digest covers
+// them all. Tokenful `managed` files render per-instance and cannot be locked at
+// all; they are recorded in the lock header as declared exclusions so the gap is
+// visible rather than silently absent.
+//
+// SCOPE IS THE MANIFEST, NOT A PREFIX: this guard used to cover only `.github/`,
+// which left 16 of the 31 lockable `managed` files (.tflintrc.hcl, .checkov.yaml,
+// .gitleaks.toml, apl-values/values.yaml, …) overwritten by `llz upgrade` with no
+// drift warning at all — the exact failure this exists to prevent, on more than
+// half the surface. The lock is now a projection of .template-manifest's
+// digestLocked classes, so the two cannot drift apart.
 
 import (
 	"bufio"
@@ -25,6 +32,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -34,19 +42,15 @@ import (
 // itself `managed`, so `llz upgrade` refreshes it alongside the files it covers.
 const vendoredLockPath = ".template-workflows.lock"
 
-// vendoredLockScope limits the guard to the vendored CI surface (.github/**):
-// the llz-*.yml reusable bodies and the composite actions. Those are the files an
-// instance carries verbatim and must never hand-edit.
-const vendoredLockScope = ".github/"
-
 func ciWorkflowsFreshCmd() *cobra.Command {
 	var write bool
 	var root string
 	c := &cobra.Command{
 		Use:   "workflows-fresh",
-		Short: "fail when a vendored .github/ file drifts from the template",
-		Long: "Verifies every `managed` file under .github/ (the vendored llz-*.yml reusable\n" +
-			"bodies and composite actions) still matches the digest the template shipped in\n" +
+		Short: "fail when a template-owned scaffold file drifts from the template",
+		Long: "Verifies every token-free file in a digest-locked class of .template-manifest\n" +
+			"(today: `managed` — the vendored llz-*.yml bodies, composite actions and the\n" +
+			"template-owned configs) still matches the digest the template shipped in\n" +
 			vendoredLockPath + ". These files are template-owned: `llz upgrade` overwrites them\n" +
 			"from a clean render, so a local edit is silently lost on the next bump. Failing\n" +
 			"here turns that silent loss into a CI error.\n\n" +
@@ -100,48 +104,52 @@ func runWorkflowsFresh(root string, write bool, out, errOut io.Writer) error {
 		}
 	}
 	if len(drifted) == 0 && len(missing) == 0 {
-		fmt.Fprintf(out, "workflows-fresh: OK — %d vendored file(s) match %s\n", len(want), vendoredLockPath)
+		if err := checkLockComplete(m, want, errOut); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "workflows-fresh: OK — %d template-owned file(s) match %s\n", len(want), vendoredLockPath)
 		return nil
 	}
 
 	for _, rel := range missing {
-		fmt.Fprintf(errOut, "::error file=%s::vendored template file is missing\n", rel)
+		fmt.Fprintf(errOut, "::error file=%s::template-owned file is missing\n", rel)
 	}
 	for _, rel := range drifted {
-		fmt.Fprintf(errOut, "::error file=%s::vendored template file was edited locally — it is template-owned (`managed`) and `llz upgrade` will overwrite it\n", rel)
+		fmt.Fprintf(errOut, "::error file=%s::file was edited locally — the template owns it and `llz upgrade` will overwrite it\n", rel)
 	}
-	fmt.Fprintf(errOut, "\n%s %d vendored file(s) drifted from the template:\n", red("✗"), len(drifted)+len(missing))
+	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) drifted from the template:\n", red("✗"), len(drifted)+len(missing))
 	for _, rel := range append(append([]string{}, missing...), drifted...) {
 		fmt.Fprintf(errOut, "    %s\n", rel)
 	}
-	fmt.Fprintf(errOut, "\nThese are `managed` in .template-manifest — the template owns them and the next\n"+
-		"`llz upgrade` overwrites them from a clean render, so a local edit here is lost.\n"+
+	fmt.Fprintf(errOut, "\nThese are in a digest-locked class in .template-manifest — the template owns\n"+
+		"them and the next `llz upgrade` overwrites them from a clean render, so a local\n"+
+		"edit here is lost.\n"+
 		"Fix by either:\n"+
 		"  • reverting the edit (`llz upgrade` re-syncs them), or\n"+
 		"  • sending the change upstream to the template, where it belongs.\n")
-	return fmt.Errorf("workflows-fresh: %d vendored file(s) drifted", len(drifted)+len(missing))
+	return fmt.Errorf("workflows-fresh: %d template-owned file(s) drifted", len(drifted)+len(missing))
 }
 
-// writeVendoredLock regenerates the digest list from the scaffold. It refuses to
-// lock a file carrying a copier token: a token means the rendered bytes differ
-// per instance, so the digest could never match and the file belongs in `merge`
-// rather than `managed`. That check is what keeps this guard honest as the
-// scaffold evolves.
-func writeVendoredLock(m templateManifest, lockPath string, out io.Writer) error {
-	files, err := scaffoldManifestFiles(m.root)
-	if err != nil {
-		return err
-	}
-	sums := map[string]string{}
-	var tokenful []string
+// lockableFiles splits the scaffold into what the digest lock can cover and what
+// it deliberately cannot. A file is lockable when its class is digestLocked (the
+// manifest is the authority — there is no path prefix here) and it carries no
+// copier token, since a token makes the rendered bytes per-instance.
+//
+// The lock file itself is excluded by construction: it is `managed`, so it would
+// otherwise try to record a digest of the bytes being written.
+func lockableFiles(m templateManifest, files []string) (sums map[string]string, tokenful []string, err error) {
+	sums = map[string]string{}
 	for _, rel := range files {
-		if !strings.HasPrefix(rel, vendoredLockScope) || m.classify(rel) != "managed" {
+		if rel == vendoredLockPath {
 			continue
 		}
-		abs := filepath.Join(m.root, filepath.FromSlash(rel))
-		data, err := os.ReadFile(abs)
+		c, ok := lookupTemplateClass(m.classify(rel))
+		if !ok || !c.digestLocked {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(m.root, filepath.FromSlash(rel)))
 		if err != nil {
-			return fmt.Errorf("workflows-fresh: read %s: %w", rel, err)
+			return nil, nil, fmt.Errorf("workflows-fresh: read %s: %w", rel, err)
 		}
 		if strings.Contains(string(data), "<@") {
 			tokenful = append(tokenful, rel)
@@ -150,28 +158,93 @@ func writeVendoredLock(m templateManifest, lockPath string, out io.Writer) error
 		sum := sha256.Sum256(data)
 		sums[rel] = hex.EncodeToString(sum[:])
 	}
-	if len(tokenful) > 0 {
-		for _, rel := range tokenful {
-			fmt.Fprintf(os.Stderr, "  - %s\n", rel)
+	sort.Strings(tokenful)
+	return sums, tokenful, nil
+}
+
+// checkLockComplete fails when a file the lock COULD cover is absent from it —
+// the "someone added a managed file and forgot to regenerate" hole. Without it
+// the verify pass only walks the lock's own keys, so an unlocked managed file is
+// indistinguishable from one that does not exist, and the lock silently decays
+// into a subset of the manifest instead of a projection of it.
+//
+// Template-repo only (gated on copier.yml next to the scaffold root, the same
+// guard checkCopierFencing uses): an instance is rendered output, and holding it
+// to the template's completeness invariant would fail instances whose lock simply
+// predates a newly-classified file.
+func checkLockComplete(m templateManifest, want map[string]string, errOut io.Writer) error {
+	if !fileExists(filepath.Join(filepath.Dir(m.root), "copier.yml")) &&
+		!fileExists(filepath.Join(filepath.Dir(m.root), "copier.yaml")) {
+		return nil
+	}
+	files, err := scaffoldManifestFiles(m.root)
+	if err != nil {
+		return err
+	}
+	sums, _, err := lockableFiles(m, files)
+	if err != nil {
+		return err
+	}
+	var unlocked []string
+	for _, rel := range sortedKeys(sums) {
+		if _, ok := want[rel]; !ok {
+			unlocked = append(unlocked, rel)
 		}
-		return fmt.Errorf("workflows-fresh: %d `managed` file(s) under %s carry a copier token — "+
-			"their rendered bytes differ per instance, so they cannot be digest-locked; "+
-			"reclassify them as `merge` in .template-manifest", len(tokenful), vendoredLockScope)
+	}
+	if len(unlocked) == 0 {
+		return nil
+	}
+	for _, rel := range unlocked {
+		fmt.Fprintf(errOut, "::error file=%s::template-owned file is missing from %s\n", rel, vendoredLockPath)
+	}
+	fmt.Fprintf(errOut, "\n%s %d template-owned file(s) are not covered by %s:\n", red("✗"), len(unlocked), vendoredLockPath)
+	for _, rel := range unlocked {
+		fmt.Fprintf(errOut, "    %s\n", rel)
+	}
+	fmt.Fprintf(errOut, "\n`llz upgrade` overwrites these from a clean render, so an instance's local edit\n"+
+		"is silently lost — which is exactly what this lock exists to catch. Regenerate it:\n"+
+		"    llz ci workflows-fresh --root %s --write\n", m.root)
+	return fmt.Errorf("workflows-fresh: %d template-owned file(s) missing from the lock", len(unlocked))
+}
+
+// writeVendoredLock regenerates the digest list from the scaffold, covering every
+// token-free file in a digestLocked class. Tokenful ones cannot be locked at all
+// (their rendered bytes differ per instance) and are recorded in the header as
+// declared exclusions rather than dropped silently.
+func writeVendoredLock(m templateManifest, lockPath string, out io.Writer) error {
+	files, err := scaffoldManifestFiles(m.root)
+	if err != nil {
+		return err
+	}
+	sums, tokenful, err := lockableFiles(m, files)
+	if err != nil {
+		return err
 	}
 	if len(sums) == 0 {
-		return fmt.Errorf("workflows-fresh: no `managed` files under %s in %s — refusing to write an empty lock", vendoredLockScope, m.root)
+		return fmt.Errorf("workflows-fresh: no digest-lockable files in %s — refusing to write an empty lock", m.root)
 	}
 
 	var b strings.Builder
-	b.WriteString("# .template-workflows.lock — digests of the vendored, template-owned CI surface.\n")
+	b.WriteString("# " + vendoredLockPath + " — digests of the template-owned scaffold surface.\n")
 	b.WriteString("#\n")
 	b.WriteString("# GENERATED by `llz ci workflows-fresh --write` — do not hand-edit.\n")
-	b.WriteString("# Covers every `managed` file under .github/ (the llz-*.yml reusable bodies and\n")
-	b.WriteString("# the composite actions). All are token-free, so an instance's rendered bytes are\n")
-	b.WriteString("# byte-identical to the template's — which is what makes this digest check valid.\n")
+	b.WriteString("# Covers every token-free file in a digest-locked class of .template-manifest\n")
+	b.WriteString("# (today: `managed`). Those render byte-identically in every instance, which is\n")
+	b.WriteString("# what makes one digest valid for all of them.\n")
 	b.WriteString("#\n")
 	b.WriteString("# `llz ci workflows-fresh` (part of `llz lint`) recomputes these offline and fails\n")
 	b.WriteString("# when an instance hand-edits a file the next `llz upgrade` would overwrite.\n")
+	if len(tokenful) > 0 {
+		b.WriteString("#\n")
+		b.WriteString("# DELIBERATELY UNLOCKED — these are digest-locked-class files that carry a copier\n")
+		b.WriteString("# token, so their rendered bytes differ per instance and no single digest can\n")
+		b.WriteString("# cover them. `llz upgrade` still overwrites them from a clean render (which is\n")
+		b.WriteString("# correct — the render substitutes each instance's own tokens); they simply get\n")
+		b.WriteString("# no drift detection. Listed so the gap is auditable rather than invisible:\n")
+		for _, rel := range tokenful {
+			b.WriteString("#   " + rel + "\n")
+		}
+	}
 	b.WriteString("#\n")
 	b.WriteString("# FORMAT: <sha256>  <path>\n")
 	for _, rel := range sortedKeys(sums) {
