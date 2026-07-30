@@ -433,3 +433,58 @@ func TestFullyQualifiedURLKeyIsUnchanged(t *testing.T) {
 		t.Fatalf("got %v, want the unchanged fully-qualified key", fs)
 	}
 }
+
+// A resource EventSource watching `secrets` puts the whole Secret — `data`
+// included — onto the event bus. This is a PAYLOAD hop rather than a transport
+// one, so none of the URL/scheme/mesh shapes can see it; it survived the entire
+// mTLS audit for exactly that reason. Pinned against the real cert-automation
+// spelling.
+func TestScanPlaintextEventSourceSecrets(t *testing.T) {
+	body := "spec:\n  resource:\n    haproxy-tls:\n      namespace: cert-manager\n" +
+		"      group: \"\"\n      version: v1\n      resource: secrets\n      eventTypes:\n        - UPDATE\n"
+	fs := scanPlaintext("k/eventsource.yaml", body, false)
+	if len(fs) != 1 {
+		t.Fatalf("want exactly 1 finding, got %d: %+v", len(fs), fs)
+	}
+	if fs[0].key != "k/eventsource.yaml:eventsource-secrets" {
+		t.Errorf("key = %q, want %q", fs[0].key, "k/eventsource.yaml:eventsource-secrets")
+	}
+	if !strings.Contains(fs[0].what, "event bus") {
+		t.Errorf("what = %q, want it to name the bus", fs[0].what)
+	}
+}
+
+// The detector must not fire on every YAML line containing the word `secrets`.
+// A guard that cried wolf on `subresource:`, on a resource LIST, or on prose
+// would be turned off, and turning it off is how the hop it exists to catch
+// comes back.
+func TestEventSourceSecretsDetectorIsNarrow(t *testing.T) {
+	for _, ln := range []string{
+		`      subresource: secrets-extra`,
+		`      resource: secretstores`,
+		`      resources: ["secrets"]`,
+		`  # resource: secrets was the old shape`,
+		`      resource: certificates`,
+	} {
+		if fs := scanPlaintext("k/x.yaml", ln+"\n", false); len(fs) != 0 {
+			t.Errorf("%s must not be a finding, got %+v", ln, fs)
+		}
+	}
+}
+
+// Spelling freedom: quoted and trailing-whitespace forms mean the same thing to
+// Kubernetes and must not be a way around the gate. Same rationale as
+// TestSchemeHTTPSpellings.
+func TestEventSourceSecretsSpellings(t *testing.T) {
+	for _, ln := range []string{
+		`      resource: secrets`,
+		`      resource: "secrets"`,
+		`      resource: 'secrets'`,
+		`      resource: Secrets`,
+		`      resource: secrets   `,
+	} {
+		if fs := scanPlaintext("k/x.yaml", ln+"\n", false); len(fs) != 1 {
+			t.Errorf("%s must be a finding, got %+v", ln, fs)
+		}
+	}
+}

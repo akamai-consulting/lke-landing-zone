@@ -146,10 +146,15 @@ var plaintextAllowed = map[string]plaintextRule{
 		owner: "apl-core",
 		reason: "cert-manager is installed and configured by apl-core; its metrics listener serves " +
 			"HTTP and LLZ ships no values for it. Payload is cert-manager counters plus certificate " +
-			"expiry timestamps — no key material. INVESTIGATED: `cert-manager` is not an app key in " +
-			"apl-values/values.yaml, but core apps CAN take _rawValues (argocd does), so an override " +
-			"may be possible; `llz ci validate-apl-values` cannot confirm it without a rendered " +
-			"instance, so the next step is a render or a live cluster, not a guess",
+			"expiry timestamps — no key material. RESOLVED (read against linode/apl-core @ bbecae1): " +
+			"there is NO _rawValues escape hatch for cert-manager. Its helmfile release " +
+			"(helmfile.d/helmfile-01.init.yaml.gotmpl:45-51) is a bare `<<: *default` and " +
+			"values/cert-manager/cert-manager.gotmpl is the only values source; only prometheus, " +
+			"alertmanager, grafana and tekton take _rawValues. So this CANNOT be closed from the " +
+			"values repo, contrary to the earlier note here. Worse under sidecars: that same file " +
+			"sets `podAnnotations.sidecar.istio.io/inject: \"false\"`, so even a meshed Prometheus " +
+			"could not mTLS to it. It closes only under Istio AMBIENT, where that annotation is " +
+			"inert and the pods enrol via the namespace — see docs/adr/0010-in-cluster-mtls.md",
 	},
 
 	// ── upstream limited ─────────────────────────────────────────────────────
@@ -159,6 +164,31 @@ var plaintextAllowed = map[string]plaintextRule{
 			"pull endpoint takes TLS only through the collector's thin service.telemetry support. " +
 			"Payload is otelcol_* internals; breaking OTelCollectorMetricsTargetDown to encrypt a " +
 			"queue gauge is a bad trade",
+	},
+
+	// ── payload on a message bus, not a transport ────────────────────────────
+	"kubernetes-charts/llz-cert-automation/templates/eventsource.yaml:eventsource-secrets": {
+		owner: "llz",
+		reason: "the haproxy-tls rotation watch. This EventSource publishes the WHOLE watched " +
+			"object onto the JetStream EventBus, so the cert-manager Secret's `data` — the HAProxy " +
+			"TLS PRIVATE KEY — is serialized onto the bus, persisted by JetStream (replicas: 3), and " +
+			"delivered to the Sensor. It is the only hop in this tree carrying private key material, " +
+			"and it predates ADR 0010 without ever being considered by it. NOT believed to be " +
+			"cleartext on the wire: Argo Events enables TLS by default for JetStream client and " +
+			"route traffic using self-signed material it generates. That is an upstream default this " +
+			"repo does not set, pin or verify, and the namespace is `istio-injection: disabled` " +
+			"(namespace.yaml:23) so the mesh is never in this path either. " +
+			"REMEDIATION, deliberately NOT applied blind: the Sensor consumes only " +
+			"`.Input.body.resource.metadata.resourceVersion`, so the trigger never needs the Secret's " +
+			"contents — the rebuild Workflow re-reads the cert from the apiserver under RBAC. " +
+			"Watching the cert-manager `Certificate` instead of its Secret removes the key from the " +
+			"bus with no loss of function. It needs ONE fact this repo does not have: the " +
+			"Certificate's name (the Secret is created outside this tree, and Certificate name and " +
+			"secretName are conventionally but not necessarily equal). Guessing it wrong makes the " +
+			"trigger silently never fire, and the failure surfaces ~80 days later as an expired edge " +
+			"certificate — strictly worse than the hop itself. Read " +
+			"`kubectl -n <cert-manager-ns> get secret haproxy-tls -o " +
+			"jsonpath='{.metadata.annotations.cert-manager\\.io/certificate-name}'` and switch it",
 	},
 
 	// ── ours, out of this guard's scope by construction ──────────────────────
@@ -220,6 +250,31 @@ var (
 	// `port: 8000`, so rePortName cannot see it. Without this the exemptions would
 	// key on whatever unrelated `port:` line came last in the document.
 	rePortMapKey = regexp.MustCompile(`^\s*["'](\d+)["']:\s*$`)
+
+	// ── event-bus payloads ───────────────────────────────────────────────────
+	//
+	// An Argo Events `resource` EventSource publishes the WHOLE watched object
+	// onto its EventBus. There is no field projection: upstream's guidance is to
+	// use "the Data Filters available in the sensor", which act AFTER publication,
+	// so everything the watch returns has already crossed the bus by then.
+	//
+	// When the watched resource is `secrets`, that means the Secret's `data` goes
+	// on the bus — and for a cert-manager TLS Secret that is the PRIVATE KEY. It is
+	// then persisted by JetStream (replicated), held in the EventSource and Sensor
+	// pod memory, and readable by anything subscribed.
+	//
+	// None of the shapes above can see this. It is not a URL, not a scrape scheme,
+	// not a mesh mode — it is a payload decision — which is exactly why it survived
+	// the entire mTLS audit unnoticed. The transport may well be encrypted (Argo
+	// Events turns TLS on by default for JetStream, with self-signed material it
+	// generates itself), but that is an upstream default this repo neither sets nor
+	// verifies, and it does not make a private key on a message bus a decision
+	// anyone here made on purpose. That is what this registry is for.
+	//
+	// Anchored to the whole line so `resource: secrets` is matched as the
+	// EventSource's resource selector and not as prose in a comment or a longer
+	// key such as `subresource: secrets-foo`.
+	reEventSourceSecrets = regexp.MustCompile(`(?i)^\s*resource:\s*["']?secrets["']?\s*$`)
 
 	// ── short-form in-cluster URLs ───────────────────────────────────────────
 	//
@@ -495,6 +550,11 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 			out = append(out, plaintextFinding{
 				key: rel + ":" + reSvcHTTP.FindString(code), file: rel, line: n,
 				what: "plaintext URL to an in-cluster Service (" + reSvcHTTP.FindString(code) + ")",
+			})
+		case reEventSourceSecrets.MatchString(code):
+			out = append(out, plaintextFinding{
+				key: rel + ":" + locator("", "eventsource-secrets"), file: rel, line: n,
+				what: "Secret contents published onto an event bus (resource EventSource watching `secrets` — the whole object, `data` included, crosses the bus)",
 			})
 		case rePermissiveMTLS.MatchString(code):
 			m := rePermissiveMTLS.FindStringSubmatch(code)
