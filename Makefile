@@ -719,6 +719,19 @@ sbom-scan:
 test:
 	cd $(GO_DIR) && go test ./...
 
+# Race detector. Separate from `test`/`coverage` so a data race fails under its
+# own name rather than as a confusing coverage failure, and so the ordinary
+# `go test` path stays fast.
+#
+# LLZ_EXPECT_RACE=1 arms the canary in cmd/llz/racegate_test.go: it asserts the
+# binary really was built with -race. Without it, a step that silently lost the
+# flag would still report green while detecting nothing — the same failure shape
+# as a mutation run that reports 100% because it never spawned a test process.
+# Do not drop the variable to quiet that test; it is the only thing proving this
+# target does what its name says.
+test-race:
+	cd $(GO_DIR) && LLZ_EXPECT_RACE=1 go test -race ./...
+
 # ── Coverage ─────────────────────────────────────────────────────────────────
 
 coverage:

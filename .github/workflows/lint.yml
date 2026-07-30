@@ -475,6 +475,20 @@ jobs:
       - name: Test + enforce per-package coverage thresholds
         run: make coverage
 
+      # Data-race gate. The tools module runs goroutines in the reconcile
+      # manager, the Prometheus query fan-out, the OpenBao client and the
+      # Keycloak configure retry loop, and reconcile_manager.go is ~97% covered,
+      # so the detector has real concurrency to observe. Nothing ran -race before
+      # this, which is how a node-clock-dependent elector bug reached e2e as an
+      # intermittent "converge never completes" rather than as a test failure.
+      #
+      # Separate step from `make coverage` so a race fails under its own name.
+      # `make test-race` sets LLZ_EXPECT_RACE=1, which arms a canary asserting the
+      # binary really was built with -race — if the flag is ever dropped, that
+      # test fails instead of this step passing while detecting nothing.
+      - name: Data-race gate
+        run: make test-race
+
       # Design-principle gate: fail when inline-bash / shell / python logic
       # exceeds .untestable-budget.yaml — the prompt to convert logic into the
       # unit-tested llz CLI rather than grow untestable CI shell. Runs here (not
