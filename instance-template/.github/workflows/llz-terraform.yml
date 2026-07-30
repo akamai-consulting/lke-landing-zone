@@ -153,6 +153,9 @@ jobs:
       # the terraform-init composite regenerates before init.
       - name: Terraform init — cluster
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -366,6 +369,9 @@ jobs:
       - name: Terraform init — shared VPC
         if: steps.net.outputs.net != ''
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           module:                vpc
           state-key:             vpc/${{ steps.net.outputs.net }}/terraform.tfstate
@@ -432,6 +438,9 @@ jobs:
 
       - name: Terraform init — cluster
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -549,6 +558,9 @@ jobs:
       # an already-gone cluster a clean no-op. Revoked at job end.
       - name: Open control-plane ACL for this runner
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:            open
           linode-token:    ${{ secrets.LINODE_API_TOKEN }}
@@ -576,6 +588,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -612,6 +627,9 @@ jobs:
 
       - name: Terraform init — cluster
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -662,6 +680,9 @@ jobs:
 
       - name: Terraform init — cluster
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -796,6 +817,9 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Terraform init — object-storage
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -864,6 +888,9 @@ jobs:
 
       - name: Terraform init — object-storage
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -908,6 +935,9 @@ jobs:
 
       - name: Terraform init — object-storage
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           module: object-storage
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1067,6 +1097,9 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Terraform init — databases
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           module: databases
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1119,6 +1152,9 @@ jobs:
 
       - name: Terraform init — databases
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           module: databases
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -1169,6 +1205,9 @@ jobs:
 
       - name: Terraform init — databases
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           module: databases
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
