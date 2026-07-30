@@ -159,7 +159,11 @@ platform:
       - namespace: llz-pat-rotator
         name: broad-pat-rotator
     # Namespace OpenBao's audit Promtail ships to (Loki gateway), allowed on :80.
-    observabilityNamespace: llz-observability
+    # `monitoring`, not llz-observability: that is where apl-core runs Loki, and
+    # this allow existed for a Service that was never there — see the lokiPushUrl
+    # note. The egress was correct in shape and wrong in target, so it granted
+    # nothing and hid the broken pipeline behind a policy that looked complete.
+    observabilityNamespace: monitoring
     # Namespace of apl-core's Istio ingress gateway. OpenBao's `keycloak` OIDC
     # auth mount (team-scoped writes) fetches the realm JWKS to validate
     # team-login id_tokens, and reaches it through the GATEWAY on :443 — not
@@ -749,6 +753,19 @@ openbao:
 openbaoPromtail:
   enabled: true
   # Loki gateway service URL, resolvable from the openbao namespace.
-  lokiPushUrl: http://loki-gateway.llz-observability.svc.cluster.local/loki/api/v1/push
+  # Loki runs in apl-core's `monitoring` namespace, NOT llz-observability — this
+  # pointed at llz-observability, where nothing creates a loki-gateway Service, so
+  # OpenBao's audit log was not reaching Loki at all (a broken pipeline, flagged in
+  # ADR 0010 and left for whoever repaired the URL). Confirmed against apl-core:
+  # its Loki release is `loki` in `monitoring`, and apl-core's own otel-operator
+  # config ships to `http://loki-gateway.monitoring/otlp`.
+  #
+  # STILL PLAINTEXT, and still registered in plaintextAllowed. The gateway is
+  # nginx serving plain HTTP — apl-core gives it no TLS material and talks to it
+  # over http:// itself — so https here would connect to nothing. What crosses is
+  # OpenBao audit records: values are hashed, but request paths, operations and
+  # auth.display_name are in clear. Closing it needs the hop meshed, which is what
+  # enrolling `llz-openbao` and `monitoring` in ambient would do.
+  lokiPushUrl: http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push
   region: primary
   cluster: platform-openbao  # stable label — matches the Helm release name.
