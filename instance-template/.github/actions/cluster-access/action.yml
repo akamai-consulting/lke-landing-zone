@@ -15,6 +15,15 @@ description: >
   repo. The instance is self-contained — no cross-repo fetch — which is what lets it
   run on an air-gapped GitHub Enterprise.
 
+  CALLERS MUST SET `timeout-minutes` ON THIS STEP (6 is the convention). A
+  composite action cannot set `timeout-minutes` on its own steps — GitHub only
+  honours it on a caller's step — so without one this action inherits the JOB
+  budget and a hang burns the whole thing silently. It has happened: an e2e run
+  spent 15m34s here against a normal 40-48s, and nothing failed or warned; the
+  time was simply gone, and only showed up by diffing step timestamps against an
+  earlier run. Every step in this action is a bounded API/state read, so minutes
+  of wall-clock is always a fault, never load.
+
   A composite action has no post-job hook, so the caller MUST pair this with a
   trailing lke-runner-acl step (mode: revoke, if: always()) passing the same
   linode-token (the caller's secrets.LINODE_API_TOKEN) and region this action
@@ -29,6 +38,15 @@ inputs:
     required: true
   aws-secret-access-key:
     description: AWS secret key for the S3 state backend.
+    required: true
+  state-encryption-passphrase:
+    description: >
+      Passphrase for OpenTofu state+plan encryption (GitHub secret
+      TF_STATE_ENCRYPTION_PASSPHRASE). REQUIRED: the kubeconfig is read from
+      Terraform state, and `llz ci fetch-kubeconfig-state` runs its own `tofu
+      init` against a root whose encryption.tf REFERENCES the encryption methods.
+      Without this the init fails on "Reference to undeclared encryption method",
+      which names the roots rather than the missing secret (ADR 0007).
     required: true
   linode-token:
     description: Linode API token used to open this runner's egress IP in the control-plane ACL.
@@ -79,6 +97,16 @@ runs:
     # instance checkout), so ./.github/actions/<name> is present with no cross-repo
     # checkout. (Pre-vendoring this action self-checked-out the template into
     # _llz-template — removed: it broke on air-gapped GHE and is now unnecessary.)
+    # MUST precede the fetch: that step runs `llz ci fetch-kubeconfig-state`,
+    # which does its own `tofu init` and therefore needs TF_ENCRYPTION exactly as
+    # a terraform-init-driven job does. This path does not go through
+    # terraform-init, which is why it silently lacked the env var until ADR 0007's
+    # encryption.tf made the omission fatal.
+    - name: Export TF_ENCRYPTION (state + plan encryption at rest)
+      uses: ./.github/actions/tf-encryption-env
+      with:
+        state-encryption-passphrase: ${{ inputs.state-encryption-passphrase }}
+
     - name: Fetch kubeconfig from Terraform state
       id: kubeconfig
       uses: ./.github/actions/fetch-kubeconfig
