@@ -197,13 +197,30 @@ func TestBootstrapCluster_AppliesInstanceRepoSecret(t *testing.T) {
 				if strings.Contains(line, "deploy argocd-server") {
 					return "1", true
 				}
+				// apl-git-config, already published. This test is about the BRIDGE, so
+				// apl-core has to look ready: a missing repoUrl is now TERMINAL rather
+				// than a warn-and-continue, and would abort before the bridge is applied.
+				if strings.Contains(line, "secret apl-git-config") {
+					switch {
+					case strings.Contains(line, "data.repoUrl"):
+						return b64("http://git-server.git-server.svc.cluster.local/otomi/values.git"), true
+					case strings.Contains(line, "data.branch"):
+						return b64("main"), true
+					case strings.Contains(line, "data.username"):
+						return b64("otomi-admin"), true
+					case strings.Contains(line, "data.password"):
+						return b64("pw"), true
+					}
+					return "", true
+				}
+				// Migration Job: report success immediately.
+				if strings.Contains(line, "jsonpath={.status.succeeded}") {
+					return "1", true
+				}
 				return "", true
 			},
 			apply: func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
-			// configureManagedApl runs when a token is set; the kubectl stub above
-			// returns no apl-git-config repoUrl, so it warns-and-continues (best-effort)
-			// without reaching the migration Job — this test only asserts the bridge.
-			now: time.Now, sleep: func(time.Duration) {},
+			now:   time.Now, sleep: func(time.Duration) {},
 		}
 		if err := bootstrapCluster(o, d); err != nil {
 			t.Fatalf("bootstrapCluster: %v", err)
@@ -314,7 +331,7 @@ func TestAplMigrateManifestsValidYAML(t *testing.T) {
 		"secret": aplMigrateSecretManifest(
 			"http://otomi-admin:pw@git-server.git-server.svc.cluster.local/otomi/values.git",
 			"https://x-access-token:tok@github.com/acme/instance.git"),
-		"job": aplMigrateJobManifest("main", "apl-primary", []string{"harbor", "loki", "grafana", "kyverno"}),
+		"job": aplMigrateJobManifest("main", "apl-primary", []string{"harbor", "loki", "grafana", "kyverno"}, false),
 	}
 	for name, m := range manifests {
 		var obj map[string]any
@@ -412,4 +429,253 @@ func TestBootstrapCluster_AppliesStorageClass(t *testing.T) {
 	if !sawSC {
 		t.Error("managed path did not apply the block-storage-retain StorageClass")
 	}
+}
+
+// THE RE-BOOTSTRAP BUG. The first migration force-pushes apl-core's Gitea tree to
+// the github apl-<env> branch, then PATCHES apl-git-config to point at it. From
+// then on cur.repoURL IS the github URL and cur.branch IS apl-<env> — so the
+// second bootstrap set SRC = DST and tried to clone the destination in order to
+// rebuild the destination. That only works while the destination exists, and can
+// never recreate it.
+//
+// Observed on cluster 637367: with apl-e2e missing, the Job waited 48x10s for a
+// branch it was itself meant to create, exited 1, and (being best-effort) let
+// "Bootstrap cluster" report SUCCESS. apl-operator then logged `couldn't find
+// remote ref apl-e2e` every 15s and converge hard-failed 20 minutes later naming
+// none of it.
+func TestAplMigrationSourceSurvivesReBootstrap(t *testing.T) {
+	const gh = "https://github.com/o/r.git"
+	const dst = "apl-e2e"
+	gitea := "https://otomi-admin:pw@git.internal/otomi/values.git"
+
+	t.Run("first bootstrap clones the current (Gitea) repo", func(t *testing.T) {
+		cur := aplGitConfig{repoURL: "https://git.internal/otomi/values.git", branch: "main",
+			username: "u", password: "p", cloneCmd: gitea}
+		src, br, skip, err := aplMigrationSource(cur, gh, dst)
+		if err != nil || br != "main" {
+			t.Fatalf("want (Gitea, main, nil), got (%q, %q, %v)", src, br, err)
+		}
+		// A first migration MUST still force-push, even over a partial branch left by
+		// an earlier failed attempt — skipping there would leave apl-core on a tree
+		// that has no env/apps/* enables.
+		if skip {
+			t.Error("first bootstrap must not skip on an existing destination")
+		}
+		// Credentials must be INJECTED for this source, or the clone is anonymous.
+		if !strings.Contains(src, "u:p@") {
+			t.Errorf("cur.repoURL source must carry injected basic auth, got %q", src)
+		}
+	})
+
+	t.Run("re-bootstrap re-seeds from Gitea, NOT from its own destination", func(t *testing.T) {
+		cur := aplGitConfig{repoURL: gh, branch: dst, username: "x-access-token",
+			password: "tok", cloneCmd: gitea}
+		src, br, skip, err := aplMigrationSource(cur, gh, dst)
+		if err != nil {
+			t.Fatalf("re-bootstrap must resolve a source, got %v", err)
+		}
+		// The repair must be conditional: apl-core has been reconciling the github
+		// branch since the first migration, so force-pushing the abandoned Gitea tree
+		// over a HEALTHY branch would revert every values change made since.
+		if !skip {
+			t.Error("re-bootstrap must skip when the destination branch is intact")
+		}
+		// The public git.<domain> host has no route from inside the cluster
+		// (httproute.enabled=false); only the git-server Service DNS name is proven.
+		if !strings.Contains(src, "git-server.git-server.svc.cluster.local") {
+			t.Errorf("re-seed source must use the in-cluster git-server address, got %q", src)
+		}
+		// It must still carry the Gitea credentials recovered from gitCloneCmd —
+		// username/password now hold the github coords.
+		if !strings.Contains(src, "otomi-admin:") {
+			t.Errorf("re-seed source lost the Gitea credentials from gitCloneCmd, got %q", src)
+		}
+		if src == gh || strings.Contains(src, "github.com") {
+			t.Errorf("source is the DESTINATION (%q) — this is the bug: the migration cannot clone the "+
+				"branch it exists to create", src)
+		}
+		if br == dst {
+			t.Errorf("source branch is the destination branch %q — it would wait forever for a branch "+
+				"nothing has pushed", br)
+		}
+		if br != "main" {
+			t.Errorf("want apl-core's own default branch main, got %q", br)
+		}
+		// cloneCmd already embeds credentials; re-injecting would corrupt the URL.
+		if strings.Count(src, "@") != 1 {
+			t.Errorf("credentials must appear exactly once, got %q", src)
+		}
+	})
+
+	t.Run("re-bootstrap with no cloneCmd defers the refusal to the Job", func(t *testing.T) {
+		// The common re-bootstrap is "destination is fine, nothing to do", which needs
+		// NO source. Erroring here would fail that normal case to prepare for the rare
+		// one — and since patchAplGitConfig overwrites username/password with the github
+		// coords, gitCloneCmd is the only surviving Gitea credential, so any cluster
+		// whose apl-core omits that field would fail its bootstrap outright.
+		cur := aplGitConfig{repoURL: gh, branch: dst, username: "x-access-token", password: "tok"}
+		src, br, skip, err := aplMigrationSource(cur, gh, dst)
+		if err != nil {
+			t.Fatalf("a missing source must not fail the resolve — the Job decides: %v", err)
+		}
+		if !skip {
+			t.Error("must still skip when the destination is intact")
+		}
+		if br != "main" {
+			t.Errorf("source branch should be apl-core's default main, got %q", br)
+		}
+		// The safety property is unchanged: it must NEVER invent a source. Force-pushing
+		// a wrong or incomplete tree wipes apl-core's tracked config.
+		if src != "" {
+			t.Errorf("guessed a source %q with nothing to recover it from", src)
+		}
+		// And the Job must refuse rather than push an empty tree when it genuinely
+		// needs the source it does not have.
+		y := aplMigrateJobManifest(br, dst, []string{"harbor"}, skip)
+		if !strings.Contains(y, `if [ -z "$SRC_URL" ]`) {
+			t.Error("the Job does not guard on an empty SRC_URL — with the branch missing it " +
+				"would clone nothing and force-push an empty tree over apl-core's config")
+		}
+	})
+}
+
+// TestAplMigrateJobSkipsHealthyDestination covers the in-cluster half of the
+// re-bootstrap repair. The decision has to live in the Job, not the runner: the
+// runner cannot reach either git remote (the Gitea Service is cluster-internal, and
+// checking github from CI would be a second, differently-authenticated code path).
+func TestAplMigrateJobSkipsHealthyDestination(t *testing.T) {
+	t.Run("repair mode guards on the destination branch", func(t *testing.T) {
+		y := aplMigrateJobManifest("main", "apl-e2e", []string{"harbor"}, true)
+		if !strings.Contains(y, `SKIP_IF_DST_EXISTS`) || !strings.Contains(y, `value: "true"`) {
+			t.Fatal("SKIP_IF_DST_EXISTS=true not rendered into the Job env")
+		}
+		// The guard must probe the DESTINATION. Probing SRC would answer the wrong
+		// question and re-push over a healthy branch anyway.
+		if !strings.Contains(y, `git ls-remote --heads "$DST_URL" "$DST_BRANCH"`) {
+			t.Error("no ls-remote guard against $DST_URL/$DST_BRANCH")
+		}
+		if !strings.Contains(y, "exit 0") {
+			t.Error("the skip path must exit 0 — a non-zero exit is now TERMINAL for the bootstrap")
+		}
+	})
+
+	t.Run("first migration does not guard", func(t *testing.T) {
+		y := aplMigrateJobManifest("main", "apl-e2e", []string{"harbor"}, false)
+		if !strings.Contains(y, `value: "false"`) {
+			t.Fatal("SKIP_IF_DST_EXISTS=false not rendered")
+		}
+		// Belt and braces: a first migration must force-push even when a partial
+		// branch survives from an earlier failed attempt.
+		if !strings.Contains(y, "git push --force") {
+			t.Error("the migration must force-push the complete tree")
+		}
+	})
+}
+
+// TestGiteaSourceFromCloneCmd pins the two things that make the recovered source
+// usable: the credentials come from gitCloneCmd (the only place the Gitea password
+// survives the github repoint) and the HOST does not.
+func TestGiteaSourceFromCloneCmd(t *testing.T) {
+	got, err := giteaSourceFromCloneCmd("https://otomi-admin:s3cr3t@git.lke1.akamai-apl.net/otomi/values.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The public host has no in-cluster route (git-server httproute.enabled=false).
+	if strings.Contains(got, "akamai-apl.net") {
+		t.Errorf("kept the PUBLIC host, which has no route from a pod: %q", got)
+	}
+	if !strings.Contains(got, aplGiteaInClusterURL[len("http://"):len("http://")+len("git-server")]) {
+		t.Errorf("did not rebuild against the in-cluster git-server address: %q", got)
+	}
+	if !strings.Contains(got, "otomi-admin") || !strings.Contains(got, "s3cr3t") {
+		t.Errorf("dropped the recovered credentials: %q", got)
+	}
+
+	// No embedded credentials => there is nothing to authenticate with, and guessing
+	// would force-push an incomplete tree over apl-core's config.
+	if _, err := giteaSourceFromCloneCmd("https://git.lke1.akamai-apl.net/otomi/values.git"); err == nil {
+		t.Error("a credential-less gitCloneCmd must ERROR, not yield an anonymous URL")
+	}
+	if _, err := giteaSourceFromCloneCmd(""); err == nil {
+		t.Error("empty gitCloneCmd must ERROR")
+	}
+}
+
+// b64 is the wire form kubectl -o jsonpath={.data.<k>} returns.
+func b64(v string) string { return base64.StdEncoding.EncodeToString([]byte(v)) }
+
+// TestWaitAplGitConfigIsBoundedAndTerminal covers the wait that replaced the old
+// warn-and-skip. Two properties matter, and the first is not about correctness of
+// the happy path at all:
+//
+//  1. It must be bounded by ATTEMPTS. The deps expose now and sleep as separate
+//     seams, and every fake in this file pairs a real time.Now with a no-op sleep.
+//     A deadline-driven loop spins at full speed for a real ten minutes under that
+//     combination — which is exactly what happened when this was first written.
+//  2. Exhausting the budget must ERROR, not skip. Skipping leaves apl-core with no
+//     values branch and defers the failure to converge ~20 minutes later.
+func TestWaitAplGitConfigIsBoundedAndTerminal(t *testing.T) {
+	t.Run("gives up after a bounded number of attempts", func(t *testing.T) {
+		calls := 0
+		d := bootstrapDeps{
+			kubectl: func(args ...string) (string, bool) { calls++; return "", true }, // never publishes
+			now:     time.Now,                                                         // real clock…
+			sleep:   func(time.Duration) {},                                           // …and a no-op sleep
+		}
+		start := time.Now()
+		if _, err := waitAplGitConfig(d); err == nil {
+			t.Fatal("want an error when apl-core never publishes its git config")
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("took %s — the loop is not attempt-bounded, it is spinning on a clock that never advances", elapsed)
+		}
+		if want := aplGitConfigAttempts(); calls < want {
+			t.Errorf("only %d kubectl calls for %d attempts — did it give up early?", calls, want)
+		}
+	})
+
+	t.Run("returns as soon as apl-core publishes", func(t *testing.T) {
+		n := 0
+		d := bootstrapDeps{
+			kubectl: func(args ...string) (string, bool) {
+				line := strings.Join(args, " ")
+				if !strings.Contains(line, "data.repoUrl") {
+					return b64("main"), true
+				}
+				n++
+				if n < 3 { // absent for the first two polls
+					return "", true
+				}
+				return b64("http://git-server.git-server.svc.cluster.local/otomi/values.git"), true
+			},
+			now:   time.Now,
+			sleep: func(time.Duration) {},
+		}
+		cur, err := waitAplGitConfig(d)
+		if err != nil {
+			t.Fatalf("want success once published, got %v", err)
+		}
+		if cur.repoURL == "" {
+			t.Error("returned an empty config on success")
+		}
+	})
+
+	t.Run("a non-transient failure is not retried", func(t *testing.T) {
+		// Undecodable data will never fix itself; waiting 10 minutes on it is waste.
+		calls := 0
+		d := bootstrapDeps{
+			kubectl: func(args ...string) (string, bool) {
+				calls++
+				return "!!!not-base64!!!", true
+			},
+			now:   time.Now,
+			sleep: func(time.Duration) {},
+		}
+		if _, err := waitAplGitConfig(d); err == nil {
+			t.Fatal("want an error on undecodable data")
+		}
+		if calls > 2 {
+			t.Errorf("retried a non-transient failure %d times", calls)
+		}
+	})
 }

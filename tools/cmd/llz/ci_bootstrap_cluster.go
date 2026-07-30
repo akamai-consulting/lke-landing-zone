@@ -25,6 +25,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -268,8 +269,30 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 	// extras layer on apl-core's own installs. See ADR 0006. Best-effort: on failure it
 	// warns rather than aborting the bridge (the extras that need a default app degrade
 	// instead of wedging; kyverno-dependent imageSignature stays render-gated as backup).
+	// HARD FAIL. This used to warn, on the theory that the extras "degrade instead of
+	// wedging". They do not: apl-core is repointed at the apl-<env> branch, so if the
+	// migration does not push it, apl-operator logs `couldn't find remote ref` every
+	// 15s forever, every gitops-* Application sits in ComparisonError, and CONVERGE
+	// hard-fails ~20 minutes later naming none of it. Cluster 637367 spent three runs
+	// that way while this step reported success.
+	//
+	// Nothing downstream can proceed without the values branch, so a failure here is
+	// terminal — and saying so at the point of failure is worth far more than a
+	// green step and an unexplained collapse two phases later.
+	// TERMINAL, including "apl-core hasn't published its coordinates yet". That state
+	// used to warn-and-skip on the theory that it is a normal early state on a fresh
+	// cluster and the extras would merely degrade. The first half is true and is now
+	// handled by WAITING (waitAplGitConfig); the second half is not — skipping the
+	// migration means the apl-<env> branch is never seeded, so apl-operator has no
+	// values branch, every gitops-* Application sits in ComparisonError, and converge
+	// hard-fails ~20 minutes later naming none of it.
+	//
+	// Failing here cannot turn a passing run red: a managed cluster that never
+	// publishes apl-git-config has no apl-core, so converge was going to fail
+	// regardless. It just fails earlier, and says why.
 	if err := configureManagedApl(o, d); err != nil {
-		warn(fmt.Sprintf("managed apl-core BYO-Git + default-apps config failed (%v) — the Argo bridge still applies; apps that need apl-core installs (harbor/loki/grafana/kyverno) may not converge until this succeeds.", err))
+		return fmt.Errorf("managed apl-core BYO-Git + default-apps configuration failed, so apl-core has no "+
+			"values branch to reconcile: %w", err)
 	}
 
 	// Instance-repo credential (private-repo path; empty token = public, skip). ArgoCD
@@ -437,12 +460,32 @@ func manifestName(obj map[string]any) string {
 // apl-core's values repo at runtime with no pod restart and no helm.
 type aplGitConfig struct {
 	repoURL, branch, username, password string
+	// cloneCmd is apl-core's ORIGINAL clone URL for its own Gitea values tree,
+	// credentials included. Despite the "Cmd" in the key name it is a bare URL, not
+	// a shell command, so it can be handed to `git clone` as-is. It survives
+	// untouched when patchAplGitConfig repoints repoURL at github, which makes it
+	// the only remaining pointer to the true SOURCE tree on a re-bootstrap — see
+	// migrateAplValuesToGitHub.
+	//
+	// Note the host is apl-core's PUBLIC Gitea name (git.<domainSuffix>), not a
+	// cluster-internal Service DNS name, so an in-cluster clone hairpins out to the
+	// LB and back. That pattern is what broke the Keycloak JWKS fetch (see
+	// keycloakJWKSURL) — but here it is verified to work: a Job cloning this exact
+	// URL from inside the cluster succeeded on 637367. Recorded so the resemblance
+	// doesn't get "fixed" on suspicion.
+	cloneCmd string
 }
 
 const (
 	aplGitSecretName = "apl-git-config"
 	aplGitSecretNS   = "apl-secrets"
 )
+
+// errAplNotBYOGitReady means apl-core has not yet written its values-repo
+// coordinates. TRANSIENT and EXPECTED on a fresh managed cluster — it must stay a
+// warning, unlike a migration that actually ran and failed. Conflating the two
+// would make every fresh bootstrap fatal.
+var errAplNotBYOGitReady = errors.New("apl-core not yet BYO-Git-configured")
 
 // configureManagedApl points the Linode-installed apl-core at LLZ's github values
 // branch (App Platform "BYO Git") and enables the default apps — the SUPPORTED way,
@@ -477,8 +520,9 @@ func configureManagedApl(o bootstrapClusterOpts, d bootstrapDeps) error {
 	}
 	tok := o.instanceRepoToken
 
-	// 1. Read apl-core's current values-repo coordinates (the Gitea default on managed).
-	cur, err := readAplGitConfig(d)
+	// 1. Read apl-core's current values-repo coordinates (the Gitea default on managed),
+	//    WAITING for them if apl-core has not published them yet.
+	cur, err := waitAplGitConfig(d)
 	if err != nil {
 		return err
 	}
@@ -499,6 +543,71 @@ func configureManagedApl(o bootstrapClusterOpts, d bootstrapDeps) error {
 
 // readAplGitConfig reads the current apl-secrets/apl-git-config Secret (base64 .data,
 // BARE keys) so the migration can clone apl-core's existing (Gitea) values tree.
+// aplGitConfigWait / aplGitConfigPoll bound the wait for apl-core to publish its
+// BYO-Git coordinates.
+var (
+	aplGitConfigWait = 10 * time.Minute
+	aplGitConfigPoll = 10 * time.Second
+)
+
+// waitAplGitConfig is readAplGitConfig with a bounded wait for the Secret to exist.
+//
+// WHY A WAIT AND NOT A SKIP. readAplGitConfig is one shot, and a fresh managed
+// cluster races it: Linode installs apl-core during cluster provisioning, and
+// apl-secrets/apl-git-config appears somewhere in that window. Treating "not there
+// yet" as a skip means the migration never runs, so the app-enable files are never
+// committed and the apl-<env> branch is never seeded — and then apl-operator has no
+// values branch, every gitops-* Application sits in ComparisonError, and converge
+// hard-fails ~20 minutes later naming none of it. That is the SAME shape as the
+// re-bootstrap bug (a green step, a late unexplained collapse) reached by a
+// different route, and the skip made it look intentional.
+//
+// Exhausting the budget is therefore TERMINAL. If apl-core never publishes its git
+// config on a managed cluster then apl-core is not installed, and nothing this
+// bootstrap does afterwards can work. Saying so here beats discovering it at
+// converge.
+// Bounded by ATTEMPTS, not by a deadline read off d.now(). The deps' clock and
+// sleep are independent seams, and every existing fake pairs a real time.Now with a
+// no-op sleep — under which a `for d.now().Before(deadline)` loop spins at full
+// speed for a real ten minutes. An attempt cap cannot be defeated by a clock that
+// does not advance, which is the property a poll loop actually wants.
+func aplGitConfigAttempts() int {
+	if n := int(aplGitConfigWait / aplGitConfigPoll); n > 0 {
+		return n
+	}
+	return 1
+}
+
+func waitAplGitConfig(d bootstrapDeps) (aplGitConfig, error) {
+	attempts := aplGitConfigAttempts()
+	var cur aplGitConfig
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		cur, err = readAplGitConfig(d)
+		if err == nil {
+			if attempt > 1 {
+				fmt.Fprintf(os.Stderr, "apl-core published its git config after %d attempt(s).\n", attempt)
+			}
+			return cur, nil
+		}
+		// Only the not-yet-published state is worth waiting on. A decode failure or a
+		// genuinely broken Secret will not fix itself.
+		if !errors.Is(err, errAplNotBYOGitReady) {
+			return cur, err
+		}
+		if attempt == attempts {
+			break
+		}
+		fmt.Fprintf(os.Stderr, "apl-core has not published %s/%s yet (attempt %d/%d) — waiting %s...\n",
+			aplGitSecretNS, aplGitSecretName, attempt, attempts, aplGitConfigPoll)
+		d.sleep(aplGitConfigPoll)
+	}
+	return cur, fmt.Errorf("apl-core never published %s/%s within %s (%d attempts; last: %v) — on a managed "+
+		"cluster Linode installs apl-core, so this means apl-core is not up. Nothing downstream (values branch, "+
+		"app enables, gitops-* Applications) can work without it",
+		aplGitSecretNS, aplGitSecretName, aplGitConfigWait, attempts, err)
+}
+
 func readAplGitConfig(d bootstrapDeps) (aplGitConfig, error) {
 	get := func(key string) (string, error) {
 		out, ok := d.kubectl("-n", aplGitSecretNS, "get", "secret", aplGitSecretName,
@@ -529,8 +638,11 @@ func readAplGitConfig(d bootstrapDeps) (aplGitConfig, error) {
 	if c.password, err = get("password"); err != nil {
 		return c, err
 	}
+	// Best-effort: absent on an apl-core build that does not publish it, in which
+	// case the re-bootstrap fallback below simply has nothing to fall back to.
+	c.cloneCmd, _ = get("gitCloneCmd")
 	if c.repoURL == "" {
-		return c, fmt.Errorf("%s/%s has no repoUrl — apl-core not yet BYO-Git-configured", aplGitSecretNS, aplGitSecretName)
+		return c, fmt.Errorf("%s/%s has no repoUrl: %w", aplGitSecretNS, aplGitSecretName, errAplNotBYOGitReady)
 	}
 	if c.branch == "" {
 		c.branch = "main"
@@ -558,8 +670,122 @@ const (
 // The full tree, pushed BEFORE the caller repoints the Secret, is what makes the switch
 // wipe-safe: the operator's per-poll `git reset --hard origin/<branch>` then adopts a
 // complete+toggled tree instead of deleting tracked files (a partial branch would wipe).
+// aplMigrationSource picks the SOURCE the migration Job should clone, and is the
+// fix for a re-bootstrap that could not recover.
+//
+// THE BUG. The first migration force-pushes apl-core's Gitea tree to the github
+// apl-<env> branch and then PATCHES apl-git-config to point at it. From then on
+// `cur.repoURL` IS the github URL and `cur.branch` IS apl-<env> — so a second
+// bootstrap set SRC = DST and tried to clone the destination in order to rebuild
+// the destination. That works only while the destination already exists, and can
+// never recreate it: with apl-e2e missing, the Job waited 48x10s for a branch it
+// was itself supposed to create, exited 1, and — because the caller treats this as
+// best-effort — reported "Bootstrap cluster: success". apl-operator then logged
+// `couldn't find remote ref apl-e2e` every 15s, apl-core's gitops-* Applications
+// sat in ComparisonError, and converge hard-failed ~20 minutes later with no
+// mention of the actual cause. Observed on cluster 637367.
+//
+// Resolution order:
+//   - not yet migrated  -> clone the current (Gitea) repo, as before.
+//   - migrated AND the destination branch exists -> nothing to rebuild; skip.
+//   - migrated BUT the destination is GONE -> re-seed from apl-core's original
+//     in-cluster tree via cloneCmd. That is the only source that still holds the
+//     real values, and re-pushing the COMPLETE tree is what keeps the switch
+//     wipe-safe (a partial branch would delete apl-core's tracked files).
+//   - migrated, destination gone, and no cloneCmd -> refuse, loudly. Guessing a
+//     source here risks pushing an incomplete tree, which WIPES config.
+//
+// Returns an ALREADY-AUTHENTICATED source URL: the two candidate sources carry
+// credentials differently — cur.repoURL needs username/password injected, while
+// cloneCmd already embeds them — and conflating the two yields an unauthenticated
+// clone that fails with a bare "Authentication failed".
+//
+// skipIfDstExists is true ONLY on the re-seed path, and is what makes a
+// re-bootstrap safe rather than merely non-fatal. See migrateAplValuesToGitHub.
+func aplMigrationSource(cur aplGitConfig, githubURL, dstBranch string) (srcAuthedURL, srcBranch string, skipIfDstExists bool, err error) {
+	if cur.repoURL != githubURL || cur.branch != dstBranch {
+		// Not yet migrated: the current repo IS the source, as originally designed.
+		// Unchanged behaviour, including force-pushing over a partial branch left by
+		// an earlier failed attempt.
+		return basicAuthGitURL(cur.repoURL, cur.username, cur.password), cur.branch, false, nil
+	}
+	// Already migrated, so this is a REPAIR, and it must not overwrite a healthy
+	// destination. apl-core has been reconciling the github branch since the first
+	// migration and its Gitea tree has been abandoned since; re-pushing that stale
+	// tree would revert every values change made after the switch (including any made
+	// through the Console). So the Job skips entirely when the branch is intact and
+	// only rebuilds when it is genuinely missing — the half-migrated state that broke
+	// 637367.
+	// A MISSING SOURCE IS NOT AN ERROR HERE. The overwhelmingly common re-bootstrap is
+	// "destination is fine, nothing to do", and that needs no source at all — so
+	// demanding one up front would fail the normal case to prepare for the rare one.
+	// It also would have been a real regression: patchAplGitConfig overwrites
+	// username/password with the github coords, so gitCloneCmd is the ONLY surviving
+	// Gitea credential, and any cluster whose apl-core does not publish that field
+	// would now fail its bootstrap outright.
+	//
+	// So resolve it best-effort and let the Job decide. It checks the destination
+	// FIRST; an empty SRC_URL is only reached when the branch is genuinely missing,
+	// and then the Job fails saying exactly that.
+	src, err := giteaSourceFromCloneCmd(cur.cloneCmd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "::warning::apl-core is already pointed at %s branch %s, and no Gitea source "+
+			"could be recovered to rebuild it from (%v). If that branch is intact this is harmless — the "+
+			"migration has nothing to do. If it is MISSING, the Job will fail and the branch must be recreated "+
+			"from apl-core's values tree by hand.\n", githubURL, dstBranch, err)
+		src = ""
+	}
+	// apl-core creates its Gitea values repo on `main`.
+	return src, "main", true, nil
+}
+
+// aplGiteaInClusterURL is apl-core's values repo at the address that is PROVEN
+// reachable from a pod: the git-server Service DNS name. Confirmed by the e2e —
+// the migration Job's clone works against exactly this URL, and apl-git-config's
+// repoUrl holds it verbatim on a fresh managed cluster.
+const aplGiteaInClusterURL = "http://git-server.git-server.svc.cluster.local/otomi/values.git"
+
+// giteaSourceFromCloneCmd recovers a usable Gitea source from the gitCloneCmd
+// field, which after migration is the only place apl-core's Gitea PASSWORD still
+// exists (patchAplGitConfig overwrites username/password with the github coords).
+//
+// It keeps the CREDENTIALS from gitCloneCmd but discards its HOST. gitCloneCmd
+// carries the PUBLIC name (git.<domainSuffix>), and apl-core deploys git-server
+// with httproute.enabled=false — no public route — so cloning it from inside the
+// cluster is not known to work. An earlier version of this code used gitCloneCmd
+// as-is on the strength of a clone I believed had been verified; re-reading the
+// evidence, what succeeded was a clone of the in-cluster Service DNS URL. Rebuilding
+// against aplGiteaInClusterURL uses the address with actual evidence behind it.
+//
+// NOT verified live: this path only runs on a re-bootstrap whose destination branch
+// has gone missing, which no run has reproduced since the fix. It fails loudly if
+// wrong.
+func giteaSourceFromCloneCmd(cloneCmd string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(cloneCmd))
+	if err != nil {
+		return "", fmt.Errorf("apl-git-config gitCloneCmd is not a URL (%v) — cannot recover the Gitea credentials "+
+			"needed to re-seed the values branch", err)
+	}
+	user := u.User.Username()
+	pass, _ := u.User.Password()
+	if user == "" || pass == "" {
+		return "", fmt.Errorf("apl-git-config gitCloneCmd carries no embedded credentials, and username/password " +
+			"now hold the github coords — there is no way to authenticate to apl-core's Gitea repo. Recreate the " +
+			"values branch from apl-core's tree, or reset apl-git-config back to the in-cluster repo and re-run")
+	}
+	return basicAuthGitURL(aplGiteaInClusterURL, user, pass), nil
+}
+
 func migrateAplValuesToGitHub(d bootstrapDeps, cur aplGitConfig, githubURL, branch string, apps []string, tok string) error {
-	srcAuth := basicAuthGitURL(cur.repoURL, cur.username, cur.password)
+	srcAuth, srcBranch, skipIfDstExists, err := aplMigrationSource(cur, githubURL, branch)
+	if err != nil {
+		return err
+	}
+	if skipIfDstExists {
+		fmt.Fprintf(os.Stderr, "apl-core is already pointed at %s branch %s — the Job will verify that branch "+
+			"exists and rebuild it from apl-core's in-cluster values repo (branch %s) ONLY if it is missing.\n",
+			githubURL, branch, srcBranch)
+	}
 	dstAuth := basicAuthGitURL(githubURL, "x-access-token", tok)
 	// Redact the raw creds AND the full authed URLs (git echoes the percent-encoded URL
 	// on error, where the raw password substring won't match).
@@ -572,14 +798,21 @@ func migrateAplValuesToGitHub(d bootstrapDeps, cur aplGitConfig, githubURL, bran
 	if out, ok := d.apply(aplMigrateSecretManifest(srcAuth, dstAuth), "llz-managed-bridge", false); !ok {
 		return fmt.Errorf("apply apl-values migration Secret: %s", redactSecrets(out, secrets))
 	}
-	if out, ok := d.apply(aplMigrateJobManifest(cur.branch, branch, apps), "llz-managed-bridge", false); !ok {
+	if out, ok := d.apply(aplMigrateJobManifest(srcBranch, branch, apps, skipIfDstExists), "llz-managed-bridge", false); !ok {
 		del()
 		return fmt.Errorf("apply apl-values migration Job: %s", redactSecrets(out, secrets))
 	}
 	defer del()
 
-	deadline := d.now().Add(aplMigrateBudget)
-	for d.now().Before(deadline) {
+	// Attempt-bounded, not deadline-bounded — see waitAplGitConfig for why. This loop
+	// was previously `for d.now().Before(deadline)` and was safe only because the test
+	// fake reports success on the first poll; one behaviour change away from spinning
+	// for the full real budget under `now: time.Now, sleep: func(time.Duration){}`.
+	attempts := int(aplMigrateBudget / aplMigrateTick)
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
 		if s, _ := d.kubectl("-n", aplMigrateJobNS, "get", "job", aplMigrateJobName, "-o", "jsonpath={.status.succeeded}"); strings.TrimSpace(s) == "1" {
 			return nil
 		}
@@ -587,9 +820,15 @@ func migrateAplValuesToGitHub(d bootstrapDeps, cur aplGitConfig, githubURL, bran
 			logs, _ := d.kubectl("-n", aplMigrateJobNS, "logs", "job/"+aplMigrateJobName, "--tail=40")
 			return fmt.Errorf("apl-values migration Job failed: %s", redactSecrets(logs, secrets))
 		}
-		d.sleep(aplMigrateTick)
+		if attempt < attempts {
+			d.sleep(aplMigrateTick)
+		}
 	}
-	return fmt.Errorf("apl-values migration Job did not complete within %s", aplMigrateBudget)
+	// Include the Job's own logs: "did not complete within 6m" alone says nothing
+	// about whether it was waiting on a branch, failing to auth, or never scheduled.
+	logs, _ := d.kubectl("-n", aplMigrateJobNS, "logs", "job/"+aplMigrateJobName, "--tail=40")
+	return fmt.Errorf("apl-values migration Job did not complete within %s: %s",
+		aplMigrateBudget, redactSecrets(logs, secrets))
 }
 
 // aplMigrateSecretManifest holds the credential-bearing clone/push URLs (kept out of
@@ -604,7 +843,7 @@ func aplMigrateSecretManifest(srcAuth, dstAuth string) string {
 
 // aplMigrateJobManifest builds the migration Job. The inline script's env/apps/<app>.yaml
 // format MUST match aplAppEnableManifest (kind AplApp, spec.enabled:true).
-func aplMigrateJobManifest(srcBranch, dstBranch string, apps []string) string {
+func aplMigrateJobManifest(srcBranch, dstBranch string, apps []string, skipIfDstExists bool) string {
 	return fmt.Sprintf(`apiVersion: batch/v1
 kind: Job
 metadata:
@@ -629,6 +868,21 @@ spec:
         args:
         - |
           set -e
+          # RE-BOOTSTRAP REPAIR ONLY. apl-core has been reconciling $DST_BRANCH since the
+          # first migration, and its Gitea tree has been abandoned since — so pushing that
+          # stale tree over a healthy branch would revert every values change made after
+          # the switch. Rebuild only when the branch is genuinely gone.
+          if [ "$SKIP_IF_DST_EXISTS" = "true" ]; then
+            if git ls-remote --heads "$DST_URL" "$DST_BRANCH" | grep -q "refs/heads/$DST_BRANCH"; then
+              echo "$DST_BRANCH already exists and apl-core is pointed at it — nothing to migrate."
+              exit 0
+            fi
+            echo "::warning::$DST_BRANCH is MISSING while apl-core is pointed at it (half-migrated) — rebuilding it from apl-core's in-cluster values repo."
+            if [ -z "$SRC_URL" ]; then
+              echo "cannot rebuild $DST_BRANCH: apl-core is pointed at it, the branch is gone, and apl-git-config carried no gitCloneCmd to recover the Gitea credentials from. Recreate the branch from apl-core's values tree, or reset apl-git-config back to the in-cluster repo and re-run." >&2
+              exit 1
+            fi
+          fi
           echo "waiting for apl-core's values repo branch $SRC_BRANCH (apl-core may still be initializing)..."
           i=0
           until git ls-remote --heads "$SRC_URL" "$SRC_BRANCH" | grep -q "refs/heads/$SRC_BRANCH"; do
@@ -665,11 +919,13 @@ spec:
           value: %[5]s
         - name: APPS
           value: %[6]s
+        - name: SKIP_IF_DST_EXISTS
+          value: "%[7]t"
         envFrom:
         - secretRef:
             name: %[1]s
 `, aplMigrateJobName, aplMigrateJobNS, aplMigrateImage,
-		yamlSingleQuote(srcBranch), yamlSingleQuote(dstBranch), yamlSingleQuote(strings.Join(apps, " ")))
+		yamlSingleQuote(srcBranch), yamlSingleQuote(dstBranch), yamlSingleQuote(strings.Join(apps, " ")), skipIfDstExists)
 }
 
 // yamlSingleQuote wraps a scalar in single quotes (doubling any embedded quote) so
