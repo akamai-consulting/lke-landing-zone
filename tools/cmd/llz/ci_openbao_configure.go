@@ -432,31 +432,80 @@ type keycloakRoleBody struct {
 	TokenMaxTTL   string              `json:"token_max_ttl"`
 }
 
-// keycloakInternalJWKS is Keycloak's realm JWKS on its INTERNAL service — the
-// URL OpenBao (in-cluster) can actually reach to validate team-login tokens (the
-// public keycloak.<domain> URL hairpins off the cluster's own LB). The service
-// name is apl-core v6's Keycloak.X chart (`keycloak-keycloakx-http`) in the
-// `keycloak` namespace; the realm is `otomi`. The egress allow is in
-// kubernetes-charts/llz-openbao-platform (platform.networkPolicy.keycloakNamespace).
-//
-// HTTPS on :8443, was plaintext :8080. This fetch retrieves the SIGNING KEYS
-// OpenBao uses to decide whether a team-login token is genuine. Over plaintext,
-// anything able to answer that request substitutes its own keys and can then
-// mint tokens OpenBao will accept — the `bound_issuer` check does not help,
-// because the issuer claim is verified with the very keys being fetched. Of all
-// the cleartext hops in the cluster this was the only one carrying TRUST
-// MATERIAL rather than data, which is why it is TLS even though Keycloak cannot
-// do mutual auth here (see keycloakJWKSCAPEM).
-//
-// PREREQUISITE — verify on a live cluster before rollout: apl-core's Keycloak.X
-// Service must expose 8443. The chart's `http` Service is named for the
-// container's HTTP port and some builds expose ONLY 8080. If 8443 is absent this
-// fetch fails and team login breaks; the fallback is NOT to revert to 8080 but
-// to pin static keys via jwt_validation_pubkeys — see the ADR.
-const keycloakInternalJWKS = "https://keycloak-keycloakx-http.keycloak.svc.cluster.local:8443/realms/otomi/protocol/openid-connect/certs"
+// keycloakJWKSPath is the realm JWKS path appended to the issuer. Deriving the
+// JWKS URL from the issuer rather than naming a Service is deliberate — see
+// keycloakJWKSURL.
+const keycloakJWKSPath = "/protocol/openid-connect/certs"
 
-// keycloakJWKSCAFile is the CA bundle OpenBao verifies Keycloak's serving cert
-// against, passed to the auth mount as `jwks_ca_pem`.
+// keycloakJWKSURL is where OpenBao fetches the realm SIGNING KEYS it uses to
+// decide whether a team-login token is genuine. This request carries TRUST
+// MATERIAL, not data: anything able to answer it substitutes its own keys and
+// can then mint tokens OpenBao accepts. `bound_issuer` does not help, because
+// the issuer claim is checked with the very keys being fetched. So it must be
+// verified TLS, which is the whole point of ADR 0010.
+//
+// It targets the PUBLIC hostname — the same host as the issuer, so the two can
+// never disagree — and NOT a Service DNS name. Two earlier attempts failed:
+//
+//   - :8080 on keycloak-keycloakx-http was plaintext, i.e. the hole above.
+//   - :8443 on that Service was the intended repair, but nothing listens there.
+//     apl-core runs Keycloak with `args: [start]`, KC_HTTP_ENABLED=true and
+//     proxy-mode xforwarded, and gives it NO TLS key material, so Keycloak never
+//     opens an HTTPS listener. The port is declared on the Service and the
+//     container and is simply dead. Because Keycloak IS in the mesh, its Envoy
+//     sidecar accepts the TCP connection and then resets it, so the symptom is
+//     `read: connection reset by peer` rather than `connection refused`:
+//     "get keys failed Get \"https://keycloak-keycloakx-http…:8443/…/certs\":
+//     read tcp 10.4.2.225:38402->10.3.204.193:8443: read: connection reset by peer".
+//
+// Keycloak's TLS is terminated by the Istio ingress gateway, which serves
+// apl-core's `otomi-wildcard` Certificate (SAN `*.<domainSuffix>`, issued by the
+// `custom-ca` ClusterIssuer — values/cert-manager/cert-manager-raw.gotmpl). That
+// wildcard covers keycloak.<domain>, and openbao-apl-ca is a leaf of the SAME
+// custom-ca, so /openbao/apl-ca/ca.crt already verifies it. The trust anchor was
+// right all along; only the endpoint was wrong.
+//
+// The public hostname resolves to the cluster's external LB IP, and hairpinning
+// back through it is unsupported on LKE-E — which is why this looked impossible
+// before. `llz ci pin-keycloak-gateway-alias` closes that by pointing the name at
+// the gateway Service's CLUSTER IP inside the OpenBao pod via hostAliases, so the
+// request never leaves the cluster while Host/SNI still match the certificate.
+//
+// ADOPTERS ON letsencrypt: apl-core issues the same wildcard from Let's Encrypt
+// when cert-manager.issuer is letsencrypt. openbao-apl-ca (a custom-ca leaf) will
+// NOT verify that chain. That is not a hypothetical: managed IS that case, which is
+// why nothing is pinned — see keycloakJWKSTrustNote.
+func keycloakJWKSURL(issuer string) string { return issuer + keycloakJWKSPath }
+
+// keycloakJWKSTrustNote documents how OpenBao verifies Keycloak's serving cert on
+// the JWKS fetch, and why nothing is pinned.
+//
+// WE USE THE SYSTEM TRUST STORE. jwks_ca_pem used to pin
+// /openbao/apl-ca/ca.crt — apl-core's `custom-ca`, reachable in the pod via the
+// openbao-apl-ca Certificate's ca.crt indirection. That was wrong on the only
+// platform this repo supports, and e2e run 30510747640 proved it:
+//
+//	oidc auth login (role platform): HTTP 400: error verifying token signature:
+//	fetching keys oidc: get keys failed Get "https://keycloak.lke637425.akamai-apl.net
+//	/realms/otomi/protocol/openid-connect/certs": tls: failed to verify certificate:
+//	x509: certificate signed by unknown authority
+//
+// On a managed (apl_enabled) cluster Linode owns lke<id>.akamai-apl.net and
+// provisions its wildcard from a PUBLIC CA. apl-core's custom-ca is not in that
+// chain, and because jwks_ca_pem REPLACES the system roots rather than adding to
+// them, pinning it guaranteed failure. My own comment on keycloakJWKSURL predicted
+// this for "adopters on letsencrypt" without noticing that managed IS that case.
+//
+// Omitting jwks_ca_pem is not a downgrade. The old comment claimed that without
+// the pin "OpenBao would still accept any certificate" — that is simply untrue:
+// Go's TLS stack verifies against the system roots by default, so the hop stays
+// verified and the key-substitution attack the pin existed to stop is still
+// stopped, now by web PKI for a genuinely public hostname. What the pin bought was
+// narrowing the trusted set to one private CA; that is only meaningful when THAT CA
+// issues the cert, which here it does not.
+//
+// If a deployment ever fronts Keycloak with a custom-ca-issued cert, this needs
+// jwks_ca_pem back — pointing at a bundle containing that CA, not the public roots.
 //
 // WHY NOT mTLS HERE. This hop is one-way TLS, not mutual, and that is a
 // limitation rather than a choice: Keycloak is not in the mesh (the
@@ -467,7 +516,15 @@ const keycloakInternalJWKS = "https://keycloak-keycloakx-http.keycloak.svc.clust
 // change LLZ cannot make from this repo. (a) closes the real hole; the residual
 // gap is that Keycloak cannot verify OpenBao, which for a public-key fetch of
 // non-secret material is not a meaningful exposure.
-const keycloakJWKSCAFile = "/openbao/apl-ca/ca.crt"
+//
+// The chart's openbao-apl-ca Certificate and its /openbao/apl-ca mount are now
+// unused by this path. Left in place deliberately: they are gated on
+// platform.aplCA.enabled, cost nothing when custom-ca is absent, and are what a
+// custom-ca gateway would need. Removing them is a chart-version change with no
+// behavioural upside.
+// The value is used in the step description so this is not a doc-only const and
+// the choice is visible in the bootstrap log.
+const keycloakJWKSTrustNote = "system trust store, no jwks_ca_pem"
 
 // aplPlatformAdminRole is apl-core's built-in all-teams platform-admin realm role
 // — the value its groups-claim mapper emits for the default admin user(s)
@@ -521,10 +578,12 @@ func keycloakTeamSteps(issuer string, teams []clusterspec.Team) []baoConfigStep 
 		// — it fails team login later, with a TLS error in the OpenBao log rather
 		// than at configure time. Watch the first `llz openbao login --team` after
 		// a rollout.
-		{desc: "configure keycloak auth (internal jwks_url over TLS + public bound_issuer)", fatal: true,
+		// NO jwks_ca_pem — see keycloakJWKSTrustNote. Setting it to apl-core's
+		// custom-ca REPLACES the system trust store, and on a managed cluster the
+		// gateway serves a PUBLICLY issued wildcard, so the pin could not verify it.
+		{desc: "configure keycloak auth (gateway-terminated jwks_url, " + keycloakJWKSTrustNote + ", public bound_issuer)", fatal: true,
 			args: []string{"write", "auth/keycloak/config",
-				"jwks_url=" + keycloakInternalJWKS, "bound_issuer=" + issuer,
-				"jwks_ca_pem=@" + keycloakJWKSCAFile,
+				"jwks_url=" + keycloakJWKSURL(issuer), "bound_issuer=" + issuer,
 				"skip_jwks_validation=true"}},
 	}
 	for _, t := range teams {

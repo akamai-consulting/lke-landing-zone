@@ -130,7 +130,10 @@ func ciCmd() *cobra.Command {
 	// material specials in ci_bao_seed.go / ci_bao_seed_seal_key.go /
 	// ci_seed_special.go.
 	c.AddCommand(ciBaoSeedCmd(), ciBaoSeedAllCmd(), ciBaoSeedSealKeyCmd(),
-		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd())
+		ciResolveHarborURLCmd(), ciAuditPVCStorageClassCmd(),
+		// Must run BEFORE the OpenBao pods are waited on: it patches the
+		// StatefulSet, so pinning it late would roll a freshly unsealed cluster.
+		ciPinKeycloakGatewayAliasCmd())
 	// Object-storage key lifecycle, one owner end to end: mint-bootstrap-objkeys
 	// mints the FIRST Loki/Harbor keys at bootstrap and seeds OpenBao (replacing
 	// the TF-minted keys + LOKI_S3_*/HARBOR_REGISTRY_S3_* GitHub relay +

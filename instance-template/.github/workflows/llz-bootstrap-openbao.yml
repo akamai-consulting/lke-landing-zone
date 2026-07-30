@@ -149,12 +149,15 @@ jobs:
     permissions:
       contents: read
     environment: infra-${{ inputs.region }}
-    # 45m normally; 70m when bootstrap_cluster adds the apl-core phase at the head.
+    # 45m normally; 90m when bootstrap_cluster adds the apl-core phase at the head.
+    # Raised 70 -> 90 alongside wait-cluster-ready's 900 -> 1500: a cold start can
+    # now legitimately spend 25m waiting for the control-plane ACL before apl-core,
+    # OpenBao and the 20m converge budget even begin.
     # INVARIANT when editing any step budget below: no SINGLE step may exceed this
     # timeout, or GitHub kills the job with no verdict — losing the step's error AND
     # the always()/failure() tail (Argo capture, control-plane ACL revoke). The
     # budgets are NOT expected to sum to less than this; see the sidecar doc.
-    timeout-minutes: ${{ inputs.bootstrap_cluster && 70 || 45 }}
+    timeout-minutes: ${{ inputs.bootstrap_cluster && 90 || 45 }}
     env:
       # GH_REPO makes gh target the repo directly instead of shelling out to git,
       # which fails on "dubious ownership" in the container's checkout dir.
@@ -245,7 +248,10 @@ jobs:
       # convergence gate at the tail of this job polls for a long time.
       - name: Cluster access (kubeconfig + runner ACL)
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -258,11 +264,23 @@ jobs:
       # Split gate, deliberately: this waits for only ONE Ready node (all apl-core's
       # install needs); the FULL pool is asserted after the bootstrap, by which time
       # the rest have had the apl-pipeline wait to join. Don't re-merge them.
+      # 1500s (25m), NOT 900s. On a FRESHLY CREATED LKE-E cluster the
+      # control-plane ACL takes minutes to begin honouring a newly added address,
+      # and Linode documents enabling an ACL as taking "up to 20 minutes to take
+      # effect" — so a 15-minute budget was UNDER the documented worst case and
+      # could not succeed however correct everything else was. Six consecutive
+      # cold starts exhausted it here while the same operation took ~35s against a
+      # settled cluster (measured against the Cloud Manager), and a warm-cluster
+      # re-run passed this step immediately.
+      #
+      # This is the step that OWNS reachability. Everything before it treats an
+      # unreachable apiserver as expected and warns rather than failing, so this
+      # budget is the one that decides whether a cold bootstrap lives.
       - name: Wait for cluster API ready (first node)
         if: inputs.bootstrap_cluster
         run: |
           llz ci phase-mark wait-cluster-ready
-          llz ci wait-cluster-ready --timeout 900 --interval 10 || {
+          llz ci wait-cluster-ready --timeout 1500 --interval 10 || {
             echo "Persisting failure = control plane still provisioning (re-run later), OR no node ever reached Ready, OR the cluster-access step above did not add this runner's egress IP to the LKE-E control-plane ACL (check its log + LINODE_API_TOKEN scope)."
             exit 1
           }
@@ -330,6 +348,17 @@ jobs:
       # sealed, therefore not-Ready, so `rollout status` would time out on every
       # first bootstrap. The init step below only needs the pods Running to exec in.
       # 600s covers the serial Linode Volume creates on a cold start; 300s flaked.
+      # MUST precede the pod wait below. OpenBao's OIDC mount fetches Keycloak's
+      # realm JWKS over verified TLS from the ingress gateway, which means the
+      # public hostname has to resolve to the gateway's ClusterIP inside the pod
+      # (the public name points at the external LB, and hairpinning through it is
+      # unsupported on LKE-E). That pin is a hostAliases patch on the StatefulSet,
+      # so doing it here means the pods are created with it already in place —
+      # pinning it after they are up would roll a freshly unsealed raft cluster.
+      # No-ops when the pin is already correct, and when no teams are declared.
+      - name: Pin the Keycloak JWKS hostname to the ingress gateway
+        run: llz ci pin-keycloak-gateway-alias --region "$REGION"
+
       - name: Wait for OpenBao pods to be running
         run: |
           llz ci wait-pods --namespace llz-openbao --timeout 600 \
@@ -436,6 +465,9 @@ jobs:
       - name: Terraform init — databases (for the admin seed)
         if: steps.ensure.outputs.available == 'true' && steps.db.outputs.declared == 'true'
         uses: ./.github/actions/terraform-init
+        # Bounded: `tofu init` is a provider/module/state fetch with no internal
+        # budget, so a stalled registry or backend would otherwise eat the job.
+        timeout-minutes: 10
         with:
           module: databases
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
@@ -743,6 +775,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -788,7 +823,10 @@ jobs:
       # Targets the PEER's region, not this deployment's. Revoked at job end.
       - name: Cluster access (peer kubeconfig + runner ACL)
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -808,6 +846,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner (peer)
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -838,7 +879,10 @@ jobs:
       # Targets the standby (self). Revoked at job end.
       - name: Cluster access (standby kubeconfig + runner ACL)
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           region:                ${{ inputs.region }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -859,6 +903,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner (standby)
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
@@ -886,7 +933,10 @@ jobs:
       # Targets the PEER's region, not this deployment's. Revoked at job end.
       - name: Cluster access (peer kubeconfig + runner ACL)
         uses: ./.github/actions/cluster-access
+        # Fails fast instead of hanging — see the action's own note. Normal is <1min.
+        timeout-minutes: 6
         with:
+          state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -906,6 +956,9 @@ jobs:
       - name: Revoke control-plane ACL for this runner (peer)
         if: always()
         uses: ./.github/actions/lke-runner-acl
+        # Backstop for the action that actually burned 15m: its internals are now
+        # bounded (runnerACLKubectlTimeout), this catches whatever is next.
+        timeout-minutes: 5
         with:
           mode:         revoke
           linode-token: ${{ secrets.LINODE_API_TOKEN }}
