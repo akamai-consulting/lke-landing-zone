@@ -188,9 +188,40 @@ func desiredVolumeLabel(regionShort, namespace, pvcName string) string {
 			b.WriteByte('-')
 		}
 	}
-	s := b.String()
-	if len(s) > maxLinodeLabel {
-		s = s[:maxLinodeLabel]
+	return fitLinodeLabel(b.String())
+}
+
+// labelTailKeep is how much of the RIGHT-hand side survives truncation. Sized to
+// carry a StatefulSet ordinal plus enough of the claim name to tell siblings apart
+// (`…enbao-0`, `…-db-1-wal`).
+const labelTailKeep = 8
+
+// fitLinodeLabel squeezes a label into Linode's 32-char cap while KEEPING the
+// discriminating tail, by dropping from the middle rather than the end.
+//
+// The naive `s[:32]` this replaces cut off exactly the part that distinguishes
+// sibling volumes, so an entire StatefulSet collapsed to one label:
+//
+//	e2e-llz-openbao-data-platform-openbao-0 ┐
+//	e2e-llz-openbao-data-platform-openbao-1 ├─► "e2e-llz-openbao-data-platform-op"
+//	e2e-llz-openbao-data-platform-openbao-2 ┘
+//
+// Linode Volume labels are account-UNIQUE, so the first replica won and the other
+// two failed `PUT /v4/volumes/<id>` with 400 {"reason":"Must be unique"} — for the
+// entire life of the relabeler. Observed on lke637974: 17 of 17 renames rejected,
+// which is why every Volume kept its opaque pvc-<uuid> label.
+//
+// Truncation is still lossy, so this is not a uniqueness GUARANTEE — two claims
+// agreeing on both the head and the last 8 characters would still collide. It
+// removes the systematic collision (StatefulSet replicas, which differ only in the
+// final character) rather than every conceivable one. The remaining risk surfaces
+// as a loud per-volume error plus a red `assert-volume-encryption`, not silence.
+func fitLinodeLabel(s string) string {
+	if len(s) <= maxLinodeLabel {
+		return strings.TrimRight(s, "-")
 	}
-	return strings.TrimRight(s, "-")
+	head := maxLinodeLabel - labelTailKeep - 1 // -1 for the joining '-'
+	tail := strings.TrimLeft(s[len(s)-labelTailKeep:], "-")
+	out := strings.TrimRight(s[:head], "-") + "-" + tail
+	return strings.TrimRight(out, "-")
 }

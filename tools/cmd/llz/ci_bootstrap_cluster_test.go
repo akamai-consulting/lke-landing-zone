@@ -764,3 +764,175 @@ func TestRenderBlockStorageClass_MalformedIDHardFails(t *testing.T) {
 		t.Fatal("expected an error for a non-numeric cluster id, got nil")
 	}
 }
+
+// ── SPIKE: encrypting the LKE stock StorageClasses ───────────────────────────
+
+const stockSCJSON = `{
+  "apiVersion":"storage.k8s.io/v1","kind":"StorageClass",
+  "metadata":{"name":"linode-block-storage",
+    "annotations":{"meta.helm.sh/release-name":"workload","storageclass.kubernetes.io/is-default-class":"true"},
+    "labels":{"helm.toolkit.fluxcd.io/name":"workload"}},
+  "provisioner":"linodebs.csi.linode.com",
+  "reclaimPolicy":"Delete","volumeBindingMode":"Immediate","allowVolumeExpansion":true,
+  "parameters":{"linodebs.csi.linode.com/someOtherOption":"keepme"}
+}`
+
+// stockSCKubectl fakes the reads encryptStockStorageClasses makes and records the
+// deletes; `present` maps class name → JSON (absent names report failure).
+func stockSCKubectl(present map[string]string, deleteFails bool) (func(...string) (string, bool), *[]string) {
+	var deleted []string
+	return func(args ...string) (string, bool) {
+		line := strings.Join(args, " ")
+		for name, body := range present {
+			if strings.HasPrefix(line, "get storageclass "+name+" ") {
+				return body, true
+			}
+		}
+		if strings.HasPrefix(line, "get storageclass ") {
+			return "", false // absent
+		}
+		if strings.HasPrefix(line, "delete storageclass ") {
+			deleted = append(deleted, strings.Fields(line)[2])
+			return "", !deleteFails
+		}
+		return "", true
+	}, &deleted
+}
+
+// TestEncryptStockStorageClasses_RecreatesEncrypted is the core of the spike: the
+// stock class must come back encrypted and ownership-tagged, because on managed
+// apl-core names it EXPLICITLY and neither the cluster default nor a Kyverno
+// mutation can reach those PVCs in time.
+func TestEncryptStockStorageClasses_RecreatesEncrypted(t *testing.T) {
+	kubectl, deleted := stockSCKubectl(map[string]string{"linode-block-storage": stockSCJSON}, false)
+	var applied []string
+	d := bootstrapDeps{
+		kubectl: kubectl,
+		apply:   func(y, _ string, _ bool) (string, bool) { applied = append(applied, y); return "", true },
+		now:     time.Now, sleep: func(time.Duration) {},
+	}
+	if err := encryptStockStorageClasses(bootstrapClusterOpts{clusterID: "637888"}, d); err != nil {
+		t.Fatalf("encryptStockStorageClasses: %v", err)
+	}
+	if len(*deleted) != 1 || (*deleted)[0] != "linode-block-storage" {
+		t.Fatalf("expected exactly the one present class to be deleted, got %v", *deleted)
+	}
+	if len(applied) != 1 {
+		t.Fatalf("expected one recreate, got %d", len(applied))
+	}
+
+	var got map[string]any
+	if err := yaml.Unmarshal([]byte(applied[0]), &got); err != nil {
+		t.Fatal(err)
+	}
+	params, _ := got["parameters"].(map[string]any)
+	if params["linodebs.csi.linode.com/encrypted"] != "true" {
+		t.Errorf("recreated class is not encrypted: %v", params)
+	}
+	if params["linodebs.csi.linode.com/volumeTags"] != "block-storage,platform-support-services,lke637888" {
+		t.Errorf("volumeTags = %v — reap keys on the lke<id> tag", params["linodebs.csi.linode.com/volumeTags"])
+	}
+	// Unknown parameters must survive: the class may carry Linode options this
+	// code does not model, and silently dropping one changes provisioning.
+	if params["linodebs.csi.linode.com/someOtherOption"] != "keepme" {
+		t.Errorf("pre-existing parameter dropped: %v", params)
+	}
+	// Identity + lifecycle must be preserved or apl-core's PVCs stop resolving /
+	// change reclaim semantics.
+	if got["reclaimPolicy"] != "Delete" || got["volumeBindingMode"] != "Immediate" || got["allowVolumeExpansion"] != true {
+		t.Errorf("lifecycle fields not preserved: %v", got)
+	}
+	meta, _ := got["metadata"].(map[string]any)
+	if meta["name"] != "linode-block-storage" {
+		t.Errorf("name changed: %v", meta)
+	}
+	// Two defaults wedge the cluster (the race sc-demote exists to prevent), and
+	// the recreated object is LLZ's — Helm/Flux ownership must not be copied over.
+	if anns, ok := meta["annotations"]; ok {
+		t.Errorf("recreated class must carry NO annotations (no is-default-class, no Helm ownership), got %v", anns)
+	}
+	if _, ok := meta["labels"]; ok {
+		t.Errorf("recreated class must not inherit LKE's Helm/Flux labels, got %v", meta["labels"])
+	}
+}
+
+// TestEncryptStockStorageClasses_Idempotent: a second bootstrap must not churn a
+// class that is already correct — a needless delete+recreate reopens the window
+// where a PVC can be created with no class to bind to.
+func TestEncryptStockStorageClasses_Idempotent(t *testing.T) {
+	already := `{"metadata":{"name":"linode-block-storage"},"provisioner":"linodebs.csi.linode.com",
+	  "parameters":{"linodebs.csi.linode.com/encrypted":"true",
+	                "linodebs.csi.linode.com/volumeTags":"block-storage,platform-support-services,lke637888"}}`
+	kubectl, deleted := stockSCKubectl(map[string]string{"linode-block-storage": already}, false)
+	var applied int
+	d := bootstrapDeps{
+		kubectl: kubectl,
+		apply:   func(string, string, bool) (string, bool) { applied++; return "", true },
+		now:     time.Now, sleep: func(time.Duration) {},
+	}
+	if err := encryptStockStorageClasses(bootstrapClusterOpts{clusterID: "637888"}, d); err != nil {
+		t.Fatal(err)
+	}
+	if len(*deleted) != 0 || applied != 0 {
+		t.Errorf("an already-correct class must not be touched: deleted=%v applied=%d", *deleted, applied)
+	}
+}
+
+// TestEncryptStockStorageClasses_SkipsAbsentAndForeign: absent classes are normal,
+// and a non-Linode provisioner must be left alone — deleting someone else's
+// StorageClass to add parameters its driver ignores would be pure damage.
+func TestEncryptStockStorageClasses_SkipsAbsentAndForeign(t *testing.T) {
+	foreign := `{"metadata":{"name":"linode-block-storage"},"provisioner":"ebs.csi.aws.com","parameters":{}}`
+	kubectl, deleted := stockSCKubectl(map[string]string{"linode-block-storage": foreign}, false)
+	var applied int
+	d := bootstrapDeps{
+		kubectl: kubectl,
+		apply:   func(string, string, bool) (string, bool) { applied++; return "", true },
+		now:     time.Now, sleep: func(time.Duration) {},
+	}
+	// linode-block-storage-retain is absent in this fake; both classes must no-op.
+	if err := encryptStockStorageClasses(bootstrapClusterOpts{clusterID: "637888"}, d); err != nil {
+		t.Fatal(err)
+	}
+	if len(*deleted) != 0 || applied != 0 {
+		t.Errorf("foreign/absent classes must be untouched: deleted=%v applied=%d", *deleted, applied)
+	}
+}
+
+// TestEncryptStockStorageClasses_RecreateFailureIsLoud pins the one genuinely
+// dangerous path. The class is deleted before it can be recreated, so a failed
+// recreate leaves the cluster with NO stock class and every PVC naming it Pending.
+// That must surface as a hard error naming the class, never a warning.
+func TestEncryptStockStorageClasses_RecreateFailureIsLoud(t *testing.T) {
+	kubectl, _ := stockSCKubectl(map[string]string{"linode-block-storage": stockSCJSON}, false)
+	d := bootstrapDeps{
+		kubectl: kubectl,
+		apply:   func(string, string, bool) (string, bool) { return "apiserver said no", false },
+		now:     time.Now, sleep: func(time.Duration) {},
+	}
+	err := encryptStockStorageClasses(bootstrapClusterOpts{clusterID: "637888"}, d)
+	if err == nil {
+		t.Fatal("a failed recreate leaves the cluster with no stock StorageClass — it must hard-fail")
+	}
+	if !strings.Contains(err.Error(), "linode-block-storage") || !strings.Contains(err.Error(), "Pending") {
+		t.Errorf("error must name the class and the consequence, got: %v", err)
+	}
+}
+
+// TestEncryptStockStorageClasses_RejectsBadClusterID: without a numeric id the
+// volumeTags render without lke<id>, and StorageClass parameters are immutable —
+// so an untagged class can never be fixed in place. Fail before deleting anything.
+func TestEncryptStockStorageClasses_RejectsBadClusterID(t *testing.T) {
+	kubectl, deleted := stockSCKubectl(map[string]string{"linode-block-storage": stockSCJSON}, false)
+	d := bootstrapDeps{
+		kubectl: kubectl,
+		apply:   func(string, string, bool) (string, bool) { return "", true },
+		now:     time.Now, sleep: func(time.Duration) {},
+	}
+	if err := encryptStockStorageClasses(bootstrapClusterOpts{clusterID: ""}, d); err == nil {
+		t.Fatal("an empty cluster id must fail before any class is deleted")
+	}
+	if len(*deleted) != 0 {
+		t.Errorf("nothing may be deleted when the id is unusable, got %v", *deleted)
+	}
+}

@@ -126,8 +126,23 @@ func TestTeardownCapture(t *testing.T) {
 		volumes: []map[string]any{
 			{"id": float64(1), "label": "pvc-aaa", "linode_id": float64(11)}, // ours
 			{"id": float64(2), "label": "pvc-bbb", "linode_id": float64(99)}, // peer's node
-			{"id": float64(3), "label": "data-c", "linode_id": float64(11)},  // not pvc-*
+			{"id": float64(3), "label": "data-c", "linode_id": float64(11)},  // operator-owned: no platform prefix
 			{"id": float64(4), "label": "pvc-ddd", "linode_id": nil},         // already detached
+			// RELABELED by the volume-labels reconciler. The tracker used to hardcode
+			// a `pvc-` prefix and skip this, so it was never handed to the sweep and
+			// outlived the cluster — then squatted its label (Linode labels are
+			// account-unique) and blocked the next cluster from relabeling.
+			{"id": float64(5), "label": "e2e-harbor-harbor-otomi-db-1", "linode_id": float64(12)},
+			// DETACHED at capture (pod mid-reschedule) but carrying this cluster's
+			// lke<id> tag. Attachment is a point-in-time property, so keying on it
+			// alone dropped this Volume and it survived its own cluster — observed
+			// with pvc-0f8efbcdf6704500 on the lke638015 destroy. The tag has no
+			// such window, so it is tracked regardless of attachment.
+			{"id": float64(6), "label": "pvc-eee", "linode_id": nil, "tags": []any{"block-storage", "lke777"}},
+			// Same tag, ALSO already renamed — both leak paths at once.
+			{"id": float64(7), "label": "e2e-monitoring-storage-loki-0", "linode_id": nil, "tags": []any{"lke777"}},
+			// Another cluster's tagged Volume must NOT be swept by this destroy.
+			{"id": float64(8), "label": "pvc-fff", "linode_id": nil, "tags": []any{"lke999"}},
 		},
 	}
 	dir, ghaEnv := withTeardown(t, fake, teardownTFVars)
@@ -135,7 +150,7 @@ func TestTeardownCapture(t *testing.T) {
 		t.Fatalf("capture: %v", err)
 	}
 	got, _ := os.ReadFile(ghaEnv)
-	want := "LKE_CLUSTER_ID=777\nCLUSTER_PVC_VOLUME_IDS=1\n"
+	want := "LKE_CLUSTER_ID=777\nCLUSTER_PVC_VOLUME_IDS=1 5 6 7\n"
 	if string(got) != want {
 		t.Errorf("GITHUB_ENV = %q, want %q", got, want)
 	}

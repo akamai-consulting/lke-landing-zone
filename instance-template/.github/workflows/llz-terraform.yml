@@ -766,7 +766,7 @@ jobs:
           # the TRACKED ids only. --require-empty FAILS the job if any survive:
           # a leaked Volume would otherwise sail past a green destroy and stall
           # the next apply's preflight on the account quota.
-          llz --yes ci reap-volumes --volume-ids "$CLUSTER_PVC_VOLUME_IDS" --wait-detach 600 \
+          llz --yes ci reap-volumes --env "$REGION" --volume-ids "$CLUSTER_PVC_VOLUME_IDS" --wait-detach 600 \
             --require-empty --attempts 4 --retry-delay 30
 
       # ── Authoritative orphan-NodeBalancer sweep ────────────────────────────

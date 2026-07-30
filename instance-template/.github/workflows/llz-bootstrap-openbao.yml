@@ -701,6 +701,33 @@ jobs:
       # (assert-reconciler reads gauges the scrape assert just proved fresh), and the
       # lanes are collision-free only because the mutating ones use disjoint
       # namespaces and each Prometheus lane port-forwards on local port :0.
+      # ── Storage invariant — DELIBERATELY NOT in the fan-out below ─────────────
+      # Every PV-backed Linode Volume must be encrypted at rest, carry its lke<id>
+      # ownership tag, and have been renamed off the CSI default pvc-<uuid> to a
+      # readable <region>-<ns>-<pvc> (an opaque uuid is unattributable in the Linode
+      # UI, the billing export and the quota census — the places you look once the
+      # cluster is gone). Checks the Volume's own `encryption` field, not the PVC's
+      # storageClassName: the class name is a PROXY, and it was a satisfied proxy
+      # the entire time a managed cluster provisioned 13 of 16 PVCs unencrypted.
+      #
+      # It runs SERIALLY, BEFORE the parallel suite, because it authenticates with
+      # the broad PAT — and the `broad-pat` lane in that suite ROTATES that PAT,
+      # revoking the old id. Run concurrently, this 401s on every volume partway
+      # through and reports a fleet-wide violation that is really just a revoked
+      # credential (observed: revoked_ids=[71820512] while this was mid-flight).
+      # The fan-out's collision rules cover namespaces and ports; shared CREDENTIALS
+      # are a third axis, and this is the only lane that sits on one.
+      #
+      # Tags and labels are healed by reconciler lanes after CreateVolume, so the
+      # verb waits a bounded time for them. Encryption never waits — it cannot
+      # change, and a red run is not re-runnable: storageClassName is immutable once
+      # bound, so it means re-rolling the workload and losing that volume's data.
+      - name: (e2e) assert storage invariant — Volume encryption + tags + labels
+        if: ${{ inputs.assert_loki }}
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: llz ci assert-volume-encryption
+
       - name: (e2e) assert suite — 6 gates + 2 diagnostics, in parallel lanes
         if: ${{ inputs.assert_loki }}
         run: |

@@ -325,16 +325,63 @@ func runCITeardownCapture(region, tfDir string) error {
 		if err != nil {
 			return fmt.Errorf("list Volumes: %w", err)
 		}
+		// Accept the CSI default label AND anything the volume-labels reconciler
+		// renamed to `<region>-<ns>-<pvc>`.
+		//
+		// This used to be a bare `pvc-` prefix check, which silently stopped
+		// matching the moment that reconciler started working: a renamed Volume was
+		// never TRACKED, so it was never handed to the sweep below, so it survived
+		// the destroy. Measured on lke637974 — 15 renamed Volumes outlived their
+		// cluster, then squatted their labels (Linode labels are account-unique) so
+		// the next cluster could not relabel 12 of its 17. One stale prefix check
+		// produced both an unbounded cost leak and a permanently broken relabeler.
+		//
+		// OWNERSHIP is established two ways, and a Volume needs only one:
+		//
+		//  1. the cluster's `lke<id>` TAG, which the block-storage StorageClasses
+		//     stamp inside CreateVolume. Authoritative: a Volume carrying it was
+		//     provisioned by this cluster and can never have belonged to another.
+		//  2. ATTACHMENT to one of this cluster's nodes — the original test, kept as
+		//     the fallback for Volumes provisioned before the tag existed.
+		//
+		// Attachment alone is not enough, and that gap leaked in production. It is a
+		// point-in-time property: a Volume whose pod happens to be unscheduled when
+		// capture runs is detached, fails the test, and is never tracked. Observed on
+		// the lke638015 destroy — pvc-0f8efbcdf6704500 (monitoring/storage-loki-0) was
+		// mid-reschedule and survived its own cluster. The tag has no such window.
+		//
+		// The label guard applies ONLY to the attachment path. A tag match is already
+		// proof of ownership, so re-checking the label there could only reject a
+		// Volume we know is ours — which is exactly the class of false negative that
+		// caused the leak this whole block exists to close. On the attachment path the
+		// label still guards against sweeping something an operator attached by hand,
+		// so it must admit every label the platform itself produces.
+		lkeTag := "lke" + clusterID
+		prefixes := linode.VolumeLabelPrefixes(region)
 		var tracked []string
+		var byTag, byAttach int
 		for _, v := range vols {
-			if !strings.HasPrefix(linode.MapString(v, "label"), "pvc-") {
-				continue
+			owned := false
+			for _, t := range linode.MapTags(v) {
+				if t == lkeTag {
+					owned = true
+					break
+				}
 			}
-			if linode.VolumeLinodeIDNull(v) || !nodeIDs[linode.MapUint(v, "linode_id")] {
-				continue
+			if owned {
+				byTag++
+			} else {
+				if linode.VolumeLinodeIDNull(v) || !nodeIDs[linode.MapUint(v, "linode_id")] {
+					continue
+				}
+				if !linode.HasAnyVolumeLabelPrefix(linode.MapString(v, "label"), prefixes) {
+					continue
+				}
+				byAttach++
 			}
 			tracked = append(tracked, linode.MapIDString(v))
 		}
+		fmt.Printf("tracked Volumes: %d by %s tag, %d by node attachment only\n", byTag, lkeTag, byAttach)
 		volIDs = strings.Join(tracked, " ")
 	}
 

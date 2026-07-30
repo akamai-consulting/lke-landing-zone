@@ -22,10 +22,13 @@ func TestDesiredVolumeLabel(t *testing.T) {
 		{"sec", "kube_system", "vol_1", "sec-kube_system-vol_1"},
 		// '/' and '.' are outside Linode's charset → '-'.
 		{"pri", "team/foo", "data.web", "pri-team-foo-data-web"},
-		// Truncated to 32, then trailing '-' stripped.
-		{"lab", "a-very-long-namespace-here", "and-pvc", "lab-a-very-long-namespace-here-a"},
-		// Truncation landing on a '-' strips it.
-		{"pri", "abcdefghijklmnopqrstuvwxyz012", "z", "pri-abcdefghijklmnopqrstuvwxyz01"},
+		// Over the cap: the MIDDLE is dropped, not the end. These expectations used
+		// to be the plain `s[:32]` prefix — which is precisely the bug: cutting from
+		// the right discards the ordinal that distinguishes sibling volumes, and
+		// Linode rejects the duplicate with 400 "Must be unique". See
+		// TestDesiredVolumeLabel_StatefulSetReplicasStayDistinct.
+		{"lab", "a-very-long-namespace-here", "and-pvc", "lab-a-very-long-namespa-and-pvc"},
+		{"pri", "abcdefghijklmnopqrstuvwxyz012", "z", "pri-abcdefghijklmnopqrs-xyz012-z"},
 	}
 	for _, c := range cases {
 		got := desiredVolumeLabel(c.region, c.ns, c.pvc)
@@ -201,5 +204,71 @@ func TestReaperRecognisesRelabelerOutput(t *testing.T) {
 	}
 	if linode.VolumeIsCandidate(true, "my-teams-database", "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
 		t.Error("an unrelated volume must never be a deletion candidate")
+	}
+}
+
+// TestDesiredVolumeLabel_StatefulSetRepicasStayDistinct is the regression test for
+// the bug that made the relabeler a no-op in practice.
+//
+// Linode Volume labels are account-UNIQUE. The old `s[:32]` truncation cut from the
+// right, which is exactly where a StatefulSet's ordinal lives, so all three OpenBao
+// replicas asked for one label. The first won; the rest got
+// 400 {"reason":"Must be unique"}. Measured on lke637974: 17 of 17 renames rejected,
+// so every Volume kept its opaque pvc-<uuid> name.
+func TestDesiredVolumeLabel_StatefulSetReplicasStayDistinct(t *testing.T) {
+	seen := map[string]string{}
+	for _, pvc := range []string{
+		"data-platform-openbao-0",
+		"data-platform-openbao-1",
+		"data-platform-openbao-2",
+	} {
+		got := desiredVolumeLabel("e2e", "llz-openbao", pvc)
+		if len(got) > maxLinodeLabel {
+			t.Fatalf("desiredVolumeLabel(%s) = %q (%d chars) — Linode rejects over %d", pvc, got, len(got), maxLinodeLabel)
+		}
+		if prev, dup := seen[got]; dup {
+			t.Fatalf("%s and %s both map to %q — the Linode API rejects the second with 'Must be unique', leaving it named pvc-<uuid> forever", prev, pvc, got)
+		}
+		seen[got] = pvc
+	}
+}
+
+// TestDesiredVolumeLabel_ShortNamesUnchanged: the fix must not churn labels that
+// already fit. A changed label on an existing Volume is a needless API write and
+// breaks any operator bookmark or dashboard keyed on the name.
+func TestDesiredVolumeLabel_ShortNamesUnchanged(t *testing.T) {
+	cases := map[string]string{
+		"harbor-otomi-db-1":     "e2e-harbor-harbor-otomi-db-1",
+		"harbor-otomi-db-1-wal": "e2e-harbor-harbor-otomi-db-1-wal", // exactly 32
+	}
+	for pvc, want := range cases {
+		if got := desiredVolumeLabel("e2e", "harbor", pvc); got != want {
+			t.Errorf("desiredVolumeLabel(%s) = %q, want %q", pvc, got, want)
+		}
+	}
+}
+
+// TestFitLinodeLabel covers the squeeze directly: within the cap, at the cap, and
+// the sibling-pair case truncation used to merge.
+func TestFitLinodeLabel(t *testing.T) {
+	if got := fitLinodeLabel("short-one"); got != "short-one" {
+		t.Errorf("under the cap must pass through, got %q", got)
+	}
+	exact := strings.Repeat("a", maxLinodeLabel)
+	if got := fitLinodeLabel(exact); got != exact {
+		t.Errorf("exactly at the cap must pass through, got %q", got)
+	}
+	a := fitLinodeLabel("e2e-monitoring-prometheus-po-prometheus-db-0")
+	b := fitLinodeLabel("e2e-monitoring-prometheus-po-prometheus-db-1")
+	if a == b {
+		t.Fatalf("siblings differing only in the final char collapsed to %q", a)
+	}
+	for _, s := range []string{a, b} {
+		if len(s) > maxLinodeLabel {
+			t.Errorf("%q is %d chars, over the %d cap", s, len(s), maxLinodeLabel)
+		}
+		if strings.HasSuffix(s, "-") {
+			t.Errorf("%q ends in a separator", s)
+		}
 	}
 }

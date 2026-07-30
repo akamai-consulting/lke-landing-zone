@@ -284,6 +284,12 @@ func bootstrapCluster(o bootstrapClusterOpts, d bootstrapDeps) error {
 		return fmt.Errorf("apply managed block-storage-retain StorageClass")
 	}
 
+	// SPIKE — encrypt the LKE stock StorageClasses IN PLACE (by delete+recreate).
+	// See encryptStockStorageClasses for why this, and not an admission policy.
+	if err := encryptStockStorageClasses(o, d); err != nil {
+		return err
+	}
+
 	// clone/snapshot-PVC deny ValidatingAdmissionPolicy + binding. In-apiserver CEL
 	// (no webhook, no CRD wait) blocking clone/snapshot-sourced PVCs, whose Linode
 	// CloneVolume path cannot carry the lke<id> tag and would mint an un-reapable
@@ -425,7 +431,9 @@ func waitManagedArgoReady(d bootstrapDeps) error {
 func dryRunBootstrap(o bootstrapClusterOpts, kubeconfigPath string) error {
 	fmt.Printf("→ (dry-run) bootstrap-cluster (managed App Platform / apl_enabled) env=%s kubeconfig=%s\n", o.env, kubeconfigPath)
 	fmt.Printf("  0. kubectl apply --server-side block-storage-retain StorageClass (cluster DEFAULT; volumeTags lke<id> rendered from --cluster-id; llzReconciler sc-demote keeps LKE's linode-block-storage-retain non-default)\n")
-	fmt.Printf("  0a. kubectl apply --server-side pvc-deny-untaggable-clone ValidatingAdmissionPolicy + binding\n")
+	fmt.Printf("  0a. SPIKE: delete+recreate LKE's stock StorageClasses (%s) with encryption + lke<id> volumeTags — parameters are immutable, so this is the only way to fix them, and the only lever that lands BEFORE apl-core creates its PVCs\n",
+		strings.Join(lkeStockStorageClasses, ", "))
+	fmt.Printf("  0b. kubectl apply --server-side pvc-deny-untaggable-clone ValidatingAdmissionPolicy + binding\n")
 	fmt.Printf("  0b. kubectl apply --server-side llz-openbao Namespace (OpenBao is CreateNamespace=false; managed apl-core does not create it)\n")
 	fmt.Printf("  1. wait for managed ArgoCD (Application CRD + argocd-server available)\n")
 	if o.instanceRepoToken != "" {
@@ -492,6 +500,196 @@ func runCombined(cmd *exec.Cmd) (string, bool) {
 // `lke<id>` is appended when the cluster id resolves. Kept in sync with the
 // manifest header comment in manifests/block-storage-class.yaml.
 const blockStorageBaseVolumeTags = "block-storage,platform-support-services"
+
+// csiEncryptedParam / csiVolumeTagsParam are the Linode CSI StorageClass
+// parameters that decide, at CreateVolume, whether a Volume is encrypted at rest
+// and which tags it carries. Both are read ONLY at provision time.
+const (
+	csiEncryptedParam    = "linodebs.csi.linode.com/encrypted"
+	csiVolumeTagsParam   = "linodebs.csi.linode.com/volumeTags"
+	linodeCSIProvisioner = "linodebs.csi.linode.com"
+)
+
+// lkeStockStorageClasses are the two classes LKE's own `workload` Helm release
+// installs into every cluster, unencrypted and untagged.
+var lkeStockStorageClasses = []string{"linode-block-storage", "linode-block-storage-retain"}
+
+// encryptStockStorageClasses rewrites LKE's stock StorageClasses so they encrypt
+// and ownership-tag at CreateVolume, by DELETING and RECREATING each one with the
+// same identity and the CSI parameters added.
+//
+// WHY THIS, AND NOT AN ADMISSION POLICY. On a managed cluster Linode owns
+// apl-values, and its `cluster.defaultStorageClass` is `linode-block-storage` — so
+// apl-core's PVCs name the unencrypted stock class EXPLICITLY. Two levers do not
+// work on those:
+//
+//   - promoting block-storage-retain to cluster default does nothing, because an
+//     explicit storageClassName never consults the default;
+//   - a Kyverno mutation cannot win the race. apl-core installs Kyverno AND creates
+//     the PVCs, and it creates most of them FIRST. Measured on lke637888:
+//     kyverno-admission-controller went Available at 15:59:50, by which point 11 of
+//     the 13 PVCs already existed (first at 15:57:10). A policy applied the instant
+//     Kyverno can admit one still arrives too late for 11 of 13.
+//
+// What DOES have a head start is this command. bootstrap-cluster applied its
+// StorageClass at 15:56:03 — 67 seconds before the first PVC — and needs nothing
+// from apl-core to do it. Fixing the class itself is therefore the only lever that
+// lands before the PVCs exist.
+//
+// WHY DELETE+RECREATE. StorageClass `parameters` are immutable; there is no patch
+// that adds encryption to an existing class. Deleting a StorageClass does NOT
+// affect existing PVs or PVCs — binding does not re-consult the class — so the only
+// exposure is a PVC created in the sub-second gap, which would land Pending and be
+// retried by the external-provisioner once the class is back.
+//
+// KNOWN OPEN RISK (this is a spike). The stock classes belong to LKE's `workload`
+// Helm release. If LKE's control plane re-reconciles that release it will restore
+// the unencrypted definitions, and any PVC created after that point regresses. This
+// change deliberately does NOT add a fight-loop for that yet — the point of running
+// it against a live e2e cluster is to find out whether, and how fast, LKE
+// re-promotes. If it does, the durable form is a reconciler lane alongside
+// sc-demote, which already watches StorageClasses for exactly this shape of drift.
+func encryptStockStorageClasses(o bootstrapClusterOpts, d bootstrapDeps) error {
+	id, err := normalizeLKEClusterID(o.clusterID)
+	if err != nil {
+		return err
+	}
+	wantTags := blockStorageBaseVolumeTags + ",lke" + id
+
+	for _, name := range lkeStockStorageClasses {
+		raw, ok := d.kubectl("get", "storageclass", name, "-o", "json")
+		// Absent is fine and expected on some cluster shapes — nothing to fix. An
+		// EMPTY body on a successful get counts as absent too: never delete a class
+		// whose definition could not actually be read back.
+		if !ok || strings.TrimSpace(raw) == "" {
+			fmt.Fprintf(os.Stderr, "  stock StorageClass %s not present — skipping.\n", name)
+			continue
+		}
+		live, err := parseStorageClass([]byte(raw))
+		if err != nil {
+			return fmt.Errorf("parse StorageClass %s: %w", name, err)
+		}
+		if live.Provisioner != linodeCSIProvisioner {
+			// Not a Linode-CSI class; encryption parameters would be meaningless.
+			fmt.Fprintf(os.Stderr, "  %s is provisioned by %q, not %s — leaving alone.\n", name, live.Provisioner, linodeCSIProvisioner)
+			continue
+		}
+		if live.Parameters[csiEncryptedParam] == "true" && live.Parameters[csiVolumeTagsParam] == wantTags {
+			fmt.Fprintf(os.Stderr, "  %s already encrypted + tagged %q — no change.\n", name, wantTags)
+			continue
+		}
+
+		// Build and validate the replacement BEFORE deleting anything: a render bug
+		// here must not be able to leave the cluster with no stock class at all.
+		replacement := live.withEncryption(wantTags)
+		body, err := yaml.Marshal(replacement.manifest())
+		if err != nil {
+			return fmt.Errorf("render replacement StorageClass %s: %w", name, err)
+		}
+
+		fmt.Fprintf(os.Stderr, "→ %s: encrypted=%q tags=%q → encrypted=\"true\" tags=%q (delete+recreate; parameters are immutable)\n",
+			name, live.Parameters[csiEncryptedParam], live.Parameters[csiVolumeTagsParam], wantTags)
+
+		if out, ok := d.kubectl("delete", "storageclass", name, "--ignore-not-found"); !ok {
+			fmt.Fprint(os.Stderr, out)
+			return fmt.Errorf("delete stock StorageClass %s (needed because parameters are immutable)", name)
+		}
+		if out, ok := d.apply(string(body), "llz-managed-bridge", true); !ok {
+			fmt.Fprint(os.Stderr, out)
+			// The class is GONE at this point and we could not put it back. Say so
+			// unmistakably: any PVC naming it will sit Pending until an operator
+			// recreates it.
+			return fmt.Errorf("recreate stock StorageClass %s FAILED after it was deleted — the cluster now has NO %s class and any PVC naming it will stay Pending. Recreate it by hand or re-run bootstrap-cluster", name, name)
+		}
+		fmt.Fprintf(os.Stderr, "  %s recreated encrypted + tagged.\n", name)
+	}
+	return nil
+}
+
+// stockStorageClass is the subset of a StorageClass that survives the delete+recreate.
+// Anything not listed here is intentionally dropped: the recreated object is LLZ's,
+// so Helm/Flux ownership metadata must NOT be carried over (copying it would make
+// the class look like it still belongs to LKE's release).
+type stockStorageClass struct {
+	Name                 string
+	Provisioner          string
+	ReclaimPolicy        string
+	VolumeBindingMode    string
+	AllowVolumeExpansion *bool
+	Parameters           map[string]string
+	IsDefault            bool
+}
+
+func parseStorageClass(raw []byte) (stockStorageClass, error) {
+	var doc struct {
+		Metadata struct {
+			Name        string            `json:"name"`
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+		Provisioner          string            `json:"provisioner"`
+		ReclaimPolicy        string            `json:"reclaimPolicy"`
+		VolumeBindingMode    string            `json:"volumeBindingMode"`
+		AllowVolumeExpansion *bool             `json:"allowVolumeExpansion"`
+		Parameters           map[string]string `json:"parameters"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return stockStorageClass{}, err
+	}
+	if doc.Metadata.Name == "" {
+		return stockStorageClass{}, fmt.Errorf("StorageClass JSON carried no metadata.name")
+	}
+	return stockStorageClass{
+		Name:                 doc.Metadata.Name,
+		Provisioner:          doc.Provisioner,
+		ReclaimPolicy:        doc.ReclaimPolicy,
+		VolumeBindingMode:    doc.VolumeBindingMode,
+		AllowVolumeExpansion: doc.AllowVolumeExpansion,
+		Parameters:           doc.Parameters,
+		IsDefault:            doc.Metadata.Annotations[scDefaultAnnotation] == "true",
+	}, nil
+}
+
+// withEncryption returns a copy carrying the CSI encryption + volumeTags
+// parameters. Every other parameter is preserved — the class may carry Linode
+// options this code does not know about, and dropping one silently would change
+// provisioning behaviour beyond encryption.
+//
+// IsDefault is deliberately NOT preserved as-is: block-storage-retain is the
+// cluster default and the sc-demote reconciler actively keeps LKE's retain class
+// non-default. Re-creating a stock class WITH the default annotation would
+// reintroduce the two-default-StorageClass wedge that sc-demote exists to prevent.
+func (s stockStorageClass) withEncryption(tags string) stockStorageClass {
+	params := make(map[string]string, len(s.Parameters)+2)
+	for k, v := range s.Parameters {
+		params[k] = v
+	}
+	params[csiEncryptedParam] = "true"
+	params[csiVolumeTagsParam] = tags
+	s.Parameters = params
+	s.IsDefault = false
+	return s
+}
+
+func (s stockStorageClass) manifest() map[string]any {
+	meta := map[string]any{"name": s.Name}
+	m := map[string]any{
+		"apiVersion":  "storage.k8s.io/v1",
+		"kind":        "StorageClass",
+		"metadata":    meta,
+		"provisioner": s.Provisioner,
+		"parameters":  s.Parameters,
+	}
+	if s.ReclaimPolicy != "" {
+		m["reclaimPolicy"] = s.ReclaimPolicy
+	}
+	if s.VolumeBindingMode != "" {
+		m["volumeBindingMode"] = s.VolumeBindingMode
+	}
+	if s.AllowVolumeExpansion != nil {
+		m["allowVolumeExpansion"] = *s.AllowVolumeExpansion
+	}
+	return m
+}
 
 // renderBlockStorageClass fills the ${volume_tags} slot in the embedded
 // block-storage-retain StorageClass with the static tags plus this cluster's
