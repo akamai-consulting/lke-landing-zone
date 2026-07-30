@@ -23,6 +23,8 @@ import (
 
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/linode"
 )
 
 // envAddOpts mirrors new-deployment.sh's flags, plus the ADOPTER-MUST-SET values
@@ -303,12 +305,12 @@ func printPlaceholderChecklist(aplDir, env string) {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-func first3(s string) string {
-	if len(s) < 3 {
-		return s
-	}
-	return s[:3]
-}
+// first3 is the REGION_SHORT derivation `llz render` stamps into the reconciler's
+// env patch. It delegates to linode.RegionShort so the label the volume-labels
+// reconciler WRITES and the prefix `llz reap` ACCEPTS come from one definition —
+// they were derived independently once, and the sweep went blind on every
+// deployment whose name is longer than three characters.
+func first3(s string) string { return linode.RegionShort(s) }
 
 func quote(s string) string { return `"` + s + `"` }
 

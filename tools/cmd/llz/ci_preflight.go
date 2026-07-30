@@ -22,6 +22,7 @@ import (
 
 type preflightOpts struct {
 	region          string
+	env             string
 	volumeRegion    string
 	failOnOrphans   string // "true" => fail when orphans exceed threshold
 	clusterLabel    string
@@ -50,6 +51,7 @@ func ciPreflightCmd() *cobra.Command {
 	}
 	f := c.Flags()
 	f.StringVar(&o.region, "region", "", "narrow the scan to one Linode region (empty = account-wide)")
+	f.StringVar(&o.env, "env", "", "deployment name; widens the Volume census to that deployment's RELABELED Volumes (<REGION_SHORT>-<ns>-<pvc>). Without it only the CSI default `pvc-` prefix is counted, so every Volume the volume-labels reconciler has renamed is invisible.")
 	f.StringVar(&o.volumeRegion, "volume-region", "", "scope the pvc-* Volume orphan count to one region (empty = the --region value, or account-wide). Volumes carry no cluster id, so an account-wide count flags other regions'/teams' detached Volumes that `llz reap` won't clean — scope to the deployment region to match reap.")
 	f.StringVar(&o.failOnOrphans, "fail-on-orphans", "true", "exit non-zero when orphans exceed the threshold (\"true\"/\"false\")")
 	f.IntVar(&o.orphanThreshold, "orphan-threshold", 0, "only fail when the orphan count EXCEEDS this")
@@ -106,7 +108,7 @@ func runCIPreflight(o preflightOpts) error {
 	// what `llz reap --region <r>` can actually clean — falling back to --region,
 	// then account-wide.
 	volumeRegion := firstNonEmpty(o.volumeRegion, o.region)
-	scan, err := scanOrphans(ctx, client, o.region, volumeRegion)
+	scan, err := scanOrphans(ctx, client, o.region, volumeRegion, o.env)
 	if err != nil {
 		return err
 	}
@@ -228,15 +230,22 @@ func (s orphanScan) orphans() int { return s.vol.orphan + s.nb.orphan + s.vpc.or
 // cluster is gone. NodeBalancers and VPCs are scoped to region ("" =
 // account-wide): they carry a cluster-id tag/label, so a gone-cluster orphan is
 // unambiguous and safe to count account-wide. Volumes are scoped SEPARATELY to
-// volumeRegion because a detached pvc-* Volume carries no cluster id and can't
+// volumeRegion because a detached relabeled Volume carries no cluster id and can't
 // be attributed — in a shared account an account-wide count pulls in other
 // regions'/teams' detached Volumes that `llz reap` (which refuses an unscoped
 // Volume sweep and only acts per --region) will never clean, so the gate would
 // disagree with reap. volumeRegion="" preserves the account-wide volume count.
+// env is the DEPLOYMENT name and widens the Volume filter to that deployment's
+// RELABELED Volumes. Without it the census accepts only the CSI default "pvc-"
+// prefix, so every Volume the volume-labels reconciler has renamed — all of them,
+// on a converged cluster — is invisible to the count. That is not a cosmetic gap:
+// assert-no-orphans is the destroy job's final gate, so a leak of exactly the
+// Volumes this deployment created would report zero orphans and pass.
 // Read-only.
-func scanOrphans(ctx context.Context, client orphanScanner, region, volumeRegion string) (orphanScan, error) {
+func scanOrphans(ctx context.Context, client orphanScanner, region, volumeRegion, env string) (orphanScan, error) {
 	inRegion := func(r string) bool { return region == "" || region == r }
 	inVolumeRegion := func(r string) bool { return volumeRegion == "" || volumeRegion == r }
+	volPrefixes := linode.VolumeLabelPrefixes(env)
 
 	live, err := client.LiveClusterIDs(ctx)
 	if err != nil {
@@ -254,7 +263,8 @@ func scanOrphans(ctx context.Context, client orphanScanner, region, volumeRegion
 		}
 		s.vol.total++
 		if linode.VolumeIsCandidate(linode.VolumeLinodeIDNull(v), linode.MapString(v, "label"),
-			linode.MapString(v, "region"), linode.MapTags(v), volumeRegion, nil, linode.MapIDString(v), "") {
+			linode.MapString(v, "region"), linode.MapTags(v), volumeRegion, nil, linode.MapIDString(v), "",
+			volPrefixes...) {
 			s.vol.orphan++
 		}
 	}

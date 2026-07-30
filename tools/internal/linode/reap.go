@@ -115,18 +115,46 @@ func VPCIsOrphan(label string, live map[string]bool) bool {
 // see VolumeLabelPrefixes.
 const CSIDefaultVolumePrefix = "pvc-"
 
+// RegionShort derives the relabeler's REGION_SHORT from a deployment name: the
+// first three characters. `llz render` computes it exactly this way when it
+// stamps REGION_SHORT into the reconciler's env patch, and the volume-labels
+// reconciler prefixes every label with it.
+//
+// THIS IS THE HALF THE FIRST FIX MISSED. VolumeLabelPrefixes used to accept
+// `<env>-`, which is only the same string as `<REGION_SHORT>-` when the
+// deployment name is three characters or fewer. On `primary` the relabeler writes
+// `pri-harbor-…` and the reaper looked for `primary-…` — so the sweep stayed
+// blind on every deployment whose name is longer than three characters, i.e. all
+// the real ones. It went unnoticed because the guard that was supposed to prove
+// the two agreed used env "e2e": exactly three characters, the one length at
+// which the bug is invisible.
+//
+// Keep this as the single definition. cmd/llz's first3 delegates here rather than
+// re-deriving it, so the label the relabeler WRITES and the prefix the reaper
+// ACCEPTS cannot drift again.
+func RegionShort(env string) string {
+	if len(env) < 3 {
+		return env
+	}
+	return env[:3]
+}
+
 // VolumeLabelPrefixes returns the label prefixes a reap should accept. env is the
-// deployment name (the relabeler's REGION_SHORT); empty means "only volumes no
-// reconciler has renamed yet".
+// deployment name; empty means "only volumes no reconciler has renamed yet".
 //
 // Deliberately NOT prefix-free: dropping the constraint entirely would make every
 // unattached volume in the account a deletion candidate, which for a destructive
 // sweep is far worse than missing some.
+//
+// The relabeled prefix is RegionShort(env), NOT env — see above. `<env>-` is not
+// also accepted: for a name of three characters or fewer the two are the same
+// string, and for a longer one `<env>-` matches nothing the relabeler has ever
+// written, so including it would only widen a destructive sweep for no coverage.
 func VolumeLabelPrefixes(env string) []string {
 	if env == "" {
 		return []string{CSIDefaultVolumePrefix}
 	}
-	return []string{CSIDefaultVolumePrefix, env + "-"}
+	return []string{CSIDefaultVolumePrefix, RegionShort(env) + "-"}
 }
 
 // VolumeIsCandidate is the safe filter for a destructive Volume sweep: an

@@ -816,7 +816,7 @@ jobs:
         if: always() && steps.confirm.outcome == 'success'
         env:
           ORPHAN_THRESHOLD: ${{ vars.PREFLIGHT_ORPHAN_THRESHOLD || '5' }}
-        run: llz ci assert-no-orphans --threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION" --attempts 5 --retry-delay 30
+        run: llz ci assert-no-orphans --threshold "$ORPHAN_THRESHOLD" --volume-region "$REGION" --env "$REGION" --attempts 5 --retry-delay 30
 
   # ── Apply / plan / destroy object-storage module ────────────────────────────
   # Creates the Loki + Harbor-registry S3 BUCKETS only. The scoped access keys

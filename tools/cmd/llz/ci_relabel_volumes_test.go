@@ -173,37 +173,81 @@ func TestRunRelabelVolumesUpdateErrorSurfaces(t *testing.T) {
 // reaper's real filter — so the same divergence cannot recur silently. The
 // namespaces are the ones actually observed leaking.
 func TestReaperRecognisesRelabelerOutput(t *testing.T) {
-	const env = "e2e"
-	prefixes := linode.VolumeLabelPrefixes(env)
+	// Deployment names of DIFFERENT LENGTHS. The first version of this guard used
+	// only "e2e" — exactly three characters, the one length at which the
+	// relabeler's first3(env) prefix and the reaper's env prefix are the same
+	// string. On "primary" the relabeler writes "pri-harbor-…" while the reaper
+	// looked for "primary-…", so the sweep stayed blind on every real deployment
+	// and the guard that existed to catch it passed. A coupling test that fixes
+	// the one input where two rules agree is a test of the test.
+	for _, env := range []string{"e2e", "primary", "secondary", "standby", "lab"} {
+		t.Run("env="+env, func(t *testing.T) {
+			prefixes := linode.VolumeLabelPrefixes(env)
 
-	for _, tc := range []struct{ ns, pvc string }{
-		{"harbor", "harbor-otomi-db-1"},
-		{"harbor", "data-harbor-redis-0"},
-		{"keycloak", "keycloak-db-1-wal"},
-		{"llz-openbao", "data-platform-openbao-0"},              // truncated at 32 chars
-		{"istio-system", "data-oauth2-proxy-redis-ha-server-0"}, // also truncated
-		{"monitoring", "storage-loki-0"},
-	} {
-		label := desiredVolumeLabel(env, tc.ns, tc.pvc)
-		t.Run(label, func(t *testing.T) {
-			if !linode.VolumeIsCandidate(true, label, "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
-				t.Errorf("reap cannot see %q, which is exactly what the relabeler writes for %s/%s.\n"+
-					"The two must agree or orphaned Volumes accumulate invisibly.", label, tc.ns, tc.pvc)
+			for _, tc := range []struct{ ns, pvc string }{
+				{"harbor", "harbor-otomi-db-1"},
+				{"harbor", "data-harbor-redis-0"},
+				{"keycloak", "keycloak-db-1-wal"},
+				{"llz-openbao", "data-platform-openbao-0"},              // truncated at 32 chars
+				{"istio-system", "data-oauth2-proxy-redis-ha-server-0"}, // also truncated
+				{"monitoring", "storage-loki-0"},
+			} {
+				// desiredVolumeLabel takes REGION_SHORT, which is what `llz render`
+				// stamps into the reconciler — first3(env), NOT env. Feeding it env
+				// directly is precisely the mistake this test now exists to pin.
+				label := desiredVolumeLabel(first3(env), tc.ns, tc.pvc)
+				if !linode.VolumeIsCandidate(true, label, "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
+					t.Errorf("reap cannot see %q, which is exactly what the relabeler writes for %s/%s on deployment %q.\n"+
+						"The two must agree or orphaned Volumes accumulate invisibly.", label, tc.ns, tc.pvc, env)
+				}
+			}
+
+			// Still matches volumes no reconciler has renamed yet.
+			if !linode.VolumeIsCandidate(true, "pvc-abc123", "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
+				t.Error("the CSI default prefix must still match — a volume is unrenamed between create and the first reconcile")
+			}
+			// And must still EXCLUDE an unrelated volume: this is a DESTRUCTIVE sweep.
+			if linode.VolumeIsCandidate(true, "my-teams-database", "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
+				t.Error("an unrelated volume must never be a deletion candidate")
 			}
 		})
 	}
 
-	// Still matches volumes no reconciler has renamed yet (fresh, or relabeler down).
-	if !linode.VolumeIsCandidate(true, "pvc-abc123", "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
-		t.Error("the CSI default prefix must still match — a volume is unrenamed between create and the first reconcile")
+	// Without --env, a relabeled volume stays OUT of scope rather than being
+	// silently swept — widening a destructive sweep must be explicit.
+	if linode.VolumeIsCandidate(true, "pri-harbor-x", "us-ord", nil, "us-ord", nil, "1", "", linode.VolumeLabelPrefixes("")...) {
+		t.Error("without --env, relabeled volumes must NOT be candidates")
 	}
-	// And the prefix must still EXCLUDE: without --env, a relabeled volume is out
-	// of scope rather than silently swept, and an unrelated volume never matches.
-	if linode.VolumeIsCandidate(true, "e2e-harbor-x", "us-ord", nil, "us-ord", nil, "1", "", linode.VolumeLabelPrefixes("")...) {
-		t.Error("without --env, relabeled volumes must NOT be candidates — widening a destructive sweep needs to be explicit")
+}
+
+// TestRegionShortIsTheOneDerivation pins the two halves of the naming contract to
+// a single definition. `llz render` stamps first3(env) into REGION_SHORT and the
+// relabeler prefixes labels with it; the reaper accepts RegionShort(env). If those
+// ever diverge again the sweep goes blind, so they must be the same function.
+func TestRegionShortIsTheOneDerivation(t *testing.T) {
+	for _, env := range []string{"e2e", "primary", "secondary", "lab", "ab", ""} {
+		if got, want := first3(env), linode.RegionShort(env); got != want {
+			t.Errorf("first3(%q)=%q but linode.RegionShort(%q)=%q — the label written and the prefix accepted must come from one derivation",
+				env, got, env, want)
+		}
 	}
-	if linode.VolumeIsCandidate(true, "my-teams-database", "us-ord", nil, "us-ord", nil, "1", "", prefixes...) {
-		t.Error("an unrelated volume must never be a deletion candidate")
+	// And the accepted prefix must be built from that derivation, not from env.
+	for _, env := range []string{"primary", "secondary"} {
+		prefixes := linode.VolumeLabelPrefixes(env)
+		wantPrefix := linode.RegionShort(env) + "-"
+		var found bool
+		for _, p := range prefixes {
+			if p == wantPrefix {
+				found = true
+			}
+			if p == env+"-" {
+				t.Errorf("VolumeLabelPrefixes(%q) accepts %q, which the relabeler never writes — "+
+					"it only widens a destructive sweep", env, env+"-")
+			}
+		}
+		if !found {
+			t.Errorf("VolumeLabelPrefixes(%q) does not accept %q, so every relabeled Volume is invisible to the sweep", env, wantPrefix)
+		}
 	}
 }
 

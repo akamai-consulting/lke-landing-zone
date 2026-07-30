@@ -5,10 +5,16 @@ package linode
 // Volume born without them (the one known path: clone/snapshot PVCs admitted
 // during a Kyverno webhook outage; the Linode CloneVolume API takes no tags).
 // This is a NARROW resurrection of the retired volume-labeler's API primitives:
-// tags only — no label rewriting (Volumes keep their pvc-<uuid> labels; renaming
-// them breaks reap's `pvc-` candidate filter), and no node-instance lookup (the
-// desired tag set, lke<id> included, is read from the live StorageClass — the
-// single source of truth cluster-bootstrap renders).
+// tags only — no label rewriting (that is the volume-labels lane's job) — and no
+// node-instance lookup (the desired tag set, lke<id> included, is read from the
+// live StorageClass — the single source of truth cluster-bootstrap renders).
+//
+// This block used to justify "no label rewriting" with "renaming them breaks
+// reap's `pvc-` candidate filter". That has been false since the volume-labels
+// reconciler landed: it renames every bound Volume, and the filter now accepts
+// RegionShort(env) too. The note outlived the change and read as a reason never
+// to touch labels — the opposite of the current contract. See
+// VolumeLabelPrefixes.
 
 import (
 	"context"
