@@ -163,8 +163,20 @@ The companion `llz ci alert-eval` runs report-only (its FIRING/ARMED/`DEAD?`/`BR
 report is surfaced in the job summary) and is intended to harden to `--strict`
 once the last opt-in-reconciler `DEAD?` alerts are resolved.
 
-Two further gates run in the same converge:
+Three further gates run in the same converge:
 
+- **`llz ci assert-openbao-audit`** — the same argument applied to the *log* path,
+  which `assert-scrape-targets` does not cover and `assert-loki` (Loki is
+  bootstrapped) cannot: it reads OpenBao's audit stream back out of Loki and fails
+  if nothing arrived in the lookback window. That pipeline shipped nowhere for its
+  entire life — `lokiPushUrl` named `loki-gateway.llz-observability`, a Service
+  nothing creates, and the NetworkPolicy egress allow named the same empty
+  namespace, so the two agreed with each other and neither agreed with the cluster.
+  Nothing static can catch that (any URL is consistent with a matching allow) and
+  nothing pod-shaped can either (promtail retries a dead name forever and stays
+  Running), so the gate is the round trip. Its static half — gate target, chart
+  push URL and netpol namespace all agreeing — is a unit test, so a revert fails at
+  PR time instead of an e2e cycle later.
 - **`llz ci assert-reconciler`** — the reconciler's *functional* health, which
   pod phase can't see: `llz_reconcile_up == 1` (the reconcile loop is up AND its
   samples succeed — a pod Running yet failing on a permission dropped by the

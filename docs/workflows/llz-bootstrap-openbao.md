@@ -702,7 +702,7 @@ the poll on a legit slow rollout (Progressing, not stalled). 20m absorbs the wor
 tail while still catching a genuine stall well inside the 45m job timeout — and the kick
 step makes the worst case rare rather than routine.
 
-### Step: (e2e) assert suite — 6 gates + 2 diagnostics, in parallel lanes
+### Step: (e2e) assert suite — 7 gates + 2 diagnostics, in parallel lanes
 
 E2E validation gate, folded in from `release-e2e.yml`'s former `validate` job: that job
 dispatched `cluster-health.yml` only to run `llz ci converge` (redundant with the poll
@@ -722,6 +722,20 @@ Per-lane rationale (each verb is unit-tested; details in its Go file):
 
 * **loki** — Loki bootstrapped + S3-backed (the former `validate` job's one net-new
   check, folded here to drop that job's container cycle).
+* **openbao-audit** — GATING round trip on OpenBao's audit-log pipeline: reads the audit
+  stream back out of Loki and fails if nothing arrived in the lookback window. Separate
+  from **loki** deliberately — that lane proves Loki is up, not that anything reaches it.
+  The pipeline shipped NOWHERE for its entire life (`lokiPushUrl` named
+  `loki-gateway.llz-observability`, a Service nothing creates; apl-core runs Loki in
+  `monitoring`) and no gate here could see it: promtail retries a dead name forever, so
+  every pod stayed Running, and the NetworkPolicy egress allow named the same empty
+  namespace — correct in shape, wrong in target, granting nothing while reviewing clean.
+  A static guard cannot tell a correct URL from a plausible one; only the round trip can.
+  Passing means the audit device is writable, the sidecar can tail it, the gateway
+  resolves, the NetworkPolicy admits the egress, and Loki ingested the result. The static
+  half — the gate's target, the chart's push URL and the netpol namespace all agreeing —
+  is a unit test (`TestAuditGateDefaultsMatchTheChart`), so a revert fails at PR time
+  rather than an e2e cycle later.
 * **scrape+reconciler** — ONE lane, ordered. `assert-scrape-targets` proves every
   landing-zone ServiceMonitor has a live `up` target and each PrometheusRule group
   loaded (the silent un-scraped-CR regression class); `assert-reconciler` then reads
