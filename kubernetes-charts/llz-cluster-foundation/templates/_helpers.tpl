@@ -107,8 +107,14 @@ at the top of the file, so the per-namespace grouping the file documents
 namespace-specific allows") is preserved and the rendered document order is
 unchanged.
 
+AMBIENT: when .ambient.enabled is true a third policy is emitted, opening the
+HBONE port and the health-probe source addresses. It is OFF by default and
+grants nothing until Istio ambient is actually enabled — see the ambient block
+in values.yaml for why it ships ahead of that.
+
 Args (dict): prefix (name prefix), ns (namespace), wave (sync-wave),
-dnsPorts (the .Values.networkPolicies.dnsPorts list).
+dnsPorts (the .Values.networkPolicies.dnsPorts list),
+ambient (the .Values.networkPolicies.ambient block).
 */}}
 {{- define "llz-cluster-foundation.baselineNP" -}}
 apiVersion: networking.k8s.io/v1
@@ -137,4 +143,38 @@ spec:
         {{- range .dnsPorts }}
         - { port: {{ .port }}, protocol: {{ .protocol }} }
         {{- end }}
+{{- if (.ambient).enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .prefix }}-allow-ambient
+  namespace: {{ .ns }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .wave | quote }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    # HBONE. Once a pod is enrolled in ambient, its inbound traffic no longer
+    # arrives on the application port — it arrives on {{ .ambient.hbonePort }},
+    # tunnelled by the peer node's ztunnel. A default-deny that enumerates
+    # application ports therefore drops ALL mesh traffic to the pod.
+    #
+    # No `from:` selector: the packets originate from the ztunnel on the SOURCE
+    # NODE, not from the client pod, so there is no podSelector or
+    # namespaceSelector that describes them. Same shape and same reason as the
+    # bare apiserver-egress rules elsewhere in this chart.
+    - ports:
+        - { port: {{ .ambient.hbonePort }}, protocol: TCP }
+    # Health probes. Ambient SNATs kubelet probe traffic to link-local addresses
+    # so the probe is distinguishable from mesh traffic; a default-deny that does
+    # not allow them fails every probe once the namespace is enrolled, and the
+    # pod CrashLoops. Both families are listed because the address used follows
+    # the pod's IP family, not the cluster's.
+    - from:
+        {{- range .ambient.healthProbeSources }}
+        - ipBlock: { cidr: {{ . | quote }} }
+        {{- end }}
+{{- end }}
 {{- end }}

@@ -961,6 +961,15 @@ spec:
       annotations:
         # Batch pod — keep it out of the istio mesh (apl-operator may have injection on;
         # an injected proxy never exits, so the Job would never complete).
+        #
+        # AMBIENT: do NOT translate this to istio.io/dataplane-mode: none. The reason
+        # above is sidecar-specific and evaporates under ambient — and here the exclusion
+        # is actively load-bearing for the WRONG side: it is why aplGiteaInClusterURL is a
+        # registered plaintext hop, since this Job clones over http:// with the Gitea
+        # username and password in an HTTP Basic header. Under ambient this pod enrols via
+        # its namespace and that hop becomes mTLS, which closes the entry in
+        # plaintextAllowed. Porting the opt-out would preserve a credentialed cleartext
+        # hop that the migration would otherwise fix for free.
         sidecar.istio.io/inject: "false"
     spec:
       restartPolicy: Never

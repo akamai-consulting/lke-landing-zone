@@ -23,7 +23,7 @@
 # covered here — its NPs live in its own Application tree.
 
 # ── cert-manager ─────────────────────────────────────────────────────────────
-{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "cert-manager" "ns" "cert-manager" "wave" $wave "dnsPorts" $np.dnsPorts) }}
+{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "cert-manager" "ns" "cert-manager" "wave" $wave "dnsPorts" $np.dnsPorts "ambient" $np.ambient) }}
 ---
 # cert-manager controllers call Let's Encrypt ACME + the Linode DNS API (both
 # HTTPS) and the apiserver. The 6443 entry covers LKE-E's apiserver DNAT. Istio
@@ -99,7 +99,7 @@ spec:
 
 # ── harbor ───────────────────────────────────────────────────────────────────
 ---
-{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "harbor" "ns" "harbor" "wave" $wave "dnsPorts" $np.dnsPorts) }}
+{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "harbor" "ns" "harbor" "wave" $wave "dnsPorts" $np.dnsPorts "ambient" $np.ambient) }}
 ---
 # Harbor talks to apiserver + Linode Object Storage (S3 over HTTPS).
 apiVersion: networking.k8s.io/v1
@@ -232,7 +232,7 @@ spec:
 
 # ── istio-system ─────────────────────────────────────────────────────────────
 ---
-{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "istio-system" "ns" $np.istiod.namespace "wave" $wave "dnsPorts" $np.dnsPorts) }}
+{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "istio-system" "ns" $np.istiod.namespace "wave" $wave "dnsPorts" $np.dnsPorts "ambient" $np.ambient) }}
 ---
 # istiod watches K8s resources cluster-wide; gateways pull from upstream services
 # in every namespace. Egress wide-open — gateways proxy to arbitrary upstream
@@ -293,7 +293,7 @@ spec:
 
 # ── observability ────────────────────────────────────────────────────────────
 ---
-{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "observability" "ns" "llz-observability" "wave" $wave "dnsPorts" $np.dnsPorts) }}
+{{ include "llz-cluster-foundation.baselineNP" (dict "prefix" "observability" "ns" "llz-observability" "wave" $wave "dnsPorts" $np.dnsPorts "ambient" $np.ambient) }}
 ---
 # Workloads here (OTel Collector, observability sidecars) reach apiserver +
 # Linode Object Storage (Loki S3). Internet HTTPS covered by 443.

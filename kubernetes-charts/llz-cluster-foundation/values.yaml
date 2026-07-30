@@ -160,6 +160,51 @@ networkPolicies:
     - port: 53
       protocol: TCP
 
+  # ── Istio AMBIENT readiness ────────────────────────────────────────────────
+  #
+  # OFF, and it grants nothing while it stays off. Ship-ahead of the migration.
+  #
+  # WHY THIS EXISTS. apl-core already carries an `apps.istio.ambient` flag
+  # (linode/apl-core#3251, "preliminary setup"), but nothing there labels a
+  # namespace `istio.io/dataplane-mode: ambient` yet — every namespace still gets
+  # `istio-injection: enabled`, so today the flag installs ztunnel and the CNI and
+  # enrols no workload. When that last step lands, THIS CHART is what breaks it:
+  # baselineNP ships default-deny into apl-core's own namespaces (cert-manager,
+  # harbor, istio-system) plus llz-observability, and apl-core ships no
+  # NetworkPolicies of its own there. Two things fail the moment a namespace is
+  # enrolled:
+  #
+  #   1. Inbound to an enrolled pod arrives on 15008 (HBONE), not the application
+  #      port, and the default-deny drops it.
+  #   2. Kubelet probes are SNATed to link-local addresses, and the default-deny
+  #      drops those too — so every probed pod CrashLoops.
+  #
+  # Both would present as apl-core failures and be debugged here. Landing the
+  # allows behind a flag means the migration is a one-line values change on our
+  # side instead of an incident.
+  #
+  # WHY NOT ON BY DEFAULT. Every allow in this chart exists because a default-deny
+  # without it broke something observed. These two are the exception — they are
+  # written from the Istio documentation against a data plane this platform does
+  # not run yet, and nothing here has exercised them. Enabling them by default
+  # would widen ingress on every managed namespace today for a benefit that does
+  # not exist until enrolment. Flip this WITH the enrolment, not before.
+  #
+  # SCOPE. Covers the namespaces baselineNP owns. The llz-* namespaces whose
+  # policies come from other trees (llz-openbao's own chart, llz-reconciler and
+  # friends under platform-apl/components) need the same treatment before THEY are
+  # enrolled; that is deliberately not bundled here.
+  ambient:
+    enabled: false
+    # HBONE. Fixed by Istio; a value here only so the template has no magic number.
+    hbonePort: 15008
+    # The link-local addresses ambient SNATs kubelet health probes to. Both
+    # families: the one used follows the POD's IP family, not the cluster's, so a
+    # dual-stack pod can present either. Trim if an instance is single-stack.
+    healthProbeSources:
+      - 169.254.7.127/32
+      - fd16:9254:7127:1337:ffff:ffff:ffff:ffff/128
+
   # The istiod control-plane Service/pod selector and xDS ports. Pods with an
   # Istio sidecar (injected in cert-manager/harbor/observability) need egress to
   # istiod for xDS + cert signing; WITHOUT it Envoy's iptables redirect kills

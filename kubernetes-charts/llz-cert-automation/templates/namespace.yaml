@@ -20,4 +20,12 @@ metadata:
     pod-security.kubernetes.io/warn-version: {{ .Values.podSecurity.warnVersion }}
     # Disable Istio sidecar injection — Argo Workflow pods are short-lived
     # batch workloads and the sidecar prevents the pod from terminating cleanly.
+    #
+    # AMBIENT: do NOT translate this to `istio.io/dataplane-mode: none`. The reason
+    # above is sidecar-specific and does not apply to ambient, where nothing is
+    # injected into the pod and a Workflow terminates normally. Enrolling this
+    # namespace is in fact the point: the EventBus hop registered in
+    # plaintextAllowed (the cert-manager Secret, private key included, crossing
+    # JetStream) gains mTLS from it. Porting the opt-out would keep key material on
+    # an unmeshed bus for a constraint that no longer exists.
     istio-injection: disabled

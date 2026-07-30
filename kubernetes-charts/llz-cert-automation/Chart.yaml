@@ -37,7 +37,7 @@ type: application
 # 0.1.10: add values.schema.json — root-strict, so a typo'd top-level key is
 #        REJECTED AT RENDER instead of silently activating nothing. Nested
 #        objects stay permissive; no rendered change for valid values.
-version: 0.1.10
+version: 0.1.11
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"
