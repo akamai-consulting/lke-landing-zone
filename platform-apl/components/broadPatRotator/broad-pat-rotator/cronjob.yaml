@@ -36,6 +36,13 @@ spec:
         metadata:
           # Batch pod — keep out of the istio mesh (a never-exiting sidecar would stop
           # the Job completing; managed clusters may have injection on for this ns).
+          #
+          # AMBIENT: do NOT translate this to `istio.io/dataplane-mode: none`. The
+          # reason above is sidecar-specific — there is no Envoy in the pod under
+          # ambient, so nothing holds the Job open and the exclusion has no purpose.
+          # Carrying it over would keep this pod's traffic in the clear for no
+          # benefit. The correct migration action here is to DELETE this annotation,
+          # not to port it.
           annotations:
             sidecar.istio.io/inject: "false"
           labels:

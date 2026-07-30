@@ -58,7 +58,7 @@ type: application
 # 0.1.14: add values.schema.json — root-strict, so a typo'd top-level key is
 #        REJECTED AT RENDER instead of silently activating nothing. Nested
 #        objects stay permissive; no rendered change for valid values.
-version: 0.1.14
+version: 0.1.15
 # appVersion tracks the alpine/k8s kubectl image tag default in values.yaml
 # (used by the CoreDNS-restart and StorageClass-patcher Jobs).
 appVersion: "1.32.4"
