@@ -260,6 +260,9 @@ jobs:
         timeout-minutes: 6
         with:
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name: ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old: ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
           github-token:          ${{ github.token }}
@@ -843,6 +846,9 @@ jobs:
         timeout-minutes: 6
         with:
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name: ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old: ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -899,6 +905,9 @@ jobs:
         timeout-minutes: 6
         with:
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name: ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old: ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           region:                ${{ inputs.region }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}
@@ -953,6 +962,9 @@ jobs:
         timeout-minutes: 6
         with:
           state-encryption-passphrase: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE }}
+          state-encryption-key-name: ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME || 'llz' }}
+          state-encryption-passphrase-old: ${{ secrets.TF_STATE_ENCRYPTION_PASSPHRASE_OLD }}
+          state-encryption-key-name-old: ${{ vars.TF_STATE_ENCRYPTION_KEY_NAME_OLD }}
           region:                ${{ needs.resolve.outputs.peer }}
           aws-access-key-id:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.TF_STATE_SECRET_KEY }}

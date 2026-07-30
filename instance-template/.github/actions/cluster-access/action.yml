@@ -48,6 +48,29 @@ inputs:
       Without this the init fails on "Reference to undeclared encryption method",
       which names the roots rather than the missing secret (ADR 0007).
     required: true
+  state-encryption-key-name:
+    description: >
+      Key-provider name the CURRENT passphrase writes state under (default
+      `llz`). Forwarded to tf-encryption-env, which owns the validation.
+    required: false
+    default: llz
+  state-encryption-passphrase-old:
+    description: >
+      PREVIOUS passphrase, set only during a rollover window. WITHOUT IT THIS
+      PATH BREAKS MID-ROLLOVER: `llz ci fetch-kubeconfig-state` runs its own
+      `tofu init`, so until every root has been re-applied under the new key the
+      state it reads is still encrypted under the OLD one, and an init carrying
+      only the new passphrase cannot decrypt it. That is the same class of
+      failure — a cluster-facing job initialising outside terraform-init — that
+      made tf-encryption-env a shared action in the first place.
+    required: false
+    default: ''
+  state-encryption-key-name-old:
+    description: >
+      Key-provider name the PREVIOUS passphrase wrote state under. Required
+      whenever state-encryption-passphrase-old is set.
+    required: false
+    default: ''
   linode-token:
     description: Linode API token used to open this runner's egress IP in the control-plane ACL.
     required: true
@@ -106,6 +129,9 @@ runs:
       uses: ./.github/actions/tf-encryption-env
       with:
         state-encryption-passphrase: ${{ inputs.state-encryption-passphrase }}
+        state-encryption-key-name: ${{ inputs.state-encryption-key-name }}
+        state-encryption-passphrase-old: ${{ inputs.state-encryption-passphrase-old }}
+        state-encryption-key-name-old: ${{ inputs.state-encryption-key-name-old }}
 
     - name: Fetch kubeconfig from Terraform state
       id: kubeconfig
