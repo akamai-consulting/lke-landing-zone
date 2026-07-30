@@ -419,9 +419,27 @@ func runCIPlaintextGuard(root string) error {
 // scanned less than it appeared to, which is the precise failure requireCorpus
 // exists to catch and would NOT have caught here (platform-apl alone keeps the
 // examined count above zero).
+// It also scans instance-template/ and terraform-modules/. Both are clean today,
+// so this closes a LATENT gap rather than a live one — but latent is the whole
+// point of a drift gate, and instance-template/apl-values/ is exactly where a
+// per-instance in-cluster URL would land, unreviewed by any of the trees above.
+//
+// Note the asymmetry these two introduce, and why it is accepted. esRepoPath
+// resolves a name against a template checkout OR an instance, where the same tree
+// sits one level down. For instance-template there IS no such second location: in
+// an instance the scaffold's contents ARE the root (environments/, apl-values/,
+// .github/), so this entry covers the template layout only. Enumerating the
+// scaffolded subtrees to cover instances too would duplicate copier's manifest
+// here and rot the moment the scaffold changes shape. The template checkout is
+// where these files are authored and reviewed, so that is where the gate belongs.
 func plaintextScanDirs(root string) []string {
 	dirs := platformTreeDirs(root)
-	dirs = append(dirs, esRepoPath(root, "kubernetes-charts"), esRepoPath(root, "tools"))
+	dirs = append(dirs,
+		esRepoPath(root, "kubernetes-charts"),
+		esRepoPath(root, "tools"),
+		esRepoPath(root, "instance-template"),
+		esRepoPath(root, "terraform-modules"),
+	)
 	return dirs
 }
 

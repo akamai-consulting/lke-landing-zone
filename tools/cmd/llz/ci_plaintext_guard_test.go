@@ -488,3 +488,23 @@ func TestEventSourceSecretsSpellings(t *testing.T) {
 		}
 	}
 }
+
+// The corpus must reach every tree this repo AUTHORS, not just the ones that
+// happened to hold a hop when the guard was written. instance-template/ is where
+// per-instance values land and terraform-modules/ ships YAML too; both were
+// outside the walk, so a plaintext URL added there passed silently.
+//
+// Asserted on the dir list rather than on a scan result because both trees are
+// clean today — the point is the corpus, and a findings-based test would pass
+// just as well with the dirs removed.
+func TestPlaintextScanDirsCoverAuthoredTrees(t *testing.T) {
+	got := map[string]bool{}
+	for _, d := range plaintextScanDirs("/repo") {
+		got[filepath.Base(d)] = true
+	}
+	for _, want := range []string{"kubernetes-charts", "tools", "instance-template", "terraform-modules"} {
+		if !got[want] {
+			t.Errorf("%s must be in the scan corpus; got %v", want, plaintextScanDirs("/repo"))
+		}
+	}
+}
