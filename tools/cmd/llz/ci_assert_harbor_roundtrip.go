@@ -44,6 +44,7 @@ package main
 // no access, or any unexpected status fails. Read-only in effect.
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -237,7 +238,27 @@ func missingActions(granted map[string]bool, want ...string) []string {
 // ── cluster + registry I/O (seamed) ──────────────────────────────────────────
 
 var readHarborRobotSecret = func(ns, name string) ([]byte, error) {
-	return execOutput("kubectl", "-n", ns, "get", "secret", name, "-o", "json")
+	// --ignore-not-found so an ABSENT Secret comes back (empty, nil) and is
+	// distinguishable from an unreadable one. The caller retries absence and
+	// fails on a real read error; without this both are "exit status 1".
+	return execOutput("kubectl", "-n", ns, "get", "secret", name, "--ignore-not-found", "-o", "json")
+}
+
+// namespaceExists reports whether the component's namespace is on this cluster at
+// all. Seamed alongside the Secret read.
+//
+// The distinction it buys is the whole reason this gate can be honest. An absent
+// llz-cert-automation namespace means the component was never deployed — managed
+// App Platform renders a MINIMAL app set and simply does not include it — and a
+// gate that failed on that would red every such cluster for a component it was
+// never asked to run. An absent Secret INSIDE a present namespace is the real
+// finding: ESO is not materializing secret/harbor/robot.
+var namespaceExists = func(ns string) (bool, error) {
+	out, err := execOutput("kubectl", "get", "namespace", ns, "--ignore-not-found", "-o", "name")
+	if err != nil {
+		return false, err
+	}
+	return len(bytes.TrimSpace(out)) > 0, nil
 }
 
 // harborHTTP performs a request against the registry. Seamed so the whole
@@ -245,6 +266,31 @@ var readHarborRobotSecret = func(ns, name string) ([]byte, error) {
 var harborHTTP = func(req *http.Request) (*http.Response, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	return client.Do(req)
+}
+
+// readSecretWithSettle polls for the robot Secret until it appears or the budget
+// runs out. Absence is retried; an unreadable cluster fails immediately, because
+// "cannot ask" is not the same answer as "not there yet".
+func readSecretWithSettle(ns, name string, settle, interval time.Duration) ([]byte, error) {
+	deadline := time.Now().Add(settle)
+	for attempt := 1; ; attempt++ {
+		raw, err := readHarborRobotSecret(ns, name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "::error::could not read Secret %s/%s (%v)\n", ns, name, err)
+			return nil, fmt.Errorf("could not read Secret %s/%s: %w", ns, name, err)
+		}
+		if len(bytes.TrimSpace(raw)) > 0 {
+			return raw, nil
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(os.Stderr, "::error::the robot credential Secret %s/%s never appeared within %s\n", ns, name, settle)
+			return nil, fmt.Errorf("robot credential Secret %s/%s never appeared within %s — ESO has not materialized it "+
+				"from secret/harbor/robot; check the harbor-robot-provisioner CronJob has ticked and the ExternalSecret is Ready",
+				ns, name, settle)
+		}
+		fmt.Printf("attempt %d: Secret %s/%s not present yet — retrying in %s\n", attempt, ns, name, interval)
+		time.Sleep(interval)
+	}
 }
 
 // probeHarborRoundTrip runs the full handshake once.
@@ -416,11 +462,30 @@ func keysOf(m map[string]bool) []string {
 func runCIAssertHarborRoundTrip(secretNS, secretName, registry, repo string, settle, interval time.Duration) error {
 	fmt.Println("## Harbor robot round-trip assertion (pull + push authorization)")
 
-	raw, err := readHarborRobotSecret(secretNS, secretName)
+	// Is the component here at all? A managed App Platform cluster renders a
+	// minimal app set that does not include llz-cert-automation, and on
+	// lke638103 the namespace simply did not exist ("namespaces
+	// \"llz-cert-automation\" not found"). That is a deployment shape, not a
+	// broken credential.
+	switch present, err := namespaceExists(secretNS); {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "::error::could not tell whether namespace %s exists (%v)\n", secretNS, err)
+		return fmt.Errorf("could not determine whether namespace %s exists: %w", secretNS, err)
+	case !present:
+		fmt.Printf("SKIP: namespace %s does not exist — the llz-cert-automation component is not deployed on this "+
+			"cluster (managed App Platform renders a minimal app set), so there is no robot credential to round-trip.\n", secretNS)
+		return nil
+	}
+
+	// The Secret READ is inside the settle loop, not before it. It is written by
+	// ESO from secret/harbor/robot, which the harbor-robot-provisioner CronJob
+	// seeds only AFTER Harbor's registry is serving — internal/health/allowlists.go
+	// documents it as deferred on a fresh bootstrap and explicitly says it must not
+	// pin the convergence gate. Reading once, first, made this gate fail on exactly
+	// the window that file says to expect.
+	raw, err := readSecretWithSettle(secretNS, secretName, settle, interval)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "::error::the robot credential Secret %s/%s is absent (%v)\n", secretNS, secretName, err)
-		return fmt.Errorf("robot credential Secret %s/%s is absent: %w — ESO has not materialized it from secret/harbor/robot",
-			secretNS, secretName, err)
+		return err
 	}
 	creds, err := decodeRobotSecret(raw)
 	if err != nil {
