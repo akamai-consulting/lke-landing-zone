@@ -163,3 +163,42 @@ func TestCredentialCoverageGuardPassesOnThisRepo(t *testing.T) {
 		t.Fatalf("credential-coverage-guard must be green on this repo: %v", err)
 	}
 }
+
+// A `secrets.FOO` in prose is not a usage. Counting it would keep a retired
+// secret's exemption looking live, which defeats the staleness rule this guard
+// leans on hardest — registry rot re-entering through the door the check watches.
+func TestCredentialCoverageGuardIgnoresWholeLineComments(t *testing.T) {
+	dir := filepath.Join(writeWorkflows(t, map[string]string{
+		"a.yml": "# historical note: this used to read ${{ secrets.RETIRED_TOKEN }}\n" +
+			"env:\n  X: ${{ secrets.GITHUB_TOKEN }}\n",
+	}), "instance-template", ".github", "workflows")
+	got, _, err := collectWorkflowSecretRefs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range got {
+		if g == "RETIRED_TOKEN" {
+			t.Error("a secret named only in a comment must not count as used")
+		}
+	}
+	if len(got) != 1 || got[0] != "GITHUB_TOKEN" {
+		t.Errorf("the real usage must survive, got %v", got)
+	}
+}
+
+// The other error direction, which is NOT symmetric: dropping a real usage means
+// an unmeasured credential goes unnoticed, which is the failure this guard
+// exists to prevent. So only whole-line comments are stripped — a `#` earlier on
+// a line that also carries a live reference must not blind the scan.
+func TestCredentialCoverageGuardKeepsUsagesAfterAnInlineHash(t *testing.T) {
+	dir := filepath.Join(writeWorkflows(t, map[string]string{
+		"a.yml": "steps:\n  - run: echo \"# banner\" && use ${{ secrets.GHCR_READ_TOKEN }}\n",
+	}), "instance-template", ".github", "workflows")
+	got, _, err := collectWorkflowSecretRefs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "GHCR_READ_TOKEN" {
+		t.Errorf("an inline # must not drop a real usage, got %v", got)
+	}
+}

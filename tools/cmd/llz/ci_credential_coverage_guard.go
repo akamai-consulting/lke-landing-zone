@@ -127,6 +127,28 @@ var credCoverageExempt = map[string]struct {
 	},
 }
 
+// uncommented drops WHOLE-LINE YAML comments before the scan. A `secrets.FOO`
+// that appears only in prose is not a usage, and counting it defeats the rule
+// this guard leans on hardest: unused registry entries fail, so a dead exemption
+// stays reviewable. A comment naming a retired secret would have kept its
+// exemption alive forever — the registry rot the staleness check exists to catch,
+// re-entering through the door the check was watching.
+//
+// WHOLE-LINE ONLY, deliberately. Stripping from any `#` would also cut
+// `run: echo "# ${{ secrets.FOO }}"`, dropping a REAL usage from the set — and an
+// unmeasured credential going unnoticed is the failure this guard exists to
+// prevent, so the two error directions are not symmetric. A trailing comment that
+// names a secret is rare; a block of prose that does is the realistic rot vector.
+func uncommented(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "#") {
+			lines[i] = ""
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // credSecretRef matches a `secrets.NAME` reference in a workflow expression. It
 // deliberately does NOT try to read `secrets:` declaration blocks: a secret that
 // is declared and never referenced is not consumed by anything, and the point of
@@ -279,7 +301,7 @@ func collectWorkflowSecretRefs(dir string) ([]string, int, error) {
 			return err
 		}
 		examined++
-		for _, m := range credSecretRef.FindAllStringSubmatch(string(b), -1) {
+		for _, m := range credSecretRef.FindAllStringSubmatch(uncommented(string(b)), -1) {
 			set[m[1]] = true
 		}
 		return nil

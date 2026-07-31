@@ -169,6 +169,22 @@ var ghSecretTargets = []struct {
 	// credentials with no expiry, and these have no expiry EITHER — they were
 	// simply not in the list it wrote.
 	//
+	// ASSUMPTION, checked rather than assumed: `expect: present` on these four
+	// encodes "OpenBao is deployed". `openbao` is NOT a Mandatory component
+	// (clusterspec/components.go marks only argocd and clusterFoundation), so an
+	// instance CAN set components.openbao.enabled=false — and there these four are
+	// never seeded, so they would page and fail the daily gate.
+	//
+	// Left as `present` rather than made conditional, because that shape is already
+	// unsupported by the job in question: the daily credential run does
+	// `alert-eval --strict`, LLZCredentialRotationOverdue names
+	// llz_credential_age_days, and the openbao-gauges lane publishes nothing
+	// without OpenBao — so --strict already classes it DEAD? and fails, today,
+	// before any of this. Building conditional expectation plumbing for a
+	// deployment nothing else supports would be machinery for a shape that cannot
+	// pass the surrounding checks anyway. Recorded so the next reader knows it was
+	// weighed, not missed.
+	//
 	// OPENBAO_SEAL_KEY is the AES-256 key the chart's `seal "static"` auto-unseal
 	// uses (ci_bao_seed_seal_key.go). It is the encryption-at-rest key for
 	// everything in OpenBao's raft store, so it is the single credential whose
