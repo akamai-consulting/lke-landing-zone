@@ -121,12 +121,13 @@ func ciAssertRotationHealthCmd() *cobra.Command {
 
 // credVerdict is one credential's rotation-health outcome.
 type credVerdict struct {
-	Cred    string
-	Class   string
-	Age     float64 // days (valid only when Present)
-	Present bool
-	Gated   bool // its class makes it eligible to fail the gate
-	FailWhy string
+	Cred     string
+	Class    string
+	Age      float64 // days (valid only when Present)
+	Present  bool
+	Gated    bool // its class makes it eligible to fail the gate
+	Optional bool // the path is opt-in; absence is not a finding
+	FailWhy  string
 }
 
 // expectedRotationCreds returns the credentials this gate demands a series for,
@@ -135,13 +136,21 @@ type credVerdict struct {
 // Derived from the declaration, not from the metrics: asking Prometheus which
 // credentials exist and then checking those exist is a tautology, and it would
 // pass green on precisely the missing-series bug this gate is for.
-func expectedRotationCreds() []struct{ Cred, Class string } {
-	out := make([]struct{ Cred, Class string }, 0, len(credPaths))
+func expectedRotationCreds() []expectedCred {
+	out := make([]expectedCred, 0, len(credPaths))
 	for _, cp := range credPaths {
-		out = append(out, struct{ Cred, Class string }{cp.cred, cp.class})
+		out = append(out, expectedCred{cp.cred, cp.class, cp.optional})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Cred < out[j].Cred })
 	return out
+}
+
+// expectedCred is one credential this gate reasons about: what class it carries,
+// and whether it is expected to EXIST at all on a given deployment.
+type expectedCred struct {
+	Cred     string
+	Class    string
+	Optional bool
 }
 
 // slaForClass returns the rotation SLA in days for a class.
@@ -157,15 +166,22 @@ func slaForClass(class string) float64 {
 //
 // ages maps the `cred` label to its llz_credential_age_days value. A credential
 // absent from it published no series.
-func evalRotationHealth(expected []struct{ Cred, Class string }, ages map[string]float64, strict bool) []credVerdict {
+func evalRotationHealth(expected []expectedCred, ages map[string]float64, strict bool) []credVerdict {
 	out := make([]credVerdict, 0, len(expected))
 	for _, e := range expected {
-		v := credVerdict{Cred: e.Cred, Class: e.Class, Gated: strict || alertableCredClasses[e.Class]}
+		v := credVerdict{Cred: e.Cred, Class: e.Class, Optional: e.Optional,
+			Gated: strict || alertableCredClasses[e.Class]}
 		age, ok := ages[e.Cred]
 		v.Present, v.Age = ok, age
 		sla := slaForClass(e.Class)
 
 		switch {
+		// An OPT-IN path that is simply not seeded here. Its age still gates when
+		// it IS present — the SLA is real — but demanding the series would red
+		// every stock cluster for a credential that is correctly absent, which is
+		// the permanent red this gate's own doc comment refuses for `static`.
+		case !ok && e.Optional:
+			v.FailWhy = ""
 		case !ok && alertableCredClasses[e.Class]:
 			v.FailWhy = "no llz_credential_age_days series — this credential is DECLARED in credPaths but the " +
 				"openbao-gauges lane is publishing nothing for it. It is invisible on the single pane, and " +
@@ -261,6 +277,10 @@ func runCIAssertRotationHealth(prom, namespace string, strict bool, settle, inte
 		switch {
 		case v.FailWhy != "":
 			fmt.Printf("FAIL: %s (%s) — %s\n", v.Cred, v.Class, v.FailWhy)
+		case !v.Present && v.Optional:
+			fmt.Printf("skip: %s (%s, opt-in) — no series; this path is not seeded on this cluster, "+
+				"which is the normal state for it. Its %.0f-day SLA still gates once it is.\n",
+				v.Cred, v.Class, slaForClass(v.Class))
 		case !v.Present:
 			fmt.Printf("skip: %s (%s) — no series; path not seeded on this cluster\n", v.Cred, v.Class)
 		default:
