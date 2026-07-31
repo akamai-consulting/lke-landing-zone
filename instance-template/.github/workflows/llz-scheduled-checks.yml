@@ -290,6 +290,22 @@ jobs:
       - name: Read cluster credential alert status
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)' --strict --summary "Credential single pane (${REGION})"
+
+      # END-TO-END GATE on the lane the step above cannot judge. alert-eval reads
+      # RULES; a credential that publishes no series has no rule to evaluate, so a
+      # dark write-time lane looks exactly like a healthy one there. This asserts
+      # the funnel from the writer's own verdict: the secret-age probe
+      # authenticated, every ghSecretTargets credential expected present IS
+      # present, and OPENBAO_ROOT_TOKEN — expected ABSENT, because bootstrap
+      # revokes it — has not been left set by a break-glass that skipped its
+      # revoke.
+      #
+      # --require-inventory because THIS job wrote the inventory two steps ago. An
+      # absent inventory here is a break, not the fresh-cluster case the flag's
+      # default tolerates for the e2e suite.
+      - name: Assert the credential funnel end to end
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci assert-rotation-health --require-inventory
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f "$HOME/.kube/config"

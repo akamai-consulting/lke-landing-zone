@@ -167,7 +167,7 @@ func TestRunAssertRotationHealthFailsOnMissingSeries(t *testing.T) {
 			return []byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`), nil
 		})
 	}
-	err := runCIAssertRotationHealth("ns/prom:9090", "llz-reconciler", false, 0, time.Millisecond)
+	err := runCIAssertRotationHealth("ns/prom:9090", "llz-reconciler", false, false, 0, time.Millisecond)
 	if err == nil {
 		t.Fatal("no credential-age series at all must fail the gate")
 	}
@@ -183,7 +183,7 @@ func TestRunAssertRotationHealthFailsOnUnreachablePrometheus(t *testing.T) {
 			return []byte(`{"status":"error","error":"query timed out"}`), nil
 		})
 	}
-	err := runCIAssertRotationHealth("ns/prom:9090", "llz-reconciler", false, 0, time.Millisecond)
+	err := runCIAssertRotationHealth("ns/prom:9090", "llz-reconciler", false, false, 0, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "could not reach Prometheus") {
 		t.Errorf("a query failure must be reported as a query failure, got %v", err)
 	}
@@ -251,6 +251,131 @@ func TestEveryCredPathClassIsKnown(t *testing.T) {
 		if !known[cp.class] {
 			t.Errorf("credPaths entry %s carries class %q, which this gate does not know — "+
 				"it would silently be judged against the yearly threshold", cp.cred, cp.class)
+		}
+	}
+}
+
+// ── the presence lane ────────────────────────────────────────────────────────
+
+// The steady state: probe authenticated, everything expected present is present,
+// and the one credential expected ABSENT is absent.
+func presenceSteadyState() map[string]float64 {
+	m := map[string]float64{}
+	for _, t := range ghSecretTargets {
+		v := 1.0
+		if t.expect == credExpectAbsent {
+			v = 0
+		}
+		m[credLabelForSecret(t.name)] = v
+	}
+	return m
+}
+
+func TestPresenceHealthPassesInSteadyState(t *testing.T) {
+	for _, v := range evalPresenceHealth(presenceSteadyState(), 1, true, false) {
+		if v.FailWhy != "" {
+			t.Errorf("%s should pass: %s", v.Cred, v.FailWhy)
+		}
+	}
+}
+
+// The failure the age lane structurally cannot see. A credential that was never
+// configured has no age, so llz_credential_age_days has nothing for it and every
+// age check — gate and alert alike — silently skips it.
+func TestPresenceHealthFailsOnAnUnconfiguredCredential(t *testing.T) {
+	m := presenceSteadyState()
+	m["openbao-recovery-key-2"] = 0
+	var got string
+	for _, v := range evalPresenceHealth(m, 1, true, false) {
+		if v.Cred == "openbao-recovery-key-2" {
+			got = v.FailWhy
+		}
+	}
+	if got == "" {
+		t.Fatal("an unconfigured credential must fail the presence lane")
+	}
+	if !strings.Contains(got, "no age because it has no value") {
+		t.Errorf("the message must explain why the age lane cannot catch it: %q", got)
+	}
+}
+
+// The same series read the other way. A root token is ephemeral by design, so a
+// SET one is the finding — a live full-admin credential left behind by a
+// break-glass whose revoke never ran.
+func TestPresenceHealthFailsOnAParkedRootToken(t *testing.T) {
+	m := presenceSteadyState()
+	m["openbao-root-token"] = 1
+	var got string
+	for _, v := range evalPresenceHealth(m, 1, true, false) {
+		if v.Cred == "openbao-root-token" {
+			got = v.FailWhy
+		}
+	}
+	if got == "" {
+		t.Fatal("a parked root token must fail the presence lane")
+	}
+	if !strings.Contains(got, "action=revoke") {
+		t.Errorf("the message must name the remedy: %q", got)
+	}
+}
+
+// The probe reporting failure is a lane-wide break, not a per-credential one.
+func TestPresenceHealthFailsWhenTheProbeCouldNotAuthenticate(t *testing.T) {
+	var funnel credVerdict
+	for _, v := range evalPresenceHealth(presenceSteadyState(), 0, true, false) {
+		if v.Cred == "token-inventory" {
+			funnel = v
+		}
+	}
+	if funnel.FailWhy == "" {
+		t.Fatalf("probe_ok=0 must fail the funnel verdict, got %+v", funnel)
+	}
+	if !strings.Contains(funnel.FailWhy, "GH_REPO") {
+		t.Errorf("the message must name the missing input: %q", funnel.FailWhy)
+	}
+}
+
+// A freshly bootstrapped cluster has not run the scheduled writer, so gating
+// there would fail the e2e suite on a job that legitimately has not run. The skip
+// is reported rather than silent, and --require-inventory turns it into a failure
+// for the caller that runs the writer moments earlier.
+func TestPresenceHealthSkipsWhenTheWriterHasNeverRun(t *testing.T) {
+	vs := evalPresenceHealth(nil, 0, false, false)
+	if len(vs) != 1 || vs[0].FailWhy != "" || vs[0].Present {
+		t.Fatalf("an unprimed cluster must skip, not fail: %+v", vs)
+	}
+	vs = evalPresenceHealth(nil, 0, false, true)
+	if len(vs) != 1 || vs[0].FailWhy == "" {
+		t.Fatalf("--require-inventory must turn the skip into a failure: %+v", vs)
+	}
+}
+
+// "The probe said OK and yet this credential has no series" is a funnel defect,
+// distinct from "the credential is absent" — different cause, different remedy,
+// so the messages must not be interchangeable.
+func TestPresenceHealthDistinguishesAMissingSeriesFromAnAbsentCredential(t *testing.T) {
+	m := presenceSteadyState()
+	delete(m, "openbao-seal-key")
+	for _, v := range evalPresenceHealth(m, 1, true, false) {
+		if v.Cred != "openbao-seal-key" {
+			continue
+		}
+		if !strings.Contains(v.FailWhy, "funnel defect") {
+			t.Errorf("a missing series must be diagnosed as a funnel defect: %q", v.FailWhy)
+		}
+	}
+}
+
+// Presence verdicts carry no age, and must not be printed as though they did:
+// "0 days old, SLA 90" on a credential whose problem is that it does not exist
+// reads as a passing measurement.
+func TestPresenceVerdictsAreMarkedAsSuch(t *testing.T) {
+	for _, v := range evalPresenceHealth(presenceSteadyState(), 1, true, false) {
+		if v.Lane != presenceLane {
+			t.Errorf("%s: Lane = %q, want %q", v.Cred, v.Lane, presenceLane)
+		}
+		if v.Age != 0 {
+			t.Errorf("%s: presence verdicts must carry no age, got %v", v.Cred, v.Age)
 		}
 	}
 }
