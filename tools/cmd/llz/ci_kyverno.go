@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/yaml"
 )
 
 type kyvernoPolicyOpts struct {
@@ -223,8 +224,37 @@ func retrofitKyvernoConfigMap(o kyvernoPolicyOpts, d aplGateDeps) {
 func warn(msg string)   { fmt.Printf("::warning::%s\n", msg) }
 func notice(msg string) { fmt.Printf("::notice::%s\n", msg) }
 
-// policyName is the manifest's basename without the .yaml extension — the label
-// the bash logged via `basename … .yaml`.
+// policyName is the ClusterPolicy's OWN metadata.name — the identity
+// `kubectl wait clusterpolicy/<name>` addresses.
+//
+// It used to be the manifest's basename minus .yaml, inherited from the bash's
+// `basename … .yaml` LOGGING label. That was fine as a log label and wrong the
+// moment it started addressing the API, because no manifest's filename equals the
+// name it declares:
+//
+//	kyverno-pvc-encrypted-storage-class.yaml        → pvc-force-encrypted-storage-class
+//	kyverno-pvc-redirect-untagged-storage-class.yaml → pvc-redirect-untagged-storage-class
+//	kyverno-sc-default-demote.yaml                  → sc-default-demote
+//
+// So the readiness wait always addressed a nonexistent object, always failed, and
+// always degraded to the "applied but did not report Ready" warning. The one check
+// that confirms a policy is actually ENFORCING has never run, on any policy.
+//
+// Falls back to the basename when the manifest cannot be read or declares no
+// metadata.name; that only re-enters the old behaviour, which is no worse.
 func policyName(manifest string) string {
-	return strings.TrimSuffix(filepath.Base(manifest), ".yaml")
+	fallback := strings.TrimSuffix(filepath.Base(manifest), ".yaml")
+	raw, err := os.ReadFile(manifest)
+	if err != nil {
+		return fallback
+	}
+	var doc struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil || doc.Metadata.Name == "" {
+		return fallback
+	}
+	return doc.Metadata.Name
 }

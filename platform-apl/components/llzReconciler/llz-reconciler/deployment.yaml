@@ -105,6 +105,43 @@ spec:
             - --reconcile-openbao-gauges
             - --reconcile-token-inventory
             - --reconcile-volume-labels
+            # volume-tags: heal the block-storage-retain StorageClass's volumeTags —
+            # this cluster's `lke<id>` ownership tag included — onto any Linode Volume
+            # that lacks them. A class stamps its tags inside CreateVolume, so this lane
+            # only ever sees Volumes that were born without them.
+            #
+            # Born-untagged is not a hypothetical, and one untagged Volume is a real
+            # cost: `llz reap`'s cluster-liveness gate keys on the `lke<id>` tag, so a
+            # Volume without it cannot be attributed and the fail-safe default KEEPS it
+            # — an unbounded leak that grows with every cluster provisioned. Verified on
+            # lke637888: 13 of 16 PVCs (harbor/keycloak/monitoring/git-server/istio-
+            # system) named LKE's stock `linode-block-storage` class EXPLICITLY, because
+            # on managed Linode owns apl-values and its cluster.defaultStorageClass is
+            # that class — and every one of their Volumes was untagged.
+            #
+            # `llz ci bootstrap-cluster` now recreates the stock classes encrypted and
+            # lke<id>-tagged, so on a freshly bootstrapped cluster those Volumes are
+            # tagged at birth. That closes the common case, not the lane. Three paths
+            # still produce untagged Volumes: the stock classes belong to LKE's own
+            # `workload` Helm release, so if its control plane re-reconciles that release
+            # the untagged definitions come back and everything created after regresses;
+            # clusters bootstrapped before that fix keep the Volumes they already have;
+            # and clone/snapshot PVCs are born untagged regardless, since the Linode
+            # CloneVolume API takes no tags and does not copy the source's. This lane is
+            # the backstop for all three, and it reconciles every PV-backed Volume
+            # regardless of which class it was born on. e2e already assumes it runs:
+            # `llz ci assert-volume-encryption` waits for tags to heal and reports an
+            # untagged Volume as "the lane is not running".
+            #
+            # It does NOT repair encryption, and must not be mistaken for a lane that
+            # does: encryption is decided inside CreateVolume and storageClassName is
+            # immutable once bound, so a Volume born unencrypted stays unencrypted until
+            # its workload is re-rolled. Tags are healable; bytes are not.
+            #
+            # Needs only LINODE_TOKEN (read lazily from the optional volume below) and
+            # no new RBAC: persistentvolumes read comes from the volume-labels grant,
+            # storageclasses get/list from sc-demote. Same PV watch as volume-labels.
+            - --reconcile-volume-tags
             - --reconcile-cidr-firewall
             - --reconcile-linode-creds
             # es-store-recovery: force-sync every ExternalSecret/PushSecret when
