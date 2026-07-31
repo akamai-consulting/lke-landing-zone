@@ -20,12 +20,19 @@ package main
 // exist is how an allowlist rots into a rubber stamp: the next reader cannot
 // tell which lines are load-bearing. When a hop is secured, its line goes.
 //
-// SCANNER SCOPE. It detects four shapes: `scheme: http` on a scrape endpoint,
-// `insecureSkipVerify: true`, an http:// URL naming an in-cluster Service, and
-// `InsecureSkipVerify: true` in Go. It does NOT see plaintext container ports or
-// probe endpoints — a listener that simply serves HTTP on a port is invisible to
-// it. Those are real hops (kubelet→/healthz is one) and they belong in the ADR,
-// but a scanner that tried to infer them from a port number would be guessing.
+// SCANNER SCOPE. It detects four written shapes — `scheme: http` on a scrape
+// endpoint, `insecureSkipVerify: true`, an http:// URL naming an in-cluster
+// Service, `InsecureSkipVerify: true` in Go — plus mesh policy that accepts
+// cleartext, cleartext wire protocols other than HTTP, and one shape nobody
+// wrote: a scrape endpoint with NO `scheme:` key, which prometheus-operator
+// defaults to http (see scanDefaultedScrapeScheme). That last one matters
+// because every other pattern here reads a decision somebody typed, and the
+// cheapest way to add a plaintext scrape is to type nothing.
+//
+// It does NOT see plaintext container ports or probe endpoints — a listener that
+// simply serves HTTP on a port is invisible to it. Those are real hops
+// (kubelet→/healthz is one) and they belong in the ADR, but a scanner that tried
+// to infer them from a port number would be guessing.
 //
 // WHAT THIS DOES NOT DO. There is no ValidatingAdmissionPolicy twin, unlike
 // ci_wave_health_guard.go. A VAP rejecting plaintext ServiceMonitors would apply
@@ -597,6 +604,9 @@ func collectPlaintextFindings(root string, dirs []string) ([]plaintextFinding, i
 // match rules are unit-tested without a tree on disk.
 func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 	var out []plaintextFinding
+	if !isGo {
+		out = append(out, scanDefaultedScrapeScheme(rel, content)...)
+	}
 	lines := strings.Split(content, "\n")
 	lastPort := ""
 	lastMTLSPort := ""
@@ -841,4 +851,131 @@ func relForKey(root, path string) string {
 	// simultaneously reporting every entry as stale. Keys name the hop, not the
 	// checkout it was read from.
 	return strings.TrimPrefix(filepath.ToSlash(rel), "instance-template/")
+}
+
+// ── the scheme nobody wrote ──────────────────────────────────────────────────
+//
+// Every pattern above reads what somebody WROTE. This one reads what they left
+// out, and it is the only shape in this file that can.
+//
+// A prometheus-operator scrape endpoint with no `scheme:` key scrapes over
+// **HTTP** — the CRD's documented default ("if empty, Prometheus uses the default
+// value `http`"). So `scheme: http` and no scheme at all are the same hop on the
+// wire, and reSchemeHTTP sees only the first. A new ServiceMonitor that simply
+// omits the line is plaintext that passes this gate, and omitting it is the more
+// likely spelling: `scheme: https` is something you add on purpose, and nobody
+// adds `scheme: http` deliberately when leaving it out does the same thing.
+//
+// LATENT. All four monitors in this tree declare a scheme today, and three of
+// them declare `https` because #360 moved them. That is what makes this worth
+// closing now rather than after: the gate's whole value is that the NEXT one
+// cannot be added silently, and a corpus with no live finding is where a drift
+// gate is cheapest to add and hardest to argue with.
+//
+// Deliberately NOT expressed as "flag any endpoint without scheme: https". An
+// endpoint can legitimately carry no scheme where relabeling rewrites
+// `__scheme__`, and the registry is where that would be recorded — but the
+// finding has to exist before it can be recorded, which is the point.
+var (
+	reMonitorKind    = regexp.MustCompile(`(?m)^\s*kind:\s*["']?(ServiceMonitor|PodMonitor)["']?\s*$`)
+	reEndpointsKey   = regexp.MustCompile(`^(\s*)(endpoints|podMetricsEndpoints):\s*$`)
+	reListItem       = regexp.MustCompile(`^(\s*)-\s`)
+	reSchemeAnyKey   = regexp.MustCompile(`(?i)^\s*-?\s*scheme:`)
+	reEndpointPortKV = regexp.MustCompile(`^\s*-?\s*(?:port|targetPort):\s*["']?([A-Za-z0-9_.\-]+)`)
+)
+
+// scanDefaultedScrapeScheme reports every ServiceMonitor/PodMonitor endpoint that
+// declares no scheme. Document-scoped rather than line-scoped, because "this item
+// contains no such key" is a statement about a block and the main loop's
+// last-seen-wins model cannot make it.
+func scanDefaultedScrapeScheme(rel, content string) []plaintextFinding {
+	var out []plaintextFinding
+	// Line offset of each document, so findings report a line in the FILE and not
+	// in the fragment — a finding a reviewer cannot navigate to is half a finding.
+	offset := 0
+	for _, doc := range splitYAMLDocs(content) {
+		if reMonitorKind.MatchString(doc) {
+			out = append(out, defaultedSchemeInDoc(rel, doc, offset)...)
+		}
+		offset += strings.Count(doc, "\n")
+	}
+	return out
+}
+
+// splitYAMLDocs splits on `---` at the start of a line, keeping the separator
+// with the following document so the line accounting stays exact.
+func splitYAMLDocs(content string) []string {
+	var docs []string
+	var cur []string
+	for _, ln := range strings.Split(content, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "---") && len(cur) > 0 {
+			docs = append(docs, strings.Join(cur, "\n")+"\n")
+			cur = nil
+		}
+		cur = append(cur, ln)
+	}
+	return append(docs, strings.Join(cur, "\n"))
+}
+
+func defaultedSchemeInDoc(rel, doc string, offset int) []plaintextFinding {
+	var out []plaintextFinding
+	lines := strings.Split(doc, "\n")
+	keyIndent := -1
+	itemIndent := -1
+	itemStart := -1
+	itemPort := ""
+	hasScheme := false
+
+	// close() emits a finding for the item that just ended, if it declared none.
+	closeItem := func() {
+		if itemStart < 0 {
+			return
+		}
+		if !hasScheme {
+			out = append(out, plaintextFinding{
+				key:  rel + ":" + locator(itemPort, "scheme-defaulted"),
+				file: rel, line: offset + itemStart + 1,
+				what: "scrape over plaintext (no `scheme:` — prometheus-operator defaults to http)",
+			})
+		}
+		itemStart, itemPort, hasScheme = -1, "", false
+	}
+
+	for i, raw := range lines {
+		code := stripComment(raw, false)
+		if strings.TrimSpace(code) == "" {
+			continue
+		}
+		if keyIndent < 0 {
+			if m := reEndpointsKey.FindStringSubmatch(code); m != nil {
+				keyIndent = len(m[1])
+			}
+			continue
+		}
+		ind := len(code) - len(strings.TrimLeft(code, " \t"))
+		// Dedent to or past the `endpoints:` key ends the list.
+		if ind <= keyIndent {
+			closeItem()
+			keyIndent, itemIndent = -1, -1
+			continue
+		}
+		if m := reListItem.FindStringSubmatch(code); m != nil && (itemIndent < 0 || len(m[1]) == itemIndent) {
+			closeItem()
+			itemIndent = len(m[1])
+			itemStart = i
+		}
+		if itemStart < 0 {
+			continue
+		}
+		if reSchemeAnyKey.MatchString(code) {
+			hasScheme = true
+		}
+		if itemPort == "" {
+			if m := reEndpointPortKV.FindStringSubmatch(code); m != nil {
+				itemPort = m[1]
+			}
+		}
+	}
+	closeItem()
+	return out
 }

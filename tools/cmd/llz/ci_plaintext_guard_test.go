@@ -599,3 +599,121 @@ func TestInsecureConfigKeysAreFindings(t *testing.T) {
 		}
 	}
 }
+
+// The gap this closes. `scheme: http` and no `scheme:` at all are the SAME hop
+// on the wire — prometheus-operator defaults the field to http — and every
+// pattern in this guard except this one reads a decision somebody typed. Omitting
+// the line is both plaintext and the more likely spelling: `scheme: https` is
+// something you add on purpose, and nobody types `scheme: http` when leaving it
+// out does the same thing.
+func TestScanPlaintextFlagsScrapeEndpointWithNoScheme(t *testing.T) {
+	doc := `apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: llz-thing
+spec:
+  endpoints:
+    - port: metrics
+      path: /metrics
+`
+	got := scanPlaintext("platform-apl/components/x/sm.yaml", doc, false)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1: %+v", len(got), got)
+	}
+	if got[0].key != "platform-apl/components/x/sm.yaml:metrics" {
+		t.Errorf("key = %q, want it keyed on the endpoint port", got[0].key)
+	}
+	if !strings.Contains(got[0].what, "no `scheme:`") {
+		t.Errorf("the finding must say the scheme is absent, not merely http: %q", got[0].what)
+	}
+}
+
+// An explicit scheme — either one — is the main loop's business. https must be
+// silent, and http must produce exactly ONE finding rather than being reported
+// twice by two overlapping rules.
+func TestScanPlaintextDoesNotDoubleReportAnExplicitScheme(t *testing.T) {
+	for _, tc := range []struct {
+		scheme string
+		want   int
+	}{
+		{"https", 0},
+		{"http", 1},
+	} {
+		doc := "kind: ServiceMonitor\nspec:\n  endpoints:\n    - port: metrics\n      scheme: " + tc.scheme + "\n"
+		if got := scanPlaintext("a/sm.yaml", doc, false); len(got) != tc.want {
+			t.Errorf("scheme %s: got %d findings, want %d: %+v", tc.scheme, len(got), tc.want, got)
+		}
+	}
+}
+
+// Per ENDPOINT, not per document. A monitor that secures one endpoint and forgets
+// the next is the realistic mistake, and a document-level check would call that
+// file clean.
+func TestScanPlaintextFlagsOnlyTheEndpointMissingAScheme(t *testing.T) {
+	doc := `kind: ServiceMonitor
+spec:
+  endpoints:
+    - port: secure
+      scheme: https
+    - port: forgotten
+      path: /metrics
+`
+	got := scanPlaintext("a/sm.yaml", doc, false)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1: %+v", len(got), got)
+	}
+	if !strings.HasSuffix(got[0].key, ":forgotten") {
+		t.Errorf("the wrong endpoint was reported: %s", got[0].key)
+	}
+}
+
+// PodMonitor spells the list `podMetricsEndpoints` and defaults identically.
+func TestScanPlaintextCoversPodMonitors(t *testing.T) {
+	doc := "kind: PodMonitor\nspec:\n  podMetricsEndpoints:\n    - port: metrics\n"
+	if got := scanPlaintext("a/pm.yaml", doc, false); len(got) != 1 {
+		t.Errorf("a PodMonitor endpoint with no scheme must be reported, got %+v", got)
+	}
+}
+
+// Only these two kinds. `endpoints:` is an ordinary key elsewhere in Kubernetes
+// (a core/v1 Endpoints object, a chart's values), and flagging those would put
+// permanent noise in front of every reviewer — which is how a gate gets bypassed.
+func TestScanPlaintextIgnoresEndpointsOutsideAMonitor(t *testing.T) {
+	doc := "kind: Endpoints\nsubsets:\n  endpoints:\n    - port: 8080\n"
+	if got := scanPlaintext("a/ep.yaml", doc, false); len(got) != 0 {
+		t.Errorf("a non-monitor `endpoints:` must not be reported, got %+v", got)
+	}
+}
+
+// Multi-document files must report a line in the FILE, not in the fragment: a
+// finding a reviewer cannot navigate to is half a finding.
+func TestScanDefaultedSchemeReportsFileRelativeLines(t *testing.T) {
+	doc := "kind: ConfigMap\nmetadata:\n  name: pad\ndata: {}\n---\nkind: ServiceMonitor\nspec:\n  endpoints:\n    - port: metrics\n"
+	got := scanDefaultedScrapeScheme("a/multi.yaml", doc)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1: %+v", len(got), got)
+	}
+	if got[0].line != 9 {
+		t.Errorf("line = %d, want 9 (the `- port: metrics` line in the FILE)", got[0].line)
+	}
+}
+
+// The corpus is clean today — three of the four monitors declare `https` because
+// #360 moved them — so this closes a LATENT gap. That is the cheapest moment to
+// add a drift gate, and this test states the fact so a future reader does not
+// mistake "no findings" for "not wired up".
+func TestDefaultedSchemeIsLatentOnThisTree(t *testing.T) {
+	dirs := plaintextScanDirs("../../..")
+	findings, examined, err := collectPlaintextFindings("../../..", dirs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if examined == 0 {
+		t.Fatal("examined nothing")
+	}
+	for _, f := range findings {
+		if strings.Contains(f.what, "no `scheme:`") {
+			t.Errorf("%s:%d has a defaulted scrape scheme — secure it or register it", f.file, f.line)
+		}
+	}
+}
