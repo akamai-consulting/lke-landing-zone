@@ -294,3 +294,22 @@ func TestServiceNamespaceOf(t *testing.T) {
 		}
 	}
 }
+
+// A PERMISSIVE namespace ACCEPTS plaintext by design, so the dial succeeding
+// there is correct behaviour. harbor ships all three of its PeerAuthentication
+// documents PERMISSIVE on purpose — ADR 0010 step 3 — and asserting STRICT
+// before that flip reds every cluster for a rollout step nobody has taken.
+func TestMeshEnforcesSTRICT(t *testing.T) {
+	if meshEnforcesSTRICT([]string{"PERMISSIVE", "PERMISSIVE", "PERMISSIVE"}) {
+		t.Error("an all-PERMISSIVE namespace is not enforcing")
+	}
+	if meshEnforcesSTRICT(nil) {
+		t.Error("no PeerAuthentication at all means the mesh default applies, which is PERMISSIVE here")
+	}
+	if !meshEnforcesSTRICT([]string{"PERMISSIVE", "STRICT"}) {
+		t.Error("a STRICT mode anywhere in the namespace means it is enforcing")
+	}
+	if !meshEnforcesSTRICT([]string{"strict"}) {
+		t.Error("the mode comparison must not be case-sensitive")
+	}
+}

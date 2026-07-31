@@ -41,6 +41,13 @@ package main
 //	        workload's port in plaintext. Istio must refuse it. The positive
 //	        control is the apiserver again.
 //
+//	        IT SKIPS UNLESS THE TARGET NAMESPACE IS ACTUALLY STRICT, read from its
+//	        PeerAuthentications at run time. A PERMISSIVE workload accepts
+//	        plaintext by design, so the dial succeeding there is correct behaviour
+//	        and not a finding — harbor ships PERMISSIVE deliberately (ADR 0010
+//	        step 3). Asserting STRICT before the flip is the "aspirational claim"
+//	        harbor-peerauthentication.yaml warns about having already caught twice.
+//
 // IT CLEANS UP AFTER ITSELF, including on failure: the scratch namespace is
 // deleted in a defer. A gate that leaks a namespace on every red run makes the
 // next run's cluster dirtier, and this one runs on a cluster that is about to be
@@ -68,9 +75,13 @@ const (
 	// allow. Loki's gateway is present on every landing zone and is plain HTTP, so
 	// a successful dial is unambiguous.
 	netEnforceDeniedTarget = "loki-gateway.monitoring.svc.cluster.local:80"
-	// netEnforceMTLSTarget is a STRICT-mesh port. harbor is namespace-wide STRICT
-	// (harbor-peerauthentication.yaml), so a plaintext dial from an unmeshed pod
-	// must be refused by the sidecar.
+	// netEnforceMTLSTarget is the port the mtls check dials in plaintext.
+	//
+	// harbor is NOT STRICT today: all three documents in
+	// harbor-peerauthentication.yaml ship mode: PERMISSIVE on purpose — ADR 0010
+	// step 3, the measurement phase that watches for clients which would break
+	// under STRICT before the flip. So this check SKIPS here until those three
+	// lines change, and the mode is read off the cluster rather than assumed.
 	netEnforceMTLSTarget = "harbor-core.harbor.svc.cluster.local:80"
 )
 
@@ -94,7 +105,9 @@ func ciAssertNetworkEnforcementCmd() *cobra.Command {
 			"           Proves the CNI enforces NetworkPolicy at all; a cluster where it\n" +
 			"           silently does not is one where every default-deny here is decorative.\n" +
 			"  mtls   — the same pod, deliberately unmeshed, dialing a STRICT-mesh port in\n" +
-			"           plaintext. Istio must refuse it.\n\n" +
+			"           plaintext. Istio must refuse it. SKIPS unless the target namespace\n" +
+			"           actually declares STRICT: a PERMISSIVE mesh accepts plaintext by\n" +
+			"           design, and harbor ships PERMISSIVE on purpose (ADR 0010 step 3).\n\n" +
 			"MUTATING: creates and deletes a scratch namespace, a NetworkPolicy and a Pod.\n" +
 			"Cleanup runs on failure too. Exit 0 / 1.",
 		Args: cobra.NoArgs,
@@ -140,6 +153,7 @@ type netEnforceVerdict struct {
 	Detail   string
 	FailWhy  string
 	Inconclu bool // the positive control failed: we learned nothing
+	Skipped  bool // the property is not in force on this cluster yet
 }
 
 // evalEnforcementProbe is the verdict logic, and the reason it is a separate pure
@@ -193,6 +207,35 @@ func evalEnforcementProbe(check string, allowedRes, deniedRes netProbeResult, wh
 	v.Detail = fmt.Sprintf("control %s connected; %s blocked (%s)",
 		allowedRes.Target, deniedRes.Target, deniedRes.Reason)
 	return v
+}
+
+// readPeerAuthModes returns every mtls mode declared by the PeerAuthentications
+// in a namespace — the workload defaults and the portLevelMtls entries alike.
+// Seamed for tests.
+var readPeerAuthModes = func(ns string) ([]string, error) {
+	out, err := execOutput("kubectl", "-n", ns, "get", "peerauthentication",
+		"-o", `jsonpath={range .items[*]}{.spec.mtls.mode}{" "}{range .spec.portLevelMtls.*}{.mode}{" "}{end}{end}`)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(string(out)), nil
+}
+
+// meshEnforcesSTRICT reports whether a namespace is actually refusing plaintext.
+// Pure.
+//
+// Absence of any STRICT mode — including no PeerAuthentication at all — means the
+// mesh default applies, and this platform's default is PERMISSIVE
+// (llz-cluster-foundation values.yaml). A PERMISSIVE workload ACCEPTS plaintext
+// by design, so a plaintext dial succeeding against it is correct behaviour and
+// not a finding.
+func meshEnforcesSTRICT(modes []string) bool {
+	for _, m := range modes {
+		if strings.EqualFold(strings.TrimSpace(m), "STRICT") {
+			return true
+		}
+	}
+	return false
 }
 
 // serviceNamespaceOf returns the namespace label of a cluster-local
@@ -516,6 +559,36 @@ func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
 					"address, so the CNI is not enforcing NetworkPolicy — which makes every default-deny in this "+
 					"repo decorative. On LKE-E that is Cilium; check the agent is healthy and the policy was programmed."))
 		case "mtls":
+			// IS THE MESH ACTUALLY ENFORCING HERE YET? harbor ships all three of its
+			// PeerAuthentication documents at mode: PERMISSIVE — ADR 0010 step 3, the
+			// measurement phase, whose whole purpose is to watch
+			// istio_requests_total{connection_security_policy="none"} fall to zero
+			// BEFORE flipping to STRICT. A PERMISSIVE workload accepts plaintext by
+			// design, so the dial succeeding is correct behaviour, and asserting
+			// otherwise reds every cluster for a rollout step nobody has taken.
+			//
+			// harbor-peerauthentication.yaml already names this trap: "every claim
+			// resting on 'harbor is STRICT' was aspirational", listing two guards that
+			// made it. This check was the third. Reading the mode off the cluster is
+			// what stops there being a fourth — the moment those three lines flip to
+			// STRICT, this check starts enforcing with no code change.
+			if ns := serviceNamespaceOf(o.mtlsTarget); ns != "" {
+				modes, merr := readPeerAuthModes(ns)
+				switch {
+				case merr != nil:
+					vs = append(vs, netEnforceVerdict{Check: "mtls",
+						FailWhy: fmt.Sprintf("could not read the PeerAuthentication mode in %s (%v) — refusing to "+
+							"guess whether the mesh is enforcing", ns, merr)})
+					continue
+				case !meshEnforcesSTRICT(modes):
+					vs = append(vs, netEnforceVerdict{Check: "mtls", Skipped: true,
+						Detail: fmt.Sprintf("namespace %s declares no STRICT PeerAuthentication (modes: %v) — the mesh "+
+							"is PERMISSIVE there and ACCEPTS plaintext by design. This is ADR 0010 step 3, the "+
+							"measurement phase; the check begins enforcing automatically when those modes flip to STRICT",
+							ns, modes)})
+					continue
+				}
+			}
 			code, ok := exits["mtls"]
 			vs = append(vs, evalEnforcementProbe("mtls", control, resultFromExit(o.mtlsTarget, code, ok, readProbeLog(o.namespace, "mtls")),
 				"The probe pod is deliberately OUTSIDE the mesh (sidecar.istio.io/inject=false) and dialed this "+
@@ -528,12 +601,16 @@ func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
 	}
 
 	var bad []string
+	observed := 0
 	for _, v := range vs {
 		switch {
 		case v.FailWhy != "":
 			fmt.Printf("FAIL: %s — %s\n", v.Check, v.FailWhy)
 			bad = append(bad, v.Check)
+		case v.Skipped:
+			fmt.Printf("SKIP: %s — %s\n", v.Check, v.Detail)
 		default:
+			observed++
 			fmt.Printf("OK: %s — %s\n", v.Check, v.Detail)
 		}
 	}
@@ -541,6 +618,12 @@ func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
 		fmt.Fprintf(os.Stderr, "::error::network enforcement not observed: %s\n", strings.Join(bad, ", "))
 		return fmt.Errorf("network enforcement not observed: %s", strings.Join(bad, ", "))
 	}
-	fmt.Printf("All %d network-enforcement check(s) observed enforcing.\n", len(vs))
+	// Every check skipping is not a pass. This lane exists to observe enforcement
+	// in the data plane; a run that observed none of it must say so.
+	if observed == 0 {
+		fmt.Fprintln(os.Stderr, "::error::every requested check skipped — no enforcement was observed")
+		return fmt.Errorf("every requested check skipped — refusing to pass vacuously")
+	}
+	fmt.Printf("All %d network-enforcement check(s) observed enforcing.\n", observed)
 	return nil
 }
