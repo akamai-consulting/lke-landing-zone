@@ -53,17 +53,23 @@ var meshEgressAllowed = map[string]meshEgressRule{
 	"llz-cert-automation/llz-cert-automation-allow-runner-egress->harbor": {
 		owner: "llz",
 		reason: "the haproxy-rebuild Workflow's push lane, opening :80 and :443 into harbor from an " +
-			"`istio-injection: disabled` namespace. BELIEVED DEAD: harbor is namespace-wide STRICT " +
-			"since #360, so an unmeshed client's plaintext :80 is rejected at the proxy regardless of " +
-			"this allow, and the Workflow's push target is `harborUrl`, which defaults to the EXTERNAL " +
+			"`istio-injection: disabled` namespace. WAS 'BELIEVED DEAD' on the grounds that harbor had " +
+			"been namespace-wide STRICT since #360, so an unmeshed client's plaintext :80 would be " +
+			"rejected at the proxy regardless of this allow. THAT GROUND IS GONE: harbor has never been " +
+			"STRICT on any cluster — the pre-split PeerAuthentication carried portLevelMtls on a " +
+			"selector-less document, which Istio's CRD rejects by CEL rule, so the apiserver refused " +
+			"every apply — and the repaired policy deliberately ships PERMISSIVE for ADR 0010 step 3's " +
+			"measurement phase. So this allow has been live and reachable the whole time, and it stays " +
+			"reachable until that flip. The OTHER half of the old reasoning still stands and is now the " +
+			"only one: the Workflow's push target is `harborUrl`, which defaults to the EXTERNAL " +
 			"`https://harbor.<cluster-domain>:5000` and therefore egresses through the ingress gateway, " +
-			"not into this namespace. NOT DELETED, deliberately: 'believed dead' is not 'observed " +
-			"dead', this could not be checked without a cluster, and the cost of being wrong is that " +
-			"the HAProxy certificate rebuild fails — surfacing ~80 days later as an expired edge " +
-			"certificate, which is far worse than an over-broad allow that grants nothing reachable. " +
-			"TO CLOSE: on a live cluster confirm the rebuild Workflow makes no in-cluster connection " +
-			"to the harbor namespace (the push should leave via the gateway), then delete both the " +
-			"rule and this entry",
+			"not into this namespace. NOT DELETED, deliberately: 'believed unused' is not 'observed " +
+			"unused', and the cost of being wrong is that the HAProxy certificate rebuild fails — " +
+			"surfacing ~80 days later as an expired edge certificate, which is far worse than an " +
+			"over-broad allow. TO CLOSE: the harbor PeerAuthentication's measurement phase answers this " +
+			"for free — if istio_requests_total{connection_security_policy=\"none\"} shows no traffic " +
+			"into harbor from llz-cert-automation across a converge, the rebuild is going out through " +
+			"the gateway as believed; delete both the rule and this entry then",
 	},
 }
 
