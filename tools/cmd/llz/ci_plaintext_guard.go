@@ -113,27 +113,74 @@ var plaintextAllowed = map[string]plaintextRule{
 			"branch has gone missing, which narrows exposure but does not remove it",
 	},
 
-	// ── mesh policy: STRICT with named port exemptions ───────────────────────
+	// ── mesh policy: harbor's PeerAuthentication ─────────────────────────────
 	//
-	// harbor is namespace-wide STRICT (harbor-peerauthentication.yaml), and these
-	// are the exemptions that make STRICT deployable at all — accepted plaintext
-	// hops in exactly the sense this registry exists to record. They were invisible
-	// until the guard learned to read mesh policy.
+	// harbor-peerauthentication.yaml ships three documents, ALL currently
+	// `mode: PERMISSIVE`, plus the portLevelMtls exemptions that become meaningful
+	// when they are flipped to STRICT. Every one of them is an accepted plaintext
+	// hop in exactly the sense this registry exists to record, and they were
+	// invisible until the guard learned to read mesh policy.
 	//
 	// CORRECTION: an earlier revision of this block asserted harbor WAS STRICT. It
-	// was not. The policy carried portLevelMtls on a selector-less document, which
-	// Istio rejects ("portLevelMtls requires selector"), so the apiserver refused
-	// every apply and the resource existed on no cluster — the namespace ran
-	// PERMISSIVE throughout. Splitting it into a namespace-wide document plus
-	// workload-scoped ones is what made the enforcement real; these entries describe
-	// a policy that now applies.
+	// was not, and never has been on any cluster. The policy carried portLevelMtls
+	// on a selector-less document, which Istio's CRD rejects by CEL rule
+	// ("portLevelMtls requires selector"), so the apiserver refused every apply and
+	// the resource existed nowhere — the namespace ran the mesh default, PERMISSIVE,
+	// throughout. Splitting it into a namespace-wide document plus workload-scoped
+	// ones is what made it appliable; it is deliberately appliable-and-PERMISSIVE
+	// first, because ADR 0010 step 3's measurement of who would break under STRICT
+	// has never been able to run.
 	//
-	// They also GUARD THE GUARD: the two harbor http:// entries above are accepted
-	// only because the provisioner's sidecar upgrades that hop to mTLS, which holds
-	// only while the policy stays STRICT on Harbor's API port. Reverting it to
-	// namespace-wide PERMISSIVE — the documented first step of its own rollout —
-	// silently falsifies them, and lands here as an unregistered `mtls-mode` finding
-	// rather than passing green.
+	// THIS IS THE ENTRY THAT GUARDS THE GUARD, so read it before deleting it. The
+	// two harbor http:// entries above are accepted because the provisioner's
+	// sidecar upgrades that hop to mTLS. That still holds under PERMISSIVE — a
+	// meshed client negotiates mTLS with a meshed server either way — so those two
+	// entries remain true. What PERMISSIVE withholds is the guarantee that nothing
+	// ELSE can speak cleartext to harbor-core, which is the difference between "our
+	// client happens to use mTLS" and "harbor cannot be spoken to in cleartext".
+	// Until the flip, that guarantee is not in place and this entry is what says so
+	// out loud rather than letting the file's STRICT-shaped comments imply it.
+	//
+	// DELETE ALL THREE AT THE FLIP. They go STRICT together, these findings
+	// disappear with them, and a stale registry entry is itself a guard failure —
+	// which is what makes the cutover visible here instead of silent. They are
+	// three entries and not one because each document governs a different set of
+	// pods: registering them jointly would let one be flipped and another left
+	// behind with nothing to say so.
+	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-mode-harbor-strict-mtls": {
+		owner: "llz",
+		reason: "document 1, namespace-wide: every harbor pod no workload-scoped policy matches — in " +
+			"practice harbor-robot-provisioner, which nothing dials INTO, so this document is the " +
+			"lowest-risk third of the cutover. PERMISSIVE because ADR 0010 step 3's measurement of who " +
+			"would break under STRICT has never been able to run: the pre-split policy was rejected by " +
+			"the apiserver on every apply, so no cluster has ever had a PeerAuthentication here in " +
+			"either mode. CLOSES with the other two when " +
+			"istio_requests_total{connection_security_policy=\"none\"} reads zero for this namespace " +
+			"across a full converge",
+	},
+	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-mode-harbor-otomi-db-mtls": {
+		owner: "llz",
+		reason: "document 2, the CNPG database pods — the riskiest third, and the reason the whole " +
+			"rollout is staged. :8000 and :9187 are exempted below and stay exempt after the flip; :5432 " +
+			"is NOT, and llz-cluster-foundation's networkPolicies.cnpg opens 5432 from the unmeshed " +
+			"cnpg-system for \"operator connectivity checks\". If that client is real, flipping this " +
+			"document STRICT wedges the Harbor DB (Instance Status Extraction Error -> ClusterIsNotReady " +
+			"-> convergence stalls). Nobody has ever observed it either way because this resource has " +
+			"never applied. CLOSES by reading the none-security metric for 5432 traffic from cnpg-system: " +
+			"exempt the port first if it is there, then flip",
+	},
+	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-mode-harbor-app-mtls": {
+		owner: "llz",
+		reason: "document 3, every app=harbor pod (core, registry, jobservice, portal, redis, trivy). " +
+			"Governs the hop harbor-robot-provisioner makes to harbor-core carrying the Harbor ADMIN " +
+			"PASSWORD. That hop is STILL mTLS on the wire under PERMISSIVE — a meshed client negotiates " +
+			"mTLS with a meshed server regardless — so the two harbor http:// entries above remain true; " +
+			"what PERMISSIVE withholds is the prohibition on anyone ELSE speaking cleartext to these " +
+			"pods, which is the difference between \"our client happens to use mTLS\" and \"harbor cannot " +
+			"be spoken to in cleartext\". Also the document that decides llz-cert-automation's " +
+			"haproxy-rebuild egress allow, which ci_mesh_egress_guard.go calls BELIEVED DEAD on the " +
+			"strength of a STRICT that was never in force. CLOSES with the other two",
+	},
 	"platform-apl/components/harbor/harbor-peerauthentication.yaml:mtls-8000": {
 		owner: "apl-core",
 		reason: "CNPG operator (cnpg-system, NOT a meshed namespace) polling harbor-otomi-db's " +
@@ -280,6 +327,15 @@ var (
 	// `port: 8000`, so rePortName cannot see it. Without this the exemptions would
 	// key on whatever unrelated `port:` line came last in the document.
 	rePortMapKey = regexp.MustCompile(`^\s*["'](\d+)["']:\s*$`)
+	// A document-level `mtls.mode:` carries no port, so every such finding in one
+	// file used to collapse onto the single key `mtls-mode`. That is fine for a
+	// file with one policy and wrong for harbor-peerauthentication.yaml, which
+	// ships three — one registry entry would have vouched for all three, and
+	// TestScanPlaintextKeysAreUniquePerFile exists to refuse exactly that. The
+	// object's own name is what separates them, so track it: first bare `name:` per
+	// document, which in every manifest here is metadata.name. Anchored with no
+	// leading `-` so a `- name:` list entry (containers, ports) cannot claim it.
+	reDocName = regexp.MustCompile(`^\s*name:\s*["']?([A-Za-z0-9_.\-]+)["']?\s*$`)
 
 	// ── event-bus payloads ───────────────────────────────────────────────────
 	//
@@ -544,6 +600,7 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 	lines := strings.Split(content, "\n")
 	lastPort := ""
 	lastMTLSPort := ""
+	lastDocName := ""
 	for i, ln := range lines {
 		n := i + 1
 		// Strip comments so a line DESCRIBING a plaintext hop is not itself a
@@ -605,6 +662,7 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 		if strings.HasPrefix(strings.TrimSpace(code), "---") {
 			lastPort = ""
 			lastMTLSPort = ""
+			lastDocName = ""
 			continue
 		}
 		// Tracked separately from lastPort: a PeerAuthentication carries no `port:`
@@ -612,6 +670,13 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 		// an unrelated document earlier in the file.
 		if m := rePortMapKey.FindStringSubmatch(code); m != nil {
 			lastMTLSPort = m[1]
+		}
+		// First `name:` in the document only — metadata.name in every manifest this
+		// scans. Later ones (a selector value, a container) must not overwrite it.
+		if lastDocName == "" {
+			if m := reDocName.FindStringSubmatch(code); m != nil {
+				lastDocName = m[1]
+			}
 		}
 		if m := rePortName.FindStringSubmatch(code); m != nil {
 			lastPort = strings.Trim(m[1], `"'`)
@@ -640,7 +705,7 @@ func scanPlaintext(rel, content string, isGo bool) []plaintextFinding {
 		case rePermissiveMTLS.MatchString(code):
 			m := rePermissiveMTLS.FindStringSubmatch(code)
 			out = append(out, plaintextFinding{
-				key: rel + ":" + locator(mtlsLocator(lastMTLSPort), "mtls-mode"), file: rel, line: n,
+				key: rel + ":" + locator(mtlsLocator(lastMTLSPort), mtlsModeLocator(lastDocName)), file: rel, line: n,
 				what: "mesh mTLS not enforced (mode: " + strings.ToUpper(m[1]) + ") — cleartext is accepted on this hop",
 			})
 		case reCleartextProto.MatchString(code):
@@ -694,6 +759,17 @@ func mtlsLocator(port string) string {
 		return ""
 	}
 	return "mtls-" + port
+}
+
+// mtlsModeLocator names a DOCUMENT-level mesh mode (no port in scope) by the
+// object it belongs to, so several policies in one file get several keys. Falls
+// back to the bare kind when no name was seen — a file with one policy keeps the
+// key it already had, and a nameless one still cannot collide with a port key.
+func mtlsModeLocator(docName string) string {
+	if docName == "" {
+		return "mtls-mode"
+	}
+	return "mtls-mode-" + docName
 }
 
 // stripComment removes the trailing/leading comment so prose about a hop is not
