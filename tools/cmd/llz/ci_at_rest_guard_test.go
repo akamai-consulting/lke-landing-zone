@@ -142,3 +142,77 @@ func TestAtRestGuardPassesOnThisRepo(t *testing.T) {
 		t.Fatalf("at-rest-guard must be green on this repo: %v", err)
 	}
 }
+
+// A comment containing an unbalanced brace must not run the depth counter past
+// the end of its resource. When it did, every LATER resource in the file was
+// swallowed and then skipped by the outer loop — a silent FALSE NEGATIVE on a
+// security gate, which reports green having never looked.
+//
+// The trigger is not exotic: Terraform in this repo is heavily commented with
+// backticked code fragments, and `dynamic {` in prose is enough.
+func TestAtRestGuardIsNotBlindedByBracesInComments(t *testing.T) {
+	body := "resource \"linode_lke_node_pool\" \"pool\" {\n" +
+		"  # the API rejects a bare `{` here — see the note about `dynamic {`\n" +
+		"  disk_encryption = \"enabled\"\n" +
+		"}\n\n" +
+		"resource \"linode_volume\" \"data\" {\n" +
+		"  size = 20\n" +
+		"}\n"
+	f := scanResourceLevers(body, "x.tf")
+	if len(f) != 1 {
+		t.Fatalf("got %d findings, want 1 (the unencrypted volume AFTER the comment): %+v", len(f), f)
+	}
+	if !strings.Contains(f[0].key, "linode_volume.data") {
+		t.Errorf("the resource after the commented brace was not scanned: %s", f[0].key)
+	}
+}
+
+// The same failure spelled with a block comment, and with a brace inside a
+// STRING — `label = "a{b"` is not an opening block.
+func TestStripHCLNoiseRemovesCommentsAndStrings(t *testing.T) {
+	lines := []string{
+		`resource "x" "y" {`,
+		`  label = "a{b#c"`,
+		`  /* block { comment`,
+		`     still inside { */ size = 1`,
+		`  // trailing { comment`,
+		`}`,
+	}
+	noise := stripHCLNoise(lines)
+	depth := 0
+	for _, l := range noise {
+		depth += braceDelta(l)
+	}
+	if depth != 0 {
+		t.Errorf("depth = %d, want 0 — braces in comments and strings must not count:\n%v", depth, noise)
+	}
+}
+
+// A block comment must be tracked ACROSS lines, so braces in its continuation
+// lines contribute nothing. Asserted as "the same content with the comment
+// removed counts identically" rather than as a fixed depth: an unclosed `/*`
+// genuinely does comment out everything after it, including a closing brace, so
+// pinning depth==0 there would assert something untrue about HCL.
+func TestStripHCLNoiseTracksBlockCommentsAcrossLines(t *testing.T) {
+	withComment := []string{
+		`resource "x" "y" {`,
+		`  /* a multi-line note {{{`,
+		`     that keeps going }}} and }}} */`,
+		`  size = 1`,
+		`}`,
+	}
+	without := []string{`resource "x" "y" {`, `  size = 1`, `}`}
+	sum := func(lines []string) int {
+		d := 0
+		for _, l := range stripHCLNoise(lines) {
+			d += braceDelta(l)
+		}
+		return d
+	}
+	if got, want := sum(withComment), sum(without); got != want {
+		t.Errorf("depth with comment = %d, without = %d — a block comment must contribute nothing", got, want)
+	}
+	if sum(without) != 0 {
+		t.Fatalf("control case is wrong: a balanced resource must net 0, got %d", sum(without))
+	}
+}

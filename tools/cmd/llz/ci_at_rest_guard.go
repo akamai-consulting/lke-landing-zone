@@ -326,6 +326,7 @@ func collectAtRestFindings(root string, dirs []string) ([]atRestFinding, int, er
 func scanResourceLevers(body, rel string) []atRestFinding {
 	var out []atRestFinding
 	lines := strings.Split(body, "\n")
+	noise := stripHCLNoise(lines)
 	for i := 0; i < len(lines); i++ {
 		m := reResourceHead.FindStringSubmatch(lines[i])
 		if m == nil {
@@ -341,7 +342,18 @@ func scanResourceLevers(body, rel string) []atRestFinding {
 			if lever.ok.MatchString(lines[j]) {
 				ok = true
 			}
-			depth += strings.Count(lines[j], "{") - strings.Count(lines[j], "}")
+			// Braces counted on the line with comments and quoted strings REMOVED,
+			// while the lever is matched on the raw line (stripping quotes would
+			// delete the `"enabled"` it looks for).
+			//
+			// This is not fussiness. Terraform in this repo is heavily commented
+			// with backticked code fragments, and one comment containing an
+			// unbalanced `{` runs the depth counter past the end of its resource,
+			// swallowing every LATER resource in the file — which the outer loop
+			// then skips via `i = j - 1`. The failure is silent and it is a
+			// FALSE NEGATIVE on a security gate: the guard reports green having
+			// never looked at the resource.
+			depth += braceDelta(noise[j])
 		}
 		if !ok {
 			out = append(out, atRestFinding{
@@ -375,4 +387,50 @@ func relFromRoot(root, path string) string {
 		return filepath.ToSlash(r)
 	}
 	return filepath.ToSlash(path)
+}
+
+// stripHCLNoise returns a parallel slice of lines with block comments, line
+// comments and quoted strings blanked out, for brace counting only. Indices line
+// up with the input so a caller can match on the raw line and count on this one.
+//
+// Quoted spans go first, so a `#` or `{` inside a string is already gone by the
+// time the comment cut runs — `label = "a#b{c"` must not read as a comment or as
+// an opening brace.
+func stripHCLNoise(lines []string) []string {
+	out := make([]string, len(lines))
+	inBlock := false
+	for i, l := range lines {
+		// /* … */ can span lines, and an unclosed one has the same silent
+		// run-past effect as an unbalanced brace, so it is tracked rather than
+		// ignored.
+		if inBlock {
+			if k := strings.Index(l, "*/"); k >= 0 {
+				l, inBlock = l[k+2:], false
+			} else {
+				out[i] = ""
+				continue
+			}
+		}
+		code, _ := stripQuotedSpans(l)
+		if k := strings.Index(code, "/*"); k >= 0 {
+			if e := strings.Index(code[k:], "*/"); e >= 0 {
+				code = code[:k] + code[k+e+2:]
+			} else {
+				code, inBlock = code[:k], true
+			}
+		}
+		if k := strings.Index(code, "#"); k >= 0 {
+			code = code[:k]
+		}
+		if k := strings.Index(code, "//"); k >= 0 {
+			code = code[:k]
+		}
+		out[i] = code
+	}
+	return out
+}
+
+// braceDelta is the net HCL block-depth change of one already-denoised line.
+func braceDelta(code string) int {
+	return strings.Count(code, "{") - strings.Count(code, "}")
 }
