@@ -279,7 +279,7 @@ rest of the must-sets come from flags or are inherited from `spec.defaults`. The
 
 - `region` (**required**), `k8sVersion` (an LKE-E `+lke` version) + node sizing (`--node-type`/`--node-count` — default to the seeded `spec.defaults`)
 - `--runner-ipv4-cidrs` / `--runner-ipv6-cidrs` → `cluster.apiServerAllowCIDRs` — static operator/CI egress CIDRs that seed the bootstrap control-plane ACL (**never `0.0.0.0/0`**; leave empty for github.com-hosted runners, which open their egress IP at runtime via `llz ci runner-acl open`)
-- `cluster.domainSuffix` (`--cluster-domain`, default `<env>.internal`), `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them.
+- `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them. **Do not set a cluster domain** — Linode owns `lke<id>.akamai-apl.net` and LLZ discovers it in-cluster; the validator rejects `cluster.bootstrap.domainSuffix`, and the leftover `--cluster-domain` flag prints a domain in the summary banner but writes nothing.
 - `--obj-cluster` (**required**) — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `env add` validates the shape up front.
 
 ### Change, inspect & preview a deployment

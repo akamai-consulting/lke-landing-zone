@@ -87,6 +87,9 @@ spec:
       k8sVersion: v1.33.6+lke7             # → k8s_version
       nodePool: { type: g8-dedicated-8-4, count: 5 }
       controlPlane: { highAvailability: true, auditLogsEnabled: true }
+      # MANDATORY and validated: LLZ never self-installs apl-core. `llz env add`
+      # seeds this for you; it is required on every env (here, once, via defaults).
+      bootstrap: { managedAppPlatform: true }
 ```
 
 ```yaml
@@ -108,8 +111,8 @@ spec:
     bootstrap:                                    # → apl-core wiring (NOT tfvars — see the
                                                   #   values.yaml note under "Field reference")
       name: platform-prod                         # apl-core cluster.name
-      domainSuffix: prod.example.com              # apl-core cluster.domainSuffix; also the
-                                                  #   Harbor host patch + portal URL
+      # NO domainSuffix — Linode owns lke<id>.akamai-apl.net and LLZ discovers it
+      # in-cluster. Setting it is a hard validation error.
       # aplChartVersion: v6.1.0                   # optional; omit to track the llz baseline.
                                                   # Linode owns the deployed version on managed
                                                   # App Platform — this only pins what
@@ -117,7 +120,8 @@ spec:
                                                   # schema check resolve.
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git  # apl-core otomi.git.repoUrl
-        revision: main                            # apl-core otomi.git.branch
+        # revision omitted → the apl-core-owned `apl-prod` branch. It must NOT equal
+        # appsRepoRevision — sharing one branch reproduces the converge wedge.
       appsRepoRevision: main                      # apps repo revision
     objectStorage:                                # → object-storage/<env>.tfvars
       cluster: us-ord-7                           # → obj_cluster
@@ -141,7 +145,7 @@ spec:
     promotionRank: 2
     bootstrap:
       name: platform-staging
-      # domainSuffix omitted → defaults to "staging.internal"
+      # domainSuffix is never set (Linode owns the domain)
     objectStorage: { cluster: us-sea-1 }
   components:                                        # partial block: only these change
     harbor: { enabled: false }                    # ← no registry in staging
@@ -174,8 +178,7 @@ spec:
 ## Minimal example
 
 The smallest valid spec — components default to all-on except `gitea`,
-`cidrFirewall`, `broadPatRotator`, and `clusterHealthWorkflow`, and
-`domainSuffix` defaults to `<env>.internal`:
+`cidrFirewall`, `broadPatRotator`, and `clusterHealthWorkflow`:
 
 ```yaml
 # landingzone.yaml
@@ -200,7 +203,7 @@ spec:
     region: us-sea
     k8sVersion: v1.33.6+lke7
     nodePool: { type: g8-dedicated-8-4, count: 3 }
-    bootstrap: { name: platform-lab }
+    bootstrap: { name: platform-lab, managedAppPlatform: true }
     objectStorage: { cluster: us-sea-1 }
 ```
 
@@ -209,7 +212,14 @@ spec:
 **Required:** `landingzone.yaml`'s `spec.instance.{upstreamOrg,repo,forge}`,
 and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 `cluster.{clusterLabel,region,k8sVersion}`, `cluster.nodePool.{type,count}`,
-`cluster.bootstrap.name`.
+`cluster.bootstrap.name`, and **`cluster.bootstrap.managedAppPlatform: true`**
+(LLZ never self-installs apl-core — `llz env add` seeds it into `spec.defaults`).
+
+**Must NOT be set:** `cluster.bootstrap.domainSuffix` — Linode owns the
+`lke<id>.akamai-apl.net` domain and LLZ discovers it in-cluster; a stale value
+would misroute the Keycloak issuer and Harbor URL, so the validator rejects it
+outright. (`llz env add --cluster-domain` is a leftover no-op: it prints a
+`domainSuffix` in its summary banner but writes nothing.)
 
 **Deprecated: `spec.instance.templateVersion`.** Accepted and ignored — leave it or
 delete it, nothing reads it. The template pin lives once in `.copier-answers.yml`
