@@ -302,9 +302,13 @@ uses stay off that list. What each publishes:
 | `OPENBAO_ROOT_TOKEN` | `on-demand` | expected **absent** | Bootstrap revokes it; the quorum is what survives. A **set** one is a live full-admin credential left by a break-glass that never ran its revoke — `LLZCredentialRootTokenParked`, remedy `action=revoke`. |
 | `HARBOR_PASSWORD` / `HARBOR_PULL_PASSWORD` | `static` | **optional** | Published by the **active** peer's `harbor-robot-provisioner`, so a standby peer (and any deployment before Harbor first comes up) legitimately has neither. Measured when present, never alerted either way. |
 
-Presence is therefore not uniformly good, which is why `llz_credential_configured`
-carries an `expect` label with three values and two rules read it in opposite
-directions. The same series also closes the case ADR 0009 thought it had closed: a
+Presence is therefore not uniformly good, which is why the reconciler publishes a
+PAIR: `llz_credential_configured{cred}` (the fact) and
+`llz_credential_presence_ok{cred}` (whether that fact matches what is expected),
+and two rules join them in opposite directions. The expectation is applied in the
+reconciler and never carried as a metric label — the registry upserts by label set
+and has no delete, so a classification label would strand a stale series alerting
+forever the moment a credential was reclassified. The same series also closes the case ADR 0009 thought it had closed: a
 credential that was never configured has no age, so before this it published
 *nothing* and no age rule could evaluate for it — invisible rather than visibly
 wrong.

@@ -300,7 +300,16 @@ spec:
           # break-glass is impossible and you find out on the day you need it; a
           # missing TF_STATE_ENCRYPTION_PASSPHRASE means state is being written by
           # something this instance cannot configure.
-          expr: max by (cred, class) (llz_credential_configured{namespace="llz-reconciler", expect="present"}) == 0
+          # Joined on `cred` against the verdict series rather than filtered by an
+          # `expect` label. The label would have been a CLASSIFICATION on an
+          # upsert-only registry with no delete, so reclassifying a credential
+          # (HARBOR_* moved present -> optional in this same branch) would leave
+          # the old label set behind, served at its last value, firing forever.
+          # presence_ok carries the judgement under an immutable label set; the
+          # `and configured == 0` half is what separates "missing" from "parked".
+          expr: |
+            max by (cred) (llz_credential_presence_ok{namespace="llz-reconciler"}) == 0
+            and on(cred) max by (cred) (llz_credential_configured{namespace="llz-reconciler"}) == 0
           for: 1h
           labels:
             severity: warning
@@ -321,7 +330,12 @@ spec:
           # This is why `expect` is a LABEL and not a filter: presence is good for
           # eight of the nine measured credentials and bad for this one, and a rule
           # set that could only say "configured is good" had no way to express it.
-          expr: max by (cred) (llz_credential_configured{namespace="llz-reconciler", expect="absent"}) == 1
+          # The same pair read the other way: presence does not match what is
+          # expected AND the credential IS set. See the note on the rule above for
+          # why this is a join and not an `expect="absent"` matcher.
+          expr: |
+            max by (cred) (llz_credential_presence_ok{namespace="llz-reconciler"}) == 0
+            and on(cred) max by (cred) (llz_credential_configured{namespace="llz-reconciler"}) == 1
           for: 1h
           labels:
             severity: warning

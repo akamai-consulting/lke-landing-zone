@@ -136,10 +136,31 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 		// safe direction — no series rather than a false one.
 		switch sec.State {
 		case tokenStateOK, tokenStateAbsent:
+			present := sec.State == tokenStateOK
+			// LABELS ARE `cred` ONLY, and that is a correctness requirement rather
+			// than tidiness. tools/internal/metrics upserts keyed by the RENDERED
+			// LABEL SET and has no delete: SetGauge with a different label value
+			// adds a series, it does not replace one, and the old sample is served
+			// at its last value for the life of the pod.
+			//
+			// `class` and `expect` are CLASSIFICATIONS — they change when the
+			// writer's llz is upgraded, independently of this long-lived pod. The
+			// first shape of this metric carried both, so the HARBOR_* move from
+			// present to optional (made two commits ago, in this same branch)
+			// would have left a stale {expect="present"} 0 behind, firing
+			// LLZCredentialUnconfigured forever until someone restarted the
+			// reconciler. That is precisely the permanent noise the class label was
+			// introduced to avoid one metric over.
+			//
+			// So the classification is applied HERE and only the verdict is
+			// published. A reclassification now flips a value on a series that
+			// already exists; it can never mint a second one.
 			reg.SetGauge("llz_credential_configured",
-				"1 if the credential is configured as a GitHub Actions secret, 0 if the API reports it absent (expect: present|optional|absent)",
-				map[string]string{"cred": cred, "class": sec.Class, "expect": expect},
-				boolGauge(sec.State == tokenStateOK))
+				"1 if the credential is configured as a GitHub Actions secret, 0 if the API reports it absent",
+				map[string]string{"cred": cred}, boolGauge(present))
+			reg.SetGauge("llz_credential_presence_ok",
+				"1 if the credential's presence matches what is expected of it (see ghSecretTargets: present|optional|absent)",
+				map[string]string{"cred": cred}, boolGauge(presenceMatchesExpectation(expect, present)))
 		}
 
 		if sec.UpdatedAt == "" {
@@ -173,4 +194,22 @@ func configMapData(obj map[string]any, key string) string {
 	}
 	s, _ := data[key].(string)
 	return s
+}
+
+// presenceMatchesExpectation applies the ghSecretTargets classification, so the
+// published series carries a verdict under an immutable label set rather than the
+// raw fact plus a label that says how to read it.
+//
+// `optional` is always satisfied: the Harbor robot pair is published by the
+// ACTIVE peer's provisioner, so a standby legitimately has neither until it has
+// run, and neither presence nor absence is a finding there.
+func presenceMatchesExpectation(expect string, present bool) bool {
+	switch expect {
+	case credExpectAbsent:
+		return !present
+	case credExpectOptional:
+		return true
+	default: // credExpectPresent, and an empty value from an older writer
+		return present
+	}
 }

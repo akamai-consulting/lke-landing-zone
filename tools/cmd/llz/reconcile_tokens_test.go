@@ -105,8 +105,8 @@ func TestSampleTokenInventoryPublishesPresenceForAbsentSecrets(t *testing.T) {
 	}
 	out := metricsDump(t, reg)
 	for _, want := range []string{
-		`llz_credential_configured{class="on-demand",cred="tf-state-access-key",expect="present"} 1`,
-		`llz_credential_configured{class="static",cred="openbao-recovery-key-2",expect="present"} 0`,
+		`llz_credential_configured{cred="tf-state-access-key"} 1`,
+		`llz_credential_configured{cred="openbao-recovery-key-2"} 0`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics missing %q:\n%s", want, out)
@@ -136,9 +136,17 @@ func TestSampleTokenInventoryCarriesExpectAbsent(t *testing.T) {
 	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm, status: 200}, reg, time.Unix(1_800_000_000, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if out := metricsDump(t, reg); !strings.Contains(out,
-		`llz_credential_configured{class="on-demand",cred="openbao-root-token",expect="absent"} 1`) {
-		t.Errorf("expect=absent must survive onto the series:\n%s", out)
+	// The verdict, not the classification: a root token that IS set does not
+	// match what is expected of it, and the pair of series is what the two rules
+	// join on.
+	out := metricsDump(t, reg)
+	for _, want := range []string{
+		`llz_credential_configured{cred="openbao-root-token"} 1`,
+		`llz_credential_presence_ok{cred="openbao-root-token"} 0`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics missing %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -160,7 +168,11 @@ func TestSampleTokenInventoryDefaultsMissingExpectToPresent(t *testing.T) {
 	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm, status: 200}, reg, time.Unix(1_800_000_000, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if out := metricsDump(t, reg); !strings.Contains(out, `expect="present"`) {
+	// No `expect` from an old writer means "present", so a configured credential
+	// satisfies it — asserted on the verdict, since the classification is applied
+	// by the reconciler and never published as a label.
+	if out := metricsDump(t, reg); !strings.Contains(out,
+		`llz_credential_presence_ok{cred="tf-state-secret-key"} 1`) {
 		t.Errorf("an inventory with no expect must default to present:\n%s", out)
 	}
 }
@@ -222,12 +234,72 @@ func TestSampleTokenInventoryPublishesNoPresenceForUnreadableSecrets(t *testing.
 	}
 	// The one the API actually answered for is still published — a partial
 	// refusal must not blank the whole lane.
-	if !strings.Contains(out, `llz_credential_configured{class="on-demand",cred="tf-state-access-key",expect="present"} 0`) {
+	if !strings.Contains(out, `llz_credential_configured{cred="tf-state-access-key"} 0`) {
 		t.Errorf("an ANSWERED absence must still publish 0:\n%s", out)
 	}
 	// …and the funnel says the lane is degraded, so the silence above is not
 	// mistaken for health.
 	if !strings.Contains(out, "llz_credential_secret_probe_ok 0") {
 		t.Errorf("the funnel verdict must carry the refusal:\n%s", out)
+	}
+}
+
+// The defect this shape exists to prevent, reproduced against the real registry.
+//
+// tools/internal/metrics upserts keyed by the RENDERED LABEL SET and has no
+// delete, so publishing a classification as a LABEL means a reclassification
+// ADDS a series rather than replacing one — and the stale sample is served at its
+// last value for the life of the pod. `expect` and `class` change when the
+// WRITER's llz is upgraded, independently of this long-lived reconciler, and
+// HARBOR_* moved present -> optional inside this very branch. Under the first
+// shape that stranded a {expect="present"} 0 firing LLZCredentialUnconfigured
+// forever until someone restarted the pod.
+//
+// Two passes over one registry with a changed classification must therefore leave
+// exactly ONE series per credential.
+func TestCredentialPresenceSurvivesReclassification(t *testing.T) {
+	inv := func(expect string) map[string]any {
+		return map[string]any{"data": map[string]any{"inventory.json": `{"updated":1,"tokens":[],"secret_probe":"ok","secrets":[
+		  {"name":"HARBOR_PASSWORD","scope":"infra-primary","class":"static","expect":"` + expect + `","state":"absent"}
+		]}`}}
+	}
+	reg := metrics.NewRegistry()
+	for _, e := range []string{"present", "optional"} { // the writer is upgraded between passes
+		if err := sampleTokenInventory(context.Background(), fakeGetter{obj: inv(e), status: 200}, reg, time.Unix(1, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := metricsDump(t, reg)
+	if n := strings.Count(out, `llz_credential_configured{cred="harbor-password"}`); n != 1 {
+		t.Errorf("got %d configured series for one credential, want 1 — a reclassification stranded a stale label set:\n%s", n, out)
+	}
+	if n := strings.Count(out, `llz_credential_presence_ok{cred="harbor-password"}`); n != 1 {
+		t.Errorf("got %d presence_ok series for one credential, want 1:\n%s", n, out)
+	}
+	// And the surviving verdict is the CURRENT one: optional is satisfied by an
+	// absent credential, so nothing alerts.
+	if !strings.Contains(out, `llz_credential_presence_ok{cred="harbor-password"} 1`) {
+		t.Errorf("the latest classification must win:\n%s", out)
+	}
+}
+
+func TestPresenceMatchesExpectation(t *testing.T) {
+	for _, tc := range []struct {
+		expect  string
+		present bool
+		want    bool
+	}{
+		{credExpectPresent, true, true},
+		{credExpectPresent, false, false},
+		{credExpectAbsent, false, true},  // the healthy root-token state
+		{credExpectAbsent, true, false},  // parked after a break-glass
+		{credExpectOptional, true, true}, // the Harbor pair, either way
+		{credExpectOptional, false, true},
+		{"", true, true}, // an older writer sent no expect: treat as present
+		{"", false, false},
+	} {
+		if got := presenceMatchesExpectation(tc.expect, tc.present); got != tc.want {
+			t.Errorf("presenceMatchesExpectation(%q, %v) = %v, want %v", tc.expect, tc.present, got, tc.want)
+		}
 	}
 }

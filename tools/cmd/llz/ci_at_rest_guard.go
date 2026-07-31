@@ -33,6 +33,14 @@ package main
 // have passed every existing gate — including `tf-validate`, `checkov` and
 // `tflint`, which have no opinion about a block that is simply not there.
 //
+// SCANNER LIMIT. Block scope is found by counting braces on lines with comments
+// and quoted strings removed (stripHCLNoise) — a brace in a comment used to run
+// the counter past the end of its resource and silently hide every later one.
+// HEREDOCS are NOT stripped: a `<<-EOT` body containing an unbalanced brace would
+// reintroduce that. No heredoc in this tree sits inside a `resource` block (they
+// are all `description` on variables), so it is a stated limit rather than a live
+// hole — and it fails toward a false NEGATIVE, which is why it is written down.
+//
 // THE ONE RESIDUE IS REGISTERED, NOT IGNORED. ADR 0007 shipped its migration in
 // two phases and only phase 1 has happened: all four roots still carry
 // `fallback { method = method.unencrypted.migrate }`, which is what lets OpenTofu

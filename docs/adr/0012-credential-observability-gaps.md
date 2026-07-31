@@ -61,8 +61,21 @@ set one is a live, unexpiring, full-admin OpenBao credential left behind by a
 break-glass whose revoke half never ran. Two rules therefore read the same series
 in opposite directions:
 
-- `LLZCredentialUnconfigured` — `expect="present"` and the value is 0
-- `LLZCredentialRootTokenParked` — `expect="absent"` and the value is 1
+- `LLZCredentialUnconfigured` — presence does not match expectation, and the credential is **absent**
+- `LLZCredentialRootTokenParked` — presence does not match expectation, and the credential is **set**
+
+**The expectation is applied in the reconciler, not carried as a metric label.**
+`tools/internal/metrics` upserts keyed by the rendered label set and has no
+delete, so a label that encodes a *classification* — which changes when the
+writer's `llz` is upgraded, independently of the long-lived reconciler pod —
+would ADD a series rather than replace one, and the stale sample is served at its
+last value until the pod restarts. The first shape of this metric carried
+`class` and `expect`, and `HARBOR_*` moved `present` → `optional` **inside this
+same branch**: that would have stranded a `{expect="present"} 0` firing
+`LLZCredentialUnconfigured` forever. So the reconciler publishes
+`llz_credential_configured{cred}` (the fact) and
+`llz_credential_presence_ok{cred}` (the verdict), both under an immutable label
+set, and the rules join them.
 
 A rule set that could only say "configured is good" would have had to leave the
 root token unwatched. The promtool group pins that the two matchers cannot be
