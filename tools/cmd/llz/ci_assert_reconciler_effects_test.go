@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -102,7 +103,7 @@ func TestProbeReconcilerEffectsSkipsDisabledLanes(t *testing.T) {
 	seamEffectReaders(t, nil, nil, nil,
 		errors.New("must not be called"), errors.New("must not be called"), errors.New("must not be called"))
 	// No lanes enabled — every check must SKIP, and a skip must not be a failure.
-	vs := probeReconcilerEffects("llz-reconciler", map[string]bool{}, time.Now(), time.Hour)
+	vs := probeReconcilerEffects("llz-reconciler", map[string]bool{}, false, time.Now(), time.Hour)
 	if len(failedEffects(vs)) != 0 {
 		t.Errorf("disabled lanes must skip, not fail: %+v", failedEffects(vs))
 	}
@@ -120,9 +121,94 @@ func TestProbeReconcilerEffectsFailsWhenEnabledObjectUnreadable(t *testing.T) {
 		errors.New("connection refused"), errors.New("NotFound"), errors.New("NotFound"))
 	vs := probeReconcilerEffects("llz-reconciler",
 		map[string]bool{"sc-demote": true, "token-inventory": true, "cidr-firewall": true},
-		time.Now(), time.Hour)
+		false, time.Now(), time.Hour)
 	if got := len(failedEffects(vs)); got != 3 {
 		t.Errorf("all three enabled-but-unreadable invariants must fail, got %d: %+v", got, vs)
+	}
+}
+
+// A cluster whose scheduled writer has not run yet has NO llz-token-inventory
+// ConfigMap, and that is its normal state — the reconciler lane only READS it.
+// The first release-e2e to reach this gate failed here on a 40-minute-old
+// cluster, on an invariant nothing in the e2e path establishes.
+//
+// `kubectl --ignore-not-found` is what makes this expressible: absent arrives as
+// (empty, nil), a broken read still arrives as an error, and the two get
+// different verdicts.
+func TestProbeReconcilerEffectsSkipsAbsentTokenInventory(t *testing.T) {
+	now := time.Now().UTC()
+	seamEffectReaders(t,
+		[]byte(`{"items":[{"metadata":{"name":"block-storage-retain","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}]}`),
+		[]byte(``), // --ignore-not-found: absent is empty output, not an error
+		[]byte(`{"data":{"LKE_CLUSTER_ID":"1","VPC_CIDR":"10.0.0.0/16"}}`),
+		nil, nil, nil)
+	vs := probeReconcilerEffects("llz-reconciler",
+		map[string]bool{"sc-demote": true, "token-inventory": true, "cidr-firewall": true},
+		false, now, time.Hour)
+	if f := failedEffects(vs); len(f) != 0 {
+		t.Errorf("an absent token-inventory ConfigMap must not fail a fresh cluster: %+v", f)
+	}
+	for _, v := range vs {
+		if v.Lane == "token-inventory" && !v.Skipped {
+			t.Error("the absent token-inventory invariant must be reported as a SKIP")
+		}
+	}
+}
+
+// The exemption is about ABSENCE only. A ConfigMap that exists and has gone stale
+// is the failure this check was written for — a stopped writer leaving the gauges
+// serving a plausible expiry — and must still gate.
+func TestProbeReconcilerEffectsStillFailsStaleTokenInventory(t *testing.T) {
+	now := time.Now().UTC()
+	seamEffectReaders(t,
+		[]byte(`{"items":[{"metadata":{"name":"block-storage-retain","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}]}`),
+		[]byte(`{"data":{"updated":"`+now.Add(-48*time.Hour).Format(time.RFC3339)+`"}}`),
+		[]byte(`{"data":{"LKE_CLUSTER_ID":"1","VPC_CIDR":"10.0.0.0/16"}}`),
+		nil, nil, nil)
+	vs := probeReconcilerEffects("llz-reconciler",
+		map[string]bool{"sc-demote": true, "token-inventory": true, "cidr-firewall": true},
+		false, now, time.Hour)
+	if len(failedEffects(vs)) != 1 {
+		t.Errorf("a STALE token-inventory ConfigMap must still fail: %+v", vs)
+	}
+}
+
+// --require-token-inventory is for the caller that writes it, where absence is a
+// break rather than a fresh cluster. Without this the gate could never tell the
+// two apart in either direction.
+func TestProbeReconcilerEffectsRequireFlagFailsOnAbsent(t *testing.T) {
+	seamEffectReaders(t,
+		[]byte(`{"items":[{"metadata":{"name":"block-storage-retain","annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}]}`),
+		[]byte(``),
+		[]byte(`{"data":{"LKE_CLUSTER_ID":"1","VPC_CIDR":"10.0.0.0/16"}}`),
+		nil, nil, nil)
+	vs := probeReconcilerEffects("llz-reconciler",
+		map[string]bool{"sc-demote": true, "token-inventory": true, "cidr-firewall": true},
+		true, time.Now(), time.Hour)
+	if len(failedEffects(vs)) != 1 {
+		t.Errorf("--require-token-inventory must fail on an absent ConfigMap: %+v", vs)
+	}
+}
+
+// The skip above is only reachable if the READ distinguishes absent from broken,
+// and `--ignore-not-found` is the whole mechanism: without it kubectl exits 1 on
+// a missing ConfigMap and absence is indistinguishable from an RBAC denial or an
+// unreachable apiserver. Every other test here seams readTokenInventory and so
+// cannot see the flag at all — this one exercises the default implementation.
+func TestReadTokenInventoryIgnoresNotFound(t *testing.T) {
+	orig := execOutput
+	t.Cleanup(func() { execOutput = orig })
+	var got []string
+	execOutput = func(name string, args ...string) ([]byte, error) {
+		got = append([]string{name}, args...)
+		return nil, nil
+	}
+	if _, err := readTokenInventory("llz-reconciler"); err != nil {
+		t.Fatalf("readTokenInventory: %v", err)
+	}
+	if !slices.Contains(got, "--ignore-not-found") {
+		t.Errorf("read was %v — without --ignore-not-found an absent ConfigMap exits 1 and is "+
+			"indistinguishable from an unreadable one, so the fresh-cluster skip can never trigger", got)
 	}
 }
 
@@ -134,7 +220,7 @@ func TestRunAssertReconcilerEffectsHappyPath(t *testing.T) {
 		[]byte(`{"data":{"LKE_CLUSTER_ID":"1","VPC_CIDR":"10.0.0.0/16"}}`),
 		nil, nil, nil)
 	err := runCIAssertReconcilerEffects("llz-reconciler",
-		[]string{"sc-demote", "token-inventory", "cidr-firewall"}, 3*time.Hour, 0, time.Millisecond)
+		[]string{"sc-demote", "token-inventory", "cidr-firewall"}, false, 3*time.Hour, 0, time.Millisecond)
 	if err != nil {
 		t.Errorf("expected all invariants to hold, got %v", err)
 	}
@@ -151,7 +237,7 @@ func TestRunAssertReconcilerEffectsFailsOnTwoDefaults(t *testing.T) {
 		[]byte(`{"data":{"LKE_CLUSTER_ID":"1","VPC_CIDR":"10.0.0.0/16"}}`),
 		nil, nil, nil)
 	err := runCIAssertReconcilerEffects("llz-reconciler",
-		[]string{"sc-demote", "token-inventory", "cidr-firewall"}, 3*time.Hour, 0, time.Millisecond)
+		[]string{"sc-demote", "token-inventory", "cidr-firewall"}, false, 3*time.Hour, 0, time.Millisecond)
 	if err == nil {
 		t.Fatal("two default StorageClasses must fail the gate")
 	}
@@ -166,7 +252,7 @@ func TestRunAssertReconcilerEffectsFailsWhenLaneSetUnknown(t *testing.T) {
 	orig := enabledReconcilerLanes
 	t.Cleanup(func() { enabledReconcilerLanes = orig })
 	enabledReconcilerLanes = func(string) ([]string, error) { return nil, errors.New("no deployment") }
-	if err := runCIAssertReconcilerEffects("llz-reconciler", nil, time.Hour, 0, time.Millisecond); err == nil {
+	if err := runCIAssertReconcilerEffects("llz-reconciler", nil, false, time.Hour, 0, time.Millisecond); err == nil {
 		t.Error("an unreadable Deployment must fail the gate")
 	}
 }
