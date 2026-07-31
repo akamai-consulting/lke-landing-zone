@@ -21,6 +21,12 @@ type fakeTeardownClient struct {
 	vpcs      []map[string]any
 	deleteErr map[string]error // per-path injected failure
 	deletes   []string
+	detached  []uint64
+}
+
+func (f *fakeTeardownClient) DetachVolume(_ context.Context, id uint64) error {
+	f.detached = append(f.detached, id)
+	return nil
 }
 
 func (f *fakeTeardownClient) ClustersWithLabel(context.Context, string) ([]uint64, error) {
@@ -428,4 +434,88 @@ func TestScanOrphans(t *testing.T) {
 	if scoped.orphans() != 0 {
 		t.Errorf("region-scoped orphans() = %d, want 0", scoped.orphans())
 	}
+}
+
+// settlingGateScanner answers the destroy gate's reads with an account that is
+// still settling: the destroyed cluster's VPC stays visible for the first
+// `vpcVisibleFor` reads of /v4/vpcs and is gone after that. Everything else is
+// already clean, so the VPC is the only thing standing between the gate and a
+// pass.
+type settlingGateScanner struct {
+	clusterID     string
+	vpcVisibleFor int
+	vpcReads      int
+}
+
+func (s *settlingGateScanner) LiveClusterIDs(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+func (s *settlingGateScanner) ListVolumes(context.Context) ([]map[string]any, error) {
+	return nil, nil
+}
+func (s *settlingGateScanner) ListNodeBalancers(context.Context) ([]map[string]any, error) {
+	return nil, nil
+}
+func (s *settlingGateScanner) NodeBalancerBackendCount(context.Context, uint64) (int, error) {
+	return 0, nil
+}
+func (s *settlingGateScanner) ListClusters(context.Context) ([]map[string]any, error) {
+	return nil, nil // the cluster itself is gone
+}
+func (s *settlingGateScanner) ListVPCs(context.Context) ([]map[string]any, error) {
+	s.vpcReads++
+	if s.vpcReads <= s.vpcVisibleFor {
+		return []map[string]any{{"id": float64(587295), "label": "lke" + s.clusterID, "region": "us-ord"}}, nil
+	}
+	return nil, nil
+}
+
+// The gate's own-orphan check (cluster survived / own NBs / own VPC) reads the
+// same asynchronously-reaped account state as the threshold census, so it needs
+// the same retries. It used to run ONCE, ahead of the loop.
+//
+// Run 30643426633: `teardown-delete-vpc` printed "VPC 587295 deleted.", and this
+// gate — invoked `--attempts 5 --retry-delay 30` — read the VPC list 5 seconds
+// later, still saw lke638293, and failed the teardown 0.9s in. It rode out none
+// of the settling window it documents, and reported a leak that was a delete
+// still propagating.
+func TestAssertNoOrphansRidesOutTheSettlingWindow(t *testing.T) {
+	orig := teardownSleep
+	teardownSleep = func(time.Duration) {}
+	t.Cleanup(func() { teardownSleep = orig })
+
+	t.Run("a VPC that disappears on the second read passes", func(t *testing.T) {
+		s := &settlingGateScanner{clusterID: "638293", vpcVisibleFor: 1}
+		out := captureStdout(t, func() {
+			if err := assertNoOrphans(context.Background(), s, "", "e2e", "638293", "e2e", 0, 5, 30); err != nil {
+				t.Fatalf("a VPC still listed on the FIRST read but gone on the second is a delete propagating, not a leak — the gate has 5 attempts precisely to let it: %v", err)
+			}
+		})
+		if !strings.Contains(out, "scoped teardown is clean") {
+			t.Errorf("the gate must announce the cluster clean once its VPC settles:\n%s", out)
+		}
+	})
+
+	t.Run("a VPC that outlives every attempt still fails", func(t *testing.T) {
+		s := &settlingGateScanner{clusterID: "638293", vpcVisibleFor: 99}
+		err := assertNoOrphans(context.Background(), s, "", "e2e", "638293", "e2e", 0, 3, 30)
+		if err == nil {
+			t.Fatal("a VPC that survives ALL attempts is a real leak and must red the teardown — retrying must not become tolerating")
+		}
+		if !strings.Contains(err.Error(), "1 VPC of its own") {
+			t.Errorf("the failure must still name what leaked; got %v", err)
+		}
+		if s.vpcReads != 3 {
+			t.Errorf("VPC reads = %d, want 3 (one per attempt)", s.vpcReads)
+		}
+	})
+
+	t.Run("a single attempt fails on the first read, as configured", func(t *testing.T) {
+		// --attempts 1 is opting OUT of the settling window; the gate must honor
+		// that rather than silently retrying anyway.
+		s := &settlingGateScanner{clusterID: "638293", vpcVisibleFor: 1}
+		if err := assertNoOrphans(context.Background(), s, "", "e2e", "638293", "e2e", 0, 1, 30); err == nil {
+			t.Fatal("--attempts 1 must take exactly one reading")
+		}
+	})
 }

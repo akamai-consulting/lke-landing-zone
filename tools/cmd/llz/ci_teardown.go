@@ -172,6 +172,18 @@ func runCIAssertNoOrphans(region, volumeRegion, clusterID, env string, threshold
 	if err != nil {
 		return err
 	}
+	return assertNoOrphans(ctx, client, region, volumeRegion, clusterID, env, threshold, attempts, retryDelay)
+}
+
+// orphanGateScanner is everything the destroy gate reads: the shared orphan
+// census plus the cluster list that says whether the cluster itself survived.
+type orphanGateScanner interface {
+	orphanScanner
+	ListClusters(ctx context.Context) ([]map[string]any, error)
+}
+
+func assertNoOrphans(ctx context.Context, client orphanGateScanner, region, volumeRegion, clusterID, env string, threshold, attempts, retryDelay int) error {
+	var err error
 	if attempts < 1 {
 		attempts = 1
 	}
@@ -183,71 +195,120 @@ func runCIAssertNoOrphans(region, volumeRegion, clusterID, env string, threshold
 	// the destroy can't clean). A surviving NB (lke_cluster.id) or VPC (lke<id>)
 	// here means the scoped sweeps failed — fail loudly so the leak can't recur
 	// silently the way it did before lke_cluster.id attribution.
-	if clusterID != "" {
-		nbs, verr := client.ListNodeBalancers(ctx)
-		if verr != nil {
-			return fmt.Errorf("list NodeBalancers: %w", verr)
-		}
-		ownNBs := 0
-		for _, nb := range nbs {
-			if nbBelongsToCluster(nb, clusterID) {
-				ownNBs++
-			}
-		}
-		vpcs, verr := client.ListVPCs(ctx)
-		if verr != nil {
-			return fmt.Errorf("list VPCs: %w", verr)
-		}
-		_, ownVPC := linode.FindIDByLabel(vpcs, "lke"+clusterID)
-		ownVPCs := 0
-		if ownVPC {
-			ownVPCs = 1
-		}
-		// The cluster ITSELF must be gone. A wedged LKE-E cluster that force-delete
-		// could not remove (dead control plane, async teardown stalled) survives
-		// here — and left un-flagged it hangs the NEXT apply's tf-import on the same
-		// unreadable state-refresh (the incident this closes). Fatal, like a leaked
-		// own NB/VPC (which means the scoped sweeps failed).
-		clusterSurvived := false
-		if cNum, perr := strconv.ParseUint(clusterID, 10, 64); perr == nil && cNum != 0 {
-			clusters, verr := client.ListClusters(ctx)
-			if verr != nil {
-				return fmt.Errorf("list clusters: %w", verr)
-			}
-			clusterSurvived = clusterIDPresent(clusters, cNum)
-		}
-		if clusterSurvived || ownNBs > 0 || ownVPC {
-			if clusterSurvived {
-				fmt.Fprintf(os.Stderr, "::error::cluster %s STILL EXISTS after destroy — its control plane is likely wedged (force-delete could not remove it). The next apply's tf-import will hang on it. Delete it: curl -X DELETE -H \"Authorization: Bearer $LINODE_TOKEN\" https://api.linode.com/v4beta/lke/clusters/%s\n", clusterID, clusterID)
-			}
-			if ownNBs > 0 || ownVPC {
-				fmt.Fprintf(os.Stderr, "::error::cluster %s left its OWN orphans after destroy: %d NodeBalancer(s) + %d VPC. Clear them: LINODE_TOKEN=<token> llz reap --region %s --cluster-label <label> --yes\n",
-					clusterID, ownNBs, ownVPCs, orAll(volRegion))
-			}
-			return fmt.Errorf("assert-no-orphans: destroyed cluster %s survived=%t and left %d NodeBalancer(s) + %d VPC of its own", clusterID, clusterSurvived, ownNBs, ownVPCs)
-		}
-		fmt.Printf("cluster %s is gone and left no NodeBalancers or VPC of its own — scoped teardown is clean.\n", clusterID)
-	}
-
+	//
+	// This check shares the retry loop with the threshold census rather than
+	// running once ahead of it. Both read the SAME asynchronous account state, so
+	// a single read is a coin flip on Linode's delete propagation: on run
+	// 30643426633 `teardown-delete-vpc` printed "VPC 587295 deleted." and this
+	// gate — configured `--attempts 5 --retry-delay 30` — still saw that VPC in
+	// the list and failed the teardown 0.9s later, having ridden out none of the
+	// settling window it documents. A deleted-but-still-listed VPC is exactly the
+	// transient the retries exist for; only a survivor that outlives ALL attempts
+	// is a real leak.
 	var scan orphanScan
+	var own ownOrphans
+	ownClean := clusterID == ""
 	for attempt := 1; attempt <= attempts; attempt++ {
-		if scan, err = scanOrphans(ctx, client, region, volRegion, env); err != nil {
-			return err
+		if !ownClean {
+			if own, err = scanOwnOrphans(ctx, client, clusterID); err != nil {
+				return err
+			}
+			if ownClean = own.clean(); ownClean {
+				fmt.Printf("cluster %s is gone and left no NodeBalancers or VPC of its own — scoped teardown is clean.\n", clusterID)
+			}
 		}
-		fmt.Printf("orphan census (NB/VPC region: %s, Volume region: %s) [attempt %d/%d]: %d Volume(s), %d NodeBalancer(s), %d VPC(s) — %d total (threshold %d)\n",
-			orAll(region), orAll(volRegion), attempt, attempts, scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan, scan.orphans(), threshold)
-		if !preflight.OrphansExceedThreshold(scan.orphans(), threshold) {
-			fmt.Println("no orphaned resources above threshold — destroy is clean.")
-			return nil
+		if ownClean {
+			if scan, err = scanOrphans(ctx, client, region, volRegion, env); err != nil {
+				return err
+			}
+			fmt.Printf("orphan census (NB/VPC region: %s, Volume region: %s) [attempt %d/%d]: %d Volume(s), %d NodeBalancer(s), %d VPC(s) — %d total (threshold %d)\n",
+				orAll(region), orAll(volRegion), attempt, attempts, scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan, scan.orphans(), threshold)
+			if !preflight.OrphansExceedThreshold(scan.orphans(), threshold) {
+				fmt.Println("no orphaned resources above threshold — destroy is clean.")
+				return nil
+			}
+		} else {
+			fmt.Printf("cluster %s still shows survived=%t, %d own NodeBalancer(s), %d own VPC [attempt %d/%d]\n",
+				clusterID, own.clusterSurvived, own.nbs, own.vpcCount(), attempt, attempts)
 		}
 		if attempt < attempts {
 			fmt.Printf("orphans still present — re-checking in %ds (cluster-delete reaps NBs/VPCs and detaches Volumes asynchronously)...\n", retryDelay)
-			time.Sleep(time.Duration(retryDelay) * time.Second)
+			teardownSleep(time.Duration(retryDelay) * time.Second)
 		}
+	}
+
+	// The cluster ITSELF must be gone. A wedged LKE-E cluster that force-delete
+	// could not remove (dead control plane, async teardown stalled) survives
+	// here — and left un-flagged it hangs the NEXT apply's tf-import on the same
+	// unreadable state-refresh (the incident this closes). Fatal, like a leaked
+	// own NB/VPC (which means the scoped sweeps failed).
+	if !ownClean {
+		if own.clusterSurvived {
+			fmt.Fprintf(os.Stderr, "::error::cluster %s STILL EXISTS after destroy — its control plane is likely wedged (force-delete could not remove it). The next apply's tf-import will hang on it. Delete it: curl -X DELETE -H \"Authorization: Bearer $LINODE_TOKEN\" https://api.linode.com/v4beta/lke/clusters/%s\n", clusterID, clusterID)
+		}
+		if own.nbs > 0 || own.vpc {
+			fmt.Fprintf(os.Stderr, "::error::cluster %s left its OWN orphans after destroy: %d NodeBalancer(s) + %d VPC. Clear them: LINODE_TOKEN=<token> llz reap --region %s --cluster-label <label> --yes\n",
+				clusterID, own.nbs, own.vpcCount(), orAll(volRegion))
+		}
+		return fmt.Errorf("assert-no-orphans: destroyed cluster %s survived=%t and left %d NodeBalancer(s) + %d VPC of its own after %d attempt(s)", clusterID, own.clusterSurvived, own.nbs, own.vpcCount(), attempts)
 	}
 	fmt.Fprintf(os.Stderr, "::error::%d orphaned Linode resource(s) remain after the destroy (threshold %d): %d Volume(s), %d NodeBalancer(s), %d VPC(s). These count against the account's active-services quota and will stall the next apply's preflight. Clear them: LINODE_TOKEN=<token> llz reap --region %s --yes\n",
 		scan.orphans(), threshold, scan.vol.orphan, scan.nb.orphan, scan.vpc.orphan, orAll(volRegion))
 	return fmt.Errorf("assert-no-orphans: %d orphaned resource(s) over threshold %d after %d attempt(s)", scan.orphans(), threshold, attempts)
+}
+
+// ownOrphans is what the destroyed cluster left behind that is unambiguously
+// ITS OWN — attributable by lke_cluster.id (NodeBalancers) or the lke<id> label
+// (VPC) — plus whether the cluster object itself is still on the account.
+type ownOrphans struct {
+	clusterSurvived bool
+	nbs             int
+	vpc             bool
+}
+
+// clean reports whether nothing of the cluster's own survives.
+func (o ownOrphans) clean() bool { return !o.clusterSurvived && o.nbs == 0 && !o.vpc }
+
+// vpcCount renders the boolean as the 0/1 count the operator-facing messages use.
+func (o ownOrphans) vpcCount() int {
+	if o.vpc {
+		return 1
+	}
+	return 0
+}
+
+// scanOwnOrphans takes one point-in-time reading of the destroyed cluster's own
+// surviving resources. Every field is asynchronously reaped by Linode after the
+// cluster DELETE, so a single reading proves nothing — callers must re-read
+// until it comes back clean or the attempt budget runs out.
+func scanOwnOrphans(ctx context.Context, client interface {
+	ListNodeBalancers(context.Context) ([]map[string]any, error)
+	ListVPCs(context.Context) ([]map[string]any, error)
+	ListClusters(context.Context) ([]map[string]any, error)
+}, clusterID string) (ownOrphans, error) {
+	var own ownOrphans
+	nbs, err := client.ListNodeBalancers(ctx)
+	if err != nil {
+		return own, fmt.Errorf("list NodeBalancers: %w", err)
+	}
+	for _, nb := range nbs {
+		if nbBelongsToCluster(nb, clusterID) {
+			own.nbs++
+		}
+	}
+	vpcs, err := client.ListVPCs(ctx)
+	if err != nil {
+		return own, fmt.Errorf("list VPCs: %w", err)
+	}
+	_, own.vpc = linode.FindIDByLabel(vpcs, "lke"+clusterID)
+	if cNum, perr := strconv.ParseUint(clusterID, 10, 64); perr == nil && cNum != 0 {
+		clusters, cerr := client.ListClusters(ctx)
+		if cerr != nil {
+			return own, fmt.Errorf("list clusters: %w", cerr)
+		}
+		own.clusterSurvived = clusterIDPresent(clusters, cNum)
+	}
+	return own, nil
 }
 
 // teardownLabels reads <tf-dir>/<region>.tfvars (falling back to the .example,
