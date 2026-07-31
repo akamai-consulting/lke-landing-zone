@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -589,10 +589,23 @@ workflows-lock-check: export LLZ_FORCE_SOURCE := 1
 workflows-lock-check:
 	$(call LLZ_CI,workflows-fresh,--root ../instance-template)
 
+# Assert every restatement of a tool version agrees with the Dockerfile ARG block
+# (the declared single source of truth): the build-images matrix, lint.yml's
+# container fallbacks and env pins, and the ciTofuTag/ciKubernetesTag constants
+# that derive TF_IMAGE/KUBE_IMAGE. The Go constants sat on Terraform 1.9.8 after
+# the other two moved to OpenTofu 1.12.5 — caught by hand then, caught here now.
+#
+# FROM SOURCE, for the same reason as workflows-lock-check: this compares the
+# WORKING TREE against itself, and the prebuilt image binary is built from the
+# merge-base (so it lacks this verb on the PR that introduces it).
+version-pins-check: export LLZ_FORCE_SOURCE := 1
+version-pins-check:
+	$(call LLZ_CI,version-pins --root .,--root ..)
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check workflows-lock-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check workflows-lock-check version-pins-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \
