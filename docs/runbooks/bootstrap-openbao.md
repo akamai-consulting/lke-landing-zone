@@ -301,4 +301,4 @@ gh workflow run breakglass-openbao.yml --field region=<env> --field action=revok
 ## See also
 
 - [`docs/secrets.md`](../secrets.md) — full secrets operations guide, dual-write rotation, query examples
-- [`instance-template/.github/workflows/bootstrap-openbao.yml`](../../instance-template/.github/workflows/bootstrap-openbao.yml) — workflow source
+- [`instance-template/.github/workflows/bootstrap-openbao.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/.github/workflows/bootstrap-openbao.yml) — workflow source

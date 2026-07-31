@@ -3,7 +3,7 @@
 **Applies to:** an instance whose platform has converged (`llz status <env>` green).
 This is the step *after* the platform: getting your own application running on it.
 
-**Related:** [`kubernetes-custom/README.md`](../../instance-template/kubernetes-custom/README.md)
+**Related:** [`kubernetes-custom/README.md`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/kubernetes-custom/README.md)
 in your instance (the escape hatch's full contract),
 [`harbor-accounts.md`](harbor-accounts.md), [`argocd-ops.md`](argocd-ops.md),
 [ADR 0007](../adr/0007-app-delivery-boundary.md) (why LLZ ships the platform and
@@ -198,7 +198,7 @@ flake makes block storage an unreliable scratch disk).
 
 ## See also
 
-- [`kubernetes-custom/README.md`](../../instance-template/kubernetes-custom/README.md) — the escape hatch's full contract
+- [`kubernetes-custom/README.md`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/kubernetes-custom/README.md) — the escape hatch's full contract
 - [`harbor-accounts.md`](harbor-accounts.md) — projects, robots, and human logins
 - [`argocd-ops.md`](argocd-ops.md) — sync/health triage and recovery
 - [`operator-onboarding.md`](operator-onboarding.md) — getting your own access first
