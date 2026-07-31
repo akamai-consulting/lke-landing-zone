@@ -333,8 +333,7 @@ new env, in order:
    auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
    engine, auth methods, and policies.
 6. **DNS** — no dedicated step. The `llz-letsencrypt-*` ClusterIssuers come from
-   the managed App Platform and sync automatically via Argo CD; set the ACME
-   contact once with `llz spec set dns.acmeEmail=<you@example.com>`.
+   the managed App Platform and sync automatically via Argo CD.
    DNS-01 challenges are solved by apl-core's `cert-manager-webhook-linode`,
    which holds its own Linode token (`TF_VAR_linode_dns_token` from the
    `LINODE_DNS_TOKEN` secret, rendered into apl-core's values by `llz ci bootstrap-cluster`) — no
