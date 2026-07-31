@@ -95,7 +95,7 @@ func TestSampleTokenInventoryPublishesPresenceForAbsentSecrets(t *testing.T) {
 		"data": map[string]any{
 			"inventory.json": `{"updated":1720000000,"tokens":[],"secrets":[
 			  {"name":"TF_STATE_ACCESS_KEY","scope":"infra-primary","updated_at":"2026-05-01T00:00:00Z","class":"on-demand","expect":"present","state":"ok"},
-			  {"name":"OPENBAO_RECOVERY_KEY_2","scope":"infra-primary","class":"static","expect":"present","state":"unknown"}
+			  {"name":"OPENBAO_RECOVERY_KEY_2","scope":"infra-primary","class":"static","expect":"present","state":"absent"}
 			]}`,
 		},
 	}
@@ -195,5 +195,39 @@ func TestSampleTokenInventoryPublishesSecretProbeVerdict(t *testing.T) {
 	}
 	if out := metricsDump(t, reg); strings.Contains(out, "llz_credential_secret_probe_ok") {
 		t.Errorf("an inventory with no verdict must publish neither value:\n%s", out)
+	}
+}
+
+// The reconciler must not turn "I could not read it" into "it is not there".
+// LLZCredentialUnconfigured reads llz_credential_configured=0 as "seed this
+// credential", so publishing 0 for an unreadable secret pages on a token
+// permission fault while naming a missing credential — and sends the operator to
+// docs/secrets.md instead of to the token. The funnel gauge carries that case.
+func TestSampleTokenInventoryPublishesNoPresenceForUnreadableSecrets(t *testing.T) {
+	cm := map[string]any{
+		"data": map[string]any{
+			"inventory.json": `{"updated":1,"tokens":[],"secret_probe":"unavailable","secrets":[
+			  {"name":"OPENBAO_SEAL_KEY","scope":"infra-primary","class":"static","expect":"present","state":"unknown"},
+			  {"name":"TF_STATE_ACCESS_KEY","scope":"infra-primary","class":"on-demand","expect":"present","state":"absent"}
+			]}`,
+		},
+	}
+	reg := metrics.NewRegistry()
+	if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm, status: 200}, reg, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	out := metricsDump(t, reg)
+	if strings.Contains(out, `cred="openbao-seal-key"`) {
+		t.Errorf("an unreadable secret must publish NO presence series:\n%s", out)
+	}
+	// The one the API actually answered for is still published — a partial
+	// refusal must not blank the whole lane.
+	if !strings.Contains(out, `llz_credential_configured{class="on-demand",cred="tf-state-access-key",expect="present"} 0`) {
+		t.Errorf("an ANSWERED absence must still publish 0:\n%s", out)
+	}
+	// …and the funnel says the lane is degraded, so the silence above is not
+	// mistaken for health.
+	if !strings.Contains(out, "llz_credential_secret_probe_ok 0") {
+		t.Errorf("the funnel verdict must carry the refusal:\n%s", out)
 	}
 }

@@ -303,9 +303,16 @@ jobs:
       # --require-inventory because THIS job wrote the inventory two steps ago. An
       # absent inventory here is a break, not the fresh-cluster case the flag's
       # default tolerates for the e2e suite.
+      #
+      # --settle 300, not the 120s default: this step is CHASING the write two
+      # steps above, and the path from `kubectl apply` to a queryable series is a
+      # 30s reconciler sample plus a 30s Prometheus scrape plus rule evaluation.
+      # The default leaves almost no margin over that, and a gate that flakes on
+      # its own propagation delay is a gate people learn to re-run rather than
+      # read.
       - name: Assert the credential funnel end to end
         if: steps.kubeconfig.outputs.available == 'true'
-        run: llz ci assert-rotation-health --require-inventory
+        run: llz ci assert-rotation-health --require-inventory --settle 300
       - name: Cleanup kubeconfig
         if: always()
         run: rm -f "$HOME/.kube/config"

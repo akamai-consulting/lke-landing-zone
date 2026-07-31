@@ -409,10 +409,17 @@ func evalPresenceHealth(configured map[string]float64, probeOK float64, probeSee
 		got, ok := configured[cred]
 		v.Present = ok
 		switch {
+		case tgt.expect == credExpectOptional:
+			// Legitimately absent on a healthy deployment (the Harbor robot pair on
+			// a standby peer, before the ACTIVE peer's provisioner has published
+			// them). Visible on the dashboard, never a gate in either direction.
+			v.Gated = false
 		case !ok:
-			v.FailWhy = "no llz_credential_configured series, although the probe reported OK. The " +
-				"credential is declared in ghSecretTargets and the writer measured the others, so this " +
-				"is a funnel defect rather than an absent credential"
+			v.FailWhy = "no llz_credential_configured series, although the probe reported OK. Either " +
+				"the writer could not READ this credential (a 403 on the environment scope is the " +
+				"likely one — environment-secret metadata needs different token permissions from " +
+				"repo-scoped, and the OpenBao credentials are environment-scoped), or the funnel " +
+				"between writer and reconciler is broken. It is NOT evidence the credential is missing"
 		case tgt.expect == credExpectPresent && got != 1:
 			v.FailWhy = "expected present and the GitHub secrets API reports it ABSENT. It has no age " +
 				"because it has no value, so no age rule can fire for it. Seed it (docs/secrets.md), or " +

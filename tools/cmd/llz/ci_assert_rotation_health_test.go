@@ -360,8 +360,11 @@ func TestPresenceHealthDistinguishesAMissingSeriesFromAnAbsentCredential(t *test
 		if v.Cred != "openbao-seal-key" {
 			continue
 		}
-		if !strings.Contains(v.FailWhy, "funnel defect") {
-			t.Errorf("a missing series must be diagnosed as a funnel defect: %q", v.FailWhy)
+		if !strings.Contains(v.FailWhy, "NOT evidence the credential is missing") {
+			t.Errorf("a missing series must not be diagnosed as an absent credential: %q", v.FailWhy)
+		}
+		if !strings.Contains(v.FailWhy, "403") {
+			t.Errorf("the message must name the likely cause — a refused environment-scope read: %q", v.FailWhy)
 		}
 	}
 }
@@ -376,6 +379,32 @@ func TestPresenceVerdictsAreMarkedAsSuch(t *testing.T) {
 		}
 		if v.Age != 0 {
 			t.Errorf("%s: presence verdicts must carry no age, got %v", v.Cred, v.Age)
+		}
+	}
+}
+
+// The Harbor robot pair is legitimately absent on a standby peer until the ACTIVE
+// peer's provisioner has published it, and on any deployment before Harbor first
+// comes up. Gating on it — as the first draft did, classing both `present` —
+// would fail the daily credential job on a healthy standby, which is a worse
+// outcome than the gap it was meant to close.
+func TestPresenceHealthDoesNotGateOptionalCredentials(t *testing.T) {
+	m := presenceSteadyState()
+	var optional []string
+	for _, tgt := range ghSecretTargets {
+		if tgt.expect == credExpectOptional {
+			optional = append(optional, credLabelForSecret(tgt.name))
+			delete(m, credLabelForSecret(tgt.name)) // absent AND publishing nothing
+		}
+	}
+	if len(optional) == 0 {
+		t.Skip("no optional targets declared")
+	}
+	for _, v := range evalPresenceHealth(m, 1, true, false) {
+		for _, o := range optional {
+			if v.Cred == o && (v.FailWhy != "" || v.Gated) {
+				t.Errorf("%s is optional and must not gate: FailWhy=%q Gated=%v", v.Cred, v.FailWhy, v.Gated)
+			}
 		}
 	}
 }

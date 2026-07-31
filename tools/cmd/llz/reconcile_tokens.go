@@ -117,13 +117,32 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 		if expect == "" {
 			expect = credExpectPresent // inventory written by an older llz
 		}
-		reg.SetGauge("llz_credential_configured",
-			"1 if the credential is configured as a GitHub Actions secret, 0 if absent (expect: present|absent)",
-			map[string]string{"cred": cred, "class": sec.Class, "expect": expect},
-			boolGauge(sec.UpdatedAt != ""))
+		// Publish presence ONLY when the writer actually learned it. `ok` and
+		// `absent` are both answers; `unknown` means the API refused (a 403 on the
+		// environment scope, a 5xx) and we know nothing.
+		//
+		// Publishing 0 for `unknown` would be the same conflation this series
+		// exists to remove: LLZCredentialUnconfigured reads 0 as "seed this
+		// credential", so a token-permission problem would page as a missing
+		// credential and send the operator to the wrong runbook. Silence here is
+		// not a blind spot — secretProbeVerdict flips the funnel gauge to 0 for
+		// exactly this case, so LLZCredentialSecretProbeUnavailable fires instead
+		// and names the real fault.
+		//
+		// An inventory from a writer predating tokenStateAbsent reports absent
+		// credentials as `unknown` and so publishes nothing for them. That is the
+		// pre-existing behaviour, and degrading to it during an upgrade is the
+		// safe direction — no series rather than a false one.
+		switch sec.State {
+		case tokenStateOK, tokenStateAbsent:
+			reg.SetGauge("llz_credential_configured",
+				"1 if the credential is configured as a GitHub Actions secret, 0 if the API reports it absent (expect: present|optional|absent)",
+				map[string]string{"cred": cred, "class": sec.Class, "expect": expect},
+				boolGauge(sec.State == tokenStateOK))
+		}
 
 		if sec.UpdatedAt == "" {
-			continue // absent — presence is published above; there is no age to publish
+			continue // absent or unreadable — either way there is no age to publish
 		}
 		t, err := time.Parse(time.RFC3339, sec.UpdatedAt)
 		if err != nil {

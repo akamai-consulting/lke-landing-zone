@@ -357,3 +357,24 @@ tests:
       - eval_time: 5h
         alertname: LLZCredentialSecretProbeUnavailable
         exp_alerts: []
+
+  # An `optional` credential matches NEITHER presence rule. The Harbor robot pair
+  # is published by the ACTIVE peer's provisioner, so a standby peer legitimately
+  # has neither until it has run — and the first draft of this work classed both
+  # `present`, which would have paged every healthy standby and failed its daily
+  # credential job. The value of pinning it here is that `expect` is a free-text
+  # label: a rule widened to `expect!="absent"` would silently re-acquire them.
+  - interval: 2m
+    name: an optional credential is visible but never alerts
+    input_series:
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="harbor-password",class="static",expect="optional"}'
+        values: "0x90"
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="harbor-pull-password",class="static",expect="optional"}'
+        values: "1x90"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: LLZCredentialUnconfigured
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: LLZRootTokenParked
+        exp_alerts: []

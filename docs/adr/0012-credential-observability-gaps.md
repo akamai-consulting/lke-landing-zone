@@ -53,7 +53,8 @@ comment instead of an omission.**
 credential in `ghSecretTargets`, including ones the API reports absent. That alone
 closes finding 3.
 
-`expect` is a **label**, not a filter, and that is the load-bearing choice.
+`expect` is a **label** with three values, not a filter, and that is the
+load-bearing choice.
 `OPENBAO_ROOT_TOKEN` is supposed to be **absent**: bootstrap mints a root token,
 uses it, and revokes it, leaving the 3-of-5 recovery quorum as what survives. A
 set one is a live, unexpiring, full-admin OpenBao credential left behind by a
@@ -66,6 +67,25 @@ in opposite directions:
 A rule set that could only say "configured is good" would have had to leave the
 root token unwatched. The promtool group pins that the two matchers cannot be
 collapsed into one.
+
+The third value, `optional`, matches neither rule. The Harbor robot pair is
+published by the **active** peer's provisioner, so a standby peer legitimately
+has neither until it has run — this ADR's first draft classed both `present`,
+which would have paged every healthy standby and failed its daily credential job.
+A gap closed by a rule that cries wolf is not closed.
+
+**And a refused read is not an absence.** `llz_credential_configured` is
+published only when the GitHub API actually answered — `ok`, or a 404 that says
+the credential is not there. A 403 publishes nothing and drops the funnel gauge
+instead. This is the same conflation as finding 3 one level down, and it was
+live in this ADR's own first implementation: `gatherSecretAges` recorded both a
+404 and a 403 as `unknown`/no-timestamp, and the reconciler turned that into
+`configured=0`. Since `LLZCredentialUnconfigured` reads 0 as "go and seed this
+credential", a token-permission fault would have paged while naming the wrong
+thing — and the exposure is not hypothetical, because the five OpenBao
+credentials added here are `infra-<region>` **environment** secrets, whose
+metadata needs different permissions from the repo-scoped ones, on a code path
+that had never run in production even once.
 
 ### 2. A funnel that cannot run says so
 

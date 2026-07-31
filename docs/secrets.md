@@ -300,12 +300,21 @@ uses stay off that list. What each publishes:
 | `OPENBAO_SEAL_KEY` | `static` | expected **present** | The at-rest key for everything else in OpenBao. `LLZCredentialNeverRotated` at 365d; a rewrap is not implemented, so the yearly nudge is the honest signal. |
 | `OPENBAO_RECOVERY_KEY_1/2/3` | `static` | expected **present** | An **absent** one means break-glass is impossible, and you would find out on the day you need it — `LLZCredentialUnconfigured`. |
 | `OPENBAO_ROOT_TOKEN` | `on-demand` | expected **absent** | Bootstrap revokes it; the quorum is what survives. A **set** one is a live full-admin credential left by a break-glass that never ran its revoke — `LLZRootTokenParked`, remedy `action=revoke`. |
+| `HARBOR_PASSWORD` / `HARBOR_PULL_PASSWORD` | `static` | **optional** | Published by the **active** peer's `harbor-robot-provisioner`, so a standby peer (and any deployment before Harbor first comes up) legitimately has neither. Measured when present, never alerted either way. |
 
 Presence is therefore not uniformly good, which is why `llz_credential_configured`
-carries an `expect` label and two rules read it in opposite directions. The same
-series also closes the case ADR 0009 thought it had closed: a credential that was
-never configured has no age, so before this it published *nothing* and no age rule
-could evaluate for it — invisible rather than visibly wrong.
+carries an `expect` label with three values and two rules read it in opposite
+directions. The same series also closes the case ADR 0009 thought it had closed: a
+credential that was never configured has no age, so before this it published
+*nothing* and no age rule could evaluate for it — invisible rather than visibly
+wrong.
+
+**A refused read is not an absence.** The series is published only when the API
+actually answered — `ok` or a 404. A 403 (environment-secret metadata needs
+different token permissions from repo-scoped, and the five OpenBao credentials are
+environment-scoped) publishes *nothing* and drops the funnel gauge instead, so a
+token-permission fault pages as `LLZCredentialSecretProbeUnavailable` rather than
+as a credential you are told to go and seed.
 
 The whole write-time lane depends on one probe authenticating.
 `LLZCredentialSecretProbeUnavailable` watches that, because when the probe cannot
