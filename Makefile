@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard workflows-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -64,6 +64,7 @@ help:
 	@echo "  tf-lint         tflint — Terraform best-practice rules (.tflintrc.hcl)"
 	@echo "  tf-validate     terraform validate — syntax + type checking (inits each module first)"
 	@echo "  checkov         Checkov IaC security scan across all Terraform modules"
+	@echo "  at-rest-guard   every TF root encrypts state; every node pool/volume sets disk encryption (ADR 0007)"
 	@echo
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
@@ -428,6 +429,17 @@ credential-coverage-guard: export LLZ_FORCE_SOURCE := 1
 credential-coverage-guard:
 	$(call LLZ_CI,credential-coverage-guard,--root ..)
 
+# at-rest-guard: `llz ci at-rest-guard` — the drift gate on ENCRYPTION AT REST for
+# Terraform-declared resources (docs/adr/0007-terraform-state-encryption.md). Every
+# root must declare `terraform { encryption }` (state holds kubeconfig_raw and every
+# Managed Postgres root_password in the clear), every node pool must set
+# disk_encryption, every linode_volume must set encryption. All three are ForceNew:
+# decided at create, immutable after, so a gate is the only place to catch them.
+# The ADR 0007 phase-1 unencrypted fallback is the one registered residue, and it
+# carries an exit condition rather than living as a comment in four files.
+at-rest-guard:
+	$(call LLZ_CI,at-rest-guard,--root ..)
+
 # wave-dependency-guard: `llz ci wave-dependency-guard` — the #163 wedge-class gate.
 # Argo sync waves gate on per-resource health, so a Deployment/StatefulSet/DaemonSet
 # that hard-references a Secret produced by a LATER-wave ExternalSecret can never go
@@ -576,7 +588,7 @@ LINT_K8S := k8s-lint k8s-validate wave-health-guard mtls-wiring-guard plaintext-
             cosign-subject-guard \
             helm-lint-charts helm-lint-real-values \
             helm-dep-lock-check
-LINT_TF := tf-lint checkov tf-validate-roots
+LINT_TF := tf-lint checkov at-rest-guard tf-validate-roots
 
 # CI job entrypoints — one target per lint.yml container job.
 lint-k8s: $(LINT_K8S) shellcheck
