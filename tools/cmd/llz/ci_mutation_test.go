@@ -56,8 +56,17 @@ func TestSweepUntilEmptyWaitsTheRetryDelay(t *testing.T) {
 // volSeqClient answers ListVolumes from a script (one entry per call, the last
 // repeating) so a test can drive the poll loop through several passes.
 type volSeqClient struct {
-	calls int
-	steps []volStep
+	calls     int
+	steps     []volStep
+	detached  []uint64
+	detachErr error
+}
+
+// DetachVolume records the ask; the canned step sequence, not the fake, decides
+// when the Volume shows up detached.
+func (c *volSeqClient) DetachVolume(_ context.Context, id uint64) error {
+	c.detached = append(c.detached, id)
+	return c.detachErr
 }
 
 type volStep struct {

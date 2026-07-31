@@ -1210,12 +1210,30 @@ func itoaOrUnknown(n int) string {
 // tests can zero it.
 var volumeDetachPollInterval = 10 * time.Second
 
-// waitVolumesDetached polls until none of the tracked Volume ids is still
-// attached (linode_id non-null), bounded by waitSec. Best-effort: a list error
-// or timeout just falls through to the sweep — VolumeIsCandidate skips anything
+// waitVolumesDetached waits until none of the tracked Volume ids is still
+// attached (linode_id non-null), bounded by waitSec, ASKING for the detach on
+// each round rather than only watching for one. Best-effort: a list error or
+// timeout just falls through to the sweep — VolumeIsCandidate skips anything
 // still attached, so it is left for the next run rather than mis-deleted.
+//
+// Waiting alone is not enough, and that gap failed a destroy. Detachment is a
+// side effect of the node Linodes being reaped after the cluster DELETE, so when
+// that async reap stalls there is nothing left to wait FOR: on run 30643426633
+// the LKE API 500'd during `tofu plan -destroy`, force-delete removed the
+// cluster object, and 16 of 17 tracked Volumes then sat attached across all 59
+// polls of the full 600s window — flat, never draining — so the sweep could
+// delete only the one Volume that happened to already be detached and the
+// destroy failed with 16 orphans. An explicit detach does not depend on the node
+// reap making progress; it is also a no-op (400/404) on the Volumes that already
+// detached, so the happy path is unchanged.
+//
+// Scope note: only the destroy job passes --wait-detach, and it passes the ids
+// `teardown-capture` attributed to the cluster being destroyed (lke<id> tag, or
+// attachment to one of its own nodes). Detaching those is the whole point of the
+// step; no live peer's Volume can be in the set.
 func waitVolumesDetached(ctx context.Context, client interface {
 	ListVolumes(context.Context) ([]map[string]any, error)
+	DetachVolume(context.Context, uint64) error
 }, volumeIDs string, waitSec int) {
 	tracked := map[string]bool{}
 	for _, id := range strings.Fields(volumeIDs) {
@@ -1224,11 +1242,13 @@ func waitVolumesDetached(ctx context.Context, client interface {
 	deadline := time.Now().Add(time.Duration(waitSec) * time.Second)
 	for attempt := 1; ; attempt++ {
 		still := -1 // unknown on a list error
+		var attached []map[string]any
 		if vols, err := client.ListVolumes(ctx); err == nil {
 			still = 0
 			for _, v := range vols {
 				if tracked[linode.MapIDString(v)] && !linode.VolumeLinodeIDNull(v) {
 					still++
+					attached = append(attached, v)
 				}
 			}
 		}
@@ -1243,7 +1263,17 @@ func waitVolumesDetached(ctx context.Context, client interface {
 		if still < 0 {
 			fmt.Printf("tracked Volumes still attached: unknown (list error, attempt %d)\n", attempt)
 		} else {
-			fmt.Printf("tracked Volumes still attached: %d (attempt %d)\n", still, attempt)
+			fmt.Printf("tracked Volumes still attached: %d (attempt %d) — requesting detach\n", still, attempt)
+		}
+		for _, v := range attached {
+			id := linode.MapUint(v, "id")
+			if id == 0 {
+				continue
+			}
+			if err := client.DetachVolume(ctx, id); err != nil {
+				fmt.Fprintf(os.Stderr, "::warning::detach Volume %d (%s) failed (%v) — retrying on the next poll.\n",
+					id, linode.MapString(v, "label"), err)
+			}
 		}
 		time.Sleep(volumeDetachPollInterval)
 	}

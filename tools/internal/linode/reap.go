@@ -289,6 +289,29 @@ func (c *Client) UpdateVolumeLabel(ctx context.Context, id uint64, label string)
 	return nil
 }
 
+// DetachVolume POSTs /v4/volumes/<id>/detach, breaking a Volume's attachment to
+// its Linode so it becomes a deletion candidate.
+//
+// A 404 (already deleted) and a 400 (already detached — the API rejects a detach
+// on an unattached Volume) are both success: the caller only cares that the
+// Volume ends up unattached, not who got it there. Every other non-2xx is
+// returned so the caller can log it and fall through to the next poll.
+func (c *Client) DetachVolume(ctx context.Context, id uint64) error {
+	url := fmt.Sprintf("%s/v4/volumes/%d/detach", c.base, id)
+	resp, err := c.post(ctx, url, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 || resp.StatusCode == 400 {
+		return nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("POST /v4/volumes/%d/detach returned %d: %s", id, resp.StatusCode, readBody(resp))
+	}
+	return nil
+}
+
 // DeleteResourcePath DELETEs an absolute API path (e.g. "/v4/nodebalancers/123").
 // A 2xx or 404 (already gone) is success — matching lib-linode.sh's linode_delete.
 func (c *Client) DeleteResourcePath(ctx context.Context, path string) error {
