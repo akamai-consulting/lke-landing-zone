@@ -17,6 +17,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -60,4 +62,55 @@ func TestReconcilerAlertSemantics(t *testing.T) {
 		t.Fatalf("promtool test rules failed: %v\n%s", err, out)
 	}
 	t.Logf("promtool:\n%s", out)
+}
+
+// Every credential alert must be NAMED so the job that reads credential alerts
+// actually evaluates it.
+//
+// The daily credential-single-pane job runs
+// `llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)'`, so the alert
+// name is not cosmetic — it is the filter. `LLZRootTokenParked` (this branch's
+// first spelling) is about the highest-privilege credential in the platform and
+// matched NOTHING: the rule was live and would have fired through Alertmanager,
+// but the job whose entire purpose is reading credential alerts skipped it.
+//
+// Asserted against the workflow's own regex, read from the file, so the two
+// cannot drift apart — they are edited by different changes in different repos'
+// worth of context.
+func TestCredentialAlertsMatchTheSinglePaneFilter(t *testing.T) {
+	wf, err := os.ReadFile("../../../instance-template/.github/workflows/llz-scheduled-checks.yml")
+	if err != nil {
+		t.Fatalf("read scheduled-checks workflow: %v", err)
+	}
+	m := regexp.MustCompile(`alert-eval --match '([^']+)'`).FindSubmatch(wf)
+	if m == nil {
+		t.Fatal("could not find the alert-eval --match filter in the workflow — this guard would pass vacuously")
+	}
+	filter := regexp.MustCompile(string(m[1]))
+
+	crd, err := os.ReadFile(reconcilerRuleCRD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := regexp.MustCompile(`(?m)^\s*-\s*alert:\s*(LLZ\S+)`).FindAllStringSubmatch(string(crd), -1)
+	if len(names) == 0 {
+		t.Fatal("found no alert names in the PrometheusRule")
+	}
+	checked := 0
+	for _, n := range names {
+		name := n[1]
+		// Only the credential family is in this job's remit; the reconciler's own
+		// health alerts are read by a different check.
+		if !strings.Contains(name, "Credential") && !strings.Contains(name, "Token") {
+			continue
+		}
+		checked++
+		if !filter.MatchString(name) {
+			t.Errorf("alert %q is a credential alert but does not match the single-pane filter %q — "+
+				"the daily job will never evaluate it. Name it LLZCredential…", name, m[1])
+		}
+	}
+	if checked == 0 {
+		t.Fatal("matched no credential alerts to check — the name heuristic has drifted")
+	}
 }

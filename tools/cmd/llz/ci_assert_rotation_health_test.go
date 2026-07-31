@@ -167,7 +167,7 @@ func TestRunAssertRotationHealthFailsOnMissingSeries(t *testing.T) {
 			return []byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`), nil
 		})
 	}
-	err := runCIAssertRotationHealth("ns/prom:9090", "llz-reconciler", false, 0, time.Millisecond)
+	err := runCIAssertRotationHealth("ns/prom:9090", "llz-reconciler", false, false, 0, time.Millisecond)
 	if err == nil {
 		t.Fatal("no credential-age series at all must fail the gate")
 	}
@@ -183,7 +183,7 @@ func TestRunAssertRotationHealthFailsOnUnreachablePrometheus(t *testing.T) {
 			return []byte(`{"status":"error","error":"query timed out"}`), nil
 		})
 	}
-	err := runCIAssertRotationHealth("ns/prom:9090", "llz-reconciler", false, 0, time.Millisecond)
+	err := runCIAssertRotationHealth("ns/prom:9090", "llz-reconciler", false, false, 0, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "could not reach Prometheus") {
 		t.Errorf("a query failure must be reported as a query failure, got %v", err)
 	}
@@ -251,6 +251,234 @@ func TestEveryCredPathClassIsKnown(t *testing.T) {
 		if !known[cp.class] {
 			t.Errorf("credPaths entry %s carries class %q, which this gate does not know — "+
 				"it would silently be judged against the yearly threshold", cp.cred, cp.class)
+		}
+	}
+}
+
+// ── the presence lane ────────────────────────────────────────────────────────
+
+// The steady state: probe authenticated, everything expected present is present,
+// and the one credential expected ABSENT is absent.
+func presenceSteadyState() map[string]float64 {
+	m := map[string]float64{}
+	for _, t := range ghSecretTargets {
+		v := 1.0
+		if t.expect == credExpectAbsent {
+			v = 0
+		}
+		m[credLabelForSecret(t.name)] = v
+	}
+	return m
+}
+
+func TestPresenceHealthPassesInSteadyState(t *testing.T) {
+	for _, v := range evalPresenceHealth(presenceSteadyState(), 1, true, false) {
+		if v.FailWhy != "" {
+			t.Errorf("%s should pass: %s", v.Cred, v.FailWhy)
+		}
+	}
+}
+
+// The failure the age lane structurally cannot see. A credential that was never
+// configured has no age, so llz_credential_age_days has nothing for it and every
+// age check — gate and alert alike — silently skips it.
+func TestPresenceHealthFailsOnAnUnconfiguredCredential(t *testing.T) {
+	m := presenceSteadyState()
+	m["openbao-recovery-key-2"] = 0
+	var got string
+	for _, v := range evalPresenceHealth(m, 1, true, false) {
+		if v.Cred == "openbao-recovery-key-2" {
+			got = v.FailWhy
+		}
+	}
+	if got == "" {
+		t.Fatal("an unconfigured credential must fail the presence lane")
+	}
+	if !strings.Contains(got, "no age because it has no value") {
+		t.Errorf("the message must explain why the age lane cannot catch it: %q", got)
+	}
+}
+
+// The same series read the other way. A root token is ephemeral by design, so a
+// SET one is the finding — a live full-admin credential left behind by a
+// break-glass whose revoke never ran.
+func TestPresenceHealthFailsOnAParkedRootToken(t *testing.T) {
+	m := presenceSteadyState()
+	m["openbao-root-token"] = 1
+	var got string
+	for _, v := range evalPresenceHealth(m, 1, true, false) {
+		if v.Cred == "openbao-root-token" {
+			got = v.FailWhy
+		}
+	}
+	if got == "" {
+		t.Fatal("a parked root token must fail the presence lane")
+	}
+	if !strings.Contains(got, "action=revoke") {
+		t.Errorf("the message must name the remedy: %q", got)
+	}
+}
+
+// The probe reporting failure is a lane-wide break, not a per-credential one.
+func TestPresenceHealthFailsWhenTheProbeCouldNotAuthenticate(t *testing.T) {
+	var funnel credVerdict
+	for _, v := range evalPresenceHealth(presenceSteadyState(), 0, true, false) {
+		if v.Cred == "token-inventory" {
+			funnel = v
+		}
+	}
+	if funnel.FailWhy == "" {
+		t.Fatalf("probe_ok=0 must fail the funnel verdict, got %+v", funnel)
+	}
+	if !strings.Contains(funnel.FailWhy, "GH_REPO") {
+		t.Errorf("the message must name the missing input: %q", funnel.FailWhy)
+	}
+}
+
+// A freshly bootstrapped cluster has not run the scheduled writer, so gating
+// there would fail the e2e suite on a job that legitimately has not run. The skip
+// is reported rather than silent, and --require-inventory turns it into a failure
+// for the caller that runs the writer moments earlier.
+func TestPresenceHealthSkipsWhenTheWriterHasNeverRun(t *testing.T) {
+	vs := evalPresenceHealth(nil, 0, false, false)
+	if len(vs) != 1 || vs[0].FailWhy != "" || vs[0].Present {
+		t.Fatalf("an unprimed cluster must skip, not fail: %+v", vs)
+	}
+	vs = evalPresenceHealth(nil, 0, false, true)
+	if len(vs) != 1 || vs[0].FailWhy == "" {
+		t.Fatalf("--require-inventory must turn the skip into a failure: %+v", vs)
+	}
+}
+
+// "The probe said OK and yet this credential has no series" is a funnel defect,
+// distinct from "the credential is absent" — different cause, different remedy,
+// so the messages must not be interchangeable.
+func TestPresenceHealthDistinguishesAMissingSeriesFromAnAbsentCredential(t *testing.T) {
+	m := presenceSteadyState()
+	delete(m, "openbao-seal-key")
+	for _, v := range evalPresenceHealth(m, 1, true, false) {
+		if v.Cred != "openbao-seal-key" {
+			continue
+		}
+		if !strings.Contains(v.FailWhy, "NOT evidence the credential is missing") {
+			t.Errorf("a missing series must not be diagnosed as an absent credential: %q", v.FailWhy)
+		}
+		if !strings.Contains(v.FailWhy, "403") {
+			t.Errorf("the message must name the likely cause — a refused environment-scope read: %q", v.FailWhy)
+		}
+	}
+}
+
+// Presence verdicts carry no age, and must not be printed as though they did:
+// "0 days old, SLA 90" on a credential whose problem is that it does not exist
+// reads as a passing measurement.
+func TestPresenceVerdictsAreMarkedAsSuch(t *testing.T) {
+	for _, v := range evalPresenceHealth(presenceSteadyState(), 1, true, false) {
+		if v.Lane != presenceLane {
+			t.Errorf("%s: Lane = %q, want %q", v.Cred, v.Lane, presenceLane)
+		}
+		if v.Age != 0 {
+			t.Errorf("%s: presence verdicts must carry no age, got %v", v.Cred, v.Age)
+		}
+	}
+}
+
+// The Harbor robot pair is legitimately absent on a standby peer until the ACTIVE
+// peer's provisioner has published it, and on any deployment before Harbor first
+// comes up. Gating on it — as the first draft did, classing both `present` —
+// would fail the daily credential job on a healthy standby, which is a worse
+// outcome than the gap it was meant to close.
+func TestPresenceHealthDoesNotGateOptionalCredentials(t *testing.T) {
+	m := presenceSteadyState()
+	var optional []string
+	for _, tgt := range ghSecretTargets {
+		if tgt.expect == credExpectOptional {
+			optional = append(optional, credLabelForSecret(tgt.name))
+			delete(m, credLabelForSecret(tgt.name)) // absent AND publishing nothing
+		}
+	}
+	if len(optional) == 0 {
+		t.Skip("no optional targets declared")
+	}
+	for _, v := range evalPresenceHealth(m, 1, true, false) {
+		for _, o := range optional {
+			if v.Cred == o && (v.FailWhy != "" || v.Gated) {
+				t.Errorf("%s is optional and must not gate: FailWhy=%q Gated=%v", v.Cred, v.FailWhy, v.Gated)
+			}
+		}
+	}
+}
+
+// The seam the earlier presence tests never crossed. They exercised
+// evalPresenceHealth — the pure half — and proved nothing about whether the
+// probe gauge could be READ, which is where the lane was actually broken:
+// llz_credential_secret_probe_ok has no `cred` label, and promVectorByLabel drops
+// every sample whose label value is empty. probeSeen was permanently false, so
+// the lane silently checked nothing and --require-inventory would have failed
+// every run on every cluster.
+func TestPromFirstSampleReadsALabellessGauge(t *testing.T) {
+	raw := []byte(`{"status":"success","data":{"resultType":"vector","result":[
+	  {"metric":{"__name__":"llz_credential_secret_probe_ok","namespace":"llz-reconciler"},"value":[1,"0"]}
+	]}}`)
+	// The helper the rest of this file uses cannot see it — pinned so the reason
+	// promFirstSample exists is visible rather than folklore.
+	if m, err := promVectorByLabel(raw, "cred"); err != nil || len(m) != 0 {
+		t.Fatalf("promVectorByLabel is expected to drop a label-less sample, got %v (%v)", m, err)
+	}
+	v, ok, err := promFirstSample(raw)
+	if err != nil || !ok || v != 0 {
+		t.Fatalf("promFirstSample = (%v, %v, %v), want (0, true, nil)", v, ok, err)
+	}
+}
+
+func TestPromFirstSampleDistinguishesEmptyFromError(t *testing.T) {
+	empty := []byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	if v, ok, err := promFirstSample(empty); err != nil || ok || v != 0 {
+		t.Errorf("an empty result is 'no series yet', got (%v, %v, %v)", v, ok, err)
+	}
+	bad := []byte(`{"status":"error","error":"query timed out"}`)
+	if _, ok, err := promFirstSample(bad); err == nil || ok {
+		t.Errorf("a query error must be an error, not an absence: ok=%v err=%v", ok, err)
+	}
+	if _, _, err := promFirstSample([]byte("not json")); err == nil {
+		t.Error("unparseable input must error")
+	}
+}
+
+// End to end through the parsing seam: a healthy funnel must be SEEN, so the
+// lane actually evaluates. The previous implementation passed every pure test
+// while failing this one.
+func TestProbePresenceHealthSeesAHealthyFunnel(t *testing.T) {
+	orig := withPrometheus
+	t.Cleanup(func() { withPrometheus = orig })
+	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+		return fn(func(q string) ([]byte, error) {
+			if strings.Contains(q, "secret_probe_ok") {
+				return []byte(`{"status":"success","data":{"resultType":"vector","result":[
+				  {"metric":{"namespace":"llz-reconciler"},"value":[1,"1"]}]}}`), nil
+			}
+			var rows []string
+			for _, tgt := range ghSecretTargets {
+				v := "1"
+				if tgt.expect == credExpectAbsent {
+					v = "0"
+				}
+				rows = append(rows, `{"metric":{"cred":"`+credLabelForSecret(tgt.name)+`"},"value":[1,"`+v+`"]}`)
+			}
+			return []byte(`{"status":"success","data":{"resultType":"vector","result":[` +
+				strings.Join(rows, ",") + `]}}`), nil
+		})
+	}
+	vs, err := probePresenceHealth("ns/prom:9090", "llz-reconciler", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vs) == 1 && vs[0].Cred == "token-inventory" && !vs[0].Present {
+		t.Fatal("a healthy funnel was read as 'the writer has never run' — the probe gauge is not being parsed")
+	}
+	for _, v := range vs {
+		if v.FailWhy != "" {
+			t.Errorf("%s must pass on a healthy funnel: %s", v.Cred, v.FailWhy)
 		}
 	}
 }

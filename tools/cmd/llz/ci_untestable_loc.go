@@ -471,16 +471,88 @@ func countRecipeBodyLines(body []string) int {
 		// so `@# comment` and `@echo` are classified on their shell content.
 		s = strings.TrimLeft(s, "@-+")
 		s = strings.TrimSpace(s)
-		isComment := s == "" || strings.HasPrefix(s, "#")
-		if !isComment && !prevContinues {
+		// Not logic: a `#` comment, or a line whose entire effect is printing
+		// literal text. See isDocPrintLine.
+		free := s == "" || strings.HasPrefix(s, "#") || isDocPrintLine(s)
+		if !free && !prevContinues {
 			n++
 		}
-		prevContinues = !isComment && strings.HasSuffix(s, `\`)
+		prevContinues = !free && strings.HasSuffix(s, `\`)
 	}
 	if n <= 1 {
 		return 0
 	}
 	return n
+}
+
+// isDocPrintLine reports whether a recipe line's ENTIRE effect is writing literal
+// text to stdout — the `@echo "…"` walls a `help:` target is made of.
+//
+// WHY THIS IS NOT LOGIC. The budget exists because "decision-making logic belongs
+// in unit-tested Go, not in CI shell" (.untestable-budget.yaml). A line that
+// prints a fixed string makes no decision, reads no state, and writes nothing a
+// later step can consume. Counting it charged DOCUMENTATION at the same rate as
+// shell logic, so `make help` — the one place a new target is discoverable — cost
+// a line of budget per target. That is an incentive pointing the wrong way: it
+// made the cheapest way to stay under the ceiling "do not document the target",
+// and this repo hit it adding two guards.
+//
+// It is deliberately narrow, because "it starts with echo" is a loophole:
+// `echo x > generated.conf` writes a file and `echo $(date)` runs a command.
+// Quoted spans are removed FIRST, then the remainder must be exactly the command
+// word — so any operator that survives quoting (`>`, `>>`, `|`, `;`, `&&`, a
+// second argument) disqualifies the line. Command substitution is rejected on
+// what the SHELL would see: `$(X)` in a Makefile is a make expansion resolved
+// before the shell exists, while `$$(X)` and a backtick are the shell's own.
+func isDocPrintLine(s string) bool {
+	rest, quoted := stripQuotedSpans(s)
+	if !docPrintCmdRE.MatchString(rest) {
+		return false
+	}
+	// Substitution inside the quoted text still runs a command, so the line is
+	// not merely printing. `\$$` is an escaped dollar (literal text) and stays.
+	return !shellSubstRE.MatchString(quoted)
+}
+
+var (
+	// The command word alone must survive quote-stripping: `echo` / `printf`, and
+	// nothing else. A trailing operator or an unquoted argument leaves residue
+	// here and disqualifies the line.
+	docPrintCmdRE = regexp.MustCompile(`^(echo|printf)\s*$`)
+	// Shell command substitution as it appears in MAKEFILE SOURCE: `$$(…)` (make
+	// collapses `$$` to the `$` the shell then acts on) or a backtick. A
+	// backslash-escaped `\$$(` is literal text to the shell and must NOT match.
+	shellSubstRE = regexp.MustCompile("(^|[^\\\\])\\$\\$\\(|`")
+)
+
+// stripQuotedSpans removes '…' and "…" spans from a shell line, returning the
+// unquoted remainder and the concatenated quoted content. Splitting them is what
+// lets the caller apply different rules to each: an operator inside quotes is
+// literal text (`echo "a; b"` prints a semicolon), while the same character
+// outside them is shell syntax.
+//
+// Backslash escapes are honoured inside double quotes only, matching the shell.
+func stripQuotedSpans(s string) (rest, quoted string) {
+	var out, q strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\'':
+			for i++; i < len(s) && s[i] != '\''; i++ {
+				q.WriteByte(s[i])
+			}
+		case '"':
+			for i++; i < len(s) && s[i] != '"'; i++ {
+				if s[i] == '\\' && i+1 < len(s) {
+					q.WriteByte(s[i])
+					i++
+				}
+				q.WriteByte(s[i])
+			}
+		default:
+			out.WriteByte(c)
+		}
+	}
+	return strings.TrimSpace(out.String()), q.String()
 }
 
 func lineIndent(l string) int {

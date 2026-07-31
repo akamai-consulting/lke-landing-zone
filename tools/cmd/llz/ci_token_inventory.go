@@ -38,6 +38,20 @@ const (
 	tokenStateWarn    = "warn"    // within the warn window (drives lead-time alerts)
 	tokenStateBreach  = "breach"  // no-expiry / expired / over-policy / invalid — audit failure
 	tokenStateUnknown = "unknown" // not set / unreachable / unparseable — can't verify, don't page
+	// tokenStateAbsent — secretEntry only. The API ANSWERED and said 404: this
+	// credential is genuinely not configured. Distinct from `unknown`, which here
+	// means the API would not answer (403/5xx) and we therefore know nothing.
+	//
+	// Collapsing the two is the exact defect this whole ADR-0012 series was
+	// written about, one level down. `llz_credential_configured = 0` is read by
+	// LLZCredentialUnconfigured as "seed this credential"; publishing it for a
+	// credential we merely could not READ turns a token-permission problem into a
+	// page that names the wrong thing and sends the operator to the wrong runbook.
+	// The risk is not theoretical: the five OpenBao credentials added here are
+	// infra-<region> ENVIRONMENT secrets, whose metadata needs different token
+	// permissions from the repo-scoped ones, and the probe had never once read an
+	// environment-scoped secret in production — it never ran at all.
+	tokenStateAbsent = "absent"
 )
 
 // tokenEntry is one credential's inventory record. Expiry is unix seconds, 0 when
@@ -58,9 +72,39 @@ type secretEntry struct {
 	Name      string `json:"name"`
 	Scope     string `json:"scope"` // repo | infra-<deployment>
 	UpdatedAt string `json:"updated_at,omitempty"`
-	Class     string `json:"class"` // rotation class for the age gauge
+	Class     string `json:"class"`  // rotation class for the age gauge
+	Expect    string `json:"expect"` // present | optional | absent — see credExpect*
 	State     string `json:"state"`
 }
+
+// Whether a credential is SUPPOSED to be configured. Age is only half of what
+// this probe can see: the other half is presence — and presence is NOT uniformly
+// good, which is why this is three values and not a bool. One credential's
+// healthy state is absent, and two are healthy either way.
+const (
+	// credExpectPresent — the instance cannot function without it, so a 404 is a
+	// finding. Everything except the root token.
+	credExpectPresent = "present"
+	// credExpectOptional — legitimately absent on some healthy deployments, so
+	// neither presence nor absence is a finding. Measured when present (the age is
+	// real and worth seeing); silent when not.
+	//
+	// This is the Harbor robot pair. `llz ci seed-harbor-standby` returns early
+	// with "HARBOR_ROBOT_NAME / HARBOR_PASSWORD not yet published — the active
+	// peer's harbor-robot-provisioner CronJob sets them once Harbor is up", so a
+	// STANDBY peer, and any deployment before Harbor first comes up, does not have
+	// them — by design, not by omission. Classing them `present` (as the first
+	// draft of this did) would fire LLZCredentialUnconfigured and FAIL the daily
+	// credential job on a perfectly healthy standby.
+	credExpectOptional = "optional"
+	// credExpectAbsent — OPENBAO_ROOT_TOKEN. Bootstrap mints a root token, uses
+	// it, and REVOKES it (ci_bao_breakglass.go: "a root token is ephemeral by
+	// design"); what survives is the 3-of-5 recovery quorum. So a root token
+	// sitting in an Actions secret in steady state is a live full-admin
+	// credential nobody revoked after a break-glass — the presence IS the
+	// finding, and the remedy is `bao-breakglass --action revoke`.
+	credExpectAbsent = "absent"
+)
 
 // tokenInventory is the ConfigMap payload the reconciler reads (data["inventory.json"]).
 type tokenInventory struct {
@@ -68,24 +112,111 @@ type tokenInventory struct {
 	Region  string        `json:"region,omitempty"`
 	Tokens  []tokenEntry  `json:"tokens"`
 	Secrets []secretEntry `json:"secrets,omitempty"`
+	// SecretProbe reports whether the GitHub secrets-metadata probe could run at
+	// all: `ok` | `unavailable`. Empty from an inventory written before this
+	// field existed, which the reconciler treats as "cannot tell" rather than as
+	// either verdict.
+	//
+	// It exists because an empty Secrets list is AMBIGUOUS and the ambiguity was
+	// load-bearing. `Secrets: []` means either "every credential was measured and
+	// none exist" or "the probe never ran", and the second is what actually
+	// happened for the whole life of ADR 0009's mechanism: the one job that runs
+	// `llz ci token-inventory` set OPENBAO_SECRETS_WRITE_TOKEN but never GH_REPO,
+	// so newSecretAgeWriter returned an error, the command printed a ::warning::
+	// nobody reads, and not one write-time series was ever published. Failing soft
+	// was the right call (an instance without a GitHub token still gets its Linode
+	// and PAT entries); failing soft INVISIBLY was not.
+	SecretProbe string `json:"secret_probe,omitempty"`
 }
 
+// Verdicts for tokenInventory.SecretProbe.
+const (
+	secretProbeOK          = "ok"
+	secretProbeUnavailable = "unavailable"
+)
+
 // ghSecretTargets are the credentials measured by WRITE TIME rather than expiry.
-// They have no expiry (an Object Storage key pair and a passphrase), and they
-// cannot be tracked the usual way — via an OpenBao `updated_time` — because
-// OpenBao runs inside the cluster whose state these very credentials guard. See
-// docs/adr/0009.
+// They have no expiry (key pairs, passphrases, raw key material) and they cannot
+// be tracked the usual way — via an OpenBao `updated_time` — because each one is
+// circular with respect to the OpenBao that would hold it: the state-backend
+// credentials guard the state that reaches the cluster OpenBao runs in, and the
+// seal key, recovery quorum and root token ARE OpenBao's own escrow. Storing any
+// of them in OpenBao means losing all of them together. See docs/adr/0009.
+//
+// The write-time probe is the mechanism ADR 0009 built for the first three. The
+// rest were left behind not because a different mechanism was needed but because
+// the target list was a literal nobody revisited — and that is the whole reason
+// `llz ci credential-coverage-guard` now exists.
 var ghSecretTargets = []struct {
-	name  string
-	class string
+	name   string
+	class  string
+	expect string
 }{
+	// ── the state backend (ADR 0009) ──────────────────────────────────────────
 	// Operator-dispatchable via secret-rotation.yml scope=tf-state-key.
-	{"TF_STATE_ACCESS_KEY", credClassOnDemand},
-	{"TF_STATE_SECRET_KEY", credClassOnDemand},
+	{"TF_STATE_ACCESS_KEY", credClassOnDemand, credExpectPresent},
+	{"TF_STATE_SECRET_KEY", credClassOnDemand, credExpectPresent},
 	// Was `static` — correctly, while re-encrypting every state file had no
 	// automation. scope=state-passphrase is that automation, so the age is now
 	// ACTIONABLE and belongs on the 90d SLA rather than the yearly nudge.
-	{"TF_STATE_ENCRYPTION_PASSPHRASE", credClassOnDemand},
+	{"TF_STATE_ENCRYPTION_PASSPHRASE", credClassOnDemand, credExpectPresent},
+
+	// ── OpenBao's own escrow ─────────────────────────────────────────────────
+	//
+	// These are the highest-consequence credentials the platform holds and NONE
+	// of them was on the single pane. Their absence is not an oversight of degree:
+	// the state-backend trio was measured because ADR 0009 went looking for
+	// credentials with no expiry, and these have no expiry EITHER — they were
+	// simply not in the list it wrote.
+	//
+	// ASSUMPTION, checked rather than assumed: `expect: present` on these four
+	// encodes "OpenBao is deployed". `openbao` is NOT a Mandatory component
+	// (clusterspec/components.go marks only argocd and clusterFoundation), so an
+	// instance CAN set components.openbao.enabled=false — and there these four are
+	// never seeded, so they would page and fail the daily gate.
+	//
+	// Left as `present` rather than made conditional, because that shape is already
+	// unsupported by the job in question: the daily credential run does
+	// `alert-eval --strict`, LLZCredentialRotationOverdue names
+	// llz_credential_age_days, and the openbao-gauges lane publishes nothing
+	// without OpenBao — so --strict already classes it DEAD? and fails, today,
+	// before any of this. Building conditional expectation plumbing for a
+	// deployment nothing else supports would be machinery for a shape that cannot
+	// pass the surrounding checks anyway. Recorded so the next reader knows it was
+	// weighed, not missed.
+	//
+	// OPENBAO_SEAL_KEY is the AES-256 key the chart's `seal "static"` auto-unseal
+	// uses (ci_bao_seed_seal_key.go). It is the encryption-at-rest key for
+	// everything in OpenBao's raft store, so it is the single credential whose
+	// compromise reads every other credential in the platform. `static`: rotating
+	// it means a seal rewrap of the whole store, which nothing here implements —
+	// so the yearly nudge is the honest signal, not a 90d SLA nobody can meet.
+	{"OPENBAO_SEAL_KEY", credClassStatic, credExpectPresent},
+	// The 3-of-5 recovery quorum that authorizes `operator generate-root`. Losing
+	// these means break-glass is impossible — which is exactly why an ABSENT one
+	// has to be visible (see llz_credential_configured): the failure surfaces on
+	// the day you need it and not before.
+	{"OPENBAO_RECOVERY_KEY_1", credClassStatic, credExpectPresent},
+	{"OPENBAO_RECOVERY_KEY_2", credClassStatic, credExpectPresent},
+	{"OPENBAO_RECOVERY_KEY_3", credClassStatic, credExpectPresent},
+	// Expected ABSENT — see credExpectAbsent. `on-demand` because there IS a
+	// rotation path (`bao-breakglass --action rotate`); the age matters only in
+	// the state this credential is not supposed to be in.
+	{"OPENBAO_ROOT_TOKEN", credClassOnDemand, credExpectAbsent},
+
+	// ── Harbor robots: the standby channel ───────────────────────────────────
+	//
+	// secret/harbor/robot and secret/harbor/pull-robot are already age-tracked in
+	// OpenBao (credPaths, `static`). These are the SECOND copy — published to
+	// GitHub by the provisioner so a rebuilt or standby cluster can adopt the
+	// existing robots instead of minting new ones (ci_harbor.go's EXISTING_*
+	// path). A second copy is a second thing that ages, and nothing was watching
+	// it: an OpenBao-side re-seed that failed to republish here leaves the standby
+	// channel holding a dead credential, and the OpenBao age would look fine.
+	// OPTIONAL, not present — see credExpectOptional. On a standby peer these are
+	// published by the ACTIVE peer's provisioner and are absent until it has run.
+	{"HARBOR_PASSWORD", credClassStatic, credExpectOptional},
+	{"HARBOR_PULL_PASSWORD", credClassStatic, credExpectOptional},
 }
 
 // The class is the SAME vocabulary the OpenBao age sampler uses
@@ -93,8 +224,11 @@ var ghSecretTargets = []struct {
 // llz_credential_age_days too, so LLZCredentialRotationOverdue picks them up with
 // no rule change. That is also why the class must track reality rather than
 // ambition — `on-demand` on a credential with no dispatchable rotation would page
-// an operator who has nothing to dispatch. All three now have one
-// (secret-rotation.yml scopes `tf-state-key` and `state-passphrase`).
+// an operator who has nothing to dispatch. The three state-backend entries have
+// one (secret-rotation.yml scopes `tf-state-key` and `state-passphrase`) and so
+// does the root token (`bao-breakglass --action rotate`); the seal key, the
+// recovery quorum and the Harbor robot copies do NOT, which is precisely why
+// they are `static` and draw the yearly nudge instead.
 
 // ghPATTargets declares the GitHub service PATs the inventory measures. It was
 // two hardcoded literals at the call site, which is why `E2E_DISPATCH_TOKEN` and
@@ -212,7 +346,9 @@ func buildTokenInventory(ctx context.Context, d tokenInvDeps) tokenInventory {
 	inv := tokenInventory{Updated: d.now.Unix(), Region: d.region}
 	inv.Tokens = append(inv.Tokens, gatherGitHubTokens(d.ghTargets, d.now, d.maxDays, d.warnDays)...)
 	// Write-time ages for the credentials with no expiry to read (ADR 0009).
+	// The verdict is recorded whether or not the probe could run — see SecretProbe.
 	inv.Secrets = gatherSecretAges(d.secretEnv, d.secretProbe)
+	inv.SecretProbe = secretProbeVerdict(d.secretProbe != nil, inv.Secrets)
 	if d.linodeToken != "" {
 		if entries, err := gatherLinodeTokens(ctx, d.newLinode(d.linodeToken), d.now, int64(d.maxDays), int64(d.warnDays)); err == nil {
 			inv.Tokens = append(inv.Tokens, entries...)
@@ -283,14 +419,23 @@ func gatherSecretAges(env string, probe func(env, name string) (string, bool, er
 	}
 	out := make([]secretEntry, 0, len(ghSecretTargets))
 	for _, t := range ghSecretTargets {
-		e := secretEntry{Name: t.name, Class: t.class, State: tokenStateUnknown}
+		// Default `absent`, not `unknown`: the loop below only reaches its end
+		// having ASKED. An error downgrades it — never the other way round.
+		e := secretEntry{Name: t.name, Class: t.class, Expect: t.expect, State: tokenStateAbsent}
+		unreadable := false
 		for _, scope := range []string{env, ""} {
 			if scope == "" && env == "" {
 				continue // already tried the repo scope
 			}
 			ts, ok, err := probe(scope, t.name)
 			if err != nil {
+				// A 404 is NOT an error here — SecretUpdatedAt returns (‥, false,
+				// nil) for it. So reaching this branch means the API refused to
+				// answer: a 403 on the environment scope, a 5xx, a transport
+				// failure. We learn nothing about the credential, and saying
+				// "absent" would be a claim we cannot support.
 				fmt.Fprintf(os.Stderr, "::warning::token-inventory: %s (%s): %v\n", t.name, scopeLabel(scope), err)
+				unreadable = true
 				continue
 			}
 			if ok {
@@ -298,12 +443,39 @@ func gatherSecretAges(env string, probe func(env, name string) (string, bool, er
 				break
 			}
 		}
+		// Found in one scope, refused in the other, is still found: only downgrade
+		// when nothing answered affirmatively anywhere.
+		if e.State != tokenStateOK && unreadable {
+			e.State = tokenStateUnknown
+		}
 		if e.Scope == "" {
 			e.Scope = scopeLabel(env)
 		}
 		out = append(out, e)
 	}
 	return out
+}
+
+// secretProbeVerdict decides whether the write-time lane can be trusted this
+// run. `ok` requires BOTH that the client was built and that every credential
+// got an answer.
+//
+// The second half is the one that is easy to miss. A client that authenticates
+// for repo-scoped secrets can still be refused on the environment scope — they
+// are different permissions — and a per-credential 403 leaves that credential
+// unmeasured while everything else looks healthy. Reporting `ok` there would
+// vouch for a lane that is partly dark, which is the failure this field exists
+// to make impossible.
+func secretProbeVerdict(clientBuilt bool, secrets []secretEntry) string {
+	if !clientBuilt {
+		return secretProbeUnavailable
+	}
+	for _, s := range secrets {
+		if s.State == tokenStateUnknown {
+			return secretProbeUnavailable
+		}
+	}
+	return secretProbeOK
 }
 
 // secretScopeForRegion maps a deployment to the GitHub environment its

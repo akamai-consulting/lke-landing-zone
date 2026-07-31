@@ -239,6 +239,21 @@ jobs:
       LINODE_TOKEN:                ${{ secrets.LINODE_API_TOKEN }}
       OPENBAO_SECRETS_WRITE_TOKEN: ${{ secrets.OPENBAO_SECRETS_WRITE_TOKEN }}
       APL_VALUES_REPO_TOKEN:       ${{ secrets.APL_VALUES_REPO_TOKEN }}
+      # WITHOUT THIS the write-time half of the single pane does not run at all.
+      # token-inventory's secret-age probe (ADR 0009) needs a token AND a repo to
+      # build its metadata client; the token arrives via the documented
+      # OPENBAO_SECRETS_WRITE_TOKEN fallback, the repo had no source, so
+      # newSecretAgeWriter errored every run and every credential with no expiry
+      # — the state-backend key pair, the state-encryption passphrase, the
+      # OpenBao seal key and recovery quorum — published no age series at all.
+      # It failed as a ::warning:: in a scheduled job's log, which is why it
+      # survived. LLZCredentialSecretProbeUnavailable now watches the funnel so
+      # the next such break is an alert instead of a log line.
+      #
+      # github.repository, not an input: this is a LOCAL reusable workflow, so
+      # the context already resolves to the instance repo and no plumbing through
+      # the caller stub is needed.
+      GH_REPO:                     ${{ github.repository }}
       # Optional PATs: unset on a stock instance, in which case token-inventory
       # drops them rather than reporting a permanent `unknown`.
       GHCR_READ_TOKEN:             ${{ secrets.GHCR_READ_TOKEN }}
@@ -269,9 +284,41 @@ jobs:
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci token-inventory | kubectl apply -f -
 
+      # END-TO-END GATE on the lane alert-eval cannot judge, and it runs FIRST —
+      # see the ordering note below. alert-eval reads RULES; a credential that
+      # publishes no series has no rule to evaluate, so a dark write-time lane
+      # looks exactly like a healthy one there. This asserts the funnel from the
+      # writer's own verdict: the secret-age probe authenticated, every
+      # ghSecretTargets credential expected present IS present, and
+      # OPENBAO_ROOT_TOKEN — expected ABSENT, because bootstrap revokes it — has
+      # not been left set by a break-glass that skipped its revoke.
+      #
+      # --require-inventory because THIS job wrote the inventory one step ago. An
+      # absent inventory here is a break, not the fresh-cluster case the flag's
+      # default tolerates for the e2e suite.
+      #
+      # --settle 300, not the 120s default: this step is CHASING the write above,
+      # and the path from `kubectl apply` to a queryable series is a 30s
+      # reconciler sample plus a 30s Prometheus scrape plus rule evaluation. The
+      # default leaves almost no margin over that, and a gate that flakes on its
+      # own propagation delay is a gate people learn to re-run rather than read.
+      - name: Assert the credential funnel end to end
+        if: steps.kubeconfig.outputs.available == 'true'
+        run: llz ci assert-rotation-health --require-inventory --settle 300
+
       # READER: evaluate the credential alerts against live Prometheus. --strict
       # fails on a BROKEN alert (missing metric / dead funnel), not just a firing
       # one — that is what catches a dead pipeline.
+      #
+      # ORDER IS LOAD-BEARING, and it changed when llz_credential_configured and
+      # llz_credential_secret_probe_ok were added. --strict fails on DEAD? — an
+      # alert none of whose named metrics exist in the live metric set — and those
+      # two metrics have never been published on any existing cluster. Run
+      # immediately after the write, before the reconciler has sampled, all three
+      # new credential alerts classify DEAD? and this step fails: a propagation
+      # race that reads as a security regression, on every instance, on the day it
+      # upgrades. The settle loop above polls for exactly those series, so once it
+      # passes they are in the metric-name set this step reads.
       - name: Read cluster credential alert status
         if: steps.kubeconfig.outputs.available == 'true'
         run: llz ci alert-eval --match '^LLZ(Token|Certificate|Credential)' --strict --summary "Credential single pane (${REGION})"

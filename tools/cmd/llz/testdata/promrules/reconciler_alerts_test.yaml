@@ -154,101 +154,90 @@ tests:
       - eval_time: 20m
         alertname: LLZConvergenceUnobserved
         exp_alerts: []
-
-  # The rotation-class split. Every credential in the gauge set publishes a real
-  # age, but only the classes something can actually bring back down are
-  # alertable. This pins the consequence twice over: widening credPaths must NOT
-  # turn LLZCredentialRotationOverdue into a rule that fires forever on paths
-  # nothing rotates — AND the operator-triggered class must not be silently
-  # exempted from the rule that asks a human to act.
-  #
-  # 2m interval, 26h of samples. The spacing has to stay inside Prometheus'
-  # 5m lookback or the series goes stale BETWEEN samples, which resolves the
-  # alert and restarts its `for` clock — an hourly series can never satisfy
-  # for:1h, let alone the for:24h rule.
   - interval: 2m
-    name: rotation-overdue fires only for credentials something can act on
+    name: a write-time probe that cannot authenticate is an alert, not a log line
     input_series:
-      # Automated + overdue: a rotator exists and is late. This is the real page.
-      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="loki-object-store",class="automated"}'
-        values: "95x780"
-      # Automated + inside SLA: silent.
-      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="obj-platform",class="automated"}'
-        values: "10x780"
-      # ON-DEMAND + overdue: rotation exists but is operator-triggered. Must fire
-      # — classing this `static` would exempt the highest-value credential in the
-      # deployment from the only actionable alert.
-      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="db-admin-shared",class="on-demand"}'
-        values: "120x780"
-      # ON-DEMAND but NOT db-admin: the opt-in cloud-firewall token, re-seeded by
-      # hand. Same class, DIFFERENT remedy — pins that the description branches on
-      # the credential and doesn't hand this operator the db-admin dispatch.
-      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="linode-cloud-firewall",class="on-demand"}'
-        values: "150x780"
-      # Generate-once, well past 90d but under a year: the old unscoped rule
-      # would have paged here every day forever.
-      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="grafana-admin",class="generate-once"}'
-        values: "200x780"
-      # Static bootstrap seed, past 90d: NOT on the SLA rule — re-seeding by hand
-      # is the only remedy, so a warning would never clear.
-      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="harbor-robot",class="static"}'
-        values: "200x780"
-      # Tracks-source, past a year: only the info-level never-rotated rule.
-      - series: 'llz_credential_age_days{namespace="llz-reconciler",cred="harbor-admin",class="tracks-source"}'
-        values: "400x780"
+      - series: 'llz_credential_secret_probe_ok{namespace="llz-reconciler"}'
+        values: "0x300"
     alert_rule_test:
-      # Exactly the two actionable ones. grafana-admin (200d generate-once),
-      # harbor-robot (200d static) and harbor-admin (400d tracks-source) are
-      # deliberately absent — nothing would clear them.
+      - eval_time: 7h
+        alertname: LLZCredentialSecretProbeUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+            exp_annotations:
+              summary: the credential write-time probe cannot run
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0009-unmeasurable-credential-coverage.md"
+              description: 'llz ci token-inventory could not build its GitHub secrets-metadata client, so no write-time credential age was measured this run. Every credential with no expiry — the state-backend key pair, the state-encryption passphrase, the OpenBao seal key and recovery quorum, the Harbor robot copies — is unmeasured while this fires. Check that the credential-single-pane job exports GH_REPO and a token with Secrets access.'
+      # Under the 6h `for`, so a single bad run does not page: the job is daily
+      # and a transient GitHub 5xx is not a broken funnel.
+      - eval_time: 5h
+        alertname: LLZCredentialSecretProbeUnavailable
+        exp_alerts: []
+
+  # ── presence, as a JOIN rather than a label filter ──────────────────────────
+  #
+  # The two presence rules read one pair of series in opposite directions:
+  # presence_ok says "this is not what we expect", configured says which way. They
+  # are a join and not an `expect="…"` matcher because tools/internal/metrics
+  # upserts by RENDERED LABEL SET and has no delete — a classification carried as
+  # a label would strand the old label set, served at its last value, alerting
+  # forever the moment a credential was reclassified. HARBOR_* moved present ->
+  # optional inside this very branch, so that is not a hypothetical.
+  #
+  # This group's whole job is to prove the two rules cannot be collapsed and that
+  # the join actually matches on `cred`.
+  - interval: 2m
+    name: an unconfigured credential and a parked root token are told apart
+    input_series:
+      # Steady state: present, and that is what is expected. Silent.
+      - series: 'llz_credential_presence_ok{namespace="llz-reconciler",cred="tf-state-access-key"}'
+        values: "1x90"
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="tf-state-access-key"}'
+        values: "1x90"
+      # Expected present, ABSENT. Before llz_credential_configured existed this
+      # credential published nothing at all — no age series, so neither age rule
+      # could evaluate for it, and a never-seeded recovery key looked exactly like
+      # a healthy one.
+      - series: 'llz_credential_presence_ok{namespace="llz-reconciler",cred="openbao-recovery-key-2"}'
+        values: "0x90"
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="openbao-recovery-key-2"}'
+        values: "0x90"
+      # Expected ABSENT and SET: a live full-admin credential left by a
+      # break-glass whose revoke never ran. Same presence_ok value as the row
+      # above, opposite `configured` — which is the only thing separating them.
+      - series: 'llz_credential_presence_ok{namespace="llz-reconciler",cred="openbao-root-token"}'
+        values: "0x90"
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="openbao-root-token"}'
+        values: "1x90"
+      # OPTIONAL: absent, and that is fine — the Harbor pair is published by the
+      # ACTIVE peer's provisioner, so a standby has neither until it has run. The
+      # reconciler resolves that, so presence_ok is 1 and NEITHER rule can see it.
+      - series: 'llz_credential_presence_ok{namespace="llz-reconciler",cred="harbor-password"}'
+        values: "1x90"
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="harbor-password"}'
+        values: "0x90"
+    alert_rule_test:
       - eval_time: 2h
-        alertname: LLZCredentialRotationOverdue
-        exp_alerts:
-          # on-demand: the description must send the operator to the DISPATCH,
-          # and must carry the no-overlap-window warning — running it blind
-          # breaks every consumer until ESO re-syncs.
-          - exp_labels:
-              severity: warning
-              service: llz-reconciler
-              cred: db-admin-shared
-              class: on-demand
-            exp_annotations:
-              summary: credential db-admin-shared rotation is overdue
-              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
-              description: 'db-admin-shared was last rotated 120 days ago (SLA 90d). Rotation is operator-triggered — no schedule will clear this. Dispatch secret-rotation.yml with scope=db-admin; it resets the password IN PLACE with no overlap window, so consumers break until ESO re-syncs — read the runbook first.'
-          # Same class, different credential: the SAME rule must produce the
-          # re-seed remedy here, not the db-admin dispatch.
-          - exp_labels:
-              severity: warning
-              service: llz-reconciler
-              cred: linode-cloud-firewall
-              class: on-demand
-            exp_annotations:
-              summary: credential linode-cloud-firewall rotation is overdue
-              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
-              description: 'linode-cloud-firewall was last rotated 150 days ago (SLA 90d). Rotation is operator-triggered — no schedule will clear this. Re-seed it with `llz openbao set` (see the runbook for this credential''s scope).'
-          # automated: the remedy is the opposite — the rotator is late, not un-run.
-          - exp_labels:
-              severity: warning
-              service: llz-reconciler
-              cred: loki-object-store
-              class: automated
-            exp_annotations:
-              summary: credential loki-object-store rotation is overdue
-              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
-              description: 'loki-object-store was last rotated 95 days ago (SLA 90d). A rotator owns this path, so it is LATE rather than un-run: check the llz-reconciler linode-creds lane and the secret-rotation.yml schedule.'
-      # 24h+ in, the year-old unrotatable credential surfaces as info — and the
-      # 200d ones still do not, because they are under 365d. The on-demand series
-      # must NOT appear here: it is already covered by the actionable rule above,
-      # and double-alerting one credential trains people to ignore both.
-      - eval_time: 25h
-        alertname: LLZCredentialNeverRotated
+        alertname: LLZCredentialUnconfigured
         exp_alerts:
           - exp_labels:
-              severity: info
+              severity: warning
               service: llz-reconciler
-              cred: harbor-admin
-              class: tracks-source
+              cred: openbao-recovery-key-2
             exp_annotations:
-              summary: credential harbor-admin has never been rotated
-              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
-              description: harbor-admin (class tracks-source) is 400 days old and has no rotation automation. Re-seed it by hand, or accept the age deliberately.
+              summary: credential openbao-recovery-key-2 is not configured
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md"
+              description: openbao-recovery-key-2 is expected as a GitHub Actions secret on this deployment and the secrets API reports it absent. It has no age because it has no value — nothing else in this ruleset can fire for it. Seed it (docs/secrets.md), or drop it from ghSecretTargets if this instance genuinely does not use it.
+      - eval_time: 2h
+        alertname: LLZCredentialRootTokenParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+              cred: openbao-root-token
+            exp_annotations:
+              summary: an OpenBao root token is parked in openbao-root-token
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+              description: openbao-root-token is set. A root token is ephemeral by design — bootstrap revokes it and the recovery quorum is what survives — so this is a full-admin credential left behind by a break-glass that never ran its revoke. Dispatch llz-breakglass-openbao.yml with action=revoke; it revokes the token AND deletes the secret.

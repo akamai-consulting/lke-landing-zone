@@ -258,22 +258,74 @@ func TestGatherSecretAgesRecordsWriteTime(t *testing.T) {
 	}
 }
 
-// An ABSENT secret must be reported as unknown, not dropped. This is the property
-// the OpenBao age sampler cannot provide — there a 404 means "not seeded yet" and
-// is skipped, so a never-written credential looks exactly like a healthy one.
-// Here the API distinguishes them, so a missing state-backend credential stays
-// visible rather than silently absent.
-func TestGatherSecretAgesReportsAbsentAsUnknown(t *testing.T) {
-	got := gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
-		return "", false, nil
+// An ABSENT secret must be reported, not dropped — the property the OpenBao age
+// sampler cannot provide, since there a 404 means "not seeded yet" and is
+// skipped, so a never-written credential looks exactly like a healthy one.
+//
+// It is reported as `absent`, NOT `unknown`. This test asserted `unknown` when
+// ADR 0009 wrote it, and that was the conflation: `unknown` is also what an
+// unreadable secret produces, so the two answers "the API says this does not
+// exist" and "the API would not tell me" were one value. The reconciler turns
+// the first into llz_credential_configured=0, which LLZCredentialUnconfigured
+// reads as "seed this credential" — so publishing it for the second would page
+// on a token-permission fault while naming a missing credential.
+func TestGatherSecretAgesReportsAbsentDistinctlyFromUnreadable(t *testing.T) {
+	absent := gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
+		return "", false, nil // 404: the API answered
 	})
-	if len(got) != len(ghSecretTargets) {
-		t.Fatalf("absent secrets must still be reported, got %d", len(got))
+	if len(absent) != len(ghSecretTargets) {
+		t.Fatalf("absent secrets must still be reported, got %d", len(absent))
 	}
-	for _, e := range got {
-		if e.State != tokenStateUnknown || e.UpdatedAt != "" {
-			t.Errorf("%s: want unknown with no timestamp, got %+v", e.Name, e)
+	for _, e := range absent {
+		if e.State != tokenStateAbsent || e.UpdatedAt != "" {
+			t.Errorf("%s: want absent with no timestamp, got %+v", e.Name, e)
 		}
+	}
+
+	unreadable := gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
+		return "", false, errors.New("403 Forbidden") // the API refused
+	})
+	for _, e := range unreadable {
+		if e.State != tokenStateUnknown {
+			t.Errorf("%s: a refused read must stay unknown, got %+v", e.Name, e)
+		}
+	}
+}
+
+// Found in one scope and refused in the other is still FOUND. The probe tries the
+// environment scope then the repo scope, and those carry different permissions —
+// so downgrading on any error seen would report a credential we successfully read
+// as unreadable, and take the whole lane's funnel verdict down with it.
+func TestGatherSecretAgesPrefersAFindOverALaterRefusal(t *testing.T) {
+	got := gatherSecretAges("infra-primary", func(env, name string) (string, bool, error) {
+		if env == "infra-primary" {
+			return "2026-05-01T10:00:00Z", true, nil
+		}
+		return "", false, errors.New("403 Forbidden")
+	})
+	for _, e := range got {
+		if e.State != tokenStateOK {
+			t.Errorf("%s: a successful read must win, got %+v", e.Name, e)
+		}
+	}
+}
+
+// The funnel verdict must fall when ANY credential went unread, not only when the
+// client could not be built. A client that authenticates for repo-scoped secrets
+// can still be refused on the environment scope — different permissions — and the
+// five OpenBao credentials measured here are environment-scoped. Reporting `ok`
+// there would vouch for a lane that is partly dark.
+func TestSecretProbeVerdictFallsOnAPerCredentialRefusal(t *testing.T) {
+	ok := []secretEntry{{State: tokenStateOK}, {State: tokenStateAbsent}}
+	if got := secretProbeVerdict(true, ok); got != secretProbeOK {
+		t.Errorf("answered entries = %q, want %q", got, secretProbeOK)
+	}
+	partial := []secretEntry{{State: tokenStateOK}, {State: tokenStateUnknown}}
+	if got := secretProbeVerdict(true, partial); got != secretProbeUnavailable {
+		t.Errorf("one unreadable entry = %q, want %q", got, secretProbeUnavailable)
+	}
+	if got := secretProbeVerdict(false, nil); got != secretProbeUnavailable {
+		t.Errorf("no client = %q, want %q", got, secretProbeUnavailable)
 	}
 }
 
@@ -332,5 +384,109 @@ func TestGHSecretTargetClassesAreKnown(t *testing.T) {
 		if !known[tgt.class] {
 			t.Errorf("%s has class %q, which no alert rule matches", tgt.name, tgt.class)
 		}
+	}
+}
+
+// Every target must declare an `expect` from the closed set. An empty one is not
+// a neutral default: the reconciler substitutes `present`, so a forgotten field
+// silently promises that a credential must exist — which for a root token is
+// exactly backwards, and for the Harbor pair pages every healthy standby.
+func TestGHSecretTargetsDeclareExpect(t *testing.T) {
+	known := map[string]bool{
+		credExpectPresent: true, credExpectOptional: true, credExpectAbsent: true,
+	}
+	for _, tgt := range ghSecretTargets {
+		if !known[tgt.expect] {
+			t.Errorf("%s: expect = %q, outside the closed set", tgt.name, tgt.expect)
+		}
+	}
+}
+
+// The credentials this measurement exists for. ADR 0009 built the write-time
+// probe for the state backend and stopped there; the seal key, the recovery
+// quorum, the root token and the Harbor robot copies have no expiry either, are
+// circular with OpenBao for exactly the same reason, and were simply not in the
+// list it wrote. Pinned by name so removing one is a deliberate edit here rather
+// than a credential quietly leaving the single pane.
+func TestGHSecretTargetsCoverOpenBaoEscrowAndHarborStandby(t *testing.T) {
+	got := map[string]string{}
+	for _, tgt := range ghSecretTargets {
+		got[tgt.name] = tgt.expect
+	}
+	for _, name := range []string{
+		"OPENBAO_SEAL_KEY",       // the at-rest key for everything else in OpenBao
+		"OPENBAO_RECOVERY_KEY_1", // lose the quorum and break-glass is impossible
+		"OPENBAO_RECOVERY_KEY_2",
+		"OPENBAO_RECOVERY_KEY_3",
+	} {
+		if got[name] != credExpectPresent {
+			t.Errorf("%s must be measured and expected present, got expect=%q", name, got[name])
+		}
+	}
+	// The Harbor robot pair is measured too, but OPTIONAL: it is published by the
+	// ACTIVE peer's provisioner, so a standby peer has neither until that has run.
+	// Classing it `present` pages every healthy standby and fails its daily
+	// credential job — a gap closed by a rule that cries wolf is not closed.
+	for _, name := range []string{"HARBOR_PASSWORD", "HARBOR_PULL_PASSWORD"} {
+		if got[name] != credExpectOptional {
+			t.Errorf("%s must be expect=optional, got %q", name, got[name])
+		}
+	}
+	// The one credential whose healthy state is absent. Bootstrap mints a root
+	// token, uses it and revokes it; a set one is a live full-admin credential
+	// left behind by a break-glass that never ran its revoke.
+	if got["OPENBAO_ROOT_TOKEN"] != credExpectAbsent {
+		t.Errorf("OPENBAO_ROOT_TOKEN must be expect=absent, got %q", got["OPENBAO_ROOT_TOKEN"])
+	}
+}
+
+// The expect verdict has to reach the ConfigMap; the reconciler reads it from
+// there and nowhere else.
+func TestGatherSecretAgesCarriesExpect(t *testing.T) {
+	want := map[string]string{}
+	for _, tgt := range ghSecretTargets {
+		want[tgt.name] = tgt.expect
+	}
+	for _, e := range gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
+		return "", false, nil
+	}) {
+		if e.Expect != want[e.Name] {
+			t.Errorf("%s: entry carries expect=%q, target declares %q", e.Name, e.Expect, want[e.Name])
+		}
+	}
+}
+
+// An empty Secrets list is ambiguous — "measured, none exist" and "the probe
+// never ran" render identically — and the ambiguity was not theoretical: the one
+// job that runs this command supplied a token but no GH_REPO, so the probe
+// errored on every run since ADR 0009 shipped and no write-time series was ever
+// published. The verdict has to be explicit for the reconciler to alert on it.
+func TestBuildTokenInventoryRecordsSecretProbeUnavailable(t *testing.T) {
+	inv := buildTokenInventory(context.Background(), tokenInvDeps{
+		secretEnv:   "infra-primary",
+		secretProbe: nil, // newSecretAgeWriter failed — the production case
+		now:         time.Unix(1_800_000_000, 0),
+	})
+	if inv.SecretProbe != secretProbeUnavailable {
+		t.Errorf("SecretProbe = %q, want %q", inv.SecretProbe, secretProbeUnavailable)
+	}
+	if len(inv.Secrets) != 0 {
+		t.Errorf("an unavailable probe must contribute no entries, got %d", len(inv.Secrets))
+	}
+}
+
+func TestBuildTokenInventoryRecordsSecretProbeOK(t *testing.T) {
+	inv := buildTokenInventory(context.Background(), tokenInvDeps{
+		secretEnv: "infra-primary",
+		secretProbe: func(string, string) (string, bool, error) {
+			return "2026-05-01T00:00:00Z", true, nil
+		},
+		now: time.Unix(1_800_000_000, 0),
+	})
+	if inv.SecretProbe != secretProbeOK {
+		t.Errorf("SecretProbe = %q, want %q", inv.SecretProbe, secretProbeOK)
+	}
+	if len(inv.Secrets) != len(ghSecretTargets) {
+		t.Errorf("got %d entries, want %d", len(inv.Secrets), len(ghSecretTargets))
 	}
 }

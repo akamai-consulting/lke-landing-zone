@@ -17,11 +17,21 @@ package main
 // visibly old" (credClassStatic's own comment). A silently-missing series is the
 // native failure of this subsystem, and nothing gated it.
 //
-// WHAT IT ASSERTS. For every credential in credPaths whose class is ALERTABLE
+// WHAT IT ASSERTS. Two lanes, because the credential single pane has two feeds
+// and they fail in different ways.
+//
+// AGE LANE — for every credential in credPaths whose class is ALERTABLE
 // (automated / on-demand — the classes something is expected to rotate):
 //
 //   1. a llz_credential_age_days series exists for it, and
 //   2. its age is within the SLA its class carries.
+//
+// PRESENCE LANE — for the GitHub-held credentials in ghSecretTargets, where the
+// failure is not "old" but "not there". That whole feed was ungated: the age lane
+// reads credPaths, so it had nothing to say about a write-time probe that never
+// authenticated (which is what was happening in production), a credential that
+// was never configured, or a root token left set after a break-glass. See
+// evalPresenceHealth.
 //
 // Non-alertable classes (generate-once / tracks-source / static) are REPORTED,
 // never gated: nothing will lower their age, so failing on it would be a
@@ -49,10 +59,12 @@ package main
 // Read-only.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,7 +93,7 @@ var alertableCredClasses = map[string]bool{
 func ciAssertRotationHealthCmd() *cobra.Command {
 	var prom, namespace string
 	var settle, interval int
-	var strict bool
+	var strict, requireInventory bool
 	c := &cobra.Command{
 		Use:   "assert-rotation-health",
 		Short: "fail unless every rotatable credential is being observed and is within its rotation SLA",
@@ -98,6 +110,11 @@ func ciAssertRotationHealthCmd() *cobra.Command {
 			"Non-alertable classes (generate-once / tracks-source / static) are reported,\n" +
 			"never gated: nothing will ever lower their age, so failing on it would be a\n" +
 			"permanent red. --strict also gates their 365d info threshold.\n\n" +
+			"ALSO gates the GitHub write-time lane: the secret-age probe authenticated, every\n" +
+			"ghSecretTargets credential expected present IS present, and the one expected\n" +
+			"absent (OPENBAO_ROOT_TOKEN) is absent. That feed has no age when it breaks, so\n" +
+			"the age assertion above cannot reach it. Skipped with a loud message where the\n" +
+			"inventory writer has never run; --require-inventory makes it a failure.\n\n" +
 			"Does NOT force a rotation. assert-broad-pat-rotation already exercises one full\n" +
 			"cycle and is safe only because its PAT family is throwaway; forcing lke-admin,\n" +
 			"obj-key, db-admin or the state passphrase mid-run would break the cluster the\n" +
@@ -105,10 +122,13 @@ func ciAssertRotationHealthCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertRotationHealth(prom, namespace, strict,
+			return runCIAssertRotationHealth(prom, namespace, strict, requireInventory,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
+	c.Flags().BoolVar(&requireInventory, "require-inventory", false,
+		"fail if the token-inventory ConfigMap has never been written (default: report the skip). "+
+			"For callers that run `llz ci token-inventory` themselves — there, an absent inventory is a break, not a fresh cluster")
 	c.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
 		"the Prometheus Service as <namespace>/<name>:<port> to port-forward to")
 	c.Flags().StringVar(&namespace, "namespace", "llz-reconciler", "namespace label the gauges carry")
@@ -123,12 +143,20 @@ func ciAssertRotationHealthCmd() *cobra.Command {
 type credVerdict struct {
 	Cred     string
 	Class    string
-	Age      float64 // days (valid only when Present)
+	Age      float64 // days (valid only on the age lane, and only when Present)
 	Present  bool
 	Gated    bool // its class makes it eligible to fail the gate
 	Optional bool // the path is opt-in; absence is not a finding
 	FailWhy  string
+	// Lane distinguishes the two questions this gate now asks. Empty (the
+	// zero value) is the age lane, so every existing construction keeps its
+	// meaning; presenceLane verdicts carry no Age and must not be printed as
+	// though they did — "0 days old, SLA 90" on a credential whose problem is
+	// that it does not exist reads as a passing measurement.
+	Lane string
 }
+
+const presenceLane = "presence"
 
 // expectedRotationCreds returns the credentials this gate demands a series for,
 // derived from the SAME credPaths table the sampler walks.
@@ -245,14 +273,30 @@ func probeRotationHealth(prom, namespace string, strict bool) ([]credVerdict, er
 	return evalRotationHealth(expectedRotationCreds(), ages, strict), nil
 }
 
-func runCIAssertRotationHealth(prom, namespace string, strict bool, settle, interval time.Duration) error {
+// probeBothLanes reads the age lane and the presence lane in one pass, so the
+// settle loop retries them together. A cluster that has just come up is often
+// mid-way through both, and retrying one while the other is already stale would
+// report a state that never existed.
+func probeBothLanes(prom, namespace string, strict, require bool) ([]credVerdict, error) {
+	ages, err := probeRotationHealth(prom, namespace, strict)
+	if err != nil {
+		return nil, err
+	}
+	presence, err := probePresenceHealth(prom, namespace, require)
+	if err != nil {
+		return nil, err
+	}
+	return append(ages, presence...), nil
+}
+
+func runCIAssertRotationHealth(prom, namespace string, strict, require bool, settle, interval time.Duration) error {
 	fmt.Println("## Credential rotation-health assertion")
 
 	var last []credVerdict
 	var lastErr error
 	deadline := time.Now().Add(settle)
 	for attempt := 1; ; attempt++ {
-		vs, err := probeRotationHealth(prom, namespace, strict)
+		vs, err := probeBothLanes(prom, namespace, strict, require)
 		last, lastErr = vs, err
 		if err == nil && len(failedCreds(vs)) == 0 {
 			break
@@ -277,6 +321,11 @@ func runCIAssertRotationHealth(prom, namespace string, strict bool, settle, inte
 		switch {
 		case v.FailWhy != "":
 			fmt.Printf("FAIL: %s (%s) — %s\n", v.Cred, v.Class, v.FailWhy)
+		case v.Lane == presenceLane && v.Class == "funnel" && !v.Present:
+			fmt.Printf("skip: %s — the inventory writer has not run on this cluster, so the GitHub "+
+				"write-time lane is unmeasured. Pass --require-inventory where the writer DOES run.\n", v.Cred)
+		case v.Lane == presenceLane:
+			fmt.Printf("OK: %s (%s) — present as expected\n", v.Cred, v.Class)
 		case !v.Present && v.Optional:
 			fmt.Printf("skip: %s (%s, opt-in) — no series; this path is not seeded on this cluster, "+
 				"which is the normal state for it. Its %.0f-day SLA still gates once it is.\n",
@@ -292,6 +341,183 @@ func runCIAssertRotationHealth(prom, namespace string, strict bool, settle, inte
 		fmt.Fprintf(os.Stderr, "::error::credential rotation health: %s\n", strings.Join(bad, ", "))
 		return fmt.Errorf("credential rotation health: %s", strings.Join(bad, ", "))
 	}
-	fmt.Println("Every rotatable credential is observed and within its SLA.")
+	fmt.Println("Every rotatable credential is observed and within its SLA, and every GitHub-held one is configured as expected.")
 	return nil
+}
+
+// ── the presence lane ────────────────────────────────────────────────────────
+//
+// Everything above gates AGE, over the credentials credPaths declares in OpenBao.
+// It has nothing to say about the OTHER feed — the GitHub write-time lane — and
+// the failure mode there is not "old", it is "not there".
+//
+// The three ways that lane fails, none of which the age gate can see:
+//
+//   the probe never authenticated   newSecretAgeWriter needs a token and a repo;
+//                                   the job supplied only the token, so no
+//                                   write-time series existed at all. It fails
+//                                   soft by design, and the soft failure was a
+//                                   ::warning:: in a scheduled job's log.
+//   a credential is not configured  it has no age because it has no value, so
+//                                   the age gate above cannot reach it — a check
+//                                   over an absent series never evaluates.
+//   a root token is parked          OPENBAO_ROOT_TOKEN is supposed to be ABSENT;
+//                                   present means a break-glass generate/rotate
+//                                   ran and its revoke half did not, leaving a
+//                                   live full-admin credential in an Actions
+//                                   secret.
+//
+// SKIPPED WHEN THE WRITER HAS NOT RUN. On a freshly bootstrapped cluster the
+// inventory ConfigMap does not exist yet — the writer is a scheduled job — and
+// failing there would gate the e2e suite on a job that legitimately has not run.
+// The skip is reported loudly rather than silently, and --require-inventory turns
+// it into a failure for the one caller that runs the writer moments earlier.
+
+// evalPresenceHealth judges the write-time lane. Pure.
+//
+// configured maps `cred` → llz_credential_configured. probeOK is the
+// llz_credential_secret_probe_ok sample; probeSeen distinguishes "the writer said
+// the probe failed" from "the writer has never run here", which need different
+// answers and would otherwise be the same absent series.
+func evalPresenceHealth(configured map[string]float64, probeOK float64, probeSeen, require bool) []credVerdict {
+	if !probeSeen {
+		v := credVerdict{Cred: "token-inventory", Class: "funnel", Lane: presenceLane, Gated: require}
+		v.FailWhy = "no llz_credential_secret_probe_ok series — `llz ci token-inventory` has not written " +
+			"the inventory ConfigMap on this cluster, so the whole GitHub write-time lane is unmeasured. " +
+			"Expected on a freshly bootstrapped cluster (the writer is a scheduled job); a FAILURE " +
+			"anywhere the writer runs, which is what --require-inventory asserts"
+		if !require {
+			v.FailWhy = ""
+			v.Present = false
+		}
+		return []credVerdict{v}
+	}
+
+	out := []credVerdict{{
+		Cred: "token-inventory", Class: "funnel", Lane: presenceLane, Present: true, Gated: true,
+		FailWhy: func() string {
+			if probeOK == 1 {
+				return ""
+			}
+			return "llz_credential_secret_probe_ok = 0 — the writer could not build its GitHub " +
+				"secrets-metadata client, so no credential write time was measured. Check that the job " +
+				"running token-inventory exports GH_REPO and a token with Secrets access"
+		}(),
+	}}
+
+	for _, tgt := range ghSecretTargets {
+		cred := credLabelForSecret(tgt.name)
+		v := credVerdict{Cred: cred, Class: tgt.class, Lane: presenceLane, Gated: true}
+		got, ok := configured[cred]
+		v.Present = ok
+		switch {
+		case tgt.expect == credExpectOptional:
+			// Legitimately absent on a healthy deployment (the Harbor robot pair on
+			// a standby peer, before the ACTIVE peer's provisioner has published
+			// them). Visible on the dashboard, never a gate in either direction.
+			v.Gated = false
+		case !ok:
+			v.FailWhy = "no llz_credential_configured series, although the probe reported OK. Either " +
+				"the writer could not READ this credential (a 403 on the environment scope is the " +
+				"likely one — environment-secret metadata needs different token permissions from " +
+				"repo-scoped, and the OpenBao credentials are environment-scoped), or the funnel " +
+				"between writer and reconciler is broken. It is NOT evidence the credential is missing"
+		case tgt.expect == credExpectPresent && got != 1:
+			v.FailWhy = "expected present and the GitHub secrets API reports it ABSENT. It has no age " +
+				"because it has no value, so no age rule can fire for it. Seed it (docs/secrets.md), or " +
+				"drop it from ghSecretTargets if this instance genuinely does not use it"
+		case tgt.expect == credExpectAbsent && got != 0:
+			v.FailWhy = "expected ABSENT and it is set. A root token is ephemeral by design — bootstrap " +
+				"revokes it and the recovery quorum is what survives — so this is a live full-admin " +
+				"credential left by a break-glass whose revoke never ran. Dispatch " +
+				"llz-breakglass-openbao.yml with action=revoke"
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Cred < out[j].Cred })
+	return out
+}
+
+// probePresenceHealth reads the two write-time-lane vectors.
+func probePresenceHealth(prom, namespace string, require bool) ([]credVerdict, error) {
+	var configured map[string]float64
+	var probeOK float64
+	var probeSeen bool
+	var perr error
+	err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
+		raw, gerr := get("/api/v1/query?query=" +
+			url.QueryEscape(fmt.Sprintf(`llz_credential_configured{namespace=%q}`, namespace)))
+		if gerr != nil {
+			return gerr
+		}
+		if configured, perr = promVectorByLabel(raw, "cred"); perr != nil {
+			return perr
+		}
+		raw, gerr = get("/api/v1/query?query=" +
+			url.QueryEscape(fmt.Sprintf(`llz_credential_secret_probe_ok{namespace=%q}`, namespace)))
+		if gerr != nil {
+			return gerr
+		}
+		// NOT promVectorByLabel: this series carries no `cred` label, and that
+		// helper skips any sample whose label is empty (`if key == "" continue`).
+		// Reading it through there returned an empty map every time, so probeSeen
+		// was permanently false — the presence lane silently checked nothing, and
+		// --require-inventory would have failed EVERY run on every cluster while
+		// reporting "the writer has not run here". The unit tests missed it
+		// because they exercise evalPresenceHealth directly and never crossed this
+		// parsing seam.
+		probeOK, probeSeen, perr = promFirstSample(raw)
+		return perr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return evalPresenceHealth(configured, probeOK, probeSeen, require), nil
+}
+
+// promFirstSample reads the value of the first sample in an instant-query
+// response, regardless of its labels, and reports whether there was one.
+//
+// It exists because promVectorByLabel — the helper every other gauge gate uses —
+// indexes samples BY a label and drops any whose value for it is empty. That is
+// right for the per-credential series and silently wrong for an aggregate:
+// `llz_credential_secret_probe_ok` has no `cred` label, so every sample was
+// discarded and the caller could not tell an unreachable funnel from one that had
+// never run. A query error is still an error; an empty result is a legitimate
+// "no such series yet" and returns ok=false.
+func promFirstSample(raw []byte) (float64, bool, error) {
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		Data   struct {
+			Result []struct {
+				Value []any `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return 0, false, fmt.Errorf("unparseable Prometheus response: %w", err)
+	}
+	if resp.Status != "success" {
+		detail := resp.Error
+		if detail == "" {
+			detail = "status=" + resp.Status
+		}
+		return 0, false, fmt.Errorf("prometheus returned an error: %s", detail)
+	}
+	for _, r := range resp.Data.Result {
+		if len(r.Value) != 2 {
+			continue
+		}
+		str, ok := r.Value[1].(string)
+		if !ok {
+			continue
+		}
+		f, err := strconv.ParseFloat(str, 64)
+		if err != nil {
+			continue
+		}
+		return f, true, nil
+	}
+	return 0, false, nil
 }
