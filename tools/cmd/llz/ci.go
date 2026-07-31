@@ -275,6 +275,22 @@ func ciCmd() *cobra.Command {
 	// created — the truncation regression left every credential valid and every
 	// push and pull 401ing on a malformed host.
 	c.AddCommand(ciAssertRotationHealthCmd(), ciAssertHarborRoundTripCmd())
+	// ── Delivery/health gates found in the post-review functional pass ───────
+	// assert-obj-roundtrip WRITES to Loki's and Harbor's object storage at each
+	// consumer's OWN endpoint with its OWN credential. verify-object-storage asks
+	// the Linode API whether the buckets exist by label, and every one of those
+	// checks passed while both consumers were returning NoSuchBucket — the
+	// generations are disjoint namespaces, so the API and the consumer were both
+	// telling the truth about different places.
+	c.AddCommand(ciAssertObjRoundTripCmd())
+	// assert-certificates consumes a signal that already existed and nothing read:
+	// llz_certificates_not_ready is published and alerted on, but alert-eval is
+	// report-only and --strict ignores FIRING, so a stuck Certificate reds nothing.
+	c.AddCommand(ciAssertCertificatesCmd())
+	// assert-database proves the seeded admin credential is still ACCEPTED.
+	// rotate-db-admin resets the password in place with no overlap window, so the
+	// failure is a live endpoint that rejects the credential every consumer holds.
+	c.AddCommand(ciAssertDatabaseCmd())
 	c.AddCommand(ciAssertSuiteCmd())
 	// E2E gate: assert OpenBao's audit log is ARRIVING in Loki, by reading it back
 	// out of Loki. The metrics path has assert-scrape-targets; the log path had

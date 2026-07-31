@@ -121,12 +121,30 @@ func assertSuiteLanes(region string) []suiteLane {
 				"Each negative is paired with a POSITIVE CONTROL from the same pod, so a probe that simply could not reach anything reports INCONCLUSIVE instead of passing as enforcement.",
 		},
 		{
+			Name: "obj-storage", Gating: true,
+			Steps: [][]string{{"assert-obj-roundtrip"}},
+			Why: "Loki and Harbor can WRITE to their object storage — a PUT and a read-back at each consumer's OWN endpoint with its OWN credential. " +
+				"verify-object-storage asks the Linode API whether the buckets exist by label, and every one of those checks passed while both consumers returned NoSuchBucket: " +
+				"the object-storage generations are disjoint namespaces, so an obj-cluster id stripped to its region puts the bucket on one while the consumers address the other, " +
+				"and both answers are truthful about different places. Reads back because a PUT can succeed against the wrong endpoint.",
+		},
+		{
+			Name: "certificates", Gating: true,
+			Steps: [][]string{{"assert-certificates"}},
+			Why: "Every cert-manager Certificate is Ready and not expiring inside the renewal window. The signal existed and nothing consumed it: llz_certificates_not_ready is " +
+				"published and LLZCertificatesNotReady alerts on it, but alert-eval is report-only and --strict ignores FIRING, so a stuck Certificate reds nothing. " +
+				"Reports broken ISSUANCE and broken RENEWAL separately — the remedies share nothing.",
+		},
+		{
 			Name: "credentials", Gating: true,
 			Steps: [][]string{{"assert-rotation-health"}, {"assert-harbor-roundtrip"}},
 			Why: "The credential lifecycle. assert-rotation-health gates every credential credPaths declares: a declared credential publishing NO age series is invisible on the " +
 				"single pane AND unalertable, because a rule over an absent series never evaluates. assert-harbor-roundtrip then USES a minted robot — the auth handshake for pull AND " +
 				"push — rather than trusting it was created; the host-truncation regression left every credential valid and every push and pull 401ing. Neither forces a rotation: " +
-				"broad-pat already exercises one full cycle safely, and forcing lke-admin/obj-key/db-admin/state-passphrase mid-run would break the cluster being measured.",
+				"broad-pat already exercises one full cycle safely, and forcing lke-admin/obj-key/db-admin/state-passphrase mid-run would break the cluster being measured. " +
+				"assert-database covers Managed Postgres and is deliberately NOT in this battery: the db-admin credential lives only in OpenBao (no ExternalSecret materializes it) " +
+				"and the bootstrap job REVOKES the root token before this suite runs, so it would fail here for want of a token rather than for anything about the database. " +
+				"It runs as its own step earlier in the job, while the token still exists.",
 		},
 		{
 			Name: "health-workflow", Gating: true,

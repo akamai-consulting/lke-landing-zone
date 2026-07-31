@@ -608,6 +608,22 @@ jobs:
         if: steps.ensure.outputs.available == 'true' && env.HA_ROLE != 'standby'
         run: llz ci audit-pvc-storageclass
 
+      # ── (e2e) Managed Postgres credential ────────────────────────────────────
+      # HERE, not in the assert suite below, and the ordering is the whole reason:
+      # the db-admin credential lives only in OpenBao — no ExternalSecret
+      # materializes it into the cluster — and the next step REVOKES the root
+      # token. Run after that and it fails for want of a token rather than for
+      # anything about the database, which is the worst kind of red.
+      #
+      # Completes the TLS + auth handshake and issues no query. rotate-db-admin
+      # resets the password IN PLACE with no overlap window, so the failure mode is
+      # a live endpoint that answers every connect and rejects the credential every
+      # consumer holds — a reachability check passes straight through that.
+      # Self-skips when no Managed Postgres is declared.
+      - name: (e2e) assert Managed Postgres accepts its seeded admin credential
+        if: ${{ inputs.assert_loki }}
+        run: llz ci assert-database
+
       # ── Revoke root token ────────────────────────────────────────────────────────
       # Revokes on success AND failure — fail-closed for credential hygiene. The
       # preserve_root_on_failure debug input suppresses it on FAILURE only, so an
