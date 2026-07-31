@@ -437,6 +437,11 @@ credential-coverage-guard:
 # decided at create, immutable after, so a gate is the only place to catch them.
 # The ADR 0007 phase-1 unencrypted fallback is the one registered residue, and it
 # carries an exit condition rather than living as a comment in four files.
+#
+# FROM SOURCE, same reason as credential-coverage-guard: the prebuilt image binary
+# is built from the merge-base, so on the PR that introduces this verb it does not
+# exist there — the gate would fail with `unknown command` rather than run.
+at-rest-guard: export LLZ_FORCE_SOURCE := 1
 at-rest-guard:
 	$(call LLZ_CI,at-rest-guard,--root ..)
 
