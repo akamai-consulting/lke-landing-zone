@@ -297,13 +297,51 @@ func readFirstObjConfig(refs []string) (cfg, from string, err error) {
 	return "", "", lastErr
 }
 
+// listSecretsIn returns the Secret names in a namespace, for failure messages
+// only. Seamed with the other cluster reads.
+var listSecretsIn = func(ns string) ([]string, error) {
+	out, err := execOutput("kubectl", "-n", ns, "get", "secret",
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(string(out)), nil
+}
+
+// candidateSecretHint lists the Secrets that DO exist alongside a ref that did
+// not resolve, so an absent-Secret failure carries its own next step.
+//
+// Best-effort and silent on error: a hint that cannot be gathered must never
+// change the verdict or add noise to it.
+func candidateSecretHint(ref string) string {
+	ns, _, ok := strings.Cut(ref, "/")
+	if !ok {
+		return ""
+	}
+	names, err := listSecretsIn(ns)
+	if err != nil || len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" Secrets that DO exist in %s: %s. If the chart renamed it, correct this consumer's "+
+		"SecretRef — note that the OpenBao PATH name is not a Kubernetes Secret name, which is how this ref went stale.",
+		ns, strings.Join(names, ", "))
+}
+
 // probeObjConsumer resolves one consumer's real config and round-trips an object.
 func probeObjConsumer(c objConsumer, keyPrefix string, now time.Time) objVerdict {
 	v := objVerdict{Consumer: c.Name}
 
 	secretRaw, err := readObjSecret(c.SecretRef)
 	if err != nil {
-		v.FailWhy = fmt.Sprintf("credential Secret %s is absent (%v) — this consumer cannot be writing at all", c.SecretRef, err)
+		// NAME WHAT IS ACTUALLY THERE. "Secret X is absent" is true and nearly
+		// useless: the reader's next question is always "then what IS in that
+		// namespace", and answering it needs a cluster they may not have. This gate
+		// shipped pointing at two Secrets that had not existed since 52465691
+		// renamed the mechanism, and finding the real names took a live kubectl.
+		// One extra line here is the difference between reading the log and
+		// standing up a cluster.
+		v.FailWhy = fmt.Sprintf("credential Secret %s is absent (%v) — this consumer cannot be writing at all.%s",
+			c.SecretRef, err, candidateSecretHint(c.SecretRef))
 		return v
 	}
 	access, err := decodeSecretField(secretRaw, c.AccessKeyField)

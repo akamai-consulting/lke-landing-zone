@@ -513,3 +513,38 @@ func TestObjConsumersNameMountedSecretsNotOpenBaoPaths(t *testing.T) {
 		}
 	}
 }
+
+// "Secret X is absent" is true and nearly useless on its own — the reader's next
+// question is always "then what IS in that namespace", and answering it needed a
+// live cluster when this gate shipped pointing at two Secrets that had not
+// existed since 52465691.
+func TestProbeObjConsumerNamesTheSecretsThatDoExist(t *testing.T) {
+	oS, oL := readObjSecret, listSecretsIn
+	t.Cleanup(func() { readObjSecret, listSecretsIn = oS, oL })
+	readObjSecret = func(string) ([]byte, error) { return nil, errors.New("NotFound") }
+	listSecretsIn = func(ns string) ([]string, error) {
+		return []string{"loki-s3-linode-credentials", "alertmanager-config"}, nil
+	}
+
+	v := probeObjConsumer(objConsumer{Name: "loki", SecretRef: "monitoring/loki-object-store"}, "p", time.Now())
+	if v.FailWhy == "" {
+		t.Fatal("an absent credential Secret must fail")
+	}
+	if !strings.Contains(v.FailWhy, "loki-s3-linode-credentials") {
+		t.Errorf("the failure must name the Secrets that DO exist, or diagnosing it needs a cluster: %s", v.FailWhy)
+	}
+}
+
+// The hint is best-effort: if it cannot be gathered, the verdict must be
+// unchanged rather than swallowing the real failure.
+func TestProbeObjConsumerSurvivesAnUnlistableNamespace(t *testing.T) {
+	oS, oL := readObjSecret, listSecretsIn
+	t.Cleanup(func() { readObjSecret, listSecretsIn = oS, oL })
+	readObjSecret = func(string) ([]byte, error) { return nil, errors.New("NotFound") }
+	listSecretsIn = func(string) ([]string, error) { return nil, errors.New("forbidden") }
+
+	v := probeObjConsumer(objConsumer{Name: "loki", SecretRef: "monitoring/loki-object-store"}, "p", time.Now())
+	if v.FailWhy == "" || !strings.Contains(v.FailWhy, "is absent") {
+		t.Errorf("the underlying failure must survive a hint that could not be gathered: %s", v.FailWhy)
+	}
+}

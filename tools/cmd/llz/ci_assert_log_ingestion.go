@@ -27,6 +27,7 @@ package main
 // indistinguishable from the outage it exists to find.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -165,6 +166,55 @@ func probeLogIngestion(get func(string) ([]byte, error), namespaces []string,
 	return out, nil
 }
 
+// printTenantDiagnosis dumps what the queried tenant can actually see, because
+// "no log lines" has two very different causes and the message alone cannot tell
+// them apart: nothing is being collected, or we are reading the WRONG TENANT.
+//
+// That is not hypothetical — it is how this gate first failed. Loki here runs
+// auth_enabled: true, the collector files landing-zone namespaces under `admins`,
+// and this gate inherited the OpenBao sidecar's `platform`. Every query came back
+// empty while the gateway logged a steady stream of successful pushes, and
+// finding that out took two rounds of hand-querying a live cluster. An empty
+// label set for the tenant we asked is the single most informative thing to print
+// here: no labels AT ALL means the tenant is wrong (or Loki is genuinely empty),
+// whereas labels present but no lines for a namespace means collection really did
+// stop for it.
+//
+// Best-effort and non-fatal — the verdict is already decided by the time this runs.
+func printTenantDiagnosis(loki, tenant string) {
+	fmt.Printf("\n-- diagnosis: what does tenant %q actually hold? --\n", tenant)
+	err := withLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
+		raw, err := get("/loki/api/v1/labels")
+		if err != nil {
+			return err
+		}
+		var out struct {
+			Data []string `json:"data"`
+		}
+		if jerr := json.Unmarshal(raw, &out); jerr != nil {
+			fmt.Printf("   (could not parse the label list: %v)\n", jerr)
+			return nil
+		}
+		if len(out.Data) == 0 {
+			fmt.Printf("   NO LABELS AT ALL for tenant %q. Either this tenant is wrong or Loki holds nothing.\n"+
+				"   Loki runs auth_enabled: true here, so the tenant partitions reads. Check which X-Scope-OrgID the\n"+
+				"   PRODUCER writes under: apl-core's collector routes by namespace (see its `routing` connector in\n"+
+				"   namespace otel) and files everything outside a team namespace under the DEFAULT pipeline's tenant.\n"+
+				"   Override with --tenant once you know it.\n", tenant)
+			return nil
+		}
+		sort.Strings(out.Data)
+		fmt.Printf("   labels present (%d): %s\n", len(out.Data), strings.Join(out.Data, ", "))
+		fmt.Printf("   The tenant is right and Loki has data, so collection stopped for the namespaces above —\n" +
+			"   check the collector's discovery and any NetworkPolicy between it and them.\n")
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("   (diagnosis query failed: %v)\n", err)
+	}
+	fmt.Println()
+}
+
 // failedIngestion returns the namespaces that are not being collected.
 func failedIngestion(vs []nsIngestion) []string {
 	var out []string
@@ -234,8 +284,9 @@ func runCIAssertLogIngestion(loki, tenant string, namespaces []string, limit int
 	}
 
 	if bad := failedIngestion(last); len(bad) > 0 {
+		printTenantDiagnosis(loki, tenant)
 		fmt.Fprintf(os.Stderr, "::error::no logs reaching Loki from: %s\n", strings.Join(bad, ", "))
-		return fmt.Errorf("no logs reaching Loki from: %s", strings.Join(bad, ", "))
+		return fmt.Errorf("no logs reaching Loki from (tenant %s): %s", tenant, strings.Join(bad, ", "))
 	}
 	fmt.Printf("All %d landing-zone namespace(s) are shipping logs to Loki.\n", len(last))
 	return nil
