@@ -72,7 +72,8 @@ the short version:
 
 - **Linode account with LKE-Enterprise** — `+lke` versions, not standard LKE
 - **Akamai App Platform (apl-core) entitlement**
-- **A GitHub org + an instance repo** — a fork of the template org, or your own
+- **A GitHub org you can create a repo in** — `llz new --push` creates the
+  instance repo itself. **Forking this template is not required** (see §3)
 
 > **Start the Linode account first — it has the longest lead time.**
 

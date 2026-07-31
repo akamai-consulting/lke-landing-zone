@@ -109,15 +109,17 @@ Point the check at the upstream template with an `upstream` git remote
 ## 3. The values contract (what you must set)
 
 > **A `landingzone.yaml` spec is required.** You do not hand-write the per-env
-> tfvars or the `apl-values/<env>/values.yaml` — `llz env add` / `llz render`
-> generate both from the spec (`environments/<env>.yaml` + instance-wide
-> `landingzone.yaml`). The tfvars are gitignored build artifacts; the values.yaml
-> overlay is committed with its identity, object-store wiring, and values-repo
-> coordinates already resolved from the spec (only the runtime secrets are left as
-> `${…}` for the cluster-bootstrap apply to fill). There is no non-spec path — an
-> instance that never runs `llz render` would ship a values.yaml with literal
-> `${…}` strings. The tables below are the **spec fields** behind each tfvar, for
-> reference; you set them in the spec (§4), not by editing tfvars.
+> tfvars or the `apl-values/<env>/` overlay — `llz env add` / `llz render` generate
+> both from the spec (`environments/<env>.yaml` + instance-wide `landingzone.yaml`).
+> The tfvars are gitignored build artifacts; the overlay (the `manifest/`
+> kustomization and the `apl-overlay/` app+obj toggles) is committed. There is no
+> non-spec path.
+>
+> Note that **apl-core's own `apl-values/values.yaml` is NOT rendered** — on the
+> managed App Platform Linode owns it (ADR
+> [0005](adr/0005-managed-app-platform.md)), and the scaffold CI check fails the
+> build if a render ever emits one. The tables below are the **spec fields** behind each tfvar, for reference; you set
+> them in the spec (§4), not by editing tfvars.
 
 **SECRET** values still come from `TF_VAR_*` environment variables at apply time and
 are never committed. Everything else is a Linode/apl-core default you usually keep.
@@ -141,12 +143,12 @@ are never committed. Everything else is a Linode/apl-core default you usually ke
 | Variable (spec field) | Class | Notes |
 |---|---|---|
 | `region`, env name | MUST-SET | Deployment discriminator; must match the cluster deployment + `apl-values/<env>` dir |
-| `cluster.bootstrap.name` | MUST-SET | → apl-core `cluster.name` (Istio hosts, Argo context). Written straight into values.yaml by `llz render` — **no longer a cluster-bootstrap tfvar** |
-| `cluster.bootstrap.domainSuffix` | MUST-SET | → apl-core `cluster.domainSuffix`. Written into values.yaml by `llz render`; `llz ci resolve-harbor-url` derives `harbor.<domain>` from the spec directly (no `cluster_domain` tfvar). Per-env prefix so siblings don't collide |
-| `cluster.bootstrap.aplValues.repoURL` (`apl_values_repo_url`) | MUST-SET | **HTTPS**, publicly reachable (see §1). `llz render` writes `otomi.git.repoUrl`; the tfvar also feeds the Argo CD values-repo credential Secret |
+| `cluster.bootstrap.name` | MUST-SET | → apl-core `cluster.name` (Istio hosts, Argo context). → apl-core's own values (Linode-owned on managed) — **not a tfvar, and not rendered by `llz render`** |
+| `cluster.bootstrap.domainSuffix` | MUST-SET | → apl-core `cluster.domainSuffix` (Linode-owned on managed); `llz render` stamps it into the Harbor host patch, and `llz ci resolve-harbor-url` derives `harbor.<domain>` from the spec directly (no `cluster_domain` tfvar). Per-env prefix so siblings don't collide |
+| `cluster.bootstrap.aplValues.repoURL` (`apl_values_repo_url`) | MUST-SET | **HTTPS**, publicly reachable (see §1). → apl-core `otomi.git.repoUrl` (Linode-owned on managed); the tfvar also feeds the Argo CD values-repo credential Secret |
 | `cluster.bootstrap.aplChartVersion` | optional | **Omit it.** On managed App Platform Linode owns the deployed apl-core version — bootstrap does not consume this field, so a pin deploys nothing. It survives only as the version `llz ci assert-apl-version` and the `validate-apl-values` schema check resolve; omitted, both use the baseline this llz tracks. Set it only to make that check assert a version other than the baseline |
-| `cluster.bootstrap.aplValues.revision` / `.username`, `appsRepoRevision` | default | `revision`/`username` → `otomi.git.branch`/`username` in values.yaml (`revision` defaults to a per-env **`apl-<env>`** branch that apl-core owns and pushes to — kept off `main`, see [apl-core-values-branch-isolation.md](designs/apl-core-values-branch-isolation.md); `username` defaults to `x-access-token`); the values-repo `revision` is **no longer a tfvar** |
-| The Loki/Harbor S3 bucket names + endpoint | derived | `llz render` derives them from the env name + `cluster.objectStorage.cluster` and writes them into values.yaml — **not a cluster-bootstrap tfvar** |
+| `cluster.bootstrap.aplValues.revision` / `.username`, `appsRepoRevision` | default | `revision`/`username` → `otomi.git.branch`/`username` in values.yaml (`revision` defaults to a per-env **`apl-<env>`** branch that apl-core owns and pushes to — kept off `main`, see [apl-core-values-branch-isolation.md](designs/apl-core-values-branch-isolation.md); `username` defaults to `x-access-token`); the values-repo `revision` is **no longer a tfvar** — apl-core owns both on managed |
+| The Loki/Harbor S3 bucket names + endpoint | derived | `llz render` derives them from the env name + `cluster.objectStorage.cluster` into the apl-overlay (`apl-values/<env>/apl-overlay/obj.yaml`) — **not a cluster-bootstrap tfvar** |
 | `tf_state_bucket`, `linode_dns_token`, `apl_values_repo_token`, `linode_token`, `openbao_secrets_write_token` | SECRET | All via `TF_VAR_*` in CI. `apl_values_repo_token` = fine-grained PAT (Contents: write). (apl-core 6.x auto-generates the Loki admin password — no `loki_admin_password` input.) |
 
 ### `object-storage/` — registry + logs OBJ buckets
