@@ -60,43 +60,28 @@ func TestClassifySignatureCanary(t *testing.T) {
 	}
 }
 
-func TestMutatedStorageClass(t *testing.T) {
-	got, err := mutatedStorageClass([]byte(`{"spec":{"storageClassName":"block-storage-retain"}}`))
-	if err != nil || got != "block-storage-retain" {
-		t.Errorf("unexpected (%q,%v)", got, err)
+// The pvc check no longer dry-runs anything: #382 retired
+// pvc-force-encrypted-storage-class and it is not installed. What must hold is
+// that the check SKIPS (rather than failing a healthy cluster) and that it cannot
+// be the only thing a run "observes".
+func TestProbePVCEnforcementSkips(t *testing.T) {
+	v := probePVCEnforcement()
+	if v.FailWhy != "" {
+		t.Errorf("the retired pvc check must not fail a healthy cluster: %s", v.FailWhy)
 	}
-	if _, err := mutatedStorageClass([]byte(`nope`)); err == nil {
-		t.Error("an unparseable dry-run object must be an error")
+	if !v.Skipped {
+		t.Error("the pvc check must report itself SKIPPED, or a reader cannot tell it from an observed pass")
+	}
+	if !strings.Contains(v.Detail, "assert-volume-encryption") {
+		t.Errorf("the skip must name where the invariant IS gated, got %q", v.Detail)
 	}
 }
 
-func TestClassifyPVCCanary(t *testing.T) {
-	// Mutated = the policy is live.
-	ok := classifyPVCCanary(`{"spec":{"storageClassName":"block-storage-retain"}}`, nil)
-	if ok.FailWhy != "" {
-		t.Errorf("a rewritten class must pass: %s", ok.FailWhy)
-	}
-
-	// NOT mutated: every PVC naming the stock class provisions unencrypted, and a
-	// StorageClass-name proxy check would still call this healthy. That exact
-	// proxy was in place while 13 of 16 PVCs came up unencrypted.
-	bad := classifyPVCCanary(`{"spec":{"storageClassName":"linode-block-storage"}}`, nil)
-	if bad.FailWhy == "" {
-		t.Fatal("an unmutated storageClassName must fail — the encryption mutation is not live")
-	}
-	if !strings.Contains(bad.FailWhy, "UNENCRYPTED") {
-		t.Errorf("the failure should name the consequence, got %q", bad.FailWhy)
-	}
-
-	// A dry-run that could not run is a CHECK failure, not evidence about the
-	// policy — the same "could not ask is not an answer" split the other gates make.
-	cantRun := classifyPVCCanary("connection refused", errors.New("exit 1"))
-	if cantRun.FailWhy == "" || !strings.Contains(cantRun.FailWhy, "not evidence") {
-		t.Errorf("an un-runnable dry-run must fail as a check failure, got %q", cantRun.FailWhy)
-	}
-
-	if v := classifyPVCCanary(`{"spec":{}}`, nil); v.FailWhy == "" {
-		t.Error("a response with no storageClassName must fail rather than be assumed good")
+// A run whose every requested check skipped has observed nothing, and must not
+// report success — that is the vacuous pass this file exists to refuse.
+func TestRunAssertAdmissionEnforcementFailsWhenEverythingSkipped(t *testing.T) {
+	if err := runCIAssertAdmissionEnforcement([]string{"pvc"}); err == nil {
+		t.Error("--checks pvc alone observed nothing enforcing and must fail")
 	}
 }
 
