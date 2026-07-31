@@ -82,8 +82,14 @@ type objConsumer struct {
 // normalized somewhere.
 var objConsumers = []objConsumer{
 	{
-		Name:           "loki",
-		SecretRef:      "monitoring/loki-object-store",
+		Name: "loki",
+		// The Secret apl-core's Loki release actually mounts. NOT
+		// `loki-object-store` — that is the OPENBAO PATH name
+		// (secret/loki/object-store, credPaths) and the two were conflated. The
+		// k8s ExternalSecret that once carried that name was deleted by 52465691
+		// when object storage went apl-core-native, so the old ref names an object
+		// that has not existed since.
+		SecretRef:      "monitoring/loki-s3-linode-credentials",
 		AccessKeyField: "AWS_ACCESS_KEY_ID",
 		SecretKeyField: "AWS_SECRET_ACCESS_KEY",
 		ConfigRefs: []string{
@@ -94,8 +100,10 @@ var objConsumers = []objConsumer{
 		},
 	},
 	{
-		Name:           "harbor",
-		SecretRef:      "harbor/harbor-registry-s3",
+		Name: "harbor",
+		// Same correction as loki: `harbor-registry-s3` is the OpenBao path name
+		// (secret/harbor/registry-s3); the registry mounts this one.
+		SecretRef:      "harbor/registry-storage-credentials",
 		AccessKeyField: "REGISTRY_STORAGE_S3_ACCESSKEY",
 		SecretKeyField: "REGISTRY_STORAGE_S3_SECRETKEY",
 		ConfigRefs: []string{
@@ -189,7 +197,12 @@ var (
 	// so a \s*-based pattern skips the line break and captures the literal key
 	// "chunks" as the bucket name. The gate would then PUT into a bucket called
 	// "chunks", get NoSuchBucket, and report a healthy cluster as broken.
-	objEndpointRe = regexp.MustCompile(`(?im)^[ \t]*(?:s3_)?(?:region)?endpoint[ \t]*:[ \t]*["']?(?:https?://)?([A-Za-z0-9._-]+)`)
+	// `s3:` is in the alternation because Loki spells the endpoint that way —
+	// `storage.s3.s3: https://<host>` — while Harbor's registry uses
+	// `regionendpoint:`. Anchoring on the key name with only leading whitespace
+	// keeps `object_store: s3` and `s3forcepathstyle: true` out: neither has the
+	// colon immediately after the key this matches on.
+	objEndpointRe = regexp.MustCompile(`(?im)^[ \t]*(?:(?:s3_)?(?:region)?endpoint|s3)[ \t]*:[ \t]*["']?(?:https?://)?([A-Za-z0-9._-]+)`)
 	objBucketRe   = regexp.MustCompile(`(?im)^[ \t]*(?:bucket|bucketnames|chunks)[ \t]*:[ \t]*["']?([A-Za-z0-9._-]+)`)
 )
 

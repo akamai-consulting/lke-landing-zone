@@ -453,3 +453,63 @@ func TestRunAssertDatabaseFailsOnRejectedCredential(t *testing.T) {
 		t.Errorf("a rejected credential must fail naming the cluster, got %v", err)
 	}
 }
+
+// Loki spells its endpoint `storage.s3.s3:`, not `endpoint:`. The gate's regex
+// only knew the `(region)endpoint` spellings, so against apl-core's real Loki
+// ConfigMap it found the bucket, found no endpoint, and refused to derive one —
+// reporting a healthy consumer as broken.
+func TestParseObjConfigReadsLokiS3Key(t *testing.T) {
+	// Trimmed from monitoring/loki on lke638084.
+	cfg := "common:\n  storage:\n    s3:\n      bucketnames: platform-loki-chunks-e2e\n" +
+		"      s3: https://us-ord-10.linodeobjects.com\n      s3forcepathstyle: true\n" +
+		"schema_config:\n  configs:\n  - object_store: s3\n    store: tsdb\n"
+	ep, bucket, err := parseObjConfig(cfg)
+	if err != nil {
+		t.Fatalf("parseObjConfig on the real Loki config: %v", err)
+	}
+	if ep != "us-ord-10.linodeobjects.com" {
+		t.Errorf("endpoint = %q, want the host from the `s3:` key", ep)
+	}
+	if bucket != "platform-loki-chunks-e2e" {
+		t.Errorf("bucket = %q", bucket)
+	}
+}
+
+// `object_store: s3` and `s3forcepathstyle: true` must not be mistaken for the
+// endpoint — matching either would send the round trip at a host named "s3" or
+// "true" and report a broken consumer.
+func TestParseObjConfigIgnoresS3LookalikeKeys(t *testing.T) {
+	cfg := "schema_config:\n  configs:\n  - object_store: s3\n" +
+		"storage:\n  s3forcepathstyle: true\n  bucket: b\n"
+	if _, _, err := parseObjConfig(cfg); err == nil {
+		t.Error("a config with no real endpoint must error, not match object_store/s3forcepathstyle")
+	}
+}
+
+// Harbor's registry keeps using `regionendpoint:` — the other spelling must
+// still work.
+func TestParseObjConfigStillReadsHarborRegionEndpoint(t *testing.T) {
+	cfg := "storage:\n  s3:\n    region: us-ord-10\n    bucket: platform-harbor-registry-e2e\n" +
+		"    regionendpoint: https://us-ord-10.linodeobjects.com\n"
+	ep, bucket, err := parseObjConfig(cfg)
+	if err != nil || ep != "us-ord-10.linodeobjects.com" || bucket != "platform-harbor-registry-e2e" {
+		t.Errorf("parseObjConfig = (%q, %q, %v)", ep, bucket, err)
+	}
+}
+
+// The consumer table must name the Secrets the workloads MOUNT, not the OpenBao
+// paths that happen to describe the same credential. Conflating them is what made
+// this lane report both consumers unable to write on a cluster where both were
+// writing fine.
+func TestObjConsumersNameMountedSecretsNotOpenBaoPaths(t *testing.T) {
+	want := map[string]string{
+		"loki":   "monitoring/loki-s3-linode-credentials",
+		"harbor": "harbor/registry-storage-credentials",
+	}
+	for _, c := range objConsumers {
+		if got := want[c.Name]; got != "" && c.SecretRef != got {
+			t.Errorf("%s SecretRef = %q, want %q — the OpenBao path name is not a k8s Secret name",
+				c.Name, c.SecretRef, got)
+		}
+	}
+}
