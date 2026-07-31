@@ -236,3 +236,61 @@ func TestProbePodManifestAllowsBothDNSLabels(t *testing.T) {
 		t.Error("expected a matchExpressions/In selector so one rule covers both label conventions")
 	}
 }
+
+// The mtls check must not accept a TIMEOUT as proof the mesh refused anything.
+// A timeout is a packet drop — the CNI discarded it and Istio never saw the
+// connection — so counting it would make this check a second copy of the netpol
+// check, passing on a property the run never exercised.
+func TestEvalEnforcementProbeMTLSRejectsATimeoutAsProof(t *testing.T) {
+	ctrl := netProbeResult{Target: "ctrl", Connected: true, Reason: "connected"}
+	dropped := netProbeResult{Target: "harbor-core...:80", Reason: "blocked: probe harbor-core...:80: timeout"}
+
+	v := evalEnforcementProbe("mtls", ctrl, dropped, "why")
+	if v.FailWhy == "" || !v.Inconclu {
+		t.Error("a timeout on the mtls dial must be INCONCLUSIVE — Istio was never consulted")
+	}
+
+	// A reset IS the mesh refusing, and must pass.
+	refused := netProbeResult{Target: "harbor-core...:80", Reason: "blocked: probe harbor-core...:80: refused"}
+	if v := evalEnforcementProbe("mtls", ctrl, refused, "why"); v.FailWhy != "" {
+		t.Errorf("a refused plaintext dial is exactly what the mesh does: %s", v.FailWhy)
+	}
+}
+
+// The netpol check is deliberately NOT held to that rule: a drop is precisely
+// what it asserts.
+func TestEvalEnforcementProbeNetpolAcceptsATimeout(t *testing.T) {
+	ctrl := netProbeResult{Target: "ctrl", Connected: true, Reason: "connected"}
+	dropped := netProbeResult{Target: "loki...:80", Reason: "blocked: probe loki...:80: timeout"}
+	if v := evalEnforcementProbe("netpol", ctrl, dropped, "why"); v.FailWhy != "" {
+		t.Errorf("a CNI drop is what the netpol check is for: %s", v.FailWhy)
+	}
+}
+
+// The probe policy must OPEN the path to the mtls target's namespace. If the
+// NetworkPolicy also denies it, the CNI drops the packet first and the mesh is
+// never consulted — which is the confound the check above now refuses.
+func TestProbePodManifestAllowsTheMTLSTargetNamespace(t *testing.T) {
+	m := probePodManifest("ns", "img", "a:1", "loki-gateway.monitoring.svc.cluster.local:80",
+		"harbor-core.harbor.svc.cluster.local:80", time.Second)
+	if !strings.Contains(m, "kubernetes.io/metadata.name: harbor") {
+		t.Error("egress to the mtls target's namespace must be allowed, or the CNI blocks it before Istio can")
+	}
+	// The NETPOL denied target must stay unallowed — that one is about the CNI.
+	if strings.Contains(m, "kubernetes.io/metadata.name: monitoring") {
+		t.Error("the netpol denied target's namespace must NOT be allowed; the check asserts the CNI blocks it")
+	}
+}
+
+func TestServiceNamespaceOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"harbor-core.harbor.svc.cluster.local:80":      "harbor",
+		"loki-gateway.monitoring.svc.cluster.local:80": "monitoring",
+		"kubernetes.default.svc.cluster.local:443":     "default",
+		"nodots:80": "",
+	} {
+		if got := serviceNamespaceOf(in); got != want {
+			t.Errorf("serviceNamespaceOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

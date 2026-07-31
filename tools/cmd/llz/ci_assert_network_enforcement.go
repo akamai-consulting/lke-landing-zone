@@ -169,9 +169,45 @@ func evalEnforcementProbe(check string, allowedRes, deniedRes netProbeResult, wh
 			deniedRes.Target, whatDenied)
 		return v
 	}
+	// WHICH KIND OF BLOCK, for the mtls check only.
+	//
+	// A sidecar refusing plaintext RESETS the connection; a NetworkPolicy drop
+	// blackholes it and shows up as a timeout. ci_net_probe.go draws that
+	// distinction on purpose and this is the check that has to act on it: if the
+	// dial timed out, the CNI dropped the packet and Istio was never consulted, so
+	// a "blocked" verdict here would be the netpol check a second time wearing the
+	// mesh's name. That is a pass on a property the run never exercised.
+	//
+	// The netpol check is deliberately NOT held to this: a drop is exactly what it
+	// is asserting, and a reset there is a fine outcome too.
+	if check == "mtls" && strings.Contains(deniedRes.Reason, "timeout") {
+		v.Inconclu = true
+		v.FailWhy = fmt.Sprintf("INCONCLUSIVE: %s was blocked by a TIMEOUT (%s), not a refusal. A timeout is a "+
+			"packet drop — the CNI discarded it and Istio never saw the connection, so this run did not observe the "+
+			"mesh refusing anything. Istio resets a plaintext dial to a STRICT port, which surfaces as `refused`. "+
+			"Check that the probe namespace's egress actually ALLOWS this target, so that the mesh is the only "+
+			"thing left that can deny it",
+			deniedRes.Target, deniedRes.Reason)
+		return v
+	}
 	v.Detail = fmt.Sprintf("control %s connected; %s blocked (%s)",
 		allowedRes.Target, deniedRes.Target, deniedRes.Reason)
 	return v
+}
+
+// serviceNamespaceOf returns the namespace label of a cluster-local
+// "<svc>.<ns>.svc.cluster.local[:port]" target, or "" if it is not that shape.
+// Pure.
+func serviceNamespaceOf(hostPort string) string {
+	host, _, ok := strings.Cut(hostPort, ":")
+	if !ok {
+		host = hostPort
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[1]
 }
 
 // probePodManifest renders the scratch namespace, the default-deny-egress policy
@@ -184,6 +220,23 @@ func evalEnforcementProbe(check string, allowedRes, deniedRes netProbeResult, wh
 // opposite.
 func probePodManifest(ns, image, allowed, denied, mtlsTarget string, timeout time.Duration) string {
 	secs := int(timeout.Seconds())
+	// THE MTLS TARGET'S NAMESPACE IS ALLOWED, on every port, and that is the point
+	// rather than a hole. The mtls check claims to observe Istio refusing
+	// plaintext; if this NetworkPolicy also denies the dial, the CNI drops the
+	// packet first and Istio is never consulted — the check would then be a second
+	// copy of the netpol check, passing on a property it never exercised. Opening
+	// the path leaves the mesh as the only thing that can refuse it, which is what
+	// the check has to isolate. (The denied target for the NETPOL check stays
+	// unallowed — that one is about the CNI.)
+	mtlsNS := serviceNamespaceOf(mtlsTarget)
+	mtlsAllow := ""
+	if mtlsNS != "" {
+		mtlsAllow = fmt.Sprintf(`
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: %s`, mtlsNS)
+	}
 	// One container per dial so each exit code is separately readable from the
 	// pod's containerStatuses. initContainers run in order and would stop at the
 	// first failure, which is precisely what must NOT happen here: the denied dial
@@ -228,28 +281,29 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # The positive control's target: the apiserver, reachable by CIDR because it
-    # is outside the pod network.
+    # The positive control's target: the apiserver.
     #
-    # BOTH PORTS. On LKE-Enterprise the "kubernetes" Service DNATs 443 → 6443 and
-    # Cilium evaluates egress on the POST-DNAT port, so an allow naming only 443
-    # blackholes the connection. The probe then reports its own positive control
-    # as blocked-by-timeout and every check comes back INCONCLUSIVE — which is
-    # what happened on lke638103, and is indistinguishable from a genuinely
-    # broken cluster until you read the dial reason.
+    # NO "to:" SELECTOR, DELIBERATELY — a bare port allow, matching any
+    # destination. This rule is copied in shape from the llz-openbao-platform
+    # policy, which reaches the apiserver successfully on these clusters every
+    # bootstrap; the difference between them was the whole bug.
     #
-    # This is the third place in the repo to need the same correction: the
-    # OpenBao policy carries 6443 alongside 443 for the apiserver, and 8080
-    # alongside 80 for the Loki gateway. Any egress rule naming a Service port
-    # here is really naming the target port.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-      ports:
+    # "to: ipBlock: 0.0.0.0/0" reads like "anywhere" and is not. Cilium turns an
+    # ipBlock into a CIDR rule, and CIDR rules match entities OUTSIDE the cluster;
+    # the kube-apiserver carries a cluster identity, so the rule never applied to
+    # it and the dial was blackholed. Two rounds on real clusters said the same
+    # thing — lke638103 and lke638247 both reported the control as blocked by
+    # TIMEOUT, a drop rather than a refusal — including one round where 6443 had
+    # been added alongside 443, which ruled the port out as the cause.
+    #
+    # Both ports stay: on LKE-Enterprise the "kubernetes" Service DNATs 443 to 6443
+    # and Cilium evaluates egress on the post-DNAT port. The OpenBao policy
+    # carries both for exactly this reason.
+    - ports:
         - protocol: TCP
           port: 443
         - protocol: TCP
-          port: 6443
+          port: 6443%[7]s
 ---
 apiVersion: v1
 kind: Pod
@@ -282,7 +336,7 @@ spec:
       image: %[2]s
       args: ["ci", "net-probe", "%[5]s", "--timeout", "%[6]d"]
       securityContext: *sec
-`, ns, image, allowed, denied, mtlsTarget, secs)
+`, ns, image, allowed, denied, mtlsTarget, secs, mtlsAllow)
 }
 
 // ── cluster I/O (seamed) ─────────────────────────────────────────────────────
