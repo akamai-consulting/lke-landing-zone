@@ -59,7 +59,53 @@ const (
 	// pvcCanaryNamespace must be one the PVC policy matches on (its rule scopes to
 	// [gitea, istio-system]); istio-system exists on every apl-core cluster.
 	pvcCanaryNamespace = "istio-system"
+	// clonePolicyName denies clone/snapshot-sourced PVCs. The Linode CSI clone API
+	// cannot apply the lke<id> ownership tag, so such a Volume is UNREAPABLE — a
+	// permanent orphan after teardown, which is the same cost leak the volume
+	// selection fixes in this series address from the other end.
+	clonePolicyName = "pvc-deny-untaggable-clone"
 )
+
+// cloneCanaryManifest is a PVC sourced from a clone, which the policy must deny.
+// It names a dataSource that need not exist: the deny fires on the FIELD being
+// set, before anything resolves it.
+const cloneCanaryManifest = `apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llz-clone-canary
+  namespace: ` + pvcCanaryNamespace + `
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ` + encryptedStorageClass + `
+  dataSource:
+    kind: PersistentVolumeClaim
+    name: llz-clone-canary-source
+  resources:
+    requests:
+      storage: 1Gi
+`
+
+// classifyCloneCanary judges the clone-deny dry run. Pure.
+//
+// Same rule as the signature canary: the denial must NAME the policy. A PVC
+// referencing a dataSource that does not exist could be rejected by the API
+// server or the CSI for unrelated reasons, and reading that as proof would
+// certify a policy this run never exercised.
+func classifyCloneCanary(out string, err error) enforcementVerdict {
+	v := enforcementVerdict{Check: "clone", Policy: clonePolicyName}
+	switch {
+	case err == nil:
+		v.FailWhy = "the API server ADMITTED a clone-sourced PVC — " + clonePolicyName + " is not enforcing. " +
+			"The Linode CSI clone API cannot apply the lke<id> ownership tag, so every Volume admitted this way is " +
+			"UNREAPABLE and outlives its cluster permanently"
+	case strings.Contains(out, clonePolicyName):
+		v.Detail = clonePolicyName + " rejected the clone-sourced canary — the policy is bound and enforcing"
+	default:
+		v.FailWhy = "the canary was rejected, but NOT by " + clonePolicyName +
+			" — so this run did not observe clone-deny enforcement. Output: " + truncateForError([]byte(out))
+	}
+	return v
+}
 
 func ciAssertAdmissionEnforcementCmd() *cobra.Command {
 	var checks string
@@ -72,7 +118,10 @@ func ciAssertAdmissionEnforcementCmd() *cobra.Command {
 			"              rejected by verify-llz-image-signature.\n" +
 			"  pvc       — a PVC asking for an unencrypted StorageClass must come back\n" +
 			"              rewritten to " + encryptedStorageClass + " by\n" +
-			"              pvc-force-encrypted-storage-class.\n\n" +
+			"              pvc-force-encrypted-storage-class.\n" +
+			"  clone     — a clone/snapshot-sourced PVC must be rejected by\n" +
+			"              " + clonePolicyName + ". The Linode CSI clone API cannot\n" +
+			"              apply the lke<id> ownership tag, so such a Volume is UNREAPABLE.\n\n" +
 			"`kubectl get clusterpolicy` proves the YAML is present; it says nothing about\n" +
 			"whether the webhook is registered, the policy compiled, or\n" +
 			"validationFailureAction is still Enforce. A decorative policy looks identical\n" +
@@ -88,8 +137,8 @@ func ciAssertAdmissionEnforcementCmd() *cobra.Command {
 			return runCIAssertAdmissionEnforcement(splitCSVList(checks))
 		},
 	}
-	c.Flags().StringVar(&checks, "checks", "signature,pvc",
-		"comma-separated checks to run (signature, pvc)")
+	c.Flags().StringVar(&checks, "checks", "signature,pvc,clone",
+		"comma-separated checks to run (signature, pvc, clone)")
 	return c
 }
 
@@ -310,6 +359,9 @@ func runCIAssertAdmissionEnforcement(checks []string) error {
 			vs = append(vs, probeSignatureEnforcement())
 		case "pvc":
 			vs = append(vs, probePVCEnforcement())
+		case "clone":
+			out, runErr := dryRunManifest(cloneCanaryManifest)
+			vs = append(vs, classifyCloneCanary(out, runErr))
 		default:
 			// An unknown check is a FAILURE, not a skip: a typo in the lane wiring
 			// would otherwise silently reduce this gate to checking nothing.

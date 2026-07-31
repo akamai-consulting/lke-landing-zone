@@ -178,7 +178,7 @@ func parseBearerChallenge(h string) (bearerChallenge, error) {
 		}
 	}
 	if c.Realm == "" {
-		return c, fmt.Errorf("Bearer challenge carried no realm: %q", h)
+		return c, fmt.Errorf("bearer challenge carried no realm: %q", h)
 	}
 	return c, nil
 }

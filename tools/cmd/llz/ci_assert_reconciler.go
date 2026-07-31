@@ -184,7 +184,7 @@ func promVectorByLabel(raw []byte, label string) (map[string]float64, error) {
 		if detail == "" {
 			detail = "status=" + resp.Status
 		}
-		return nil, fmt.Errorf("Prometheus returned an error: %s", detail)
+		return nil, fmt.Errorf("prometheus returned an error: %s", detail)
 	}
 	out := map[string]float64{}
 	for _, r := range resp.Data.Result {

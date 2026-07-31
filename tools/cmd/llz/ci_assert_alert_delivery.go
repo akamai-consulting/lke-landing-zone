@@ -114,7 +114,7 @@ func activeAlertmanagers(raw []byte) (active []string, dropped int, err error) {
 		if detail == "" {
 			detail = "status=" + resp.Status
 		}
-		return nil, 0, fmt.Errorf("Prometheus returned an error: %s", detail)
+		return nil, 0, fmt.Errorf("prometheus returned an error: %s", detail)
 	}
 	for _, a := range resp.Data.ActiveAlertmanagers {
 		active = append(active, a.URL)

@@ -136,3 +136,32 @@ func TestRunAssertAdmissionEnforcementHappyPath(t *testing.T) {
 		t.Errorf("a policy-named denial must pass, got %v", err)
 	}
 }
+
+func TestClassifyCloneCanary(t *testing.T) {
+	// Admitted = not enforcing. Every Volume let through this way is UNREAPABLE:
+	// the Linode CSI clone API cannot apply the lke<id> ownership tag, so it
+	// outlives its cluster permanently — the same cost leak this series closes
+	// from the reaper end.
+	v := classifyCloneCanary("persistentvolumeclaim/llz-clone-canary created (server dry run)", nil)
+	if v.FailWhy == "" {
+		t.Fatal("an ADMITTED clone-sourced PVC must fail the gate")
+	}
+	if !strings.Contains(v.FailWhy, "UNREAPABLE") {
+		t.Errorf("the failure must name the consequence, got %q", v.FailWhy)
+	}
+
+	denied := `Error from server: admission webhook "validate.kyverno.svc-fail" denied the request: ` +
+		`policy PersistentVolumeClaim/istio-system/llz-clone-canary for resource violation: pvc-deny-untaggable-clone: ...`
+	if v := classifyCloneCanary(denied, errors.New("exit 1")); v.FailWhy != "" {
+		t.Errorf("a denial naming the policy must pass: %s", v.FailWhy)
+	}
+
+	// A rejection from anything else proves nothing about THIS policy — a PVC
+	// whose dataSource does not exist could be refused by the API server or the
+	// CSI for entirely unrelated reasons.
+	other := `Error from server (NotFound): persistentvolumeclaims "llz-clone-canary-source" not found`
+	v2 := classifyCloneCanary(other, errors.New("exit 1"))
+	if v2.FailWhy == "" || !strings.Contains(v2.FailWhy, "NOT by") {
+		t.Errorf("an unrelated rejection must not count as proof, got %q", v2.FailWhy)
+	}
+}
