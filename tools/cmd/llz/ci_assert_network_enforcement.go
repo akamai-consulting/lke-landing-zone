@@ -230,12 +230,26 @@ spec:
           port: 53
     # The positive control's target: the apiserver, reachable by CIDR because it
     # is outside the pod network.
+    #
+    # BOTH PORTS. On LKE-Enterprise the "kubernetes" Service DNATs 443 → 6443 and
+    # Cilium evaluates egress on the POST-DNAT port, so an allow naming only 443
+    # blackholes the connection. The probe then reports its own positive control
+    # as blocked-by-timeout and every check comes back INCONCLUSIVE — which is
+    # what happened on lke638103, and is indistinguishable from a genuinely
+    # broken cluster until you read the dial reason.
+    #
+    # This is the third place in the repo to need the same correction: the
+    # OpenBao policy carries 6443 alongside 443 for the apiserver, and 8080
+    # alongside 80 for the Loki gateway. Any egress rule naming a Service port
+    # here is really naming the target port.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
       ports:
         - protocol: TCP
           port: 443
+        - protocol: TCP
+          port: 6443
 ---
 apiVersion: v1
 kind: Pod
