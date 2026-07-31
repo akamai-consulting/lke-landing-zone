@@ -206,11 +206,23 @@ spec:
   egress:
     # DNS, or every dial fails on resolution and the control cannot distinguish
     # "policy blocked it" from "the name never resolved".
+    #
+    # BOTH label values, because the upstream convention is not universal. Stock
+    # kube-dns/CoreDNS carries k8s-app=kube-dns, but LKE-Enterprise installs
+    # CoreDNS from its "workload" Helm release labelled k8s-app=coredns and
+    # publishes it as the "coredns" Service — there is no kube-dns Service on the
+    # cluster at all. Selecting only kube-dns matched NOTHING there, so DNS egress
+    # was denied, every dial failed to resolve, and the positive control failed —
+    # which this gate correctly reported as INCONCLUSIVE rather than as
+    # enforcement. matchExpressions/In is the one selector that covers both
+    # without a second rule.
     - to:
         - namespaceSelector: {}
           podSelector:
-            matchLabels:
-              k8s-app: kube-dns
+            matchExpressions:
+              - key: k8s-app
+                operator: In
+                values: [kube-dns, coredns]
       ports:
         - protocol: UDP
           port: 53

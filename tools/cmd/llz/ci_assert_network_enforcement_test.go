@@ -150,7 +150,11 @@ func TestProbePodManifestStaysOutsideTheMesh(t *testing.T) {
 	if strings.Contains(m, "initContainers") {
 		t.Error("the dials must be separate containers; initContainers would stop at the expected failure")
 	}
-	for _, want := range []string{"a:1", "d:2", "m:3", "default-deny-egress", "k8s-app: kube-dns"} {
+	// The DNS allow is asserted by label VALUE in
+	// TestProbePodManifestAllowsBothDNSLabels; pinning the exact matchLabels line
+	// here would fail the moment it became a matchExpressions covering both
+	// conventions, which is what LKE-Enterprise needs.
+	for _, want := range []string{"a:1", "d:2", "m:3", "default-deny-egress", "k8s-app"} {
 		if !strings.Contains(m, want) {
 			t.Errorf("manifest is missing %q", want)
 		}
@@ -213,5 +217,22 @@ func TestResultFromExitCarriesTheProbesOwnReason(t *testing.T) {
 func TestResultFromExitWithoutALogIsUnchanged(t *testing.T) {
 	if r := resultFromExit("t", 1, true, ""); r.Reason != "blocked" {
 		t.Errorf("reason = %q, want the bare verdict when no log could be read", r.Reason)
+	}
+}
+
+// The probe's DNS allow must match CoreDNS on LKE-Enterprise, where it is
+// labelled k8s-app=coredns and there is no kube-dns Service at all. Selecting
+// only kube-dns matched nothing on lke638084, so DNS egress was denied and every
+// dial — including the positive control — failed to resolve.
+func TestProbePodManifestAllowsBothDNSLabels(t *testing.T) {
+	m := probePodManifest("ns", "img", "a:1", "d:2", "m:3", time.Second)
+	for _, want := range []string{"kube-dns", "coredns"} {
+		if !strings.Contains(m, want) {
+			t.Errorf("the DNS egress allow does not mention %q — a cluster labelling CoreDNS that way "+
+				"gets no DNS, and every probe fails to resolve rather than reporting enforcement", want)
+		}
+	}
+	if !strings.Contains(m, "matchExpressions") {
+		t.Error("expected a matchExpressions/In selector so one rule covers both label conventions")
 	}
 }
