@@ -168,3 +168,60 @@ func TestCounterKeepsTypeAcrossZeroDelta(t *testing.T) {
 		t.Fatalf("counter registered at 0 not rendered as counter:\n%s", got)
 	}
 }
+
+// SetGaugeFamily replaces the sample set, which is the property SetGauge cannot
+// offer: there is no delete, so a label set the caller stops producing is served
+// at its last value until the process ends. A lane whose series come from DATA
+// (a list that shrinks) needs removal, not upsert.
+func TestSetGaugeFamilyReplacesRatherThanMerges(t *testing.T) {
+	r := NewRegistry()
+	r.SetGaugeFamily("m", "help", []GaugeSample{
+		{Labels: map[string]string{"k": "a"}, Value: 1},
+		{Labels: map[string]string{"k": "b"}, Value: 1},
+	})
+	r.SetGaugeFamily("m", "help", []GaugeSample{
+		{Labels: map[string]string{"k": "a"}, Value: 0},
+	})
+	var b strings.Builder
+	if _, err := r.WriteTo(&b); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	if !strings.Contains(out, `m{k="a"} 0`) {
+		t.Errorf("the surviving sample must carry its new value:\n%s", out)
+	}
+	if strings.Contains(out, `k="b"`) {
+		t.Errorf("a sample the caller stopped producing must be GONE:\n%s", out)
+	}
+}
+
+// An empty set clears the family. That is deliberate: a pass that measured
+// nothing must not leave the previous pass's values standing as if they were
+// fresh measurements.
+func TestSetGaugeFamilyWithNoSamplesClearsTheFamily(t *testing.T) {
+	r := NewRegistry()
+	r.SetGaugeFamily("m", "help", []GaugeSample{{Labels: map[string]string{"k": "a"}, Value: 1}})
+	r.SetGaugeFamily("m", "help", nil)
+	var b strings.Builder
+	if _, err := r.WriteTo(&b); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), `m{`) {
+		t.Errorf("an empty family must publish no samples:\n%s", b.String())
+	}
+}
+
+// It must not disturb a DIFFERENT metric — the guard against the hazard its own
+// doc comment names, where two lanes share a family name.
+func TestSetGaugeFamilyLeavesOtherMetricsAlone(t *testing.T) {
+	r := NewRegistry()
+	r.SetGauge("other", "help", map[string]string{"k": "x"}, 7)
+	r.SetGaugeFamily("m", "help", []GaugeSample{{Labels: map[string]string{"k": "a"}, Value: 1}})
+	var b strings.Builder
+	if _, err := r.WriteTo(&b); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), `other{k="x"} 7`) {
+		t.Errorf("an unrelated family must survive:\n%s", b.String())
+	}
+}

@@ -95,6 +95,15 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 			nil, 0)
 	}
 
+	// Accumulated and published as WHOLE FAMILIES below, not per-credential.
+	// SetGauge has no delete, so a credential that leaves ghSecretTargets leaves
+	// its last sample frozen — and "drop it from ghSecretTargets" is the remedy
+	// this very ruleset recommends for a credential an instance does not use, so
+	// taking that advice would have made the alert permanent until someone
+	// restarted the reconciler. These two families have exactly one writer (this
+	// function), which is what makes a whole-family replace safe here and unsafe
+	// for llz_credential_age_days, whose samples the OpenBao sampler also writes.
+	var configured, presenceOK []metrics.GaugeSample
 	for _, sec := range inv.Secrets {
 		cred := credLabelForSecret(sec.Name)
 
@@ -155,12 +164,11 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 			// So the classification is applied HERE and only the verdict is
 			// published. A reclassification now flips a value on a series that
 			// already exists; it can never mint a second one.
-			reg.SetGauge("llz_credential_configured",
-				"1 if the credential is configured as a GitHub Actions secret, 0 if the API reports it absent",
-				map[string]string{"cred": cred}, boolGauge(present))
-			reg.SetGauge("llz_credential_presence_ok",
-				"1 if the credential's presence matches what is expected of it (see ghSecretTargets: present|optional|absent)",
-				map[string]string{"cred": cred}, boolGauge(presenceMatchesExpectation(expect, present)))
+			configured = append(configured, metrics.GaugeSample{
+				Labels: map[string]string{"cred": cred}, Value: boolGauge(present)})
+			presenceOK = append(presenceOK, metrics.GaugeSample{
+				Labels: map[string]string{"cred": cred},
+				Value:  boolGauge(presenceMatchesExpectation(expect, present))})
 		}
 
 		if sec.UpdatedAt == "" {
@@ -170,11 +178,24 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 		if err != nil {
 			continue
 		}
+		// SetGauge, not the family replace: the OpenBao sampler writes this same
+		// metric for its own credentials, and replacing the family here would
+		// delete every one of them on each pass.
 		reg.SetGauge("llz_credential_age_days",
 			"days since the credential was last written (class: automated|on-demand|generate-once|tracks-source|static)",
 			map[string]string{"cred": cred, "class": sec.Class},
 			float64(health.DaysSince(t, now)))
 	}
+
+	// Published even when empty — that is the point. An empty inventory (the probe
+	// could not authenticate, or every credential was retired) must REMOVE the
+	// series rather than leave the previous pass's verdicts standing.
+	reg.SetGaugeFamily("llz_credential_configured",
+		"1 if the credential is configured as a GitHub Actions secret, 0 if the API reports it absent",
+		configured)
+	reg.SetGaugeFamily("llz_credential_presence_ok",
+		"1 if the credential's presence matches what is expected of it (see ghSecretTargets: present|optional|absent)",
+		presenceOK)
 	return nil
 }
 

@@ -58,6 +58,39 @@ func (r *Registry) SetGauge(name, help string, labels map[string]string, value f
 	f.samples[rendered] = sample{labels: rendered, value: value}
 }
 
+// GaugeSample is one labelled value for SetGaugeFamily.
+type GaugeSample struct {
+	Labels map[string]string
+	Value  float64
+}
+
+// SetGaugeFamily REPLACES every sample of `name` with the given set, so a label
+// set the caller no longer produces DISAPPEARS instead of lingering.
+//
+// SetGauge cannot do that. It upserts by rendered label set and there is no
+// delete, so a sample is served at its last value until the process ends —
+// correct for a lane that reports on a fixed set of things, and wrong for one
+// whose set is DATA. The credential lane is the second kind: its series come from
+// a list that shrinks when a credential is retired, and the documented remedy for
+// a false alert is to remove one. Under SetGauge that removal left the last
+// sample frozen, so the remedy made the alert permanent.
+//
+// ONLY SAFE FOR A FAMILY WITH ONE WRITER. It replaces the whole sample map, so
+// two lanes sharing a metric name would clobber each other — which is exactly the
+// case for llz_credential_age_days (the OpenBao sampler and the token lane both
+// write it), and why that one must keep using SetGauge.
+func (r *Registry) SetGaugeFamily(name, help string, samples []GaugeSample) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	f := r.family(name, help, "gauge")
+	fresh := make(map[string]sample, len(samples))
+	for _, s := range samples {
+		rendered := renderLabels(s.Labels)
+		fresh[rendered] = sample{labels: rendered, value: s.Value}
+	}
+	f.samples = fresh
+}
+
 // AddCounter adds delta to the monotonic counter `name` for the given label set,
 // registering it at 0 first if absent. Use for _total series (runs, errors) so a
 // scrape reports the accumulated count and rate() works. Safe to call

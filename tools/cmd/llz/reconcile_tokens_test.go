@@ -303,3 +303,60 @@ func TestPresenceMatchesExpectation(t *testing.T) {
 		}
 	}
 }
+
+// Retiring a credential must retire its series. This is the remedy
+// LLZCredentialUnconfigured's own description recommends — "drop it from
+// ghSecretTargets if this instance genuinely does not use it" — and under
+// SetGauge, taking that advice froze the last sample at presence_ok=0, so the
+// alert fired forever until someone restarted the reconciler. The documented fix
+// for a false page made the page permanent.
+func TestRetiredCredentialLeavesTheMetrics(t *testing.T) {
+	cm := func(body string) map[string]any {
+		return map[string]any{"data": map[string]any{"inventory.json": body}}
+	}
+	const kept = `{"name":"TF_STATE_ACCESS_KEY","class":"on-demand","expect":"present","state":"ok","updated_at":"2026-05-01T00:00:00Z"}`
+	before := `{"updated":1,"tokens":[],"secret_probe":"ok","secrets":[
+	  {"name":"GONE_TOKEN","class":"static","expect":"present","state":"absent"},` + kept + `]}`
+	after := `{"updated":2,"tokens":[],"secret_probe":"ok","secrets":[` + kept + `]}`
+
+	reg := metrics.NewRegistry()
+	for _, b := range []string{before, after} {
+		if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm(b), status: 200}, reg, time.Unix(1, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := metricsDump(t, reg)
+	if strings.Contains(out, `cred="gone-token"`) {
+		t.Errorf("a retired credential must leave no series behind:\n%s", out)
+	}
+	// …and the credential that stayed is untouched.
+	if !strings.Contains(out, `llz_credential_presence_ok{cred="tf-state-access-key"} 1`) {
+		t.Errorf("the surviving credential must still be published:\n%s", out)
+	}
+}
+
+// The same rule with nothing left at all: an inventory whose probe could not
+// authenticate carries no secrets, and the previous pass's verdicts must not
+// stand in for measurements that were never taken. The funnel gauge is what says
+// why the series went away.
+func TestUnreadableInventoryClearsPresenceSeries(t *testing.T) {
+	cm := func(body string) map[string]any {
+		return map[string]any{"data": map[string]any{"inventory.json": body}}
+	}
+	reg := metrics.NewRegistry()
+	ok := `{"updated":1,"tokens":[],"secret_probe":"ok","secrets":[
+	  {"name":"OPENBAO_SEAL_KEY","class":"static","expect":"present","state":"absent"}]}`
+	dark := `{"updated":2,"tokens":[],"secret_probe":"unavailable"}`
+	for _, b := range []string{ok, dark} {
+		if err := sampleTokenInventory(context.Background(), fakeGetter{obj: cm(b), status: 200}, reg, time.Unix(1, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := metricsDump(t, reg)
+	if strings.Contains(out, `cred="openbao-seal-key"`) {
+		t.Errorf("a pass that measured nothing must not leave stale verdicts:\n%s", out)
+	}
+	if !strings.Contains(out, "llz_credential_secret_probe_ok 0") {
+		t.Errorf("the funnel gauge must say why:\n%s", out)
+	}
+}
