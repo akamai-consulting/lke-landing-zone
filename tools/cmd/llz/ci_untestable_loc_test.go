@@ -540,3 +540,97 @@ func TestCountEmbeddedShellLines(t *testing.T) {
 		})
 	}
 }
+
+// A recipe line whose entire effect is printing literal text is DOCUMENTATION,
+// not shell logic, and the budget exists for logic. Counting it charged `make
+// help` a line per target — so the cheapest way to stay under the ceiling was to
+// stop documenting new targets, which is an incentive pointing the wrong way.
+//
+// The exemption is narrow on purpose. `echo` alone is a loophole: redirection
+// writes a file and substitution runs a command, and neither is "printing". The
+// table is mostly the ways a line can LOOK like a print and not be one.
+func TestIsDocPrintLine(t *testing.T) {
+	tests := []struct {
+		name, in string
+		want     bool
+	}{
+		{"help-wall echo", `echo "  lint            run the linters"`, true},
+		{"single quotes", `echo '  lint   run the linters'`, true},
+		{"bare echo prints a blank line", `echo`, true},
+		{"printf with quoted format and arg", `printf '%s\n' "hello"`, true},
+		// Inside quotes these are literal text, and the help wall is full of them
+		// — `; ( ) |` all appear in real descriptions. Stripping quoted spans
+		// BEFORE looking for operators is what makes those still count as prints.
+		{"operators inside quotes are literal", `echo "a; b | c > d (e)"`, true},
+		// `\$$` is an escaped dollar: make hands the shell `\$`, which prints a
+		// literal `$`. The Makefile's own help text relies on this.
+		{"escaped dollar is literal text", `echo "uses \$$(LINT_TF) and \$$(LINT_K8S)"`, true},
+
+		// ── the loopholes the rule must not open ──────────────────────────────
+		{"redirection writes a file", `echo "x" > generated.conf`, false},
+		{"append redirection", `echo "x" >> $(GITHUB_ENV)`, false},
+		{"pipe feeds another command", `echo "x" | kubectl apply -f -`, false},
+		{"command chaining", `echo "x"; rm -rf build`, false},
+		{"substitution runs a command", `echo "today is $$(date)"`, false},
+		{"backticks run a command", "echo \"today is `date`\"", false},
+		{"unquoted argument is an ordinary command word", `echo one`, false},
+		{"not a print at all", `kubectl apply -f x.yaml`, false},
+		{"make expansion as a command is not a print", `$(MAKE) sub`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDocPrintLine(tt.in); got != tt.want {
+				t.Errorf("isDocPrintLine(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// The whole point, at the level the budget actually reads: a help wall costs
+// nothing, and a recipe that does real work is unaffected by having one.
+func TestCountMakefileRecipeLinesFreesDocumentation(t *testing.T) {
+	help := "help:\n" +
+		"\t@echo \"targets:\"\n" +
+		"\t@echo \"  build   compile\"\n" +
+		"\t@echo \"  test    run tests\"\n"
+	if got := countMakefileRecipeLines(help); got != 0 {
+		t.Errorf("a help wall must cost nothing, got %d", got)
+	}
+	// A banner in front of real work does not launder the work.
+	mixed := "release:\n" +
+		"\t@echo \"releasing…\"\n" +
+		"\tgit tag $(V)\n" +
+		"\tgit push --tags\n"
+	if got := countMakefileRecipeLines(mixed); got != 2 {
+		t.Errorf("real commands must still count, got %d, want 2", got)
+	}
+	// …and a recipe that redirects is not documentation however it is spelled.
+	writes := "gen:\n" +
+		"\t@echo \"a\" > out.txt\n" +
+		"\t@echo \"b\" >> out.txt\n"
+	if got := countMakefileRecipeLines(writes); got != 2 {
+		t.Errorf("redirecting echos must count, got %d, want 2", got)
+	}
+}
+
+// stripQuotedSpans is the half that makes the rule safe rather than merely
+// convenient: an operator inside quotes is text, the same character outside them
+// is syntax, and conflating the two either floods the tally or opens a hole.
+func TestStripQuotedSpans(t *testing.T) {
+	tests := []struct{ in, rest, quoted string }{
+		{`echo "a; b"`, "echo", "a; b"},
+		{`echo "a" > f`, "echo  > f", "a"},
+		{`echo 'x' "y"`, "echo", "xy"},
+		{`echo "esc \" inside"`, "echo", `esc \" inside`},
+		{`plain words`, "plain words", ""},
+		// An unterminated quote must not swallow the caller — it consumes to end
+		// of line, which is also what the shell would report an error about.
+		{`echo "unterminated`, "echo", "unterminated"},
+	}
+	for _, tt := range tests {
+		rest, quoted := stripQuotedSpans(tt.in)
+		if rest != tt.rest || quoted != tt.quoted {
+			t.Errorf("stripQuotedSpans(%q) = (%q, %q), want (%q, %q)", tt.in, rest, quoted, tt.rest, tt.quoted)
+		}
+	}
+}

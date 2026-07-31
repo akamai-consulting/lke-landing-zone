@@ -35,6 +35,17 @@
 #                           body is ONE logical line is tool-invocation glue —
 #                           the shape `$(call LLZ_CI,<verb>)` takes — so it is
 #                           not counted, same rule as a single-line `run:`.
+#                           Comments are skipped, and so is a line whose ENTIRE
+#                           effect is printing literal text (`@echo "…"` — the
+#                           `help:` wall). Printing makes no decision, and
+#                           charging for it priced DOCUMENTATION at the rate of
+#                           logic: `make help` cost a line per target, so the
+#                           cheapest way under the ceiling was to stop
+#                           documenting new targets. Narrow by construction —
+#                           quoted spans are stripped first, then the remainder
+#                           must be the bare command word, so redirection, a
+#                           pipe, a chained command, an unquoted argument or a
+#                           `$$(…)`/backtick substitution all still count.
 #   embedded-shell        : non-blank, non-comment shell inside a YAML block
 #                           scalar (`relabel.sh: |`, Argo `script.source: |`).
 #                           A block counts as shell when its key ends in
@@ -112,7 +123,18 @@ categories:
     # Baseline at introduction: 100. Ratcheted 103 -> 99 in the same change, once
     # placeholder-lint became `llz ci placeholder-guard` and the three sbom-* steps
     # collapsed onto one SBOM_STEP macro: remaining is 96, keeping ~3% headroom.
-    budget: 99
+    #
+    # Ratcheted 99 -> 28 when the counter stopped charging for documentation
+    # output. ~70 of the 96 were `@echo` lines in the `help:` wall — printing, not
+    # logic — so the old ceiling was mostly measuring how well the Makefile was
+    # documented. What remains (27) is the real thing this category is for, and
+    # all of it: install-tools, helm-repos, gitleaks, the SBOM_STEP macro,
+    # sbom-scan, coverage, clean, helm-lint-real-values.
+    #
+    # NOTE the headroom is now ~1 line, because ~3% of 27 is 1. That is the
+    # convention working as intended at this size, not an oversight: the next
+    # multi-line recipe should become an `llz ci` verb rather than take the slack.
+    budget: 28
     include:
       - "Makefile"
 

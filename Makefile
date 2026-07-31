@@ -86,8 +86,10 @@ help:
 	@echo "  dropped-apiversions-check  no manifest declares an apiVersion apl-core's operators no longer serve (#330 class)"
 	@echo "  untestable-loc-check  fail when inline-bash/shell/python logic exceeds .untestable-budget.yaml"
 	@echo "  actions-lint    actionlint — GitHub Actions workflow linting"
-	@echo "  lint            Changed-file linters; LINT_ALL=1 mirrors the CI 'Lint' workflow"
-	@echo "                  (go/shell/py/actions + \$$(LINT_TF) + \$$(LINT_K8S); kind dry-run is CI-only)"
+	@echo "  lint            Changed-file linters; LINT_ALL=1 runs the full local mirror of"
+	@echo "                  the CI 'Lint' workflow (.github/workflows/lint.yml): go + shell +"
+	@echo "                  py + actions, \$$(LINT_TF), and \$$(LINT_K8S). The kind server-side"
+	@echo "                  dry-run is CI-only (needs Docker/kind)."
 	@echo
 	@echo "Instance test:"
 	@echo "  instance-test   Local, no-cloud smoke test: copier-instantiate the template"
