@@ -289,6 +289,16 @@ var (
 	readProbeStatuses = func(ns string) ([]byte, error) {
 		return execOutput("kubectl", "-n", ns, "get", "pod", "net-probe", "-o", "json")
 	}
+	// readProbeLog returns one probe container's stdout — the line net-probe
+	// prints naming WHY the dial failed. Best-effort: a log that cannot be read
+	// must never change a verdict, only how well it is explained.
+	readProbeLog = func(ns, container string) string {
+		out, err := execOutput("kubectl", "-n", ns, "logs", "net-probe", "-c", container)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
 	// resolveProbeImage reads the image the reconciler Deployment runs, so the
 	// probe uses an image already present and already signature-gated rather than
 	// one this file guesses at.
@@ -338,7 +348,16 @@ func containerExit(raw []byte) (map[string]int, error) {
 
 // resultFromExit turns a net-probe exit code back into a result. Exit 2 (the
 // probe could not run) is NOT "blocked" — it is an inconclusive control.
-func resultFromExit(target string, code int, ok bool) netProbeResult {
+//
+// `log` is the probe container's own stdout, which already names the distinction
+// that matters: net-probe classifies every dial as refused / timeout / dns
+// precisely so a reader need not guess, and collapsing all of them to "blocked"
+// threw away the only evidence the gate had. A failed positive control used to
+// print "check the probe pod's scheduling, image pull and DNS" while holding the
+// answer to that question — "dns" points at CoreDNS or the policy's DNS allow,
+// "timeout" at a policy drop, "refused" at a closed port or a sidecar reset.
+// Empty when the log could not be read, in which case the verdict is unchanged.
+func resultFromExit(target string, code int, ok bool, log string) netProbeResult {
 	if !ok {
 		return netProbeResult{Target: target, Connected: false, Reason: "the probe container did not report an exit code"}
 	}
@@ -346,10 +365,18 @@ func resultFromExit(target string, code int, ok bool) netProbeResult {
 	case 0:
 		return netProbeResult{Target: target, Connected: true, Reason: "connected"}
 	case 2:
-		return netProbeResult{Target: target, Connected: false, Reason: "the probe could not run (bad address)"}
+		return netProbeResult{Target: target, Connected: false, Reason: withProbeLog("the probe could not run (bad address)", log)}
 	default:
-		return netProbeResult{Target: target, Connected: false, Reason: "blocked"}
+		return netProbeResult{Target: target, Connected: false, Reason: withProbeLog("blocked", log)}
 	}
+}
+
+// withProbeLog appends the probe's own explanation to a reason. Pure.
+func withProbeLog(reason, log string) string {
+	if log == "" {
+		return reason
+	}
+	return reason + ": " + log
 }
 
 func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
@@ -397,20 +424,20 @@ func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
 	}
 
 	ctrlCode, ctrlOK := exits["control"]
-	control := resultFromExit(o.allowed, ctrlCode, ctrlOK)
+	control := resultFromExit(o.allowed, ctrlCode, ctrlOK, readProbeLog(o.namespace, "control"))
 
 	var vs []netEnforceVerdict
 	for _, check := range o.checks {
 		switch check {
 		case "netpol":
 			code, ok := exits["denied"]
-			vs = append(vs, evalEnforcementProbe("netpol", control, resultFromExit(o.denied, code, ok),
+			vs = append(vs, evalEnforcementProbe("netpol", control, resultFromExit(o.denied, code, ok, readProbeLog(o.namespace, "denied")),
 				"The scratch namespace carries a default-deny-egress NetworkPolicy that does not allow this "+
 					"address, so the CNI is not enforcing NetworkPolicy — which makes every default-deny in this "+
 					"repo decorative. On LKE-E that is Cilium; check the agent is healthy and the policy was programmed."))
 		case "mtls":
 			code, ok := exits["mtls"]
-			vs = append(vs, evalEnforcementProbe("mtls", control, resultFromExit(o.mtlsTarget, code, ok),
+			vs = append(vs, evalEnforcementProbe("mtls", control, resultFromExit(o.mtlsTarget, code, ok, readProbeLog(o.namespace, "mtls")),
 				"The probe pod is deliberately OUTSIDE the mesh (sidecar.istio.io/inject=false) and dialed this "+
 					"STRICT-mesh port in plaintext. Istio must refuse that. Check the namespace's PeerAuthentication "+
 					"is still STRICT and has not been reverted to PERMISSIVE, and that this port is not a portLevelMtls exemption."))

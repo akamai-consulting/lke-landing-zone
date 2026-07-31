@@ -98,18 +98,18 @@ func TestEvalEnforcementProbeInconclusiveWhenControlFails(t *testing.T) {
 }
 
 func TestResultFromExit(t *testing.T) {
-	if r := resultFromExit("t", 0, true); !r.Connected {
+	if r := resultFromExit("t", 0, true, ""); !r.Connected {
 		t.Error("exit 0 is connected")
 	}
-	if r := resultFromExit("t", 1, true); r.Connected || r.Reason != "blocked" {
+	if r := resultFromExit("t", 1, true, ""); r.Connected || r.Reason != "blocked" {
 		t.Errorf("exit 1 is blocked, got %+v", r)
 	}
 	// Exit 2 means the probe could not run — NOT that the target was blocked.
 	// Folding it into "blocked" would turn a broken probe into a passing gate.
-	if r := resultFromExit("t", 2, true); r.Connected || !strings.Contains(r.Reason, "could not run") {
+	if r := resultFromExit("t", 2, true, ""); r.Connected || !strings.Contains(r.Reason, "could not run") {
 		t.Errorf("exit 2 must be distinguishable from blocked, got %+v", r)
 	}
-	if r := resultFromExit("t", 0, false); r.Connected {
+	if r := resultFromExit("t", 0, false, ""); r.Connected {
 		t.Error("a missing exit code must not read as connected")
 	}
 }
@@ -191,5 +191,27 @@ func TestRunAssertNetworkEnforcementAlwaysCleansUp(t *testing.T) {
 	// One pre-emptive delete (in case a previous run leaked) plus the deferred one.
 	if deletes < 2 {
 		t.Errorf("the scratch namespace must be cleaned up on the failure path, got %d deletes", deletes)
+	}
+}
+
+// The probe already classifies every dial as refused / timeout / dns; the gate
+// used to collapse all of them into "blocked" and then tell the operator to go
+// check DNS by hand. A failed positive control is the case where that evidence
+// matters most, so it must reach the verdict text.
+func TestResultFromExitCarriesTheProbesOwnReason(t *testing.T) {
+	r := resultFromExit("kubernetes.default.svc.cluster.local:443", 1, true, "dns: lookup failed")
+	if r.Connected {
+		t.Fatal("exit 1 must remain blocked")
+	}
+	if !strings.Contains(r.Reason, "dns: lookup failed") {
+		t.Errorf("reason = %q — the probe's own classification must survive into the verdict, or the "+
+			"gate discards the only evidence it collected", r.Reason)
+	}
+}
+
+// An unreadable log must not change the verdict — only how well it is explained.
+func TestResultFromExitWithoutALogIsUnchanged(t *testing.T) {
+	if r := resultFromExit("t", 1, true, ""); r.Reason != "blocked" {
+		t.Errorf("reason = %q, want the bare verdict when no log could be read", r.Reason)
 	}
 }
