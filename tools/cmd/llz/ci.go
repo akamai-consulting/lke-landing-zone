@@ -200,6 +200,10 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciWaveHealthGuardCmd())
 	c.AddCommand(ciMTLSWiringGuardCmd())
 	c.AddCommand(ciPlaintextGuardCmd())
+	// Static guard on credential-OBSERVABILITY drift: a `secrets.NAME` an instance
+	// workflow consumes must be measured by one of the single-pane feeds or
+	// registered as a reasoned exemption (Makefile credential-coverage-guard).
+	c.AddCommand(ciCredentialCoverageGuardCmd())
 	// Static guard for the #163 wedge class: a workload that hard-depends on a
 	// Secret produced by a LATER-wave ExternalSecret can never go Healthy and
 	// wedges the sync (Makefile wave-dependency-guard).
