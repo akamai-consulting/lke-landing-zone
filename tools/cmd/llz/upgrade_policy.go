@@ -72,8 +72,12 @@ func (s upgradeSnapshot) restore() error {
 	return nil
 }
 
+// upgradeProtectsOwned reports whether a file must be snapshotted before copier
+// runs and put back after. The class table is the authority (upgradeRestore);
+// the answers tracker is copier's own bookkeeping and is never restored.
 func upgradeProtectsOwned(class, rel string) bool {
-	return class == "owned" && rel != copierAnswersPath
+	c, ok := lookupTemplateClass(class)
+	return ok && c.upgrade == upgradeRestore && rel != copierAnswersPath
 }
 
 func upgradeWorktreeFiles() ([]string, error) {
@@ -222,7 +226,8 @@ func overwriteManagedFromScaffold(cleanRoot string) (int, error) {
 	}
 	count := 0
 	for _, rel := range files {
-		if m.classify(rel) != "managed" {
+		c, ok := lookupTemplateClass(m.classify(rel))
+		if !ok || c.upgrade != upgradeOverwrite {
 			continue
 		}
 		src := filepath.Join(cleanRoot, filepath.FromSlash(rel))

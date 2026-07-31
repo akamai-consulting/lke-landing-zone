@@ -374,7 +374,7 @@ func ciCmd() *cobra.Command {
 	c.AddCommand(ciTemplateManifestCmd())
 	// Vendored-CI drift guard: the `managed` .github/ surface is overwritten by
 	// `llz upgrade`, so a local edit is silently lost — fail CI instead.
-	c.AddCommand(ciWorkflowsFreshCmd())
+	c.AddCommand(ciManagedFreshCmd())
 	// Tool-version pin agreement: the Dockerfile ARG block is the authority and
 	// every restatement (build matrix, container fallbacks, Go constants) must
 	// match it. This drifted once already — see ci_version_pins.go.

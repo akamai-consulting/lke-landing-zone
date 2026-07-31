@@ -191,7 +191,7 @@ chart are an Akamai-internal feature; they live in the private
 | Artifact | Published as | Consumed by an instance via |
 |---|---|---|
 | Terraform modules | Umbrella `git::` tag `vX.Y.Z` | `source = "git::ssh://…//terraform-modules/<name>?ref=vX.Y.Z"` |
-| Reusable workflows + scaffold | Same umbrella tag `vX.Y.Z` | Vendored into the instance by copier; thin stubs call them repo-locally (`uses: ./.github/workflows/llz-<wf>.yml`), re-pinned by `llz upgrade` and drift-guarded by `.template-workflows.lock` |
+| Reusable workflows + scaffold | Same umbrella tag `vX.Y.Z` | Vendored into the instance by copier; thin stubs call them repo-locally (`uses: ./.github/workflows/llz-<wf>.yml`), re-pinned by `llz upgrade` and drift-guarded by `.template-managed.lock` |
 | `llz` CLI | Binaries on the `vX.Y.Z` release | `gh release download vX.Y.Z` / `llz self-update` |
 | Helm charts | OCI on GHCR, immutable `version:` (independent) | Argo CD Application referencing `oci://ghcr.io/<org>/charts/<chart>:X.Y.Z` |
 | CI images | GHCR tags | CI variables (`TF_IMAGE`, `KUBE_IMAGE`) |
