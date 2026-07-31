@@ -217,8 +217,7 @@ measured: `llz drift` (and the monthly `template-drift` job) reports how far beh
 the template you've fallen.
 
 - **Drives it:** `llz self-update`, `llz upgrade`, Renovate
-  (`instance-template/renovate.json`), `llz drift`,
-  `llz ci stamp-template-version`.
+  (`instance-template/renovate.json`), `llz drift`.
 - **Tenet:** *publish/consume* + *defaults with escape hatches* — fixes arrive as
   bumps; the `managed` / `merge` / `owned` manifest decides what an upgrade may
   touch.

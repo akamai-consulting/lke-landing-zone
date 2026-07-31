@@ -18,7 +18,7 @@ Five distinct surfaces, each with its own playbook for ongoing work:
 | Grafana (per region) | port-forward `<release>-grafana` in `grafana` | [grafana-access.md](grafana-access.md) | admin / per-person local user |
 | Loki (per region) | through Grafana or port-forward `<release>-loki-gateway` | [loki-access.md](loki-access.md) | `X-Scope-OrgID: <project>` header |
 
-GitHub Actions (the CI surface) is separate: see [Git + GitHub access](#git--github-access) below.
+GitHub Actions (the CI surface) is separate: see [Git + GitHub access](#2-git--github-access) below.
 
 ---
 

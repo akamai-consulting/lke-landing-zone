@@ -17,7 +17,7 @@ the files the rest of the toolchain already consumes:
 | Source of truth | Renders to | When |
 |---|---|---|
 | `environments/<env>.yaml` → `spec.cluster` | the three `<env>.tfvars` (**gitignored**, regenerated) | build/CI, before `terraform` |
-| `environments/<env>.yaml` → `spec.components` | `manifest/kustomization.yaml` + `argocd/kustomization.yaml` (committed, CI-verified) | `llz render` |
+| `environments/<env>.yaml` → `spec.components` | `apl-values/<env>/manifest/kustomization.yaml` (llz Argo backend) + `apl-values/<env>/apl-overlay/apps.yaml` (apl-core backend) — both committed, CI-verified | `llz render` |
 | `landingzone.yaml` → `spec.instance` | `.copier-answers.yml` + copier `-d` data | `llz new` / `llz upgrade` |
 
 The per-env `<env>.tfvars` are **build artifacts, not committed** — `terraform-iac-bootstrap/.gitignore`
@@ -36,9 +36,13 @@ near-mechanical lift, and it gives per-env diff/review locality, per-env
 reads it, `llz render --check` validates it, and `llz env list` discovers
 deployments from it (unioned with any committed `cluster/*.tfvars`).
 
-> Adopting the spec is opt-in. Instances without a `landingzone.yaml` keep using
-> their committed tfvars + manifest trees unchanged; every spec-driven path is a
-> no-op when no spec is present.
+> **Every new instance has a spec, and it is the only supported authoring path** —
+> `llz env add` writes `landingzone.yaml` + `environments/<env>.yaml` on the first
+> env, and the per-env tfvars are gitignored artifacts rendered from it (see
+> [adopter-guide §3](adopter-guide.md#3-the-values-contract-what-you-must-set)).
+> The no-op contract below exists only for **pre-spec instances** scaffolded before
+> the spec landed: they keep using their committed tfvars + manifest trees
+> unchanged, because every spec-driven path is a no-op when no spec is present.
 
 ## Layout
 
@@ -83,6 +87,9 @@ spec:
       k8sVersion: v1.33.6+lke7             # → k8s_version
       nodePool: { type: g8-dedicated-8-4, count: 5 }
       controlPlane: { highAvailability: true, auditLogsEnabled: true }
+      # MANDATORY and validated: LLZ never self-installs apl-core. `llz env add`
+      # seeds this for you; it is required on every env (here, once, via defaults).
+      bootstrap: { managedAppPlatform: true }
 ```
 
 ```yaml
@@ -101,18 +108,21 @@ spec:
       ipv4: ["203.0.113.0/24"]                    # → github_runner_ipv4_cidrs
       ipv6: []                                    # → github_runner_ipv6_cidrs
     promotionRank: 3                              # → promotion_rank (pipeline position)
-    bootstrap:                                    # → apl-core values (llz ci bootstrap-cluster)
-      name: platform-prod                         # → cluster_name
-      domainSuffix: prod.example.com              # → cluster_domain
+    bootstrap:                                    # → apl-core wiring (NOT tfvars — see the
+                                                  #   values.yaml note under "Field reference")
+      name: platform-prod                         # apl-core cluster.name
+      # NO domainSuffix — Linode owns lke<id>.akamai-apl.net and LLZ discovers it
+      # in-cluster. Setting it is a hard validation error.
       # aplChartVersion: v6.1.0                   # optional; omit to track the llz baseline.
                                                   # Linode owns the deployed version on managed
                                                   # App Platform — this only pins what
                                                   # `llz ci assert-apl-version` / the apl-values
                                                   # schema check resolve.
       aplValues:
-        repoURL: https://github.com/my-org/platform-support.git  # → apl_values_repo_url
-        revision: main                            # → apl_values_repo_revision
-      appsRepoRevision: main                      # → apps_repo_revision
+        repoURL: https://github.com/my-org/platform-support.git  # apl-core otomi.git.repoUrl
+        # revision omitted → the apl-core-owned `apl-prod` branch. It must NOT equal
+        # appsRepoRevision — sharing one branch reproduces the converge wedge.
+      appsRepoRevision: main                      # apps repo revision
     objectStorage:                                # → object-storage/<env>.tfvars
       cluster: us-ord-7                           # → obj_cluster
       # keyRotationDays: DEPRECATED/ignored — rotation is owned by the
@@ -135,7 +145,7 @@ spec:
     promotionRank: 2
     bootstrap:
       name: platform-staging
-      # domainSuffix omitted → defaults to "staging.internal"
+      # domainSuffix is never set (Linode owns the domain)
     objectStorage: { cluster: us-sea-1 }
   components:                                        # partial block: only these change
     harbor: { enabled: false }                    # ← no registry in staging
@@ -168,8 +178,7 @@ spec:
 ## Minimal example
 
 The smallest valid spec — components default to all-on except `gitea`,
-`cidrFirewall`, `broadPatRotator`, and `clusterHealthWorkflow`, and
-`domainSuffix` defaults to `<env>.internal`:
+`cidrFirewall`, `broadPatRotator`, and `clusterHealthWorkflow`:
 
 ```yaml
 # landingzone.yaml
@@ -194,7 +203,7 @@ spec:
     region: us-sea
     k8sVersion: v1.33.6+lke7
     nodePool: { type: g8-dedicated-8-4, count: 3 }
-    bootstrap: { name: platform-lab }
+    bootstrap: { name: platform-lab, managedAppPlatform: true }
     objectStorage: { cluster: us-sea-1 }
 ```
 
@@ -203,7 +212,14 @@ spec:
 **Required:** `landingzone.yaml`'s `spec.instance.{upstreamOrg,repo,forge}`,
 and per env (`environments/<env>.yaml` or inherited from `spec.defaults`)
 `cluster.{clusterLabel,region,k8sVersion}`, `cluster.nodePool.{type,count}`,
-`cluster.bootstrap.name`.
+`cluster.bootstrap.name`, and **`cluster.bootstrap.managedAppPlatform: true`**
+(LLZ never self-installs apl-core — `llz env add` seeds it into `spec.defaults`).
+
+**Must NOT be set:** `cluster.bootstrap.domainSuffix` — Linode owns the
+`lke<id>.akamai-apl.net` domain and LLZ discovers it in-cluster; a stale value
+would misroute the Keycloak issuer and Harbor URL, so the validator rejects it
+outright. (`llz env add --cluster-domain` is a leftover no-op: it prints a
+`domainSuffix` in its summary banner but writes nothing.)
 
 **Deprecated: `spec.instance.templateVersion`.** Accepted and ignored — leave it or
 delete it, nothing reads it. The template pin lives once in `.copier-answers.yml`
@@ -218,9 +234,10 @@ the **llz Argo backend** (its resources/Applications live ONCE in a shared kusto
 Component, `platform-apl/components/<name>/`, which the env's thin
 `apl-values/<env>/manifest/kustomization.yaml` lists under `components:` when enabled —
 `llz render` generates that overlay and `llz render --check` drift-guards it) and/or the
-**apl-core backend** (it flips `apps.<key>.enabled` in the committed `values.yaml`, which
-`llz render` patches with yaml.v3 — comments and the remaining `${…}` Terraform
-placeholders are preserved — and `--check` drift-guards). Some span both — e.g. `harbor`
+**apl-core backend** (it flips `apps.<key>.enabled` in the committed
+`apl-values/<env>/apl-overlay/apps.yaml`, which the in-cluster apl-overlay reconciler
+merges onto the `apl-<env>` branch — `llz render` generates it and `--check`
+drift-guards it). Some span both — e.g. `harbor`
 enables apl-core's Harbor app *and* adds the llz registry-S3 ExternalSecret;
 `observability` enables apl-core's prometheus/loki/grafana/alertmanager/otel *and*
 adds the loki ExternalSecret + alert rules.
@@ -231,10 +248,14 @@ block changes only the components you name — an explicit `enabled: false` stic
 unmentioned components default on. `enabled` is tri-state: omitting it (a tune-only
 toggle, see below) inherits the default rather than reading as a disable. The set:
 `argocd` (mandatory), `clusterFoundation` (mandatory), `externalSecrets`,
-`certManagerBootstrapCA`, `openbao` (requires `externalSecrets` + `certManagerBootstrapCA`),
+`certManagerBootstrapCA`, `imageSignature`,
+`openbao` (requires `externalSecrets` + `certManagerBootstrapCA`),
 `argoWorkflows`, `argoEvents`, `observability`, `harbor`,
 `policyEngine` (Kyverno + policy-reporter), `imageScanning` (Trivy), `gitea`,
-`cidrFirewall`, `broadPatRotator`, `llzReconciler`, `clusterHealthWorkflow`.
+`cidrFirewall`, `broadPatRotator` (requires `externalSecrets`),
+`llzReconciler` (requires `observability`), `clusterHealthWorkflow`
+(requires `argoWorkflows`). `llz components` prints this table live — it is the
+authoritative copy.
 On the managed platform many of these are apl-core's (Linode-owned) and are not
 emitted by `llz render` — see docs/adr/0005-managed-app-platform.md.
 
@@ -258,7 +279,9 @@ overlay — everything else (chart mechanism, secrets) stays in the shared
 `apl-values/values.yaml` base. `observability` takes `retention` (→
 `apps.prometheus.retention`, default `7d`), `storage` (→ `storageSize`, default
 `10Gi`), and `replicas` (default `1`); `harbor` takes `registryStorage` (registry
-image-store PVC, default `20Gi`). An unset knob keeps the base default; a knob set
+image-store PVC, default `20Gi`); `broadPatRotator` takes `broadPATLabel` +
+`broadPATDeployments` (which PAT it rotates and where it propagates — not capacity).
+Those three are the whole set. An unset knob keeps the base default; a knob set
 on a component that doesn't read it (or a bad duration/quantity) is a validation
 error. Example: `observability: { retention: 30d, storage: 50Gi, replicas: 2 }`.
 
@@ -300,19 +323,26 @@ untouched — there is no load-time default — and opt in by adding a team here
 retrofit path). Full walkthrough:
 [docs/runbooks/openbao-team-login.md](runbooks/openbao-team-login.md).
 
-**Identity + platform are spec-owned in `values.yaml`.** For a spec instance,
-`llz render` writes the cluster identity and apl-core global flags straight into
-each env's `values.yaml` — resolving the `${cluster_name}`/`${cluster_domain}`
-placeholders from the spec *before* Terraform runs, so `landingzone.yaml` is the
-single source (`llz ci bootstrap-cluster`'s own substitution then has nothing
-left to fill for them; it remains the identity path for non-spec instances). From
-the env: `cluster.name` ← `cluster.bootstrap.name`, and `cluster.domainSuffix` +
-`dns.domainFilters[0]` ← `cluster.bootstrap.domainSuffix`. From
-`spec.defaults.platform` (instance-wide): `otomi.hasExternalDNS` ← `externalDNS`
-(default `true`) and `otomi.hasExternalIDP` ← `externalIDP` (default `false` →
-standalone Keycloak). The `${…}` placeholders Terraform fills regardless are the
-secrets + infra outputs (repo creds, dns token, loki/harbor object-store, coredns
-IP).
+> **`llz render` does not write apl-core's `values.yaml`.** LLZ runs exclusively on
+> Linode's **managed** App Platform, where apl-core owns its own values (ADR
+> [0005](adr/0005-managed-app-platform.md)) — `template-scripts/ci/scaffold-render-check.sh`
+> *fails the build* if a render ever emits one. The spec's route into apl-core is the **apl-overlay**
+> (`apl-values/<env>/apl-overlay/{apps,obj,teams}.yaml`) — a separate, secret-free
+> source of truth the in-cluster reconciler merges onto the `apl-<env>` branch, so
+> the two writers never collide.
+>
+> **Consequence — three spec blocks are currently validated but never rendered:**
+> `spec.dns.*` (including `acmeEmail`), `spec.defaults.platform.*` (`externalDNS`,
+> `externalIDP`), and `spec.alerting.*` (`receivers`, `slack.channel*`). They were
+> written into `values.yaml` before the managed-only collapse and no renderer
+> replaced them, so setting them today changes `landingzone.yaml` and nothing else.
+> `llz import` still reads them back off a live site. Treat them as inert until
+> they are rewired or removed.
+
+Cluster identity does still reach the platform, just not through `values.yaml`:
+`cluster.bootstrap.domainSuffix` drives the Harbor host patch
+(`llz render` → `harbor-provisioner-env-patch.yaml`) and `llz apl user add`'s
+portal URL.
 
 **Networking.** A Linode VPC is a **region-scoped container** (it has no CIDR —
 subnets do). By default each environment gets its **own dedicated VPC**

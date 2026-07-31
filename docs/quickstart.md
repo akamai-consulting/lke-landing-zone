@@ -72,7 +72,8 @@ the short version:
 
 - **Linode account with LKE-Enterprise** — `+lke` versions, not standard LKE
 - **Akamai App Platform (apl-core) entitlement**
-- **A GitHub org + an instance repo** — a fork of the template org, or your own
+- **A GitHub org you can create a repo in** — `llz new --push` creates the
+  instance repo itself. **Forking this template is not required** (see §3)
 
 > **Start the Linode account first — it has the longest lead time.**
 
@@ -105,7 +106,8 @@ gh auth status --hostname github.com || gh auth login --hostname github.com   # 
 > `gh auth switch --hostname github.com --user <name>` (persists; `gh auth status`
 > lists them). To use a specific account for one command without switching, override
 > the token for that invocation:
-> `GH_TOKEN="$(gh auth token --hostname github.com --user <name>)" ./template-scripts/install-llz.sh`.
+> `GH_TOKEN="$(gh auth token --hostname github.com --user <name>)" bash -c "$(curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh)"`
+> (from a checkout: `GH_TOKEN=… ./template-scripts/install-llz.sh`).
 
 > **`gh auth` ≠ your cloud/PAT credentials.** Logging in to `gh` covers GitHub
 > repo, release, and API calls only. `llz tokens` (§4) still prompts you for a
@@ -227,11 +229,21 @@ with no template fork makes copier's HTTPS clone 404, which git surfaces as a
 confusing `Username for 'https://github.com':` prompt — `llz new` now preflights
 this and tells you to fix `--org` or fork first.)
 
-`llz new` runs `copier copy` to render the instance into `my-instance/` (asks
-`upstream_org` and `instance_repo`, writes `.copier-answers.yml`). With
-`--push --yes` it also runs `gh repo create <instance_repo> --private --source .
---push`, so the remote repo exists and `llz tokens`/`doctor` work against it
-immediately. It does **not** ask for credentials — that's `llz tokens` (§4).
+`llz new` runs `copier copy` to render the instance into `my-instance/`, then
+writes `.copier-answers.yml`. It prompts for three answers — keep the defaults
+unless the note says otherwise:
+
+| Prompt | What to answer |
+|---|---|
+| `upstream_org` | **Keep `akamai-consulting`** to track upstream. Set it only if you publish your own template fork. |
+| `instance_repo` | **Your** instance repo as `<owner>/<name>` — this is what `--push` creates. |
+| `openbao_team` | Default `platform`. Names your operators' scoped, non-root OpenBao subtree (`secret/platform`) + the apl-core team. Lowercase kebab; add more later in `landingzone.yaml`. See [spec.teams](landing-zone-spec.md#field-reference). |
+
+(`llz_version` is a fourth answer, but `llz new` sets it from its own version — you
+are not prompted.) With `--push --yes` it also runs `gh repo create <instance_repo>
+--private --source . --push`, so the remote repo exists and `llz tokens`/`doctor`
+work against it immediately. It does **not** ask for credentials — that's
+`llz tokens` (§4).
 
 > **The instance pins to the `llz` version you installed.** `llz new` records this
 > CLI's own version as the instance's `llz_version` and renders the scaffold's
@@ -267,7 +279,7 @@ rest of the must-sets come from flags or are inherited from `spec.defaults`. The
 
 - `region` (**required**), `k8sVersion` (an LKE-E `+lke` version) + node sizing (`--node-type`/`--node-count` — default to the seeded `spec.defaults`)
 - `--runner-ipv4-cidrs` / `--runner-ipv6-cidrs` → `cluster.apiServerAllowCIDRs` — static operator/CI egress CIDRs that seed the bootstrap control-plane ACL (**never `0.0.0.0/0`**; leave empty for github.com-hosted runners, which open their egress IP at runtime via `llz ci runner-acl open`)
-- `cluster.domainSuffix` (`--cluster-domain`, default `<env>.internal`), `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them.
+- `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them. **Do not set a cluster domain** — Linode owns `lke<id>.akamai-apl.net` and LLZ discovers it in-cluster; the validator rejects `cluster.bootstrap.domainSuffix`, and the leftover `--cluster-domain` flag prints a domain in the summary banner but writes nothing.
 - `--obj-cluster` (**required**) — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `env add` validates the shape up front.
 
 ### Change, inspect & preview a deployment
@@ -438,8 +450,8 @@ For what's missing it:
 | **Linode token** | reads your Linode PAT (full Read/Write) → `LINODE_API_TOKEN`, and uses it for the next two steps |
 | **State bucket** | lists your Linode OBJ clusters, you pick one, then **creates** the state bucket → `TF_STATE_BUCKET`, `TF_STATE_ENDPOINT` |
 | **State key** | **creates** a bucket-scoped `read_write` OBJ key → `TF_STATE_ACCESS_KEY`, `TF_STATE_SECRET_KEY` |
-| **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (classic PAT, **`repo` + `workflow`** scopes — the build writes the remaining infra secrets with it), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted) |
-| **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE` (`ghcr.io/<org>/ci-{terraform,kubernetes}:<tag>`) |
+| **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (the build writes the remaining infra secrets with it — see the permissions note below), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted) |
+| **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE` (`ghcr.io/<org>/ci-tofu:<tag>` and `ghcr.io/<org>/ci-kubernetes:<tag>`) |
 | **Optional** | offers `LINODE_DNS_TOKEN` (Enter to skip — the cluster still bootstraps) |
 
 It writes everything to `my-instance/.llz/` (mode `0600`, **gitignored**), then
@@ -449,6 +461,21 @@ The remaining infra secrets — `OPENBAO_SEAL_KEY`, `OPENBAO_RECOVERY_KEY_*`, th
 Loki/Harbor OBJ keys, Harbor robots — are written **by the build**
 (that's exactly what `OPENBAO_SECRETS_WRITE_TOKEN` is for); `llz` never asks for
 them.
+
+> ⚠️ **`OPENBAO_SECRETS_WRITE_TOKEN` needs `Environments: write`, not `Secrets`.**
+> The wizard's pre-filled link creates a **fine-grained** PAT with **Actions: write
+> + Environments: write** (a classic `repo` + `workflow` PAT also works). Two traps:
+>
+> - The fine-grained **"Secrets" permission covers only *repo-level* secrets and is
+>   NOT enough** — `infra-<env>` environment secrets are governed by
+>   **Environments**.
+> - You must **also be Environment admin** on every `infra-<env>` environment.
+>
+> Get either wrong and repo-level writes still succeed while the `--env`-scoped
+> `gh secret set` calls 401 — which typically surfaces as `bootstrap-openbao.yml`
+> failing its S3 preflight ~5 minutes into a run you started 30 minutes earlier.
+> Check the PAT with `GH_TOKEN=$PAT gh api user`. Full detail:
+> [bootstrap-openbao runbook](runbooks/bootstrap-openbao.md).
 
 > **Manual alternative.** `llz secrets gather` (paste every credential yourself)
 > + `llz secrets push <env> --yes` is still available if you'd rather not have

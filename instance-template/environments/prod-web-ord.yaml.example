@@ -40,7 +40,10 @@ spec:
       ipv6: []
 
     network:                                       # omit entirely → own dedicated VPC
-      vpc: prod-ord                                # a spec.networks name (same region)
+      # vpc: prod-ord                              # a spec.networks name (same region) —
+                                                   #   uncomment ONLY after declaring it in
+                                                   #   landingzone.yaml's spec.networks, or
+                                                   #   the spec fails validation
       subnetCIDR: 10.0.0.0/14                      # → vpc_subnet_cidr (/13 or /14)
 
     promotionRank: 3                               # → promotion_rank (pipeline position)
@@ -49,7 +52,10 @@ spec:
       name: platform-prod-web                      # → cluster.name (apl-core identity)
       aplValues:
         repoURL: https://github.com/my-org/platform-support.git
-        revision: main
+        # revision: omit → the apl-core-owned `apl-<env>` branch. It must NOT equal
+        #   appsRepoRevision below: apl-operator commits its env/ tree to the former
+        #   while platform-bootstrap reads the latter, so one shared branch
+        #   reproduces the converge wedge (the validator rejects it).
       appsRepoRevision: main                       # optional
 
       # ── Managed App Platform (REQUIRED) ──────────────────────────────────────

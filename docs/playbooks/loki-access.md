@@ -2,7 +2,7 @@
 
 **Applies to:** Loki (`<release>-loki` SingleBinary deployment in the `monitoring` namespace) on every cluster. Backed by Linode Object Storage per cluster.
 
-**Related:** your observability configuration, [`loki-values.yaml`](../../instance-template/apl-values/values.yaml), [`grafana-access.md`](grafana-access.md).
+**Related:** your observability configuration, [`loki-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml), [`grafana-access.md`](grafana-access.md).
 
 ---
 
@@ -90,7 +90,7 @@ curl -fsSL -X POST "http://localhost:3100/loki/api/v1/push" \
 If a separate workload needs log isolation, add a new tenant by:
 
 1. Setting its writers to send `X-Scope-OrgID: <new-tenant>` instead of `<project>`.
-2. Adding a per-tenant `limits_config` block in [`loki-values.yaml`](../../instance-template/apl-values/values.yaml) — see Loki's [multi-tenancy docs](https://grafana.com/docs/loki/latest/operations/multi-tenancy/) for ingestion-rate / retention overrides.
+2. Adding a per-tenant `limits_config` block in [`loki-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml) — see Loki's [multi-tenancy docs](https://grafana.com/docs/loki/latest/operations/multi-tenancy/) for ingestion-rate / retention overrides.
 3. Adding a second Loki data source in Grafana for that tenant (header value differs).
 
 Don't reuse `<project>` as a catch-all — once a workload's logs are mixed in there, splitting them out later is painful.

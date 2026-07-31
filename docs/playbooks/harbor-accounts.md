@@ -2,7 +2,7 @@
 
 **Applies to:** Harbor (`harbor.<primary-cluster>.internal:5000`), deployed on the primary cluster only. Other clusters consume Harbor remotely via `secret/harbor/pull-robot`.
 
-**Related:** [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial Harbor admin + robot bootstrap), `llz ci harbor-provisioner` ([`tools/cmd/llz/ci_harbor_provisioner.go`](../../tools/cmd/llz/ci_harbor_provisioner.go), canonical robot creation — the in-cluster harbor-robot-provisioner CronJob).
+**Related:** [`docs/runbooks/bootstrap-openbao.md`](../runbooks/bootstrap-openbao.md) (initial Harbor admin + robot bootstrap), `llz ci harbor-provisioner` ([`tools/cmd/llz/ci_harbor_provisioner.go`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/cmd/llz/ci_harbor_provisioner.go), canonical robot creation — the in-cluster harbor-robot-provisioner CronJob).
 
 ---
 
@@ -68,7 +68,7 @@ Note this reads a **platform** path, which the ESO store's platform allowlist al
 
 ## Machine account — system robot (CI / in-cluster)
 
-Two robots already exist (the CI robot, `pull-<project>`) — both created by the in-cluster `harbor-robot-provisioner` CronJob (`llz ci harbor-provisioner`, [`tools/cmd/llz/ci_harbor_provisioner.go`](../../tools/cmd/llz/ci_harbor_provisioner.go)) once Harbor is up. To rotate one, delete the robot in Harbor UI — the next CronJob tick (~5m) recreates it, re-seeds OpenBao, and re-publishes the repo-level GitHub secrets. To add a new robot, run the same shape of API call by hand or extend that command.
+Two robots already exist (the CI robot, `pull-<project>`) — both created by the in-cluster `harbor-robot-provisioner` CronJob (`llz ci harbor-provisioner`, [`tools/cmd/llz/ci_harbor_provisioner.go`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/tools/cmd/llz/ci_harbor_provisioner.go)) once Harbor is up. To rotate one, delete the robot in Harbor UI — the next CronJob tick (~5m) recreates it, re-seeds OpenBao, and re-publishes the repo-level GitHub secrets. To add a new robot, run the same shape of API call by hand or extend that command.
 
 ### Adding a new robot by hand
 
