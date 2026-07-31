@@ -300,7 +300,7 @@ tests:
       # alerts on when it is 1. Pinning "no alert" proves the two matchers are
       # actually distinct rather than accidentally both matching everything.
       - eval_time: 2h
-        alertname: LLZRootTokenParked
+        alertname: LLZCredentialRootTokenParked
         exp_alerts: []
 
   # The same root token, left behind by a break-glass whose revoke never ran.
@@ -310,12 +310,12 @@ tests:
       - series: 'llz_credential_configured{namespace="llz-reconciler",cred="openbao-root-token",class="on-demand",expect="absent"}'
         values: "1x90"
       # A present credential that WANTS to be present, carried alongside to pin
-      # that LLZRootTokenParked keys on `expect` and not merely on the value 1.
+      # that LLZCredentialRootTokenParked keys on `expect` and not merely on the value 1.
       - series: 'llz_credential_configured{namespace="llz-reconciler",cred="openbao-seal-key",class="static",expect="present"}'
         values: "1x90"
     alert_rule_test:
       - eval_time: 2h
-        alertname: LLZRootTokenParked
+        alertname: LLZCredentialRootTokenParked
         exp_alerts:
           - exp_labels:
               severity: warning
@@ -376,5 +376,5 @@ tests:
         alertname: LLZCredentialUnconfigured
         exp_alerts: []
       - eval_time: 2h
-        alertname: LLZRootTokenParked
+        alertname: LLZCredentialRootTokenParked
         exp_alerts: []

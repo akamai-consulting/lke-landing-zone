@@ -122,7 +122,7 @@ func TestSampleTokenInventoryPublishesPresenceForAbsentSecrets(t *testing.T) {
 
 // `expect` is a label rather than a filter because presence is not uniformly
 // good: the root token is supposed to be ABSENT, so for that one a 1 is the
-// finding. LLZRootTokenParked reads this series in the opposite direction from
+// finding. LLZCredentialRootTokenParked reads this series in the opposite direction from
 // LLZCredentialUnconfigured, and it can only do that if the label survives.
 func TestSampleTokenInventoryCarriesExpectAbsent(t *testing.T) {
 	cm := map[string]any{
@@ -146,7 +146,7 @@ func TestSampleTokenInventoryCarriesExpectAbsent(t *testing.T) {
 // written by a CI job running whatever llz that instance's TF_IMAGE baked, and
 // read by the in-cluster reconciler. An inventory from before `expect` existed
 // carries none, and defaulting it to "absent" would make every credential in it
-// fire LLZRootTokenParked. It defaults to `present`, so an old writer degrades to
+// fire LLZCredentialRootTokenParked. It defaults to `present`, so an old writer degrades to
 // the pre-existing meaning instead of to a fleet-wide false page.
 func TestSampleTokenInventoryDefaultsMissingExpectToPresent(t *testing.T) {
 	cm := map[string]any{

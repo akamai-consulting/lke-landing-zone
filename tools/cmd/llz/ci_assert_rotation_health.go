@@ -59,10 +59,12 @@ package main
 // Read-only.
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -441,13 +443,13 @@ func probePresenceHealth(prom, namespace string, require bool) ([]credVerdict, e
 	var configured map[string]float64
 	var probeOK float64
 	var probeSeen bool
+	var perr error
 	err := withPrometheus(prom, func(get func(string) ([]byte, error)) error {
 		raw, gerr := get("/api/v1/query?query=" +
 			url.QueryEscape(fmt.Sprintf(`llz_credential_configured{namespace=%q}`, namespace)))
 		if gerr != nil {
 			return gerr
 		}
-		var perr error
 		if configured, perr = promVectorByLabel(raw, "cred"); perr != nil {
 			return perr
 		}
@@ -456,17 +458,66 @@ func probePresenceHealth(prom, namespace string, require bool) ([]credVerdict, e
 		if gerr != nil {
 			return gerr
 		}
-		// No `cred` label on this one — key on the empty string, which is what
-		// promVectorByLabel yields for a series that lacks the label.
-		probe, perr := promVectorByLabel(raw, "cred")
-		if perr != nil {
-			return perr
-		}
-		probeOK, probeSeen = probe[""]
-		return nil
+		// NOT promVectorByLabel: this series carries no `cred` label, and that
+		// helper skips any sample whose label is empty (`if key == "" continue`).
+		// Reading it through there returned an empty map every time, so probeSeen
+		// was permanently false — the presence lane silently checked nothing, and
+		// --require-inventory would have failed EVERY run on every cluster while
+		// reporting "the writer has not run here". The unit tests missed it
+		// because they exercise evalPresenceHealth directly and never crossed this
+		// parsing seam.
+		probeOK, probeSeen, perr = promFirstSample(raw)
+		return perr
 	})
 	if err != nil {
 		return nil, err
 	}
 	return evalPresenceHealth(configured, probeOK, probeSeen, require), nil
+}
+
+// promFirstSample reads the value of the first sample in an instant-query
+// response, regardless of its labels, and reports whether there was one.
+//
+// It exists because promVectorByLabel — the helper every other gauge gate uses —
+// indexes samples BY a label and drops any whose value for it is empty. That is
+// right for the per-credential series and silently wrong for an aggregate:
+// `llz_credential_secret_probe_ok` has no `cred` label, so every sample was
+// discarded and the caller could not tell an unreachable funnel from one that had
+// never run. A query error is still an error; an empty result is a legitimate
+// "no such series yet" and returns ok=false.
+func promFirstSample(raw []byte) (float64, bool, error) {
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		Data   struct {
+			Result []struct {
+				Value []any `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return 0, false, fmt.Errorf("unparseable Prometheus response: %w", err)
+	}
+	if resp.Status != "success" {
+		detail := resp.Error
+		if detail == "" {
+			detail = "status=" + resp.Status
+		}
+		return 0, false, fmt.Errorf("prometheus returned an error: %s", detail)
+	}
+	for _, r := range resp.Data.Result {
+		if len(r.Value) != 2 {
+			continue
+		}
+		str, ok := r.Value[1].(string)
+		if !ok {
+			continue
+		}
+		f, err := strconv.ParseFloat(str, 64)
+		if err != nil {
+			continue
+		}
+		return f, true, nil
+	}
+	return 0, false, nil
 }

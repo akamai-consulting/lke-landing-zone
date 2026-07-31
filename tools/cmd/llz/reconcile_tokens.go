@@ -72,6 +72,7 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 	// same thing ("days since this credential was last written") and only the
 	// SOURCE differs. Reusing it means the existing dashboard panels and both
 	// alert rules pick these up with no query changes.
+
 	// Did the write-time probe run at all? An empty Secrets list cannot answer
 	// that — it reads identically whether every credential was measured and none
 	// exist, or the probe never authenticated. The writer says so explicitly now,
@@ -112,7 +113,7 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 		// uniformly good: OPENBAO_ROOT_TOKEN is supposed to be ABSENT (bootstrap
 		// revokes it), so for that one a 1 here is the finding. Two rules read
 		// this series in opposite directions — LLZCredentialUnconfigured and
-		// LLZRootTokenParked — and both need the label to tell which way to read.
+		// LLZCredentialRootTokenParked — and both need the label to say which way.
 		expect := sec.Expect
 		if expect == "" {
 			expect = credExpectPresent // inventory written by an older llz

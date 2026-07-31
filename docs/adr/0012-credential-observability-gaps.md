@@ -62,7 +62,7 @@ break-glass whose revoke half never ran. Two rules therefore read the same serie
 in opposite directions:
 
 - `LLZCredentialUnconfigured` — `expect="present"` and the value is 0
-- `LLZRootTokenParked` — `expect="absent"` and the value is 1
+- `LLZCredentialRootTokenParked` — `expect="absent"` and the value is 1
 
 A rule set that could only say "configured is good" would have had to leave the
 root token unwatched. The promtool group pins that the two matchers cannot be

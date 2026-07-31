@@ -408,3 +408,77 @@ func TestPresenceHealthDoesNotGateOptionalCredentials(t *testing.T) {
 		}
 	}
 }
+
+// The seam the earlier presence tests never crossed. They exercised
+// evalPresenceHealth — the pure half — and proved nothing about whether the
+// probe gauge could be READ, which is where the lane was actually broken:
+// llz_credential_secret_probe_ok has no `cred` label, and promVectorByLabel drops
+// every sample whose label value is empty. probeSeen was permanently false, so
+// the lane silently checked nothing and --require-inventory would have failed
+// every run on every cluster.
+func TestPromFirstSampleReadsALabellessGauge(t *testing.T) {
+	raw := []byte(`{"status":"success","data":{"resultType":"vector","result":[
+	  {"metric":{"__name__":"llz_credential_secret_probe_ok","namespace":"llz-reconciler"},"value":[1,"0"]}
+	]}}`)
+	// The helper the rest of this file uses cannot see it — pinned so the reason
+	// promFirstSample exists is visible rather than folklore.
+	if m, err := promVectorByLabel(raw, "cred"); err != nil || len(m) != 0 {
+		t.Fatalf("promVectorByLabel is expected to drop a label-less sample, got %v (%v)", m, err)
+	}
+	v, ok, err := promFirstSample(raw)
+	if err != nil || !ok || v != 0 {
+		t.Fatalf("promFirstSample = (%v, %v, %v), want (0, true, nil)", v, ok, err)
+	}
+}
+
+func TestPromFirstSampleDistinguishesEmptyFromError(t *testing.T) {
+	empty := []byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`)
+	if v, ok, err := promFirstSample(empty); err != nil || ok || v != 0 {
+		t.Errorf("an empty result is 'no series yet', got (%v, %v, %v)", v, ok, err)
+	}
+	bad := []byte(`{"status":"error","error":"query timed out"}`)
+	if _, ok, err := promFirstSample(bad); err == nil || ok {
+		t.Errorf("a query error must be an error, not an absence: ok=%v err=%v", ok, err)
+	}
+	if _, _, err := promFirstSample([]byte("not json")); err == nil {
+		t.Error("unparseable input must error")
+	}
+}
+
+// End to end through the parsing seam: a healthy funnel must be SEEN, so the
+// lane actually evaluates. The previous implementation passed every pure test
+// while failing this one.
+func TestProbePresenceHealthSeesAHealthyFunnel(t *testing.T) {
+	orig := withPrometheus
+	t.Cleanup(func() { withPrometheus = orig })
+	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+		return fn(func(q string) ([]byte, error) {
+			if strings.Contains(q, "secret_probe_ok") {
+				return []byte(`{"status":"success","data":{"resultType":"vector","result":[
+				  {"metric":{"namespace":"llz-reconciler"},"value":[1,"1"]}]}}`), nil
+			}
+			var rows []string
+			for _, tgt := range ghSecretTargets {
+				v := "1"
+				if tgt.expect == credExpectAbsent {
+					v = "0"
+				}
+				rows = append(rows, `{"metric":{"cred":"`+credLabelForSecret(tgt.name)+`"},"value":[1,"`+v+`"]}`)
+			}
+			return []byte(`{"status":"success","data":{"resultType":"vector","result":[` +
+				strings.Join(rows, ",") + `]}}`), nil
+		})
+	}
+	vs, err := probePresenceHealth("ns/prom:9090", "llz-reconciler", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vs) == 1 && vs[0].Cred == "token-inventory" && !vs[0].Present {
+		t.Fatal("a healthy funnel was read as 'the writer has never run' — the probe gauge is not being parsed")
+	}
+	for _, v := range vs {
+		if v.FailWhy != "" {
+			t.Errorf("%s must pass on a healthy funnel: %s", v.Cred, v.FailWhy)
+		}
+	}
+}

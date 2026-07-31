@@ -299,7 +299,7 @@ uses stay off that list. What each publishes:
 |---|---|---|---|
 | `OPENBAO_SEAL_KEY` | `static` | expected **present** | The at-rest key for everything else in OpenBao. `LLZCredentialNeverRotated` at 365d; a rewrap is not implemented, so the yearly nudge is the honest signal. |
 | `OPENBAO_RECOVERY_KEY_1/2/3` | `static` | expected **present** | An **absent** one means break-glass is impossible, and you would find out on the day you need it — `LLZCredentialUnconfigured`. |
-| `OPENBAO_ROOT_TOKEN` | `on-demand` | expected **absent** | Bootstrap revokes it; the quorum is what survives. A **set** one is a live full-admin credential left by a break-glass that never ran its revoke — `LLZRootTokenParked`, remedy `action=revoke`. |
+| `OPENBAO_ROOT_TOKEN` | `on-demand` | expected **absent** | Bootstrap revokes it; the quorum is what survives. A **set** one is a live full-admin credential left by a break-glass that never ran its revoke — `LLZCredentialRootTokenParked`, remedy `action=revoke`. |
 | `HARBOR_PASSWORD` / `HARBOR_PULL_PASSWORD` | `static` | **optional** | Published by the **active** peer's `harbor-robot-provisioner`, so a standby peer (and any deployment before Harbor first comes up) legitimately has neither. Measured when present, never alerted either way. |
 
 Presence is therefore not uniformly good, which is why `llz_credential_configured`

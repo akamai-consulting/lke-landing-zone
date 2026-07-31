@@ -309,7 +309,7 @@ spec:
             summary: 'credential {{ $labels.cred }} is not configured'
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md"
             description: '{{ $labels.cred }} is expected as a GitHub Actions secret on this deployment and the secrets API reports it absent. It has no age because it has no value — nothing else in this ruleset can fire for it. Seed it (docs/secrets.md), or drop it from ghSecretTargets if this instance genuinely does not use it.'
-        - alert: LLZRootTokenParked
+        - alert: LLZCredentialRootTokenParked
           # The same series read the other way. A root token is EPHEMERAL by design:
           # bootstrap mints one, uses it, and revokes it, leaving the 3-of-5 recovery
           # quorum as what survives (ci_bao_breakglass.go). So OPENBAO_ROOT_TOKEN
