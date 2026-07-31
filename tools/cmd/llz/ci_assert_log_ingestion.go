@@ -48,6 +48,28 @@ import (
 // them; add them via --namespaces where they are enabled.
 var defaultLogNamespaces = []string{"llz-reconciler", "llz-openbao"}
 
+// defaultCollectorTenant is the Loki tenant apl-core's cluster-wide collector
+// writes THIS path's logs under, and it is deliberately NOT defaultAuditTenant.
+//
+// Two different producers reach Loki, and they use different tenants. The OpenBao
+// sidecar pushes with promtail `tenant_id: platform`, which is what
+// assert-openbao-audit reads. apl-core's platform-logs-collector routes by
+// namespace instead (its `routing` connector, read off lke638084):
+//
+//	namespace == "team-admin"     → X-Scope-OrgID: admin
+//	namespace == "team-platform"  → X-Scope-OrgID: platform
+//	everything else (default)     → X-Scope-OrgID: admins
+//
+// Every namespace this gate checks is a landing-zone namespace, none of which is
+// a team namespace, so all of them land in the DEFAULT pipeline — tenant
+// `admins`. Reading as `platform` found nothing and reported the collector dead
+// while it was demonstrably alive: the gateway's access log showed a steady
+// stream of `POST /otlp/v1/logs → 204` throughout.
+//
+// This matters only because apl-core ships Loki with `auth_enabled: true`, so the
+// tenant actually partitions reads. A read with no header answers "no org id".
+const defaultCollectorTenant = "admins"
+
 func ciAssertLogIngestionCmd() *cobra.Command {
 	var loki, tenant, namespaces string
 	var lookback, settle, interval, limit int
@@ -74,7 +96,9 @@ func ciAssertLogIngestionCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&loki, "loki", defaultAuditLokiService, "the Loki gateway Service as <namespace>/<name>:<port> to port-forward to")
-	c.Flags().StringVar(&tenant, "tenant", defaultAuditTenant, "Loki tenant (X-Scope-OrgID) to read as")
+	c.Flags().StringVar(&tenant, "tenant", defaultCollectorTenant,
+		"Loki tenant (X-Scope-OrgID) to read as — must match the COLLECTOR's tenant, "+
+			"which is not the OpenBao sidecar's (see defaultCollectorTenant)")
 	c.Flags().StringVar(&namespaces, "namespaces", strings.Join(defaultLogNamespaces, ","),
 		"comma-separated namespaces whose pod logs must be arriving")
 	c.Flags().IntVar(&lookback, "lookback", 30, "minutes of history a namespace must have logged within")
