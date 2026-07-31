@@ -453,3 +453,98 @@ func TestRunAssertDatabaseFailsOnRejectedCredential(t *testing.T) {
 		t.Errorf("a rejected credential must fail naming the cluster, got %v", err)
 	}
 }
+
+// Loki spells its endpoint `storage.s3.s3:`, not `endpoint:`. The gate's regex
+// only knew the `(region)endpoint` spellings, so against apl-core's real Loki
+// ConfigMap it found the bucket, found no endpoint, and refused to derive one —
+// reporting a healthy consumer as broken.
+func TestParseObjConfigReadsLokiS3Key(t *testing.T) {
+	// Trimmed from monitoring/loki on lke638084.
+	cfg := "common:\n  storage:\n    s3:\n      bucketnames: platform-loki-chunks-e2e\n" +
+		"      s3: https://us-ord-10.linodeobjects.com\n      s3forcepathstyle: true\n" +
+		"schema_config:\n  configs:\n  - object_store: s3\n    store: tsdb\n"
+	ep, bucket, err := parseObjConfig(cfg)
+	if err != nil {
+		t.Fatalf("parseObjConfig on the real Loki config: %v", err)
+	}
+	if ep != "us-ord-10.linodeobjects.com" {
+		t.Errorf("endpoint = %q, want the host from the `s3:` key", ep)
+	}
+	if bucket != "platform-loki-chunks-e2e" {
+		t.Errorf("bucket = %q", bucket)
+	}
+}
+
+// `object_store: s3` and `s3forcepathstyle: true` must not be mistaken for the
+// endpoint — matching either would send the round trip at a host named "s3" or
+// "true" and report a broken consumer.
+func TestParseObjConfigIgnoresS3LookalikeKeys(t *testing.T) {
+	cfg := "schema_config:\n  configs:\n  - object_store: s3\n" +
+		"storage:\n  s3forcepathstyle: true\n  bucket: b\n"
+	if _, _, err := parseObjConfig(cfg); err == nil {
+		t.Error("a config with no real endpoint must error, not match object_store/s3forcepathstyle")
+	}
+}
+
+// Harbor's registry keeps using `regionendpoint:` — the other spelling must
+// still work.
+func TestParseObjConfigStillReadsHarborRegionEndpoint(t *testing.T) {
+	cfg := "storage:\n  s3:\n    region: us-ord-10\n    bucket: platform-harbor-registry-e2e\n" +
+		"    regionendpoint: https://us-ord-10.linodeobjects.com\n"
+	ep, bucket, err := parseObjConfig(cfg)
+	if err != nil || ep != "us-ord-10.linodeobjects.com" || bucket != "platform-harbor-registry-e2e" {
+		t.Errorf("parseObjConfig = (%q, %q, %v)", ep, bucket, err)
+	}
+}
+
+// The consumer table must name the Secrets the workloads MOUNT, not the OpenBao
+// paths that happen to describe the same credential. Conflating them is what made
+// this lane report both consumers unable to write on a cluster where both were
+// writing fine.
+func TestObjConsumersNameMountedSecretsNotOpenBaoPaths(t *testing.T) {
+	want := map[string]string{
+		"loki":   "monitoring/loki-s3-linode-credentials",
+		"harbor": "harbor/registry-storage-credentials",
+	}
+	for _, c := range objConsumers {
+		if got := want[c.Name]; got != "" && c.SecretRef != got {
+			t.Errorf("%s SecretRef = %q, want %q — the OpenBao path name is not a k8s Secret name",
+				c.Name, c.SecretRef, got)
+		}
+	}
+}
+
+// "Secret X is absent" is true and nearly useless on its own — the reader's next
+// question is always "then what IS in that namespace", and answering it needed a
+// live cluster when this gate shipped pointing at two Secrets that had not
+// existed since 52465691.
+func TestProbeObjConsumerNamesTheSecretsThatDoExist(t *testing.T) {
+	oS, oL := readObjSecret, listSecretsIn
+	t.Cleanup(func() { readObjSecret, listSecretsIn = oS, oL })
+	readObjSecret = func(string) ([]byte, error) { return nil, errors.New("NotFound") }
+	listSecretsIn = func(ns string) ([]string, error) {
+		return []string{"loki-s3-linode-credentials", "alertmanager-config"}, nil
+	}
+
+	v := probeObjConsumer(objConsumer{Name: "loki", SecretRef: "monitoring/loki-object-store"}, "p", time.Now())
+	if v.FailWhy == "" {
+		t.Fatal("an absent credential Secret must fail")
+	}
+	if !strings.Contains(v.FailWhy, "loki-s3-linode-credentials") {
+		t.Errorf("the failure must name the Secrets that DO exist, or diagnosing it needs a cluster: %s", v.FailWhy)
+	}
+}
+
+// The hint is best-effort: if it cannot be gathered, the verdict must be
+// unchanged rather than swallowing the real failure.
+func TestProbeObjConsumerSurvivesAnUnlistableNamespace(t *testing.T) {
+	oS, oL := readObjSecret, listSecretsIn
+	t.Cleanup(func() { readObjSecret, listSecretsIn = oS, oL })
+	readObjSecret = func(string) ([]byte, error) { return nil, errors.New("NotFound") }
+	listSecretsIn = func(string) ([]string, error) { return nil, errors.New("forbidden") }
+
+	v := probeObjConsumer(objConsumer{Name: "loki", SecretRef: "monitoring/loki-object-store"}, "p", time.Now())
+	if v.FailWhy == "" || !strings.Contains(v.FailWhy, "is absent") {
+		t.Errorf("the underlying failure must survive a hint that could not be gathered: %s", v.FailWhy)
+	}
+}

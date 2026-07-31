@@ -180,7 +180,23 @@ type: application
 #         stays registered in plaintextAllowed: the gateway is nginx with no TLS
 #         material from apl-core (its own otel-operator ships to it over http://),
 #         so https:// would connect to nothing. Meshing closes it.
-version: 0.1.29
+# 0.1.30: FINISH 0.1.29. It repointed the audit pipeline at `monitoring` and left
+#         the egress allow on :80, but the loki-gateway Service publishes :80 and
+#         its pods listen on :8080, and Cilium evaluates egress on the TARGET port
+#         — so every push was still dropped at the CNI. Observed on lke638084:
+#         promtail tailing the audit device correctly and retrying
+#         `context deadline exceeded` against
+#         loki-gateway.monitoring.svc.cluster.local forever, while the gateway's
+#         own access log showed apl-core's collector POSTing successfully from
+#         inside `monitoring`. :8080 is now allowed alongside :80 — the same
+#         post-DNAT correction this policy already carries for the apiserver
+#         (443 → 6443) a few rules above.
+#
+#         Two consecutive releases fixed one half each of the same allow, which is
+#         what a rule that is shape-correct and effect-free buys you: nothing in
+#         review or in converge can tell it from a working one, and only reading
+#         it back off the wire can.
+version: 0.1.30
 # appVersion tracks the OpenBao server image tag default in values.yaml.
 appVersion: "2.5.0"
 keywords:

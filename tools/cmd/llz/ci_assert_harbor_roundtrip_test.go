@@ -243,15 +243,63 @@ func TestProbeHarborRoundTripUnauthenticatedRegistry(t *testing.T) {
 	}
 }
 
-// An absent credential Secret must fail with the ESO-shaped diagnosis, not be
-// skipped: a gate that skips when the credential is missing cannot catch a
-// credential that stopped being delivered.
+// seamHarborCluster stubs the two cluster reads: whether the component's
+// namespace exists, and the Secret inside it.
+func seamHarborCluster(t *testing.T, nsPresent bool, nsErr error, secret []byte, secretErr error) {
+	t.Helper()
+	oN, oS := namespaceExists, readHarborRobotSecret
+	t.Cleanup(func() { namespaceExists, readHarborRobotSecret = oN, oS })
+	namespaceExists = func(string) (bool, error) { return nsPresent, nsErr }
+	readHarborRobotSecret = func(string, string) ([]byte, error) { return secret, secretErr }
+}
+
+// An absent credential Secret INSIDE A PRESENT NAMESPACE must fail with the
+// ESO-shaped diagnosis, not be skipped: a gate that skips when the credential is
+// missing cannot catch a credential that stopped being delivered.
 func TestRunAssertHarborRoundTripMissingSecretFails(t *testing.T) {
-	orig := readHarborRobotSecret
-	t.Cleanup(func() { readHarborRobotSecret = orig })
-	readHarborRobotSecret = func(string, string) ([]byte, error) { return nil, fmt.Errorf("NotFound") }
+	seamHarborCluster(t, true, nil, nil, nil) // namespace there, Secret absent
 	err := runCIAssertHarborRoundTrip("ns", "name", "", harborProbeRepo, 0, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "secret/harbor/robot") {
 		t.Errorf("a missing robot Secret must fail naming the OpenBao path, got %v", err)
+	}
+}
+
+// A cluster that never deployed llz-cert-automation has no namespace and no
+// robot credential to round-trip. Managed App Platform renders a minimal app set
+// and omits it; on lke638103 the namespace genuinely did not exist. Failing there
+// reds a correct cluster for a component it was never asked to run.
+func TestRunAssertHarborRoundTripSkipsWhenComponentAbsent(t *testing.T) {
+	seamHarborCluster(t, false, nil, nil, fmt.Errorf("must not be read"))
+	if err := runCIAssertHarborRoundTrip("ns", "name", "", harborProbeRepo, 0, time.Millisecond); err != nil {
+		t.Errorf("an undeployed component must SKIP, not fail: %v", err)
+	}
+}
+
+// "Could not tell" is not "not deployed". An unreadable cluster must fail rather
+// than skip, or a broken kubeconfig silently turns this gate off.
+func TestRunAssertHarborRoundTripFailsWhenNamespaceUnreadable(t *testing.T) {
+	seamHarborCluster(t, false, fmt.Errorf("connection refused"), nil, nil)
+	if err := runCIAssertHarborRoundTrip("ns", "name", "", harborProbeRepo, 0, time.Millisecond); err == nil {
+		t.Error("an unreadable namespace check must fail, not degrade to a skip")
+	}
+}
+
+// The Secret is written by ESO from a path the harbor-robot-provisioner CronJob
+// seeds only after Harbor is serving, so a fresh cluster has a window where it is
+// legitimately absent. The read must be RETRIED inside the settle budget rather
+// than decided once, which is what made this lane fail on the documented window.
+func TestRunAssertHarborRoundTripRetriesTheSecretRead(t *testing.T) {
+	oN, oS := namespaceExists, readHarborRobotSecret
+	t.Cleanup(func() { namespaceExists, readHarborRobotSecret = oN, oS })
+	namespaceExists = func(string) (bool, error) { return true, nil }
+	reads := 0
+	readHarborRobotSecret = func(string, string) ([]byte, error) {
+		reads++
+		return nil, nil // always absent
+	}
+	_ = runCIAssertHarborRoundTrip("ns", "name", "", harborProbeRepo, 50*time.Millisecond, 10*time.Millisecond)
+	if reads < 2 {
+		t.Errorf("the Secret was read %d time(s) — absence must be retried within the settle budget, "+
+			"or the gate decides during the window ESO is documented to need", reads)
 	}
 }

@@ -41,6 +41,13 @@ package main
 //	        workload's port in plaintext. Istio must refuse it. The positive
 //	        control is the apiserver again.
 //
+//	        IT SKIPS UNLESS THE TARGET NAMESPACE IS ACTUALLY STRICT, read from its
+//	        PeerAuthentications at run time. A PERMISSIVE workload accepts
+//	        plaintext by design, so the dial succeeding there is correct behaviour
+//	        and not a finding — harbor ships PERMISSIVE deliberately (ADR 0010
+//	        step 3). Asserting STRICT before the flip is the "aspirational claim"
+//	        harbor-peerauthentication.yaml warns about having already caught twice.
+//
 // IT CLEANS UP AFTER ITSELF, including on failure: the scratch namespace is
 // deleted in a defer. A gate that leaks a namespace on every red run makes the
 // next run's cluster dirtier, and this one runs on a cluster that is about to be
@@ -68,9 +75,13 @@ const (
 	// allow. Loki's gateway is present on every landing zone and is plain HTTP, so
 	// a successful dial is unambiguous.
 	netEnforceDeniedTarget = "loki-gateway.monitoring.svc.cluster.local:80"
-	// netEnforceMTLSTarget is a STRICT-mesh port. harbor is namespace-wide STRICT
-	// (harbor-peerauthentication.yaml), so a plaintext dial from an unmeshed pod
-	// must be refused by the sidecar.
+	// netEnforceMTLSTarget is the port the mtls check dials in plaintext.
+	//
+	// harbor is NOT STRICT today: all three documents in
+	// harbor-peerauthentication.yaml ship mode: PERMISSIVE on purpose — ADR 0010
+	// step 3, the measurement phase that watches for clients which would break
+	// under STRICT before the flip. So this check SKIPS here until those three
+	// lines change, and the mode is read off the cluster rather than assumed.
 	netEnforceMTLSTarget = "harbor-core.harbor.svc.cluster.local:80"
 )
 
@@ -94,7 +105,9 @@ func ciAssertNetworkEnforcementCmd() *cobra.Command {
 			"           Proves the CNI enforces NetworkPolicy at all; a cluster where it\n" +
 			"           silently does not is one where every default-deny here is decorative.\n" +
 			"  mtls   — the same pod, deliberately unmeshed, dialing a STRICT-mesh port in\n" +
-			"           plaintext. Istio must refuse it.\n\n" +
+			"           plaintext. Istio must refuse it. SKIPS unless the target namespace\n" +
+			"           actually declares STRICT: a PERMISSIVE mesh accepts plaintext by\n" +
+			"           design, and harbor ships PERMISSIVE on purpose (ADR 0010 step 3).\n\n" +
 			"MUTATING: creates and deletes a scratch namespace, a NetworkPolicy and a Pod.\n" +
 			"Cleanup runs on failure too. Exit 0 / 1.",
 		Args: cobra.NoArgs,
@@ -140,6 +153,7 @@ type netEnforceVerdict struct {
 	Detail   string
 	FailWhy  string
 	Inconclu bool // the positive control failed: we learned nothing
+	Skipped  bool // the property is not in force on this cluster yet
 }
 
 // evalEnforcementProbe is the verdict logic, and the reason it is a separate pure
@@ -169,9 +183,74 @@ func evalEnforcementProbe(check string, allowedRes, deniedRes netProbeResult, wh
 			deniedRes.Target, whatDenied)
 		return v
 	}
+	// WHICH KIND OF BLOCK, for the mtls check only.
+	//
+	// A sidecar refusing plaintext RESETS the connection; a NetworkPolicy drop
+	// blackholes it and shows up as a timeout. ci_net_probe.go draws that
+	// distinction on purpose and this is the check that has to act on it: if the
+	// dial timed out, the CNI dropped the packet and Istio was never consulted, so
+	// a "blocked" verdict here would be the netpol check a second time wearing the
+	// mesh's name. That is a pass on a property the run never exercised.
+	//
+	// The netpol check is deliberately NOT held to this: a drop is exactly what it
+	// is asserting, and a reset there is a fine outcome too.
+	if check == "mtls" && strings.Contains(deniedRes.Reason, "timeout") {
+		v.Inconclu = true
+		v.FailWhy = fmt.Sprintf("INCONCLUSIVE: %s was blocked by a TIMEOUT (%s), not a refusal. A timeout is a "+
+			"packet drop — the CNI discarded it and Istio never saw the connection, so this run did not observe the "+
+			"mesh refusing anything. Istio resets a plaintext dial to a STRICT port, which surfaces as `refused`. "+
+			"Check that the probe namespace's egress actually ALLOWS this target, so that the mesh is the only "+
+			"thing left that can deny it",
+			deniedRes.Target, deniedRes.Reason)
+		return v
+	}
 	v.Detail = fmt.Sprintf("control %s connected; %s blocked (%s)",
 		allowedRes.Target, deniedRes.Target, deniedRes.Reason)
 	return v
+}
+
+// readPeerAuthModes returns every mtls mode declared by the PeerAuthentications
+// in a namespace — the workload defaults and the portLevelMtls entries alike.
+// Seamed for tests.
+var readPeerAuthModes = func(ns string) ([]string, error) {
+	out, err := execOutput("kubectl", "-n", ns, "get", "peerauthentication",
+		"-o", `jsonpath={range .items[*]}{.spec.mtls.mode}{" "}{range .spec.portLevelMtls.*}{.mode}{" "}{end}{end}`)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(string(out)), nil
+}
+
+// meshEnforcesSTRICT reports whether a namespace is actually refusing plaintext.
+// Pure.
+//
+// Absence of any STRICT mode — including no PeerAuthentication at all — means the
+// mesh default applies, and this platform's default is PERMISSIVE
+// (llz-cluster-foundation values.yaml). A PERMISSIVE workload ACCEPTS plaintext
+// by design, so a plaintext dial succeeding against it is correct behaviour and
+// not a finding.
+func meshEnforcesSTRICT(modes []string) bool {
+	for _, m := range modes {
+		if strings.EqualFold(strings.TrimSpace(m), "STRICT") {
+			return true
+		}
+	}
+	return false
+}
+
+// serviceNamespaceOf returns the namespace label of a cluster-local
+// "<svc>.<ns>.svc.cluster.local[:port]" target, or "" if it is not that shape.
+// Pure.
+func serviceNamespaceOf(hostPort string) string {
+	host, _, ok := strings.Cut(hostPort, ":")
+	if !ok {
+		host = hostPort
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[1]
 }
 
 // probePodManifest renders the scratch namespace, the default-deny-egress policy
@@ -184,6 +263,23 @@ func evalEnforcementProbe(check string, allowedRes, deniedRes netProbeResult, wh
 // opposite.
 func probePodManifest(ns, image, allowed, denied, mtlsTarget string, timeout time.Duration) string {
 	secs := int(timeout.Seconds())
+	// THE MTLS TARGET'S NAMESPACE IS ALLOWED, on every port, and that is the point
+	// rather than a hole. The mtls check claims to observe Istio refusing
+	// plaintext; if this NetworkPolicy also denies the dial, the CNI drops the
+	// packet first and Istio is never consulted — the check would then be a second
+	// copy of the netpol check, passing on a property it never exercised. Opening
+	// the path leaves the mesh as the only thing that can refuse it, which is what
+	// the check has to isolate. (The denied target for the NETPOL check stays
+	// unallowed — that one is about the CNI.)
+	mtlsNS := serviceNamespaceOf(mtlsTarget)
+	mtlsAllow := ""
+	if mtlsNS != "" {
+		mtlsAllow = fmt.Sprintf(`
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: %s`, mtlsNS)
+	}
 	// One container per dial so each exit code is separately readable from the
 	// pod's containerStatuses. initContainers run in order and would stop at the
 	// first failure, which is precisely what must NOT happen here: the denied dial
@@ -206,24 +302,51 @@ spec:
   egress:
     # DNS, or every dial fails on resolution and the control cannot distinguish
     # "policy blocked it" from "the name never resolved".
+    #
+    # BOTH label values, because the upstream convention is not universal. Stock
+    # kube-dns/CoreDNS carries k8s-app=kube-dns, but LKE-Enterprise installs
+    # CoreDNS from its "workload" Helm release labelled k8s-app=coredns and
+    # publishes it as the "coredns" Service — there is no kube-dns Service on the
+    # cluster at all. Selecting only kube-dns matched NOTHING there, so DNS egress
+    # was denied, every dial failed to resolve, and the positive control failed —
+    # which this gate correctly reported as INCONCLUSIVE rather than as
+    # enforcement. matchExpressions/In is the one selector that covers both
+    # without a second rule.
     - to:
         - namespaceSelector: {}
           podSelector:
-            matchLabels:
-              k8s-app: kube-dns
+            matchExpressions:
+              - key: k8s-app
+                operator: In
+                values: [kube-dns, coredns]
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
-    # The positive control's target: the apiserver, reachable by CIDR because it
-    # is outside the pod network.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-      ports:
+    # The positive control's target: the apiserver.
+    #
+    # NO "to:" SELECTOR, DELIBERATELY — a bare port allow, matching any
+    # destination. This rule is copied in shape from the llz-openbao-platform
+    # policy, which reaches the apiserver successfully on these clusters every
+    # bootstrap; the difference between them was the whole bug.
+    #
+    # "to: ipBlock: 0.0.0.0/0" reads like "anywhere" and is not. Cilium turns an
+    # ipBlock into a CIDR rule, and CIDR rules match entities OUTSIDE the cluster;
+    # the kube-apiserver carries a cluster identity, so the rule never applied to
+    # it and the dial was blackholed. Two rounds on real clusters said the same
+    # thing — lke638103 and lke638247 both reported the control as blocked by
+    # TIMEOUT, a drop rather than a refusal — including one round where 6443 had
+    # been added alongside 443, which ruled the port out as the cause.
+    #
+    # Both ports stay: on LKE-Enterprise the "kubernetes" Service DNATs 443 to 6443
+    # and Cilium evaluates egress on the post-DNAT port. The OpenBao policy
+    # carries both for exactly this reason.
+    - ports:
         - protocol: TCP
           port: 443
+        - protocol: TCP
+          port: 6443%[7]s
 ---
 apiVersion: v1
 kind: Pod
@@ -256,7 +379,7 @@ spec:
       image: %[2]s
       args: ["ci", "net-probe", "%[5]s", "--timeout", "%[6]d"]
       securityContext: *sec
-`, ns, image, allowed, denied, mtlsTarget, secs)
+`, ns, image, allowed, denied, mtlsTarget, secs, mtlsAllow)
 }
 
 // ── cluster I/O (seamed) ─────────────────────────────────────────────────────
@@ -288,6 +411,16 @@ var (
 	}
 	readProbeStatuses = func(ns string) ([]byte, error) {
 		return execOutput("kubectl", "-n", ns, "get", "pod", "net-probe", "-o", "json")
+	}
+	// readProbeLog returns one probe container's stdout — the line net-probe
+	// prints naming WHY the dial failed. Best-effort: a log that cannot be read
+	// must never change a verdict, only how well it is explained.
+	readProbeLog = func(ns, container string) string {
+		out, err := execOutput("kubectl", "-n", ns, "logs", "net-probe", "-c", container)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
 	}
 	// resolveProbeImage reads the image the reconciler Deployment runs, so the
 	// probe uses an image already present and already signature-gated rather than
@@ -338,7 +471,16 @@ func containerExit(raw []byte) (map[string]int, error) {
 
 // resultFromExit turns a net-probe exit code back into a result. Exit 2 (the
 // probe could not run) is NOT "blocked" — it is an inconclusive control.
-func resultFromExit(target string, code int, ok bool) netProbeResult {
+//
+// `log` is the probe container's own stdout, which already names the distinction
+// that matters: net-probe classifies every dial as refused / timeout / dns
+// precisely so a reader need not guess, and collapsing all of them to "blocked"
+// threw away the only evidence the gate had. A failed positive control used to
+// print "check the probe pod's scheduling, image pull and DNS" while holding the
+// answer to that question — "dns" points at CoreDNS or the policy's DNS allow,
+// "timeout" at a policy drop, "refused" at a closed port or a sidecar reset.
+// Empty when the log could not be read, in which case the verdict is unchanged.
+func resultFromExit(target string, code int, ok bool, log string) netProbeResult {
 	if !ok {
 		return netProbeResult{Target: target, Connected: false, Reason: "the probe container did not report an exit code"}
 	}
@@ -346,10 +488,18 @@ func resultFromExit(target string, code int, ok bool) netProbeResult {
 	case 0:
 		return netProbeResult{Target: target, Connected: true, Reason: "connected"}
 	case 2:
-		return netProbeResult{Target: target, Connected: false, Reason: "the probe could not run (bad address)"}
+		return netProbeResult{Target: target, Connected: false, Reason: withProbeLog("the probe could not run (bad address)", log)}
 	default:
-		return netProbeResult{Target: target, Connected: false, Reason: "blocked"}
+		return netProbeResult{Target: target, Connected: false, Reason: withProbeLog("blocked", log)}
 	}
+}
+
+// withProbeLog appends the probe's own explanation to a reason. Pure.
+func withProbeLog(reason, log string) string {
+	if log == "" {
+		return reason
+	}
+	return reason + ": " + log
 }
 
 func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
@@ -397,20 +547,50 @@ func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
 	}
 
 	ctrlCode, ctrlOK := exits["control"]
-	control := resultFromExit(o.allowed, ctrlCode, ctrlOK)
+	control := resultFromExit(o.allowed, ctrlCode, ctrlOK, readProbeLog(o.namespace, "control"))
 
 	var vs []netEnforceVerdict
 	for _, check := range o.checks {
 		switch check {
 		case "netpol":
 			code, ok := exits["denied"]
-			vs = append(vs, evalEnforcementProbe("netpol", control, resultFromExit(o.denied, code, ok),
+			vs = append(vs, evalEnforcementProbe("netpol", control, resultFromExit(o.denied, code, ok, readProbeLog(o.namespace, "denied")),
 				"The scratch namespace carries a default-deny-egress NetworkPolicy that does not allow this "+
 					"address, so the CNI is not enforcing NetworkPolicy — which makes every default-deny in this "+
 					"repo decorative. On LKE-E that is Cilium; check the agent is healthy and the policy was programmed."))
 		case "mtls":
+			// IS THE MESH ACTUALLY ENFORCING HERE YET? harbor ships all three of its
+			// PeerAuthentication documents at mode: PERMISSIVE — ADR 0010 step 3, the
+			// measurement phase, whose whole purpose is to watch
+			// istio_requests_total{connection_security_policy="none"} fall to zero
+			// BEFORE flipping to STRICT. A PERMISSIVE workload accepts plaintext by
+			// design, so the dial succeeding is correct behaviour, and asserting
+			// otherwise reds every cluster for a rollout step nobody has taken.
+			//
+			// harbor-peerauthentication.yaml already names this trap: "every claim
+			// resting on 'harbor is STRICT' was aspirational", listing two guards that
+			// made it. This check was the third. Reading the mode off the cluster is
+			// what stops there being a fourth — the moment those three lines flip to
+			// STRICT, this check starts enforcing with no code change.
+			if ns := serviceNamespaceOf(o.mtlsTarget); ns != "" {
+				modes, merr := readPeerAuthModes(ns)
+				switch {
+				case merr != nil:
+					vs = append(vs, netEnforceVerdict{Check: "mtls",
+						FailWhy: fmt.Sprintf("could not read the PeerAuthentication mode in %s (%v) — refusing to "+
+							"guess whether the mesh is enforcing", ns, merr)})
+					continue
+				case !meshEnforcesSTRICT(modes):
+					vs = append(vs, netEnforceVerdict{Check: "mtls", Skipped: true,
+						Detail: fmt.Sprintf("namespace %s declares no STRICT PeerAuthentication (modes: %v) — the mesh "+
+							"is PERMISSIVE there and ACCEPTS plaintext by design. This is ADR 0010 step 3, the "+
+							"measurement phase; the check begins enforcing automatically when those modes flip to STRICT",
+							ns, modes)})
+					continue
+				}
+			}
 			code, ok := exits["mtls"]
-			vs = append(vs, evalEnforcementProbe("mtls", control, resultFromExit(o.mtlsTarget, code, ok),
+			vs = append(vs, evalEnforcementProbe("mtls", control, resultFromExit(o.mtlsTarget, code, ok, readProbeLog(o.namespace, "mtls")),
 				"The probe pod is deliberately OUTSIDE the mesh (sidecar.istio.io/inject=false) and dialed this "+
 					"STRICT-mesh port in plaintext. Istio must refuse that. Check the namespace's PeerAuthentication "+
 					"is still STRICT and has not been reverted to PERMISSIVE, and that this port is not a portLevelMtls exemption."))
@@ -421,12 +601,16 @@ func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
 	}
 
 	var bad []string
+	observed := 0
 	for _, v := range vs {
 		switch {
 		case v.FailWhy != "":
 			fmt.Printf("FAIL: %s — %s\n", v.Check, v.FailWhy)
 			bad = append(bad, v.Check)
+		case v.Skipped:
+			fmt.Printf("SKIP: %s — %s\n", v.Check, v.Detail)
 		default:
+			observed++
 			fmt.Printf("OK: %s — %s\n", v.Check, v.Detail)
 		}
 	}
@@ -434,6 +618,12 @@ func runCIAssertNetworkEnforcement(o netEnforceOpts) error {
 		fmt.Fprintf(os.Stderr, "::error::network enforcement not observed: %s\n", strings.Join(bad, ", "))
 		return fmt.Errorf("network enforcement not observed: %s", strings.Join(bad, ", "))
 	}
-	fmt.Printf("All %d network-enforcement check(s) observed enforcing.\n", len(vs))
+	// Every check skipping is not a pass. This lane exists to observe enforcement
+	// in the data plane; a run that observed none of it must say so.
+	if observed == 0 {
+		fmt.Fprintln(os.Stderr, "::error::every requested check skipped — no enforcement was observed")
+		return fmt.Errorf("every requested check skipped — refusing to pass vacuously")
+	}
+	fmt.Printf("All %d network-enforcement check(s) observed enforcing.\n", observed)
 	return nil
 }

@@ -45,6 +45,7 @@ package main
 // enabled on this cluster — never because it could not tell.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -66,6 +67,7 @@ const tokenInventoryConfigMap = "llz-token-inventory"
 func ciAssertReconcilerEffectsCmd() *cobra.Command {
 	var namespace, laneSet string
 	var tokenMaxAge, settle, interval int
+	var requireInventory bool
 	c := &cobra.Command{
 		Use:   "assert-reconciler-effects",
 		Short: "fail unless each enabled reconciler lane's cluster invariant actually holds",
@@ -82,7 +84,7 @@ func ciAssertReconcilerEffectsCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertReconcilerEffects(namespace, splitCSVList(laneSet),
+			return runCIAssertReconcilerEffects(namespace, splitCSVList(laneSet), requireInventory,
 				time.Duration(tokenMaxAge)*time.Minute,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
@@ -90,6 +92,10 @@ func ciAssertReconcilerEffectsCmd() *cobra.Command {
 	c.Flags().StringVar(&namespace, "namespace", "llz-reconciler", "the reconciler's namespace (also where llz-token-inventory lives)")
 	c.Flags().StringVar(&laneSet, "lane-set", "",
 		"comma-separated lanes to check effects for (default: read the Deployment's --reconcile-* args)")
+	c.Flags().BoolVar(&requireInventory, "require-token-inventory", false,
+		"fail when the llz-token-inventory ConfigMap has never been written (default: report the skip). "+
+			"Its writer is the scheduled llz-scheduled-checks job, so on a fresh cluster absence is normal; "+
+			"set this for a caller that runs the writer itself, where absence is a break")
 	c.Flags().IntVar(&tokenMaxAge, "token-inventory-max-age", 180,
 		"minutes; the llz-token-inventory ConfigMap must have been updated within this window")
 	c.Flags().IntVar(&settle, "settle", 180, "seconds to keep polling before failing (absorbs a lane's first sweep after converge)")
@@ -196,6 +202,41 @@ func evalTokenInventory(raw []byte, now time.Time, maxAge time.Duration) effectV
 	return v
 }
 
+// evalTokenInventoryAbsent judges a token-inventory ConfigMap that is not there
+// at all. Pure.
+//
+// ABSENT AND STALE ARE DIFFERENT FAILURES, and this check only ever existed for
+// the second one. The reconciler's token-inventory lane READS the ConfigMap and
+// re-exposes it as gauges; the WRITER is `llz ci token-inventory | kubectl apply`
+// in llz-scheduled-checks.yml — a scheduled workflow on its own cadence, which on
+// a cluster minutes old has never run. So the lane being enabled says the reader
+// is on, not that anything has been written yet, and treating absence as proof of
+// breakage reds every fresh cluster.
+//
+// Staleness still gates, which is the property that matters: a writer that ran
+// and STOPPED leaves gauges serving a plausible last-known-good expiry, and
+// LLZTokenExpiringSoon can never fire on a token that has since lapsed. That is
+// unchanged.
+//
+// --require-token-inventory is for the caller that runs the writer itself. There
+// an absent ConfigMap IS a break, and the flag says so rather than leaving this
+// gate permanently unable to tell the two apart.
+func evalTokenInventoryAbsent(require bool, namespace string) effectVerdict {
+	v := effectVerdict{Lane: "token-inventory"}
+	if require {
+		v.FailWhy = fmt.Sprintf("the %s ConfigMap does not exist in %s and --require-token-inventory is set — "+
+			"this caller writes it, so its absence is a broken writer, not a fresh cluster",
+			tokenInventoryConfigMap, namespace)
+		return v
+	}
+	v.Skipped = true
+	v.Detail = fmt.Sprintf("%s does not exist yet in %s — its writer is the scheduled "+
+		"llz-scheduled-checks job, not the reconciler lane, and it has not run here. Freshness still gates "+
+		"once it does; pass --require-token-inventory if this caller writes it",
+		tokenInventoryConfigMap, namespace)
+	return v
+}
+
 // ── cidr-firewall: the controller ConfigMap carries discovered values ────────
 
 // firewallRequiredKeys are the values the discovery lane derives and the
@@ -246,8 +287,13 @@ var (
 	readStorageClasses = func() ([]byte, error) {
 		return execOutput("kubectl", "get", "storageclass", "-o", "json")
 	}
+	// --ignore-not-found is load-bearing: it makes ABSENT (exit 0, empty stdout)
+	// distinguishable from UNREADABLE (non-zero exit). Without it both arrive as
+	// "exit status 1" and the check cannot tell a cluster whose writer has never
+	// run from one where the read is broken.
 	readTokenInventory = func(ns string) ([]byte, error) {
-		return execOutput("kubectl", "-n", ns, "get", "configmap", tokenInventoryConfigMap, "-o", "json")
+		return execOutput("kubectl", "-n", ns, "get", "configmap", tokenInventoryConfigMap,
+			"--ignore-not-found", "-o", "json")
 	}
 	readFirewallConfig = func() ([]byte, error) {
 		return execOutput("kubectl", "-n", "kube-system", "get", "configmap", firewallConfigMapName, "-o", "json")
@@ -255,7 +301,7 @@ var (
 )
 
 // probeReconcilerEffects evaluates every invariant whose lane is enabled.
-func probeReconcilerEffects(namespace string, enabled map[string]bool, now time.Time, tokenMaxAge time.Duration) []effectVerdict {
+func probeReconcilerEffects(namespace string, enabled map[string]bool, requireInventory bool, now time.Time, tokenMaxAge time.Duration) []effectVerdict {
 	var out []effectVerdict
 
 	if enabled["sc-demote"] {
@@ -278,11 +324,14 @@ func probeReconcilerEffects(namespace string, enabled map[string]bool, now time.
 
 	if enabled["token-inventory"] {
 		raw, err := readTokenInventory(namespace)
-		if err != nil {
+		switch {
+		case err != nil:
 			out = append(out, effectVerdict{Lane: "token-inventory",
-				FailWhy: fmt.Sprintf("could not read the %s ConfigMap in %s (%v) — the lane is enabled, so it must exist",
+				FailWhy: fmt.Sprintf("could not read the %s ConfigMap in %s (%v)",
 					tokenInventoryConfigMap, namespace, err)})
-		} else {
+		case len(bytes.TrimSpace(raw)) == 0:
+			out = append(out, evalTokenInventoryAbsent(requireInventory, namespace))
+		default:
 			out = append(out, evalTokenInventory(raw, now, tokenMaxAge))
 		}
 	} else {
@@ -316,7 +365,7 @@ func failedEffects(vs []effectVerdict) []effectVerdict {
 	return out
 }
 
-func runCIAssertReconcilerEffects(namespace string, laneSet []string, tokenMaxAge, settle, interval time.Duration) error {
+func runCIAssertReconcilerEffects(namespace string, laneSet []string, requireInventory bool, tokenMaxAge, settle, interval time.Duration) error {
 	fmt.Println("## Reconciler lane-effect assertion")
 
 	lanes := laneSet
@@ -336,7 +385,7 @@ func runCIAssertReconcilerEffects(namespace string, laneSet []string, tokenMaxAg
 	var last []effectVerdict
 	deadline := time.Now().Add(settle)
 	for attempt := 1; ; attempt++ {
-		last = probeReconcilerEffects(namespace, enabled, time.Now(), tokenMaxAge)
+		last = probeReconcilerEffects(namespace, enabled, requireInventory, time.Now(), tokenMaxAge)
 		if len(failedEffects(last)) == 0 {
 			break
 		}
@@ -350,6 +399,8 @@ func runCIAssertReconcilerEffects(namespace string, laneSet []string, tokenMaxAg
 
 	for _, v := range last {
 		switch {
+		case v.Skipped && v.Detail != "":
+			fmt.Printf("SKIP: %s — %s\n", v.Lane, v.Detail)
 		case v.Skipped:
 			fmt.Printf("SKIP: %s — lane not enabled on this cluster\n", v.Lane)
 		case v.FailWhy != "":

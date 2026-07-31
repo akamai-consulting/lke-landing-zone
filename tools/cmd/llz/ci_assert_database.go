@@ -33,6 +33,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/openbao"
 )
 
 // dbProbeDatabase is the database every Managed Postgres exposes, used purely as
@@ -126,9 +128,47 @@ func evalDBProbe(cluster string, v pgVerdict, msg string) dbVerdict {
 
 // ── OpenBao reads (seamed) ───────────────────────────────────────────────────
 
+// dbBao is the ONE OpenBao connection every read in this gate shares, opened
+// lazily and torn down by runCIAssertDatabase.
+//
+// It goes through openbaoClientForward, not openbaoClient, and that is the whole
+// point. OpenBao has no external ingress, so NOTHING in the bootstrap workflow
+// sets OPENBAO_ADDR_ACTIVE — every CI-side caller reaches it either by `kubectl
+// exec` (baoKVPutFn) or by ephemeral port-forward (team-login-smoke). This gate
+// shipped calling the plain constructor and died in 70ms on "OPENBAO_ADDR_ACTIVE
+// is not set", failing a whole release-e2e for want of an address rather than
+// for anything about a database.
+//
+// Shared rather than per-read because the settle loop re-reads every cluster on
+// every attempt: a client per read would open, warm up and tear down a
+// port-forward up to (settle/interval)×clusters times.
+var dbBao struct {
+	client  *openbao.Client
+	cleanup func()
+	err     error
+	opened  bool
+}
+
+func dbBaoClient() (*openbao.Client, error) {
+	if !dbBao.opened {
+		dbBao.client, dbBao.cleanup, dbBao.err = openbaoClientForward(roleActive)
+		dbBao.opened = true
+	}
+	return dbBao.client, dbBao.err
+}
+
+// closeDBBao tears the connection down and resets it, so a second call in the
+// same process (and every test) starts from a closed state.
+func closeDBBao() {
+	if dbBao.cleanup != nil {
+		dbBao.cleanup()
+	}
+	dbBao.client, dbBao.cleanup, dbBao.err, dbBao.opened = nil, nil, nil, false
+}
+
 // listDBClusters returns the cluster names declared under dbAdminRoot.
 var listDBClusters = func(ctx context.Context) ([]string, error) {
-	bao, err := openbaoClient("active")
+	bao, err := dbBaoClient()
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +185,7 @@ var listDBClusters = func(ctx context.Context) ([]string, error) {
 
 // readDBCreds fetches one cluster's admin connection record.
 var readDBCreds = func(ctx context.Context, cluster string) (dbAdminCreds, error) {
-	bao, err := openbaoClient("active")
+	bao, err := dbBaoClient()
 	if err != nil {
 		return dbAdminCreds{}, err
 	}
@@ -192,6 +232,7 @@ func failedDBs(vs []dbVerdict) []string {
 
 func runCIAssertDatabase(timeout, settle, interval time.Duration) error {
 	fmt.Println("## Managed Postgres credential assertion")
+	defer closeDBBao()
 	ctx := context.Background()
 
 	clusters, err := listDBClusters(ctx)

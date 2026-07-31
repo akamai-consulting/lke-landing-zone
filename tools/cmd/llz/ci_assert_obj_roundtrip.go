@@ -82,8 +82,14 @@ type objConsumer struct {
 // normalized somewhere.
 var objConsumers = []objConsumer{
 	{
-		Name:           "loki",
-		SecretRef:      "monitoring/loki-object-store",
+		Name: "loki",
+		// The Secret apl-core's Loki release actually mounts. NOT
+		// `loki-object-store` — that is the OPENBAO PATH name
+		// (secret/loki/object-store, credPaths) and the two were conflated. The
+		// k8s ExternalSecret that once carried that name was deleted by 52465691
+		// when object storage went apl-core-native, so the old ref names an object
+		// that has not existed since.
+		SecretRef:      "monitoring/loki-s3-linode-credentials",
 		AccessKeyField: "AWS_ACCESS_KEY_ID",
 		SecretKeyField: "AWS_SECRET_ACCESS_KEY",
 		ConfigRefs: []string{
@@ -94,8 +100,10 @@ var objConsumers = []objConsumer{
 		},
 	},
 	{
-		Name:           "harbor",
-		SecretRef:      "harbor/harbor-registry-s3",
+		Name: "harbor",
+		// Same correction as loki: `harbor-registry-s3` is the OpenBao path name
+		// (secret/harbor/registry-s3); the registry mounts this one.
+		SecretRef:      "harbor/registry-storage-credentials",
 		AccessKeyField: "REGISTRY_STORAGE_S3_ACCESSKEY",
 		SecretKeyField: "REGISTRY_STORAGE_S3_SECRETKEY",
 		ConfigRefs: []string{
@@ -189,7 +197,12 @@ var (
 	// so a \s*-based pattern skips the line break and captures the literal key
 	// "chunks" as the bucket name. The gate would then PUT into a bucket called
 	// "chunks", get NoSuchBucket, and report a healthy cluster as broken.
-	objEndpointRe = regexp.MustCompile(`(?im)^[ \t]*(?:s3_)?(?:region)?endpoint[ \t]*:[ \t]*["']?(?:https?://)?([A-Za-z0-9._-]+)`)
+	// `s3:` is in the alternation because Loki spells the endpoint that way —
+	// `storage.s3.s3: https://<host>` — while Harbor's registry uses
+	// `regionendpoint:`. Anchoring on the key name with only leading whitespace
+	// keeps `object_store: s3` and `s3forcepathstyle: true` out: neither has the
+	// colon immediately after the key this matches on.
+	objEndpointRe = regexp.MustCompile(`(?im)^[ \t]*(?:(?:s3_)?(?:region)?endpoint|s3)[ \t]*:[ \t]*["']?(?:https?://)?([A-Za-z0-9._-]+)`)
 	objBucketRe   = regexp.MustCompile(`(?im)^[ \t]*(?:bucket|bucketnames|chunks)[ \t]*:[ \t]*["']?([A-Za-z0-9._-]+)`)
 )
 
@@ -284,13 +297,51 @@ func readFirstObjConfig(refs []string) (cfg, from string, err error) {
 	return "", "", lastErr
 }
 
+// listSecretsIn returns the Secret names in a namespace, for failure messages
+// only. Seamed with the other cluster reads.
+var listSecretsIn = func(ns string) ([]string, error) {
+	out, err := execOutput("kubectl", "-n", ns, "get", "secret",
+		"-o", `jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}`)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(string(out)), nil
+}
+
+// candidateSecretHint lists the Secrets that DO exist alongside a ref that did
+// not resolve, so an absent-Secret failure carries its own next step.
+//
+// Best-effort and silent on error: a hint that cannot be gathered must never
+// change the verdict or add noise to it.
+func candidateSecretHint(ref string) string {
+	ns, _, ok := strings.Cut(ref, "/")
+	if !ok {
+		return ""
+	}
+	names, err := listSecretsIn(ns)
+	if err != nil || len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" Secrets that DO exist in %s: %s. If the chart renamed it, correct this consumer's "+
+		"SecretRef — note that the OpenBao PATH name is not a Kubernetes Secret name, which is how this ref went stale.",
+		ns, strings.Join(names, ", "))
+}
+
 // probeObjConsumer resolves one consumer's real config and round-trips an object.
 func probeObjConsumer(c objConsumer, keyPrefix string, now time.Time) objVerdict {
 	v := objVerdict{Consumer: c.Name}
 
 	secretRaw, err := readObjSecret(c.SecretRef)
 	if err != nil {
-		v.FailWhy = fmt.Sprintf("credential Secret %s is absent (%v) — this consumer cannot be writing at all", c.SecretRef, err)
+		// NAME WHAT IS ACTUALLY THERE. "Secret X is absent" is true and nearly
+		// useless: the reader's next question is always "then what IS in that
+		// namespace", and answering it needs a cluster they may not have. This gate
+		// shipped pointing at two Secrets that had not existed since 52465691
+		// renamed the mechanism, and finding the real names took a live kubectl.
+		// One extra line here is the difference between reading the log and
+		// standing up a cluster.
+		v.FailWhy = fmt.Sprintf("credential Secret %s is absent (%v) — this consumer cannot be writing at all.%s",
+			c.SecretRef, err, candidateSecretHint(c.SecretRef))
 		return v
 	}
 	access, err := decodeSecretField(secretRaw, c.AccessKeyField)

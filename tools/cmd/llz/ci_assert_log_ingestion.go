@@ -27,6 +27,7 @@ package main
 // indistinguishable from the outage it exists to find.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -47,6 +48,28 @@ import (
 // llz-argo-workflows) would fail on a cluster that legitimately does not run
 // them; add them via --namespaces where they are enabled.
 var defaultLogNamespaces = []string{"llz-reconciler", "llz-openbao"}
+
+// defaultCollectorTenant is the Loki tenant apl-core's cluster-wide collector
+// writes THIS path's logs under, and it is deliberately NOT defaultAuditTenant.
+//
+// Two different producers reach Loki, and they use different tenants. The OpenBao
+// sidecar pushes with promtail `tenant_id: platform`, which is what
+// assert-openbao-audit reads. apl-core's platform-logs-collector routes by
+// namespace instead (its `routing` connector, read off lke638084):
+//
+//	namespace == "team-admin"     → X-Scope-OrgID: admin
+//	namespace == "team-platform"  → X-Scope-OrgID: platform
+//	everything else (default)     → X-Scope-OrgID: admins
+//
+// Every namespace this gate checks is a landing-zone namespace, none of which is
+// a team namespace, so all of them land in the DEFAULT pipeline — tenant
+// `admins`. Reading as `platform` found nothing and reported the collector dead
+// while it was demonstrably alive: the gateway's access log showed a steady
+// stream of `POST /otlp/v1/logs → 204` throughout.
+//
+// This matters only because apl-core ships Loki with `auth_enabled: true`, so the
+// tenant actually partitions reads. A read with no header answers "no org id".
+const defaultCollectorTenant = "admins"
 
 func ciAssertLogIngestionCmd() *cobra.Command {
 	var loki, tenant, namespaces string
@@ -74,7 +97,9 @@ func ciAssertLogIngestionCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&loki, "loki", defaultAuditLokiService, "the Loki gateway Service as <namespace>/<name>:<port> to port-forward to")
-	c.Flags().StringVar(&tenant, "tenant", defaultAuditTenant, "Loki tenant (X-Scope-OrgID) to read as")
+	c.Flags().StringVar(&tenant, "tenant", defaultCollectorTenant,
+		"Loki tenant (X-Scope-OrgID) to read as — must match the COLLECTOR's tenant, "+
+			"which is not the OpenBao sidecar's (see defaultCollectorTenant)")
 	c.Flags().StringVar(&namespaces, "namespaces", strings.Join(defaultLogNamespaces, ","),
 		"comma-separated namespaces whose pod logs must be arriving")
 	c.Flags().IntVar(&lookback, "lookback", 30, "minutes of history a namespace must have logged within")
@@ -139,6 +164,55 @@ func probeLogIngestion(get func(string) ([]byte, error), namespaces []string,
 		out = append(out, evalNamespaceIngestion(ns, streams))
 	}
 	return out, nil
+}
+
+// printTenantDiagnosis dumps what the queried tenant can actually see, because
+// "no log lines" has two very different causes and the message alone cannot tell
+// them apart: nothing is being collected, or we are reading the WRONG TENANT.
+//
+// That is not hypothetical — it is how this gate first failed. Loki here runs
+// auth_enabled: true, the collector files landing-zone namespaces under `admins`,
+// and this gate inherited the OpenBao sidecar's `platform`. Every query came back
+// empty while the gateway logged a steady stream of successful pushes, and
+// finding that out took two rounds of hand-querying a live cluster. An empty
+// label set for the tenant we asked is the single most informative thing to print
+// here: no labels AT ALL means the tenant is wrong (or Loki is genuinely empty),
+// whereas labels present but no lines for a namespace means collection really did
+// stop for it.
+//
+// Best-effort and non-fatal — the verdict is already decided by the time this runs.
+func printTenantDiagnosis(loki, tenant string) {
+	fmt.Printf("\n-- diagnosis: what does tenant %q actually hold? --\n", tenant)
+	err := withLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
+		raw, err := get("/loki/api/v1/labels")
+		if err != nil {
+			return err
+		}
+		var out struct {
+			Data []string `json:"data"`
+		}
+		if jerr := json.Unmarshal(raw, &out); jerr != nil {
+			fmt.Printf("   (could not parse the label list: %v)\n", jerr)
+			return nil
+		}
+		if len(out.Data) == 0 {
+			fmt.Printf("   NO LABELS AT ALL for tenant %q. Either this tenant is wrong or Loki holds nothing.\n"+
+				"   Loki runs auth_enabled: true here, so the tenant partitions reads. Check which X-Scope-OrgID the\n"+
+				"   PRODUCER writes under: apl-core's collector routes by namespace (see its `routing` connector in\n"+
+				"   namespace otel) and files everything outside a team namespace under the DEFAULT pipeline's tenant.\n"+
+				"   Override with --tenant once you know it.\n", tenant)
+			return nil
+		}
+		sort.Strings(out.Data)
+		fmt.Printf("   labels present (%d): %s\n", len(out.Data), strings.Join(out.Data, ", "))
+		fmt.Printf("   The tenant is right and Loki has data, so collection stopped for the namespaces above —\n" +
+			"   check the collector's discovery and any NetworkPolicy between it and them.\n")
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("   (diagnosis query failed: %v)\n", err)
+	}
+	fmt.Println()
 }
 
 // failedIngestion returns the namespaces that are not being collected.
@@ -210,8 +284,9 @@ func runCIAssertLogIngestion(loki, tenant string, namespaces []string, limit int
 	}
 
 	if bad := failedIngestion(last); len(bad) > 0 {
+		printTenantDiagnosis(loki, tenant)
 		fmt.Fprintf(os.Stderr, "::error::no logs reaching Loki from: %s\n", strings.Join(bad, ", "))
-		return fmt.Errorf("no logs reaching Loki from: %s", strings.Join(bad, ", "))
+		return fmt.Errorf("no logs reaching Loki from (tenant %s): %s", tenant, strings.Join(bad, ", "))
 	}
 	fmt.Printf("All %d landing-zone namespace(s) are shipping logs to Loki.\n", len(last))
 	return nil

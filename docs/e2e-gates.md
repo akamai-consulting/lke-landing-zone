@@ -183,3 +183,41 @@ What does need one: anything where a component starts depending on another
 component's live output, anything that renames or reformats something a second
 component parses, and anything whose failure mode is *silence*. Those are the
 ones that stay green while broken, and they are the only reason this file exists.
+
+## When a lane goes red
+
+A gate's job is not finished when it fails — it is finished when its failure says
+what to do next. Nine of the fourteen gating lanes went red the first time this
+suite met a real cluster, and the ones that were cheap to fix were the ones whose
+output named the specific thing that was missing. The expensive ones said
+something true and unhelpful ("Secret X is absent", "no log lines in the window")
+and sent the reader to a live cluster to find out what *was* there.
+
+So when you write the failure message, answer the reader's next question in it:
+
+- **Name what IS present**, not only what is missing. `assert-obj-roundtrip` lists
+  the Secrets that do exist in the namespace, because the ref it was looking for
+  had been renamed and no amount of staring at the absent name reveals the new one.
+- **Print the parameter you queried with.** `assert-log-ingestion` reports the Loki
+  tenant and whether that tenant holds any labels at all — the difference between
+  "collection stopped" and "we asked the wrong tenant", which are indistinguishable
+  from the bare symptom and have nothing in common as remedies.
+- **Keep the distinction your probe already made.** `llz ci net-probe` classifies
+  every dial as refused / timeout / dns precisely because they point at different
+  subsystems; the gate above it once collapsed all three to "blocked" and then
+  printed a list of things to go check.
+
+And distinguish **absent** from **not applicable**. Several lanes failed on
+clusters that were behaving correctly: a component this deployment shape does not
+install, an opt-in credential nobody seeded, a rollout step deliberately not taken
+yet. A gate that cannot tell those from a regression will be turned off, which
+costs more than the coverage it was protecting. Read the live state and skip on
+it — `assert-network-enforcement` reads the namespace's PeerAuthentication mode
+rather than assuming STRICT, so it starts enforcing by itself the day someone
+flips it.
+
+If every check in a lane skipped, **fail**. "All checks passed" having observed
+nothing is the vacuous pass in its purest form.
+
+For getting kubectl at a cluster a lane failed on, see
+[docs/runbooks/e2e-lane-diagnostics.md](runbooks/e2e-lane-diagnostics.md).

@@ -86,46 +86,61 @@ const (
 // policyReconcilerRead (ci_openbao_configure.go). A missing grant is a 403, and
 // a 403 is a non-404 error that fails the WHOLE sampler pass (up=0) — it does
 // not degrade to a single missing series.
-var credPaths = []struct{ path, cred, class string }{
-	{"secret/loki/object-store", "loki-object-store", credClassAutomated},
-	{"secret/harbor/registry-s3", "harbor-registry-s3", credClassAutomated},
-	{"secret/obj/platform", "obj-platform", credClassAutomated},
+// The `optional` column says whether the path is expected to EXIST on every
+// deployment. It is orthogonal to class, which says what lowers the age once it
+// does: `linode-cloud-firewall` is on-demand (a real 90d SLA, actionable by a
+// human) AND opt-in (most instances never seed it). Conflating the two costs one
+// property or the other — demote it to `static` and it silently loses the SLA the
+// docs promise; leave it required and assert-rotation-health reds every stock
+// cluster for a credential that is correctly absent.
+// credPath is one tracked KV path. Named rather than anonymous because the
+// sampler copies and extends this slice, and every one of those literals had to
+// repeat the shape verbatim.
+type credPath struct {
+	path, cred, class string
+	optional          bool
+}
+
+var credPaths = []credPath{
+	{"secret/loki/object-store", "loki-object-store", credClassAutomated, false},
+	{"secret/harbor/registry-s3", "harbor-registry-s3", credClassAutomated, false},
+	{"secret/obj/platform", "obj-platform", credClassAutomated, false},
 	// The narrow in-cluster PAT. Re-minted monthly per region by
 	// secret-rotation.yml → `rotate-incluster-pat`, so it is genuinely
 	// `automated` and belongs on the 90d SLA: a stalled rotation workflow is
 	// exactly the failure this alert can ask a human to fix. It was the one
 	// credential with real rotation and no watchdog over it.
-	{"secret/linode/api-token", "linode-incluster-pat", credClassAutomated},
+	{"secret/linode/api-token", "linode-incluster-pat", credClassAutomated, false},
 	// The BROAD account read_write PAT — the highest-privilege Linode credential
 	// the platform holds. The broadPatRotator CronJob re-mints it weekly against
 	// ROTATE_AFTER_DAYS, so it is `automated` and belongs on the 90d SLA for the
 	// same reason the narrow PAT does. Its EXPIRY already rode in free via the
 	// token-inventory's Linode enumeration; what was missing is rotation age —
 	// so a wedged rotator stayed invisible until the token actually lapsed.
-	{"secret/linode/broad-pat", "linode-broad-pat", credClassAutomated},
-	{"secret/grafana/admin", "grafana-admin", credClassGenerateOnce},
-	{"secret/otel/ingress", "otel-ingress", credClassGenerateOnce},
-	{"secret/harbor/admin", "harbor-admin", credClassTracksSource},
+	{"secret/linode/broad-pat", "linode-broad-pat", credClassAutomated, false},
+	{"secret/grafana/admin", "grafana-admin", credClassGenerateOnce, false},
+	{"secret/otel/ingress", "otel-ingress", credClassGenerateOnce, false},
+	{"secret/harbor/admin", "harbor-admin", credClassTracksSource, false},
 	// Bootstrap seeds, re-seeded only by hand. `secret/alerts/webhooks` is
 	// operator-seeded and only when spec.alerting.receivers includes slack; an
 	// instance without it 404s and is skipped, same as any unseeded path.
-	{"secret/harbor/robot", "harbor-robot", credClassStatic},
-	{"secret/harbor/pull-robot", "harbor-pull-robot", credClassStatic},
-	{"secret/cert-automation/github-token", "cert-automation-github-token", credClassStatic},
-	{"secret/infra/github-dispatch-token", "infra-github-dispatch-token", credClassStatic},
+	{"secret/harbor/robot", "harbor-robot", credClassStatic, false},
+	{"secret/harbor/pull-robot", "harbor-pull-robot", credClassStatic, false},
+	{"secret/cert-automation/github-token", "cert-automation-github-token", credClassStatic, false},
+	{"secret/infra/github-dispatch-token", "infra-github-dispatch-token", credClassStatic, false},
 	// The third copy of a GitHub PAT held in OpenBao, and the same drift signal as
 	// the two above: token-inventory measures the GitHub-side expiry of
 	// APL_VALUES_REPO_TOKEN, but nothing re-seeds THIS copy when an operator
 	// rotates that PAT, and a stale copy is what actually breaks apl-core's
 	// otomi.git and the argocd repo Secrets.
-	{"secret/infra/apl-values-repo-token", "infra-apl-values-repo-token", credClassStatic},
-	{"secret/alerts/webhooks", "alerts-webhooks", credClassStatic},
+	{"secret/infra/apl-values-repo-token", "infra-apl-values-repo-token", credClassStatic, false},
+	{"secret/alerts/webhooks", "alerts-webhooks", credClassStatic, false},
 	// OPT-IN least-privilege firewall token (docs/consume-lke-landing-zone-internal.md).
 	// Most instances never seed it — the sampler 404s and publishes nothing, same
 	// as any unseeded path. Where it IS seeded it is operator-managed on a
 	// documented ≤90d policy, so `on-demand` (actionable, 90d SLA) rather than
 	// `static` (yearly nudge) is what matches the posture the docs promise.
-	{"secret/linode/cloud-firewall", "linode-cloud-firewall", credClassOnDemand},
+	{"secret/linode/cloud-firewall", "linode-cloud-firewall", credClassOnDemand, true},
 }
 
 // dbAdminRoot is the KV collection holding one Managed Postgres admin credential
@@ -219,7 +234,7 @@ func sampleOpenBao(ctx context.Context, reg *metrics.Registry, now time.Time) er
 	}
 	// Copied, not aliased: appending to a slice that shares credPaths' backing
 	// array would let one sample pass scribble the next one's entries.
-	paths := append([]struct{ path, cred, class string }(nil), credPaths...)
+	paths := append([]credPath(nil), credPaths...)
 	// Managed Postgres admin credentials, discovered rather than declared. A
 	// deployment with no databases lists nothing (ok=false on the 404 KV v2
 	// returns for an empty collection) and contributes no series.
@@ -229,8 +244,8 @@ func sampleOpenBao(ctx context.Context, reg *metrics.Registry, now time.Time) er
 	}
 	if ok {
 		for _, n := range names {
-			paths = append(paths, struct{ path, cred, class string }{
-				dbAdminRoot + "/" + n, "db-admin-" + n, credClassOnDemand})
+			paths = append(paths, credPath{
+				path: dbAdminRoot + "/" + n, cred: "db-admin-" + n, class: credClassOnDemand})
 		}
 	}
 

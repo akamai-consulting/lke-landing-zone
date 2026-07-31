@@ -8,8 +8,11 @@ package main
 // applied to the two Kyverno policies that carry a security property:
 //
 //   verify-llz-image-signature      an unsigned first-party image must be REJECTED
-//   pvc-force-encrypted-storage-class  a PVC asking for an unencrypted class must
-//                                      be REWRITTEN onto the encrypting one
+//   pvc-deny-untaggable-clone       a clone-sourced PVC must be REJECTED
+//
+// It used to carry a third, `pvc`, over pvc-force-encrypted-storage-class. That
+// policy is no longer the mechanism and is no longer deployed — see
+// probePVCEnforcement for why the check now skips rather than fails.
 //
 // Why a static check cannot do this. `kubectl get clusterpolicy` proves the YAML
 // is in the cluster. It says nothing about whether Kyverno's webhook is
@@ -116,9 +119,11 @@ func ciAssertAdmissionEnforcementCmd() *cobra.Command {
 			"requires that policy's OWN response:\n\n" +
 			"  signature — a Pod referencing an UNSIGNED first-party llz image must be\n" +
 			"              rejected by verify-llz-image-signature.\n" +
-			"  pvc       — a PVC asking for an unencrypted StorageClass must come back\n" +
-			"              rewritten to " + encryptedStorageClass + " by\n" +
-			"              pvc-force-encrypted-storage-class.\n" +
+			"  pvc       — SKIPS. pvc-force-encrypted-storage-class is no longer the\n" +
+			"              encryption mechanism and is no longer deployed; #382 recreates\n" +
+			"              LKE's stock StorageClasses encrypted at bootstrap instead,\n" +
+			"              because a Kyverno mutation cannot win the race against\n" +
+			"              apl-core's own PVCs. assert-volume-encryption gates the outcome.\n" +
 			"  clone     — a clone/snapshot-sourced PVC must be rejected by\n" +
 			"              " + clonePolicyName + ". The Linode CSI clone API cannot\n" +
 			"              apply the lke<id> ownership tag, so such a Volume is UNREAPABLE.\n\n" +
@@ -137,8 +142,8 @@ func ciAssertAdmissionEnforcementCmd() *cobra.Command {
 			return runCIAssertAdmissionEnforcement(splitCSVList(checks))
 		},
 	}
-	c.Flags().StringVar(&checks, "checks", "signature,pvc,clone",
-		"comma-separated checks to run (signature, pvc, clone)")
+	c.Flags().StringVar(&checks, "checks", "signature,clone",
+		"comma-separated checks to run (signature, clone). `pvc` is accepted and SKIPS — see probePVCEnforcement")
 	return c
 }
 
@@ -147,6 +152,7 @@ type enforcementVerdict struct {
 	Check   string
 	Policy  string
 	Detail  string
+	Skipped bool // the policy this check covers is no longer the mechanism
 	FailWhy string
 }
 
@@ -256,71 +262,6 @@ func classifySignatureCanary(out string, err error) enforcementVerdict {
 
 // ── PVC encryption policy ────────────────────────────────────────────────────
 
-// pvcCanaryManifest asks for the unencrypted LKE stock class, which the policy
-// must rewrite. Small and ReadWriteOnce so it is an ordinary request in every
-// respect except the class it names.
-const pvcCanaryManifest = `apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: llz-pvc-encryption-canary
-  namespace: ` + pvcCanaryNamespace + `
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: linode-block-storage
-  resources:
-    requests:
-      storage: 1Gi
-`
-
-// mutatedStorageClass extracts spec.storageClassName from a dry-run's returned
-// object. Pure.
-func mutatedStorageClass(raw []byte) (string, error) {
-	var obj struct {
-		Spec struct {
-			StorageClassName string `json:"storageClassName"`
-		} `json:"spec"`
-	}
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return "", fmt.Errorf("decoding the dry-run PVC: %w", err)
-	}
-	return obj.Spec.StorageClassName, nil
-}
-
-// classifyPVCCanary judges the dry-run's returned object. Pure.
-//
-// This policy MUTATES rather than denies, so the assertion is on what came back,
-// not on whether it was rejected. An unmutated class means every PVC that asks
-// for the stock class provisions UNENCRYPTED — the exact state in which 13 of 16
-// PVCs on lke637888 came up unencrypted while a StorageClass-name proxy check
-// reported everything fine.
-func classifyPVCCanary(out string, err error) enforcementVerdict {
-	v := enforcementVerdict{Check: "pvc", Policy: pvcEncryptionPolicyName}
-	if err != nil {
-		v.FailWhy = "the PVC canary could not be dry-run (" + truncateForError([]byte(out)) + ") — " +
-			"this is a check failure, not evidence about the policy"
-		return v
-	}
-	got, perr := mutatedStorageClass([]byte(out))
-	if perr != nil {
-		v.FailWhy = perr.Error()
-		return v
-	}
-	switch got {
-	case encryptedStorageClass:
-		v.Detail = fmt.Sprintf("%s rewrote linode-block-storage → %s — the mutation is live", pvcEncryptionPolicyName, got)
-	case "":
-		v.FailWhy = "the dry-run PVC came back with no storageClassName — the response is not the shape this check can judge"
-	default:
-		v.FailWhy = fmt.Sprintf("a PVC asking for linode-block-storage came back as %q, not %q — "+
-			"%s is not mutating. Every PVC that names the stock class will provision UNENCRYPTED, and a "+
-			"StorageClass-name check would still report it healthy",
-			got, encryptedStorageClass, pvcEncryptionPolicyName)
-	}
-	return v
-}
-
-// ── orchestration ────────────────────────────────────────────────────────────
-
 func probeSignatureEnforcement() enforcementVerdict {
 	raw, err := readClusterPolicy(signaturePolicyName)
 	if err != nil {
@@ -339,10 +280,44 @@ func probeSignatureEnforcement() enforcementVerdict {
 	return v
 }
 
+// probePVCEnforcement no longer asserts anything, and that is the correct
+// behaviour rather than a gap.
+//
+// This check required pvc-force-encrypted-storage-class to rewrite a PVC naming
+// the stock class onto block-storage-retain. #382 REPLACED that mechanism, and
+// its own commentary in ci_bootstrap_cluster.go explains why the policy could
+// never have worked: apl-core installs Kyverno AND creates the PVCs, and creates
+// most of them first. Measured on lke637888, kyverno-admission-controller went
+// Available at 15:59:50 with 11 of 13 PVCs already created. A mutation applied
+// the instant Kyverno can admit one still arrives too late for 11 of them.
+//
+// What ships instead is `llz ci bootstrap-cluster` recreating LKE's stock
+// StorageClasses with the CSI encryption parameter, 67 seconds before the first
+// PVC exists. On lke638084 both classes came up
+// `encrypted="" → encrypted="true"`, and the ClusterPolicy is not installed at
+// all — `clusterpolicies.kyverno.io "pvc-force-encrypted-storage-class" not
+// found`. The check was therefore asserting a mechanism that had already been
+// deliberately retired, on a cluster that was behaving correctly.
+//
+// It SKIPS rather than being deleted so that `--checks signature,pvc,clone` from
+// an older vendored workflow keeps working; an unknown check is a hard failure
+// here by design, so silently removing the name would break those callers.
+//
+// The invariant itself is NOT uncovered: assert-volume-encryption gates the
+// outcome — every PV-backed Linode Volume encrypted at rest — against the Linode
+// API, and its failure text already points at the stock classes and at LKE
+// re-promoting its own unencrypted definitions. Adding a second, differently
+// shaped assertion of the same property here is how two gates drift apart.
 func probePVCEnforcement() enforcementVerdict {
-	// -o json so the MUTATED object comes back for inspection.
-	out, err := dryRunManifest(pvcCanaryManifest, "-o", "json")
-	return classifyPVCCanary(out, err)
+	return enforcementVerdict{
+		Check:   "pvc",
+		Policy:  pvcEncryptionPolicyName,
+		Skipped: true,
+		Detail: "SKIP: " + pvcEncryptionPolicyName + " is no longer the encryption mechanism and is no longer " +
+			"deployed — #382 recreates LKE's stock StorageClasses encrypted at bootstrap, because a Kyverno " +
+			"mutation cannot win the race against apl-core's own PVCs. The outcome is gated by " +
+			"assert-volume-encryption against the Linode API.",
+	}
 }
 
 func runCIAssertAdmissionEnforcement(checks []string) error {
@@ -359,6 +334,7 @@ func runCIAssertAdmissionEnforcement(checks []string) error {
 			vs = append(vs, probeSignatureEnforcement())
 		case "pvc":
 			vs = append(vs, probePVCEnforcement())
+
 		case "clone":
 			out, runErr := dryRunManifest(cloneCanaryManifest)
 			vs = append(vs, classifyCloneCanary(out, runErr))
@@ -371,11 +347,16 @@ func runCIAssertAdmissionEnforcement(checks []string) error {
 	}
 
 	var bad []string
+	observed := 0
 	for _, v := range vs {
-		if v.FailWhy != "" {
+		switch {
+		case v.FailWhy != "":
 			fmt.Printf("FAIL: %s — %s\n", v.Check, v.FailWhy)
 			bad = append(bad, v.Check)
-		} else {
+		case v.Skipped:
+			fmt.Printf("%s\n", v.Detail)
+		default:
+			observed++
 			fmt.Printf("OK: %s — %s\n", v.Check, v.Detail)
 		}
 	}
@@ -385,6 +366,12 @@ func runCIAssertAdmissionEnforcement(checks []string) error {
 		fmt.Fprintf(os.Stderr, "::error::admission policies not enforcing: %s\n", strings.Join(bad, ", "))
 		return fmt.Errorf("admission policies not enforcing: %s", strings.Join(bad, ", "))
 	}
-	fmt.Printf("All %d admission policy check(s) observed enforcing.\n", len(vs))
+	// Refuse to report success having only skipped. A suite reduced to skips is the
+	// vacuous pass this whole file exists to prevent.
+	if observed == 0 {
+		fmt.Fprintln(os.Stderr, "::error::every requested check skipped — nothing was observed enforcing")
+		return fmt.Errorf("every requested check skipped — refusing to pass vacuously")
+	}
+	fmt.Printf("All %d admission policy check(s) observed enforcing.\n", observed)
 	return nil
 }

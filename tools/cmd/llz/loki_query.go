@@ -6,15 +6,24 @@ package main
 // webhook-denied on LKE-Enterprise), with two Loki-specific pieces: the tenant
 // header and the query_range envelope.
 //
-// THE TENANT HEADER IS ALWAYS SENT, and that is safe under either configuration.
-// apl-core ships Loki with `auth_enabled` unset (single-tenant), where the auth
-// middleware ignores X-Scope-OrgID and files everything under the `fake` tenant —
-// so the header is inert. If multi-tenancy is ever turned on, reads without it
-// fail with an unhelpful 401 "no org id", and the promtail sidecar already pushes
-// with `tenant_id: platform`. Sending `platform` matches the writer in both
-// worlds; omitting it is only correct in one. (docs/playbooks/loki-access.md
-// contradicts itself on this point — it says both "do not add the header" and
-// "note the mandatory header". Always-send is the reading that works either way.)
+// THE TENANT HEADER IS ALWAYS SENT, AND IT IS LOAD-BEARING — not, as this comment
+// used to claim, inert.
+//
+// The old text said apl-core ships Loki with `auth_enabled` unset (single-tenant),
+// so the header was ignored and any value would do. That is wrong. Read off
+// lke638084, monitoring/loki has `auth_enabled: true`, and a read with no header
+// answers "no org id" rather than serving anything.
+//
+// So the tenant PARTITIONS reads, and each caller must send the one its own writer
+// used. There is more than one writer: the OpenBao promtail sidecar pushes
+// `tenant_id: platform`, while apl-core's collector routes by namespace and puts
+// everything outside a team namespace under `admins`. A single shared default is
+// therefore wrong for one of them by construction — see defaultAuditTenant and
+// defaultCollectorTenant, which is why they are two constants.
+//
+// (docs/playbooks/loki-access.md contradicts itself on this point — it says both
+// "do not add the header" and "note the mandatory header". The header is
+// mandatory.)
 
 import (
 	"encoding/json"

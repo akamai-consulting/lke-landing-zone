@@ -98,18 +98,18 @@ func TestEvalEnforcementProbeInconclusiveWhenControlFails(t *testing.T) {
 }
 
 func TestResultFromExit(t *testing.T) {
-	if r := resultFromExit("t", 0, true); !r.Connected {
+	if r := resultFromExit("t", 0, true, ""); !r.Connected {
 		t.Error("exit 0 is connected")
 	}
-	if r := resultFromExit("t", 1, true); r.Connected || r.Reason != "blocked" {
+	if r := resultFromExit("t", 1, true, ""); r.Connected || r.Reason != "blocked" {
 		t.Errorf("exit 1 is blocked, got %+v", r)
 	}
 	// Exit 2 means the probe could not run — NOT that the target was blocked.
 	// Folding it into "blocked" would turn a broken probe into a passing gate.
-	if r := resultFromExit("t", 2, true); r.Connected || !strings.Contains(r.Reason, "could not run") {
+	if r := resultFromExit("t", 2, true, ""); r.Connected || !strings.Contains(r.Reason, "could not run") {
 		t.Errorf("exit 2 must be distinguishable from blocked, got %+v", r)
 	}
-	if r := resultFromExit("t", 0, false); r.Connected {
+	if r := resultFromExit("t", 0, false, ""); r.Connected {
 		t.Error("a missing exit code must not read as connected")
 	}
 }
@@ -150,7 +150,11 @@ func TestProbePodManifestStaysOutsideTheMesh(t *testing.T) {
 	if strings.Contains(m, "initContainers") {
 		t.Error("the dials must be separate containers; initContainers would stop at the expected failure")
 	}
-	for _, want := range []string{"a:1", "d:2", "m:3", "default-deny-egress", "k8s-app: kube-dns"} {
+	// The DNS allow is asserted by label VALUE in
+	// TestProbePodManifestAllowsBothDNSLabels; pinning the exact matchLabels line
+	// here would fail the moment it became a matchExpressions covering both
+	// conventions, which is what LKE-Enterprise needs.
+	for _, want := range []string{"a:1", "d:2", "m:3", "default-deny-egress", "k8s-app"} {
 		if !strings.Contains(m, want) {
 			t.Errorf("manifest is missing %q", want)
 		}
@@ -191,5 +195,121 @@ func TestRunAssertNetworkEnforcementAlwaysCleansUp(t *testing.T) {
 	// One pre-emptive delete (in case a previous run leaked) plus the deferred one.
 	if deletes < 2 {
 		t.Errorf("the scratch namespace must be cleaned up on the failure path, got %d deletes", deletes)
+	}
+}
+
+// The probe already classifies every dial as refused / timeout / dns; the gate
+// used to collapse all of them into "blocked" and then tell the operator to go
+// check DNS by hand. A failed positive control is the case where that evidence
+// matters most, so it must reach the verdict text.
+func TestResultFromExitCarriesTheProbesOwnReason(t *testing.T) {
+	r := resultFromExit("kubernetes.default.svc.cluster.local:443", 1, true, "dns: lookup failed")
+	if r.Connected {
+		t.Fatal("exit 1 must remain blocked")
+	}
+	if !strings.Contains(r.Reason, "dns: lookup failed") {
+		t.Errorf("reason = %q — the probe's own classification must survive into the verdict, or the "+
+			"gate discards the only evidence it collected", r.Reason)
+	}
+}
+
+// An unreadable log must not change the verdict — only how well it is explained.
+func TestResultFromExitWithoutALogIsUnchanged(t *testing.T) {
+	if r := resultFromExit("t", 1, true, ""); r.Reason != "blocked" {
+		t.Errorf("reason = %q, want the bare verdict when no log could be read", r.Reason)
+	}
+}
+
+// The probe's DNS allow must match CoreDNS on LKE-Enterprise, where it is
+// labelled k8s-app=coredns and there is no kube-dns Service at all. Selecting
+// only kube-dns matched nothing on lke638084, so DNS egress was denied and every
+// dial — including the positive control — failed to resolve.
+func TestProbePodManifestAllowsBothDNSLabels(t *testing.T) {
+	m := probePodManifest("ns", "img", "a:1", "d:2", "m:3", time.Second)
+	for _, want := range []string{"kube-dns", "coredns"} {
+		if !strings.Contains(m, want) {
+			t.Errorf("the DNS egress allow does not mention %q — a cluster labelling CoreDNS that way "+
+				"gets no DNS, and every probe fails to resolve rather than reporting enforcement", want)
+		}
+	}
+	if !strings.Contains(m, "matchExpressions") {
+		t.Error("expected a matchExpressions/In selector so one rule covers both label conventions")
+	}
+}
+
+// The mtls check must not accept a TIMEOUT as proof the mesh refused anything.
+// A timeout is a packet drop — the CNI discarded it and Istio never saw the
+// connection — so counting it would make this check a second copy of the netpol
+// check, passing on a property the run never exercised.
+func TestEvalEnforcementProbeMTLSRejectsATimeoutAsProof(t *testing.T) {
+	ctrl := netProbeResult{Target: "ctrl", Connected: true, Reason: "connected"}
+	dropped := netProbeResult{Target: "harbor-core...:80", Reason: "blocked: probe harbor-core...:80: timeout"}
+
+	v := evalEnforcementProbe("mtls", ctrl, dropped, "why")
+	if v.FailWhy == "" || !v.Inconclu {
+		t.Error("a timeout on the mtls dial must be INCONCLUSIVE — Istio was never consulted")
+	}
+
+	// A reset IS the mesh refusing, and must pass.
+	refused := netProbeResult{Target: "harbor-core...:80", Reason: "blocked: probe harbor-core...:80: refused"}
+	if v := evalEnforcementProbe("mtls", ctrl, refused, "why"); v.FailWhy != "" {
+		t.Errorf("a refused plaintext dial is exactly what the mesh does: %s", v.FailWhy)
+	}
+}
+
+// The netpol check is deliberately NOT held to that rule: a drop is precisely
+// what it asserts.
+func TestEvalEnforcementProbeNetpolAcceptsATimeout(t *testing.T) {
+	ctrl := netProbeResult{Target: "ctrl", Connected: true, Reason: "connected"}
+	dropped := netProbeResult{Target: "loki...:80", Reason: "blocked: probe loki...:80: timeout"}
+	if v := evalEnforcementProbe("netpol", ctrl, dropped, "why"); v.FailWhy != "" {
+		t.Errorf("a CNI drop is what the netpol check is for: %s", v.FailWhy)
+	}
+}
+
+// The probe policy must OPEN the path to the mtls target's namespace. If the
+// NetworkPolicy also denies it, the CNI drops the packet first and the mesh is
+// never consulted — which is the confound the check above now refuses.
+func TestProbePodManifestAllowsTheMTLSTargetNamespace(t *testing.T) {
+	m := probePodManifest("ns", "img", "a:1", "loki-gateway.monitoring.svc.cluster.local:80",
+		"harbor-core.harbor.svc.cluster.local:80", time.Second)
+	if !strings.Contains(m, "kubernetes.io/metadata.name: harbor") {
+		t.Error("egress to the mtls target's namespace must be allowed, or the CNI blocks it before Istio can")
+	}
+	// The NETPOL denied target must stay unallowed — that one is about the CNI.
+	if strings.Contains(m, "kubernetes.io/metadata.name: monitoring") {
+		t.Error("the netpol denied target's namespace must NOT be allowed; the check asserts the CNI blocks it")
+	}
+}
+
+func TestServiceNamespaceOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"harbor-core.harbor.svc.cluster.local:80":      "harbor",
+		"loki-gateway.monitoring.svc.cluster.local:80": "monitoring",
+		"kubernetes.default.svc.cluster.local:443":     "default",
+		"nodots:80": "",
+	} {
+		if got := serviceNamespaceOf(in); got != want {
+			t.Errorf("serviceNamespaceOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A PERMISSIVE namespace ACCEPTS plaintext by design, so the dial succeeding
+// there is correct behaviour. harbor ships all three of its PeerAuthentication
+// documents PERMISSIVE on purpose — ADR 0010 step 3 — and asserting STRICT
+// before that flip reds every cluster for a rollout step nobody has taken.
+func TestMeshEnforcesSTRICT(t *testing.T) {
+	if meshEnforcesSTRICT([]string{"PERMISSIVE", "PERMISSIVE", "PERMISSIVE"}) {
+		t.Error("an all-PERMISSIVE namespace is not enforcing")
+	}
+	if meshEnforcesSTRICT(nil) {
+		t.Error("no PeerAuthentication at all means the mesh default applies, which is PERMISSIVE here")
+	}
+	if !meshEnforcesSTRICT([]string{"PERMISSIVE", "STRICT"}) {
+		t.Error("a STRICT mode anywhere in the namespace means it is enforcing")
+	}
+	if !meshEnforcesSTRICT([]string{"strict"}) {
+		t.Error("the mode comparison must not be case-sensitive")
 	}
 }

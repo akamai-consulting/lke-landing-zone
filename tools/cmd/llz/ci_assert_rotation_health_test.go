@@ -44,12 +44,12 @@ func TestSlaForClass(t *testing.T) {
 }
 
 func TestEvalRotationHealth(t *testing.T) {
-	expected := []struct{ Cred, Class string }{
-		{"linode-incluster-pat", credClassAutomated},
-		{"db-admin", credClassOnDemand},
-		{"grafana-admin", credClassGenerateOnce},
-		{"missing-automated", credClassAutomated},
-		{"unseeded-static", credClassStatic},
+	expected := []expectedCred{
+		{"linode-incluster-pat", credClassAutomated, false},
+		{"db-admin", credClassOnDemand, false},
+		{"grafana-admin", credClassGenerateOnce, false},
+		{"missing-automated", credClassAutomated, false},
+		{"unseeded-static", credClassStatic, false},
 	}
 	ages := map[string]float64{
 		"linode-incluster-pat": 30,
@@ -89,8 +89,65 @@ func TestEvalRotationHealth(t *testing.T) {
 	}
 }
 
+// An OPT-IN path is alertable — it carries a real 90d SLA — but most deployments
+// never seed it, so its ABSENCE is the normal state and cannot be a finding. The
+// first release-e2e to reach this gate failed on exactly this: every seeded
+// credential reported OK and linode-cloud-firewall, which the e2e cluster
+// correctly does not have, reded the lane.
+//
+// Both halves are asserted here, because fixing this by demoting the class would
+// have passed the first half and silently dropped the SLA.
+func TestEvalRotationHealthOptionalPathAbsentIsNotAFinding(t *testing.T) {
+	expected := []expectedCred{
+		{"linode-cloud-firewall", credClassOnDemand, true},
+		{"required-on-demand", credClassOnDemand, false},
+	}
+	vs := evalRotationHealth(expected, map[string]float64{}, false)
+	by := map[string]credVerdict{}
+	for _, v := range vs {
+		by[v.Cred] = v
+	}
+	if f := by["linode-cloud-firewall"].FailWhy; f != "" {
+		t.Errorf("an unseeded OPT-IN path must be skipped, not failed: %s", f)
+	}
+	if by["required-on-demand"].FailWhy == "" {
+		t.Error("a REQUIRED on-demand credential with no series must still fail — that is what this gate is for")
+	}
+	// The SLA must survive the exemption: once seeded, an overdue opt-in path is
+	// still a finding.
+	overdue := evalRotationHealth(expected, map[string]float64{"linode-cloud-firewall": 200}, false)[0]
+	if overdue.FailWhy == "" {
+		t.Error("an opt-in path that IS seeded and is past its SLA must fail — the exemption is about presence, not age")
+	}
+}
+
+// The opt-in exemption must be spelled in credPaths, not hardcoded in the gate:
+// the sampler and the gate read the same table, and a second list would be the
+// split contract docs/e2e-gates.md is about.
+func TestCredPathsMarksTheOptInFirewallTokenOptional(t *testing.T) {
+	var seen bool
+	for _, cp := range credPaths {
+		if cp.cred != "linode-cloud-firewall" {
+			if cp.optional {
+				t.Errorf("%s is marked optional; every other declared path is seeded on every deployment", cp.cred)
+			}
+			continue
+		}
+		seen = true
+		if !cp.optional {
+			t.Error("linode-cloud-firewall is the documented OPT-IN least-privilege token — it must be optional")
+		}
+		if cp.class != credClassOnDemand {
+			t.Errorf("linode-cloud-firewall class = %s, want on-demand — demoting it drops the 90d SLA the docs promise", cp.class)
+		}
+	}
+	if !seen {
+		t.Fatal("linode-cloud-firewall is no longer in credPaths")
+	}
+}
+
 func TestEvalRotationHealthStrictGatesInfoClasses(t *testing.T) {
-	expected := []struct{ Cred, Class string }{{"grafana-admin", credClassGenerateOnce}}
+	expected := []expectedCred{{"grafana-admin", credClassGenerateOnce, false}}
 	ages := map[string]float64{"grafana-admin": 400}
 	if v := evalRotationHealth(expected, ages, true)[0]; v.FailWhy == "" {
 		t.Error("--strict must gate the 365d info threshold too")
