@@ -31,7 +31,7 @@ func TestScanOrphansTotalsFollowTheirOwnRegionScope(t *testing.T) {
 	ctx := context.Background()
 
 	// Account-wide: every resource is counted.
-	all, err := scanOrphans(ctx, fake, "", "")
+	all, err := scanOrphans(ctx, fake, "", "", "")
 	if err != nil {
 		t.Fatalf("scanOrphans: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestScanOrphansTotalsFollowTheirOwnRegionScope(t *testing.T) {
 	}
 
 	// volumeRegion narrows ONLY the Volume total, and to that region's Volumes.
-	scoped, err := scanOrphans(ctx, fake, "", "us-ord")
+	scoped, err := scanOrphans(ctx, fake, "", "us-ord", "")
 	if err != nil {
 		t.Fatalf("scanOrphans(volumeRegion): %v", err)
 	}
@@ -57,7 +57,7 @@ func TestScanOrphansTotalsFollowTheirOwnRegionScope(t *testing.T) {
 	}
 
 	// --region narrows NodeBalancers and VPCs.
-	east, err := scanOrphans(ctx, fake, "us-east", "")
+	east, err := scanOrphans(ctx, fake, "us-east", "", "")
 	if err != nil {
 		t.Fatalf("scanOrphans(region): %v", err)
 	}

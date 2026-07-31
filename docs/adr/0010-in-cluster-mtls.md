@@ -269,6 +269,16 @@ creates that Service — so OpenBao's audit log is almost certainly not reaching
 Loki at all. That is a broken pipeline rather than an exposed one, and fixing it
 is out of scope here; whoever repairs the URL must give it TLS at the same time.
 
+> **Update (chart 0.1.29).** The URL is repaired — both it and
+> `platform.networkPolicy.observabilityNamespace` now target `monitoring` — and
+> `llz ci assert-openbao-audit` gates the round trip so it cannot silently break
+> again. The TLS half of the instruction above is **not** satisfied and cannot be
+> from here: the gateway is nginx serving plain HTTP with no TLS material from
+> apl-core (apl-core's own otel-operator ships to it over `http://`), so `https://`
+> would connect to nothing. The hop stays a registered `plaintextAllowed` residual,
+> re-keyed to the new URL, and closes when `llz-openbao` and `monitoring` are both
+> enrolled in ambient.
+
 ### Known incompatibility
 
 `llz reconcile --reconcile-harbor` runs the provisioner logic in-process from the

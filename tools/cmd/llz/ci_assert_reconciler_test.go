@@ -2,6 +2,9 @@ package main
 
 import (
 	"errors"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -110,7 +113,7 @@ func seamReconcilerProm(t *testing.T, upBody, leaderBody []byte) {
 func TestRunAssertReconcilerHealthy(t *testing.T) {
 	one := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
 	seamReconcilerProm(t, one, one)
-	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 30*time.Second, time.Second); err != nil {
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 30*time.Second, time.Second); err != nil {
 		t.Errorf("expected no error when up=1 and leader=1, got %v", err)
 	}
 }
@@ -141,7 +144,7 @@ func TestRunAssertReconcilerReportingDown(t *testing.T) {
 	leader1 := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
 	seamReconcilerProm(t, up0, leader1)
 	calls := stubExecCombined(t, "")
-	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 0, time.Second); err == nil {
 		t.Errorf("expected an error when llz_reconcile_up=0, got %v", err)
 	}
 	if len(*calls) == 0 {
@@ -156,7 +159,7 @@ func TestRunAssertReconcilerNoLeaderOrAbsent(t *testing.T) {
 	seamReconcilerProm(t, up1, absent)
 	stubReconcilerLease(t, "", false)
 	calls := stubExecCombined(t, "")
-	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 0, time.Second); err == nil {
 		t.Errorf("expected an error when leader gauge is absent, got %v", err)
 	}
 	if len(*calls) == 0 {
@@ -173,7 +176,7 @@ func TestRunAssertReconcilerLeaderGaugeLagsButLeaseLive(t *testing.T) {
 	seamReconcilerProm(t, up1, leader0)
 	stubReconcilerLease(t, "llz-reconciler-abc123", true)
 	calls := stubExecCombined(t, "")
-	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err != nil {
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 0, time.Second); err != nil {
 		t.Fatalf("expected no error when the gauge lags but the Lease is live, got %v", err)
 	}
 	if len(*calls) != 0 {
@@ -188,7 +191,7 @@ func TestRunAssertReconcilerLeaderDownAndLeaseDead(t *testing.T) {
 	seamReconcilerProm(t, up1, leader0)
 	stubReconcilerLease(t, "", false)
 	calls := stubExecCombined(t, "")
-	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 0, time.Second); err == nil {
 		t.Fatalf("expected an error when leader=0 and the Lease has no live holder, got %v", err)
 	}
 	if len(*calls) == 0 {
@@ -207,7 +210,7 @@ func TestRunAssertReconcilerUpFailHasNoLeaseFallback(t *testing.T) {
 	t.Cleanup(func() { reconcilerLeaseLive = orig })
 	reconcilerLeaseLive = func(string, time.Time) (string, bool) { leaseConsulted = true; return "holder", true }
 	stubExecCombined(t, "")
-	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 0, time.Second); err == nil {
 		t.Fatalf("expected an error when up=0 regardless of the Lease, got %v", err)
 	}
 	if leaseConsulted {
@@ -244,7 +247,7 @@ func TestRunAssertReconcilerHealthyDoesNotDump(t *testing.T) {
 	one := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
 	seamReconcilerProm(t, one, one)
 	calls := stubExecCombined(t, "")
-	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 30*time.Second, time.Second); err != nil {
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 30*time.Second, time.Second); err != nil {
 		t.Fatalf("expected exit 0, got %v", err)
 	}
 	if len(*calls) != 0 {
@@ -298,7 +301,196 @@ func TestRunAssertReconcilerUnreachable(t *testing.T) {
 	withPrometheus = func(_ string, _ func(func(string) ([]byte, error)) error) error {
 		return errors.New("port-forward failed")
 	}
-	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", 0, time.Second); err == nil {
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", false, nil, 10, 0, time.Second); err == nil {
 		t.Errorf("expected an error when Prometheus is unreachable, got %v", err)
+	}
+}
+
+// ── per-lane freshness ───────────────────────────────────────────────────────
+
+func TestLanesFromDeploymentArgs(t *testing.T) {
+	got := lanesFromDeploymentArgs([]string{
+		"reconcile", "--metrics-addr=:8080",
+		"--reconcile-argo-nudge", "--reconcile-sc-demote=true",
+		"--reconcile-volume-labels", "--reconcile-volume-tags=false",
+		"--reconcile-unknown-future-lane",
+	})
+	want := []string{"argo-nudge", "observe", "sc-demote", "volume-labels"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	// observe runs unconditionally, so an argless container still expects it —
+	// otherwise a reconciler with every optional lane off would be gated on
+	// nothing at all and pass vacuously.
+	if lanes := lanesFromDeploymentArgs(nil); len(lanes) != 1 || lanes[0] != alwaysOnReconcilerLane {
+		t.Errorf("no args must still expect the always-on lane, got %v", lanes)
+	}
+	// An explicitly-disabled lane must NOT be demanded — an instance that turns a
+	// lane off is not broken, and failing it here would make the gate unusable.
+	for _, l := range lanesFromDeploymentArgs([]string{"--reconcile-volume-tags=false"}) {
+		if l == "volume-tags" {
+			t.Error("--reconcile-volume-tags=false must not be treated as enabled")
+		}
+	}
+}
+
+// TestReconcileFlagLaneTableMatchesReconcileGo is the coupling guard: the flag
+// names and the lane names are declared independently in reconcile.go, and this
+// gate's expected set is built from the mapping between them. If a lane is
+// renamed on one side only, the gate silently stops demanding it — the exact
+// failure mode the whole per-lane check exists to catch, one level up.
+func TestReconcileFlagLaneTableMatchesReconcileGo(t *testing.T) {
+	src, err := os.ReadFile("reconcile.go")
+	if err != nil {
+		t.Fatalf("reading reconcile.go: %v", err)
+	}
+	body := string(src)
+
+	// Every --reconcile-* flag reconcile.go registers must be in the table.
+	flagRe := regexp.MustCompile(`"(reconcile-[a-z-]+)"`)
+	for _, m := range flagRe.FindAllStringSubmatch(body, -1) {
+		flag := "--" + m[1]
+		if _, ok := reconcileFlagLane[flag]; !ok {
+			t.Errorf("reconcile.go registers %s but reconcileFlagLane has no entry — "+
+				"the lane it enables will be silently excluded from assert-reconciler --lanes", flag)
+		}
+	}
+	// And every lane name the table maps to must actually be registered.
+	laneRe := regexp.MustCompile(`name:\s+"([a-z-]+)"`)
+	registered := map[string]bool{}
+	for _, m := range laneRe.FindAllStringSubmatch(body, -1) {
+		registered[m[1]] = true
+	}
+	for flag, lane := range reconcileFlagLane {
+		if !registered[lane] {
+			t.Errorf("reconcileFlagLane maps %s to lane %q, which reconcile.go does not register — "+
+				"the gate would demand a series nothing ever emits", flag, lane)
+		}
+	}
+	if !registered[alwaysOnReconcilerLane] {
+		t.Errorf("reconcile.go no longer registers the always-on lane %q", alwaysOnReconcilerLane)
+	}
+}
+
+func TestPromVectorByLabel(t *testing.T) {
+	raw := []byte(`{"status":"success","data":{"resultType":"vector","result":[
+	  {"metric":{"reconciler":"observe"},"value":[1,"1720000000"]},
+	  {"metric":{"reconciler":"apl-overlay"},"value":[1,"1720000300"]},
+	  {"metric":{},"value":[1,"5"]}
+	]}}`)
+	got, err := promVectorByLabel(raw, "reconciler")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 || got["observe"] != 1720000000 || got["apl-overlay"] != 1720000300 {
+		t.Errorf("unexpected vector: %v", got)
+	}
+	// A query failure must be an ERROR, not an empty map — an empty map would read
+	// as "every lane is dead" and fail the gate blaming the reconciler.
+	if _, err := promVectorByLabel([]byte(`{"status":"error","error":"boom"}`), "reconciler"); err == nil {
+		t.Error("a Prometheus error must not decode as an empty vector")
+	}
+	if _, err := promVectorByLabel([]byte(`nope`), "reconciler"); err == nil {
+		t.Error("an unparseable body must be an error")
+	}
+}
+
+func TestEvalLaneFreshness(t *testing.T) {
+	now := time.Unix(1_720_010_000, 0)
+	expected := []string{"observe", "apl-overlay", "volume-labels", "ghost"}
+	lastSuccess := map[string]float64{
+		"observe":       float64(now.Add(-20 * time.Second).Unix()), // 30s cadence → fine
+		"apl-overlay":   float64(now.Add(-2 * time.Hour).Unix()),    // 300s cadence → stale
+		"volume-labels": float64(now.Add(-30 * time.Minute).Unix()), // 3600s cadence → fine
+	}
+	intervals := map[string]float64{"observe": 30, "apl-overlay": 300, "volume-labels": 3600}
+
+	got := evalLaneFreshness(expected, lastSuccess, intervals, now, 10, defaultLaneInterval)
+	byLane := map[string]laneVerdict{}
+	for _, v := range got {
+		byLane[v.Lane] = v
+	}
+	if byLane["observe"].FailWhy != "" {
+		t.Errorf("observe should be fresh: %s", byLane["observe"].FailWhy)
+	}
+	if byLane["volume-labels"].FailWhy != "" {
+		t.Errorf("a slow lane inside its OWN budget must pass — judging every lane on one cadence is the bug: %s",
+			byLane["volume-labels"].FailWhy)
+	}
+	if byLane["apl-overlay"].FailWhy == "" {
+		t.Error("a 300s lane silent for 2h must be stale")
+	}
+	// The whole point: a lane the Deployment enables that has NEVER reported is a
+	// failure, not an absence. Passing here is how a dead lane stays invisible.
+	if g := byLane["ghost"]; g.FailWhy == "" || g.Present {
+		t.Errorf("an enabled lane with no series must FAIL closed, got %+v", g)
+	}
+}
+
+// A lane reporting successes but no interval sample must still be judged — the
+// fallback cadence is generous, so it can under-report staleness but never
+// invent it.
+func TestEvalLaneFreshnessFallsBackToDefaultInterval(t *testing.T) {
+	now := time.Unix(1_720_010_000, 0)
+	fresh := map[string]float64{"x": float64(now.Add(-time.Minute).Unix())}
+	if v := evalLaneFreshness([]string{"x"}, fresh, nil, now, 10, defaultLaneInterval)[0]; v.FailWhy != "" {
+		t.Errorf("a recent pass with no interval sample must pass: %s", v.FailWhy)
+	}
+	ancient := map[string]float64{"x": float64(now.Add(-100 * time.Hour).Unix())}
+	if v := evalLaneFreshness([]string{"x"}, ancient, nil, now, 10, defaultLaneInterval)[0]; v.FailWhy == "" {
+		t.Error("a lane silent for 100h must be stale even on the fallback cadence")
+	}
+}
+
+// End-to-end through the seam: one dead lane among healthy ones must red the
+// gate. llz_reconcile_up is a max() across lanes, so it stays pinned at 1 — this
+// is precisely what the aggregate gauges cannot see.
+func TestRunAssertReconcilerFailsOnDeadLane(t *testing.T) {
+	now := time.Now()
+	one := []byte(`{"status":"success","data":{"result":[{"value":[1,"1"]}]}}`)
+	success := []byte(`{"status":"success","data":{"resultType":"vector","result":[
+	  {"metric":{"reconciler":"observe"},"value":[1,"` + strconv.FormatInt(now.Unix(), 10) + `"]}
+	]}}`)
+	intervals := []byte(`{"status":"success","data":{"resultType":"vector","result":[
+	  {"metric":{"reconciler":"observe"},"value":[1,"30"]},
+	  {"metric":{"reconciler":"volume-labels"},"value":[1,"3600"]}
+	]}}`)
+
+	orig := withPrometheus
+	t.Cleanup(func() { withPrometheus = orig })
+	withPrometheus = func(_ string, fn func(func(string) ([]byte, error)) error) error {
+		return fn(func(path string) ([]byte, error) {
+			switch {
+			case strings.Contains(path, "last_success_timestamp"):
+				return success, nil
+			case strings.Contains(path, "interval_seconds"):
+				return intervals, nil
+			default:
+				return one, nil
+			}
+		})
+	}
+	stubExecCombined(t, "")
+
+	// volume-labels is enabled but has no last-success series — a dead lane.
+	err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", true,
+		[]string{"observe", "volume-labels"}, 10, 0, time.Millisecond)
+	if err == nil {
+		t.Fatal("a dead lane must fail the gate even while up=1 and leader=1")
+	}
+	if !strings.Contains(err.Error(), "volume-labels") {
+		t.Errorf("the failure must name the dead lane, got %v", err)
+	}
+}
+
+// Failing to read the Deployment must FAIL, not silently degrade to an empty
+// expected set — a gate that demands nothing reports nothing wrong.
+func TestRunAssertReconcilerFailsWhenLaneSetUnknown(t *testing.T) {
+	orig := enabledReconcilerLanes
+	t.Cleanup(func() { enabledReconcilerLanes = orig })
+	enabledReconcilerLanes = func(string) ([]string, error) { return nil, errors.New("no such deployment") }
+
+	if err := runCIAssertReconciler("ns/svc:9090", "llz-reconciler", true, nil, 10, 0, time.Millisecond); err == nil {
+		t.Error("an unreadable Deployment must fail the gate, not skip the lane check")
 	}
 }

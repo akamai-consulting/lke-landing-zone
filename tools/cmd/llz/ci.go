@@ -227,6 +227,78 @@ func ciCmd() *cobra.Command {
 	// failing on dropped RBAC/OpenBao access) that converge and alert-eval --strict
 	// both miss.
 	c.AddCommand(ciAssertReconcilerCmd())
+	// E2E gate: what the reconciler lanes DO, not that they are running. A lane can
+	// report a successful pass every cycle while its effect on the cluster is absent
+	// (reconciled onto the wrong object, reverted by Argo, computed from empty
+	// input) — assert-reconciler reads the lane's self-report and cannot see that.
+	c.AddCommand(ciAssertReconcilerEffectsCmd())
+	// ── Tier-2 delivery gates: does the data actually ARRIVE? ────────────────
+	// Each covers a pipeline whose failure mode is silence — the producer stays
+	// Running, the sink stays Ready, converge stays green, and the thing simply
+	// never gets there. assert-openbao-audit proved one such round trip; these are
+	// the rest of them.
+	//
+	// log path (the cluster-wide collector, NOT the OpenBao promtail sidecar).
+	c.AddCommand(ciAssertLogIngestionCmd())
+	// secret path: ESO is still RE-READING OpenBao, not just holding a Secret it
+	// materialized once and can no longer refresh.
+	c.AddCommand(ciAssertESORoundTripCmd())
+	// alert path: a firing alert has somewhere to go. Prometheus treats "firing
+	// with no receivers" as normal, so this is invisible everywhere else.
+	c.AddCommand(ciAssertAlertDeliveryCmd())
+	// dashboard path: the sidecar is a label selector, so a dropped label leaves a
+	// valid ConfigMap holding a dashboard nobody can see.
+	c.AddCommand(ciAssertGrafanaDashboardsCmd())
+	// ── Tier-4 enforcement negatives ─────────────────────────────────────────
+	// The runtime counterpart to the static policy manifests, in the same spirit as
+	// assert-wave-health-vap: server-dry-run something each policy MUST act on and
+	// require that policy's own response. `kubectl get clusterpolicy` proves the
+	// YAML is present; it cannot tell an enforcing policy from a decorative one,
+	// and both ship failurePolicy: Ignore, so a downed Kyverno admits silently.
+	c.AddCommand(ciAssertAdmissionEnforcementCmd())
+	// The two enforcement properties that CANNOT be dry-run: admission answers
+	// from the API server, but a dropped packet is only knowable by sending one.
+	// assert-network-enforcement opens real connections from a real pod (each
+	// negative paired with a positive control, so a broken probe reports
+	// INCONCLUSIVE rather than passing); net-probe is the dial it runs there.
+	c.AddCommand(ciAssertNetworkEnforcementCmd(), ciNetProbeCmd())
+	// The e2e assert battery itself. Was ~40 lines of inline bash implementing a
+	// parallel job runner in YAML — untestable, and with the lane list written
+	// TWICE (once to run, once to collect) so a lane could run and never be able to
+	// fail the step. One tested list now drives both, and it ships with the binary
+	// rather than with each instance's vendored workflow.
+	// ── Tier-3 credential-lifecycle gates ────────────────────────────────────
+	// assert-rotation-health gates the age of every credential credPaths declares:
+	// a declared credential publishing NO series is invisible on the single pane
+	// AND unalertable, because a rule over an absent series never evaluates.
+	// assert-harbor-roundtrip USES a minted robot rather than trusting it was
+	// created — the truncation regression left every credential valid and every
+	// push and pull 401ing on a malformed host.
+	c.AddCommand(ciAssertRotationHealthCmd(), ciAssertHarborRoundTripCmd())
+	// ── Delivery/health gates found in the post-review functional pass ───────
+	// assert-obj-roundtrip WRITES to Loki's and Harbor's object storage at each
+	// consumer's OWN endpoint with its OWN credential. verify-object-storage asks
+	// the Linode API whether the buckets exist by label, and every one of those
+	// checks passed while both consumers were returning NoSuchBucket — the
+	// generations are disjoint namespaces, so the API and the consumer were both
+	// telling the truth about different places.
+	c.AddCommand(ciAssertObjRoundTripCmd())
+	// assert-certificates consumes a signal that already existed and nothing read:
+	// llz_certificates_not_ready is published and alerted on, but alert-eval is
+	// report-only and --strict ignores FIRING, so a stuck Certificate reds nothing.
+	c.AddCommand(ciAssertCertificatesCmd())
+	// assert-database proves the seeded admin credential is still ACCEPTED.
+	// rotate-db-admin resets the password in place with no overlap window, so the
+	// failure is a live endpoint that rejects the credential every consumer holds.
+	c.AddCommand(ciAssertDatabaseCmd())
+	c.AddCommand(ciAssertSuiteCmd())
+	// E2E gate: assert OpenBao's audit log is ARRIVING in Loki, by reading it back
+	// out of Loki. The metrics path has assert-scrape-targets; the log path had
+	// nothing, and shipped to a Service that never existed for its entire life —
+	// with a NetworkPolicy egress allow pointed at the same empty namespace, so
+	// both sides agreed with each other and neither agreed with the cluster. Only
+	// the round trip can tell a correct URL from a plausible one.
+	c.AddCommand(ciAssertOpenbaoAuditCmd())
 	// Static guard for the harbor-reconciler mesh class: a NetworkPolicy egress to
 	// a STRICT-mesh namespace (harbor) from outside it describes traffic Istio
 	// silently drops (Makefile mesh-egress-guard).

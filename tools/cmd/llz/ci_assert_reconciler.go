@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -35,31 +36,253 @@ import (
 )
 
 func ciAssertReconcilerCmd() *cobra.Command {
-	var prom, namespace string
-	var settle, interval int
+	var prom, namespace, lanes string
+	var settle, interval, staleFactor int
+	var checkLanes bool
 	c := &cobra.Command{
 		Use:   "assert-reconciler",
-		Short: "fail unless the reconciler is reporting healthy (llz_reconcile_up=1) and has a leader (llz_reconcile_leader=1)",
+		Short: "fail unless the reconciler is reporting healthy (llz_reconcile_up=1), has a leader, and every enabled lane is running fresh",
 		Long: "Asserts the reconciler's functional gauges in the in-cluster Prometheus:\n" +
 			"llz_reconcile_up == 1 (the reconcile loop is up AND its samples succeed — a\n" +
 			"pod that is Running yet failing on lost RBAC/OpenBao access reports 0) and\n" +
 			"llz_reconcile_leader == 1 (a replica holds the driving Lease). Catches the\n" +
 			"silently-broken-reconciler class that converge/health (pod phase) and\n" +
-			"alert-eval --strict (ignores FIRING) both miss. Polls a short settle budget,\n" +
-			"then exits 0 (healthy) or 1. Read-only; ephemeral kubectl port-forward.",
+			"alert-eval --strict (ignores FIRING) both miss.\n\n" +
+			"ALSO asserts every ENABLED lane is passing recently (--lanes, default on).\n" +
+			"llz_reconcile_up is a max() across lanes, so one dead lane among nine leaves\n" +
+			"it pinned at 1; and because the registry never expires a gauge, a dead lane\n" +
+			"keeps serving its last-known-good sample instead of going absent. The\n" +
+			"per-lane freshness series is the only thing that contradicts that, and\n" +
+			"nothing consumed it: LLZReconcilerStale covers it as an ALERT, but alert-eval\n" +
+			"is report-only and --strict ignores FIRING by design.\n\n" +
+			"The expected lane set comes from the reconciler DEPLOYMENT's --reconcile-*\n" +
+			"args, not from the metrics — a lane that is declared but never reports is\n" +
+			"exactly the failure, and deriving the expectation from the gauge would make\n" +
+			"it unobservable. Polls a short settle budget, then exits 0 or 1. Read-only.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cmd.SilenceUsage = true
-			return runCIAssertReconciler(prom, namespace,
+			return runCIAssertReconciler(prom, namespace, checkLanes, splitCSVList(lanes), staleFactor,
 				time.Duration(settle)*time.Second, time.Duration(interval)*time.Second)
 		},
 	}
 	c.Flags().StringVar(&prom, "prom", "monitoring/prometheus-operated:9090",
 		"the Prometheus Service as <namespace>/<name>:<port> to port-forward to")
 	c.Flags().StringVar(&namespace, "namespace", "llz-reconciler", "namespace label the reconciler gauges carry")
+	c.Flags().BoolVar(&checkLanes, "lanes", true, "also assert every enabled lane has passed recently (per-lane freshness)")
+	c.Flags().StringVar(&lanes, "lane-set", "",
+		"comma-separated lane names to require (default: read the Deployment's --reconcile-* args)")
+	c.Flags().IntVar(&staleFactor, "stale-factor", 10,
+		"a lane is stale after this many of its OWN llz_reconcile_interval_seconds without a success (matches the LLZReconcilerStale rule)")
 	c.Flags().IntVar(&settle, "settle", 120, "seconds to keep polling for the reconciler to report healthy before failing")
 	c.Flags().IntVar(&interval, "interval", 15, "seconds between poll attempts")
 	return c
+}
+
+// ── per-lane freshness ───────────────────────────────────────────────────────
+
+// alwaysOnReconcilerLane is the sampling lane that runs unconditionally
+// (reconcile.go registers it before any --reconcile-* flag is consulted), so it
+// is expected even when the Deployment declares no optional lanes at all.
+const alwaysOnReconcilerLane = "observe"
+
+// reconcileFlagLane maps a Deployment `--reconcile-<x>` argument to the lane name
+// that argument switches on — i.e. the `reconciler` label its gauges carry.
+//
+// This table is the CONTRACT between reconcile.go's flag registration and its
+// lane registration, and it is the split-contract archetype in miniature: the
+// flag name and the lane name are chosen independently and have already drifted
+// once (`--reconcile-cidr-firewall` drives the lane called `cidr-firewall`, but
+// `--reconcile-openbao-gauges` drives `openbao-gauges` and
+// `--reconcile-linode-creds` drives `linode-creds` — three different truncation
+// habits). TestReconcileFlagLaneTableMatchesReconcileGo pins it against the real
+// registrations so a renamed lane fails at PR time instead of silently dropping
+// out of this gate's expected set.
+var reconcileFlagLane = map[string]string{
+	"--reconcile-argo-nudge":        "argo-nudge",
+	"--reconcile-cidr-firewall":     "cidr-firewall",
+	"--reconcile-volume-labels":     "volume-labels",
+	"--reconcile-volume-tags":       "volume-tags",
+	"--reconcile-sc-demote":         "sc-demote",
+	"--reconcile-linode-creds":      "linode-creds",
+	"--reconcile-es-store-recovery": "es-store-recovery",
+	"--reconcile-openbao-gauges":    "openbao-gauges",
+	"--reconcile-token-inventory":   "token-inventory",
+	"--reconcile-apl-overlay":       "apl-overlay",
+}
+
+// lanesFromDeploymentArgs extracts the enabled lane names from a reconciler
+// container's args. Pure.
+//
+// It accepts both `--reconcile-x` and `--reconcile-x=true`, and honours an
+// explicit `=false` as OFF — otherwise a lane deliberately disabled by an
+// instance would be demanded here and fail a perfectly healthy cluster. Unknown
+// `--reconcile-*` args are IGNORED rather than guessed at: a new lane must be
+// added to reconcileFlagLane (and its test) to be gated, which is a visible
+// omission rather than a silent one.
+func lanesFromDeploymentArgs(args []string) []string {
+	out := []string{alwaysOnReconcilerLane}
+	seen := map[string]bool{alwaysOnReconcilerLane: true}
+	for _, a := range args {
+		flag, val := a, ""
+		if i := strings.IndexByte(a, '='); i >= 0 {
+			flag, val = a[:i], a[i+1:]
+		}
+		lane, known := reconcileFlagLane[flag]
+		if !known || seen[lane] {
+			continue
+		}
+		if val == "false" || val == "0" {
+			continue
+		}
+		seen[lane] = true
+		out = append(out, lane)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// enabledReconcilerLanes reads the shipped Deployment and returns the lanes it
+// switches on. Swappable for tests. A kubectl failure returns an error rather
+// than an empty set: an empty expected set would make this gate pass having
+// demanded nothing, which is the vacuous pass the whole battery refuses.
+var enabledReconcilerLanes = func(namespace string) ([]string, error) {
+	out, err := execOutput("kubectl", "-n", namespace, "get", "deploy", "llz-reconciler",
+		"-o", "jsonpath={.spec.template.spec.containers[*].args}")
+	if err != nil {
+		return nil, fmt.Errorf("reading llz-reconciler Deployment args: %w", err)
+	}
+	var args []string
+	if err := json.Unmarshal(out, &args); err != nil {
+		// jsonpath over a multi-container pod concatenates arrays; fall back to a
+		// whitespace split, which is enough to spot the --reconcile-* tokens.
+		args = strings.Fields(strings.NewReplacer("[", " ", "]", " ", "\"", " ", ",", " ").Replace(string(out)))
+	}
+	return lanesFromDeploymentArgs(args), nil
+}
+
+// promVectorByLabel parses an instant-query response into label-value → sample
+// value, keyed by the named label. Like promScalar it separates a query failure
+// from an empty result — "we could not ask" must never read as "the lane is
+// dead", which would send an operator after a healthy reconciler.
+func promVectorByLabel(raw []byte, label string) (map[string]float64, error) {
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		Data   struct {
+			Result []struct {
+				Metric map[string]string `json:"metric"`
+				Value  []any             `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("unparseable Prometheus response: %w", err)
+	}
+	if resp.Status != "success" {
+		detail := resp.Error
+		if detail == "" {
+			detail = "status=" + resp.Status
+		}
+		return nil, fmt.Errorf("prometheus returned an error: %s", detail)
+	}
+	out := map[string]float64{}
+	for _, r := range resp.Data.Result {
+		key := r.Metric[label]
+		if key == "" || len(r.Value) != 2 {
+			continue
+		}
+		str, ok := r.Value[1].(string)
+		if !ok {
+			continue
+		}
+		if f, err := strconv.ParseFloat(str, 64); err == nil {
+			out[key] = f
+		}
+	}
+	return out, nil
+}
+
+// laneVerdict is one lane's freshness outcome.
+type laneVerdict struct {
+	Lane    string
+	Age     time.Duration // since its last successful pass (valid only when Present)
+	Budget  time.Duration // staleFactor × the lane's own interval
+	Present bool          // a last-success series exists for this lane
+	FailWhy string        // empty when OK
+}
+
+// evalLaneFreshness decides, for each EXPECTED lane, whether it has passed
+// recently enough. Pure.
+//
+// Each lane is judged against its OWN cadence: apl-overlay runs every 300s and
+// volume-labels has a 3600s resync floor, so one global budget would either
+// excuse a dead fast lane or condemn a healthy slow one. That is the same
+// per-lane join the LLZReconcilerStale rule does; this reuses the reasoning
+// rather than inventing a second definition of "stale".
+//
+// A missing interval sample falls back to defaultInterval — the lane is reporting
+// successes, so it is alive, and refusing to judge it would silently drop it from
+// the gate.
+func evalLaneFreshness(expected []string, lastSuccess, intervals map[string]float64,
+	now time.Time, staleFactor int, defaultInterval time.Duration) []laneVerdict {
+
+	if staleFactor < 1 {
+		staleFactor = 1
+	}
+	out := make([]laneVerdict, 0, len(expected))
+	for _, lane := range expected {
+		v := laneVerdict{Lane: lane}
+		ts, ok := lastSuccess[lane]
+		if !ok {
+			v.FailWhy = "no llz_reconcile_last_success_timestamp_seconds series — the lane is enabled in the Deployment but has never reported a successful pass (it never started, or every pass has failed since boot)"
+			out = append(out, v)
+			continue
+		}
+		v.Present = true
+		iv := defaultInterval
+		if s, ok := intervals[lane]; ok && s > 0 {
+			iv = time.Duration(s) * time.Second
+		}
+		v.Budget = time.Duration(staleFactor) * iv
+		v.Age = now.Sub(time.Unix(int64(ts), 0))
+		if v.Age > v.Budget {
+			v.FailWhy = fmt.Sprintf("last successful pass was %s ago, over its %s budget (%d × %s cadence) — the lane is wedged or erroring every pass",
+				v.Age.Round(time.Second), v.Budget, staleFactor, iv)
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// defaultLaneInterval is the fallback cadence for a lane reporting successes but
+// no interval sample. The slowest shipped resync floor (3600s) — generous on
+// purpose, so the fallback can only ever under-report staleness, never invent it.
+const defaultLaneInterval = 3600 * time.Second
+
+// probeReconcilerLanes evaluates per-lane freshness over an already-open getter.
+func probeReconcilerLanes(get func(string) ([]byte, error), namespace string,
+	expected []string, staleFactor int, now time.Time) ([]laneVerdict, error) {
+
+	successQ := fmt.Sprintf(`llz_reconcile_last_success_timestamp_seconds{namespace=%q}`, namespace)
+	intervalQ := fmt.Sprintf(`llz_reconcile_interval_seconds{namespace=%q}`, namespace)
+	sRaw, err := get("/api/v1/query?query=" + url.QueryEscape(successQ))
+	if err != nil {
+		return nil, err
+	}
+	iRaw, err := get("/api/v1/query?query=" + url.QueryEscape(intervalQ))
+	if err != nil {
+		return nil, err
+	}
+	success, err := promVectorByLabel(sRaw, "reconciler")
+	if err != nil {
+		return nil, err
+	}
+	// An unreadable interval vector is NOT fatal: the fallback cadence keeps the
+	// freshness question answerable, and failing here would blame the lanes for a
+	// second query's problem.
+	intervals, _ := promVectorByLabel(iRaw, "reconciler")
+	return evalLaneFreshness(expected, success, intervals, now, staleFactor, defaultLaneInterval), nil
 }
 
 // promScalar parses an instant-query response, returning the first sample's value
@@ -148,15 +371,28 @@ func evalReconcilerGauge(name, query string, raw []byte, want float64, absentWhy
 type reconcilerProbe struct {
 	up     gaugeCheck
 	leader gaugeCheck
+	lanes  []laneVerdict
+}
+
+// staleLanes returns the lanes that failed their freshness budget.
+func (p reconcilerProbe) staleLanes() []laneVerdict {
+	var out []laneVerdict
+	for _, v := range p.lanes {
+		if v.FailWhy != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func (p reconcilerProbe) healthy() bool {
-	return p.up.failWhy == "" && p.leader.failWhy == ""
+	return p.up.failWhy == "" && p.leader.failWhy == "" && len(p.staleLanes()) == 0
 }
 
 // probeReconciler opens one port-forward and evaluates llz_reconcile_up +
-// llz_reconcile_leader. A transport error is returned so the poll loop can retry.
-func probeReconciler(prom, namespace string) (reconcilerProbe, error) {
+// llz_reconcile_leader, plus per-lane freshness when expectedLanes is non-empty.
+// A transport error is returned so the poll loop can retry.
+func probeReconciler(prom, namespace string, expectedLanes []string, staleFactor int) (reconcilerProbe, error) {
 	upQ := fmt.Sprintf(`max(llz_reconcile_up{namespace=%q})`, namespace)
 	leaderQ := fmt.Sprintf(`max(llz_reconcile_leader{namespace=%q})`, namespace)
 	var p reconcilerProbe
@@ -175,6 +411,13 @@ func probeReconciler(prom, namespace string) (reconcilerProbe, error) {
 		p.leader = evalReconcilerGauge("llz_reconcile_leader", leaderQ, leaderRaw, 1,
 			"no llz_reconcile_leader series — the reconciler isn't reporting (pod down / not scraped)",
 			"llz_reconcile_leader=0 — no replica holds the driving Lease (leader election stuck)")
+		if len(expectedLanes) > 0 {
+			lanes, lerr := probeReconcilerLanes(get, namespace, expectedLanes, staleFactor, time.Now())
+			if lerr != nil {
+				return lerr
+			}
+			p.lanes = lanes
+		}
 		return nil
 	})
 	return p, err
@@ -184,14 +427,34 @@ func probeReconciler(prom, namespace string) (reconcilerProbe, error) {
 // and an error otherwise (cobra exits 1 on it). The ::error:: annotations stay
 // as direct writes: GitHub parses an annotation only at the start of a line, and
 // a returned error reaches stderr behind main.go's "llz: " prefix.
-func runCIAssertReconciler(prom, namespace string, settle, interval time.Duration) error {
+func runCIAssertReconciler(prom, namespace string, checkLanes bool, laneSet []string, staleFactor int,
+	settle, interval time.Duration) error {
 	fmt.Println("## Reconciler functional-health assertion")
+
+	// Resolve the expected lane set BEFORE polling. A failure to read the
+	// Deployment is fatal rather than "check no lanes": silently degrading to an
+	// empty expectation is how this gate would report success having demanded
+	// nothing of the very lanes it exists to watch.
+	var expected []string
+	if checkLanes {
+		switch {
+		case len(laneSet) > 0:
+			expected = laneSet
+		default:
+			var err error
+			if expected, err = enabledReconcilerLanes(namespace); err != nil {
+				fmt.Fprintf(os.Stderr, "::error::could not determine which reconciler lanes are enabled (%v)\n", err)
+				return fmt.Errorf("could not determine which reconciler lanes are enabled: %w", err)
+			}
+		}
+		fmt.Printf("expected lanes (from the Deployment's --reconcile-* args): %s\n", strings.Join(expected, ", "))
+	}
 
 	var last reconcilerProbe
 	var lastErr error
 	deadline := time.Now().Add(settle)
 	for attempt := 1; ; attempt++ {
-		p, err := probeReconciler(prom, namespace)
+		p, err := probeReconciler(prom, namespace, expected, staleFactor)
 		last, lastErr = p, err
 		if err == nil && p.healthy() {
 			break
@@ -243,12 +506,35 @@ func runCIAssertReconciler(prom, namespace string, settle, interval time.Duratio
 		fmt.Printf("FAIL: %s\n", last.leader.failWhy)
 	}
 
-	if upFail || leaderFail {
+	// Per-lane freshness. Reported in full either way: a green run should record
+	// WHICH lanes it saw passing, so a lane that quietly stops being declared is
+	// visible in the log rather than merely absent from a failure list.
+	stale := last.staleLanes()
+	for _, v := range last.lanes {
+		if v.FailWhy != "" {
+			fmt.Printf("FAIL: lane %s — %s\n", v.Lane, v.FailWhy)
+		} else {
+			fmt.Printf("OK: lane %s — last success %s ago (budget %s)\n",
+				v.Lane, v.Age.Round(time.Second), v.Budget)
+		}
+	}
+
+	if upFail || leaderFail || len(stale) > 0 {
 		dumpReconcilerDiagnostics(namespace)
+		if len(stale) > 0 {
+			names := make([]string, 0, len(stale))
+			for _, v := range stale {
+				names = append(names, v.Lane)
+			}
+			fmt.Fprintf(os.Stderr, "::error::reconciler lane(s) not passing: %s\n", strings.Join(names, ", "))
+			if !upFail && !leaderFail {
+				return fmt.Errorf("reconciler lane(s) not passing: %s", strings.Join(names, ", "))
+			}
+		}
 		fmt.Fprintln(os.Stderr, "::error::reconciler is not functionally healthy")
 		return fmt.Errorf("reconciler is not functionally healthy")
 	}
-	fmt.Println("Reconciler is reporting healthy and has a leader.")
+	fmt.Printf("Reconciler is reporting healthy, has a leader, and all %d enabled lane(s) are fresh.\n", len(last.lanes))
 	return nil
 }
 

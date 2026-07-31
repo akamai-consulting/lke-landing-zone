@@ -381,7 +381,7 @@ func TestScanOrphans(t *testing.T) {
 			{"id": float64(21), "label": "lke100", "region": "us-ord"}, // keep
 		},
 	}
-	scan, err := scanOrphans(context.Background(), fake, "", "")
+	scan, err := scanOrphans(context.Background(), fake, "", "", "")
 	if err != nil {
 		t.Fatalf("scanOrphans: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestScanOrphans(t *testing.T) {
 	// preflight-vs-reap alignment fix: a detached pvc-* Volume in another region
 	// must not be counted against a us-ord apply that `llz reap --region us-ord`
 	// would never clean.
-	volElsewhere, err := scanOrphans(context.Background(), fake, "", "us-east")
+	volElsewhere, err := scanOrphans(context.Background(), fake, "", "us-east", "")
 	if err != nil {
 		t.Fatalf("scanOrphans(volumeRegion): %v", err)
 	}
@@ -421,7 +421,7 @@ func TestScanOrphans(t *testing.T) {
 	for _, m := range fake.vpcs {
 		m["region"] = "us-east"
 	}
-	scoped, err := scanOrphans(context.Background(), fake, "us-ord", "us-ord")
+	scoped, err := scanOrphans(context.Background(), fake, "us-ord", "us-ord", "")
 	if err != nil {
 		t.Fatalf("scanOrphans(region): %v", err)
 	}

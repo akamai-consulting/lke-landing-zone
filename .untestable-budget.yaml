@@ -70,7 +70,31 @@ categories:
     # were being counted TWICE by the glob below, so deduplicating them dropped the
     # tally 597 → 534 without deleting any logic. Keep ~3% headroom rather than
     # leaving the freed budget as slack a future PR could fill with untested bash.
-    budget: 550
+    #
+    # Ratcheted 550 → 526 when the e2e assert battery moved out of YAML into
+    # `llz ci assert-suite` (tools/cmd/llz/ci_assert_suite.go).
+    #
+    # It briefly went the other way. Six new e2e gates (assert-reconciler-effects,
+    # assert-log-ingestion, assert-eso-roundtrip, assert-alert-delivery,
+    # assert-grafana-dashboards, assert-admission-enforcement) pushed the tally to
+    # 551 and the budget was RAISED to 560 to unblock — the one thing the paragraph
+    # above and this gate's own error message both say not to do. The debt was then
+    # paid in the same change rather than left as a comment, so the net is a ratchet
+    # DOWN.
+    #
+    # What moved: the battery was ~40 lines of inline bash implementing a parallel
+    # job runner — background N subprocesses into a temp dir, `wait`, then re-read
+    # each lane's rc/log in a `for` loop to print ::group:: blocks and decide the
+    # step's exit status. Three things were wrong with it, and the gate was right to
+    # object: the code deciding whether the battery FAILS was the only untested part
+    # of it; the lane list was written twice (once to run, once to collect) so a lane
+    # present in the first and missing from the second ran and could never fail the
+    # step; and the list shipped per-instance, so a new gate reached an instance only
+    # when someone edited its vendored workflow.
+    #
+    # Tally after the move: 511 — 39 below the pre-existing 550 ceiling even with the
+    # six new gates added. Budgeted at 511 + ~3%, same convention as the others.
+    budget: 526
     include:
       - ".github/workflows/*.yml"
       - "instance-template/.github/workflows/*.yml"

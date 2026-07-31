@@ -1,0 +1,218 @@
+package main
+
+// ci_assert_log_ingestion.go implements `llz ci assert-log-ingestion` — the gate
+// that every landing-zone namespace's pod logs are actually reaching Loki.
+//
+// assert-openbao-audit proved ONE producer's round trip: the promtail sidecar in
+// the OpenBao pod. That sidecar is a first-party thing this repo configures, and
+// it broke because we pointed it at a Service that did not exist. The rest of the
+// landing zone's logs travel a DIFFERENT path — apl-core's cluster-wide collector
+// picks up pod stdout by Kubernetes service discovery — and nothing asserted that
+// path at all.
+//
+// It fails the same silent way. A namespace dropped from the collector's
+// discovery config, a relabel rule that stops emitting the `namespace` label, a
+// NetworkPolicy that blocks the collector from a namespace: in every case the
+// pods stay Running, Loki stays Ready, assert-loki stays green, and the logs you
+// need during an incident are simply not there. You find out when you go looking,
+// which is the worst possible moment.
+//
+// The assertion is per-namespace and freshness-bounded: for each expected
+// namespace there must be at least one log line in the lookback window. Existence
+// alone would stay green for Loki's whole retention after collection stopped —
+// the same trap assert-openbao-audit avoids.
+//
+// FAIL-CLOSED: no stream, no entries, an unparseable response, or an unreachable
+// Loki all fail. A log-delivery gate that passes having examined nothing is
+// indistinguishable from the outage it exists to find.
+
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+// defaultLogNamespaces are the landing-zone namespaces whose pod logs must be
+// reaching Loki. Deliberately a KNOWN list rather than "every namespace Loki
+// happens to have": if collection regresses at the source, a discovered list
+// would come back short and the gate would pass green on the very bug it exists
+// to catch — the same reasoning as assert-scrape-targets' monitor list.
+//
+// Only the two namespaces that exist on EVERY landing zone are defaults.
+// Component-gated namespaces (llz-pat-rotator, llz-cluster-health,
+// llz-argo-workflows) would fail on a cluster that legitimately does not run
+// them; add them via --namespaces where they are enabled.
+var defaultLogNamespaces = []string{"llz-reconciler", "llz-openbao"}
+
+func ciAssertLogIngestionCmd() *cobra.Command {
+	var loki, tenant, namespaces string
+	var lookback, settle, interval, limit int
+	c := &cobra.Command{
+		Use:   "assert-log-ingestion",
+		Short: "fail unless each landing-zone namespace's pod logs are arriving in Loki",
+		Long: "Queries Loki for recent log lines from each landing-zone namespace and fails if\n" +
+			"any namespace has none. Covers the cluster-wide collector path — apl-core's\n" +
+			"Kubernetes service discovery over pod stdout — which is DIFFERENT from the\n" +
+			"OpenBao promtail sidecar that assert-openbao-audit covers, and which nothing\n" +
+			"asserted.\n\n" +
+			"The failure is silent by construction: a namespace dropped from discovery, a\n" +
+			"relabel rule that stops emitting `namespace`, or a NetworkPolicy blocking the\n" +
+			"collector all leave pods Running, Loki Ready and assert-loki green while the\n" +
+			"logs are simply absent. Freshness-bounded, so collection that stopped an hour\n" +
+			"ago cannot pass on Loki's retained history. Read-only. Exit 0 / 1.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cmd.SilenceUsage = true
+			return runCIAssertLogIngestion(loki, tenant, splitCSVList(namespaces), limit,
+				time.Duration(lookback)*time.Minute,
+				time.Duration(settle)*time.Second,
+				time.Duration(interval)*time.Second)
+		},
+	}
+	c.Flags().StringVar(&loki, "loki", defaultAuditLokiService, "the Loki gateway Service as <namespace>/<name>:<port> to port-forward to")
+	c.Flags().StringVar(&tenant, "tenant", defaultAuditTenant, "Loki tenant (X-Scope-OrgID) to read as")
+	c.Flags().StringVar(&namespaces, "namespaces", strings.Join(defaultLogNamespaces, ","),
+		"comma-separated namespaces whose pod logs must be arriving")
+	c.Flags().IntVar(&lookback, "lookback", 30, "minutes of history a namespace must have logged within")
+	c.Flags().IntVar(&limit, "limit", 5, "max entries to fetch per namespace (only their existence and recency is read)")
+	c.Flags().IntVar(&settle, "settle", 180, "seconds to keep polling before failing")
+	c.Flags().IntVar(&interval, "interval", 15, "seconds between poll attempts")
+	return c
+}
+
+// nsIngestion is one namespace's ingestion verdict.
+type nsIngestion struct {
+	Namespace string
+	Entries   int
+	Newest    time.Time
+	FailWhy   string
+}
+
+// logIngestionSelector builds the LogQL selector for a namespace's pod logs.
+func logIngestionSelector(ns string) string {
+	return fmt.Sprintf(`{namespace=%q}`, ns)
+}
+
+// evalNamespaceIngestion reduces one namespace's streams to a verdict. Pure.
+//
+// Zero entries is a FAILURE, never a pass-with-note. The whole reason this gate
+// exists is that "no logs" is what a broken collector and a healthy-but-quiet
+// namespace look like from the outside — and on a converged cluster neither
+// llz-reconciler (a 30s sample loop that logs every pass) nor llz-openbao is ever
+// genuinely silent for the lookback window.
+func evalNamespaceIngestion(ns string, streams []lokiStream) nsIngestion {
+	v := nsIngestion{Namespace: ns}
+	for _, s := range streams {
+		for _, e := range s.Entries {
+			v.Entries++
+			if e.At.After(v.Newest) {
+				v.Newest = e.At
+			}
+		}
+	}
+	if v.Entries == 0 {
+		v.FailWhy = "no log lines in the window — this namespace's pods are not being collected. " +
+			"Check the collector's namespace discovery, its relabel rules (a dropped `namespace` label " +
+			"makes the stream unfindable rather than absent), and any NetworkPolicy between the collector and this namespace"
+	}
+	return v
+}
+
+// probeLogIngestion queries every expected namespace over one open port-forward.
+func probeLogIngestion(get func(string) ([]byte, error), namespaces []string,
+	limit int, lookback time.Duration, now time.Time) ([]nsIngestion, error) {
+
+	out := make([]nsIngestion, 0, len(namespaces))
+	for _, ns := range namespaces {
+		raw, err := get(lokiQueryRangePath(logIngestionSelector(ns), now.Add(-lookback), now, limit))
+		if err != nil {
+			return nil, err
+		}
+		streams, perr := parseLokiStreams(raw)
+		if perr != nil {
+			return nil, perr
+		}
+		out = append(out, evalNamespaceIngestion(ns, streams))
+	}
+	return out, nil
+}
+
+// failedIngestion returns the namespaces that are not being collected.
+func failedIngestion(vs []nsIngestion) []string {
+	var out []string
+	for _, v := range vs {
+		if v.FailWhy != "" {
+			out = append(out, v.Namespace)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func runCIAssertLogIngestion(loki, tenant string, namespaces []string, limit int,
+	lookback, settle, interval time.Duration) error {
+
+	fmt.Println("## Landing-zone log-ingestion assertion")
+	if len(namespaces) == 0 {
+		fmt.Fprintln(os.Stderr, "::error::no --namespaces given — refusing to pass having checked nothing")
+		return fmt.Errorf("no --namespaces given — refusing to pass vacuously")
+	}
+	if lookback <= 0 {
+		fmt.Fprintln(os.Stderr, "::error::--lookback must be positive — a zero window can never contain a log line")
+		return fmt.Errorf("--lookback must be positive")
+	}
+	fmt.Printf("Loki %s, tenant %s, namespaces %s, lookback %s\n", loki, tenant, strings.Join(namespaces, ", "), lookback)
+
+	var last []nsIngestion
+	var lastErr error
+	deadline := time.Now().Add(settle)
+	for attempt := 1; ; attempt++ {
+		var vs []nsIngestion
+		err := withLoki(loki, tenant, func(get func(string) ([]byte, error)) error {
+			var perr error
+			vs, perr = probeLogIngestion(get, namespaces, limit, lookback, time.Now())
+			return perr
+		})
+		last, lastErr = vs, err
+		if err == nil && len(failedIngestion(vs)) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		if err != nil {
+			fmt.Printf("attempt %d: could not query Loki at %s (%v) — retrying in %s\n", attempt, loki, err, interval)
+		} else {
+			fmt.Printf("attempt %d: %v still not ingesting — retrying in %s\n", attempt, failedIngestion(vs), interval)
+		}
+		time.Sleep(interval)
+	}
+
+	// An unreachable Loki is a gate FAILURE, not a skip: we cannot tell a Loki we
+	// could not reach from a collector that has stopped, and conflating those is
+	// exactly what this gate refuses.
+	if lastErr != nil {
+		fmt.Fprintf(os.Stderr, "::error::could not query Loki at %s within %s (%v)\n", loki, settle, lastErr)
+		return fmt.Errorf("could not query Loki at %s within %s: %w", loki, settle, lastErr)
+	}
+
+	for _, v := range last {
+		if v.FailWhy != "" {
+			fmt.Printf("FAIL: %s — %s\n", v.Namespace, v.FailWhy)
+		} else {
+			fmt.Printf("OK: %s — %d line(s), freshest %s old\n",
+				v.Namespace, v.Entries, time.Since(v.Newest).Truncate(time.Second))
+		}
+	}
+
+	if bad := failedIngestion(last); len(bad) > 0 {
+		fmt.Fprintf(os.Stderr, "::error::no logs reaching Loki from: %s\n", strings.Join(bad, ", "))
+		return fmt.Errorf("no logs reaching Loki from: %s", strings.Join(bad, ", "))
+	}
+	fmt.Printf("All %d landing-zone namespace(s) are shipping logs to Loki.\n", len(last))
+	return nil
+}

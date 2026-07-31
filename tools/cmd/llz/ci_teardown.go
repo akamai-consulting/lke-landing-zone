@@ -132,7 +132,7 @@ func ciTeardownDeleteVPCCmd() *cobra.Command {
 }
 
 func ciAssertNoOrphansCmd() *cobra.Command {
-	var region, volumeRegion, clusterID string
+	var region, volumeRegion, clusterID, env string
 	var threshold, attempts, retryDelay int
 	c := &cobra.Command{
 		Use:   "assert-no-orphans",
@@ -153,12 +153,13 @@ func ciAssertNoOrphansCmd() *cobra.Command {
 			"Reads LINODE_TOKEN (or LINODE_API_TOKEN).",
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return runCIAssertNoOrphans(region, volumeRegion, clusterID, threshold, attempts, retryDelay)
+			return runCIAssertNoOrphans(region, volumeRegion, clusterID, env, threshold, attempts, retryDelay)
 		},
 	}
 	f := c.Flags()
 	f.StringVar(&region, "region", "", "scope the NB/VPC orphan census to one region (empty = account-wide)")
 	f.StringVar(&volumeRegion, "volume-region", "", "scope the pvc-* Volume orphan count to one region (empty = the --region value, or account-wide)")
+	f.StringVar(&env, "env", "", "deployment name; widens the Volume census to that deployment's RELABELED Volumes. Without it this gate counts only `pvc-`-prefixed Volumes and reports zero orphans while the deployment's own renamed Volumes leak.")
 	f.StringVar(&clusterID, "cluster-id", "", "the destroyed cluster's id: its OWN surviving NBs (lke_cluster.id) and VPC (lke<id>) fail the gate regardless of --threshold (defaults to the LKE_CLUSTER_ID env, so the workflow needs no new flag)")
 	f.IntVar(&threshold, "threshold", 0, "only fail when the (other-account) orphan count EXCEEDS this")
 	f.IntVar(&attempts, "attempts", 5, "re-count attempts before failing")
@@ -166,7 +167,7 @@ func ciAssertNoOrphansCmd() *cobra.Command {
 	return c
 }
 
-func runCIAssertNoOrphans(region, volumeRegion, clusterID string, threshold, attempts, retryDelay int) error {
+func runCIAssertNoOrphans(region, volumeRegion, clusterID, env string, threshold, attempts, retryDelay int) error {
 	client, ctx, err := ciClient()
 	if err != nil {
 		return err
@@ -230,7 +231,7 @@ func runCIAssertNoOrphans(region, volumeRegion, clusterID string, threshold, att
 
 	var scan orphanScan
 	for attempt := 1; attempt <= attempts; attempt++ {
-		if scan, err = scanOrphans(ctx, client, region, volRegion); err != nil {
+		if scan, err = scanOrphans(ctx, client, region, volRegion, env); err != nil {
 			return err
 		}
 		fmt.Printf("orphan census (NB/VPC region: %s, Volume region: %s) [attempt %d/%d]: %d Volume(s), %d NodeBalancer(s), %d VPC(s) — %d total (threshold %d)\n",

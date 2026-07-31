@@ -44,6 +44,19 @@ gofmt -l .            # must print nothing
   (`spf13/cobra` for the CLI, `sigs.k8s.io/yaml` for YAML), reaching the
   Kubernetes API with a hand-rolled in-cluster REST client rather than client-go.
 - Binaries build fully static (`CGO_ENABLED=0`).
+- **`ci assert-*` verbs are the e2e gates** — the layer that catches behavior no
+  static check can see. Structure every new one the same way: the judgement is a
+  **pure function over parsed input** (testable without a cluster), and the
+  transport — `kubectl`, port-forward, an API client — sits behind a **package-var
+  seam** a test replaces (`withPrometheus` / `withLoki` in `prom_query.go` /
+  `loki_query.go`). `ci_assert_scrape.go` and `ci_assert_openbao_audit.go` are the
+  models. Unit-test the pure evaluator *and* the fail-closed arms: empty result,
+  malformed response, unreachable endpoint. A gate must never report success
+  having examined nothing. When two components in this module share a rule (a
+  label format, a path layout, a truncation limit), test the coupling by calling
+  **both sides' real functions** — never by restating the rule in the test, which
+  passes happily while the shipped consumer goes blind. See
+  [docs/e2e-gates.md](../docs/e2e-gates.md).
 - Never add `Co-Authored-By` to commits.
 - Do not commit secrets or keypairs (`*.pem`, `*.der`, `*.key`) — `.gitignore`
   covers these and the pre-commit hook enforces it.
