@@ -40,7 +40,7 @@ drives it from scaffold to a converged LKE-E cluster and on into day-2.
 flowchart LR
     subgraph TPL["📦 Template repo (this repo) — builds & publishes"]
         direction TB
-        TF["terraform-modules/<br/>cluster · object-storage"]
+        TF["terraform-modules/<br/>cluster · object-storage · databases"]
         CH["kubernetes-charts/<br/>first-party Helm charts"]
         IMG["dockerfiles/<br/>ci-tofu · ci-kubernetes · devcontainer · llz"]
         CLI["tools/ — the llz CLI (Go)"]
@@ -120,6 +120,7 @@ and the version/publish contract in
 |---|---|
 | [`llz-cluster`](terraform-modules/llz-cluster/) | VPC + subnet + node Cloud Firewall + LKE-E cluster (no node pool) |
 | [`llz-object-storage`](terraform-modules/llz-object-storage/) | Linode OBJ buckets for registry/log storage (buckets only — the scoped keys are minted and rotated in-cluster) |
+| [`llz-databases`](terraform-modules/llz-databases/) | One VPC-attached Linode Managed PostgreSQL cluster (no public endpoint) |
 
 ### Helm charts — `kubernetes-charts/`
 

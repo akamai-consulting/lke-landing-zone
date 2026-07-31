@@ -128,7 +128,7 @@ deployment — both are "stop here" signals a CI step can branch on.
 
 The pipeline runs as a **static `needs:`-chained workflow**
 (`.github/workflows/promote.yml`) — *generated from the ranks*, not hand-written.
-GitHub already provides the three pieces of a promotion pipeline, so the runtime
+GitHub already provides every piece of a promotion pipeline, so the runtime
 reinvents nothing:
 
 | Promotion concern | Native mechanism |

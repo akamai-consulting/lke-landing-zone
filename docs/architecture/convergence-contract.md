@@ -2,7 +2,7 @@
 
 **Audience:** anyone touching Terraform, `llz ci bootstrap-cluster`, the bootstrap workflows, the cluster-health script, or an Argo Application in this repo.
 
-This doc defines what "the cluster is done bootstrapping" means, and the three exit codes that every layer of the bootstrap honours.
+This doc defines what "the cluster is done bootstrapping" means, and the four exit codes that every layer of the bootstrap honours.
 
 ## The problem we're solving
 

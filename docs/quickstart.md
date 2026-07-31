@@ -450,8 +450,8 @@ For what's missing it:
 | **Linode token** | reads your Linode PAT (full Read/Write) → `LINODE_API_TOKEN`, and uses it for the next two steps |
 | **State bucket** | lists your Linode OBJ clusters, you pick one, then **creates** the state bucket → `TF_STATE_BUCKET`, `TF_STATE_ENDPOINT` |
 | **State key** | **creates** a bucket-scoped `read_write` OBJ key → `TF_STATE_ACCESS_KEY`, `TF_STATE_SECRET_KEY` |
-| **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (classic PAT, **`repo` + `workflow`** scopes — the build writes the remaining infra secrets with it), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted) |
-| **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE` (`ghcr.io/<org>/ci-{terraform,kubernetes}:<tag>`) |
+| **GitHub PATs** | opens pre-filled links and reads: `OPENBAO_SECRETS_WRITE_TOKEN` (the build writes the remaining infra secrets with it — see the permissions note below), `APL_VALUES_REPO_TOKEN` (fine-grained PAT, **Contents: write** on your instance repo — apl-core's external values store; the in-cluster Gitea is obsoleted) |
+| **Image vars** | computes `TF_IMAGE` / `KUBE_IMAGE` (`ghcr.io/<org>/ci-tofu:<tag>` and `ghcr.io/<org>/ci-kubernetes:<tag>`) |
 | **Optional** | offers `LINODE_DNS_TOKEN` (Enter to skip — the cluster still bootstraps) |
 
 It writes everything to `my-instance/.llz/` (mode `0600`, **gitignored**), then
@@ -461,6 +461,21 @@ The remaining infra secrets — `OPENBAO_SEAL_KEY`, `OPENBAO_RECOVERY_KEY_*`, th
 Loki/Harbor OBJ keys, Harbor robots — are written **by the build**
 (that's exactly what `OPENBAO_SECRETS_WRITE_TOKEN` is for); `llz` never asks for
 them.
+
+> ⚠️ **`OPENBAO_SECRETS_WRITE_TOKEN` needs `Environments: write`, not `Secrets`.**
+> The wizard's pre-filled link creates a **fine-grained** PAT with **Actions: write
+> + Environments: write** (a classic `repo` + `workflow` PAT also works). Two traps:
+>
+> - The fine-grained **"Secrets" permission covers only *repo-level* secrets and is
+>   NOT enough** — `infra-<env>` environment secrets are governed by
+>   **Environments**.
+> - You must **also be Environment admin** on every `infra-<env>` environment.
+>
+> Get either wrong and repo-level writes still succeed while the `--env`-scoped
+> `gh secret set` calls 401 — which typically surfaces as `bootstrap-openbao.yml`
+> failing its S3 preflight ~5 minutes into a run you started 30 minutes earlier.
+> Check the PAT with `GH_TOKEN=$PAT gh api user`. Full detail:
+> [bootstrap-openbao runbook](runbooks/bootstrap-openbao.md).
 
 > **Manual alternative.** `llz secrets gather` (paste every credential yourself)
 > + `llz secrets push <env> --yes` is still available if you'd rather not have
