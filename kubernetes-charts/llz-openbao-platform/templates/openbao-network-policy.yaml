@@ -91,12 +91,25 @@ spec:
           protocol: TCP
         - port: 6443
           protocol: TCP
+    # Audit shipping to the Loki gateway. BOTH ports, for the same post-DNAT
+    # reason spelled out for the apiserver above: the gateway Service publishes
+    # :80 but its pods listen on :8080, and Cilium evaluates egress on the
+    # TARGET port. Allowing only :80 drops every push at the CNI, which surfaces
+    # as promtail retrying `context deadline exceeded` forever — a timeout, not a
+    # refusal, so it looks like an unreachable host rather than a policy.
+    #
+    # This is the SECOND half of the audit-pipeline break. #387 fixed the target
+    # (llz-observability → monitoring) and left the port, so the rule went on
+    # granting nothing while naming the right namespace — the same shape-correct,
+    # effect-free allow the values.yaml note below describes.
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.platform.networkPolicy.observabilityNamespace }}
       ports:
         - port: 80
+          protocol: TCP
+        - port: 8080
           protocol: TCP
     {{- if .Values.platform.networkPolicy.gatewayNamespace }}
     # apl-core Keycloak: the `keycloak` OIDC auth mount fetches the realm JWKS to
