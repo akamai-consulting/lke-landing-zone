@@ -72,9 +72,58 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 	// same thing ("days since this credential was last written") and only the
 	// SOURCE differs. Reusing it means the existing dashboard panels and both
 	// alert rules pick these up with no query changes.
+	// Did the write-time probe run at all? An empty Secrets list cannot answer
+	// that — it reads identically whether every credential was measured and none
+	// exist, or the probe never authenticated. The writer says so explicitly now,
+	// because "never authenticated" is what was actually happening: the
+	// credential-single-pane job passed a token but no GH_REPO, so the probe
+	// errored on every run and the whole write-time half of the single pane was
+	// dark behind a ::warning:: in a scheduled job's log.
+	//
+	// An inventory with no verdict at all is from a writer that predates this
+	// field; publish nothing rather than guess, so an instance mid-upgrade does
+	// not page for a probe that may be working fine.
+	switch inv.SecretProbe {
+	case secretProbeOK:
+		reg.SetGauge("llz_credential_secret_probe_ok",
+			"1 if the GitHub secrets-metadata probe (credential write-time ages) could run, 0 if it could not authenticate",
+			nil, 1)
+	case secretProbeUnavailable:
+		reg.SetGauge("llz_credential_secret_probe_ok",
+			"1 if the GitHub secrets-metadata probe (credential write-time ages) could run, 0 if it could not authenticate",
+			nil, 0)
+	}
+
 	for _, sec := range inv.Secrets {
+		cred := credLabelForSecret(sec.Name)
+
+		// PRESENCE, published unconditionally — including for a secret that is not
+		// configured at all. That case used to `continue` before publishing
+		// anything, which quietly reintroduced the exact blind spot ADR 0009
+		// claimed the GitHub API had closed: it argued no companion absence alert
+		// was needed because "the API distinguishes them", and it does — the
+		// distinction was carried all the way here as State/UpdatedAt and then
+		// dropped on the floor. A never-configured TF_STATE_ENCRYPTION_PASSPHRASE
+		// or a missing recovery key published NO series, and a rule over an absent
+		// series never evaluates, so it looked identical to a healthy one on both
+		// the dashboard and every alert.
+		//
+		// `expect` is a label rather than a filter because presence is not
+		// uniformly good: OPENBAO_ROOT_TOKEN is supposed to be ABSENT (bootstrap
+		// revokes it), so for that one a 1 here is the finding. Two rules read
+		// this series in opposite directions — LLZCredentialUnconfigured and
+		// LLZRootTokenParked — and both need the label to tell which way to read.
+		expect := sec.Expect
+		if expect == "" {
+			expect = credExpectPresent // inventory written by an older llz
+		}
+		reg.SetGauge("llz_credential_configured",
+			"1 if the credential is configured as a GitHub Actions secret, 0 if absent (expect: present|absent)",
+			map[string]string{"cred": cred, "class": sec.Class, "expect": expect},
+			boolGauge(sec.UpdatedAt != ""))
+
 		if sec.UpdatedAt == "" {
-			continue // not configured — carried in the inventory, but there is no age
+			continue // absent — presence is published above; there is no age to publish
 		}
 		t, err := time.Parse(time.RFC3339, sec.UpdatedAt)
 		if err != nil {
@@ -82,7 +131,7 @@ func sampleTokenInventory(ctx context.Context, client nodeGetter, reg *metrics.R
 		}
 		reg.SetGauge("llz_credential_age_days",
 			"days since the credential was last written (class: automated|on-demand|generate-once|tracks-source|static)",
-			map[string]string{"cred": credLabelForSecret(sec.Name), "class": sec.Class},
+			map[string]string{"cred": cred, "class": sec.Class},
 			float64(health.DaysSince(t, now)))
 	}
 	return nil

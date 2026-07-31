@@ -257,6 +257,79 @@ spec:
             summary: 'credential {{ $labels.cred }} has never been rotated'
             runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
             description: '{{ $labels.cred }} (class {{ $labels.class }}) is {{ $value }} days old and has no rotation automation. Re-seed it by hand, or accept the age deliberately.'
+        - alert: LLZCredentialSecretProbeUnavailable
+          # The funnel that feeds both rules below, watched at its source.
+          #
+          # The write-time probe reads GitHub Actions secret METADATA — the only
+          # age signal that exists for credentials with no expiry and no OpenBao
+          # home (ADR 0009). It needs a token and a repo, and the job that runs it
+          # supplied only the token, so newSecretAgeWriter errored on every run
+          # since the mechanism shipped: no entries in the inventory, therefore no
+          # series, therefore nothing for any rule to fire on. The failure was a
+          # ::warning:: in a scheduled job nobody reads.
+          #
+          # This is deliberately NOT expressed as "the series are missing".
+          # Absence cannot distinguish a broken probe from a deployment that
+          # genuinely holds none of these credentials, and guessing wrong in
+          # either direction is worse than asking the writer, which knows.
+          expr: max(llz_credential_secret_probe_ok{namespace="llz-reconciler"}) == 0
+          for: 6h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: the credential write-time probe cannot run
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0009-unmeasurable-credential-coverage.md"
+            description: 'llz ci token-inventory could not build its GitHub secrets-metadata client, so no write-time credential age was measured this run. Every credential with no expiry — the state-backend key pair, the state-encryption passphrase, the OpenBao seal key and recovery quorum, the Harbor robot copies — is unmeasured while this fires. Check that the credential-single-pane job exports GH_REPO and a token with Secrets access.'
+        - alert: LLZCredentialUnconfigured
+          # The two rules above are both ABOUT AGE, and age only exists for a
+          # credential that exists. A credential that was never configured has no
+          # age, published no series at all, and therefore could not fire either of
+          # them — an alert over an absent series never evaluates. That is the same
+          # failure mode the `static` class was introduced to fix, one level up:
+          # invisible rather than visibly wrong.
+          #
+          # ADR 0009 believed this was already closed ("the API distinguishes them,
+          # so no companion absence alert is needed"). The distinction was real and
+          # was carried in the inventory JSON — it was dropped by the reconciler
+          # before any series was published. llz_credential_configured is that
+          # distinction, published.
+          #
+          # WARNING, not info: every credential with expect=present here is one the
+          # instance cannot do without. A missing OPENBAO_RECOVERY_KEY_* means
+          # break-glass is impossible and you find out on the day you need it; a
+          # missing TF_STATE_ENCRYPTION_PASSPHRASE means state is being written by
+          # something this instance cannot configure.
+          expr: max by (cred, class) (llz_credential_configured{namespace="llz-reconciler", expect="present"}) == 0
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'credential {{ $labels.cred }} is not configured'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md"
+            description: '{{ $labels.cred }} is expected as a GitHub Actions secret on this deployment and the secrets API reports it absent. It has no age because it has no value — nothing else in this ruleset can fire for it. Seed it (docs/secrets.md), or drop it from ghSecretTargets if this instance genuinely does not use it.'
+        - alert: LLZRootTokenParked
+          # The same series read the other way. A root token is EPHEMERAL by design:
+          # bootstrap mints one, uses it, and revokes it, leaving the 3-of-5 recovery
+          # quorum as what survives (ci_bao_breakglass.go). So OPENBAO_ROOT_TOKEN
+          # present in steady state means a break-glass generate/rotate happened and
+          # the revoke half never did — a live, unexpiring, full-admin OpenBao
+          # credential parked in an Actions secret, readable by every workflow that
+          # names it.
+          #
+          # This is why `expect` is a LABEL and not a filter: presence is good for
+          # eight of the nine measured credentials and bad for this one, and a rule
+          # set that could only say "configured is good" had no way to express it.
+          expr: max by (cred) (llz_credential_configured{namespace="llz-reconciler", expect="absent"}) == 1
+          for: 1h
+          labels:
+            severity: warning
+            service: llz-reconciler
+          annotations:
+            summary: 'an OpenBao root token is parked in {{ $labels.cred }}'
+            runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+            description: '{{ $labels.cred }} is set. A root token is ephemeral by design — bootstrap revokes it and the recovery quorum is what survives — so this is a full-admin credential left behind by a break-glass that never ran its revoke. Dispatch llz-breakglass-openbao.yml with action=revoke; it revokes the token AND deletes the secret.'
         - alert: LLZReconcilerNoLeader
           # The llz_reconcile_leader gauge is published only when a driving
           # reconciler is enabled (leader election is running). If it exists and no

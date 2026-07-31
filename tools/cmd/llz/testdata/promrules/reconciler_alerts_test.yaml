@@ -252,3 +252,108 @@ tests:
               summary: credential harbor-admin has never been rotated
               runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/linode-credential-rotation.md"
               description: harbor-admin (class tracks-source) is 400 days old and has no rotation automation. Re-seed it by hand, or accept the age deliberately.
+
+  # ── presence, read in BOTH directions ────────────────────────────────────────
+  #
+  # llz_credential_configured is the one series in this ruleset whose "good"
+  # value is not uniform. Eight of the nine measured GitHub-held credentials want
+  # 1; OPENBAO_ROOT_TOKEN wants 0, because bootstrap revokes it and the recovery
+  # quorum is what survives. A ruleset that could only say "configured is good"
+  # would have had to leave the root token unwatched, so `expect` is a label and
+  # two rules read it in opposite directions.
+  #
+  # This group exists mostly to pin that the two rules cannot be collapsed: swap
+  # either expr's matcher for the other and the paired expectation below fails.
+  #
+  # 2m interval, same reason as the group above — an hourly series goes stale
+  # inside Prometheus' 5m lookback and can never satisfy `for: 1h`.
+  - interval: 2m
+    name: unconfigured credentials and parked root tokens are both visible
+    input_series:
+      # Present and expected present: silent. This is the steady state.
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="tf-state-access-key",class="on-demand",expect="present"}'
+        values: "1x90"
+      # ABSENT and expected present. Before llz_credential_configured existed this
+      # credential published NOTHING — no age series, so neither age rule could
+      # evaluate for it, so a never-seeded recovery key looked exactly like a
+      # healthy one. That silence is the whole reason this rule was added.
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="openbao-recovery-key-2",class="static",expect="present"}'
+        values: "0x90"
+      # Absent and expected absent: the healthy root-token state. Must be silent
+      # under BOTH rules — the unconfigured rule must not claim it is missing.
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="openbao-root-token",class="on-demand",expect="absent"}'
+        values: "0x90"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: LLZCredentialUnconfigured
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+              cred: openbao-recovery-key-2
+              class: static
+            exp_annotations:
+              summary: credential openbao-recovery-key-2 is not configured
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/secrets.md"
+              description: openbao-recovery-key-2 is expected as a GitHub Actions secret on this deployment and the secrets API reports it absent. It has no age because it has no value — nothing else in this ruleset can fire for it. Seed it (docs/secrets.md), or drop it from ghSecretTargets if this instance genuinely does not use it.
+      # The expect=absent series is 0 here, which is the value the OTHER rule
+      # alerts on when it is 1. Pinning "no alert" proves the two matchers are
+      # actually distinct rather than accidentally both matching everything.
+      - eval_time: 2h
+        alertname: LLZRootTokenParked
+        exp_alerts: []
+
+  # The same root token, left behind by a break-glass whose revoke never ran.
+  - interval: 2m
+    name: a root token left set after break-glass is a finding
+    input_series:
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="openbao-root-token",class="on-demand",expect="absent"}'
+        values: "1x90"
+      # A present credential that WANTS to be present, carried alongside to pin
+      # that LLZRootTokenParked keys on `expect` and not merely on the value 1.
+      - series: 'llz_credential_configured{namespace="llz-reconciler",cred="openbao-seal-key",class="static",expect="present"}'
+        values: "1x90"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: LLZRootTokenParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+              cred: openbao-root-token
+            exp_annotations:
+              summary: an OpenBao root token is parked in openbao-root-token
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/runbooks/bootstrap-openbao.md"
+              description: openbao-root-token is set. A root token is ephemeral by design — bootstrap revokes it and the recovery quorum is what survives — so this is a full-admin credential left behind by a break-glass that never ran its revoke. Dispatch llz-breakglass-openbao.yml with action=revoke; it revokes the token AND deletes the secret.
+      - eval_time: 2h
+        alertname: LLZCredentialUnconfigured
+        exp_alerts: []
+
+  # ── the funnel, watched at its source ───────────────────────────────────────
+  #
+  # Every write-time credential age depends on one probe running. When it does
+  # not, the symptom is SILENCE — no entries, no series, no rule to evaluate —
+  # which is why this is expressed as a positive signal from the writer rather
+  # than as `absent(llz_credential_age_days)`. Absence cannot tell a broken probe
+  # apart from a deployment that holds none of these credentials.
+  - interval: 2m
+    name: a write-time probe that cannot authenticate is an alert, not a log line
+    input_series:
+      - series: 'llz_credential_secret_probe_ok{namespace="llz-reconciler"}'
+        values: "0x300"
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: LLZCredentialSecretProbeUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: llz-reconciler
+            exp_annotations:
+              summary: the credential write-time probe cannot run
+              runbook_url: "https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0009-unmeasurable-credential-coverage.md"
+              description: 'llz ci token-inventory could not build its GitHub secrets-metadata client, so no write-time credential age was measured this run. Every credential with no expiry — the state-backend key pair, the state-encryption passphrase, the OpenBao seal key and recovery quorum, the Harbor robot copies — is unmeasured while this fires. Check that the credential-single-pane job exports GH_REPO and a token with Secrets access.'
+      # Under the 6h `for`, so a single bad run does not page: the job is daily
+      # and a transient GitHub 5xx is not a broken funnel.
+      - eval_time: 5h
+        alertname: LLZCredentialSecretProbeUnavailable
+        exp_alerts: []

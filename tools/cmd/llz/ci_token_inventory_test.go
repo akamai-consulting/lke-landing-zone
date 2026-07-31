@@ -334,3 +334,96 @@ func TestGHSecretTargetClassesAreKnown(t *testing.T) {
 		}
 	}
 }
+
+// Every target must declare an `expect`. An empty one is not a neutral default:
+// the reconciler substitutes `present`, so a forgotten field silently promises
+// that a credential must exist — which for a root token is exactly backwards.
+func TestGHSecretTargetsDeclareExpect(t *testing.T) {
+	for _, tgt := range ghSecretTargets {
+		if tgt.expect != credExpectPresent && tgt.expect != credExpectAbsent {
+			t.Errorf("%s: expect = %q, want %q or %q", tgt.name, tgt.expect, credExpectPresent, credExpectAbsent)
+		}
+	}
+}
+
+// The credentials this measurement exists for. ADR 0009 built the write-time
+// probe for the state backend and stopped there; the seal key, the recovery
+// quorum, the root token and the Harbor robot copies have no expiry either, are
+// circular with OpenBao for exactly the same reason, and were simply not in the
+// list it wrote. Pinned by name so removing one is a deliberate edit here rather
+// than a credential quietly leaving the single pane.
+func TestGHSecretTargetsCoverOpenBaoEscrowAndHarborStandby(t *testing.T) {
+	got := map[string]string{}
+	for _, tgt := range ghSecretTargets {
+		got[tgt.name] = tgt.expect
+	}
+	for _, name := range []string{
+		"OPENBAO_SEAL_KEY",       // the at-rest key for everything else in OpenBao
+		"OPENBAO_RECOVERY_KEY_1", // lose the quorum and break-glass is impossible
+		"OPENBAO_RECOVERY_KEY_2",
+		"OPENBAO_RECOVERY_KEY_3",
+		"HARBOR_PASSWORD",      // second copy of an OpenBao-tracked robot secret
+		"HARBOR_PULL_PASSWORD", // ditto — a copy that ages on its own
+	} {
+		if got[name] != credExpectPresent {
+			t.Errorf("%s must be measured and expected present, got expect=%q", name, got[name])
+		}
+	}
+	// The one credential whose healthy state is absent. Bootstrap mints a root
+	// token, uses it and revokes it; a set one is a live full-admin credential
+	// left behind by a break-glass that never ran its revoke.
+	if got["OPENBAO_ROOT_TOKEN"] != credExpectAbsent {
+		t.Errorf("OPENBAO_ROOT_TOKEN must be expect=absent, got %q", got["OPENBAO_ROOT_TOKEN"])
+	}
+}
+
+// The expect verdict has to reach the ConfigMap; the reconciler reads it from
+// there and nowhere else.
+func TestGatherSecretAgesCarriesExpect(t *testing.T) {
+	want := map[string]string{}
+	for _, tgt := range ghSecretTargets {
+		want[tgt.name] = tgt.expect
+	}
+	for _, e := range gatherSecretAges("infra-primary", func(string, string) (string, bool, error) {
+		return "", false, nil
+	}) {
+		if e.Expect != want[e.Name] {
+			t.Errorf("%s: entry carries expect=%q, target declares %q", e.Name, e.Expect, want[e.Name])
+		}
+	}
+}
+
+// An empty Secrets list is ambiguous — "measured, none exist" and "the probe
+// never ran" render identically — and the ambiguity was not theoretical: the one
+// job that runs this command supplied a token but no GH_REPO, so the probe
+// errored on every run since ADR 0009 shipped and no write-time series was ever
+// published. The verdict has to be explicit for the reconciler to alert on it.
+func TestBuildTokenInventoryRecordsSecretProbeUnavailable(t *testing.T) {
+	inv := buildTokenInventory(context.Background(), tokenInvDeps{
+		secretEnv:   "infra-primary",
+		secretProbe: nil, // newSecretAgeWriter failed — the production case
+		now:         time.Unix(1_800_000_000, 0),
+	})
+	if inv.SecretProbe != secretProbeUnavailable {
+		t.Errorf("SecretProbe = %q, want %q", inv.SecretProbe, secretProbeUnavailable)
+	}
+	if len(inv.Secrets) != 0 {
+		t.Errorf("an unavailable probe must contribute no entries, got %d", len(inv.Secrets))
+	}
+}
+
+func TestBuildTokenInventoryRecordsSecretProbeOK(t *testing.T) {
+	inv := buildTokenInventory(context.Background(), tokenInvDeps{
+		secretEnv: "infra-primary",
+		secretProbe: func(string, string) (string, bool, error) {
+			return "2026-05-01T00:00:00Z", true, nil
+		},
+		now: time.Unix(1_800_000_000, 0),
+	})
+	if inv.SecretProbe != secretProbeOK {
+		t.Errorf("SecretProbe = %q, want %q", inv.SecretProbe, secretProbeOK)
+	}
+	if len(inv.Secrets) != len(ghSecretTargets) {
+		t.Errorf("got %d entries, want %d", len(inv.Secrets), len(ghSecretTargets))
+	}
+}
