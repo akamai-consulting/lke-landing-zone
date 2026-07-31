@@ -30,7 +30,7 @@ provision them:
 | **Linode account with LKE-Enterprise** | The cluster, VPC, Object Storage, and Cloud Firewalls are all Linode | LKE-E (`+lke` k8s versions), not standard LKE. Production accounts need an executive sponsor + InfoSec approval — start this first (longest lead time); follow the [Linode account request checklist](infosec/linode-account-request-checklist.md) |
 | **Akamai App Platform (apl-core) entitlement** | We build *on* the platform it provides (Istio, Argo CD, cert-manager, Harbor, Keycloak) | Pinned via `apl_chart_version`; verify with `helm search repo apl/apl --versions` |
 | **A GitOps repo reachable over HTTPS** | apl-core's values schema requires an HTTPS Git URL that every node can reach | Must be reachable over HTTPS by every node — use github.com, gitlab.com, or an internal HTTPS mirror |
-| **A fork of this repo** | The TF-managed bootstrap Argo CD Application tracks *your* first-party repo over SSH | See §5 for the literals to repoint |
+| **Your own instance repo** | The TF-managed bootstrap Argo CD Application tracks *your* repo over SSH; `gh` targets it | Created for you by `llz new --push` (the `instance_repo` copier answer). **Forking this template is *not* required** — `upstream_org` defaults to `akamai-consulting` and the charts are public on GHCR. Fork only if you want to publish your own artifacts; then see §5 |
 | **GHCR pull access** | Argo CD pulls the first-party charts from `ghcr.io/<org>/charts` | The packages are **public** — Argo CD pulls them anonymously, no credential needed. (A private fork can still seed a repo credential from `GHCR_READ_TOKEN` + `GHCR_USERNAME`; the Terraform gate honors it when set.) |
 | CLI tooling | `terraform`/`tofu`, `kubectl`, `helm`, `linode-cli`, `gh`, `bao`, `jq` | **`llz doctor` is the authoritative, always-current list** + reports which are installed and whether `gh` is authed. Skip the host installs by working in the [Dev Container](devcontainer.md), which ships them all. |
 
@@ -100,10 +100,11 @@ Idempotent, so re-running is safe; review + commit the resulting removals.
 
 The
 Scheduled Checks workflow's `template-drift` job (monthly) reports how far behind
-the template your instance has fallen (run `llz drift` for the same check locally). After you pull upstream template
-changes, re-run `llz ci stamp-template-version` and commit the refreshed stamp so
-the baseline advances. Point it at the upstream template with an `upstream` git
-remote or pass `--repo <owner/repo>`; `git remote add upstream <template-repo-url>`.
+the template your instance has fallen (run `llz drift` for the same check locally).
+There is no stamp to refresh by hand — `llz upgrade` re-records the pin in
+`.copier-answers.yml`, which is the one place both `llz drift` and CI read it from.
+Point the check at the upstream template with an `upstream` git remote
+(`git remote add upstream <template-repo-url>`) or `llz drift --repo-url <url>`.
 
 ## 3. The values contract (what you must set)
 
@@ -184,6 +185,10 @@ copier copy --trust --vcs-ref v0.1.0 -d llz_version=v0.1.0 \
 #   upstream_org   — the org hosting the LLZ template/modules/charts (default
 #                    akamai-consulting; set to your fork if you publish your own)
 #   instance_repo  — this instance's own <owner>/<name>
+#   openbao_team   — the default team name for scoped, non-root OpenBao writes
+#                    (default `platform` → secret/platform; lowercase kebab).
+#                    Becomes an apl-core team + a <name>-writer policy; see
+#                    landing-zone-spec.md's spec.teams.
 #   llz_version    — the release to pin module/workflow refs to. PASS IT EXPLICITLY
 #                    (`-d llz_version=<vcs-ref>`) so the pins match the version you
 #                    scaffold from; `llz new` sets it automatically. The `main`
@@ -275,12 +280,12 @@ llz env add <env> --region us-sea --obj-cluster us-sea-1 \
   --k8s-version v1.33.6+lke7 --promotion-rank 1
 ```
 
-It generates `terraform-iac-bootstrap/{cluster,object-storage}/<env>.tfvars`
+It generates `terraform-iac-bootstrap/{cluster,object-storage,databases}/<env>.tfvars`
 (**gitignored** build artifacts — regenerated from the spec on every render and in CI, so you
-commit only the spec + overlay) and the `apl-values/<env>/` overlay, then prints the values
-you must still fill (region, `k8s_version`, `apl_values_repo_url`, `obj_cluster`)
-and scans for leftover template tokens to
-review. Validate the overlay renders:
+commit only the spec + overlay) and the `apl-values/<env>/` overlay. `--region` and
+`--obj-cluster` are **required** and the rest fall back to `spec.defaults`, so
+nothing is left half-filled; it then lists any residual `apl-values` placeholders
+for you to fill. Validate the overlay renders:
 
 ```bash
 kubectl kustomize apl-values/<env>/manifest >/dev/null   # must succeed
@@ -327,9 +332,10 @@ new env, in order:
    the env: seed the static seal key, `bao operator init` (recovery keys; the pods
    auto-unseal from the static seal key), then `llz ci bao-configure` writes the KV
    engine, auth methods, and policies.
-6. **DNS** — no dedicated step. The `llz-letsencrypt-*` ClusterIssuers sync
-   automatically via Argo CD (they live in the mandatory `platform-apl/manifest/dns`
-   base). DNS-01 challenges are solved by apl-core's `cert-manager-webhook-linode`,
+6. **DNS** — no dedicated step. The `llz-letsencrypt-*` ClusterIssuers come from
+   the managed App Platform and sync automatically via Argo CD; set the ACME
+   contact once with `llz spec set dns.acmeEmail=<you@example.com>`.
+   DNS-01 challenges are solved by apl-core's `cert-manager-webhook-linode`,
    which holds its own Linode token (`TF_VAR_linode_dns_token` from the
    `LINODE_DNS_TOKEN` secret, rendered into apl-core's values by `llz ci bootstrap-cluster`) — no
    OpenBao seed or ExternalSecret is involved. (The Argo CD / apl-core values-repo

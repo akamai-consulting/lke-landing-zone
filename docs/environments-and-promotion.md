@@ -6,8 +6,9 @@ workflows, N ranked deployments, and a change that walks them in order on green.
 
 > Prerequisite: you can stand up a single deployment end to end
 > ([quickstart.md](quickstart.md)). This doc is the multi-deployment layer on
-> top — read [§0 of the quickstart](quickstart.md#0-a-word-on-environments-first)
-> for the three meanings of "environment" first; here, "environment" always means
+> top — read the quickstart's *What "environment" means here* table
+> ([§3](quickstart.md#3-scaffold-your-instance--llz-new--llz-env-add)) for the
+> three meanings of "environment" first; here, "environment" always means
 > a **deployment**.
 
 ## 1. The model: a pipeline is N deployments in one repo
@@ -34,8 +35,8 @@ What "promotion" means here is deliberately narrow and GitOps-shaped:
 
 This gives you blast-radius control (a bad change is caught on `dev` before it
 reaches `prod`) without a second repo or a separate config system: the same
-`llz validate → tokens → build → status` flow you already run for one deployment,
-run per stage in a fixed order.
+`llz tokens → doctor → build → status` flow you already run for one deployment
+(or `llz up <env>`, which chains the first three), run per stage in a fixed order.
 
 ```
         one instance repo, main branch
@@ -76,9 +77,11 @@ Rules:
 Set it at scaffold time:
 
 ```bash
-llz env add dev     --region us-ord --promotion-rank 1   # ...plus the usual flags
-llz env add staging --region us-ord --promotion-rank 2
-llz env add prod    --region us-sea --promotion-rank 3
+# --region and --obj-cluster are required on every `env add`; the rest of the
+# sizing falls back to spec.defaults.
+llz env add dev     --region us-ord --obj-cluster us-ord-1 --promotion-rank 1
+llz env add staging --region us-ord --obj-cluster us-ord-1 --promotion-rank 2
+llz env add prod    --region us-sea --obj-cluster us-sea-1 --promotion-rank 3
 ```
 
 …or edit `promotion_rank` in an existing `cluster/<env>.tfvars` by hand. Either
@@ -207,7 +210,7 @@ branching the repo:
 
 Promotion of a *version* pin, then, is literally: edit `dev`'s pin → merge →
 build `dev` → on green, copy the pin into `staging`'s tfvars in a follow-up PR →
-build `staging`, and so on. `llz validate --env <env>` flags any unfilled
+build `staging`, and so on. `llz doctor --env <env>` flags any unfilled
 placeholder before each stage's build, so a half-configured stage fails fast.
 
 ## 6. Ordering caveats that interact with promotion
@@ -232,7 +235,7 @@ remove them:
 This is platform/infrastructure promotion — rolling an instance-repo change
 across clusters in order. It is **not** application-level continuous delivery of
 *your* workloads onto a cluster; that is apl-core / Argo CD's job, and the
-"Deploy GitHub Environment" row in the [quickstart's environment table](quickstart.md#0-a-word-on-environments-first)
+"Deploy GitHub Environment" row in the [quickstart's environment table](quickstart.md#3-scaffold-your-instance--llz-new--llz-env-add)
 is the seam for app secrets. Keep the two mental models separate: `promotion_rank`
 sequences *clusters*; Argo sequences *apps within* a cluster.
 

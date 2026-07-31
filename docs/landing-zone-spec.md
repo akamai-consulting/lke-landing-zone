@@ -36,9 +36,13 @@ near-mechanical lift, and it gives per-env diff/review locality, per-env
 reads it, `llz render --check` validates it, and `llz env list` discovers
 deployments from it (unioned with any committed `cluster/*.tfvars`).
 
-> Adopting the spec is opt-in. Instances without a `landingzone.yaml` keep using
-> their committed tfvars + manifest trees unchanged; every spec-driven path is a
-> no-op when no spec is present.
+> **Every new instance has a spec, and it is the only supported authoring path** —
+> `llz env add` writes `landingzone.yaml` + `environments/<env>.yaml` on the first
+> env, and the per-env tfvars are gitignored artifacts rendered from it (see
+> [adopter-guide §3](adopter-guide.md#3-the-values-contract-what-you-must-set)).
+> The no-op contract below exists only for **pre-spec instances** scaffolded before
+> the spec landed: they keep using their committed tfvars + manifest trees
+> unchanged, because every spec-driven path is a no-op when no spec is present.
 
 ## Layout
 

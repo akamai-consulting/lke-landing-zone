@@ -32,7 +32,9 @@ cd my-instance
 # 3. Add a deployment — authors the spec, renders the tfvars + apl-values overlay (§3)
 llz env add lab --region us-sea --obj-cluster us-sea-1
 
-# 4. Confirm it's ready to build — fill anything doctor flags, then re-run until green (§4)
+# 4. Fill the one placeholder nearly every instance needs, then confirm readiness.
+#    Fix anything doctor flags and re-run until green (§4).
+llz spec set dns.acmeEmail=you@example.com
 llz doctor --env lab
 
 # 5. Provision credentials → readiness gate → build, in ONE command (§4)
@@ -105,7 +107,8 @@ gh auth status --hostname github.com || gh auth login --hostname github.com   # 
 > `gh auth switch --hostname github.com --user <name>` (persists; `gh auth status`
 > lists them). To use a specific account for one command without switching, override
 > the token for that invocation:
-> `GH_TOKEN="$(gh auth token --hostname github.com --user <name>)" ./template-scripts/install-llz.sh`.
+> `GH_TOKEN="$(gh auth token --hostname github.com --user <name>)" bash -c "$(curl -fsSL https://raw.githubusercontent.com/akamai-consulting/lke-landing-zone/main/template-scripts/install-llz.sh)"`
+> (from a checkout: `GH_TOKEN=… ./template-scripts/install-llz.sh`).
 
 > **`gh auth` ≠ your cloud/PAT credentials.** Logging in to `gh` covers GitHub
 > repo, release, and API calls only. `llz tokens` (§4) still prompts you for a
@@ -227,11 +230,21 @@ with no template fork makes copier's HTTPS clone 404, which git surfaces as a
 confusing `Username for 'https://github.com':` prompt — `llz new` now preflights
 this and tells you to fix `--org` or fork first.)
 
-`llz new` runs `copier copy` to render the instance into `my-instance/` (asks
-`upstream_org` and `instance_repo`, writes `.copier-answers.yml`). With
-`--push --yes` it also runs `gh repo create <instance_repo> --private --source .
---push`, so the remote repo exists and `llz tokens`/`doctor` work against it
-immediately. It does **not** ask for credentials — that's `llz tokens` (§4).
+`llz new` runs `copier copy` to render the instance into `my-instance/`, then
+writes `.copier-answers.yml`. It prompts for three answers — keep the defaults
+unless the note says otherwise:
+
+| Prompt | What to answer |
+|---|---|
+| `upstream_org` | **Keep `akamai-consulting`** to track upstream. Set it only if you publish your own template fork. |
+| `instance_repo` | **Your** instance repo as `<owner>/<name>` — this is what `--push` creates. |
+| `openbao_team` | Default `platform`. Names your operators' scoped, non-root OpenBao subtree (`secret/platform`) + the apl-core team. Lowercase kebab; add more later in `landingzone.yaml`. See [spec.teams](landing-zone-spec.md#field-reference). |
+
+(`llz_version` is a fourth answer, but `llz new` sets it from its own version — you
+are not prompted.) With `--push --yes` it also runs `gh repo create <instance_repo>
+--private --source . --push`, so the remote repo exists and `llz tokens`/`doctor`
+work against it immediately. It does **not** ask for credentials — that's
+`llz tokens` (§4).
 
 > **The instance pins to the `llz` version you installed.** `llz new` records this
 > CLI's own version as the instance's `llz_version` and renders the scaffold's
@@ -305,8 +318,15 @@ renders both.
 Then fill any overlay placeholders `env add` listed and confirm readiness:
 
 ```bash
+llz spec set dns.acmeEmail=you@example.com   # the one placeholder nearly every instance must fill
 llz doctor --env lab   # validates the spec + drift, then scans the overlay for placeholders
 ```
+
+> **Set `dns.acmeEmail` before you build.** It is a `REPLACE_PER_ENV` placeholder
+> that `llz doctor` blocks on. Left unfilled, the `llz-letsencrypt-*` ClusterIssuers
+> register with an unparseable contact, Let's Encrypt rejects them, and **no Istio
+> Gateway ever gets a TLS certificate** — the cluster converges but nothing serves
+> HTTPS.
 
 `llz doctor --env` is the single readiness gate (full breakdown in §4): when a
 spec is present it **validates it and confirms the committed `apl-values` are in
@@ -567,6 +587,7 @@ versioned charts + external actions*.
 - [ ] `llz` installed + completion (§2); `llz doctor` tooling green
 - [ ] `llz new … --push --yes` run; org literals repointed; instance pushed to GitHub (§3)
 - [ ] `llz env add <env> --region … --obj-cluster …` run (authors `landingzone.yaml` + `environments/<env>.yaml`, renders); the overlay placeholders it listed are filled (§3)
+- [ ] `llz spec set dns.acmeEmail=<you@example.com>` set — otherwise Let's Encrypt rejects the ClusterIssuers and nothing gets a TLS cert (§3)
 - [ ] `llz doctor --env <env>` green — deployment files + every required value set (§4)
 - [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); cluster converges (`llz status <env>`) (§4)
 - [ ] Static seal key + recovery keys 4 & 5 + root token saved offline; `OPENBAO_ROOT_TOKEN` deleted
