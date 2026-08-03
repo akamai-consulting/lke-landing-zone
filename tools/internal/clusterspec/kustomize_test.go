@@ -236,6 +236,7 @@ func TestRenderCarvedApp(t *testing.T) {
 		"path: apl-values/prod/apps/externalSecrets",
 		"namespace: external-secrets",
 		"SkipDryRunOnMissingResource=true",
+		"argocd.argoproj.io/compare-options: " + CompareOptions,
 	} {
 		if !strings.Contains(app, want) {
 			t.Errorf("carved App CR missing %q:\n%s", want, app)
@@ -251,6 +252,37 @@ func TestRenderCarvedApp(t *testing.T) {
 		}
 		if esWave >= c.CarvedApp.AppWave {
 			t.Errorf("externalSecrets App wave %d must be < %s App wave %d", esWave, name, c.CarvedApp.AppWave)
+		}
+	}
+}
+
+// Every carved App must carry the compare-options — the drift they were parked on
+// (#394) is not specific to one bundle: an ExternalSecret's ESO-defaulted fields
+// are enough on their own, and every carved bundle has one.
+func TestRenderCarvedApp_AllCarryServerSideDiff(t *testing.T) {
+	for _, c := range Components {
+		if c.CarvedApp == nil {
+			continue
+		}
+		app := RenderCarvedApp(c, "prod", "https://github.com/acme/inst.git", "main")
+		if !strings.Contains(app, "argocd.argoproj.io/compare-options: "+CompareOptions) {
+			t.Errorf("%s does not set compare-options — it will report OutOfSync forever on "+
+				"fields the cluster writes (ESO/Kyverno defaults, mutateDigest)", c.CarvedApp.AppName)
+		}
+	}
+}
+
+// IncludeMutationWebhook is the half that is easy to drop as redundant, and on
+// Argo 3.4.4 it MEASURABLY is: llz-reconciler went Synced with ServerSideDiff
+// alone while its live Deployment still carried the Kyverno-written digest. It
+// is pinned anyway because it names the behaviour this fix depends on — Argo
+// documents it as the switch that includes admission-webhook mutations in the
+// prediction — and a default that happens to work is a worse thing to rely on
+// than a setting that says so. Drop it only with a version-specific reason.
+func TestCompareOptions_KeepsMutationWebhook(t *testing.T) {
+	for _, want := range []string{"ServerSideDiff=true", "IncludeMutationWebhook=true"} {
+		if !strings.Contains(CompareOptions, want) {
+			t.Errorf("CompareOptions = %q, must contain %q", CompareOptions, want)
 		}
 	}
 }

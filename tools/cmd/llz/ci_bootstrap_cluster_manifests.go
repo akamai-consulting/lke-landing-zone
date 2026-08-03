@@ -12,6 +12,8 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 // base64Auth is the `username:password` docker-auth blob (mirrors the module's
@@ -190,6 +192,14 @@ func platformBootstrapApplicationManifest(o bootstrapClusterOpts) map[string]any
 		"metadata": map[string]any{
 			"name":      "platform-bootstrap",
 			"namespace": "argocd",
+			// Same compare-options the carved Apps render (clusterspec.CompareOptions):
+			// this App's own tree includes the verify-llz-image-signature ClusterPolicy,
+			// whose Kyverno-defaulted spec fields made it the ONE resource keeping
+			// platform-bootstrap permanently OutOfSync — with selfHeal re-applying it in
+			// a loop (autoHealAttemptsCount 7 on lke638381). See #394.
+			"annotations": map[string]any{
+				"argocd.argoproj.io/compare-options": clusterspec.CompareOptions,
+			},
 		},
 		"spec": map[string]any{
 			"project": "platform-bootstrap",
