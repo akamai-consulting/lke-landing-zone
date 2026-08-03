@@ -95,6 +95,14 @@ func TestManifestBuilders(t *testing.T) {
 	if retry["limit"] != 40 {
 		t.Errorf("retry limit = %v want 40", retry["limit"])
 	}
+	// Same compare-options the carved Apps render: this App's own tree carries the
+	// verify-llz-image-signature ClusterPolicy, whose Kyverno-defaulted spec fields
+	// were the ONE thing keeping platform-bootstrap OutOfSync — and selfHeal
+	// re-applying it in a loop (#394).
+	ann, _ := app["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if ann["argocd.argoproj.io/compare-options"] != clusterspec.CompareOptions {
+		t.Errorf("bootstrap app compare-options = %v, want %q", ann["argocd.argoproj.io/compare-options"], clusterspec.CompareOptions)
+	}
 
 	ss := secretStoreApplicationManifest(o)
 	sssrc := ss["spec"].(map[string]any)["source"].(map[string]any)

@@ -357,6 +357,68 @@ spec:
 `
 }
 
+// CompareOptions is the Argo CD compare-options every LLZ-owned Application sets.
+// Exported so the bootstrap Applications (`llz ci bootstrap-cluster`, which builds
+// its manifests in Go rather than through this renderer) state the same thing
+// once, in one place.
+//
+// WHY (#394). Argo diffs CLIENT-side by default: it compares the rendered manifest
+// against live, so anything the CLUSTER writes reads as drift the App can never
+// resolve —
+//
+//   - CRD/webhook DEFAULTS: ESO fills in ExternalSecret `target.deletionPolicy:
+//     Retain` and `remoteRef.conversionStrategy/decodingStrategy/metadataPolicy`;
+//     Kyverno fills in `admission`, `emitWarning`, `skipBackgroundRequests`,
+//     `useCache`, `verifyDigest` on a ClusterPolicy. Nothing in git sets these and
+//     nothing ever will.
+//   - MUTATING WEBHOOKS: verify-llz-image-signature rewrites the llz image to its
+//     verified digest (mutateDigest), so the Deployment/CronJob/DaemonSet live
+//     object carries `:tag@sha256:…` where git carries `:tag`.
+//
+// ServerSideDiff computes the comparison target with a server-side apply DRY RUN
+// instead, so both land in the prediction and the App reads Synced when it IS in
+// sync.
+//
+// Measured on lke639228 (2026-08-03, Argo CD v3.4.4). Submitting each drifting
+// object's git form through `kubectl apply --server-side --dry-run=server`
+// returned exactly the live object in all three classes — the ExternalSecret with
+// every default filled in, the ClusterPolicy likewise, and the reconciler
+// Deployment with the tag rewritten to the digest. Setting these options on
+// llz-observability (defaults class) and llz-reconciler (image class) took both
+// from OutOfSync to Synced, and a deliberate `scale --replicas=2` on the
+// reconciler was still caught: OutOfSync within a second, auto-healed back to 1.
+// The prediction absorbs what the cluster writes without blinding the diff to
+// what an operator writes.
+//
+// ON AN EXISTING CLUSTER THIS NEEDS ONE REFRESH. Argo does not re-diff an App
+// just because its compare-options changed — llz-harbor sat OutOfSync for ten
+// minutes after being annotated and went Synced the moment it was hard-refreshed.
+// A fresh cluster renders this before the first comparison and is unaffected, but
+// merging this alone will not visibly fix a running cluster: `kubectl -n argocd
+// annotate app <name> argocd.argoproj.io/refresh=hard --overwrite` (or any resync)
+// is what makes it take.
+//
+// IncludeMutationWebhook is belt-and-braces, NOT load-bearing on this version:
+// Argo documents it as the switch that includes admission-webhook mutations in
+// the prediction, but 3.4.4 kept the image case Synced with ServerSideDiff alone.
+// It is set explicitly because the behaviour it names is one this fix depends on
+// — better stated than inherited from a default that could change.
+//
+// WHY NOT ignoreDifferences (the obvious alternative): dropping the image path
+// from the diff also stops Argo noticing a CHANGED tag — an ignored-only diff
+// never triggers auto-sync — so a release or e2e image bump would sit in git and
+// never roll out. ServerSideDiff has the opposite property: a new tag predicts a
+// new digest, which differs from live, which syncs.
+const CompareOptions = "ServerSideDiff=true,IncludeMutationWebhook=true"
+
+// compareOptionsAnnotation is the rendered YAML fragment (2-space indented under
+// metadata.annotations, no trailing newline — the caller's template supplies it).
+const compareOptionsAnnotation = `    # Diff against a server-side-apply DRY RUN, not against the raw manifest, so
+    # cluster-written fields (ESO/Kyverno CRD defaults) and admission-webhook
+    # rewrites (mutateDigest → image digest) stop reading as unresolvable drift.
+    # See clusterspec.CompareOptions for the full why, and why NOT ignoreDifferences.
+    argocd.argoproj.io/compare-options: ` + CompareOptions
+
 // RenderCarvedApp returns the Argo CD Application CR for a carved component in env
 // — a git-path App (project platform-bootstrap, same as llz-secret-store) pointing
 // at the self-contained per-env source root apps/<name>/ (RenderCarvedAppKustomization).
@@ -376,6 +438,7 @@ metadata:
     # App-level wave: the floor for this App's content, ordered against the other
     # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
     argocd.argoproj.io/sync-wave: "` + strconv.Itoa(ca.AppWave) + `"
+` + compareOptionsAnnotation + `
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:

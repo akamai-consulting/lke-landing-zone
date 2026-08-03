@@ -19,6 +19,33 @@ type ArgoApp struct {
 	Automated bool   // .spec.syncPolicy.automated present (non-null)
 	SpecErr   string // joined ComparisonError/InvalidSpecError condition messages
 	OpErr     string // .status.operationState.message when the last sync FAILED (apply-time errors, e.g. the 256KB annotation limit — these never surface as a ComparisonError)
+	// Drifted names the child resources whose own .status is not Synced —
+	// <kind>/<ns>/<name>, in .status.resources order. An OutOfSync App says
+	// only THAT something differs; this says WHAT, which is the difference
+	// between a DRIFT line an operator can act on and one they learn to skip
+	// past (#394). Empty when nothing is individually OutOfSync (an App can be
+	// OutOfSync for a resource Argo cannot attribute, e.g. a pruned extra).
+	Drifted []string
+}
+
+// maxDriftedNamed caps how many drifted resources a DRIFT line names. A report
+// line is read at a glance; an App that drifts on 40 resources has a different
+// problem, and the count in the "+N more" tail is the part that matters there.
+const maxDriftedNamed = 3
+
+// summarizeDrifted renders the drifted-resource suffix for a report line, or ""
+// when there is nothing to name. Truncation is EXPLICIT: a silently-capped list
+// reads as the whole story.
+func summarizeDrifted(drifted []string) string {
+	if len(drifted) == 0 {
+		return ""
+	}
+	shown := drifted
+	tail := ""
+	if len(shown) > maxDriftedNamed {
+		shown, tail = shown[:maxDriftedNamed], fmt.Sprintf(" +%d more", len(drifted)-maxDriftedNamed)
+	}
+	return " [OutOfSync: " + strings.Join(shown, ", ") + tail + "]"
 }
 
 // IsInstanceCustomApp reports whether an ArgoCD Application is an operator
@@ -117,7 +144,7 @@ func classifyArgoApp(a ArgoApp, phase1 bool) (Category, string) {
 		return CatPending, label + " — waiting on OpenBao bootstrap"
 	}
 	if a.Health == "Healthy" {
-		return CatDrift, label + " — drift only; workload functional"
+		return CatDrift, label + " — drift only; workload functional" + summarizeDrifted(a.Drifted)
 	}
 	// Progressing is ArgoCD's "reconcile still in flight" health — a Deployment
 	// rolling out, a child resource not yet Ready (e.g. loki-gateway waiting on
@@ -224,6 +251,12 @@ type argoAppJSON struct {
 			Phase   string `json:"phase"`
 			Message string `json:"message"`
 		} `json:"operationState"`
+		Resources []struct {
+			Kind      string `json:"kind"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+			Status    string `json:"status"`
+		} `json:"resources"`
 	} `json:"status"`
 }
 
@@ -254,6 +287,20 @@ func ParseArgoApp(raw []byte) (ArgoApp, error) {
 	if j.Status.OperationState.Phase == "Failed" || j.Status.OperationState.Phase == "Error" {
 		opErr = j.Status.OperationState.Message
 	}
+	// A resource with an EMPTY status is not drift: Argo leaves .status blank on
+	// resources it does not diff (hooks, and children it only observes). Only an
+	// explicit non-Synced value names a difference.
+	var drifted []string
+	for _, r := range j.Status.Resources {
+		if r.Status == "" || r.Status == "Synced" {
+			continue
+		}
+		ref := r.Kind + "/" + r.Name
+		if r.Namespace != "" {
+			ref = r.Kind + "/" + r.Namespace + "/" + r.Name
+		}
+		drifted = append(drifted, ref)
+	}
 	return ArgoApp{
 		Name:      j.Metadata.Name,
 		Sync:      j.Status.Sync.Status,
@@ -261,5 +308,6 @@ func ParseArgoApp(raw []byte) (ArgoApp, error) {
 		Automated: auto,
 		SpecErr:   strings.Join(specErrs, " | "),
 		OpErr:     opErr,
+		Drifted:   drifted,
 	}, nil
 }

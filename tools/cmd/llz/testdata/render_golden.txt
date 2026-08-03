@@ -293,6 +293,11 @@ metadata:
     # App-level wave: the floor for this App's content, ordered against the other
     # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
     argocd.argoproj.io/sync-wave: "-10"
+    # Diff against a server-side-apply DRY RUN, not against the raw manifest, so
+    # cluster-written fields (ESO/Kyverno CRD defaults) and admission-webhook
+    # rewrites (mutateDigest → image digest) stop reading as unresolvable drift.
+    # See clusterspec.CompareOptions for the full why, and why NOT ignoreDifferences.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -339,6 +344,11 @@ metadata:
     # App-level wave: the floor for this App's content, ordered against the other
     # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
     argocd.argoproj.io/sync-wave: "-5"
+    # Diff against a server-side-apply DRY RUN, not against the raw manifest, so
+    # cluster-written fields (ESO/Kyverno CRD defaults) and admission-webhook
+    # rewrites (mutateDigest → image digest) stop reading as unresolvable drift.
+    # See clusterspec.CompareOptions for the full why, and why NOT ignoreDifferences.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -385,6 +395,11 @@ metadata:
     # App-level wave: the floor for this App's content, ordered against the other
     # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
     argocd.argoproj.io/sync-wave: "5"
+    # Diff against a server-side-apply DRY RUN, not against the raw manifest, so
+    # cluster-written fields (ESO/Kyverno CRD defaults) and admission-webhook
+    # rewrites (mutateDigest → image digest) stop reading as unresolvable drift.
+    # See clusterspec.CompareOptions for the full why, and why NOT ignoreDifferences.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -727,6 +742,11 @@ metadata:
     # App-level wave: the floor for this App's content, ordered against the other
     # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
     argocd.argoproj.io/sync-wave: "-10"
+    # Diff against a server-side-apply DRY RUN, not against the raw manifest, so
+    # cluster-written fields (ESO/Kyverno CRD defaults) and admission-webhook
+    # rewrites (mutateDigest → image digest) stop reading as unresolvable drift.
+    # See clusterspec.CompareOptions for the full why, and why NOT ignoreDifferences.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -773,6 +793,11 @@ metadata:
     # App-level wave: the floor for this App's content, ordered against the other
     # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
     argocd.argoproj.io/sync-wave: "5"
+    # Diff against a server-side-apply DRY RUN, not against the raw manifest, so
+    # cluster-written fields (ESO/Kyverno CRD defaults) and admission-webhook
+    # rewrites (mutateDigest → image digest) stop reading as unresolvable drift.
+    # See clusterspec.CompareOptions for the full why, and why NOT ignoreDifferences.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -819,6 +844,11 @@ metadata:
     # App-level wave: the floor for this App's content, ordered against the other
     # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
     argocd.argoproj.io/sync-wave: "-5"
+    # Diff against a server-side-apply DRY RUN, not against the raw manifest, so
+    # cluster-written fields (ESO/Kyverno CRD defaults) and admission-webhook
+    # rewrites (mutateDigest → image digest) stop reading as unresolvable drift.
+    # See clusterspec.CompareOptions for the full why, and why NOT ignoreDifferences.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
@@ -865,6 +895,11 @@ metadata:
     # App-level wave: the floor for this App's content, ordered against the other
     # carved Apps (externalSecrets lowest). See clusterspec CarvedApp.AppWave.
     argocd.argoproj.io/sync-wave: "5"
+    # Diff against a server-side-apply DRY RUN, not against the raw manifest, so
+    # cluster-written fields (ESO/Kyverno CRD defaults) and admission-webhook
+    # rewrites (mutateDigest → image digest) stop reading as unresolvable drift.
+    # See clusterspec.CompareOptions for the full why, and why NOT ignoreDifferences.
+    argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
