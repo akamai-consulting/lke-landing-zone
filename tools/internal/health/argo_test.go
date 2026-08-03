@@ -134,6 +134,52 @@ func TestParseArgoApp(t *testing.T) {
 	if ok.OpErr != "" {
 		t.Errorf("succeeded sync must leave OpErr empty, got %q", ok.OpErr)
 	}
+
+	// Only the resources whose OWN status is non-Synced are named. Synced ones and
+	// the blank-status ones (Argo leaves .status empty on resources it doesn't
+	// diff) must not be reported as drift — that would name innocents on every
+	// OutOfSync App.
+	drifted, _ := ParseArgoApp([]byte(`{"metadata":{"name":"platform-bootstrap"},"status":{"resources":[
+      {"group":"kyverno.io","kind":"ClusterPolicy","name":"verify-llz-image-signature","status":"OutOfSync"},
+      {"kind":"NetworkPolicy","namespace":"llz-observability","name":"default-deny","status":"Synced"},
+      {"kind":"ServiceAccount","namespace":"argocd","name":"no-status"},
+      {"group":"apps","kind":"Deployment","namespace":"llz-reconciler","name":"llz-reconciler","status":"OutOfSync"}
+    ]}}`))
+	if got, want := strings.Join(drifted.Drifted, ","),
+		"ClusterPolicy/verify-llz-image-signature,Deployment/llz-reconciler/llz-reconciler"; got != want {
+		t.Errorf("Drifted = %q, want %q", got, want)
+	}
+}
+
+func TestSummarizeDrifted(t *testing.T) {
+	if got := summarizeDrifted(nil); got != "" {
+		t.Errorf("no drifted resources must add nothing to the line, got %q", got)
+	}
+	if got, want := summarizeDrifted([]string{"Deployment/llz-reconciler/llz-reconciler"}),
+		" [OutOfSync: Deployment/llz-reconciler/llz-reconciler]"; got != want {
+		t.Errorf("summarizeDrifted = %q, want %q", got, want)
+	}
+	// Truncation states the count it dropped rather than trailing off silently.
+	got := summarizeDrifted([]string{"a", "b", "c", "d", "e"})
+	if want := " [OutOfSync: a, b, c +2 more]"; got != want {
+		t.Errorf("summarizeDrifted(5) = %q, want %q", got, want)
+	}
+}
+
+// The DRIFT line is the one an operator is trained to skip past; it earns
+// attention only by naming what actually differs (#394).
+func TestClassifyArgoApp_DriftNamesTheResource(t *testing.T) {
+	_, msg := ClassifyArgoApp(ArgoApp{
+		Name: "llz-observability", Sync: "OutOfSync", Health: "Healthy", Automated: true,
+		Drifted: []string{"OpenTelemetryCollector/llz-observability/platform"},
+	}, false)
+	if !strings.Contains(msg, "[OutOfSync: OpenTelemetryCollector/llz-observability/platform]") {
+		t.Errorf("drift message must name the drifted resource, got %q", msg)
+	}
+	// A drifting App Argo cannot attribute still reads cleanly.
+	if _, msg := ClassifyArgoApp(ArgoApp{Name: "platform-eso", Sync: "OutOfSync", Health: "Healthy", Automated: true}, false); strings.Contains(msg, "OutOfSync:") {
+		t.Errorf("no drifted resources must leave the line unchanged, got %q", msg)
+	}
 }
 
 func TestIsAnnotationLimitError(t *testing.T) {
