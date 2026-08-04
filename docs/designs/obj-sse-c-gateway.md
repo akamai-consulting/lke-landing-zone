@@ -232,6 +232,32 @@ out on its own. One retention period later the bucket is uniformly encrypted. Th
 honest audit answer during that window is "encrypted from date X, plaintext aging
 out through X+retention".
 
+> **But the INDEX does not age out gracefully, and this was measured the hard way.**
+> Loki's index-gateway enumerates a table's files and reads *every* one. It does not
+> skip an object it cannot decrypt — it fails the whole table and retries:
+>
+> ```
+> GetObject 400 InvalidArgument: The calculated MD5 hash of the key
+>                                did not match the hash that was provided
+> ```
+>
+> Queries then degrade (measured at ~33s against a healthy cluster, enough to time
+> out clients) until the unreadable index files age out. So the drain window is not
+> "correct but partially plaintext" — it is **correct but slow**, and slow enough to
+> break callers.
+>
+> Two consequences worth planning around:
+>
+> - **Migrating IN over a populated bucket** costs a degraded query path for one
+>   retention period, not zero. If that is unacceptable, empty the index prefix at
+>   cutover rather than letting it drain.
+> - **A NEW KEY over an existing bucket is not a migration at all.** SSE-C is
+>   per-object, so a fresh key makes every existing object permanently unreadable.
+>   That is what e2e hit: each cluster mints its own key while reusing the bucket, so
+>   teardown now destroys the data buckets as well as the cluster
+>   (`release-e2e-lane.yml`). Anywhere else, a new key over old data means those
+>   objects are gone — treat it as key loss, because it is.
+
 ## Verification
 
 `llz ci assert-obj-encryption` runs four checks, and the last two are the point:

@@ -45,6 +45,11 @@ on:
         required: false
         type: boolean
         default: false
+      drain_data_buckets:
+        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images, and destroying a cluster is not consent to erase them. The e2e lane sets it true because every cluster mints its own SSE-C key, which makes objects a previous cluster wrote permanently unreadable.'
+        required: false
+        type: boolean
+        default: false
     secrets:
       # All `required: false` on purpose: these are environment-scoped secrets,
       # which cannot satisfy a workflow_call `secrets` contract at call time.
@@ -737,6 +742,37 @@ jobs:
         working-directory: terraform-iac-bootstrap/cluster
         run: |
           llz ci tf-destroy --var-file="${REGION}.tfvars"
+
+      # ── EMPTY the data buckets, without deleting them (opt-in) ────────────────
+      # SSE-C keys are per-object and every cluster mints its own, so objects left
+      # behind by a destroyed cluster are permanently unreadable by the next one.
+      # Loki's index-gateway does not skip what it cannot decrypt — it fails the
+      # whole table and retries, degrading queries badly enough to time out clients
+      # (#397 follow-up). So a lane that recreates a cluster over the same buckets
+      # has to clear them.
+      #
+      # EMPTY, NOT DELETE, and that distinction is load-bearing. Destroying the
+      # buckets works, but Linode does not release the NAME immediately: a recreate
+      # six minutes after a successful destroy still failed with
+      #   [400] The bucket 'platform-loki-chunks-e2e' already exists
+      # so deleting them turns the next provision red. Emptying gets the same result
+      # — no cross-generation objects — with nothing to re-create.
+      #
+      # OPT-IN, default false: on a real deployment these buckets hold the logs and
+      # the registry, and destroying a cluster is not consent to erase them. Only a
+      # caller that owns the data (the e2e lane) passes this.
+      - name: Empty the data buckets (drain_data_buckets)
+        if: ${{ always() && steps.confirm.outcome == 'success' && inputs.drain_data_buckets }}
+        # NO working-directory: this reads landingzone.yaml from the REPO ROOT to
+        # resolve the deployment's bucket names. The sibling drain in the
+        # object-storage destroy job runs in terraform-iac-bootstrap/object-storage
+        # because it needs `tofu output`; copying that here made the verb look for
+        # the spec in a subdirectory and fail with "no LandingZone spec found".
+        env:
+          LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
+        run: |
+          set -uo pipefail
+          llz --yes ci drain-obj-buckets --region "$REGION"
 
       # Fallback for when Terraform couldn't reach or import the cluster: deletes
       # it by label, then the node firewall. The VPC is deliberately NOT deleted
