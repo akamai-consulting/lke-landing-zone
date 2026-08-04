@@ -88,6 +88,13 @@ func optionalTFVars(path string) bool {
 func validateOBJCluster(v string) error { return validate.OBJClusterID(v) }
 
 func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
+	// Every path below is CWD-relative, so the wrong directory yields a complete
+	// but stray spec tree rather than an error. Gate on the CWD first — before the
+	// flag checks, so the operator who forgot `cd my-instance` is told THAT, not
+	// which flag they also mistyped. See instance_root.go.
+	if err := requireInstanceRoot("`llz env add`"); err != nil {
+		return err
+	}
 	if o.templateEnv == "" {
 		o.templateEnv = "example"
 	}
@@ -107,6 +114,21 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	// rather than scaffolding an env that won't render.
 	if o.region == "" {
 		return fmt.Errorf("--region is required (the spec's cluster.region)")
+	}
+	// The control-plane ACL seed. Written into the spec verbatim, so an unparseable
+	// entry reaches the LKE ACL API at apply, and an open-world entry quietly
+	// publishes the control plane — the one thing the flag help says never to do.
+	if err := validate.CIDRList("--runner-ipv4-cidrs", o.runnerIPv4CIDRs, validate.IPv4); err != nil {
+		return err
+	}
+	if err := validate.CIDRList("--runner-ipv6-cidrs", o.runnerIPv6CIDRs, validate.IPv6); err != nil {
+		return err
+	}
+	// Ask the account whether the region exists before authoring a spec against it
+	// (best-effort — see region_resolve.go). Runs BEFORE the obj-cluster resolution
+	// so a swapped --region/--obj-cluster pair is named for what it is.
+	if err := checkRegion(o.region); err != nil {
+		return err
 	}
 	// Derive/check obj-cluster against the account rather than making the operator
 	// invent it. Best-effort: with no LINODE_TOKEN this is exactly the old
@@ -284,7 +306,9 @@ func printEnvAddNextSteps(name, envFile string, o envAddOpts) {
 func printPlaceholderChecklist(aplDir, env string) {
 	var todo []finding
 	for _, f := range overlayScanFiles(filepath.Join(aplDir, env)) {
-		fs, _ := scanForSentinels(f)
+		// false: `env add` scans the freshly-rendered OVERLAY, never tfvars, so the
+		// ACL branch has nothing to say here — doctor owns that check.
+		fs, _ := scanForSentinels(f, false)
 		for _, fd := range fs {
 			if fd.blocking {
 				todo = append(todo, fd)
@@ -296,11 +320,62 @@ func printPlaceholderChecklist(aplDir, env string) {
 			green("✓"), cyan("llz doctor --env "+env))
 		return
 	}
-	fmt.Printf("\n%s %s\n", yellow(fmt.Sprintf("Placeholders still to fill (%d)", len(todo))),
-		dim("— edit these, then `llz doctor --env "+env+"`:"))
-	for _, f := range todo {
-		fmt.Printf("  %s %s  %s %s\n", dim("•"), cyan(fmt.Sprintf("%s:%d", f.file, f.line)), f.token, dim("— "+f.hint))
+	groups := groupFindings(todo)
+	fmt.Printf("\n%s %s\n", yellow(fmt.Sprintf("Placeholders still to fill (%d in %d file(s))", len(groups), countFiles(todo))),
+		dim("— then `llz doctor --env "+env+"`:"))
+	for _, g := range groups {
+		where := cyan(g.first.loc())
+		if g.files > 1 {
+			where = cyan(g.first.loc()) + dim(fmt.Sprintf(" (+%d more file(s))", g.files-1))
+		}
+		fmt.Printf("  %s %s  %s %s\n", dim("•"), where, g.first.token, dim("— "+g.first.hint))
 	}
+}
+
+// findingGroup is one distinct placeholder+remedy, with how many DISTINCT files
+// carry it — not how many times it occurs, which is a different number whenever
+// one file mentions the placeholder twice (instance-custom.yaml does).
+type findingGroup struct {
+	first finding
+	files int
+}
+
+// groupFindings collapses findings that share a token AND a remedy, preserving
+// first-seen order.
+//
+// This is not cosmetic. The instance-repo placeholder lands in nine rendered
+// files and is fixed by ONE `llz spec set` (hintFor explains why), so printing
+// nine identical lines under the heading "edit these" told the operator to do
+// the exact thing the hint tells them not to. One line per fix, with the file
+// count, makes the size of the job honest.
+func groupFindings(in []finding) []findingGroup {
+	var out []findingGroup
+	idx := map[string]int{}
+	seen := map[string]bool{} // group key + file — so a repeat in one file adds nothing
+	for _, f := range in {
+		key := f.token + "\x00" + f.hint
+		if seen[key+"\x00"+f.file] {
+			continue
+		}
+		seen[key+"\x00"+f.file] = true
+		if i, ok := idx[key]; ok {
+			out[i].files++
+			continue
+		}
+		idx[key] = len(out)
+		out = append(out, findingGroup{first: f, files: 1})
+	}
+	return out
+}
+
+// countFiles is the number of distinct files carrying any finding — what the
+// summary line claims to print.
+func countFiles(in []finding) int {
+	seen := map[string]bool{}
+	for _, f := range in {
+		seen[f.file] = true
+	}
+	return len(seen)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

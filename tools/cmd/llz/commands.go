@@ -200,7 +200,51 @@ func missingTemplateSourceErr(org string) error {
 		org, templateName, defaultTemplateOrg, defaultTemplateOrg, templateName, org)
 }
 
+// checkNewTarget refuses to scaffold over a directory that already has content.
+// `copier copy` into a populated dir does not stop — it renders on top and
+// prompts per conflicting file — so the natural retry (`llz new my-instance`
+// again, after a half-finished first run, or to "update" an instance) merges a
+// fresh scaffold into a live instance instead of failing. An existing instance is
+// updated with `llz upgrade`; a fresh one goes in an empty directory.
+func checkNewTarget(dir string) error {
+	ents, err := os.ReadDir(dir)
+	switch {
+	case os.IsNotExist(err):
+		return nil // absent — the normal case
+	case err != nil:
+		// Exists but unreadable (permissions, a dead symlink, an I/O error). Not
+		// "empty": copier would fail on it too, later and less legibly.
+		return fmt.Errorf("cannot read %s: %w", dir, err)
+	}
+	if !isInstanceRoot(dir) {
+		// Hidden entries don't count as content: scaffolding into a freshly cloned
+		// empty repo (only .git) is a legitimate path, and copier git-inits anyway.
+		visible := 0
+		for _, e := range ents {
+			if !strings.HasPrefix(e.Name(), ".") {
+				visible++
+			}
+		}
+		if visible == 0 {
+			return nil
+		}
+	}
+	if isInstanceRoot(dir) {
+		return fmt.Errorf("%s is already a landing-zone instance — `llz new` would render a second scaffold over it.\n"+
+			"  • add a deployment to it:     %s\n"+
+			"  • move it to a new release:   %s\n"+
+			"  • really want a separate instance? scaffold it into a new directory",
+			dir, cyan("cd "+dir+" && llz env add <env> --region <region> --obj-cluster <obj-cluster>"),
+			cyan("cd "+dir+" && llz self-update && llz upgrade"))
+	}
+	return fmt.Errorf("%s already exists and is not empty — copier would render the scaffold on top of it.\n"+
+		"  Pick an empty directory (or remove that one) and re-run", dir)
+}
+
 func runNew(g globalOpts, org, ref, dir string, push bool) error {
+	if err := checkNewTarget(dir); err != nil {
+		return err
+	}
 	repo := org + "/" + templateName
 	if !templateSourceExistsFn(repo) {
 		return missingTemplateSourceErr(org)
@@ -511,13 +555,23 @@ func cmdEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	return runEnvAdd(g, name, o)
 }
 
-func cmdBuild(args []string, g globalOpts) error {
+func cmdBuild(args []string, g globalOpts, skipPreflight bool) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: llz build <env>")
 	}
 	env := args[0]
 	if err := validateEnvName(env); err != nil {
 		return err
+	}
+	// The dispatch is fire-and-forget — GitHub accepts any `region` string and
+	// fails later, in CI, on the tree it checked out. Ask the remote first
+	// (build_preflight.go); --skip-preflight is the escape hatch for a build whose
+	// spec deliberately lives elsewhere (another branch, another checkout).
+	// --dry-run prints the argv and dispatches nothing, so it has nothing to gate.
+	if !skipPreflight && !g.dryRun {
+		if err := buildPreflight(env); err != nil {
+			return err
+		}
 	}
 	return runGated(g, buildArgv(env)...)
 }
@@ -528,7 +582,10 @@ func cmdBuild(args []string, g globalOpts) error {
 var (
 	upTokens = func(g globalOpts, admin bool, env string) error { return runTokens(g, admin, env, "", "", "") }
 	upDoctor = func(g globalOpts, admin bool, env string) error { return runDoctor("", env, admin, true, "", "") }
-	upBuild  = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g) }
+	upBuild  = func(g globalOpts, env string) error { return cmdBuild([]string{env}, g, false) }
+	// upPreflight is the same dispatch check, run before the chain starts; seamed
+	// alongside the three stages so the order test can drive it.
+	upPreflight = buildPreflight
 )
 
 // cmdUp sequences the first-build flow into one command: provision credentials
@@ -538,6 +595,14 @@ var (
 func cmdUp(env string, g globalOpts, admin, skipTokens bool) error {
 	if err := validateEnvName(env); err != nil {
 		return err
+	}
+	// Stage 3 preflights the dispatch anyway, but stage 1 is an interactive token
+	// wizard: discovering "this deployment was never pushed" AFTER minting PATs
+	// and creating a state bucket is a bad trade for a read-only check. Ask now.
+	if !g.dryRun {
+		if err := upPreflight(env); err != nil {
+			return err
+		}
 	}
 	if !skipTokens {
 		fmt.Println(bold("══ 1/3  llz tokens — provision credentials ══"))
@@ -573,6 +638,19 @@ func printManualActions(env string) {
 func cmdStatus(args []string, g globalOpts, wait bool, timeout int) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: llz status <env>")
+	}
+	// Every check below is a kubectl call, so with no cluster access they all fail
+	// the same way and bury the one thing worth saying under three copies of
+	// kubectl's connection dump. Probe once and say it instead (status_preflight.go).
+	//
+	// The OPENBAO_ROOT_TOKEN check still runs: it reads GitHub, not the cluster,
+	// and it is the standing "you have not escrowed + deleted this yet" nag that
+	// `llz status` promises on EVERY run. Gating it behind cluster reachability
+	// would silence it exactly for the operator who has no kubeconfig — which is
+	// most of them, right after the build that printed the token.
+	if err := statusPreflight(args[0]); err != nil {
+		warnIfRootTokenPresent(args[0])
+		return err
 	}
 	// Read-only kubectl checks against the cluster kubectl currently points at.
 	var firstErr error

@@ -211,6 +211,16 @@ func (c *Client) ListObjectStorageClusters(ctx context.Context) ([]map[string]an
 	return c.listAllPages(ctx, "/v4/object-storage/clusters")
 }
 
+// ListRegions returns every Linode region visible to the account. Each map
+// carries `id` (e.g. "us-ord", "de-fra-2"), `label`, and `capabilities`. Used to
+// check a `--region` against reality before a spec is authored against it — a
+// region id and an object-storage cluster id are shaped alike (both can carry a
+// numeric suffix: de-fra-2 is a region, us-ord-10 an OBJ cluster), so no offline
+// pattern can tell a typo'd or swapped one from a valid one.
+func (c *Client) ListRegions(ctx context.Context) ([]map[string]any, error) {
+	return c.listAllPages(ctx, "/v4/regions")
+}
+
 // CreateObjectStorageBucket creates a bucket in the given cluster. The returned
 // map includes `label`, `cluster`, and `hostname` (<label>.<cluster>...). A
 // 2xx is also returned for an already-owned bucket of the same name, so this is
