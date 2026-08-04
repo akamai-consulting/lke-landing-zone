@@ -123,7 +123,7 @@ func TestAtRestGuardFailsOnEmptyCorpus(t *testing.T) {
 
 // Every registered residue must name an exit condition. An accepted residue with
 // no test for retiring it is a permanent one wearing a temporary label — which is
-// precisely what ADR 0007's phase 2 became while it lived as a comment repeated in
+// precisely what ADR 0007 (state encryption)'s phase 2 became while it lived as a comment repeated in
 // four files.
 func TestAtRestAllowedEntriesCarryAnExitCondition(t *testing.T) {
 	for k, r := range atRestAllowed {

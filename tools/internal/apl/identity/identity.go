@@ -1,5 +1,5 @@
 // Package identity is the APL user-onboarding domain, lifted out of package main
-// per ADR 0002 Phase 1 (docs/adr/0002-llz-as-apl-cli.md). Given a Keycloak admin
+// per ADR 0013 Phase 1 (docs/adr/0013-llz-as-apl-cli.md). Given a Keycloak admin
 // API, it validates the requested access, creates (or finds) the user, grants the
 // team/admin realm roles, mirrors any already-provisioned group membership, and
 // optionally emails a set-password invite.

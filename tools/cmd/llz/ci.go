@@ -152,7 +152,7 @@ func ciCmd() *cobra.Command {
 	// fixed `akmadmin` user — so it is --apply-gated and refreshes TF state after,
 	// or seed-db-admin would reconcile the rotation away. See ci_rotate_dbadmin.go.
 	c.AddCommand(ciSeedDBAdminCmd(), ciDBDeclaredCmd(), ciDBSummaryCmd(), ciRotateDBAdminCmd())
-	// State-encryption key rollover (ADR 0007 / ADR 0009). Dispatch-only.
+	// State-encryption key rollover (ADR 0007 (state encryption) / ADR 0009). Dispatch-only.
 	c.AddCommand(ciRotateStatePassphraseCmd())
 	// In-cluster rotation of the broad account:read_write Linode PAT (LINODE_API_TOKEN):
 	// mint -> seed OpenBao -> publish to each deployment's GitHub env secret (sealed box)
@@ -194,6 +194,11 @@ func ciCmd() *cobra.Command {
 	// the vendored llz-*.yml bodies ship verbatim so an instance copy matches
 	// the copier render — see copier.yml's _tasks note.)
 	c.AddCommand(ciDeliverDocsCmd())
+	// Doc rot, mechanically: llz commands/flags against the live cobra tree,
+	// `gh workflow run` inputs against the workflow YAML, and links resolved BOTH
+	// in the template and in the post-deliver-docs keep-set. Added after an audit
+	// found 30 doc defects, most of them detectable from the repo itself.
+	c.AddCommand(ciDocsGuardCmd())
 	// Repo-scan gate (former template-scripts python: validate-externalsecret-paths.py
 	// via the Makefile).
 	c.AddCommand(ciExternalSecretPathsCmd())

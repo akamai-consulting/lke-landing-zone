@@ -4,11 +4,11 @@ package main
 // APL by creating a Keycloak user in the `otomi` realm and granting them team
 // membership (the `team-<name>` role apl-core provisions) and/or the APL
 // platform-admin role (`platform-admin`). Lives only under the `apl` front door — the
-// top-level `llz users` alias was retired (ADR 0002 Appendix B: users is an
+// top-level `llz users` alias was retired (ADR 0013 Appendix B: users is an
 // APL-domain op).
 //
 // The onboarding DOMAIN — validate roles, create/find the user, grant roles +
-// groups, invite — lives in internal/apl/identity (ADR 0002 Phase 1). This file
+// groups, invite — lives in internal/apl/identity (ADR 0013 Phase 1). This file
 // keeps the CLI surface, cluster access, and Keycloak HTTP transport: it resolves
 // master-realm admin creds from the in-cluster keycloak Secret, opens an
 // ephemeral kubectl port-forward (keycloakConnect), builds a kcClient, and adapts
@@ -57,7 +57,7 @@ type usersAddOpts struct {
 
 // aplUserCmd is `llz apl user` — the sole home of APL user management, reached as
 // a leaf of the `apl` front door (aplCmd). Formerly the top-level `llz users`;
-// retired there per ADR 0002 Appendix B (users → apl user).
+// retired there per ADR 0013 Appendix B (users → apl user).
 func aplUserCmd() *cobra.Command {
 	s := &cobra.Command{
 		Use:   "user",

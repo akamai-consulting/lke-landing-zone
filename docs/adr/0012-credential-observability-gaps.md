@@ -134,7 +134,7 @@ guard for a real credential is to actually measure it.
 
 ### 4. Registries carry exit conditions where the residue is temporary
 
-`atRestAllowed` requires an `exit` field. ADR 0007 shipped a two-phase migration
+`atRestAllowed` requires an `exit` field. ADR 0007 (state encryption) shipped a two-phase migration
 and only phase 1 has happened — all four roots still carry
 `fallback { method = method.unencrypted.migrate }`, which is what lets OpenTofu
 read pre-encryption state and also what makes an unencrypted state file *accepted*
@@ -156,7 +156,7 @@ shared entry would let the first migrated root vouch for the three that were not
 - **A new Terraform root cannot ship unencrypted.** `llz env add` scaffolds roots,
   so this is the realistic near-term regression, and it was the one no existing
   linter covered.
-- **ADR 0007 phase 2 has an exit test** instead of four comments. It is still
+- **ADR 0007 (state encryption) phase 2 has an exit test** instead of four comments. It is still
   unfinished, and the registry says so in one place.
 - **Four more gates in `make lint`.** Two run from source (`LLZ_FORCE_SOURCE`)
   because they compare the working tree against Go lists in the working tree, and
@@ -178,13 +178,14 @@ shared entry would let the first migrated root vouch for the three that were not
   to dispatch — the same test ADR 0009 applied to the state passphrase. Rotating
   the seal key means a rewrap of OpenBao's entire raft store; that belongs in an
   ADR that argues it directly, and it is the honest residue of this one.
-- **It does not flip ADR 0007 to `enforced`.** That needs every root's state
+- **It does not flip ADR 0007 (state encryption) to `enforced`.** That needs every root's state
   migrated in every deployment, which is an observation this repo cannot make from
   source. The registry records the exit condition; making the flip is the next
   piece of work, not this one.
 - **It does not close a single plaintext hop.** Finding 5 is a scanner gap, not a
   new hop; the accepted residuals in `plaintextAllowed` are unchanged and most of
-  them close only under [ADR 0011](0011-ambient-mesh-migration.md).
+  them close only under the **ambient-mesh migration** (reserved as ADR 0011; not
+  yet written — see [the ADR index](README.md)).
 - **It does not gate the template repo's own workflows.** Those run against a
   throwaway e2e instance, and pulling maintainer-only credentials into the scan
   would put permanent `unknown` rows on every adopter's dashboard.
@@ -205,6 +206,6 @@ shared entry would let the first migrated root vouch for the three that were not
 ## Related
 
 - ADR 0009 — the write-time mechanism this extends, and the source of findings 1–3.
-- ADR 0007 — the state-encryption posture whose phase 2 is now registered with an exit test.
+- ADR 0007 (state encryption) — the state-encryption posture whose phase 2 is now registered with an exit test.
 - ADR 0010 / 0011 — the in-cluster TLS posture and the ambient migration that closes most of `plaintextAllowed`.
-- ADR 0001 — "where does the credential live" as a blast-radius question, which is why the OpenBao escrow cannot simply be moved into OpenBao.
+- The **PAT-rotation-locus** question — "where does the credential live" as a blast-radius question, which is why the OpenBao escrow cannot simply be moved into OpenBao. (Reserved as ADR 0001; not yet written — see [the ADR index](README.md).)

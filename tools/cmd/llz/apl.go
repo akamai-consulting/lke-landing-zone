@@ -2,23 +2,23 @@ package main
 
 import "github.com/spf13/cobra"
 
-// aplCmd is the APL-layer front door (ADR 0002 — "one binary, two altitudes"): a
+// aplCmd is the APL-layer front door (ADR 0013 — "one binary, two altitudes"): a
 // noun-verb subtree that speaks App Platform's domain model. `user` is HOMED here
 // (its top-level `llz users` alias was retired), `values` groups the apl-values
 // commands, and `app` lists + toggles App Platform apps; `openbao`/`status`/
 // `doctor`/`verify` still DELEGATE to their existing top-level command, re-labeled
 // to App Platform vocabulary. The tree grows (`apl values set/show`, `apl team`)
-// in later phases. See ADR 0002 Appendix A/B.
+// in later phases. See ADR 0013 Appendix A/B.
 //
 // Secrets are deliberately NOT unified under an `apl secret` verb: the two stores
-// are distinct backends and stay distinct (ADR 0002 Appendix B). The platform
+// are distinct backends and stay distinct (ADR 0013 Appendix B). The platform
 // runtime secret store — OpenBao KV — is surfaced here as `apl openbao`; GitHub
 // build-time secrets remain `llz secrets` (provider/CI plumbing), out of `apl`.
 func aplCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "apl",
-		Short: "App Platform layer: users, apps, values, secrets & platform health (ADR 0002)",
-		Long: "The APL-layer front door (ADR 0002, \"one binary, two altitudes\").\n\n" +
+		Short: "App Platform layer: users, apps, values, secrets & platform health (ADR 0013)",
+		Long: "The APL-layer front door (ADR 0013, \"one binary, two altitudes\").\n\n" +
 			"`apl user` onboards platform users, `apl values` renders/validates the\n" +
 			"App Platform values, and `apl openbao` reaches the platform secret store;\n" +
 			"the remaining leaves delegate to their existing top-level equivalents and\n" +

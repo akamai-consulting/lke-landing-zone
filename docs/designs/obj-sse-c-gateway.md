@@ -400,7 +400,7 @@ is a flag flip and waiting".
 - Delete the four `linode_object_storage_bucket` entries from `atRestAllowed` and
   add the bucket-level encryption lever to `atRestResourceLevers` — buckets stop
   being a registered residual and become a checked one.
-- Update ADR 0007: the Context table's measured numbers become historical, and
+- Update ADR 0007 (state encryption): the Context table's measured numbers become historical, and
   "Backend SSE (`encrypt = true`)" moves from *rejected* to *adopted*.
 - Retire the `ohttp`/`lab` E1 caveat if managed SSE lands only on E2/E3.
 

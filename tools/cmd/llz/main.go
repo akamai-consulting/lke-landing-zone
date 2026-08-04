@@ -74,7 +74,7 @@ func newRootCmd() *cobra.Command {
 	// legible; CI/plumbing (ci, lint, fmt, hooks, …) falls under "Additional
 	// Commands". Groups must be registered before a command references them.
 	root.AddGroup(
-		&cobra.Group{ID: "apl", Title: "App Platform (front door — ADR 0002, Phase 0):"},
+		&cobra.Group{ID: "apl", Title: "App Platform (front door — ADR 0013, Phase 0):"},
 		&cobra.Group{ID: "spec", Title: "Author & deploy (the LandingZone spec):"},
 		&cobra.Group{ID: "build", Title: "Provision, build & operate:"},
 		&cobra.Group{ID: "day2", Title: "Day-2 & maintenance:"},

@@ -111,7 +111,14 @@ _tasks:
   # version-pinned to <@ llz_version @>. The keep-set lives ONCE in the verb, so
   # this and release-e2e can't drift (the drift that leaked a template-build doc
   # into the e2e instance). No-op fallback if llz isn't on PATH (full docs kept).
-  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
+  #
+  # --template-root additionally repoints links in the instance's ROOT-level
+  # Markdown (README.md, AGENTS.md, apl-values/README.md) that target paths only
+  # the template carries. Without it those stayed relative and stayed dead in
+  # every rendered instance — the docs/-scoped rewrite never walks the root. The
+  # flag is what lets the rewrite tell "template-only" from "created later by
+  # `llz env add`", so it never repoints a link to a URL that would 404.
+  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> --root . --template-root <@ _copier_conf.src_path @> || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
   # The vendored workflow bodies (llz-*.yml) ship VERBATIM — comments included.
   # There is deliberately NO comment-strip task here: .github/workflows/** is
   # `merge`-classified (.template-manifest), and copier's 3-way merge on

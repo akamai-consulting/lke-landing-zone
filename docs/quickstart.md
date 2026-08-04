@@ -588,7 +588,8 @@ that must be true before the build:
    committed `apl-values` are in sync with it (so a spec edit you forgot to
    `llz render` is caught here); then scans the tfvars + overlay for residual
    placeholders, verifies the deployment discriminator agrees across the tfvars,
-   and renders the overlay (the former `llz validate --env`).
+   and renders the overlay. (This absorbed the env-scoped check `llz validate`
+   used to carry; that flag still works but is deprecated and prints a notice.)
 3. **Repo config** — every variable/secret an e2e/build needs, required vs
    optional, set vs missing, merging your local `.llz/*.env` with the live repo
    config. (Variable *values* are read from the repo; secrets are presence-only —

@@ -46,7 +46,7 @@ inputs:
       Terraform state, and `llz ci fetch-kubeconfig-state` runs its own `tofu
       init` against a root whose encryption.tf REFERENCES the encryption methods.
       Without this the init fails on "Reference to undeclared encryption method",
-      which names the roots rather than the missing secret (ADR 0007).
+      which names the roots rather than the missing secret (ADR 0007 (state encryption)).
     required: true
   linode-token:
     description: Linode API token used to open this runner's egress IP in the control-plane ACL.
@@ -100,7 +100,7 @@ runs:
     # MUST precede the fetch: that step runs `llz ci fetch-kubeconfig-state`,
     # which does its own `tofu init` and therefore needs TF_ENCRYPTION exactly as
     # a terraform-init-driven job does. This path does not go through
-    # terraform-init, which is why it silently lacked the env var until ADR 0007's
+    # terraform-init, which is why it silently lacked the env var until ADR 0007 (state encryption)'s
     # encryption.tf made the omission fatal.
     - name: Export TF_ENCRYPTION (state + plan encryption at rest)
       uses: ./.github/actions/tf-encryption-env

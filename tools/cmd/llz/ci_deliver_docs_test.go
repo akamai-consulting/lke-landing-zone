@@ -27,7 +27,7 @@ func TestRunDeliverDocs(t *testing.T) {
 	write("designs/reconciler.md", "reference")
 	write("architecture/windows.md", "reference")
 
-	if err := runDeliverDocs(dir, "myorg", "v1.2.3"); err != nil {
+	if err := runDeliverDocs(dir, "myorg", "v1.2.3", "", ""); err != nil {
 		t.Fatalf("runDeliverDocs: %v", err)
 	}
 
@@ -53,7 +53,7 @@ func TestRunDeliverDocs(t *testing.T) {
 	}
 
 	// Idempotent — a second run over the already-pruned tree is a no-op success.
-	if err := runDeliverDocs(dir, "myorg", "v1.2.3"); err != nil {
+	if err := runDeliverDocs(dir, "myorg", "v1.2.3", "", ""); err != nil {
 		t.Errorf("second run failed (not idempotent): %v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestDeliverDocsPinsOnlyThePointer(t *testing.T) {
 	write("alerting.md", "reference")
 	write("adopter-guide.md", "reference")
 
-	if err := runDeliverDocs(dir, "myorg", "v1.2.3"); err != nil {
+	if err := runDeliverDocs(dir, "myorg", "v1.2.3", "", ""); err != nil {
 		t.Fatalf("runDeliverDocs: %v", err)
 	}
 	snapshot := func(p string) string {
@@ -140,7 +140,7 @@ func TestDeliverDocsPinsOnlyThePointer(t *testing.T) {
 	}
 
 	// Re-deliver at the NEXT version: only the pointer moves.
-	if err := runDeliverDocs(dir, "myorg", "v1.2.4"); err != nil {
+	if err := runDeliverDocs(dir, "myorg", "v1.2.4", "", ""); err != nil {
 		t.Fatalf("re-deliver: %v", err)
 	}
 	for _, p := range kept {
@@ -173,7 +173,7 @@ func TestDeliverDocsHealsPermalinksLeftPinnedByAnOlderDelivery(t *testing.T) {
 	write("runbooks/recover.md",
 		"See [the guide](https://github.com/myorg/lke-landing-zone/blob/v0.0.32/docs/adopter-guide.md#6-bootstrap-order).\n")
 
-	if err := runDeliverDocs(dir, "myorg", "v0.0.33"); err != nil {
+	if err := runDeliverDocs(dir, "myorg", "v0.0.33", "", ""); err != nil {
 		t.Fatalf("runDeliverDocs: %v", err)
 	}
 	for _, p := range []string{"quickstart.md", "runbooks/recover.md"} {

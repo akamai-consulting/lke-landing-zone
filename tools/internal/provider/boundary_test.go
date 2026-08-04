@@ -7,8 +7,8 @@ package provider_test
 // that an interface has the methods it visibly has would be ceremony: it would
 // raise the package's coverage number without raising anyone's confidence.
 //
-// What IS worth enforcing is the invariant the package exists to create. ADR 0002
-// (docs/adr/0002-llz-as-apl-cli.md) establishes "two altitudes": the APL layer
+// What IS worth enforcing is the invariant the package exists to create. ADR 0013
+// (docs/adr/0013-llz-as-apl-cli.md) establishes "two altitudes": the APL layer
 // (internal/apl/...) must reach provisioning ONLY through ClusterProvider, never
 // by importing a concrete cloud, so a future non-Linode provider drops in without
 // touching APL-layer code. That is an architectural claim, and today it holds
@@ -34,7 +34,7 @@ const modulePath = "github.com/akamai-consulting/lke-landing-zone/tools"
 
 // forbidden are packages the APL layer must not depend on, transitively.
 var forbidden = map[string]string{
-	modulePath + "/internal/linode": "the concrete cloud — reach it through provider.ClusterProvider instead (ADR 0002)",
+	modulePath + "/internal/linode": "the concrete cloud — reach it through provider.ClusterProvider instead (ADR 0013)",
 	modulePath + "/cmd/llz":         "the CLI layer — the APL layer is a library and must not depend upward",
 }
 

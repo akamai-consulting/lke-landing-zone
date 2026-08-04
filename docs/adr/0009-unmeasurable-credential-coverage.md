@@ -32,7 +32,7 @@ two optional PATs dropped rather than reported `unknown` when unset.
 | Credential | What it guards | Why it cannot be measured today |
 |------------|----------------|---------------------------------|
 | `TF_STATE_ACCESS_KEY` / `TF_STATE_SECRET_KEY` | The state bucket — which, post-ADR-0007, holds *encrypted* state containing `kubeconfig_raw` and every `root_password` | Object Storage keys are not PATs. `/profile/tokens` does not return them, and the key resource carries no expiry field. |
-| `TF_STATE_ENCRYPTION_PASSPHRASE` | The decryption of that state (ADR 0007) | A passphrase. There is nothing to probe — no issuer, no expiry, no remote object. |
+| `TF_STATE_ENCRYPTION_PASSPHRASE` | The decryption of that state (ADR 0007 (state encryption)) | A passphrase. There is nothing to probe — no issuer, no expiry, no remote object. |
 | LKE admin kubeconfig | Cluster-admin on every cluster | Rotated monthly by `secret-rotation.yml` scope `lke-admin`, but the artifact is a kubeconfig, not a token with an expiry claim we read. |
 
 For Kind 2 the only meaningful signal is **age**: *when was this last rotated?*
@@ -44,7 +44,7 @@ being a plumbing change.
 
 ### Why "just put them in OpenBao" does not work
 
-Two of the three are **bootstrap-ordering circular**, the same shape ADR 0007 hit
+Two of the three are **bootstrap-ordering circular**, the same shape ADR 0007 (state encryption) hit
 when it rejected `key_provider "openbao"`:
 
 ```
@@ -128,7 +128,7 @@ re-encrypting every state file. Three facts, each **verified against OpenTofu
    calls**, and the plaintext lives only in the pipe between the two processes.
    Cheaper than `apply -refresh-only` and immune to a provider outage.
 
-Because ADR 0007 put the *posture* in code and the *key material* in
+Because ADR 0007 (state encryption) put the *posture* in code and the *key material* in
 `TF_ENCRYPTION`, the second key provider and the fallback are emitted entirely
 from the `terraform-init` action — **no root is edited, and no PR is open during
 the rotation window.**
@@ -197,7 +197,7 @@ observation, and an assertion by the rotating job was always the weaker signal.
 - ADR 0007 (Terraform state encryption) — same circularity, same rejection of
   `key_provider "openbao"`; this ADR generalises that reasoning from *keys* to
   *observability of keys*.
-- ADR 0001 (PAT rotation locus) — "where does the credential live" as a blast-radius question.
+- The **PAT-rotation-locus** question — "where does the credential live" as a blast-radius question. (Reserved as ADR 0001; not yet written — see [the ADR index](README.md).)
 - [docs/secrets.md](../secrets.md) — the rotation-class table and the
   credential-age coverage section this extends.
 - `tools/cmd/llz/ci_token_inventory.go` — Kind 1's target list.

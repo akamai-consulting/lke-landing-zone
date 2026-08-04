@@ -5,7 +5,7 @@ SHELL := /bin/bash
         fmt fmt-check vet shellcheck audit update tidy sbom gitleaks \
         sbom-go sbom-terraform sbom-kubernetes sbom-scan \
         chart-pin-guard chart-version-guard \
-		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check lint lint-k8s lint-tf \
+		tf-fmt tf-fmt-check tf-lint tf-validate tf-validate-roots checkov at-rest-guard managed-lock-check render-charts k8s-lint k8s-validate chart-guards prom-rules-check helm-repos helm-lint-real-values helm-lint-charts helm-dep-lock-check argocd-rendered-apps-check externalsecret-paths-check credential-coverage-guard wave-health-guard wave-dependency-guard mesh-egress-guard monitoring-label-guard dropped-apiversions-check untestable-loc-check version-pins-check actions-lint placeholder-guard template-manifest-check docs-guard lint lint-k8s lint-tf \
         test coverage clean \
         instance-test scaffold-check llz-functional reap-orphans \
         install-tools install-syft install-trivy install-gitleaks
@@ -64,7 +64,8 @@ help:
 	@echo "  tf-lint         tflint — Terraform best-practice rules (.tflintrc.hcl)"
 	@echo "  tf-validate     terraform validate — syntax + type checking (inits each module first)"
 	@echo "  checkov         Checkov IaC security scan across all Terraform modules"
-	@echo "  at-rest-guard   every TF root encrypts state; every node pool/volume sets disk encryption (ADR 0007)"
+	@echo "  at-rest-guard   every TF root encrypts state; every node pool/volume sets disk encryption (ADR 0007 (state encryption))"
+	@echo "  docs-guard      every doc's llz commands/flags, workflow inputs and links resolve"
 	@echo
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"
@@ -435,7 +436,7 @@ credential-coverage-guard:
 # Managed Postgres root_password in the clear), every node pool must set
 # disk_encryption, every linode_volume must set encryption. All three are ForceNew:
 # decided at create, immutable after, so a gate is the only place to catch them.
-# The ADR 0007 phase-1 unencrypted fallback is the one registered residue, and it
+# The ADR 0007 (state encryption) phase-1 unencrypted fallback is the one registered residue, and it
 # carries an exit condition rather than living as a comment in four files.
 #
 # FROM SOURCE, same reason as credential-coverage-guard: the prebuilt image binary
@@ -636,10 +637,28 @@ version-pins-check: export LLZ_FORCE_SOURCE := 1
 version-pins-check:
 	$(call LLZ_CI,version-pins --root .,--root ..)
 
+# docs-guard: validate every Markdown file against the repo it documents —
+# `llz` commands + flags against the live cobra tree, `gh workflow run` inputs
+# against the workflows' declared inputs, and relative links resolved BOTH in
+# this tree and in the post-`deliver-docs` keep-set an adopter actually carries.
+#
+# Added after a full audit of the 104 Markdown files: of 30 defects found, the
+# majority were mechanically detectable from the repo itself and had simply never
+# been asked about. The expensive ones were all in the DELIVERED operator set,
+# which is why the link half evaluates that keep-set specifically.
+#
+# FROM SOURCE, like version-pins-check: it compares the working tree against
+# itself, so a prebuilt image binary built from the merge-base lacks the verb on
+# the PR that introduces it — and, more importantly, would check the docs against
+# an OLD CLI, which is the exact drift this is meant to catch.
+docs-guard: export LLZ_FORCE_SOURCE := 1
+docs-guard:
+	$(call LLZ_CI,docs-guard --root .,--root ..)
+
 lint:
 	@set -e; \
 	if [ -n "$(LINT_ALL)" ]; then \
-		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
+		$(MAKE) --no-print-directory fmt-check vet shellcheck actions-lint tf-fmt-check template-manifest-check managed-lock-check version-pins-check docs-guard untestable-loc-check $(LINT_TF) $(LINT_K8S) chart-version-guard instance-test; \
 		LLZ_FUNCTIONAL_NET=0 $(MAKE) --no-print-directory llz-functional; \
 		exit 0; \
 	fi; \

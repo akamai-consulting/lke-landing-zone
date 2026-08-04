@@ -6,14 +6,14 @@ This is the step *after* the platform: getting your own application running on i
 **Related:** [`kubernetes-custom/README.md`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/kubernetes-custom/README.md)
 in your instance (the escape hatch's full contract),
 [`harbor-accounts.md`](harbor-accounts.md), [`argocd-ops.md`](argocd-ops.md),
-[ADR 0007](../adr/0007-app-delivery-boundary.md) (why LLZ ships the platform and
+[ADR 0007 (app-delivery boundary)](../adr/0007-app-delivery-boundary.md) (why LLZ ships the platform and
 not your delivery chart).
 
 > **What LLZ gives you, and what it doesn't.** LLZ provisions the platform — Argo CD,
 > a private Harbor, OpenBao + External Secrets, cert-manager, the gateway, storage,
 > the default-deny network baseline — and an `owned` directory to put your manifests
 > in. It does **not** ship an application delivery chart, a build pipeline, or an
-> opinion about how you produce images ([ADR 0007](../adr/0007-app-delivery-boundary.md)).
+> opinion about how you produce images ([ADR 0007 (app-delivery boundary)](../adr/0007-app-delivery-boundary.md)).
 > This playbook walks the seam between the two, because every step below is a place
 > the platform's contract is easy to guess wrong.
 
@@ -189,7 +189,7 @@ The failure signatures worth recognizing, because each reads like something it i
 ## What you still own
 
 LLZ deliberately stops here. **Building** the image, **choosing** a CI system, and
-**promoting** across environments are yours — [ADR 0007](../adr/0007-app-delivery-boundary.md)
+**promoting** across environments are yours — [ADR 0007 (app-delivery boundary)](../adr/0007-app-delivery-boundary.md)
 records why, and what the platform guarantees in exchange. If you build in-cluster,
 `argoWorkflows: { enabled: true }` in your env's `components` gets you the Workflow
 CRDs on managed; note that ephemeral build workspaces belong in an `emptyDir`, not a

@@ -11,7 +11,7 @@ package main
 //                              Postgres `root_password` in the clear — `sensitive`
 //                              controls CLI DISPLAY, never what is written — so a
 //                              root without this block hands all of it to whoever
-//                              holds the bucket key (ADR 0007).
+//                              holds the bucket key (ADR 0007 (state encryption)).
 //   disk_encryption            the node pool's boot and data disks: every image
 //                              layer, every emptyDir, and the kubelet's on-disk
 //                              copy of every Secret projected into a pod.
@@ -47,7 +47,7 @@ package main
 // are all `description` on variables), so it is a stated limit rather than a live
 // hole — and it fails toward a false NEGATIVE, which is why it is written down.
 //
-// THE ONE RESIDUE IS REGISTERED, NOT IGNORED. ADR 0007 shipped its migration in
+// THE ONE RESIDUE IS REGISTERED, NOT IGNORED. ADR 0007 (state encryption) shipped its migration in
 // two phases and only phase 1 has happened: all four roots still carry
 // `fallback { method = method.unencrypted.migrate }`, which is what lets OpenTofu
 // READ pre-encryption state. It also means an unencrypted state file is still
@@ -79,14 +79,14 @@ type atRestRule struct {
 // atRestAllowed registers every accepted at-rest gap, keyed by
 // "<file-relative-path>:<locator>".
 var atRestAllowed = map[string]atRestRule{
-	// ── ADR 0007 phase 1: the unencrypted fallback ───────────────────────────
+	// ── ADR 0007 (state encryption) phase 1: the unencrypted fallback ───────────────────────────
 	//
 	// One entry per root rather than one shared entry, deliberately: retiring this
 	// is per-root work (each root's state has to have been migrated before its
 	// fallback can go), and a single entry would let the first root that migrated
 	// vouch for the three that had not.
 	"tools/internal/tfroots/roots/cluster/encryption.tf:unencrypted-fallback": {
-		reason: "ADR 0007 PHASE 1. `enforced` and an UNENCRYPTED fallback are mutually exclusive, " +
+		reason: "ADR 0007 (state encryption) PHASE 1. `enforced` and an UNENCRYPTED fallback are mutually exclusive, " +
 			"so an existing instance cannot go straight to enforced — the fallback is what reads " +
 			"pre-encryption state and rewrites it encrypted. While it is here, a state file that " +
 			"was written in plaintext is ACCEPTED rather than refused, and this root's state holds " +
@@ -97,20 +97,20 @@ var atRestAllowed = map[string]atRestRule{
 			"to the action — only to this file",
 	},
 	"tools/internal/tfroots/roots/databases/encryption.tf:unencrypted-fallback": {
-		reason: "ADR 0007 PHASE 1, as cluster/. This root's state is the sharpest of the four: " +
+		reason: "ADR 0007 (state encryption) PHASE 1, as cluster/. This root's state is the sharpest of the four: " +
 			"`root_password` is a provider-COMPUTED attribute on every Managed Postgres cluster, " +
 			"so there is no way to keep it out of state at all — encryption is the only control",
 		exit: "as cluster/ — migrate this root's state in every deployment, then swap the fallback " +
 			"for `enforced = true`",
 	},
 	"tools/internal/tfroots/roots/object-storage/encryption.tf:unencrypted-fallback": {
-		reason: "ADR 0007 PHASE 1, as cluster/. This root's state carries OBJ key material — " +
+		reason: "ADR 0007 (state encryption) PHASE 1, as cluster/. This root's state carries OBJ key material — " +
 			"including, historically, the keys that reach the Loki and Harbor buckets",
 		exit: "as cluster/ — migrate this root's state in every deployment, then swap the fallback " +
 			"for `enforced = true`",
 	},
 	"tools/internal/tfroots/roots/vpc/encryption.tf:unencrypted-fallback": {
-		reason: "ADR 0007 PHASE 1, as cluster/. The lowest-value state of the four (network " +
+		reason: "ADR 0007 (state encryption) PHASE 1, as cluster/. The lowest-value state of the four (network " +
 			"topology, no credential), and it moves with the others rather than separately: a " +
 			"half-migrated instance split across two postures is worse to reason about than either " +
 			"posture applied uniformly",
@@ -120,7 +120,7 @@ var atRestAllowed = map[string]atRestRule{
 
 	// ── Object Storage buckets: no SSE mode Linode implements is reachable ───
 	//
-	// MEASURED, not inferred — this is the fact ADR 0007 recorded as "unverified"
+	// MEASURED, not inferred — this is the fact ADR 0007 (state encryption) recorded as "unverified"
 	// and it is the whole reason these four entries read the way they do. Probed
 	// 2026-07-31 against a scratch bucket on us-ord-10 (E3) with a temporary
 	// scoped key, all of it deleted afterwards:
@@ -154,7 +154,7 @@ var atRestAllowed = map[string]atRestRule{
 	// key would have to sit in the same OpenBao path and the same mounted Secret
 	// as the S3 credential the app already holds. That defends against obtaining
 	// bucket CONTENTS without the app's config — Linode-side disk access, a stray
-	// listing — but not against the access-key compromise ADR 0007 names as the
+	// listing — but not against the access-key compromise ADR 0007 (state encryption) names as the
 	// real blast radius. Worth stating so a future reader weighs the fork against
 	// what it actually closes.
 	//
@@ -211,7 +211,7 @@ var (
 	// is the only form this repo uses, but the match is on the keyword so a
 	// different backend type still registers as a root.
 	reTFBackend = regexp.MustCompile(`(?m)^\s*backend\s+"[a-z0-9_]+"\s*\{`)
-	// The posture block ADR 0007 puts in code, deliberately separate from the key
+	// The posture block ADR 0007 (state encryption) puts in code, deliberately separate from the key
 	// material in TF_ENCRYPTION. Its PRESENCE is what makes a hand-run apply
 	// without TF_ENCRYPTION fail instead of silently writing plaintext.
 	reTFEncryption = regexp.MustCompile(`(?m)^\s*encryption\s*\{`)
@@ -277,7 +277,7 @@ func ciAtRestGuardCmd() *cobra.Command {
 			"Encryption is decided at CREATE and is immutable afterwards, so there is no\n" +
 			"remediation for a resource that came up unencrypted — only a rebuild. That is\n" +
 			"why this is a pre-apply gate and not a report.\n\n" +
-			"The ADR 0007 phase-1 unencrypted fallback is registered in atRestAllowed with\n" +
+			"The ADR 0007 (state encryption) phase-1 unencrypted fallback is registered in atRestAllowed with\n" +
 			"an exit condition; unregistered gaps fail, and so do registry entries whose\n" +
 			"gap is gone. A missing disk_encryption cannot be registered at all.",
 		Args: cobra.NoArgs,
