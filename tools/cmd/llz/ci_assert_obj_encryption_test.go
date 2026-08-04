@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // pod builds a harbor-registry pod list. certDirs maps container name -> the
@@ -151,15 +154,35 @@ func TestAssertObjEncryptionCatchesRewriteToTheWrongTarget(t *testing.T) {
 
 // withSSECSample stubs the sample listing and a per-key verdict function, so the
 // mixed-bucket case (the one a single-object sample got wrong) is testable.
+// Every stubbed object is dated AFTER the stubbed cutover, so these cases exercise
+// the classification rather than the freshness filter. The filter has its own tests.
 func withSSECSample(t *testing.T, keys []string, listErr error, verdict func(string) ssecVerdict) {
 	t.Helper()
-	pk, pl := s3ObjectSSECProbe, s3SampleObjectKeys
-	s3SampleObjectKeys = func(_, _, _, _ string, _ int) ([]string, error) { return keys, listErr }
+	cutover := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	refs := make([]s3ObjectRef, 0, len(keys))
+	for i, k := range keys {
+		refs = append(refs, s3ObjectRef{Key: k, LastModified: cutover.Add(time.Duration(i+1) * time.Hour)})
+	}
+	withSSECSampleAt(t, cutover, refs, listErr, verdict)
+}
+
+func withSSECSampleAt(t *testing.T, cutover time.Time, refs []s3ObjectRef, listErr error, verdict func(string) ssecVerdict) {
+	t.Helper()
+	pk, pl, pc := s3ObjectSSECProbe, s3SampleObjectKeys, objProxyCutoverTime
+	s3SampleObjectKeys = func(_, _, _, b string, _ int) ([]s3ObjectRef, error) {
+		out := make([]s3ObjectRef, len(refs))
+		copy(out, refs)
+		for i := range out {
+			out[i].Bucket = b
+		}
+		return out, listErr
+	}
 	s3ObjectSSECProbe = func(_, _, _, _, key string) (ssecVerdict, string) { return verdict(key), "stub" }
+	objProxyCutoverTime = func() (time.Time, error) { return cutover, nil }
 	prevCreds := objEncConsumerCreds
 	objEncConsumerCreds = func(_, _, _ string) (string, string, error) { return "ak", "sk", nil }
 	t.Cleanup(func() {
-		s3ObjectSSECProbe, s3SampleObjectKeys, objEncConsumerCreds = pk, pl, prevCreds
+		s3ObjectSSECProbe, s3SampleObjectKeys, objProxyCutoverTime, objEncConsumerCreds = pk, pl, pc, prevCreds
 	})
 }
 
@@ -167,7 +190,7 @@ func allEncrypted(string) ssecVerdict { return ssecEncrypted }
 
 func TestCheckObjectsEncryptedPassesWhenTheWholeSampleIsEncrypted(t *testing.T) {
 	withSSECSample(t, []string{"a", "b", "c"}, nil, allEncrypted)
-	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", "b", 50); len(f) != 0 {
+	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
 		t.Errorf("a clean sample must pass, got %+v", f)
 	}
 }
@@ -182,15 +205,15 @@ func TestCheckObjectsEncryptedCatchesOnePlaintextAmongMany(t *testing.T) {
 		}
 		return ssecEncrypted
 	})
-	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", "b", 50)
+	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
 	if len(f) != 1 || !strings.Contains(f[0].problem, "PLAINTEXT") {
 		t.Fatalf("one plaintext object among ten must fail, got %+v", f)
 	}
 	if !strings.Contains(f[0].problem, "1 of 10") {
 		t.Errorf("the finding must report the COUNT — that is the auditable number: %q", f[0].problem)
 	}
-	if !strings.Contains(f[0].fix, "retention") {
-		t.Error("the fix must distinguish a bypassing proxy from objects that simply predate it")
+	if !strings.Contains(f[0].fix, "bypassing") {
+		t.Error("these are post-cutover writes, so the fix must say the traffic is bypassing the proxy")
 	}
 }
 
@@ -202,7 +225,7 @@ func TestCheckObjectsEncryptedToleratesObjectsThatVanish(t *testing.T) {
 		}
 		return ssecEncrypted
 	})
-	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", "b", 50); len(f) != 0 {
+	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
 		t.Errorf("a raced deletion must not fail the gate, got %+v", f)
 	}
 }
@@ -211,7 +234,7 @@ func TestCheckObjectsEncryptedToleratesObjectsThatVanish(t *testing.T) {
 // other check, so this one must not shrug at zero objects.
 func TestCheckObjectsEncryptedFailsOnAnEmptyBucket(t *testing.T) {
 	withSSECSample(t, nil, nil, allEncrypted)
-	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", "b", 50)
+	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
 	if len(f) != 1 || !strings.Contains(f[0].problem, "EMPTY") {
 		t.Errorf("an empty bucket proves nothing and must not pass, got %+v", f)
 	}
@@ -219,7 +242,7 @@ func TestCheckObjectsEncryptedFailsOnAnEmptyBucket(t *testing.T) {
 
 func TestCheckObjectsEncryptedFailsWhenUnclassifiable(t *testing.T) {
 	withSSECSample(t, []string{"k"}, nil, func(string) ssecVerdict { return ssecUnknown })
-	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", "b", 50); len(f) != 1 {
+	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 1 {
 		t.Error("an unclassifiable response is not a pass")
 	}
 }
@@ -233,7 +256,7 @@ func TestCheckObjectsEncryptedFailsWhenConsumerCredsUnreadable(t *testing.T) {
 		return "", "", errors.New("secrets \"loki-s3-linode-credentials\" not found")
 	}
 	t.Cleanup(func() { objEncConsumerCreds = prev })
-	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", "b", 50)
+	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
 	if len(f) != 1 {
 		t.Fatalf("unreadable consumer creds must be one finding, got %+v", f)
 	}
@@ -245,19 +268,94 @@ func TestCheckObjectsEncryptedFailsWhenConsumerCredsUnreadable(t *testing.T) {
 	}
 }
 
-// An absent llz-cert-automation namespace means the credential component was never
-// deployed (managed renders a minimal app set) — not an encryption failure.
-func TestCheckHarborPathSkipsWhenCredentialNamespaceAbsent(t *testing.T) {
+// No Harbor on the cluster means there is nothing whose writes must be encrypted —
+// a skip, not a finding.
+func TestCheckHarborPathSkipsWhenHarborIsAbsent(t *testing.T) {
 	prev := namespaceExists
-	var asked string
-	namespaceExists = func(ns string) (bool, error) { asked = ns; return false, nil }
+	var asked []string
+	namespaceExists = func(ns string) (bool, error) { asked = append(asked, ns); return false, nil }
 	t.Cleanup(func() { namespaceExists = prev })
 	if f := checkHarborPath("h", "bucket"); len(f) != 0 {
-		t.Errorf("an absent credential namespace must not fail the gate, got %+v", f)
+		t.Errorf("no Harbor on the cluster must not fail the gate, got %+v", f)
 	}
-	if asked != harborRobotSecretNS {
-		t.Errorf("guarded on %q, but the robot Secret lives in %q — checking the wrong namespace is "+
-			"how this reported a missing credential as an encryption finding", asked, harborRobotSecretNS)
+	if len(asked) != 1 || asked[0] != harborNS {
+		t.Errorf("guarded on %v, want a single check of %q — the SUBJECT is Harbor, not whichever "+
+			"namespace happens to hold a credential", asked, harborNS)
+	}
+}
+
+// THE REGRESSION THIS EXISTS FOR. Guarding on llz-cert-automation skipped the
+// harbor-push check on 100% of managed clusters, because cert-automation there is
+// apl-core's and that namespace is never created — so the one check that proves the
+// CA chain never ran on the cluster class it protects, and printed a reassuring
+// explanation each time. A skip that is structural rather than occasional is not a
+// skip, it is a check that does not exist.
+func TestCheckHarborPathRunsOnManagedWhereTheRobotNamespaceCannotExist(t *testing.T) {
+	prevNS, prevSecret, prevKubectl := namespaceExists, readHarborRobotSecret, objEncKubectl
+	t.Cleanup(func() { namespaceExists, readHarborRobotSecret, objEncKubectl = prevNS, prevSecret, prevKubectl })
+
+	namespaceExists = func(ns string) (bool, error) { return ns == harborNS, nil } // managed: no llz-cert-automation
+	readHarborRobotSecret = func(ns, name string) ([]byte, error) {
+		if ns == harborNS && name == harborAdminSecretName {
+			return []byte(`{"data":{"HARBOR_ADMIN_PASSWORD":"` +
+				base64.StdEncoding.EncodeToString([]byte("s3cret")) + `"}}`), nil
+		}
+		return nil, errors.New("not found")
+	}
+	objEncKubectl = func(...string) (string, error) {
+		return `{"items":[{"spec":{"hostnames":["harbor.lke1.akamai-apl.net"]}}]}`, nil
+	}
+
+	creds, findings := harborProbeCreds()
+	if len(findings) > 0 {
+		t.Fatalf("managed must fall back to Harbor's own admin credential, got findings %+v", findings)
+	}
+	if creds.Username != harborAdminUser || creds.Password != "s3cret" {
+		t.Errorf("credential = %q/%q, want the harbor admin", creds.Username, creds.Password)
+	}
+	if creds.RegistryHost != "harbor.lke1.akamai-apl.net" {
+		t.Errorf("registry host = %q, want the host read off Harbor's own route — there is no spec "+
+			"domainSuffix on managed to render it from", creds.RegistryHost)
+	}
+}
+
+// Where LLZ's cert-automation IS deployed the robot stays preferred, and a broken
+// robot Secret stays a finding. Falling back to admin there would paper over a real
+// break in a credential path assert-harbor-roundtrip owns — and would quietly push
+// with a much heavier credential than the gate needs.
+func TestCheckHarborPathPrefersTheRobotAndDoesNotMaskItsFailure(t *testing.T) {
+	prevNS, prevSecret := namespaceExists, readHarborRobotSecret
+	t.Cleanup(func() { namespaceExists, readHarborRobotSecret = prevNS, prevSecret })
+
+	namespaceExists = func(string) (bool, error) { return true, nil } // self-installed: both present
+	readHarborRobotSecret = func(ns, name string) ([]byte, error) {
+		if ns == harborRobotSecretNS {
+			return nil, errors.New("the robot Secret is unreadable")
+		}
+		t.Errorf("fell back to %s/%s while %s exists — that masks the robot failure", ns, name, harborRobotSecretNS)
+		return nil, errors.New("unreachable")
+	}
+
+	_, findings := harborProbeCreds()
+	if len(findings) != 1 || !strings.Contains(findings[0].problem, harborRobotSecretNS) {
+		t.Fatalf("an unreadable robot Secret must stay one finding naming %s, got %+v", harborRobotSecretNS, findings)
+	}
+}
+
+// A host that fails usableRegistryHost is the "harbor." truncation class (PR #342):
+// non-empty, so it satisfies every `== ""` guard on its way to 401ing every push.
+func TestHarborPublicHostRejectsAnUnusableHostname(t *testing.T) {
+	prev := objEncKubectl
+	t.Cleanup(func() { objEncKubectl = prev })
+	objEncKubectl = func(...string) (string, error) {
+		return `{"items":[{"spec":{"hostnames":["harbor."]}},{"spec":{"rules":[{"host":"harbor.real.example"}]}}]}`, nil
+	}
+	got, err := harborPublicHost()
+	if err != nil {
+		t.Fatalf("an Ingress rule should have supplied the host after the bad HTTPRoute: %v", err)
+	}
+	if got != "harbor.real.example" {
+		t.Errorf("host = %q, want the usable one — %q is the truncation class that passes every empty-string guard", got, "harbor.")
 	}
 }
 
@@ -421,5 +519,168 @@ func TestLooksLikeTLSFailure(t *testing.T) {
 		if looksLikeTLSFailure(s) {
 			t.Errorf("must NOT read as a TLS failure: %q", s)
 		}
+	}
+}
+
+// PRE-CUTOVER OBJECTS ARE NOT A FINDING. Turning the gateway on over an existing
+// bucket leaves everything already in it plaintext, irreversibly and by design.
+// Counting those made this check unpassable on every e2e bucket (they are reused
+// across clusters) and produced a failure whose own fix text argued it might be
+// fine — which is how a gate becomes something people skip rather than read.
+func TestCheckObjectsEncryptedIgnoresObjectsThatPredateTheCutover(t *testing.T) {
+	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
+	refs := []s3ObjectRef{
+		{Key: "written-after", LastModified: cutover.Add(time.Hour)},
+		{Key: "predates-1", LastModified: cutover.Add(-240 * time.Hour)},
+		{Key: "predates-2", LastModified: cutover.Add(-99 * time.Hour)},
+	}
+	withSSECSampleAt(t, cutover, refs, nil, func(k string) ssecVerdict {
+		if k == "written-after" {
+			return ssecEncrypted
+		}
+		return ssecPlaintext // the pre-cutover residue
+	})
+	if f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50); len(f) != 0 {
+		t.Errorf("plaintext objects older than the cutover are documented residue, not a breach: %+v", f)
+	}
+}
+
+// The mirror image, and the property that keeps the filter honest: an object written
+// AFTER the gateway went live has no excuse for being plaintext.
+func TestCheckObjectsEncryptedStillCatchesPlaintextWrittenAfterTheCutover(t *testing.T) {
+	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
+	refs := []s3ObjectRef{
+		{Key: "predates", LastModified: cutover.Add(-time.Hour)},
+		{Key: "leaked", LastModified: cutover.Add(time.Minute)},
+	}
+	withSSECSampleAt(t, cutover, refs, nil, func(k string) ssecVerdict {
+		if k == "leaked" {
+			return ssecPlaintext
+		}
+		return ssecEncrypted
+	})
+	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
+	if len(f) != 1 || !strings.Contains(f[0].problem, "PLAINTEXT") {
+		t.Fatalf("a post-cutover plaintext write must fail, got %+v", f)
+	}
+	if !strings.Contains(f[0].problem, "1 of 1") {
+		t.Errorf("the count must be out of the objects actually JUDGED, not the whole sample: %q", f[0].problem)
+	}
+}
+
+// A bucket whose every object predates the cutover proves nothing either way, and a
+// check that examined no relevant object must not report green. This is the state a
+// consumer that CANNOT WRITE produces — the real condition it surfaced on the e2e
+// cluster, where Loki was failing every PutObject and the bucket held only a
+// previous cluster's data.
+func TestCheckObjectsEncryptedReportsWhenNothingWasWrittenSinceTheCutover(t *testing.T) {
+	cutover := time.Date(2026, 8, 3, 17, 18, 0, 0, time.UTC)
+	refs := []s3ObjectRef{{Key: "old", LastModified: cutover.Add(-time.Hour)}}
+	withSSECSampleAt(t, cutover, refs, nil, allEncrypted)
+	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", []string{"b"}, 50)
+	if len(f) != 1 {
+		t.Fatalf("nothing written since the cutover must be reported, not passed, got %+v", f)
+	}
+	if !strings.Contains(f[0].problem, "proves nothing") {
+		t.Errorf("the finding must say it proved nothing: %q", f[0].problem)
+	}
+	// The Harbor push runs BEFORE this check and writes a blob, so it is the first
+	// thing to suspect when the sample has nothing post-cutover in it.
+	if !strings.Contains(f[0].fix, "Harbor push") {
+		t.Errorf("the fix must point at the guaranteed writer first: %q", f[0].fix)
+	}
+}
+
+// Plain LIST order is lexicographic, so on a bucket with history the whole sample is
+// drawn from the OLDEST keys — every one of them pre-cutover, and the check then has
+// nothing to judge no matter how much fresh data exists. Newest-first is what makes
+// the sample relevant.
+func TestSampleReturnsNewestFirst(t *testing.T) {
+	base := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	body := ""
+	for i, name := range []string{"aaa-oldest", "mmm-middle", "zzz-newest"} {
+		body += fmt.Sprintf("<Contents><Key>%s</Key><LastModified>%s</LastModified></Contents>",
+			name, base.Add(time.Duration(i)*time.Hour).Format(time.RFC3339))
+	}
+	prev := s3SignedRequest
+	s3SignedRequest = func(_, _, _, _, _, _ string) (int, string, error) { return 200, body, nil }
+	t.Cleanup(func() { s3SignedRequest = prev })
+
+	got, err := s3SampleObjectKeys("ak", "sk", "e", "b", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Key != "zzz-newest" || got[1].Key != "mmm-middle" {
+		t.Errorf("sample = %+v, want the two NEWEST — lexicographic order samples only the oldest keys, "+
+			"which on a reused bucket are all pre-cutover and unjudgeable", got)
+	}
+}
+
+// Both buckets are sampled, and a finding names the one it came from.
+//
+// Pinning this to Loki's bucket alone is what made the check unsatisfiable on the
+// e2e timeline: Loki holds its first chunk for up to chunk_idle_period, so nine
+// minutes after the cutover that bucket contains only a previous cluster's objects
+// and the check reported "nothing written since the gateway went live" on a fleet
+// that was encrypting correctly.
+func TestObjEncryptionSamplesEveryBucketAndAttributesFindings(t *testing.T) {
+	cutover := time.Date(2026, 8, 3, 19, 41, 0, 0, time.UTC)
+	prevList, prevProbe, prevCut, prevCreds := s3SampleObjectKeys, s3ObjectSSECProbe, objProxyCutoverTime, objEncConsumerCreds
+	t.Cleanup(func() {
+		s3SampleObjectKeys, s3ObjectSSECProbe, objProxyCutoverTime, objEncConsumerCreds = prevList, prevProbe, prevCut, prevCreds
+	})
+	objProxyCutoverTime = func() (time.Time, error) { return cutover, nil }
+	objEncConsumerCreds = func(string, string, string) (string, string, error) { return "ak", "sk", nil }
+
+	var sampled []string
+	s3SampleObjectKeys = func(_, _, _, b string, _ int) ([]s3ObjectRef, error) {
+		sampled = append(sampled, b)
+		switch b {
+		case "harbor-bucket": // the gate's own probe blob — always post-cutover
+			return []s3ObjectRef{{Key: "blobs/data", LastModified: cutover.Add(time.Minute), Bucket: b}}, nil
+		default: // Loki has not flushed yet: only a previous cluster's objects
+			return []s3ObjectRef{{Key: "old/chunk", LastModified: cutover.Add(-240 * time.Hour), Bucket: b}}, nil
+		}
+	}
+	s3ObjectSSECProbe = func(_, _, _, bucket, _ string) (ssecVerdict, string) {
+		if bucket == "harbor-bucket" {
+			return ssecPlaintext, "stub" // so the finding has to name its bucket
+		}
+		return ssecEncrypted, "stub"
+	}
+
+	f := checkObjectsAreEncrypted("ep", []string{"harbor-bucket", "loki-bucket"}, 50)
+
+	if len(sampled) != 2 {
+		t.Fatalf("sampled %v — both buckets must be listed, or a dead consumer makes the check unsatisfiable", sampled)
+	}
+	if len(f) != 1 || !strings.Contains(f[0].problem, "PLAINTEXT") {
+		t.Fatalf("the post-cutover harbor object was plaintext and must fail, got %+v", f)
+	}
+	if !strings.Contains(f[0].problem, "harbor-bucket/blobs/data") {
+		t.Errorf("the finding must name the BUCKET and key it found: %q", f[0].problem)
+	}
+}
+
+// The Harbor push must run BEFORE the object sample. It writes the one post-cutover
+// object this gate can guarantee, so sampling first samples a bucket nothing has
+// written to yet — which is the ordering bug that failed e2e run 30844253067.
+func TestHarborPushRunsBeforeTheObjectSample(t *testing.T) {
+	src, err := os.ReadFile("ci_assert_obj_encryption.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	harbor := strings.Index(body, "findings = append(findings, checkHarborPath(")
+	object := strings.Index(body, "findings = append(findings, checkObjectsAreEncrypted(")
+	if harbor < 0 || object < 0 {
+		t.Fatal("could not find both call sites — this test's premise no longer holds, revisit it")
+	}
+	if harbor > object {
+		t.Error("checkObjectsAreEncrypted runs before checkHarborPath: the sample then predates the probe blob " +
+			"that guarantees it has post-cutover material, and the check fails on a healthy cluster")
+	}
+	if !strings.Contains(body, "checkObjectsAreEncrypted(endpoint, []string{harborBucket, bucket}") {
+		t.Error("the object sample must cover BOTH buckets — Loki's alone is empty on a young cluster")
 	}
 }

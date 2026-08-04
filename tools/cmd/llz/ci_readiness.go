@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 	"github.com/akamai-consulting/lke-landing-zone/tools/internal/health"
 	"github.com/spf13/cobra"
 )
@@ -178,8 +179,229 @@ func lokiBootstrapped(nameMatch string) (bool, []string) {
 		msgs = append(msgs, "FAIL: Loki config does not reference S3 — still on the filesystem default? (kyverno loki-s3-object-store may not have applied)")
 		ok = false
 	}
+
+	// 3. Loki's writes are actually LANDING.
+	//
+	// Checks 1 and 2 are both properties of the cluster's INTENT — pods scheduled,
+	// config pointing at S3 — and #397 is what it looks like when intent is perfect
+	// and the outcome is nothing. Loki was Running, Ready, Synced, Healthy, S3
+	// configured, and every PutObject returned 403 AccessDenied: 238 flush failures
+	// on one ingester and a chunks bucket whose newest object predated the cluster
+	// by ten days. This lane was green throughout, because nothing here had ever
+	// asked whether a byte was written.
+	//
+	// TWO SIGNALS, because neither alone is enough. Flush ERRORS catch active
+	// breakage but only once Loki has tried, and on a fresh cluster it has not: the
+	// first version of this scanned a 60s window and passed on a cluster that had
+	// written nothing at all, which is precisely the blindness it was added to
+	// remove. The OUTCOME signal — has anything reached the bucket since the
+	// ingesters started — covers that, but only after enough time has passed that a
+	// healthy Loki would have flushed. Together they cover both.
+	for _, m := range lokiWriteFindings(nameMatch) {
+		msgs = append(msgs, m.text)
+		if m.fatal {
+			ok = false
+		}
+	}
 	return ok, msgs
 }
+
+// lokiWriteMsg is one line of the write-path verdict; fatal ones fail the lane.
+type lokiWriteMsg struct {
+	text  string
+	fatal bool
+}
+
+// lokiWriteFindings answers "is Loki actually persisting anything".
+func lokiWriteFindings(nameMatch string) []lokiWriteMsg {
+	var out []lokiWriteMsg
+
+	fails := lokiFlushFailures(nameMatch)
+	if len(fails) > 0 {
+		out = append(out,
+			lokiWriteMsg{fmt.Sprintf("FAIL: Loki is failing to flush chunks to object storage (%d error(s) in the last %s):", len(fails), lokiFlushWindow), true},
+			lokiWriteMsg{"  " + fails[0], false},
+			lokiWriteMsg{"  Loki being Ready and S3-configured does not mean it can WRITE. A 403 AccessDenied " +
+				"here is usually NOT the credential — check it against a plain signed PUT before chasing the key. " +
+				"Linode's Ceph RGW rejects the AWS SDK's default PutObject framing (content-encoding: aws-chunked " +
+				"with an x-amz-trailer CRC32); the same credential succeeds without it. Loki's legacy S3 client " +
+				"offers no knob for that and ignores AWS_REQUEST_CHECKSUM_CALCULATION — the remedy is Loki's " +
+				"thanos client (use_thanos_objstore: true + send_content_md5: true), which apl-core owns. See #397", false})
+		return out
+	}
+	out = append(out, lokiWriteMsg{fmt.Sprintf("OK: no chunk-flush failures in the last %s", lokiFlushWindow), false})
+
+	// The outcome half. Skipped rather than guessed when the pieces are missing —
+	// this must never fail a lane because the gate could not look.
+	newest, since, err := lokiNewestWriteAge(nameMatch)
+	if err != nil {
+		out = append(out, lokiWriteMsg{"SKIP: could not compare the chunks bucket against ingester start (" + err.Error() + ") — the write OUTCOME is unmeasured here", false})
+		return out
+	}
+	if newest.After(since) {
+		out = append(out, lokiWriteMsg{fmt.Sprintf("OK: Loki has written to object storage since the ingesters started (newest object %s)", newest.Format(time.RFC3339)), false})
+		return out
+	}
+	// Nothing since start. Only a finding once a healthy Loki would have flushed:
+	// it holds a chunk until chunk_idle_period, so an empty bucket minutes into a
+	// bootstrap is normal and failing on it would red every fresh cluster — the
+	// exact mistake that made the obj-encryption [object] check unsatisfiable.
+	grace := lokiFlushGrace()
+	waited := lokiNow().Sub(since)
+	if waited < grace {
+		out = append(out, lokiWriteMsg{fmt.Sprintf(
+			"UNPROVEN: nothing written to object storage in the %s since the ingesters started, but Loki holds "+
+				"chunks for up to %s — too early to call. This lane cannot confirm Loki persists anything on a "+
+				"cluster this young; assert-obj-encryption's [object] check judges whatever HAS been written",
+			waited.Round(time.Second), grace), false})
+		return out
+	}
+	out = append(out, lokiWriteMsg{fmt.Sprintf(
+		"FAIL: Loki has written NOTHING to object storage in the %s since the ingesters started, which is longer "+
+			"than the %s it holds a chunk — it is not persisting logs, and no flush error has surfaced to say so. "+
+			"Check the ingesters for S3 errors; see #397 for the Linode/Ceph checksum-framing case that produces "+
+			"exactly this with every health signal green", waited.Round(time.Second), grace), true})
+	return out
+}
+
+// lokiNow is the clock seam; lokiFlushGrace is how long a healthy Loki may sit on a
+// chunk before flushing (Loki's chunk_idle_period default). A var so a cluster that
+// tunes it can be matched without re-releasing, and so tests can shrink it.
+var (
+	lokiNow        = time.Now
+	lokiFlushGrace = func() time.Duration { return 30 * time.Minute }
+)
+
+// lokiNewestWriteAge returns the newest object in the chunks bucket and the time the
+// OLDEST running ingester started — the two ends of "has it written since it came up".
+//
+// The OLDEST ingester, deliberately: a rolling restart makes the youngest pod seconds
+// old, and measuring against that would call every cluster "too early" forever.
+func lokiNewestWriteAge(nameMatch string) (newest time.Time, since time.Time, err error) {
+	bucket, endpoint := lokiChunksTarget()
+	if bucket == "" || endpoint == "" {
+		return newest, since, fmt.Errorf("no chunks bucket/endpoint for this deployment")
+	}
+	ak, sk, cerr := objEncConsumerCreds(lokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+	if cerr != nil {
+		return newest, since, fmt.Errorf("reading %s: %w", lokiObjSecretRef, cerr)
+	}
+	start, serr := lokiOldestIngesterStart(nameMatch)
+	if serr != nil {
+		return newest, since, serr
+	}
+	refs, lerr := s3SampleObjectKeys(ak, sk, endpoint, bucket, 1) // newest-first, so one is enough
+	if lerr != nil {
+		return newest, since, fmt.Errorf("listing %s: %w", bucket, lerr)
+	}
+	if len(refs) == 0 {
+		return time.Time{}, start, nil // empty bucket: nothing written, by definition
+	}
+	return refs[0].LastModified, start, nil
+}
+
+// lokiOldestIngesterStart is when the longest-running ingester came up.
+func lokiOldestIngesterStart(nameMatch string) (time.Time, error) {
+	var oldest time.Time
+	for _, p := range lokiPodsFn(nameMatch) {
+		if !strings.Contains(p.name, "ingester") {
+			continue
+		}
+		t, err := lokiPodStart(p.ns, p.name)
+		if err != nil {
+			continue
+		}
+		if oldest.IsZero() || t.Before(oldest) {
+			oldest = t
+		}
+	}
+	if oldest.IsZero() {
+		return oldest, fmt.Errorf("no ingester pod reported a start time")
+	}
+	return oldest, nil
+}
+
+// Seams for the outcome half.
+var (
+	lokiPodStart = func(ns, pod string) (time.Time, error) {
+		out, err := kubectlOut("-n", ns, "get", "pod", pod, "-o", "jsonpath={.status.startTime}")
+		if err != nil {
+			return time.Time{}, err
+		}
+		return time.Parse(time.RFC3339, strings.TrimSpace(out))
+	}
+	// lokiChunksTarget resolves the bucket + endpoint from the deployment spec, the
+	// same derivation assert-obj-encryption uses, so the two cannot disagree about
+	// which bucket "Loki's" means.
+	lokiChunksTarget = func() (string, string) {
+		region := os.Getenv("REGION")
+		if region == "" {
+			return "", ""
+		}
+		lz, err := clusterspec.LoadInstance(".")
+		if err != nil {
+			return "", ""
+		}
+		e, ok := lz.Env(region)
+		if !ok {
+			return "", ""
+		}
+		return clusterspec.ObjLokiChunksBucket(region), clusterspec.ObjEndpointHost(e.Cluster.ObjectStorage.Cluster)
+	}
+)
+
+// lokiFlushWindow is how far back the flush-failure scan looks.
+//
+// SHORT ON PURPOSE. assert-loki polls for a settle budget (120s by default) and
+// re-evaluates this each attempt, so the window must be short enough that a single
+// transient S3 blip AGES OUT inside that budget — otherwise one hiccup during
+// bootstrap reds the lane for the whole settle. A minute does that, and the failure
+// this catches recurs every few seconds, so it cannot hide in the gap.
+var lokiFlushWindow = time.Minute
+
+// lokiFlushFailures returns recent chunk-flush errors from Loki's writers.
+//
+// LOGS, NOT METRICS, deliberately. The equivalent metric lives behind Prometheus or
+// a port-forward to each pod, and a check that needs a working monitoring stack to
+// tell you the monitoring stack is broken is the wrong shape. The log line is
+// unambiguous, already the thing an operator greps for, and needs nothing but the
+// cluster access this gate already has.
+//
+// This proves FAILURE, not success: a quiet window can also mean Loki simply had
+// nothing to flush yet, which on a fresh bootstrap is normal. That asymmetry is why
+// assert-obj-encryption separately reports a bucket with no writes since the cutover
+// — between them, "nothing written" cannot pass as "everything fine".
+func lokiFlushFailures(nameMatch string) []string {
+	var out []string
+	for _, p := range lokiPodsFn(nameMatch) {
+		// Only the components that WRITE. Queriers and gateways read, and scanning
+		// them adds log volume without adding signal.
+		if !strings.Contains(p.name, "ingester") && !strings.Contains(p.name, "compactor") {
+			continue
+		}
+		raw, err := lokiLogs(p.ns, p.name, lokiFlushWindow)
+		if err != nil {
+			continue // a pod that just restarted / is terminating is not evidence
+		}
+		for _, line := range strings.Split(raw, "\n") {
+			if strings.Contains(line, "failed to flush") {
+				out = append(out, strings.TrimSpace(truncateForError([]byte(p.ns+"/"+p.name+": "+line))))
+			}
+		}
+	}
+	return out
+}
+
+// lokiLogs and lokiPodsFn are the seams for the outcome check. The flush-failure
+// scan is the one check in this lane that reads a RUNNING process's behaviour rather
+// than the cluster's declared intent, which is exactly what made it the check that
+// was missing — and exactly why it needs to be exercisable without a cluster.
+var (
+	lokiLogs = func(ns, pod string, since time.Duration) (string, error) {
+		return kubectlOut("-n", ns, "logs", pod, "--since="+since.String(), "--tail=200")
+	}
+	lokiPodsFn = lokiPods
+)
 
 // lokiPods returns the Loki pods, preferring the app.kubernetes.io/name label and
 // falling back to a name-regex match over all pods (so it doesn't depend on one

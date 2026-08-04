@@ -205,7 +205,58 @@ func parseTokenResponse(raw []byte) (string, []tokenAccess, error) {
 	if tok == "" {
 		return "", nil, fmt.Errorf("the token service returned no token")
 	}
-	return tok, r.Access, nil
+	// THE ACCESS LIST IS IN THE JWT, NOT THE ENVELOPE. Harbor's /service/token
+	// answers with {token, access_token, expires_in, issued_at} — measured; there is
+	// no `access` key in the body at all, and the distribution token spec does not
+	// put one there. The granted scope is a CLAIM inside the token.
+	//
+	// Reading r.Access therefore always yielded an empty list, so grantedActions
+	// always returned nothing and every caller concluded the credential held no
+	// push scope. The comment at the call site had the mechanism exactly right —
+	// "Harbor returns a valid token with an empty access list when the credential
+	// lacks the scope" — which is what made the empty result look like a diagnosis
+	// instead of a bug: the check reported the one failure it was written to detect,
+	// on every credential, including ones that could demonstrably push.
+	//
+	// It survived because both callers were guarded on a namespace that does not
+	// exist on managed clusters, so neither ever reached this line where we run.
+	//
+	// The body is still preferred when it does carry an access list: a registry that
+	// states the grant explicitly is more authoritative than our reading of its token.
+	if len(r.Access) > 0 {
+		return tok, r.Access, nil
+	}
+	return tok, jwtAccessClaims(tok), nil
+}
+
+// jwtAccessClaims pulls the `access` claim out of an unverified JWT payload.
+//
+// UNVERIFIED IS CORRECT HERE, and it is worth being explicit about why. We are not
+// making an authorization decision — the registry does that when the token is
+// presented, and the push either succeeds or 401s. This only reads what the token
+// SAYS it grants, to turn a coming 401 into a message that names the missing scope.
+// A forged token would fail at the registry regardless; verifying the signature here
+// would mean fetching Harbor's signing key to improve an error string.
+//
+// Returns nil for anything unparseable: the caller then reports no granted actions,
+// which is the same conservative answer as before.
+func jwtAccessClaims(token string) []tokenAccess {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil
+	}
+	// JWT uses base64url WITHOUT padding; RawURLEncoding is the matching decoder.
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil
+	}
+	var claims struct {
+		Access []tokenAccess `json:"access"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil
+	}
+	return claims.Access
 }
 
 // grantedActions returns the actions granted for a repository across the access

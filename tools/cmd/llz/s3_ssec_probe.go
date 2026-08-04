@@ -25,7 +25,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -139,7 +141,25 @@ var s3SignedRequest = func(method, accessKey, secretKey, endpoint, path, query s
 	return resp.StatusCode, string(body), nil
 }
 
-var s3ListKeyRe = regexp.MustCompile(`<Key>([^<]+)</Key>`)
+// One <Contents> entry: the key and when it was written. LastModified is what lets
+// the caller tell "written since the gateway went live" from "predates it", which is
+// the difference between a breach and a bucket with history.
+var s3ListEntryRe = regexp.MustCompile(`(?s)<Key>([^<]+)</Key>.*?<LastModified>([^<]+)</LastModified>`)
+var s3ListTokenRe = regexp.MustCompile(`<NextContinuationToken>([^<]+)</NextContinuationToken>`)
+
+// s3ObjectRef is one listed object.
+type s3ObjectRef struct {
+	Key          string
+	LastModified time.Time
+	// Bucket is filled by the CALLER, not the lister — one sample can span several
+	// buckets, and a finding that cannot name which one is not actionable.
+	Bucket string
+}
+
+// s3SamplePageCap bounds the LIST walk. Ten pages of 1000 is enough to find recent
+// writes in any bucket this gate looks at, and bounded so a large bucket cannot turn
+// one check into thousands of requests. The bound is reported, never silent.
+const s3SamplePageCap = 10
 
 // s3SampleObjectKeys returns up to max object keys from the bucket.
 //
@@ -154,23 +174,52 @@ var s3ListKeyRe = regexp.MustCompile(`<Key>([^<]+)</Key>`)
 // finding text rather than hidden, because the number that matters to an auditor
 // is "how many did you look at", and a checker that implies full coverage from a
 // sample is worse than one that admits the bound.
-var s3SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max int) ([]string, error) {
+var s3SampleObjectKeys = func(accessKey, secretKey, endpoint, bucket string, max int) ([]s3ObjectRef, error) {
 	if max < 1 {
 		max = 1
 	}
-	code, body, err := s3SignedRequest(http.MethodGet, accessKey, secretKey, endpoint,
-		"/"+bucket, fmt.Sprintf("list-type=2&max-keys=%d", max))
-	if err != nil {
-		return nil, err
+	var refs []s3ObjectRef
+	token := ""
+	for page := 0; page < s3SamplePageCap; page++ {
+		query := "list-type=2&max-keys=1000"
+		if token != "" {
+			// Canonical query order is by key, and `continuation-token` sorts before
+			// `list-type`/`max-keys` — send it in the order it is signed or SigV4 fails.
+			query = "continuation-token=" + url.QueryEscape(token) + "&" + query
+		}
+		code, body, err := s3SignedRequest(http.MethodGet, accessKey, secretKey, endpoint, "/"+bucket, query)
+		if err != nil {
+			return nil, err
+		}
+		if code != http.StatusOK {
+			return nil, fmt.Errorf("listing %s returned HTTP %d (%s)", bucket, code, s3ErrorCode(body))
+		}
+		for _, m := range s3ListEntryRe.FindAllStringSubmatch(body, -1) {
+			ts, err := time.Parse(time.RFC3339, m[2])
+			if err != nil {
+				// An unparseable timestamp must not silently become the zero time —
+				// that would sort it oldest and quietly exclude it from the sample.
+				// Treat it as brand new so it IS judged.
+				ts = time.Now()
+			}
+			refs = append(refs, s3ObjectRef{Key: m[1], LastModified: ts})
+		}
+		t := s3ListTokenRe.FindStringSubmatch(body)
+		if t == nil {
+			break
+		}
+		token = t[1]
 	}
-	if code != http.StatusOK {
-		return nil, fmt.Errorf("listing %s returned HTTP %d (%s)", bucket, code, s3ErrorCode(body))
+	// NEWEST FIRST, then take max. Plain LIST order is lexicographic, which for a
+	// bucket with history means the sample is drawn entirely from the oldest keys —
+	// the ones written before the gateway existed. Sampling those and calling them a
+	// breach is how this check reported PLAINTEXT on a cluster where every write
+	// since the cutover was correctly encrypted.
+	sort.Slice(refs, func(i, j int) bool { return refs[i].LastModified.After(refs[j].LastModified) })
+	if len(refs) > max {
+		refs = refs[:max]
 	}
-	var keys []string
-	for _, m := range s3ListKeyRe.FindAllStringSubmatch(body, -1) {
-		keys = append(keys, m[1])
-	}
-	return keys, nil
+	return refs, nil
 }
 
 // s3ObjectSSECProbe HEADs one object WITHOUT SSE-C headers and classifies the answer.

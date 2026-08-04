@@ -40,7 +40,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -180,12 +182,16 @@ func runAssertObjEncryption(endpoint, bucket, harborBucket, region string, sampl
 	var findings []objEncryptionFinding
 	findings = append(findings, checkRegistryPodsCarryCA()...)
 	findings = append(findings, checkEndpointResolvesToProxy(endpoint)...)
-	findings = append(findings, checkObjectsAreEncrypted(endpoint, bucket, sample)...)
+	// HARBOR BEFORE THE SAMPLE, and the ordering is load-bearing. checkHarborPath
+	// pushes a blob through Harbor's registry, which is the one post-cutover object
+	// this gate can GUARANTEE exists — see checkObjectsAreEncrypted for why that
+	// matters. Sampling first meant sampling a bucket nothing had written to yet.
 	findings = append(findings, checkHarborPath(endpoint, harborBucket)...)
+	findings = append(findings, checkObjectsAreEncrypted(endpoint, []string{harborBucket, bucket}, sample)...)
 
 	if len(findings) == 0 {
 		fmt.Printf("assert-obj-encryption: registry pods carry the CA, the endpoint resolves to the proxy, "+
-			"and a live object in %s is encrypted.\n", bucket)
+			"and a live object in %s is encrypted.\n", harborBucket)
 		return nil
 	}
 	for _, f := range findings {
@@ -202,14 +208,23 @@ func runAssertObjEncryption(endpoint, bucket, harborBucket, region string, sampl
 // namespace IS present is a finding, because that is the check being skipped on a
 // cluster that needs it — and it is the ONLY check that proves the CA chain.
 func checkHarborPath(endpoint, harborBucket string) []objEncryptionFinding {
-	// Guard on the namespace that holds the CREDENTIAL, not the one that holds
-	// Harbor. The first revision checked `harbor` and then read the robot Secret
-	// from llz-cert-automation — a different namespace, which a managed cluster
-	// rendering a minimal app set may simply not have. That reported "could not
-	// read the Harbor robot credential" as an encryption finding on a cluster where
-	// the component was never deployed. assert-harbor-roundtrip already draws this
-	// distinction; this now draws the same one.
-	present, err := namespaceExists(harborRobotSecretNS)
+	// Guard on HARBOR, not on the namespace that happens to hold a credential.
+	//
+	// This guarded on llz-cert-automation for two revisions, and the reasoning was
+	// sound for the bug it fixed (reading a robot Secret out of a namespace a minimal
+	// managed render never creates, then reporting the miss as an encryption finding).
+	// It was wrong about which namespace is the SUBJECT. llz-cert-automation is
+	// LLZ's own cert component, and on a managed cluster cert-automation is
+	// apl-core's — see components.go — so that namespace is not merely "sometimes
+	// absent", it is NEVER present on the entire cluster class this gate exists to
+	// protect. The check skipped 100% of the time on managed, printed a reassuring
+	// line explaining why that was fine, and left the CA chain unproven on every
+	// cluster we actually run.
+	//
+	// The question is "is there a Harbor whose writes must be encrypted", so the
+	// guard is the harbor namespace. The credential is a detail, and there is one
+	// available wherever Harbor is (see harborProbeCreds).
+	present, err := namespaceExists(harborNS)
 	if err != nil {
 		return []objEncryptionFinding{{
 			check: "harbor-push", problem: "could not determine whether the harbor namespace exists: " + err.Error(),
@@ -217,8 +232,8 @@ func checkHarborPath(endpoint, harborBucket string) []objEncryptionFinding {
 		}}
 	}
 	if !present {
-		fmt.Printf("  harbor-push: namespace %s is absent — the Harbor robot credential is not deployed "+
-			"here, so there is no push path to prove the CA chain with\n", harborRobotSecretNS)
+		fmt.Printf("  harbor-push: namespace %s is absent — no Harbor on this cluster, so there is no "+
+			"push path to prove the CA chain with\n", harborNS)
 		return nil
 	}
 	if harborBucket == "" {
@@ -229,20 +244,9 @@ func checkHarborPath(endpoint, harborBucket string) []objEncryptionFinding {
 				"mutation LANDED, and the object check samples Loki, which reaches the proxy with no CA at all",
 		}}
 	}
-	raw, err := readHarborRobotSecret(harborRobotSecretNS, harborRobotSecretName)
-	if err != nil || len(raw) == 0 {
-		return []objEncryptionFinding{{
-			check:   "harbor-push",
-			problem: fmt.Sprintf("could not read the Harbor robot credential %s/%s", harborRobotSecretNS, harborRobotSecretName),
-			fix:     "assert-harbor-roundtrip covers this credential path; fix it there first",
-		}}
-	}
-	creds, err := decodeRobotSecret(raw)
-	if err != nil {
-		return []objEncryptionFinding{{
-			check: "harbor-push", problem: "the Harbor robot credential is unusable: " + err.Error(),
-			fix: "assert-harbor-roundtrip covers this credential path; fix it there first",
-		}}
+	creds, findings := harborProbeCreds()
+	if len(findings) > 0 {
+		return findings
 	}
 	nonce := make([]byte, 32)
 	if _, err := rand.Read(nonce); err != nil {
@@ -252,6 +256,163 @@ func checkHarborPath(endpoint, harborBucket string) []objEncryptionFinding {
 	}
 	return checkHarborBlobIsEncrypted(endpoint, harborBucket, creds, nonce)
 }
+
+// harborProbeCreds returns a credential that can push one blob into Harbor.
+//
+// PREFERS THE LLZ ROBOT where LLZ's cert-automation is deployed, and keeps the old
+// strictness there: if that namespace exists, a missing or malformed robot Secret is
+// still a finding rather than a quiet downgrade, because on those clusters it is a
+// real break in a path assert-harbor-roundtrip owns.
+//
+// FALLS BACK TO HARBOR'S ADMIN only when that namespace is absent — which on managed
+// is always, since cert-automation there is apl-core's. Admin is a heavier credential
+// than a scoped robot and would be the wrong default; it is used here because it is
+// the one credential that exists wherever Harbor does, and a gate that cannot
+// authenticate is a gate that proves nothing. It is the same credential the
+// in-cluster harbor provisioner already runs on, and this reads it with the cluster
+// access the gate already holds — so it grants no reach it did not have.
+func harborProbeCreds() (harborRobotCreds, []objEncryptionFinding) {
+	robotNS, err := namespaceExists(harborRobotSecretNS)
+	if err != nil {
+		return harborRobotCreds{}, []objEncryptionFinding{{
+			check: "harbor-push", problem: "could not determine whether " + harborRobotSecretNS + " exists: " + err.Error(),
+			fix: "this gate cannot choose a credential without it",
+		}}
+	}
+	if !robotNS {
+		return harborAdminProbeCreds()
+	}
+	raw, err := readHarborRobotSecret(harborRobotSecretNS, harborRobotSecretName)
+	if err != nil || len(raw) == 0 {
+		return harborRobotCreds{}, []objEncryptionFinding{{
+			check:   "harbor-push",
+			problem: fmt.Sprintf("could not read the Harbor robot credential %s/%s", harborRobotSecretNS, harborRobotSecretName),
+			fix:     "assert-harbor-roundtrip covers this credential path; fix it there first",
+		}}
+	}
+	creds, err := decodeRobotSecret(raw)
+	if err != nil {
+		return harborRobotCreds{}, []objEncryptionFinding{{
+			check: "harbor-push", problem: "the Harbor robot credential is unusable: " + err.Error(),
+			fix: "assert-harbor-roundtrip covers this credential path; fix it there first",
+		}}
+	}
+	fmt.Printf("  harbor-push: pushing as robot %q (from %s/%s)\n", creds.Username, harborRobotSecretNS, harborRobotSecretName)
+	return creds, nil
+}
+
+// harborAdminSecret is Harbor's own admin credential, created by its Helm release in
+// the harbor namespace — present on managed and self-installed alike.
+const (
+	harborAdminSecretName = "harbor-admin-password"
+	harborAdminSecretKey  = "HARBOR_ADMIN_PASSWORD"
+	harborAdminUser       = "admin"
+)
+
+func harborAdminProbeCreds() (harborRobotCreds, []objEncryptionFinding) {
+	fail := func(problem, fix string) (harborRobotCreds, []objEncryptionFinding) {
+		return harborRobotCreds{}, []objEncryptionFinding{{check: "harbor-push", problem: problem, fix: fix}}
+	}
+	raw, err := readHarborRobotSecret(harborNS, harborAdminSecretName)
+	if err != nil || len(raw) == 0 {
+		return fail(
+			fmt.Sprintf("%s is absent, and Harbor's own %s/%s could not be read either", harborRobotSecretNS, harborNS, harborAdminSecretName),
+			"Harbor's Helm release creates this Secret; if it is missing, Harbor is not installed yet — "+
+				"re-run once it is, rather than accepting an unproven CA chain")
+	}
+	pass, err := decodeSecretField(raw, harborAdminSecretKey)
+	if err != nil || pass == "" {
+		return fail(
+			fmt.Sprintf("%s/%s has no usable %s", harborNS, harborAdminSecretName, harborAdminSecretKey),
+			"the CA chain cannot be proven without a credential that can push")
+	}
+	host, ferr := harborPublicHost()
+	if ferr != nil {
+		return fail("could not discover Harbor's public registry host: "+ferr.Error(),
+			"the push must go through the registry's own S3 client to prove anything, so it needs the host "+
+				"`docker push` targets. On managed there is no spec domainSuffix to render it from, so it is read "+
+				"from Harbor's route")
+	}
+	fmt.Printf("  harbor-push: %s is absent (cert-automation is apl-core's here) — pushing as %s to %s\n",
+		harborRobotSecretNS, harborAdminUser, host)
+	return harborRobotCreds{Username: harborAdminUser, Password: pass, RegistryHost: host}, nil
+}
+
+// harborPublicHost reads the host `docker push` targets off Harbor's own route.
+//
+// Not from the spec: on managed there is no domainSuffix, which is the whole reason
+// HarborHost("") once rendered the string "harbor." — non-empty, so it satisfied
+// every `== ""` guard on the way to 401ing every push (see PR #342). Reading the
+// cluster avoids re-deriving a value the cluster already states.
+func harborPublicHost() (string, error) {
+	out, err := objEncKubectl("-n", harborNS, "get", "httproute,ingress", "-o", "json")
+	if err != nil {
+		return "", err
+	}
+	var view struct {
+		Items []struct {
+			Spec struct {
+				Hostnames []string `json:"hostnames"` // HTTPRoute
+				Rules     []struct {
+					Host string `json:"host"` // Ingress
+				} `json:"rules"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &view); err != nil {
+		return "", fmt.Errorf("decoding Harbor's routes: %w", err)
+	}
+	for _, it := range view.Items {
+		for _, h := range it.Spec.Hostnames {
+			if usableRegistryHost(h) {
+				return h, nil
+			}
+		}
+		for _, r := range it.Spec.Rules {
+			if usableRegistryHost(r.Host) {
+				return r.Host, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no HTTPRoute or Ingress in the %s namespace declares a usable hostname", harborNS)
+}
+
+// bucketCounts renders "harbor=12, loki=30" for the sample line, so a reader can see
+// WHICH bucket supplied the evidence rather than a bare total.
+func bucketCounts(per map[string]int) string {
+	names := make([]string, 0, len(per))
+	for b := range per {
+		names = append(names, b)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, b := range names {
+		parts = append(parts, fmt.Sprintf("%s=%d", b, per[b]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// objProxyCutoverTime is when object-storage traffic began flowing through the
+// gateway: the creation of the CoreDNS rewrite, which is the switch that routes it.
+//
+// Read from the cluster rather than tracked separately because the ConfigMap IS the
+// cutover — it cannot drift from the thing it dates. Deleting and re-adding the
+// rewrite moves it forward, which is the correct behaviour: writes during the gap
+// went direct and are genuinely plaintext.
+var objProxyCutoverTime = func() (time.Time, error) {
+	out, err := objEncKubectl("-n", "kube-system", "get", "configmap", objProxyRewriteConfigMap,
+		"-o", "jsonpath={.metadata.creationTimestamp}")
+	if err != nil {
+		return time.Time{}, fmt.Errorf("reading %s: %w", objProxyRewriteConfigMap, err)
+	}
+	ts, perr := time.Parse(time.RFC3339, strings.TrimSpace(out))
+	if perr != nil {
+		return time.Time{}, fmt.Errorf("%s has an unparseable creationTimestamp %q", objProxyRewriteConfigMap, out)
+	}
+	return ts, nil
+}
+
+const objProxyRewriteConfigMap = "coredns-custom"
 
 // registryPodView is the slice of a Pod this check needs. Decoded from JSON rather
 // than scraped from a jsonpath template, because the template could not attribute a
@@ -418,7 +579,24 @@ func checkEndpointResolvesToProxy(endpoint string) []objEncryptionFinding {
 // sample is evidence of success, not proof of it. The success line prints the
 // sample size for exactly that reason — "0 of 50 sampled objects were plaintext" is
 // an auditable claim, "encrypted" is not.
-func checkObjectsAreEncrypted(endpoint, bucket string, sample int) []objEncryptionFinding {
+// checkObjectsAreEncrypted samples REAL objects and fails on any plaintext among
+// the ones written since the gateway went live.
+//
+// EVERY BUCKET, not just Loki's, because a bucket only proves something if it has
+// data from AFTER the cutover — and pinning this to Loki made the check unsatisfiable
+// on the e2e timeline. Loki does not flush its first chunk until chunk_idle_period,
+// so on a cluster the gateway went live on nine minutes earlier the bucket holds
+// nothing but a previous cluster's objects, and the check reported "nothing has been
+// written since the gateway went live" on a fleet that was encrypting correctly.
+// That is the same failure as the pre-cutover sampling this replaced: a check whose
+// precondition the timeline cannot meet.
+//
+// Harbor's bucket always has fresh material, because checkHarborPath pushes a blob
+// into it moments before this runs. A check that can CAUSE the data it judges never
+// waits on a background consumer — the same reason the harbor push exists at all.
+// Loki's bucket is still sampled, so its writes are covered whenever it has made
+// any; "has Loki written at all" belongs to assert-loki, which owns Loki.
+func checkObjectsAreEncrypted(endpoint string, buckets []string, sample int) []objEncryptionFinding {
 	// The CONSUMER's own credentials, read from the Secret it mounts — not the
 	// ambient AWS_* env.
 	//
@@ -438,59 +616,112 @@ func checkObjectsAreEncrypted(endpoint, bucket string, sample int) []objEncrypti
 				"there first. The probe needs only LIST and HEAD on the bucket, and NOT the SSE-C key",
 		}}
 	}
-	keys, err := s3SampleObjectKeys(ak, sk, endpoint, bucket, sample)
-	if err != nil {
-		return []objEncryptionFinding{{
-			check:   "object",
-			problem: fmt.Sprintf("could not list %s: %v", bucket, err),
-			fix:     "check the key is scoped to this bucket and the endpoint host is the one the bucket was created against",
-		}}
+	var keys []s3ObjectRef
+	perBucket := map[string]int{}
+	for _, b := range buckets {
+		if b == "" {
+			continue
+		}
+		got, err := s3SampleObjectKeys(ak, sk, endpoint, b, sample)
+		if err != nil {
+			return []objEncryptionFinding{{
+				check:   "object",
+				problem: fmt.Sprintf("could not list %s: %v", b, err),
+				fix:     "check the key is scoped to this bucket and the endpoint host is the one the bucket was created against",
+			}}
+		}
+		for _, r := range got {
+			r.Bucket = b
+			keys = append(keys, r)
+		}
+		perBucket[b] = len(got)
 	}
 	if len(keys) == 0 {
 		return []objEncryptionFinding{{
 			check:   "object",
-			problem: bucket + " is EMPTY, so nothing proves writes are encrypted",
+			problem: strings.Join(buckets, " and ") + " are EMPTY, so nothing proves writes are encrypted",
 			fix: "write something through the real path (push an image / let Loki flush a chunk) and re-run. " +
 				"An empty bucket and a correctly-encrypted bucket look identical to every check except this one",
 		}}
 	}
 
-	var plaintext, unknown []string
+	// JUDGE ONLY WHAT WAS WRITTEN SINCE THE GATEWAY WENT LIVE.
+	//
+	// Objects written before the cutover are plaintext and stay plaintext — that is
+	// a documented, irreversible property of turning this on over an existing
+	// bucket, not a finding. Counting them made this check UNPASSABLE on any bucket
+	// with history, which for e2e is every bucket, since they are reused across
+	// clusters. It reported "20 of 20 sampled objects are stored in PLAINTEXT" on a
+	// cluster where the proxy had encrypted every write it received, and the fix
+	// text underneath explained why that might be fine — a gate whose own failure
+	// message argues that the failure may not be real is one people learn to skip.
+	cutover, cerr := objProxyCutoverTime()
+	if cerr != nil {
+		return []objEncryptionFinding{{
+			check:   "object",
+			problem: "could not determine when the gateway went live: " + cerr.Error(),
+			fix: "without it, objects that PREDATE the cutover cannot be told from writes that bypassed the " +
+				"proxy — and reporting the first as the second is how this check cried wolf",
+		}}
+	}
+	var fresh []s3ObjectRef
 	for _, k := range keys {
-		switch verdict, _ := s3ObjectSSECProbe(ak, sk, endpoint, bucket, k); verdict {
+		if k.LastModified.After(cutover) {
+			fresh = append(fresh, k)
+		}
+	}
+	if len(fresh) == 0 {
+		return []objEncryptionFinding{{
+			check: "object",
+			problem: fmt.Sprintf("nothing has been written to %s since the gateway went live at %s "+
+				"(newest of %d sampled: %s), so this proves nothing about encryption",
+				strings.Join(buckets, " or "), cutover.Format(time.RFC3339), len(keys), keys[0].LastModified.Format(time.RFC3339)),
+			fix: "a check that examined no relevant object must not report green. The Harbor push above " +
+				"normally guarantees at least one post-cutover object, so if THAT skipped or failed this is " +
+				"downstream of it. Otherwise no consumer has written since the cutover — check their logs " +
+				"for S3 errors before suspecting the proxy",
+		}}
+	}
+
+	var plaintext, unknown []string
+	for _, k := range fresh {
+		switch verdict, _ := s3ObjectSSECProbe(ak, sk, endpoint, k.Bucket, k.Key); verdict {
 		case ssecPlaintext:
-			plaintext = append(plaintext, k)
+			plaintext = append(plaintext, k.Bucket+"/"+k.Key)
 		case ssecEncrypted, ssecAbsent:
 			// absent: raced a compaction/delete between LIST and HEAD. Not evidence
 			// of plaintext, and not worth failing a gate over.
 		default:
-			unknown = append(unknown, k)
+			unknown = append(unknown, k.Bucket+"/"+k.Key)
 		}
 	}
+	fmt.Printf("  object: %d of %d sampled objects (%s) were written since the cutover at %s; classifying those\n",
+		len(fresh), len(keys), bucketCounts(perBucket), cutover.Format(time.RFC3339))
 
 	var out []objEncryptionFinding
 	if len(plaintext) > 0 {
 		out = append(out, objEncryptionFinding{
 			check: "object",
 			problem: fmt.Sprintf("%d of %d sampled objects in %s are stored in PLAINTEXT (e.g. %s)",
-				len(plaintext), len(keys), bucket, plaintext[0]),
-			fix: "if this is a FRESH bucket, traffic is bypassing obj-proxy — check the CoreDNS rewrite is " +
-				"live and llz_objproxy_ssec_injected_total is climbing. If the proxy was turned on over an " +
-				"EXISTING bucket, these predate it: objects written before the cutover stay plaintext " +
-				"forever. For Loki that resolves itself once a full retention period has passed; for a " +
-				"registry it needs a re-push or a rewrite",
+				len(plaintext), len(fresh), strings.Join(buckets, "+"), plaintext[0]),
+			fix: "these were written AFTER the gateway went live, so they are not cutover residue — the " +
+				"traffic is bypassing obj-proxy. Check the CoreDNS rewrite resolves the endpoint to the " +
+				"proxy Service and that llz_objproxy_ssec_injected_total is climbing",
 		})
 	}
 	if len(unknown) > 0 {
 		out = append(out, objEncryptionFinding{
 			check:   "object",
-			problem: fmt.Sprintf("%d of %d sampled objects could not be classified (e.g. %s)", len(unknown), len(keys), unknown[0]),
+			problem: fmt.Sprintf("%d of %d sampled objects could not be classified (e.g. %s)", len(unknown), len(fresh), unknown[0]),
 			fix:     "an unclassifiable response is not a pass; check the key's permissions on this bucket",
 		})
 	}
 	if len(out) == 0 {
-		fmt.Printf("  object: 0 of %d sampled objects in %s were plaintext (a clean sample is evidence, not proof of full coverage)\n",
-			len(keys), bucket)
+		// len(fresh), not len(keys): the number that means anything is how many
+		// objects were actually JUDGED. Reporting the whole sample here overstated
+		// the coverage — "0 of 12" when only 4 were post-cutover and examined.
+		fmt.Printf("  object: 0 of %d judged objects in %s were plaintext (a clean sample is evidence, not proof of full coverage)\n",
+			len(fresh), strings.Join(buckets, "+"))
 	}
 	return out
 }

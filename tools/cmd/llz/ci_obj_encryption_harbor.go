@@ -222,12 +222,13 @@ func checkHarborBlobIsEncrypted(endpoint, bucket string, creds harborRobotCreds,
 		}}
 	}
 	key := harborBlobStorageKey(digest)
-	ak, sk := objEncAccessKey(), objEncSecretKey()
-	if ak == "" || sk == "" {
+	ak, sk, cerr := objEncBucketReadCreds()
+	if cerr != nil {
 		return []objEncryptionFinding{{
 			check:   "harbor-push",
-			problem: "pushed a blob through Harbor but cannot verify it: no object-storage credentials in the environment",
-			fix:     "set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY scoped to " + bucket,
+			problem: "pushed a blob through Harbor but cannot verify it: " + cerr.Error(),
+			fix: "the readback needs only HEAD on " + bucket + ", and NOT the SSE-C key. " +
+				"This is the same Secret the [object] check reads",
 		}}
 	}
 
@@ -265,6 +266,37 @@ func checkHarborBlobIsEncrypted(endpoint, bucket string, creds harborRobotCreds,
 			}}
 		}
 	}
+}
+
+// objEncBucketReadCreds returns the credential this gate reads objects back with.
+//
+// THE CLUSTER'S CREDENTIAL FIRST, ambient AWS_* only as a fallback — the opposite of
+// what this check did, and the ordering matters. In the assert-suite AWS_* is the
+// TERRAFORM STATE bucket's key, which has no access to the data buckets: reading it
+// here turned a working encryption path into
+//
+//	could not classify the pushed blob …: HTTP 403
+//
+// with a fix line advising the reader to check permissions on a bucket whose
+// permissions were fine. The [object] check already carries a comment explaining
+// precisely this trap ("a gate that reads whatever credentials happen to be in
+// scope is a gate that reports its own misconfiguration as a breach") and this
+// function is next to it in the same file — it simply was not applied here.
+//
+// The platform's own key is used rather than Harbor's because Harbor's registry
+// takes its S3 credentials from pod env, not from an AWS_*-shaped Secret anything
+// can read; the keys are account-scoped, so the consumer credential reaches both
+// buckets. Verified: a HEAD with it against the harbor bucket answers 400
+// (SSE-C required), not 403.
+func objEncBucketReadCreds() (string, string, error) {
+	if ak, sk, err := objEncConsumerCreds(lokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"); err == nil && ak != "" && sk != "" {
+		return ak, sk, nil
+	}
+	ak, sk := objEncAccessKey(), objEncSecretKey()
+	if ak == "" || sk == "" {
+		return "", "", fmt.Errorf("no object-storage credentials: %s is unreadable and AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are unset", lokiObjSecretRef)
+	}
+	return ak, sk, nil
 }
 
 // requestHarborToken performs the token-service exchange. It duplicates the
