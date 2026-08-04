@@ -126,9 +126,9 @@ func runDeliverDocs(dir, org, ref, root, templateRoot string) error {
 // written by the first `llz env add`) is absent from both and so is left alone,
 // rather than being repointed at a template URL that 404s.
 
-// scaffoldDir is where the template keeps the files it renders INTO an instance.
+// templateScaffoldSubdir is where the template keeps the files it renders INTO an instance.
 // A file is template-owned iff the template ships it at instance-template/<rel>.
-const scaffoldDir = "instance-template"
+const templateScaffoldSubdir = "instance-template"
 
 // repointInstanceRootLinks rewrites, in every TEMPLATE-OWNED .md under root except
 // those under docsDir, the relative links that are dead in the instance but present
@@ -183,7 +183,7 @@ func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, err
 			return nil
 		}
 		if relPath, e := filepath.Rel(root, p); e != nil ||
-			!pathExists(filepath.Join(templateRoot, scaffoldDir, relPath)) {
+			!pathExists(filepath.Join(templateRoot, templateScaffoldSubdir, relPath)) {
 			return nil // not ours to rewrite
 		}
 		data, err := os.ReadFile(p)

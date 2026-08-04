@@ -310,10 +310,10 @@ func TestDeliverDocs_DocsDirRecognisedRegardlessOfSpelling(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Make it template-OWNED under docs/, so only the docs-skip can save it.
-			if err := os.MkdirAll(filepath.Join(tmpl, scaffoldDir, "docs"), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Join(tmpl, templateScaffoldSubdir, "docs"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(tmpl, scaffoldDir, "docs", "quickstart.md"), []byte("x"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(tmpl, templateScaffoldSubdir, "docs", "quickstart.md"), []byte("x"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.MkdirAll(filepath.Join(tmpl, "platform-apl"), 0o755); err != nil {
