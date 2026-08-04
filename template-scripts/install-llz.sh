@@ -105,8 +105,15 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$BINDIR"
 
+# gh's own failure here is just "release not found" — no tag, no repo, no hint —
+# and this is the line a mistyped or unpublished explicit tag lands on, so say
+# which release was looked for and where to see the real list.
 gh release download "$VER" --repo "$REPO" \
-  --pattern "$asset" --pattern SHA256SUMS --clobber --dir "$tmp"
+  --pattern "$asset" --pattern SHA256SUMS --clobber --dir "$tmp" || {
+  echo "install-llz: could not download $asset from $REPO at $VER." >&2
+  echo "install-llz: check the tag exists and has assets:  gh release list --repo $REPO" >&2
+  exit 1
+}
 
 # Verify the checksum (sha256sum on Linux, shasum on macOS).
 if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
@@ -145,9 +152,13 @@ echo "install-llz: enable shell completion with \`llz completion zsh\` (or \`bas
 # thrown away — reporting "(not runnable)" for a binary that answered correctly.
 # Measured with a stub printing 200k lines: empty before, right version after.
 # Swallowing the status here is safe because emptiness is the real signal.
+#
+# Only TWO binaries are ever probed: the one just installed (ours, checksum-
+# verified) and the one the shell resolves (which `llz` runs regardless of this
+# script). Every other copy is reported by path alone — see report_other.
 llz_version_of() {
-  v="$({ "$1" version </dev/null 2>/dev/null || true; } | head -1)"
-  [ -n "$v" ] || v="$({ "$1" --version </dev/null 2>/dev/null || true; } | head -1)"
+  v="$({ "$1" version </dev/null 2>/dev/null || true; } | head -n 1)"
+  [ -n "$v" ] || v="$({ "$1" --version </dev/null 2>/dev/null || true; } | head -n 1)"
   [ -n "$v" ] || v="(not runnable)"
   printf '%s' "$v"
 }
@@ -197,12 +208,20 @@ fi
 # them once with their versions instead of leaving them to be discovered by a
 # confusing failure months later. Off-PATH dirs are worth naming for the same
 # reason: they are exactly what a later PATH edit promotes to winner.
+#
+# These are listed by PATH ONLY — deliberately not executed. Probing a version
+# means running the file, and this loop reaches copies the user has not chosen to
+# run: an `llz` in a dir that is not even on PATH would otherwise sit dormant,
+# and executing it here is the installer's decision, not theirs. The path is the
+# actionable part ("this one may shadow you later"); anyone who wants the version
+# can run it themselves. The two binaries that ARE probed above are the two the
+# user is already committed to: ours, and whatever `llz` already resolves to.
 report_other() { # $1 = path, $2 = suffix note
   if [ "$others_header" = "0" ]; then
-    echo "install-llz: other llz copies on this machine (not in use right now):" >&2
+    echo "install-llz: other llz copies on this machine (not run, not in use right now):" >&2
     others_header=1
   fi
-  echo "install-llz:    $1  [$(llz_version_of "$1")]$2" >&2
+  echo "install-llz:    $1$2" >&2
 }
 others_header=0
 while IFS= read -r p; do
