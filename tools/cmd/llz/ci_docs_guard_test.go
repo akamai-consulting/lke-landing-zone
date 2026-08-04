@@ -622,3 +622,74 @@ func TestInvocationTokens(t *testing.T) {
 		})
 	}
 }
+
+// instance-template/ Markdown renders to the instance ROOT, so its links must be
+// judged as they will appear there. An earlier cut SKIPPED that whole tree on the
+// grounds that the links "resolve in a rendered instance" — nothing judged them in
+// a rendered instance either, so the one tree the guard ignored is precisely where
+// links shipped dead to adopters.
+func TestCheckDocLinks_InstanceTemplateIsJudgedAsRendered(t *testing.T) {
+	root := t.TempDir()
+	// Repo layout: docs/ at the root (copied into the instance at render),
+	// plus the scaffold subtree.
+	writeMD(t, root, "docs/quickstart.md", "# qs")
+	writeMD(t, root, "instance-template/kubernetes-custom/README.md", "# custom")
+
+	for _, tc := range []struct{ name, rel, body, wantHit string }{
+		{
+			// docs/ lives at the repo ROOT, not under instance-template/ — the
+			// link is correct and must not be reported.
+			name: "a link into docs/ resolves against the repo root",
+			rel:  "instance-template/AGENTS.md",
+			body: "see [qs](docs/quickstart.md)\n",
+		},
+		{
+			// A sibling scaffold file renders alongside, so it satisfies the link.
+			name: "a link to a template-owned sibling resolves",
+			rel:  "instance-template/README.md",
+			body: "see [custom](kubernetes-custom/README.md)\n",
+		},
+		{
+			name:    "a link to nothing is reported",
+			rel:     "instance-template/AGENTS.md",
+			body:    "see [gone](docs/nope.md)\n",
+			wantHit: "does not exist",
+		},
+		{
+			// The false negative that let `../../platform-apl/` pass: the probe
+			// walked OUT of the repo and coincidentally landed on a real dir.
+			name:    "a link climbing above the instance root is reported",
+			rel:     "instance-template/apl-values/README.md",
+			body:    "see [shared](../../platform-apl/)\n",
+			wantHit: "climbs above the instance root",
+		},
+		{
+			// deliver-docs writes docs/README.md at render time, so its absence
+			// here is by construction, not breakage.
+			name: "a render-time artifact is not a dead link",
+			rel:  "instance-template/README.md",
+			body: "see [docs](docs/README.md)\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeMD(t, root, tc.rel, tc.body)
+			docs, bad := loadDocs(root, []string{tc.rel})
+			if len(bad) != 0 {
+				t.Fatalf("fixture unreadable: %v", bad)
+			}
+			got := checkDocLinks(root, docs)
+			if tc.wantHit == "" {
+				if len(got) != 0 {
+					t.Fatalf("expected no findings, got %v", got)
+				}
+				return
+			}
+			if len(got) == 0 {
+				t.Fatalf("expected a finding containing %q, got none", tc.wantHit)
+			}
+			if !strings.Contains(got[0].Detail, tc.wantHit) {
+				t.Errorf("finding = %q, want it to contain %q", got[0].Detail, tc.wantHit)
+			}
+		})
+	}
+}

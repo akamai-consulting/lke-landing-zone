@@ -125,6 +125,21 @@ func ciDocsGuardCmd() *cobra.Command {
 // from 105 files to 101 while still reporting success. A deny-set fails in the
 // safe direction: an artifact tree nobody listed produces noisy findings, which
 // gets fixed. An over-broad skip produces silent under-coverage, which does not.
+// renderTimeArtifact names paths that exist in a RENDERED instance but not in the
+// template, because the render itself creates them. They are not dead links — the
+// guard simply cannot see them from here. Keep this list tiny and cite the creator,
+// so it stays a statement of fact rather than a place to bury real breakage.
+var renderTimeArtifact = map[string]bool{
+	// runDeliverDocs writes it (docsPointer) after pruning docs/ to the keep-set.
+	"docs/README.md": true,
+}
+
+// The scaffold subtree, whose Markdown renders to the instance ROOT.
+const (
+	scaffoldDirName = "instance-template"
+	scaffoldPrefix  = scaffoldDirName + "/"
+)
+
 var docsGuardSkipDir = map[string]bool{
 	".git":           true,
 	".terraform":     true, // provider/module cache: third-party READMEs
@@ -570,6 +585,26 @@ func checkDocLinks(root string, docs []docFile) []docFinding {
 	for _, d := range docs {
 		rel := d.rel
 		dir := filepath.Dir(rel)
+		// A file under instance-template/ RENDERS to the instance root, so its
+		// links must be judged as they will appear there — not skipped, which is
+		// what an earlier cut did on the grounds that they "resolve in a rendered
+		// instance". Nothing judged them in a rendered instance either, so the
+		// links that actually shipped dead to adopters (AGENTS.md ->
+		// docs/adopter-guide.md) were in the one tree the guard ignored.
+		//
+		// After render, `instance-template/X.md` is `X.md` and a target resolves
+		// against that. It is satisfied by EITHER the repo root (docs/ lives there
+		// and is copied in at render) or instance-template/ (template-owned files
+		// that render alongside).
+		instRel := strings.TrimPrefix(filepath.ToSlash(rel), scaffoldPrefix)
+		rendered := rel != instRel
+		linkDir := dir
+		if rendered {
+			linkDir = filepath.Dir(instRel)
+			if linkDir == "." {
+				linkDir = ""
+			}
+		}
 		for i, line := range strings.Split(d.body, "\n") {
 			for _, m := range docsGuardLinkRe.FindAllStringSubmatch(line, -1) {
 				target := m[1]
@@ -581,14 +616,26 @@ func checkDocLinks(root string, docs []docFile) []docFinding {
 				if path == "" {
 					continue
 				}
-				resolved := filepath.Clean(filepath.Join(dir, path))
+				resolved := filepath.Clean(filepath.Join(linkDir, path))
+				// A rendered instance has NOTHING above its root, so a link that
+				// climbs past it is dead there however it resolves here. Catch it
+				// before the existence probes: filepath.Join(root, "../x") walks
+				// out of the repo and can land on a same-named directory by pure
+				// coincidence — which is how `../../platform-apl/` from
+				// apl-values/README.md passed while being dead in every instance.
+				if rendered && strings.HasPrefix(resolved, "..") {
+					out = append(out, docFinding{File: rel, Line: i + 1, Kind: "link",
+						Detail: fmt.Sprintf("%s climbs above the instance root — dead in a rendered instance; use an absolute template URL", target)})
+					continue
+				}
 				if pathExists(filepath.Join(root, resolved)) {
 					continue
 				}
-				// instance-template/ links resolve against a RENDERED instance,
-				// where docs/ has been delivered — judge them there instead.
-				if strings.HasPrefix(rel, "instance-template"+string(filepath.Separator)) {
-					continue
+				if rendered && pathExists(filepath.Join(root, scaffoldDirName, resolved)) {
+					continue // template-owned; renders into the instance beside this file
+				}
+				if rendered && renderTimeArtifact[filepath.ToSlash(resolved)] {
+					continue // written during render, so absent here by construction
 				}
 				out = append(out, docFinding{File: rel, Line: i + 1, Kind: "link",
 					Detail: fmt.Sprintf("%s does not exist", target)})
