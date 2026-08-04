@@ -124,9 +124,9 @@ the LandingZone spec and `llz render`s a thin overlay over the shared apl-values
 base (`platform-apl/manifest` + `components/`) rather than cloning or hand-copying per-env files.
 
 - **Drives it:** `llz env add <env>` (with `--dry-run` to preview), the values
-  contract in [adopter §3](adopter-guide.md), `llz validate --env <env>` to flag
+  contract in [adopter §3](adopter-guide.md), `llz doctor --env <env>` to flag
   unfilled placeholders before any build.
-- **Done is checkable:** `llz validate --env <env>` passes;
+- **Done is checkable:** `llz doctor --env <env>` passes;
   `kubectl kustomize apl-values/<env>/manifest` succeeds.
 - **Tenet:** *reviewable git fact* — tfvars is the single source of truth; identity
   is a diff, secrets are environment-injected.
@@ -249,7 +249,7 @@ operator exactly what their workstation is missing.
 |---|---|---|---|
 | 0 · Entitle | prerequisites satisfied | `llz doctor` | [adopter §1](adopter-guide.md) · [InfoSec checklist](infosec/linode-account-request-checklist.md) |
 | 1 · Scaffold | instance pinned; hook armed; tokens seeded | `llz new`, `llz tokens` | [adopter §2,§4](adopter-guide.md) |
-| 2 · Configure | `llz validate --env` passes; overlay renders | `llz env add`, `llz validate` | [adopter §3](adopter-guide.md) |
+| 2 · Configure | `llz doctor --env` passes; overlay renders | `llz env add`, `llz doctor` | [adopter §3](adopter-guide.md) |
 | 3 · Bootstrap | convergence gate exit 0 | TF workflow + `llz ci converge` | [overview low-level](architecture/overview.md) · [convergence contract](architecture/convergence-contract.md) |
 | 4 · Operate | scheduled gates stay green | `llz status/health/drift` + day-2 workflows | [playbooks](playbooks/operator-onboarding.md) |
 | 5 · Promote | change walked `dev→staging→prod` on green | `promotion_rank`, `llz env pipeline/next` | [environments-and-promotion](environments-and-promotion.md) |
