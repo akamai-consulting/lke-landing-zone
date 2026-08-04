@@ -81,6 +81,8 @@ without `TF_ENCRYPTION` fails with OpenTofu's own unhelpful message (*"Invalid
 expression … A single static variable reference is required"*). Two supported ways:
 
 ```bash
+export LINODE_API_TOKEN=…        # both paths need it; A also needs the TF state creds
+
 # A. From Terraform state — what CI uses. Run from the cluster root; the command
 #    handles init, the encryption env, and the empty-output diagnostics.
 cd terraform-iac-bootstrap/cluster
@@ -90,6 +92,19 @@ llz ci fetch-kubeconfig-state --region <env> --output ~/.kube/<instance>-<env>.c
 #    Prefer this when you are locked out and unsure what still works.
 llz ci fetch-kubeconfig --region <env> --output ~/.kube/<instance>-<env>.config
 ```
+
+> **In a fresh clone, give B the cluster explicitly.** `--region` resolves the
+> cluster by reading `cluster_label`/`region` out of
+> `terraform-iac-bootstrap/cluster/<env>.tfvars` — and those tfvars are
+> **gitignored build artifacts**, so a clone that has not run `llz render <env>`
+> does not have them. Either render first, or name the cluster yourself, which
+> needs nothing from the repo at all:
+>
+> ```bash
+> llz ci fetch-kubeconfig --cluster-label <label> --linode-region <us-ord> \
+>   --output ~/.kube/<instance>-<env>.config
+> # or, if you have the numeric id:  --cluster-id 638034
+> ```
 
 Both write mode `0600`. Then:
 

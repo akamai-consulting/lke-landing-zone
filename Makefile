@@ -637,6 +637,11 @@ version-pins-check: export LLZ_FORCE_SOURCE := 1
 version-pins-check:
 	$(call LLZ_CI,version-pins --root .,--root ..)
 
+# docs-guard runs on a DOC change, yes — but also on a CLI or workflow-input
+# change, which is what actually causes doc rot. A renamed flag makes a doc wrong
+# without touching the doc, so scoping this to *.md would miss precisely the drift
+# it exists to catch.
+#
 # docs-guard: validate every Markdown file against the repo it documents —
 # `llz` commands + flags against the live cobra tree, `gh workflow run` inputs
 # against the workflows' declared inputs, and relative links resolved BOTH in
@@ -696,6 +701,9 @@ lint:
 	fi; \
 	if echo "$$CHANGED" | grep -qE '\.github/workflows/.*\.yml$$|\.sh$$|instance-template/\.github/|^\.untestable-budget\.yaml$$'; then \
 		$(MAKE) --no-print-directory untestable-loc-check; \
+	fi; \
+	if echo "$$CHANGED" | grep -qE '\.md$$|^tools/cmd/llz/.*\.go$$|\.github/workflows/.*\.yml$$|instance-template/\.github/workflows/'; then \
+		$(MAKE) --no-print-directory docs-guard; \
 	fi
 
 # ── Audit ─────────────────────────────────────────────────────────────────────

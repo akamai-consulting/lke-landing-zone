@@ -126,9 +126,22 @@ func runDeliverDocs(dir, org, ref, root, templateRoot string) error {
 // written by the first `llz env add`) is absent from both and so is left alone,
 // rather than being repointed at a template URL that 404s.
 
-// repointInstanceRootLinks rewrites, in every .md under root EXCEPT those under
-// docsDir, the relative links that are dead in the instance but present in the
-// template checkout. Returns how many links it rewrote.
+// scaffoldDir is where the template keeps the files it renders INTO an instance.
+// A file is template-owned iff the template ships it at instance-template/<rel>.
+const scaffoldDir = "instance-template"
+
+// repointInstanceRootLinks rewrites, in every TEMPLATE-OWNED .md under root except
+// those under docsDir, the relative links that are dead in the instance but present
+// in the template checkout. Returns how many links it rewrote.
+//
+// ONLY TEMPLATE-OWNED FILES ARE TOUCHED, and that is a correctness rule, not an
+// optimisation. This runs on `copier update` against a LIVE instance, which holds
+// plenty of Markdown that is none of our business: a `vendor/`ed chart, a
+// `.terraform/` module cache, an adopter's own notes. An early cut of this walked
+// all of them and rewrote a link inside `vendor/` — mutating a file the template
+// does not own is exactly what .template-manifest exists to prevent. Gating on
+// "the template ships this path under instance-template/" bounds the blast radius
+// to the files copier itself rendered, with no denylist to keep current.
 func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, error) {
 	if org == "" {
 		org = "akamai-consulting"
@@ -143,17 +156,30 @@ func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, err
 			return nil
 		}
 		if d.IsDir() {
-			// docs/ is handled by repointReferencedLinks; .git holds no docs.
+			// docs/ is handled by repointReferencedLinks.
 			if abs, e := filepath.Abs(p); e == nil && abs == absDocs {
 				return filepath.SkipDir
 			}
-			if d.Name() == ".git" {
-				return filepath.SkipDir
+			// Dot-directories (.git, .terraform, .instance-test) and vendored
+			// trees hold no template-owned file, so skipping them is pure
+			// walk cost avoided — the ownership check below is what makes it safe.
+			if p != root {
+				if strings.HasPrefix(d.Name(), ".") {
+					return filepath.SkipDir
+				}
+				switch d.Name() {
+				case "node_modules", "vendor":
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}
 		if !strings.HasSuffix(p, ".md") {
 			return nil
+		}
+		if relPath, e := filepath.Rel(root, p); e != nil ||
+			!pathExists(filepath.Join(templateRoot, scaffoldDir, relPath)) {
+			return nil // not ours to rewrite
 		}
 		data, err := os.ReadFile(p)
 		if err != nil {

@@ -5,6 +5,7 @@ package main
 // every rendered instance.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,10 +141,14 @@ func TestDeliverDocs_RepointsInstanceRoot(t *testing.T) {
 		}
 	}
 
-	// The template has the full docs set plus a template-only tree.
+	// The template has the full docs set plus a template-only tree...
 	write(filepath.Join(tmpl, "docs", "adopter-guide.md"), "# guide")
 	write(filepath.Join(tmpl, "docs", "quickstart.md"), "# qs")
 	mkdir(tmpl, "platform-apl")
+	// ...and, under instance-template/, the scaffold files it renders into an
+	// instance. Only these are template-OWNED, so only these may be rewritten.
+	write(filepath.Join(tmpl, "instance-template", "AGENTS.md"), "scaffold source")
+	write(filepath.Join(tmpl, "instance-template", "apl-values", "README.md"), "scaffold source")
 
 	// The instance: docs/ already copied in, plus root-level Markdown.
 	write(filepath.Join(root, "docs", "adopter-guide.md"), "# guide")
@@ -205,5 +210,61 @@ func TestDeliverDocs_RootPassIsOptIn(t *testing.T) {
 	}
 	if string(after) != before {
 		t.Errorf("root Markdown was rewritten without --template-root:\n got %q\nwant %q", after, before)
+	}
+}
+
+// deliver-docs runs on `copier update` against a LIVE instance, which holds
+// Markdown that is none of our business — a vendored chart, a .terraform module
+// cache, an adopter's own notes. An early cut of the root pass walked all of it
+// and rewrote a link inside vendor/, mutating a file the template does not own.
+func TestDeliverDocs_LeavesNonTemplateFilesAlone(t *testing.T) {
+	root, tmpl := t.TempDir(), t.TempDir()
+	write := func(base string, parts ...string) func(string) {
+		return func(body string) {
+			p := filepath.Join(append([]string{base}, parts...)...)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// Template: the referenced doc, plus the ONE scaffold file it owns.
+	write(tmpl, "docs", "adopter-guide.md")("# guide")
+	write(tmpl, "instance-template", "AGENTS.md")("scaffold source")
+
+	// Instance: a delivered docs/, the owned AGENTS.md, and three files that are
+	// NOT ours — each linking the same pruned doc, so only ownership separates them.
+	write(root, "docs", "quickstart.md")("# qs")
+	link := "see [g](%s)\n"
+	write(root, "AGENTS.md")(fmt.Sprintf(link, "docs/adopter-guide.md"))
+	write(root, "vendor", "chart", "README.md")(fmt.Sprintf(link, "../../docs/adopter-guide.md"))
+	write(root, ".terraform", "modules", "m", "README.md")(fmt.Sprintf(link, "../../../docs/adopter-guide.md"))
+	write(root, "my-team-notes", "onboarding.md")(fmt.Sprintf(link, "../docs/adopter-guide.md"))
+
+	if err := runDeliverDocs(filepath.Join(root, "docs"), "acme", "v1", root, tmpl); err != nil {
+		t.Fatalf("runDeliverDocs: %v", err)
+	}
+
+	owned, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(owned), "https://github.com/acme/") {
+		t.Errorf("the template-owned AGENTS.md should have been repointed:\n%s", owned)
+	}
+	for _, rel := range []string{
+		filepath.Join("vendor", "chart", "README.md"),
+		filepath.Join(".terraform", "modules", "m", "README.md"),
+		filepath.Join("my-team-notes", "onboarding.md"),
+	} {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "https://github.com/") {
+			t.Errorf("%s is NOT template-owned and must not be rewritten:\n%s", rel, b)
+		}
 	}
 }
