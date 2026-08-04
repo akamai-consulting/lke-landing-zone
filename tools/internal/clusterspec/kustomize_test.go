@@ -429,3 +429,16 @@ func TestObjProxyDNSPatchLeavesNoPlaceholder(t *testing.T) {
 		t.Errorf("rendered CoreDNS patch is not a rewrite to the proxy Service:\n%s", got)
 	}
 }
+
+// An empty cluster id must never produce `rewrite name  <target>`: that is not a
+// valid CoreDNS directive, CoreDNS refuses to load a Corefile it cannot parse, and
+// the blast radius is cluster DNS for every workload — not just this component.
+func TestObjProxyDNSPatchNeverEmitsAMalformedRewrite(t *testing.T) {
+	got := RenderObjProxyDNSPatch("")
+	if strings.Contains(got, "rewrite name  ") || strings.Contains(got, "rewrite name \n") {
+		t.Errorf("empty cluster id produced a malformed rewrite, which breaks cluster DNS:\n%s", got)
+	}
+	if strings.Contains(got, "objproxy.include") {
+		t.Errorf("an env with no object storage must emit no rewrite key at all:\n%s", got)
+	}
+}

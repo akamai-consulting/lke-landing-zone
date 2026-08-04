@@ -12,6 +12,9 @@ resources:
   # here, not in tools/cmd/llz/manifests/, because nothing applies that directory.
   - kyverno-harbor-ca.yaml
   - externalsecret.yaml
+  # The obj key the proxy re-signs with (#397). Listed with the other secrets, ahead
+  # of the DaemonSet that mounts it.
+  - creds-externalsecret.yaml
   - service.yaml
   - network-policy.yaml
   - daemonset.yaml

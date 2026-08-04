@@ -469,3 +469,57 @@ func TestObjProxyMarksOutboundRequests(t *testing.T) {
 		t.Errorf("outbound request carried %q, want the loop marker — without it the guard is inert", got)
 	}
 }
+
+// A virtual-host-style request (bucket.<endpoint>/<key>) puts the object key
+// somewhere injectSSEC does not look: a single-segment key reads as a bucket-level
+// operation and gets NO SSE-C headers, so the object is written in PLAINTEXT while
+// every signal stays green. Nothing routes such requests here today — the CoreDNS
+// rewrite is an exact match — but broadening that rewrite is a natural-looking
+// change that would arm this silently. It must fail closed instead.
+func TestObjProxyRefusesVirtualHostStyleAddressing(t *testing.T) {
+	c := &objProxyCounters{}
+	rp, err := buildObjProxy(objProxyOpts{upstream: "us-ord-10.linodeobjects.com"}, testKey(t), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := objProxyHandlerForHost(rp, c, "us-ord-10.linodeobjects.com")
+
+	req := httptest.NewRequest(http.MethodPut, "https://ignored/chunk", strings.NewReader("x"))
+	req.Host = "platform-loki-chunks-e2e.us-ord-10.linodeobjects.com"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMisdirectedRequest {
+		t.Errorf("status = %d, want 421 — forwarding this writes an unencrypted object", w.Code)
+	}
+	if c.misdirected.Load() != 1 {
+		t.Errorf("misdirected counter = %d, want 1", c.misdirected.Load())
+	}
+}
+
+// The normal path-style request must be unaffected by that guard.
+func TestObjProxyAcceptsThePathStyleHostItFronts(t *testing.T) {
+	c := &objProxyCounters{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	host := strings.TrimPrefix(upstream.URL, "http://")
+
+	rp, err := buildObjProxy(objProxyOpts{upstream: host}, testKey(t), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp.Transport = upstream.Client().Transport
+	od := rp.Director
+	rp.Director = func(r *http.Request) { od(r); r.URL.Scheme = "http" }
+
+	req := httptest.NewRequest(http.MethodPut, "https://ignored/bucket/key", strings.NewReader("x"))
+	req.Host = host
+	w := httptest.NewRecorder()
+	objProxyHandlerForHost(rp, c, host).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("path-style request rejected with %d", w.Code)
+	}
+}

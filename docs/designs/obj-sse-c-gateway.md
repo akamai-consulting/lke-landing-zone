@@ -72,13 +72,30 @@ Loki / Harbor ──https──▶ obj-proxy ──https──▶ us-ord-N.linod
 
 Three measured facts make this small enough to trust on the write path:
 
-1. **SSE-C headers are honoured outside SigV4 `SignedHeaders`.** So the proxy does
-   **not re-sign** — it changes neither body, method, path nor Host, and the
-   client's signature stays valid. A re-signing proxy would have to terminate,
-   strip, re-sign and forward; this is blind header injection instead. It is also
-   why callers must reach the proxy at the **real endpoint hostname**: rewriting
-   Host would invalidate the signature we deliberately do not recompute.
+1. **SSE-C headers are honoured outside SigV4 `SignedHeaders`.** So on the normal
+   path the proxy does **not re-sign** — it changes neither body, method, path nor
+   Host, and the client's signature stays valid. This is blind header injection,
+   not termination. It is also why callers must reach the proxy at the **real
+   endpoint hostname**: rewriting Host would invalidate the signature we
+   deliberately do not recompute.
+
+   **One exception, added later: the #397 repair.** Linode's Ceph rejects the AWS
+   SDK's default `PutObject` framing (`content-encoding: aws-chunked` with an
+   `x-amz-trailer` CRC32), and Loki cannot be configured out of sending it. Those
+   requests — and only those — are de-chunked and re-signed, because the framing
+   headers are inside `SignedHeaders` and cannot be removed without it. The
+   property above still holds for every other request. See
+   `tools/cmd/llz/objproxy_resign.go`; the capability is off unless `--creds-file`
+   is given, applies only to that framing, and re-signs as the **same access key
+   the client used**, refusing any other. It is the one place the proxy holds a
+   credential, which is a real increase in what a compromised proxy could do and
+   the reason it is opt-in rather than always on.
 2. **Blanket injection survives multipart**, including `CompleteMultipartUpload`.
+   It assumes **path-style** addressing throughout: the object key is read out of
+   `/<bucket>/<key>`. Both writers use it (Loki pins `s3forcepathstyle: true`, and
+   Harbor's encrypted blob on the e2e cluster proves it resolves the plain endpoint
+   name). A virtual-host-style request is refused rather than forwarded — see
+   Failure modes.
 3. **Server-side COPY needs more.** Copying an encrypted source additionally
    requires the `x-amz-copy-source-server-side-encryption-customer-*` trio;
    destination headers alone fail `400 InvalidArgument`. Harbor reaches this path —
@@ -253,6 +270,18 @@ separate plaintext health port.
 | Rewrite never applied | Everything Healthy, everything plaintext. Only check 2 sees it |
 | Key lost | **Every object unrecoverable.** Linode keeps no copy |
 | DNS routes the endpoint back to the proxy | `508` per request, counted; fails closed, no silent plaintext |
+| Re-signing credential missing/unreadable | Proxy refuses to start. Loud, not a silent loss of the #397 repair |
+| Re-signing credential ROTATED | Re-read from the mounted Secret on mtime change — no restart needed. Reading it once would 403 every repaired write after `rotate-linode-creds` until each pod happened to restart |
+| Pre-existing `kube-system/coredns-custom` | Argo takes ownership and REPLACES it, losing other keys. Absent on apl-core, so no current cluster is affected; an adopter with one must fold their keys into the component file |
+| Virtual-host-style request (`bucket.<endpoint>/<key>`) | **Refused, 421.** The key is not in the path, so it cannot be encrypted correctly here. Nothing routes this way today — the rewrite is exact-match — but broadening that rewrite would otherwise arm a silent-plaintext path |
+| A repair fails mid-request | Original forwarded untouched; upstream's own answer stands. Body is buffered first precisely so this cannot truncate a write |
+| Payload over the 32MiB repair cap | Forwarded unrepaired — fails upstream as it does today. Bounded on purpose: the proxy is a DaemonSet and an unbounded buffer would take object storage down for the whole node |
+
+The proxy also holds an object-storage **key** now, for the #397 repair
+(`--creds-file`). It is the same key the clients behind it already use, so it grants
+no new reach over object storage — but a compromised proxy could *mint* requests
+rather than only relay signed ones, which is why the capability is opt-in and
+refuses to re-sign under any access key but the caller's own.
 
 Key loss is the sharpest. It joins `OPENBAO_SEAL_KEY` and
 `TF_STATE_ENCRYPTION_PASSPHRASE` in the "lose it and the data is gone" class, and

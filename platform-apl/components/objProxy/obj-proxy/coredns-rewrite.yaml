@@ -24,8 +24,17 @@
 # and mounts an OPTIONAL ConfigMap `kube-system/coredns-custom` at
 # /etc/coredns/custom. So this is a supported extension, not a patch, and Flux has
 # no opinion about it. A `rewrite` is a directive, so it belongs in an `.include`.
-# The ConfigMap did not exist on the e2e cluster, so this creates it; if an instance
-# already has one, MERGE this key rather than replacing the object.
+# THIS OBJECT IS NOW ARGO-OWNED, which changes the advice that used to be here.
+# While it was applied by hand the instruction was "merge this key rather than
+# replacing the object"; a human could do that, and Argo cannot. It applies the whole
+# ConfigMap, so on a cluster that ALREADY has a kube-system/coredns-custom — a
+# supported CoreDNS extension point, and someone's other DNS customisation — Argo
+# takes ownership and the other keys are lost.
+#
+# Verified absent on apl-core (it did not exist on the e2e cluster before this
+# component created it), so no LLZ-managed cluster has one today. An adopter who does
+# must fold their keys into this file rather than expecting a merge, because there is
+# nothing left in the pipeline that would perform one.
 #
 # ORDER OF OPERATIONS — getting this wrong is a cluster-wide object-storage outage,
 # not a degradation. It is now enforced rather than documented:

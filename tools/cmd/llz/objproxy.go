@@ -75,6 +75,11 @@ type objProxyOpts struct {
 	tlsKey      string
 	healthAddr  string
 	upstreamCAs string
+	credsFile   string
+	creds       objProxyCreds
+	// credsFn, when set, is consulted per request so a rotated credential is picked
+	// up without a restart. Tests set creds directly instead.
+	credsFn func() objProxyCreds
 }
 
 // objProxyCounters are the numbers an operator needs to answer "is it actually
@@ -86,6 +91,12 @@ type objProxyCounters struct {
 	copySrc   atomic.Uint64
 	upstreamE atomic.Uint64
 	loops     atomic.Uint64
+	resigned  atomic.Uint64
+	resignErr atomic.Uint64
+	// misdirected counts virtual-host-style requests refused rather than written
+	// unencrypted. Non-zero means something is addressing object storage in a form
+	// this gateway cannot protect.
+	misdirected atomic.Uint64
 }
 
 func objProxyCmd() *cobra.Command {
@@ -111,6 +122,11 @@ func objProxyCmd() *cobra.Command {
 	f := c.Flags()
 	f.StringVar(&o.listen, "listen", ":8443", "HTTPS listen address for S3 clients")
 	f.StringVar(&o.upstream, "upstream", "", "real Object Storage endpoint host, e.g. us-ord-10.linodeobjects.com (required)")
+	f.StringVar(&o.credsFile, "creds-file", "",
+		"optional file holding the object-storage AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY this proxy may "+
+			"re-sign with. Enables the #397 repair: requests sent in the aws-chunked trailer-checksum framing "+
+			"Linode rejects are de-chunked and re-signed AS THE SAME ACCESS KEY. Without it the proxy never "+
+			"re-signs and such requests fail upstream exactly as they do today")
 	f.StringVar(&o.keyFile, "key-file", "", "file holding the 32-byte raw SSE-C key (required)")
 	f.StringVar(&o.tlsCert, "tls-cert", "", "serving certificate for the endpoint hostname (required)")
 	f.StringVar(&o.tlsKey, "tls-key", "", "serving private key (required)")
@@ -144,7 +160,27 @@ func runObjProxy(ctx context.Context, o objProxyOpts) error {
 		return err
 	}
 
-	if err := assertNotSelf(o.upstream, o.listen); err != nil {
+	// Optional, and its absence is a normal configuration rather than a fault: with
+	// no credentials the proxy never re-signs and behaves exactly as it did before
+	// #397. An UNREADABLE file is a fault, though — it means someone intended the
+	// repair and it silently would not happen.
+	if o.credsFile != "" {
+		rawCreds, err := os.ReadFile(o.credsFile)
+		if err != nil {
+			return fmt.Errorf("read object-storage credentials: %w", err)
+		}
+		o.creds = parseObjProxyCreds(rawCreds)
+		loader := &credsLoader{path: o.credsFile}
+		o.credsFn = loader.get
+		if !o.creds.usable() {
+			return fmt.Errorf("%s holds no usable AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY pair — "+
+				"the #397 re-signing repair would be silently off", o.credsFile)
+		}
+		fmt.Printf("obj-proxy: re-signing enabled for access key %s (repairs the aws-chunked trailer framing Linode rejects)\n",
+			o.creds.AccessKeyID)
+	}
+
+	if err := assertNotSelf(o.upstream); err != nil {
 		return err
 	}
 
@@ -156,7 +192,7 @@ func runObjProxy(ctx context.Context, o objProxyOpts) error {
 
 	srv := &http.Server{
 		Addr:              o.listen,
-		Handler:           objProxyHandlerFor(proxy, counters),
+		Handler:           objProxyHandlerForHost(proxy, counters, o.upstream),
 		ReadHeaderTimeout: 15 * time.Second,
 		TLSConfig:         objProxyServingTLS(o.tlsCert, o.tlsKey),
 	}
@@ -238,6 +274,15 @@ func parseSSECKeyFile(raw []byte) ([]byte, error) {
 
 // buildObjProxy assembles the reverse proxy. Split out so tests drive the whole
 // handler against an httptest upstream instead of only the injection function.
+// resolveCreds prefers the live loader (so a rotation is seen without a restart)
+// and falls back to the static value tests supply.
+func resolveCreds(o objProxyOpts) objProxyCreds {
+	if o.credsFn != nil {
+		return o.credsFn()
+	}
+	return o.creds
+}
+
 func buildObjProxy(o objProxyOpts, key ssecKey, c *objProxyCounters) (*httputil.ReverseProxy, error) {
 	target, err := url.Parse("https://" + o.upstream)
 	if err != nil {
@@ -264,6 +309,19 @@ func buildObjProxy(o objProxyOpts, key ssecKey, c *objProxyCounters) (*httputil.
 			// like the SSE-C headers, which is measured-safe: the upstream honours
 			// headers outside SignedHeaders and ignores ones it does not know.
 			r.Header.Set(objProxyLoopHeader, "1")
+			// #397: repair the framing Linode rejects, BEFORE the SSE-C headers go on.
+			// Order matters — re-signing rewrites Authorization over a minimal signed
+			// set, and the SSE-C headers must stay outside it exactly as they do on a
+			// pass-through request, so that the two paths differ in as little as
+			// possible. Failure here is non-fatal: the original request is forwarded
+			// untouched and the upstream's own 403 is a truer verdict than a rewrite
+			// we could not complete.
+			if ok, err := resignForUpstream(r, resolveCreds(o), o.upstream); err != nil {
+				c.resignErr.Add(1)
+				fmt.Fprintf(os.Stderr, "obj-proxy: could not re-sign %s %s (%v) — forwarding as-is\n", r.Method, r.URL.Path, err)
+			} else if ok {
+				c.resigned.Add(1)
+			}
 			if injectSSEC(r.Header, r.Method, r.URL.Path, key) {
 				c.injected.Add(1)
 			} else {
@@ -288,10 +346,19 @@ func objProxyHandlerFor(rp *httputil.ReverseProxy, c *objProxyCounters) http.Han
 	return &objProxyHandler{rp: rp, c: c}
 }
 
-// objProxyHandler refuses a request that has already been through this proxy.
+// objProxyHandlerForHost is objProxyHandlerFor with the VIRTUAL-HOST guard armed.
+// Separate constructor so existing callers/tests keep the old behaviour explicitly
+// rather than acquiring a new rejection by accident.
+func objProxyHandlerForHost(rp *httputil.ReverseProxy, c *objProxyCounters, upstream string) http.Handler {
+	return &objProxyHandler{rp: rp, c: c, upstream: upstream}
+}
+
+// objProxyHandler refuses a request that has already been through this proxy, or
+// that is addressed in a form this proxy cannot encrypt correctly.
 type objProxyHandler struct {
-	rp *httputil.ReverseProxy
-	c  *objProxyCounters
+	rp       *httputil.ReverseProxy
+	c        *objProxyCounters
+	upstream string
 }
 
 func (h *objProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -303,6 +370,31 @@ func (h *objProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"upstream endpoint back to the obj-proxy Service instead of to Linode. Check the DaemonSet "+
 			"still sets dnsPolicy: Default so the pod resolves via the node's resolver.",
 			http.StatusLoopDetected)
+		return
+	}
+	// VIRTUAL-HOST-STYLE ADDRESSING IS REFUSED, not silently forwarded.
+	//
+	// This proxy assumes path-style (`/<bucket>/<key>`): injectSSEC reads the object
+	// key out of the PATH, and a bucket-style request (`bucket.<endpoint>/<key>`)
+	// puts the key somewhere else entirely — a single-segment key then looks like a
+	// bucket-level operation and gets NO SSE-C headers at all, which writes the
+	// object in PLAINTEXT while everything reports healthy.
+	//
+	// Today nothing reaches here that way: the CoreDNS rewrite is an exact-match on
+	// the endpoint name, so `bucket.<endpoint>` is never routed to us. That is
+	// exactly why this guard is worth having — broadening that rewrite to a suffix
+	// or regex is a natural-looking improvement, and it would arm the silent-
+	// plaintext path above. This makes that attempt fail loudly on the first request
+	// instead.
+	//
+	// 421 Misdirected Request is the honest code: the request reached a server that
+	// cannot serve it correctly.
+	if h.upstream != "" && r.Host != "" && !strings.EqualFold(r.Host, h.upstream) {
+		h.c.misdirected.Add(1)
+		http.Error(w, "obj-proxy: request addressed to "+r.Host+" but this proxy fronts "+h.upstream+
+			" and handles PATH-STYLE requests only. A virtual-host-style request (bucket.<endpoint>) cannot "+
+			"be encrypted correctly here — its object key is not in the path — so it is refused rather than "+
+			"forwarded unencrypted.", http.StatusMisdirectedRequest)
 		return
 	}
 	h.rp.ServeHTTP(w, r)
@@ -377,7 +469,7 @@ func objProxyTransport(caFile string) (*http.Transport, error) {
 // warning rather than a hard stop: DNS can be briefly unavailable at boot, and
 // refusing to start then would turn a transient resolver blip into an outage of
 // every image pull.
-func assertNotSelf(upstream, listen string) error {
+func assertNotSelf(upstream string) error {
 	ips, err := net.LookupHost(upstream)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "obj-proxy: WARNING: could not resolve upstream %q to check for a proxy loop: %v\n", upstream, err)
@@ -398,7 +490,6 @@ func assertNotSelf(upstream, listen string) error {
 				upstream, ip)
 		}
 	}
-	_ = listen
 	return nil
 }
 
@@ -436,6 +527,12 @@ func objProxyHealth(c *objProxyCounters) http.Handler {
 		// it: the requests fail closed, but every one of them is a write that did not
 		// happen.
 		fmt.Fprintf(w, "llz_objproxy_loops_detected_total %d\n", c.loops.Load())
+		// #397: how many requests arrived in the framing Linode rejects and were
+		// repaired, and how many could not be. A climbing resign_failed_total means
+		// writes are reaching the upstream in a form it will refuse.
+		fmt.Fprintf(w, "llz_objproxy_resigned_total %d\n", c.resigned.Load())
+		fmt.Fprintf(w, "llz_objproxy_resign_failed_total %d\n", c.resignErr.Load())
+		fmt.Fprintf(w, "llz_objproxy_misdirected_total %d\n", c.misdirected.Load())
 	})
 	return mux
 }

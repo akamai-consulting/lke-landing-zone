@@ -85,6 +85,11 @@ spec:
             # not exist and every request 404s NoSuchBucket.
             - --upstream=$(OBJ_ENDPOINT_HOST)
             - --key-file=/etc/llz/ssec/key
+            # #397: lets the proxy de-chunk and re-sign the aws-chunked trailer
+            # framing Linode's Ceph rejects, as the SAME access key the client used.
+            # Without this flag the proxy never re-signs and those writes fail
+            # upstream exactly as they do today — see creds-externalsecret.yaml.
+            - --creds-file=/etc/llz/obj-creds/credentials
             - --tls-cert=/etc/llz/tls/tls.crt
             - --tls-key=/etc/llz/tls/tls.key
             - --health-addr=:8080
@@ -108,6 +113,7 @@ spec:
             - { name: health, containerPort: 8080, protocol: TCP }
           volumeMounts:
             - { name: ssec-key, mountPath: /etc/llz/ssec, readOnly: true }
+            - { name: obj-creds, mountPath: /etc/llz/obj-creds, readOnly: true }
             - { name: tls, mountPath: /etc/llz/tls, readOnly: true }
           livenessProbe:
             httpGet: { path: /healthz, port: health }
@@ -143,6 +149,13 @@ spec:
         - name: ssec-key
           secret:
             secretName: obj-proxy-ssec-key
+            defaultMode: 0440
+        - name: obj-creds
+          secret:
+            secretName: obj-proxy-creds
+            # 0440 for the same reason as the SSE-C key beside it: root owns the
+            # projection, the process is 65532, and the group bit paired with fsGroup
+            # is what makes it readable at all.
             defaultMode: 0440
         - name: tls
           secret:
