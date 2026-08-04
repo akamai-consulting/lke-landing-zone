@@ -857,3 +857,175 @@ func TestCheckSelfRepoLinks(t *testing.T) {
 		})
 	}
 }
+
+// ── preemptive property tests ────────────────────────────────────────────────
+//
+// Three separate review rounds found the same defect in different clothes: the
+// scan stopped early on a token shape nobody had considered — a leading `--yes`,
+// a value like `v1.33.6+lke7`, then `<env>`. Each was fixed with a case pinning
+// that shape, which is how you keep discovering the fourth one in review.
+//
+// The invariant underneath all three: A FLAG AT THE END OF AN INVOCATION MUST
+// SURVIVE, whatever appears before it. Asserting that across a cross-product of
+// realistic value shapes tests the CLASS instead of the instances, and would have
+// caught all three before review.
+
+// docValueShapes are the token shapes real docs put in front of a flag. Add to
+// this list rather than writing another single-case test.
+var docValueShapes = []struct{ name, tok string }{
+	{"placeholder", "<env>"},
+	{"placeholder with slash", "<secret/path>"},
+	{"placeholder with pipe", "<active|standby>"},
+	{"two placeholders", "<owner>/<name>"},
+	{"dotted plus version", "v1.33.6+lke7"},
+	{"cidr", "203.0.113.0/24"},
+	{"ipv6 cidr", "::/0"},
+	{"node type", "g8-dedicated-8-4"},
+	{"path", "~/.kube/lab.config"},
+	{"obj cluster", "us-ord-10"},
+	{"secret path", "secret/harbor/robot"},
+	{"quoted with space", `"a b"`},
+	{"equals form", "key=value"},
+	{"duration", "30d"},
+	{"url", "https://github.com/o/r.git"},
+	{"branch ref", "apl-lab"},
+	{"digits", "8"},
+	{"dotted spec path", "cluster.nodePool.count=8"},
+}
+
+func TestInvocationTokens_TrailingFlagSurvivesEveryValueShape(t *testing.T) {
+	for _, v := range docValueShapes {
+		t.Run(v.name, func(t *testing.T) {
+			// A value in the middle, and a flag after it that must be seen.
+			rest := " env add lab --some-value " + v.tok + " --trailing-flag"
+			got := invocationTokens(rest)
+			var found bool
+			for _, tok := range got {
+				if tok == "--trailing-flag" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("a flag after %s (%q) was LOST — the scan stopped early.\n  tokens: %q\n  this is the class that shipped three times; add the shape to docValueShapes and fix the tokeniser, do not special-case it here",
+					v.name, v.tok, got)
+			}
+		})
+	}
+}
+
+// The same invariant one level up: the guard must actually REPORT a bad flag that
+// sits behind each shape. Tokenising correctly is necessary but not sufficient —
+// the leading-flag defect tokenised fine and still resolved to no command.
+func TestCheckDocCommands_ReportsBadFlagBehindEveryValueShape(t *testing.T) {
+	root := t.TempDir()
+	for _, v := range docValueShapes {
+		t.Run(v.name, func(t *testing.T) {
+			writeMD(t, root, "docs/p.md",
+				"`llz env add lab --k8s-version "+v.tok+" --definitely-not-a-flag`\n")
+			docs, bad := loadDocs(root, []string{"docs/p.md"})
+			if len(bad) != 0 {
+				t.Fatalf("fixture unreadable: %v", bad)
+			}
+			got := checkDocCommands(docs, newRootCmd(), &docsScanned{})
+			if len(got) != 1 || !strings.Contains(got[0].Detail, "--definitely-not-a-flag") {
+				t.Errorf("a bad flag behind %s (%q) was not reported — got %v", v.name, v.tok, got)
+			}
+		})
+	}
+}
+
+// And the leading-flag axis, which is orthogonal: a persistent flag BEFORE the
+// subcommand must not hide anything after it.
+func TestCheckDocCommands_LeadingFlagsDoNotHideTrailingOnes(t *testing.T) {
+	root := t.TempDir()
+	for _, lead := range []string{"--yes", "--dry-run", "--open", "-y"} {
+		t.Run(lead, func(t *testing.T) {
+			writeMD(t, root, "docs/p.md",
+				"`llz "+lead+" ci reap-volumes --region <cluster_region> --definitely-not-a-flag`\n")
+			docs, _ := loadDocs(root, []string{"docs/p.md"})
+			got := checkDocCommands(docs, newRootCmd(), &docsScanned{})
+			if len(got) != 1 || !strings.Contains(got[0].Detail, "--definitely-not-a-flag") {
+				t.Errorf("a leading %s hid the trailing flag — got %v", lead, got)
+			}
+		})
+	}
+}
+
+// The shorthand-`on:` defect survived a table of HAND-WRITTEN YAML because I only
+// wrote the shapes I had thought of. This cross-checks the parser against every
+// REAL workflow in the repo using an independent, deliberately naive signal — a
+// grep. Where the two disagree, one of them is wrong, and either way it is worth
+// knowing. A fixture cannot go stale against reality; this can't either.
+func TestParseWorkflowDispatchInputs_AgreesWithRealWorkflows(t *testing.T) {
+	root := repoRootForDocsGuard(t)
+	var checked int
+	for _, dir := range []string{
+		filepath.Join(root, ".github", "workflows"),
+		filepath.Join(root, "instance-template", ".github", "workflows"),
+	} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || (!strings.HasSuffix(e.Name(), ".yml") && !strings.HasSuffix(e.Name(), ".yaml")) {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			wi, err := parseWorkflowDispatchInputs(data)
+			if err != nil {
+				t.Errorf("%s: parse failed: %v", path, err)
+				continue
+			}
+			checked++
+			// The independent signal: the token appears in the raw `on:` BLOCK.
+			// Textual, sharing no code with the YAML parser — but scoped, because
+			// the first cut grepped the whole file and cried wolf on four
+			// workflows that merely MENTION workflow_dispatch in a comment or an
+			// `if:` condition. (Found by running it, not by reasoning about it.)
+			naive := strings.Contains(rawOnBlock(string(data)), "workflow_dispatch")
+			if naive != wi.dispatch {
+				t.Errorf("%s: parser says dispatch=%v but the file %s the token — one of them is wrong (this is how the `on: [push, workflow_dispatch]` shorthand slipped through a hand-written fixture table)",
+					filepath.Base(path), wi.dispatch,
+					map[bool]string{true: "CONTAINS", false: "does NOT contain"}[naive])
+			}
+		}
+	}
+	if checked < 20 {
+		t.Errorf("only %d workflow(s) cross-checked — the walk found too few to be meaningful", checked)
+	}
+}
+
+// rawOnBlock returns the text of the top-level `on:` block — from the `on:` line
+// to the next top-level key — without parsing YAML, so it stays an independent
+// check on the parser rather than a second opinion from the same code.
+func rawOnBlock(body string) string {
+	lines := strings.Split(body, "\n")
+	start := -1
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "on:" || strings.HasPrefix(t, "on:") || strings.HasPrefix(t, `"on":`) || strings.HasPrefix(t, "'on':") {
+			if l == strings.TrimLeft(l, " \t") { // top-level only
+				start = i
+				break
+			}
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(lines[start] + "\n")
+	for _, l := range lines[start+1:] {
+		if strings.TrimSpace(l) == "" || strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") {
+			b.WriteString(l + "\n")
+			continue
+		}
+		break // a new top-level key ends the block
+	}
+	return b.String()
+}
