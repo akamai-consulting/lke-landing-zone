@@ -996,6 +996,13 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.TF_STATE_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_KEY }}
+          # `llz ci temp-objkey create` below mints the bucket-scoped drain key and
+          # reads LINODE_API_TOKEN. Without it the mint fails, the drain is SKIPPED
+          # (it only warns), and terraform destroy then dies on non-empty buckets —
+          # so the drain this step exists to perform had never actually run. The
+          # matching "Delete temporary drain key" step already passed this token,
+          # which is what made the omission hard to see.
+          LINODE_API_TOKEN:      ${{ secrets.LINODE_API_TOKEN }}
         run: |
           set -uo pipefail
 
