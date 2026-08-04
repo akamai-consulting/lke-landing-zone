@@ -156,9 +156,11 @@ func withSSECSample(t *testing.T, keys []string, listErr error, verdict func(str
 	pk, pl := s3ObjectSSECProbe, s3SampleObjectKeys
 	s3SampleObjectKeys = func(_, _, _, _ string, _ int) ([]string, error) { return keys, listErr }
 	s3ObjectSSECProbe = func(_, _, _, _, key string) (ssecVerdict, string) { return verdict(key), "stub" }
-	t.Setenv("AWS_ACCESS_KEY_ID", "ak")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "sk")
-	t.Cleanup(func() { s3ObjectSSECProbe, s3SampleObjectKeys = pk, pl })
+	prevCreds := objEncConsumerCreds
+	objEncConsumerCreds = func(_, _, _ string) (string, string, error) { return "ak", "sk", nil }
+	t.Cleanup(func() {
+		s3ObjectSSECProbe, s3SampleObjectKeys, objEncConsumerCreds = pk, pl, prevCreds
+	})
 }
 
 func allEncrypted(string) ssecVerdict { return ssecEncrypted }
@@ -222,12 +224,40 @@ func TestCheckObjectsEncryptedFailsWhenUnclassifiable(t *testing.T) {
 	}
 }
 
-func TestCheckObjectsEncryptedFailsWithoutCredentials(t *testing.T) {
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+// The gate must read the CONSUMER's credentials, not the ambient AWS_* env. In the
+// assert-suite those are the Terraform STATE bucket's key, which cannot list the
+// data buckets — the first revision reported that 403 as an encryption finding.
+func TestCheckObjectsEncryptedFailsWhenConsumerCredsUnreadable(t *testing.T) {
+	prev := objEncConsumerCreds
+	objEncConsumerCreds = func(_, _, _ string) (string, string, error) {
+		return "", "", errors.New("secrets \"loki-s3-linode-credentials\" not found")
+	}
+	t.Cleanup(func() { objEncConsumerCreds = prev })
 	f := checkObjectsAreEncrypted("us-ord-10.linodeobjects.com", "b", 50)
-	if len(f) != 1 || !strings.Contains(f[0].fix, "NOT the SSE-C key") {
-		t.Errorf("must explain that the probe needs bucket creds but NOT the encryption key, got %+v", f)
+	if len(f) != 1 {
+		t.Fatalf("unreadable consumer creds must be one finding, got %+v", f)
+	}
+	if !strings.Contains(f[0].problem, lokiObjSecretRef) {
+		t.Errorf("the finding must name the Secret it could not read: %q", f[0].problem)
+	}
+	if !strings.Contains(f[0].fix, "NOT the SSE-C key") {
+		t.Errorf("the fix must say the probe needs bucket creds but NOT the encryption key: %q", f[0].fix)
+	}
+}
+
+// An absent llz-cert-automation namespace means the credential component was never
+// deployed (managed renders a minimal app set) — not an encryption failure.
+func TestCheckHarborPathSkipsWhenCredentialNamespaceAbsent(t *testing.T) {
+	prev := namespaceExists
+	var asked string
+	namespaceExists = func(ns string) (bool, error) { asked = ns; return false, nil }
+	t.Cleanup(func() { namespaceExists = prev })
+	if f := checkHarborPath("h", "bucket"); len(f) != 0 {
+		t.Errorf("an absent credential namespace must not fail the gate, got %+v", f)
+	}
+	if asked != harborRobotSecretNS {
+		t.Errorf("guarded on %q, but the robot Secret lives in %q — checking the wrong namespace is "+
+			"how this reported a missing credential as an encryption finding", asked, harborRobotSecretNS)
 	}
 }
 

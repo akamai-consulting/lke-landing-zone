@@ -57,6 +57,31 @@ const (
 	objProxyService     = "obj-proxy.obj-proxy.svc.cluster.local"
 )
 
+// lokiObjSecretRef is the Secret apl-core's Loki release mounts for object storage —
+// the same one assert-obj-roundtrip reads, kept in one place so the two cannot drift.
+const lokiObjSecretRef = "monitoring/loki-s3-linode-credentials"
+
+// objEncConsumerCreds reads an access/secret pair out of a namespaced Secret.
+var objEncConsumerCreds = func(ref, akField, skField string) (string, string, error) {
+	ns, name, ok := strings.Cut(ref, "/")
+	if !ok {
+		return "", "", fmt.Errorf("secret ref %q is not namespace/name", ref)
+	}
+	raw, err := objEncKubectl("-n", ns, "get", "secret", name, "-o", "json")
+	if err != nil {
+		return "", "", err
+	}
+	ak, err := decodeSecretField([]byte(raw), akField)
+	if err != nil {
+		return "", "", err
+	}
+	sk, err := decodeSecretField([]byte(raw), skField)
+	if err != nil {
+		return "", "", err
+	}
+	return ak, sk, nil
+}
+
 // objEncKubectl is the read seam. The checks below are the whole value of this
 // gate, and a check that can only run against a live cluster is a check that is
 // never exercised until the night it matters.
@@ -177,7 +202,14 @@ func runAssertObjEncryption(endpoint, bucket, harborBucket, region string, sampl
 // namespace IS present is a finding, because that is the check being skipped on a
 // cluster that needs it — and it is the ONLY check that proves the CA chain.
 func checkHarborPath(endpoint, harborBucket string) []objEncryptionFinding {
-	present, err := namespaceExists(harborNS)
+	// Guard on the namespace that holds the CREDENTIAL, not the one that holds
+	// Harbor. The first revision checked `harbor` and then read the robot Secret
+	// from llz-cert-automation — a different namespace, which a managed cluster
+	// rendering a minimal app set may simply not have. That reported "could not
+	// read the Harbor robot credential" as an encryption finding on a cluster where
+	// the component was never deployed. assert-harbor-roundtrip already draws this
+	// distinction; this now draws the same one.
+	present, err := namespaceExists(harborRobotSecretNS)
 	if err != nil {
 		return []objEncryptionFinding{{
 			check: "harbor-push", problem: "could not determine whether the harbor namespace exists: " + err.Error(),
@@ -185,7 +217,8 @@ func checkHarborPath(endpoint, harborBucket string) []objEncryptionFinding {
 		}}
 	}
 	if !present {
-		fmt.Println("  harbor-push: the harbor namespace is absent — Harbor is not deployed here, so the CA chain has nothing to prove")
+		fmt.Printf("  harbor-push: namespace %s is absent — the Harbor robot credential is not deployed "+
+			"here, so there is no push path to prove the CA chain with\n", harborRobotSecretNS)
 		return nil
 	}
 	if harborBucket == "" {
@@ -386,12 +419,23 @@ func checkEndpointResolvesToProxy(endpoint string) []objEncryptionFinding {
 // sample size for exactly that reason — "0 of 50 sampled objects were plaintext" is
 // an auditable claim, "encrypted" is not.
 func checkObjectsAreEncrypted(endpoint, bucket string, sample int) []objEncryptionFinding {
-	ak, sk := os.Getenv("AWS_ACCESS_KEY_ID"), os.Getenv("AWS_SECRET_ACCESS_KEY")
-	if ak == "" || sk == "" {
+	// The CONSUMER's own credentials, read from the Secret it mounts — not the
+	// ambient AWS_* env.
+	//
+	// In the assert-suite those env vars are the TERRAFORM STATE bucket's key, which
+	// has no access to the data buckets: the first revision failed with
+	// "403 AccessDenied listing platform-loki-chunks-e2e" and reported it as an
+	// encryption finding. A gate that reads whatever credentials happen to be in
+	// scope is a gate that reports its own misconfiguration as a breach.
+	// assert-obj-roundtrip already reads each consumer's own key for exactly this
+	// reason; this uses the same Secret.
+	ak, sk, cerr := objEncConsumerCreds(lokiObjSecretRef, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+	if cerr != nil {
 		return []objEncryptionFinding{{
 			check:   "object",
-			problem: "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are not set, so the outcome check cannot run",
-			fix:     "supply a key scoped to " + bucket + "; the probe needs only LIST and HEAD, and NOT the SSE-C key",
+			problem: "could not read the Loki object-store credentials from " + lokiObjSecretRef + ": " + cerr.Error(),
+			fix: "this is the same Secret assert-obj-roundtrip reads; if that lane is also failing, fix it " +
+				"there first. The probe needs only LIST and HEAD on the bucket, and NOT the SSE-C key",
 		}}
 	}
 	keys, err := s3SampleObjectKeys(ak, sk, endpoint, bucket, sample)
