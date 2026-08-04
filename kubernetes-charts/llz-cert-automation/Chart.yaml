@@ -37,7 +37,14 @@ type: application
 # 0.1.10: add values.schema.json — root-strict, so a typo'd top-level key is
 #        REJECTED AT RENDER instead of silently activating nothing. Nested
 #        objects stay permissive; no rendered change for valid values.
-version: 0.1.10
+# 0.1.11: doc-only — 0.1.9 retargeted the README at
+#        `platform-apl/components/certManager/cert-automation.yaml` as "the real
+#        consumer"; that file does not exist, and on Managed App Platform (the
+#        only supported mode, ADR 0005) cert-automation is apl-core's, so the
+#        component is ManagedSkip and NOTHING in this repo deploys this chart.
+#        The README now says so and points at the cutover table
+#        (behavior unchanged; bumped so the guard republishes the corrected artifact).
+version: 0.1.11
 # appVersion tracks the HAProxy base image the rebuild Workflow builds FROM
 # (workflow.build-image step: FROM haproxy:2.9-alpine).
 appVersion: "2.9-alpine"
