@@ -11,7 +11,26 @@
 Two facts shape every Loki playbook:
 
 1. **No external Ingress.** Loki is reachable only as `http://<release>-loki-gateway.monitoring.svc.cluster.local` — inside the cluster network. Operators reach it via Grafana (preferred) or `kubectl port-forward` (debug).
-2. **Multi-tenancy is OFF.** `auth_enabled` is not set anywhere in the values, so Loki runs single-tenant. Do **not** add an `X-Scope-OrgID` header — and if you are chasing a 401 / "no org id", tenancy is not the cause. Should multi-tenancy ever be enabled, this playbook's read/write recipes all need the header added.
+2. **Multi-tenancy is ON, and the tenant partitions reads.** apl-core ships Loki with
+   `auth_enabled: true`, so **every** request must carry an `X-Scope-OrgID` header. A
+   read without one answers `no org id`; a read with the *wrong* one returns an empty
+   result set, which looks exactly like "the writer is dead".
+
+### Which tenant am I?
+
+There is more than one writer and they do not share a tenant, so there is no single
+correct value — pick the one belonging to the logs you are looking for:
+
+| Logs you want | Tenant | Why |
+|---|---|---|
+| Anything in a landing-zone namespace (`llz-*`, `argocd`, `harbor`, `external-secrets`, …) | **`admins`** | apl-core's collector routes by namespace; everything outside a team namespace lands in the default pipeline |
+| Workloads in `team-<name>` namespaces | **`<name>`** | e.g. `team-platform` → `platform`, `team-admin` → `admin` |
+| OpenBao audit log | **`platform`** | the OpenBao pod's promtail sidecar pushes with `tenant_id: platform`, independently of the collector |
+
+Reading the OpenBao audit stream as `admins` (or the reconciler's logs as
+`platform`) returns nothing and reports a healthy pipeline as dead. `llz ci
+assert-openbao-audit` and `llz ci assert-log-ingestion` each default to the right
+tenant for what they check — prefer them over a hand-rolled query.
 
 ---
 
@@ -29,7 +48,11 @@ Grafana is the supported read path: it carries the tenant header for you, ships 
     sum by (level) (count_over_time({app="<release>-app"}[5m]))
     ```
 
-The Grafana → Loki connection uses the cluster-internal Service URL with `X-Scope-OrgID: <project>` injected as a custom HTTP header (see `grafana-values.yaml`).
+The Grafana → Loki data source uses the cluster-internal Service URL with an
+`X-Scope-OrgID` custom HTTP header. Whichever tenant that data source carries is the
+one you are querying — check it under *Connections → Data sources → Loki* if a query
+you expect to match returns nothing, and add a second data source (same URL,
+different header) rather than editing the shared one when you need another tenant.
 
 ---
 
@@ -41,24 +64,33 @@ When Grafana itself is broken, or you want to script queries:
 # 1. Port-forward Loki's HTTP gateway
 kubectl -n monitoring port-forward svc/<release>-loki-gateway 3100:80
 
-# 2. LogQL via the HTTP API — note the mandatory X-Scope-OrgID header
+# 2. LogQL via the HTTP API. TENANT is mandatory — see "Which tenant am I?" above.
+#    `admins` covers every landing-zone namespace; the OpenBao audit log is `platform`.
+TENANT=admins
 curl -G "http://localhost:3100/loki/api/v1/query_range" \
-  -H "X-Scope-OrgID: <project>" \
-  --data-urlencode 'query={app="<release>-app"} |= "error"' \
+  -H "X-Scope-OrgID: ${TENANT}" \
+  --data-urlencode 'query={namespace="llz-openbao"}' \
   --data-urlencode "start=$(date -u -v-1H '+%Y-%m-%dT%H:%M:%SZ')" \
   --data-urlencode "end=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
   --data-urlencode 'limit=100' \
   | jq
 
-# Useful endpoints:
+# Useful endpoints (all tenant-scoped — send the header on every one):
 #   GET /loki/api/v1/labels                  — list label names
 #   GET /loki/api/v1/label/<name>/values     — list label values
 #   GET /loki/api/v1/query_range             — range query (LogQL)
 #   GET /loki/api/v1/query                   — instant query
-#   GET /ready, /metrics                     — health
+#   GET /ready, /metrics                     — health (not tenant-scoped)
 ```
 
-Forgetting the header is the most common debug-time mistake; the API returns a useless-looking `no org id` 401 with no other context.
+> **`date -u -v-1H` is BSD/macOS.** On Linux use `date -u -d '1 hour ago'`.
+
+The two failure modes, which look nothing alike:
+
+- **No header** → HTTP 401 `no org id`. Add one.
+- **Wrong header** → HTTP 200 with an empty `result` array. Nothing is wrong with
+  the query, the writer, or the pipeline — you are reading a tenant those logs were
+  never written to. Check the table above before debugging anything else.
 
 ---
 
@@ -66,14 +98,22 @@ Forgetting the header is the most common debug-time mistake; the API returns a u
 
 You should not normally write to Loki by hand. The two production writers are:
 
-- **OTel Collector** — note its pipelines currently use the `debug` exporter only (`platform-apl/components/observability/otel-collector.yaml`); it is not yet wired to Loki. Extend `exporters:` when a downstream is in place.
-- **Promtail sidecar in the OpenBao pod** — tails `/openbao/audit/audit.log` and pushes to the same gateway. See the audit-logging notes in [`docs/secrets.md`](../secrets.md#audit-logging). That write path is gated end to end by `llz ci assert-openbao-audit`, which queries `{app="openbao",component="audit"}` over the last 30 minutes and fails if nothing arrived — run it (it is read-only) before hand-debugging a "no audit logs" report; its failure output names the five things to check, in order.
+- **apl-core's platform-logs-collector** — routes by namespace via its `routing`
+  connector: `team-admin` → `admin`, `team-platform` → `platform`, and everything
+  else (including every landing-zone namespace) → **`admins`**. Gated by
+  `llz ci assert-log-ingestion`, which defaults to that tenant for exactly this
+  reason.
+- **Promtail sidecar in the OpenBao pod** — tails `/openbao/audit/audit.log` and pushes to the same gateway with `tenant_id: platform`, independently of the collector. See the audit-logging notes in [`docs/secrets.md`](../secrets.md#audit-logging). That write path is gated end to end by `llz ci assert-openbao-audit`, which queries `{app="openbao",component="audit"}` over the last 30 minutes and fails if nothing arrived — run it (it is read-only) before hand-debugging a "no audit logs" report; its failure output names the five things to check, in order.
 
-If you need to push test logs manually:
+Because those two use different tenants, **no single header reads both**. That is
+why the two gates carry separate tenant defaults rather than sharing one constant.
+
+If you need to push test logs manually — they land in whichever tenant you name, so
+read them back with the same one:
 
 ```bash
 curl -fsSL -X POST "http://localhost:3100/loki/api/v1/push" \
-  -H "X-Scope-OrgID: <project>" \
+  -H "X-Scope-OrgID: admins" \
   -H "Content-Type: application/json" \
   -d '{
     "streams": [{
@@ -87,13 +127,16 @@ curl -fsSL -X POST "http://localhost:3100/loki/api/v1/push" \
 
 ## Tenancy expansion
 
-If a separate workload needs log isolation, add a new tenant by:
+Tenants already exist per APL team — declaring a team in `spec.teams` gets its
+namespace routed to its own tenant by the collector, with no Loki-side change. Reach
+for the steps below only for a tenant that is **not** an APL team:
 
-1. Setting its writers to send `X-Scope-OrgID: <new-tenant>` instead of `<project>`.
-2. Adding a per-tenant `limits_config` block in [`loki-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml) — see Loki's [multi-tenancy docs](https://grafana.com/docs/loki/latest/operations/multi-tenancy/) for ingestion-rate / retention overrides.
-3. Adding a second Loki data source in Grafana for that tenant (header value differs).
+1. Set its writers to send `X-Scope-OrgID: <new-tenant>`.
+2. Add a per-tenant `limits_config` block in [`loki-values.yaml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/apl-values/values.yaml) — see Loki's [multi-tenancy docs](https://grafana.com/docs/loki/latest/operations/multi-tenancy/) for ingestion-rate / retention overrides.
+3. Add a second Loki data source in Grafana for that tenant (header value differs).
 
-Don't reuse `<project>` as a catch-all — once a workload's logs are mixed in there, splitting them out later is painful.
+Don't reuse `admins` as a catch-all for workload logs — once they are mixed into the
+platform's default tenant, splitting them out later is painful.
 
 ---
 
