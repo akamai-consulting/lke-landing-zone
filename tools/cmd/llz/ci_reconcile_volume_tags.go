@@ -41,6 +41,11 @@ type pvVolume struct {
 	VolumeID  string
 	Namespace string
 	PVC       string
+	// Phase is the PV's status.phase. Only the LABEL expectation depends on it:
+	// labels are account-unique so a Released PV sharing a claimRef with a live one
+	// can never take the derived name, while tags and encryption remain meaningful
+	// on any phase.
+	Phase string
 }
 
 // parsePVVolumes extracts the backing Linode Volume of every Linode-CSI PV in a
@@ -68,6 +73,9 @@ func parsePVVolumes(pvList map[string]any) []pvVolume {
 			continue
 		}
 		v := pvVolume{VolumeID: id}
+		if st, ok := pv["status"].(map[string]any); ok {
+			v.Phase, _ = st["phase"].(string)
+		}
 		if claim, ok := spec["claimRef"].(map[string]any); ok {
 			v.Namespace, _ = claim["namespace"].(string)
 			v.PVC, _ = claim["name"].(string)

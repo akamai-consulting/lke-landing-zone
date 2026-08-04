@@ -44,7 +44,7 @@ func TestRunCIAssertLoki(t *testing.T) {
 		return nil, errors.New("nope")
 	})
 	// settle=0 → single evaluation (no polling/sleep in the unit test).
-	if err := runCIAssertLoki("loki", 0, 0); err != nil {
+	if err := runCIAssertLoki("loki", "e2e", 0, 0, false); err != nil {
 		t.Errorf("bootstrapped Loki => err %v, want nil", err)
 	}
 
@@ -58,7 +58,7 @@ func TestRunCIAssertLoki(t *testing.T) {
 		}
 		return nil, errors.New("nope")
 	})
-	if err := runCIAssertLoki("loki", 0, 0); err == nil {
+	if err := runCIAssertLoki("loki", "e2e", 0, 0, false); err == nil {
 		t.Errorf("unbootstrapped Loki => err %v, want non-nil", err)
 	}
 }
@@ -82,7 +82,7 @@ func TestRunCIAssertLokiRidesOutTransient(t *testing.T) {
 		return nil, nil // Argo CRD absent → non-gating block skipped
 	})
 	// Tiny interval so the retry is instant; settle large enough for attempt 2.
-	if err := runCIAssertLoki("loki", 2*time.Second, time.Millisecond); err != nil {
+	if err := runCIAssertLoki("loki", "e2e", 2*time.Second, time.Millisecond, false); err != nil {
 		t.Errorf("a first-attempt transient should be ridden out => err %v, want nil (calls=%d)", err, n)
 	}
 }

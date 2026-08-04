@@ -393,3 +393,52 @@ func TestComponentRegistry_AplCoreMapping(t *testing.T) {
 		t.Error("openbao defaults enabled")
 	}
 }
+
+// The proxy dials a host, its certificate is issued FOR a host, and the CoreDNS
+// rewrite redirects a host. All three must be the same string: a rewrite pointing
+// at a name the cert does not carry is a handshake failure on every object-storage
+// call, which presents as an outage rather than as a certificate problem. They are
+// rendered from one derivation so they cannot drift; this is the test that says so.
+func TestObjProxyRenderersAgreeOnTheEndpointHost(t *testing.T) {
+	const oc = "us-ord-10"
+	host := ObjEndpointHost(oc)
+	if host == "" {
+		t.Fatal("ObjEndpointHost returned empty — the premise of this test is gone")
+	}
+	for name, got := range map[string]string{
+		"dns patch":  RenderObjProxyDNSPatch(oc),
+		"env patch":  RenderObjProxyEnvPatch(oc),
+		"cert patch": RenderObjProxyCertPatch(oc),
+	} {
+		if !strings.Contains(got, host) {
+			t.Errorf("%s does not carry the endpoint host %q:\n%s", name, host, got)
+		}
+	}
+}
+
+// REPLACE_ME reaching a cluster is not a rendering blemish: CoreDNS would rewrite
+// the literal name REPLACE_ME.linodeobjects.com, nothing would resolve to the proxy,
+// and every write would go direct in plaintext while the component reported Healthy.
+func TestObjProxyDNSPatchLeavesNoPlaceholder(t *testing.T) {
+	got := RenderObjProxyDNSPatch("us-ord-10")
+	if strings.Contains(got, "REPLACE_ME") {
+		t.Errorf("rendered CoreDNS patch still contains REPLACE_ME — the rewrite would target a literal "+
+			"placeholder hostname, so no traffic reaches the proxy and everything is written unencrypted:\n%s", got)
+	}
+	if !strings.Contains(got, "rewrite name ") || !strings.Contains(got, "obj-proxy.obj-proxy.svc.cluster.local") {
+		t.Errorf("rendered CoreDNS patch is not a rewrite to the proxy Service:\n%s", got)
+	}
+}
+
+// An empty cluster id must never produce `rewrite name  <target>`: that is not a
+// valid CoreDNS directive, CoreDNS refuses to load a Corefile it cannot parse, and
+// the blast radius is cluster DNS for every workload — not just this component.
+func TestObjProxyDNSPatchNeverEmitsAMalformedRewrite(t *testing.T) {
+	got := RenderObjProxyDNSPatch("")
+	if strings.Contains(got, "rewrite name  ") || strings.Contains(got, "rewrite name \n") {
+		t.Errorf("empty cluster id produced a malformed rewrite, which breaks cluster DNS:\n%s", got)
+	}
+	if strings.Contains(got, "objproxy.include") {
+		t.Errorf("an env with no object storage must emit no rewrite key at all:\n%s", got)
+	}
+}

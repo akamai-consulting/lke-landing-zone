@@ -70,6 +70,11 @@ on:
         description: 'Required for destroy: destroy:<deployment>:cluster | destroy:<deployment>:object-storage | destroy:<deployment>:databases'
         required: false
         type: string
+      drain_data_buckets:
+        description: 'On destroy, EMPTY (not delete) the Loki/Harbor buckets once the cluster is gone. Default false — they hold real logs and images.'
+        required: false
+        type: boolean
+        default: false
       assert_loki:
         description: 'After converge, assert Loki is S3-backed (llz ci assert-loki). Default false; the release-e2e gate dispatches with this true so the check runs inside the bootstrap converge instead of a separate health pass.'
         required: false
@@ -93,6 +98,7 @@ jobs:
       module: ${{ inputs.module }}
       region: ${{ inputs.region }}
       confirm_destroy: ${{ inputs.confirm_destroy }}
+      drain_data_buckets: ${{ inputs.drain_data_buckets || false }}
       # Default false via the reusable's input; release-e2e's provision dispatch
       # passes assert_loki=true so the E2E Loki assertion runs in the converge job.
       assert_loki: ${{ inputs.assert_loki || false }}

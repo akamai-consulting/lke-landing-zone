@@ -589,6 +589,14 @@ func carvedPatchTargets(c clusterspec.Component, appsDir, env string, e clusters
 		// (Validate guarantees both are set when it's enabled).
 		tog := e.Components[c.Name]
 		content["broad-pat-rotator-env-patch.yaml"] = clusterspec.RenderBroadPATEnvPatch(tog.BroadPATLabel, tog.BroadPATDeployments, ghRepo)
+	case "objProxy":
+		// The endpoint the SSE-C gateway proxies to, and the dnsNames its serving
+		// cert must carry — both from the one object-storage cluster id, so the
+		// certificate can never name a host the proxy does not dial.
+		oc := e.Cluster.ObjectStorage.Cluster
+		content["obj-proxy-env-patch.yaml"] = clusterspec.RenderObjProxyEnvPatch(oc)
+		content["obj-proxy-cert-patch.yaml"] = clusterspec.RenderObjProxyCertPatch(oc)
+		content["obj-proxy-dns-patch.yaml"] = clusterspec.RenderObjProxyDNSPatch(oc)
 	case "llzReconciler":
 		// REGION_SHORT (volume-labels) + REGION/OBJ_CLUSTER (linode-creds); REGION is
 		// the env name and OBJ_CLUSTER the object-storage cluster.

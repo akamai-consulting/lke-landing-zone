@@ -350,6 +350,61 @@ var Components = []Component{
 		CarvedApp: &CarvedApp{AppName: "llz-broad-pat-rotator", AppWave: 5, Namespace: "llz-pat-rotator"},
 	},
 	{
+		// The S3 gateway that makes Object Storage encrypted at rest.
+		//
+		// `llz obj-proxy` reverse-proxies object-storage traffic and injects SSE-C
+		// headers that Loki and Harbor cannot emit themselves (Loki's SSEConfig takes
+		// only SSE-KMS/SSE-S3; distribution's S3 driver only `encrypt`/`keyid`).
+		// Linode implements no other server-side mode — SSE-S3 answers 400 and
+		// PutBucketEncryption answers 501 — so this is the only route to encrypted
+		// buckets on this platform. See docs/designs/obj-sse-c-gateway.md.
+		//
+		// DEFAULT-DISABLED, and enabling it is NOT the on switch. The proxy is inert
+		// until CoreDNS rewrites the endpoint hostname to its Service, which is
+		// staged separately and deliberately last: it can only take traffic once
+		// Loki's and Harbor's pods trust the CA that issues obj-proxy-tls, and
+		// flipping the rewrite before that presents as an object-storage outage
+		// rather than as a certificate problem.
+		//
+		// DependsOn externalSecrets: the SSE-C key arrives via ESO from OpenBao
+		// (secret/obj/ssec, seeded by `llz ci seed-ssec-key`).
+		Name:              "objProxy",
+		DependsOn:         []string{"externalSecrets"},
+		ManifestResources: []string{"obj-proxy"},
+		DefaultDisabled:   true,
+		// Two per-env values, both derived from the SAME object-storage cluster id:
+		// the upstream the proxy dials, and the dnsNames its serving certificate must
+		// carry. They are rendered from one source so they cannot disagree — a cert
+		// for a host the proxy does not dial fails every client handshake.
+		Patches: []Patch{
+			{
+				Path:    "obj-proxy-env-patch.yaml",
+				Group:   "apps",
+				Version: "v1",
+				Kind:    "DaemonSet",
+				Name:    "obj-proxy",
+			},
+			{
+				Path:    "obj-proxy-cert-patch.yaml",
+				Group:   "cert-manager.io",
+				Version: "v1",
+				Kind:    "Certificate",
+				Name:    "obj-proxy-tls",
+			},
+			{
+				Path:    "obj-proxy-dns-patch.yaml",
+				Version: "v1",
+				Kind:    "ConfigMap",
+				Name:    "coredns-custom",
+			},
+		},
+		// Its own health-inert Application, like the rotator: this sits on the write
+		// path for every image pull and log write, and a Degraded proxy must fail its
+		// own App rather than platform-bootstrap. Wave 5 after the openbao
+		// ClusterSecretStore its ExternalSecret resolves against.
+		CarvedApp: &CarvedApp{AppName: "llz-obj-proxy", AppWave: 5, Namespace: "obj-proxy"},
+	},
+	{
 		// In-cluster reconciler + convergence metrics surface (Phase 0:
 		// observe-only). Deploys the long-lived `llz reconcile` process that
 		// samples cluster signals and serves them at :8080/metrics, plus the

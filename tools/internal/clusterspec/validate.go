@@ -292,6 +292,9 @@ func validateInstance(in Instance) []error {
 	return errs
 }
 
+// objProxyComponentName is the spec key for the SSE-C gateway.
+const objProxyComponentName = "objProxy"
+
 func validateEnv(name string, env Environment) []error {
 	var errs []error
 	prefix := func(format string, a ...any) error {
@@ -299,6 +302,15 @@ func validateEnv(name string, env Environment) []error {
 	}
 	if err := validate.EnvName(name); err != nil {
 		errs = append(errs, fmt.Errorf("environments key: %w", err))
+	}
+	// objProxy fronts the object-storage endpoint, so without one there is nothing to
+	// front: the proxy would start with an empty upstream, its certificate would name
+	// nothing, and the CoreDNS rewrite would have no host to rewrite. Rejecting it
+	// here is what keeps those renderers from having to invent a safe answer.
+	if t, ok := env.Components[objProxyComponentName]; ok && t.Enabled != nil && *t.Enabled &&
+		env.Cluster.ObjectStorage.Cluster == "" {
+		errs = append(errs, prefix("components.%s.enabled is true but cluster.objectStorage.cluster is empty — "+
+			"the SSE-C gateway has no endpoint to front", objProxyComponentName))
 	}
 
 	c := env.Cluster

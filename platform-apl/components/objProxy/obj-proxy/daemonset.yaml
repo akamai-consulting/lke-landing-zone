@@ -1,0 +1,163 @@
+# obj-proxy — the S3 gateway that makes Object Storage encrypted at rest.
+#
+# Runs `llz obj-proxy`: a reverse proxy to Linode Object Storage that injects
+# SSE-C headers Loki and Harbor cannot emit themselves. Linode implements no other
+# server-side encryption mode (measured: SSE-S3 → 400 InvalidArgument,
+# PutBucketEncryption → 501 NotImplemented), so this is what puts those buckets
+# in an auditable at-rest posture — with a key Linode never stores.
+#
+# WHY A DAEMONSET, not a Deployment. This sits on the path of every image pull and
+# every log write, so a rolling Deployment's brief unavailability is a cluster-wide
+# registry and ingestion stall. Per-node means a node's traffic is served by a pod
+# on that node: no cross-node hop for large layer transfers, and a failure is
+# scoped to one node's workloads rather than to everything at once.
+#
+# dnsPolicy: Default IS LOAD-BEARING — see PROPERTY 1 in tools/cmd/llz/objproxy.go.
+# Clients reach this pod because CoreDNS rewrites the endpoint hostname to the
+# Service below. The proxy dials THAT SAME HOSTNAME upstream, so if it resolved
+# through cluster DNS it would resolve to itself and every request would loop.
+# Default policy uses the NODE's resolver, which carries no rewrite. The binary
+# refuses to start if it detects the loop, so a mistake here fails at boot rather
+# than as a mystery under load.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: obj-proxy
+  namespace: obj-proxy
+  annotations:
+    # Wave 5 — AFTER OpenBao, not before the writers.
+    #
+    # The instinct is to put this early: it is on the write path, and an object
+    # written while it is down would be plaintext. That instinct is wrong here, and
+    # wave-health-guard is what caught it. This pod cannot start without
+    # obj-proxy-ssec-key, which ESO serves from OpenBao at wave 0 — so at a negative
+    # wave it would sit not-Ready and BLOCK the bootstrap from ever reaching the
+    # OpenBao that would unblock it. A circular wedge, the PR #142 failure class.
+    #
+    # Ordering against Loki and Harbor is not needed anyway: this component is inert
+    # until CoreDNS rewrites the endpoint hostname to it, and that rewrite is a
+    # separate, deliberately-staged step. By the time it is flipped, this DaemonSet
+    # has been running for many syncs. And the failure mode is fail-CLOSED, not
+    # silent plaintext: with the rewrite live, a writer that cannot reach the proxy
+    # cannot reach object storage at all.
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: obj-proxy
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # One node at a time: a node whose proxy is restarting cannot write, and we
+      # would rather that be brief and localised than simultaneous everywhere.
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: obj-proxy
+      annotations:
+        # NOT meshed. The mesh would add a second TLS hop in front of a process whose
+        # whole job is to be transparent on the S3 path, and the traffic here is
+        # already TLS end to end (client→proxy, proxy→Linode).
+        sidecar.istio.io/inject: "false"
+    spec:
+      dnsPolicy: Default # load-bearing — see the header
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        # fsGroup IS LOAD-BEARING. Secret volume files are owned by root:root, so a
+        # container running as 65532 cannot read a 0400 file — every pod died with
+        # `open /etc/llz/ssec/key: permission denied` in the e2e run that first got
+        # this far. fsGroup makes the kubelet group-own the projected files, which is
+        # what lets defaultMode 0440 below be readable by this user WITHOUT making the
+        # key world-readable inside the container.
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: obj-proxy
+          image: ghcr.io/akamai-consulting/llz:latest
+          args:
+            - obj-proxy
+            - --listen=:8443
+            # Rendered per-env by `llz render` from spec …objectStorage.cluster —
+            # the SAME value the buckets were created against. A mismatch here does
+            # not fail loudly: it reaches a sibling endpoint where the buckets do
+            # not exist and every request 404s NoSuchBucket.
+            - --upstream=$(OBJ_ENDPOINT_HOST)
+            - --key-file=/etc/llz/ssec/key
+            # #397: lets the proxy de-chunk and re-sign the aws-chunked trailer
+            # framing Linode's Ceph rejects, as the SAME access key the client used.
+            # Without this flag the proxy never re-signs and those writes fail
+            # upstream exactly as they do today — see creds-externalsecret.yaml.
+            - --creds-file=/etc/llz/obj-creds/credentials
+            - --tls-cert=/etc/llz/tls/tls.crt
+            - --tls-key=/etc/llz/tls/tls.key
+            - --health-addr=:8080
+          env:
+            # REPLACE_ME is filled per env by `llz render`
+            # (RenderObjProxyEnvPatch → obj-proxy-env-patch.yaml) with
+            # <objectStorage.cluster>.linodeobjects.com. The certificate's dnsNames
+            # come from the SAME derivation, so the two cannot disagree.
+            - name: OBJ_ENDPOINT_HOST
+              value: "REPLACE_ME"
+            # Go does NOT read its cgroup limit: the GC sizes the heap against the
+            # HOST's memory, so under a container cap it happily grows past the limit
+            # and the kernel kills it rather than the collector reclaiming. Setting a
+            # soft limit below `limits.memory` makes the GC work harder as it
+            # approaches the ceiling instead of being OOMKilled at it. 450MiB leaves
+            # headroom for non-heap (stacks, TLS buffers) inside the 512Mi cap.
+            - name: GOMEMLIMIT
+              value: "450MiB"
+          ports:
+            - { name: s3, containerPort: 8443, protocol: TCP }
+            - { name: health, containerPort: 8080, protocol: TCP }
+          volumeMounts:
+            - { name: ssec-key, mountPath: /etc/llz/ssec, readOnly: true }
+            - { name: obj-creds, mountPath: /etc/llz/obj-creds, readOnly: true }
+            - { name: tls, mountPath: /etc/llz/tls, readOnly: true }
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /healthz, port: health }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            # 512Mi, not 256Mi. Bodies stream and are never buffered, so steady-state
+            # is small — roughly (concurrent conns x 32KiB proxy buffer) plus TLS
+            # read/write buffers, a few MiB at this MaxIdleConnsPerHost. But Go's GC
+            # lets the heap roughly DOUBLE before collecting, so a transient spike
+            # during a burst of large layer pushes can cross a tight ceiling. Being
+            # OOMKilled mid-push surfaces as a flaky Harbor, not as a proxy problem,
+            # which is the most expensive kind of failure to diagnose here.
+            #
+            # No CPU limit on purpose: this is a streaming proxy on the image-pull
+            # path, and throttling it turns a large layer push into a timeout that
+            # surfaces as a Harbor error.
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+      volumes:
+        # 0440, not 0400: owner is root and the process is 65532, so the GROUP bit
+        # (paired with fsGroup above) is the only thing that makes these readable.
+        # Not 0444 — the SSE-C key is the one unrecoverable secret in this system and
+        # there is no reason for it to be world-readable even in a single-container pod.
+        - name: ssec-key
+          secret:
+            secretName: obj-proxy-ssec-key
+            defaultMode: 0440
+        - name: obj-creds
+          secret:
+            secretName: obj-proxy-creds
+            # 0440 for the same reason as the SSE-C key beside it: root owns the
+            # projection, the process is 65532, and the group bit paired with fsGroup
+            # is what makes it readable at all.
+            defaultMode: 0440
+        - name: tls
+          secret:
+            secretName: obj-proxy-tls
+            defaultMode: 0440

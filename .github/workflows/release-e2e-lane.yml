@@ -266,8 +266,20 @@ jobs:
           echo "     then: export KUBECONFIG=... && kubectl get pods -A"
           echo "When done, destroy it manually:"
           echo "  gh workflow run terraform.yml -R ${INSTANCE_REPO} -f action=destroy -f module=cluster -f region=${E2E_ENV} -f confirm_destroy=destroy:${E2E_ENV}:cluster"
+          echo "     ^ add -f drain_data_buckets=true: this run's objects are encrypted with ITS SSE-C key,"
+          echo "       and leaving them makes the next run's Loki index unreadable (see the teardown step)."
 
-      - name: Dispatch terraform.yml (destroy) and watch
+      # drain_data_buckets=true EMPTIES the Loki/Harbor buckets once the cluster is
+      # gone. Each cluster mints its own SSE-C key, so objects the previous one wrote
+      # are permanently unreadable by the next — and Loki's index-gateway fails whole
+      # tables rather than skipping them, which times out queries while every
+      # write-path check stays green.
+      #
+      # EMPTY, not delete. Destroying the buckets was the first attempt and it moved
+      # the failure downstream: Linode does not release the NAME promptly, so a
+      # recreate six minutes after a successful destroy still failed with
+      # "[400] The bucket 'platform-loki-chunks-e2e' already exists".
+      - name: Dispatch terraform.yml (destroy cluster) and watch
         if: ${{ env.KEEP_CLUSTER != 'true' }}
         env:
           GH_TOKEN: ${{ (inputs.forge == 'github-enterprise-server') && secrets.E2E_GHES_DISPATCH_TOKEN || secrets.E2E_DISPATCH_TOKEN }}
@@ -276,7 +288,9 @@ jobs:
           .github/scripts/dispatch-and-watch.sh \
             --repo "${INSTANCE_REPO}" --workflow terraform.yml \
             --field action=destroy --field module=cluster --field region="${E2E_ENV}" \
-            --field confirm_destroy="destroy:${E2E_ENV}:cluster"
+            --field confirm_destroy="destroy:${E2E_ENV}:cluster" \
+            --field drain_data_buckets=true
+
 
   # ── 5. Gate — the release passes only if every stage above was green ─────────
   gate:

@@ -1,0 +1,49 @@
+# The CA bundle Harbor's registry needs, issued INTO THE HARBOR NAMESPACE.
+#
+# The namespace is the point. A Pod can only mount Secrets from its own namespace,
+# so a bundle sitting next to the proxy in `obj-proxy` is unusable by
+# harbor-registry — it has to be here, in `harbor`. cert-manager issuing a second
+# Certificate from the same ClusterIssuer is the cheapest way to put it there; no
+# replicator, no copy job, and it renews on the same schedule as the serving cert.
+#
+# WHAT CONSUMES IT. The Kyverno ClusterPolicy `harbor-obj-proxy-ca`
+# (tools/cmd/llz/manifests/kyverno-harbor-obj-proxy-ca.yaml) mounts this Secret's
+# ca.crt into harbor-registry pods at /etc/llz/ca and sets SSL_CERT_DIR so Go adds
+# it to the system pool. See that file for why the mutation targets Pods rather
+# than the Deployment, and for the measured trust-store layout it relies on.
+#
+# WHY HARBOR NEEDS THIS AND LOKI DOES NOT. Measured on the live cluster: Loki's
+# rendered config carries
+#     common.storage.s3.http_config.insecure_skip_verify: true
+# so its S3 client does not verify the server certificate at all and accepts the
+# proxy's cert unconditionally. Harbor's registry runs `secure: true` with no
+# skipverify and mounts no CA material, so it is the entire trust blocker.
+#
+# (That Loki flag is apl-core's, not ours. It removes a blocker here, but it is a
+# real pre-existing TLS-verification gap on the hop carrying object-storage
+# credentials and every log line — worth raising upstream on its own merits, and
+# invisible to `plaintext-guard`, which scans what THIS repo ships rather than what
+# apl-core renders into the cluster.)
+#
+# The `leaf` here is unused: only ca.crt matters. cert-manager has no
+# "bundle-only" Certificate kind, so a minimal leaf is issued to obtain the chain.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: obj-proxy-ca
+  namespace: harbor
+  annotations:
+    # Wave 5, with the rest of the component: cert-manager must be up to issue it,
+    # and nothing reads it until a registry pod is admitted.
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  secretName: obj-proxy-ca
+  commonName: obj-proxy-ca-bundle
+  duration: 2160h # 90d
+  renewBefore: 720h # 30d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: llz-serving-ca
+    kind: ClusterIssuer

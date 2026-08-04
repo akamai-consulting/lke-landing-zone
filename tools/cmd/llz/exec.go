@@ -1,6 +1,11 @@
 package main
 
-import "os/exec"
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os/exec"
+)
 
 // This file holds the single seam through which llz shells out to external
 // tools (git, gh, kubectl, ssh-keyscan, …). The output-capturing and
@@ -13,7 +18,27 @@ import "os/exec"
 // execOutput runs name with args and returns its standard output, exactly as
 // (*exec.Cmd).Output would (stderr is surfaced via *exec.ExitError on failure).
 var execOutput = func(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	out, err := exec.Command(name, args...).Output()
+	if err == nil {
+		return out, nil
+	}
+	// ATTACH STDERR TO THE ERROR. .Output() captures stdout only, and every tool
+	// this runs — kubectl, bao, tofu — writes its diagnosis to STDERR. So a failure
+	// arrived as a bare "exit status 1" with an empty message, and callers that
+	// dutifully appended the captured output appended nothing:
+	//
+	//   llz: patch llz-openbao/platform-openbao hostAliases: exit status 1:
+	//
+	// That is an e2e failure with its cause structurally discarded. Go already
+	// carries the text on ExitError.Stderr when Stderr is unset; it was simply never
+	// read. Wrapped with %w so errors.Is/As still work on the original.
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if msg := bytes.TrimSpace(ee.Stderr); len(msg) > 0 {
+			return out, fmt.Errorf("%w: %s", err, msg)
+		}
+	}
+	return out, err
 }
 
 // execCombined runs name with args and returns their combined stdout+stderr as a

@@ -155,7 +155,17 @@ func TestSelectLanesRejectsUnknownNames(t *testing.T) {
 // like a cluster fault.
 func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 	lanes := assertSuiteLanes("e2e")
-	wantRegion := map[string]bool{"health-workflow": true, "broad-pat": true, "team-write": true}
+	// obj-encryption takes --region because it is COMPONENT-GATED: it reads
+	// spec.components.objProxy for that deployment and self-skips when the SSE-C
+	// gateway is not enabled, rather than redding every cluster that does not run it.
+	//
+	// loki takes it because its write PROOF resolves this deployment's chunks bucket
+	// from the spec to confirm a flushed chunk landed. Reading $REGION inside the verb
+	// instead would turn a missing value into a silent skip — the proof would report
+	// "unmeasured" and pass, which is the exact failure mode the proof was added to
+	// remove.
+	wantRegion := map[string]bool{"health-workflow": true, "broad-pat": true, "team-write": true,
+		"obj-encryption": true, "loki": true}
 	for _, l := range lanes {
 		hasRegion := false
 		for _, s := range l.Steps {

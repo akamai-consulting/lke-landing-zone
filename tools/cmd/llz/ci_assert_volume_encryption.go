@@ -182,10 +182,23 @@ func judgeVolume(pv pvVolume, vol map[string]any, desired []string, regionShort 
 		v.NotReapable = fmt.Sprintf("label %q is INVISIBLE to reap (accepted prefixes: %v) — this Volume would survive its own cluster's destroy and leak", v.Label, linode.VolumeLabelPrefixes(regionShort))
 	}
 
-	// Label is only meaningful for a PV with a bound claim: the relabeler derives
-	// it from namespace/pvc and skips released PVs, so demanding a readable label
-	// on one would be asserting something nothing ever sets.
-	if pv.Namespace != "" && pv.PVC != "" {
+	// Label is only meaningful for a BOUND PV.
+	//
+	// A claimRef test is not enough, and that gap made this gate permanently red on
+	// any cluster with Retain-policy leftovers. A RELEASED PV keeps its claimRef —
+	// that is what makes it Released rather than Available — so every leaked PV from
+	// every previous incarnation of a StatefulSet pod still looks claimed. With
+	// Retain, `monitoring/storage-loki-0` accumulates one per cluster rebuild.
+	//
+	// desiredVolumeLabel is a pure function of (region, namespace, pvc), so all of
+	// them want the SAME label, and Linode Volume labels are ACCOUNT-UNIQUE: the
+	// first rename wins and the rest fail duplicate-label forever. Demanding a
+	// readable label on those is asserting something that cannot happen — the lane
+	// is not slow, it is impossible. Observed as "5 of 22 … still the CSI default",
+	// all five claiming monitoring/storage-loki-0.
+	//
+	// They stay reapable: reap accepts the `pvc-` prefix, which is what they keep.
+	if pv.Namespace != "" && pv.PVC != "" && (pv.Phase == "" || pv.Phase == "Bound") {
 		switch {
 		case v.Label == "":
 			v.BadLabel = "Linode Volume has NO label"

@@ -153,6 +153,28 @@ func RenderObjOverlayEnv(env, objCluster string) string {
 	})
 }
 
+// ObjLokiChunksBucket and ObjHarborRegistryBucket are THE derivations of the two
+// bucket names a deployment writes to, shared with RenderObjOverlayEnv above so a
+// checker cannot drift from the buckets the object-storage module actually creates.
+//
+// They exist because the alternative was three invented environment variables
+// (OBJ_ENDPOINT_HOST, LOKI_CHUNKS_BUCKET, HARBOR_REGISTRY_BUCKET) exported by
+// nothing — a gate configured from values no workflow sets does not fail closed,
+// it fails at the first flag check with an error about a missing argument.
+func ObjLokiChunksBucket(env string) string {
+	if env == "" {
+		return ""
+	}
+	return objLabelPrefix + "-loki-chunks-" + env
+}
+
+func ObjHarborRegistryBucket(env string) string {
+	if env == "" {
+		return ""
+	}
+	return objLabelPrefix + "-harbor-registry-" + env
+}
+
 // objLabelPrefix mirrors the llz-object-storage module's label_prefix default —
 // keep in lockstep with the module if that default changes.
 const objLabelPrefix = "platform"

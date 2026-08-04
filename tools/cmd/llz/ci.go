@@ -53,7 +53,7 @@ func ciCmd() *cobra.Command {
 		ciKeycloakConfigureCmd(),
 		ciTeamLoginSmokeCmd())
 	// Cluster readiness gates (assert-loki-bootstrapped.sh / wait-for-harbor.sh).
-	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciAssertHealthWorkflowCmd(), ciValidateTokensCmd())
+	c.AddCommand(ciAssertLokiCmd(), ciWaitHarborCmd(), ciHarborTrustObjProxyCACmd(), ciDrainObjBucketsCmd(), ciAssertHealthWorkflowCmd(), ciValidateTokensCmd())
 	// Generic wait primitives (formerly inline kubectl polling loops in the
 	// bootstrap / rotation workflows).
 	c.AddCommand(ciWaitPodsCmd(), ciWaitClusterReadyCmd())
@@ -161,6 +161,8 @@ func ciCmd() *cobra.Command {
 	// Bootstrap seed for the broad-PAT rotator's minting credential — gated on the
 	// component being enabled (the account-wide broad PAT lands in exactly one cluster).
 	c.AddCommand(ciSeedBroadPATCmd())
+	c.AddCommand(ciSeedSSECKeyCmd())
+	c.AddCommand(ciAssertObjEncryptionCmd())
 	// e2e: force one rotation Job from the CronJob + assert it rotated end-to-end.
 	c.AddCommand(ciAssertBroadPATRotationCmd())
 	// e2e: prove the operator escape hatch works end to end — the release-e2e seed

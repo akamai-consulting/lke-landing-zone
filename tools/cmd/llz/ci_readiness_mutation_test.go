@@ -14,7 +14,7 @@ func TestRunCIAssertLokiAttemptCounterAdvances(t *testing.T) {
 	withKubectl(t, func(string) ([]byte, error) { return nil, errors.New("apiserver 503") })
 
 	out := captureStdout(t, func() {
-		if err := runCIAssertLoki("loki", 200*time.Millisecond, 20*time.Millisecond); err == nil {
+		if err := runCIAssertLoki("loki", "e2e", 200*time.Millisecond, 20*time.Millisecond, false); err == nil {
 			t.Error("an unbootstrapped Loki must still fail after the settle budget")
 		}
 	})
@@ -47,7 +47,7 @@ func TestRunCIAssertLokiReportsArgoApplicationState(t *testing.T) {
 
 	withKubectl(t, stub("Synced", "Healthy"))
 	out := captureStdout(t, func() {
-		if err := runCIAssertLoki("loki", 0, 0); err != nil {
+		if err := runCIAssertLoki("loki", "e2e", 0, 0, false); err != nil {
 			t.Fatalf("a bootstrapped Loki must pass: %v", err)
 		}
 	})
@@ -57,7 +57,7 @@ func TestRunCIAssertLokiReportsArgoApplicationState(t *testing.T) {
 
 	withKubectl(t, stub("OutOfSync", "Degraded"))
 	out = captureStdout(t, func() {
-		if err := runCIAssertLoki("loki", 0, 0); err != nil {
+		if err := runCIAssertLoki("loki", "e2e", 0, 0, false); err != nil {
 			t.Fatalf("the Argo block is non-gating: %v", err)
 		}
 	})

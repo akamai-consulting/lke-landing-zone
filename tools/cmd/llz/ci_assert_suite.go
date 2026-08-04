@@ -84,7 +84,10 @@ func assertSuiteLanes(region string) []suiteLane {
 	return []suiteLane{
 		{
 			Name: "loki", Gating: true,
-			Steps: [][]string{{"assert-loki"}},
+			// --region because the write PROOF has to resolve this deployment's chunks
+			// bucket from the spec. Without it the proof degrades to a skip, which is
+			// the quiet failure this lane exists to stop having.
+			Steps: [][]string{regionArg("assert-loki")},
 			Why:   "Loki is bootstrapped and S3-backed. Says nothing about anything REACHING it — that is openbao-audit and delivery.",
 		},
 		{
@@ -119,6 +122,17 @@ func assertSuiteLanes(region string) []suiteLane {
 			Why: "MUTATING (its own scratch namespace, deleted on every path). The two enforcement properties that cannot be dry-run: a dropped packet is only knowable by sending one. " +
 				"Proves the CNI enforces NetworkPolicy at all — without which every default-deny in this repo is decorative — and that Istio refuses plaintext on a STRICT-mesh port. " +
 				"Each negative is paired with a POSITIVE CONTROL from the same pod, so a probe that simply could not reach anything reports INCONCLUSIVE instead of passing as enforcement.",
+		},
+		{
+			Name: "obj-encryption", Gating: true,
+			Steps: [][]string{regionArg("assert-obj-encryption")},
+			Why: "Objects actually land ENCRYPTED. Separate from obj-storage on purpose: assert-obj-roundtrip proves a consumer can WRITE, " +
+				"and a plaintext write passes it perfectly. This proves the SSE-C gateway is in the path — the registry pods carry the CA, " +
+				"the DNS rewrite is in force, sampled objects answer 400 to a keyless HEAD, and a blob pushed BY HARBOR lands encrypted. " +
+				"That last one is the only check that proves the CA chain: Loki reaches the proxy with insecure_skip_verify, so every other " +
+				"check here is green with Harbor's trust completely broken. MUTATING (leaves one untagged probe blob, which Harbor GC reclaims). " +
+				"Endpoint and bucket names are derived from the spec, not passed in — a gate configured from env vars nothing exports fails on a " +
+				"missing flag rather than on encryption. SELF-SKIPS (loudly) with no --region or when spec.components.objProxy is off.",
 		},
 		{
 			Name: "obj-storage", Gating: true,

@@ -122,10 +122,25 @@ type csiVolume struct {
 	pvcName   string
 }
 
-// linodeCSIVolumes extracts a csiVolume for every PV backed by the Linode CSI
-// driver that has a bound claimRef (orphaned PVs — no claimRef — are skipped, as
-// are non-Linode-CSI PVs). The Volume id is the leading segment of the CSI
-// volumeHandle (`<id>-<name>` on LKE-E).
+// linodeCSIVolumes extracts a csiVolume for every BOUND PV backed by the Linode
+// CSI driver. The Volume id is the leading segment of the CSI volumeHandle
+// (`<id>-<name>` on LKE-E).
+//
+// PHASE MATTERS, and checking claimRef alone is not enough. A RELEASED PV keeps
+// its claimRef — that is precisely what makes it Released rather than Available —
+// so a claimRef test admits every leaked PV from every previous incarnation of a
+// StatefulSet pod. With `Retain`, `monitoring/storage-loki-0` accumulates one per
+// cluster rebuild.
+//
+// That matters because desiredVolumeLabel is a pure function of
+// (region, namespace, pvc): every one of those Released PVs wants the SAME label,
+// and Linode Volume labels are ACCOUNT-UNIQUE. So the first rename wins and every
+// other one fails with a duplicate-label error, forever. The volumes keep their
+// pvc-<uuid> names, assert-volume-encryption reports them as un-relabeled, and no
+// amount of waiting helps — it is not a slow lane, it is an impossible one.
+//
+// Skipping non-Bound PVs does NOT make them unreapable: reap accepts the `pvc-`
+// prefix (VolumeLabelPrefixes), which is exactly what they keep.
 func linodeCSIVolumes(pvList map[string]any) []csiVolume {
 	items, _ := pvList["items"].([]any)
 	var out []csiVolume
@@ -142,6 +157,12 @@ func linodeCSIVolumes(pvList map[string]any) []csiVolume {
 		claim, _ := spec["claimRef"].(map[string]any)
 		if claim == nil {
 			continue
+		}
+		// Bound only — see the phase note above.
+		if status, _ := pv["status"].(map[string]any); status != nil {
+			if phase, _ := status["phase"].(string); phase != "" && phase != "Bound" {
+				continue
+			}
 		}
 		handle, _ := csi["volumeHandle"].(string)
 		idStr := handle
