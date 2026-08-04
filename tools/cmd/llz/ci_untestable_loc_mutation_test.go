@@ -50,14 +50,14 @@ func TestScanUntestableOrderingAndBreakdown(t *testing.T) {
 	write("scripts/header-only.sh", "#!/bin/bash\n# no logic\n\n") // 0 — must not appear in the breakdown
 	write(".github/workflows/w.yml", "steps:\n  - run: |\n      echo a\n")
 
-	cfg := untestableBudget{Categories: map[string]untestableCategory{
+	cfg := budgetConfig{Categories: map[string]budgetCategory{
 		"zulu-workflows": {Kind: "workflow-run", Budget: 9, Include: []string{".github/workflows/*.yml"}},
 		"alpha-scripts":  {Kind: "script", Budget: 9, Include: []string{"scripts/**/*.sh"}},
 	}}
 
-	results, err := scanUntestable(root, cfg)
+	results, err := scanBudgetCategories(root, cfg)
 	if err != nil {
-		t.Fatalf("scanUntestable: %v", err)
+		t.Fatalf("scanBudgetCategories: %v", err)
 	}
 	if len(results) != 2 {
 		t.Fatalf("results = %+v, want 2 categories", results)

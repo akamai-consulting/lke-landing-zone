@@ -25,6 +25,7 @@ on:
       - '.github/workflows/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
+      - '.core-surface-budget.yaml'
       # Markdown ANYWHERE. The `docs` job below runs docs-guard, whose corpus is
       # every .md file in the repo — but no path here matched one, so the guard
       # only ever ran when a PR happened to also touch code. A docs-only PR (the
@@ -56,6 +57,7 @@ on:
       - '.github/workflows/**'
       - 'instance-template/.github/**'
       - '.untestable-budget.yaml'
+      - '.core-surface-budget.yaml'
       # Markdown anywhere — see the note on the pull_request copy above.
       - '**.md'
   workflow_dispatch:
@@ -557,6 +559,15 @@ jobs:
       # set up above; `make untestable-loc-check` falls back to `go run`.
       - name: Untestable-LOC budget gate
         run: make untestable-loc-check
+
+      # Its counterweight (ADR 0014): untestable-loc names tools/cmd/llz as the
+      # destination for converted logic but caps nothing there, so package main
+      # accretes. This budgets the destination — Go logic lines in package main —
+      # and is satisfied by extracting to tools/internal/<pkg> (ADR 0002) or
+      # moving the capability out to an extension (issue #10), never by raising
+      # the budget. Same Go-toolchain-only requirement as the step above.
+      - name: Core-surface budget gate
+        run: make core-surface-check
 
       # Guard: every container-job `run:` step must resolve to bash, not the
       # container's /bin/sh (dash). A missing default silently broke the scheduled

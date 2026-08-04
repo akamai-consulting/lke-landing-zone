@@ -1,0 +1,58 @@
+# Core-surface budget — Go logic lines in package main (tools/cmd/llz).
+#
+# WHY THIS EXISTS, and why it has no slack:  docs/adr/0014-core-surface-budget.md
+# WHERE THE NUMBER IS GOING (~3,000):        docs/designs/internal-extensions.md
+# WHAT A BREACH TELLS YOU:                   coreSurfaceRemedy, in
+#                                            tools/cmd/llz/ci_core_surface.go
+#
+# This file is the operational half of that: the number, and the rule for
+# changing it. The argument lives in the ADR and is not repeated here.
+#
+# THE RULE. `budget` equals the measurement exactly — it is a high-water mark, not
+# a ceiling with headroom (`exact: true` enforces both directions). So:
+#
+#   grew package main?    the gate fails until you raise this line in the SAME
+#                         commit, and say in the message why the code belongs in
+#                         package main rather than tools/internal/<pkg>.
+#   shrank it?            the gate fails until you LOWER this line. Bank the
+#                         paydown; slack left behind silently pre-approves the
+#                         next change's growth.
+#
+# Raising it is expected, not forbidden. The signal is the trend of this line, not
+# any single value.
+#
+# COUNTING (`llz ci core-surface --verbose` prints the per-file breakdown).
+# `go-logic` counts non-blank lines of Go that do not START with `//` — the
+# `script` counter's rule with Go's comment marker. Block comments are
+# deliberately not tracked: this repo documents with `//`, and `/*` appears almost
+# only inside glob and regex string literals, where a naive scanner would swallow
+# the rest of the file.
+#
+# SCOPE. Non-test Go directly under tools/cmd/llz — package main, the one package
+# that cannot be imported, cannot be unit-tested from outside, and has no boundary
+# of its own. tools/internal/** is NOT counted: code that moved there has already
+# done the thing this gate asks for. Tests are excluded outright, because they are
+# what this repo wants more of.
+#
+# NO `remedy:` KEY, deliberately. The breach guidance lives only in
+# coreSurfaceRemedy: when it lived in both places the YAML copy silently won, and
+# an edit to the Go constant never reached an operator. The key stays supported
+# for a gate that needs to override the default; this one does not.
+
+categories:
+  cmd-llz-package-main:
+    kind: go-logic
+    # 47,182 logic lines across 236 non-test files, 130 of them ci_*.go.
+    #
+    # The first number this gate ever recorded was 41,803 across 215 files, taken
+    # on 2026-08-03. Rebasing onto main five weeks later moved it to 47,182 across
+    # 236 — +5,379 lines and +21 files with no decomposition in between, which is
+    # the trend the ADR predicted arriving on schedule. That is the point of the
+    # line: it is a measurement, and the measurement is what argues.
+    budget: 47182
+    exact: true
+    include:
+      - "tools/cmd/llz/*.go"
+
+exclude:
+  - "tools/cmd/llz/*_test.go"
