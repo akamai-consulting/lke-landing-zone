@@ -115,9 +115,16 @@ echo "install-llz: enable shell completion with \`llz completion zsh|bash\` (see
 # enumerate every copy, name the one that wins, and say how to fix it.
 
 # llz_version_of prints a binary's version line, or a placeholder if it won't run.
+#
+# `</dev/null` is load-bearing, not hygiene. The documented install path is
+# `curl … | bash`, where bash reads THE SCRIPT ITSELF from stdin — so any child
+# process that reads stdin eats the rest of the installer, and bash then just
+# stops wherever the buffer ran out. These probes execute whatever files happen
+# to be named `llz` on this machine, which is precisely the code we cannot vouch
+# for. Detach them from stdin so a stray `llz` that reads it truncates nothing.
 llz_version_of() {
-  v="$("$1" version 2>/dev/null | head -1)" || v=""
-  [ -n "$v" ] || v="$("$1" --version 2>/dev/null | head -1)" || v=""
+  v="$("$1" version </dev/null 2>/dev/null | head -1)" || v=""
+  [ -n "$v" ] || v="$("$1" --version </dev/null 2>/dev/null | head -1)" || v=""
   [ -n "$v" ] || v="(not runnable)"
   printf '%s' "$v"
 }
@@ -154,7 +161,7 @@ else
     echo "install-llz:    new    →  $BINDIR/llz  [$(llz_version_of "$BINDIR/llz")]"
     echo "install-llz:    \`llz version\` will keep reporting the OLD binary, and a stale llz can fail"
     echo "install-llz:    later with e.g. \"pathspec 'vX.Y.Z' did not match any file(s) known to git\"."
-    echo "install-llz:    Fix it one of two ways, then re-check with \`type -a llz\`:"
+    echo "install-llz:    Fix it one of two ways, then re-check with \`hash -r; type -a llz\`:"
     echo "install-llz:      1) drop the old copy (prefix with sudo if it is root-owned):"
     echo "install-llz:           rm '$winner'"
     echo "install-llz:      2) or put the new one first, then rehash the shell (zsh: rehash):"
@@ -184,8 +191,14 @@ done <<EOF
 $(llz_on_path)
 EOF
 for d in /usr/local/bin /opt/homebrew/bin /opt/local/bin /usr/bin "$HOME/.local/bin" "$HOME/go/bin" "$HOME/bin"; do
+  # The PATH test is textual, so a dir PATH spells differently (a trailing slash,
+  # a symlink) reads as absent here. Re-check by inode against the two files we
+  # have already accounted for — otherwise the winner itself can be re-listed
+  # below as "not in use right now", which is the one thing this block must never
+  # say about the binary the shell is running.
   case ":$PATH:" in *":$d:"*) continue ;; esac
-  if [ -f "$d/llz" ] && [ -x "$d/llz" ] && [ ! "$d/llz" -ef "$BINDIR/llz" ]; then
+  if [ -f "$d/llz" ] && [ -x "$d/llz" ] && [ ! "$d/llz" -ef "$BINDIR/llz" ] &&
+    { [ -z "$winner" ] || [ ! "$d/llz" -ef "$winner" ]; }; then
     report_other "$d/llz" "  (not on PATH)"
   fi
 done

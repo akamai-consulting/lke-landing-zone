@@ -151,9 +151,13 @@ The script still uses `gh` to fetch the release asset, so keep `gh` authenticate
 > now names every copy and tells you which one wins; check it yourself with:
 >
 > ```bash
-> type -a llz          # every llz on PATH, winner first
-> llz version          # must match what the installer just printed
+> hash -r; type -a llz   # drop cached lookups, then list every llz your shell sees
+> llz version            # must match what the installer just printed
 > ```
+>
+> `hash -r` first because the list is not always in winning order: zsh answers
+> from its command hash, so a shell that resolved `llz` before you installed
+> keeps running the old path even once a nearer copy exists.
 >
 > If the winner is the old one, `rm` it (with `sudo` if it's root-owned) or put
 > `~/.local/bin` first on `PATH` — then `hash -r` (zsh: `rehash`) so the current
