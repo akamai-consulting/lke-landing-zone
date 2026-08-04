@@ -132,7 +132,14 @@ llz_on_path() {
   done | awk '!seen[$0]++'
 }
 
-winner="$(command -v llz 2>/dev/null || true)"
+# `type -P` searches PATH and prints a FILE PATH, which is the only thing the -ef
+# comparisons and the `rm` suggestion below can act on. `command -v` would answer
+# about the shell's whole namespace: with an exported `llz` function in the
+# environment (`export -f llz` in the calling shell — inherited even by a
+# non-interactive script) it prints the bare word "llz", which then reads as a
+# relative path and turns the report into nonsense (`rm llz`). Aliases can't reach
+# here at all — a non-interactive bash script inherits none.
+winner="$(type -P llz 2>/dev/null || true)"
 
 if [ -z "$winner" ]; then
   echo "install-llz: NOTE $BINDIR is not on your PATH — \`llz\` won't resolve yet." >&2
@@ -149,7 +156,7 @@ else
     echo "install-llz:    later with e.g. \"pathspec 'vX.Y.Z' did not match any file(s) known to git\"."
     echo "install-llz:    Fix it one of two ways, then re-check with \`type -a llz\`:"
     echo "install-llz:      1) drop the old copy (prefix with sudo if it is root-owned):"
-    echo "install-llz:           rm $winner"
+    echo "install-llz:           rm '$winner'"
     echo "install-llz:      2) or put the new one first, then rehash the shell (zsh: rehash):"
     echo "install-llz:           export PATH=\"$BINDIR:\$PATH\" && hash -r"
   } >&2
