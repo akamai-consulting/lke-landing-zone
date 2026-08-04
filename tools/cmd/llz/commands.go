@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -182,12 +183,41 @@ func shellQuote(argv []string) string {
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
-// templateSourceExistsFn reports whether the --org template source is reachable
+// templateSourceStatusFn reports whether the --org template source is reachable
 // on GitHub; seamed for tests. runNew preflights it because copier clones
 // gh:<org>/<template> over HTTPS, and a 404 there (typo'd/un-forked --org)
 // surfaces as an interactive `Username for 'https://github.com':` prompt rather
 // than a clear error — the failure mode adopters actually hit.
-var templateSourceExistsFn = repoExists
+var templateSourceStatusFn = repoStatus
+
+// ghUnreachableErr covers the case a preflight must NOT blame on the repo: we
+// could not ask GitHub at all. `gh` missing or unauthenticated makes every lookup
+// fail, and reporting that as "not found" sends the operator off to fix something
+// that is fine. tail is the caller's one-line "so do not conclude X" — the checks
+// are identical everywhere, the wrong conclusion is not.
+// The host is ghHost(), never the github.com literal: `llz doctor` already scopes
+// its own auth check that way (GH_HOST), so a remediation naming the default host
+// would tell a GHE operator to authenticate somewhere doctor is not even looking
+// — and doctor would go on failing after they followed it exactly.
+func ghUnreachableErr(subject string, err error, tail string) error {
+	return fmt.Errorf("could not check %s on GitHub: %w\n"+
+		"  llz drives GitHub through the `gh` CLI, so this is almost always gh, not your instance:\n"+
+		"  • installed?      gh version                             (https://cli.github.com)\n"+
+		"  • authenticated?  gh auth status --hostname %s   (then: gh auth login --hostname %s)\n"+
+		"  %s", subject, err, ghHost(), ghHost(), tail)
+}
+
+// templateUnreachableTail states what an unanswerable lookup does NOT prove about
+// the --org template source. The default upstream is public, so gh is the only
+// candidate; a fork named by --org may be private, where "it's public" would be a
+// false claim and the fix is a login that can see it.
+func templateUnreachableTail(org, repo string) string {
+	if org == defaultTemplateOrg {
+		return "This is NOT a missing template — " + repo + " is public. Re-run `llz new` once gh can answer"
+	}
+	return "This does NOT mean " + repo + " is missing — a private fork also needs a `gh` login that can see it.\n" +
+		"  Re-run `llz new` once gh can answer"
+}
 
 // missingTemplateSourceErr explains an absent --org template source: --org names
 // the template to scaffold FROM (default: the public upstream), not where the
@@ -246,7 +276,10 @@ func runNew(g globalOpts, org, ref, dir string, push bool) error {
 		return err
 	}
 	repo := org + "/" + templateName
-	if !templateSourceExistsFn(repo) {
+	switch found, err := templateSourceStatusFn(repo); {
+	case err != nil:
+		return ghUnreachableErr(repo, err, templateUnreachableTail(org, repo))
+	case !found:
 		return missingTemplateSourceErr(org)
 	}
 	ref, err := scaffoldRef(ref, repo)
@@ -316,13 +349,147 @@ func printNextSteps(dir string, pushed bool) {
 	note("local checks: llz lint / llz validate; add your own commands in .llz/commands.yaml")
 }
 
+// ghOwnerKindFn classifies the <owner> half of instance_repo on GitHub; seamed
+// for tests. instanceRepoExistsFn reports whether the instance repo itself is
+// already there (an adopter who created it by hand after a failed --push).
+var (
+	ghOwnerKindFn        = ghOwnerKind
+	instanceRepoExistsFn = repoExists
+	ghLoginFn            = ghLogin
+)
+
+// ghOwnerKind classifies a GitHub account name: "User", "Organization", or ""
+// when GitHub definitively 404s it. A non-nil error means indeterminate (no `gh`
+// auth, offline, rate-limited) — callers must not treat that as "absent".
+// /users/<name> resolves orgs too, so one call answers both questions.
+func ghOwnerKind(owner string) (string, error) {
+	out, err := execOutput("gh", "api", "users/"+owner, "--jq", ".type")
+	if err != nil {
+		if ghNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// ghNotFound reports whether a `gh api` failure was a 404 rather than an auth,
+// network, or rate-limit problem — gh writes "gh: Not Found (HTTP 404)" to
+// stderr, which (*exec.Cmd).Output captures on the ExitError.
+func ghNotFound(err error) bool {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		s := string(ee.Stderr)
+		return strings.Contains(s, "HTTP 404") || strings.Contains(s, "Not Found")
+	}
+	return false
+}
+
+// ghLogin returns the authenticated `gh` login, or "" if it can't be resolved.
+// Only used to make remediation text concrete ("chandraS/<name>"), never to gate.
+func ghLogin() string {
+	out, err := execOutput("gh", "api", "user", "--jq", ".login")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// missingRepoOwnerErr explains an instance_repo whose OWNER does not exist. This
+// is the failure a first-time adopter actually hits: `gh repo create` creates a
+// repository, never its org, so an absent owner surfaces as a bare "GraphQL:
+// <login> does not have the correct permissions to execute `CreateRepository`"
+// — which reads like a token-scope problem and names no next step.
+//
+// An absent owner splits two ways, and the fixes do NOT overlap: the name is the
+// one they meant (create the org — a user owner they can log in as always exists)
+// or the name is wrong (a typo, or they meant their own account). Only the first
+// resumes from the scaffold on disk; correcting the name means re-scaffolding,
+// because instance_repo is rendered INTO the workflows, not just recorded in
+// .copier-answers.yml. Telling everyone to "create the org" would send a typo
+// straight into a second wrong repo.
+func missingRepoOwnerErr(repo, owner, dir, login string) error {
+	mine := "<your-login>"
+	if login != "" {
+		mine = login
+	}
+	return fmt.Errorf("--push: GitHub owner %q does not exist (or your `gh` login cannot see it), so %s cannot be created.\n"+
+		"  `gh repo create` creates a REPOSITORY, never its owner — the <owner> half of instance_repo must exist first.\n"+
+		"  The scaffold in %s is complete and committed; only the push is left. Is %q the owner you meant?\n"+
+		"  • yes — it's an org you        create it (named exactly %s): https://%s/organizations/new\n"+
+		"    have not created yet:        gh repo create %s --private --source %s --remote origin --push\n"+
+		"  • no — misspelled, or you      re-scaffold with the right answer: llz new <new-dir> --push --yes\n"+
+		"    meant your own account:      (e.g. instance_repo %s/%s — a user owner exists already, nothing to create)\n"+
+		"                                 instance_repo is rendered INTO the workflows, so correcting it means\n"+
+		"                                 re-scaffolding — editing .copier-answers.yml alone is not enough",
+		owner, repo, dir, owner, owner, ghHost(), repo, dir, mine, shortRepoName(repo))
+}
+
+// foreignUserOwnerErr covers an instance_repo owned by a DIFFERENT GitHub user.
+// GitHub has no way to satisfy it — one user cannot create a repository inside
+// another user's account, whatever the token's scopes — so `gh repo create` fails
+// with the same bare CreateRepository error as an absent owner, and every
+// "check your permissions" hint is a dead end. Reachable by a typo that happens
+// to land on a real login, or by naming a colleague's account.
+func foreignUserOwnerErr(repo, owner, dir, login string) error {
+	return fmt.Errorf("--push: instance_repo owner %q is another GitHub USER's account (you are authenticated as %q).\n"+
+		"  GitHub lets you create repositories in your own account or in an org you belong to — never in another\n"+
+		"  user's account, at any token scope, so `gh repo create %s` cannot succeed. Pick one:\n"+
+		"  • wrong owner?                 re-scaffold with the right answer: llz new <new-dir> --push --yes\n"+
+		"                                 (e.g. instance_repo %s/%s — instance_repo is rendered INTO the workflows,\n"+
+		"                                 so editing .copier-answers.yml alone is not enough)\n"+
+		"  • sharing with that person?    use an org you both belong to as the owner, and re-scaffold\n"+
+		"  • logged in as the wrong you?  gh auth switch --hostname %s --user %s, then from %s:\n"+
+		"                                 gh repo create %s --private --source . --remote origin --push",
+		owner, login, repo, login, shortRepoName(repo), ghHost(), owner, dir, repo)
+}
+
+// createRepoErr wraps a failed `gh repo create` with the checks that explain it.
+// gh's own message is preserved above this text (it streams to stderr). ownerKind
+// is the GitHub account type of the owner ("Organization", "User", or "" when it
+// could not be classified). The org-membership probe is meaningless for a user
+// owner — `user/memberships/orgs/<user>` just 404s — and read:org is only ever
+// needed for an org, so a "User" owner is offered neither. An UNCLASSIFIED owner
+// gets the org guidance: instance_repo owners are usually orgs, the classifier
+// only comes up empty when gh could not answer at all, and the probe is harmless
+// (a 404) if the guess is wrong — where withholding a working check is not.
+func createRepoErr(repo, dir, ownerKind string, err error) error {
+	owner, _, ok := strings.Cut(repo, "/")
+	if !ok {
+		owner = repo
+	}
+	host := ghHost()
+	first := fmt.Sprintf("  • is `gh` authed as the right account?    gh auth status --hostname %s\n"+
+		"  • does the token carry the repo scope?    gh auth refresh -h %s -s repo\n"+
+		"  • is the owner one you can create in?     %q must be your own account, or an org you belong to\n",
+		host, host, owner)
+	if ownerKind == "Organization" || ownerKind == "" {
+		first = fmt.Sprintf("  • can you create repos in that org?       gh api user/memberships/orgs/%s --jq .role\n"+
+			"  • is `gh` authed as the right account?    gh auth status --hostname %s\n"+
+			"  • does the token carry the scopes?        gh auth refresh -h %s -s repo,read:org\n", owner, host, host)
+	}
+	return fmt.Errorf("--push: `gh repo create %s` failed: %w\n"+
+		"  The scaffold in %s is complete and committed; only the push is left. Check, in order:\n"+
+		"%s"+
+		"  Then finish from the scaffold:\n"+
+		"    gh repo create %s --private --source %s --remote origin --push",
+		repo, err, dir, first, repo, dir)
+}
+
 // pushInstanceRepo creates the instance's GitHub repo and pushes the freshly
 // scaffolded tree, closing the §3 loop (the repo learned from .copier-answers.yml).
 // Returns whether the push actually happened. Gated by --yes; respects --dry-run.
 func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 	a, err := readAnswers(dir)
 	if err != nil || a == nil || a.InstanceRepo == "" || a.InstanceRepo == "your-org/your-instance-repo" {
-		fmt.Fprintln(os.Stderr, "llz: --push: instance_repo not set in .copier-answers.yml — skipping (create + push by hand)")
+		fmt.Fprintf(os.Stderr, "llz: --push: instance_repo is still the placeholder in %s/.copier-answers.yml — skipping the repo create.\n", dir)
+		// This returns before ensureScaffoldBranch, so the tree may still be on
+		// whatever `git init` named it — say so, since the command below pushes
+		// the checked-out branch and the bootstrap Application tracks `main`.
+		fmt.Fprintf(os.Stderr, "  Create it yourself once you know the <owner>/<name>, from `main` (`git -C %s branch -M main`\n"+
+			"  if you are on master — the platform-bootstrap Application tracks it):\n"+
+			"    gh repo create <owner>/<name> --private --source %s --remote origin --push\n"+
+			"  The <owner> (an org, or your own user) must already exist — that command creates the repo, not the org.\n", dir, dir)
 		return false, nil
 	}
 	repo := a.InstanceRepo
@@ -337,9 +504,130 @@ func pushInstanceRepo(g globalOpts, dir string) (bool, error) {
 			return false, err
 		}
 	}
+	if err := ensureScaffoldBranch(g, dir); err != nil {
+		return false, err
+	}
+
+	// Preflight the destination before the create: an absent owner and an
+	// already-created repo are both dead ends for `gh repo create`, and both are
+	// what a first-time adopter runs into. Skipped in --dry-run (nothing reaches
+	// GitHub there, so the printed plan stays the plain create).
+	owner, _, hasOwner := strings.Cut(repo, "/")
+	var ownerKind string
+	if hasOwner && !g.dryRun {
+		kind, err := ghOwnerKindFn(owner)
+		switch login := ghLoginFn(); {
+		case err != nil:
+			// Indeterminate (no gh auth, offline, rate limit) — don't block on a
+			// classification we couldn't make; createRepoErr explains the failure.
+		case kind == "":
+			return false, missingRepoOwnerErr(repo, owner, dir, login)
+		case kind == "User" && login != "" && !strings.EqualFold(owner, login):
+			// A real account, just not one we can ever create in. Only claimed when
+			// we know who we are — an unresolvable login proves nothing.
+			return false, foreignUserOwnerErr(repo, owner, dir, login)
+		}
+		ownerKind = kind
+		if instanceRepoExistsFn(repo) {
+			if err := adoptExistingRepo(g, dir, repo); err != nil {
+				return false, err
+			}
+			return g.yes, nil
+		}
+	}
+
 	// gh repo create makes a new GitHub repo (outward-facing) — gate on --yes.
-	return g.yes && !g.dryRun, runGated(g, "gh", "repo", "create", repo,
-		"--private", "--source", dir, "--remote", "origin", "--push")
+	if err := runGated(g, "gh", "repo", "create", repo,
+		"--private", "--source", dir, "--remote", "origin", "--push"); err != nil {
+		return false, createRepoErr(repo, dir, ownerKind, err)
+	}
+	return g.yes && !g.dryRun, nil
+}
+
+// bootstrapBranch is the branch a fresh instance must be pushed to: the
+// platform-bootstrap Argo Application tracks apps_repo_revision, which defaults
+// to "main" (ci_bootstrap_cluster.go).
+const bootstrapBranch = "main"
+
+// ensureScaffoldBranch renames a not-yet-pushed scaffold onto bootstrapBranch.
+// `git init` still names the first branch `master` unless the operator has set
+// init.defaultBranch, and nothing downstream forgives that: `gh repo create
+// --source --push` pushes whatever branch is checked out, so the scaffold lands
+// on `master` while the platform-bootstrap Application — and every carved App
+// under it — asks Argo CD for `main`. That failure surfaces an hour later as an
+// unresolvable revision inside the cluster, not here, where it costs one rename.
+// (The workflows already tolerate either name: terraform.yml triggers on
+// [main, master]. Argo CD is the half that does not.)
+//
+// Only ever renames a branch with no upstream — nothing has been pushed yet, so
+// there is no history to rewrite and an instance deliberately living on another
+// branch (already pushed) is left alone.
+func ensureScaffoldBranch(g globalOpts, dir string) error {
+	cur, err := execOutput("git", "-C", dir, "symbolic-ref", "--short", "HEAD")
+	branch := strings.TrimSpace(string(cur))
+	if err != nil || branch == "" || branch == bootstrapBranch {
+		return nil
+	}
+	if _, err := execOutput("git", "-C", dir, "rev-parse", "--symbolic-full-name", "@{upstream}"); err == nil {
+		return nil
+	}
+	// `git branch -M` is --move --force: renaming onto an EXISTING main deletes
+	// that branch and everything only it pointed at, silently. A one-commit
+	// copier scaffold has no second branch, but pushInstanceRepo also runs over
+	// directories llz did not just create — so never clobber, just say so.
+	if _, err := execOutput("git", "-C", dir, "show-ref", "--verify", "--quiet", "refs/heads/"+bootstrapBranch); err == nil {
+		fmt.Fprintf(os.Stderr, "%s scaffold is on %q but a %q branch already exists — leaving both alone.\n",
+			yellow("!"), branch, bootstrapBranch)
+		fmt.Fprintf(os.Stderr, "  The platform-bootstrap Application tracks %s (apps_repo_revision), so push the scaffold there\n"+
+			"  yourself once you have reconciled the two branches.\n", bootstrapBranch)
+		return nil
+	}
+	// run() is a no-op under --dry-run, and unlike runGated it does not mark its
+	// echo as one — so an announcement in the past tense would have --dry-run
+	// reporting a local branch mutation that did not happen, from the one flag
+	// whose entire contract is "changes nothing".
+	verb := "renaming"
+	if g.dryRun {
+		verb = "would rename"
+	}
+	fmt.Fprintf(os.Stderr, "%s scaffold is on %q; %s to %q — the platform-bootstrap Application tracks %s (apps_repo_revision)\n",
+		yellow("!"), branch, verb, bootstrapBranch, bootstrapBranch)
+	return run(g, "git", "-C", dir, "branch", "-M", bootstrapBranch)
+}
+
+// adoptExistingRepo wires an instance_repo that ALREADY exists as `origin` and
+// pushes into it, instead of `gh repo create`ing it again (which fails with
+// "Name already exists on this account"). This is the second half of the absent-
+// owner story: the adopter creates the org/repo by hand, re-runs, and would
+// otherwise hit a fresh dead end.
+func adoptExistingRepo(g globalOpts, dir, repo string) error {
+	// runGated only PRINTS without --yes (and in --dry-run), so the announcement
+	// has to match the mode — otherwise it claims a push that never happened and
+	// the operator walks away believing the repo is populated.
+	did := "wiring it as `origin` and pushing into it"
+	if g.dryRun || !g.yes {
+		did = "would wire it as `origin` and push into it"
+	}
+	fmt.Fprintf(os.Stderr, "%s %s already exists on GitHub — %s.\n", yellow("!"), repo, did)
+	sub := "add"
+	if _, err := execOutput("git", "-C", dir, "remote", "get-url", "origin"); err == nil {
+		sub = "set-url"
+	}
+	// ghHost(), not the github.com literal: `gh repo create` resolves the host
+	// itself from GH_HOST, but this remote URL is hand-built, so on GHE it would
+	// point origin at a host the repo does not live on and the push below fails.
+	if err := runGated(g, "git", "-C", dir, "remote", sub, "origin", "https://"+ghHost()+"/"+repo+".git"); err != nil {
+		return err
+	}
+	if err := runGated(g, "git", "-C", dir, "push", "-u", "origin", "HEAD"); err != nil {
+		return fmt.Errorf("--push: %s exists but the push was rejected: %w\n"+
+			"  The remote most likely already has commits (a README/.gitignore from repo creation).\n"+
+			"  Reconcile from the scaffold, then push:\n"+
+			"    git -C %s pull --rebase origin HEAD && git -C %s push -u origin HEAD\n"+
+			"  (or recreate the repo empty: `gh repo create %s --private` with no initial files)",
+			repo, err, dir, dir, repo)
+	}
+	return nil
 }
 
 func runUpgrade(g globalOpts, ref string, commit, noRender bool) error {

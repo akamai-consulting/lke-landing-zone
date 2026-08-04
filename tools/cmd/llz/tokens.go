@@ -53,9 +53,8 @@ func runTokens(g globalOpts, admin bool, env, cluster, bucket, repo string) erro
 	if err != nil {
 		return err
 	}
-	if lookable("gh") && !repoExists(instanceRepo) {
-		remediateMissingRepo(instanceRepo)
-		return fmt.Errorf("instance repo %s not found on GitHub", instanceRepo)
+	if err := requireInstanceRepo(instanceRepo); err != nil {
+		return err
 	}
 
 	fmt.Printf("%s %s\n", bold("llz tokens"), dim(fmt.Sprintf("— %s (env infra-%s)%s", instanceRepo, deployEnv, adminBanner(admin))))
@@ -306,9 +305,8 @@ func cmdDoctorE2E(repo, env string, admin bool) error {
 	if env == "" {
 		env = "e2e"
 	}
-	if lookable("gh") && !repoExists(instanceRepo) {
-		remediateMissingRepo(instanceRepo)
-		return fmt.Errorf("instance repo %s not found on GitHub", instanceRepo)
+	if err := requireInstanceRepo(instanceRepo); err != nil {
+		return err
 	}
 	secrets, vars := loadEnvFiles()
 	reqs := e2eRequirements(admin)
@@ -363,8 +361,56 @@ func resolveInstanceRepo(flagVal string, admin bool) (string, error) {
 // every secret reads "missing" is that the natural `llz new` (without --push) →
 // `llz tokens` sequence never created the remote repo.
 func repoExists(repo string) bool {
-	_, err := execOutput("gh", "api", "repos/"+repo, "--silent")
-	return err == nil
+	found, err := repoStatus(repo)
+	return found && err == nil
+}
+
+// repoStatus is repoExists with the third answer kept: (false, nil) means GitHub
+// answered 404, while a non-nil error means llz could not ask at all — `gh`
+// absent, unauthenticated, offline, rate-limited. Collapsing those two into
+// "false" is fine for a readiness table (every row reads "missing" either way)
+// but wrong for a preflight that then blames the repo for gh's problem.
+//
+// A 404 is "not there, OR not visible to this login" — GitHub hides private
+// repos behind the same status rather than admitting they exist. Callers must
+// word it that way: an operator authed as the wrong account, or with a token
+// missing the repo scope, is told to create a repository that is already there,
+// and `gh repo create` then dead-ends on "Name already exists on this account".
+func repoStatus(repo string) (bool, error) {
+	if _, err := execLookPath("gh"); err != nil {
+		return false, fmt.Errorf("the GitHub CLI is not on PATH: %w", err)
+	}
+	if _, err := execOutput("gh", "api", "repos/"+repo, "--silent"); err != nil {
+		if ghNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// requireInstanceRepo gates `llz tokens` / `llz doctor` on the live instance repo
+// — both read and write it, so neither means anything without it. It keeps the
+// two failures apart for the same reason `llz new`'s preflight does: a `gh` that
+// cannot answer (missing, unauthenticated, offline, rate-limited) used to be
+// reported as "instance repo not found on GitHub", sending the operator off to
+// re-create a repo that was never missing. Skipped entirely when gh is absent —
+// doctor's own tooling table is where that belongs, and `llz tokens` fails on it
+// soon enough.
+func requireInstanceRepo(instanceRepo string) error {
+	if !lookable("gh") {
+		return nil
+	}
+	found, err := repoStatus(instanceRepo)
+	switch {
+	case err != nil:
+		return ghUnreachableErr(instanceRepo, err,
+			"This does NOT mean the repo is missing — nothing was checked. Re-run once gh can answer")
+	case !found:
+		remediateMissingRepo(instanceRepo)
+		return fmt.Errorf("instance repo %s is not visible to your `gh` login (absent, or private to an account you are not authed as)", instanceRepo)
+	}
+	return nil
 }
 
 // remediateMissingRepo prints the exact fix for an absent instance repo so the
@@ -372,7 +418,31 @@ func repoExists(repo string) bool {
 func remediateMissingRepo(repo string) {
 	fmt.Fprintf(os.Stderr, "\n%s instance repo %q is not reachable on GitHub.\n", red("✗"), repo)
 	fmt.Fprintln(os.Stderr, "  `llz tokens` and `llz doctor` read/write the live repo, so it must exist and be pushed first.")
-	fmt.Fprintln(os.Stderr, "  Create + push it from the instance directory:")
+	// GitHub 404s a private repo you cannot see exactly as it 404s one that does
+	// not exist, so "create it" is the wrong first move for an operator who is
+	// simply authed as the wrong account — `gh repo create` would then dead-end
+	// on "Name already exists on this account".
+	fmt.Fprintf(os.Stderr, "  If it DOES exist, you are authed as an account that cannot see it: gh auth status --hostname %s\n", ghHost())
+	// An absent OWNER is the more common cause and needs a different first step —
+	// `gh repo create` makes a repository, never the org that holds it, so
+	// printing the create line alone sends the operator into a bare
+	// "does not have the correct permissions to execute `CreateRepository`".
+	// Spelling comes first: a user owner they can log in as always exists, so an
+	// absent one is far more often a typo in instance_repo than an uncreated org.
+	if owner, _, ok := strings.Cut(repo, "/"); ok {
+		if kind, err := ghOwnerKindFn(owner); err == nil && kind == "" {
+			fmt.Fprintf(os.Stderr, "  The OWNER %q does not exist either — check how it is spelled in .copier-answers.yml,\n", owner)
+			fmt.Fprintf(os.Stderr, "  or, if that org is simply not created yet: https://%s/organizations/new\n", ghHost())
+		}
+	}
+	// `--source . --push` pushes whatever branch is checked out, and `git init`
+	// still names the first one `master` unless init.defaultBranch says otherwise.
+	// `llz new --push` normalises that itself (ensureScaffoldBranch); a remediation
+	// the operator types by hand in some existing checkout does not, and a repo
+	// whose content lands on `master` leaves the platform-bootstrap Application
+	// asking Argo CD for a revision that is not there.
+	fmt.Fprintln(os.Stderr, "  Create + push it from the instance directory — on `main`, which the platform-bootstrap")
+	fmt.Fprintln(os.Stderr, "  Application tracks (apps_repo_revision); `git branch -M main` first if you are on master:")
 	fmt.Fprintf(os.Stderr, "    gh repo create %s --private --source . --remote origin --push\n", repo)
 	fmt.Fprintln(os.Stderr, "  …or re-scaffold with push next time: `llz new <name> --push --yes`.")
 }
