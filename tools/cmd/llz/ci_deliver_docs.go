@@ -246,8 +246,19 @@ func rewriteInstanceRootLinks(
 		if path == "" {
 			return m
 		}
-		resolved := filepath.Clean(filepath.Join(fileDir, path))
-		if resolved == "." || strings.HasPrefix(resolved, "..") {
+		// Root-relative (`/docs/x.md`) resolves from the INSTANCE root, not the
+		// file's directory — the same rule the guard's two resolvers use. This was
+		// the third copy of that resolution and the one I missed when fixing them.
+		base := fileDir
+		if strings.HasPrefix(path, "/") {
+			base, path = "", strings.TrimPrefix(path, "/")
+		}
+		resolved := filepath.Clean(filepath.Join(base, path))
+		// Defensive: nothing above the instance root, and nothing absolute, ever
+		// reaches the existence probes. (Neither can escape the tree today —
+		// filepath.Join(root, "/x") is root/x, cleaned, not /x — but the probes
+		// should not depend on that being true of every future caller.)
+		if resolved == "." || resolved == "" || filepath.IsAbs(resolved) || strings.HasPrefix(resolved, "..") {
 			return m // escapes the instance — not ours to rewrite
 		}
 		if inInstance(resolved) {
