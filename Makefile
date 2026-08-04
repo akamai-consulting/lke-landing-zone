@@ -30,6 +30,7 @@ COVERAGE_MINS := \
 	cmd/llz=48 \
 	internal/cli=95 \
 	internal/clusterspec=95 \
+	internal/extension=95 \
 	internal/health=95 \
 	internal/kube=78 \
 	internal/linode=80 \
