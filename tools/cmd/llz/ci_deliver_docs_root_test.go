@@ -402,3 +402,59 @@ func TestDeliverDocs_WalkErrorFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// deliver-docs rewrites template-owned Markdown IN PLACE on a live instance, so
+// it must not disturb file modes. A review flagged the `0o644` argument to
+// os.WriteFile as resetting perms; measured, it does not — that argument applies
+// only when CREATING, and these paths are always read first, so the create branch
+// is unreachable. This pins the behaviour rather than "fixing" a hazard that is
+// not there: if anyone later switches to a create-truncate pattern, this fails.
+func TestDeliverDocs_PreservesFileModes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — mode semantics differ")
+	}
+	root, tmpl := t.TempDir(), t.TempDir()
+	write := func(base, rel, body string, mode os.FileMode) string {
+		p := filepath.Join(base, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	write(tmpl, "docs/adopter-guide.md", "# guide", 0o644)
+	write(tmpl, filepath.Join(templateScaffoldSubdir, "AGENTS.md"), "src", 0o644)
+	write(root, "docs/quickstart.md", "# qs", 0o644)
+	// A deliberately restrictive mode on a file the ROOT pass will rewrite.
+	agents := write(root, "AGENTS.md", "[g](docs/adopter-guide.md)\n", 0o600)
+	// ...and on one the DOCS pass will rewrite.
+	kept := write(root, "docs/runbooks/r.md", "[s](../secrets.md)\n", 0o640)
+
+	if err := runDeliverDocs(filepath.Join(root, "docs"), "acme", "v1", root, tmpl); err != nil {
+		t.Fatalf("runDeliverDocs: %v", err)
+	}
+
+	for _, tc := range []struct {
+		path string
+		want os.FileMode
+	}{{agents, 0o600}, {kept, 0o640}} {
+		fi, err := os.Stat(tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != tc.want {
+			t.Errorf("%s: mode %v, want %v preserved — an in-place doc rewrite must not change perms on a live instance",
+				filepath.Base(tc.path), got, tc.want)
+		}
+		// And prove the rewrite actually happened, so this is not passing vacuously.
+		b, _ := os.ReadFile(tc.path)
+		if !strings.Contains(string(b), "https://github.com/acme/") {
+			t.Errorf("%s was not rewritten — the mode assertion proves nothing:\n%s", filepath.Base(tc.path), b)
+		}
+	}
+}
