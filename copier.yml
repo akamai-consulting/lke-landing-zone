@@ -146,20 +146,38 @@ instance_repo:
   type: str
   help: >-
     This instance's own GitHub repository as <owner>/<name> — used for ArgoCD
-    repo URLs, `gh` CLI targeting, and the SSH deploy-key wiring.
+    repo URLs, `gh` CLI targeting, and the SSH deploy-key wiring. The <owner>
+    (your GitHub user, or an org you can create repos in) must ALREADY exist:
+    `llz new --push` creates the repository, never its owner. Create an org at
+    https://github.com/organizations/new first, or use your own username.
   default: your-org/your-instance-repo
   # Shape only, and the placeholder default stays legal: `copier copy --defaults`
   # (template CI's instance-test) renders with it, and `llz new --push` already
-  # detects it and skips the repo creation with a message. What this catches is a
+  # detects it and skips the repo creation with a message. What this catches is an
   # answer that is not an <owner>/<name> pair at all — a browser URL, a bare repo
-  # name, a trailing .git. Every one of those renders a scaffold that LOOKS fine:
-  # the value is only dereferenced later, by `gh repo create` (after the whole
-  # render), by the ArgoCD repoURL, and by every `gh` call `llz tokens`/`doctor`
-  # make against "the instance repo".
+  # name, a trailing .git — plus an OWNER that GitHub itself would refuse. Every
+  # one of those renders a scaffold that LOOKS fine: the value is only
+  # dereferenced later, by `gh repo create` (after the whole render), by the
+  # ArgoCD repoURL, and by every `gh` call `llz tokens`/`doctor` make against
+  # "the instance repo".
+  #
+  # The owner half is GitHub's OWN account-name rule (alphanumerics joined by
+  # single hyphens, no leading/trailing hyphen, <= 39 chars), not merely
+  # "something before the slash": "acme--corp" or "acme-" would otherwise pass
+  # here, 404 at `llz new --push`'s owner preflight, and be answered with "create
+  # the org, named exactly acme--corp" — an org GitHub then refuses to create.
+  # Whether the owner EXISTS is that preflight's job, at the point where it can
+  # ask GitHub; this is only the shape.
+  #
+  # The .git suffix is a separate elif on purpose: the name half accepts dots, so
+  # "org/repo.git" reaches it and gets told about the suffix specifically instead
+  # of the generic slug message.
   # Uses the custom _envops delimiters (<% %> blocks, <@ @> vars), not stock Jinja.
   validator: >-
-    <% if not instance_repo | regex_search('^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$') %>instance_repo
-    must be <owner>/<name> — the repo slug, not a URL, and not a bare name. Got
+    <% if not instance_repo | regex_search('^[A-Za-z0-9]+(-[A-Za-z0-9]+)*/[A-Za-z0-9][A-Za-z0-9._-]*$')
+    or instance_repo.split('/')[0] | length > 39 %>instance_repo must be <owner>/<name> — the repo
+    slug, not a URL, and not a bare name; the owner is a GitHub org or your own username
+    (alphanumerics joined by single hyphens, no leading/trailing hyphen, max 39 chars). Got
     "<@ instance_repo @>" (e.g. my-org/my-lke-instance).<% elif instance_repo.endswith('.git') %>instance_repo
     must be <owner>/<name> without the .git suffix — got "<@ instance_repo @>".<% endif %>
 
