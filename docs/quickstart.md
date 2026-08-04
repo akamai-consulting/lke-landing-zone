@@ -132,7 +132,7 @@ The script still uses `gh` to fetch the release asset, so keep `gh` authenticate
 (above) — only the script itself is downloaded anonymously.
 
 > **Already have a template or instance checkout?** Skip the `curl` and run the
-> same script from there: `./template-scripts/install-llz.sh` (append `v0.2.0` to
+> same script from there: `./template-scripts/install-llz.sh` (append `v0.0.39` to
 > pin a tag, or prefix `ORG=<fork>`).
 
 > **Put `~/.local/bin` on your `PATH`.** If `llz version` prints "command not
@@ -142,18 +142,47 @@ The script still uses `gh` to fetch the release asset, so keep `gh` authenticate
 > echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 > ```
 
+> **Already had an `llz` on this machine?** A copy earlier on `PATH` wins every
+> lookup, so the install can succeed while `llz` keeps running the OLD binary —
+> which then fails much later and cryptically (a stale llz scaffolds from a
+> retired template ref: `pathspec 'vX.Y.Z' did not match any file(s) known to
+> git`). Quickstarts before 2026-06-13 installed with `sudo` into
+> `/usr/local/bin`, and the devcontainer image ships one there too. The installer
+> now names every copy and tells you which one wins; check it yourself with:
+>
+> ```bash
+> hash -r; type -a llz   # drop cached lookups, then list every llz your shell sees
+> llz version            # must match what the installer just printed
+> ```
+>
+> `hash -r` first because the list is not always in winning order: zsh answers
+> from its command hash, so a shell that resolved `llz` before you installed
+> keeps running the old path even once a nearer copy exists.
+>
+> If the winner is the old one, `rm` it (with `sudo` if it's root-owned) or put
+> `~/.local/bin` first on `PATH` — then `hash -r` (zsh: `rehash`) so the current
+> shell forgets the old location.
+
 <details>
 <summary><strong>Install by hand</strong> — no checkout, or you prefer the raw commands</summary>
 
 Download the asset for your platform with `gh` and put it on your `PATH`. The
 release tag is the bare `<VER>`; the snippet resolves the latest with
-`gh release list`:
+`gh release list` — highest **semver**, drafts and pre-releases dropped, which is
+the same rule `llz self-update` and `llz new` apply. (Don't shorten it to
+`--limit 1`: that returns whatever was released *last*, and a draft's git tag
+does not exist yet, so the binary installs but `llz new` then dies with
+`pathspec 'vX.Y.Z' did not match any file(s) known to git`.)
 
 ```bash
 # macOS arm64 shown; swap the suffix for your platform:
 #   llz-darwin-arm64  llz-darwin-amd64  llz-linux-amd64  llz-linux-arm64
 ORG=akamai-consulting            # or your fork's org
-VER=$(gh release list --repo "${ORG}/lke-landing-zone" --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')
+VER=$(gh release list --repo "${ORG}/lke-landing-zone" --limit 200 --json tagName,isDraft,isPrerelease \
+  --jq '[.[]|select((.isDraft or .isPrerelease)|not)|.tagName|select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))]
+        |map({t:.,k:(sub("^v";"")|sub("[-+].*$";"")|split(".")|map(tonumber))})
+        |reduce .[] as $r (null; if . == null or $r.k > .k then $r else . end)|(.t // empty)')
+: "${VER:?no published vX.Y.Z release found — check: gh release list --repo ${ORG}/lke-landing-zone}"
 ASSET=llz-darwin-arm64
 BINDIR="$HOME/.local/bin"
 mkdir -p "$BINDIR"               # create it FIRST (see the PATH note above)
@@ -169,7 +198,11 @@ anonymously — no token, no API asset endpoint:
 
 ```bash
 ORG=akamai-consulting; ASSET=llz-darwin-arm64
-VER=$(gh release list --repo "${ORG}/lke-landing-zone" --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')
+VER=$(gh release list --repo "${ORG}/lke-landing-zone" --limit 200 --json tagName,isDraft,isPrerelease \
+  --jq '[.[]|select((.isDraft or .isPrerelease)|not)|.tagName|select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))]
+        |map({t:.,k:(sub("^v";"")|sub("[-+].*$";"")|split(".")|map(tonumber))})
+        |reduce .[] as $r (null; if . == null or $r.k > .k then $r else . end)|(.t // empty)')
+: "${VER:?no published vX.Y.Z release found — check: gh release list --repo ${ORG}/lke-landing-zone}"
 BINDIR="$HOME/.local/bin"; mkdir -p "$BINDIR"
 curl -fsSL \
   "https://github.com/${ORG}/lke-landing-zone/releases/download/${VER}/${ASSET}" \
@@ -194,7 +227,7 @@ source <(llz completion bash)                 # bash (add to ~/.bashrc)
 Once installed, keep the binary current without re-running the download — `llz
 self-update` pulls the latest **full** release for your platform (pre-release
 candidates are skipped; via `gh`, checksum-verified) and replaces itself in place;
-`--ref v0.2.0` targets a specific version, `--dry-run` just reports what it would
+`--ref v0.0.39` targets a specific version, `--dry-run` just reports what it would
 install.
 
 > Building from source instead? From a template checkout, `make llz` produces
@@ -539,7 +572,7 @@ Two independent tracks, because the template ships two kinds of thing.
 llz self-update                # get the new llz binary first (the version anchor)
 llz upgrade                    # re-renders the scaffold + re-pins to llz's version
 # or target a specific release explicitly:
-llz upgrade --ref v0.2.0
+llz upgrade --ref v0.0.39
 ```
 
 Runs `copier update` (3-way merge — your local edits survive; conflicts appear as

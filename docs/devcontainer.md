@@ -47,7 +47,7 @@ locally passes in CI.
 `PATH` the moment the container starts (`llz version`). To move to a *different*
 release — e.g. a newer one published since the image was built, or one matching
 an instance pinned to an older template — run `llz self-update` (optionally
-`--ref v0.2.0`), or install over it with the one-liner from
+`--ref v0.0.39`), or install over it with the one-liner from
 [Quick Start §2](quickstart.md#2-install-llz).
 
 ---

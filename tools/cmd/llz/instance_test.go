@@ -9,7 +9,7 @@ import (
 func TestReadAnswers(t *testing.T) {
 	dir := t.TempDir()
 	body := "" +
-		"_commit: v0.1.0\n" +
+		"_commit: v0.0.38\n" +
 		"_src_path: gh:akamai-consulting/lke-landing-zone\n" +
 		"upstream_org: akamai-consulting\n" +
 		"instance_repo: my-org/my-instance\n"
@@ -23,7 +23,7 @@ func TestReadAnswers(t *testing.T) {
 	if a == nil {
 		t.Fatal("expected answers, got nil")
 	}
-	if a.Commit != "v0.1.0" || a.UpstreamOrg != "akamai-consulting" || a.InstanceRepo != "my-org/my-instance" {
+	if a.Commit != "v0.0.38" || a.UpstreamOrg != "akamai-consulting" || a.InstanceRepo != "my-org/my-instance" {
 		t.Errorf("parsed answers: %+v", a)
 	}
 }

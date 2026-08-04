@@ -561,7 +561,7 @@ func selfUpdateCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error { return runSelfUpdate(gopts, repo, ref) },
 	}
-	c.Flags().StringVar(&ref, "ref", "", "release to install, e.g. v0.2.0 (default: latest)")
+	c.Flags().StringVar(&ref, "ref", "", "release to install, e.g. v0.0.39 (default: latest)")
 	c.Flags().StringVar(&repo, "repo", "", "template repo to pull from (default: upstream_org/lke-landing-zone)")
 	return c
 }

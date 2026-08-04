@@ -133,19 +133,21 @@ func TestLatestRelease(t *testing.T) {
 		if name != "gh" || len(args) == 0 || args[0] != "release" {
 			t.Errorf("latestRelease shelled out to %q %v, want gh release ...", name, args)
 		}
-		// Bare vX.Y.Z full releases are the CLI track. Pre-releases (unpromoted e2e
-		// candidates), drafts, and prefixed legacy/module tags are all ignored — so
-		// v0.3.0, though highest, is skipped because it is still a pre-release.
+		// Bare vX.Y.Z full releases are the CLI track. Every tag ABOVE the expected
+		// winner is excluded for a different reason — v0.0.38 is a pre-release (an
+		// unpromoted e2e candidate), v0.0.39 is a draft (no git tag exists yet), and
+		// llz/v0.0.40 is on the legacy prefixed track — so a filter that dropped any
+		// one of the three would return it instead of v0.0.37.
 		return []byte(`[` +
-			`{"tagName":"v0.1.0","isDraft":false,"isPrerelease":false},` +
-			`{"tagName":"v0.2.0","isDraft":false,"isPrerelease":false},` +
-			`{"tagName":"v0.3.0","isDraft":false,"isPrerelease":true},` +
-			`{"tagName":"v0.4.0","isDraft":true,"isPrerelease":false},` +
-			`{"tagName":"llz/v0.9.0","isDraft":false,"isPrerelease":false}]`), nil
+			`{"tagName":"v0.0.36","isDraft":false,"isPrerelease":false},` +
+			`{"tagName":"v0.0.37","isDraft":false,"isPrerelease":false},` +
+			`{"tagName":"v0.0.38","isDraft":false,"isPrerelease":true},` +
+			`{"tagName":"v0.0.39","isDraft":true,"isPrerelease":false},` +
+			`{"tagName":"llz/v0.0.40","isDraft":false,"isPrerelease":false}]`), nil
 	})
 	tag, err := latestRelease("akamai/lke-landing-zone")
-	if err != nil || tag != "v0.2.0" {
-		t.Errorf("latestRelease = (%q, %v), want (v0.2.0, nil)", tag, err)
+	if err != nil || tag != "v0.0.37" {
+		t.Errorf("latestRelease = (%q, %v), want (v0.0.37, nil)", tag, err)
 	}
 
 	// Only pre-releases/prefixed tags -> error (no full release to serve).

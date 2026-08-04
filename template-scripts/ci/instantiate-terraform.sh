@@ -6,7 +6,7 @@
 # (tools/internal/tfroots/roots/<root>) — `llz render` generates them into an instance
 # on the fly (the instance commits ZERO Terraform code). They reference the reusable
 # modules by their PUBLISHED git:: ref (e.g.
-#   source = "git::ssh://…//terraform-modules/llz-cluster?ref=llz-cluster/v0.1.0")
+#   source = "git::ssh://…//terraform-modules/llz-cluster?ref=v0.0.39")
 # which only resolves after a release tag exists. This is the Terraform analog of
 # rendering charts: it copies the roots into a build dir and rewrites those
 # git:: sources to the in-repo terraform-modules/ path, then runs

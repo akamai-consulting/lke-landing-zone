@@ -182,7 +182,7 @@ layers, and Copier owns the outer one:
 # Without --trust, Copier skips both — no docs/, and you arm the hook yourself with
 # `llz hooks`. (The bootstrap/operations scripts are NOT copied in — the reusable
 # llz-* workflows run them from a template checkout.)
-copier copy --trust --vcs-ref v0.1.0 -d llz_version=v0.1.0 \
+copier copy --trust --vcs-ref v0.0.38 -d llz_version=v0.0.38 \
   gh:akamai-consulting/lke-landing-zone my-instance
 # Copier asks for:
 #   upstream_org   — the org hosting the LLZ template/modules/charts (default
@@ -206,9 +206,9 @@ filled in, and writes `.copier-answers.yml` recording the answers + the template
 commit. Later, inside the instance:
 
 ```bash
-llz upgrade --ref v0.2.0   # preferred: copier update + re-pin to v0.2.0 in lockstep
+llz upgrade --ref v0.0.39   # preferred: copier update + re-pin to v0.0.39 in lockstep
 # or, raw copier (re-pin the version yourself — then `llz render`, see below):
-copier update --trust --vcs-ref v0.2.0 -d llz_version=v0.2.0
+copier update --trust --vcs-ref v0.0.39 -d llz_version=v0.0.39
 ```
 
 > **Prefer `llz upgrade` over raw `copier update`** for more than the re-pin. The

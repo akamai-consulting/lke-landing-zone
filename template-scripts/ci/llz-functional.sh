@@ -127,19 +127,26 @@ case "$run_net" in
 esac
 
 if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
-  # Resolve the release under test: an explicit ref (v0.1.0 / 0.1.0, or a legacy
-  # llz/v0.1.0), else the highest-semver bare vX.Y.Z umbrella tag on the repo.
+  # Resolve the release under test: an explicit ref (v0.0.38 / 0.0.38, or a legacy
+  # llz/v0.0.38), else the highest-semver bare vX.Y.Z umbrella tag on the repo.
   REF="${LLZ_FUNCTIONAL_REF:-}"
   if [[ -n "$REF" ]]; then
     v="${REF#llz/}"; v="${v#v}"; TAG="v${v}"
   else
     # Highest-semver FULL release: skip drafts and pre-releases (unpromoted e2e
-    # candidates), matching latestRelease() in selfupdate.go.
+    # candidates), matching latestRelease() in selfupdate.go — including its
+    # tolerance for a -pre/+build tail, which is stripped before the numeric
+    # comparison. Without the strip, `split(".") | map(tonumber)` would ERROR on
+    # a tag like v1.2.3-hotfix rather than rank it, so the filter and the key
+    # have to move together. The reduce keeps the FIRST of equal cores (gh lists
+    # newest first), which is what latestLLZTag does and what a `sort_by | last`
+    # would silently invert — see TestLatestLLZTagTieKeepsFirst.
+    # shellcheck disable=SC2016  # $r is a jq variable; it must NOT expand in the shell.
     TAG="$(gh release list --repo "$REPO" --limit 200 --json tagName,isDraft,isPrerelease --jq \
-      '[.[] | select((.isDraft|not) and (.isPrerelease|not)) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort_by(ltrimstr("v") | split(".") | map(tonumber)) | last')"
+      '[.[] | select((.isDraft|not) and (.isPrerelease|not)) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))] | map({tag:., key:(ltrimstr("v") | sub("[-+].*$";"") | split(".") | map(tonumber))}) | reduce .[] as $r (null; if . == null or $r.key > .key then $r else . end) | (.tag // empty)')"
     [[ -n "$TAG" && "$TAG" != "null" ]] || { fail "no full vX.Y.Z release found on $REPO"; TAG=""; }
   fi
-  WANT_VER="$TAG"   # e.g. v0.1.0
+  WANT_VER="$TAG"   # e.g. v0.0.38
 
   # Asset for THIS platform (matches assetName() in selfupdate.go).
   goos="$(go env GOOS 2>/dev/null || uname -s | tr '[:upper:]' '[:lower:]')"
@@ -241,6 +248,36 @@ if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
     else
       fail "self-update --dry-run did not report a resolved target"
     fi
+
+    # B6. install-llz.sh reports WHICH llz the shell will run. A successful
+    # install is not the same as a usable one: an older copy earlier on PATH wins
+    # every lookup, the installer's own success line proves nothing (it invokes
+    # the new binary by absolute path), and the resulting failure surfaces much
+    # later as copier rejecting a retired template ref. That is a silent-by-
+    # construction bug, so pin BOTH verdicts here rather than trusting a manual
+    # check to be repeated.
+    step "B6. install-llz.sh names the winning llz on PATH"
+    inst="$ROOT/template-scripts/install-llz.sh"
+    shadow="$(mktemp -d)"; mkdir -p "$shadow/old" "$shadow/new"
+    printf '#!/bin/sh\necho "llz version stale-shadow"\n' >"$shadow/old/llz"
+    chmod +x "$shadow/old/llz"
+
+    # Shadowed: an older llz earlier on PATH must be named as the one in use.
+    out="$(PATH="$shadow/old:$shadow/new:$PATH" LLZ_BINDIR="$shadow/new" bash "$inst" 2>&1 || true)"
+    if grep -q 'ANOTHER llz WINS' <<<"$out" && grep -q "in use →  $shadow/old/llz" <<<"$out"; then
+      pass "install-llz flags the shadowing copy and names it"
+    else
+      fail "install-llz did not report the shadowing $shadow/old/llz (output: $(tr '\n' ' ' <<<"$out" | tail -c 300))"
+    fi
+    # …and it must not cry wolf when the fresh install is the one that wins.
+    rm -f "$shadow/old/llz"
+    out="$(PATH="$shadow/old:$shadow/new:$PATH" LLZ_BINDIR="$shadow/new" bash "$inst" 2>&1 || true)"
+    if grep -q "on your PATH → $shadow/new/llz" <<<"$out" && ! grep -q 'ANOTHER llz WINS' <<<"$out"; then
+      pass "install-llz confirms the fresh install when nothing shadows it"
+    else
+      fail "install-llz did not confirm $shadow/new/llz as the winner (output: $(tr '\n' ' ' <<<"$out" | tail -c 300))"
+    fi
+    rm -rf "$shadow"
   fi
 fi
 
