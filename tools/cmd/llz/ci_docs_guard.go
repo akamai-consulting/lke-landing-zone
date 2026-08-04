@@ -182,6 +182,24 @@ func isDecisionRecord(rel string) bool {
 	return strings.HasPrefix(rel, "docs/adr/") || strings.HasPrefix(rel, "docs/designs/")
 }
 
+// flagTakesValue reports whether --name consumes the NEXT token as its value.
+// Bool flags do not, which is what lets `llz --yes ci …` still resolve `ci`
+// rather than swallowing it as a value. An UNKNOWN flag is assumed value-less on
+// purpose: guessing "it takes a value" would swallow a real subcommand and hide
+// the very drift this guard exists to find, whereas guessing wrong the other way
+// costs at most one spurious positional that the descent ignores.
+func flagTakesValue(cur, root *cobra.Command, name string) bool {
+	n := strings.TrimLeft(name, "-")
+	f := cur.Flags().Lookup(n)
+	if f == nil {
+		f = cur.InheritedFlags().Lookup(n)
+	}
+	if f == nil {
+		f = root.PersistentFlags().Lookup(n)
+	}
+	return f != nil && f.Value.Type() != "bool"
+}
+
 // Prose regularly reads "the llz binary", "an llz workload", "the llz image".
 // Those parse as a subcommand and are not one; the check only reports a token
 // run whose FIRST word is a real top-level command, so ordinary English is
@@ -198,57 +216,45 @@ func checkDocCommands(root string, files []string, rootCmd *cobra.Command) []doc
 		}
 		for i, line := range strings.Split(string(data), "\n") {
 			for _, m := range llzInvocationRe.FindAllStringSubmatch(line, -1) {
+				// Resolve the command and its flags in ONE pass, the way cobra
+				// itself accepts them: flags may appear before, between, or after
+				// subcommand words. An earlier cut stopped collecting words at the
+				// first flag and treated everything after it as a flag value —
+				// which made `llz --yes ci reap-volumes --bogus` resolve to NO
+				// command at all and skip silently. That is a doc style this repo
+				// uses (orphan-volume-cleanup.md), so the guard was blind exactly
+				// where it claimed coverage.
 				fields := strings.Fields(m[1])
-				var words, flags []string
-				for _, f := range fields {
+				cur, words, flags, descending := rootCmd, 0, []string(nil), true
+				for i := 0; i < len(fields); i++ {
+					f := fields[i]
 					if f == "--" {
-						// The argv separator (`llz openbao exec -- kv get …`),
-						// not a flag. Everything after it is the inner command.
+						// The argv separator (`llz openbao exec -- kv get …`).
+						// Everything after it belongs to the inner command.
 						break
 					}
 					if strings.HasPrefix(f, "-") {
-						flags = append(flags, strings.SplitN(f, "=", 2)[0])
+						name := strings.SplitN(f, "=", 2)[0]
+						flags = append(flags, name)
+						// A VALUE-taking flag consumes the next token, so it must
+						// not be mistaken for a subcommand. A bool flag does not —
+						// which is the whole point: `--yes ci` must still find `ci`.
+						if !strings.Contains(f, "=") && flagTakesValue(cur, rootCmd, name) {
+							i++
+						}
 						continue
 					}
-					if len(flags) > 0 {
-						continue // a flag VALUE, not a subcommand
+					if descending {
+						if next, _, err := cur.Find([]string{f}); err == nil && next != cur {
+							cur, words = next, words+1
+							continue
+						}
+						descending = false // a positional; stop descending
 					}
-					words = append(words, f)
 				}
-				if len(words) == 0 {
-					continue
+				if words == 0 {
+					continue // no command resolved — prose, or a bare `llz`
 				}
-				cur, _, err := rootCmd.Find(words[:1])
-				if err != nil || cur == rootCmd {
-					continue // not a command at all — prose
-				}
-				// Walk as deep as the words go; a word that is not a subcommand
-				// is treated as a positional argument and ends the descent.
-				depth := 1
-				for depth < len(words) {
-					next, _, err := cur.Find(words[depth : depth+1])
-					if err != nil || next == cur {
-						break
-					}
-					cur = next
-					depth++
-				}
-				// NO UNKNOWN-SUBCOMMAND CHECK — tried, measured, removed. Flagging a
-				// word that is not a subcommand of a group (`llz ci frobnicate`)
-				// catches typos, and on a synthetic probe it caught four of four.
-				// On the real docs it produced five findings and every one was
-				// legitimate prose: three named a verb the docs correctly describe
-				// as RETIRED ("`llz ci gh-pat-expiry` … were retired"), and two
-				// were the glob `llz ci bao-*`. A docs gate that punishes accurate
-				// history and glob notation is one people switch off, which costs
-				// more than the typos it would catch. Distinguishing the cases
-				// needs edit-distance heuristics that would themselves need tuning.
-				//
-				// It did earn its keep once before being removed: it found
-				// tools/AGENTS.md claiming `llz ci cred-audit` in the present tense
-				// after that verb was retired. Run it by hand if you want another
-				// sweep; do not wire it into CI without solving the above.
-				_ = depth
 				for _, fl := range flags {
 					if fl == "--help" || fl == "-h" || !strings.HasPrefix(fl, "--") {
 						continue

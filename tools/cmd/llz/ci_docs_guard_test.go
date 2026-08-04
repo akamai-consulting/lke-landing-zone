@@ -194,6 +194,31 @@ func TestCheckDocCommands(t *testing.T) {
 			body: "the sketch was `llz reconcile --reconcile-harbor`\n",
 		},
 		{
+			// PERSISTENT FLAG BEFORE THE SUBCOMMAND. This shape ships in our own
+			// docs (orphan-volume-cleanup.md: `llz --yes ci reap-volumes …`), and
+			// an earlier parser stopped collecting words at the first flag — so
+			// the whole invocation resolved to no command and was skipped
+			// SILENTLY. Silent under-coverage in a guard is worse than no guard.
+			name:    "a leading persistent flag does not hide the subcommand",
+			rel:     "docs/guide.md",
+			body:    "run `llz --yes ci reap-volumes --totally-bogus`\n",
+			wantHit: "`llz ci reap-volumes` has no flag --totally-bogus",
+		},
+		{
+			name: "a leading persistent flag with a valid tail is accepted",
+			rel:  "docs/guide.md",
+			body: "run `LINODE_TOKEN=x llz --yes ci reap-volumes --region us-ord --env lab`\n",
+		},
+		{
+			// A VALUE-taking flag consumes the next token, which must not then be
+			// mistaken for a subcommand — while a BOOL flag must not consume one,
+			// which is what makes the case above work.
+			name:    "a value-taking flag's value is not read as a subcommand",
+			rel:     "docs/guide.md",
+			body:    "run `llz --dry-run env add lab --region us-sea --nope`\n",
+			wantHit: "`llz env add` has no flag --nope",
+		},
+		{
 			// A positional argument must not be mistaken for a subcommand and
 			// send the flag lookup to the wrong command.
 			name:    "a positional arg does not derail the flag lookup",
