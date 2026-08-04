@@ -377,7 +377,6 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command, n *docsScanned) []
 		}
 		for _, ll := range foldContinuations(d.body) {
 			for _, m := range llzStartRe.FindAllStringSubmatch(ll.text, -1) {
-				n.invocations++
 				// Resolve the command and its flags in ONE pass, the way cobra
 				// itself accepts them: flags may appear before, between, or after
 				// subcommand words. An earlier cut stopped collecting words at the
@@ -417,6 +416,11 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command, n *docsScanned) []
 				if words == 0 {
 					continue // no command resolved — prose, or a bare `llz`
 				}
+				// Counted only once a REAL command resolved. Counting at the regex
+				// match instead folded every prose mention ("the llz binary", "the
+				// llz image") into the total, inflating the reported coverage and
+				// padding the floor with matches that validate nothing.
+				n.invocations++
 				for _, fl := range flags {
 					if fl == "--help" || fl == "-h" || !strings.HasPrefix(fl, "--") {
 						continue

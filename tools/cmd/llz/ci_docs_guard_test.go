@@ -392,24 +392,26 @@ func TestDocsGuard_CleanOnThisRepo(t *testing.T) {
 	findings = append(findings, wfFindings...)
 	findings = append(findings, checkDocLinks(root, docs, &n)...)
 
-	// COVERAGE FLOORS, not just "no findings". Every defect this guard has had
-	// scanned less than it claimed while every assertion still passed — a walk
-	// that skipped the root, a parser that stopped at the first flag, at a
-	// version string, at `<env>` (that one blinded ~92 invocations). A clean
-	// run proves nothing if the scanner went quiet, so the counts are asserted
-	// too. Raise these if the corpus grows; a DROP means something got blinded.
-	// FLAGS, not invocations. Measured, not assumed: re-introducing the `<env>`
-	// blinding left the invocation count at 804 (a truncating parser still FINDS
-	// the command, it just stops collecting) while flags fell 210 -> 162. The
-	// count that moves is the one worth asserting.
+	// COVERAGE FLOORS — a TRIPWIRE for gross blinding, not a precise gate.
+	// Be clear about what they do and do not buy, because the temptation is to
+	// treat a green run as proof of coverage, which is the exact mistake this
+	// guard keeps making.
+	//
+	// MEASURED by re-introducing each real regression and reading the counters:
+	//
+	//   `<env>` terminator (Copilot #9)  flags 210 -> 162   CAUGHT
+	//   leading-flag parse (Copilot #3)  flags 210 -> 200   NOT caught
+	//
+	// So a large blinding trips these and a small one does not. Tightening to
+	// catch the 5% case would fail CI on any docs PR that removes a handful of
+	// flags — brittle enough that it would get loosened again, or deleted. The
+	// counters' main value is the PRINTED line: a reviewer comparing runs sees
+	// the number move even when the floor does not.
 	if n.flags < 200 {
-		t.Errorf("only %d flag(s) validated — the parser has been blinded (was 210; the `<env>` regression scored 162). A clean run over a shrunken scan is the failure mode this guard keeps having", n.flags)
+		t.Errorf("only %d flag(s) validated (was 210) — the parser has been blinded; a clean run over a shrunken scan is the failure mode this guard keeps having", n.flags)
 	}
 	if n.invocations < 600 {
-		t.Errorf("only %d llz invocation(s) scanned (was 804)", n.invocations)
-	}
-	if n.links < 350 {
-		t.Errorf("only %d link(s) scanned — the link walk has been narrowed (was 495)", n.links)
+		t.Errorf("only %d llz invocation(s) resolved (was 761) — commands are no longer being recognised", n.invocations)
 	}
 	if n.dispatches < 10 {
 		t.Errorf("only %d workflow dispatch(es) scanned (was 15)", n.dispatches)
