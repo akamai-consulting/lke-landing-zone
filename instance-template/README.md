@@ -30,9 +30,11 @@ Install the CLI (or `llz self-update` if you already have it), then drive the fl
 curl -fsSL https://raw.githubusercontent.com/<@ upstream_org @>/lke-landing-zone/main/template-scripts/install-llz.sh | bash
 
 llz env add <env> --region <linode-region> --obj-cluster <obj-cluster>  # author the spec + render
+git push                   # `env add` commits; the build renders from the PUSHED tree
 llz doctor --env <env>     # readiness gate — fill anything it flags
 llz up <env> --yes         # tokens → doctor → build (stops at the first failure)
-llz status <env>           # OpenBao / ArgoCD / ESO convergence
+llz ci fetch-kubeconfig --region <env> --output ~/.kube/<env>.yaml   # the build ran in CI; this host has no kubeconfig yet
+KUBECONFIG=~/.kube/<env>.yaml llz status <env>   # OpenBao / ArgoCD / ESO convergence
 ```
 
 Full walkthrough — accounts, credentials, bootstrap order — is in

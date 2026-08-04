@@ -237,11 +237,19 @@ func secretsCmd() *cobra.Command {
 // ── run ──────────────────────────────────────────────────────────────────────
 
 func buildCmd() *cobra.Command {
-	return &cobra.Command{
+	var skipPreflight bool
+	c := &cobra.Command{
 		Use: "build <env>", Short: "dispatch the terraform.yml apply (module=all) (--yes)",
+		Long: "Dispatches terraform.yml (action=apply module=all) for a deployment. GitHub\n" +
+			"runs the workflow from the repo's default branch and renders the tfvars from\n" +
+			"the spec IN THAT CHECKOUT, so the build preflights that the deployment exists\n" +
+			"locally AND on that branch — a spec that was committed but never pushed would\n" +
+			"otherwise fail minutes later, in CI. --skip-preflight bypasses the check.",
 		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error { return cmdBuild(args, gopts) },
+		RunE: func(_ *cobra.Command, args []string) error { return cmdBuild(args, gopts, skipPreflight) },
 	}
+	c.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "dispatch without checking the deployment is on the branch CI builds from")
+	return c
 }
 
 func upCmd() *cobra.Command {

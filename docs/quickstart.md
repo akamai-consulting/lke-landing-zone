@@ -30,25 +30,34 @@ llz new my-instance --push --yes
 cd my-instance
 
 # 3. Add a deployment — authors the spec, renders the tfvars + apl-values overlay (§3)
+#    Run it from the instance directory (step 2's `cd`).
 llz env add lab --region us-sea --obj-cluster us-sea-1
 
-# 4. Confirm it's ready to build — fill anything doctor flags, then re-run until green (§4)
+# 4. Publish it — `env add` commits the spec, and the build reads your repo (§4)
+git push
+
+# 5. Confirm it's ready to build — fill anything doctor flags, then re-run until green (§4)
 llz doctor --env lab
 
-# 5. Provision credentials → readiness gate → build, in ONE command (§4)
+# 6. Provision credentials → readiness gate → build, in ONE command (§4)
 llz up lab --yes
 
-# 6. AFTER the build, do the two manual steps the bootstrap can't (§4):
+# 7. AFTER the build, do the two manual steps the bootstrap can't (§4):
 #    • copy the static seal key + recovery keys 4 & 5 + the root token (shown once) to offline storage
 #    • delete the OPENBAO_ROOT_TOKEN secret from infra-lab if you seeded one
 #      (`llz status` flags it every run until you do)
 
-# 7. Verify convergence (§4). DNS-01 needs no step — the llz-letsencrypt-*
+# 8. Get a kubeconfig — the cluster was built in CI, so this machine has none (§4)
+export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)
+llz ci fetch-kubeconfig --region lab --output ~/.kube/lab.yaml
+export KUBECONFIG=~/.kube/lab.yaml
+
+# 9. Verify convergence (§4). DNS-01 needs no step — the llz-letsencrypt-*
 #    ClusterIssuers sync via Argo CD once LINODE_DNS_TOKEN is set.
 llz status lab
 ```
 
-That is the whole thing, start to converged cluster. Step 5's `llz up` chains the
+That is the whole thing, start to converged cluster. Step 6's `llz up` chains the
 three gates — `tokens → doctor → build` — and **stops at the first failure**, so a
 missing token or unfilled placeholder is caught before the expensive apply; you can
 run those three individually to inspect each gate (§4). `llz` itself is a thin
@@ -61,6 +70,13 @@ Run `llz <command> --help` for any command; the persistent flags `--dry-run`
 (print, change nothing), `--open` (open links), and `--yes` (execute
 cloud-mutating commands) work anywhere on the line. Stuck on a step? `llz doctor`
 (§4) is the always-current readiness check.
+
+### If a command stops you
+
+`llz` validates each step before it can cost you anything, and prints the fix
+with the refusal — read the message and follow it. The full list of what gets
+checked is in the
+[adopter guide](adopter-guide.md#what-llz-checks-before-it-lets-you-spend-money).
 
 ---
 
@@ -247,8 +263,9 @@ Two commands: scaffold the instance repo, then add a deployment to it.
 
 ```bash
 llz new my-instance --push --yes
-cd my-instance
+cd my-instance                 # `llz env add` refuses to run outside an instance root
 llz env add lab --region us-sea --obj-cluster us-sea-1
+git push                       # `env add` commits; publishing is yours (§4)
 ```
 
 ### Scaffold the instance repo — `llz new`
@@ -314,6 +331,12 @@ rest of the must-sets come from flags or are inherited from `spec.defaults`. The
 - `--runner-ipv4-cidrs` / `--runner-ipv6-cidrs` → `cluster.apiServerAllowCIDRs` — static operator/CI egress CIDRs that seed the bootstrap control-plane ACL (**never `0.0.0.0/0`**; leave empty for github.com-hosted runners, which open their egress IP at runtime via `llz ci runner-acl open`)
 - `--apl-values-repo-url` (**HTTPS**, defaults from `instance_repo`), `--apl-chart-version`. `clusterLabel`/`cluster.bootstrap.name` are derived from your instance name — edit `environments/<env>.yaml` to change them. **Do not set a cluster domain** — Linode owns `lke<id>.akamai-apl.net` and LLZ discovers it in-cluster; the validator rejects `cluster.bootstrap.domainSuffix`, and the leftover `--cluster-domain` flag prints a domain in the summary banner but writes nothing.
 - `--obj-cluster` (**required**) — your region's Linode OBJ cluster id (e.g. `us-ord-1`, or a newer-generation `us-ord-10`). List them with `linode-cli object-storage clusters-list`; `env add` validates the shape up front.
+
+> **Export `LINODE_TOKEN` (or `LINODE_API_TOKEN`) first** and `env add` checks
+> `--region` and `--obj-cluster` against your account, including that they belong
+> together — easy to mix up, since `us-sea-1` is an OBJ cluster and `de-fra-2` is
+> a region. `0.0.0.0/0` in either `--runner-*-cidrs` flag is rejected: it would
+> leave the Kubernetes API server open to the internet.
 
 ### Change, inspect & preview a deployment
 
@@ -454,12 +477,30 @@ you want to inspect each gate — see the collapsible below.)
 > set it (`llz status` flags it on every run until you do). See the
 > [bootstrap runbook](runbooks/bootstrap-openbao.md#after-first-time-bootstrap--required-operator-actions).
 
+> **Push before you build.** The workflow builds from your repo, not your laptop:
+> `llz env add` commits the spec, pushing is yours, and `llz build` stops if you
+> haven't. It dispatches against the repo's **default branch**, so a feature
+> branch has to be merged, not just pushed. (`--skip-preflight` overrides the
+> check if you mean it.)
+
 Then finish the deferred DNS bit once its token exists (the ArgoCD deploy key was
-already provisioned by `llz tokens`), and verify convergence:
+already provisioned by `llz tokens`), and verify convergence. `llz status` reads
+the cluster over `kubectl`, and the build ran in GitHub Actions — so fetch a
+kubeconfig first (it stops with these same commands if you don't):
 
 ```bash
+export LINODE_API_TOKEN=$(grep ^LINODE_API_TOKEN .llz/secrets.env | cut -d= -f2-)
+llz ci fetch-kubeconfig --region lab --output ~/.kube/lab.yaml
+export KUBECONFIG=~/.kube/lab.yaml
 llz status lab                 # openbao pods / argocd apps / ESO ClusterSecretStore
 ```
+
+In a fresh clone, run `llz render lab` first — `fetch-kubeconfig` finds the
+cluster through `lab.tfvars`, which is a render artifact and is not committed.
+
+> Still refused or timing out with a kubeconfig in hand? LKE-E's control-plane ACL
+> admits only `cluster.apiServerAllowCIDRs` — add your egress prefix
+> (`llz env edit lab`, then re-apply), or run from a host already allowed.
 
 To add the HA second region, repeat §3–4 with `secondary` (or `staging`),
 **after** `lab`/`primary` has fully bootstrapped.
@@ -626,9 +667,10 @@ versioned charts + external actions*.
 - [ ] `gh auth login` done (§2)
 - [ ] `llz` installed + completion (§2); `llz doctor` tooling green
 - [ ] `llz new … --push --yes` run; org literals repointed; instance pushed to GitHub (§3)
-- [ ] `llz env add <env> --region … --obj-cluster …` run (authors `landingzone.yaml` + `environments/<env>.yaml`, renders); the overlay placeholders it listed are filled (§3)
+- [ ] `llz env add <env> --region … --obj-cluster …` run **from the instance root** (authors `landingzone.yaml` + `environments/<env>.yaml`, renders); the overlay placeholders it listed are filled (§3)
+- [ ] spec + overlay **pushed** — `env add` commits, you push; the build renders from the pushed tree (§4)
 - [ ] `llz doctor --env <env>` green — deployment files + every required value set (§4)
-- [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); cluster converges (`llz status <env>`) (§4)
+- [ ] `llz up <env> --yes` run (or `tokens → doctor → build`); kubeconfig fetched (`llz ci fetch-kubeconfig --region <env>`); cluster converges (`llz status <env>`) (§4)
 - [ ] Static seal key + recovery keys 4 & 5 + root token saved offline; `OPENBAO_ROOT_TOKEN` deleted
 - [ ] `LINODE_DNS_TOKEN` set — `llz ci bootstrap-cluster` renders it into apl-core's DNS values; the ClusterIssuers then sync via Argo CD (no dedicated command)
 - [ ] Renovate enabled and repointed; `llz upgrade` path understood (§5)

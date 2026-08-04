@@ -148,6 +148,20 @@ instance_repo:
     This instance's own GitHub repository as <owner>/<name> — used for ArgoCD
     repo URLs, `gh` CLI targeting, and the SSH deploy-key wiring.
   default: your-org/your-instance-repo
+  # Shape only, and the placeholder default stays legal: `copier copy --defaults`
+  # (template CI's instance-test) renders with it, and `llz new --push` already
+  # detects it and skips the repo creation with a message. What this catches is a
+  # answer that is not an <owner>/<name> pair at all — a browser URL, a bare repo
+  # name, a trailing .git. Every one of those renders a scaffold that LOOKS fine:
+  # the value is only dereferenced later, by `gh repo create` (after the whole
+  # render), by the ArgoCD repoURL, and by every `gh` call `llz tokens`/`doctor`
+  # make against "the instance repo".
+  # Uses the custom _envops delimiters (<% %> blocks, <@ @> vars), not stock Jinja.
+  validator: >-
+    <% if not instance_repo | regex_search('^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$') %>instance_repo
+    must be <owner>/<name> — the repo slug, not a URL, and not a bare name. Got
+    "<@ instance_repo @>" (e.g. my-org/my-lke-instance).<% elif instance_repo.endswith('.git') %>instance_repo
+    must be <owner>/<name> without the .git suffix — got "<@ instance_repo @>".<% endif %>
 
 openbao_team:
   type: str

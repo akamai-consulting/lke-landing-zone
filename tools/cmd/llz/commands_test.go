@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -141,5 +143,85 @@ func TestShellQuote(t *testing.T) {
 	}
 	if got := shellQuote([]string{"region=us sea"}); got != "'region=us sea'" {
 		t.Errorf("space: got %q", got)
+	}
+}
+
+func TestCheckNewTarget(t *testing.T) {
+	// Absent or empty is the normal case — scaffold away.
+	fresh := filepath.Join(t.TempDir(), "does-not-exist-yet")
+	if err := checkNewTarget(fresh); err != nil {
+		t.Errorf("absent dir: %v", err)
+	}
+	if err := checkNewTarget(t.TempDir()); err != nil {
+		t.Errorf("empty dir: %v", err)
+	}
+
+	// An existing INSTANCE. `copier copy` would render a second scaffold on top of
+	// it (it prompts per conflicting file, it does not stop), so the retry that
+	// looks harmless — re-running `llz new` with the same name — merges a fresh
+	// scaffold into a live instance. Name the two commands that were actually meant.
+	inst := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inst, ".copier-answers.yml"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := checkNewTarget(inst)
+	if err == nil {
+		t.Fatal("expected a refusal to scaffold over an existing instance")
+	}
+	for _, want := range []string{"already a landing-zone instance", "llz env add", "llz upgrade"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+
+	// Non-empty but not an instance: still refuse, without the instance advice.
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, "notes.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkNewTarget(other); err == nil {
+		t.Error("expected a refusal to scaffold into a non-empty directory")
+	}
+}
+
+func TestCheckNewTargetIgnoresHiddenEntries(t *testing.T) {
+	// Scaffolding into a freshly cloned empty repo (only .git) is a legitimate
+	// path, and copier git-inits the dir itself — so hidden entries alone are not
+	// "content". A .copier-answers.yml is still caught, by isInstanceRoot.
+	cloned := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cloned, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkNewTarget(cloned); err != nil {
+		t.Errorf("a bare .git must not block the scaffold: %v", err)
+	}
+}
+
+func TestCheckNewTargetUnreadableDirIsNotEmpty(t *testing.T) {
+	// A directory that exists but cannot be read is not "absent". Treating every
+	// ReadDir error as absence let `llz new` proceed into it, so copier failed
+	// later and less legibly — or rendered part of a scaffold first.
+	parent := t.TempDir()
+	locked := filepath.Join(parent, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "keep.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Skipf("cannot drop read permission here: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — permission bits do not apply")
+	}
+
+	err := checkNewTarget(locked)
+	if err == nil {
+		t.Fatal("an unreadable target must not be treated as an empty one")
+	}
+	if !strings.Contains(err.Error(), "cannot read") {
+		t.Errorf("error %q should name the read failure", err)
 	}
 }

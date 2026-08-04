@@ -27,8 +27,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/validate"
 )
+
+// quotedTokens pulls the "…" entries out of an HCL list so each can be parsed on
+// its own terms rather than string-matched inside the whole line.
+var quotedTokens = regexp.MustCompile(`"([^"]*)"`)
+
+// instanceRepoPlaceholder is the unrendered instance_repo answer. It reaches two
+// very different kinds of file, which need two different fixes — see hintFor.
+const instanceRepoPlaceholder = "your-org/your-instance-repo"
 
 type sentinel struct {
 	token    string
@@ -39,7 +51,7 @@ type sentinel struct {
 var scaffoldSentinels = []sentinel{
 	{"REPLACE_PER_ENV", true, "fill in the per-env value (ACME email, GitOps repoUrl/branch/path, DNS domain)"},
 	{"REPLACE_ME", true, "replace the placeholder Helm registry URL / value"},
-	{"your-org/your-instance-repo", true, "repoint to your fork / instance repo (owner/name)"},
+	{instanceRepoPlaceholder, true, "repoint to your fork / instance repo (owner/name)"},
 	{"your-env", true, "an env token escaped substitution — set it to the deployment name"},
 }
 
@@ -63,6 +75,16 @@ type finding struct {
 	blocking bool
 }
 
+// loc renders a finding's position. A spec-level finding has no line — the value
+// may be inherited from another file entirely — and printing "file:0" for it
+// reads as a bug in the reporter rather than as "somewhere in this file".
+func (f finding) loc() string {
+	if f.line <= 0 {
+		return f.file
+	}
+	return fmt.Sprintf("%s:%d", f.file, f.line)
+}
+
 func runEnvReadiness(env string) error {
 	if env == "" {
 		return fmt.Errorf("--env is required (e.g. --env primary)")
@@ -82,6 +104,7 @@ func runEnvReadiness(env string) error {
 	// before the file-level scan below — which reads the RENDERED output and would
 	// otherwise pass on stale tfvars after a spec edit that wasn't re-rendered.
 	specDriven := false // spec present AND this env defined in it
+	var specFindings []finding
 	if lz, present, perr := loadSpec(); present {
 		fmt.Println(bold("LandingZone spec:"))
 		if perr != nil {
@@ -94,8 +117,15 @@ func runEnvReadiness(env string) error {
 			}
 			return fmt.Errorf("%d spec problem(s) — fix landingzone.yaml / environments/<env>.yaml, then re-run", len(errs))
 		}
-		if _, ok := lz.Env(env); ok {
+		if e, ok := lz.Env(env); ok {
 			specDriven = true
+			// The spec is the source of truth here, and it is ALWAYS present —
+			// unlike the rendered tfvars, which are gitignored build artifacts
+			// absent in a fresh clone. Read the ACL off the merged environment
+			// (applyInheritance folds spec.defaults in at load), so an open-world
+			// prefix is caught wherever it came from: a flag, a hand edit, or a
+			// spec.defaults entry that no per-env file even mentions.
+			specFindings = openWorldACLFindings(env, e.Cluster.APIServerAllowCIDRs)
 			if err := checkManifestDrift(lz, aplDir, []string{env}); err != nil {
 				// checkManifestDrift already printed the drifted files + the
 				// `llz render` hint; surface it as the blocking failure.
@@ -125,10 +155,13 @@ func runEnvReadiness(env string) error {
 
 	fmt.Printf("%s\n\n", bold(fmt.Sprintf("Deployment %q readiness (%s + %s):", env, tfDir, aplDir)))
 
-	var findings []finding
+	findings := specFindings
 	missing := 0
 	for _, f := range files {
-		fs, present := scanForSentinels(f)
+		// The rendered-tfvars ACL scan is for LEGACY instances only: a spec-driven
+		// one was already read from its spec above, and scanning both would report
+		// the same prefix twice, in two files, for one mistake.
+		fs, present := scanForSentinels(f, !specDriven)
 		if !present {
 			// A spec-driven env renders its tfvars on demand (they are gitignored
 			// build artifacts), so an absent <env>.tfvars is normal, not a finding —
@@ -163,7 +196,7 @@ func runEnvReadiness(env string) error {
 			mark = red("✗ TODO ")
 			blocking++
 		}
-		fmt.Printf("  %s %s:%d  %s %s\n", mark, f.file, f.line, f.token, dim("— "+f.hint))
+		fmt.Printf("  %s %s  %s %s\n", mark, f.loc(), f.token, dim("— "+f.hint))
 	}
 
 	// obj_cluster must be shaped like a Linode OBJ cluster id — catch a malformed
@@ -215,7 +248,7 @@ func runEnvReadiness(env string) error {
 	if len(deferred) > 0 {
 		fmt.Println("\n" + bold("Deferred — cert/DNS issuance (non-blocking; set up after the build):"))
 		for _, f := range deferred {
-			fmt.Printf("  %s %s:%d  %s %s\n", cyan("○ later"), f.file, f.line, f.token, dim("— "+f.hint))
+			fmt.Printf("  %s %s  %s %s\n", cyan("○ later"), f.loc(), f.token, dim("— "+f.hint))
 		}
 		fmt.Println("  " + dim("↳ fine to leave for now — set the ACME email + TF_VAR_linode_dns_token; the Argo-synced letsencrypt ClusterIssuers issue certs once both exist (quickstart §4)."))
 	}
@@ -273,7 +306,7 @@ func overlayScanFiles(overlay string) []string {
 // scanForSentinels reports whether the file exists and any sentinel / empty-CIDR
 // findings. Comment-only lines (trimmed starts with '#') are skipped — the
 // sentinels appear there as documentation, not as unfilled values.
-func scanForSentinels(path string) ([]finding, bool) {
+func scanForSentinels(path string, tfvarsACL bool) ([]finding, bool) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, false
@@ -292,12 +325,20 @@ func scanForSentinels(path string) ([]finding, bool) {
 		}
 		for _, s := range scaffoldSentinels {
 			if strings.Contains(line, s.token) {
-				out = append(out, finding{path, ln, s.token, s.hint, s.blocking})
+				out = append(out, finding{path, ln, s.token, hintFor(s, path), s.blocking})
 			}
 		}
 		if isTfvars && isEmptyCIDRList(line) {
 			out = append(out, finding{path, ln, strings.TrimSpace(line),
 				"empty runner CIDR list — fine for github.com-hosted runners (they open their egress IP at runtime via `llz ci runner-acl open`); fill it for self-hosted runners with a fixed range", false})
+		}
+		// `llz env add` rejects an open-world ACL at the flag, but the spec is a
+		// file: `llz env edit`, a hand edit, or an inherited spec.defaults reaches
+		// the rendered tfvars without passing that check. Report it here too — as a
+		// finding, not a blocker, because an instance that already has one must
+		// still be able to render and build while it fixes it.
+		if isTfvars && tfvarsACL && isOpenWorldCIDRLine(line) {
+			out = append(out, finding{path, ln, strings.TrimSpace(line), openWorldACLHint, false})
 		}
 	}
 	return out, true
@@ -318,6 +359,78 @@ func isEmptyCIDRList(line string) bool {
 		rhs = rhs[:h]
 	}
 	return strings.TrimSpace(rhs) == "[]"
+}
+
+// openWorldACLHint is the one explanation both ACL paths give, so the spec-level
+// check and the legacy tfvars scan cannot drift apart on what the problem is.
+const openWorldACLHint = "the control-plane ACL admits every address — LKE-E accepts this and the apply " +
+	"succeeds, leaving the Kubernetes API server reachable from the whole internet; replace it with your " +
+	"operator/CI egress prefixes (or empty it for github.com-hosted runners)"
+
+// openWorldACLFindings reports every all-addresses prefix in a MERGED
+// environment's apiServerAllowCIDRs. The file is named as the spec rather than a
+// rendered artifact, because that is where the operator has to fix it — and,
+// when the value is inherited, environments/<env>.yaml will not even contain it
+// (spec.defaults in landingzone.yaml will).
+func openWorldACLFindings(env string, acl clusterspec.AllowCIDRs) []finding {
+	var out []finding
+	file := filepath.Join(clusterspec.EnvironmentsDir, env+".yaml")
+	for _, list := range [][]string{acl.IPv4, acl.IPv6} {
+		for _, c := range list {
+			if validate.IsOpenWorldCIDR(c) {
+				out = append(out, finding{file, 0, c, openWorldACLHint + " (or in spec.defaults, if it is inherited)", false})
+			}
+		}
+	}
+	return out
+}
+
+// hintFor adapts a sentinel's remediation to WHERE it was found.
+//
+// The instance-repo placeholder is the case that matters. It appears both in the
+// chart values an adopter genuinely hand-edits (adopter-guide §5) AND, until the
+// spec is repointed, in every rendered apl-values file — six or more of them.
+// The generic "repoint to your fork" hint sends the operator to hand-edit all of
+// them, and `llz render` then overwrites the lot: the value is RENDERED from
+// spec.instance.repo, so the fix is one command, once, and the checklist should
+// say which one.
+func hintFor(s sentinel, path string) string {
+	if s.token != instanceRepoPlaceholder {
+		return s.hint
+	}
+	if _, aplDir, _ := instanceLayout(); strings.HasPrefix(filepath.Clean(path), filepath.Clean(aplDir)+string(filepath.Separator)) {
+		return "rendered from spec.instance.repo — fix it once with `llz spec set instance.repo=<owner>/<name>` " +
+			"(editing this file by hand is undone by the next `llz render`)"
+	}
+	return s.hint
+}
+
+// isOpenWorldCIDRLine matches a `github_runner_ipv{4,6}_cidrs` assignment whose
+// list contains an all-addresses prefix. It reads the rendered tfvars rather than
+// the spec so a value that arrived by ANY route — flag, `llz env edit`, hand
+// edit, inherited spec.defaults — is seen the same way.
+func isOpenWorldCIDRLine(line string) bool {
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, "github_runner_ipv4_cidrs") && !strings.HasPrefix(t, "github_runner_ipv6_cidrs") {
+		return false
+	}
+	eq := strings.Index(t, "=")
+	if eq < 0 {
+		return false
+	}
+	rhs := t[eq+1:]
+	if h := strings.Index(rhs, "#"); h >= 0 {
+		rhs = rhs[:h]
+	}
+	// Parse each quoted entry rather than string-matching "0.0.0.0/0": a /0 has
+	// many spellings ("0::/0", "203.0.113.7/0") that all mask to everything while
+	// reading like a specific host. One rule, in internal/validate.
+	for _, m := range quotedTokens.FindAllStringSubmatch(rhs, -1) {
+		if validate.IsOpenWorldCIDR(m[1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // renderOverlay runs `kubectl kustomize <overlay>/manifest`, returning a non-nil

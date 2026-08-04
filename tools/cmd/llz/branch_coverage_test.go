@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/akamai-consulting/lke-landing-zone/tools/internal/clusterspec"
 )
 
 // ── shared helpers ───────────────────────────────────────────────────────────
@@ -238,11 +240,12 @@ func stubUpSteps(t *testing.T, failAt string) *[]string {
 		}
 		return nil
 	}
-	origT, origD, origB := upTokens, upDoctor, upBuild
+	origT, origD, origB, origP := upTokens, upDoctor, upBuild, upPreflight
 	upTokens = func(globalOpts, bool, string) error { return mk("tokens") }
 	upDoctor = func(globalOpts, bool, string) error { return mk("doctor") }
 	upBuild = func(globalOpts, string) error { return mk("build") }
-	t.Cleanup(func() { upTokens, upDoctor, upBuild = origT, origD, origB })
+	upPreflight = func(string) error { return mk("preflight") }
+	t.Cleanup(func() { upTokens, upDoctor, upBuild, upPreflight = origT, origD, origB, origP })
 	return &calls
 }
 
@@ -264,8 +267,11 @@ func TestCmdUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("happy path errored: %v", err)
 	}
-	if got := strings.Join(*calls, ","); got != "tokens,doctor,build" {
-		t.Errorf("step order = %q, want tokens,doctor,build", got)
+	// The dispatch check leads: it is read-only, and stage 1 is an interactive
+	// wizard that mints credentials — no point running it for a build that cannot
+	// dispatch.
+	if got := strings.Join(*calls, ","); got != "preflight,tokens,doctor,build" {
+		t.Errorf("step order = %q, want preflight,tokens,doctor,build", got)
 	}
 	if !strings.Contains(out, "remaining manual actions") {
 		t.Errorf("manual-actions summary not printed:\n%s", out)
@@ -274,8 +280,8 @@ func TestCmdUp(t *testing.T) {
 	// --skip-tokens → doctor → build only.
 	calls = stubUpSteps(t, "")
 	captureStdout(t, func() { _ = cmdUp("lab", g, false, true) })
-	if got := strings.Join(*calls, ","); got != "doctor,build" {
-		t.Errorf("skip-tokens order = %q, want doctor,build", got)
+	if got := strings.Join(*calls, ","); got != "preflight,doctor,build" {
+		t.Errorf("skip-tokens order = %q, want preflight,doctor,build", got)
 	}
 
 	// tokens fails → short-circuit; doctor/build never run; error wraps `tokens:`.
@@ -284,7 +290,7 @@ func TestCmdUp(t *testing.T) {
 	if err == nil || !strings.HasPrefix(err.Error(), "tokens:") {
 		t.Errorf("tokens failure: err = %v, want a tokens: wrap", err)
 	}
-	if got := strings.Join(*calls, ","); got != "tokens" {
+	if got := strings.Join(*calls, ","); got != "preflight,tokens" {
 		t.Errorf("tokens failure must stop after tokens, got %q", got)
 	}
 
@@ -294,8 +300,8 @@ func TestCmdUp(t *testing.T) {
 	if err == nil || !strings.HasPrefix(err.Error(), "doctor:") {
 		t.Errorf("doctor failure: err = %v, want a doctor: wrap", err)
 	}
-	if got := strings.Join(*calls, ","); got != "tokens,doctor" {
-		t.Errorf("doctor failure order = %q, want tokens,doctor", got)
+	if got := strings.Join(*calls, ","); got != "preflight,tokens,doctor" {
+		t.Errorf("doctor failure order = %q, want preflight,tokens,doctor", got)
 	}
 
 	// build fails → error wraps `build:`; manual actions must NOT print.
@@ -308,8 +314,8 @@ func TestCmdUp(t *testing.T) {
 	// and then never read it, so the build case verified the error wrap but not
 	// that the earlier steps actually ran first. staticcheck's SA4006 ("this value
 	// is never used") is what surfaced the omission.
-	if got := strings.Join(*calls, ","); got != "tokens,doctor,build" {
-		t.Errorf("build failure order = %q, want tokens,doctor,build", got)
+	if got := strings.Join(*calls, ","); got != "preflight,tokens,doctor,build" {
+		t.Errorf("build failure order = %q, want preflight,tokens,doctor,build", got)
 	}
 	if strings.Contains(out, "remaining manual actions") {
 		t.Errorf("manual actions must not print on build failure:\n%s", out)
@@ -331,5 +337,80 @@ func TestPrintPlaceholderChecklist(t *testing.T) {
 	out2 := captureStdout(t, func() { printPlaceholderChecklist("apl-values", "lab") })
 	if !strings.Contains(out2, "no placeholders left") {
 		t.Errorf("clean overlay should report none left:\n%s", out2)
+	}
+}
+
+func TestRunEnvReadinessOpenWorldACL(t *testing.T) {
+	// `llz env add` rejects 0.0.0.0/0 at the flag, but a spec is a file: `llz env
+	// edit`, a hand edit, or an inherited spec.defaults renders one without ever
+	// passing that check. doctor reports it — as a finding, not a blocker, so an
+	// instance that already has one can still render and build while it fixes it.
+	dir := chdirTempDir(t)
+	writeGoodReadiness(t, dir, "e2e")
+	writeTFVars(t, dir, "cluster", "e2e",
+		"region = \"us-ord\"\ngithub_runner_ipv4_cidrs = [\"0.0.0.0/0\"]\n")
+	var err error
+	out := captureStdout(t, func() { err = runEnvReadiness("e2e") })
+	if err != nil {
+		t.Fatalf("an open ACL must be reported, not blocking: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "admits every address") {
+		t.Errorf("open-world ACL not flagged:\n%s", out)
+	}
+}
+
+func TestIsOpenWorldCIDRLine(t *testing.T) {
+	for _, open := range []string{
+		`github_runner_ipv4_cidrs = ["0.0.0.0/0"]`,
+		`github_runner_ipv4_cidrs = ["203.0.113.0/24", "0.0.0.0/0"]`,
+		`github_runner_ipv6_cidrs = ["::/0"]`,
+	} {
+		if !isOpenWorldCIDRLine(open) {
+			t.Errorf("isOpenWorldCIDRLine(%q) = false, want true", open)
+		}
+	}
+	for _, ok := range []string{
+		`github_runner_ipv4_cidrs = ["203.0.113.0/24"]`,
+		`github_runner_ipv4_cidrs = []`,
+		`github_runner_ipv4_cidrs = [] # was "0.0.0.0/0"`, // the comment is not the value
+		`node_count = 5`,
+		`github_runner_ipv4_cidrs`, // no assignment at all
+	} {
+		if isOpenWorldCIDRLine(ok) {
+			t.Errorf("isOpenWorldCIDRLine(%q) = true, want false", ok)
+		}
+	}
+}
+
+func TestOpenWorldACLFindings(t *testing.T) {
+	// The spec-level half of the ACL check. It exists because the other two paths
+	// structurally cannot see this: `llz env add` validates only the FLAGS it was
+	// given, and the tfvars scan reads a gitignored build artifact that a fresh
+	// clone has not rendered. The spec is merged at load (applyInheritance), so an
+	// open-world prefix inherited from spec.defaults — which environments/<env>.yaml
+	// never even mentions — arrives here like an explicit one.
+	got := openWorldACLFindings("lab", clusterspec.AllowCIDRs{
+		IPv4: []string{"203.0.113.0/24", "0.0.0.0/0"},
+		IPv6: []string{"2001:db8::/32", "::/0"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("got %d findings, want 2 (one per open prefix): %+v", len(got), got)
+	}
+	for _, f := range got {
+		if f.blocking {
+			t.Errorf("%q must be a finding, not a blocker — an instance that already has one still has to be able to build while it fixes it", f.token)
+		}
+		// Named against the spec, not a rendered artifact: that is where the
+		// operator edits, and for an inherited value the env file has no such line.
+		if f.file != filepath.Join("environments", "lab.yaml") {
+			t.Errorf("finding points at %q, want the env spec file", f.file)
+		}
+		if !strings.Contains(f.hint, "if it is inherited") {
+			t.Errorf("hint should send the operator to spec.defaults too: %q", f.hint)
+		}
+	}
+	// A closed ACL says nothing.
+	if got := openWorldACLFindings("lab", clusterspec.AllowCIDRs{IPv4: []string{"203.0.113.0/24"}}); len(got) != 0 {
+		t.Errorf("a closed ACL must produce no findings, got %+v", got)
 	}
 }
