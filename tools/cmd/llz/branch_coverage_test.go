@@ -475,3 +475,21 @@ func TestEnvAdd_ClusterDomainIsNotEchoedAsApplied(t *testing.T) {
 		t.Errorf("the banner must not echo a domainSuffix it never writes:\n%s", out)
 	}
 }
+
+// cobra's MarkDeprecated already warns at parse time; a second warning printed
+// from runEnvAdd said the same thing twice AND split the summary banner in half.
+func TestEnvAdd_ClusterDomainWarnsExactlyOnce(t *testing.T) {
+	dir := chdirTempDir(t)
+	writeFileMkdir(t, filepath.Join(dir, "terraform-iac-bootstrap", "cluster", ".keep"), "")
+	var out, errOut string
+	errOut = captureStderr(t, func() {
+		out = captureStdout(t, func() {
+			_ = runEnvAdd(globalOpts{dryRun: true}, "lab", envAddOpts{
+				region: "us-sea", objCluster: "us-sea-1", clusterDomain: "lab.example.com", dryRun: true,
+			})
+		})
+	})
+	if n := strings.Count(errOut+out, "cluster-domain"); n > 0 {
+		t.Errorf("runEnvAdd must not warn about --cluster-domain itself (cobra already does); saw %d mention(s):\n%s%s", n, errOut, out)
+	}
+}

@@ -199,10 +199,82 @@ func loadDocs(root string, files []string) ([]docFile, []docFinding) {
 
 // ── 1. llz commands + flags ──────────────────────────────────────────────────
 
-// Matches `llz` followed by subcommand words and any flags, inside prose or a
-// fenced block. Stops at a pipe, backtick, or newline so a shell pipeline does
-// not bleed into the token list.
-var llzInvocationRe = regexp.MustCompile(`(?:^|[^\w./-])llz((?:\s+(?:--?[\w-]+(?:=[^\s` + "`" + `|]*)?|[a-z][a-z0-9-]*))+)`)
+// llzStartRe finds where an `llz` invocation BEGINS. It deliberately does not
+// try to match the whole command: an earlier version did, and its alternation
+// stopped at the first token it could not classify — so a value like
+// `v1.33.6+lke7` or `203.0.113.0/24` ended the match and every flag after it went
+// unchecked, on one line or many. Find the start, then TOKENISE the rest.
+var llzStartRe = regexp.MustCompile(`(?:^|[^\w./-])llz(\s+.*)$`)
+
+// invocationTokens splits the text after `llz` into argv-ish tokens, stopping at
+// whatever ends the command: a shell operator, a comment, or the closing backtick
+// of inline code. Quoted strings are kept whole so a value containing a space is
+// one token.
+func invocationTokens(rest string) []string {
+	var out []string
+	var cur strings.Builder
+	quote := rune(0)
+	flush := func() {
+		if cur.Len() > 0 {
+			out = append(out, cur.String())
+			cur.Reset()
+		}
+	}
+	runes := []rune(rest)
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			} else {
+				cur.WriteRune(c)
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case ' ', '\t':
+			flush()
+		case '`', '|', '#', ';', '&', '>', '<', ')':
+			flush()
+			return out // the command ends here
+		case '\\':
+			flush() // a stray continuation marker; tokens continue on the folded line
+		default:
+			cur.WriteRune(c)
+		}
+	}
+	flush()
+	return out
+}
+
+// logicalLine is a source line after shell CONTINUATIONS have been folded in,
+// carrying the line number of where it STARTED so a finding still points at the
+// place a reader will look.
+type logicalLine struct {
+	text string
+	num  int
+}
+
+// foldContinuations joins `\`-continued lines into one logical line. The command
+// scan is line-based and llzInvocationRe stops at a newline, so without this a
+// multi-line invocation had only its FIRST line checked — and multi-line is
+// exactly the shape of the copy/paste blocks most likely to drift. quickstart.md's
+// flagship `llz env add … \` block spans three lines; two of them were unguarded.
+func foldContinuations(body string) []logicalLine {
+	raw := strings.Split(body, "\n")
+	out := make([]logicalLine, 0, len(raw))
+	for i := 0; i < len(raw); i++ {
+		start, cur := i+1, raw[i]
+		for strings.HasSuffix(strings.TrimRight(cur, " \t"), "\\") && i+1 < len(raw) {
+			cur = strings.TrimSuffix(strings.TrimRight(cur, " \t"), "\\") + " " + strings.TrimSpace(raw[i+1])
+			i++
+		}
+		out = append(out, logicalLine{text: cur, num: start})
+	}
+	return out
+}
 
 // isDecisionRecord reports whether a doc is a dated RECORD rather than an
 // instruction. ADRs and design docs describe what was decided (and often what was
@@ -247,8 +319,8 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command) []docFinding {
 		if isDecisionRecord(rel) {
 			continue
 		}
-		for i, line := range strings.Split(d.body, "\n") {
-			for _, m := range llzInvocationRe.FindAllStringSubmatch(line, -1) {
+		for _, ll := range foldContinuations(d.body) {
+			for _, m := range llzStartRe.FindAllStringSubmatch(ll.text, -1) {
 				// Resolve the command and its flags in ONE pass, the way cobra
 				// itself accepts them: flags may appear before, between, or after
 				// subcommand words. An earlier cut stopped collecting words at the
@@ -257,7 +329,7 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command) []docFinding {
 				// command at all and skip silently. That is a doc style this repo
 				// uses (orphan-volume-cleanup.md), so the guard was blind exactly
 				// where it claimed coverage.
-				fields := strings.Fields(m[1])
+				fields := invocationTokens(m[1])
 				cur, words, flags, descending := rootCmd, 0, []string(nil), true
 				for i := 0; i < len(fields); i++ {
 					f := fields[i]
@@ -303,7 +375,7 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command) []docFinding {
 					}
 					if found == nil {
 						out = append(out, docFinding{
-							File: rel, Line: i + 1, Kind: "flag",
+							File: rel, Line: ll.num, Kind: "flag",
 							Detail: fmt.Sprintf("`llz %s` has no flag %s", path, fl),
 						})
 						continue
@@ -314,7 +386,7 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command) []docFinding {
 					// message already carries the replacement.
 					if found.Deprecated != "" {
 						out = append(out, docFinding{
-							File: rel, Line: i + 1, Kind: "deprecated-flag",
+							File: rel, Line: ll.num, Kind: "deprecated-flag",
 							Detail: fmt.Sprintf("`llz %s %s` is deprecated: %s", path, fl, found.Deprecated),
 						})
 					}

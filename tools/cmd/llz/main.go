@@ -351,7 +351,7 @@ func envCmd() *cobra.Command {
 	// which read exactly like it had been applied. Marked deprecated so cobra says
 	// so on every use rather than leaving the reader to discover it at apply time.
 	f.StringVar(&o.clusterDomain, "cluster-domain", "", "DEPRECATED, ignored: Linode owns the cluster domain and the validator rejects cluster.bootstrap.domainSuffix")
-	_ = f.MarkDeprecated("cluster-domain", "the cluster domain is Linode-owned and discovered in-cluster; this flag writes nothing")
+	_ = f.MarkDeprecated("cluster-domain", "ignored — Linode owns the cluster domain (lke<id>.akamai-apl.net) and LLZ discovers it in-cluster, so this writes nothing")
 	f.StringVar(&o.objCluster, "obj-cluster", "", "Linode Object Storage cluster (e.g. us-sea-1)")
 	f.StringVar(&o.k8sVersion, "k8s-version", "", "LKE-E k8s version (a +lke version in your account)")
 	f.StringVar(&o.nodeType, "node-type", "", "Linode node type for the pool (e.g. g8-dedicated-8-4; default: example value)")

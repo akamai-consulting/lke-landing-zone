@@ -561,3 +561,64 @@ func TestMarkdownFiles_WalkErrorFailsClosed(t *testing.T) {
 		t.Error("markdownFiles swallowed a walk error — it must fail closed, not under-cover silently")
 	}
 }
+
+// The command scan is line-based, so a multi-line `llz … \` invocation had only
+// its FIRST line checked — and multi-line is exactly the shape of the copy/paste
+// blocks most likely to drift (quickstart.md's flagship `llz env add` spans three
+// lines; two were unguarded).
+func TestFoldContinuations(t *testing.T) {
+	got := foldContinuations("llz env add lab \\\n  --region us-sea \\\n  --nope\nunrelated\n")
+	if len(got) == 0 || got[0].num != 1 {
+		t.Fatalf("first logical line should start at 1, got %+v", got)
+	}
+	for _, want := range []string{"--region us-sea", "--nope"} {
+		if !strings.Contains(got[0].text, want) {
+			t.Errorf("continuation %q not folded into the first line: %q", want, got[0].text)
+		}
+	}
+	// A finding must still point at the line a reader will look at.
+	if got[0].num != 1 {
+		t.Errorf("folded line reported at %d, want the STARTING line 1", got[0].num)
+	}
+}
+
+// The old whole-command regex stopped at the first token it could not classify,
+// so a value like `v1.33.6+lke7` or a CIDR ended the match and every flag after it
+// went unchecked — on one line or many.
+func TestInvocationTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name, rest string
+		want       []string
+	}{
+		{"a dotted/plus version does not end the scan",
+			" env add lab --k8s-version v1.33.6+lke7 --nope",
+			[]string{"env", "add", "lab", "--k8s-version", "v1.33.6+lke7", "--nope"}},
+		{"a CIDR does not end the scan",
+			" env add lab --runner-ipv4-cidrs 203.0.113.0/24 --nope",
+			[]string{"env", "add", "lab", "--runner-ipv4-cidrs", "203.0.113.0/24", "--nope"}},
+		{"a pipe ends the command",
+			" env list --json | jq -r '.[]'",
+			[]string{"env", "list", "--json"}},
+		{"a closing backtick ends the command",
+			" doctor --env lab` and then something",
+			[]string{"doctor", "--env", "lab"}},
+		{"a quoted value stays one token",
+			` openbao set secret/x k="a b" --yes`,
+			[]string{"openbao", "set", "secret/x", "k=a b", "--yes"}},
+		{"a comment ends the command",
+			" build lab --yes  # dispatches terraform.yml",
+			[]string{"build", "lab", "--yes"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := invocationTokens(tc.rest)
+			if len(got) != len(tc.want) {
+				t.Fatalf("tokens = %q, want %q", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("token %d = %q, want %q (full: %q)", i, got[i], tc.want[i], got)
+				}
+			}
+		})
+	}
+}

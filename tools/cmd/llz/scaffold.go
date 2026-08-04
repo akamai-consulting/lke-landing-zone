@@ -160,11 +160,9 @@ func runEnvAdd(g globalOpts, name string, o envAddOpts) error {
 	field := func(label, val string) { fmt.Printf("    %s%s\n", dim(label), val) }
 	fmt.Println(bold("llz env add") + dim(" — spec-first scaffold"))
 	field("env:            ", name)
-	if o.clusterDomain != "" {
-		// Loud, because the old banner echoed this back as if it had been applied.
-		fmt.Fprintf(os.Stderr, "%s --cluster-domain %q is IGNORED: Linode owns the cluster domain (lke<id>.akamai-apl.net) and LLZ discovers it in-cluster.\n",
-			yellow("warning:"), o.clusterDomain)
-	}
+	// NO --cluster-domain warning here: cobra's MarkDeprecated (main.go) already
+	// emits one at parse time, before this banner. Printing a second warning mid-
+	// banner said the same thing twice and split the field list in half.
 	field("Linode region:  ", o.region)
 	field("OBJ cluster:    ", o.objCluster)
 	field("dry-run:        ", fmt.Sprintf("%v", dryRun))
