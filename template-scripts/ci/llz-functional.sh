@@ -248,6 +248,36 @@ if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
     else
       fail "self-update --dry-run did not report a resolved target"
     fi
+
+    # B6. install-llz.sh reports WHICH llz the shell will run. A successful
+    # install is not the same as a usable one: an older copy earlier on PATH wins
+    # every lookup, the installer's own success line proves nothing (it invokes
+    # the new binary by absolute path), and the resulting failure surfaces much
+    # later as copier rejecting a retired template ref. That is a silent-by-
+    # construction bug, so pin BOTH verdicts here rather than trusting a manual
+    # check to be repeated.
+    step "B6. install-llz.sh names the winning llz on PATH"
+    inst="$ROOT/template-scripts/install-llz.sh"
+    shadow="$(mktemp -d)"; mkdir -p "$shadow/old" "$shadow/new"
+    printf '#!/bin/sh\necho "llz version stale-shadow"\n' >"$shadow/old/llz"
+    chmod +x "$shadow/old/llz"
+
+    # Shadowed: an older llz earlier on PATH must be named as the one in use.
+    out="$(PATH="$shadow/old:$shadow/new:$PATH" LLZ_BINDIR="$shadow/new" bash "$inst" 2>&1 || true)"
+    if grep -q 'ANOTHER llz WINS' <<<"$out" && grep -q "in use →  $shadow/old/llz" <<<"$out"; then
+      pass "install-llz flags the shadowing copy and names it"
+    else
+      fail "install-llz did not report the shadowing $shadow/old/llz (output: $(tr '\n' ' ' <<<"$out" | tail -c 300))"
+    fi
+    # …and it must not cry wolf when the fresh install is the one that wins.
+    rm -f "$shadow/old/llz"
+    out="$(PATH="$shadow/old:$shadow/new:$PATH" LLZ_BINDIR="$shadow/new" bash "$inst" 2>&1 || true)"
+    if grep -q "on your PATH → $shadow/new/llz" <<<"$out" && ! grep -q 'ANOTHER llz WINS' <<<"$out"; then
+      pass "install-llz confirms the fresh install when nothing shadows it"
+    else
+      fail "install-llz did not confirm $shadow/new/llz as the winner (output: $(tr '\n' ' ' <<<"$out" | tail -c 300))"
+    fi
+    rm -rf "$shadow"
   fi
 fi
 

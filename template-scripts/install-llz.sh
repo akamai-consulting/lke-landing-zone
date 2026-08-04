@@ -49,12 +49,12 @@ gh auth status --hostname "$HOST" >/dev/null 2>&1 || {
 #                         does NOT exist yet — so the download succeeds and the
 #                         scaffold then dies in copier with "pathspec 'vX.Y.Z'
 #                         did not match any file(s) known to git".
-#   ^v<int>.<int>.<int>   drops prefixed tags (the legacy llz/v* CLI track, any
-#     with an optional     other release track) and malformed ones — the repo
-#     -pre / +build tail   carries a real `v.0.0.30` typo tag that must not win.
-#                         The suffix is tolerated and then stripped for ordering,
-#                         exactly as semver() does, so the two agree on a tag
-#                         like v1.2.3-hotfix that is not flagged pre-release.
+#   the tag regex        drops prefixed tags (the legacy llz/v* CLI track, any
+#                        other release track) and malformed ones — the repo
+#                        carries a real `v.0.0.30` typo tag that must not win.
+#                        A -pre/+build tail is tolerated and then stripped for
+#                        ordering, exactly as semver() does, so the two agree on
+#                        a tag like v1.2.3-hotfix that is not flagged pre-release.
 #
 # The reduce is not a stylistic choice over `sort_by(.key) | last`. Stripping the
 # tail means two full releases can share one numeric core (v1.2.3 and
