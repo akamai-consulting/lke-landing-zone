@@ -15,3 +15,9 @@ resources:
   - service.yaml
   - network-policy.yaml
   - daemonset.yaml
+  # THE ON SWITCH, and deliberately last in this list: it is the only file here that
+  # changes where Loki's and Harbor's traffic goes. Everything above it is inert
+  # until this lands. Its sync wave (10) puts it after the CA + policy at wave 5,
+  # and `llz ci wait-harbor` rolls any registry pod that predates the policy — see
+  # the file header for why order is the whole safety story.
+  - coredns-rewrite.yaml

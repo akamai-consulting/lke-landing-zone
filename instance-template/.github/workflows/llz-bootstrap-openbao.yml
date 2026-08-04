@@ -727,6 +727,26 @@ jobs:
           llz ci phase-mark converge
           llz ci converge --budget 1200
 
+      # ── Close the obj-proxy CA admission race (no-op unless objProxy is on) ───
+      # The Kyverno policy that mounts the obj-proxy CA into harbor-registry mutates
+      # on ADMISSION, so it cannot reach a pod apl-core had already started. Sync
+      # waves order the OBJECTS (CA + policy at 5, the CoreDNS rewrite at 10) but no
+      # wave re-admits a running pod — so whether the registry trusts the proxy comes
+      # down to which of two installs won a race. Once the rewrite is live, a pod that
+      # lost it cannot complete a single S3 call: it fails to verify a certificate
+      # from a CA it does not have. It does not crash, so nothing restarts it and
+      # nothing reports it — Harbor is just broken until someone notices.
+      #
+      # AFTER converge, not before: the verb keys off the ClusterPolicy to decide
+      # whether objProxy is enabled here, and that policy arrives with the component's
+      # Argo sync. Run earlier it sees no policy and silently does nothing — which is
+      # exactly why it is not folded into wait-harbor.
+      #
+      # Always exits 0. assert-obj-encryption's [pod] check in the suite below is the
+      # gate; this is the repair that keeps it from having to fire.
+      - name: Ensure harbor-registry trusts the obj-proxy CA
+        run: llz ci harbor-trust-obj-proxy-ca
+
       # ── Storage invariant — DELIBERATELY NOT in the fan-out below ─────────────
       # Every PV-backed Linode Volume must be encrypted at rest, carry its lke<id>
       # ownership tag, and have been renamed off the CSI default pvc-<uuid> to a

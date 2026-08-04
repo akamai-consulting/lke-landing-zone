@@ -28,14 +28,21 @@
 # already has one, MERGE this key rather than replacing the object.
 #
 # ORDER OF OPERATIONS — getting this wrong is a cluster-wide object-storage outage,
-# not a degradation:
+# not a degradation. It is now enforced rather than documented:
 #
 #   1. Component enabled, DaemonSet Ready on every node, secret/obj/ssec seeded
 #      (`llz ci seed-ssec-key`). Confirm /stats on the health port.
 #   2. HARBOR must trust the CA issuing obj-proxy-tls — see ca-trust.yaml. Loki does
 #      NOT need this (it runs insecure_skip_verify: true on its S3 client), so Harbor
 #      is the whole of the blocker.
-#   3. THEN apply this. Verify a round-trip before declaring success.
+#   3. THEN this. Sync wave 10 puts it after the CA and the Kyverno policy at wave 5.
+#
+# A LATER WAVE IS NOT SUFFICIENT ON ITS OWN, because the policy mutates on ADMISSION:
+# registry pods that apl-core started before the policy existed carry no CA, and no
+# wave ordering reaches a pod that is already running. `llz ci wait-harbor` closes
+# that race — it reads the running pods and rolls the deployment if any of them
+# predates the policy (retrofitHarborObjProxyCA). Without that step this file is
+# safe only by luck of scheduling, which is not a property you can rely on twice.
 #
 # ROLLBACK is deleting this ConfigMap: DNS reverts to the real endpoint and traffic
 # goes direct again. Objects written while the proxy was live stay ENCRYPTED and
@@ -43,13 +50,22 @@
 # writes, not readability of what the proxy already encrypted. That asymmetry is why
 # step 2 is verified rather than assumed.
 #
-# NOT APPLIED BY THE KUSTOMIZATION, deliberately: enabling the component must not be
-# able to flip the switch. Apply this as a separate, reviewed change.
+# ENABLING THE COMPONENT NOW FLIPS THE SWITCH. This was previously held out of the
+# kustomization so that could not happen; it is in, because a proxy that nothing
+# routes to is a component that reports Healthy while every byte still goes to
+# Linode in the clear — the failure that looks most like success. `llz ci
+# assert-obj-encryption` gates on all four properties (CA, DNS, ciphertext, a real
+# Harbor push) so the flip is verified rather than assumed.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: coredns-custom
   namespace: kube-system
+  annotations:
+    # Wave 10, after the CA bundle and the Kyverno policy at wave 5. See the header:
+    # this is necessary for ordering but not sufficient, because admission-time
+    # mutation cannot reach an already-running pod.
+    argocd.argoproj.io/sync-wave: "10"
 data:
   # `.include` (not `.server`): the Corefile imports these INSIDE the `.:53` block,
   # which is where a rewrite directive has to sit.

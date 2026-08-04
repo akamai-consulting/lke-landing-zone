@@ -391,6 +391,12 @@ var Components = []Component{
 				Kind:    "Certificate",
 				Name:    "obj-proxy-tls",
 			},
+			{
+				Path:    "obj-proxy-dns-patch.yaml",
+				Version: "v1",
+				Kind:    "ConfigMap",
+				Name:    "coredns-custom",
+			},
 		},
 		// Its own health-inert Application, like the rotator: this sits on the write
 		// path for every image pull and log write, and a Degraded proxy must fail its
