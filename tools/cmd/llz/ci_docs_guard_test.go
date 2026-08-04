@@ -383,20 +383,47 @@ func repoRootForDocsGuard(t *testing.T) string {
 // `tofu init` leaves vendored provider READMEs under .terraform/. Both are full of
 // Markdown whose links resolve against a DIFFERENT repo — scanning them made the
 // guard fail on a clean tree, purely because another target had run first.
-func TestMarkdownFiles_SkipsBuildArtifacts(t *testing.T) {
+//
+// The first fix skipped EVERY dot-directory, which silently dropped .github/'s four
+// real docs and took the guard from 105 files to 101 while still reporting success.
+// So this pins both directions: artifacts out, .github IN.
+func TestMarkdownFiles_SkipsArtifactsButKeepsDotGithub(t *testing.T) {
 	root := t.TempDir()
 	writeMD(t, root, "docs/real.md", "# real")
+	writeMD(t, root, ".github/PULL_REQUEST_TEMPLATE.md", "# pr template")
+	writeMD(t, root, ".github/ISSUE_TEMPLATE/bug_report.md", "# bug")
+	writeMD(t, root, ".github/workflows/AGENTS.md", "# wf agents")
 	writeMD(t, root, ".instance-test/instance/README.md", "[x](nope.md)")
 	writeMD(t, root, "a/.terraform/providers/p/README.md", "[y](nope.md)")
+	writeMD(t, root, ".e2e-instance/README.md", "[e](nope.md)")
 	writeMD(t, root, "node_modules/pkg/README.md", "[z](nope.md)")
 	writeMD(t, root, "rendered/out/README.md", "[w](nope.md)")
+	writeMD(t, root, "vendor/v/README.md", "[v](nope.md)")
 
 	files, err := markdownFiles(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 1 || files[0] != filepath.Join("docs", "real.md") {
-		t.Errorf("expected only docs/real.md, got %v", files)
+	got := map[string]bool{}
+	for _, f := range files {
+		got[filepath.ToSlash(f)] = true
+	}
+	for _, want := range []string{
+		"docs/real.md",
+		".github/PULL_REQUEST_TEMPLATE.md",
+		".github/ISSUE_TEMPLATE/bug_report.md",
+		".github/workflows/AGENTS.md",
+	} {
+		if !got[want] {
+			t.Errorf("%s is a real doc and must be scanned (got %v)", want, files)
+		}
+	}
+	for f := range got {
+		for _, artifact := range []string{".instance-test/", ".terraform/", ".e2e-instance/", "node_modules/", "rendered/", "vendor/"} {
+			if strings.Contains(f, artifact) {
+				t.Errorf("%s is a build artifact and must not be scanned", f)
+			}
+		}
 	}
 }
 

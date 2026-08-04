@@ -268,3 +268,84 @@ func TestDeliverDocs_LeavesNonTemplateFilesAlone(t *testing.T) {
 		}
 	}
 }
+
+// --docs and --root are INDEPENDENT flags, and the two callers spell them
+// differently: copier passes `--docs docs --root .` (relative, CWD = instance),
+// e2e passes `--docs .e2e-instance/docs --root .e2e-instance`. An early cut
+// compared cleaned path STRINGS, so a caller mixing an absolute --root with a
+// relative --docs failed to recognise docs/ and walked it a second time — under
+// the root pass, which is not the pass that owns it. Identity is by inode now;
+// this pins that across all four spellings.
+func TestDeliverDocs_DocsDirRecognisedRegardlessOfSpelling(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	for _, tc := range []struct{ name, root, docs string }{
+		{"both relative", ".", "docs"},
+		{"both absolute", "", ""}, // filled below
+		{"absolute root, relative docs", "", "docs"},
+		{"relative root, absolute docs", ".", ""},
+		// The case string comparison actually gets wrong: the same directory
+		// reached by two different names. filepath.Abs does not resolve symlinks,
+		// so "<base>/docs" and "<base>/docs-link" compare unequal while being one
+		// inode — and the root pass then walks docs/ as if it were not docs/.
+		{"docs reached through a symlink", ".", "SYMLINK"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, tmpl := t.TempDir(), t.TempDir()
+			if err := os.MkdirAll(filepath.Join(base, "docs"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// The probe link is a DIRECTORY, deliberately: the docs pass only
+			// rewrites *.md, so it leaves this alone — while the root pass would
+			// resolve docs/../platform-apl and repoint it. A /tree/ URL appearing
+			// here is therefore proof, and the only proof, that the root pass
+			// walked docs/. (A *.md probe cannot discriminate: both passes would
+			// emit the same blob/main/docs/... string.)
+			if err := os.WriteFile(filepath.Join(base, "docs", "quickstart.md"),
+				[]byte("[shared tree](../platform-apl/)\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// Make it template-OWNED under docs/, so only the docs-skip can save it.
+			if err := os.MkdirAll(filepath.Join(tmpl, scaffoldDir, "docs"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(tmpl, scaffoldDir, "docs", "quickstart.md"), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(tmpl, "platform-apl"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chdir(base); err != nil {
+				t.Fatal(err)
+			}
+			root, docs := tc.root, tc.docs
+			if root == "" {
+				root = base
+			}
+			if docs == "" {
+				docs = filepath.Join(base, "docs")
+			}
+			if docs == "SYMLINK" {
+				link := filepath.Join(base, "docs-link")
+				if err := os.Symlink(filepath.Join(base, "docs"), link); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				docs = link
+			}
+			if err := runDeliverDocs(docs, "acme", "v1", root, tmpl); err != nil {
+				t.Fatalf("runDeliverDocs: %v", err)
+			}
+			b, err := os.ReadFile(filepath.Join(base, "docs", "quickstart.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(b), "/tree/main/platform-apl") {
+				t.Errorf("root pass walked docs/ (spelling: root=%q docs=%q):\n%s", tc.root, tc.docs, b)
+			}
+		})
+	}
+}

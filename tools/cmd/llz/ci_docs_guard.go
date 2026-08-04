@@ -112,6 +112,27 @@ func ciDocsGuardCmd() *cobra.Command {
 	return c
 }
 
+// docsGuardSkipDir names the directories that hold Markdown belonging to
+// something other than this repo — build output and vendored third-party trees,
+// whose links resolve against THEIR project and would report as dead here.
+//
+// It is an explicit DENY-set, not a "skip every dot-directory" rule. That rule
+// was tried and silently dropped four real docs — `.github/PULL_REQUEST_TEMPLATE.md`,
+// the two issue templates, and `.github/workflows/AGENTS.md` — taking the guard
+// from 105 files to 101 while still reporting success. A deny-set fails in the
+// safe direction: an artifact tree nobody listed produces noisy findings, which
+// gets fixed. An over-broad skip produces silent under-coverage, which does not.
+var docsGuardSkipDir = map[string]bool{
+	".git":           true,
+	".terraform":     true, // provider/module cache: third-party READMEs
+	".instance-test": true, // the rendered instance `make instance-test` leaves
+	".e2e-instance":  true, // the hoisted instance e2e-instantiate builds
+	"node_modules":   true,
+	"vendor":         true,
+	"rendered":       true, // `make render-charts` output
+	"bin":            true,
+}
+
 func markdownFiles(root string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -120,22 +141,12 @@ func markdownFiles(root string) ([]string, error) {
 		}
 		if d.IsDir() {
 			// NEVER skip the root itself — it is routinely passed as "." or "..",
-			// whose basename starts with a dot and would match the rule below,
-			// skipping the entire walk and reporting a clean "0 files OK".
+			// whose basename would match a name-based rule and skip the entire
+			// walk, reporting a clean "0 files OK" while checking nothing.
 			if p == root {
 				return nil
 			}
-			// Skip build artifacts and vendored trees. Any DOT-directory is
-			// out: .git, .terraform (whose provider tarballs carry READMEs
-			// full of links relative to THEIR repo), and .instance-test —
-			// the rendered instance `make instance-test` leaves behind, which
-			// would otherwise be scanned as if it were source. No documentation
-			// this guard should judge lives in a dot-directory.
-			if strings.HasPrefix(d.Name(), ".") {
-				return filepath.SkipDir
-			}
-			switch d.Name() {
-			case "node_modules", "vendor", "rendered", "bin":
+			if docsGuardSkipDir[d.Name()] {
 				return filepath.SkipDir
 			}
 			return nil
@@ -222,6 +233,22 @@ func checkDocCommands(root string, files []string, rootCmd *cobra.Command) []doc
 					cur = next
 					depth++
 				}
+				// NO UNKNOWN-SUBCOMMAND CHECK — tried, measured, removed. Flagging a
+				// word that is not a subcommand of a group (`llz ci frobnicate`)
+				// catches typos, and on a synthetic probe it caught four of four.
+				// On the real docs it produced five findings and every one was
+				// legitimate prose: three named a verb the docs correctly describe
+				// as RETIRED ("`llz ci gh-pat-expiry` … were retired"), and two
+				// were the glob `llz ci bao-*`. A docs gate that punishes accurate
+				// history and glob notation is one people switch off, which costs
+				// more than the typos it would catch. Distinguishing the cases
+				// needs edit-distance heuristics that would themselves need tuning.
+				//
+				// It did earn its keep once before being removed: it found
+				// tools/AGENTS.md claiming `llz ci cred-audit` in the present tense
+				// after that verb was retired. Run it by hand if you want another
+				// sweep; do not wire it into CI without solving the above.
+				_ = depth
 				for _, fl := range flags {
 					if fl == "--help" || fl == "-h" || !strings.HasPrefix(fl, "--") {
 						continue

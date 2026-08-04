@@ -41,7 +41,7 @@ Argo Applications pin `targetRevision: X.Y.Z`.
 
 A chart is consumed by an Argo CD `Application` that references the OCI artifact
 rather than an in-repo path. Today exactly one lives in this repo:
-[`platform-apl/components/openbao/openbao.yaml`](../platform-apl/components/openbao)
+[`platform-apl/components/openbao/openbao.yaml`](../platform-apl/components/openbao/openbao.yaml)
 (`chart: llz-openbao-platform`). That consumer relationship is the forcing
 function that keeps an extracted chart honestly reusable.
 

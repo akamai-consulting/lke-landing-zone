@@ -146,19 +146,24 @@ func repointInstanceRootLinks(root, docsDir, templateRoot, org string) (int, err
 	if org == "" {
 		org = "akamai-consulting"
 	}
-	absDocs, err := filepath.Abs(docsDir)
-	if err != nil {
-		return 0, err
-	}
+	// Identify docs/ by INODE, not by path string. --docs and --root are
+	// independent flags: copier passes `--docs docs --root .` (both relative to
+	// the instance), e2e passes `--docs .e2e-instance/docs --root .e2e-instance`.
+	// Comparing cleaned path strings — or resolving one against the other — is
+	// wrong for one caller or the other, and gets it wrong SILENTLY by walking
+	// docs/ twice. os.SameFile sidesteps the spelling entirely.
+	docsInfo, docsErr := os.Stat(docsDir)
 	total := 0
-	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
 			// docs/ is handled by repointReferencedLinks.
-			if abs, e := filepath.Abs(p); e == nil && abs == absDocs {
-				return filepath.SkipDir
+			if docsErr == nil {
+				if fi, e := os.Stat(p); e == nil && os.SameFile(fi, docsInfo) {
+					return filepath.SkipDir
+				}
 			}
 			// Dot-directories (.git, .terraform, .instance-test) and vendored
 			// trees hold no template-owned file, so skipping them is pure
