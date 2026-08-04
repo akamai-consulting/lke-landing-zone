@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,5 +30,28 @@ func TestLoadTemplateManifestLocatesTheBadRule(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ":5 bad rule") {
 		t.Errorf("error must point at line 5 (comments and blanks still consume a line number), got: %v", err)
+	}
+}
+
+// The reverse containment (ADR 0014) exempts copier's `_answers_file`, and that
+// branch survived every test in the suite when deleted. It matters because copier
+// REGENERATES the answers tracker itself rather than merging it, so listing it
+// under `_skip_if_exists` is correct however the manifest classes it — the fence
+// is not an ownership claim there. Without the exemption, a template that fences
+// its own answers file (which copier.yml does today) fails the gate the moment the
+// manifest calls that file anything but `owned`.
+func TestReverseFencingExemptsTheCopierAnswersFile(t *testing.T) {
+	root := t.TempDir()
+	scaffold := filepath.Join(root, "instance-template")
+	// classed `managed`, which would otherwise trip the reverse check
+	writeTestFile(t, scaffold, ".template-manifest", "managed **\n")
+	writeTestFile(t, scaffold, ".copier-answers.yml", "_commit: v1\n")
+	writeTestFile(t, root, "copier.yml",
+		"_answers_file: .copier-answers.yml\n_skip_if_exists:\n  - \".copier-answers.yml\"\n_exclude: []\n")
+
+	var out, errOut bytes.Buffer
+	if err := runTemplateManifest(scaffold, "", "", &out, &errOut); err != nil {
+		t.Fatalf("the answers tracker is copier's own file, not an ownership claim: %v\nstderr: %s",
+			err, errOut.String())
 	}
 }

@@ -202,3 +202,84 @@ func writeTestFile(t *testing.T, root, rel, content string) {
 		t.Fatal(err)
 	}
 }
+
+// ── reverse containment (ADR 0014) ───────────────────────────────────────────
+//
+// The forward check asks "is every fenced file protected by copier?". These
+// cover the converse: "is every file copier skips one the manifest says the
+// instance owns?" A `managed`/`merge` file in `_skip_if_exists` receives no
+// update from copier and no restore from `llz upgrade` — it silently freezes.
+
+// reverseFixture lays out a scaffold whose single file `keep.txt` has the given
+// manifest class and the given copier protection.
+func reverseFixture(t *testing.T, class, copierYML string) (scaffold string, out, errOut *bytes.Buffer) {
+	t.Helper()
+	root := t.TempDir()
+	scaffold = filepath.Join(root, "instance-template")
+	writeTestFile(t, scaffold, ".template-manifest", "managed **\n"+class+" keep.txt\n")
+	writeTestFile(t, scaffold, "keep.txt", "content\n")
+	writeTestFile(t, root, "copier.yml", copierYML)
+	return scaffold, &bytes.Buffer{}, &bytes.Buffer{}
+}
+
+func TestCopierFencingReverseRejectsFencingAnUnownedFile(t *testing.T) {
+	for _, class := range []string{"managed", "merge"} {
+		t.Run(class, func(t *testing.T) {
+			scaffold, out, errOut := reverseFixture(t, class,
+				"_skip_if_exists:\n  - \"keep.txt\"\n_exclude: []\n")
+			err := runTemplateManifest(scaffold, "", "", out, errOut)
+			if err == nil {
+				t.Fatalf("a %s file fenced by _skip_if_exists must fail\nstdout: %s", class, out.String())
+			}
+			if !strings.Contains(errOut.String(), "keep.txt") {
+				t.Errorf("the error must name the offending file, got: %s", errOut.String())
+			}
+		})
+	}
+}
+
+func TestCopierFencingReverseAcceptsAnOwnedFile(t *testing.T) {
+	scaffold, out, errOut := reverseFixture(t, "owned",
+		"_skip_if_exists:\n  - \"keep.txt\"\n_exclude: []\n")
+	if err := runTemplateManifest(scaffold, "", "", out, errOut); err != nil {
+		t.Fatalf("an owned file fenced by _skip_if_exists is the correct pairing: %v\nstderr: %s", err, errOut.String())
+	}
+}
+
+// `_exclude` is a DELIVERY decision (the file never ships), not an ownership
+// claim, so it must not drag a template-owned file into the fenced classes.
+func TestCopierFencingReverseIgnoresExclude(t *testing.T) {
+	scaffold, out, errOut := reverseFixture(t, "managed",
+		"_skip_if_exists: []\n_exclude:\n  - \"keep.txt\"\n")
+	if err := runTemplateManifest(scaffold, "", "", out, errOut); err != nil {
+		t.Fatalf("_exclude must not be treated as an ownership claim: %v\nstderr: %s", err, errOut.String())
+	}
+}
+
+// An unmatched fence rule is dead config, but it may legitimately anticipate a
+// file the template does not ship yet — so it is reported, not enforced.
+func TestCopierFencingReverseNotesUnmatchedRuleWithoutFailing(t *testing.T) {
+	scaffold, out, errOut := reverseFixture(t, "owned",
+		"_skip_if_exists:\n  - \"keep.txt\"\n  - \"never/shipped.txt\"\n_exclude: []\n")
+	if err := runTemplateManifest(scaffold, "", "", out, errOut); err != nil {
+		t.Fatalf("an unmatched fence rule must not fail the gate: %v", err)
+	}
+	if !strings.Contains(errOut.String(), "never/shipped.txt") {
+		t.Errorf("the unmatched rule should be reported, got: %s", errOut.String())
+	}
+}
+
+// fencedClassNames is derived from the table so a new fenced class needs no edit
+// in the error text — the same property TestCopierFencingIsDrivenByTheTable
+// pins for the check itself.
+func TestFencedClassNamesComesFromTheTable(t *testing.T) {
+	got := fencedClassNames()
+	for _, c := range templateClasses {
+		if c.copierFenced && !strings.Contains(got, c.name) {
+			t.Errorf("fencedClassNames() = %q, missing fenced class %q", got, c.name)
+		}
+		if !c.copierFenced && strings.Contains(got, c.name) {
+			t.Errorf("fencedClassNames() = %q, lists unfenced class %q", got, c.name)
+		}
+	}
+}
