@@ -91,8 +91,32 @@ on:
 			wantRequired: []string{"region"},
 		},
 		{
-			name:         "on as a sequence has no dispatch inputs",
+			name:         "a sequence WITHOUT workflow_dispatch is not dispatchable",
 			yaml:         "on: [push, pull_request]\n",
+			wantDispatch: false,
+		},
+		{
+			// GitHub accepts three spellings and only the map form carries
+			// inputs. Reading the other two as non-dispatchable is a FALSE
+			// POSITIVE — docs-guard would call a valid `gh workflow run`
+			// impossible and fail CI on a correct doc.
+			name:         "scalar shorthand is dispatchable",
+			yaml:         "on: workflow_dispatch\n",
+			wantDispatch: true,
+		},
+		{
+			name:         "sequence shorthand is dispatchable",
+			yaml:         "on: [push, workflow_dispatch]\n",
+			wantDispatch: true,
+		},
+		{
+			name:         "block-sequence shorthand is dispatchable",
+			yaml:         "on:\n  - push\n  - workflow_dispatch\n",
+			wantDispatch: true,
+		},
+		{
+			name:         "a scalar that is some OTHER trigger is not dispatchable",
+			yaml:         "on: push\n",
 			wantDispatch: false,
 		},
 	} {

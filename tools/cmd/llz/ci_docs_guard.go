@@ -596,9 +596,31 @@ func parseWorkflowDispatchInputs(data []byte) (*wfInputs, error) {
 			on = v
 		}
 	}
+	// GitHub accepts three spellings of the trigger list, and only the map form
+	// can carry inputs. Treating the other two as "not dispatchable" is a FALSE
+	// POSITIVE, not merely under-coverage: docs-guard would report a perfectly
+	// valid `gh workflow run` as impossible and fail CI on a correct doc.
+	//
+	//   on: workflow_dispatch              scalar
+	//   on: [push, workflow_dispatch]      sequence
+	//   on:                                map — the only form with inputs
+	//     workflow_dispatch:
+	//       inputs: …
+	switch v := on.(type) {
+	case string:
+		wi.dispatch = v == "workflow_dispatch"
+		return wi, nil
+	case []any:
+		for _, e := range v {
+			if fmt.Sprint(e) == "workflow_dispatch" {
+				wi.dispatch = true
+			}
+		}
+		return wi, nil
+	}
 	onMap, ok := on.(map[string]any)
 	if !ok {
-		return wi, nil // `on: [push]` or a bare string — no dispatch inputs
+		return wi, nil // some other shape — no dispatch inputs we can read
 	}
 	wd, ok := onMap["workflow_dispatch"]
 	if !ok {
