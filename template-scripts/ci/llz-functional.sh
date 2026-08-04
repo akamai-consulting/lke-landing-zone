@@ -134,9 +134,13 @@ if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
     v="${REF#llz/}"; v="${v#v}"; TAG="v${v}"
   else
     # Highest-semver FULL release: skip drafts and pre-releases (unpromoted e2e
-    # candidates), matching latestRelease() in selfupdate.go.
+    # candidates), matching latestRelease() in selfupdate.go — including its
+    # tolerance for a -pre/+build tail, which is stripped before the numeric
+    # sort. Without the strip, `split(".") | map(tonumber)` would ERROR on a tag
+    # like v1.2.3-hotfix rather than rank it, so the filter and the sort key
+    # have to move together.
     TAG="$(gh release list --repo "$REPO" --limit 200 --json tagName,isDraft,isPrerelease --jq \
-      '[.[] | select((.isDraft|not) and (.isPrerelease|not)) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort_by(ltrimstr("v") | split(".") | map(tonumber)) | last')"
+      '[.[] | select((.isDraft|not) and (.isPrerelease|not)) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))] | sort_by(ltrimstr("v") | sub("[-+].*$";"") | split(".") | map(tonumber)) | last')"
     [[ -n "$TAG" && "$TAG" != "null" ]] || { fail "no full vX.Y.Z release found on $REPO"; TAG=""; }
   fi
   WANT_VER="$TAG"   # e.g. v0.0.38

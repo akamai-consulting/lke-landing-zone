@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # install-llz.sh — download the `llz` CLI from a template release via `gh` and
-# install it to ~/.local/bin. Pinned-release installer (no decision logic): it
-# resolves your platform's asset, verifies the checksum, and drops the binary on
-# a sudo-free, corp-friendly path.
+# install it to ~/.local/bin. It resolves the release the same way the CLI does,
+# picks your platform's asset, verifies the checksum, drops the binary on a
+# sudo-free corp-friendly path, and then reports which `llz` your shell will
+# actually run — installing one and running another is the failure this script
+# exists to prevent.
 #
 #   ./template-scripts/install-llz.sh                 # latest full release
 #   ./template-scripts/install-llz.sh v0.0.39         # a specific tag
@@ -48,8 +50,11 @@ gh auth status --hostname "$HOST" >/dev/null 2>&1 || {
 #                         scaffold then dies in copier with "pathspec 'vX.Y.Z'
 #                         did not match any file(s) known to git".
 #   ^v<int>.<int>.<int>   drops prefixed tags (the legacy llz/v* CLI track, any
-#                         other release track) and malformed ones — the repo
-#                         carries a real `v.0.0.30` typo tag that must not win.
+#     with an optional     other release track) and malformed ones — the repo
+#     -pre / +build tail   carries a real `v.0.0.30` typo tag that must not win.
+#                         The suffix is tolerated and then stripped for ordering,
+#                         exactly as semver() does, so the two agree on a tag
+#                         like v1.2.3-hotfix that is not flagged pre-release.
 tag_query='[.[] | select((.isDraft or .isPrerelease) | not) | .tagName
      | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?$"))]
    | map({tag: ., key: (sub("^v";"") | sub("[-+].*$";"") | split(".") | map(tonumber))})
@@ -98,7 +103,9 @@ if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 25
 (cd "$tmp" && grep " ${asset}\$" SHA256SUMS | $sum -c -)
 
 install -m 0755 "$tmp/$asset" "$BINDIR/llz"
-echo "install-llz: installed $("$BINDIR/llz" version) → $BINDIR/llz"
+# `</dev/null` for the same reason as the probes below: under `curl … | bash`,
+# stdin IS the installer script, and any child that reads it truncates the rest.
+echo "install-llz: installed $("$BINDIR/llz" version </dev/null) → $BINDIR/llz"
 echo "install-llz: enable shell completion with \`llz completion zsh|bash\` (see quickstart §2)."
 
 # ── which llz will the shell actually run? ───────────────────────────────────

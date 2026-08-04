@@ -181,7 +181,7 @@ ORG=akamai-consulting            # or your fork's org
 VER=$(gh release list --repo "${ORG}/lke-landing-zone" --limit 200 --json tagName,isDraft,isPrerelease \
   --jq '[.[]|select((.isDraft or .isPrerelease)|not)|.tagName|select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
         |map({t:.,k:(sub("^v";"")|split(".")|map(tonumber))})|sort_by(.k)|last|.t // empty')
-[ -n "$VER" ] || echo '!! no published vX.Y.Z release found — stop and check: gh release list' >&2
+: "${VER:?no published vX.Y.Z release found — check: gh release list --repo ${ORG}/lke-landing-zone}"
 ASSET=llz-darwin-arm64
 BINDIR="$HOME/.local/bin"
 mkdir -p "$BINDIR"               # create it FIRST (see the PATH note above)
@@ -200,7 +200,7 @@ ORG=akamai-consulting; ASSET=llz-darwin-arm64
 VER=$(gh release list --repo "${ORG}/lke-landing-zone" --limit 200 --json tagName,isDraft,isPrerelease \
   --jq '[.[]|select((.isDraft or .isPrerelease)|not)|.tagName|select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
         |map({t:.,k:(sub("^v";"")|split(".")|map(tonumber))})|sort_by(.k)|last|.t // empty')
-[ -n "$VER" ] || echo '!! no published vX.Y.Z release found — stop and check: gh release list' >&2
+: "${VER:?no published vX.Y.Z release found — check: gh release list --repo ${ORG}/lke-landing-zone}"
 BINDIR="$HOME/.local/bin"; mkdir -p "$BINDIR"
 curl -fsSL \
   "https://github.com/${ORG}/lke-landing-zone/releases/download/${VER}/${ASSET}" \
