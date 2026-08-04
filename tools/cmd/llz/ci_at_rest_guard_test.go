@@ -216,3 +216,70 @@ func TestStripHCLNoiseTracksBlockCommentsAcrossLines(t *testing.T) {
 		t.Fatalf("control case is wrong: a balanced resource must net 0, got %d", sum(without))
 	}
 }
+
+// A bucket holds data at rest and has NO argument to encrypt it, so it must be
+// REPORTED (silence read as approval — four buckets carrying every image layer
+// and every log line were simply never looked at) and it must be REGISTRABLE
+// (there is nothing to set, so a non-registrable finding would be a gate nobody
+// could ever pass).
+func TestAtRestGuardReportsObjectStorageBucketAsRegistrable(t *testing.T) {
+	findings := scanResourceLevers(
+		"resource \"linode_object_storage_bucket\" \"loki_chunks\" {\n  region = \"us-ord\"\n}\n",
+		"terraform-modules/llz-object-storage/main.tf")
+	if len(findings) != 1 {
+		t.Fatalf("a bucket must produce exactly one finding, got %+v", findings)
+	}
+	if !findings[0].registrable {
+		t.Error("a bucket finding must be registrable — there is no lever to set, so a " +
+			"non-registrable finding would be unsatisfiable")
+	}
+	want := "terraform-modules/llz-object-storage/main.tf:linode_object_storage_bucket.loki_chunks"
+	if findings[0].key != want {
+		t.Errorf("key = %q, want %q", findings[0].key, want)
+	}
+}
+
+// The no-lever branch must not swallow the levered ones: an unencrypted volume
+// declared after a bucket in the same file still has to fail. The first revision
+// skipped the rest of the resource body after a no-lever match, which would have
+// hidden exactly this.
+func TestAtRestGuardStillSeesLeveredResourcesAfterABucket(t *testing.T) {
+	body := "resource \"linode_object_storage_bucket\" \"b\" {\n  region = \"us-ord\"\n}\n\n" +
+		"resource \"linode_volume\" \"v\" {\n  size = 20\n}\n"
+	findings := scanResourceLevers(body, "terraform-modules/llz-object-storage/main.tf")
+	if len(findings) != 2 {
+		t.Fatalf("want a finding for each resource, got %+v", findings)
+	}
+	if findings[1].registrable {
+		t.Error("an unencrypted linode_volume must stay NON-registrable — it has a lever")
+	}
+}
+
+// Every bucket in the real tree must be registered. This is the assertion that
+// makes the probe result durable: if someone adds a fifth bucket, the guard fails
+// until they say what lands in it and what would retire the entry.
+func TestEveryObjectStorageBucketIsRegistered(t *testing.T) {
+	root := "../../.." // tools/cmd/llz -> repo root, as TestAtRestGuardPassesOnThisRepo
+	findings, _, err := collectAtRestFindings(root, atRestScanDirs(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, f := range findings {
+		if !strings.Contains(f.key, "linode_object_storage_bucket.") {
+			continue
+		}
+		seen++
+		rule, ok := atRestAllowed[f.key]
+		if !ok {
+			t.Errorf("bucket %s is not registered in atRestAllowed", f.key)
+			continue
+		}
+		if rule.exit == "" {
+			t.Errorf("bucket %s is registered with no exit condition", f.key)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("scanned no buckets at all — the guard would report green over them")
+	}
+}

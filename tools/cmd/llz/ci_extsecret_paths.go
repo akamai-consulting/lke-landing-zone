@@ -499,6 +499,11 @@ func runCIExternalSecretPaths(root string, w io.Writer) error {
 		// because the REF side could not see the ExternalSecret that reads it — the
 		// two incomplete corpora masked each other.
 		"tools/cmd/llz/ci_seed_broad_pat.go",
+		// seed-ssec-key writes secret/obj/ssec, the obj-proxy's SSE-C key. Nothing
+		// else seeds it, and it is generate-once (Linode discards SSE-C keys, so a
+		// second write orphans every encrypted object) — so it never appears as a
+		// `bao kv put` step in a workflow, only here.
+		"tools/cmd/llz/ci_seed_ssec_key.go",
 	} {
 		goPaths, goFields, err := collectSeededGo(esRepoPath(root, goSrc))
 		if err != nil {

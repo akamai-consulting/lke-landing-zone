@@ -1,0 +1,70 @@
+# THE ON SWITCH — read this before applying it.
+#
+# Everything else in this component is inert without this file. It points the
+# Object Storage endpoint hostname at the obj-proxy Service, which is what routes
+# Loki's and Harbor's S3 traffic through the SSE-C gateway instead of straight to
+# Linode.
+#
+# WHY DNS AND NOT CONFIG. apl-core renders the endpoint for both writers as
+# `https://{{ $obj.linode.region }}.linodeobjects.com` — derived from `region`, not
+# independently settable — so there is no supported way to point them at a proxy.
+# And we would not want to change the NAME even if we could: the proxy deliberately
+# does not re-sign (SSE-C headers are honoured outside SigV4 SignedHeaders,
+# measured), so the Host the client signed must survive to the upstream untouched.
+# DNS is the only layer that redirects the traffic without altering what was signed.
+#
+# THIS IS NOT A COREFILE PATCH — verified against the live e2e cluster (lke638381).
+# The Corefile is a Flux-managed Helm resource (helm.toolkit.fluxcd.io/name:
+# workload, ConfigMap kube-system/workload-coredns), so editing it directly would be
+# reverted on the next reconcile. It ships CoreDNS's standard extension hooks:
+#
+#     import custom/*.server      # before the .:53 block — whole server blocks
+#     .:53 { … import custom/*.include }   # INSIDE the block — directives
+#
+# and mounts an OPTIONAL ConfigMap `kube-system/coredns-custom` at
+# /etc/coredns/custom. So this is a supported extension, not a patch, and Flux has
+# no opinion about it. A `rewrite` is a directive, so it belongs in an `.include`.
+# The ConfigMap did not exist on the e2e cluster, so this creates it; if an instance
+# already has one, MERGE this key rather than replacing the object.
+#
+# ORDER OF OPERATIONS — getting this wrong is a cluster-wide object-storage outage,
+# not a degradation:
+#
+#   1. Component enabled, DaemonSet Ready on every node, secret/obj/ssec seeded
+#      (`llz ci seed-ssec-key`). Confirm /stats on the health port.
+#   2. HARBOR must trust the CA issuing obj-proxy-tls — see ca-trust.yaml. Loki does
+#      NOT need this (it runs insecure_skip_verify: true on its S3 client), so Harbor
+#      is the whole of the blocker.
+#   3. THEN apply this. Verify a round-trip before declaring success.
+#
+# ROLLBACK is deleting this ConfigMap: DNS reverts to the real endpoint and traffic
+# goes direct again. Objects written while the proxy was live stay ENCRYPTED and
+# become unreadable on the direct path — rollback restores availability for new
+# writes, not readability of what the proxy already encrypted. That asymmetry is why
+# step 2 is verified rather than assumed.
+#
+# NOT APPLIED BY THE KUSTOMIZATION, deliberately: enabling the component must not be
+# able to flip the switch. Apply this as a separate, reviewed change.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  # `.include` (not `.server`): the Corefile imports these INSIDE the `.:53` block,
+  # which is where a rewrite directive has to sit.
+  #
+  # `rewrite name` is EXACT-match on purpose — one name, nothing else. A regex or
+  # suffix rule would put every lookup in the blast radius of a typo; this puts one
+  # hostname there.
+  #
+  # REPLACE_ME is filled by `llz render` from the same spec …objectStorage.cluster
+  # value the DaemonSet's OBJ_ENDPOINT_HOST and the certificate's dnsNames use — all
+  # three must name the identical host or the handshake fails.
+  #
+  # The proxy itself must NOT see this rewrite: its DaemonSet sets
+  # `dnsPolicy: Default` so it resolves via the node's resolver and reaches the real
+  # Linode endpoint. Without that it would resolve its own upstream to itself and
+  # every request would loop; `llz obj-proxy` refuses to start if it detects that.
+  objproxy.include: |
+    rewrite name REPLACE_ME.linodeobjects.com obj-proxy.obj-proxy.svc.cluster.local

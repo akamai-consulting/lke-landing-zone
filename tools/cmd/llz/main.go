@@ -66,7 +66,7 @@ func newRootCmd() *cobra.Command {
 		newCmd(), doctorCmd(), upgradeCmd(), driftCmd(), envCmd(), specCmd(), networkCmd(), componentsCmd(),
 		importCmd(), secretsCmd(), tokensCmd(), renderCmd(), buildCmd(), upCmd(), statusCmd(),
 		lintCmd(), fmtCmd(), validateCmd(), checkCmd(), hooksCmd(), precommitCmd(),
-		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), versionCmd(), selfUpdateCmd(),
+		reapCmd(), openbaoCmd(), ciCmd(), credentialsCmd(), verifyCmd(), reconcileCmd(), objProxyCmd(), versionCmd(), selfUpdateCmd(),
 		aplCmd(),
 	)
 

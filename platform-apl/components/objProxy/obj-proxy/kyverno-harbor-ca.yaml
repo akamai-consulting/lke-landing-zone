@@ -1,0 +1,128 @@
+# Kyverno ClusterPolicy: give Harbor's registry the CA that signs the obj-proxy
+# certificate, so it trusts the SSE-C gateway standing in front of Object Storage.
+#
+# WHY THIS EXISTS. Linode implements only SSE-C, and distribution's S3 driver cannot
+# emit SSE-C headers, so `llz obj-proxy` injects them (see
+# platform-apl/components/objProxy). Clients reach the proxy at the real endpoint
+# name — DNS changes what it resolves to, never what it is called — so the proxy
+# serves a certificate for <cluster>.linodeobjects.com from the platform's internal
+# CA. Harbor must trust that CA or every S3 call fails `x509: unknown authority`.
+#
+# WHY A POLICY AND NOT A VALUES CHANGE. Measured on the live e2e cluster: the
+# harbor-registry Deployment mounts NO CA material (its only volumes are
+# registry-htpasswd, registry-config and an emptyDir), there is no
+# ca-bundle/custom-ca/trust ConfigMap anywhere in the cluster, and apl-core exposes
+# no custom-CA injection point on a managed App Platform. Harbor is apl-core's
+# workload, so admission-time mutation is the only lever this repo has.
+#
+# WHY IT MATCHES POD AND NOT DEPLOYMENT. Mutating the Deployment would make the live
+# object permanently differ from the Helm release apl-core ships, and Flux/Argo
+# compare Deployments — that is a drift-and-correct loop, the same class as the
+# two-default-StorageClass wedge. Pods are not compared, so mutating the Pod leaves
+# apl-core's desired state byte-identical. This is exactly how Istio injects its own
+# sidecar into these same pods.
+#
+# WHY SSL_CERT_DIR AND NOT OVERWRITING THE BUNDLE. `registry` is a Go binary, and
+# Go's crypto/x509 builds the system pool from a FILE list and a DIRECTORY list,
+# combined. SSL_CERT_DIR replaces only the directory list, so the image's own
+# bundle still loads and no public trust is lost. Measured in the running container:
+#
+#   /etc/pki/tls/certs/ca-bundle.crt   887587 bytes   (Go certFiles[1] — Photon)
+#   /etc/ssl/certs                     334 entries    (Go certDirectories[0])
+#   /etc/ssl/certs/ca-certificates.crt ABSENT         (Go certFiles[0])
+#
+# Both default directories are listed explicitly below anyway, so the value is
+# correct even if a future image moves its trust store into one of them.
+#
+# HOW IT REACHES THE CLUSTER. Argo, as part of the objProxy component — NOT the
+# tools/cmd/llz/manifests/ directory its siblings live in. Those are applied by
+# `llz ci apply-kyverno-policy`, and that command is invoked by NOTHING: no
+# workflow, no Terraform, and bootstrap-cluster does not call it in-process despite
+# the comment in ci.go saying it does. Putting this there would have shipped a
+# ClusterPolicy that never reaches a cluster, which for a CA-delivery mechanism
+# means Harbor silently loses object storage the moment the DNS rewrite goes live.
+#
+# Living in the component is also the right lifecycle: the policy exists exactly
+# when the proxy does, and is removed with it.
+#
+# ORDERING. It syncs at wave 5 alongside the proxy, which is AFTER harbor-registry
+# is already running — so the mutation does not reach existing pods. That is what
+# `kubectl -n harbor rollout restart deploy/harbor-registry` is for, and why
+# assert-obj-encryption checks the running pod rather than the policy.
+#
+# FAILURE MODE, STATED PLAINLY. The live Kyverno resource webhook is
+# `mutate.kyverno.svc-ignore` — failurePolicy: Ignore. If Kyverno is down when a
+# registry Pod is admitted, the Pod starts WITHOUT the CA and every S3 call fails
+# once the DNS rewrite is live. That is loud and self-healing (the next restart with
+# Kyverno up fixes it), unlike the PVC case where a missed mutation produces a
+# permanently unencrypted volume. Ignore is kept deliberately: Fail would block
+# registry pods whenever Kyverno is unavailable, and this is the image-pull path.
+# `llz ci assert-obj-encryption` checks the RUNNING POD rather than the policy,
+# because a policy that exists proves nothing about a pod admitted while it was not.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: harbor-obj-proxy-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    policies.kyverno.io/title: Trust the obj-proxy CA in Harbor's registry
+    policies.kyverno.io/category: Storage / Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Adds the obj-proxy CA bundle and SSL_CERT_DIR to harbor-registry pods so the
+      registry trusts the SSE-C gateway that encrypts Object Storage writes. Scoped
+      to harbor-registry-* pods in the harbor namespace only.
+spec:
+  # Admission only. There is nothing to fix on an already-running pod — the env is
+  # read at process start — and a background scan would only log failures for pods
+  # that predate the policy.
+  background: false
+  # See FAILURE MODE above. Ignore is a considered choice, not a default.
+  failurePolicy: Ignore
+  rules:
+    - name: add-obj-proxy-ca
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [harbor]
+              # Narrow on purpose. A strategic-merge patch on `containers` merges by
+              # name and would ADD a nameless, image-less container to any pod that
+              # lacks `registry`/`registryctl` — so the match must guarantee the
+              # containers exist rather than the patch guessing.
+              names: ["harbor-registry-*"]
+              operations: [CREATE]
+      mutate:
+        patchStrategicMerge:
+          spec:
+            volumes:
+              # Issued into the harbor namespace by ca-trust.yaml: a Pod can only
+              # mount Secrets from its OWN namespace, so the bundle cannot live in
+              # the obj-proxy namespace with the proxy itself.
+              - name: llz-obj-proxy-ca
+                secret:
+                  secretName: obj-proxy-ca
+                  optional: true # never block the pod on a missing bundle
+                  items:
+                    - key: ca.crt
+                      path: obj-proxy-ca.crt
+            containers:
+              # Both containers speak S3: registryctl runs garbage collection
+              # against the same backend.
+              - name: registry
+                env:
+                  - name: SSL_CERT_DIR
+                    value: /etc/ssl/certs:/etc/pki/tls/certs:/etc/llz/ca
+                volumeMounts:
+                  - name: llz-obj-proxy-ca
+                    mountPath: /etc/llz/ca
+                    readOnly: true
+              - name: registryctl
+                env:
+                  - name: SSL_CERT_DIR
+                    value: /etc/ssl/certs:/etc/pki/tls/certs:/etc/llz/ca
+                volumeMounts:
+                  - name: llz-obj-proxy-ca
+                    mountPath: /etc/llz/ca
+                    readOnly: true

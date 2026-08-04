@@ -1,0 +1,10 @@
+# Not meshed: the proxy is deliberately transparent on the S3 path and the traffic
+# is already TLS on both sides. See the DaemonSet's sidecar.istio.io/inject: "false".
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: obj-proxy
+  annotations:
+    argocd.argoproj.io/sync-wave: "-12"
+  labels:
+    pod-security.kubernetes.io/enforce: restricted

@@ -542,6 +542,24 @@ jobs:
           LINODE_API_TOKEN: ${{ secrets.LINODE_API_TOKEN }}
         run: llz ci seed-broad-pat --region "$REGION"
 
+      # ── obj-proxy SSE-C key ────────────────────────────────────────────────────
+      # The encryption key for the object-storage gateway
+      # (docs/designs/obj-sse-c-gateway.md). No-ops unless spec.components.objProxy
+      # is enabled for this deployment.
+      #
+      # MUST run here, before the converge gate. The proxy's ExternalSecret reads
+      # secret/obj/ssec, and a missing path is not a soft failure: ESO reports
+      # SecretSyncedError, the Secret is never created, the DaemonSet cannot mount
+      # it, and llz-obj-proxy sits OutOfSync/Degraded until the convergence gate
+      # gives up — which is exactly how the first e2e run of this component failed.
+      #
+      # GENERATE-ONCE: an existing key is left alone, and an INDETERMINATE OpenBao
+      # read refuses to write rather than risk orphaning every object already
+      # encrypted under a key it could not see. Re-runs are safe and do nothing.
+      - name: Seed obj-proxy SSE-C key (when enabled)
+        if: steps.ensure.outputs.available == 'true'
+        run: llz ci seed-ssec-key --region "$REGION"
+
       # ── Standby: replicate the active's Harbor robot credentials ───────────────
       # A standby has no in-cluster Harbor, so it seeds secret/harbor/{robot,
       # pull-robot} from the repo-level HARBOR_* secrets the active's provisioner

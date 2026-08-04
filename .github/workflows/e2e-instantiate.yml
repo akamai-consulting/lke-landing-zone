@@ -243,6 +243,22 @@ jobs:
             components.argoWorkflows.enabled=true \
             components.clusterHealthWorkflow.enabled=true
 
+          # objProxy: the SSE-C gateway that makes Object Storage encrypted at rest
+          # (docs/designs/obj-sse-c-gateway.md). Default-DISABLED, so without this the
+          # e2e cluster runs without it and the obj-encryption assert lane self-skips —
+          # a green run that proved nothing about encryption.
+          #
+          # Enabling it here does NOT flip the switch. The component is inert until
+          # CoreDNS rewrites the endpoint hostname to the proxy Service, and that
+          # rewrite is deliberately outside the kustomization: it can only be applied
+          # once Harbor's registry pods carry the CA, and flipping it early turns an
+          # unencrypted-but-working registry into a broken one. So this run exercises
+          # the DEPLOY path — the DaemonSet comes up, the key is seeded, the Kyverno
+          # mutation lands on restarted registry pods — and the lane reports the DNS
+          # rewrite as the one remaining gap rather than passing.
+          bin/llz env set "${E2E_ENV}" \
+            components.objProxy.enabled=true
+
       - name: Lay the template out as an instance
         run: |
           set -euo pipefail

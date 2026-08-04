@@ -155,7 +155,11 @@ func TestSelectLanesRejectsUnknownNames(t *testing.T) {
 // like a cluster fault.
 func TestAssertSuiteLanesThreadRegionOnlyWhereItBelongs(t *testing.T) {
 	lanes := assertSuiteLanes("e2e")
-	wantRegion := map[string]bool{"health-workflow": true, "broad-pat": true, "team-write": true}
+	// obj-encryption takes --region because it is COMPONENT-GATED: it reads
+	// spec.components.objProxy for that deployment and self-skips when the SSE-C
+	// gateway is not enabled, rather than redding every cluster that does not run it.
+	wantRegion := map[string]bool{"health-workflow": true, "broad-pat": true, "team-write": true,
+		"obj-encryption": true}
 	for _, l := range lanes {
 		hasRegion := false
 		for _, s := range l.Steps {

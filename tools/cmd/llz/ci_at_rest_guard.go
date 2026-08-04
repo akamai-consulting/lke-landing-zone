@@ -20,6 +20,12 @@ package main
 //                              `assert-volume-encryption`, which reads the Linode
 //                              API; nothing covered a Volume declared in HCL.
 //
+// A FOURTH CLASS has no lever at all: linode_object_storage_bucket holds data at
+// rest and Linode exposes no way to encrypt it (measured — see the bucket entries
+// in atRestAllowed for the probe and its numbers). Those resources were invisible
+// here, which read as approval rather than as an open question, so they are now
+// reported as always-registrable findings. See atRestNoLeverResources.
+//
 // The pattern this repeats is the one PVC encryption already taught, expensively:
 // encryption is decided at CREATE and is immutable afterwards. There is no
 // remediation for a state file that was written unencrypted or a node pool that
@@ -111,6 +117,89 @@ var atRestAllowed = map[string]atRestRule{
 		exit: "as cluster/ — migrate this root's state in every deployment, then swap the fallback " +
 			"for `enforced = true`",
 	},
+
+	// ── Object Storage buckets: no SSE mode Linode implements is reachable ───
+	//
+	// MEASURED, not inferred — this is the fact ADR 0007 recorded as "unverified"
+	// and it is the whole reason these four entries read the way they do. Probed
+	// 2026-07-31 against a scratch bucket on us-ord-10 (E3) with a temporary
+	// scoped key, all of it deleted afterwards:
+	//
+	//   plain PUT then HEAD      200, NO x-amz-server-side-encryption header —
+	//                            nothing is applied by default
+	//   SSE-S3 (AES256 header)   400 InvalidArgument
+	//   SSE-C (customer key)     200; HEAD without the key 400 — it genuinely works
+	//   PutBucketEncryption      501 NotImplemented
+	//   GetBucketEncryption      501 NotImplemented
+	//
+	// Those numbers are from us-ord-10 (E3). SSE-C is also supported on E1, which
+	// matters because not every deployment is on a gen-2 endpoint: the ohttp and lab
+	// buckets sit on us-ord-1 (E1). So the gateway covers both generations rather
+	// than only the newest.
+	//
+	// So the two obvious moves are both dead, and one of them is dead in the
+	// DANGEROUS direction. Harbor's registry (`encrypt: true`) and Loki
+	// (`sse.type: SSE-S3`) can each request SSE-S3 in one line of values — and on
+	// Linode that returns 400 on every blob push and every chunk flush. It does
+	// not degrade to plaintext; it breaks the writer. Nobody should discover that
+	// from a production rollout, which is why the numbers are written here rather
+	// than summarised as "not supported".
+	//
+	// SSE-C is the one mode Linode implements and NEITHER writer can emit it:
+	// Loki's SSEConfig accepts only SSE-KMS and SSE-S3 and hard-errors otherwise,
+	// and distribution's S3 driver exposes only `encrypt` and `keyid`. Reaching it
+	// means forking both.
+	//
+	// AND IT WOULD BUY LESS THAN IT LOOKS. SSE-C keys travel on every GET, so the
+	// key would have to sit in the same OpenBao path and the same mounted Secret
+	// as the S3 credential the app already holds. That defends against obtaining
+	// bucket CONTENTS without the app's config — Linode-side disk access, a stray
+	// listing — but not against the access-key compromise ADR 0007 names as the
+	// real blast radius. Worth stating so a future reader weighs the fork against
+	// what it actually closes.
+	//
+	// Registered per-bucket rather than once for the module: the two consumers
+	// hold materially different data and would be fixed by different upstreams, so
+	// a shared entry would let Harbor's story vouch for Loki's.
+	"terraform-modules/llz-object-storage/main.tf:linode_object_storage_bucket.harbor_registry": {
+		reason: "every container image layer the platform runs, including anything pushed by tenants. " +
+			"Readable by whoever holds a key scoped to this bucket. Closest thing to a fix that exists " +
+			"today is distribution gaining SSE-C support, which would still need Linode to keep " +
+			"honouring it",
+		exit: "the objProxy component is ENABLED for this deployment and `llz ci assert-obj-encryption` " +
+			"reports green against this bucket — which requires the CoreDNS rewrite live, the Kyverno " +
+			"harbor-obj-proxy-ca mutation on the running registry pods, and a real object answering 400 " +
+			"to a keyless HEAD. Until all three hold, the bucket is plaintext no matter what is deployed. " +
+			"(The old exits — Linode shipping SSE-S3, or distribution gaining SSE-C — remain valid but are " +
+			"no longer what this is waiting on.)",
+	},
+	"terraform-modules/llz-object-storage/main.tf:linode_object_storage_bucket.loki_chunks": {
+		reason: "every log line in the deployment, which is the sharpest of the four: it includes the " +
+			"OpenBao audit stream shipped by the promtail sidecar — request paths, operations and " +
+			"auth.display_name — so this bucket holds a readable record of who asked OpenBao for what",
+		exit: "as harbor_registry — the objProxy gateway covers this bucket too, and Loki needs NO CA " +
+			"work to use it (its rendered config carries insecure_skip_verify: true on the S3 client, " +
+			"measured on the live cluster). NOTE this bucket has no alternative: Loki cannot move to " +
+			"block storage, because the filesystem store cannot serve a clustered deployment and this " +
+			"one runs three ingesters behind separate queriers — the proxy is the only route to " +
+			"encryption here",
+	},
+	"terraform-modules/llz-object-storage/main.tf:linode_object_storage_bucket.loki_ruler": {
+		reason: "Loki ruler state — alerting and recording rule definitions. No credentials and no log " +
+			"bodies, so the lowest-value of the four; registered separately rather than folded into " +
+			"loki_chunks so that closing one cannot silently vouch for the other",
+		exit: "same two triggers as loki_chunks — a 200 on the SSE-S3 probe, or an SSE-C type in Loki's " +
+			"SSEConfig. This bucket moves with loki_chunks rather than separately: they are written by " +
+			"the same Loki and split across two postures for no gain",
+	},
+	"terraform-modules/llz-object-storage/main.tf:linode_object_storage_bucket.loki_admin": {
+		reason: "Loki admin/tenant metadata. Per ADR 0010 the collector tenant is `admins` and Loki " +
+			"runs auth_enabled: true, so this describes the tenancy boundary rather than carrying log " +
+			"bodies — but it maps the deployment for anyone who reads it",
+		exit: "same two triggers as loki_chunks, and it moves with that bucket for the same reason — " +
+			"one Loki writes all three, so retiring them independently would leave a split posture " +
+			"nobody could describe in one sentence",
+	},
 }
 
 // ── the levers, and how they are spelled ────────────────────────────────────
@@ -145,6 +234,25 @@ var atRestResourceLevers = map[string]struct {
 	"linode_lke_node_pool": {arg: "disk_encryption", ok: reDiskEncrypted},
 	"linode_instance":      {arg: "disk_encryption", ok: reDiskEncrypted},
 	"linode_volume":        {arg: "encryption", ok: reVolEncrypted},
+}
+
+// atRestNoLeverResources are resource types that hold data at rest and have NO
+// argument to encrypt it — so unlike the levered types above, there is nothing
+// to set and the finding is always REGISTRABLE.
+//
+// They exist as their own class because the guard was blind to them in a way
+// that read as approval: the levered map is a list of things to check, and a
+// resource absent from it is simply never looked at. Four buckets holding every
+// container image and every log line in the deployment sat outside it, and the
+// guard printed green over them — which is exactly the "cannot tell which lines
+// are load-bearing" failure the registry exists to prevent, one level up.
+//
+// Being registrable is the point: the gap cannot be closed, so the useful
+// artifact is a reviewed statement of what is exposed plus a condition that
+// retires it, not a check nobody can satisfy.
+var atRestNoLeverResources = map[string]string{
+	"linode_object_storage_bucket": "Linode Object Storage exposes no bucket-level " +
+		"encryption argument, and the provider surfaces none",
 }
 
 type atRestFinding struct {
@@ -338,6 +446,18 @@ func scanResourceLevers(body, rel string) []atRestFinding {
 	for i := 0; i < len(lines); i++ {
 		m := reResourceHead.FindStringSubmatch(lines[i])
 		if m == nil {
+			continue
+		}
+		// No-lever types first: there is no argument to look for, so the finding
+		// is emitted from the head line alone and the body is not scanned.
+		if why, unlevered := atRestNoLeverResources[m[1]]; unlevered {
+			out = append(out, atRestFinding{
+				key:  fmt.Sprintf("%s:%s.%s", rel, m[1], m[2]),
+				file: rel, line: i + 1, registrable: true,
+				what: fmt.Sprintf("%s.%s stores data at rest with no encryption argument available (%s), "+
+					"so its contents are protected only by whatever the provider does underneath",
+					m[1], m[2], why),
+			})
 			continue
 		}
 		lever, watched := atRestResourceLevers[m[1]]

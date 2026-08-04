@@ -17,10 +17,29 @@ the clear:
 
 Anyone holding `TF_STATE_ACCESS_KEY` can read all of it. The bucket has no
 server-side encryption configured (the S3 backend blocks set `skip_*` flags but
-never `encrypt`), and Linode Object Storage's honouring of
-`x-amz-server-side-encryption` is unverified — and would in any case defend
-against disk theft rather than against the access key, which is the real blast
-radius.
+never `encrypt`), and server-side encryption would in any case defend against
+disk theft rather than against the access key, which is the real blast radius.
+
+> **Measured 2026-07-31** (this paragraph previously said Linode's honouring of
+> `x-amz-server-side-encryption` was *unverified*; it has now been probed against
+> a scratch bucket on `us-ord-10`, since deleted):
+>
+> | Request | Result |
+> |---|---|
+> | plain `PUT` then `HEAD` | `200`, **no** `x-amz-server-side-encryption` — nothing applied by default |
+> | `x-amz-server-side-encryption: AES256` (SSE-S3) | **`400 InvalidArgument`** |
+> | SSE-C (customer-provided key) | `200`; `HEAD` without the key `400` — works |
+> | `PutBucketEncryption` / `GetBucketEncryption` | **`501 NotImplemented`** |
+>
+> So SSE-S3 is not merely unverified, it is **rejected**, and there is no
+> bucket-level default either. This matters beyond the state bucket: Harbor's
+> registry (`encrypt: true`) and Loki (`sse.type: SSE-S3`) can each request SSE-S3
+> in one line of values, and on Linode that would return 400 on every blob push
+> and every chunk flush rather than degrading to plaintext. SSE-C is the only mode
+> Linode implements and no writer here can emit it. See the
+> `linode_object_storage_bucket` entries in `atRestAllowed`
+> (`tools/cmd/llz/ci_at_rest_guard.go`), which carry the same numbers and the
+> conditions that would retire them.
 
 The question that prompted this was narrower: *can we keep the Managed Postgres
 admin password out of state?* The answer is **no** — `root_password` is a
@@ -119,7 +138,7 @@ Terraform 1.9.8 until that migration):
 | Option | Why not |
 |--------|---------|
 | Drop the `connections` / `root_password` outputs | Removes one of two copies; the resource attribute remains. Also breaks `seed-db-admin`. |
-| Backend SSE (`encrypt = true`) | Unverified on Linode OBJ, and defends against disk theft rather than against the access key. |
+| Backend SSE (`encrypt = true`) | **Rejected by Linode OBJ** — measured `400 InvalidArgument` (see Context). Would also have defended against disk theft rather than against the access key. |
 | `key_provider "openbao"` | Circular — OpenBao runs inside the cluster the `cluster` root provisions. |
 | Write-only (`_wo`) attributes | Cover values *you supply*; `root_password` is provider-computed. |
 | `terraform state rm` | Abandons management of the resource. |
