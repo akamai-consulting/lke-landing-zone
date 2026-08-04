@@ -234,7 +234,7 @@ func TestCheckDocCommands(t *testing.T) {
 			if len(bad) != 0 {
 				t.Fatalf("fixture unreadable: %v", bad)
 			}
-			got := checkDocCommands(docs, newRootCmd())
+			got := checkDocCommands(docs, newRootCmd(), &docsScanned{})
 			if tc.wantHit == "" {
 				if len(got) != 0 {
 					t.Fatalf("expected no findings, got %v", got)
@@ -299,7 +299,7 @@ func TestCheckDocWorkflowInputs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			writeMD(t, root, "docs/run.md", tc.body)
 			docs, _ := loadDocs(root, []string{"docs/run.md"})
-			got, err := checkDocWorkflowInputs(root, docs)
+			got, err := checkDocWorkflowInputs(root, docs, &docsScanned{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -382,14 +382,38 @@ func TestDocsGuard_CleanOnThisRepo(t *testing.T) {
 	}
 	var findings []docFinding
 	docs, unreadable := loadDocs(root, files)
+	var n docsScanned
 	findings = append(findings, unreadable...)
-	findings = append(findings, checkDocCommands(docs, newRootCmd())...)
-	wfFindings, err := checkDocWorkflowInputs(root, docs)
+	findings = append(findings, checkDocCommands(docs, newRootCmd(), &n)...)
+	wfFindings, err := checkDocWorkflowInputs(root, docs, &n)
 	if err != nil {
 		t.Fatalf("workflow inputs: %v", err)
 	}
 	findings = append(findings, wfFindings...)
-	findings = append(findings, checkDocLinks(root, docs)...)
+	findings = append(findings, checkDocLinks(root, docs, &n)...)
+
+	// COVERAGE FLOORS, not just "no findings". Every defect this guard has had
+	// scanned less than it claimed while every assertion still passed — a walk
+	// that skipped the root, a parser that stopped at the first flag, at a
+	// version string, at `<env>` (that one blinded ~92 invocations). A clean
+	// run proves nothing if the scanner went quiet, so the counts are asserted
+	// too. Raise these if the corpus grows; a DROP means something got blinded.
+	// FLAGS, not invocations. Measured, not assumed: re-introducing the `<env>`
+	// blinding left the invocation count at 804 (a truncating parser still FINDS
+	// the command, it just stops collecting) while flags fell 210 -> 162. The
+	// count that moves is the one worth asserting.
+	if n.flags < 200 {
+		t.Errorf("only %d flag(s) validated — the parser has been blinded (was 210; the `<env>` regression scored 162). A clean run over a shrunken scan is the failure mode this guard keeps having", n.flags)
+	}
+	if n.invocations < 600 {
+		t.Errorf("only %d llz invocation(s) scanned (was 804)", n.invocations)
+	}
+	if n.links < 350 {
+		t.Errorf("only %d link(s) scanned — the link walk has been narrowed (was 495)", n.links)
+	}
+	if n.dispatches < 10 {
+		t.Errorf("only %d workflow dispatch(es) scanned (was 15)", n.dispatches)
+	}
 	for _, f := range findings {
 		t.Errorf("%s", f)
 	}
@@ -505,7 +529,7 @@ func checkDeliveredDocLinksFrom(t *testing.T, root string, rels ...string) []doc
 	if len(bad) != 0 {
 		t.Fatalf("fixture unreadable: %v", bad)
 	}
-	return checkDeliveredDocLinks(root, docs)
+	return checkDeliveredDocLinks(root, docs, &docsScanned{})
 }
 
 // A guard that cannot READ a doc must not report that it checked it. Every
@@ -608,6 +632,24 @@ func TestInvocationTokens(t *testing.T) {
 		{"a comment ends the command",
 			" build lab --yes  # dispatches terraform.yml",
 			[]string{"build", "lab", "--yes"}},
+		{
+			// THE placeholder case. `<env>` is the most common thing a real
+			// invocation contains (92 across the docs) and `<` sits at a token
+			// start — so terminating on it, as an earlier cut did to catch input
+			// redirects, blinded the scan past the placeholder on nearly every
+			// command in the corpus.
+			"an angle-bracket placeholder does not end the scan",
+			" env add <env> --region us-sea --nope",
+			[]string{"env", "add", "<env>", "--region", "us-sea", "--nope"}},
+		{"placeholders with a slash and a pipe stay whole",
+			" openbao get <active|standby> <secret/path> <key>",
+			[]string{"openbao", "get", "<active|standby>", "<secret/path>", "<key>"}},
+		{"a redirect at a token boundary still ends the command",
+			` completion zsh > "${fpath[1]}/_llz"`,
+			[]string{"completion", "zsh"}},
+		{"an owner/name pair of placeholders is two tokens",
+			" new <owner>/<name> --push",
+			[]string{"new", "<owner>/<name>", "--push"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := invocationTokens(tc.rest)
@@ -677,7 +719,7 @@ func TestCheckDocLinks_InstanceTemplateIsJudgedAsRendered(t *testing.T) {
 			if len(bad) != 0 {
 				t.Fatalf("fixture unreadable: %v", bad)
 			}
-			got := checkDocLinks(root, docs)
+			got := checkDocLinks(root, docs, &docsScanned{})
 			if tc.wantHit == "" {
 				if len(got) != 0 {
 					t.Fatalf("expected no findings, got %v", got)

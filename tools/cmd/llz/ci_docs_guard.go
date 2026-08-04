@@ -46,6 +46,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// docsScanned counts what each check actually EXAMINED, not what it was handed.
+//
+// WHY A COUNTER. Every defect this guard has had was the same shape: it scanned
+// LESS than it claimed and still printed a clean result — a walk that skipped the
+// root, a dot-rule that dropped .github/, a parser that stopped at the first flag,
+// at a version string, at `<env>`. None of them changed the file count, so none
+// were visible. Reporting what was examined turns the next one into a number that
+// moves, and the repo-level test asserts FLOORS on it — so a clean run over a
+// shrunken scan fails instead of reassuring.
+type docsScanned struct {
+	invocations int // `llz …` commands parsed
+	flags       int // flags actually VALIDATED against a resolved command
+	dispatches  int // `gh workflow run` calls parsed
+	links       int // relative links resolved
+}
+
+func (c docsScanned) String() string {
+	return fmt.Sprintf("%d llz invocation(s) / %d flag(s), %d workflow dispatch(es), %d link(s)",
+		c.invocations, c.flags, c.dispatches, c.links)
+}
+
 type docFinding struct {
 	File, Detail string
 	Line         int
@@ -79,18 +100,19 @@ func ciDocsGuardCmd() *cobra.Command {
 			// silent skip in each of the three checks below — a guard that cannot
 			// read a doc must not report that it checked it.
 			docs, findings := loadDocs(root, files)
+			var n docsScanned
 			if !skipCommands {
-				findings = append(findings, checkDocCommands(docs, cmd.Root())...)
+				findings = append(findings, checkDocCommands(docs, cmd.Root(), &n)...)
 			}
 			if !skipWorkflows {
-				f, err := checkDocWorkflowInputs(root, docs)
+				f, err := checkDocWorkflowInputs(root, docs, &n)
 				if err != nil {
 					return err
 				}
 				findings = append(findings, f...)
 			}
 			if !skipLinks {
-				findings = append(findings, checkDocLinks(root, docs)...)
+				findings = append(findings, checkDocLinks(root, docs, &n)...)
 			}
 			sort.Slice(findings, func(i, j int) bool {
 				if findings[i].File != findings[j].File {
@@ -102,9 +124,10 @@ func ciDocsGuardCmd() *cobra.Command {
 				fmt.Println(f)
 			}
 			if len(findings) > 0 {
+				fmt.Printf("docs-guard: checked %s across %d file(s).\n", n, len(docs))
 				return fmt.Errorf("docs-guard: %d finding(s) across %d Markdown file(s)", len(findings), len(files))
 			}
-			fmt.Printf("docs-guard: %d Markdown file(s) OK — commands, workflow inputs and links all resolve.\n", len(docs))
+			fmt.Printf("docs-guard: %d Markdown file(s) OK — checked %s.\n", len(docs), n)
 			return nil
 		},
 	}
@@ -251,9 +274,27 @@ func invocationTokens(rest string) []string {
 			quote = c
 		case ' ', '\t':
 			flush()
-		case '`', '|', '#', ';', '&', '>', '<', ')':
+		case '`':
+			// Always ends it: this is the closing backtick of markdown inline
+			// code, and it butts straight up against the last token.
 			flush()
-			return out // the command ends here
+			return out
+		case '<':
+			// NEVER a terminator. In these docs `<` opens a placeholder — `<env>`,
+			// `<owner>/<name>` — 92 times across the corpus, and it sits exactly
+			// where a token starts. An earlier cut terminated on it to catch input
+			// redirects (which appear nowhere here), so the scan stopped at the
+			// placeholder and skipped every flag after it on ~92 invocations.
+			cur.WriteRune(c)
+		case '|', '#', ';', '&', '>', ')':
+			// Shell operators ONLY at a token boundary. Mid-token they are
+			// ordinary characters — notably the `>` that CLOSES a placeholder.
+			if cur.Len() > 0 {
+				cur.WriteRune(c)
+				continue
+			}
+			flush()
+			return out // a real operator: `> file`, `| jq`, `# comment`
 		case '\\':
 			flush() // a stray continuation marker; tokens continue on the folded line
 		default:
@@ -327,7 +368,7 @@ func flagTakesValue(cur, root *cobra.Command, name string) bool {
 // Those parse as a subcommand and are not one; the check only reports a token
 // run whose FIRST word is a real top-level command, so ordinary English is
 // invisible to it rather than needing an ignore list.
-func checkDocCommands(docs []docFile, rootCmd *cobra.Command) []docFinding {
+func checkDocCommands(docs []docFile, rootCmd *cobra.Command, n *docsScanned) []docFinding {
 	var out []docFinding
 	for _, d := range docs {
 		rel := d.rel
@@ -336,6 +377,7 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command) []docFinding {
 		}
 		for _, ll := range foldContinuations(d.body) {
 			for _, m := range llzStartRe.FindAllStringSubmatch(ll.text, -1) {
+				n.invocations++
 				// Resolve the command and its flags in ONE pass, the way cobra
 				// itself accepts them: flags may appear before, between, or after
 				// subcommand words. An earlier cut stopped collecting words at the
@@ -379,6 +421,11 @@ func checkDocCommands(docs []docFile, rootCmd *cobra.Command) []docFinding {
 					if fl == "--help" || fl == "-h" || !strings.HasPrefix(fl, "--") {
 						continue
 					}
+					// Counted HERE, not per invocation: a truncating parser still
+					// finds the invocation, it just stops collecting. Invocation
+					// count therefore does NOT move when the scan is blinded —
+					// measured, not assumed — so the flag count is the metric.
+					n.flags++
 					name := strings.TrimPrefix(fl, "--")
 					path := strings.TrimPrefix(cur.CommandPath(), "llz ")
 					found := cur.Flags().Lookup(name)
@@ -423,7 +470,7 @@ type wfInputs struct {
 	dispatch bool
 }
 
-func checkDocWorkflowInputs(root string, docs []docFile) ([]docFinding, error) {
+func checkDocWorkflowInputs(root string, docs []docFile, n *docsScanned) ([]docFinding, error) {
 	wfs, err := loadWorkflowInputs(root)
 	if err != nil {
 		return nil, err
@@ -439,6 +486,7 @@ func checkDocWorkflowInputs(root string, docs []docFile) ([]docFinding, error) {
 			sub := ghRunRe.FindStringSubmatch(whole)
 			name, rest := sub[1], sub[2]
 			line := strings.Count(text[:m[0]], "\n") + 1
+			n.dispatches++
 			wf, ok := wfs[name]
 			if !ok {
 				out = append(out, docFinding{File: rel, Line: line, Kind: "workflow",
@@ -580,7 +628,7 @@ func parseWorkflowDispatchInputs(data []byte) (*wfInputs, error) {
 
 var docsGuardLinkRe = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)\)`)
 
-func checkDocLinks(root string, docs []docFile) []docFinding {
+func checkDocLinks(root string, docs []docFile, n *docsScanned) []docFinding {
 	var out []docFinding
 	for _, d := range docs {
 		rel := d.rel
@@ -616,6 +664,7 @@ func checkDocLinks(root string, docs []docFile) []docFinding {
 				if path == "" {
 					continue
 				}
+				n.links++
 				resolved := filepath.Clean(filepath.Join(linkDir, path))
 				// A rendered instance has NOTHING above its root, so a link that
 				// climbs past it is dead there however it resolves here. Catch it
@@ -642,7 +691,7 @@ func checkDocLinks(root string, docs []docFile) []docFinding {
 			}
 		}
 	}
-	out = append(out, checkDeliveredDocLinks(root, docs)...)
+	out = append(out, checkDeliveredDocLinks(root, docs, n)...)
 	return out
 }
 
@@ -651,7 +700,7 @@ func checkDocLinks(root string, docs []docFile) []docFinding {
 // sibling runbook is fine; one that links a doc `deliver-docs` prunes is fine too
 // (the rewrite repoints it) — but only if the rewrite can SEE it, which is what
 // the audit found it could not do from the instance root.
-func checkDeliveredDocLinks(root string, docs []docFile) []docFinding {
+func checkDeliveredDocLinks(root string, docs []docFile, n *docsScanned) []docFinding {
 	var out []docFinding
 	delivered := func(rel string) bool {
 		if !strings.HasPrefix(rel, "docs/") {
