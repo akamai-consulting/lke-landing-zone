@@ -93,9 +93,8 @@ func runPinKeycloakGatewayAlias(region string) error {
 	}
 
 	patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"hostAliases":[{"ip":%q,"hostnames":[%q]}]}}}}`, ip, host)
-	if out, err := execOutput("kubectl", "-n", openbaoNS, "patch", "statefulset", openbaoStatefulSet,
-		"--type=strategic", "-p", patch); err != nil {
-		return fmt.Errorf("patch %s/%s hostAliases: %w: %s", openbaoNS, openbaoStatefulSet, err, strings.TrimSpace(string(out)))
+	if err := patchWithWebhookRetry(patch); err != nil {
+		return err
 	}
 	fmt.Printf("pinned %s -> %s on %s/%s.\n", host, ip, openbaoNS, openbaoStatefulSet)
 	return nil
@@ -261,6 +260,55 @@ func statefulSetHostAliasIP(ns, name, host string) (ip string, ok bool) {
 		time.Sleep(statefulSetPoll)
 	}
 }
+
+// patchWithWebhookRetry applies the hostAliases patch, retrying while Kyverno's
+// admission webhook is unreachable.
+//
+// THE RACE. This step runs during bootstrap, and the write goes through Kyverno's
+// validating webhook, which is failurePolicy: Fail. If Kyverno's endpoint is not
+// serving yet the apiserver rejects the patch outright:
+//
+//	Internal error occurred: failed calling webhook "validate.kyverno.svc-fail":
+//	failed to call webhook: Post "https://kyverno-svc.kyverno.svc:443/validate/fail":
+//	No agent available
+//
+// The step already waited for the StatefulSet to be CREATED by Argo, which is a
+// different readiness question and told us nothing about admission. So it failed the
+// whole bootstrap job on a transient that clears in well under a minute — twice,
+// observed, and the first time the log gave no clue why.
+//
+// ONLY the race is retried. A non-race patch failure (a bad field, RBAC) is returned
+// immediately, because retrying those just delays a real error behind a timeout.
+func patchWithWebhookRetry(patch string) error {
+	deadline := keycloakPinNow().Add(keycloakPinWebhookBudget)
+	for attempt := 1; ; attempt++ {
+		out, err := execOutput("kubectl", "-n", openbaoNS, "patch", "statefulset", openbaoStatefulSet,
+			"--type=strategic", "-p", patch)
+		if err == nil {
+			return nil
+		}
+		text := strings.TrimSpace(string(out)) + " " + err.Error()
+		if !isKyvernoWebhookRace(text) {
+			return fmt.Errorf("patch %s/%s hostAliases: %w: %s", openbaoNS, openbaoStatefulSet, err, strings.TrimSpace(string(out)))
+		}
+		if !keycloakPinNow().Before(deadline) {
+			return fmt.Errorf("patch %s/%s hostAliases: Kyverno's admission webhook was still unreachable after %s: %w: %s",
+				openbaoNS, openbaoStatefulSet, keycloakPinWebhookBudget, err, strings.TrimSpace(string(out)))
+		}
+		fmt.Printf("keycloak-pin: Kyverno's admission webhook is not serving yet (attempt %d) — retrying in %s\n",
+			attempt, keycloakPinWebhookInterval)
+		keycloakPinSleep(keycloakPinWebhookInterval)
+	}
+}
+
+// Bounded so a genuinely broken Kyverno fails the job rather than hanging it. Three
+// minutes covers the observed 30-90s window with room for a slow node.
+var (
+	keycloakPinWebhookBudget   = 3 * time.Minute
+	keycloakPinWebhookInterval = 10 * time.Second
+	keycloakPinNow             = time.Now
+	keycloakPinSleep           = time.Sleep
+)
 
 // hostAliasIP parses a hostAliases JSON array and returns the IP mapped to host.
 // Pure and unit-tested; an empty/absent/garbled list reads as "not pinned",
