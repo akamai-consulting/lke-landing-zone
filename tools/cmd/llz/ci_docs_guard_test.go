@@ -761,3 +761,31 @@ func TestCheckDocLinks_InstanceTemplateIsJudgedAsRendered(t *testing.T) {
 		})
 	}
 }
+
+// The guard does NOT report an unknown top-level command, and that is a decision
+// with a measurement behind it, not an oversight: `.llz/commands.yaml` lets an
+// instance define its own verbs, and extending-llz.md documents two of them
+// (`llz smoke`, `llz psql`). Reporting unknown commands would flag the very doc
+// that teaches the mechanism. This pins the behaviour so nobody "fixes" it into
+// a false positive — and pins that a KNOWN command's flags are still checked.
+func TestCheckDocCommands_UserDefinedCommandsAreNotReported(t *testing.T) {
+	root := t.TempDir()
+	writeMD(t, root, "docs/extending.md",
+		"```bash\nllz smoke                 # runs: bash hack/smoke.sh\n"+
+			"llz psql --db readonly    # extra args appended to argv\n```\n")
+	docs, bad := loadDocs(root, []string{"docs/extending.md"})
+	if len(bad) != 0 {
+		t.Fatalf("fixture unreadable: %v", bad)
+	}
+	if got := checkDocCommands(docs, newRootCmd(), &docsScanned{}); len(got) != 0 {
+		t.Errorf("user-defined commands must not be reported, got %v", got)
+	}
+
+	// ...while a REAL command's bad flag is still caught, so the exemption is
+	// scoped to unknown commands and has not silenced the check.
+	writeMD(t, root, "docs/real.md", "`llz doctor --not-a-flag`\n")
+	docs, _ = loadDocs(root, []string{"docs/real.md"})
+	if got := checkDocCommands(docs, newRootCmd(), &docsScanned{}); len(got) != 1 {
+		t.Errorf("a known command's unknown flag must still be reported, got %v", got)
+	}
+}

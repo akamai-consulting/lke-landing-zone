@@ -65,7 +65,7 @@ help:
 	@echo "  tf-validate     terraform validate — syntax + type checking (inits each module first)"
 	@echo "  checkov         Checkov IaC security scan across all Terraform modules"
 	@echo "  at-rest-guard   every TF root encrypts state; every node pool/volume sets disk encryption (ADR 0007 (state encryption))"
-	@echo "  docs-guard      every doc's llz commands/flags, workflow inputs and links resolve"
+	@echo "  docs-guard      doc drift: llz FLAGS, gh workflow-run inputs, and links resolve"
 	@echo
 	@echo "Kubernetes targets:"
 	@echo "  k8s-lint        kube-linter — k8s best-practice checks (.kube-linter.yaml)"

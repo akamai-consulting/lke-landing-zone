@@ -17,9 +17,17 @@ package main
 //
 // THREE CHECKS, in ascending order of what they cost to get wrong:
 //
-//  1. COMMANDS — every `llz …` invocation resolves to a real command, and every
-//     `--flag` on it is one that command accepts. Walks the live cobra tree, so it
-//     cannot drift from the CLI.
+//  1. FLAGS — for every `llz …` invocation whose command RESOLVES, each `--flag`
+//     is one that command accepts (deprecated ones are reported too). Walks the
+//     live cobra tree, so it cannot drift from the CLI.
+//
+//     It does NOT report an unknown top-level command. Measured before deciding:
+//     the only doc lines starting `llz <word>` where <word> is not in the tree are
+//     `llz smoke` and `llz psql` in extending-llz.md — USER-DEFINED commands from
+//     .llz/commands.yaml, which by design never appear in the binary. Reporting
+//     unknown commands would flag the doc that teaches the extension mechanism,
+//     and the only fix would be an ignore-list — a place to bury real breakage.
+//     Same call, same reason, as the unknown-SUBCOMMAND check (see checkDocCommands).
 //
 //  2. WORKFLOW DISPATCHES — every `gh workflow run <wf> -f k=v` names a workflow
 //     that exists and inputs it declares. `gh` rejects an undeclared input, so
@@ -84,7 +92,9 @@ func ciDocsGuardCmd() *cobra.Command {
 		Use:   "docs-guard",
 		Short: "fail when the docs name a command, flag, workflow input or path that does not exist",
 		Long: "Validates every Markdown file against the repo it documents:\n" +
-			"  • every `llz …` invocation + its flags, against the live cobra tree\n" +
+			"  • the FLAGS of every `llz …` invocation whose command resolves, against\n" +
+			"    the live cobra tree (an unknown top-level command is NOT reported —\n" +
+			"    `.llz/commands.yaml` lets an instance define its own)\n" +
 			"  • every `gh workflow run` input, against the workflow's declared inputs\n" +
 			"  • every relative link, in the template tree AND in the delivered\n" +
 			"    (post-`deliver-docs`) operator set\n" +
@@ -245,7 +255,7 @@ func loadDocs(root string, files []string) ([]docFile, []docFinding) {
 	return docs, bad
 }
 
-// ── 1. llz commands + flags ──────────────────────────────────────────────────
+// ── 1. llz FLAGS (on invocations whose command resolves) ─────────────────────
 
 // llzStartRe finds where an `llz` invocation BEGINS. It deliberately does not
 // try to match the whole command: an earlier version did, and its alternation
