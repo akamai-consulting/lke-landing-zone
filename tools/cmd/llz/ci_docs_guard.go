@@ -71,23 +71,26 @@ func ciDocsGuardCmd() *cobra.Command {
 			"prose claims about behaviour still need a human.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			var findings []docFinding
 			files, err := markdownFiles(root)
 			if err != nil {
 				return err
 			}
+			// Read once. An unreadable file becomes a FINDING here rather than a
+			// silent skip in each of the three checks below — a guard that cannot
+			// read a doc must not report that it checked it.
+			docs, findings := loadDocs(root, files)
 			if !skipCommands {
-				findings = append(findings, checkDocCommands(root, files, cmd.Root())...)
+				findings = append(findings, checkDocCommands(docs, cmd.Root())...)
 			}
 			if !skipWorkflows {
-				f, err := checkDocWorkflowInputs(root, files)
+				f, err := checkDocWorkflowInputs(root, docs)
 				if err != nil {
 					return err
 				}
 				findings = append(findings, f...)
 			}
 			if !skipLinks {
-				findings = append(findings, checkDocLinks(root, files)...)
+				findings = append(findings, checkDocLinks(root, docs)...)
 			}
 			sort.Slice(findings, func(i, j int) bool {
 				if findings[i].File != findings[j].File {
@@ -101,7 +104,7 @@ func ciDocsGuardCmd() *cobra.Command {
 			if len(findings) > 0 {
 				return fmt.Errorf("docs-guard: %d finding(s) across %d Markdown file(s)", len(findings), len(files))
 			}
-			fmt.Printf("docs-guard: %d Markdown file(s) OK — commands, workflow inputs and links all resolve.\n", len(files))
+			fmt.Printf("docs-guard: %d Markdown file(s) OK — commands, workflow inputs and links all resolve.\n", len(docs))
 			return nil
 		},
 	}
@@ -136,8 +139,12 @@ var docsGuardSkipDir = map[string]bool{
 func markdownFiles(root string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		// FAIL, don't skip. Swallowing a walk error (a permission bit, a broken
+		// symlink) drops part of the tree while the run still prints "N file(s)
+		// OK" — a false green, which is the exact defect this guard exists to
+		// catch. Under-covering silently is worse than not running.
 		if err != nil {
-			return nil
+			return fmt.Errorf("walk %s: %w", p, err)
 		}
 		if d.IsDir() {
 			// NEVER skip the root itself — it is routinely passed as "." or "..",
@@ -159,6 +166,35 @@ func markdownFiles(root string) ([]string, error) {
 	})
 	sort.Strings(out)
 	return out, err
+}
+
+// docFile is a Markdown file already read into memory. The four checks below
+// used to each os.ReadFile the same path and `continue` on error — four silent
+// skips per unreadable file, and four reads per file in the happy path. Reading
+// once, here, makes an I/O failure a FINDING (the run goes red and names the
+// file) instead of invisible under-coverage.
+type docFile struct {
+	rel  string
+	body string
+}
+
+// loadDocs reads every file, returning the readable ones and a finding per
+// failure. It never returns a partial set silently.
+func loadDocs(root string, files []string) ([]docFile, []docFinding) {
+	docs := make([]docFile, 0, len(files))
+	var bad []docFinding
+	for _, rel := range files {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			bad = append(bad, docFinding{
+				File: rel, Line: 0, Kind: "unreadable",
+				Detail: fmt.Sprintf("could not be read (%v) — the guard cannot vouch for this file, so the run fails rather than reporting a coverage it does not have", err),
+			})
+			continue
+		}
+		docs = append(docs, docFile{rel: rel, body: string(data)})
+	}
+	return docs, bad
 }
 
 // ── 1. llz commands + flags ──────────────────────────────────────────────────
@@ -204,17 +240,14 @@ func flagTakesValue(cur, root *cobra.Command, name string) bool {
 // Those parse as a subcommand and are not one; the check only reports a token
 // run whose FIRST word is a real top-level command, so ordinary English is
 // invisible to it rather than needing an ignore list.
-func checkDocCommands(root string, files []string, rootCmd *cobra.Command) []docFinding {
+func checkDocCommands(docs []docFile, rootCmd *cobra.Command) []docFinding {
 	var out []docFinding
-	for _, rel := range files {
+	for _, d := range docs {
+		rel := d.rel
 		if isDecisionRecord(rel) {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
-			continue
-		}
-		for i, line := range strings.Split(string(data), "\n") {
+		for i, line := range strings.Split(d.body, "\n") {
 			for _, m := range llzInvocationRe.FindAllStringSubmatch(line, -1) {
 				// Resolve the command and its flags in ONE pass, the way cobra
 				// itself accepts them: flags may appear before, between, or after
@@ -303,7 +336,7 @@ type wfInputs struct {
 	dispatch bool
 }
 
-func checkDocWorkflowInputs(root string, files []string) ([]docFinding, error) {
+func checkDocWorkflowInputs(root string, docs []docFile) ([]docFinding, error) {
 	wfs, err := loadWorkflowInputs(root)
 	if err != nil {
 		return nil, err
@@ -312,12 +345,8 @@ func checkDocWorkflowInputs(root string, files []string) ([]docFinding, error) {
 		return nil, nil
 	}
 	var out []docFinding
-	for _, rel := range files {
-		data, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
-			continue
-		}
-		text := string(data)
+	for _, d := range docs {
+		rel, text := d.rel, d.body
 		for _, m := range ghRunRe.FindAllStringSubmatchIndex(text, -1) {
 			whole := text[m[0]:m[1]]
 			sub := ghRunRe.FindStringSubmatch(whole)
@@ -379,7 +408,12 @@ func loadWorkflowInputs(root string) (map[string]*wfInputs, error) {
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			continue // a repo without one of these is fine
+			if os.IsNotExist(err) {
+				continue // a repo without one of these is fine
+			}
+			// Anything else (a permission bit) would silently drop every
+			// workflow in that tree and let bad dispatch inputs through.
+			return nil, fmt.Errorf("read workflow dir %s: %w", dir, err)
 		}
 		for _, e := range entries {
 			if e.IsDir() || (!strings.HasSuffix(e.Name(), ".yml") && !strings.HasSuffix(e.Name(), ".yaml")) {
@@ -459,15 +493,12 @@ func parseWorkflowDispatchInputs(data []byte) (*wfInputs, error) {
 
 var docsGuardLinkRe = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)\)`)
 
-func checkDocLinks(root string, files []string) []docFinding {
+func checkDocLinks(root string, docs []docFile) []docFinding {
 	var out []docFinding
-	for _, rel := range files {
+	for _, d := range docs {
+		rel := d.rel
 		dir := filepath.Dir(rel)
-		data, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
-			continue
-		}
-		for i, line := range strings.Split(string(data), "\n") {
+		for i, line := range strings.Split(d.body, "\n") {
 			for _, m := range docsGuardLinkRe.FindAllStringSubmatch(line, -1) {
 				target := m[1]
 				if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") ||
@@ -492,7 +523,7 @@ func checkDocLinks(root string, files []string) []docFinding {
 			}
 		}
 	}
-	out = append(out, checkDeliveredDocLinks(root, files)...)
+	out = append(out, checkDeliveredDocLinks(root, docs)...)
 	return out
 }
 
@@ -501,7 +532,7 @@ func checkDocLinks(root string, files []string) []docFinding {
 // sibling runbook is fine; one that links a doc `deliver-docs` prunes is fine too
 // (the rewrite repoints it) — but only if the rewrite can SEE it, which is what
 // the audit found it could not do from the instance root.
-func checkDeliveredDocLinks(root string, files []string) []docFinding {
+func checkDeliveredDocLinks(root string, docs []docFile) []docFinding {
 	var out []docFinding
 	delivered := func(rel string) bool {
 		if !strings.HasPrefix(rel, "docs/") {
@@ -510,16 +541,13 @@ func checkDeliveredDocLinks(root string, files []string) []docFinding {
 		top := strings.SplitN(strings.TrimPrefix(rel, "docs/"), "/", 2)[0]
 		return docsKeep[top]
 	}
-	for _, rel := range files {
+	for _, d := range docs {
+		rel := d.rel
 		if !delivered(rel) {
 			continue
 		}
 		dir := filepath.Dir(rel)
-		data, err := os.ReadFile(filepath.Join(root, rel))
-		if err != nil {
-			continue
-		}
-		for i, line := range strings.Split(string(data), "\n") {
+		for i, line := range strings.Split(d.body, "\n") {
 			for _, m := range docsGuardLinkRe.FindAllStringSubmatch(line, -1) {
 				target := m[1]
 				if strings.HasPrefix(target, "http") || strings.HasPrefix(target, "#") ||

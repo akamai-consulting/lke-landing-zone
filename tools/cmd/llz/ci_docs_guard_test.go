@@ -230,7 +230,11 @@ func TestCheckDocCommands(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			writeMD(t, root, tc.rel, tc.body)
-			got := checkDocCommands(root, []string{tc.rel}, newRootCmd())
+			docs, bad := loadDocs(root, []string{tc.rel})
+			if len(bad) != 0 {
+				t.Fatalf("fixture unreadable: %v", bad)
+			}
+			got := checkDocCommands(docs, newRootCmd())
 			if tc.wantHit == "" {
 				if len(got) != 0 {
 					t.Fatalf("expected no findings, got %v", got)
@@ -294,7 +298,8 @@ func TestCheckDocWorkflowInputs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeMD(t, root, "docs/run.md", tc.body)
-			got, err := checkDocWorkflowInputs(root, []string{"docs/run.md"})
+			docs, _ := loadDocs(root, []string{"docs/run.md"})
+			got, err := checkDocWorkflowInputs(root, docs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -330,14 +335,14 @@ func TestCheckDeliveredDocLinks(t *testing.T) {
 
 	t.Run("a link to a pruned doc is fine — deliver-docs repoints it", func(t *testing.T) {
 		writeMD(t, root, "docs/runbooks/r.md", "see [secrets](../secrets.md)\n")
-		if got := checkDeliveredDocLinks(root, []string{"docs/runbooks/r.md"}); len(got) != 0 {
+		if got := checkDeliveredDocLinksFrom(t, root, "docs/runbooks/r.md"); len(got) != 0 {
 			t.Fatalf("expected no findings, got %v", got)
 		}
 	})
 
 	t.Run("a link escaping docs/ is dead after delivery", func(t *testing.T) {
 		writeMD(t, root, "docs/runbooks/r.md", "see [the chart](../../kubernetes-charts/README.md)\n")
-		got := checkDeliveredDocLinks(root, []string{"docs/runbooks/r.md"})
+		got := checkDeliveredDocLinksFrom(t, root, "docs/runbooks/r.md")
 		if len(got) == 0 {
 			t.Fatal("expected a finding for a link escaping docs/")
 		}
@@ -348,7 +353,7 @@ func TestCheckDeliveredDocLinks(t *testing.T) {
 
 	t.Run("a link to a nonexistent doc is reported", func(t *testing.T) {
 		writeMD(t, root, "docs/playbooks/p.md", "see [gone](gone.md)\n")
-		got := checkDeliveredDocLinks(root, []string{"docs/playbooks/p.md"})
+		got := checkDeliveredDocLinksFrom(t, root, "docs/playbooks/p.md")
 		if len(got) == 0 || !strings.Contains(got[0].Detail, "does not exist") {
 			t.Fatalf("expected a does-not-exist finding, got %v", got)
 		}
@@ -356,7 +361,7 @@ func TestCheckDeliveredDocLinks(t *testing.T) {
 
 	t.Run("a doc that is NOT delivered is not held to this rule", func(t *testing.T) {
 		writeMD(t, root, "docs/secrets.md", "see [charts](../kubernetes-charts/README.md)\n")
-		if got := checkDeliveredDocLinks(root, []string{"docs/secrets.md"}); len(got) != 0 {
+		if got := checkDeliveredDocLinksFrom(t, root, "docs/secrets.md"); len(got) != 0 {
 			t.Fatalf("secrets.md is referenced, not delivered — got %v", got)
 		}
 	})
@@ -376,13 +381,15 @@ func TestDocsGuard_CleanOnThisRepo(t *testing.T) {
 		t.Fatalf("only found %d Markdown files — is the repo root wrong? (%s)", len(files), root)
 	}
 	var findings []docFinding
-	findings = append(findings, checkDocCommands(root, files, newRootCmd())...)
-	wfFindings, err := checkDocWorkflowInputs(root, files)
+	docs, unreadable := loadDocs(root, files)
+	findings = append(findings, unreadable...)
+	findings = append(findings, checkDocCommands(docs, newRootCmd())...)
+	wfFindings, err := checkDocWorkflowInputs(root, docs)
 	if err != nil {
 		t.Fatalf("workflow inputs: %v", err)
 	}
 	findings = append(findings, wfFindings...)
-	findings = append(findings, checkDocLinks(root, files)...)
+	findings = append(findings, checkDocLinks(root, docs)...)
 	for _, f := range findings {
 		t.Errorf("%s", f)
 	}
@@ -487,5 +494,70 @@ func TestMarkdownFiles_RootPassedAsDotIsNotSkipped(t *testing.T) {
 	}
 	if len(files) == 0 {
 		t.Error(`--root ".." walked 0 files — the root was skipped`)
+	}
+}
+
+// checkDeliveredDocLinksFrom reads then checks, so the delivered-link tests read
+// like the production path (load once, then check) instead of re-reading.
+func checkDeliveredDocLinksFrom(t *testing.T, root string, rels ...string) []docFinding {
+	t.Helper()
+	docs, bad := loadDocs(root, rels)
+	if len(bad) != 0 {
+		t.Fatalf("fixture unreadable: %v", bad)
+	}
+	return checkDeliveredDocLinks(root, docs)
+}
+
+// A guard that cannot READ a doc must not report that it checked it. Every
+// checker used to `continue` past an unreadable file, so a permission bit
+// produced a clean "N file(s) OK" over a smaller N — the same false-green this
+// whole guard exists to prevent.
+func TestLoadDocs_UnreadableFileIsAFindingNotASilentSkip(t *testing.T) {
+	root := t.TempDir()
+	writeMD(t, root, "docs/fine.md", "# fine")
+	writeMD(t, root, "docs/locked.md", "# secret")
+	locked := filepath.Join(root, "docs", "locked.md")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o644) })
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — mode 0000 is still readable")
+	}
+
+	docs, bad := loadDocs(root, []string{"docs/fine.md", "docs/locked.md"})
+	if len(docs) != 1 || docs[0].rel != filepath.Join("docs", "fine.md") {
+		t.Errorf("readable docs = %+v, want just docs/fine.md", docs)
+	}
+	if len(bad) != 1 || bad[0].Kind != "unreadable" {
+		t.Fatalf("an unreadable file must produce exactly one 'unreadable' finding, got %+v", bad)
+	}
+	if !strings.Contains(bad[0].File, "locked.md") {
+		t.Errorf("the finding must name the file, got %q", bad[0].File)
+	}
+}
+
+// markdownFiles must fail on a walk error rather than returning a short list
+// that later prints as a clean run.
+func TestMarkdownFiles_WalkErrorFailsClosed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root — an unreadable dir is still traversable")
+	}
+	root := t.TempDir()
+	writeMD(t, root, "docs/fine.md", "# fine")
+	blocked := filepath.Join(root, "blocked")
+	if err := os.MkdirAll(filepath.Join(blocked, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "inner", "hidden.md"), []byte("# hidden"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Skipf("cannot chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+
+	if _, err := markdownFiles(root); err == nil {
+		t.Error("markdownFiles swallowed a walk error — it must fail closed, not under-cover silently")
 	}
 }
