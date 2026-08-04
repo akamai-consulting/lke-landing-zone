@@ -12,7 +12,7 @@ func TestSnapshotUpgradeOwnedRestoresOwnedButNotCopierAnswers(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ".template-manifest"), "owned owned.txt\nowned .copier-answers.yml\nmanaged managed.txt\n")
 	writeFile(t, filepath.Join(dir, "owned.txt"), "operator\n")
-	writeFile(t, filepath.Join(dir, ".copier-answers.yml"), "llz_version: v0.1.0\n")
+	writeFile(t, filepath.Join(dir, ".copier-answers.yml"), "llz_version: v0.0.38\n")
 	writeFile(t, filepath.Join(dir, "managed.txt"), "old template\n")
 	gitInitRepo(t, dir, ".template-manifest", "owned.txt", ".copier-answers.yml", "managed.txt")
 	chdir(t, dir)
@@ -28,7 +28,7 @@ func TestSnapshotUpgradeOwnedRestoresOwnedButNotCopierAnswers(t *testing.T) {
 	defer snap.cleanup()
 
 	writeFile(t, filepath.Join(dir, "owned.txt"), "copier clobbered\n")
-	writeFile(t, filepath.Join(dir, ".copier-answers.yml"), "llz_version: v0.2.0\n")
+	writeFile(t, filepath.Join(dir, ".copier-answers.yml"), "llz_version: v0.0.39\n")
 	if err := snap.restore(); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestSnapshotUpgradeOwnedRestoresOwnedButNotCopierAnswers(t *testing.T) {
 	if got := mustRead(t, filepath.Join(dir, "owned.txt")); got != "operator\n" {
 		t.Errorf("owned restored = %q", got)
 	}
-	if got := mustRead(t, filepath.Join(dir, ".copier-answers.yml")); got != "llz_version: v0.2.0\n" {
+	if got := mustRead(t, filepath.Join(dir, ".copier-answers.yml")); got != "llz_version: v0.0.39\n" {
 		t.Errorf("copier answers should not be restored, got %q", got)
 	}
 }

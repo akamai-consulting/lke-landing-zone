@@ -21,7 +21,7 @@ func TestNormalizeLLZTag(t *testing.T) {
 		{"1.2.3", "v1.2.3"},
 		{"v1.2.3", "v1.2.3"},
 		{"llz/v1.2.3", "v1.2.3"}, // legacy prefixed ref accepted, normalized to bare
-		{"  v0.1.0 ", "v0.1.0"},
+		{"  v0.0.38 ", "v0.0.38"},
 	} {
 		if got := normalizeLLZTag(tc.in); got != tc.want {
 			t.Errorf("normalizeLLZTag(%q) = %q, want %q", tc.in, got, tc.want)
@@ -53,26 +53,30 @@ func TestSemverAndLess(t *testing.T) {
 		t.Error("2.0.0 is not < 1.9.9")
 	}
 	// A dev build sorts below any real release, so self-update always proceeds.
-	if !semverLess("dev", "v0.1.0") {
-		t.Error("dev should sort below v0.1.0")
+	if !semverLess("dev", "v0.0.38") {
+		t.Error("dev should sort below v0.0.38")
 	}
 }
 
 func TestLatestLLZTag(t *testing.T) {
+	// Tags follow the shipped release line (v0.0.x) — the same shape the picker
+	// meets on the real repo, so the numeric-vs-lexical trap is the live one:
+	// a string sort would hand back v0.0.9.
 	tags := []string{
-		"llz-pool/v0.1.0", // module track (prefixed) — ignored
-		"llz/v0.1.0",      // legacy CLI tag (prefixed) — ignored
-		"llz/v0.10.0",     // legacy CLI tag (prefixed) — ignored
-		"v0.2.0",
-		"v0.10.0", // highest bare
-		"v0.3.0",
-		"vbroken", // unparseable — ignored
+		"llz-pool/v0.0.38", // module track (prefixed) — ignored
+		"llz/v0.0.38",      // legacy CLI tag (prefixed) — ignored
+		"llz/v0.0.40",      // legacy CLI tag (prefixed) — ignored
+		"v0.0.2",
+		"v0.0.10", // highest bare
+		"v0.0.9",
+		"v.0.0.30", // real typo tag on the repo — unparseable, ignored
+		"vbroken",  // unparseable — ignored
 	}
 	got, ok := latestLLZTag(tags)
-	if !ok || got != "v0.10.0" {
-		t.Errorf("latestLLZTag = %q ok=%v, want v0.10.0", got, ok)
+	if !ok || got != "v0.0.10" {
+		t.Errorf("latestLLZTag = %q ok=%v, want v0.0.10", got, ok)
 	}
-	if _, ok := latestLLZTag([]string{"llz-pool/v1.0.0", "llz/v9.9.9"}); ok {
+	if _, ok := latestLLZTag([]string{"llz-pool/v0.0.1", "llz/v0.0.99"}); ok {
 		t.Error("expected no bare vX.Y.Z tag")
 	}
 }
@@ -99,8 +103,8 @@ func TestReleaseArgv(t *testing.T) {
 			"--limit", "200", "--json", "tagName,isDraft,isPrerelease"}) {
 		t.Errorf("releaseListArgv: got %v", got)
 	}
-	got := releaseDownloadArgv("akamai-consulting/lke-landing-zone", "v0.2.0", "llz-linux-amd64", "/tmp/x")
-	want := []string{"gh", "release", "download", "v0.2.0",
+	got := releaseDownloadArgv("akamai-consulting/lke-landing-zone", "v0.0.39", "llz-linux-amd64", "/tmp/x")
+	want := []string{"gh", "release", "download", "v0.0.39",
 		"--repo", "akamai-consulting/lke-landing-zone",
 		"--pattern", "llz-linux-amd64", "--pattern", "SHA256SUMS",
 		"--dir", "/tmp/x", "--clobber"}

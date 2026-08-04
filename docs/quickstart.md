@@ -132,7 +132,7 @@ The script still uses `gh` to fetch the release asset, so keep `gh` authenticate
 (above) — only the script itself is downloaded anonymously.
 
 > **Already have a template or instance checkout?** Skip the `curl` and run the
-> same script from there: `./template-scripts/install-llz.sh` (append `v0.2.0` to
+> same script from there: `./template-scripts/install-llz.sh` (append `v0.0.39` to
 > pin a tag, or prefix `ORG=<fork>`).
 
 > **Put `~/.local/bin` on your `PATH`.** If `llz version` prints "command not
@@ -145,7 +145,7 @@ The script still uses `gh` to fetch the release asset, so keep `gh` authenticate
 > **Already had an `llz` on this machine?** A copy earlier on `PATH` wins every
 > lookup, so the install can succeed while `llz` keeps running the OLD binary —
 > which then fails much later and cryptically (a stale llz scaffolds from a
-> retired template ref: `pathspec 'v0.1.0' did not match any file(s) known to
+> retired template ref: `pathspec 'vX.Y.Z' did not match any file(s) known to
 > git`). Quickstarts before 2026-06-13 installed with `sudo` into
 > `/usr/local/bin`, and the devcontainer image ships one there too. The installer
 > now names every copy and tells you which one wins; check it yourself with:
@@ -219,7 +219,7 @@ source <(llz completion bash)                 # bash (add to ~/.bashrc)
 Once installed, keep the binary current without re-running the download — `llz
 self-update` pulls the latest **full** release for your platform (pre-release
 candidates are skipped; via `gh`, checksum-verified) and replaces itself in place;
-`--ref v0.2.0` targets a specific version, `--dry-run` just reports what it would
+`--ref v0.0.39` targets a specific version, `--dry-run` just reports what it would
 install.
 
 > Building from source instead? From a template checkout, `make llz` produces
@@ -564,7 +564,7 @@ Two independent tracks, because the template ships two kinds of thing.
 llz self-update                # get the new llz binary first (the version anchor)
 llz upgrade                    # re-renders the scaffold + re-pins to llz's version
 # or target a specific release explicitly:
-llz upgrade --ref v0.2.0
+llz upgrade --ref v0.0.39
 ```
 
 Runs `copier update` (3-way merge — your local edits survive; conflicts appear as

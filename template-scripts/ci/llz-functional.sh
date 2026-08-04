@@ -127,8 +127,8 @@ case "$run_net" in
 esac
 
 if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
-  # Resolve the release under test: an explicit ref (v0.1.0 / 0.1.0, or a legacy
-  # llz/v0.1.0), else the highest-semver bare vX.Y.Z umbrella tag on the repo.
+  # Resolve the release under test: an explicit ref (v0.0.38 / 0.0.38, or a legacy
+  # llz/v0.0.38), else the highest-semver bare vX.Y.Z umbrella tag on the repo.
   REF="${LLZ_FUNCTIONAL_REF:-}"
   if [[ -n "$REF" ]]; then
     v="${REF#llz/}"; v="${v#v}"; TAG="v${v}"
@@ -139,7 +139,7 @@ if [[ "${SKIP_NET:-1}" -eq 0 ]]; then
       '[.[] | select((.isDraft|not) and (.isPrerelease|not)) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))] | sort_by(ltrimstr("v") | split(".") | map(tonumber)) | last')"
     [[ -n "$TAG" && "$TAG" != "null" ]] || { fail "no full vX.Y.Z release found on $REPO"; TAG=""; }
   fi
-  WANT_VER="$TAG"   # e.g. v0.1.0
+  WANT_VER="$TAG"   # e.g. v0.0.38
 
   # Asset for THIS platform (matches assetName() in selfupdate.go).
   goos="$(go env GOOS 2>/dev/null || uname -s | tr '[:upper:]' '[:lower:]')"

@@ -10,9 +10,9 @@ import (
 func TestCopierCopyArgv(t *testing.T) {
 	// --data llz_version mirrors --vcs-ref, so the rendered instance pins to exactly
 	// the release it was scaffolded from.
-	got := copierCopyArgv("akamai-consulting", "v0.1.0", "my-instance")
-	want := []string{"copier", "copy", "--trust", "--vcs-ref", "v0.1.0",
-		"--data", "llz_version=v0.1.0",
+	got := copierCopyArgv("akamai-consulting", "v0.0.38", "my-instance")
+	want := []string{"copier", "copy", "--trust", "--vcs-ref", "v0.0.38",
+		"--data", "llz_version=v0.0.38",
 		"gh:akamai-consulting/lke-landing-zone", "my-instance"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("copierCopyArgv\n got: %v\nwant: %v", got, want)
@@ -26,7 +26,7 @@ func TestRunNewMissingTemplateSource(t *testing.T) {
 	t.Cleanup(func() { templateSourceExistsFn = orig })
 	templateSourceExistsFn = func(string) bool { return false }
 
-	err := runNew(globalOpts{}, "nonexistent-org", "v0.1.0", "my-instance", false)
+	err := runNew(globalOpts{}, "nonexistent-org", "v0.0.38", "my-instance", false)
 	if err == nil {
 		t.Fatal("expected an error when the template source is missing")
 	}
@@ -41,8 +41,8 @@ func TestCopierUpdateArgv(t *testing.T) {
 	if got := copierUpdateArgv(""); !reflect.DeepEqual(got, []string{"copier", "update", "--trust"}) {
 		t.Errorf("no-ref: got %v", got)
 	}
-	if got := copierUpdateArgv("v0.2.0"); !reflect.DeepEqual(got,
-		[]string{"copier", "update", "--trust", "--vcs-ref", "v0.2.0", "--data", "llz_version=v0.2.0"}) {
+	if got := copierUpdateArgv("v0.0.39"); !reflect.DeepEqual(got,
+		[]string{"copier", "update", "--trust", "--vcs-ref", "v0.0.39", "--data", "llz_version=v0.0.39"}) {
 		t.Errorf("ref: got %v", got)
 	}
 }

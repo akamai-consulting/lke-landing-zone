@@ -67,7 +67,7 @@ provider "linode" {
 }
 
 module "object_storage" {
-  source = "git::ssh://git@github.com/akamai-consulting/lke-landing-zone.git//terraform-modules/llz-object-storage?ref=v0.1.0"
+  source = "git::ssh://git@github.com/akamai-consulting/lke-landing-zone.git//terraform-modules/llz-object-storage?ref=v0.0.39"
 
   region_suffix = "primary"
   obj_cluster   = "us-ord-1"

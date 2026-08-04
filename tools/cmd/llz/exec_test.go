@@ -135,17 +135,17 @@ func TestLatestRelease(t *testing.T) {
 		}
 		// Bare vX.Y.Z full releases are the CLI track. Pre-releases (unpromoted e2e
 		// candidates), drafts, and prefixed legacy/module tags are all ignored — so
-		// v0.3.0, though highest, is skipped because it is still a pre-release.
+		// v0.0.38, though highest, is skipped because it is still a pre-release.
 		return []byte(`[` +
-			`{"tagName":"v0.1.0","isDraft":false,"isPrerelease":false},` +
-			`{"tagName":"v0.2.0","isDraft":false,"isPrerelease":false},` +
-			`{"tagName":"v0.3.0","isDraft":false,"isPrerelease":true},` +
-			`{"tagName":"v0.4.0","isDraft":true,"isPrerelease":false},` +
-			`{"tagName":"llz/v0.9.0","isDraft":false,"isPrerelease":false}]`), nil
+			`{"tagName":"v0.0.36","isDraft":false,"isPrerelease":false},` +
+			`{"tagName":"v0.0.37","isDraft":false,"isPrerelease":false},` +
+			`{"tagName":"v0.0.38","isDraft":false,"isPrerelease":true},` +
+			`{"tagName":"v0.0.39","isDraft":true,"isPrerelease":false},` +
+			`{"tagName":"llz/v0.0.40","isDraft":false,"isPrerelease":false}]`), nil
 	})
 	tag, err := latestRelease("akamai/lke-landing-zone")
-	if err != nil || tag != "v0.2.0" {
-		t.Errorf("latestRelease = (%q, %v), want (v0.2.0, nil)", tag, err)
+	if err != nil || tag != "v0.0.37" {
+		t.Errorf("latestRelease = (%q, %v), want (v0.0.37, nil)", tag, err)
 	}
 
 	// Only pre-releases/prefixed tags -> error (no full release to serve).

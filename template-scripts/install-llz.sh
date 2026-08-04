@@ -5,7 +5,7 @@
 # a sudo-free, corp-friendly path.
 #
 #   ./template-scripts/install-llz.sh                 # latest full release
-#   ./template-scripts/install-llz.sh v0.2.0          # a specific tag
+#   ./template-scripts/install-llz.sh v0.0.39         # a specific tag
 #   ORG=myfork ./template-scripts/install-llz.sh      # install from your fork's releases
 #   LLZ_BINDIR=/usr/local/bin ./template-scripts/install-llz.sh   # custom install dir
 #
@@ -58,7 +58,7 @@ tag_query='[.[] | select((.isDraft or .isPrerelease) | not) | .tagName
 if [ -z "$VER" ]; then
   VER="$(gh release list --repo "$REPO" --limit 200 --json tagName,isDraft,isPrerelease --jq "$tag_query")"
   [ -n "$VER" ] || {
-    echo "install-llz: no full vX.Y.Z release found in $REPO — pass a version, e.g. \`$0 v0.2.0\`." >&2
+    echo "install-llz: no full vX.Y.Z release found in $REPO — pass a version, e.g. \`$0 v0.0.39\`." >&2
     exit 1
   }
   echo "install-llz: latest release is $VER"
@@ -110,7 +110,7 @@ echo "install-llz: enable shell completion with \`llz completion zsh|bash\` (see
 # /usr/local/bin, the devcontainer image ships one there, `make llz` leaves one
 # in a checkout's bin/, and `go install` drops one in ~/go/bin. A stale winner
 # fails LATER and cryptically — an old binary scaffolds from a template ref that
-# no longer exists ("pathspec 'v0.1.0' did not match any file(s) known to git")
+# no longer exists ("pathspec 'vX.Y.Z' did not match any file(s) known to git")
 # and self-updates against a retired tag track ("release not found"). So
 # enumerate every copy, name the one that wins, and say how to fix it.
 
@@ -146,7 +146,7 @@ else
     echo "install-llz:    in use →  $winner  [$(llz_version_of "$winner")]"
     echo "install-llz:    new    →  $BINDIR/llz  [$(llz_version_of "$BINDIR/llz")]"
     echo "install-llz:    \`llz version\` will keep reporting the OLD binary, and a stale llz can fail"
-    echo "install-llz:    later with e.g. \"pathspec 'v0.1.0' did not match any file(s) known to git\"."
+    echo "install-llz:    later with e.g. \"pathspec 'vX.Y.Z' did not match any file(s) known to git\"."
     echo "install-llz:    Fix it one of two ways, then re-check with \`type -a llz\`:"
     echo "install-llz:      1) drop the old copy (prefix with sudo if it is root-owned):"
     echo "install-llz:           rm $winner"
