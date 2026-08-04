@@ -658,7 +658,7 @@ version-pins-check:
 # an OLD CLI, which is the exact drift this is meant to catch.
 docs-guard: export LLZ_FORCE_SOURCE := 1
 docs-guard:
-	$(call LLZ_CI,docs-guard --root .,--root ..)
+	$(call LLZ_CI,docs-guard,--root ..)
 
 lint:
 	@set -e; \

@@ -337,4 +337,4 @@ gh workflow run breakglass-openbao.yml --field region=<env> --field action=revok
 ## See also
 
 - [`docs/secrets.md`](../secrets.md) — full secrets operations guide, dual-write rotation, query examples
-- [`.github/workflows/bootstrap-openbao.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/.github/workflows/bootstrap-openbao.yml) — workflow source
+- [`instance-template/.github/workflows/bootstrap-openbao.yml`](https://github.com/akamai-consulting/lke-landing-zone/blob/main/instance-template/.github/workflows/bootstrap-openbao.yml) — the thin caller in the TEMPLATE repo (in your instance it is `.github/workflows/bootstrap-openbao.yml`); the body is `llz-bootstrap-openbao.yml` beside it

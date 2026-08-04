@@ -789,3 +789,71 @@ func TestCheckDocCommands_UserDefinedCommandsAreNotReported(t *testing.T) {
 		t.Errorf("a known command's unknown flag must still be reported, got %v", got)
 	}
 }
+
+// An ABSOLUTE link into this repo's own tree is as checkable as a relative one,
+// and the guard used to ignore it entirely. That gap shipped a 404: a blanket sed
+// stripped `instance-template/` from delivered docs and also stripped it from a
+// template-repo URL, where the prefix was correct.
+func TestCheckSelfRepoLinks(t *testing.T) {
+	root := t.TempDir()
+	writeMD(t, root, "instance-template/.github/workflows/x.yml", "on: push")
+	writeMD(t, root, "docs/real.md", "# real")
+
+	base := "https://github.com/akamai-consulting/lke-landing-zone"
+	for _, tc := range []struct{ name, body, wantHit string }{
+		{
+			name:    "a path that is not in the tree is reported",
+			body:    "[wf](" + base + "/blob/main/.github/workflows/x.yml)\n",
+			wantHit: "does not exist in this repo",
+		},
+		{
+			// The hint is the whole point: this exact confusion caused the 404.
+			name:    "and it names the instance-template/ alternative",
+			body:    "[wf](" + base + "/blob/main/.github/workflows/x.yml)\n",
+			wantHit: "did you mean instance-template/.github/workflows/x.yml",
+		},
+		{
+			name: "a path that IS in the tree passes",
+			body: "[wf](" + base + "/blob/main/instance-template/.github/workflows/x.yml)\n",
+		},
+		{
+			name: "a tree URL to a directory passes",
+			body: "[d](" + base + "/tree/main/docs)\n",
+		},
+		{
+			// A version-tagged permalink names a HISTORICAL tree; this checkout
+			// cannot vouch for it, so it must not be judged.
+			name: "a version-pinned permalink is not judged",
+			body: "[old](" + base + "/blob/v0.0.32/docs/gone.md)\n",
+		},
+		{
+			name: "a fork's URL is checked too",
+			body: "[wf](https://github.com/someorg/lke-landing-zone/blob/main/instance-template/.github/workflows/x.yml)\n",
+		},
+		{
+			name: "an unrelated GitHub URL is ignored",
+			body: "[x](https://github.com/other/project/blob/main/nope.md)\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeMD(t, root, "docs/probe.md", tc.body)
+			docs, bad := loadDocs(root, []string{"docs/probe.md"})
+			if len(bad) != 0 {
+				t.Fatalf("fixture unreadable: %v", bad)
+			}
+			got := checkSelfRepoLinks(root, docs, &docsScanned{})
+			if tc.wantHit == "" {
+				if len(got) != 0 {
+					t.Fatalf("expected no findings, got %v", got)
+				}
+				return
+			}
+			if len(got) == 0 {
+				t.Fatalf("expected a finding containing %q, got none", tc.wantHit)
+			}
+			if !strings.Contains(got[0].Detail, tc.wantHit) {
+				t.Errorf("finding = %q, want it to contain %q", got[0].Detail, tc.wantHit)
+			}
+		})
+	}
+}

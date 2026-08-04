@@ -68,11 +68,12 @@ type docsScanned struct {
 	flags       int // flags actually VALIDATED against a resolved command
 	dispatches  int // `gh workflow run` calls parsed
 	links       int // relative links resolved
+	selfLinks   int // absolute links into this repo's own tree, resolved
 }
 
 func (c docsScanned) String() string {
 	return fmt.Sprintf("%d llz invocation(s) / %d flag(s), %d workflow dispatch(es), %d link(s)",
-		c.invocations, c.flags, c.dispatches, c.links)
+		c.invocations, c.flags, c.dispatches, c.links+c.selfLinks)
 }
 
 type docFinding struct {
@@ -737,7 +738,48 @@ func checkDocLinks(root string, docs []docFile, n *docsScanned) []docFinding {
 			}
 		}
 	}
+	out = append(out, checkSelfRepoLinks(root, docs, n)...)
 	out = append(out, checkDeliveredDocLinks(root, docs, n)...)
+	return out
+}
+
+// selfRepoBlobRe matches a link into THIS repo's own tree at `main` — the form
+// docs use to point at source that is not delivered locally. `<org>` is loose on
+// purpose so a fork's URLs are checked too; the ref is pinned to `main` because a
+// version-tagged permalink names a HISTORICAL tree this checkout cannot vouch for.
+var selfRepoBlobRe = regexp.MustCompile(
+	`^https://github\.com/[^/]+/lke-landing-zone/(?:blob|tree)/main/([^)\s#]+)`)
+
+// checkSelfRepoLinks verifies that an absolute link into this repo's own tree
+// resolves to a real path.
+//
+// This gap was found the expensive way: a blanket sed that stripped
+// `instance-template/` from delivered docs also stripped it from an ABSOLUTE URL,
+// where the prefix was correct — producing a 404 in the bootstrap runbook that the
+// guard could not see, because it only ever looked at relative links. An absolute
+// URL into our own tree is just as checkable as a relative one, and is exactly what
+// docs use for source that is NOT delivered locally.
+func checkSelfRepoLinks(root string, docs []docFile, n *docsScanned) []docFinding {
+	var out []docFinding
+	for _, d := range docs {
+		for i, line := range strings.Split(d.body, "\n") {
+			for _, m := range docsGuardLinkRe.FindAllStringSubmatch(line, -1) {
+				sm := selfRepoBlobRe.FindStringSubmatch(m[1])
+				if sm == nil {
+					continue
+				}
+				n.selfLinks++
+				if pathExists(filepath.Join(root, filepath.FromSlash(sm[1]))) {
+					continue
+				}
+				detail := fmt.Sprintf("%s does not exist in this repo", sm[1])
+				if alt := filepath.Join(scaffoldDirName, filepath.FromSlash(sm[1])); pathExists(filepath.Join(root, alt)) {
+					detail += fmt.Sprintf(" — did you mean %s? (the scaffold lives under %s/ in the TEMPLATE repo, even though it renders to the instance root)", filepath.ToSlash(alt), scaffoldDirName)
+				}
+				out = append(out, docFinding{File: d.rel, Line: i + 1, Kind: "self-link", Detail: detail})
+			}
+		}
+	}
 	return out
 }
 
