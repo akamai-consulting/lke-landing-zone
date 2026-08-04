@@ -45,6 +45,9 @@ func writeFileMkdir(t *testing.T, path, content string) {
 // ── item C: no-remote-repo detection (tokens.go) ─────────────────────────────
 
 func TestRepoExists(t *testing.T) {
+	// repoStatus resolves `gh` on PATH before shelling out; stub it so the test
+	// asserts llz's logic rather than whether this machine has gh installed.
+	withLookPath(t, func(f string) (string, error) { return "/usr/bin/" + f, nil })
 	withExecOutput(t, func(name string, args ...string) ([]byte, error) {
 		if name != "gh" || len(args) < 2 || args[0] != "api" || args[1] != "repos/o/r" {
 			t.Errorf("repoExists shelled out to %q %v, want `gh api repos/o/r ...`", name, args)
@@ -61,14 +64,37 @@ func TestRepoExists(t *testing.T) {
 }
 
 func TestRemediateMissingRepo(t *testing.T) {
+	withGhOwnerKind(t, func(string) (string, error) { return "Organization", nil })
 	out := captureStderr(t, func() { remediateMissingRepo("acme/inst") })
 	for _, want := range []string{
 		`instance repo "acme/inst" is not reachable`,
 		"gh repo create acme/inst",
 		"llz new",
+		// `--source . --push` pushes the CHECKED-OUT branch, and this remediation
+		// is typed by hand where ensureScaffoldBranch never ran — so it has to name
+		// the branch the bootstrap Application actually tracks.
+		"git branch -M main",
+		"apps_repo_revision",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("remediateMissingRepo output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "OWNER") {
+		t.Errorf("named the owner as missing although it exists:\n%s", out)
+	}
+
+	// An absent owner needs a different first step — creating the repo under an
+	// org that does not exist fails with a bare CreateRepository error.
+	withGhOwnerKind(t, func(string) (string, error) { return "", nil })
+	out = captureStderr(t, func() { remediateMissingRepo("acme/inst") })
+	for _, want := range []string{
+		`OWNER "acme" does not exist`,
+		"check how it is spelled", // a typo is likelier than an uncreated org
+		"https://github.com/organizations/new",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("absent-owner remediation missing %q:\n%s", want, out)
 		}
 	}
 }

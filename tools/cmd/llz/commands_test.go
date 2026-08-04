@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,9 +25,7 @@ func TestCopierCopyArgv(t *testing.T) {
 func TestRunNewMissingTemplateSource(t *testing.T) {
 	// A typo'd / un-forked --org must fail fast with the actionable error instead
 	// of letting copier drop into an interactive git username prompt.
-	orig := templateSourceExistsFn
-	t.Cleanup(func() { templateSourceExistsFn = orig })
-	templateSourceExistsFn = func(string) bool { return false }
+	withTemplateSourceStatus(t, func(string) (bool, error) { return false, nil })
 
 	err := runNew(globalOpts{}, "nonexistent-org", "v0.0.38", "my-instance", false)
 	if err == nil {
@@ -36,6 +35,28 @@ func TestRunNewMissingTemplateSource(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
+	}
+}
+
+// A `gh` that cannot answer (missing, unauthenticated, offline) must NOT be
+// reported as an absent template: the upstream is public, and "fork it first" is
+// then the wrong instruction to hand a brand-new adopter.
+func TestRunNewGitHubUnreachable(t *testing.T) {
+	withTemplateSourceStatus(t, func(string) (bool, error) {
+		return false, errors.New("gh: To get started with GitHub CLI, please run: gh auth login")
+	})
+
+	err := runNew(globalOpts{}, defaultTemplateOrg, "v0.1.0", "my-instance", false)
+	if err == nil {
+		t.Fatal("expected an error when GitHub could not be reached")
+	}
+	for _, want := range []string{"could not check", "gh auth status", "NOT a missing template"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "gh repo fork") {
+		t.Errorf("told the adopter to fork a template that is fine:\n%s", err)
 	}
 }
 
