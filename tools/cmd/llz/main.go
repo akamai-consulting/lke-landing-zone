@@ -344,7 +344,14 @@ func envCmd() *cobra.Command {
 	f.StringVar(&o.templateEnv, "template-env", "example", "template env to clone")
 	f.StringVar(&o.region, "region", "", "GEOGRAPHIC Linode region, e.g. us-sea — not the deployment name (that is the positional <env>)")
 	f.StringVar(&o.regionShort, "region-short", "", "3-letter REGION_SHORT for volume labels (default: first 3 chars of <env>)")
-	f.StringVar(&o.clusterDomain, "cluster-domain", "", "base domain → cluster.domainSuffix (default: <env>.internal)")
+	// DEPRECATED and WRITE-NOTHING. Linode owns the cluster domain on Managed App
+	// Platform (lke<id>.akamai-apl.net) and the spec validator REJECTS
+	// cluster.bootstrap.domainSuffix outright, so there is nothing for this to set.
+	// It survived as a flag that echoed the value back in the summary banner —
+	// which read exactly like it had been applied. Marked deprecated so cobra says
+	// so on every use rather than leaving the reader to discover it at apply time.
+	f.StringVar(&o.clusterDomain, "cluster-domain", "", "DEPRECATED, ignored: Linode owns the cluster domain and the validator rejects cluster.bootstrap.domainSuffix")
+	_ = f.MarkDeprecated("cluster-domain", "the cluster domain is Linode-owned and discovered in-cluster; this flag writes nothing")
 	f.StringVar(&o.objCluster, "obj-cluster", "", "Linode Object Storage cluster (e.g. us-sea-1)")
 	f.StringVar(&o.k8sVersion, "k8s-version", "", "LKE-E k8s version (a +lke version in your account)")
 	f.StringVar(&o.nodeType, "node-type", "", "Linode node type for the pool (e.g. g8-dedicated-8-4; default: example value)")

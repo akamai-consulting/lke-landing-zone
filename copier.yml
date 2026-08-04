@@ -118,7 +118,15 @@ _tasks:
   # every rendered instance — the docs/-scoped rewrite never walks the root. The
   # flag is what lets the rewrite tell "template-only" from "created later by
   # `llz env add`", so it never repoints a link to a URL that would 404.
-  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> --root . --template-root <@ _copier_conf.src_path @> || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
+  #
+  # THREE-WAY FALLBACK, in descending order of what the operator's `llz` supports.
+  # `copier update` runs with whatever binary is on PATH, which is routinely OLDER
+  # than the template being pulled — an adopter who has not `llz self-update`d yet.
+  # A binary predating --root/--template-root would fail the whole task on an
+  # unknown flag and silently leave the full docs/ tree with no README pointer, so
+  # the middle rung retries the pre-flag form and only then gives up. Cosmetic
+  # degradation (root links stay relative) instead of a broken delivery.
+  - "mkdir -p docs && cp -a <@ _copier_conf.src_path @>/docs/. docs/ && (command -v llz >/dev/null 2>&1 && { llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @> --root . --template-root <@ _copier_conf.src_path @> 2>/dev/null || { echo \"(llz predates --template-root — root-level doc links left relative; 'llz self-update' then re-run 'llz upgrade' to repoint them)\" && llz ci deliver-docs --docs docs --org <@ upstream_org @> --ref <@ llz_version @>; }; } || echo \"(llz not on PATH — full docs/ kept; run 'llz ci deliver-docs --docs docs' to slim it)\")"
   # The vendored workflow bodies (llz-*.yml) ship VERBATIM — comments included.
   # There is deliberately NO comment-strip task here: .github/workflows/** is
   # `merge`-classified (.template-manifest), and copier's 3-way merge on

@@ -281,12 +281,17 @@ is out of scope here; whoever repairs the URL must give it TLS at the same time.
 
 ### Known incompatibility
 
-`llz reconcile --reconcile-harbor` runs the provisioner logic in-process from the
+`llz reconcile --reconcile-harbor` ran the provisioner logic in-process from the
 unmeshed reconciler pod, speaking plaintext to harbor-core. Once the harbor
-`PeerAuthentication` is STRICT that lane cannot work. It is off by default and not
-enabled in the Deployment. It is not made a hard error because meshing the
-reconciler later would make it valid again; the failure is loud (`llz_reconcile_up=0`).
-`ci_mesh_egress_guard.go` cannot catch this — it inspects NetworkPolicies, and
+`PeerAuthentication` is STRICT that lane cannot work.
+
+> **Resolved since.** That reconciler was removed — `llz reconcile` has no
+> `--reconcile-harbor` flag today, and Harbor robot provisioning runs from the
+> `harbor-robot-provisioner` CronJob (`llz ci harbor-provisioner`). The
+> incompatibility below is therefore historical; it is left recorded because the
+> reasoning applies to any future in-process lane added to the unmeshed reconciler.
+
+`ci_mesh_egress_guard.go` cannot catch this class — it inspects NetworkPolicies, and
 this path is Go.
 
 `llz ci openbao-login` — both methods — now requires in-cluster mTLS material.

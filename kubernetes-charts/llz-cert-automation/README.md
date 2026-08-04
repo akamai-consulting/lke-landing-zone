@@ -49,8 +49,11 @@ helm install llz-cert-automation oci://ghcr.io/akamai-consulting/charts/llz-cert
   --version 0.1.9
 ```
 
-In this repo it is consumed by an Argo CD Application referencing the published
-OCI chart (`platform-apl/components/certManager/cert-automation.yaml`).
+**Nothing in this repo deploys it today.** On Managed App Platform — the only
+supported mode (ADR 0005) — cert-automation is apl-core's, so the component is
+`ManagedSkip` and its Argo CD Application is never rendered. The chart stays
+published and reusable for a self-installed consumer; see the cutover table in
+[`kubernetes-charts/README.md`](../README.md).
 
 ## Values
 

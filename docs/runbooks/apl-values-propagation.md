@@ -8,7 +8,7 @@ gate, and no `otomi/values` Gitea repo to seed.
 
 ## How a values change reaches the cluster
 
-`instance-template/apl-values/<env>/values.yaml` feeds two consumers:
+`apl-values/<env>/values.yaml` feeds two consumers:
 
 1. **`llz ci bootstrap-cluster`** — the file is substituted (identity
    placeholders, tokens) and passed as the apl-core chart values on every

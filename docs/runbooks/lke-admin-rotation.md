@@ -22,7 +22,7 @@ Your Product Security rotation guidelines recommend a Linode PAT scoped to the *
 
 ## Automated path (target state)
 
-`instance-template/.github/workflows/secret-rotation.yml` — monthly (1st, 04:00 UTC), each environment:
+`.github/workflows/secret-rotation.yml` — monthly (1st, 04:00 UTC), each environment:
 
 ```
 per environment, Environment-gated (infra-<env>)
@@ -59,7 +59,10 @@ Environment approval on `infra-<env>` still applies. Run every environment for a
 Use the shared `LINODE_API_TOKEN` (the broad Terraform Linode token — see the PAT-scope note above; a separate K8s-scoped PAT is intentionally not maintained):
 
 ```bash
-CID=<cluster_id>          # terraform -chdir=instance-template/terraform-iac-bootstrap/cluster output -raw cluster_id
+# The cluster id, read from the cluster root's Terraform output:
+cd terraform-iac-bootstrap/cluster
+CID=$(llz ci tf-output cluster_id)
+
 curl -fsSL -X DELETE \
   -H "Authorization: Bearer $LINODE_API_TOKEN" \
   "https://api.linode.com/v4/lke/clusters/${CID}/kubeconfig"
@@ -68,9 +71,16 @@ curl -fsSL -X DELETE \
 Then refresh Terraform state so downstream CI gets the new kubeconfig:
 
 ```bash
-cd instance-template/terraform-iac-bootstrap/cluster
-terraform apply -refresh-only -auto-approve -var-file="<env>.tfvars"
+cd terraform-iac-bootstrap/cluster
+tofu apply -refresh-only -auto-approve -var-file="<env>.tfvars"
 ```
+
+> **`TF_ENCRYPTION` must be in the environment for both steps.** Every root carries
+> `encryption.tf`, so a hand-run `tofu`/`llz ci tf-output` without it fails with
+> OpenTofu's own unhelpful *"Invalid expression … A single static variable reference
+> is required"*. In CI the `tf-encryption-env` composite action exports it from
+> `TF_STATE_ENCRYPTION_PASSPHRASE`; by hand, export it yourself before running
+> either command. See [ADR 0007 (state encryption)](https://github.com/akamai-consulting/lke-landing-zone/blob/main/docs/adr/0007-terraform-state-encryption.md).
 
 Do **not** `kubectl delete` the `lke-admin-token` Secret.
 

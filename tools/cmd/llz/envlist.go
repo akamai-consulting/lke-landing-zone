@@ -127,11 +127,14 @@ func envListCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "list the scaffolded deployments (the CI matrix source of truth)",
-		Long: "Lists every deployment scaffolded by `llz env add` — one per\n" +
-			"terraform-iac-bootstrap/cluster/<name>.tfvars. The CI workflows' `discover`\n" +
-			"job runs `llz env list --json` and feeds it into each per-deployment\n" +
-			"matrix, so Terraform (the tfvars) is the single source of truth and a new\n" +
-			"deployment is covered everywhere the moment it is added. --ha narrows to the\n" +
+		Long: "Lists every deployment scaffolded by `llz env add`, from the UNION of two\n" +
+			"sources: the LandingZone spec's environments/<name>.yaml (the source of\n" +
+			"truth you commit) and any terraform-iac-bootstrap/cluster/<name>.tfvars.\n" +
+			"The union matters because the tfvars are gitignored build artifacts —\n" +
+			"on a fresh clone the spec is the only source, so a spec-only deployment\n" +
+			"must still appear. The CI workflows' `discover` job runs\n" +
+			"`llz env list --json` and feeds it into each per-deployment matrix, so a\n" +
+			"new deployment is covered everywhere the moment it is added. --ha narrows to the\n" +
 			"OpenBao HA members (ha_role != standalone); --role filters by exact role.\n" +
 			"--ordered emits only the deployments that declare a promotion_rank, in\n" +
 			"ascending promotion order (dev → staging → prod) — the sequence a\n" +

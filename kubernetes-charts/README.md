@@ -39,26 +39,31 @@ Argo Applications pin `targetRevision: X.Y.Z`.
 
 ## Consumption (the monorepo dogfoods its own charts)
 
-Each cut-over chart is consumed by an Argo CD `Application` that references the
-OCI chart instead of an in-repo path — `platform-apl/manifest/applications/cluster-foundation.yaml`
-for the foundation chart, and the `platform-apl/components/` kustomize components
-(`components/openbao/openbao.yaml`, `components/certManager/cert-automation.yaml`)
-for the other two. This consumer relationship is the forcing
-function that keeps the extracted charts honestly reusable.
+A chart is consumed by an Argo CD `Application` that references the OCI artifact
+rather than an in-repo path. Today exactly one lives in this repo:
+[`platform-apl/components/openbao/openbao.yaml`](../platform-apl/components/openbao)
+(`chart: llz-openbao-platform`). That consumer relationship is the forcing
+function that keeps an extracted chart honestly reusable.
 
 ### Cutover status
 
-Three of the four platform charts are **consumed live** via OCI Argo Applications (the
-monorepo dogfoods its own published charts). `llz-argo-bootstrap-apps` is a
-standalone generator. The cluster is rebuilt greenfield, so there is no live
-state to migrate — the bootstrap stands the whole platform up from the charts.
+**Only `llz-openbao-platform` is consumed live from this repo.** The other three are
+published and reusable, but nothing here deploys them — read the table as "what is
+dogfooded", not "what is deployed".
 
-| Chart | Live consumption | Notes |
+| Chart | Live consumption here | Notes |
 |---|---|---|
-| `llz-cert-automation` | ✅ OCI Argo App | CRDs handled via `SkipDryRunOnMissingResource`. |
-| `llz-cluster-foundation` | ✅ OCI Argo App | Namespaces/NPs/Jobs; wave-`-20` health-gated so they're Healthy before wave-`-15` consumers. |
-| `llz-openbao-platform` | ✅ OCI Argo App | HA-Raft boots fresh on the recreated cluster. `releaseName: platform-openbao` preserved (StatefulSet/cert/raft identity); `OPENBAO_CHART` Makefile targets + `replacements:` repointed/cleaned. |
+| `llz-openbao-platform` | ✅ `platform-apl/components/openbao/openbao.yaml` | HA-Raft boots fresh on a recreated cluster. `releaseName: platform-openbao` is preserved (StatefulSet/cert/raft identity); `OPENBAO_CHART` Makefile targets + `replacements:` repointed accordingly. |
+| `llz-cluster-foundation` | ❌ not deployed on managed | Namespaces, default-deny NPs, CoreDNS, storage-class defaulting. On Managed App Platform apl-core owns all of it, so the component is `ManagedSkip` — and managed is the only supported mode (ADR 0005). Still published for a self-installed consumer. |
+| `llz-cert-automation` | ❌ not deployed on managed | Event-driven cert renewal. Same reason: cert-automation is apl-core's on managed. |
 | `llz-argo-bootstrap-apps` | n/a (generator) | Standalone app-of-apps generator for a *new* sibling team; intentionally not wired into this repo's kustomization. |
+
+> **Known stale references in `components.go`.** `clusterFoundation` and several
+> other component entries still carry `ArgoApps: []string{"applications/…"}` paths
+> under `platform-apl/manifest/applications/`, **a directory that no longer exists**.
+> They are unreachable rather than broken: every one of them is `ManagedSkip`, so
+> the render never resolves them on a managed cluster. Anyone re-enabling a
+> self-installed path must restore those manifests first.
 
 > **Rollout ordering (hard prerequisite).** Before bootstrapping the recreated
 > cluster, the charts must be **published to GHCR** (the `publish-charts` workflow
